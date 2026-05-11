@@ -52,7 +52,7 @@ You can also trigger everything via **natural language** (EN or PT) — skills f
 Inside Claude Code:
 
 ```text
-/plugin marketplace add https://github.com/prodigitalkey/dev-guardian
+/plugin marketplace add https://github.com/linofcp007/dev-guardian
 /plugin install dev-guardian@dev-guardian
 ```
 
@@ -199,7 +199,7 @@ Também podes invocar tudo em **linguagem natural** (PT ou EN) — as skills dis
 Dentro do Claude Code:
 
 ```text
-/plugin marketplace add https://github.com/prodigitalkey/dev-guardian
+/plugin marketplace add https://github.com/linofcp007/dev-guardian
 /plugin install dev-guardian@dev-guardian
 ```
 
