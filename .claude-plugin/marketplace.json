@@ -1,0 +1,45 @@
+{
+  "name": "dev-guardian",
+  "owner": {
+    "name": "Carlos Pereira",
+    "email": "carlospereira@prodigitalkey.com"
+  },
+  "metadata": {
+    "description": "dev-guardian marketplace — open-source security, quality and compliance tooling for Claude Code.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "dev-guardian",
+      "source": "./",
+      "description": "All-in-one open-source security, bugfix, quality, observability and compliance plugin. Stack-aware (Node/Python/PHP/Go/Rust/Ruby/Java). Bilingual EN/PT.",
+      "version": "0.1.0",
+      "category": "security",
+      "tags": [
+        "security",
+        "code-review",
+        "vulnerability-scanning",
+        "dependency-management",
+        "bugfix",
+        "quality",
+        "observability",
+        "compliance",
+        "open-source",
+        "semgrep",
+        "trivy",
+        "gitleaks",
+        "renovate",
+        "owasp",
+        "sbom",
+        "gdpr",
+        "rgpd"
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/prodigitalkey/dev-guardian",
+      "author": {
+        "name": "Carlos Pereira",
+        "email": "carlospereira@prodigitalkey.com"
+      }
+    }
+  ]
+}

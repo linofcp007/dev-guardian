@@ -41,18 +41,33 @@ Também podes invocar tudo em **linguagem natural** (PT ou EN) — as skills dis
 
 ## Instalação do plugin
 
-### Em Cowork / Claude Code
+### A) Via marketplace (recomendado, partilhável)
 
-1. Recebe o ficheiro `dev-guardian.plugin`
-2. Faz click em "Save plugin" / "Install"
-3. Pronto — as skills ficam disponíveis
+Dentro do Claude Code:
 
-### Manual
+```text
+/plugin marketplace add https://github.com/prodigitalkey/dev-guardian
+/plugin install dev-guardian@dev-guardian
+```
 
-Descomprime o `.plugin` (é um zip) para a tua pasta de plugins Claude:
+Funciona com qualquer URL git (HTTPS ou SSH) ou caminho local de uma pasta que contenha [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
+
+### B) Cópia manual da pasta
+
+Copia a pasta inteira para:
 
 - **Linux / macOS**: `~/.claude/plugins/dev-guardian/`
-- **Windows**: `%APPDATA%\Claude\plugins\dev-guardian\`
+- **Windows**: `%USERPROFILE%\.claude\plugins\dev-guardian\`
+
+Depois, dentro do Claude Code, corre `/plugin` e ativa o `dev-guardian`. Em alternativa, adiciona ao teu `~/.claude/settings.json`:
+
+```json
+{
+  "enabledPlugins": { "dev-guardian": true }
+}
+```
+
+> ⚠️ Os scripts `.sh` em `scripts/` correm direto em Linux/macOS. No Windows nativo precisas de **WSL2** ou Git Bash; as skills/commands em si funcionam em qualquer SO.
 
 ## Uso típico — primeiro projeto
 

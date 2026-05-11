@@ -1,7 +1,7 @@
 {
   "name": "dev-guardian",
   "version": "0.1.0",
-  "description": "Plugin all-in-one open-source para segurança, bugfix, qualidade, observability e compliance em projetos de desenvolvimento. Detecta automaticamente o stack (Node, Python, PHP, Go, Rust, Ruby, Java) e instala/configura ferramentas open-source como Semgrep, Trivy, gitleaks, Renovate, OWASP ZAP, Playwright. Comportamento pragmático com alertas paranoid quando crítico.",
+  "description": "All-in-one open-source plugin for security, bugfix, code quality, observability and compliance in dev projects. Auto-detects the stack (Node, Python, PHP, Go, Rust, Ruby, Java) and installs/configures open-source tools like Semgrep, Trivy, gitleaks, Renovate, OWASP ZAP, Playwright. Pragmatic by default, paranoid when critical. Works in EN and PT. // Plugin all-in-one open-source para segurança, bugfix, qualidade, observability e compliance em projetos de desenvolvimento. Deteta automaticamente o stack e instala/configura ferramentas open-source. Pragmático por defeito, paranoid quando crítico.",
   "author": {
     "name": "Carlos Pereira",
     "email": "carlospereira@prodigitalkey.com"
