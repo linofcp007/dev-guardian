@@ -1,0 +1,46 @@
+# dev-guardian gitleaks config
+# Estende o default do gitleaks com regras adicionais e despromove FPs comuns.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key-strict"
+description = "Generic API key heuristic (chars longos com prefixos suspeitos)"
+regex = '''(?i)(api[_-]?key|api[_-]?secret|access[_-]?token)[\s:=]+["']?[A-Za-z0-9_\-]{32,}["']?'''
+tags = ["key", "generic"]
+
+[[rules]]
+id = "stripe-live-key"
+description = "Stripe live secret key"
+regex = '''sk_live_[0-9a-zA-Z]{24,}'''
+tags = ["stripe", "key", "production"]
+
+[[rules]]
+id = "supabase-service-key"
+description = "Supabase service role key"
+regex = '''eyJ[a-zA-Z0-9_\-]{20,}\.eyJ[a-zA-Z0-9_\-]{200,}\.[a-zA-Z0-9_\-]{40,}'''
+tags = ["supabase", "jwt", "key"]
+
+[allowlist]
+description = "Despromover FPs comuns"
+paths = [
+  '''(?i)(test|tests|__tests__|spec|specs|fixtures?|examples?|docs?|samples?)/''',
+  '''node_modules/''',
+  '''vendor/''',
+  '''\.lock$''',
+  '''package-lock\.json''',
+  '''pnpm-lock\.yaml''',
+  '''yarn\.lock'''
+]
+regexes = [
+  '''(?i)example\.com''',
+  '''(?i)your[_-]?(api[_-]?)?key[_-]?here''',
+  '''(?i)dummy[_-]?(token|key|secret)''',
+  '''(?i)placeholder''',
+  '''xxxxxxxx''',
+  '''AKIAIOSFODNN7EXAMPLE''',
+  '''wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'''
+]
+commits = []
+stopwords = ["example", "dummy", "placeholder", "fake", "test"]

@@ -1,0 +1,24 @@
+{
+  "name": "dev-guardian",
+  "version": "0.1.0",
+  "description": "Plugin all-in-one open-source para segurança, bugfix, qualidade, observability e compliance em projetos de desenvolvimento. Detecta automaticamente o stack (Node, Python, PHP, Go, Rust, Ruby, Java) e instala/configura ferramentas open-source como Semgrep, Trivy, gitleaks, Renovate, OWASP ZAP, Playwright. Comportamento pragmático com alertas paranoid quando crítico.",
+  "author": {
+    "name": "Carlos Pereira",
+    "email": "carlospereira@prodigitalkey.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "security",
+    "code-review",
+    "vulnerability-scanning",
+    "dependency-management",
+    "bugfix",
+    "quality",
+    "observability",
+    "compliance",
+    "open-source",
+    "semgrep",
+    "trivy",
+    "gitleaks"
+  ]
+}

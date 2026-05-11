@@ -1,0 +1,40 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Scan output / reports
+.scan-cache/
+reports/
+*.sarif
+sbom.json
+gitleaks-report.json
+trivy-report.json
+semgrep-report.json
+
+# Local installs
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+vendor/
+
+# Build artefacts
+dist/
+build/
+*.plugin
+*.zip

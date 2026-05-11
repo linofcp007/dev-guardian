@@ -1,0 +1,96 @@
+# dev-guardian Semgrep config base.
+# Multi-linguagem. Detalhe em https://semgrep.dev/p/owasp-top-ten
+rules:
+  # ============== SECRETS COMMITED ==============
+  - id: hardcoded-aws-key
+    pattern-regex: 'AKIA[0-9A-Z]{16}'
+    message: Possível AWS Access Key hardcoded.
+    severity: ERROR
+    languages: [generic]
+
+  - id: hardcoded-private-key
+    pattern-regex: '-----BEGIN (RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----'
+    message: Chave privada hardcoded no código.
+    severity: ERROR
+    languages: [generic]
+
+  # ============== JS/TS ==============
+  - id: js-eval-of-user-input
+    pattern-either:
+      - pattern: eval($X)
+      - pattern: new Function($X)
+    message: Uso de eval/new Function. Evitar sempre que possível — risco de RCE se $X vier de input externo.
+    severity: WARNING
+    languages: [javascript, typescript]
+
+  - id: js-insecure-randomness
+    pattern: Math.random()
+    message: Math.random() não é criptograficamente seguro. Para tokens/IDs sensíveis usa crypto.randomBytes ou crypto.getRandomValues.
+    severity: INFO
+    languages: [javascript, typescript]
+
+  - id: js-document-write
+    pattern: document.write($X)
+    message: document.write é vetor de XSS quando $X contém input não-sanitizado.
+    severity: WARNING
+    languages: [javascript, typescript]
+
+  - id: js-dangerouslySetInnerHTML
+    pattern: |
+      <$EL dangerouslySetInnerHTML={...} />
+    message: dangerouslySetInnerHTML — verificar que o HTML é sanitizado (DOMPurify recomendado).
+    severity: WARNING
+    languages: [javascript, typescript]
+
+  # ============== Python ==============
+  - id: py-eval-exec
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+    message: eval/exec — risco de RCE se input vier de fora.
+    severity: ERROR
+    languages: [python]
+
+  - id: py-shell-true
+    pattern: subprocess.$F(..., shell=True, ...)
+    message: subprocess com shell=True é injetável. Passa lista de args em vez de string.
+    severity: WARNING
+    languages: [python]
+
+  - id: py-yaml-load
+    pattern: yaml.load($X)
+    message: yaml.load() sem Loader é inseguro (RCE). Usa yaml.safe_load().
+    severity: ERROR
+    languages: [python]
+
+  - id: py-pickle-load
+    pattern-either:
+      - pattern: pickle.load(...)
+      - pattern: pickle.loads(...)
+    message: pickle deserialization de dados não-confiáveis é RCE direto. Considera JSON.
+    severity: WARNING
+    languages: [python]
+
+  # ============== PHP / WordPress ==============
+  - id: php-eval
+    pattern: eval($X)
+    message: eval() em PHP — risco crítico de RCE.
+    severity: ERROR
+    languages: [php]
+
+  - id: php-sql-injection-direct
+    pattern-either:
+      - pattern: mysql_query($X . $Y)
+      - pattern: mysqli_query($CONN, $X . $Y)
+    message: Concatenação direta em SQL query — usa prepared statements.
+    severity: ERROR
+    languages: [php]
+
+  - id: wp-unescaped-output
+    pattern-either:
+      - pattern: echo $_GET[$X]
+      - pattern: echo $_POST[$X]
+      - pattern: echo $_REQUEST[$X]
+    message: Output direto de input do utilizador — XSS. Usa esc_html(), esc_attr(), etc.
+    severity: ERROR
+    languages: [php]

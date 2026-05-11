@@ -1,0 +1,77 @@
+# dev-guardian pre-commit hooks
+# Instalar: pip install pre-commit && pre-commit install
+# Correr manualmente: pre-commit run --all-files
+
+repos:
+  # === Sanity checks ===
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key
+      - id: mixed-line-ending
+
+  # === Secrets scanning ===
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+
+  # === SAST ===
+  - repo: https://github.com/returntocorp/semgrep
+    rev: v1.78.0
+    hooks:
+      - id: semgrep
+        args: ['--config=auto', '--error', '--quiet', '--skip-unknown-extensions']
+
+  # === Python ===
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.9
+    hooks:
+      - id: bandit
+        args: ['-c', 'pyproject.toml', '-q']
+        additional_dependencies: ['bandit[toml]']
+
+  # === JS/TS — ESLint corre via Node, é mais simples deixar como hook local ===
+  - repo: local
+    hooks:
+      - id: eslint
+        name: eslint
+        entry: npx eslint --fix
+        language: system
+        types_or: [javascript, jsx, ts, tsx]
+        require_serial: false
+        pass_filenames: true
+
+  # === Dockerfile ===
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.13.0-beta
+    hooks:
+      - id: hadolint-docker
+
+  # === Shell ===
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+
+  # === Commit message (Conventional Commits) ===
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]

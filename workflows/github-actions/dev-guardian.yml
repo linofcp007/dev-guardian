@@ -1,0 +1,154 @@
+# dev-guardian — security & quality CI
+# Copia para .github/workflows/dev-guardian.yml
+name: Dev Guardian
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+  schedule:
+    - cron: '0 4 * * 1'  # weekly Mon 4am UTC
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============== SAST ==============
+  semgrep:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule' || github.repository_owner != ''
+    container:
+      image: returntocorp/semgrep
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: semgrep ci --config=auto --sarif-output=semgrep.sarif --error || true
+        continue-on-error: true
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+        continue-on-error: true
+
+  # ============== Secrets ==============
+  gitleaks:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============== Dependencies / IaC / Container ==============
+  trivy:
+    name: Vulnerability scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scanners: 'vuln,secret,misconfig'
+          severity: 'HIGH,CRITICAL'
+          format: 'sarif'
+          output: 'trivy-fs.sarif'
+          ignore-unfixed: true
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-fs.sarif'
+        continue-on-error: true
+
+  # ============== Lint / format ==============
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Python
+      - name: Setup Python
+        if: hashFiles('**/*.py') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run ruff
+        if: hashFiles('**/*.py') != ''
+        run: |
+          pip install ruff
+          ruff check . --output-format=github
+
+      # Node
+      - name: Setup Node
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install + lint Node
+        if: hashFiles('package.json') != ''
+        run: |
+          npm ci || npm install
+          npm run lint --if-present
+
+  # ============== Tests ==============
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Python tests
+      - name: Setup Python
+        if: hashFiles('**/*.py') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run pytest
+        if: hashFiles('pytest.ini', 'pyproject.toml') != ''
+        run: |
+          pip install -e ".[dev]" 2>/dev/null || pip install -r requirements.txt
+          pip install pytest pytest-cov
+          pytest --cov --cov-report=term --cov-report=xml || true
+
+      # Node tests
+      - name: Setup Node
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Run npm test
+        if: hashFiles('package.json') != ''
+        run: |
+          npm ci || npm install
+          npm test --if-present
+
+  # ============== SBOM ==============
+  sbom:
+    name: SBOM (Syft)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anchore/sbom-action@v0
+        with:
+          format: cyclonedx-json
+          output-file: sbom.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
