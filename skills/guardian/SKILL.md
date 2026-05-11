@@ -1,6 +1,6 @@
 ---
 name: guardian
-description: Main security, bugfix and code-quality skill using open-source tools (Semgrep, Trivy, gitleaks, Renovate, OWASP ZAP, Playwright). Routes to specialized Guardian modules. EN triggers — use whenever the user asks to initialize/protect/audit a project, configure security, scan vulnerabilities or secrets, review code before PR/commit/deploy, find bugs, improve quality, update dependencies, configure observability, or says "is this safe?", "any bugs?", "check this", "audit the project", "protect the repo", "guardian init/scan/fix/review/audit", "check for vulnerabilities", "before deploy", "before merge", "any secrets in the code?", "are dependencies secure?". PT triggers — usa SEMPRE que pedirem para inicializar/proteger/auditar um projeto, configurar segurança, scan de vulnerabilidades ou secrets, revisão antes de PR/commit/deploy, encontrar bugs, melhorar qualidade, atualizar dependências, configurar observability, ou disserem "está seguro?", "tem bugs?", "vê se isto está bem", "audita o projeto", "protege o repo", "verifica vulnerabilidades", "antes de deploy", "antes de merge", "tem secrets no código?", "as dependências estão seguras?". Works in PT and EN. Stack-aware (Node/Python/PHP/Go/Rust/Ruby/Java). Pragmatic by default, paranoid when critical.
+description: Main security, bugfix and code-quality router using open-source tools (Semgrep, Trivy, gitleaks, Renovate, OWASP ZAP, Playwright). Routes to specialized Guardian modules. Use whenever the user asks to initialize/protect/audit a project, configure security, scan vulnerabilities or secrets, review code before PR/commit/deploy, find bugs, improve quality, update dependencies, configure observability — or says "is this safe?", "any bugs?", "audit the project", "guardian init/scan/fix/review/audit", "before deploy/merge", "any secrets?". Usa também quando pedirem em PT para "auditar o projeto", "verificar vulnerabilidades", "proteger o repo", "está seguro?", "tem bugs?", "antes de deploy/merge", "tem secrets?", "atualizar dependências". Bilingual EN/PT. Stack-aware (Node/Python/PHP/Go/Rust/Ruby/Java). Pragmatic by default, paranoid when critical.
 ---
 
 # Guardian — Security, Bugfix & Quality
@@ -37,7 +37,7 @@ Se o utilizador não diz explicitamente que modo quer, infere a partir do contex
 
 ## Fluxo geral
 
-1. **Detectar o stack** primeiro (sempre). Corre `scripts/detect/detect-stack.sh` no projeto. Isto identifica linguagens, package managers, frameworks e ferramentas já presentes. Sem isto, qualquer recomendação é genérica e potencialmente errada.
+1. **Detectar o stack** primeiro (sempre). Corre `bash ${CLAUDE_PLUGIN_ROOT}/scripts/detect/detect-stack.sh` no projeto. Isto identifica linguagens, package managers, frameworks e ferramentas já presentes. Sem isto, qualquer recomendação é genérica e potencialmente errada.
 
 2. **Verificar o que já está configurado.** Não duplicar trabalho. Se já existe `.semgrep.yml`, `.gitleaks.toml`, `renovate.json`, `dependabot.yml`, `.pre-commit-config.yaml`, lê primeiro e respeita o que está lá.
 

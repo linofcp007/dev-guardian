@@ -1,12 +1,10 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "dev-guardian",
+  "description": "dev-guardian marketplace — open-source security, quality and compliance tooling for Claude Code.",
   "owner": {
     "name": "Carlos Pereira",
     "email": "carlospereira@prodigitalkey.com"
-  },
-  "metadata": {
-    "description": "dev-guardian marketplace — open-source security, quality and compliance tooling for Claude Code.",
-    "version": "0.1.0"
   },
   "plugins": [
     {
@@ -34,7 +32,6 @@
         "gdpr",
         "rgpd"
       ],
-      "license": "MIT",
       "homepage": "https://github.com/linofcp007/dev-guardian",
       "author": {
         "name": "Carlos Pereira",

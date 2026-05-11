@@ -7,6 +7,9 @@ on:
   schedule:
     - cron: '0 3 * * 2'  # weekly Tue 3am UTC
 
+permissions:
+  contents: read
+
 jobs:
   zap-baseline:
     name: OWASP ZAP Baseline
