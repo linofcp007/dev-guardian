@@ -1,5 +1,5 @@
 ---
-description: Bootstrap a project with full open-source security & quality setup (Semgrep, Trivy, gitleaks, Renovate, pre-commit, CI). Configura o projeto com toda a infraestrutura de segurança e qualidade.
+description: Bootstrap security & quality toolchain. Setup inicial.
 ---
 
 Invoke the `guardian-init` skill to bootstrap the current project with the full open-source security and quality toolchain.

@@ -1,5 +1,5 @@
 ---
-description: Executive audit report — combines security + quality + deps into one report. Relatório executivo combinado.
+description: Executive audit (security+quality+deps). Relatório executivo.
 ---
 
 Run a combined audit by invoking, in order:

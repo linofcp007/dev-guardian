@@ -1,5 +1,5 @@
 ---
-description: Deep pre-PR / pre-merge / pre-deploy review (security + bugs + quality + tests/CI). Revisão profunda antes de PR, merge ou deploy.
+description: Deep pre-PR / pre-deploy review. Revisão antes de PR ou deploy.
 ---
 
 Invoke the `guardian-review` skill for a senior-level review of the pending changes before PR, merge, or deploy.

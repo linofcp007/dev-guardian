@@ -1,5 +1,5 @@
 ---
-description: Compliance check — GDPR/RGPD, OSS licenses, SBOM, privacy policy scaffolding. Compliance, RGPD, licenças e SBOM.
+description: GDPR/RGPD, OSS licenses, SBOM. Compliance e licenças.
 ---
 
 Invoke the `guardian-compliance` skill for compliance checks.

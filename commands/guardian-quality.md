@@ -1,5 +1,5 @@
 ---
-description: Code quality and tech-debt analysis — smells, complexity, duplication, naming, refactor opportunities. Qualidade de código e dívida técnica.
+description: Code quality + tech-debt analysis. Qualidade e dívida técnica.
 ---
 
 Invoke the `guardian-quality` skill for code quality and tech-debt analysis.

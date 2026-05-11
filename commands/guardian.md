@@ -1,5 +1,5 @@
 ---
-description: Guardian router — auto-route to the right module (security, bugfix, quality, deps, observability, performance, compliance). Router principal do Guardian.
+description: Guardian router — picks the right module. Router principal.
 ---
 
 Invoke the `guardian` skill. The user wants the Guardian router to decide which module to run.

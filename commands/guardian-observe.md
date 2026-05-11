@@ -1,5 +1,5 @@
 ---
-description: Configure structured logging, metrics, error tracking, alerting with open-source stack (Pino/structlog, Prometheus, Grafana, GlitchTip, Uptime Kuma). Configura observability open-source.
+description: Logs, metrics, error tracking, alerts. Observability OSS.
 ---
 
 Invoke the `guardian-observability` skill to set up or audit the observability stack.

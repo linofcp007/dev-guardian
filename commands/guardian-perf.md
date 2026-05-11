@@ -1,5 +1,5 @@
 ---
-description: Performance budgets, load testing, profiling with k6, Artillery, Lighthouse. Performance budgets e load testing.
+description: Performance budgets + load testing. Performance e carga.
 ---
 
 Invoke the `guardian-performance` skill for performance work.

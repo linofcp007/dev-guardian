@@ -69,7 +69,7 @@ Then inside Claude Code, run `/plugin` and enable `dev-guardian`. Alternatively,
 
 ```json
 {
-  "enabledPlugins": { "dev-guardian": true }
+  "enabledPlugins": { "dev-guardian@dev-guardian": true }
 }
 ```
 
@@ -216,7 +216,7 @@ Depois, dentro do Claude Code, corre `/plugin` e ativa o `dev-guardian`. Em alte
 
 ```json
 {
-  "enabledPlugins": { "dev-guardian": true }
+  "enabledPlugins": { "dev-guardian@dev-guardian": true }
 }
 ```
 

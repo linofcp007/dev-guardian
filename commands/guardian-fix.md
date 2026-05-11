@@ -1,5 +1,5 @@
 ---
-description: Hunt and fix implementation bugs — race conditions, null safety, edge cases, off-by-one, memory leaks, missing error handling. Caça e corrige bugs de implementação.
+description: Find and fix implementation bugs. Caça e corrige bugs.
 ---
 
 Invoke the `guardian-bugfix` skill to find and fix implementation bugs in the current codebase.
