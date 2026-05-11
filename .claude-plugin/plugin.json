@@ -6,6 +6,8 @@
     "name": "Carlos Pereira",
     "email": "carlospereira@prodigitalkey.com"
   },
+  "homepage": "https://github.com/linofcp007/dev-guardian",
+  "repository": "https://github.com/linofcp007/dev-guardian",
   "license": "MIT",
   "keywords": [
     "security",

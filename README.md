@@ -47,9 +47,9 @@ You can also trigger everything via **natural language** (EN or PT) — skills f
 
 ### Plugin installation
 
-#### A) Via marketplace (recommended, shareable)
+#### A) Via marketplace (recommended, shareable) — Claude Code CLI
 
-Inside Claude Code:
+Inside the Claude Code CLI:
 
 ```text
 /plugin marketplace add https://github.com/linofcp007/dev-guardian
@@ -58,7 +58,9 @@ Inside Claude Code:
 
 Works with any git URL (HTTPS or SSH) or local folder path containing [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
 
-#### B) Manual folder copy
+> ⚠️ **Claude Desktop app limitation.** The Desktop client currently rejects third-party marketplaces with `External plugin sources are not yet supported` (the feature is gated server-side). This is a Claude Desktop limitation, not a problem with this plugin — installing from any GitHub-hosted marketplace fails the same way today. Tracking issues: [anthropics/claude-code#41653](https://github.com/anthropics/claude-code/issues/41653) (remote sources), [anthropics/claude-code#52147](https://github.com/anthropics/claude-code/issues/52147) (local paths). Until parity ships, use option **B** below or install via the Claude Code CLI.
+
+#### B) Manual folder copy (works everywhere)
 
 Copy the whole folder to:
 
@@ -194,9 +196,9 @@ Também podes invocar tudo em **linguagem natural** (PT ou EN) — as skills dis
 
 ### Instalação do plugin
 
-#### A) Via marketplace (recomendado, partilhável)
+#### A) Via marketplace (recomendado, partilhável) — Claude Code CLI
 
-Dentro do Claude Code:
+Dentro do Claude Code CLI:
 
 ```text
 /plugin marketplace add https://github.com/linofcp007/dev-guardian
@@ -205,7 +207,9 @@ Dentro do Claude Code:
 
 Funciona com qualquer URL git (HTTPS ou SSH) ou caminho local de uma pasta que contenha [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
 
-#### B) Cópia manual da pasta
+> ⚠️ **Limitação da app Claude Desktop.** O cliente Desktop rejeita atualmente marketplaces de terceiros com `External plugin sources are not yet supported` (a feature está bloqueada server-side). É uma limitação do Claude Desktop, não um problema deste plugin — qualquer marketplace alojado no GitHub falha hoje da mesma forma. Issues a acompanhar: [anthropics/claude-code#41653](https://github.com/anthropics/claude-code/issues/41653) (fontes remotas), [anthropics/claude-code#52147](https://github.com/anthropics/claude-code/issues/52147) (paths locais). Até a paridade chegar, usa a opção **B** abaixo ou instala via Claude Code CLI.
+
+#### B) Cópia manual da pasta (funciona em qualquer lado)
 
 Copia a pasta inteira para:
 

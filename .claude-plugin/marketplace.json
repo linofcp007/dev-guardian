@@ -1,5 +1,4 @@
 {
-  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "dev-guardian",
   "description": "dev-guardian marketplace — open-source security, quality and compliance tooling for Claude Code.",
   "owner": {
@@ -11,7 +10,6 @@
       "name": "dev-guardian",
       "source": "./",
       "description": "All-in-one open-source security, bugfix, quality, observability and compliance plugin. Stack-aware (Node/Python/PHP/Go/Rust/Ruby/Java). Bilingual EN/PT.",
-      "version": "0.1.0",
       "category": "security",
       "tags": [
         "security",
