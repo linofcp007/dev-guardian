@@ -1,89 +1,78 @@
 # Copilot instructions — dev-guardian
 
-This project uses the **dev-guardian MCP server** for security, quality,
-bugfix, dependency, compliance, observability, and performance tasks. The
-server exposes ~35 tools and 11 resources, all running open-source scanners
-locally with results persisted in `.guardian/guardian.db`.
+This project uses the **dev-guardian MCP server** — ~50 tools and 16
+resources for security, quality, bugfix, deps, compliance, observability,
+performance, WordPress, and .NET. All scanners run locally; results
+persist in `.guardian/guardian.db` for diffing and baselines.
 
-When the user's request matches one of the intents below, invoke the
-corresponding MCP tool rather than running the underlying scanner directly:
+When the user's request matches an intent below, invoke the corresponding
+MCP tool rather than the underlying scanner directly.
 
 ## Intent → tool
 
-### Security
-- "is this safe?" / "audit security" / "scan vulnerabilities" → `security_scan_full`
-- "any leaked secrets?" → `scan_secrets`
-- "vulnerable dependencies?" / "CVEs?" → `scan_deps` (raw) or `deps_audit` (with bot detection)
-- "Dockerfile / container security" → `scan_containers`
-- "Terraform / Kubernetes / IaC" → `scan_iac`
-- "bugs / race conditions / null safety" → `bug_hunt`
+**Security**: `security_scan_full`, `scan_sast`, `scan_secrets`,
+`scan_deps`, `scan_containers`, `scan_iac`, `bug_hunt`.
 
-### Quality
-- "review before PR" / "diff-scoped check" → `review_pr`
-- "code quality" / "duplication" → `quality_check`
+**Quality**: `review_pr`, `quality_check`.
 
-### Dependencies
-- "what should I update?" → `deps_update_plan`
-- "is renovate / dependabot configured?" → `deps_audit`
+**Deps**: `deps_audit`, `deps_update_plan` (npm/pip/composer/cargo/go/
+bundler/dotnet).
 
-### Compliance
-- "GDPR / SOC2 / ISO27001 evidence" → `compliance_check` + `compliance_evidence`
-- "SBOM" → `generate_sbom`
-- "license compatibility" → `license_compatibility`
+**Compliance**: `compliance_check`, `generate_sbom`,
+`license_compatibility`, `compliance_evidence`.
 
-### Operations
-- "bootstrap / init project" → `init_project`
-- "install scanners" → `install_toolchain`
-- "detect stack" → `detect_stack`
-- "add structured logging / metrics" → `observability_setup`
-- "performance check / Lighthouse / k6" → `perf_check`
+**Ops**: `init_project`, `install_toolchain`, `detect_stack`,
+`observability_setup`, `perf_check`.
 
-### Meta
-- "full audit" → `audit_executive`
-- "risk score" → `risk_score`
-- "what's new since last scan?" → `diff_scans`
-- "set baseline" → `set_baseline`
-- "false positives" / "reduce noise" → `triage_findings`
-- "how do I fix this finding?" → `suggest_fix` (returns context; you write the patch)
-- "export HTML report" → `report_export`
-- "open GitHub issues from top findings" → `create_github_issues` (uses local `gh` CLI; no API tokens needed)
-- "wire pre-commit hooks" → `precommit_install`
-- "is dev-guardian alive?" → `health_status`
+**WordPress**: `scan_wordpress`, `wp_audit`, `wp_vuln_check`,
+`wp_cron_audit`, `wp_rest_audit`, `wp_describe_setup`,
+`wp_recommend_hardening`, `wp_plugin_check`, `bulk_audit_wordpress_sites`.
+
+**.NET / C#**: `scan_dotnet_secrets`, `dotnet_target_framework_check`,
+`dotnet_efcore_audit`, `dotnet_describe_setup`.
+
+**Meta**: `audit_executive` (stack-aware — includes WP/.NET tools when
+detected), `risk_score`, `diff_scans`, `set_baseline`, `triage_findings`,
+`prioritize_findings`, `suggest_fix`, `report_export`,
+`create_github_issues` (local `gh` CLI), `precommit_install`,
+`register_custom_rules`, `health_status`, `regression_alert`,
+`sbom_diff`, `install_host_context`, `check_toolchain`,
+`suppress_finding`.
 
 ## Resources
 
-Read-only data the server exposes (via `guardian://...` URIs):
+- Findings: `guardian://findings/open` (paginated `?page=N&page_size=M`),
+  `guardian://findings/critical`, `guardian://findings/by-severity/{level}`
+- Scans: `guardian://scans/latest`, `guardian://scans/history`,
+  `guardian://scans/{scan_id}`
+- Other: `guardian://cves/active`, `guardian://sbom`, `guardian://stack`,
+  `guardian://compliance/status`, `guardian://baseline`
+- WordPress: `guardian://wp/audit/latest`, `guardian://wp/audit/{id}`,
+  `guardian://wp/cron`
+- .NET: `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`
 
-- `guardian://findings/open` — currently-open findings (suppressions filtered)
-- `guardian://findings/critical` — severity=critical subset
-- `guardian://cves/active` — CVEs from the latest deps scan
-- `guardian://compliance/status` — licenses + policy docs
-- `guardian://baseline` — active regression baseline
-- `guardian://stack` — detected stack
-- `guardian://scans/latest`, `guardian://scans/history`
+## Workflows
 
-## Typical workflows
+**Bootstrap**: `detect_stack` → `init_project` → `install_toolchain` →
+`security_scan_full` (or `scan_wordpress` for WP) → `set_baseline`.
 
-**Bootstrap a fresh project**
-1. `detect_stack`
-2. `init_project` with `profile: "standard"`
-3. `install_toolchain` (auto-install missing scanners)
-4. `security_scan_full`
-5. `set_baseline` to freeze the starting state
+**Before PR**: `review_pr` → `triage_findings` → `prioritize_findings` →
+`suggest_fix`.
 
-**Before opening a PR**
-1. `review_pr` — diff-scoped, fast
-2. `triage_findings` to bucket noise
-3. `suggest_fix` for real findings (returns ±20 lines of source); propose patches
+**Audit**: `audit_executive` (stack-aware) → `risk_score` →
+`compliance_evidence`.
 
-**Periodic audit**
-1. `audit_executive`
-2. `risk_score`
-3. `compliance_evidence` for handover
+**WP**: `scan_wordpress` + `wp_audit` + `wp_cron_audit` + `wp_rest_audit`
+→ `wp_recommend_hardening`.
 
-## Anti-patterns to avoid
+**.NET**: `dotnet_target_framework_check` + `scan_dotnet_secrets` +
+`scan_sast` + `dotnet_efcore_audit` → `dotnet_describe_setup`.
 
-- Don't run `security_scan_full` for every small change — use `review_pr`.
+## Anti-patterns
+
+- Don't run `security_scan_full` for tiny changes — use `review_pr`.
 - Don't `suppress_finding` before `triage_findings`.
-- Don't propose patches without `suggest_fix` first (you'll lack precise line context).
-- Don't shell out to scanners directly — you lose diff_scans, baselines, persistence.
+- Don't propose fixes without `suggest_fix` first (returns source context).
+- Don't shell out to scanners — you lose diff_scans, baselines, persistence.
+- Don't run `scan_wordpress` on a non-WP project — `detect_stack` first.
+- Don't run `wp_audit` without WP-CLI — `install_toolchain tools=["wp-cli"]`.

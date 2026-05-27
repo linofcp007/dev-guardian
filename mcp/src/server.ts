@@ -75,11 +75,24 @@ import './tools/installHostContext.js';
 import './tools/scanWordpress.js';
 import './tools/wpAudit.js';
 import './tools/wpVulnCheck.js';
+// Phase 16 — extended WP / .NET / cross-cutting:
+import './tools/wpCronAudit.js';
+import './tools/wpRecommendHardening.js';
+import './tools/wpPluginCheck.js';
+import './tools/wpRestAudit.js';
+import './tools/bulkAuditWordpressSites.js';
+import './tools/wpDescribeSetup.js';
+import './tools/scanDotnetSecrets.js';
+import './tools/dotnetTargetFrameworkCheck.js';
+import './tools/dotnetEfcoreAudit.js';
+import './tools/dotnetDescribeSetup.js';
+import './tools/prioritizeFindings.js';
 
 import './resources/scans.js';
 import './resources/findings.js';
 import './resources/misc.js';
 import './resources/wp.js';
+import './resources/dotnet.js';
 
 const SERVER_NAME = 'dev-guardian';
 const SERVER_VERSION = '0.1.0';

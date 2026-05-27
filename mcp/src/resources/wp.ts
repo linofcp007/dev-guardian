@@ -44,35 +44,49 @@ registerResourceModule({
     if (!scanId) throw mcpInvalidParams('scan_id is required');
     const scan = ctx.storage.scans.getById(scanId);
     if (!scan) throw mcpInvalidParams(`unknown scan_id '${scanId}'`);
-    // wp_audit is persisted under scan_type='audit' with a `meta.checksum_mismatches`
-    // marker — we shape the resource around that to avoid creating a new
-    // scan_type purely for this.
-    const meta = scan.meta ?? {};
-    if (!('checksum_mismatches' in (meta as Record<string, unknown>))) {
-      throw mcpInvalidParams(`scan '${scanId}' is not a wp_audit`);
+    if (scan.scan_type !== 'wp_audit') {
+      throw mcpInvalidParams(`scan '${scanId}' is not a wp_audit (type='${scan.scan_type}')`);
     }
     return {
       json: {
         scan_id: scanId,
         captured_at: scan.started_at,
-        ...(meta as Record<string, unknown>),
+        ...((scan.meta ?? {}) as Record<string, unknown>),
+      },
+    };
+  },
+});
+
+registerResourceModule({
+  name: 'guardian-wp-cron',
+  uri: 'guardian://wp/cron',
+  description:
+    'Latest wp_cron_audit result: total scheduled events + flagged ones (suspicious hooks, ' +
+    'base64-looking args, hooks from inactive plugins).',
+  handler: async (_uri, _params, ctx) => {
+    const scan = findLatestOfType(ctx, 'wp_cron_audit');
+    if (!scan) return { json: { last_run: null } };
+    return {
+      json: {
+        scan_id: scan.scan_id,
+        captured_at: scan.started_at,
+        ...((scan.meta ?? {}) as Record<string, unknown>),
       },
     };
   },
 });
 
 function findLatestWpAudit(ctx: PluginContext): ReturnType<typeof ctx.storage.scans.getById> {
-  // wp_audit rows live as scan_type='audit' carrying a `meta.checksum_mismatches`
-  // marker. Filter for that marker.
+  return findLatestOfType(ctx, 'wp_audit');
+}
+
+function findLatestOfType(
+  ctx: PluginContext,
+  type: string,
+): ReturnType<typeof ctx.storage.scans.getById> {
   const history = ctx.storage.scans.listHistory(50);
-  for (const row of history) {
-    if (row.status !== 'completed' || row.scan_type !== 'audit') continue;
-    const full = ctx.storage.scans.getById(row.scan_id);
-    if (full?.meta && 'checksum_mismatches' in (full.meta as Record<string, unknown>)) {
-      return full;
-    }
-  }
-  return null;
+  const row = history.find((s) => s.scan_type === type && s.status === 'completed');
+  return row ? ctx.storage.scans.getById(row.scan_id) : null;
 }
 
 interface JsonRpcError extends Error {

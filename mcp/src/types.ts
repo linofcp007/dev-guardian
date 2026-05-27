@@ -50,6 +50,16 @@ export const SCAN_TYPES = [
   'perf',
   'init',
   'observability',
+  // WordPress family
+  'wordpress',
+  'wp_audit',
+  'wp_vuln_check',
+  'wp_cron_audit',
+  'wp_rest_audit',
+  // .NET family
+  'dotnet_secrets',
+  'dotnet_target_framework',
+  'dotnet_efcore_audit',
 ] as const;
 export type ScanType = (typeof SCAN_TYPES)[number];
 

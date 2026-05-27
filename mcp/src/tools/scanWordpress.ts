@@ -49,7 +49,7 @@ registerToolModule(
       'WP rule pack, Trivy fs for composer.lock CVEs, gitleaks for secrets, PHPCS WordPress ' +
       'standard. Each scanner that is missing is skipped with reason. Use wp_audit / wp_vuln_check ' +
       'for live-install scenarios.',
-    scan_type: 'wordpress' as never,
+    scan_type: 'wordpress',
     category: 'security',
     inputSchema: {
       project_path: ProjectPath,
@@ -82,130 +82,150 @@ registerToolModule(
         );
       }
 
-      // --- Semgrep (PHP + WordPress rule pack) ----------------------------
-      const semgrepBin = await scannerAvailable('semgrep');
+      // The 4 scanners are independent: separate report files, separate
+      // CLIs. Run in parallel — wall-clock drops from sum to max.
+      const [semgrepBin, gitleaksBin, trivyBin, phpcsBin] = await Promise.all([
+        scannerAvailable('semgrep'),
+        scannerAvailable('gitleaks'),
+        scannerAvailable('trivy'),
+        scannerAvailable('phpcs'),
+      ]);
+
+      const tasks: Array<Promise<void>> = [];
+
       if (semgrepBin) {
-        const outFile = join(reportDir, 'sast.json');
-        const args = [
-          '--config=p/php',
-          '--config=p/wordpress',
-          '--json',
-          '--quiet',
-          '--output',
-          outFile,
-        ];
-        if (inp.auto_fix === true) args.push('--autofix');
-        args.push(ctx.projectPath);
-        const r = await runProcess({
-          command: 'semgrep',
-          args,
-          cwd: ctx.projectPath,
-          env: ctx.scriptEnv,
-          signal: ctx.signal,
-          onLog: ctx.onLog,
-        });
-        const raw = readJsonSafe(outFile);
-        if (raw) parser_inputs.push({ parser: semgrepParser, input: raw });
-        const ok = r.outcome === 'completed' || r.exitCode === 1;
-        tools_run.push({ name: 'semgrep-wp', status: ok ? 'ok' : 'failed' });
+        tasks.push(
+          (async () => {
+            const outFile = join(reportDir, 'sast.json');
+            const args = [
+              '--config=p/php',
+              '--config=p/wordpress',
+              '--json',
+              '--quiet',
+              '--output',
+              outFile,
+            ];
+            if (inp.auto_fix === true) args.push('--autofix');
+            args.push(ctx.projectPath);
+            const r = await runProcess({
+              command: 'semgrep',
+              args,
+              cwd: ctx.projectPath,
+              env: ctx.scriptEnv,
+              signal: ctx.signal,
+              onLog: ctx.onLog,
+            });
+            const raw = readJsonSafe(outFile);
+            if (raw) parser_inputs.push({ parser: semgrepParser, input: raw });
+            const ok = r.outcome === 'completed' || r.exitCode === 1;
+            tools_run.push({ name: 'semgrep-wp', status: ok ? 'ok' : 'failed' });
+          })(),
+        );
       } else {
         tools_run.push({ name: 'semgrep-wp', status: 'skipped', reason: 'not_installed' });
         missing_tools.push('semgrep');
       }
 
-      // --- gitleaks --------------------------------------------------------
-      const gitleaksBin = await scannerAvailable('gitleaks');
       if (gitleaksBin) {
-        const outFile = join(reportDir, 'secrets.json');
-        const r = await runProcess({
-          command: 'gitleaks',
-          args: [
-            'detect',
-            '--no-banner',
-            '--report-format=json',
-            `--report-path=${outFile}`,
-            '--redact',
-            '-s',
-            ctx.projectPath,
-          ],
-          cwd: ctx.projectPath,
-          env: ctx.scriptEnv,
-          signal: ctx.signal,
-          onLog: ctx.onLog,
-        });
-        const raw = readJsonSafe(outFile);
-        if (raw) parser_inputs.push({ parser: gitleaksParser, input: raw });
-        const ok = r.outcome === 'completed' || r.exitCode === 1;
-        tools_run.push({ name: 'gitleaks', status: ok ? 'ok' : 'failed' });
+        tasks.push(
+          (async () => {
+            const outFile = join(reportDir, 'secrets.json');
+            const r = await runProcess({
+              command: 'gitleaks',
+              args: [
+                'detect',
+                '--no-banner',
+                '--report-format=json',
+                `--report-path=${outFile}`,
+                '--redact',
+                '-s',
+                ctx.projectPath,
+              ],
+              cwd: ctx.projectPath,
+              env: ctx.scriptEnv,
+              signal: ctx.signal,
+              onLog: ctx.onLog,
+            });
+            const raw = readJsonSafe(outFile);
+            if (raw) parser_inputs.push({ parser: gitleaksParser, input: raw });
+            const ok = r.outcome === 'completed' || r.exitCode === 1;
+            tools_run.push({ name: 'gitleaks', status: ok ? 'ok' : 'failed' });
+          })(),
+        );
       } else {
         tools_run.push({ name: 'gitleaks', status: 'skipped', reason: 'not_installed' });
         missing_tools.push('gitleaks');
       }
 
-      // --- Trivy fs (composer.lock CVEs) ----------------------------------
-      const trivyBin = await scannerAvailable('trivy');
       if (trivyBin) {
-        const outFile = join(reportDir, 'deps.json');
-        const r = await runProcess({
-          command: 'trivy',
-          args: [
-            'fs',
-            '--scanners',
-            'vuln,license',
-            '--format',
-            'json',
-            '--output',
-            outFile,
-            '--quiet',
-            ctx.projectPath,
-          ],
-          cwd: ctx.projectPath,
-          env: ctx.scriptEnv,
-          signal: ctx.signal,
-          onLog: ctx.onLog,
-        });
-        const raw = readJsonSafe(outFile);
-        if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
-        tools_run.push({
-          name: 'trivy',
-          status: r.outcome === 'completed' ? 'ok' : 'failed',
-        });
+        tasks.push(
+          (async () => {
+            const outFile = join(reportDir, 'deps.json');
+            const r = await runProcess({
+              command: 'trivy',
+              args: [
+                'fs',
+                '--scanners',
+                'vuln,license',
+                '--format',
+                'json',
+                '--output',
+                outFile,
+                '--quiet',
+                ctx.projectPath,
+              ],
+              cwd: ctx.projectPath,
+              env: ctx.scriptEnv,
+              signal: ctx.signal,
+              onLog: ctx.onLog,
+            });
+            const raw = readJsonSafe(outFile);
+            if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
+            tools_run.push({
+              name: 'trivy',
+              status: r.outcome === 'completed' ? 'ok' : 'failed',
+            });
+          })(),
+        );
       } else {
         tools_run.push({ name: 'trivy', status: 'skipped', reason: 'not_installed' });
         missing_tools.push('trivy');
       }
 
-      // --- PHPCS + WPCS ---------------------------------------------------
-      const phpcsBin = await scannerAvailable('phpcs');
       if (phpcsBin) {
-        const outFile = join(reportDir, 'phpcs.json');
-        const r = await runProcess({
-          command: 'phpcs',
-          args: [
-            `--standard=${standard}`,
-            '--report=json',
-            `--report-file=${outFile}`,
-            '--extensions=php',
-            ctx.projectPath,
-          ],
-          cwd: ctx.projectPath,
-          env: ctx.scriptEnv,
-          signal: ctx.signal,
-          onLog: ctx.onLog,
-        });
-        const raw = readJsonSafe(outFile);
-        if (raw) parser_inputs.push({ parser: phpcsParser, input: raw });
-        // phpcs exits 1 when issues are found — that is OK.
-        const ok = r.outcome === 'completed' || r.exitCode === 1 || r.exitCode === 2;
-        tools_run.push({
-          name: 'phpcs-wpcs',
-          status: ok ? 'ok' : 'failed',
-          reason: ok ? undefined : `phpcs exit ${r.exitCode}`,
-        } as ToolRun);
+        tasks.push(
+          (async () => {
+            const outFile = join(reportDir, 'phpcs.json');
+            const r = await runProcess({
+              command: 'phpcs',
+              args: [
+                `--standard=${standard}`,
+                '--report=json',
+                `--report-file=${outFile}`,
+                '--extensions=php',
+                ctx.projectPath,
+              ],
+              cwd: ctx.projectPath,
+              env: ctx.scriptEnv,
+              signal: ctx.signal,
+              onLog: ctx.onLog,
+            });
+            const raw = readJsonSafe(outFile);
+            if (raw) parser_inputs.push({ parser: phpcsParser, input: raw });
+            const ok = r.outcome === 'completed' || r.exitCode === 1 || r.exitCode === 2;
+            tools_run.push({
+              name: 'phpcs-wpcs',
+              status: ok ? 'ok' : 'failed',
+              reason: ok ? undefined : `phpcs exit ${r.exitCode}`,
+            } as ToolRun);
+          })(),
+        );
       } else {
         tools_run.push({ name: 'phpcs-wpcs', status: 'skipped', reason: 'not_installed' });
         missing_tools.push('phpcs');
       }
+
+      await Promise.all(tasks);
 
       const extras: Record<string, unknown> = { wordpress_layout_detected: looksWp };
       if (warnings.length > 0) extras['warnings_extra'] = warnings;

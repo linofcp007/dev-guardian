@@ -118,7 +118,7 @@ async function handler(
 
   ctx.storage.scans.insert({
     scan_id: scanId,
-    scan_type: 'security_full' as never,
+    scan_type: 'wp_vuln_check',
     project_path: inp.wp_install_path ?? url!,
     tree_hash: '',
     report_dir: reportDir,

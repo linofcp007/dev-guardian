@@ -29,7 +29,9 @@ import {
 } from '../types.js';
 import { registerToolModule, TOOLS, type ToolModule } from './index.js';
 
-const SUB_TOOLS = ['security_scan_full', 'quality_check', 'deps_audit', 'compliance_check'] as const;
+const BASE_SUB_TOOLS = ['security_scan_full', 'quality_check', 'deps_audit', 'compliance_check'] as const;
+const WP_EXTRA_SUB_TOOLS = ['scan_wordpress'] as const;
+const DOTNET_EXTRA_SUB_TOOLS = ['scan_dotnet_secrets', 'dotnet_target_framework_check'] as const;
 
 interface SubScanSummary {
   tool: string;
@@ -99,8 +101,12 @@ async function handler(
   const subInput: Record<string, unknown> = { project_path: projectPath };
   if (inp.severity_min) subInput['severity_min'] = inp.severity_min;
 
+  // Stack-aware: extend the base set with WP / .NET tools when the latest
+  // stack snapshot indicates those languages.
+  const subTools = buildSubToolsForStack(ctx);
+
   const subResultsArr = await Promise.all(
-    SUB_TOOLS.map(async (toolName) => {
+    subTools.map(async (toolName) => {
       const subTool = TOOLS.find((t) => t.name === toolName);
       if (!subTool) {
         return [
@@ -183,7 +189,7 @@ async function handler(
   ctx.storage.scans.finalize({
     scan_id: auditScanId,
     status: 'completed',
-    tools_run: SUB_TOOLS.map((name) => ({
+    tools_run: subTools.map((name) => ({
       name,
       status: subResults[name]?.ok ? 'ok' : 'failed',
       ...(subResults[name]?.error ? { reason: subResults[name]!.error!.code } : {}),
@@ -200,6 +206,20 @@ async function handler(
     top_findings,
     ...(deltas ? { deltas } : {}),
   };
+}
+
+function buildSubToolsForStack(ctx: PluginContext): readonly string[] {
+  const snap = ctx.storage.stack.getLatest()?.snapshot;
+  const languages = snap?.languages ?? [];
+  const frameworks = snap?.frameworks ?? [];
+  const out: string[] = [...BASE_SUB_TOOLS];
+  if (languages.includes('php') && frameworks.includes('wordpress')) {
+    out.push(...WP_EXTRA_SUB_TOOLS);
+  }
+  if (languages.includes('csharp') || languages.includes('fsharp')) {
+    out.push(...DOTNET_EXTRA_SUB_TOOLS);
+  }
+  return out;
 }
 
 function findPreviousAudit(ctx: PluginContext, excludeScanId: string): string | null {

@@ -120,82 +120,101 @@ async function handler(
     warnings: [],
   };
 
-  // -------- WP core version
-  const versionResult = await retry(() =>
-    wpCall(['core', 'version', `--path=${installPath}`], installPath, ctx),
-  );
+  // Parallelise the independent WP-CLI subcommands. Each call goes through
+  // the same retry policy (3 attempts, exp. backoff). Worst case improves
+  // from 9 × ~10s sequential to ~10s wall-clock when ALL of them retry.
+  const configFlags = includeOptions
+    ? ['DISALLOW_FILE_EDIT', 'WP_DEBUG', 'WP_DEBUG_LOG', 'FORCE_SSL_ADMIN']
+    : [];
+
+  const [
+    versionResult,
+    coreVerify,
+    pluginVerify,
+    themeVerify,
+    adminResult,
+    pluginListResult,
+    ...configResults
+  ] = await Promise.all([
+    retry(() => wpCall(['core', 'version', `--path=${installPath}`], installPath, ctx)),
+    retry(() =>
+      wpCall(
+        ['core', 'verify-checksums', `--path=${installPath}`, '--format=json'],
+        installPath,
+        ctx,
+      ),
+    ),
+    retry(() =>
+      wpCall(
+        ['plugin', 'verify-checksums', '--all', `--path=${installPath}`, '--format=json'],
+        installPath,
+        ctx,
+      ),
+    ),
+    retry(() =>
+      wpCall(
+        ['theme', 'verify-checksums', '--all', `--path=${installPath}`, '--format=json'],
+        installPath,
+        ctx,
+      ),
+    ),
+    includeUsers
+      ? retry(() =>
+          wpCall(
+            [
+              'user',
+              'list',
+              '--role=administrator',
+              `--path=${installPath}`,
+              '--fields=user_login,user_email',
+              '--format=json',
+            ],
+            installPath,
+            ctx,
+          ),
+        )
+      : Promise.resolve({ ok: true, stdout: '[]', stderr: '', reason: '' } as WpResult),
+    retry(() =>
+      wpCall(
+        [
+          'plugin',
+          'list',
+          `--path=${installPath}`,
+          '--fields=name,auto_update',
+          '--format=json',
+        ],
+        installPath,
+        ctx,
+      ),
+    ),
+    ...configFlags.map((flag) =>
+      retry(() => wpCall(['config', 'get', flag, `--path=${installPath}`], installPath, ctx)),
+    ),
+  ]);
+
+  // -------- Apply results
   if (versionResult.ok) {
     meta.wp_version = versionResult.stdout.trim() || null;
   } else {
     meta.warnings.push(`core version: ${versionResult.reason}`);
   }
 
-  // -------- Checksums
-  const coreVerify = await retry(() =>
-    wpCall(
-      ['core', 'verify-checksums', `--path=${installPath}`, '--format=json'],
-      installPath,
-      ctx,
-    ),
-  );
   meta.checksum_mismatches.core = parseChecksumOutput(coreVerify);
   if (!coreVerify.ok) meta.warnings.push(`core verify-checksums: ${coreVerify.reason}`);
 
-  const pluginVerify = await retry(() =>
-    wpCall(
-      ['plugin', 'verify-checksums', '--all', `--path=${installPath}`, '--format=json'],
-      installPath,
-      ctx,
-    ),
-  );
   meta.checksum_mismatches.plugins = groupByComponent(pluginVerify);
-  if (!pluginVerify.ok)
-    meta.warnings.push(`plugin verify-checksums: ${pluginVerify.reason}`);
+  if (!pluginVerify.ok) meta.warnings.push(`plugin verify-checksums: ${pluginVerify.reason}`);
 
-  const themeVerify = await retry(() =>
-    wpCall(
-      ['theme', 'verify-checksums', '--all', `--path=${installPath}`, '--format=json'],
-      installPath,
-      ctx,
-    ),
-  );
   meta.checksum_mismatches.themes = groupByComponent(themeVerify);
   if (!themeVerify.ok) meta.warnings.push(`theme verify-checksums: ${themeVerify.reason}`);
 
-  // -------- Config flags
-  if (includeOptions) {
-    for (const flag of ['DISALLOW_FILE_EDIT', 'WP_DEBUG', 'WP_DEBUG_LOG', 'FORCE_SSL_ADMIN']) {
-      const r = await retry(() =>
-        wpCall(['config', 'get', flag, `--path=${installPath}`], installPath, ctx),
-      );
-      if (r.ok) {
-        const val = r.stdout.trim().toLowerCase();
-        meta.config_flags[flag] = val === 'true' || val === '1';
-      } else {
-        meta.warnings.push(`config get ${flag}: ${r.reason}`);
-      }
-    }
-  }
-
-  // -------- Admins
   if (includeUsers) {
-    const r = await retry(() =>
-      wpCall(
-        [
-          'user',
-          'list',
-          '--role=administrator',
-          `--path=${installPath}`,
-          '--fields=user_login,user_email',
-          '--format=json',
-        ],
-        installPath,
-        ctx,
-      ),
-    );
-    if (r.ok) {
+    if (adminResult.ok) {
       try {
-        const arr = JSON.parse(r.stdout) as Array<{ user_login: string; user_email: string }>;
+        const arr = JSON.parse(adminResult.stdout) as Array<{
+          user_login: string;
+          user_email: string;
+        }>;
         meta.admins = arr.map((u) => ({
           user_login: u.user_login,
           user_email: u.user_email,
@@ -205,24 +224,10 @@ async function handler(
         meta.warnings.push('user list: stdout not JSON');
       }
     } else {
-      meta.warnings.push(`user list: ${r.reason}`);
+      meta.warnings.push(`user list: ${adminResult.reason}`);
     }
   }
 
-  // -------- Plugins with auto_update
-  const pluginListResult = await retry(() =>
-    wpCall(
-      [
-        'plugin',
-        'list',
-        `--path=${installPath}`,
-        '--fields=name,auto_update',
-        '--format=json',
-      ],
-      installPath,
-      ctx,
-    ),
-  );
   if (pluginListResult.ok) {
     try {
       const arr = JSON.parse(pluginListResult.stdout) as Array<{
@@ -239,11 +244,22 @@ async function handler(
     meta.warnings.push(`plugin list: ${pluginListResult.reason}`);
   }
 
+  configFlags.forEach((flag, i) => {
+    const r = configResults[i];
+    if (!r) return;
+    if (r.ok) {
+      const val = r.stdout.trim().toLowerCase();
+      meta.config_flags[flag] = val === 'true' || val === '1';
+    } else {
+      meta.warnings.push(`config get ${flag}: ${r.reason}`);
+    }
+  });
+
   // -------- Persist scan row with meta
   const scanId = randomUUID();
   ctx.storage.scans.insert({
     scan_id: scanId,
-    scan_type: 'audit' as never, // wp_audit lives under the broader audit umbrella
+    scan_type: 'wp_audit',
     project_path: installPath,
     tree_hash: '',
   });
