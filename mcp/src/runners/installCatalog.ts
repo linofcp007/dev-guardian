@@ -180,7 +180,78 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
       linux: { apt: aptInstall('k6') },
       darwin: { brew: brewInstall('k6') },
     },
-    default: false, // opt-in
+    default: false,
+  },
+  // ---------- WordPress ----------
+  'wp-cli': {
+    name: 'wp-cli',
+    version_floor: '2.8.0',
+    required_by: ['wp_audit', 'wp_vuln_check'],
+    install: {
+      win32: { scoop: scoopInstall('wp-cli'), choco: chocoInstall('wp-cli') },
+      linux: { curl: wpCliCurlInstaller() },
+      darwin: { brew: brewInstall('wp-cli') },
+    },
+    default: false,
+  },
+  wpscan: {
+    name: 'wpscan',
+    version_floor: '3.8.0',
+    required_by: ['wp_vuln_check'],
+    install: {
+      // wpscan is a Ruby gem. Windows native needs Ruby; we recommend WSL.
+      win32: { scoop: scoopInstall('wpscan') },
+      linux: { apt: gemInstall('wpscan') },
+      darwin: { brew: brewInstall('wpscanteam/tap/wpscan') },
+    },
+    default: false,
+  },
+  phpcs: {
+    name: 'phpcs',
+    version_floor: '3.7.0',
+    required_by: ['scan_wordpress'],
+    install: {
+      win32: { choco: chocoInstall('php-codesniffer') },
+      linux: { apt: aptInstall('php-codesniffer') },
+      darwin: { brew: brewInstall('php-code-sniffer') },
+    },
+    default: false,
+  },
+  // ---------- .NET (SDK never auto-installed) ----------
+  'dotnet-sdk': {
+    name: 'dotnet-sdk',
+    version_floor: '6.0.0',
+    required_by: ['scan_sast', 'deps_update_plan'],
+    install: {
+      // dev-guardian NEVER auto-installs the .NET SDK. These specs only
+      // exist so check_toolchain surfaces install hints.
+      win32: { winget: dotnetSdkHint('winget install Microsoft.DotNet.SDK.6') },
+      linux: { apt: dotnetSdkHint('see https://learn.microsoft.com/dotnet/core/install/linux') },
+      darwin: { brew: dotnetSdkHint('brew install --cask dotnet-sdk') },
+    },
+    default: false,
+  },
+  'dotnet-outdated': {
+    name: 'dotnet-outdated',
+    version_floor: '4.0.0',
+    required_by: ['deps_update_plan'],
+    install: {
+      win32: { winget: dotnetGlobalTool('dotnet-outdated-tool') },
+      linux: { apt: dotnetGlobalTool('dotnet-outdated-tool') },
+      darwin: { brew: dotnetGlobalTool('dotnet-outdated-tool') },
+    },
+    default: false,
+  },
+  'dotnet-format': {
+    name: 'dotnet-format',
+    version_floor: '5.0.0',
+    required_by: ['quality_check'],
+    install: {
+      win32: { winget: dotnetGlobalTool('dotnet-format') },
+      linux: { apt: dotnetGlobalTool('dotnet-format') },
+      darwin: { brew: dotnetGlobalTool('dotnet-format') },
+    },
+    default: false,
   },
 };
 
@@ -256,6 +327,51 @@ function curlInstaller(url: string): InstallSpec {
     args: ['-c', `curl -sSfL ${url} | sh -s -- -b "$HOME/.local/bin"`],
     needs_elevation: false,
     description: `curl ${url} | sh`,
+  };
+}
+
+function gemInstall(pkg: string): InstallSpec {
+  return {
+    command: 'gem',
+    args: ['install', pkg],
+    needs_elevation: false,
+    description: `gem install ${pkg}`,
+  };
+}
+
+function wpCliCurlInstaller(): InstallSpec {
+  // Official one-liner from https://wp-cli.org/.
+  return {
+    command: 'bash',
+    args: [
+      '-c',
+      'curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar && ' +
+        'chmod +x wp-cli.phar && mv wp-cli.phar "$HOME/.local/bin/wp"',
+    ],
+    needs_elevation: false,
+    description: 'curl wp-cli.phar → ~/.local/bin/wp',
+  };
+}
+
+function dotnetSdkHint(humanCommand: string): InstallSpec {
+  // SENTINEL: this spec is NEVER executed by install_toolchain — the tool
+  // checks meta.name and treats `dotnet-sdk` as read-only. We surface this
+  // string via `check_toolchain.install_command` so the user knows how to
+  // proceed manually.
+  return {
+    command: 'echo',
+    args: [humanCommand],
+    needs_elevation: false,
+    description: humanCommand,
+  };
+}
+
+function dotnetGlobalTool(pkg: string): InstallSpec {
+  return {
+    command: 'dotnet',
+    args: ['tool', 'install', '--global', pkg],
+    needs_elevation: false,
+    description: `dotnet tool install --global ${pkg}`,
   };
 }
 

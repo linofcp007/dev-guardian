@@ -1,0 +1,41 @@
+{
+  "totals": { "errors": 2, "warnings": 1, "fixable": 0 },
+  "files": {
+    "src/plugin.php": {
+      "errors": 2,
+      "warnings": 0,
+      "messages": [
+        {
+          "message": "Output should be escaped via esc_html()",
+          "source": "WordPress.Security.EscapeOutput.OutputNotEscaped",
+          "severity": 5,
+          "line": 42,
+          "column": 5,
+          "type": "ERROR"
+        },
+        {
+          "message": "Use of $wpdb->prepare() is required",
+          "source": "WordPress.DB.PreparedSQL.NotPrepared",
+          "severity": 5,
+          "line": 88,
+          "column": 1,
+          "type": "ERROR"
+        }
+      ]
+    },
+    "src/admin.php": {
+      "errors": 0,
+      "warnings": 1,
+      "messages": [
+        {
+          "message": "Line exceeds 80 characters",
+          "source": "Generic.Files.LineLength.MaxExceeded",
+          "severity": 2,
+          "line": 15,
+          "column": 1,
+          "type": "WARNING"
+        }
+      ]
+    }
+  }
+}

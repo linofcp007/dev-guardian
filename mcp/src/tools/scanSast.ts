@@ -7,10 +7,11 @@
  * and Python sources are detected, is run in the same pass.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
+import { securityCodeScanParser } from '../runners/scannerParsers/securityCodeScan.js';
 import { runProcess } from '../runners/processRunner.js';
 import {
   AllowDirty,
@@ -57,9 +58,13 @@ registerToolModule(
 
       // --- Semgrep -----------------------------------------------------
       const semgrepBin = await scannerAvailable('semgrep');
+      // C# / .NET signal: when csproj exists, also pin p/csharp rule pack.
+      const hasCsproj = anyCsprojInProject(ctx.projectPath);
       if (semgrepBin) {
         const outFile = join(reportDir, 'sast.json');
-        const args = ['--config=auto', '--json', '--quiet', '--output', outFile];
+        const args = ['--config=auto'];
+        if (hasCsproj) args.push('--config=p/csharp');
+        args.push('--json', '--quiet', '--output', outFile);
         if (autoFix) args.push('--autofix');
         args.push(ctx.projectPath);
 
@@ -117,6 +122,42 @@ registerToolModule(
         }
       }
 
+      // --- security-code-scan (Roslyn analyzer) -----------------------
+      // Only fires when csproj refs `security-code-scan` already — we never
+      // mutate user .csproj files. If the project opted-in, run dotnet build
+      // and harvest the SCS#### lines from the log.
+      if (hasCsproj && csprojReferencesScs(ctx.projectPath)) {
+        const dotnetBin = await scannerAvailable('dotnet');
+        if (dotnetBin) {
+          const result = await runProcess({
+            command: 'dotnet',
+            args: ['build', '--no-incremental', '--verbosity:diag', ctx.projectPath],
+            cwd: ctx.projectPath,
+            env: ctx.scriptEnv,
+            signal: ctx.signal,
+            onLog: ctx.onLog,
+            timeoutMs: 10 * 60_000,
+          });
+          // Parse SCS lines from stdout (build log).
+          parser_inputs.push({ parser: securityCodeScanParser, input: result.stdout });
+          tools_run.push({
+            name: 'security-code-scan',
+            status: result.outcome === 'completed' || result.exitCode === 1 ? 'ok' : 'failed',
+            reason:
+              result.outcome === 'completed'
+                ? undefined
+                : (result.stderr.split(/\r?\n/)[0] ?? 'dotnet build failed'),
+          } as ToolRun);
+        } else {
+          tools_run.push({
+            name: 'security-code-scan',
+            status: 'skipped',
+            reason: 'dotnet SDK not installed',
+          });
+          missing_tools.push('dotnet-sdk');
+        }
+      }
+
       const anyOk = tools_run.some((t) => t.status === 'ok');
       const outcome = anyOk ? 'completed' : missing_tools.length > 0 ? 'completed' : 'failed';
 
@@ -130,3 +171,44 @@ registerToolModule(
     },
   }),
 );
+
+function anyCsprojInProject(projectPath: string): boolean {
+  try {
+    return readdirSync(projectPath).some(
+      (n) => n.endsWith('.csproj') || n.endsWith('.fsproj'),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function csprojReferencesScs(projectPath: string): boolean {
+  // Cheap check: scan the first-level *.csproj files for the
+  // security-code-scan package name. We don't recurse — projects opting in
+  // typically put the analyzer ref at the root csproj or a Directory.Build.props.
+  let csprojs: string[];
+  try {
+    csprojs = readdirSync(projectPath).filter((n) => n.endsWith('.csproj'));
+  } catch {
+    return false;
+  }
+  for (const file of csprojs) {
+    try {
+      const xml = readFileSync(join(projectPath, file), 'utf8');
+      if (/security[-_]?code[-_]?scan/i.test(xml)) return true;
+    } catch {
+      /* ignore */
+    }
+  }
+  // Also check Directory.Build.props if present.
+  const dbProps = join(projectPath, 'Directory.Build.props');
+  if (existsSync(dbProps)) {
+    try {
+      const xml = readFileSync(dbProps, 'utf8');
+      if (/security[-_]?code[-_]?scan/i.test(xml)) return true;
+    } catch {
+      /* ignore */
+    }
+  }
+  return false;
+}

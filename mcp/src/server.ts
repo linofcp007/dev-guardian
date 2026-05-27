@@ -71,10 +71,15 @@ import './tools/reportExport.js';
 import './tools/complianceEvidence.js';
 import './tools/createGithubIssues.js';
 import './tools/installHostContext.js';
+// WordPress + .NET (Phase 15):
+import './tools/scanWordpress.js';
+import './tools/wpAudit.js';
+import './tools/wpVulnCheck.js';
 
 import './resources/scans.js';
 import './resources/findings.js';
 import './resources/misc.js';
+import './resources/wp.js';
 
 const SERVER_NAME = 'dev-guardian';
 const SERVER_VERSION = '0.1.0';

@@ -162,6 +162,8 @@ export const DOMAIN_ERROR_CODES = [
   'output_too_large',
   'scanner_failed',
   'cancelled',
+  'not_a_wordpress_install',
+  'not_a_wordpress_project',
 ] as const;
 export type DomainErrorCode = (typeof DOMAIN_ERROR_CODES)[number];
 

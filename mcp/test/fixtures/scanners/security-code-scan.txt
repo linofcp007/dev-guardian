@@ -1,0 +1,9 @@
+Microsoft (R) Build Engine version 8.0.0+...
+Restored /work/proj/Proj.csproj (in 142 ms).
+
+src/Controllers/HomeController.cs(42,15): warning SCS0001: Possible SQL injection vulnerability [proj/Proj.csproj]
+src/Controllers/HomeController.cs(58,21): warning SCS0006: Weak hashing algorithm (MD5) [proj/Proj.csproj]
+src/Models/User.cs(110,5): error SCS0029: Potential XSS via Response.Write [proj/Proj.csproj]
+src/Util/Crypto.cs(15,9): warning SCS0011: Weak cipher mode for symmetric encryption [proj/Proj.csproj]
+
+Build succeeded with 4 warnings.

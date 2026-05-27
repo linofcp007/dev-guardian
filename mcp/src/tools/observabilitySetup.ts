@@ -104,7 +104,7 @@ async function handler(
   };
 }
 
-type Stack = 'node' | 'python' | 'php' | 'go' | 'rust' | 'java' | 'ruby' | 'generic';
+type Stack = 'node' | 'python' | 'php' | 'go' | 'rust' | 'java' | 'ruby' | 'dotnet' | 'generic';
 
 function inferStack(projectPath: string, ctx: PluginContext): Stack {
   // Prefer the latest stack snapshot when available — it understands frameworks too.
@@ -117,6 +117,7 @@ function inferStack(projectPath: string, ctx: PluginContext): Stack {
     if (snap.languages?.includes('rust')) return 'rust';
     if (snap.languages?.includes('java')) return 'java';
     if (snap.languages?.includes('ruby')) return 'ruby';
+    if (snap.languages?.includes('csharp')) return 'dotnet';
   }
   // Filesystem fallback.
   if (existsSync(join(projectPath, 'package.json'))) return 'node';
@@ -131,6 +132,13 @@ function inferStack(projectPath: string, ctx: PluginContext): Stack {
   if (existsSync(join(projectPath, 'pom.xml')) || existsSync(join(projectPath, 'build.gradle')))
     return 'java';
   if (existsSync(join(projectPath, 'Gemfile'))) return 'ruby';
+  try {
+    const entries = require('node:fs').readdirSync(projectPath) as string[];
+    if (entries.some((n) => n.endsWith('.csproj') || n.endsWith('.sln') || n === 'global.json'))
+      return 'dotnet';
+  } catch {
+    /* ignore */
+  }
   return 'generic';
 }
 
@@ -165,6 +173,11 @@ function buildProposals(stack: Stack): Proposal[] {
     case 'ruby':
       return [
         { target: 'config/initializers/observability.rb', language: 'ruby', description: 'SemanticLogger JSON appender', contents: RUBY_OBSERV_RB },
+      ];
+    case 'dotnet':
+      return [
+        { target: 'src/Observability/Logging.cs', language: 'csharp', description: 'Serilog + ILogger configuration', contents: DOTNET_LOGGING_CS },
+        { target: 'src/Observability/Metrics.cs', language: 'csharp', description: 'prometheus-net metrics + ASP.NET middleware', contents: DOTNET_METRICS_CS },
       ];
     default:
       return [
@@ -350,6 +363,68 @@ SemanticLogger.default_level = ENV.fetch('LOG_LEVEL', 'info').to_sym
 SemanticLogger.add_appender(io: $stdout, formatter: :json)
 
 LOG = SemanticLogger['app']
+`;
+
+const DOTNET_LOGGING_CS = `// Serilog + ILogger configuration.
+// NuGet packages: Serilog, Serilog.AspNetCore, Serilog.Sinks.Console, Serilog.Formatting.Compact
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Serilog;
+using Serilog.Formatting.Compact;
+
+namespace Observability;
+
+public static class Logging
+{
+    public static IHostBuilder UseGuardianLogging(this IHostBuilder builder)
+    {
+        return builder.UseSerilog((ctx, _, cfg) =>
+        {
+            cfg
+                .ReadFrom.Configuration(ctx.Configuration)
+                .Enrich.FromLogContext()
+                .Enrich.WithMachineName()
+                .Enrich.WithProcessId()
+                .Enrich.WithEnvironmentName()
+                .WriteTo.Console(new CompactJsonFormatter());
+        });
+    }
+}
+`;
+
+const DOTNET_METRICS_CS = `// Prometheus metrics for ASP.NET Core.
+// NuGet packages: prometheus-net, prometheus-net.AspNetCore
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Routing;
+using Prometheus;
+
+namespace Observability;
+
+public static class Metrics
+{
+    public static readonly Counter HttpRequests = Prometheus.Metrics.CreateCounter(
+        "http_requests_total",
+        "Total HTTP requests.",
+        new CounterConfiguration { LabelNames = new[] { "method", "route", "status" } });
+
+    public static readonly Histogram HttpLatency = Prometheus.Metrics.CreateHistogram(
+        "http_request_duration_seconds",
+        "HTTP request latency in seconds.",
+        new HistogramConfiguration
+        {
+            LabelNames = new[] { "method", "route" },
+            Buckets = new double[] { 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10 },
+        });
+
+    /// Wire from Program.cs:
+    ///   app.UseHttpMetrics();
+    ///   app.MapMetrics();
+    public static IEndpointRouteBuilder MapGuardianMetrics(this IEndpointRouteBuilder endpoints)
+    {
+        endpoints.MapMetrics(); // /metrics endpoint
+        return endpoints;
+    }
+}
 `;
 
 function failDomain(

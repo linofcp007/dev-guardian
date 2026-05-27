@@ -38,7 +38,7 @@ interface UpgradeStep {
   installed_version: string;
   latest_version: string;
   classification: Classification;
-  ecosystem: 'npm' | 'pip' | 'composer' | 'cargo' | 'go' | 'rubygems' | 'unknown';
+  ecosystem: 'npm' | 'pip' | 'composer' | 'cargo' | 'go' | 'rubygems' | 'dotnet' | 'unknown';
   reason?: string;
   upgrade_command: string;
 }
@@ -99,6 +99,8 @@ async function handler(
           return runGoOutdated(projectPath, cvePackages);
         case 'rubygems':
           return runBundlerOutdated(projectPath, cvePackages);
+        case 'dotnet':
+          return runDotnetOutdated(projectPath, cvePackages);
         default:
           return [] as UpgradeStep[];
       }
@@ -133,7 +135,16 @@ function detectEcosystems(projectPath: string): Array<UpgradeStep['ecosystem']> 
   if (existsSync(join(projectPath, 'Cargo.toml'))) out.push('cargo');
   if (existsSync(join(projectPath, 'go.mod'))) out.push('go');
   if (existsSync(join(projectPath, 'Gemfile'))) out.push('rubygems');
+  if (anyCsproj(projectPath)) out.push('dotnet');
   return out;
+}
+
+function anyCsproj(projectPath: string): boolean {
+  try {
+    return require('node:fs').readdirSync(projectPath).some((n: string) => n.endsWith('.csproj') || n.endsWith('.sln'));
+  } catch {
+    return false;
+  }
 }
 
 function detectUnsupportedEcosystems(projectPath: string): string[] {
@@ -405,6 +416,107 @@ async function runBundlerOutdated(
         ecosystem: 'rubygems',
         cvePackages,
         upgrade_command: `bundle update ${name}`,
+      }),
+    );
+  }
+  return out;
+}
+
+async function runDotnetOutdated(
+  projectPath: string,
+  cvePackages: Set<string>,
+): Promise<UpgradeStep[]> {
+  // Restore first (`dotnet list package --outdated` requires resolved
+  // packages). If restore fails (e.g. private feed not configured), skip
+  // the whole dotnet branch rather than failing the whole call.
+  const restore = await execa('dotnet', ['restore', '--nologo', '--verbosity', 'quiet'], {
+    cwd: projectPath,
+    reject: false,
+    timeout: 5 * 60_000,
+  });
+  if (restore.exitCode !== 0) return [];
+
+  // `--format json` is available on .NET 8+; on older SDKs we fall back to
+  // parsing the human-readable text output (less precise but functional).
+  const r = await execa(
+    'dotnet',
+    ['list', 'package', '--outdated', '--format', 'json'],
+    { cwd: projectPath, reject: false, timeout: 90_000 },
+  );
+
+  if (r.exitCode === 0 && r.stdout.trim().startsWith('{')) {
+    return parseDotnetJson(r.stdout, cvePackages);
+  }
+
+  // Fallback to text parsing.
+  const fallback = await execa(
+    'dotnet',
+    ['list', 'package', '--outdated'],
+    { cwd: projectPath, reject: false, timeout: 90_000 },
+  );
+  if (fallback.exitCode !== 0 || fallback.stdout.trim().length === 0) return [];
+  return parseDotnetText(fallback.stdout, cvePackages);
+}
+
+function parseDotnetJson(raw: string, cvePackages: Set<string>): UpgradeStep[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  const projects =
+    (parsed as { projects?: Array<{ frameworks?: Array<{ topLevelPackages?: unknown[] }> }> })
+      ?.projects;
+  if (!Array.isArray(projects)) return [];
+  const out: UpgradeStep[] = [];
+  for (const proj of projects) {
+    for (const fw of proj.frameworks ?? []) {
+      for (const pkg of fw.topLevelPackages ?? []) {
+        if (!pkg || typeof pkg !== 'object') continue;
+        const p = pkg as Record<string, unknown>;
+        const name = typeof p['id'] === 'string' ? (p['id'] as string) : '';
+        const installed =
+          typeof p['resolvedVersion'] === 'string' ? (p['resolvedVersion'] as string) : '';
+        const latest =
+          typeof p['latestVersion'] === 'string' ? (p['latestVersion'] as string) : '';
+        if (!name || !installed || !latest || installed === latest) continue;
+        out.push(
+          buildStep({
+            package_name: name,
+            installed_version: installed,
+            latest_version: latest,
+            ecosystem: 'dotnet',
+            cvePackages,
+            upgrade_command: `dotnet add package ${name} --version ${latest}`,
+          }),
+        );
+      }
+    }
+  }
+  return out;
+}
+
+function parseDotnetText(text: string, cvePackages: Set<string>): UpgradeStep[] {
+  // Lines look like:
+  //   > Microsoft.AspNetCore.App   2.1.0    2.1.0    3.1.0
+  // (package, requested, resolved, latest). We skip header lines.
+  const out: UpgradeStep[] = [];
+  for (const lineRaw of text.split(/\r?\n/)) {
+    const line = lineRaw.trim();
+    if (!line.startsWith('>')) continue;
+    const parts = line.replace(/^>\s*/, '').split(/\s+/);
+    if (parts.length < 4) continue;
+    const [name, _requested, resolved, latest] = parts;
+    if (!name || !resolved || !latest || resolved === latest) continue;
+    out.push(
+      buildStep({
+        package_name: name,
+        installed_version: resolved,
+        latest_version: latest,
+        ecosystem: 'dotnet',
+        cvePackages,
+        upgrade_command: `dotnet add package ${name} --version ${latest}`,
       }),
     );
   }

@@ -1,0 +1,61 @@
+{
+  "version": {
+    "number": "6.4.1",
+    "vulnerabilities": [
+      {
+        "title": "WordPress 6.4 - Cross-Site Scripting (XSS) via post titles",
+        "fixed_in": "6.4.2",
+        "references": {
+          "cve": ["2024-31210"],
+          "cvss": { "score": 6.1 }
+        }
+      }
+    ]
+  },
+  "main_theme": {
+    "slug": "twentytwentyfour",
+    "version": "1.1",
+    "vulnerabilities": []
+  },
+  "plugins": {
+    "contact-form-7": {
+      "version": { "number": "5.7" },
+      "vulnerabilities": [
+        {
+          "title": "Contact Form 7 < 5.7.7 - Authenticated Arbitrary File Upload",
+          "fixed_in": "5.7.7",
+          "references": {
+            "cve": ["2023-6449"],
+            "cvss": { "score": 9.1 }
+          }
+        }
+      ]
+    },
+    "elementor": {
+      "version": { "number": "3.18.0" },
+      "vulnerabilities": [
+        {
+          "title": "Elementor < 3.18.2 - Cross-Site Request Forgery",
+          "fixed_in": "3.18.2",
+          "references": {
+            "cve": ["2024-1057"],
+            "cvss": { "score": 4.3 }
+          },
+          "severity": "medium"
+        }
+      ]
+    }
+  },
+  "themes": {
+    "stale-theme": {
+      "version": { "number": "1.0" },
+      "vulnerabilities": [
+        {
+          "title": "stale-theme arbitrary file read",
+          "fixed_in": "1.1",
+          "references": { "cve": ["2023-99999"] }
+        }
+      ]
+    }
+  }
+}

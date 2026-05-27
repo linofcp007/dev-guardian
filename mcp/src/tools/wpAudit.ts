@@ -1,0 +1,355 @@
+/**
+ * `wp_audit` — audit a live WordPress install via WP-CLI.
+ *
+ * Standalone tool (no factory). Requires `wp` (WP-CLI) on PATH and a
+ * directory containing `wp-config.php`. All WP-CLI invocations are
+ * read-only.
+ *
+ * Per-subsection retry: each WP-CLI call is retried up to 3 times with
+ * exponential backoff (1s, 3s, 9s) before being skipped. A failing
+ * subsection puts a warning in `warnings[]` but never fails the whole
+ * audit — partial data is preferable to no data.
+ */
+
+import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import { z } from 'zod';
+import type { PluginContext } from '../context.js';
+import { resolveProjectPath } from '../platform/projectPath.js';
+import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import { scannerAvailable } from './scanHelpers.js';
+import type { DomainError, ToolResult } from '../types.js';
+import { registerToolModule, type ToolModule } from './index.js';
+
+const RETRY_DELAYS_MS = [1000, 3000, 9000] as const;
+const DEFAULT_RISKY_LOGINS = ['admin', 'administrator', 'root', 'wpadmin'];
+
+const inputSchema = {
+  wp_install_path: z
+    .string()
+    .min(1)
+    .describe('Path to the directory containing wp-config.php.'),
+  include_users: z.boolean().optional(),
+  include_options: z.boolean().optional(),
+  risky_login_names: z.array(z.string()).optional(),
+};
+
+interface ChecksumFile {
+  file: string;
+  status: 'modified' | 'missing' | 'added' | 'unknown';
+}
+
+interface AuditMeta {
+  wp_version: string | null;
+  checksum_mismatches: {
+    core: ChecksumFile[];
+    plugins: Record<string, ChecksumFile[]>;
+    themes: Record<string, ChecksumFile[]>;
+  };
+  config_flags: Record<string, boolean | null>;
+  admins: Array<{ user_login: string; user_email: string; risky: boolean }>;
+  plugins_with_auto_update: string[];
+  warnings: string[];
+}
+
+const tool: ToolModule = {
+  name: 'wp_audit',
+  title: 'Live WordPress install audit',
+  description:
+    'Audit a running WordPress install via WP-CLI (read-only): core/plugin/theme file checksums, ' +
+    'admin user list, dangerous config flags, plugins with auto_update on. Persists a scan row of ' +
+    'type wp_audit so guardian://scans/{id} returns the structured audit.',
+  inputSchema,
+  handler: async (input, ctx) => handler(input, ctx),
+};
+
+registerToolModule(tool);
+
+async function handler(
+  input: Record<string, unknown>,
+  ctx: PluginContext,
+): Promise<ToolResult<Record<string, unknown>>> {
+  const inp = input as {
+    wp_install_path: string;
+    include_users?: boolean;
+    include_options?: boolean;
+    risky_login_names?: string[];
+  };
+  if (!inp.wp_install_path) {
+    return failDomain('not_a_wordpress_install', 'wp_install_path is required.');
+  }
+  let installPath: string;
+  try {
+    installPath = resolveProjectPath(inp.wp_install_path).path;
+  } catch (e) {
+    return failDomain('not_a_wordpress_install', (e as Error).message);
+  }
+  if (!existsSync(join(installPath, 'wp-config.php'))) {
+    return failDomain(
+      'not_a_wordpress_install',
+      `No wp-config.php in ${installPath}`,
+    );
+  }
+
+  const wpBin = await scannerAvailable('wp');
+  if (!wpBin) {
+    return failDomain(
+      'missing_scanner',
+      'WP-CLI (`wp`) is not installed. Run install_toolchain with tools=["wp-cli"].',
+    );
+  }
+
+  const includeUsers = inp.include_users ?? true;
+  const includeOptions = inp.include_options ?? true;
+  const riskyLogins = new Set(
+    (inp.risky_login_names ?? DEFAULT_RISKY_LOGINS).map((s) => s.toLowerCase()),
+  );
+
+  const meta: AuditMeta = {
+    wp_version: null,
+    checksum_mismatches: { core: [], plugins: {}, themes: {} },
+    config_flags: {
+      DISALLOW_FILE_EDIT: null,
+      WP_DEBUG: null,
+      WP_DEBUG_LOG: null,
+      FORCE_SSL_ADMIN: null,
+    },
+    admins: [],
+    plugins_with_auto_update: [],
+    warnings: [],
+  };
+
+  // -------- WP core version
+  const versionResult = await retry(() =>
+    wpCall(['core', 'version', `--path=${installPath}`], installPath, ctx),
+  );
+  if (versionResult.ok) {
+    meta.wp_version = versionResult.stdout.trim() || null;
+  } else {
+    meta.warnings.push(`core version: ${versionResult.reason}`);
+  }
+
+  // -------- Checksums
+  const coreVerify = await retry(() =>
+    wpCall(
+      ['core', 'verify-checksums', `--path=${installPath}`, '--format=json'],
+      installPath,
+      ctx,
+    ),
+  );
+  meta.checksum_mismatches.core = parseChecksumOutput(coreVerify);
+  if (!coreVerify.ok) meta.warnings.push(`core verify-checksums: ${coreVerify.reason}`);
+
+  const pluginVerify = await retry(() =>
+    wpCall(
+      ['plugin', 'verify-checksums', '--all', `--path=${installPath}`, '--format=json'],
+      installPath,
+      ctx,
+    ),
+  );
+  meta.checksum_mismatches.plugins = groupByComponent(pluginVerify);
+  if (!pluginVerify.ok)
+    meta.warnings.push(`plugin verify-checksums: ${pluginVerify.reason}`);
+
+  const themeVerify = await retry(() =>
+    wpCall(
+      ['theme', 'verify-checksums', '--all', `--path=${installPath}`, '--format=json'],
+      installPath,
+      ctx,
+    ),
+  );
+  meta.checksum_mismatches.themes = groupByComponent(themeVerify);
+  if (!themeVerify.ok) meta.warnings.push(`theme verify-checksums: ${themeVerify.reason}`);
+
+  // -------- Config flags
+  if (includeOptions) {
+    for (const flag of ['DISALLOW_FILE_EDIT', 'WP_DEBUG', 'WP_DEBUG_LOG', 'FORCE_SSL_ADMIN']) {
+      const r = await retry(() =>
+        wpCall(['config', 'get', flag, `--path=${installPath}`], installPath, ctx),
+      );
+      if (r.ok) {
+        const val = r.stdout.trim().toLowerCase();
+        meta.config_flags[flag] = val === 'true' || val === '1';
+      } else {
+        meta.warnings.push(`config get ${flag}: ${r.reason}`);
+      }
+    }
+  }
+
+  // -------- Admins
+  if (includeUsers) {
+    const r = await retry(() =>
+      wpCall(
+        [
+          'user',
+          'list',
+          '--role=administrator',
+          `--path=${installPath}`,
+          '--fields=user_login,user_email',
+          '--format=json',
+        ],
+        installPath,
+        ctx,
+      ),
+    );
+    if (r.ok) {
+      try {
+        const arr = JSON.parse(r.stdout) as Array<{ user_login: string; user_email: string }>;
+        meta.admins = arr.map((u) => ({
+          user_login: u.user_login,
+          user_email: u.user_email,
+          risky: riskyLogins.has((u.user_login ?? '').toLowerCase()),
+        }));
+      } catch {
+        meta.warnings.push('user list: stdout not JSON');
+      }
+    } else {
+      meta.warnings.push(`user list: ${r.reason}`);
+    }
+  }
+
+  // -------- Plugins with auto_update
+  const pluginListResult = await retry(() =>
+    wpCall(
+      [
+        'plugin',
+        'list',
+        `--path=${installPath}`,
+        '--fields=name,auto_update',
+        '--format=json',
+      ],
+      installPath,
+      ctx,
+    ),
+  );
+  if (pluginListResult.ok) {
+    try {
+      const arr = JSON.parse(pluginListResult.stdout) as Array<{
+        name: string;
+        auto_update: string;
+      }>;
+      meta.plugins_with_auto_update = arr
+        .filter((p) => (p.auto_update ?? '').toLowerCase() === 'on')
+        .map((p) => p.name);
+    } catch {
+      meta.warnings.push('plugin list: stdout not JSON');
+    }
+  } else {
+    meta.warnings.push(`plugin list: ${pluginListResult.reason}`);
+  }
+
+  // -------- Persist scan row with meta
+  const scanId = randomUUID();
+  ctx.storage.scans.insert({
+    scan_id: scanId,
+    scan_type: 'audit' as never, // wp_audit lives under the broader audit umbrella
+    project_path: installPath,
+    tree_hash: '',
+  });
+  ctx.storage.scans.finalize({
+    scan_id: scanId,
+    status: 'completed',
+    tools_run: [{ name: 'wp-cli', status: 'ok' }],
+    missing_tools: [],
+    meta: meta as unknown as Record<string, unknown>,
+  });
+
+  return {
+    ok: true,
+    scan_id: scanId,
+    ...meta,
+  };
+}
+
+interface WpResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  reason: string;
+}
+
+async function wpCall(
+  args: string[],
+  cwd: string,
+  ctx: PluginContext,
+): Promise<WpResult> {
+  const r: ProcessRunResult = await runProcess({
+    command: 'wp',
+    args,
+    cwd,
+    env: process.env,
+    timeoutMs: 60_000,
+  });
+  const ok = r.outcome === 'completed';
+  return {
+    ok,
+    stdout: r.stdout,
+    stderr: r.stderr,
+    reason: ok ? '' : `exit ${r.exitCode ?? '?'} (${r.outcome}); ${r.stderr.split(/\r?\n/)[0] ?? ''}`,
+  };
+  void ctx;
+}
+
+async function retry(call: () => Promise<WpResult>): Promise<WpResult> {
+  let last = await call();
+  for (let i = 0; i < RETRY_DELAYS_MS.length && !last.ok; i += 1) {
+    await new Promise((res) => setTimeout(res, RETRY_DELAYS_MS[i]));
+    last = await call();
+  }
+  return last;
+}
+
+function parseChecksumOutput(r: WpResult): ChecksumFile[] {
+  if (!r.ok || r.stdout.trim().length === 0) return [];
+  try {
+    const arr = JSON.parse(r.stdout) as Array<{
+      file?: string;
+      message?: string;
+      status?: string;
+    }>;
+    return arr.map((x) => ({
+      file: x.file ?? '(unknown)',
+      status: normaliseStatus(x.status ?? x.message),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function groupByComponent(r: WpResult): Record<string, ChecksumFile[]> {
+  // WP-CLI emits one row per file with a `plugin_name` (or `theme_name`)
+  // field. Group by that to produce { slug: [files] }.
+  if (!r.ok || r.stdout.trim().length === 0) return {};
+  try {
+    const arr = JSON.parse(r.stdout) as Array<Record<string, string>>;
+    const out: Record<string, ChecksumFile[]> = {};
+    for (const row of arr) {
+      const slug = row['plugin_name'] ?? row['theme_name'] ?? '(unknown)';
+      const f: ChecksumFile = {
+        file: row['file'] ?? '(unknown)',
+        status: normaliseStatus(row['status'] ?? row['message']),
+      };
+      if (!out[slug]) out[slug] = [];
+      out[slug]!.push(f);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function normaliseStatus(raw: string | undefined): ChecksumFile['status'] {
+  const s = (raw ?? '').toLowerCase();
+  if (s.includes('modified') || s.includes('changed')) return 'modified';
+  if (s.includes('missing')) return 'missing';
+  if (s.includes('added') || s.includes('extra') || s.includes('not in')) return 'added';
+  return 'unknown';
+}
+
+function failDomain(
+  code: DomainError['code'],
+  message: string,
+): ToolResult<Record<string, unknown>> {
+  return { ok: false, error: { code, message } };
+}

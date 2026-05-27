@@ -292,6 +292,18 @@ async function installPerTool(opts: PerToolContext): Promise<void> {
       });
       continue;
     }
+    // Hard rule: never auto-install the .NET SDK. We always route it to
+    // manual_steps with the OS-appropriate hint from the catalogue.
+    if (toolName === 'dotnet-sdk' && opts.os !== 'unsupported') {
+      const specs = TOOL_CATALOG['dotnet-sdk']?.install[opts.os];
+      const first = specs ? (Object.values(specs)[0] as { description?: string } | undefined) : undefined;
+      const hint = first?.description ?? 'See https://learn.microsoft.com/dotnet/core/install/';
+      opts.result.manual_steps.push({
+        tool: toolName,
+        instructions: `dev-guardian never auto-installs the .NET SDK. ${hint}`,
+      });
+      continue;
+    }
     const picked = pickInstallSpec(
       toolName,
       opts.os,
