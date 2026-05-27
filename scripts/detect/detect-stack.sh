@@ -102,7 +102,15 @@ HAS_COMPOSE=$([ -f docker-compose.yml ] || [ -f compose.yml ] || [ -f docker-com
 
 # IaC
 HAS_TERRAFORM=$(has_glob "*.tf")
-HAS_KUBERNETES=$([ -d k8s ] || [ -d kubernetes ] || has_glob "*.yaml" && grep -lq "apiVersion: " *.yaml 2>/dev/null && echo true || echo false)
+HAS_KUBERNETES=$(
+  if [ -d k8s ] || [ -d kubernetes ]; then
+    echo true
+  elif compgen -G "*.yaml" > /dev/null 2>&1 && grep -lq "apiVersion: " *.yaml 2>/dev/null; then
+    echo true
+  else
+    echo false
+  fi
+)
 HAS_ANSIBLE=$([ -d roles ] || [ -f ansible.cfg ] && echo true || echo false)
 
 # CI
