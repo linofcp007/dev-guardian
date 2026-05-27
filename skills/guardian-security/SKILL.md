@@ -13,7 +13,7 @@ A skill suporta quatro tipos. Pergunta ao utilizador qual (ou faz `--all` se ele
 
 | Tipo                    | O que faz                                                        | Ferramenta                       |
 | ----------------------- | ---------------------------------------------------------------- | -------------------------------- |
-| **SAST**                | Análise estática de código aplicacional                          | Semgrep + bandit/brakeman/gosec |
+| **SAST**                | Análise estática de código aplicacional                          | Semgrep + bandit/brakeman/gosec  |
 | **Secrets**             | Procura API keys, tokens, passwords no código e histórico Git    | gitleaks                         |
 | **Dependencies**        | CVEs em bibliotecas/packages                                     | Trivy                            |
 | **Container/IaC**       | Dockerfile, imagens, Terraform, Kubernetes                       | Trivy + Checkov                  |
@@ -74,7 +74,7 @@ Não despeja apenas os resultados brutos — isso é ruído. Para cada finding:
 
 Sempre nesta estrutura, em ordem decrescente de prioridade:
 
-```
+```markdown
 # Relatório de Segurança — <projeto>
 <data> · <duração> · <ficheiros analisados>
 
@@ -120,7 +120,7 @@ Para coisas óbvias e reversíveis, oferece aplicar:
 
 Em casos de **emergência absoluta** (chave de produção viva exposta), interrompe a conversa e diz claramente:
 
-```
+```text
 ⛔ STOP — Esta chave parece estar VIVA e em PRODUÇÃO.
 Antes de mais nada, revoga-a já:
   → <link direto ao painel de revogação se conseguires inferir o provider>

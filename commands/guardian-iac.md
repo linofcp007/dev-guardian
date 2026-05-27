@@ -5,6 +5,7 @@ description: Infrastructure-as-Code scan (Terraform, Kubernetes, Ansible, CloudF
 Run the **IaC-focused** Guardian flow. Use when the project has `*.tf`, `*.tf.json`, `k8s/`, `kubernetes/`, `helm/`, `ansible/`, or CloudFormation YAML.
 
 The skill should:
+
 1. `scan_iac` — Trivy config scan across all detected IaC artifacts.
 2. Terraform-specific: state file hygiene (no committed `terraform.tfstate`), variable defaults that smell like secrets, `0.0.0.0/0` ingress rules, public S3 / GCS / Azure blob, IAM wildcards.
 3. Kubernetes-specific: missing `securityContext`, `privileged: true`, `hostNetwork: true`, missing resource limits, `latest` image tags.

@@ -24,7 +24,7 @@ grep -rE "(email|phone|address|name|cpf|nif|birthday|ip|cookie)" --include="*.{t
 
 Lista no formato:
 
-```
+```text
 | Dado          | Onde guardado | Quem acede | Retenção | Base legal       |
 | ------------- | ------------- | ---------- | -------- | ---------------- |
 | Email         | users table   | App+admin  | Indef.   | Contrato         |
@@ -34,6 +34,7 @@ Lista no formato:
 ### 2. Cookies e tracking
 
 Verifica:
+
 - Há cookie banner antes de set cookies não-essenciais?
 - Há opt-out para analytics? (Plausible/Umami são GDPR-friendly por design, sem banner)
 - Há third-party scripts (Google Analytics, Facebook Pixel)?
@@ -45,6 +46,7 @@ Templates em `${CLAUDE_PLUGIN_ROOT}/configs/compliance/cookie-banner/` (HTML+JS 
 ### 3. Direitos do utilizador
 
 A app suporta?
+
 - **Acesso** — pode o utilizador descarregar os seus dados? (endpoint `/me/export`)
 - **Retificação** — pode atualizar perfil?
 - **Apagamento** — endpoint `/me/delete` que apaga ou anonimiza?
@@ -56,6 +58,7 @@ Para cada um em falta, propõe endpoint + UI mínimos.
 ### 4. Logs e PII
 
 Verifica que logs **não** guardam:
+
 - Passwords (mesmo hashed em logs é mau)
 - Tokens completos (mascara: `tok_abc...xyz`)
 - Body de requests com PII
@@ -80,12 +83,14 @@ rules:
 - **Backups** — encriptados (não em S3 público!)
 
 Verifica configs:
+
 - TLS 1.2+ no servidor
 - Sem cifras fracas (testar com `testssl.sh` open-source)
 
 ### 6. Privacy policy
 
 Se não existe, gera template em `${CLAUDE_PLUGIN_ROOT}/configs/compliance/privacy-policy-template.md` com:
+
 - Que dados recolhe
 - Para quê
 - Quanto tempo mantém
@@ -117,14 +122,15 @@ go-licenses report ./... > .guardian/licenses.csv
 
 Para cada dependência, classifica:
 
-| Tipo                | Exemplos        | Compat. com projeto comercial proprietário? |
-| ------------------- | --------------- | -------------------------------------------- |
-| Permissive          | MIT, BSD, ISC, Apache 2.0 | ✅ Sim                              |
-| Weak copyleft       | LGPL, MPL       | ⚠️ Sim com cuidado (dynamic linking)        |
-| Strong copyleft     | GPL v2/v3, AGPL | ❌ Não (excepto se libertares o teu)        |
-| Non-OSS / commercial| Custom EULAs    | Verificar cada um                            |
+| Tipo                 | Exemplos                  | Compat. com projeto comercial proprietário? |
+| -------------------- | ------------------------- | ------------------------------------------- |
+| Permissive           | MIT, BSD, ISC, Apache 2.0 | Sim                                         |
+| Weak copyleft        | LGPL, MPL                 | Sim com cuidado (dynamic linking)           |
+| Strong copyleft      | GPL v2/v3, AGPL           | Não (excepto se libertares o teu)           |
+| Non-OSS / commercial | Custom EULAs              | Verificar cada um                           |
 
 Sinaliza imediatamente:
+
 - 🔴 GPL/AGPL detetada — incompatível com produto fechado
 - 🟡 LGPL — OK se usado como dynamic lib, problemático se static link
 - 🟢 MIT/Apache/BSD — OK
@@ -134,6 +140,7 @@ Output em formato lista clara, com link ao licença e package.
 ## SBOM (Software Bill of Materials)
 
 Útil para:
+
 - Resposta rápida a CVE críticos (sei se uso a lib X em 30 segundos)
 - Compliance (algumas certificações exigem)
 - Auditoria de supply chain
@@ -170,6 +177,7 @@ Template open-source pronto a colar (sem dependências externas, GDPR-friendly):
 ```
 
 Comportamento:
+
 - Mostra na primeira visita
 - 3 opções: Aceitar todos · Só essenciais · Configurar
 - Bloqueia tracking até decisão (não set scripts)

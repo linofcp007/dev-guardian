@@ -25,7 +25,7 @@ Lê o output para decidir o que instalar.
 
 Antes de instalar/configurar qualquer coisa, apresenta um plano em formato curto:
 
-```
+```text
 Detectei: Node.js + TypeScript (npm), Python (poetry), Dockerfile, GitHub Actions
 Vou configurar:
   ✓ Semgrep (SAST para JS/TS + Python)
@@ -55,16 +55,17 @@ O instalador é idempotente — verifica antes de instalar, não duplica.
 
 Copia templates apropriados para o projeto:
 
-| Ficheiro                         | Origem                                            | Notas                                      |
-| -------------------------------- | ------------------------------------------------- | ------------------------------------------ |
-| `.gitleaks.toml`                 | `configs/gitleaks/gitleaks.toml`                  | Sempre                                     |
-| `.semgrep.yml`                   | `configs/semgrep/<linguagem>.yml`                 | Combina vários se polyglot                 |
-| `renovate.json`                  | `configs/renovate/renovate.json`                  | Sempre (substitui Dependabot)              |
-| `.pre-commit-config.yaml`        | `configs/pre-commit/<linguagem>.yaml`             | Combina hooks para todas as linguagens     |
-| `.github/workflows/dev-guardian.yml` | `workflows/github-actions/dev-guardian.yml`   | Workflow principal                         |
-| `.github/workflows/e2e.yml`      | `workflows/github-actions/e2e.yml`                | Só se for webapp                           |
+| Ficheiro                             | Origem                                          | Notas                                  |
+| ------------------------------------ | ----------------------------------------------- | -------------------------------------- |
+| `.gitleaks.toml`                     | `configs/gitleaks/gitleaks.toml`                | Sempre                                 |
+| `.semgrep.yml`                       | `configs/semgrep/<linguagem>.yml`               | Combina vários se polyglot             |
+| `renovate.json`                      | `configs/renovate/renovate.json`                | Sempre (substitui Dependabot)          |
+| `.pre-commit-config.yaml`            | `configs/pre-commit/<linguagem>.yaml`           | Combina hooks para todas as linguagens |
+| `.github/workflows/dev-guardian.yml` | `workflows/github-actions/dev-guardian.yml`     | Workflow principal                     |
+| `.github/workflows/e2e.yml`          | `workflows/github-actions/e2e.yml`              | Só se for webapp                       |
 
 Antes de copiar qualquer ficheiro, verifica se já existe. Se sim, perguntar:
+
 - Substituir (backup do antigo como `.bak`)
 - Fazer merge (se o template é compatível com o que está)
 - Ignorar (manter o existente)
@@ -92,7 +93,7 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/scan/initial-scan.sh
 
 Apresenta:
 
-```
+```text
 ✅ Dev-Guardian instalado.
 
 Estado atual do projeto:
@@ -113,6 +114,7 @@ Próximos passos sugeridos:
 ### Node.js / TypeScript
 
 Instala/configura:
+
 - Semgrep com regras `p/javascript`, `p/typescript`, `p/owasp-top-ten`, `p/react` se React detectado
 - ESLint + `@typescript-eslint` se TS detectado
 - Trivy para `package.json`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`
@@ -121,6 +123,7 @@ Instala/configura:
 ### Python
 
 Instala/configura:
+
 - Semgrep com regras `p/python`, `p/django` ou `p/flask` se aplicável, `p/owasp-top-ten`
 - `ruff` (lint + format, substitui flake8/black/isort)
 - `bandit` como SAST específico de Python (complementa Semgrep)
@@ -129,6 +132,7 @@ Instala/configura:
 ### PHP / WordPress
 
 Instala/configura:
+
 - Semgrep com regras `p/php` e regras custom para WordPress se detectado `wp-config.php`
 - PHPStan ou Psalm (lint estático)
 - Trivy para `composer.lock`

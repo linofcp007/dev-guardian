@@ -27,6 +27,7 @@ Detecção e correção de bugs de implementação. Foca em problemas que SAST g
 ### 1. Definir o âmbito
 
 Antes de mergulhar, pergunta:
+
 - "Há um bug específico que viste?" — se sim, foca aí
 - "Ou queres uma varredura geral?" — se sim, vai ficheiro a ficheiro pelas zonas críticas
 
@@ -69,6 +70,7 @@ Análogo para Python (`AttributeError`), Go (`nil pointer`), etc. Regras prontas
 ### 4. Padrões comuns e fixes
 
 #### Null safety
+
 ```js
 // 🐛 Bug
 const name = user.profile.name;
@@ -78,6 +80,7 @@ const name = user?.profile?.name ?? "Anonymous";
 ```
 
 #### Race condition em fetch
+
 ```js
 // 🐛 Bug — última resposta nem sempre é o último request
 useEffect(() => {
@@ -95,6 +98,7 @@ useEffect(() => {
 ```
 
 #### Resource leak — event listener
+
 ```js
 // 🐛 Bug — listener fica para sempre
 window.addEventListener('resize', onResize);
@@ -107,6 +111,7 @@ useEffect(() => {
 ```
 
 #### Error swallow
+
 ```python
 # 🐛 Bug
 try:

@@ -35,6 +35,7 @@ Copia `${CLAUDE_PLUGIN_ROOT}/configs/renovate/renovate.json` para a raiz do proj
 ### 3. Customizar
 
 Pergunta ao utilizador:
+
 - Auto-merge para que tipo de updates? (default: patch dev-deps)
 - Que branches monitorar? (default: branch default)
 - Frequência? (default: semanal)
@@ -45,6 +46,7 @@ Aplica customizações ao `renovate.json`.
 ### 4. Ativar no GitHub
 
 Renovate corre como GitHub App. Instruir o utilizador:
+
 1. Vai a `github.com/apps/renovate`
 2. Click "Install"
 3. Selecciona o repo
@@ -55,6 +57,7 @@ Para self-hosted (sem GitHub.com), usa `renovate-runner` em CI.
 ### 5. Migrar de Dependabot
 
 Se já existe `.github/dependabot.yml`:
+
 - Pergunta se quer migrar (recomendado) ou correr em paralelo
 - Se migrar: comenta o `dependabot.yml` (não apaga, para histórico) e ativa Renovate
 - Avisa que terá de fechar PRs antigos do Dependabot manualmente
@@ -68,6 +71,7 @@ trivy fs --scanners vuln --severity HIGH,CRITICAL --format table .
 ```
 
 Para JSON estruturado:
+
 ```bash
 trivy fs --scanners vuln --format json --output .guardian/deps-cves.json .
 ```
@@ -90,7 +94,7 @@ Para cada CVE encontrado:
 
 ### Apresentar
 
-```
+```text
 Vulnerabilidades de dependências — N findings
 
 🔴 Crítico (exploitable no teu código):
@@ -113,6 +117,7 @@ Vulnerabilidades de dependências — N findings
 ### Aplicar fixes
 
 Para updates patch/minor seguros, oferece:
+
 ```bash
 # Node
 npm update <package>
@@ -166,6 +171,7 @@ pip-licenses --format=json --output-file .guardian/licenses.json
 ```
 
 Sinaliza:
+
 - 🔴 GPL/AGPL em projeto não-GPL (não pode misturar)
 - 🟡 LGPL (OK em dynamic linking mas precisa cuidado)
 - 🟢 MIT/Apache/BSD (OK na maioria dos contextos)

@@ -5,6 +5,7 @@ description: What changed since a tag, commit, or date. Desde a última release.
 Run a Guardian pass scoped to **everything that changed since a reference point** — typically the last release tag, a commit SHA, or a calendar date. Useful for retrospective reviews and release notes.
 
 The skill should:
+
 1. Resolve the reference from `$ARGUMENTS`: tag (`v1.2.3`), SHA (`abc1234`), or relative date (`"2 weeks ago"`, `"last monday"`).
 2. Default reference = most recent tag (`git describe --tags --abbrev=0`).
 3. Diff the file tree and dependency lockfiles between the reference and `HEAD`.

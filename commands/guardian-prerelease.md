@@ -5,6 +5,7 @@ description: Release readiness — changelog, SBOM diff, license check, version 
 Invoke the release-readiness checklist. Run this **before tagging a new release**.
 
 Steps:
+
 1. Diff dependencies and licenses against the previous release tag using `sbom_diff` + `license_compatibility`. Flag any new copyleft dependency that was not present before.
 2. Run `audit_executive` against the release branch.
 3. Generate a structured changelog from commits since the last tag, grouped by `feat:` / `fix:` / `chore:` / `breaking:`.

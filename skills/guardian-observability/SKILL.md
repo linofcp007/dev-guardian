@@ -17,7 +17,7 @@ Configura logging estruturado, métricas e error tracking usando exclusivamente 
 | Distributed tracing | Jaeger ou Tempo             | Sim                          |
 | Uptime / blackbox   | Uptime Kuma                 | Sim, UI bonita               |
 | Alerting            | Alertmanager + Grafana      | Sim                          |
-| All-in-one         | SigNoz                      | Sim, alternativa a Datadog   |
+| All-in-one          | SigNoz                      | Sim, alternativa a Datadog   |
 
 Para projetos pequenos solo, **SigNoz** ou **GlitchTip + Uptime Kuma** chega bem. Para infra mais séria, a stack Grafana (Loki + Mimir/Prometheus + Tempo) é o padrão.
 
@@ -56,6 +56,7 @@ logger.error({ err, userId }, 'login failed');
 ```
 
 Vantagens:
+
 - JSON em produção (parseable por Loki/qualquer agregador)
 - Pretty em desenvolvimento
 - Fast (mais rápido que Winston)
@@ -119,6 +120,7 @@ A maioria dos frameworks tem auto-instrumentation: Express, FastAPI, Flask, Djan
 Para apps Node/Python/Go, instrumentar com **OpenTelemetry** ou cliente Prometheus nativo.
 
 #### Métricas essenciais (RED method)
+
 - **Rate** — requests por segundo, por endpoint
 - **Errors** — taxa de erros por endpoint
 - **Duration** — latência (p50, p95, p99)
@@ -148,6 +150,7 @@ Configura Prometheus para fazer scrape do endpoint `/metrics`.
 ### 5. Dashboards (Grafana)
 
 Templates JSON em `${CLAUDE_PLUGIN_ROOT}/configs/grafana/dashboards/`:
+
 - `app-overview.json` — RED metrics
 - `errors.json` — top errors
 - `db-health.json` — connection pool, slow queries
@@ -193,6 +196,7 @@ Toda esta stack corre num VPS modesto (4GB RAM, 2 CPU). Para apps pequenas, um �
 ## Privacy/GDPR
 
 Se a app tem utilizadores em UE:
+
 - Self-host obriga zero data egress
 - Em logs não guardar IPs/emails sem propósito legal
 - Configurar retention adequada (90 dias normalmente OK)

@@ -5,6 +5,7 @@ description: Fast scan of the staged / uncommitted diff only. Scan rápido do di
 Run a **fast, narrow** Guardian pass against only the files in the current `git diff` (staged + unstaged). Designed to finish in seconds and run from the editor between edits — not a full audit.
 
 The skill should:
+
 1. Compute the diff set: `git diff --name-only HEAD` plus `git diff --cached --name-only`.
 2. If there is nothing, say so and exit cleanly.
 3. Run `scan_sast` and `scan_secrets` restricted to that set.

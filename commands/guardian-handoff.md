@@ -5,6 +5,7 @@ description: Project handoff snapshot — pending work, debt, next actions. Pass
 Produce a complete **handoff document** for someone else picking up the project — useful before holidays, leaving the team, or onboarding a new maintainer.
 
 The snapshot should contain:
+
 1. **Current state** — last `audit_executive` summary (🔴 / 🟡 / 🟢 counts) + active CVEs from the `cves` table.
 2. **Open commitments** — unfinished branches (`git branch --no-merged main`), open PRs, draft commits.
 3. **Active suppressions** — items in the `suppressions` table with their expiry dates and stated reasons.

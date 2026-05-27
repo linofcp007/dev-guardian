@@ -5,6 +5,7 @@ description: Performance budgets + load testing. Performance e carga. Rendimient
 Invoke the `guardian-performance` skill for performance work.
 
 Coverage:
+
 - Performance budgets (Lighthouse CI for frontends, custom budgets for backends)
 - Load and stress testing (k6 or Artillery)
 - Profiling hints (Node clinic, py-spy, pprof, etc. based on stack)

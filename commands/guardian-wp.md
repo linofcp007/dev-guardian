@@ -5,6 +5,7 @@ description: WordPress-focused audit (wp_audit + wp_vuln_check + scan_wordpress)
 Run the **WordPress-focused** Guardian flow. Use when the project is a WP site, plugin, theme, or any codebase with `wp-config.php` / `composer.json` referencing WP.
 
 The skill should invoke, in order:
+
 1. `scan_wordpress` — source-side scan (Semgrep PHP + `p/wordpress` rule pack + Trivy on `composer.lock` + gitleaks + PHPCS-WPCS).
 2. `wp_audit` — if a live WP install path is provided, checksum core/plugins/themes, list admins, check `WP_DEBUG` / `DISALLOW_FILE_EDIT` / `FORCE_SSL_ADMIN`.
 3. `wp_vuln_check` — query WPScan's DB for known vulns in the installed plugins/themes/core.

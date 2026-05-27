@@ -47,7 +47,7 @@ Devolve JSON com métricas por ficheiro/função.
 
 Mostra um sumário primeiro:
 
-```
+```text
 Qualidade — overview
 
 Linhas: 23,418 · Ficheiros: 187 · Linguagens: TS, Py
@@ -78,6 +78,7 @@ Para identificar churn, lê `git log --since=6.months --name-only` e cruza com o
 ### 4. Tipos de proposta
 
 #### Refactor pequeno (auto-aplicável com confirmação)
+
 - Extrair função
 - Renomear variável
 - Eliminar dead code
@@ -86,6 +87,7 @@ Para identificar churn, lê `git log --since=6.months --name-only` e cruza com o
 Mostra diff, pergunta "aplicar?".
 
 #### Refactor médio (proposta + plano)
+
 - Quebrar ficheiro grande em vários
 - Substituir copy-paste por helper partilhado
 - Reorganizar parâmetros (introduzir DTOs)
@@ -93,6 +95,7 @@ Mostra diff, pergunta "aplicar?".
 Propõe plano em fases, mostra antes/depois de uma fase, pede aprovação.
 
 #### Refactor grande (apenas plano)
+
 - Mudar arquitetura
 - Migrar framework
 - Reorganizar módulos top-level
@@ -134,7 +137,7 @@ Aponta-os mas não obriga a corrigir — confirma com benchmark se faz diferenç
 
 Sempre prioriza por impacto/esforço. Útil > completo. Estrutura:
 
-```
+```markdown
 # Qualidade — <projeto>
 
 ## Quick wins (esforço baixo, ganho alto)

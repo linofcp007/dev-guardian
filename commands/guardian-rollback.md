@@ -5,6 +5,7 @@ description: Assess whether a rollback is safe — DB migrations, breaking schem
 Decide whether rolling back is **safe** before you actually do it. Rollbacks of code are easy; rollbacks of data and migrations are not.
 
 The skill should:
+
 1. Identify the rollback target — `$ARGUMENTS` or the previous tag / previous deployment SHA.
 2. Diff the file tree between `HEAD` and the target.
 3. **Database migrations** — list every migration file added since the target. For each, decide if it is reversible:

@@ -5,6 +5,7 @@ description: Security scan (SAST, secrets, CVEs, IaC). Scan completo. Escaneo co
 Invoke the `guardian-security` skill to run a comprehensive security scan on the current project.
 
 Coverage:
+
 - SAST with Semgrep
 - Secret scanning with gitleaks
 - Dependency CVEs with Trivy

@@ -5,6 +5,7 @@ description: C# / .NET-focused audit (SAST + secrets + EF Core + target framewor
 Run the **C# / .NET-focused** Guardian flow. Use when the project has `*.csproj` / `*.sln` / `*.fsproj` files.
 
 The skill should invoke, in order:
+
 1. `detect_stack` — confirm .NET stack version, frameworks (ASP.NET Core, EF Core), central package management.
 2. `scan_sast` — runs Semgrep with `p/csharp` + parses `security-code-scan` (SCS####) warnings if the analyzer is opted-in via NuGet.
 3. `scan_dotnet_secrets` — looks for hardcoded connection strings, JWT signing keys, `appsettings.json` leaks, user-secrets misuse.

@@ -145,6 +145,7 @@ users = User.objects.select_related('profile').all()
 ```
 
 Detecção:
+
 - Django: `django-silk` ou `django-debug-toolbar`
 - Node + Prisma/TypeORM: log queries em dev
 - Geral: contar queries por request
@@ -181,6 +182,7 @@ node --inspect app.js
 ```
 
 Suspeitos comuns:
+
 - Event listeners sem `removeListener`
 - Closures que capturam objetos grandes
 - Caches sem limite (substituir por LRU)

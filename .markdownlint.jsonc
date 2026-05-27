@@ -1,0 +1,19 @@
+{
+  // Markdown lint configuration for dev-guardian.
+  //
+  // Rationale:
+  //  - MD013 (line-length): disabled — skill YAML `description:` MUST stay on
+  //    one line for the Claude Code skill loader to read it, and our
+  //    descriptions intentionally list dozens of trigger phrases in EN/PT/ES.
+  //  - MD041 (first-line-h1): disabled — every SKILL.md starts with a YAML
+  //    frontmatter block, not an `#` heading. The frontmatter is the
+  //    file-level title for the skill loader.
+  //  - MD024 (no-duplicate-heading): tolerate sibling-section duplicates
+  //    across the EN / PT / ES blocks of the README (e.g. "Skills", "Autor").
+  //    `siblings_only: true` means duplicates are only flagged inside the
+  //    same `##`-level section, not across them.
+  "default": true,
+  "MD013": false,
+  "MD041": false,
+  "MD024": { "siblings_only": true }
+}

@@ -22,11 +22,13 @@ Para auditorias periódicas sem mudança específica, usa `guardian-security`, `
 ### 1. Determinar o diff a rever
 
 Pergunta (ou infere):
+
 - Diff vs `main`/`master`? (mais comum em PR)
 - Diff vs último commit? (pre-commit)
 - Diff vs última tag/release? (pre-deploy)
 
 Comandos:
+
 ```bash
 git diff origin/main...HEAD              # PR review
 git diff --staged                        # pre-commit
@@ -37,48 +39,56 @@ git diff <last-tag>..HEAD                # pre-release
 
 Para cada PR, valida explicitamente:
 
-**Correctness**
+#### Correctness
+
 - [ ] Lógica de cada nova função faz sentido para o input descrito
 - [ ] Edge cases óbvios cobertos (vazio, null, negativo, Unicode, muito grande)
 - [ ] Não introduz race conditions / async bugs
 - [ ] Tratamento de erros é específico, não genérico-engole-tudo
 
-**Security**
+#### Security
+
 - [ ] Nenhum secret no diff (chave, password, token, URL com credenciais)
 - [ ] Input do utilizador é validado/sanitizado antes de DB, shell, HTML
 - [ ] Autenticação/autorização aplicadas onde precisam
 - [ ] Não desativa CSP, CORS, ou outras defesas sem justificação
 - [ ] Não escreve a log dados sensíveis (PII, tokens)
 
-**Tests**
+#### Tests
+
 - [ ] Há testes para o comportamento novo?
 - [ ] Os testes existentes passam (`pytest`, `npm test`, etc.)
 - [ ] Coverage do diff é razoável (idealmente ≥ 70% do código novo)
 - [ ] Testes de regressão para bugs corrigidos no diff
 
-**Quality**
+#### Quality
+
 - [ ] Funções pequenas, nomes claros
 - [ ] Sem código comentado-out
 - [ ] Sem `console.log`/`print` deixados de debug
 - [ ] Imports usados
 - [ ] Estilo consistente com o resto do projeto
 
-**Dependencies**
+#### Dependencies
+
 - [ ] Se há `package.json`/`requirements.txt` no diff, novas deps são necessárias?
 - [ ] Licenças compatíveis (sem GPL em projeto comercial não-GPL)?
 - [ ] Sem `*` ou ranges abertos
 
-**Migrations / breaking changes**
+#### Migrations / breaking changes
+
 - [ ] Migrations DB são reversíveis e não fazem lock prolongado
 - [ ] APIs públicas mudadas estão versionadas ou marcadas como breaking
 - [ ] Configs novas têm default seguro
 - [ ] Rollback plan é claro
 
-**Documentation**
+#### Documentation
+
 - [ ] README/docs atualizados se comportamento público mudou
 - [ ] CHANGELOG entry se aplicável
 
-**CI / Build**
+#### CI / Build
+
 - [ ] CI passa (verificar via git status / GitHub se conectado)
 - [ ] Builds reproduzíveis (sem `latest` em base images)
 
@@ -96,7 +106,7 @@ Este script corre Semgrep só nos ficheiros do diff, gitleaks só no diff, Trivy
 
 Estrutura curta e directa:
 
-```
+```markdown
 # Review: <branch> → main · <N> ficheiros · +<add> -<del>
 
 ## Veredito: 🟡 Aprovar com mudanças pequenas
@@ -120,6 +130,7 @@ Estrutura curta e directa:
 ### 5. Conduta especial: PRs do Dependabot/Renovate
 
 Se o PR é só atualização de dependências:
+
 - Analisa o changelog/release notes da versão nova
 - Marca como **patch** (seguro), **minor** (provavelmente seguro), **major** (precisa verificação manual)
 - Para majors, identifica breaking changes que afetem o teu código (procura usos das APIs alteradas)
@@ -144,7 +155,7 @@ Por defeito, esta skill discute e propõe — não aplica mudanças automaticame
 
 Se o utilizador trabalha com PR descriptions, oferece gerar um sumário para colar no PR:
 
-```
+```markdown
 ## What
 <resumo em linguagem natural>
 

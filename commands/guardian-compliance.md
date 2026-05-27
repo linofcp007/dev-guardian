@@ -5,6 +5,7 @@ description: GDPR/RGPD, OSS licenses, SBOM. Compliance e licenças. Cumplimiento
 Invoke the `guardian-compliance` skill for compliance checks.
 
 Coverage:
+
 - GDPR / RGPD: personal data inventory, lawful basis, data retention, right to be forgotten, DPO references
 - OSS license audit (license-checker, go-licenses, cargo-deny, etc.)
 - SBOM generation (Syft → SPDX or CycloneDX)

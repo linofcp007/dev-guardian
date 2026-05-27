@@ -5,6 +5,7 @@ description: Deep pre-PR / pre-deploy review. Revisão antes de PR ou deploy. Re
 Invoke the `guardian-review` skill for a senior-level review of the pending changes before PR, merge, or deploy.
 
 The review should combine:
+
 - Security checks (secrets, injection, auth)
 - Bug hunt on the diff (logic, edge cases, error handling)
 - Quality (complexity, duplication, naming)
