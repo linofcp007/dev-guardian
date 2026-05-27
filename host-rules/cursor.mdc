@@ -1,0 +1,101 @@
+---
+description: dev-guardian MCP — security, quality, deps, compliance toolkit
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# dev-guardian
+
+This project has the **dev-guardian MCP server** registered (see settings). It
+exposes ~35 tools and 11 resources for security, quality, bugfix, deps,
+compliance, observability, and performance — every tool runs open-source
+scanners **locally**, no telemetry, no cloud spend.
+
+Prefer these tools over invoking `semgrep` / `trivy` / `gitleaks` /
+`pre-commit` directly: the MCP layer persists results to
+`.guardian/guardian.db` so diffing, trending, baselines, and regression
+detection all just work.
+
+## When the user asks for X → invoke tool Y
+
+### Security
+- "is this safe?" / "audit security" / "scan vulnerabilities" → `security_scan_full`
+- "any leaked secrets?" / "check secrets" → `scan_secrets`
+- "vulnerable deps?" / "any CVEs?" → `scan_deps` or `deps_audit`
+- "scan Dockerfile" / "container security" → `scan_containers`
+- "scan Terraform / Kubernetes / IaC" → `scan_iac`
+- "deep dive on bugs" / "race conditions / null safety" → `bug_hunt`
+
+### Quality / review
+- "review before PR" / "diff-scoped scan" → `review_pr`
+- "code quality" / "duplication" / "complexity" → `quality_check`
+
+### Deps
+- "what should I update?" / "upgrade plan" → `deps_update_plan`
+- "is renovate configured?" / "audit dependencies" → `deps_audit`
+
+### Compliance
+- "GDPR / SOC2 / ISO27001" → `compliance_check` then `compliance_evidence`
+- "SBOM" / "software bill of materials" → `generate_sbom`
+- "license compatibility" / "MIT vs AGPL" → `license_compatibility`
+
+### Ops
+- "bootstrap project" / "set up security" → `init_project`
+- "install scanners" → `install_toolchain`
+- "detect stack" → `detect_stack`
+- "add logging / metrics" → `observability_setup`
+- "performance check" / "Lighthouse" / "k6" → `perf_check`
+
+### Meta
+- "full audit" / "executive report" → `audit_executive`
+- "risk score" / "how bad is it?" → `risk_score`
+- "what's new since last scan?" → `diff_scans`
+- "set baseline" → `set_baseline`
+- "false positives" / "noise reduction" → `triage_findings`
+- "how do I fix this?" → `suggest_fix` (returns context — you propose the patch)
+- "export report" / "evidence pack" → `report_export` or `compliance_evidence`
+- "create GitHub issues" → `create_github_issues` (uses local `gh` CLI)
+- "pre-commit hooks" → `precommit_install`
+- "health check" / "is dev-guardian working?" → `health_status`
+
+## Useful resources (`guardian://...`)
+
+- `guardian://findings/open` — currently open findings, suppressions filtered out
+- `guardian://findings/critical` — just severity=critical
+- `guardian://cves/active` — CVEs from the latest deps scan
+- `guardian://compliance/status` — licenses + policy docs
+- `guardian://baseline` — active regression baseline
+- `guardian://stack` — detected stack info
+- `guardian://scans/latest` — most recent scan
+- `guardian://scans/history` — last 50 scans
+
+## Workflows
+
+### Bootstrap a fresh project
+1. `detect_stack` → know what we're working with
+2. `init_project` profile=standard → drop in gitleaks/renovate/semgrep configs
+3. `install_toolchain` if any scanner is missing
+4. `security_scan_full` → first pass
+5. `set_baseline` → freeze the current state as the regression reference
+
+### Before opening a PR
+1. `review_pr` → diff-scoped (much faster than full scan)
+2. If anything fires: `triage_findings` to bucket likely false positives
+3. `suggest_fix` for each real finding — synthesise the patch yourself
+
+### Periodic audit (monthly / quarterly)
+1. `audit_executive` → sequences security + quality + deps + compliance
+2. `risk_score` → executive 0-100 number
+3. `compliance_evidence` framework=gdpr/soc2/iso27001 → markdown evidence pack
+
+## Things not to do
+
+- Don't run `security_scan_full` for every tiny change — `review_pr` is
+  10×+ faster because it's diff-scoped.
+- Don't suppress a finding (`suppress_finding`) before checking
+  `triage_findings` — it may already classify the finding for you.
+- Don't propose fixes without first calling `suggest_fix` — it gives you
+  the source context (±20 lines) the patch needs to be precise.
+- Don't invoke scanners directly via shell when an MCP tool exists; you
+  lose persistence, baselines, and the diff_scans capability.

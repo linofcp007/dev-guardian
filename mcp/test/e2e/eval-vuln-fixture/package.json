@@ -1,0 +1,10 @@
+{
+  "name": "eval-vuln-fixture",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Minimal Node project with a known eval() vuln and an outdated dep. Used by the dev-guardian MCP E2E test to assert real-scanner integration.",
+  "main": "app.js",
+  "dependencies": {
+    "lodash": "4.17.20"
+  }
+}

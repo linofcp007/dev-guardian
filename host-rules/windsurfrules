@@ -1,0 +1,80 @@
+# dev-guardian (via MCP)
+
+This project has the dev-guardian MCP server registered. It exposes ~35
+tools and 11 resources for security, quality, bugfix, deps, compliance,
+observability, and performance — every tool runs open-source scanners
+locally, no telemetry.
+
+Prefer these MCP tools over running `semgrep` / `trivy` / `gitleaks`
+directly: the MCP layer persists results to `.guardian/guardian.db` so
+diffing, baselines, and regression detection just work.
+
+## When the user asks for X → invoke tool Y
+
+### Security
+- "is this safe?" / "audit security" → `security_scan_full`
+- "secrets?" → `scan_secrets`
+- "CVEs?" / "vulnerable deps?" → `scan_deps` or `deps_audit`
+- "Dockerfile security" → `scan_containers`
+- "IaC scan" → `scan_iac`
+- "deep bug hunt" → `bug_hunt`
+
+### Quality / review
+- "review before PR" / "diff scan" → `review_pr`
+- "code quality" → `quality_check`
+
+### Deps
+- "upgrade plan" → `deps_update_plan`
+- "audit deps" → `deps_audit`
+
+### Compliance
+- "GDPR / SOC2 / ISO27001" → `compliance_check` then `compliance_evidence`
+- "SBOM" → `generate_sbom`
+- "license compatibility" → `license_compatibility`
+
+### Ops
+- "bootstrap" / "init" → `init_project`
+- "install scanners" → `install_toolchain`
+- "detect stack" → `detect_stack`
+- "logging / metrics" → `observability_setup`
+- "performance" → `perf_check`
+
+### Meta
+- "full audit" → `audit_executive`
+- "risk score" → `risk_score`
+- "what's new?" → `diff_scans`
+- "set baseline" → `set_baseline`
+- "noise reduction" / "false positives" → `triage_findings`
+- "how do I fix this?" → `suggest_fix`
+- "export report" → `report_export`
+- "GitHub issues" → `create_github_issues` (uses local `gh`)
+- "pre-commit hooks" → `precommit_install`
+
+## Resources
+
+- `guardian://findings/open` — current state
+- `guardian://findings/critical` — only critical
+- `guardian://cves/active` — active CVEs
+- `guardian://compliance/status` — licenses + policy docs
+- `guardian://baseline` — active baseline
+- `guardian://stack` — detected stack
+- `guardian://scans/latest`, `guardian://scans/history`
+
+## Workflows
+
+### Bootstrap
+1. `detect_stack` 2. `init_project` 3. `install_toolchain` if needed
+4. `security_scan_full` 5. `set_baseline`
+
+### Before PR
+1. `review_pr` 2. `triage_findings` for noise 3. `suggest_fix` for the rest
+
+### Periodic audit
+1. `audit_executive` 2. `risk_score` 3. `compliance_evidence`
+
+## Don't
+
+- Don't run `security_scan_full` for tiny changes — use `review_pr`.
+- Don't `suppress_finding` before `triage_findings`.
+- Don't propose fixes without `suggest_fix` first (it gives source context).
+- Don't shell out to scanners directly — you lose persistence + baselines.

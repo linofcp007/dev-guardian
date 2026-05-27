@@ -1,0 +1,25 @@
+[
+  {
+    "code": "F401",
+    "filename": "src/app.py",
+    "location": { "row": 1, "column": 1 },
+    "end_location": { "row": 1, "column": 9 },
+    "message": "'os' imported but unused",
+    "fix": { "applicability": "safe", "edits": [] }
+  },
+  {
+    "code": "S301",
+    "filename": "src/loader.py",
+    "location": { "row": 10, "column": 5 },
+    "end_location": { "row": 10, "column": 25 },
+    "message": "Use of pickle is insecure",
+    "fix": null
+  },
+  {
+    "code": "W291",
+    "filename": "src/utils.py",
+    "location": { "row": 4, "column": 80 },
+    "end_location": { "row": 4, "column": 81 },
+    "message": "Trailing whitespace"
+  }
+]

@@ -1,0 +1,20 @@
+[
+  {
+    "RuleID": "aws-access-token",
+    "Description": "AWS Access Key",
+    "StartLine": 14,
+    "EndLine": 14,
+    "File": "src/config.js",
+    "Commit": "abcdef1234567890",
+    "Match": "[REDACTED]",
+    "Secret": "[REDACTED]"
+  },
+  {
+    "RuleID": "generic-api-key",
+    "Description": "Generic API Key",
+    "StartLine": 5,
+    "EndLine": 5,
+    "File": "scripts/deploy.sh",
+    "Match": "[REDACTED]"
+  }
+]

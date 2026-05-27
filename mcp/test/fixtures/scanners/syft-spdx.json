@@ -1,0 +1,9 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "test-project",
+  "packages": [
+    { "SPDXID": "SPDXRef-Pkg-express", "name": "express", "versionInfo": "4.18.2" },
+    { "SPDXID": "SPDXRef-Pkg-react",   "name": "react",   "versionInfo": "18.2.0" }
+  ]
+}

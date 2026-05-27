@@ -1,0 +1,38 @@
+{
+  "errors": [],
+  "metrics": {
+    "_totals": {
+      "loc": 120,
+      "nosec": 0,
+      "skipped_tests": 0,
+      "SEVERITY.HIGH": 1,
+      "SEVERITY.LOW": 1,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0
+    }
+  },
+  "results": [
+    {
+      "code": "1 import pickle\n2 data = pickle.loads(user_input)\n",
+      "filename": "src/loader.py",
+      "issue_confidence": "HIGH",
+      "issue_severity": "MEDIUM",
+      "issue_text": "Pickle library appears to be in use, possible security issue.",
+      "line_number": 2,
+      "line_range": [1, 2],
+      "test_id": "B301",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "import os\nos.system('rm -rf /')\n",
+      "filename": "src/runner.py",
+      "issue_confidence": "MEDIUM",
+      "issue_severity": "HIGH",
+      "issue_text": "Starting a process with a shell, possible injection detected.",
+      "line_number": 2,
+      "line_range": [2],
+      "test_id": "B605",
+      "test_name": "start_process_with_a_shell"
+    }
+  ]
+}

@@ -22,5 +22,12 @@
     "semgrep",
     "trivy",
     "gitleaks"
-  ]
+  ],
+  "mcpServers": {
+    "dev-guardian": {
+      "command": "node",
+      "args": ["${pluginDir}/mcp/dist/server.js"],
+      "env": {}
+    }
+  }
 }

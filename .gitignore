@@ -38,3 +38,9 @@ dist/
 build/
 *.plugin
 *.zip
+
+# Spec docs (local only)
+.specs/
+
+# dev-guardian MCP runtime artefacts (DB + scan reports)
+.guardian/

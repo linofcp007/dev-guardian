@@ -1,0 +1,22 @@
+{
+  "statistics": {
+    "total": { "lines": 5000, "sources": 25, "clones": 2, "duplicatedLines": 28 }
+  },
+  "duplicates": [
+    {
+      "format": "javascript",
+      "lines": 14,
+      "tokens": 75,
+      "firstFile": { "name": "src/billing.js", "start": 10, "end": 23 },
+      "secondFile": { "name": "src/invoice.js", "start": 5, "end": 18 },
+      "fragment": "function applyDiscount(order, code) {\n  // ..."
+    },
+    {
+      "format": "typescript",
+      "lines": 8,
+      "tokens": 40,
+      "firstFile": { "name": "src/utils.ts", "start": 3, "end": 10 },
+      "secondFile": { "name": "src/helpers.ts", "start": 1, "end": 8 }
+    }
+  ]
+}
