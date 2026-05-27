@@ -39,6 +39,10 @@ build/
 *.plugin
 *.zip
 
+# Exception: ship compiled MCP server (consumed by Claude Code at runtime)
+!mcp/dist/
+!mcp/dist/**
+
 # Spec docs (local only)
 .specs/
 

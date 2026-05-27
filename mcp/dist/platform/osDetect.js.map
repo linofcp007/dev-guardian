@@ -1,0 +1,1 @@
+{"version":3,"file":"osDetect.js","sourceRoot":"","sources":["../../src/platform/osDetect.ts"],"names":[],"mappings":"AAAA;;;;;;GAMG;AAIH,MAAM,UAAU,QAAQ;IACtB,QAAQ,OAAO,CAAC,QAAQ,EAAE,CAAC;QACzB,KAAK,OAAO;YACV,OAAO,OAAO,CAAC;QACjB,KAAK,QAAQ;YACX,OAAO,QAAQ,CAAC;QAClB,KAAK,OAAO;YACV,OAAO,OAAO,CAAC;QACjB;YACE,OAAO,aAAa,CAAC;IACzB,CAAC;AACH,CAAC"}
