@@ -1,6 +1,6 @@
 ---
 name: guardian
-description: Main security, bugfix and code-quality router using open-source tools (Semgrep, Trivy, gitleaks, Renovate, OWASP ZAP, Playwright). Routes to specialized Guardian modules. Use whenever the user asks to initialize/protect/audit a project, configure security, scan vulnerabilities or secrets, review code before PR/commit/deploy, find bugs, improve quality, update dependencies, configure observability — or says "is this safe?", "any bugs?", "audit the project", "guardian init/scan/fix/review/audit", "before deploy/merge", "any secrets?". ALSO use for generic holistic checks (route to whichever module fits, or run guardian-audit if truly broad) when the user says "do a full checkup", "full project checkup", "check for errors", "check for issues", "check for problems", "diagnose this project", "tell me what's broken", "what's wrong with this code", "check everything", "health check", "is this project healthy?". Usa também quando pedirem em PT para "auditar o projeto", "verificar vulnerabilidades", "proteger o repo", "está seguro?", "tem bugs?", "antes de deploy/merge", "tem secrets?", "atualizar dependências", "faz um checkup", "checkup completo", "verifica por erros", "verifica por problemas", "vê o que está mal", "diagnóstico do projeto", "diz-me o que está mal", "verifica tudo", "o que pode estar partido?", "este projeto está saudável?". Úsala también cuando pidan en ES "auditar el proyecto", "comprobar vulnerabilidades", "proteger el repo", "¿es seguro?", "¿tiene bugs?", "antes del despliegue/merge", "¿hay secretos?", "actualizar dependencias", "haz un chequeo", "chequeo completo", "diagnóstico del proyecto", "comprueba si hay errores", "comprueba si hay problemas", "dime qué está mal", "verifica todo", "¿qué puede estar roto?", "¿este proyecto está sano?". Trilingual EN/PT/ES. Stack-aware (Node/Python/PHP/Go/Rust/Ruby/Java/.NET). Pragmatic by default, paranoid when critical. Always respond in the user's language.
+description: Main security, bugfix and code-quality router using open-source tools (Semgrep, Trivy, gitleaks, Renovate, OWASP ZAP, Playwright). Routes to specialized Guardian modules. Use whenever the user asks to initialize/protect/audit a project, configure security, scan vulnerabilities or secrets, review code before PR/commit/deploy, find bugs, improve quality, update dependencies, configure observability — or says "is this safe?", "any bugs?", "audit the project", "guardian init/scan/fix/review/audit", "before deploy/merge", "any secrets?". ALSO use for workflow moments — when the user says "before push", "about to push", "before deploy", "before release", "ship it", "just ran npm/pip/composer install", "I pulled main", "merged a PR", "weird behaviour in prod", "production blew up", "incident", "something is broken in prod", "leaked secret", "we exposed a key", "going to rollback", "is rollback safe?", "going on holiday hand off", "project health", "how is the project?", "trend", "tech debt", "what's our debt?", "are we within budget?", "generate report", "executive summary", "SOC 2 evidence", "changelog since last release", "what changed since v1.2", "scan this file", "scan this diff", "scan this branch" — route to the right module (guardian-prepush / predeploy / prerelease / handoff / postinstall / incoming / postfix / diff / file / branch / since / panic / leak / rollback / postmortem / wp / dotnet / docker / iac / llm / status / trend / debt / budget / report / soc2 / changelog). ALSO use for generic holistic checks when the user says "do a full checkup", "full project checkup", "check for errors", "check for issues", "check for problems", "diagnose this project", "tell me what's broken", "what's wrong with this code", "check everything", "health check", "is this project healthy?". Usa também quando pedirem em PT para "auditar o projeto", "verificar vulnerabilidades", "proteger o repo", "está seguro?", "tem bugs?", "antes de deploy/merge", "tem secrets?", "atualizar dependências", "faz um checkup", "checkup completo", "verifica por erros", "verifica por problemas", "vê o que está mal", "diagnóstico do projeto", "diz-me o que está mal", "verifica tudo", "o que pode estar partido?", "este projeto está saudável?", "antes de push/deploy/release", "vou fazer push", "vou em férias", "passa o projeto", "acabei de instalar deps", "puxei main", "rebentou em produção", "pânico", "incident", "vazou secret", "expusemos uma chave", "vou fazer rollback", "é seguro fazer rollback?", "estado do projeto", "tendência de findings", "qual é a dívida técnica?", "estou dentro do budget?", "gera relatório", "relatório executivo", "evidence SOC 2", "changelog desde a última release", "scan deste ficheiro", "scan do diff", "scan da branch", "audita o WordPress", "audita o .NET", "vê o Dockerfile", "vê o terraform", "tenho features de AI". Úsala también cuando pidan en ES "auditar el proyecto", "comprobar vulnerabilidades", "proteger el repo", "¿es seguro?", "¿tiene bugs?", "antes del despliegue/merge", "¿hay secretos?", "actualizar dependencias", "haz un chequeo", "chequeo completo", "diagnóstico del proyecto", "comprueba si hay errores", "comprueba si hay problemas", "dime qué está mal", "verifica todo", "¿qué puede estar roto?", "¿este proyecto está sano?", "antes del push/despliegue/release", "voy a hacer push", "me voy de vacaciones", "pasa el proyecto", "acabo de instalar deps", "tiré de main", "se cayó producción", "pánico", "incidente", "se filtró un secreto", "expusimos una clave", "voy a hacer rollback", "¿es seguro hacer rollback?", "estado del proyecto", "tendencia de findings", "¿cuál es la deuda técnica?", "¿estoy dentro del presupuesto?", "genera informe", "informe ejecutivo", "evidencia SOC 2", "changelog desde el último release", "escaneo de este archivo", "escaneo del diff", "escaneo de la rama", "audita el WordPress", "audita el .NET", "revisa el Dockerfile", "revisa el terraform", "tengo features de AI". Trilingual EN/PT/ES. Stack-aware (Node/Python/PHP/Go/Rust/Ruby/Java/.NET). Pragmatic by default, paranoid when critical. Always respond in the user's language.
 ---
 
 # Guardian — Security, Bugfix & Quality
@@ -44,6 +44,39 @@ O utilizador pode invocar o Guardian de várias formas. Encaminha para o módulo
 | `guardian perf`, "performance", "load test"        | `guardian-performance`          | Performance budgets, testes de carga            |
 | `guardian compliance`, "GDPR", "licenças"          | `guardian-compliance`           | Compliance, licenças, SBOM, privacy             |
 | `guardian audit`, "relatório completo"             | `guardian-audit` (combo)        | Combina security + quality + deps               |
+
+### Comandos adicionais (workflow moments)
+
+|Comando|Routes / faz|
+|---|---|
+|`/guardian-prepush`|Scan rápido do diff + secrets check antes de `git push`|
+|`/guardian-predeploy`|Gate completo antes de deploy (audit + env + compliance + CI)|
+|`/guardian-prerelease`|Release readiness — changelog, SBOM diff, version bump|
+|`/guardian-handoff`|Snapshot de handoff (debt + pendências + próximas ações)|
+|`/guardian-postinstall`|Vet do que entrou após `npm/pip/composer install`|
+|`/guardian-incoming`|Inspecciona código que outros mergearam ou que veio via pull|
+|`/guardian-postfix`|Valida correção + regression-check da categoria|
+|`/guardian-diff`|Scan rápido só do diff atual (staged + unstaged)|
+|`/guardian-file`|Scan deep de um único ficheiro / pasta|
+|`/guardian-branch`|Diff da branch atual contra main|
+|`/guardian-since <ref>`|O que mudou desde tag/SHA/data|
+|`/guardian-panic`|Modo triagem após incident em produção|
+|`/guardian-leak`|Resposta a fuga de secrets — history scan + rotation checklist|
+|`/guardian-rollback`|Decide se um rollback é seguro (DB migrations, schema, etc.)|
+|`/guardian-postmortem`|Template estruturado de post-incident analysis|
+|`/guardian-wp`|Audit focado em WordPress|
+|`/guardian-dotnet`|Audit focado em C# / .NET|
+|`/guardian-docker`|Audit focado em containers / Dockerfile|
+|`/guardian-iac`|Audit focado em Terraform / Kubernetes / Ansible|
+|`/guardian-llm`|Audit focado em features de AI / LLM (prompt injection, eval, custo)|
+|`/guardian-status`|Dashboard do projeto (último scan, deltas, baseline, supressões)|
+|`/guardian-trend`|Tendência de findings ao longo do tempo|
+|`/guardian-debt`|Dívida técnica consolidada + top hotspots por ROI|
+|`/guardian-budget`|Está dentro dos budgets de performance / custo / complexidade?|
+|`/guardian-report`|Relatório markdown/PDF para stakeholders não-técnicos|
+|`/guardian-soc2`|Evidence pack para auditoria SOC 2 / ISO 27001|
+|`/guardian-changelog`|Gera changelog estruturado desde uma referência|
+|`/g`, `/gs`, `/gf`, `/gr`, `/gq`|Atalhos curtos para `/guardian`, `/guardian-scan`, `/guardian-fix`, `/guardian-review`, `/guardian-quality`|
 
 **Pedidos genéricos / checkup (catch-all).** Frases como *"faz um checkup completo"*, *"checkup"*, *"diagnóstico do projeto"*, *"verifica tudo"*, *"verifica por erros"*, *"verifica por problemas"*, *"vê o que está mal"*, *"diz-me o que está mal"*, *"o que pode estar partido?"*, *"este projeto está saudável?"* (e equivalentes EN: *"do a full checkup"*, *"check for errors/issues/problems"*, *"diagnose this project"*, *"tell me what's broken"*, *"is this project healthy?"*) devem ser tratadas como uma verificação holística: corre `guardian-security` + `guardian-bugfix` + `guardian-quality` + `guardian-deps` em sequência e apresenta um relatório consolidado (idêntico ao `guardian audit`, mas a incluir bugfix).
 
