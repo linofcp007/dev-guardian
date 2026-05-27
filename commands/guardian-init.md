@@ -1,5 +1,5 @@
 ---
-description: Bootstrap security & quality toolchain. Setup inicial.
+description: Bootstrap security & quality toolchain. Setup inicial. Configuración inicial.
 ---
 
 Invoke the `guardian-init` skill to bootstrap the current project with the full open-source security and quality toolchain.

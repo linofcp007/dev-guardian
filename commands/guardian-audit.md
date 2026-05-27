@@ -1,5 +1,5 @@
 ---
-description: Executive audit (security+quality+deps). Relatório executivo.
+description: Executive audit (security+quality+deps). Relatório executivo. Informe ejecutivo.
 ---
 
 Run a combined audit by invoking, in order:

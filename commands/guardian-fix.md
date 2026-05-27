@@ -1,5 +1,5 @@
 ---
-description: Find and fix implementation bugs. Caça e corrige bugs.
+description: Find and fix implementation bugs. Caça e corrige bugs. Encuentra y arregla bugs.
 ---
 
 Invoke the `guardian-bugfix` skill to find and fix implementation bugs in the current codebase.

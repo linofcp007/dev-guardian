@@ -1,5 +1,5 @@
 ---
-description: Guardian router — picks the right module. Router principal.
+description: Guardian router — picks the right module. Router principal. Router principal.
 ---
 
 Invoke the `guardian` skill. The user wants the Guardian router to decide which module to run.

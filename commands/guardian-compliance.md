@@ -1,5 +1,5 @@
 ---
-description: GDPR/RGPD, OSS licenses, SBOM. Compliance e licenças.
+description: GDPR/RGPD, OSS licenses, SBOM. Compliance e licenças. Cumplimiento y licencias.
 ---
 
 Invoke the `guardian-compliance` skill for compliance checks.

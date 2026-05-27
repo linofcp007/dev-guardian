@@ -1,5 +1,5 @@
 ---
-description: Security scan (SAST, secrets, CVEs, IaC). Scan completo.
+description: Security scan (SAST, secrets, CVEs, IaC). Scan completo. Escaneo completo.
 ---
 
 Invoke the `guardian-security` skill to run a comprehensive security scan on the current project.

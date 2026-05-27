@@ -1,5 +1,5 @@
 ---
-description: Deep pre-PR / pre-deploy review. Revisão antes de PR ou deploy.
+description: Deep pre-PR / pre-deploy review. Revisão antes de PR ou deploy. Revisión antes de PR o despliegue.
 ---
 
 Invoke the `guardian-review` skill for a senior-level review of the pending changes before PR, merge, or deploy.

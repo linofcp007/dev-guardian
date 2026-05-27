@@ -1,11 +1,23 @@
 ---
 name: guardian
-description: Main security, bugfix and code-quality router using open-source tools (Semgrep, Trivy, gitleaks, Renovate, OWASP ZAP, Playwright). Routes to specialized Guardian modules. Use whenever the user asks to initialize/protect/audit a project, configure security, scan vulnerabilities or secrets, review code before PR/commit/deploy, find bugs, improve quality, update dependencies, configure observability — or says "is this safe?", "any bugs?", "audit the project", "guardian init/scan/fix/review/audit", "before deploy/merge", "any secrets?". ALSO use for generic holistic checks (route to whichever module fits, or run guardian-audit if truly broad) when the user says "do a full checkup", "full project checkup", "check for errors", "check for issues", "check for problems", "diagnose this project", "tell me what's broken", "what's wrong with this code", "check everything", "health check", "is this project healthy?". Usa também quando pedirem em PT para "auditar o projeto", "verificar vulnerabilidades", "proteger o repo", "está seguro?", "tem bugs?", "antes de deploy/merge", "tem secrets?", "atualizar dependências", "faz um checkup", "checkup completo", "verifica por erros", "verifica por problemas", "vê o que está mal", "diagnóstico do projeto", "diz-me o que está mal", "verifica tudo", "o que pode estar partido?", "este projeto está saudável?". Bilingual EN/PT. Stack-aware (Node/Python/PHP/Go/Rust/Ruby/Java). Pragmatic by default, paranoid when critical.
+description: Main security, bugfix and code-quality router using open-source tools (Semgrep, Trivy, gitleaks, Renovate, OWASP ZAP, Playwright). Routes to specialized Guardian modules. Use whenever the user asks to initialize/protect/audit a project, configure security, scan vulnerabilities or secrets, review code before PR/commit/deploy, find bugs, improve quality, update dependencies, configure observability — or says "is this safe?", "any bugs?", "audit the project", "guardian init/scan/fix/review/audit", "before deploy/merge", "any secrets?". ALSO use for generic holistic checks (route to whichever module fits, or run guardian-audit if truly broad) when the user says "do a full checkup", "full project checkup", "check for errors", "check for issues", "check for problems", "diagnose this project", "tell me what's broken", "what's wrong with this code", "check everything", "health check", "is this project healthy?". Usa também quando pedirem em PT para "auditar o projeto", "verificar vulnerabilidades", "proteger o repo", "está seguro?", "tem bugs?", "antes de deploy/merge", "tem secrets?", "atualizar dependências", "faz um checkup", "checkup completo", "verifica por erros", "verifica por problemas", "vê o que está mal", "diagnóstico do projeto", "diz-me o que está mal", "verifica tudo", "o que pode estar partido?", "este projeto está saudável?". Úsala también cuando pidan en ES "auditar el proyecto", "comprobar vulnerabilidades", "proteger el repo", "¿es seguro?", "¿tiene bugs?", "antes del despliegue/merge", "¿hay secretos?", "actualizar dependencias", "haz un chequeo", "chequeo completo", "diagnóstico del proyecto", "comprueba si hay errores", "comprueba si hay problemas", "dime qué está mal", "verifica todo", "¿qué puede estar roto?", "¿este proyecto está sano?". Trilingual EN/PT/ES. Stack-aware (Node/Python/PHP/Go/Rust/Ruby/Java/.NET). Pragmatic by default, paranoid when critical. Always respond in the user's language.
 ---
 
 # Guardian — Security, Bugfix & Quality
 
 Skill principal de proteção e qualidade de código. Faz routing para um de vários modos especializados conforme o que o utilizador precisa, usando exclusivamente ferramentas open-source (Semgrep, Trivy, gitleaks, Renovate, OWASP ZAP, Playwright, etc.).
+
+## Idioma da resposta
+
+O Guardian opera em **EN, PT e ES**. Detecta o idioma da última mensagem do utilizador e responde sempre nesse idioma:
+
+- Utilizador escreve em inglês → responde em inglês.
+- Utilizador escreve em português → responde em português.
+- Utilizador escreve en español → responde en español.
+
+Termos técnicos universais (SAST, CVE, RCE, CI/CD, secrets, supply chain, etc.) mantêm-se em inglês mesmo em respostas PT/ES. Se o utilizador troca de idioma a meio da conversa, troca tu também. Em caso de mistura ambígua, segue o idioma da última instrução clara.
+
+Os módulos especializados (`guardian-security`, `guardian-bugfix`, etc.) herdam esta regra — quando os invocares, mantém o idioma do utilizador.
 
 ## Filosofia
 
@@ -31,7 +43,7 @@ O utilizador pode invocar o Guardian de várias formas. Encaminha para o módulo
 | `guardian observe`, "logs", "monitoring"           | `guardian-observability`        | Configurar logging, métricas, error tracking    |
 | `guardian perf`, "performance", "load test"        | `guardian-performance`          | Performance budgets, testes de carga            |
 | `guardian compliance`, "GDPR", "licenças"          | `guardian-compliance`           | Compliance, licenças, SBOM, privacy             |
-| `guardian audit`, "relatório completo"             | Combina security + quality + deps | Relatório executivo                           |
+| `guardian audit`, "relatório completo"             | `guardian-audit` (combo)        | Combina security + quality + deps               |
 
 **Pedidos genéricos / checkup (catch-all).** Frases como *"faz um checkup completo"*, *"checkup"*, *"diagnóstico do projeto"*, *"verifica tudo"*, *"verifica por erros"*, *"verifica por problemas"*, *"vê o que está mal"*, *"diz-me o que está mal"*, *"o que pode estar partido?"*, *"este projeto está saudável?"* (e equivalentes EN: *"do a full checkup"*, *"check for errors/issues/problems"*, *"diagnose this project"*, *"tell me what's broken"*, *"is this project healthy?"*) devem ser tratadas como uma verificação holística: corre `guardian-security` + `guardian-bugfix` + `guardian-quality` + `guardian-deps` em sequência e apresenta um relatório consolidado (idêntico ao `guardian audit`, mas a incluir bugfix).
 
@@ -83,7 +95,7 @@ A skill consegue lidar com projetos polyglot (vários ao mesmo tempo).
 | E2E testing                    | Playwright                 | Cypress                    |
 | Load testing                   | k6                         | Artillery                  |
 | SBOM                           | Syft                       | CycloneDX CLI              |
-| Error tracking                 | GlitchTip / Sentry self-hosted | —                      |
+| Error tracking                 | GlitchTip                  | Sentry self-hosted         |
 | Metrics                        | Prometheus + Grafana       | —                          |
 
 Detalhes de instalação em `scripts/install/`.

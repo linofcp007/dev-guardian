@@ -1,5 +1,5 @@
 ---
-description: Performance budgets + load testing. Performance e carga.
+description: Performance budgets + load testing. Performance e carga. Rendimiento y carga.
 ---
 
 Invoke the `guardian-performance` skill for performance work.

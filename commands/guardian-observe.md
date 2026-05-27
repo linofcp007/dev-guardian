@@ -1,5 +1,5 @@
 ---
-description: Logs, metrics, error tracking, alerts. Observability OSS.
+description: Logs, metrics, error tracking, alerts. Observability OSS. Observabilidad OSS.
 ---
 
 Invoke the `guardian-observability` skill to set up or audit the observability stack.

@@ -1,5 +1,5 @@
 ---
-description: Dependency updates, CVEs, supply chain. Dependências e CVEs.
+description: Dependency updates, CVEs, supply chain. Dependências e CVEs. Dependencias y CVEs.
 ---
 
 Invoke the `guardian-deps` skill for dependency management, vulnerability scanning, and supply-chain hygiene.

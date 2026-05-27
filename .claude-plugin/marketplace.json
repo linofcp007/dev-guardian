@@ -9,7 +9,7 @@
     {
       "name": "dev-guardian",
       "source": "./",
-      "description": "All-in-one open-source security, bugfix, quality, observability and compliance plugin. Stack-aware (Node/Python/PHP/Go/Rust/Ruby/Java). Bilingual EN/PT.",
+      "description": "All-in-one open-source security, bugfix, quality, observability and compliance plugin. Stack-aware (Node/Python/PHP-WordPress/Go/Rust/Ruby/Java/C#-.NET). Trilingual EN/PT/ES.",
       "category": "security",
       "tags": [
         "security",
@@ -28,7 +28,14 @@
         "owasp",
         "sbom",
         "gdpr",
-        "rgpd"
+        "rgpd",
+        "wordpress",
+        "dotnet",
+        "csharp",
+        "trilingual",
+        "es",
+        "pt",
+        "en"
       ],
       "homepage": "https://github.com/linofcp007/dev-guardian",
       "author": {

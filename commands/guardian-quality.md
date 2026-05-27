@@ -1,5 +1,5 @@
 ---
-description: Code quality + tech-debt analysis. Qualidade e dívida técnica.
+description: Code quality + tech-debt analysis. Qualidade e dívida técnica. Calidad y deuda técnica.
 ---
 
 Invoke the `guardian-quality` skill for code quality and tech-debt analysis.
