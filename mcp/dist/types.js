@@ -52,6 +52,8 @@ export const SCAN_TYPES = [
     'dotnet_secrets',
     'dotnet_target_framework',
     'dotnet_efcore_audit',
+    // AI-agent supply chain
+    'skill_audit',
 ];
 export const TOOL_RUN_STATUSES = ['ok', 'skipped', 'failed'];
 /**
@@ -72,5 +74,7 @@ export const DOMAIN_ERROR_CODES = [
     'cancelled',
     'not_a_wordpress_install',
     'not_a_wordpress_project',
+    'target_not_found',
+    'unsupported_target',
 ];
 //# sourceMappingURL=types.js.map

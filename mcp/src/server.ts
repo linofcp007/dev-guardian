@@ -87,6 +87,8 @@ import './tools/dotnetTargetFrameworkCheck.js';
 import './tools/dotnetEfcoreAudit.js';
 import './tools/dotnetDescribeSetup.js';
 import './tools/prioritizeFindings.js';
+// AI-agent supply chain (Phase 17):
+import './tools/scanSkill.js';
 
 import './resources/scans.js';
 import './resources/findings.js';

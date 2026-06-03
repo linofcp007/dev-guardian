@@ -8,7 +8,7 @@
 
 All-in-one **100% open-source** plugin for Claude Code / Cowork. Handles security, bug detection and fixing, code quality, dependency management, observability, performance and compliance for any dev project. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), trilingual triggers (EN + PT + ES) — responds in the user's language.
 
-Under the hood it ships a Claude Code plugin (10 skills + 11 slash commands) **and** an MCP server with **50 tools and 5 resources**, with persistent SQLite state for baselines, deltas and suppressions.
+Under the hood it ships a Claude Code plugin (11 skills + 12 slash commands) **and** an MCP server with **51 tools and 5 resources**, with persistent SQLite state for baselines, deltas and suppressions. It also vets **third-party AI skills / MCP servers / agents before you install them** — the supply-chain check for the agent ecosystem.
 
 ### Skills (Claude Code front-end)
 
@@ -24,11 +24,12 @@ Under the hood it ships a Claude Code plugin (10 skills + 11 slash commands) **a
 | `guardian-observability` | `/guardian-observe`    | Structured logging, metrics, error tracking               |
 | `guardian-performance`   | `/guardian-perf`       | Performance budgets, k6, Lighthouse                       |
 | `guardian-compliance`    | `/guardian-compliance` | GDPR, licenses, SBOM, privacy policy                      |
+| `guardian-scanskill`     | `/guardian-scanskill`  | Vet a 3rd-party skill / MCP server / agent before install |
 | (combines 3 of them)     | `/guardian-audit`      | Executive report: security + quality + deps               |
 
 You can also trigger everything via **natural language** (EN, PT or ES). Skills fire on descriptions — *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*, *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*.
 
-### MCP server (50 tools, 5 resources)
+### MCP server (51 tools, 5 resources)
 
 The plugin registers an MCP server on stdio that Claude Code launches automatically. The tools group into:
 
@@ -38,7 +39,8 @@ The plugin registers an MCP server on stdio that Claude Code launches automatica
 - **Quality, deps, prioritisation** (5) — `quality_check`, `deps_update_plan`, `triage_findings`, `prioritize_findings`, `risk_score`
 - **Compliance & SBOM** (5) — `compliance_check` (GDPR/RGPD), `compliance_evidence`, `generate_sbom` (Syft), `sbom_diff`, `license_compatibility`
 - **Observability & perf** (3) — `observability_setup` (Pino/structlog/Monolog/Serilog + Prometheus), `health_status`, `perf_check` (k6 / Lighthouse)
-- **Lifecycle / PR / governance** (10) — `init_project`, `precommit_install`, `review_pr`, `set_baseline`, `diff_scans`, `regression_alert`, `report_export`, `create_github_issues`, `suppress_finding`, `audit_executive`
+- **Lifecycle / PR / governance** (10) — `init_project`, `precommit_install`, `review_pr`, `set_baseline`, `diff_scans`, `regression_alert`, `report_export` (HTML / **SARIF 2.1.0** / Markdown / JSON), `create_github_issues`, `suppress_finding`, `audit_executive`
+- **AI-agent supply chain** (1) — `scan_skill`: vet a third-party **skill / MCP server / agent before you install it**. Accepts a directory, file, `.zip`, or git/HTTP(S) URL and runs 16 threat categories (prompt injection, data exfiltration, privilege escalation, supply chain, excessive agency, output handling, system-prompt leakage, memory poisoning, tool misuse, rogue agent, trigger abuse, dangerous code, taint, signatures, MCP least-privilege, MCP tool poisoning), a **YARA-style signature engine**, taint-light source→sink, hidden-Unicode detection, and **OSV.dev** CVE lookups — rolled up into a **0-100 risk score** and a **SAFE → DO NOT INSTALL** verdict
 - **Meta / host** (4) — `detect_stack`, `check_toolchain`, `install_toolchain`, `install_host_context`
 
 **Resources** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`.
@@ -47,7 +49,7 @@ The plugin registers an MCP server on stdio that Claude Code launches automatica
 
 ### Open-source tools orchestrated
 
-Semgrep · Trivy · gitleaks · Renovate · OWASP ZAP · Playwright · Pino / structlog / Monolog / Serilog · Prometheus + Grafana · GlitchTip · Uptime Kuma · k6 · Artillery · Lighthouse · Syft · WPScan · WP-CLI · PHPCS + WPCS · security-code-scan · dotnet-outdated · ruff · bandit · jscpd · eslint · hadolint · shellcheck.
+Semgrep · Trivy · OSV.dev · gitleaks · Renovate · OWASP ZAP · Playwright · Pino / structlog / Monolog / Serilog · Prometheus + Grafana · GlitchTip · Uptime Kuma · k6 · Artillery · Lighthouse · Syft · WPScan · WP-CLI · PHPCS + WPCS · security-code-scan · dotnet-outdated · ruff · bandit · jscpd · eslint · hadolint · shellcheck.
 
 ### Plugin installation
 
@@ -104,11 +106,11 @@ dev-guardian/
 ├── .claude-plugin/
 │   ├── plugin.json              # declares the MCP server + plugin metadata
 │   └── marketplace.json
-├── commands/                    # 11 slash commands
-├── skills/                      # 10 skills (one per router target)
+├── commands/                    # 12 slash commands
+├── skills/                      # 11 skills (one per router target)
 ├── mcp/                         # MCP server (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/
-│   ├── test/                    # 262 unit + integration tests
+│   ├── test/                    # 280 unit + integration tests
 │   ├── scripts/                 # smoke.mjs, smoke-wp-dotnet.mjs
 │   └── dist/                    # built artifact (node dist/server.js)
 ├── scripts/
@@ -135,7 +137,7 @@ Carlos Pereira · prodigitalkey.com
 
 Plugin all-in-one **100% open-source** para Claude Code / Cowork. Faz segurança, deteção e correção de bugs, qualidade de código, gestão de dependências, observability, performance e compliance em qualquer projeto de desenvolvimento. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), triggers trilingues (EN + PT + ES) — responde no idioma do utilizador.
 
-Por baixo do capot fornece um plugin Claude Code (10 skills + 11 slash commands) **e** um servidor MCP com **50 tools e 5 resources**, com estado persistente em SQLite para baselines, deltas e supressões.
+Por baixo do capot fornece um plugin Claude Code (11 skills + 12 slash commands) **e** um servidor MCP com **51 tools e 5 resources**, com estado persistente em SQLite para baselines, deltas e supressões. Também faz **vet de skills / MCP servers / agentes de terceiros antes de os instalares** — a verificação de supply-chain do ecossistema de agentes.
 
 ### Skills (front-end Claude Code)
 
@@ -151,11 +153,12 @@ Por baixo do capot fornece um plugin Claude Code (10 skills + 11 slash commands)
 | `guardian-observability` | `/guardian-observe`    | Logging estruturado, métricas, error tracking            |
 | `guardian-performance`   | `/guardian-perf`       | Performance budgets, k6, Lighthouse                      |
 | `guardian-compliance`    | `/guardian-compliance` | RGPD, licenças, SBOM, privacy policy                     |
+| `guardian-scanskill`     | `/guardian-scanskill`  | Vet de skill / MCP / agente antes de instalar            |
 | (combina os 3)           | `/guardian-audit`      | Relatório executivo: security + quality + deps           |
 
 Também podes invocar tudo em **linguagem natural** (PT, EN ou ES). As skills disparam por descrição — *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*, *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*.
 
-### Servidor MCP (50 tools, 5 resources)
+### Servidor MCP (51 tools, 5 resources)
 
 O plugin regista um servidor MCP em stdio que o Claude Code arranca automaticamente. As tools agrupam-se em:
 
@@ -165,7 +168,8 @@ O plugin regista um servidor MCP em stdio que o Claude Code arranca automaticame
 - **Qualidade, deps, priorização** (5) — `quality_check`, `deps_update_plan`, `triage_findings`, `prioritize_findings`, `risk_score`
 - **Compliance & SBOM** (5) — `compliance_check` (RGPD/GDPR), `compliance_evidence`, `generate_sbom` (Syft), `sbom_diff`, `license_compatibility`
 - **Observability & perf** (3) — `observability_setup` (Pino/structlog/Monolog/Serilog + Prometheus), `health_status`, `perf_check` (k6 / Lighthouse)
-- **Lifecycle / PR / governance** (10) — `init_project`, `precommit_install`, `review_pr`, `set_baseline`, `diff_scans`, `regression_alert`, `report_export`, `create_github_issues`, `suppress_finding`, `audit_executive`
+- **Lifecycle / PR / governance** (10) — `init_project`, `precommit_install`, `review_pr`, `set_baseline`, `diff_scans`, `regression_alert`, `report_export` (HTML / **SARIF 2.1.0** / Markdown / JSON), `create_github_issues`, `suppress_finding`, `audit_executive`
+- **AI-agent supply chain** (1) — `scan_skill`: vet a third-party **skill / MCP server / agent before you install it**. Accepts a directory, file, `.zip`, or git/HTTP(S) URL and runs 16 threat categories (prompt injection, data exfiltration, privilege escalation, supply chain, excessive agency, output handling, system-prompt leakage, memory poisoning, tool misuse, rogue agent, trigger abuse, dangerous code, taint, signatures, MCP least-privilege, MCP tool poisoning), a **YARA-style signature engine**, taint-light source→sink, hidden-Unicode detection, and **OSV.dev** CVE lookups — rolled up into a **0-100 risk score** and a **SAFE → DO NOT INSTALL** verdict
 - **Meta / host** (4) — `detect_stack`, `check_toolchain`, `install_toolchain`, `install_host_context`
 
 **Resources** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`.
@@ -174,7 +178,7 @@ O plugin regista um servidor MCP em stdio que o Claude Code arranca automaticame
 
 ### Ferramentas open-source orquestradas
 
-Semgrep · Trivy · gitleaks · Renovate · OWASP ZAP · Playwright · Pino / structlog / Monolog / Serilog · Prometheus + Grafana · GlitchTip · Uptime Kuma · k6 · Artillery · Lighthouse · Syft · WPScan · WP-CLI · PHPCS + WPCS · security-code-scan · dotnet-outdated · ruff · bandit · jscpd · eslint · hadolint · shellcheck.
+Semgrep · Trivy · OSV.dev · gitleaks · Renovate · OWASP ZAP · Playwright · Pino / structlog / Monolog / Serilog · Prometheus + Grafana · GlitchTip · Uptime Kuma · k6 · Artillery · Lighthouse · Syft · WPScan · WP-CLI · PHPCS + WPCS · security-code-scan · dotnet-outdated · ruff · bandit · jscpd · eslint · hadolint · shellcheck.
 
 ### Instalação do plugin
 
@@ -231,11 +235,11 @@ dev-guardian/
 ├── .claude-plugin/
 │   ├── plugin.json              # declara o servidor MCP + metadata
 │   └── marketplace.json
-├── commands/                    # 11 slash commands
-├── skills/                      # 10 skills (uma por destino do router)
+├── commands/                    # 12 slash commands
+├── skills/                      # 11 skills (uma por destino do router)
 ├── mcp/                         # Servidor MCP (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/
-│   ├── test/                    # 262 testes unit + integration
+│   ├── test/                    # 280 testes unit + integration
 │   ├── scripts/                 # smoke.mjs, smoke-wp-dotnet.mjs
 │   └── dist/                    # artefacto compilado (node dist/server.js)
 ├── scripts/
@@ -262,7 +266,7 @@ Carlos Pereira · prodigitalkey.com
 
 Plugin todo-en-uno **100% open-source** para Claude Code / Cowork. Cubre seguridad, detección y corrección de bugs, calidad de código, gestión de dependencias, observabilidad, rendimiento y cumplimiento para cualquier proyecto de desarrollo. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), triggers trilingües (EN + PT + ES) — responde en el idioma del usuario.
 
-Bajo el capó incluye un plugin Claude Code (10 skills + 11 slash commands) **y** un servidor MCP con **50 herramientas y 5 recursos**, con estado persistente en SQLite para baselines, deltas y supresiones.
+Bajo el capó incluye un plugin Claude Code (11 skills + 12 slash commands) **y** un servidor MCP con **51 herramientas y 5 recursos**, con estado persistente en SQLite para baselines, deltas y supresiones. También hace **vet de skills / MCP servers / agentes de terceros antes de instalarlos** — la verificación de supply-chain del ecosistema de agentes.
 
 ### Skills (front-end de Claude Code)
 
@@ -278,11 +282,12 @@ Bajo el capó incluye un plugin Claude Code (10 skills + 11 slash commands) **y*
 | `guardian-observability` | `/guardian-observe`    | Logging estructurado, métricas, error tracking           |
 | `guardian-performance`   | `/guardian-perf`       | Performance budgets, k6, Lighthouse                      |
 | `guardian-compliance`    | `/guardian-compliance` | RGPD/LOPD, licencias, SBOM, política de privacidad       |
+| `guardian-scanskill`     | `/guardian-scanskill`  | Vet de skill / servidor MCP / agente antes de instalar   |
 | (combina 3 de ellas)     | `/guardian-audit`      | Informe ejecutivo: seguridad + calidad + deps            |
 
 También puedes invocarlo todo en **lenguaje natural** (ES, EN o PT). Las skills se disparan por descripción — *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*, *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*.
 
-### Servidor MCP (50 herramientas, 5 recursos)
+### Servidor MCP (51 herramientas, 5 recursos)
 
 El plugin registra un servidor MCP en stdio que Claude Code arranca automáticamente. Las herramientas se agrupan en:
 
@@ -292,7 +297,8 @@ El plugin registra un servidor MCP en stdio que Claude Code arranca automáticam
 - **Calidad, deps, priorización** (5) — `quality_check`, `deps_update_plan`, `triage_findings`, `prioritize_findings`, `risk_score`
 - **Compliance & SBOM** (5) — `compliance_check` (RGPD/GDPR), `compliance_evidence`, `generate_sbom` (Syft), `sbom_diff`, `license_compatibility`
 - **Observabilidad & rendimiento** (3) — `observability_setup` (Pino/structlog/Monolog/Serilog + Prometheus), `health_status`, `perf_check` (k6 / Lighthouse)
-- **Lifecycle / PR / gobierno** (10) — `init_project`, `precommit_install`, `review_pr`, `set_baseline`, `diff_scans`, `regression_alert`, `report_export`, `create_github_issues`, `suppress_finding`, `audit_executive`
+- **Lifecycle / PR / gobierno** (10) — `init_project`, `precommit_install`, `review_pr`, `set_baseline`, `diff_scans`, `regression_alert`, `report_export` (HTML / **SARIF 2.1.0** / Markdown / JSON), `create_github_issues`, `suppress_finding`, `audit_executive`
+- **Cadena de suministro de agentes IA** (1) — `scan_skill`: audita una **skill / servidor MCP / agente de terceros antes de instalarlo**. Acepta un directorio, archivo, `.zip` o URL git/HTTP(S) y corre 16 categorías de amenaza (prompt injection, exfiltración de datos, escalada de privilegios, supply chain, agencia excesiva, manejo de salida, fuga del system-prompt, envenenamiento de memoria, mal uso de tools, agente rogue, abuso de triggers, código peligroso, taint, firmas, MCP least-privilege, MCP tool poisoning), un motor de **firmas estilo YARA**, taint-light source→sink, detección de Unicode oculto y lookups de CVE en **OSV.dev** — todo agregado en una **puntuación de riesgo 0-100** y un veredicto **SAFE → DO NOT INSTALL**
 - **Meta / host** (4) — `detect_stack`, `check_toolchain`, `install_toolchain`, `install_host_context`
 
 **Recursos** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`.
@@ -301,7 +307,7 @@ El plugin registra un servidor MCP en stdio que Claude Code arranca automáticam
 
 ### Herramientas open-source orquestadas
 
-Semgrep · Trivy · gitleaks · Renovate · OWASP ZAP · Playwright · Pino / structlog / Monolog / Serilog · Prometheus + Grafana · GlitchTip · Uptime Kuma · k6 · Artillery · Lighthouse · Syft · WPScan · WP-CLI · PHPCS + WPCS · security-code-scan · dotnet-outdated · ruff · bandit · jscpd · eslint · hadolint · shellcheck.
+Semgrep · Trivy · OSV.dev · gitleaks · Renovate · OWASP ZAP · Playwright · Pino / structlog / Monolog / Serilog · Prometheus + Grafana · GlitchTip · Uptime Kuma · k6 · Artillery · Lighthouse · Syft · WPScan · WP-CLI · PHPCS + WPCS · security-code-scan · dotnet-outdated · ruff · bandit · jscpd · eslint · hadolint · shellcheck.
 
 ### Instalación del plugin
 
@@ -358,11 +364,11 @@ dev-guardian/
 ├── .claude-plugin/
 │   ├── plugin.json              # declara el servidor MCP + metadatos
 │   └── marketplace.json
-├── commands/                    # 11 slash commands
-├── skills/                      # 10 skills (una por destino del router)
+├── commands/                    # 12 slash commands
+├── skills/                      # 11 skills (una por destino del router)
 ├── mcp/                         # Servidor MCP (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/
-│   ├── test/                    # 262 tests unit + integration
+│   ├── test/                    # 280 tests unit + integration
 │   ├── scripts/                 # smoke.mjs, smoke-wp-dotnet.mjs
 │   └── dist/                    # artefacto compilado (node dist/server.js)
 ├── scripts/

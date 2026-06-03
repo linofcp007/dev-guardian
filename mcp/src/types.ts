@@ -60,6 +60,8 @@ export const SCAN_TYPES = [
   'dotnet_secrets',
   'dotnet_target_framework',
   'dotnet_efcore_audit',
+  // AI-agent supply chain
+  'skill_audit',
 ] as const;
 export type ScanType = (typeof SCAN_TYPES)[number];
 
@@ -174,6 +176,8 @@ export const DOMAIN_ERROR_CODES = [
   'cancelled',
   'not_a_wordpress_install',
   'not_a_wordpress_project',
+  'target_not_found',
+  'unsupported_target',
 ] as const;
 export type DomainErrorCode = (typeof DOMAIN_ERROR_CODES)[number];
 

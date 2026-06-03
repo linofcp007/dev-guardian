@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
+import { toSarif } from '../report/sarif.js';
 import { ProjectPath } from '../schemas.js';
 import type { Cve, DomainError, Finding, Severity, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
@@ -23,14 +24,24 @@ import { registerToolModule, type ToolModule } from './index.js';
 const inputSchema = {
   project_path: ProjectPath,
   scan_id: z.string().uuid().optional().describe('Scan to export. Defaults to the latest completed.'),
+  format: z
+    .enum(['html', 'sarif', 'markdown', 'json'])
+    .optional()
+    .default('html')
+    .describe(
+      'Output format. html (default, self-contained, browser-openable), sarif (SARIF 2.1.0 for ' +
+        'CI/IDE code scanning), markdown (handover doc), or json (raw findings).',
+    ),
 };
 
 const tool: ToolModule = {
   name: 'report_export',
-  title: 'Export scan as HTML report',
+  title: 'Export scan as a report (HTML / SARIF / Markdown / JSON)',
   description:
-    'Write a static, self-contained HTML report for a scan. Local file only — opens in any browser. ' +
-    'No external assets, no JS. Suitable for handover or audit evidence.',
+    'Write a report for a scan in one of four formats: html (static, self-contained, opens in any ' +
+    'browser), sarif (SARIF 2.1.0 for GitHub/GitLab code scanning and IDE viewers), markdown ' +
+    '(handover doc), or json (raw findings). Local file only — no external services. Suitable for ' +
+    'handover or audit evidence.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -41,7 +52,12 @@ async function handler(
   input: Record<string, unknown>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string; scan_id?: string };
+  const inp = input as {
+    project_path?: string;
+    scan_id?: string;
+    format?: 'html' | 'sarif' | 'markdown' | 'json';
+  };
+  const format = inp.format ?? 'html';
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -63,20 +79,96 @@ async function handler(
       ? ctx.storage.cves.listActive(scanId)
       : [];
 
-  const html = renderHtml(scan, findings, cves);
+  const { content, fileName } = renderReport(format, scan, findings, cves);
   const outDir = join(projectPath, '.guardian', 'reports', `export-${scanId.slice(0, 8)}`);
   mkdirSync(outDir, { recursive: true });
-  const outFile = join(outDir, 'report.html');
-  writeFileSync(outFile, html, 'utf8');
+  const outFile = join(outDir, fileName);
+  writeFileSync(outFile, content, 'utf8');
 
   return {
     ok: true,
     scan_id: scanId,
+    format,
     file_path: outFile,
-    bytes: Buffer.byteLength(html, 'utf8'),
+    bytes: Buffer.byteLength(content, 'utf8'),
     findings_count: findings.length,
     cves_count: cves.length,
   };
+}
+
+type ScanRecordT = NonNullable<ReturnType<PluginContext['storage']['scans']['getById']>>;
+
+function renderReport(
+  format: 'html' | 'sarif' | 'markdown' | 'json',
+  scan: ScanRecordT,
+  findings: Finding[],
+  cves: Cve[],
+): { content: string; fileName: string } {
+  switch (format) {
+    case 'sarif':
+      return { content: toSarif(findings), fileName: 'report.sarif' };
+    case 'json':
+      return {
+        content: JSON.stringify({ scan, findings, cves }, null, 2),
+        fileName: 'report.json',
+      };
+    case 'markdown':
+      return { content: renderMarkdown(scan, findings, cves), fileName: 'report.md' };
+    case 'html':
+    default:
+      return { content: renderHtml(scan, findings, cves), fileName: 'report.html' };
+  }
+}
+
+function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[]): string {
+  const counts: Record<Severity, number> = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
+  for (const f of findings) counts[f.severity] += 1;
+  const lines: string[] = [];
+  lines.push(`# dev-guardian scan report`);
+  lines.push('');
+  lines.push(`- **Scan ID:** ${scan.scan_id}`);
+  lines.push(`- **Type:** ${scan.scan_type}`);
+  lines.push(`- **Status:** ${scan.status}`);
+  lines.push(`- **Started:** ${scan.started_at}`);
+  lines.push(`- **Project:** \`${scan.project_path}\``);
+  lines.push('');
+  lines.push(
+    `**Severity:** critical ${counts.critical} · high ${counts.high} · medium ${counts.medium} · low ${counts.low} · info ${counts.info}`,
+  );
+  lines.push('');
+  lines.push(`## Findings (${findings.length})`);
+  lines.push('');
+  if (findings.length === 0) {
+    lines.push('_No findings._');
+  } else {
+    lines.push('| Sev | Tool | Rule | Title | Location |');
+    lines.push('| --- | --- | --- | --- | --- |');
+    for (const f of [...findings].sort((a, b) => severityOrder(b.severity) - severityOrder(a.severity))) {
+      const loc = f.file_path ? `\`${f.file_path}${f.line_start ? `:${f.line_start}` : ''}\`` : '';
+      lines.push(
+        `| ${f.severity} | ${f.tool} | \`${f.rule_id ?? ''}\` | ${mdEscape(f.title)} | ${loc} |`,
+      );
+    }
+  }
+  if (cves.length > 0) {
+    lines.push('');
+    lines.push(`## Active CVEs (${cves.length})`);
+    lines.push('');
+    lines.push('| CVE | Sev | Package | Installed | Fixed |');
+    lines.push('| --- | --- | --- | --- | --- |');
+    for (const c of cves) {
+      lines.push(
+        `| ${c.cve_id} | ${c.severity} | ${c.package_name} | ${c.installed_version ?? ''} | ${c.fixed_version ?? ''} |`,
+      );
+    }
+  }
+  lines.push('');
+  lines.push('_Generated by dev-guardian — open-source, no telemetry._');
+  return lines.join('\n');
+}
+
+function mdEscape(s: string): string {
+  return s.replace(/\|/g, '\\|');
 }
 
 function renderHtml(
