@@ -9,8 +9,8 @@ tags are not patched — upgrade to the newest release.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.6.x   | ✅        |
-| < 0.6   | ❌        |
+| 1.0.x   | ✅        |
+| < 1.0   | ❌        |
 
 ## Reporting a vulnerability
 

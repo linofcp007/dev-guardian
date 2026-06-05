@@ -2,8 +2,33 @@
 
 All notable changes to dev-guardian are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project uses
-[Semantic Versioning](https://semver.org/). Until 1.0 the surface may still
-change; breaking changes are called out per release.
+[Semantic Versioning](https://semver.org/). From 1.0.0 the MCP tool/resource
+surface and default behaviours follow semver — breaking changes require a major
+version bump.
+
+## [1.0.0] — 2026-06-05
+
+First stable release. Everything below was already shipped in 0.x; 1.0.0 marks
+the point where the surface is proven and held to semver.
+
+### Added
+
+- **CI pipeline** (GitHub Actions): markdownlint; build + test on Linux, macOS
+  and Windows; a dist-sync gate (committed `mcp/dist` must equal a fresh build);
+  coverage thresholds; an e2e job running real Semgrep against a vulnerable
+  fixture; and a dogfood self-audit (Syft SBOM + gitleaks + Semgrep SARIF).
+- **Stability snapshot** — the exact 50 tools + 16 resources are pinned in
+  `toolSurface.test.ts`; accidental surface drift fails CI.
+- `SECURITY.md` (responsible disclosure), `CONTRIBUTING.md`, this `CHANGELOG.md`.
+
+### Changed
+
+- **First stable release.** The MCP tool/resource surface and default
+  behaviours are now covered by semver.
+
+### Fixed
+
+- README counts corrected (44 commands, 16 resources).
 
 ## [0.6.0] — 2026-06-05
 
@@ -78,6 +103,7 @@ change; breaking changes are called out per release.
   observability / performance / compliance plugin with an MCP server, SQLite
   state, and trilingual (EN/PT/ES) triggers.
 
+[1.0.0]: https://github.com/linofcp007/dev-guardian/releases/tag/v1.0.0
 [0.6.0]: https://github.com/linofcp007/dev-guardian/releases/tag/v0.6.0
 [0.5.1]: https://github.com/linofcp007/dev-guardian/releases/tag/v0.5.1
 [0.5.0]: https://github.com/linofcp007/dev-guardian/releases/tag/v0.5.0
