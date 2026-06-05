@@ -62,13 +62,22 @@ describe('E2E — eval-vuln fixture', () => {
 
     const r = await execa(
       'semgrep',
-      ['--config', BASE_RULES, '--json', '--quiet', '--no-git-ignore', FIXTURE],
-      { reject: false, timeout: 5 * 60_000 },
+      ['scan', '--config', BASE_RULES, '--json', '--quiet', '--disable-version-check', FIXTURE],
+      { reject: false, timeout: 5 * 60_000, env: { SEMGREP_SEND_METRICS: 'off' } },
     );
-    const out = JSON.parse(r.stdout || '{"results":[]}') as {
-      results?: Array<{ check_id?: string }>;
-    };
+    let out: { results?: Array<{ check_id?: string }> } = { results: [] };
+    try {
+      out = JSON.parse(r.stdout || '{"results":[]}');
+    } catch {
+      /* leave out empty; diagnostic below surfaces the raw failure */
+    }
     const ruleIds = (out.results ?? []).map((x) => String(x.check_id ?? ''));
+    if (ruleIds.length === 0) {
+      console.error(
+        `[e2e] semgrep exit=${r.exitCode} stdoutLen=${(r.stdout || '').length} ` +
+          `stderr=${(r.stderr || '').slice(0, 600)}`,
+      );
+    }
 
     expect(ruleIds.length).toBeGreaterThan(0);
     expect(ruleIds.some((id) => /eval/i.test(id))).toBe(true);
