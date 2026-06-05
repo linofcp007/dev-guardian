@@ -1,5 +1,5 @@
 /**
- * Unit tests for the pure MCP-config helpers used by install_host_context.
+ * Unit tests for the pure MCP-config helpers used by the mcp-config CLI.
  * No filesystem writes here — only string/path logic.
  */
 

@@ -74,7 +74,7 @@ to confirm this file is loaded, `/memory refresh` after editing it.
 - "health check" → `health_status`
 - "regression check" → `regression_alert`
 - "SBOM diff" → `sbom_diff`
-- "install rules for another AI" → `install_host_context`
+- "set up another AI host" → run `node bin/dev-guardian.mjs mcp-config <host>` (CLI)
 
 ## Resources
 

@@ -8,7 +8,7 @@
 
 All-in-one **100% open-source** plugin for Claude Code / Cowork. Handles security, bug detection and fixing, code quality, dependency management, observability, performance and compliance for any dev project. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), trilingual triggers (EN + PT + ES) — responds in the user's language.
 
-Under the hood it ships a Claude Code plugin (11 skills + 12 slash commands) **and** an MCP server with **51 tools and 5 resources**, with persistent SQLite state for baselines, deltas and suppressions. It also vets **third-party AI skills / MCP servers / agents before you install them** — the supply-chain check for the agent ecosystem.
+Under the hood it ships a Claude Code plugin (11 skills + 12 slash commands) **and** an MCP server with **50 tools and 5 resources**, with persistent SQLite state for baselines, deltas and suppressions. It also vets **third-party AI skills / MCP servers / agents before you install them** — the supply-chain check for the agent ecosystem.
 
 ### Skills (Claude Code front-end)
 
@@ -29,7 +29,7 @@ Under the hood it ships a Claude Code plugin (11 skills + 12 slash commands) **a
 
 You can also trigger everything via **natural language** (EN, PT or ES). Skills fire on descriptions — *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*, *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*.
 
-### MCP server (51 tools, 5 resources)
+### MCP server (50 tools, 5 resources)
 
 The plugin registers an MCP server on stdio that Claude Code launches automatically. The tools group into:
 
@@ -41,7 +41,7 @@ The plugin registers an MCP server on stdio that Claude Code launches automatica
 - **Observability & perf** (3) — `observability_setup` (Pino/structlog/Monolog/Serilog + Prometheus), `health_status`, `perf_check` (k6 / Lighthouse)
 - **Lifecycle / PR / governance** (10) — `init_project`, `precommit_install`, `review_pr`, `set_baseline`, `diff_scans`, `regression_alert`, `report_export` (Markdown default / branded **HTML** with dark/light toggle / **SARIF 2.1.0** / JSON), `create_github_issues`, `suppress_finding`, `audit_executive`
 - **AI-agent supply chain** (1) — `scan_skill`: vet a third-party **skill / MCP server / agent before you install it**. Accepts a directory, file, `.zip`, or git/HTTP(S) URL and runs 16 threat categories (prompt injection, data exfiltration, privilege escalation, supply chain, excessive agency, output handling, system-prompt leakage, memory poisoning, tool misuse, rogue agent, trigger abuse, dangerous code, taint, signatures, MCP least-privilege, MCP tool poisoning), a **YARA-style signature engine**, taint-light source→sink, hidden-Unicode detection, and **OSV.dev** CVE lookups — rolled up into a **0-100 risk score** and a **SAFE → DO NOT INSTALL** verdict
-- **Meta / host** (4) — `detect_stack`, `check_toolchain`, `install_toolchain`, `install_host_context`
+- **Meta / host** (3) — `detect_stack`, `check_toolchain`, `install_toolchain`
 
 **Resources** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`.
 
@@ -85,15 +85,15 @@ Then inside Claude Code, run `/plugin` and enable `dev-guardian`. Alternatively,
 
 ### Other AI hosts (Cursor · Windsurf · Copilot · Codex · Gemini · Cline · Claude Desktop)
 
-The real engine is the **MCP server**, so any MCP-capable host can use dev-guardian — not just Claude Code. The `install_host_context` MCP tool sets a host up in **one call**: it **registers the server** in the host's config (merging into existing config, never clobbering other servers) **and drops the rules file** that tells that host's AI when to call each tool. Idempotent.
+The real engine is the **MCP server**, so any MCP-capable host can use dev-guardian — not just Claude Code. The **`mcp-config` CLI** wires a host up from a plain terminal — no MCP connection needed (no chicken-and-egg). It fills in the absolute path to the server for you, and either prints the block to paste or, with `--write`, merges it into the project and drops the rules file. Idempotent.
 
-From a Claude Code session inside your project:
+From a terminal in your project (after `cd mcp && npm install && npm run build` once):
 
 ```text
-install_host_context host=all               # set up every host at once
-install_host_context host=cursor            # just Cursor (project scope)
-install_host_context host=codex scope=global # user-level registration
-install_host_context host=all apply=false   # preview the plan, write nothing
+node bin/dev-guardian.mjs mcp-config cursor          # print the block to paste
+node bin/dev-guardian.mjs mcp-config all             # every host
+node bin/dev-guardian.mjs mcp-config codex --write   # write + merge into the project
+node bin/dev-guardian.mjs mcp-config all --scope global
 ```
 
 | Host | MCP config file (project / global) | Rules file |
@@ -186,7 +186,7 @@ Carlos Pereira · prodigitalkey.com
 
 Plugin all-in-one **100% open-source** para Claude Code / Cowork. Faz segurança, deteção e correção de bugs, qualidade de código, gestão de dependências, observability, performance e compliance em qualquer projeto de desenvolvimento. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), triggers trilingues (EN + PT + ES) — responde no idioma do utilizador.
 
-Por baixo do capot fornece um plugin Claude Code (11 skills + 12 slash commands) **e** um servidor MCP com **51 tools e 5 resources**, com estado persistente em SQLite para baselines, deltas e supressões. Também faz **vet de skills / MCP servers / agentes de terceiros antes de os instalares** — a verificação de supply-chain do ecossistema de agentes.
+Por baixo do capot fornece um plugin Claude Code (11 skills + 12 slash commands) **e** um servidor MCP com **50 tools e 5 resources**, com estado persistente em SQLite para baselines, deltas e supressões. Também faz **vet de skills / MCP servers / agentes de terceiros antes de os instalares** — a verificação de supply-chain do ecossistema de agentes.
 
 ### Skills (front-end Claude Code)
 
@@ -207,7 +207,7 @@ Por baixo do capot fornece um plugin Claude Code (11 skills + 12 slash commands)
 
 Também podes invocar tudo em **linguagem natural** (PT, EN ou ES). As skills disparam por descrição — *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*, *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*.
 
-### Servidor MCP (51 tools, 5 resources)
+### Servidor MCP (50 tools, 5 resources)
 
 O plugin regista um servidor MCP em stdio que o Claude Code arranca automaticamente. As tools agrupam-se em:
 
@@ -219,7 +219,7 @@ O plugin regista um servidor MCP em stdio que o Claude Code arranca automaticame
 - **Observability & perf** (3) — `observability_setup` (Pino/structlog/Monolog/Serilog + Prometheus), `health_status`, `perf_check` (k6 / Lighthouse)
 - **Lifecycle / PR / governance** (10) — `init_project`, `precommit_install`, `review_pr`, `set_baseline`, `diff_scans`, `regression_alert`, `report_export` (Markdown default / branded **HTML** with dark/light toggle / **SARIF 2.1.0** / JSON), `create_github_issues`, `suppress_finding`, `audit_executive`
 - **AI-agent supply chain** (1) — `scan_skill`: vet a third-party **skill / MCP server / agent before you install it**. Accepts a directory, file, `.zip`, or git/HTTP(S) URL and runs 16 threat categories (prompt injection, data exfiltration, privilege escalation, supply chain, excessive agency, output handling, system-prompt leakage, memory poisoning, tool misuse, rogue agent, trigger abuse, dangerous code, taint, signatures, MCP least-privilege, MCP tool poisoning), a **YARA-style signature engine**, taint-light source→sink, hidden-Unicode detection, and **OSV.dev** CVE lookups — rolled up into a **0-100 risk score** and a **SAFE → DO NOT INSTALL** verdict
-- **Meta / host** (4) — `detect_stack`, `check_toolchain`, `install_toolchain`, `install_host_context`
+- **Meta / host** (3) — `detect_stack`, `check_toolchain`, `install_toolchain`
 
 **Resources** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`.
 
@@ -263,15 +263,15 @@ Depois, dentro do Claude Code, corre `/plugin` e ativa o `dev-guardian`. Em alte
 
 ### Outros hosts de IA (Cursor · Windsurf · Copilot · Codex · Gemini · Cline · Claude Desktop)
 
-O motor real é o **servidor MCP**, por isso qualquer host com suporte MCP pode usar o dev-guardian — não só o Claude Code. A tool MCP `install_host_context` configura um host **num só comando**: **regista o servidor** na config do host (fundindo-se com a config existente, sem destruir outros servidores) **e deixa o ficheiro de regras** que diz à IA desse host quando chamar cada tool. Idempotente.
+O motor real é o **servidor MCP**, por isso qualquer host com suporte MCP pode usar o dev-guardian — não só o Claude Code. A **CLI `mcp-config`** liga um host a partir de um terminal normal — sem precisar de ligação MCP (sem ovo-e-galinha). Preenche o caminho absoluto do servidor por ti e ou imprime o bloco para colar ou, com `--write`, funde-o no projeto e deixa o ficheiro de regras. Idempotente.
 
-A partir de uma sessão Claude Code dentro do teu projeto:
+A partir de um terminal no teu projeto (depois de `cd mcp && npm install && npm run build` uma vez):
 
 ```text
-install_host_context host=all               # configura todos os hosts de uma vez
-install_host_context host=cursor            # só Cursor (scope de projeto)
-install_host_context host=codex scope=global # registo a nível de utilizador
-install_host_context host=all apply=false   # pré-visualiza o plano, não escreve nada
+node bin/dev-guardian.mjs mcp-config cursor          # imprime o bloco para colar
+node bin/dev-guardian.mjs mcp-config all             # todos os hosts
+node bin/dev-guardian.mjs mcp-config codex --write   # escreve + funde no projeto
+node bin/dev-guardian.mjs mcp-config all --scope global
 ```
 
 | Host | Ficheiro de config MCP (projeto / global) | Ficheiro de regras |
@@ -364,7 +364,7 @@ Carlos Pereira · prodigitalkey.com
 
 Plugin todo-en-uno **100% open-source** para Claude Code / Cowork. Cubre seguridad, detección y corrección de bugs, calidad de código, gestión de dependencias, observabilidad, rendimiento y cumplimiento para cualquier proyecto de desarrollo. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), triggers trilingües (EN + PT + ES) — responde en el idioma del usuario.
 
-Bajo el capó incluye un plugin Claude Code (11 skills + 12 slash commands) **y** un servidor MCP con **51 herramientas y 5 recursos**, con estado persistente en SQLite para baselines, deltas y supresiones. También hace **vet de skills / MCP servers / agentes de terceros antes de instalarlos** — la verificación de supply-chain del ecosistema de agentes.
+Bajo el capó incluye un plugin Claude Code (11 skills + 12 slash commands) **y** un servidor MCP con **50 herramientas y 5 recursos**, con estado persistente en SQLite para baselines, deltas y supresiones. También hace **vet de skills / MCP servers / agentes de terceros antes de instalarlos** — la verificación de supply-chain del ecosistema de agentes.
 
 ### Skills (front-end de Claude Code)
 
@@ -385,7 +385,7 @@ Bajo el capó incluye un plugin Claude Code (11 skills + 12 slash commands) **y*
 
 También puedes invocarlo todo en **lenguaje natural** (ES, EN o PT). Las skills se disparan por descripción — *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*, *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*.
 
-### Servidor MCP (51 herramientas, 5 recursos)
+### Servidor MCP (50 herramientas, 5 recursos)
 
 El plugin registra un servidor MCP en stdio que Claude Code arranca automáticamente. Las herramientas se agrupan en:
 
@@ -397,7 +397,7 @@ El plugin registra un servidor MCP en stdio que Claude Code arranca automáticam
 - **Observabilidad & rendimiento** (3) — `observability_setup` (Pino/structlog/Monolog/Serilog + Prometheus), `health_status`, `perf_check` (k6 / Lighthouse)
 - **Lifecycle / PR / gobierno** (10) — `init_project`, `precommit_install`, `review_pr`, `set_baseline`, `diff_scans`, `regression_alert`, `report_export` (Markdown default / branded **HTML** with dark/light toggle / **SARIF 2.1.0** / JSON), `create_github_issues`, `suppress_finding`, `audit_executive`
 - **Cadena de suministro de agentes IA** (1) — `scan_skill`: audita una **skill / servidor MCP / agente de terceros antes de instalarlo**. Acepta un directorio, archivo, `.zip` o URL git/HTTP(S) y corre 16 categorías de amenaza (prompt injection, exfiltración de datos, escalada de privilegios, supply chain, agencia excesiva, manejo de salida, fuga del system-prompt, envenenamiento de memoria, mal uso de tools, agente rogue, abuso de triggers, código peligroso, taint, firmas, MCP least-privilege, MCP tool poisoning), un motor de **firmas estilo YARA**, taint-light source→sink, detección de Unicode oculto y lookups de CVE en **OSV.dev** — todo agregado en una **puntuación de riesgo 0-100** y un veredicto **SAFE → DO NOT INSTALL**
-- **Meta / host** (4) — `detect_stack`, `check_toolchain`, `install_toolchain`, `install_host_context`
+- **Meta / host** (3) — `detect_stack`, `check_toolchain`, `install_toolchain`
 
 **Recursos** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`.
 
@@ -441,15 +441,15 @@ Luego, dentro de Claude Code, ejecuta `/plugin` y activa `dev-guardian`. Alterna
 
 ### Otros hosts de IA (Cursor · Windsurf · Copilot · Codex · Gemini · Cline · Claude Desktop)
 
-El motor real es el **servidor MCP**, así que cualquier host compatible con MCP puede usar dev-guardian — no solo Claude Code. La herramienta MCP `install_host_context` configura un host en **un solo comando**: **registra el servidor** en la config del host (fusionándose con la config existente, sin destruir otros servidores) **y coloca el archivo de reglas** que le dice a la IA de ese host cuándo llamar a cada herramienta. Idempotente.
+El motor real es el **servidor MCP**, así que cualquier host compatible con MCP puede usar dev-guardian — no solo Claude Code. La **CLI `mcp-config`** conecta un host desde una terminal normal — sin necesidad de conexión MCP (sin huevo-y-gallina). Rellena la ruta absoluta del servidor por ti y o imprime el bloque para pegar o, con `--write`, lo fusiona en el proyecto y coloca el archivo de reglas. Idempotente.
 
-Desde una sesión de Claude Code dentro de tu proyecto:
+Desde una terminal en tu proyecto (tras `cd mcp && npm install && npm run build` una vez):
 
 ```text
-install_host_context host=all               # configura todos los hosts de una vez
-install_host_context host=cursor            # solo Cursor (scope de proyecto)
-install_host_context host=codex scope=global # registro a nivel de usuario
-install_host_context host=all apply=false   # previsualiza el plan, no escribe nada
+node bin/dev-guardian.mjs mcp-config cursor          # imprime el bloque para pegar
+node bin/dev-guardian.mjs mcp-config all             # todos los hosts
+node bin/dev-guardian.mjs mcp-config codex --write   # escribe + fusiona en el proyecto
+node bin/dev-guardian.mjs mcp-config all --scope global
 ```
 
 | Host | Archivo de config MCP (proyecto / global) | Archivo de reglas |

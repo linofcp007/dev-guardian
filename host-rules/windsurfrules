@@ -34,7 +34,7 @@ dotnet_efcore_audit · dotnet_describe_setup
 set_baseline · triage_findings · prioritize_findings · suggest_fix ·
 report_export · create_github_issues · precommit_install ·
 register_custom_rules · health_status · regression_alert · sbom_diff ·
-install_host_context · check_toolchain · suppress_finding
+check_toolchain · suppress_finding
 
 ## Resources
 

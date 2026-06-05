@@ -36,7 +36,7 @@ detected), `risk_score`, `diff_scans`, `set_baseline`, `triage_findings`,
 `prioritize_findings`, `suggest_fix`, `report_export`,
 `create_github_issues` (local `gh` CLI), `precommit_install`,
 `register_custom_rules`, `health_status`, `regression_alert`,
-`sbom_diff`, `install_host_context`, `check_toolchain`,
+`sbom_diff`, `check_toolchain`,
 `suppress_finding`.
 
 ## Resources

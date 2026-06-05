@@ -43,7 +43,7 @@ dev-guardian MCP server out of the box: `.mcp.json` (Claude Code), `.cursor/`,
 `.gemini/`, `.vscode/`, `.windsurf/`, `.github/copilot-instructions.md`, plus root
 `AGENTS.md` / `GEMINI.md`. They use **relative** paths (`mcp/dist/server.js`), so
 run `npm run build` once first. To install the same into *another* project, use the
-`install_host_context` MCP tool (it writes absolute paths) — don't copy these by hand.
+`mcp-config` CLI (`node bin/dev-guardian.mjs mcp-config <host> --write`) — it fills in absolute paths.
 
 ## Prefer MCP tools over raw scanners
 

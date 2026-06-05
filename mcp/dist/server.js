@@ -66,7 +66,6 @@ import './tools/healthStatus.js';
 import './tools/reportExport.js';
 import './tools/complianceEvidence.js';
 import './tools/createGithubIssues.js';
-import './tools/installHostContext.js';
 // WordPress + .NET (Phase 15):
 import './tools/scanWordpress.js';
 import './tools/wpAudit.js';

@@ -1,5 +1,5 @@
 /**
- * Declarative per-host setup specs for `install_host_context`.
+ * Declarative per-host setup specs for the `mcp-config` CLI / host setup.
  *
  * Each AI host needs up to two things to work with dev-guardian:
  *   1. an MCP-server registration in the host's own config file, and
