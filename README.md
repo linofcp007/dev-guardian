@@ -83,6 +83,55 @@ Then inside Claude Code, run `/plugin` and enable `dev-guardian`. Alternatively,
 >
 > `.sh` scripts in `scripts/` run natively on Linux/macOS. On Windows native you need **WSL2** or Git Bash; the skills/commands themselves work on any OS.
 
+### Other AI hosts (Cursor · Windsurf · Copilot · Codex · Gemini · Cline · Claude Desktop)
+
+The real engine is the **MCP server**, so any MCP-capable host can use dev-guardian — not just Claude Code. The `install_host_context` MCP tool sets a host up in **one call**: it **registers the server** in the host's config (merging into existing config, never clobbering other servers) **and drops the rules file** that tells that host's AI when to call each tool. Idempotent.
+
+From a Claude Code session inside your project:
+
+```text
+install_host_context host=all               # set up every host at once
+install_host_context host=cursor            # just Cursor (project scope)
+install_host_context host=codex scope=global # user-level registration
+install_host_context host=all apply=false   # preview the plan, write nothing
+```
+
+| Host | MCP config file (project / global) | Rules file |
+| ---- | ---------------------------------- | ---------- |
+| **Cursor** | `.cursor/mcp.json` / `~/.cursor/mcp.json` | `.cursor/rules/dev-guardian.mdc` |
+| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurfrules` |
+| **GitHub Copilot** | `.vscode/mcp.json` (`servers` key, `type:"stdio"`) | `.github/copilot-instructions.md` |
+| **Codex CLI** | `.codex/config.toml` / `~/.codex/config.toml` | `AGENTS.md` |
+| **Gemini CLI** | `.gemini/settings.json` / `~/.gemini/settings.json` | `GEMINI.md` |
+| **Cline** | manual — the tool returns a snippet to paste | `.clinerules` |
+| **Claude Desktop** | `claude_desktop_config.json` (OS-specific, global) | — (paste `AGENTS.md` into a Project's instructions) |
+
+**Manual fallback** (if you'd rather not let the tool edit configs): paste one of the blocks below, replacing the path with the **absolute** path to `mcp/dist/server.js`.
+
+```jsonc
+// Cursor / Windsurf / Gemini / Claude Desktop  (mcpServers)
+{ "mcpServers": { "dev-guardian": {
+  "command": "node", "args": ["/abs/path/to/dev-guardian/mcp/dist/server.js"], "env": {}
+} } }
+```
+
+```jsonc
+// GitHub Copilot  (.vscode/mcp.json — note the "servers" key + type)
+{ "servers": { "dev-guardian": {
+  "type": "stdio", "command": "node", "args": ["/abs/path/to/dev-guardian/mcp/dist/server.js"]
+} } }
+```
+
+```toml
+# Codex CLI  (~/.codex/config.toml — single-quoted path avoids Windows escaping)
+[mcp_servers.dev-guardian]
+command = "node"
+args = ['/abs/path/to/dev-guardian/mcp/dist/server.js']
+enabled = true
+```
+
+> Claude Desktop has no rules-file mechanism — paste the contents of `host-rules/AGENTS.md` (or `GEMINI.md`) into a **Project's custom instructions**. Claude Code / Cowork need none of this: the plugin registers the server automatically.
+
 ### Philosophy
 
 - **Pragmatic by default** — doesn't block work over cosmetics
@@ -212,6 +261,55 @@ Depois, dentro do Claude Code, corre `/plugin` e ativa o `dev-guardian`. Em alte
 >
 > Os scripts `.sh` em `scripts/` correm direto em Linux/macOS. No Windows nativo precisas de **WSL2** ou Git Bash; as skills/commands em si funcionam em qualquer SO.
 
+### Outros hosts de IA (Cursor · Windsurf · Copilot · Codex · Gemini · Cline · Claude Desktop)
+
+O motor real é o **servidor MCP**, por isso qualquer host com suporte MCP pode usar o dev-guardian — não só o Claude Code. A tool MCP `install_host_context` configura um host **num só comando**: **regista o servidor** na config do host (fundindo-se com a config existente, sem destruir outros servidores) **e deixa o ficheiro de regras** que diz à IA desse host quando chamar cada tool. Idempotente.
+
+A partir de uma sessão Claude Code dentro do teu projeto:
+
+```text
+install_host_context host=all               # configura todos os hosts de uma vez
+install_host_context host=cursor            # só Cursor (scope de projeto)
+install_host_context host=codex scope=global # registo a nível de utilizador
+install_host_context host=all apply=false   # pré-visualiza o plano, não escreve nada
+```
+
+| Host | Ficheiro de config MCP (projeto / global) | Ficheiro de regras |
+| ---- | ----------------------------------------- | ------------------ |
+| **Cursor** | `.cursor/mcp.json` / `~/.cursor/mcp.json` | `.cursor/rules/dev-guardian.mdc` |
+| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurfrules` |
+| **GitHub Copilot** | `.vscode/mcp.json` (chave `servers`, `type:"stdio"`) | `.github/copilot-instructions.md` |
+| **Codex CLI** | `.codex/config.toml` / `~/.codex/config.toml` | `AGENTS.md` |
+| **Gemini CLI** | `.gemini/settings.json` / `~/.gemini/settings.json` | `GEMINI.md` |
+| **Cline** | manual — a tool devolve um snippet para colar | `.clinerules` |
+| **Claude Desktop** | `claude_desktop_config.json` (específico do SO, global) | — (cola o `AGENTS.md` nas instruções de um Project) |
+
+**Fallback manual** (se preferires não deixar a tool editar configs): cola um dos blocos abaixo, substituindo o caminho pelo caminho **absoluto** para `mcp/dist/server.js`.
+
+```jsonc
+// Cursor / Windsurf / Gemini / Claude Desktop  (mcpServers)
+{ "mcpServers": { "dev-guardian": {
+  "command": "node", "args": ["/caminho/abs/para/dev-guardian/mcp/dist/server.js"], "env": {}
+} } }
+```
+
+```jsonc
+// GitHub Copilot  (.vscode/mcp.json — repara na chave "servers" + type)
+{ "servers": { "dev-guardian": {
+  "type": "stdio", "command": "node", "args": ["/caminho/abs/para/dev-guardian/mcp/dist/server.js"]
+} } }
+```
+
+```toml
+# Codex CLI  (~/.codex/config.toml — path em aspas simples evita escape no Windows)
+[mcp_servers.dev-guardian]
+command = "node"
+args = ['/caminho/abs/para/dev-guardian/mcp/dist/server.js']
+enabled = true
+```
+
+> O Claude Desktop não tem mecanismo de ficheiro de regras — cola o conteúdo de `host-rules/AGENTS.md` (ou `GEMINI.md`) nas **instruções personalizadas de um Project**. O Claude Code / Cowork não precisam disto: o plugin regista o servidor automaticamente.
+
 ### Filosofia
 
 - **Pragmático por defeito** — não bloqueia trabalho por nada cosmético
@@ -340,6 +438,55 @@ Luego, dentro de Claude Code, ejecuta `/plugin` y activa `dev-guardian`. Alterna
 > El servidor MCP corre desde `mcp/dist/`. En la primera instalación ejecuta una vez `cd mcp && npm install && npm run build`. Después el plugin lo arranca automáticamente vía `node ${pluginDir}/mcp/dist/server.js`.
 >
 > Los scripts `.sh` en `scripts/` corren directamente en Linux/macOS. En Windows nativo necesitas **WSL2** o Git Bash; las skills/commands en sí funcionan en cualquier SO.
+
+### Otros hosts de IA (Cursor · Windsurf · Copilot · Codex · Gemini · Cline · Claude Desktop)
+
+El motor real es el **servidor MCP**, así que cualquier host compatible con MCP puede usar dev-guardian — no solo Claude Code. La herramienta MCP `install_host_context` configura un host en **un solo comando**: **registra el servidor** en la config del host (fusionándose con la config existente, sin destruir otros servidores) **y coloca el archivo de reglas** que le dice a la IA de ese host cuándo llamar a cada herramienta. Idempotente.
+
+Desde una sesión de Claude Code dentro de tu proyecto:
+
+```text
+install_host_context host=all               # configura todos los hosts de una vez
+install_host_context host=cursor            # solo Cursor (scope de proyecto)
+install_host_context host=codex scope=global # registro a nivel de usuario
+install_host_context host=all apply=false   # previsualiza el plan, no escribe nada
+```
+
+| Host | Archivo de config MCP (proyecto / global) | Archivo de reglas |
+| ---- | ----------------------------------------- | ----------------- |
+| **Cursor** | `.cursor/mcp.json` / `~/.cursor/mcp.json` | `.cursor/rules/dev-guardian.mdc` |
+| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurfrules` |
+| **GitHub Copilot** | `.vscode/mcp.json` (clave `servers`, `type:"stdio"`) | `.github/copilot-instructions.md` |
+| **Codex CLI** | `.codex/config.toml` / `~/.codex/config.toml` | `AGENTS.md` |
+| **Gemini CLI** | `.gemini/settings.json` / `~/.gemini/settings.json` | `GEMINI.md` |
+| **Cline** | manual — la herramienta devuelve un snippet para pegar | `.clinerules` |
+| **Claude Desktop** | `claude_desktop_config.json` (específico del SO, global) | — (pega `AGENTS.md` en las instrucciones de un Project) |
+
+**Fallback manual** (si prefieres no dejar que la herramienta edite configs): pega uno de los bloques de abajo, sustituyendo la ruta por la ruta **absoluta** a `mcp/dist/server.js`.
+
+```jsonc
+// Cursor / Windsurf / Gemini / Claude Desktop  (mcpServers)
+{ "mcpServers": { "dev-guardian": {
+  "command": "node", "args": ["/ruta/abs/a/dev-guardian/mcp/dist/server.js"], "env": {}
+} } }
+```
+
+```jsonc
+// GitHub Copilot  (.vscode/mcp.json — fíjate en la clave "servers" + type)
+{ "servers": { "dev-guardian": {
+  "type": "stdio", "command": "node", "args": ["/ruta/abs/a/dev-guardian/mcp/dist/server.js"]
+} } }
+```
+
+```toml
+# Codex CLI  (~/.codex/config.toml — ruta entre comillas simples evita el escape en Windows)
+[mcp_servers.dev-guardian]
+command = "node"
+args = ['/ruta/abs/a/dev-guardian/mcp/dist/server.js']
+enabled = true
+```
+
+> Claude Desktop no tiene mecanismo de archivo de reglas — pega el contenido de `host-rules/AGENTS.md` (o `GEMINI.md`) en las **instrucciones personalizadas de un Project**. Claude Code / Cowork no necesitan nada de esto: el plugin registra el servidor automáticamente.
 
 ### Filosofía
 

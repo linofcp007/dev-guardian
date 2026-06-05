@@ -1,59 +1,52 @@
 /**
- * `install_host_context` — copy a host-specific rules file into the user's
- * project root so non-Claude AI assistants (Cursor, Windsurf, Copilot, Cline,
- * Codex CLI) know about the dev-guardian MCP tools.
+ * `install_host_context` — set up a non-Claude AI host to use dev-guardian.
  *
- * Templates live in `<plugin>/host-rules/`. We read the template at runtime
- * and write it to the matching path inside the user's project. Idempotent:
- * if the destination already exists, the call returns `already_exists: true`
- * unless `force` is set.
+ * Two things make a host dev-guardian-aware:
+ *   1. an MCP-server registration in the host's config file (so the tools are
+ *      reachable), and
+ *   2. a "rules" / context file (so the host's AI knows *when* to call them).
  *
- * The "context" here is a markdown file that the host's AI reads when the
- * user opens the project. It maps natural-language intents to the right
- * MCP tools, lists the resources, and warns against anti-patterns.
+ * This tool does both, idempotently, for Cursor, Windsurf, GitHub Copilot,
+ * Cline, Codex CLI, Gemini CLI and Claude Desktop. The MCP registration merges
+ * into any existing host config without clobbering other servers; the rules
+ * file is copied from `<plugin>/host-rules/`. Use host="all" to do every host.
+ *
+ * Claude Code / Cowork need none of this — the plugin registers the server
+ * automatically via `.claude-plugin/plugin.json`.
  */
-import { copyFileSync, existsSync, mkdirSync, statSync, } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync, } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
+import { ALL_HOSTS, effectiveScope, HOST_SPECS, } from '../hostsetup/hostSpecs.js';
+import { buildManualSnippet, buildServerEntry, mergeJsonConfig, mergeTomlConfig, resolveMcpConfigPath, resolveServerJsPath, } from '../hostsetup/mcpConfig.js';
+import { detectOs } from '../platform/osDetect.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
-const HOST_SPECS = {
-    cursor: {
-        template_file: 'cursor.mdc',
-        target_path: '.cursor/rules/dev-guardian.mdc',
-        description: 'Cursor — .cursor/rules/dev-guardian.mdc',
-    },
-    windsurf: {
-        template_file: 'windsurfrules',
-        target_path: '.windsurfrules',
-        description: 'Windsurf — .windsurfrules (root)',
-    },
-    copilot: {
-        template_file: 'copilot-instructions.md',
-        target_path: '.github/copilot-instructions.md',
-        description: 'GitHub Copilot — .github/copilot-instructions.md',
-    },
-    cline: {
-        template_file: 'clinerules',
-        target_path: '.clinerules',
-        description: 'Cline (VS Code) — .clinerules (root)',
-    },
-    codex: {
-        template_file: 'AGENTS.md',
-        target_path: 'AGENTS.md',
-        description: 'OpenAI Codex CLI — AGENTS.md (root)',
-    },
-};
 const inputSchema = {
     project_path: ProjectPath,
     host: z
-        .enum(['cursor', 'windsurf', 'copilot', 'cline', 'codex', 'all'])
-        .describe('Which host to install context for. Use "all" to install every template.'),
+        .enum(['cursor', 'windsurf', 'copilot', 'cline', 'codex', 'gemini', 'claude-desktop', 'all'])
+        .describe('Which host to set up. Use "all" to set up every supported host.'),
+    scope: z
+        .enum(['project', 'global'])
+        .optional()
+        .describe('Where to register the MCP server: "project" (config inside the repo, default) or "global" ' +
+        '(user-level config). Only affects MCP registration; rules files are always project-scoped. ' +
+        'Windsurf and Claude Desktop are global-only and ignore this.'),
+    register_mcp: z
+        .boolean()
+        .optional()
+        .describe('Write/merge the MCP server registration into the host config. Default: true.'),
+    install_rules: z
+        .boolean()
+        .optional()
+        .describe('Copy the host rules/context file into the project. Default: true.'),
     force: z
         .boolean()
         .optional()
-        .describe('Overwrite the destination file if it already exists. Default: false.'),
+        .describe('Overwrite an existing rules file / update a differing MCP entry. Default: false.'),
     apply: z
         .boolean()
         .optional()
@@ -61,11 +54,11 @@ const inputSchema = {
 };
 const tool = {
     name: 'install_host_context',
-    title: 'Install dev-guardian context for non-Claude AIs',
-    description: 'Copy the host-specific rules file (Cursor / Windsurf / Copilot / Cline / Codex) from the ' +
-        'dev-guardian plugin into the target project so the host\'s AI knows when to call the MCP ' +
-        'tools. Idempotent: existing destinations are preserved unless force=true. Use host="all" to ' +
-        'install every template (handy for monorepos with mixed dev tooling).',
+    title: 'Set up a non-Claude AI host (MCP server + rules)',
+    description: 'Make a non-Claude AI host dev-guardian-aware: register the MCP server in its config (merging, ' +
+        'not clobbering) AND drop the host rules file. Supports Cursor, Windsurf, GitHub Copilot, Cline, ' +
+        'Codex CLI, Gemini CLI and Claude Desktop. Idempotent. Use host="all" for every host, ' +
+        'scope="global" for a user-level MCP registration. apply=false previews the plan.',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -81,47 +74,68 @@ async function handler(input, ctx) {
     }
     const apply = inp.apply ?? true;
     const force = inp.force === true;
+    const registerMcp = inp.register_mcp ?? true;
+    const installRules = inp.install_rules ?? true;
+    const requestedScope = inp.scope ?? 'project';
+    const requestedHosts = inp.host === 'all' ? [...ALL_HOSTS] : [inp.host];
     const hostsDir = resolveHostRulesDir(ctx.scriptsDir);
-    if (!existsSync(hostsDir)) {
+    const needsRules = installRules && requestedHosts.some((h) => HOST_SPECS[h].rules);
+    if (needsRules && !existsSync(hostsDir)) {
         return failDomain('scanner_failed', `host-rules templates not found at ${hostsDir}. Re-install the plugin or build it.`);
     }
-    const requestedHosts = inp.host === 'all'
-        ? Object.keys(HOST_SPECS)
-        : [inp.host];
-    const results = [];
-    for (const host of requestedHosts) {
-        results.push(installOne({ host, hostsDir, projectPath, apply, force }));
-    }
+    const serverJsPath = resolveServerJsPath(ctx.scriptsDir);
+    const env = {
+        os: detectOs(),
+        home: homedir(),
+        appData: process.env.APPDATA,
+        projectPath,
+    };
+    const results = requestedHosts.map((host) => {
+        const spec = HOST_SPECS[host];
+        const scope = effectiveScope(spec, requestedScope);
+        const rules = installRules
+            ? installRulesOne(spec, hostsDir, projectPath, apply, force)
+            : { status: 'skipped', reason: 'install_rules=false' };
+        const mcp = registerMcp
+            ? registerMcpOne(host, spec, scope, serverJsPath, env, apply, force)
+            : { status: 'skipped', reason: 'register_mcp=false' };
+        return { host, scope, ...rules, mcp };
+    });
     return {
         ok: true,
         applied: apply,
         project_path: projectPath,
+        server_js: serverJsPath,
         results,
-        next_steps: 'Restart the target AI host so it re-reads the rules file. Then ask "what dev-guardian tools ' +
-            'do you have?" — the host should list the MCP tools and use the new rules to pick the right one.',
+        next_steps: 'Restart the target AI host so it re-reads its MCP config and rules file. Then ask "what ' +
+            'dev-guardian tools do you have?" — it should list the MCP tools. For hosts marked "manual" ' +
+            '(Cline), paste the returned snippet into the host\'s MCP settings.',
     };
 }
-function installOne(args) {
-    const spec = HOST_SPECS[args.host];
-    const src = join(args.hostsDir, spec.template_file);
-    const dst = join(args.projectPath, spec.target_path);
+function installRulesOne(spec, hostsDir, projectPath, apply, force) {
+    const rules = spec.rules;
+    if (!rules) {
+        return {
+            status: 'unsupported',
+            reason: 'host has no rules-file mechanism (uses Projects / custom instructions instead)',
+        };
+    }
+    const src = join(hostsDir, rules.template_file);
+    const dst = join(projectPath, rules.target_path);
     const base = {
-        host: args.host,
-        template_file: spec.template_file,
+        template_file: rules.template_file,
         source_path: src,
         target_path: dst,
         status: 'would_write',
     };
-    if (!existsSync(src)) {
+    if (!existsSync(src))
         return { ...base, status: 'template_missing', reason: `${src} missing` };
-    }
-    if (existsSync(dst) && !args.force) {
+    if (existsSync(dst) && !force) {
         return { ...base, status: 'already_exists', reason: 'force=false; not overwriting' };
     }
-    if (!args.apply) {
+    if (!apply) {
         try {
-            const size = statSync(src).size;
-            return { ...base, status: 'would_write', bytes: size };
+            return { ...base, status: 'would_write', bytes: statSync(src).size };
         }
         catch {
             return { ...base, status: 'would_write' };
@@ -130,11 +144,79 @@ function installOne(args) {
     try {
         mkdirSync(dirname(dst), { recursive: true });
         copyFileSync(src, dst);
-        const size = statSync(dst).size;
-        return { ...base, status: 'written', bytes: size };
+        return { ...base, status: 'written', bytes: statSync(dst).size };
     }
     catch (e) {
         return { ...base, status: 'failed', reason: e.message };
+    }
+}
+function registerMcpOne(host, spec, scope, serverJsPath, env, apply, force) {
+    const m = spec.mcp;
+    if (m.format === 'manual') {
+        return {
+            status: 'manual',
+            key: m.serverKey,
+            snippet: buildManualSnippet(serverJsPath),
+            reason: m.manualNote,
+        };
+    }
+    const configPath = resolveMcpConfigPath(host, scope, env);
+    if (!configPath) {
+        return { status: 'unsupported', scope, reason: `could not resolve config path (os=${env.os})` };
+    }
+    let existing = null;
+    try {
+        if (existsSync(configPath))
+            existing = readFileSync(configPath, 'utf8');
+    }
+    catch (e) {
+        return { status: 'failed', config_path: configPath, key: m.serverKey, scope, reason: e.message };
+    }
+    const withType = m.format === 'json-servers';
+    const entry = buildServerEntry(serverJsPath, withType);
+    let merged;
+    try {
+        merged =
+            m.format === 'toml'
+                ? mergeTomlConfig(existing, entry, force)
+                : mergeJsonConfig(existing, m.serverKey, entry, force);
+    }
+    catch (e) {
+        return {
+            status: 'failed',
+            config_path: configPath,
+            key: m.serverKey,
+            scope,
+            reason: `existing config could not be parsed safely (left untouched): ${e.message}`,
+        };
+    }
+    if (merged.status === 'already_present') {
+        return { status: 'already_present', config_path: configPath, key: m.serverKey, scope };
+    }
+    if (merged.status === 'needs_update') {
+        return {
+            status: 'needs_update',
+            config_path: configPath,
+            key: m.serverKey,
+            scope,
+            reason: 'an entry named "dev-guardian" exists but differs; pass force=true to update it',
+        };
+    }
+    if (!apply) {
+        return {
+            status: merged.status === 'written' ? 'would_write' : 'would_merge',
+            config_path: configPath,
+            key: m.serverKey,
+            scope,
+        };
+    }
+    try {
+        mkdirSync(dirname(configPath), { recursive: true });
+        writeFileSync(configPath, merged.content, 'utf8');
+        return { status: merged.status, config_path: configPath, key: m.serverKey, scope };
+    }
+    catch (e) {
+        return { status: 'failed', config_path: configPath, key: m.serverKey, scope, reason: e.message };
     }
 }
 function resolveHostRulesDir(scriptsDir) {
