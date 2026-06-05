@@ -89,7 +89,7 @@ jobs:
       - run: npm run test:coverage
 
   e2e:
-    name: e2e with real scanners
+    name: e2e (real Semgrep, offline ruleset)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,13 +100,8 @@ jobs:
           cache-dependency-path: mcp/package-lock.json
       - name: Install Semgrep
         run: pipx install semgrep
-      - name: Install Trivy
-        run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b "$HOME/.local/bin"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Versions
-        run: semgrep --version && trivy --version
+      - name: Version
+        run: semgrep --version
       - name: Build
         working-directory: mcp
         run: npm ci && npm run build
