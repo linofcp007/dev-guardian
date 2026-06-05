@@ -9,7 +9,16 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html'],
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.d.ts', 'src/server.ts'],
+      // server.ts = bootstrap, registerAll.ts = side-effect import list only.
+      exclude: ['src/**/*.d.ts', 'src/server.ts', 'src/registerAll.ts'],
+      // Floors set just below current (73/68/79/73). Raise as the suite grows;
+      // CI fails if coverage regresses below these.
+      thresholds: {
+        statements: 70,
+        branches: 62,
+        functions: 72,
+        lines: 70,
+      },
     },
   },
 });
