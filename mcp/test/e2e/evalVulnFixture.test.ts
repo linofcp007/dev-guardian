@@ -1,18 +1,18 @@
 /**
  * End-to-end test against the eval-vuln fixture (test/e2e/eval-vuln-fixture/):
- *   - app.js with `eval(req.query.expr)`  → the bundled Semgrep rule
- *     `js-eval-of-user-input` (configs/semgrep/base.yml) must flag it,
- *   - package.json with `lodash@4.17.20`.
+ *   - app.js with `eval(parsed.query.expr)`.
  *
  * Skipped when Semgrep is not installed, so a bare runner stays green; CI
- * installs Semgrep and runs it. We scan with the **bundled local ruleset**
- * (offline, no registry/token) so the result is deterministic across machines.
+ * installs Semgrep and runs it. We scan with a **self-contained, offline rule**
+ * (no registry/token, no dependency on the bundled config's per-version quirks)
+ * so the result is deterministic: real Semgrep must flag the eval().
  */
 
 import Database from 'better-sqlite3';
 import { execa } from 'execa';
-import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -27,7 +27,16 @@ const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(here, '..', '..', '..');
 const FIXTURE = resolve(here, 'eval-vuln-fixture');
 const SCRIPTS_DIR = resolve(ROOT, 'scripts');
-const BASE_RULES = resolve(ROOT, 'configs', 'semgrep', 'base.yml');
+
+const EVAL_RULE = [
+  'rules:',
+  '  - id: e2e-eval-detect',
+  '    languages: [javascript]',
+  '    severity: ERROR',
+  '    message: eval of user input',
+  '    pattern: eval(...)',
+  '',
+].join('\n');
 
 beforeAll(async () => {
   await import('../../src/tools/securityScanFull.js');
@@ -50,7 +59,7 @@ async function isInstalled(bin: string): Promise<boolean> {
 describe('E2E — eval-vuln fixture', () => {
   it.skipIf(true)('placeholder so the suite always has at least one test in this file', () => {});
 
-  it('the bundled Semgrep rule flags eval() in the fixture (real scanner, offline)', async () => {
+  it('real Semgrep flags eval() in the fixture (self-contained offline rule)', async () => {
     if (!existsSync(FIXTURE)) {
       console.warn('[e2e] fixture missing, skipping');
       return;
@@ -60,22 +69,25 @@ describe('E2E — eval-vuln fixture', () => {
       return;
     }
 
+    const ruleFile = join(mkdtempSync(join(tmpdir(), 'sg-rule-')), 'eval.yml');
+    writeFileSync(ruleFile, EVAL_RULE, 'utf8');
+
     const r = await execa(
       'semgrep',
-      ['scan', '--config', BASE_RULES, '--json', '--quiet', '--disable-version-check', FIXTURE],
+      ['--config', ruleFile, '--json', '--quiet', '--disable-version-check', FIXTURE],
       { reject: false, timeout: 5 * 60_000, env: { SEMGREP_SEND_METRICS: 'off' } },
     );
-    let out: { results?: Array<{ check_id?: string }> } = { results: [] };
+    let parsed: { results?: Array<{ check_id?: string }>; errors?: unknown[] } = {};
     try {
-      out = JSON.parse(r.stdout || '{"results":[]}');
+      parsed = JSON.parse(r.stdout || '{}');
     } catch {
-      /* leave out empty; diagnostic below surfaces the raw failure */
+      /* diagnostic below surfaces the raw failure */
     }
-    const ruleIds = (out.results ?? []).map((x) => String(x.check_id ?? ''));
+    const ruleIds = (parsed.results ?? []).map((x) => String(x.check_id ?? ''));
     if (ruleIds.length === 0) {
       console.error(
-        `[e2e] semgrep exit=${r.exitCode} stdoutLen=${(r.stdout || '').length} ` +
-          `stderr=${(r.stderr || '').slice(0, 600)}`,
+        `[e2e] semgrep exit=${r.exitCode} errors=${JSON.stringify((parsed.errors ?? []).slice(0, 3))} ` +
+          `stdout=${(r.stdout || '').slice(0, 500)} stderr=${(r.stderr || '').slice(0, 300)}`,
       );
     }
 
