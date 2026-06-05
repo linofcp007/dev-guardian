@@ -1,0 +1,118 @@
+---
+description: dev-guardian MCP — security, quality, deps, compliance, WP, .NET
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# dev-guardian
+
+This project has the **dev-guardian MCP server** registered. ~50 tools and
+16 resources for security, quality, bugfix, deps, compliance,
+observability, performance, plus first-class WordPress and .NET support.
+All scanners run **locally**, no telemetry.
+
+Prefer these MCP tools over invoking scanners directly. The MCP layer
+persists results to `.guardian/guardian.db` for diffing, baselines, and
+regression tracking.
+
+## When the user asks for X → invoke tool Y
+
+### Generic security
+- "is this safe?" / "audit security" → `security_scan_full`
+- "secrets leak?" → `scan_secrets`
+- "vulnerable deps / CVEs?" → `scan_deps` or `deps_audit`
+- "Dockerfile / container security" → `scan_containers`
+- "Terraform / K8s / IaC" → `scan_iac`
+- "deep bug hunt" → `bug_hunt`
+
+### Quality / review
+- "review before PR" → `review_pr`
+- "code quality / duplication" → `quality_check`
+
+### Deps
+- "upgrade plan" → `deps_update_plan` (npm/pip/composer/cargo/go/bundler/dotnet)
+- "audit deps + bot config" → `deps_audit`
+
+### Compliance
+- "GDPR / SOC2 / ISO27001" → `compliance_check` then `compliance_evidence`
+- "SBOM" → `generate_sbom`
+- "license compatibility" → `license_compatibility`
+
+### Ops
+- "bootstrap" → `init_project`
+- "install scanners" → `install_toolchain`
+- "detect stack" → `detect_stack`
+- "logging / metrics" → `observability_setup`
+- "performance / Lighthouse / k6" → `perf_check`
+
+### WordPress
+- "scan WP code" → `scan_wordpress`
+- "audit live WP install" → `wp_audit`
+- "any WP CVEs?" → `wp_vuln_check`
+- "WP cron / backdoor check" → `wp_cron_audit`
+- "WP REST API exposed?" → `wp_rest_audit`
+- "WP posture overview" → `wp_describe_setup`
+- "hardening checklist" → `wp_recommend_hardening`
+- "check one plugin" → `wp_plugin_check`
+- "audit N WP sites in parallel" → `bulk_audit_wordpress_sites`
+
+### .NET / C#
+- ".NET secrets in configs?" → `scan_dotnet_secrets`
+- "EOL frameworks?" → `dotnet_target_framework_check`
+- "EF Core migration safety" → `dotnet_efcore_audit`
+- ".NET posture overview" → `dotnet_describe_setup`
+- ".NET SAST" → `scan_sast` (auto includes p/csharp + SCS when opted in)
+
+### Meta
+- "full audit" → `audit_executive` (stack-aware: auto includes WP/.NET when detected)
+- "risk score" → `risk_score`
+- "what's new since last scan?" → `diff_scans`
+- "set baseline" → `set_baseline`
+- "noise reduction" → `triage_findings`
+- "prioritise findings" → `prioritize_findings`
+- "how do I fix this?" → `suggest_fix`
+- "export report" → `report_export`
+- "GitHub issues from findings" → `create_github_issues` (local `gh`)
+- "pre-commit hooks" → `precommit_install`
+- "register custom Semgrep rules" → `register_custom_rules`
+- "health check" → `health_status`
+- "regression check" → `regression_alert`
+- "SBOM diff" → `sbom_diff`
+- "install rules for another AI host" → `install_host_context`
+
+## Resources (`guardian://…`)
+
+Findings + scans: `findings/open`, `findings/critical`,
+`findings/by-severity/{level}` (paginated), `scans/latest`, `scans/history`,
+`scans/{id}`, `cves/active`, `sbom`, `stack`, `compliance/status`, `baseline`.
+
+WordPress: `wp/audit/latest`, `wp/audit/{scan_id}`, `wp/cron`.
+
+.NET: `dotnet/target-frameworks`, `dotnet/efcore`.
+
+## Workflows
+
+**Bootstrap** → `detect_stack` → `init_project` → `install_toolchain` →
+`security_scan_full` (or `scan_wordpress`) → `set_baseline`.
+
+**Before PR** → `review_pr` → `triage_findings` → `prioritize_findings` →
+`suggest_fix`.
+
+**Periodic audit** → `audit_executive` (stack-aware) → `risk_score` →
+`compliance_evidence`.
+
+**WP-only** → `scan_wordpress` + `wp_audit` + `wp_cron_audit` +
+`wp_rest_audit` → `wp_recommend_hardening`.
+
+**.NET-only** → `dotnet_target_framework_check` + `scan_dotnet_secrets` +
+`scan_sast` + `dotnet_efcore_audit` → `dotnet_describe_setup`.
+
+## Anti-patterns
+
+- Don't run `security_scan_full` for tiny changes — use `review_pr`.
+- Don't `suppress_finding` before `triage_findings`.
+- Don't propose fixes without `suggest_fix` (you'll lack source context).
+- Don't shell out to scanners directly — you lose persistence + baselines.
+- Don't run `scan_wordpress` on a non-WP project — `detect_stack` first.
+- Don't run `wp_audit` without WP-CLI — `install_toolchain tools=["wp-cli"]`.

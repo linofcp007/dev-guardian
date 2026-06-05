@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "dev-guardian": {
+      "command": "node",
+      "args": ["mcp/dist/server.js"]
+    }
+  }
+}
