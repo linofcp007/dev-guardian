@@ -60,21 +60,28 @@ describe('E2E — eval-vuln fixture', () => {
   it.skipIf(true)('placeholder so the suite always has at least one test in this file', () => {});
 
   it('real Semgrep flags eval() in the fixture (self-contained offline rule)', async () => {
-    if (!existsSync(FIXTURE)) {
-      console.warn('[e2e] fixture missing, skipping');
-      return;
-    }
     if (!(await isInstalled('semgrep'))) {
       console.warn('[e2e] semgrep not installed, skipping');
       return;
     }
 
-    const ruleFile = join(mkdtempSync(join(tmpdir(), 'sg-rule-')), 'eval.yml');
+    // Write rule AND target into a temp dir OUTSIDE any `test/` path. Semgrep's
+    // built-in default ignore skips `test/` directories, so scanning the in-repo
+    // fixture (mcp/test/e2e/...) returned zero targets (paths.scanned: []).
+    const work = mkdtempSync(join(tmpdir(), 'sg-e2e-'));
+    const ruleFile = join(work, 'eval.yml');
+    const targetFile = join(work, 'vuln.js');
     writeFileSync(ruleFile, EVAL_RULE, 'utf8');
+    writeFileSync(
+      targetFile,
+      'const http = require("http");\n' +
+        'http.createServer((req) => eval(req.url)).listen(3000);\n',
+      'utf8',
+    );
 
     const r = await execa(
       'semgrep',
-      ['--config', ruleFile, '--json', '--quiet', '--disable-version-check', FIXTURE],
+      ['--config', ruleFile, '--json', '--quiet', '--disable-version-check', targetFile],
       { reject: false, timeout: 5 * 60_000, env: { SEMGREP_SEND_METRICS: 'off' } },
     );
     let parsed: { results?: Array<{ check_id?: string }>; errors?: unknown[] } = {};
