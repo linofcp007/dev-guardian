@@ -1,14 +1,16 @@
 /**
- * `report_export` — write a self-contained HTML report for a scan (or the
- * latest audit) to `.guardian/reports/export-<scan>/report.html`.
+ * `report_export` — write a report for a scan (or a stakeholder narrative) to
+ * `.guardian/reports/…`.
  *
- * Single static HTML file, no JS, no external assets. Renders:
- *   - scan metadata (type, started_at, status, tools_run)
- *   - severity counts as a horizontal bar
- *   - findings table sorted by severity
- *   - CVE table (when applicable)
+ * Formats: markdown (default, handover doc), html (branded Pro Digital Key
+ * shell, dark/light toggle, self-contained, browser-openable), sarif (SARIF
+ * 2.1.0), json (raw findings). Local-only, no third-party services.
  *
- * Local-only, no third-party services. Open in any browser.
+ * Two HTML modes:
+ *   - scan mode (default): renders scan metadata, a severity bar, findings and
+ *     CVE tables for a scan_id.
+ *   - narrative mode (`content_markdown`): wraps stakeholder Markdown in the same
+ *     branded shell — used by `/guardian-report`. scan_id is ignored here.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -16,6 +18,14 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
+import {
+  escapeHtml,
+  type Lang,
+  markdownToSafeHtml,
+  renderHtmlDocument,
+  severityBar,
+  severityChip,
+} from '../report/htmlTheme.js';
 import { toSarif } from '../report/sarif.js';
 import { ProjectPath } from '../schemas.js';
 import type { Cve, DomainError, Finding, Severity, ToolResult } from '../types.js';
@@ -27,21 +37,39 @@ const inputSchema = {
   format: z
     .enum(['html', 'sarif', 'markdown', 'json'])
     .optional()
-    .default('html')
+    .default('markdown')
     .describe(
-      'Output format. html (default, self-contained, browser-openable), sarif (SARIF 2.1.0 for ' +
-        'CI/IDE code scanning), markdown (handover doc), or json (raw findings).',
+      'Output format. markdown (default, handover doc), html (branded Pro Digital Key shell with a ' +
+        'dark/light toggle, self-contained, opens offline), sarif (SARIF 2.1.0 for CI/IDE code ' +
+        'scanning), or json (raw findings).',
     ),
+  content_markdown: z
+    .string()
+    .optional()
+    .describe(
+      'Stakeholder-narrative Markdown. When set, it is wrapped in the branded HTML shell ' +
+        '(dark/light) instead of rendering a scan — scan_id is ignored. Used by /guardian-report.',
+    ),
+  title: z
+    .string()
+    .optional()
+    .describe('Title for the content_markdown report. Default: "Pro Digital Key — Report".'),
+  subtitle: z.string().optional().describe('Optional subtitle under the title (content_markdown mode).'),
+  lang: z
+    .enum(['en', 'pt', 'es'])
+    .optional()
+    .describe('Language for the HTML shell chrome (report title + footer). Default: en.'),
 };
 
 const tool: ToolModule = {
   name: 'report_export',
-  title: 'Export scan as a report (HTML / SARIF / Markdown / JSON)',
+  title: 'Export a report (branded HTML / SARIF / Markdown / JSON)',
   description:
-    'Write a report for a scan in one of four formats: html (static, self-contained, opens in any ' +
-    'browser), sarif (SARIF 2.1.0 for GitHub/GitLab code scanning and IDE viewers), markdown ' +
-    '(handover doc), or json (raw findings). Local file only — no external services. Suitable for ' +
-    'handover or audit evidence.',
+    'Write a report in one of four formats: markdown (default — handover doc), html (branded Pro ' +
+    'Digital Key shell with a dark/light toggle, self-contained, opens offline in any browser), ' +
+    'sarif (SARIF 2.1.0 for GitHub/GitLab code scanning), or json (raw findings). Pass ' +
+    'content_markdown to render a stakeholder narrative as Markdown (or branded HTML with ' +
+    'format=html). Local file only — no external services, no web fonts.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -56,8 +84,13 @@ async function handler(
     project_path?: string;
     scan_id?: string;
     format?: 'html' | 'sarif' | 'markdown' | 'json';
+    content_markdown?: string;
+    title?: string;
+    subtitle?: string;
+    lang?: Lang;
   };
-  const format = inp.format ?? 'html';
+  const format = inp.format ?? 'markdown';
+  const lang: Lang = inp.lang ?? 'en';
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -65,8 +98,36 @@ async function handler(
     return failDomain('not_a_git_repo', (e as Error).message);
   }
 
-  const scanId =
-    inp.scan_id ?? ctx.storage.scans.getLatest()?.scan_id;
+  // Narrative mode — wrap stakeholder Markdown in the branded shell.
+  if (inp.content_markdown != null) {
+    const title = inp.title ?? 'Pro Digital Key — Report';
+    const narrativeFormat = format === 'markdown' ? 'markdown' : 'html';
+    const content =
+      narrativeFormat === 'markdown'
+        ? inp.content_markdown
+        : renderHtmlDocument({
+            title,
+            ...(inp.subtitle ? { subtitle: inp.subtitle } : {}),
+            sections: [markdownToSafeHtml(inp.content_markdown)],
+            lang,
+          });
+    const outDir = join(projectPath, '.guardian', 'reports', `report-${slugify(title)}`);
+    mkdirSync(outDir, { recursive: true });
+    const fileName = narrativeFormat === 'markdown' ? 'report.md' : 'report.html';
+    const outFile = join(outDir, fileName);
+    writeFileSync(outFile, content, 'utf8');
+    return {
+      ok: true,
+      kind: 'narrative',
+      format: narrativeFormat,
+      title,
+      file_path: outFile,
+      bytes: Buffer.byteLength(content, 'utf8'),
+    };
+  }
+
+  // Scan mode.
+  const scanId = inp.scan_id ?? ctx.storage.scans.getLatest()?.scan_id;
   if (!scanId) {
     return failDomain('unknown_scan_id', 'No completed scans to export.');
   }
@@ -79,7 +140,7 @@ async function handler(
       ? ctx.storage.cves.listActive(scanId)
       : [];
 
-  const { content, fileName } = renderReport(format, scan, findings, cves);
+  const { content, fileName } = renderReport(format, scan, findings, cves, lang);
   const outDir = join(projectPath, '.guardian', 'reports', `export-${scanId.slice(0, 8)}`);
   mkdirSync(outDir, { recursive: true });
   const outFile = join(outDir, fileName);
@@ -87,6 +148,7 @@ async function handler(
 
   return {
     ok: true,
+    kind: 'scan',
     scan_id: scanId,
     format,
     file_path: outFile,
@@ -103,6 +165,7 @@ function renderReport(
   scan: ScanRecordT,
   findings: Finding[],
   cves: Cve[],
+  lang: Lang,
 ): { content: string; fileName: string } {
   switch (format) {
     case 'sarif':
@@ -116,7 +179,7 @@ function renderReport(
       return { content: renderMarkdown(scan, findings, cves), fileName: 'report.md' };
     case 'html':
     default:
-      return { content: renderHtml(scan, findings, cves), fileName: 'report.html' };
+      return { content: renderHtml(scan, findings, cves, lang), fileName: 'report.html' };
   }
 }
 
@@ -171,133 +234,84 @@ function mdEscape(s: string): string {
   return s.replace(/\|/g, '\\|');
 }
 
-function renderHtml(
-  scan: ReturnType<NonNullable<PluginContext['storage']['scans']['getById']>>,
-  findings: Finding[],
-  cves: Cve[],
-): string {
-  if (!scan) return '';
-  const counts: Record<Severity, number> = {
-    info: 0,
-    low: 0,
-    medium: 0,
-    high: 0,
-    critical: 0,
-  };
+const SCAN_TITLE: Record<Lang, string> = {
+  en: 'Security Report',
+  pt: 'Relatório de Segurança',
+  es: 'Informe de Seguridad',
+};
+
+function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: Lang): string {
+  const counts: Record<Severity, number> = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const f of findings) counts[f.severity] += 1;
 
-  const sevColor: Record<Severity, string> = {
-    critical: '#7f1d1d',
-    high: '#b91c1c',
-    medium: '#b45309',
-    low: '#1f6feb',
-    info: '#6b7280',
-  };
-  const bar = (['critical', 'high', 'medium', 'low', 'info'] as Severity[])
-    .map((s) => {
-      const n = counts[s];
-      if (n === 0) return '';
-      return `<div style="flex:${n};background:${sevColor[s]};color:#fff;padding:6px 8px;text-align:center;font-size:13px;">${s}: ${n}</div>`;
-    })
-    .join('');
-
-  const findingRows = [...findings]
-    .sort((a, b) => severityOrder(b.severity) - severityOrder(a.severity))
-    .map((f) => {
-      const sev = f.severity;
-      return `<tr>
-        <td><span style="background:${sevColor[sev]};color:#fff;padding:2px 8px;border-radius:3px;font-size:11px;">${sev}</span></td>
-        <td>${escapeHtml(f.tool)}</td>
-        <td><code style="font-size:12px;">${escapeHtml(f.rule_id ?? '')}</code></td>
-        <td>${escapeHtml(f.title)}</td>
-        <td><code style="font-size:12px;">${escapeHtml(f.file_path ?? '')}${
-          f.line_start ? `:${f.line_start}` : ''
-        }</code></td>
-      </tr>`;
-    })
-    .join('');
-
-  const cveRows = cves
-    .map(
-      (c) => `<tr>
-      <td><a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(c.cve_id)}" target="_blank" rel="noopener">${escapeHtml(c.cve_id)}</a></td>
-      <td><span style="background:${sevColor[c.severity]};color:#fff;padding:2px 8px;border-radius:3px;font-size:11px;">${c.severity}</span></td>
-      <td>${escapeHtml(c.package_name)}</td>
-      <td><code style="font-size:12px;">${escapeHtml(c.installed_version ?? '')}</code></td>
-      <td><code style="font-size:12px;">${escapeHtml(c.fixed_version ?? '')}</code></td>
-    </tr>`,
-    )
-    .join('');
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>dev-guardian report — ${escapeHtml(scan.scan_id)}</title>
-<style>
-  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; color: #1f2328; }
-  h1 { margin-bottom: 0.25rem; }
-  .meta { color: #57606a; font-size: 14px; margin-bottom: 1.5rem; }
-  .bar { display: flex; border-radius: 4px; overflow: hidden; margin: 1rem 0 2rem; min-height: 28px; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #d0d7de; font-size: 14px; }
-  th { background: #f6f8fa; font-weight: 600; }
-  tr:hover { background: #f6f8fa; }
-  code { background: #f6f8fa; padding: 2px 4px; border-radius: 3px; }
-  .empty { color: #57606a; font-style: italic; }
-  footer { color: #6b7280; font-size: 12px; margin-top: 3rem; border-top: 1px solid #d0d7de; padding-top: 1rem; }
-</style>
-</head>
-<body>
-<h1>dev-guardian scan report</h1>
-<div class="meta">
+  const meta = `<div class="pdk-meta">
   <strong>Scan ID:</strong> ${escapeHtml(scan.scan_id)}<br>
   <strong>Type:</strong> ${escapeHtml(scan.scan_type)}<br>
   <strong>Status:</strong> ${escapeHtml(scan.status)}<br>
   <strong>Started:</strong> ${escapeHtml(scan.started_at)}<br>
   <strong>Finished:</strong> ${escapeHtml(scan.finished_at ?? 'n/a')}<br>
   <strong>Project:</strong> <code>${escapeHtml(scan.project_path)}</code>
-</div>
+</div>`;
 
-<h2>Severity distribution</h2>
-${findings.length === 0 ? '<p class="empty">No findings.</p>' : `<div class="bar">${bar}</div>`}
+  const sevSection =
+    `<h2>Severity distribution</h2>\n` +
+    (findings.length === 0 ? '<p class="pdk-empty">No findings.</p>' : severityBar(counts));
 
-<h2>Findings (${findings.length})</h2>
-${
-  findings.length === 0
-    ? '<p class="empty">No findings.</p>'
-    : `<table>
-  <thead><tr><th>Sev</th><th>Tool</th><th>Rule</th><th>Title</th><th>Location</th></tr></thead>
-  <tbody>${findingRows}</tbody>
-</table>`
-}
+  const findingRows = [...findings]
+    .sort((a, b) => severityOrder(b.severity) - severityOrder(a.severity))
+    .map(
+      (f) => `<tr>
+  <td>${severityChip(f.severity)}</td>
+  <td>${escapeHtml(f.tool)}</td>
+  <td><code>${escapeHtml(f.rule_id ?? '')}</code></td>
+  <td>${escapeHtml(f.title)}</td>
+  <td><code>${escapeHtml(f.file_path ?? '')}${f.line_start ? `:${f.line_start}` : ''}</code></td>
+</tr>`,
+    )
+    .join('');
+  const findingsSection =
+    `<h2>Findings (${findings.length})</h2>\n` +
+    (findings.length === 0
+      ? '<p class="pdk-empty">No findings.</p>'
+      : `<table><thead><tr><th>Sev</th><th>Tool</th><th>Rule</th><th>Title</th><th>Location</th></tr></thead><tbody>${findingRows}</tbody></table>`);
 
-<h2>Active CVEs (${cves.length})</h2>
-${
-  cves.length === 0
-    ? '<p class="empty">No CVEs indexed for this scan.</p>'
-    : `<table>
-  <thead><tr><th>CVE</th><th>Sev</th><th>Package</th><th>Installed</th><th>Fixed</th></tr></thead>
-  <tbody>${cveRows}</tbody>
-</table>`
-}
+  const cveRows = cves
+    .map(
+      (c) => `<tr>
+  <td><a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(c.cve_id)}" target="_blank" rel="noopener">${escapeHtml(c.cve_id)}</a></td>
+  <td>${severityChip(c.severity)}</td>
+  <td>${escapeHtml(c.package_name)}</td>
+  <td><code>${escapeHtml(c.installed_version ?? '')}</code></td>
+  <td><code>${escapeHtml(c.fixed_version ?? '')}</code></td>
+</tr>`,
+    )
+    .join('');
+  const cveSection =
+    `<h2>Active CVEs (${cves.length})</h2>\n` +
+    (cves.length === 0
+      ? '<p class="pdk-empty">No CVEs indexed for this scan.</p>'
+      : `<table><thead><tr><th>CVE</th><th>Sev</th><th>Package</th><th>Installed</th><th>Fixed</th></tr></thead><tbody>${cveRows}</tbody></table>`);
 
-<footer>Generated by dev-guardian MCP server · open-source · no telemetry</footer>
-</body>
-</html>`;
+  return renderHtmlDocument({
+    title: SCAN_TITLE[lang],
+    subtitle: `${scan.scan_type} · ${scan.started_at} · ${scan.status}`,
+    sections: [meta, sevSection, findingsSection, cveSection],
+    lang,
+  });
 }
 
 function severityOrder(s: Severity): number {
   return { info: 0, low: 1, medium: 2, high: 3, critical: 4 }[s] ?? 0;
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+function slugify(s: string): string {
+  return (
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'report'
+  );
 }
 
 function failDomain(

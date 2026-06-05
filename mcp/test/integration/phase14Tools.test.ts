@@ -7,7 +7,7 @@
  */
 
 import Database from 'better-sqlite3';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -402,19 +402,35 @@ describe('license_compatibility', () => {
 });
 
 describe('report_export', () => {
-  it('writes an HTML file with severity counts and findings table', async () => {
+  it('writes a branded HTML file with severity counts and findings table', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);
     seedFindings(plugin, 'A', 2);
 
     const r = (await getTool('report_export').handler(
-      { project_path: project, scan_id: 'A' },
+      { project_path: project, scan_id: 'A', format: 'html' },
       plugin,
     )) as { ok: true; file_path: string; bytes: number; findings_count: number };
     expect(r.ok).toBe(true);
     expect(r.findings_count).toBe(2);
     expect(r.file_path).toMatch(/report\.html$/);
     expect(r.bytes).toBeGreaterThan(500);
+    const html = readFileSync(r.file_path, 'utf8');
+    expect(html).toContain('pdk-report-theme'); // branded Pro Digital Key shell
+    expect(html).toContain('Pro Digital Key');
+  });
+
+  it('defaults to markdown when no format is given', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedFindings(plugin, 'A', 1);
+
+    const r = (await getTool('report_export').handler(
+      { project_path: project, scan_id: 'A' },
+      plugin,
+    )) as { ok: true; format: string; file_path: string };
+    expect(r.format).toBe('markdown');
+    expect(r.file_path).toMatch(/report\.md$/);
   });
 });
 

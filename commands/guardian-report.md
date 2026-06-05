@@ -15,6 +15,8 @@ The skill should produce a structured markdown document (the user can then conve
 
 Tone is non-technical. No raw rule IDs, no scanner names — translate findings into outcomes. Where helpful, include a glossary footer.
 
-Use `report_export` MCP tool to write to disk if the user wants a file (default: print inline).
+**Output format — Markdown by default.** Print the 6 sections above as Markdown inline — that is the primary deliverable. Optionally persist it to a file with `report_export content_markdown="<the markdown>"` (writes `report.md`, the default format).
+
+- **Secondary — a branded, shareable file:** when the user wants something polished to send or print to PDF, call `report_export format=html content_markdown="<the markdown>" title="…" lang=<en|pt|es>`. Set `lang` to the user's language so the shell chrome (footer, `<html lang>`) matches. It wraps the same prose in the Pro Digital Key shell (dark/light toggle, system default, self-contained, opens offline, print-friendly) so every report looks the same.
 
 Reporting period / audience (e.g. "monthly board", "Q1 stakeholders"): $ARGUMENTS
