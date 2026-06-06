@@ -40,35 +40,10 @@ Conventional Commits: `feat(scope): …`, `fix(scope): …`, `chore(release): �
 
 ## Releases
 
-1. Bump the version in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json),
-   [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) and the
-   root [`package.json`](package.json).
+1. Bump the version in both [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json)
+   and [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
 2. Update [CHANGELOG.md](CHANGELOG.md).
 3. Tag `vX.Y.Z` and create a GitHub release.
-
-### Publishing to npm (optional, maintainers)
-
-The repo also publishes as the scoped package **`@dev-guardian/mcp-server`** —
-bins `dev-guardian` (the `mcp-config` CLI) and `dev-guardian-mcp` (the server).
-The root [`package.json`](package.json) `files` allowlist ships `bin/`,
-`mcp/dist/` and the runtime assets only — never `src/`, `test/` or
-`node_modules`. `prepublishOnly` rebuilds and tests first. The inner
-`mcp/package.json` is `private`, so only the root package publishes.
-
-```bash
-npm pack --dry-run     # inspect the tarball, publishes nothing
-npm login              # an account that owns the @dev-guardian scope
-npm publish            # @dev-guardian/mcp-server, access: public
-```
-
-Consumers then get the CLI without cloning:
-
-```bash
-npm i -g @dev-guardian/mcp-server
-dev-guardian mcp-config cursor --write
-```
-
-The Claude Code marketplace install (git) is independent of npm.
 
 ## Adding a scanner / tool
 

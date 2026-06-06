@@ -1,7 +1,6 @@
 {
   "name": "@dev-guardian/mcp-server",
   "version": "0.1.0",
-  "private": true,
   "description": "MCP server for the dev-guardian plugin. Exposes security, quality, bugfix, deps, compliance, observability and performance capabilities as MCP tools and resources via stdio transport.",
   "type": "module",
   "main": "./dist/server.js",
