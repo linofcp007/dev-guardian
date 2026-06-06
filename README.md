@@ -47,6 +47,16 @@ The plugin registers an MCP server on stdio that Claude Code launches automatica
 
 **Storage** — SQLite at `.guardian/guardian.db`. Tables: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`. Enables baseline tracking, scan-to-scan deltas, time-bounded suppressions, regression alerts.
 
+### Guardrail hooks (auto-active)
+
+With the plugin enabled, Claude Code auto-loads `hooks/hooks.json` — three **dependency-free, fail-open** guardrails that run in milliseconds (no native modules, never break your workflow):
+
+- **SessionStart** — briefs the agent with the project's security posture: branch, uncommitted changes, last-scan age, and whether the project is guardian-initialized.
+- **PostToolUse (Write/Edit/MultiEdit)** — scans the text just written for hard-coded secrets (AWS, GitHub, GitLab, Anthropic, OpenAI, Stripe, Google, Slack, private keys, …) and warns with a **redacted** preview. The authoritative full-history scan stays `scan_secrets` (gitleaks) via `/guardian-scan`.
+- **PreToolUse (Bash)** — **denies catastrophic commands by default** (`rm -rf /`, `curl … | sh`, raw-disk `dd`/`mkfs`, fork bombs); **warns** on merely risky ones (force-push, hard reset, `sudo`, `chmod 777`).
+
+Blocking secret *writes* is **opt-in**: set `"secrets": { "block": true }` in `.guardian/hooks.config.json`. Tune every behaviour there, allowlist false positives in `.guardian/hooks-allowlist.json`, or kill all hooks with `GUARDIAN_HOOKS=off`. The same detectors run on the CLI for terminal / CI use: `node bin/dev-guardian.mjs check --file <path>` and `--bash "<command>"` (exit 1 on a finding).
+
 ### Open-source tools orchestrated
 
 Semgrep · Trivy · OSV.dev · gitleaks · Renovate · OWASP ZAP · Playwright · Pino / structlog / Monolog / Serilog · Prometheus + Grafana · GlitchTip · Uptime Kuma · k6 · Artillery · Lighthouse · Syft · WPScan · WP-CLI · PHPCS + WPCS · security-code-scan · dotnet-outdated · ruff · bandit · jscpd · eslint · hadolint · shellcheck.
@@ -157,8 +167,10 @@ dev-guardian/
 │   └── marketplace.json
 ├── commands/                    # 44 slash commands
 ├── skills/                      # 11 skills (one per router target)
+├── hooks/                       # hooks.json + guardian-hook.mjs (auto-active guardrails)
+├── bin/                         # dev-guardian.mjs CLI (mcp-config, check)
 ├── mcp/                         # MCP server (TypeScript + SQLite)
-│   ├── src/                     # tools/, resources/, runners/, storage/, platform/
+│   ├── src/                     # tools/, resources/, runners/, storage/, platform/, hooks/
 │   ├── test/                    # 280 unit + integration tests
 │   ├── scripts/                 # smoke.mjs, smoke-wp-dotnet.mjs
 │   └── dist/                    # built artifact (node dist/server.js)
@@ -224,6 +236,16 @@ O plugin regista um servidor MCP em stdio que o Claude Code arranca automaticame
 **Resources** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`.
 
 **Storage** — SQLite em `.guardian/guardian.db`. Tabelas: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`. Permite tracking de baseline, deltas scan-a-scan, supressões com expiração, alertas de regressão.
+
+### Hooks de proteção (auto-ativos)
+
+Com o plugin ativo, o Claude Code carrega automaticamente `hooks/hooks.json` — três guardrails **dependency-free e fail-open**, em milissegundos (sem módulos nativos, nunca quebram o teu workflow):
+
+- **SessionStart** — informa o agente da postura de segurança do projeto: branch, alterações não commitadas, idade do último scan e se o projeto está guardian-initialized.
+- **PostToolUse (Write/Edit/MultiEdit)** — analisa o texto acabado de escrever à procura de secrets hardcoded (AWS, GitHub, GitLab, Anthropic, OpenAI, Stripe, Google, Slack, chaves privadas, …) e avisa com pré-visualização **redigida**. O scan completo do histórico continua em `scan_secrets` (gitleaks) via `/guardian-scan`.
+- **PreToolUse (Bash)** — **bloqueia por defeito comandos catastróficos** (`rm -rf /`, `curl … | sh`, `dd`/`mkfs` em disco cru, fork bombs); **avisa** nos apenas arriscados (force-push, hard reset, `sudo`, `chmod 777`).
+
+O bloqueio da *escrita* de secrets é **opt-in**: define `"secrets": { "block": true }` em `.guardian/hooks.config.json`. Ajusta tudo aí, faz allowlist de falsos positivos em `.guardian/hooks-allowlist.json`, ou desliga todos os hooks com `GUARDIAN_HOOKS=off`. Os mesmos detetores correm no CLI para terminal / CI: `node bin/dev-guardian.mjs check --file <path>` e `--bash "<command>"` (exit 1 ao encontrar algo).
 
 ### Ferramentas open-source orquestradas
 
@@ -335,6 +357,8 @@ dev-guardian/
 │   └── marketplace.json
 ├── commands/                    # 44 slash commands
 ├── skills/                      # 11 skills (uma por destino do router)
+├── hooks/                       # hooks.json + guardian-hook.mjs (guardrails auto-ativos)
+├── bin/                         # CLI dev-guardian.mjs (mcp-config, check)
 ├── mcp/                         # Servidor MCP (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/
 │   ├── test/                    # 280 testes unit + integration
@@ -402,6 +426,16 @@ El plugin registra un servidor MCP en stdio que Claude Code arranca automáticam
 **Recursos** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`.
 
 **Almacenamiento** — SQLite en `.guardian/guardian.db`. Tablas: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`. Permite tracking de baseline, deltas scan-a-scan, supresiones con caducidad, alertas de regresión.
+
+### Hooks de protección (auto-activos)
+
+Con el plugin activo, Claude Code carga automáticamente `hooks/hooks.json` — tres guardrails **sin dependencias y fail-open**, en milisegundos (sin módulos nativos, nunca rompen tu flujo):
+
+- **SessionStart** — informa al agente de la postura de seguridad del proyecto: rama, cambios sin commitear, antigüedad del último escaneo y si el proyecto está guardian-initialized.
+- **PostToolUse (Write/Edit/MultiEdit)** — analiza el texto recién escrito buscando secretos hardcoded (AWS, GitHub, GitLab, Anthropic, OpenAI, Stripe, Google, Slack, claves privadas, …) y avisa con vista previa **redactada**. El escaneo completo del historial sigue en `scan_secrets` (gitleaks) vía `/guardian-scan`.
+- **PreToolUse (Bash)** — **bloquea por defecto comandos catastróficos** (`rm -rf /`, `curl … | sh`, `dd`/`mkfs` en disco crudo, fork bombs); **avisa** en los meramente arriesgados (force-push, hard reset, `sudo`, `chmod 777`).
+
+El bloqueo de la *escritura* de secretos es **opt-in**: define `"secrets": { "block": true }` en `.guardian/hooks.config.json`. Ajusta todo ahí, allowlist de falsos positivos en `.guardian/hooks-allowlist.json`, o desactiva todos los hooks con `GUARDIAN_HOOKS=off`. Los mismos detectores corren en el CLI para terminal / CI: `node bin/dev-guardian.mjs check --file <ruta>` y `--bash "<command>"` (exit 1 al encontrar algo).
 
 ### Herramientas open-source orquestadas
 
@@ -513,6 +547,8 @@ dev-guardian/
 │   └── marketplace.json
 ├── commands/                    # 44 slash commands
 ├── skills/                      # 11 skills (una por destino del router)
+├── hooks/                       # hooks.json + guardian-hook.mjs (guardrails auto-activos)
+├── bin/                         # CLI dev-guardian.mjs (mcp-config, check)
 ├── mcp/                         # Servidor MCP (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/
 │   ├── test/                    # 280 tests unit + integration

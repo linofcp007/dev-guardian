@@ -12,6 +12,11 @@ quality, deps, observability, performance and compliance. Two halves:
   declared in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json).
 - **MCP server** — `mcp/` (TypeScript + SQLite), the real engine: 51 tools,
   16 resources. Built to `mcp/dist/`.
+- **Guardrail hooks** — `hooks/hooks.json` (auto-discovered at the plugin root)
+  with the `hooks/guardian-hook.mjs` dispatcher. Dependency-free and fail-open: SessionStart
+  posture briefing, PostToolUse secret warning, PreToolUse catastrophic-Bash
+  block. Detection lives in `mcp/src/hooks/{secretScan,bashGuard}.ts` (pure,
+  unit-tested) and is shared with the `dev-guardian check` CLI subcommand.
 
 ## Build & test (always from `mcp/`)
 
@@ -31,10 +36,12 @@ npm test             # vitest run (full suite)
   `src/`. Run `npm run build` and stage `mcp/dist/` in the *same* commit.
 - **Markdownlint stays clean** for `skills/`, `commands/` and `README.md`
   (config: [`.markdownlint.jsonc`](.markdownlint.jsonc)).
-- **Releases** bump the version in both
-  [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json) and
-  [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json), tagged
-  `vX.Y.Z`.
+- **Releases** bump the version in
+  [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json),
+  [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) and
+  [`mcp/package.json`](mcp/package.json) (keep all three in lock-step — the MCP
+  server reports the `plugin.json` version at runtime), add a `CHANGELOG.md`
+  entry, and tag `vX.Y.Z`.
 
 ## In-repo AI host configs (dogfooding)
 

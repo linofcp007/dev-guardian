@@ -6,6 +6,40 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
+## [1.1.0] — 2026-06-06
+
+### Added
+
+- **Guardrail hooks** (`hooks/hooks.json` + `hooks/guardian-hook.mjs`),
+  auto-loaded when the plugin is enabled — **dependency-free** (only `node:`
+  builtins + pure compiled detectors; no native modules, so they run in the
+  installed plugin where `mcp/node_modules` isn't shipped) and **fail-open**
+  (any error → exit 0, never breaks the host):
+  - **SessionStart** — briefs the agent with the project's security posture
+    (branch, uncommitted changes, last-scan age, init state).
+  - **PostToolUse (Write/Edit/MultiEdit/NotebookEdit)** — warns, with a
+    **redacted** preview, when freshly written text contains a hard-coded
+    secret. The authoritative full scan stays `scan_secrets` (gitleaks).
+  - **PreToolUse (Bash)** — denies catastrophic commands by default
+    (`rm -rf /`, `curl … | sh`, raw-disk `dd`/`mkfs`, fork bombs); warns on
+    risky ones (force-push, hard reset, `sudo`, `chmod 777`).
+  - Configurable via `.guardian/hooks.config.json` (opt-in secret-write
+    blocking with `secrets.block`), `.guardian/hooks-allowlist.json` for false
+    positives, and the `GUARDIAN_HOOKS=off` kill switch.
+- `mcp/src/hooks/secretScan.ts` + `bashGuard.ts` — pure, unit-tested detection
+  engines (31 new tests) shared by the hooks and the CLI.
+- `dev-guardian check` CLI subcommand (`--file <path>` / `--bash "<command>"`,
+  `--min`, `--json`) — run the same guardrail detectors from a terminal or CI;
+  exit code 1 on a finding.
+
+### Fixed
+
+- The MCP server no longer reports a hard-coded `0.1.0`; it reads its version
+  from `.claude-plugin/plugin.json` at startup (falling back to the MCP
+  `package.json`), keeping its reported identity in lock-step with the release.
+- `mcp/package.json` version aligned with the plugin release (was stale at
+  `0.1.0`).
+
 ## [1.0.0] — 2026-06-05
 
 First stable release. Everything below was already shipped in 0.x; 1.0.0 marks
@@ -103,6 +137,7 @@ the point where the surface is proven and held to semver.
   observability / performance / compliance plugin with an MCP server, SQLite
   state, and trilingual (EN/PT/ES) triggers.
 
+[1.1.0]: https://github.com/linofcp007/dev-guardian/releases/tag/v1.1.0
 [1.0.0]: https://github.com/linofcp007/dev-guardian/releases/tag/v1.0.0
 [0.6.0]: https://github.com/linofcp007/dev-guardian/releases/tag/v0.6.0
 [0.5.1]: https://github.com/linofcp007/dev-guardian/releases/tag/v0.5.1

@@ -20,6 +20,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PluginContext } from './context.js';
@@ -35,7 +36,31 @@ import { RESOURCES } from './resources/index.js';
 import './registerAll.js';
 
 const SERVER_NAME = 'dev-guardian';
-const SERVER_VERSION = '0.1.0';
+
+/**
+ * Single source of truth for the version we report to the host. Reading it at
+ * runtime keeps the MCP server's identity in lock-step with the plugin release
+ * instead of drifting behind a hard-coded constant. Falls back to the MCP
+ * package.json (standalone npm use), then '0.0.0'.
+ */
+function resolveServerVersion(): string {
+  const here = dirname(fileURLToPath(import.meta.url)); // mcp/dist (built) | mcp/src (dev)
+  const candidates = [
+    resolve(here, '..', '..', '.claude-plugin', 'plugin.json'),
+    resolve(here, '..', 'package.json'),
+  ];
+  for (const path of candidates) {
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { version?: string };
+      if (parsed.version) return parsed.version;
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  return '0.0.0';
+}
+
+const SERVER_VERSION = resolveServerVersion();
 
 async function main(): Promise<void> {
   const projectPath = resolve(process.cwd());

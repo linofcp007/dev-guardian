@@ -1,0 +1,50 @@
+{
+  "description": "dev-guardian guardrails — secret detection on writes, catastrophic-command blocking on Bash, and a security-posture briefing at session start. Dependency-free and fail-open; tune via .guardian/hooks.config.json or disable with GUARDIAN_HOOKS=off.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs\" SessionStart",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs\" PostToolUse",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs\" PreToolUse",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs\" PreToolUse",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
