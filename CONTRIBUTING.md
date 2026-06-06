@@ -45,6 +45,27 @@ Conventional Commits: `feat(scope): …`, `fix(scope): …`, `chore(release): �
 2. Update [CHANGELOG.md](CHANGELOG.md).
 3. Tag `vX.Y.Z` and create a GitHub release.
 
+## Listing on MCP directories (GitHub-indexed)
+
+We do **not** publish to npm. Distribution is the git-based Claude Code
+marketplace, so the MCP directories that index public GitHub repos are the way
+to get extra reach — no packaging required, they install from source.
+
+- **Glama** — [`glama.json`](glama.json) (root) declares the `maintainers`
+  (GitHub usernames). After it's on the default branch, claim the listing at
+  <https://glama.ai/mcp/servers> ("Add server" → point at the repo → the
+  `glama.json` proves ownership). Claiming unlocks editing the name/description
+  and optionally configuring a Docker image later.
+- **PulseMCP** — submit the repo at <https://www.pulsemcp.com/submit>. It reads
+  the README's MCP section (the stdio config blocks) for install details.
+- **mcp.so** — submit at <https://mcp.so/submit>. Same: it crawls the repo +
+  README.
+
+Keep the README's "MCP server" + install blocks current — these crawlers parse
+them. To list on a **1-command-install** registry instead (official MCP
+Registry, Smithery), you'd first need an npm package or an OCI image; that's a
+separate decision, intentionally not done here.
+
 ## Adding a scanner / tool
 
 - Put pure parsing in `mcp/src/runners/scannerParsers/` with a unit test.
