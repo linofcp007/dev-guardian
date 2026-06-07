@@ -26,7 +26,8 @@ npx markdownlint-cli2 "README.md" "CONTRIBUTING.md" "SECURITY.md" "skills/**/*.m
 - **Commit the compiled `mcp/dist/`.** The repo *is* the distribution — Claude
   Code runs `mcp/dist/server.js` directly, no install-time build. Rebuild
   (`npm run build`) and stage `mcp/dist/` in the **same** commit as the `src/`
-  change. CI fails if `dist/` drifts from a fresh build.
+  change. There's no CI to catch drift — if you skip the rebuild, `dist/`
+  silently desyncs from `src/`, so it's on you to verify before committing.
 - **Tests stay green** (`npm test`) and **markdownlint stays clean** for
   `skills/`, `commands/`, `README.md` and the root docs.
 - **The MCP tool surface is snapshotted.** Adding or removing a tool/resource

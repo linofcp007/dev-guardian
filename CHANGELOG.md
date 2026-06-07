@@ -6,6 +6,18 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
+## [1.1.1] — 2026-06-07
+
+### Changed
+
+- **Dropped the GitHub Actions CI workflow** (`.github/workflows/ci.yml`).
+  dev-guardian is distributed git-first and the maintainer avoids the recurring
+  Actions cost, so the quality gates now run **locally**: `npm test`,
+  `npm run build` (rebuild `mcp/dist/` before committing — no CI to catch
+  drift), markdownlint, the guardrail hooks, and the `dev-guardian check` CLI.
+  No npm publishing either (unchanged — never set up). No change to the plugin
+  behaviour or the MCP tool/resource surface.
+
 ## [1.1.0] — 2026-06-06
 
 ### Added
