@@ -5,7 +5,7 @@
  *
  * The server is always launched the same way the Claude Code plugin launches
  * it: `node <plugin>/mcp/dist/server.js`. For non-Claude hosts there is no
- * `${pluginDir}` placeholder, so we emit an ABSOLUTE path.
+ * `${CLAUDE_PLUGIN_ROOT}` placeholder, so we emit an ABSOLUTE path.
  */
 
 import { join, resolve } from 'node:path';

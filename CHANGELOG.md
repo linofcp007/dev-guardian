@@ -6,6 +6,20 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
+## [1.1.2] — 2026-06-10
+
+### Fixed
+
+- **MCP server now loads when the plugin is enabled.** The plugin manifest
+  (`.claude-plugin/plugin.json`) launched the server via the invalid
+  `${pluginDir}` placeholder, which Claude Code does not recognise — it rejected
+  the config with `Invalid MCP server config for "dev-guardian": Missing
+  environment variables: pluginDir` and the 51 MCP tools never came up. Switched
+  to the documented **`${CLAUDE_PLUGIN_ROOT}`** placeholder (already used by the
+  guardrail hooks). Same fix applied to the docs that quoted the old form
+  (`README.md`, `mcp/README.md`, `mcp/src/hostsetup/mcpConfig.ts`). No change to
+  the MCP tool/resource surface or plugin behaviour.
+
 ## [1.1.1] — 2026-06-07
 
 ### Changed

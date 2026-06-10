@@ -64,7 +64,7 @@ npm run dev    # tsx src/server.ts
   "mcpServers": {
     "dev-guardian": {
       "command": "node",
-      "args": ["${pluginDir}/mcp/dist/server.js"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/dist/server.js"]
     }
   }
 }

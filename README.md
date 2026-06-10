@@ -89,7 +89,7 @@ Then inside Claude Code, run `/plugin` and enable `dev-guardian`. Alternatively,
 }
 ```
 
-> The MCP server runs from `mcp/dist/`. On first install run `cd mcp && npm install && npm run build` once. The plugin manifest then launches it automatically via `node ${pluginDir}/mcp/dist/server.js`.
+> The MCP server runs from `mcp/dist/`. On first install run `cd mcp && npm install && npm run build` once. The plugin manifest then launches it automatically via `node ${CLAUDE_PLUGIN_ROOT}/mcp/dist/server.js`.
 >
 > `.sh` scripts in `scripts/` run natively on Linux/macOS. On Windows native you need **WSL2** or Git Bash; the skills/commands themselves work on any OS.
 
@@ -279,7 +279,7 @@ Depois, dentro do Claude Code, corre `/plugin` e ativa o `dev-guardian`. Em alte
 }
 ```
 
-> O servidor MCP corre a partir de `mcp/dist/`. Na primeira instalação corre uma vez `cd mcp && npm install && npm run build`. Depois o plugin arranca-o automaticamente via `node ${pluginDir}/mcp/dist/server.js`.
+> O servidor MCP corre a partir de `mcp/dist/`. Na primeira instalação corre uma vez `cd mcp && npm install && npm run build`. Depois o plugin arranca-o automaticamente via `node ${CLAUDE_PLUGIN_ROOT}/mcp/dist/server.js`.
 >
 > Os scripts `.sh` em `scripts/` correm direto em Linux/macOS. No Windows nativo precisas de **WSL2** ou Git Bash; as skills/commands em si funcionam em qualquer SO.
 
@@ -469,7 +469,7 @@ Luego, dentro de Claude Code, ejecuta `/plugin` y activa `dev-guardian`. Alterna
 }
 ```
 
-> El servidor MCP corre desde `mcp/dist/`. En la primera instalación ejecuta una vez `cd mcp && npm install && npm run build`. Después el plugin lo arranca automáticamente vía `node ${pluginDir}/mcp/dist/server.js`.
+> El servidor MCP corre desde `mcp/dist/`. En la primera instalación ejecuta una vez `cd mcp && npm install && npm run build`. Después el plugin lo arranca automáticamente vía `node ${CLAUDE_PLUGIN_ROOT}/mcp/dist/server.js`.
 >
 > Los scripts `.sh` en `scripts/` corren directamente en Linux/macOS. En Windows nativo necesitas **WSL2** o Git Bash; las skills/commands en sí funcionan en cualquier SO.
 
