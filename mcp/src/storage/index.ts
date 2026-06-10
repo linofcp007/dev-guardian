@@ -6,7 +6,7 @@
  * the engine later only touches files in this folder.
  */
 
-import type { Database as DB } from 'better-sqlite3';
+import type { DB } from './db.js';
 import { BaselinesRepo } from './baselinesRepo.js';
 import { CvesRepo } from './cvesRepo.js';
 import { FindingsRepo } from './findingsRepo.js';

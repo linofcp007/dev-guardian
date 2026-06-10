@@ -16,7 +16,7 @@
  * emits progress from its invoke().
  */
 
-import Database from 'better-sqlite3';
+import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';

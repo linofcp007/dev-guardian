@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import Database from 'better-sqlite3';
+import { GuardianDatabase as Database } from '../../../src/storage/db.js';
 import { runMigrations } from '../../../src/storage/migrations/runner.js';
 
 describe('migrations runner', () => {

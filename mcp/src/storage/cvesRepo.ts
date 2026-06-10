@@ -6,7 +6,7 @@
  * "active" (last_seen = latest deps scan) vs. historical.
  */
 
-import type { Database as DB, Statement } from 'better-sqlite3';
+import type { DB, Statement } from './db.js';
 import type { Cve, Severity } from '../types.js';
 
 interface CveRow {

@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { GuardianDatabase as Database } from '../../../src/storage/db.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

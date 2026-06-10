@@ -14,7 +14,7 @@
  * right parser, and surface tools_run / missing_tools correctly?
  */
 
-import Database from 'better-sqlite3';
+import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import {
   cpSync,
   existsSync,

@@ -6,7 +6,7 @@
  * via `getActive()`.
  */
 
-import type { Database as DB, Statement } from 'better-sqlite3';
+import type { DB, Statement } from './db.js';
 import type { Baseline } from '../types.js';
 import { nowIso } from './repoUtil.js';
 

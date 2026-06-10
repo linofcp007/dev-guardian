@@ -6,6 +6,33 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
+## [1.1.3] — 2026-06-10
+
+### Fixed
+
+- **MCP server now starts on a fresh install — no `npm install` required.** The
+  server imported `@modelcontextprotocol/sdk`, `better-sqlite3`, `execa` and
+  `zod` as runtime dependencies, but the plugin ships git-first with
+  `mcp/node_modules` git-ignored, so the *installed* server crashed on its first
+  import with `ERR_MODULE_NOT_FOUND` and none of the 50 MCP tools came up (the
+  zero-dependency hooks were unaffected).
+  - Replaced the native **`better-sqlite3`** engine with the built-in
+    **`node:sqlite`** (`DatabaseSync`), behind a thin adapter in
+    `mcp/src/storage/db.ts` (`prepare/run/get/all/exec/pragma` + a nesting-aware
+    `transaction`) — no native module to compile or ship.
+  - The build now **bundles** `dist/server.js` with esbuild
+    (`mcp/scripts/bundle.mjs`), inlining the remaining pure-JS deps, so the
+    server runs with **zero** runtime `node_modules`.
+  - The server is launched with `--experimental-sqlite` and now requires Node
+    **>=22.5**. No change to the MCP tool/resource surface (still 50 tools,
+    16 resources); the full test suite now exercises the `node:sqlite` engine.
+
+### Changed
+
+- Removed `better-sqlite3` / `@types/better-sqlite3`; bumped `@types/node` to
+  22.x and added `esbuild` as the bundler. Verified the bundled server boots
+  from a `node_modules`-free sandbox and lists all 50 tools.
+
 ## [1.1.2] — 2026-06-10
 
 ### Fixed

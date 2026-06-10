@@ -7,7 +7,7 @@
  * "your stack changed on date X".
  */
 
-import type { Database as DB, Statement } from 'better-sqlite3';
+import type { DB, Statement } from './db.js';
 import type { StackSnapshot } from '../types.js';
 import { nowIso, parseJsonObject } from './repoUtil.js';
 

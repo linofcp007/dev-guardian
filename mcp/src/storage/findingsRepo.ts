@@ -11,7 +11,7 @@
  * the latest completed scan with the suppressions table.
  */
 
-import type { Database as DB, Statement } from 'better-sqlite3';
+import type { DB, Statement } from './db.js';
 import type { Category, Finding, Severity } from '../types.js';
 import { SEVERITIES, SEVERITY_ORDER } from '../types.js';
 import { boolToInt, intToBool } from './repoUtil.js';

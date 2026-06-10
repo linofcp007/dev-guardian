@@ -8,7 +8,7 @@
  * to keep tests offline and deterministic.
  */
 
-import Database from 'better-sqlite3';
+import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

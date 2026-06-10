@@ -3,7 +3,7 @@
  * stakeholder Markdown wrapped in the branded shell, no scan required.
  */
 
-import Database from 'better-sqlite3';
+import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

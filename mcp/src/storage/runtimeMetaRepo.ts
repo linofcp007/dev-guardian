@@ -5,7 +5,7 @@
  * Current users: shell choice (probed once on Windows, then cached).
  */
 
-import type { Database as DB, Statement } from 'better-sqlite3';
+import type { DB, Statement } from './db.js';
 import { nowIso } from './repoUtil.js';
 
 interface RuntimeMetaRow {

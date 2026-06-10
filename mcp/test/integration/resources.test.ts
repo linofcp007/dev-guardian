@@ -6,7 +6,7 @@
  * and verify each handler's JSON output.
  */
 
-import Database from 'better-sqlite3';
+import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';

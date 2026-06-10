@@ -7,7 +7,7 @@
  * (see [.specs/dev-guardian-mcp/design.md] → "Tool invocation flow").
  */
 
-import type { Database as DB, Statement } from 'better-sqlite3';
+import type { DB, Statement } from './db.js';
 import type { ScanRecord, ScanStatus, ScanType, ToolRun } from '../types.js';
 import { nowIso, parseJsonArray } from './repoUtil.js';
 

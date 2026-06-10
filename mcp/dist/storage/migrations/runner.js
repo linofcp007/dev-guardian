@@ -9,10 +9,32 @@
  * Migrations are SQL only (no JS hooks): keep the surface area small and the
  * audit trail trivial — what you read in the .sql file is what runs.
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-const MIGRATIONS_DIR = dirname(fileURLToPath(import.meta.url));
+/**
+ * Where the `NNN_name.sql` files live at runtime. Resolved by probing, because
+ * the path differs across the three ways this module runs:
+ *   - tsc output / tsx tests → this module sits beside the .sql files;
+ *   - esbuild bundle (dist/server.js) → `import.meta.url` collapses to `dist/`,
+ *     so the assets are one level down in `dist/storage/migrations/` (where
+ *     `scripts/copy-assets.mjs` mirrors them).
+ */
+function resolveMigrationsDir() {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const candidates = [here, join(here, 'storage', 'migrations'), join(here, 'migrations')];
+    for (const dir of candidates) {
+        try {
+            if (existsSync(dir) && readdirSync(dir).some((f) => /^\d+_.+\.sql$/.test(f)))
+                return dir;
+        }
+        catch {
+            /* unreadable candidate — try the next one */
+        }
+    }
+    return here;
+}
+const MIGRATIONS_DIR = resolveMigrationsDir();
 export function runMigrations(db) {
     ensureSchemaMetaTable(db);
     const current = getCurrentVersion(db);

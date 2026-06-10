@@ -7,7 +7,7 @@
  * observability_setup is pure file-system logic — no execa to mock.
  */
 
-import Database from 'better-sqlite3';
+import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import {
   existsSync,
   mkdirSync,

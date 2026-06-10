@@ -8,7 +8,7 @@
  * so the result is deterministic: real Semgrep must flag the eval().
  */
 
-import Database from 'better-sqlite3';
+import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { execa } from 'execa';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

@@ -1,27 +1,135 @@
 /**
  * SQLite connection management for the dev-guardian MCP server.
  *
+ * Backed by Node's built-in `node:sqlite` (`DatabaseSync`) — no native module,
+ * so the server runs from a self-contained bundle with **zero** runtime
+ * `node_modules`. A thin adapter (`GuardianDatabase` / `GuardianStatement`)
+ * preserves the small, better-sqlite3-shaped surface the repos rely on:
+ * `prepare<P, R>()`, `run()/get()/all()`, `exec()`, `pragma()` and a
+ * nesting-aware `transaction()`. This stays the only module that knows the
+ * engine is node:sqlite; swapping it again only touches files in this folder.
+ *
  * The DB lives at `<project_root>/.guardian/guardian.db`. When that path is
  * not writable (read-only mounts, missing permissions), we fall back to
  * `os.tmpdir()/dev-guardian/<sha1(project_root)>/guardian.db` and surface a
  * warning the caller can include in tool responses.
  *
- * The connection itself opens in WAL mode with foreign keys on; the resolver
- * uses `:memory:` when the caller asks for it, which the unit tests rely on.
+ * The connection opens in WAL mode with foreign keys on; the resolver uses
+ * `:memory:` when the caller asks for it, which the unit tests rely on.
  */
-import Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, accessSync, constants } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runMigrations } from './migrations/runner.js';
+// `node:sqlite` is pulled in via createRequire rather than a static value
+// import on purpose: the production bundler (esbuild) and the test runner
+// (vite-node, whose bundled Vite predates node:sqlite and would try to resolve
+// a bare `sqlite`) both leave a runtime require untouched, so Node resolves the
+// builtin natively in every context. The type-only import above is erased.
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+/**
+ * Prepared-statement wrapper over `node:sqlite`'s `StatementSync`.
+ *
+ * Methods are declared as methods (not arrow properties) on purpose: that keeps
+ * their parameter types bivariant, so a `GuardianStatement<unknown[]>` returned
+ * by an un-generic `prepare()` stays assignable to a typed
+ * `GuardianStatement<[string, ...]>` field — exactly how better-sqlite3's
+ * `Statement` behaved.
+ */
+export class GuardianStatement {
+    stmt;
+    constructor(stmt) {
+        this.stmt = stmt;
+    }
+    run(...params) {
+        const info = this.stmt.run(...params);
+        return { changes: Number(info.changes), lastInsertRowid: info.lastInsertRowid };
+    }
+    get(...params) {
+        return this.stmt.get(...params);
+    }
+    all(...params) {
+        return this.stmt.all(...params);
+    }
+}
+/**
+ * Minimal database handle over `node:sqlite`, exposing exactly what the storage
+ * repos use. Construct from a path (or `':memory:'`) — tests build these
+ * directly; the server goes through {@link openDatabase}.
+ */
+export class GuardianDatabase {
+    raw;
+    txDepth = 0;
+    /**
+     * The path passed to the constructor (or `':memory:'`). Mirrors
+     * better-sqlite3's `db.name`, which `healthStatus` reads to stat the DB file.
+     */
+    name;
+    constructor(source) {
+        if (typeof source === 'string') {
+            this.raw = new DatabaseSync(source);
+            this.name = source;
+        }
+        else {
+            this.raw = source;
+            this.name = '';
+        }
+    }
+    prepare(source) {
+        return new GuardianStatement(this.raw.prepare(source));
+    }
+    /** Run one or more statements for their side effects (DDL, PRAGMA, BEGIN…). */
+    exec(sql) {
+        this.raw.exec(sql);
+    }
+    /** better-sqlite3-style PRAGMA setter. Any returned row is intentionally ignored. */
+    pragma(source) {
+        this.raw.exec(`PRAGMA ${source}`);
+    }
+    /**
+     * Wraps `fn` in a transaction and returns a callable, mirroring
+     * better-sqlite3's `db.transaction(fn)`. Nesting-aware: the outermost call
+     * uses BEGIN/COMMIT/ROLLBACK, inner calls use SAVEPOINTs — so the repos'
+     * `tx(args)` semantics carry over unchanged.
+     */
+    transaction(fn) {
+        return (...args) => {
+            const depth = this.txDepth;
+            const top = depth === 0;
+            this.raw.exec(top ? 'BEGIN' : `SAVEPOINT sp_${depth}`);
+            this.txDepth = depth + 1;
+            try {
+                const result = fn(...args);
+                this.raw.exec(top ? 'COMMIT' : `RELEASE sp_${depth}`);
+                this.txDepth = depth;
+                return result;
+            }
+            catch (error) {
+                if (top) {
+                    this.raw.exec('ROLLBACK');
+                }
+                else {
+                    this.raw.exec(`ROLLBACK TO sp_${depth}`);
+                    this.raw.exec(`RELEASE sp_${depth}`);
+                }
+                this.txDepth = depth;
+                throw error;
+            }
+        };
+    }
+    close() {
+        this.raw.close();
+    }
+}
 /**
  * Open (and migrate) a guardian database. Idempotent — calling twice on the
  * same path returns two independent connections to the same file.
  */
 export function openDatabase(options) {
     if (options.inMemory) {
-        const db = new Database(':memory:');
+        const db = new GuardianDatabase(':memory:');
         applyPragmas(db);
         runMigrations(db);
         return { db, path: ':memory:' };
@@ -44,7 +152,7 @@ export function openDatabase(options) {
                 `dev-guardian DB persisted to '${chosenPath}' instead. ` +
                 `Scans will not be visible alongside the project.`;
     }
-    const db = new Database(chosenPath);
+    const db = new GuardianDatabase(chosenPath);
     applyPragmas(db);
     runMigrations(db);
     const result = { db, path: chosenPath };

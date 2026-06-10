@@ -8,7 +8,7 @@
  * suppression can be lifted later by deleting (or letting expire) the row.
  */
 
-import type { Database as DB, Statement } from 'better-sqlite3';
+import type { DB, Statement } from './db.js';
 import type { Suppression } from '../types.js';
 import { nowIso } from './repoUtil.js';
 
