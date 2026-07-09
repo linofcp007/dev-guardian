@@ -94,6 +94,7 @@ function makePlugin(projectPath: string): PluginContext {
 }
 
 const trivyFsFx = () => readFileSync(join(FIX, 'trivy-fs.json'), 'utf8');
+const npmAuditFx = () => readFileSync(join(FIX, 'npm-audit.json'), 'utf8');
 
 beforeEach(() => {
   vi.mocked(runProcess).mockReset();
@@ -141,6 +142,200 @@ describe('deps_audit', () => {
     // Trivy fs fixture: 2 vulns + 1 license = 3 findings
     const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
     expect(total).toBe(3);
+  });
+
+  it('parses npm audit output into Findings alongside Trivy (the npm-audit gap)', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/tool'); // trivy + npm both present
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'npm') {
+        // npm audit prints JSON to stdout and exits 1 when vulns are present.
+        return {
+          outcome: 'completed' as const,
+          exitCode: 1,
+          stdout: npmAuditFx(),
+          stderr: '',
+          truncated: false,
+        };
+      }
+      // trivy fs
+      const outIdx = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const path = outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
+      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      return {
+        outcome: 'completed' as const,
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
+        truncated: false,
+      };
+    });
+
+    const tool = getTool('deps_audit');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      findings_count_by_severity: Record<string, number>;
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+
+    expect(r.ok).toBe(true);
+    // 3 from Trivy fixture + 2 from npm-audit fixture (lodash high, minimist critical).
+    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+    expect(total).toBe(5);
+    const npm = r.tools_run.find((t) => t.name === 'npm');
+    expect(npm?.status).toBe('ok');
+    expect(npm?.reason).toMatch(/parsed/i);
+    expect(r.coverage).toBe('full');
+  });
+
+  it('dedupes an npm-audit finding for a package Trivy already reported (no double count)', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    const plugin = makePlugin(project);
+
+    // npm audit reports tough-cookie (which Trivy ALSO reports) + lodash (unique to npm).
+    const npmOverlap = JSON.stringify({
+      auditReportVersion: 2,
+      vulnerabilities: {
+        'tough-cookie': {
+          name: 'tough-cookie',
+          severity: 'medium',
+          via: [
+            {
+              source: 9999,
+              name: 'tough-cookie',
+              title: 'Prototype Pollution in tough-cookie',
+              url: 'https://github.com/advisories/GHSA-tough',
+              severity: 'medium',
+              range: '<4.1.3',
+            },
+          ],
+          range: '<4.1.3',
+          fixAvailable: true,
+        },
+        lodash: {
+          name: 'lodash',
+          severity: 'high',
+          via: [
+            {
+              source: 1065,
+              name: 'lodash',
+              title: 'Prototype Pollution in lodash',
+              url: 'https://github.com/advisories/GHSA-jf85',
+              severity: 'high',
+              range: '<4.17.12',
+            },
+          ],
+          range: '<4.17.12',
+          fixAvailable: true,
+        },
+      },
+      metadata: { vulnerabilities: { total: 2 } },
+    });
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/tool'); // trivy + npm present
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'npm') {
+        return { outcome: 'completed' as const, exitCode: 1, stdout: npmOverlap, stderr: '', truncated: false };
+      }
+      const outIdx = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const path = outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
+      // Trivy fixture reports tough-cookie + semver (vulns) + evil-lib (license).
+      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('deps_audit');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      findings_count_by_severity: Record<string, number>;
+    };
+    expect(r.ok).toBe(true);
+    // 3 Trivy findings + only the npm 'lodash' finding; the npm 'tough-cookie'
+    // duplicate of Trivy's CVE is dropped. (5 - 1 overlap = 4.)
+    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+    expect(total).toBe(4);
+    const npmFindings = plugin.storage.findings
+      .listByScan((r as unknown as { scan_id: string }).scan_id)
+      .filter((f) => f.tool === 'npm-audit');
+    expect(npmFindings.map((f) => f.snippet)).toEqual([expect.stringContaining('lodash')]);
+  });
+
+  it('marks a missing native auditor (npm) as a coverage gap, not silent full coverage', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    const plugin = makePlugin(project);
+
+    // Trivy present and succeeds; npm absent from PATH.
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'npm' ? null : '/fake/bin/trivy',
+    );
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const outIdx = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const path = outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
+      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('deps_audit');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      missing_tools: string[];
+      warnings: string[];
+    };
+    expect(r.ok).toBe(true);
+    // The npm advisory coverage the tool claims to add never ran — that is a gap.
+    expect(r.missing_tools).toContain('npm');
+    expect(r.coverage).toBe('partial');
+    expect(r.warnings.some((w) => /npm/i.test(w))).toBe(true);
+  });
+
+  it('does not count an npm audit error (no lockfile) as a successful, clean scan', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/tool'); // trivy + npm present
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'npm') {
+        // npm audit with no lockfile prints an error object and exits non-zero.
+        return {
+          outcome: 'failed' as const,
+          exitCode: 1,
+          stdout: JSON.stringify({
+            error: { code: 'ENOLOCK', summary: 'This command requires an existing lockfile.', detail: '' },
+          }),
+          stderr: '',
+          truncated: false,
+        };
+      }
+      const outIdx = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const path = outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
+      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('deps_audit');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      missing_tools: string[];
+      findings_count_by_severity: Record<string, number>;
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+    expect(r.ok).toBe(true);
+    const npm = r.tools_run.find((t) => t.name === 'npm');
+    expect(npm?.status).toBe('failed');
+    expect(r.missing_tools).toContain('npm');
+    // Only Trivy's 3 findings — the npm error JSON must not be parsed into findings.
+    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+    expect(total).toBe(3);
+    expect(r.coverage).toBe('partial');
   });
 
   it('detects .github/dependabot.yml when present', async () => {

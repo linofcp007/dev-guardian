@@ -173,6 +173,70 @@ describe('scan_sast (Semgrep)', () => {
     expect(r.missing_tools).toContain('semgrep');
     expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('skipped');
   });
+
+  it('falls back to Docker when semgrep is absent but a daemon is available', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+
+    // semgrep not on PATH, docker is.
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'docker' ? '/usr/bin/docker' : null,
+    );
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      expect(opts.command).toBe('docker');
+      expect(opts.args).toContain('--mount');
+      expect(opts.args).toContain('semgrep/semgrep');
+      // Simulate the bind mount: the container writes /src/... which lands on
+      // the host project. Reconstruct the host path from the container path.
+      const outIdx = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const containerOut = outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
+      if (containerOut?.startsWith('/src/')) {
+        const hostOut = join(project, containerOut.slice('/src/'.length));
+        mkdirSync(dirname(hostOut), { recursive: true });
+        writeFileSync(hostOut, semgrepFixture(), 'utf8');
+      }
+      return fakeRunSuccess({ exitCode: 1 }); // semgrep exits 1 when it finds issues
+    });
+
+    const tool = getTool('scan_sast');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      findings_count_by_severity: Record<string, number>;
+      tools_run: { name: string; status: string; reason?: string }[];
+      missing_tools: string[];
+    };
+
+    expect(r.ok).toBe(true);
+    const semgrep = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.reason).toMatch(/docker/i);
+    expect(r.missing_tools).not.toContain('semgrep');
+    expect(r.coverage).toBe('full');
+    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+    expect(total).toBe(3);
+  });
+
+  it('reports coverage=none with a loud warning when neither semgrep nor docker exist', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockResolvedValue(null);
+
+    const tool = getTool('scan_sast');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      warnings: string[];
+      missing_tools: string[];
+    };
+
+    expect(r.ok).toBe(true);
+    expect(r.coverage).toBe('none');
+    expect(r.missing_tools).toContain('semgrep');
+    // The headline must not let "0 findings" read as clean.
+    expect(r.warnings.some((w) => /not a clean bill of health/i.test(w))).toBe(true);
+  });
 });
 
 describe('scan_secrets (gitleaks)', () => {

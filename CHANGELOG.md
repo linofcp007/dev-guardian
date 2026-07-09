@@ -6,6 +6,40 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
+## [1.1.4] — 2026-07-09
+
+### Added
+
+- **Scan coverage trust signal.** Every scan now reports a `coverage` value
+  (`full` / `partial` / `none`) derived from which scanners actually ran, so a
+  "0 findings" result that scanned nothing can never read as "all clear". At
+  coverage `none` a loud warning states plainly that nothing was scanned;
+  `audit_executive` rolls up the worst coverage across its sub-scans and
+  surfaces each gap. (`tools/scanCoverage.ts`)
+- **Semgrep Docker fallback for SAST.** When `semgrep` is not on PATH but a
+  Docker daemon is reachable, `scan_sast` runs the official `semgrep/semgrep`
+  image (bind-mounted via `--mount` so it tolerates Windows drive letters and
+  spaces in the path). A failed container run is recorded as a real coverage
+  gap, never a silent empty scan. (`runners/dockerScanner.ts`)
+- **`npm audit` findings are now counted.** `deps_audit` parses
+  `npm audit --json` (npm 6 and 7+) into Findings, complementing Trivy's CVE
+  coverage with GitHub advisories. (`runners/scannerParsers/npmAudit.ts`)
+
+### Fixed
+
+- **No double-counting of the same dependency CVE.** When Trivy already reports
+  a package by CVE, the overlapping `npm audit` finding for that package is
+  dropped (Trivy is the canonical CVE source); npm findings for packages Trivy
+  missed are kept. Stops inflated severity counts from flowing into the
+  executive roll-up.
+- **An `npm audit` error is no longer treated as a clean scan.** A missing
+  lockfile makes npm exit non-zero with an `{ error }` object rather than a
+  report — previously counted as a successful "0 findings". It is now recorded
+  as a failed auditor and a coverage gap.
+- **A missing native auditor is a coverage gap.** When `npm` / `pip-audit` is
+  expected (the manifest exists) but absent, it is added to `missing_tools` so
+  coverage reflects the gap instead of reporting `full`.
+
 ## [1.1.3] — 2026-06-10
 
 ### Fixed

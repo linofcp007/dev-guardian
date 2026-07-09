@@ -30,6 +30,7 @@ import { SEVERITY_ORDER } from '../types.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import { InvalidProjectPathError, resolveProjectPath, } from '../platform/projectPath.js';
 import { isWorkingTreeClean } from './gitState.js';
+import { assessCoverage } from './scanCoverage.js';
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 export function makeScanTool(config) {
     return {
@@ -171,6 +172,10 @@ async function runScanPipeline(config, input, plugin, callMeta) {
         findings.push(...out.findings);
         cves.push(...out.cves);
     }
+    // Cross-parser reconciliation (e.g. drop npm-audit dupes of Trivy CVEs)
+    // before anything counts, persists, or filters the findings.
+    if (invocation.dedupeFindings)
+        findings = invocation.dedupeFindings(findings);
     // Severity floor.
     findings = filterFindings(findings, input.severity_min);
     // Persist findings + CVEs (best-effort; one transaction per repo).
@@ -209,6 +214,13 @@ async function runScanPipeline(config, input, plugin, callMeta) {
     // Build the ScanResult response.
     const counts = countBySeverity(findings);
     const top = topFindings(findings, 10);
+    // Coverage: did the scanners that were supposed to run actually run? A
+    // "0 findings" result is only trustworthy at coverage 'full'. When a primary
+    // scanner was missing/failed we push a loud warning so the count is never
+    // mistaken for a clean bill of health.
+    const { coverage, warning: coverageWarning } = assessCoverage(config.scan_type, invocation.tools_run, invocation.missing_tools);
+    if (coverageWarning)
+        warnings.unshift(coverageWarning);
     const result = {
         scan_id: scanId,
         scan_type: config.scan_type,
@@ -223,6 +235,7 @@ async function runScanPipeline(config, input, plugin, callMeta) {
         findings_count_by_severity: counts,
         top_findings: top,
         warnings,
+        coverage,
     };
     const payload = {
         ...result,
@@ -238,13 +251,18 @@ function cachedResult(plugin, scanId, warnings) {
     const findings = plugin.storage.findings.listByScan(scanId);
     const counts = countBySeverity(findings);
     const top = topFindings(findings, 10);
+    // Re-derive coverage from the persisted tools_run/missing_tools so a cached
+    // scan carries the same honest signal as a fresh one.
+    const { coverage, warning: coverageWarning } = assessCoverage(record.scan_type, record.tools_run, record.missing_tools);
+    const allWarnings = coverageWarning ? [coverageWarning, ...warnings] : warnings;
     const payload = {
         ...record,
         cached: true,
         cached_from: scanId,
         findings_count_by_severity: counts,
         top_findings: top,
-        warnings,
+        warnings: allWarnings,
+        coverage,
     };
     return { ok: true, ...payload };
 }

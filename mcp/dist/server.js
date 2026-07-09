@@ -31633,6 +31633,24 @@ async function isWorkingTreeClean(projectPath) {
   }
 }
 
+// src/tools/scanCoverage.ts
+function computeCoverage(toolsRun, missingTools) {
+  const ranOk = toolsRun.some((t) => t.status === "ok");
+  const failed = toolsRun.some((t) => t.status === "failed");
+  const hasGaps = missingTools.length > 0 || failed;
+  if (!hasGaps) return "full";
+  return ranOk ? "partial" : "none";
+}
+function assessCoverage(scanType, toolsRun, missingTools) {
+  const coverage = computeCoverage(toolsRun, missingTools);
+  if (coverage === "full") return { coverage, warning: null };
+  const failedTools = toolsRun.filter((t) => t.status === "failed").map((t) => t.name);
+  const gaps = [.../* @__PURE__ */ new Set([...missingTools, ...failedTools])];
+  const list = gaps.length > 0 ? gaps.join(", ") : "one or more scanners";
+  const warning = coverage === "none" ? `\u26A0\uFE0F ${scanType}: NO scanner ran (unavailable/failed: ${list}). A "0 findings" result is NOT a clean bill of health \u2014 nothing was actually scanned. Install ${list} (or use the Docker fallback) and re-run before trusting this scan.` : `\u26A0\uFE0F ${scanType}: partial coverage \u2014 ${list} did not run; findings may be incomplete.`;
+  return { coverage, warning };
+}
+
 // src/tools/scanToolFactory.ts
 var FIVE_MINUTES_MS = 5 * 60 * 1e3;
 function makeScanTool(config2) {
@@ -31768,6 +31786,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
     findings.push(...out.findings);
     cves.push(...out.cves);
   }
+  if (invocation.dedupeFindings) findings = invocation.dedupeFindings(findings);
   findings = filterFindings(findings, input.severity_min);
   if (findings.length > 0) {
     plugin.storage.findings.bulkInsert(
@@ -31800,6 +31819,12 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
   }
   const counts = countBySeverity(findings);
   const top = topFindings(findings, 10);
+  const { coverage, warning: coverageWarning } = assessCoverage(
+    config2.scan_type,
+    invocation.tools_run,
+    invocation.missing_tools
+  );
+  if (coverageWarning) warnings.unshift(coverageWarning);
   const result = {
     scan_id: scanId,
     scan_type: config2.scan_type,
@@ -31814,7 +31839,8 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
     report_paths: invocation.report_paths,
     findings_count_by_severity: counts,
     top_findings: top,
-    warnings
+    warnings,
+    coverage
   };
   const payload = {
     ...result,
@@ -31830,13 +31856,20 @@ function cachedResult(plugin, scanId, warnings) {
   const findings = plugin.storage.findings.listByScan(scanId);
   const counts = countBySeverity(findings);
   const top = topFindings(findings, 10);
+  const { coverage, warning: coverageWarning } = assessCoverage(
+    record2.scan_type,
+    record2.tools_run,
+    record2.missing_tools
+  );
+  const allWarnings = coverageWarning ? [coverageWarning, ...warnings] : warnings;
   const payload = {
     ...record2,
     cached: true,
     cached_from: scanId,
     findings_count_by_severity: counts,
     top_findings: top,
-    warnings
+    warnings: allWarnings,
+    coverage
   };
   return { ok: true, ...payload };
 }
@@ -31995,6 +32028,39 @@ function subcategoryFor(ruleId) {
   return "dotnet-security";
 }
 
+// src/runners/dockerScanner.ts
+var DEFAULT_SEMGREP_IMAGE = "semgrep/semgrep";
+function buildSemgrepDockerArgs(opts) {
+  const image = opts.image ?? DEFAULT_SEMGREP_IMAGE;
+  const containerOut = toContainerPath(opts.projectPath, opts.outFileHost);
+  const args = [
+    "run",
+    "--rm",
+    "--mount",
+    `type=bind,source=${opts.projectPath},target=/src`,
+    "-w",
+    "/src",
+    image,
+    "semgrep",
+    "--config=auto"
+  ];
+  if (opts.hasCsproj) args.push("--config=p/csharp");
+  args.push("--json", "--quiet", "--output", containerOut);
+  if (opts.autoFix) args.push("--autofix");
+  args.push("/src");
+  return args;
+}
+function toContainerPath(projectPath, outFileHost) {
+  const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const root = norm(projectPath);
+  let rel2 = norm(outFileHost);
+  if (rel2.toLowerCase().startsWith(root.toLowerCase())) {
+    rel2 = rel2.slice(root.length);
+  }
+  rel2 = rel2.replace(/^\/+/, "");
+  return rel2 ? `/src/${rel2}` : "/src";
+}
+
 // src/tools/scanSast.ts
 registerToolModule(
   makeScanTool({
@@ -32018,8 +32084,8 @@ registerToolModule(
       const autoFix = input.auto_fix === true;
       const semgrepBin = await scannerAvailable("semgrep");
       const hasCsproj = anyCsprojInProject(ctx.projectPath);
+      const outFile = join7(reportDir, "sast.json");
       if (semgrepBin) {
-        const outFile = join7(reportDir, "sast.json");
         const args = ["--config=auto"];
         if (hasCsproj) args.push("--config=p/csharp");
         args.push("--json", "--quiet", "--output", outFile);
@@ -32044,23 +32110,61 @@ registerToolModule(
           tools_run[tools_run.length - 1].reason = reason;
         }
       } else {
-        tools_run.push({ name: "semgrep", status: "skipped", reason: "not_installed" });
-        missing_tools.push("semgrep");
-      }
-      const looksPython = existsSync6(join7(ctx.projectPath, "pyproject.toml")) || existsSync6(join7(ctx.projectPath, "requirements.txt")) || existsSync6(join7(ctx.projectPath, "setup.py"));
-      if (looksPython) {
-        const banditBin = await scannerAvailable("bandit");
-        if (banditBin) {
-          const outFile = join7(reportDir, "bandit.json");
+        const dockerBin = await scannerAvailable("docker");
+        if (dockerBin) {
+          const image = process.env["GUARDIAN_SEMGREP_IMAGE"] || DEFAULT_SEMGREP_IMAGE;
+          const args = buildSemgrepDockerArgs({
+            projectPath: ctx.projectPath,
+            outFileHost: outFile,
+            hasCsproj,
+            autoFix,
+            image
+          });
           const result = await runProcess({
-            command: "bandit",
-            args: ["-r", ctx.projectPath, "-f", "json", "-o", outFile, "-q"],
+            command: "docker",
+            args,
             cwd: ctx.projectPath,
             env: ctx.scriptEnv,
             signal: ctx.signal,
             onLog: ctx.onLog
           });
           const raw = readJsonSafe(outFile);
+          if (raw) parser_inputs.push({ parser: semgrepParser, input: raw });
+          const ranInDocker = (result.outcome === "completed" || result.exitCode === 1) && raw !== null;
+          if (ranInDocker) {
+            tools_run.push({
+              name: "semgrep",
+              status: "ok",
+              reason: `ran via docker (${image})`
+            });
+          } else {
+            const reason = result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? "docker fallback failed";
+            tools_run.push({ name: "semgrep", status: "failed", reason: `docker: ${reason}` });
+            missing_tools.push("semgrep");
+          }
+        } else {
+          tools_run.push({
+            name: "semgrep",
+            status: "skipped",
+            reason: "not_installed (no docker fallback available)"
+          });
+          missing_tools.push("semgrep");
+        }
+      }
+      const looksPython = existsSync6(join7(ctx.projectPath, "pyproject.toml")) || existsSync6(join7(ctx.projectPath, "requirements.txt")) || existsSync6(join7(ctx.projectPath, "setup.py"));
+      if (looksPython) {
+        const banditBin = await scannerAvailable("bandit");
+        if (banditBin) {
+          const outFile2 = join7(reportDir, "bandit.json");
+          const result = await runProcess({
+            command: "bandit",
+            args: ["-r", ctx.projectPath, "-f", "json", "-o", outFile2, "-q"],
+            cwd: ctx.projectPath,
+            env: ctx.scriptEnv,
+            signal: ctx.signal,
+            onLog: ctx.onLog
+          });
+          const raw = readJsonSafe(outFile2);
           if (raw) parser_inputs.push({ parser: banditParser, input: raw });
           const ok = result.outcome === "completed" || result.exitCode === 1;
           tools_run.push({ name: "bandit", status: ok ? "ok" : "failed" });
@@ -32833,6 +32937,135 @@ async function diffFiles(base, head, cwd) {
 // src/tools/depsAudit.ts
 import { existsSync as existsSync9 } from "node:fs";
 import { join as join15 } from "node:path";
+
+// src/runners/scannerParsers/npmAudit.ts
+var NPM_AUDIT_TOOL_NAME = "npm-audit";
+var npmAuditParser = {
+  name: NPM_AUDIT_TOOL_NAME,
+  parse(input, ctx = {}) {
+    const root = parseInputAsJson(input);
+    const findings = [];
+    const cves = [];
+    const seen = /* @__PURE__ */ new Set();
+    const vulns = getProp(root, "vulnerabilities");
+    if (vulns && typeof vulns === "object") {
+      for (const entry of Object.values(vulns)) {
+        const fixAvailable = fixIsAvailable(getProp(entry, "fixAvailable"));
+        for (const via of asArray(getProp(entry, "via"))) {
+          if (typeof via !== "object" || via === null) continue;
+          const finding2 = mapV2Advisory(via, fixAvailable, seen, ctx);
+          if (finding2) findings.push(finding2);
+        }
+      }
+    }
+    const advisories = getProp(root, "advisories");
+    if (advisories && typeof advisories === "object") {
+      for (const adv of Object.values(advisories)) {
+        const out = mapV1Advisory(adv, seen);
+        if (out?.finding) findings.push(out.finding);
+        if (out?.cves) cves.push(...out.cves);
+      }
+    }
+    return { findings, cves };
+  }
+};
+function fixIsAvailable(raw) {
+  if (typeof raw === "boolean") return raw;
+  return raw !== null && typeof raw === "object";
+}
+function mapV2Advisory(via, fixAvailable, seen, _ctx) {
+  const source = getNumber(via, "source") ?? getString(via, "source");
+  const url = getString(via, "url");
+  const pkg = getString(via, "name") ?? getString(via, "dependency");
+  const title = getString(via, "title");
+  if (source === void 0 && !url && !title) return null;
+  const key = `v2:${source ?? url ?? `${pkg}:${title}`}`;
+  if (seen.has(key)) return null;
+  seen.add(key);
+  const range = getString(via, "range");
+  const input = {
+    tool: NPM_AUDIT_TOOL_NAME,
+    rule_id: String(source ?? url ?? pkg ?? "npm-advisory"),
+    severity: normalizeSeverity(getString(via, "severity")),
+    category: "security",
+    subcategory: "dependency",
+    title: title ?? `Vulnerability in ${pkg ?? "a dependency"}`,
+    file_path: "package.json",
+    fix_available: fixAvailable,
+    snippet: `${pkg ?? ""}@${range ?? ""}`
+  };
+  const message = composeMessage(pkg, range, url);
+  if (message) input.message = message;
+  return makeFinding(input);
+}
+function mapV1Advisory(adv, seen) {
+  const id = getNumber(adv, "id") ?? getString(adv, "id");
+  const pkg = getString(adv, "module_name");
+  const title = getString(adv, "title");
+  if (!pkg && !title) return null;
+  const key = `v1:${id ?? title}`;
+  if (seen.has(key)) return null;
+  seen.add(key);
+  const severity = normalizeSeverity(getString(adv, "severity"));
+  const range = getString(adv, "vulnerable_versions");
+  const url = getString(adv, "url");
+  const recommendation2 = getString(adv, "recommendation");
+  const input = {
+    tool: NPM_AUDIT_TOOL_NAME,
+    rule_id: String(id ?? title),
+    severity,
+    category: "security",
+    subcategory: "dependency",
+    title: title ?? `Vulnerability in ${pkg}`,
+    file_path: "package.json",
+    fix_available: recommendation2 ? /upgrad|updat/i.test(recommendation2) : false,
+    snippet: `${pkg ?? ""}@${range ?? ""}`
+  };
+  const message = composeMessage(pkg, range, url ?? recommendation2);
+  if (message) input.message = message;
+  const cves = [];
+  for (const cveId of asArray(getProp(adv, "cves"))) {
+    if (typeof cveId === "string" && /^CVE-\d/i.test(cveId)) {
+      const cve = {
+        cve_id: cveId,
+        package_name: pkg ?? "unknown",
+        severity
+      };
+      cves.push(cve);
+    }
+  }
+  return { finding: makeFinding(input), cves };
+}
+function composeMessage(pkg, range, tail) {
+  const parts = [];
+  if (pkg) parts.push(`package: ${pkg}`);
+  if (range) parts.push(`vulnerable: ${range}`);
+  if (tail) parts.push(tail);
+  return parts.length > 0 ? parts.join(" \xB7 ") : void 0;
+}
+
+// src/tools/depsAudit.ts
+function packageFromSnippet(snippet) {
+  if (!snippet) return null;
+  const at = snippet.lastIndexOf("@");
+  if (at <= 0) return null;
+  return snippet.slice(0, at).trim().toLowerCase() || null;
+}
+function dropNpmDuplicatesOfTrivy(findings) {
+  const trivyPackages = /* @__PURE__ */ new Set();
+  for (const f of findings) {
+    if (f.tool === TRIVY_TOOL_NAME && f.subcategory === "cve") {
+      const pkg = packageFromSnippet(f.snippet);
+      if (pkg) trivyPackages.add(pkg);
+    }
+  }
+  if (trivyPackages.size === 0) return findings;
+  return findings.filter((f) => {
+    if (f.tool !== NPM_AUDIT_TOOL_NAME) return true;
+    const pkg = packageFromSnippet(f.snippet);
+    return !(pkg !== null && trivyPackages.has(pkg));
+  });
+}
 function detectBots(projectPath) {
   return {
     renovate: existsSync9(join15(projectPath, "renovate.json")) || existsSync9(join15(projectPath, ".renovaterc")) || existsSync9(join15(projectPath, ".renovaterc.json")),
@@ -32894,7 +33127,10 @@ registerToolModule(
           args: ["audit", "--json", "--audit-level=info"],
           outFile: join15(reportDir, "npm-audit.json"),
           ctx,
-          tools_run
+          tools_run,
+          missing_tools,
+          parser_inputs,
+          parser: npmAuditParser
         });
       }
       if (existsSync9(join15(ctx.projectPath, "pyproject.toml")) || existsSync9(join15(ctx.projectPath, "requirements.txt"))) {
@@ -32903,7 +33139,8 @@ registerToolModule(
           args: ["-f", "json", "-o", join15(reportDir, "pip-audit.json")],
           outFile: join15(reportDir, "pip-audit.json"),
           ctx,
-          tools_run
+          tools_run,
+          missing_tools
         });
       }
       const bot_configured = detectBots(ctx.projectPath);
@@ -32912,12 +33149,23 @@ registerToolModule(
         tools_run,
         missing_tools,
         parser_inputs,
+        dedupeFindings: dropNpmDuplicatesOfTrivy,
         report_paths: [reportDir],
         extras: { bot_configured }
       };
     }
   })
 );
+function looksLikeNpmAuditReport(raw) {
+  try {
+    const j = JSON.parse(raw);
+    if (!j || typeof j !== "object" || "error" in j) return false;
+    const isObj = (v) => typeof v === "object" && v !== null;
+    return isObj(j["vulnerabilities"]) || isObj(j["advisories"]);
+  } catch {
+    return false;
+  }
+}
 async function tryNativeAudit(opts) {
   const bin = await scannerAvailable(opts.command);
   if (!bin) {
@@ -32926,6 +33174,7 @@ async function tryNativeAudit(opts) {
       status: "skipped",
       reason: "not_installed"
     });
+    opts.missing_tools?.push(opts.command);
     return;
   }
   const isNpmStdout = opts.command === "npm";
@@ -32944,12 +33193,27 @@ async function tryNativeAudit(opts) {
     } catch {
     }
   }
-  const ok = result.outcome === "completed" || opts.command === "npm" && typeof result.exitCode === "number" || result.exitCode === 1;
-  opts.tools_run.push({
-    name: opts.command,
-    status: ok ? "ok" : "failed",
-    reason: ok ? "captured (no MCP parser yet)" : void 0
-  });
+  const exitOk = result.outcome === "completed" || result.exitCode === 0 || result.exitCode === 1;
+  const ok = isNpmStdout ? exitOk && looksLikeNpmAuditReport(result.stdout) : exitOk;
+  let parsed = false;
+  if (ok && opts.parser && opts.parser_inputs) {
+    const rawText = isNpmStdout ? result.stdout : readJsonSafe(opts.outFile);
+    if (rawText && rawText.length > 0) {
+      opts.parser_inputs.push({ parser: opts.parser, input: rawText });
+      parsed = true;
+    }
+  }
+  if (ok) {
+    opts.tools_run.push({
+      name: opts.command,
+      status: "ok",
+      reason: parsed ? "parsed into findings" : "captured (evidence only)"
+    });
+  } else {
+    const reason = isNpmStdout && exitOk ? "ran but produced no audit report (missing lockfile?)" : "failed to run";
+    opts.tools_run.push({ name: opts.command, status: "failed", reason });
+    opts.missing_tools?.push(opts.command);
+  }
 }
 
 // src/tools/depsUpdatePlan.ts
@@ -34782,6 +35046,9 @@ async function handler10(input, ctx) {
         if (r.findings_count_by_severity !== void 0)
           summary.findings_count_by_severity = r.findings_count_by_severity;
         if (r.top_findings !== void 0) summary.top_findings = r.top_findings;
+        if (r.coverage !== void 0) summary.coverage = r.coverage;
+        if (r.missing_tools !== void 0) summary.missing_tools = r.missing_tools;
+        if (r.warnings !== void 0) summary.warnings = r.warnings;
         return [toolName, summary];
       }
       return [
@@ -34826,6 +35093,25 @@ async function handler10(input, ctx) {
       filteredAggregate.map((f) => ({ ...f, scan_id: auditScanId }))
     );
   }
+  const aggregateMissing = /* @__PURE__ */ new Set();
+  const coverageList = [];
+  const coverage_warnings = [];
+  for (const summary of Object.values(subResults)) {
+    if (!summary.ok) {
+      coverageList.push("none");
+      coverage_warnings.push(
+        `${summary.tool}: did not run (${summary.error?.code ?? "failed"}) \u2014 not covered.`
+      );
+      continue;
+    }
+    coverageList.push(summary.coverage ?? "full");
+    for (const m of summary.missing_tools ?? []) aggregateMissing.add(m);
+    if (summary.coverage && summary.coverage !== "full") {
+      const loud = (summary.warnings ?? []).find((w) => w.startsWith("\u26A0\uFE0F"));
+      coverage_warnings.push(loud ?? `${summary.tool}: coverage=${summary.coverage}.`);
+    }
+  }
+  const overallCoverage = worstCoverage(coverageList);
   ctx.storage.scans.finalize({
     scan_id: auditScanId,
     status: "completed",
@@ -34834,7 +35120,7 @@ async function handler10(input, ctx) {
       status: subResults[name]?.ok ? "ok" : "failed",
       ...subResults[name]?.error ? { reason: subResults[name].error.code } : {}
     })),
-    missing_tools: []
+    missing_tools: [...aggregateMissing]
   });
   return {
     ok: true,
@@ -34842,9 +35128,15 @@ async function handler10(input, ctx) {
     project_path: projectPath,
     sub_scans: subResults,
     aggregate_counts,
+    coverage: overallCoverage,
+    ...coverage_warnings.length > 0 ? { coverage_warnings } : {},
     top_findings,
     ...deltas ? { deltas } : {}
   };
+}
+function worstCoverage(list) {
+  const rank = { none: 0, partial: 1, full: 2 };
+  return list.reduce((worst, c3) => rank[c3] < rank[worst] ? c3 : worst, "full");
 }
 function buildSubToolsForStack(ctx) {
   const snap = ctx.storage.stack.getLatest()?.snapshot;

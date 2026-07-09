@@ -27,8 +27,22 @@ b "=== SAST (Semgrep) ==="
 if command -v semgrep >/dev/null; then
   semgrep --config=auto --json --output="$OUT/sast.json" --quiet . || y "Semgrep retornou findings"
   g "✓ Semgrep: $OUT/sast.json"
+elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  # Fallback: Semgrep não está no PATH mas há um daemon Docker — corre a imagem
+  # oficial. --mount (em vez de -v) evita a ambiguidade da drive no Windows e
+  # tolera espaços no caminho. Output vai para dentro do mount → fica no host.
+  SEMGREP_IMAGE="${GUARDIAN_SEMGREP_IMAGE:-semgrep/semgrep}"
+  y "Semgrep não instalado — a usar Docker ($SEMGREP_IMAGE)"
+  docker run --rm --mount "type=bind,source=$(pwd),target=/src" -w /src "$SEMGREP_IMAGE" \
+    semgrep --config=auto --json --output="/src/$OUT/sast.json" --quiet /src \
+    || y "Semgrep (docker) retornou findings"
+  if [ -s "$OUT/sast.json" ]; then
+    g "✓ Semgrep (docker): $OUT/sast.json"
+  else
+    y "⚠️ Semgrep (docker) falhou — SAST NÃO correu (resultado não fiável)"
+  fi
 else
-  y "Semgrep não instalado — skip"
+  y "⚠️ Semgrep não instalado e Docker indisponível — SAST SALTADO. '0 findings' NÃO é um resultado limpo."
 fi
 
 b "=== Secrets (gitleaks) ==="

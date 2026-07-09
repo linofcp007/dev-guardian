@@ -68,6 +68,14 @@ export type ScanType = (typeof SCAN_TYPES)[number];
 export const TOOL_RUN_STATUSES = ['ok', 'skipped', 'failed'] as const;
 export type ToolRunStatus = (typeof TOOL_RUN_STATUSES)[number];
 
+/**
+ * How complete a scan's coverage was. Derived (not persisted as a column)
+ * from `tools_run` + `missing_tools`; see `tools/scanCoverage.ts`. Surfaced on
+ * `ScanResult` so a "0 findings" result that scanned nothing never reads as
+ * "all clear".
+ */
+export type ScanCoverage = 'full' | 'partial' | 'none';
+
 export interface ToolRun {
   name: string;
   version?: string;
@@ -114,6 +122,12 @@ export interface ScanResult extends ScanRecord {
   findings_count_by_severity: FindingsCountBySeverity;
   top_findings: Finding[];
   warnings: string[];
+  /**
+   * Trust signal for the severity counts above. 'none' means no scanner
+   * actually ran — the counts are meaningless, not clean. Derived from
+   * tools_run/missing_tools; see `tools/scanCoverage.ts`.
+   */
+  coverage?: ScanCoverage;
 }
 
 export interface Cve {

@@ -24,6 +24,7 @@ import {
   type DomainError,
   type Finding,
   type FindingsCountBySeverity,
+  type ScanCoverage,
   type Severity,
   type ToolResult,
 } from '../types.js';
@@ -40,6 +41,9 @@ interface SubScanSummary {
   error?: { code: string; message: string };
   findings_count_by_severity?: FindingsCountBySeverity;
   top_findings?: Finding[];
+  coverage?: ScanCoverage;
+  missing_tools?: string[];
+  warnings?: string[];
 }
 
 const tool: ToolModule = {
@@ -125,12 +129,18 @@ async function handler(
           scan_id?: string;
           findings_count_by_severity?: FindingsCountBySeverity;
           top_findings?: Finding[];
+          coverage?: ScanCoverage;
+          missing_tools?: string[];
+          warnings?: string[];
         };
         const summary: SubScanSummary = { tool: toolName, ok: true };
         if (r.scan_id !== undefined) summary.scan_id = r.scan_id;
         if (r.findings_count_by_severity !== undefined)
           summary.findings_count_by_severity = r.findings_count_by_severity;
         if (r.top_findings !== undefined) summary.top_findings = r.top_findings;
+        if (r.coverage !== undefined) summary.coverage = r.coverage;
+        if (r.missing_tools !== undefined) summary.missing_tools = r.missing_tools;
+        if (r.warnings !== undefined) summary.warnings = r.warnings;
         return [toolName, summary] as const;
       }
       return [
@@ -186,6 +196,31 @@ async function handler(
       filteredAggregate.map((f) => ({ ...f, scan_id: auditScanId })),
     );
   }
+  // Coverage roll-up: the aggregate "0 critical" is only trustworthy when
+  // every sub-scan actually ran its scanners. Take the worst coverage across
+  // the children and surface each gap (including the loud "0 findings is not
+  // clean" line from a sub-scan that scanned nothing) so the executive summary
+  // can never be mistaken for a clean bill of health.
+  const aggregateMissing = new Set<string>();
+  const coverageList: ScanCoverage[] = [];
+  const coverage_warnings: string[] = [];
+  for (const summary of Object.values(subResults)) {
+    if (!summary.ok) {
+      coverageList.push('none');
+      coverage_warnings.push(
+        `${summary.tool}: did not run (${summary.error?.code ?? 'failed'}) — not covered.`,
+      );
+      continue;
+    }
+    coverageList.push(summary.coverage ?? 'full');
+    for (const m of summary.missing_tools ?? []) aggregateMissing.add(m);
+    if (summary.coverage && summary.coverage !== 'full') {
+      const loud = (summary.warnings ?? []).find((w) => w.startsWith('⚠️'));
+      coverage_warnings.push(loud ?? `${summary.tool}: coverage=${summary.coverage}.`);
+    }
+  }
+  const overallCoverage = worstCoverage(coverageList);
+
   ctx.storage.scans.finalize({
     scan_id: auditScanId,
     status: 'completed',
@@ -194,7 +229,7 @@ async function handler(
       status: subResults[name]?.ok ? 'ok' : 'failed',
       ...(subResults[name]?.error ? { reason: subResults[name]!.error!.code } : {}),
     })),
-    missing_tools: [],
+    missing_tools: [...aggregateMissing],
   });
 
   return {
@@ -203,9 +238,18 @@ async function handler(
     project_path: projectPath,
     sub_scans: subResults,
     aggregate_counts,
+    coverage: overallCoverage,
+    ...(coverage_warnings.length > 0 ? { coverage_warnings } : {}),
     top_findings,
     ...(deltas ? { deltas } : {}),
   };
+}
+
+/** none < partial < full — the executive roll-up is only as trustworthy as
+ * its least-covered sub-scan. */
+function worstCoverage(list: ScanCoverage[]): ScanCoverage {
+  const rank: Record<ScanCoverage, number> = { none: 0, partial: 1, full: 2 };
+  return list.reduce<ScanCoverage>((worst, c) => (rank[c] < rank[worst] ? c : worst), 'full');
 }
 
 function buildSubToolsForStack(ctx: PluginContext): readonly string[] {

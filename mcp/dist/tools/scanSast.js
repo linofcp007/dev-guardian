@@ -12,6 +12,7 @@ import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { securityCodeScanParser } from '../runners/scannerParsers/securityCodeScan.js';
 import { runProcess } from '../runners/processRunner.js';
+import { buildSemgrepDockerArgs, DEFAULT_SEMGREP_IMAGE, } from '../runners/dockerScanner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.js';
@@ -41,8 +42,8 @@ registerToolModule(makeScanTool({
         const semgrepBin = await scannerAvailable('semgrep');
         // C# / .NET signal: when csproj exists, also pin p/csharp rule pack.
         const hasCsproj = anyCsprojInProject(ctx.projectPath);
+        const outFile = join(reportDir, 'sast.json');
         if (semgrepBin) {
-            const outFile = join(reportDir, 'sast.json');
             const args = ['--config=auto'];
             if (hasCsproj)
                 args.push('--config=p/csharp');
@@ -72,8 +73,59 @@ registerToolModule(makeScanTool({
             }
         }
         else {
-            tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'not_installed' });
-            missing_tools.push('semgrep');
+            // Semgrep not on PATH — fall back to the official Docker image when a
+            // daemon is reachable. This is what makes a SAST scan actually run on
+            // hosts where the user only has Semgrep via Docker. If the Docker
+            // attempt fails (no image, offline, daemon down), we record it as
+            // failed + missing so coverage is honestly 'none' rather than a silent
+            // "0 findings".
+            const dockerBin = await scannerAvailable('docker');
+            if (dockerBin) {
+                const image = process.env['GUARDIAN_SEMGREP_IMAGE'] || DEFAULT_SEMGREP_IMAGE;
+                const args = buildSemgrepDockerArgs({
+                    projectPath: ctx.projectPath,
+                    outFileHost: outFile,
+                    hasCsproj,
+                    autoFix,
+                    image,
+                });
+                const result = await runProcess({
+                    command: 'docker',
+                    args,
+                    cwd: ctx.projectPath,
+                    env: ctx.scriptEnv,
+                    signal: ctx.signal,
+                    onLog: ctx.onLog,
+                });
+                const raw = readJsonSafe(outFile);
+                if (raw)
+                    parser_inputs.push({ parser: semgrepParser, input: raw });
+                // exit 0/1 AND a report file means Semgrep actually ran in the
+                // container. Anything else (image pull failed, daemon down) is a
+                // real coverage gap, not a clean scan.
+                const ranInDocker = (result.outcome === 'completed' || result.exitCode === 1) && raw !== null;
+                if (ranInDocker) {
+                    tools_run.push({
+                        name: 'semgrep',
+                        status: 'ok',
+                        reason: `ran via docker (${image})`,
+                    });
+                }
+                else {
+                    const reason = result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ??
+                        'docker fallback failed';
+                    tools_run.push({ name: 'semgrep', status: 'failed', reason: `docker: ${reason}` });
+                    missing_tools.push('semgrep');
+                }
+            }
+            else {
+                tools_run.push({
+                    name: 'semgrep',
+                    status: 'skipped',
+                    reason: 'not_installed (no docker fallback available)',
+                });
+                missing_tools.push('semgrep');
+            }
         }
         // --- Bandit ------------------------------------------------------
         // Only attempt Bandit when the project obviously has Python sources.
