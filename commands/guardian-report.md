@@ -9,7 +9,7 @@ The skill should produce a structured markdown document (the user can then conve
 1. **Executive summary** — 3 sentences. Where is the project, what's the biggest risk, what's the recommended next move.
 2. **Security posture** — counts of 🔴 / 🟡 / 🟢 findings + trend vs. last reporting period.
 3. **Compliance** — GDPR / RGPD readiness, license posture, SBOM availability.
-4. **Quality** — high-level tech debt score, hotspots **described in business terms** (not file paths).
+4. **Quality** — high-level tech debt score, hotspots **described in business terms** (not file paths). Include an **Understanding gate** line from `.guardian/last-grill.md` (the latest `guardian-grill` verdict): a green quality gate should mean the code metrics passed *and* a human understood the change, not metrics alone.
 5. **Dependencies** — outdated / vulnerable count, supply-chain risks.
 6. **Recommended next 5 actions** — in plain language, ordered by impact.
 

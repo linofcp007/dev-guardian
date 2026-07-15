@@ -8,7 +8,7 @@
 
 All-in-one **100% open-source** plugin for Claude Code / Cowork. Handles security, bug detection and fixing, code quality, dependency management, observability, performance and compliance for any dev project. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), trilingual triggers (EN + PT + ES) — responds in the user's language.
 
-Under the hood it ships a Claude Code plugin (11 skills + 44 slash commands) **and** an MCP server with **50 tools and 16 resources**, with persistent SQLite state for baselines, deltas and suppressions. It also vets **third-party AI skills / MCP servers / agents before you install them** — the supply-chain check for the agent ecosystem.
+Under the hood it ships a Claude Code plugin (13 skills + 48 slash commands) **and** an MCP server with **50 tools and 16 resources**, with persistent SQLite state for baselines, deltas and suppressions. It also vets **third-party AI skills / MCP servers / agents before you install them** — the supply-chain check for the agent ecosystem.
 
 ### Skills (Claude Code front-end)
 
@@ -25,6 +25,8 @@ Under the hood it ships a Claude Code plugin (11 skills + 44 slash commands) **a
 | `guardian-performance`   | `/guardian-perf`       | Performance budgets, k6, Lighthouse                       |
 | `guardian-compliance`    | `/guardian-compliance` | GDPR, licenses, SBOM, privacy policy                      |
 | `guardian-scanskill`     | `/guardian-scanskill`  | Vet a 3rd-party skill / MCP server / agent before install |
+| `guardian-grill`         | `/guardian-grill`      | Understanding gate — grills you on the diff before merge  |
+| `guardian-improve`       | `/guardian-improve`    | Turns measured tech debt into improvement specs           |
 | (combines 3 of them)     | `/guardian-audit`      | Executive report: security + quality + deps               |
 
 You can also trigger everything via **natural language** (EN, PT or ES). Skills fire on descriptions — *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*, *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*.
@@ -165,8 +167,8 @@ dev-guardian/
 ├── .claude-plugin/
 │   ├── plugin.json              # declares the MCP server + plugin metadata
 │   └── marketplace.json
-├── commands/                    # 44 slash commands
-├── skills/                      # 11 skills (one per router target)
+├── commands/                    # 48 slash commands
+├── skills/                      # 13 skills (one per router target)
 ├── hooks/                       # hooks.json + guardian-hook.mjs (auto-active guardrails)
 ├── bin/                         # dev-guardian.mjs CLI (mcp-config, check)
 ├── mcp/                         # MCP server (TypeScript + SQLite)
@@ -198,7 +200,7 @@ Carlos Pereira · prodigitalkey.com
 
 Plugin all-in-one **100% open-source** para Claude Code / Cowork. Faz segurança, deteção e correção de bugs, qualidade de código, gestão de dependências, observability, performance e compliance em qualquer projeto de desenvolvimento. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), triggers trilingues (EN + PT + ES) — responde no idioma do utilizador.
 
-Por baixo do capot fornece um plugin Claude Code (11 skills + 44 slash commands) **e** um servidor MCP com **50 tools e 16 resources**, com estado persistente em SQLite para baselines, deltas e supressões. Também faz **vet de skills / MCP servers / agentes de terceiros antes de os instalares** — a verificação de supply-chain do ecossistema de agentes.
+Por baixo do capot fornece um plugin Claude Code (13 skills + 48 slash commands) **e** um servidor MCP com **50 tools e 16 resources**, com estado persistente em SQLite para baselines, deltas e supressões. Também faz **vet de skills / MCP servers / agentes de terceiros antes de os instalares** — a verificação de supply-chain do ecossistema de agentes.
 
 ### Skills (front-end Claude Code)
 
@@ -215,6 +217,8 @@ Por baixo do capot fornece um plugin Claude Code (11 skills + 44 slash commands)
 | `guardian-performance`   | `/guardian-perf`       | Performance budgets, k6, Lighthouse                      |
 | `guardian-compliance`    | `/guardian-compliance` | RGPD, licenças, SBOM, privacy policy                     |
 | `guardian-scanskill`     | `/guardian-scanskill`  | Vet de skill / MCP / agente antes de instalar            |
+| `guardian-grill`         | `/guardian-grill`      | Sabatina de compreensão ao diff antes do merge           |
+| `guardian-improve`       | `/guardian-improve`    | Transforma dívida técnica medida em specs de melhoria    |
 | (combina os 3)           | `/guardian-audit`      | Relatório executivo: security + quality + deps           |
 
 Também podes invocar tudo em **linguagem natural** (PT, EN ou ES). As skills disparam por descrição — *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*, *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*.
@@ -355,8 +359,8 @@ dev-guardian/
 ├── .claude-plugin/
 │   ├── plugin.json              # declara o servidor MCP + metadata
 │   └── marketplace.json
-├── commands/                    # 44 slash commands
-├── skills/                      # 11 skills (uma por destino do router)
+├── commands/                    # 48 slash commands
+├── skills/                      # 13 skills (uma por destino do router)
 ├── hooks/                       # hooks.json + guardian-hook.mjs (guardrails auto-ativos)
 ├── bin/                         # CLI dev-guardian.mjs (mcp-config, check)
 ├── mcp/                         # Servidor MCP (TypeScript + SQLite)
@@ -388,7 +392,7 @@ Carlos Pereira · prodigitalkey.com
 
 Plugin todo-en-uno **100% open-source** para Claude Code / Cowork. Cubre seguridad, detección y corrección de bugs, calidad de código, gestión de dependencias, observabilidad, rendimiento y cumplimiento para cualquier proyecto de desarrollo. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), triggers trilingües (EN + PT + ES) — responde en el idioma del usuario.
 
-Bajo el capó incluye un plugin Claude Code (11 skills + 44 slash commands) **y** un servidor MCP con **50 herramientas y 16 recursos**, con estado persistente en SQLite para baselines, deltas y supresiones. También hace **vet de skills / MCP servers / agentes de terceros antes de instalarlos** — la verificación de supply-chain del ecosistema de agentes.
+Bajo el capó incluye un plugin Claude Code (13 skills + 48 slash commands) **y** un servidor MCP con **50 herramientas y 16 recursos**, con estado persistente en SQLite para baselines, deltas y supresiones. También hace **vet de skills / MCP servers / agentes de terceros antes de instalarlos** — la verificación de supply-chain del ecosistema de agentes.
 
 ### Skills (front-end de Claude Code)
 
@@ -405,6 +409,8 @@ Bajo el capó incluye un plugin Claude Code (11 skills + 44 slash commands) **y*
 | `guardian-performance`   | `/guardian-perf`       | Performance budgets, k6, Lighthouse                      |
 | `guardian-compliance`    | `/guardian-compliance` | RGPD/LOPD, licencias, SBOM, política de privacidad       |
 | `guardian-scanskill`     | `/guardian-scanskill`  | Vet de skill / servidor MCP / agente antes de instalar   |
+| `guardian-grill`         | `/guardian-grill`      | Interrogatorio de comprensión del diff antes del merge   |
+| `guardian-improve`       | `/guardian-improve`    | Convierte deuda técnica medida en specs de mejora        |
 | (combina 3 de ellas)     | `/guardian-audit`      | Informe ejecutivo: seguridad + calidad + deps            |
 
 También puedes invocarlo todo en **lenguaje natural** (ES, EN o PT). Las skills se disparan por descripción — *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*, *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*.
@@ -545,8 +551,8 @@ dev-guardian/
 ├── .claude-plugin/
 │   ├── plugin.json              # declara el servidor MCP + metadatos
 │   └── marketplace.json
-├── commands/                    # 44 slash commands
-├── skills/                      # 11 skills (una por destino del router)
+├── commands/                    # 48 slash commands
+├── skills/                      # 13 skills (una por destino del router)
 ├── hooks/                       # hooks.json + guardian-hook.mjs (guardrails auto-activos)
 ├── bin/                         # CLI dev-guardian.mjs (mcp-config, check)
 ├── mcp/                         # Servidor MCP (TypeScript + SQLite)

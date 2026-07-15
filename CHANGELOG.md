@@ -6,6 +6,41 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
+## [1.2.0] — 2026-07-15
+
+### Added
+
+- **`guardian-grill` — the understanding gate.** A new front-end skill (with
+  `/guardian-grill` and the `/gg` alias) that grills *you* on the
+  domain-significant decisions a diff/PR introduced before you merge — for the
+  long autonomous loops where you no longer read every line. Complements the code
+  gates (lint / Semgrep / tests / review): those check the code, this checks that
+  a human still understands the branches and rules the AI wrote. Records its
+  verdict to `.guardian/last-grill.md` so the status and report gates can show an
+  Understanding-gate row. Adapts the `dev-grill` engine when installed, runs the
+  loop inline otherwise.
+- **`guardian-improve` — from measured debt to improvement specs.** A new skill
+  (with `/guardian-improve` and the `/gi` alias) that converts the ROI-ranked
+  hotspots, quality-rule violations, oversized files, duplication and coverage
+  gaps from the quality gate into metric-anchored **improvement spec seeds**
+  (problem → affected files → current metric → target metric → draft EARS
+  criteria) ready to hand to `dev-spec-driven`. Closes the loop:
+  measure → spec → fix → re-measure. Targets are derived per project from
+  `.guardian/budgets.yml`, the stack, or the baseline — never invented.
+
+### Changed
+
+- **`guardian-status`** now shows an **Understanding gate** row from
+  `.guardian/last-grill.md` (🟢 / 🟡 / 🔴, or ⚪ when not run for the current diff).
+- **`guardian-report`** includes the latest `guardian-grill` verdict in its
+  Quality section — a green gate means the metrics passed *and* a human understood
+  the change.
+- **`guardian-budget`** now also audits code-quality budgets (max file / function
+  lines, cyclomatic complexity, duplication %, coverage floor) from
+  `.guardian/budgets.yml` — the single source of truth shared by the quality gate
+  and `guardian-improve`, proposed per stack.
+- README and CLAUDE.md counts updated to **13 skills + 48 slash commands**.
+
 ## [1.1.4] — 2026-07-09
 
 ### Added

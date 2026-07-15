@@ -11,7 +11,8 @@ The skill should display:
 3. **Baseline status** — is there a baseline set? When? How far has the project drifted from it?
 4. **Suppressions** — list active items with their reason and expiry. Highlight any expiring within 7 days.
 5. **Active CVEs** — top 5 by severity, with the package and the fixed-in version when available.
-6. **Last commands run** — recent invocations of Guardian commands to give the user a sense of cadence.
+6. **Understanding gate** — read `.guardian/last-grill.md` (written by `guardian-grill`) and show the latest verdict 🟢 / 🟡 / 🔴 with its scope and gap count. If missing or older than the current diff, show ⚪ "not run for current changes" — a full gate needs both code metrics *and* understanding.
+7. **Last commands run** — recent invocations of Guardian commands to give the user a sense of cadence.
 
 If no scans have been run yet, suggest `guardian-init` or `guardian-scan`. Output should fit in one terminal screen — terse, table-oriented.
 

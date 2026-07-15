@@ -8,7 +8,7 @@ For *using* the tools in another project, see [`host-rules/AGENTS.md`](host-rule
 An all-in-one, 100% open-source Claude Code / Cowork plugin for security, bugfix,
 quality, deps, observability, performance and compliance. Two halves:
 
-- **Plugin front-end** — `skills/` (11 skills) + `commands/` (slash commands),
+- **Plugin front-end** — `skills/` (13 skills) + `commands/` (slash commands),
   declared in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json).
 - **MCP server** — `mcp/` (TypeScript + SQLite), the real engine: 51 tools,
   16 resources. Built to `mcp/dist/`.
