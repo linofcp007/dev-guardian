@@ -128,6 +128,13 @@ interface RouteRecord {
   auth_hint: 'none' | 'required' | 'unknown';
   params: string[];          // path parameters, normalised: ':id' and '{id}' both → 'id'
   confidence: 'high' | 'medium' | 'low';
+  /**
+   * Framework-level route namespace, when the framework has one. Currently
+   * only WordPress: `register_rest_route('myplugin/v1', '/items')` yields
+   * namespace 'myplugin/v1'. The WP resolver combines it with path_raw to
+   * produce the served /wp-json path.
+   */
+  namespace?: string;
 }
 ```
 
@@ -153,7 +160,6 @@ falsehood. `'unknown'` is the honest answer and downstream tools must treat it a
 interface CoverageEntry {
   language: string;
   detected: boolean;         // the stack snapshot reported this language
-  rules_applied: number;
   routes_found: number;
   status: 'ok' | 'no_matches' | 'no_rules';
 }
@@ -240,6 +246,12 @@ rules:
   roughly 15–20 rules across 8 languages instead of 100+.
 - Decorator- and attribute-based frameworks (`@app.get`, `@GetMapping`, `[HttpGet]`,
   `Route::get`) use the same shape with the pattern written against the decorator.
+- **Namespaced frameworks capture two metavariables.** WordPress's
+  `register_rest_route($NS, $ROUTE, ...)` yields `$NS` and `$ROUTE` rather than `$PATH`.
+  Semgrep cannot concatenate metavariables into a third, so the extractor reads both and
+  fills `RouteRecord.namespace` alongside `path_raw`. Any future namespaced framework
+  follows the same shape — the composition lives in `extract.ts`, where it is testable,
+  never in a magic separator inside a path string.
 
 Two properties this contract guarantees:
 

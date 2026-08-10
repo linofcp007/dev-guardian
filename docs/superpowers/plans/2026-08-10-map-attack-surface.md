@@ -19,7 +19,8 @@ Every task's requirements implicitly include this section.
 - **`noUncheckedIndexedAccess: true`** — every array index and every `Record` lookup yields `T | undefined`. Destructuring `const [a, b] = arr` gives `a: T | undefined`. Guard before use; never use `!`.
 - **`noUnusedLocals` and `noUnusedParameters` are on** — prefix intentionally-unused parameters with `_`.
 - **`exactOptionalPropertyTypes: false`** — building objects with `{ ...(x ? { k: x } : {}) }` is allowed, and so is assigning `undefined` to an optional property.
-- **Test coverage thresholds are enforced** and the suite fails if they regress: statements 70, branches 62, functions 72, lines 70 (`mcp/vitest.config.ts`). Every new `src/` module in this plan ships with its tests in the same task — do not batch tests to the end.
+- **`npm test` is `vitest run` — it does NOT check coverage.** Coverage thresholds (statements 70, branches 62, functions 72, lines 70, in `mcp/vitest.config.ts`) are enforced only by `npm run test:coverage`, which Task 8 runs once at the end. Every new `src/` module in this plan still ships with its tests in the same task — do not batch tests to the end, or that final run will fail and you will not know which task caused it.
+- **`npm run build` is `tsc` + `copy-assets.mjs` + `bundle.mjs`.** All three must succeed; a `tsc` error means the commit is not ready.
 - **Input schema primitives come from `mcp/src/schemas.ts`** — never inline zod literals in a tool's `inputSchema`.
 - **Commit `mcp/dist/` in the same commit as any TypeScript change.** The repo is the distribution; Claude Code runs `mcp/dist/server.js` with no install-time build. Run `npm run build` before `git add`.
 - **Do not push.** Commits are local unless the user asks otherwise.
@@ -208,6 +209,14 @@ export interface RouteRecord {
   auth_hint: 'none' | 'required' | 'unknown';
   params: string[];
   confidence: 'high' | 'medium' | 'low';
+  /**
+   * Framework-level route namespace, when the framework has one. Currently
+   * only WordPress: `register_rest_route('myplugin/v1', '/items')` yields
+   * namespace 'myplugin/v1'. Semgrep cannot concatenate two metavariables
+   * into a third, so the extractor keeps them as separate fields and the WP
+   * resolver combines them.
+   */
+  namespace?: string;
 }
 
 /** A `app.use('/prefix', router)`-style mount, consumed by the Node resolver. */
@@ -221,8 +230,11 @@ export interface MountRecord {
 export interface CoverageEntry {
   language: string;
   detected: boolean;
-  rules_applied: number;
   routes_found: number;
+  /**
+   * 'no_rules' means the language was detected but the rule pack covers no
+   * framework for it — the case most tools hide by reporting zero.
+   */
   status: 'ok' | 'no_matches' | 'no_rules';
 }
 
@@ -583,6 +595,34 @@ describe('extractSurface', () => {
     });
   });
 
+  it('reads $NS + $ROUTE for namespaced frameworks, keeping them separate', () => {
+    const { routes } = extractSurface({
+      results: [
+        {
+          check_id: 'guardian-route-wp-rest',
+          path: 'wp-content/plugins/x/api.php',
+          start: { line: 20 },
+          extra: {
+            metadata: { guardian_kind: 'route', framework: 'wp-rest', confidence: 'high' },
+            metavars: {
+              $NS: { abstract_content: "'myplugin/v1'" },
+              $ROUTE: { abstract_content: "'/items'" },
+            },
+          },
+        },
+      ],
+    });
+    // Semgrep cannot build a third metavariable, so the extractor keeps both
+    // and the WP resolver composes them. Quotes from abstract_content go.
+    expect(routes[0]?.namespace).toBe('myplugin/v1');
+    expect(routes[0]?.path_raw).toBe('/items');
+  });
+
+  it('leaves namespace undefined for frameworks that have none', () => {
+    const { routes } = extractSurface(fixture('express.json'));
+    expect(routes[0]?.namespace).toBeUndefined();
+  });
+
   it('reads auth_hint from rule metadata only', () => {
     const { routes } = extractSurface({
       results: [
@@ -726,10 +766,14 @@ function toRoute(
   file: string,
   line: number,
 ): RouteRecord | null {
-  const path = metavar(metavars, '$PATH');
+  // Namespaced frameworks (WordPress) capture $NS + $ROUTE instead of $PATH,
+  // because Semgrep cannot concatenate metavariables into a third one. Keep
+  // them as separate fields; the WP resolver composes the served path.
+  const namespace = stripQuotes(metavar(metavars, '$NS'));
+  const path = stripQuotes(metavar(metavars, '$PATH') ?? metavar(metavars, '$ROUTE'));
   if (path === undefined) return null;
 
-  return {
+  const route: RouteRecord = {
     method: normalizeMethod(metavar(metavars, '$METHOD') ?? str(metadata, 'method')),
     path_raw: path,
     path_resolved: path,
@@ -742,10 +786,21 @@ function toRoute(
     params: extractParams(path),
     confidence: normalizeConfidence(str(metadata, 'confidence')),
   };
+  if (namespace !== undefined) route.namespace = namespace;
+  return route;
+}
+
+/**
+ * Semgrep's `abstract_content` keeps the source quoting, so a captured path
+ * arrives as `'/users'` rather than `/users`.
+ */
+function stripQuotes(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  return value.replace(/^['"`]|['"`]$/g, '');
 }
 
 function toMount(metavars: unknown, file: string, line: number): MountRecord | null {
-  const prefix = metavar(metavars, '$PREFIX');
+  const prefix = stripQuotes(metavar(metavars, '$PREFIX'));
   const routerVar = metavar(metavars, '$ROUTER');
   if (prefix === undefined || routerVar === undefined) return null;
   return { prefix, router_var: routerVar, file, line };
@@ -800,7 +855,7 @@ function metavar(metavars: unknown, name: string): string | undefined {
 - [ ] **Step 5: Run the test to verify it passes**
 
 Run: `npm test -- test/unit/surface/extract.test.ts`
-Expected: PASS, 10 tests.
+Expected: PASS, 12 tests.
 
 - [ ] **Step 6: Build and commit**
 
@@ -1043,7 +1098,7 @@ git commit -m "feat(surface): resolve Express-style router mount prefixes"
 - Consumes: `RouteRecord` from `types.js`; `joinPath` from `surface/resolvers/node.js` (Task 3).
 - Produces: `resolveWordpressRoutes(routes: RouteRecord[]): RouteRecord[]`.
 
-`register_rest_route('myplugin/v1', '/items', [...])` serves at `/wp-json/myplugin/v1/items`. The rule pack captures the namespace into `$NS` and the route into `$ROUTE`; Task 2's extractor puts the namespace in `path_raw` only for the route metavar, so this resolver needs both. To keep `RouteRecord` flat, the rule pack emits `path_raw` already joined as `"<ns>|<route>"` and this resolver splits it — documented in the rule pack and asserted here.
+`register_rest_route('myplugin/v1', '/items', [...])` serves at `/wp-json/myplugin/v1/items`. Task 2's extractor fills `RouteRecord.namespace` from `$NS` and `path_raw` from `$ROUTE`; this resolver combines them. When `namespace` is absent the route is flagged `path_partial` — we know where it is *not* served, which is all we honestly know.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1067,38 +1122,50 @@ function wpRoute(pathRaw: string, overrides: Partial<RouteRecord> = {}): RouteRe
     auth_hint: 'unknown',
     params: [],
     confidence: 'high',
+    namespace: 'myplugin/v1',
     ...overrides,
   };
 }
 
 describe('resolveWordpressRoutes', () => {
   it('joins namespace and route under /wp-json', () => {
-    const [r] = resolveWordpressRoutes([wpRoute('myplugin/v1|/items')]);
+    const [r] = resolveWordpressRoutes([wpRoute('/items')]);
     expect(r?.path_resolved).toBe('/wp-json/myplugin/v1/items');
     expect(r?.path_partial).toBe(false);
+    expect(r?.path_raw).toBe('/items');
   });
 
   it('tolerates slash variants on both sides', () => {
-    expect(resolveWordpressRoutes([wpRoute('/myplugin/v1/|items')])[0]?.path_resolved)
-      .toBe('/wp-json/myplugin/v1/items');
-    expect(resolveWordpressRoutes([wpRoute('myplugin/v1|items')])[0]?.path_resolved)
-      .toBe('/wp-json/myplugin/v1/items');
+    expect(
+      resolveWordpressRoutes([wpRoute('items', { namespace: '/myplugin/v1/' })])[0]?.path_resolved,
+    ).toBe('/wp-json/myplugin/v1/items');
+    expect(
+      resolveWordpressRoutes([wpRoute('/items', { namespace: 'myplugin/v1' })])[0]?.path_resolved,
+    ).toBe('/wp-json/myplugin/v1/items');
   });
 
-  it('re-derives params from the route half only', () => {
-    const [r] = resolveWordpressRoutes([wpRoute('ns/v1|/items/(?P<id>\\d+)')]);
-    expect(r?.path_resolved).toContain('/wp-json/ns/v1/items/');
+  it('preserves a WP regex route segment verbatim', () => {
+    const [r] = resolveWordpressRoutes([
+      wpRoute('/items/(?P<id>\\d+)', { namespace: 'ns/v1' }),
+    ]);
+    expect(r?.path_resolved).toBe('/wp-json/ns/v1/items/(?P<id>\\d+)');
   });
 
-  it('marks the route partial when the namespace half is missing', () => {
-    const [r] = resolveWordpressRoutes([wpRoute('/items')]);
+  it('marks the route partial when the namespace is missing', () => {
+    const [r] = resolveWordpressRoutes([wpRoute('/items', { namespace: undefined })]);
     expect(r?.path_partial).toBe(true);
     expect(r?.path_resolved).toBe('/items');
+  });
+
+  it('marks the route partial when the namespace is an empty string', () => {
+    const [r] = resolveWordpressRoutes([wpRoute('/items', { namespace: '  ' })]);
+    expect(r?.path_partial).toBe(true);
   });
 
   it('leaves non-wp-rest routes untouched', () => {
     const other = wpRoute('/x', { framework: 'laravel' });
     expect(resolveWordpressRoutes([other])[0]?.path_resolved).toBe('/x');
+    expect(resolveWordpressRoutes([other])[0]?.path_partial).toBe(false);
   });
 });
 ```
@@ -1118,9 +1185,12 @@ Create `mcp/src/surface/resolvers/wordpress.ts`:
  *
  * `register_rest_route('myplugin/v1', '/items', ...)` is reachable at
  * `/wp-json/myplugin/v1/items`. Semgrep captures the namespace and the route
- * as two metavariables; the rule pack packs them into `path_raw` as
- * `"<namespace>|<route>"` so `RouteRecord` can stay flat. This module is the
- * only place that knows about that encoding.
+ * as two separate metavariables and cannot concatenate them, so the
+ * extractor stores the namespace on `RouteRecord.namespace` and the route on
+ * `path_raw`. This module is the only place that knows how they combine.
+ *
+ * Without a namespace we cannot know where the route is served, so it is
+ * flagged `path_partial` rather than guessed at.
  */
 
 import type { RouteRecord } from '../../types.js';
@@ -1133,19 +1203,12 @@ export function resolveWordpressRoutes(routes: RouteRecord[]): RouteRecord[] {
   return routes.map((route) => {
     if (route.framework !== WP_FRAMEWORK) return route;
 
-    const separator = route.path_raw.indexOf('|');
-    if (separator === -1) {
-      // No namespace captured — we cannot know where this is served.
-      return { ...route, path_partial: true };
-    }
-
-    const namespace = route.path_raw.slice(0, separator).replace(/^\/+|\/+$/g, '');
-    const routePart = route.path_raw.slice(separator + 1);
+    const namespace = (route.namespace ?? '').trim().replace(/^\/+|\/+$/g, '');
     if (namespace.length === 0) return { ...route, path_partial: true };
 
     return {
       ...route,
-      path_resolved: joinPath(`${WP_REST_PREFIX}/${namespace}`, routePart),
+      path_resolved: joinPath(`${WP_REST_PREFIX}/${namespace}`, route.path_raw),
       path_partial: false,
     };
   });
@@ -1155,7 +1218,7 @@ export function resolveWordpressRoutes(routes: RouteRecord[]): RouteRecord[] {
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `npm test -- test/unit/surface/resolvers/wordpress.test.ts`
-Expected: PASS, 5 tests.
+Expected: PASS, 6 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1533,8 +1596,11 @@ describe('configs/semgrep/routes.yml', () => {
 });
 ```
 
-If `yaml` is not already a dependency, add it as a dev dependency first:
-`npm install --save-dev yaml`
+`yaml` is neither declared in `mcp/package.json` nor resolvable transitively — verified before this plan was written. Install it as a **dev** dependency before running the test (it is used only by this test, never at runtime):
+
+```bash
+npm install --save-dev yaml
+```
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -1560,9 +1626,11 @@ Create `configs/semgrep/routes.yml`. Every rule uses `severity: INFO` and carrie
 #   import → captures $SYMBOL and $MODULE
 #   env    → captures $NAME
 #
-# WordPress note: register_rest_route takes the namespace and the route as two
-# arguments. The extractor keeps RouteRecord flat, so the wp rule packs both
-# into $PATH as "<namespace>|<route>"; resolvers/wordpress.ts splits it.
+# Namespaced frameworks: register_rest_route takes the namespace and the route
+# as two arguments. Semgrep cannot concatenate metavariables into a third, so
+# the rule captures $NS and $ROUTE separately; extract.ts puts $NS on
+# RouteRecord.namespace and $ROUTE on path_raw, and resolvers/wordpress.ts
+# combines them into the served /wp-json path.
 
 rules:
   # ---------- JavaScript / TypeScript ----------
@@ -2294,7 +2362,6 @@ function buildCoverage(routes: RouteRecord[], ctx: PluginContext): CoverageEntry
     entries.push({
       language,
       detected: detected.includes(language),
-      rules_applied: hasRules ? 1 : 0,
       routes_found: found,
       status: !hasRules ? 'no_rules' : found > 0 ? 'ok' : 'no_matches',
     });
@@ -2518,10 +2585,13 @@ Run: `npm test -- test/integration/toolSurface.test.ts`
 
 Read the failure output, then update the expected tool and resource lists in that test to include `map_attack_surface`, `guardian-surface-latest` and `guardian-surface-by-id`. This is a deliberate, reviewed change to the public MCP surface — do not blanket-update a snapshot without reading what changed.
 
-- [ ] **Step 6: Run the full suite**
+- [ ] **Step 6: Run the full suite, then the coverage gate**
 
 Run: `npm test`
-Expected: PASS, including coverage thresholds (statements 70, branches 62, functions 72, lines 70).
+Expected: PASS — 402 pre-existing tests plus everything this plan added, 0 failures.
+
+Run: `npm run test:coverage`
+Expected: PASS — no threshold violation (statements 70, branches 62, functions 72, lines 70). This is the only run in the plan that checks coverage. If it fails, the gap is in whichever module this plan added without matching tests.
 
 - [ ] **Step 7: Update the docs**
 
@@ -2552,6 +2622,6 @@ git commit -m "feat(surface): serve attack-surface snapshots as MCP resources"
 - [ ] Prefix resolution works for Express-style mounting and WP REST namespaces.
 - [ ] `surface_snapshots` persists across runs; both resources serve.
 - [ ] A run with Semgrep unavailable persists nothing and explains why.
-- [ ] `npm test` passes with Semgrep absent from the machine, coverage thresholds included.
+- [ ] `npm test` passes with Semgrep absent from the machine; `npm run test:coverage` passes its thresholds.
 - [ ] `mcp/dist/` rebuilt and staged in every commit that touched TypeScript.
 - [ ] README tool/resource counts and CHANGELOG updated.
