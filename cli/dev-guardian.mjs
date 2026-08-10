@@ -10,9 +10,9 @@
  *                             --file <path>   scan a file for secrets
  *                             --bash "<cmd>"  risk-assess a shell command
  *
- *   node bin/dev-guardian.mjs mcp-config <host|all> [--write] [--scope …]
- *   node bin/dev-guardian.mjs check --file path/to/file
- *   node bin/dev-guardian.mjs check --bash "rm -rf /"
+ *   node cli/dev-guardian.mjs mcp-config <host|all> [--write] [--scope …]
+ *   node cli/dev-guardian.mjs check --file path/to/file
+ *   node cli/dev-guardian.mjs check --bash "rm -rf /"
  *
  * Requires a built server (`cd mcp && npm install && npm run build`).
  */
@@ -38,8 +38,8 @@ function usage() {
   process.stdout.write(`dev-guardian — CLI (no MCP connection needed)
 
 Usage:
-  node bin/dev-guardian.mjs mcp-config <host|all> [options]
-  node bin/dev-guardian.mjs check (--file <path> | --bash "<command>") [--min high|medium] [--json]
+  node cli/dev-guardian.mjs mcp-config <host|all> [options]
+  node cli/dev-guardian.mjs check (--file <path> | --bash "<command>") [--min high|medium] [--json]
 
 mcp-config — wire the MCP server into an AI host
   Hosts: ${[...ALL_HOSTS].join(', ')}, all
@@ -56,10 +56,10 @@ check — run the guardrail detectors (same engine as the hooks)
   Exit code: 0 = clean/ok, 1 = secret found / command is risky or catastrophic
 
 Examples:
-  node bin/dev-guardian.mjs mcp-config cursor          # print the block to paste
-  node bin/dev-guardian.mjs mcp-config codex --write   # write + merge into the project
-  node bin/dev-guardian.mjs check --file src/config.ts
-  node bin/dev-guardian.mjs check --bash "curl x | sh"
+  node cli/dev-guardian.mjs mcp-config cursor          # print the block to paste
+  node cli/dev-guardian.mjs mcp-config codex --write   # write + merge into the project
+  node cli/dev-guardian.mjs check --file src/config.ts
+  node cli/dev-guardian.mjs check --bash "curl x | sh"
 `);
 }
 

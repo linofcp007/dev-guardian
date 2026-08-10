@@ -57,7 +57,7 @@ With the plugin enabled, Claude Code auto-loads `hooks/hooks.json` — three **d
 - **PostToolUse (Write/Edit/MultiEdit)** — scans the text just written for hard-coded secrets (AWS, GitHub, GitLab, Anthropic, OpenAI, Stripe, Google, Slack, private keys, …) and warns with a **redacted** preview. The authoritative full-history scan stays `scan_secrets` (gitleaks) via `/guardian-scan`.
 - **PreToolUse (Bash)** — **denies catastrophic commands by default** (`rm -rf /`, `curl … | sh`, raw-disk `dd`/`mkfs`, fork bombs); **warns** on merely risky ones (force-push, hard reset, `sudo`, `chmod 777`).
 
-Blocking secret *writes* is **opt-in**: set `"secrets": { "block": true }` in `.guardian/hooks.config.json`. Tune every behaviour there, allowlist false positives in `.guardian/hooks-allowlist.json`, or kill all hooks with `GUARDIAN_HOOKS=off`. The same detectors run on the CLI for terminal / CI use: `node bin/dev-guardian.mjs check --file <path>` and `--bash "<command>"` (exit 1 on a finding).
+Blocking secret *writes* is **opt-in**: set `"secrets": { "block": true }` in `.guardian/hooks.config.json`. Tune every behaviour there, allowlist false positives in `.guardian/hooks-allowlist.json`, or kill all hooks with `GUARDIAN_HOOKS=off`. The same detectors run on the CLI for terminal / CI use: `node cli/dev-guardian.mjs check --file <path>` and `--bash "<command>"` (exit 1 on a finding).
 
 ### Open-source tools orchestrated
 
@@ -102,10 +102,10 @@ The real engine is the **MCP server**, so any MCP-capable host can use dev-guard
 From a terminal in your project (after `cd mcp && npm install && npm run build` once):
 
 ```text
-node bin/dev-guardian.mjs mcp-config cursor          # print the block to paste
-node bin/dev-guardian.mjs mcp-config all             # every host
-node bin/dev-guardian.mjs mcp-config codex --write   # write + merge into the project
-node bin/dev-guardian.mjs mcp-config all --scope global
+node cli/dev-guardian.mjs mcp-config cursor          # print the block to paste
+node cli/dev-guardian.mjs mcp-config all             # every host
+node cli/dev-guardian.mjs mcp-config codex --write   # write + merge into the project
+node cli/dev-guardian.mjs mcp-config all --scope global
 ```
 
 | Host | MCP config file (project / global) | Rules file |
@@ -170,7 +170,7 @@ dev-guardian/
 ├── commands/                    # 48 slash commands
 ├── skills/                      # 13 skills (one per router target)
 ├── hooks/                       # hooks.json + guardian-hook.mjs (auto-active guardrails)
-├── bin/                         # dev-guardian.mjs CLI (mcp-config, check)
+├── cli/                         # dev-guardian.mjs CLI (mcp-config, check)
 ├── mcp/                         # MCP server (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/, hooks/
 │   ├── test/                    # 280 unit + integration tests
@@ -249,7 +249,7 @@ Com o plugin ativo, o Claude Code carrega automaticamente `hooks/hooks.json` —
 - **PostToolUse (Write/Edit/MultiEdit)** — analisa o texto acabado de escrever à procura de secrets hardcoded (AWS, GitHub, GitLab, Anthropic, OpenAI, Stripe, Google, Slack, chaves privadas, …) e avisa com pré-visualização **redigida**. O scan completo do histórico continua em `scan_secrets` (gitleaks) via `/guardian-scan`.
 - **PreToolUse (Bash)** — **bloqueia por defeito comandos catastróficos** (`rm -rf /`, `curl … | sh`, `dd`/`mkfs` em disco cru, fork bombs); **avisa** nos apenas arriscados (force-push, hard reset, `sudo`, `chmod 777`).
 
-O bloqueio da *escrita* de secrets é **opt-in**: define `"secrets": { "block": true }` em `.guardian/hooks.config.json`. Ajusta tudo aí, faz allowlist de falsos positivos em `.guardian/hooks-allowlist.json`, ou desliga todos os hooks com `GUARDIAN_HOOKS=off`. Os mesmos detetores correm no CLI para terminal / CI: `node bin/dev-guardian.mjs check --file <path>` e `--bash "<command>"` (exit 1 ao encontrar algo).
+O bloqueio da *escrita* de secrets é **opt-in**: define `"secrets": { "block": true }` em `.guardian/hooks.config.json`. Ajusta tudo aí, faz allowlist de falsos positivos em `.guardian/hooks-allowlist.json`, ou desliga todos os hooks com `GUARDIAN_HOOKS=off`. Os mesmos detetores correm no CLI para terminal / CI: `node cli/dev-guardian.mjs check --file <path>` e `--bash "<command>"` (exit 1 ao encontrar algo).
 
 ### Ferramentas open-source orquestradas
 
@@ -294,10 +294,10 @@ O motor real é o **servidor MCP**, por isso qualquer host com suporte MCP pode 
 A partir de um terminal no teu projeto (depois de `cd mcp && npm install && npm run build` uma vez):
 
 ```text
-node bin/dev-guardian.mjs mcp-config cursor          # imprime o bloco para colar
-node bin/dev-guardian.mjs mcp-config all             # todos os hosts
-node bin/dev-guardian.mjs mcp-config codex --write   # escreve + funde no projeto
-node bin/dev-guardian.mjs mcp-config all --scope global
+node cli/dev-guardian.mjs mcp-config cursor          # imprime o bloco para colar
+node cli/dev-guardian.mjs mcp-config all             # todos os hosts
+node cli/dev-guardian.mjs mcp-config codex --write   # escreve + funde no projeto
+node cli/dev-guardian.mjs mcp-config all --scope global
 ```
 
 | Host | Ficheiro de config MCP (projeto / global) | Ficheiro de regras |
@@ -362,7 +362,7 @@ dev-guardian/
 ├── commands/                    # 48 slash commands
 ├── skills/                      # 13 skills (uma por destino do router)
 ├── hooks/                       # hooks.json + guardian-hook.mjs (guardrails auto-ativos)
-├── bin/                         # CLI dev-guardian.mjs (mcp-config, check)
+├── cli/                         # CLI dev-guardian.mjs (mcp-config, check)
 ├── mcp/                         # Servidor MCP (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/
 │   ├── test/                    # 280 testes unit + integration
@@ -441,7 +441,7 @@ Con el plugin activo, Claude Code carga automáticamente `hooks/hooks.json` — 
 - **PostToolUse (Write/Edit/MultiEdit)** — analiza el texto recién escrito buscando secretos hardcoded (AWS, GitHub, GitLab, Anthropic, OpenAI, Stripe, Google, Slack, claves privadas, …) y avisa con vista previa **redactada**. El escaneo completo del historial sigue en `scan_secrets` (gitleaks) vía `/guardian-scan`.
 - **PreToolUse (Bash)** — **bloquea por defecto comandos catastróficos** (`rm -rf /`, `curl … | sh`, `dd`/`mkfs` en disco crudo, fork bombs); **avisa** en los meramente arriesgados (force-push, hard reset, `sudo`, `chmod 777`).
 
-El bloqueo de la *escritura* de secretos es **opt-in**: define `"secrets": { "block": true }` en `.guardian/hooks.config.json`. Ajusta todo ahí, allowlist de falsos positivos en `.guardian/hooks-allowlist.json`, o desactiva todos los hooks con `GUARDIAN_HOOKS=off`. Los mismos detectores corren en el CLI para terminal / CI: `node bin/dev-guardian.mjs check --file <ruta>` y `--bash "<command>"` (exit 1 al encontrar algo).
+El bloqueo de la *escritura* de secretos es **opt-in**: define `"secrets": { "block": true }` en `.guardian/hooks.config.json`. Ajusta todo ahí, allowlist de falsos positivos en `.guardian/hooks-allowlist.json`, o desactiva todos los hooks con `GUARDIAN_HOOKS=off`. Los mismos detectores corren en el CLI para terminal / CI: `node cli/dev-guardian.mjs check --file <ruta>` y `--bash "<command>"` (exit 1 al encontrar algo).
 
 ### Herramientas open-source orquestadas
 
@@ -486,10 +486,10 @@ El motor real es el **servidor MCP**, así que cualquier host compatible con MCP
 Desde una terminal en tu proyecto (tras `cd mcp && npm install && npm run build` una vez):
 
 ```text
-node bin/dev-guardian.mjs mcp-config cursor          # imprime el bloque para pegar
-node bin/dev-guardian.mjs mcp-config all             # todos los hosts
-node bin/dev-guardian.mjs mcp-config codex --write   # escribe + fusiona en el proyecto
-node bin/dev-guardian.mjs mcp-config all --scope global
+node cli/dev-guardian.mjs mcp-config cursor          # imprime el bloque para pegar
+node cli/dev-guardian.mjs mcp-config all             # todos los hosts
+node cli/dev-guardian.mjs mcp-config codex --write   # escribe + fusiona en el proyecto
+node cli/dev-guardian.mjs mcp-config all --scope global
 ```
 
 | Host | Archivo de config MCP (proyecto / global) | Archivo de reglas |
@@ -554,7 +554,7 @@ dev-guardian/
 ├── commands/                    # 48 slash commands
 ├── skills/                      # 13 skills (una por destino del router)
 ├── hooks/                       # hooks.json + guardian-hook.mjs (guardrails auto-activos)
-├── bin/                         # CLI dev-guardian.mjs (mcp-config, check)
+├── cli/                         # CLI dev-guardian.mjs (mcp-config, check)
 ├── mcp/                         # Servidor MCP (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/
 │   ├── test/                    # 280 tests unit + integration

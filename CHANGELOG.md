@@ -6,6 +6,24 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
+## [1.2.1] — 2026-08-10
+
+### Fixed
+
+- **Marketplace sync failed on Claude Desktop / claude.ai.** The top-level `bin/` directory is now
+  `cli/`. Desktop does not clone the repository — it delegates validation to a remote Anthropic
+  service, which rejected the plugin with `status=failed_content`: *"Plugin contains a top-level
+  bin/ directory ('bin/dev-guardian.mjs'). claude.ai-hosted plugins may not ship bin/ executables
+  because they are added to PATH on the CLI but are not shown on the admin approval surface. Declare
+  executable entry points via hooks, commands, or mcpServers instead."* The UI surfaced this only as
+  **"Marketplace sync failed. Check the repository URL"**, which is misleading — the URL was always
+  correct. Installing through the Claude Code CLI was never affected, because it uses a local
+  `git clone` and skips this validation, so a passing CLI install is not evidence that Desktop will
+  accept the plugin.
+- The CLI is now `node cli/dev-guardian.mjs` — same commands (`mcp-config`, `check`), same
+  behaviour. References updated in `README.md` (EN/PT/ES), `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`,
+  `.cursor/rules/` and every `host-rules/` template.
+
 ## [1.2.0] — 2026-07-15
 
 ### Added

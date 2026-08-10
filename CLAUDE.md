@@ -50,7 +50,15 @@ dev-guardian MCP server out of the box: `.mcp.json` (Claude Code), `.cursor/`,
 `.gemini/`, `.vscode/`, `.windsurf/`, `.github/copilot-instructions.md`, plus root
 `AGENTS.md` / `GEMINI.md`. They use **relative** paths (`mcp/dist/server.js`), so
 run `npm run build` once first. To install the same into *another* project, use the
-`mcp-config` CLI (`node bin/dev-guardian.mjs mcp-config <host> --write`) — it fills in absolute paths.
+`mcp-config` CLI (`node cli/dev-guardian.mjs mcp-config <host> --write`) — it fills in absolute paths.
+
+**Never put the CLI back in a top-level `bin/`.** Claude Desktop / claude.ai does not clone the repo:
+it validates it on a remote Anthropic service that *rejects* any plugin shipping a top-level `bin/`
+(those files land on PATH in the CLI but are invisible on the admin approval surface). The sync fails
+with `status=failed_content` and the UI shows only "Marketplace sync failed. Check the repository
+URL", which points nowhere near the cause. The local CLI (`/plugin marketplace add`) uses `git clone`
+and does **not** apply this rule, so it passes even when Desktop refuses — it is not a valid pre-check.
+Executable entry points belong in `hooks/`, `commands/` or `mcpServers`.
 
 ## Prefer MCP tools over raw scanners
 
