@@ -318,6 +318,66 @@ describe('map_attack_surface', () => {
     expect(ctx.storage.surface.getLatest()).not.toBeNull();
   });
 
+  it('treats exitCode 1 as success — semgrep exits 1 when it FINDS matches', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    // The normal success path for this tool: execa reports outcome 'failed'
+    // for any non-zero exit, but exit 1 from Semgrep means "matches found".
+    // Without the `|| exitCode === 1` clause in buildToolRun, every run that
+    // actually found routes would be reported as a failed scan.
+    vi.mocked(runProcess).mockResolvedValue({
+      outcome: 'failed',
+      exitCode: 1,
+      stdout: '',
+      stderr: '',
+      truncated: false,
+    });
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      snapshot_id: number | null;
+      routes_total: number;
+      tools_run: { status: string; reason?: string }[];
+    };
+
+    expect(result.tools_run[0]?.status).toBe('ok');
+    expect(result.routes_total).toBe(1);
+    expect(result.snapshot_id).not.toBeNull();
+  });
+
+  it('keeps reporting a persisted failed run on later cached calls', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    // Genuine failure (exit 2) that still left parseable JSON — the one case
+    // where a failed run is persisted. Its warning must not be swallowed by
+    // the cache marker on the second call, or an empty snapshot that is empty
+    // *because the scan died* reads as "this application exposes nothing".
+    vi.mocked(runProcess).mockResolvedValue({
+      outcome: 'failed',
+      exitCode: 2,
+      stdout: '',
+      stderr: 'semgrep: fatal: rule pack failed to load\n',
+      truncated: false,
+    });
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+
+    await tool().handler({ project_path: projectPath }, ctx);
+    const second = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      routes_total: number;
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+
+    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(1);
+    expect(second.routes_total).toBe(0);
+    expect(second.tools_run[0]?.reason).toBe('cached');
+    const failed = second.tools_run.find((r) => r.status === 'failed');
+    expect(failed).toBeDefined();
+    expect(failed?.reason).toContain('rule pack failed to load');
+  });
+
   it('persists nothing when semgrep runs but produces no readable output', async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockResolvedValue(okRun());

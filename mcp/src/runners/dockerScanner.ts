@@ -26,6 +26,14 @@ export interface SemgrepDockerOptions {
   autoFix?: boolean;
   /** Override the image (default `semgrep/semgrep`). */
   image?: string;
+  /**
+   * `--config` values, one flag each. Defaults to `['auto']`, i.e.
+   * `--config=auto`, which is what every findings scan wants.
+   * `map_attack_surface` passes its own rule pack instead — the path must
+   * already be expressed inside the mount (see `toContainerPath`), since the
+   * container cannot see host paths.
+   */
+  configs?: string[];
 }
 
 /**
@@ -47,8 +55,8 @@ export function buildSemgrepDockerArgs(opts: SemgrepDockerOptions): string[] {
     '/src',
     image,
     'semgrep',
-    '--config=auto',
   ];
+  for (const config of opts.configs ?? ['auto']) args.push(`--config=${config}`);
   if (opts.hasCsproj) args.push('--config=p/csharp');
   args.push('--json', '--quiet', '--output', containerOut);
   if (opts.autoFix) args.push('--autofix');

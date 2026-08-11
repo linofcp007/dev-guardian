@@ -32120,9 +32120,9 @@ function buildSemgrepDockerArgs(opts) {
     "-w",
     "/src",
     image,
-    "semgrep",
-    "--config=auto"
+    "semgrep"
   ];
+  for (const config2 of opts.configs ?? ["auto"]) args.push(`--config=${config2}`);
   if (opts.hasCsproj) args.push("--config=p/csharp");
   args.push("--json", "--quiet", "--output", containerOut);
   if (opts.autoFix) args.push("--autofix");
@@ -41686,7 +41686,11 @@ var IncludeEnvVars = external_exports.boolean().optional().default(true).describ
 var tool39 = {
   name: "map_attack_surface",
   title: "Map the application attack surface",
-  description: "Statically extract the externally reachable surface of the project \u2014 HTTP routes (method, path, params, auth hint), referenced environment variables, and declared container ports \u2014 across all supported stacks. Persists a snapshot readable via guardian://surface/latest. Returns a summary plus a 20-route sample; read the resource for the full list.",
+  // No "auth hint" in this description on purpose: `auth_hint` exists on every
+  // RouteRecord but no rule can populate it yet, so it is always 'unknown'
+  // (see normalizeAuth in surface/extract.ts). Advertising a constant as a
+  // feature is how an agent ends up reasoning from it.
+  description: "Statically extract the externally reachable surface of the project \u2014 HTTP routes (method, path, params), referenced environment variables, and declared container ports \u2014 across all supported stacks. Persists a snapshot readable via guardian://surface/latest. Returns a summary plus a 20-route sample; read the resource for the full list.",
   inputSchema: {
     project_path: ProjectPath,
     force: Force,
@@ -41707,12 +41711,7 @@ async function handler39(input, ctx) {
   if (inp.force !== true) {
     const cached2 = ctx.storage.surface.getByTreeHash(treeHash);
     if (cached2) {
-      return summarize3(
-        cached2.snapshot,
-        cached2.id,
-        [{ name: "semgrep", status: "skipped", reason: "cached" }],
-        ctx
-      );
+      return summarize3(cached2.snapshot, cached2.id, cachedToolsRun(cached2.snapshot), ctx);
     }
   }
   const includeEnvVars = inp.include_env_vars !== false;
@@ -41773,6 +41772,14 @@ async function handler39(input, ctx) {
   });
   return summarize3(snapshot, persisted.id, [toolRun], ctx);
 }
+function cachedToolsRun(snapshot) {
+  const marker = { name: "semgrep", status: "skipped", reason: "cached" };
+  const persisted = snapshot.tools_run.map((run) => ({
+    ...run,
+    reason: run.reason === void 0 ? "from the cached run" : `${run.reason} (from the cached run)`
+  }));
+  return [marker, ...persisted];
+}
 async function invokeSemgrep(projectPath, rulesPath, outFile, reportDir) {
   const semgrepBin = await scannerAvailable("semgrep");
   if (semgrepBin !== null) {
@@ -41800,26 +41807,14 @@ async function invokeSemgrep(projectPath, rulesPath, outFile, reportDir) {
     };
   }
   const image = process.env["GUARDIAN_SEMGREP_IMAGE"] || DEFAULT_SEMGREP_IMAGE;
-  const containerOut = toContainerPath(projectPath, outFile);
   const run = await runProcess({
     command: "docker",
-    args: [
-      "run",
-      "--rm",
-      "--mount",
-      `type=bind,source=${projectPath},target=/src`,
-      "-w",
-      "/src",
+    args: buildSemgrepDockerArgs({
+      projectPath,
+      outFileHost: outFile,
       image,
-      "semgrep",
-      "--config",
-      containerRules,
-      "--json",
-      "--quiet",
-      "--output",
-      containerOut,
-      "/src"
-    ],
+      configs: [containerRules]
+    }),
     cwd: projectPath
   });
   return { toolRun: buildToolRun(run, `docker (${image})`) };

@@ -25,7 +25,7 @@ import { copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { resolveProjectPath } from '../platform/projectPath.js';
-import { DEFAULT_SEMGREP_IMAGE, toContainerPath } from '../runners/dockerScanner.js';
+import { buildSemgrepDockerArgs, DEFAULT_SEMGREP_IMAGE, toContainerPath, } from '../runners/dockerScanner.js';
 import { runProcess } from '../runners/processRunner.js';
 import { Force, ProjectPath } from '../schemas.js';
 import { collectEnvVars } from '../surface/collectors/envVars.js';
@@ -50,8 +50,12 @@ const IncludeEnvVars = z
 const tool = {
     name: 'map_attack_surface',
     title: 'Map the application attack surface',
+    // No "auth hint" in this description on purpose: `auth_hint` exists on every
+    // RouteRecord but no rule can populate it yet, so it is always 'unknown'
+    // (see normalizeAuth in surface/extract.ts). Advertising a constant as a
+    // feature is how an agent ends up reasoning from it.
     description: 'Statically extract the externally reachable surface of the project — HTTP routes ' +
-        '(method, path, params, auth hint), referenced environment variables, and declared ' +
+        '(method, path, params), referenced environment variables, and declared ' +
         'container ports — across all supported stacks. Persists a snapshot readable via ' +
         'guardian://surface/latest. Returns a summary plus a 20-route sample; read the ' +
         'resource for the full list.',
@@ -81,7 +85,7 @@ async function handler(input, ctx) {
     if (inp.force !== true) {
         const cached = ctx.storage.surface.getByTreeHash(treeHash);
         if (cached) {
-            return summarize(cached.snapshot, cached.id, [{ name: 'semgrep', status: 'skipped', reason: 'cached' }], ctx);
+            return summarize(cached.snapshot, cached.id, cachedToolsRun(cached.snapshot), ctx);
         }
     }
     const includeEnvVars = inp.include_env_vars !== false;
@@ -140,20 +144,39 @@ async function handler(input, ctx) {
     return summarize(snapshot, persisted.id, [toolRun], ctx);
 }
 /**
+ * What a cache hit reports as `tools_run`.
+ *
+ * The cache marker must not erase the run that produced the snapshot. There
+ * is exactly one case where a failing run still persists — Semgrep exited
+ * non-zero but left parseable JSON, persisted with a `failed` entry carrying
+ * the diagnostic. Reporting a bare `{semgrep, skipped, cached}` on every
+ * later call for the same tree hash would let that warning survive one call
+ * and then vanish, so a snapshot that is empty *because the scan died* would
+ * read as "this application exposes nothing" — verbatim the falsehood this
+ * tool exists to prevent (see the module doc comment).
+ */
+function cachedToolsRun(snapshot) {
+    const marker = { name: 'semgrep', status: 'skipped', reason: 'cached' };
+    const persisted = snapshot.tools_run.map((run) => ({
+        ...run,
+        reason: run.reason === undefined ? 'from the cached run' : `${run.reason} (from the cached run)`,
+    }));
+    return [marker, ...persisted];
+}
+/**
  * Run Semgrep against the routes rule pack, natively if it's on PATH,
  * otherwise via Docker. Returns null only when neither is available — the
  * caller treats that as "cannot run at all" and persists nothing.
  *
  * Mirrors scan_sast's Docker fallback (scanSast.ts:95-130): probe `docker`,
  * bind the project at `/src`, run the container, and check for real output.
- * We don't call `buildSemgrepDockerArgs` directly — it hardcodes
- * `--config=auto` with no hook for a custom rule pack — but we reuse the
- * same conventions from `runners/dockerScanner.js` it's built on
- * (`toContainerPath`, `DEFAULT_SEMGREP_IMAGE`, the `/src` bind-mount shape)
- * rather than inventing a second one. The rule pack lives outside the
- * project tree (in the dev-guardian install), so we stage a copy inside the
- * report dir — already inside the project, already inside the bind mount —
- * instead of adding a second `--mount`.
+ * The argv comes from the shared `buildSemgrepDockerArgs` — this tool only
+ * differs in `--config`, which the builder now takes as an option, so the
+ * mount shape, the output rewriting and anything added there later apply
+ * here too. The rule pack lives outside the project tree (in the
+ * dev-guardian install), so we stage a copy inside the report dir — already
+ * inside the project, already inside the bind mount — instead of adding a
+ * second `--mount`.
  */
 async function invokeSemgrep(projectPath, rulesPath, outFile, reportDir) {
     const semgrepBin = await scannerAvailable('semgrep');
@@ -184,18 +207,14 @@ async function invokeSemgrep(projectPath, rulesPath, outFile, reportDir) {
         };
     }
     const image = process.env['GUARDIAN_SEMGREP_IMAGE'] || DEFAULT_SEMGREP_IMAGE;
-    const containerOut = toContainerPath(projectPath, outFile);
     const run = await runProcess({
         command: 'docker',
-        args: [
-            'run', '--rm',
-            '--mount', `type=bind,source=${projectPath},target=/src`,
-            '-w', '/src',
-            image, 'semgrep',
-            '--config', containerRules,
-            '--json', '--quiet', '--output', containerOut,
-            '/src',
-        ],
+        args: buildSemgrepDockerArgs({
+            projectPath,
+            outFileHost: outFile,
+            image,
+            configs: [containerRules],
+        }),
         cwd: projectPath,
     });
     return { toolRun: buildToolRun(run, `docker (${image})`) };
