@@ -5,14 +5,27 @@
  * Findings, and it must not create a row in `scans`. Same shape as
  * `detect_stack`.
  *
- * Failure policy: if Semgrep cannot run, NOTHING is persisted. A zero-route
- * snapshot written by a failed run would later be read by scan_dast and
- * risk_score as "this application exposes nothing" — the inverse of the
- * truth. "Zero because the scan failed" and "zero because there are none"
- * must stay distinguishable.
+ * Failure policy: if Semgrep cannot run — natively or via Docker — NOTHING
+ * is persisted. A zero-route snapshot written by a failed run would later be
+ * read by scan_dast and risk_score as "this application exposes nothing" —
+ * the inverse of the truth. "Zero because the scan failed" and "zero because
+ * there are none" must stay distinguishable. The same guarantee extends to a
+ * Semgrep run that "succeeded" but produced no readable/parseable JSON: we
+ * never let a parse exception escape uncaught (there is no try/catch at the
+ * MCP dispatch site), and we never treat garbage output as zero routes.
+ *
+ * The one case where a non-zero Semgrep exit DOES get persisted: Semgrep
+ * exits 1 when it *finds* matches (see `buildToolRun` below) — that is
+ * success, not failure. A genuine failure (crash, bad config, timeout) still
+ * blocks persistence only when it also failed to leave parseable JSON behind;
+ * if it left partial-but-parseable JSON, that partial data is persisted with
+ * a `failed` tools_run entry carrying the diagnostic.
  */
+import { copyFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { z } from 'zod';
 import { resolveProjectPath } from '../platform/projectPath.js';
+import { DEFAULT_SEMGREP_IMAGE, toContainerPath } from '../runners/dockerScanner.js';
 import { runProcess } from '../runners/processRunner.js';
 import { Force, ProjectPath } from '../schemas.js';
 import { collectEnvVars } from '../surface/collectors/envVars.js';
@@ -29,6 +42,11 @@ const WEBHOOK_PATTERN = /webhook|callback|hook/i;
 const COVERED_LANGUAGES = new Set([
     'javascript', 'typescript', 'python', 'php', 'go', 'rust', 'ruby', 'java', 'csharp',
 ]);
+const IncludeEnvVars = z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe('Collect environment-variable names the code reads. Default: true.');
 const tool = {
     name: 'map_attack_surface',
     title: 'Map the application attack surface',
@@ -40,6 +58,7 @@ const tool = {
     inputSchema: {
         project_path: ProjectPath,
         force: Force,
+        include_env_vars: IncludeEnvVars,
     },
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -61,77 +80,151 @@ async function handler(input, ctx) {
     const treeHash = await computeTreeHash(projectPath);
     if (inp.force !== true) {
         const cached = ctx.storage.surface.getByTreeHash(treeHash);
-        if (cached)
-            return summarize(cached.snapshot, cached.id, [
-                { name: 'semgrep', status: 'skipped', reason: 'cached' },
-            ]);
+        if (cached) {
+            return summarize(cached.snapshot, cached.id, [{ name: 'semgrep', status: 'skipped', reason: 'cached' }], ctx);
+        }
     }
-    const semgrepBin = await scannerAvailable('semgrep');
-    if (semgrepBin === null) {
-        return {
-            ok: true,
-            routes_total: 0,
-            by_language: [],
-            coverage: [],
-            snapshot_id: null,
-            sample: [],
-            env_vars_total: 0,
-            ports: [],
-            tools_run: [{ name: 'semgrep', status: 'skipped', reason: 'not_installed' }],
-            missing_tools: ['semgrep'],
-            note: 'Semgrep is not installed, so no surface was mapped and nothing was persisted. ' +
-                'Run install_toolchain, then retry.',
-        };
-    }
+    const includeEnvVars = inp.include_env_vars !== false;
     const reportDir = ensureReportDir(projectPath, treeHash, 'surface');
     const outFile = join(reportDir, 'surface.json');
     const rulesPath = join(ctx.scriptsDir, '..', 'configs', 'semgrep', 'routes.yml');
-    const run = await runProcess({
-        command: 'semgrep',
-        args: [
-            '--config', rulesPath,
-            '--json', '--output', outFile,
-            '--quiet', '--no-git-ignore',
-            projectPath,
-        ],
-        cwd: projectPath,
-    });
+    const invocation = await invokeSemgrep(projectPath, rulesPath, outFile, reportDir);
+    if (invocation === null) {
+        return degradedResult([
+            {
+                name: 'semgrep',
+                status: 'skipped',
+                reason: 'not_installed (no docker fallback available)',
+            },
+        ], ['semgrep'], 'Semgrep is not installed and no Docker fallback is available, so no surface was ' +
+            'mapped and nothing was persisted. Run install_toolchain, then retry.', ctx);
+    }
+    const { toolRun } = invocation;
+    // `readJsonSafe` returns null only for a missing/unreadable file (see
+    // scanHelpers.ts) — never for unparseable content. A file that exists but
+    // holds truncated/garbage JSON (mid-write timeout, stale partial file from
+    // a previous crash) reaches the JSON.parse below, which is guarded
+    // separately.
     const raw = readJsonSafe(outFile);
     if (raw === null) {
-        return {
-            ok: true,
-            routes_total: 0,
-            by_language: [],
-            coverage: [],
-            snapshot_id: null,
-            sample: [],
-            env_vars_total: 0,
-            ports: [],
-            tools_run: [{ name: 'semgrep', status: 'failed', reason: 'no_output' }],
-            missing_tools: [],
-            note: 'Semgrep produced no parseable output; nothing was persisted.',
+        const failedToolRun = {
+            ...toolRun,
+            status: 'failed',
+            reason: toolRun.reason ?? 'no_output',
         };
+        return degradedResult([failedToolRun], [], 'Semgrep produced no readable output file; nothing was persisted.', ctx);
     }
-    const parsed = JSON.parse(raw);
-    const toolRun = {
-        name: 'semgrep',
-        status: run.outcome === 'completed' ? 'ok' : 'failed',
-    };
-    const snapshot = buildSnapshot(parsed, projectPath, ctx, [toolRun]);
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    }
+    catch (e) {
+        // Precedent: detectStack.ts:73-79 catches JSON.parse the same way and
+        // returns a degraded result instead of letting the SyntaxError escape.
+        // There is no try/catch at the tool-dispatch site (tools/index.ts), so
+        // an uncaught throw here would surface as an opaque MCP protocol error
+        // and bypass this tool's documented "persist nothing" contract entirely.
+        const failedToolRun = {
+            name: 'semgrep',
+            status: 'failed',
+            reason: `unparseable output: ${e.message}`,
+        };
+        return degradedResult([failedToolRun], [], 'Semgrep output was not valid JSON; nothing was persisted.', ctx);
+    }
+    const snapshot = buildSnapshot(parsed, projectPath, ctx, [toolRun], includeEnvVars);
     const persisted = ctx.storage.surface.insert({
         project_path: projectPath,
         tree_hash: treeHash,
         snapshot,
     });
-    return summarize(snapshot, persisted.id, [toolRun]);
+    return summarize(snapshot, persisted.id, [toolRun], ctx);
 }
-function buildSnapshot(parsed, projectPath, ctx, toolsRun) {
+/**
+ * Run Semgrep against the routes rule pack, natively if it's on PATH,
+ * otherwise via Docker. Returns null only when neither is available — the
+ * caller treats that as "cannot run at all" and persists nothing.
+ *
+ * Mirrors scan_sast's Docker fallback (scanSast.ts:95-130): probe `docker`,
+ * bind the project at `/src`, run the container, and check for real output.
+ * We don't call `buildSemgrepDockerArgs` directly — it hardcodes
+ * `--config=auto` with no hook for a custom rule pack — but we reuse the
+ * same conventions from `runners/dockerScanner.js` it's built on
+ * (`toContainerPath`, `DEFAULT_SEMGREP_IMAGE`, the `/src` bind-mount shape)
+ * rather than inventing a second one. The rule pack lives outside the
+ * project tree (in the dev-guardian install), so we stage a copy inside the
+ * report dir — already inside the project, already inside the bind mount —
+ * instead of adding a second `--mount`.
+ */
+async function invokeSemgrep(projectPath, rulesPath, outFile, reportDir) {
+    const semgrepBin = await scannerAvailable('semgrep');
+    if (semgrepBin !== null) {
+        const run = await runProcess({
+            command: 'semgrep',
+            args: ['--config', rulesPath, '--json', '--output', outFile, '--quiet', projectPath],
+            cwd: projectPath,
+        });
+        return { toolRun: buildToolRun(run) };
+    }
+    const dockerBin = await scannerAvailable('docker');
+    if (dockerBin === null)
+        return null;
+    let containerRules;
+    try {
+        const stagedRules = join(reportDir, 'routes.yml');
+        copyFileSync(rulesPath, stagedRules);
+        containerRules = toContainerPath(projectPath, stagedRules);
+    }
+    catch (e) {
+        return {
+            toolRun: {
+                name: 'semgrep',
+                status: 'failed',
+                reason: `docker: could not stage rule pack: ${e.message}`,
+            },
+        };
+    }
+    const image = process.env['GUARDIAN_SEMGREP_IMAGE'] || DEFAULT_SEMGREP_IMAGE;
+    const containerOut = toContainerPath(projectPath, outFile);
+    const run = await runProcess({
+        command: 'docker',
+        args: [
+            'run', '--rm',
+            '--mount', `type=bind,source=${projectPath},target=/src`,
+            '-w', '/src',
+            image, 'semgrep',
+            '--config', containerRules,
+            '--json', '--quiet', '--output', containerOut,
+            '/src',
+        ],
+        cwd: projectPath,
+    });
+    return { toolRun: buildToolRun(run, `docker (${image})`) };
+}
+/**
+ * Semgrep exits 1 when it *finds* matches — that is success, not failure.
+ * Repo convention: scanSast.ts:87-94, bugHunt.ts:158, scanWordpress.ts
+ * (semgrep-wp/gitleaks/etc.) all treat `outcome === 'completed' ||
+ * exitCode === 1` as ok. Reading the raw outcome alone (as an earlier
+ * version of this tool did) reports every successful route-finding run as
+ * `failed`.
+ */
+function buildToolRun(run, via) {
+    const ok = run.outcome === 'completed' || run.exitCode === 1;
+    if (ok) {
+        return via ? { name: 'semgrep', status: 'ok', reason: `ran via ${via}` } : { name: 'semgrep', status: 'ok' };
+    }
+    const firstLine = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+    const reason = via ? `${via}: ${firstLine ?? 'fallback failed'}` : (firstLine ?? 'unknown');
+    return { name: 'semgrep', status: 'failed', reason };
+}
+function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars) {
     const { routes, mounts } = extractSurface(parsed);
-    const imports = extractImports(parsed);
+    const knownFiles = collectAllFiles(parsed);
+    const imports = extractImports(parsed, knownFiles);
     const resolved = resolveWordpressRoutes(resolveNodeMounts(routes, mounts, imports));
     return {
         routes: resolved,
-        env_vars: collectEnvVars(parsed),
+        env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
         ports: collectPorts(projectPath),
         webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
         coverage: buildCoverage(resolved, ctx),
@@ -139,8 +232,21 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun) {
         missing_tools: [],
     };
 }
+/** Every file path Semgrep reported a match in, across all `guardian_kind`s. */
+function collectAllFiles(parsed) {
+    const results = parsed.results;
+    const out = new Set();
+    if (!Array.isArray(results))
+        return out;
+    for (const raw of results) {
+        const path = raw.path;
+        if (typeof path === 'string')
+            out.add(path);
+    }
+    return out;
+}
 /** `guardian_kind: 'import'` matches, needed by the Node mount resolver. */
-function extractImports(parsed) {
+function extractImports(parsed, knownFiles) {
     const results = parsed.results;
     if (!Array.isArray(results))
         return [];
@@ -149,21 +255,45 @@ function extractImports(parsed) {
         const record = raw;
         if (record.extra?.metadata?.guardian_kind !== 'import')
             continue;
-        const symbol = record.extra.metavars?.['$SYMBOL']?.abstract_content;
-        const modulePath = record.extra.metavars?.['$MODULE']?.abstract_content;
+        // Semgrep's abstract_content keeps the source quoting (`'./routes/users'`,
+        // not `./routes/users`) — same as $PATH/$PREFIX in extract.ts and $NAME
+        // in envVars.ts. Without stripping it, `specifier.startsWith('.')` in
+        // resolveModuleFile below never matches and mount resolution silently
+        // never fires against real Semgrep output.
+        const symbol = stripQuotes(record.extra.metavars?.['$SYMBOL']?.abstract_content);
+        const modulePath = stripQuotes(record.extra.metavars?.['$MODULE']?.abstract_content);
         const file = record.path;
         if (symbol === undefined || modulePath === undefined || file === undefined)
             continue;
-        out.push({ symbol, module_file: resolveModuleFile(file, modulePath), file });
+        out.push({ symbol, module_file: resolveModuleFile(file, modulePath, knownFiles), file });
     }
     return out;
 }
+function stripQuotes(value) {
+    if (value === undefined)
+        return undefined;
+    return value.replace(/^['"`]|['"`]$/g, '');
+}
+function stripKnownExtension(path) {
+    return path.replace(/\.[cm]?[jt]sx?$/, '');
+}
 /**
  * Turn a specifier like `./routes/users` (imported from `src/app.ts`) into
- * the project-relative file `src/routes/users.ts`. Extension-less specifiers
- * are probed against the extensions Node resolves.
+ * the project-relative file the route was actually matched in, e.g.
+ * `src/routes/users.ts`.
+ *
+ * We do NOT guess a single extension: a plain-JS project imports
+ * `./routes/users` and the real file is `.js`; a TypeScript project under
+ * this repo's own NodeNext convention imports `./routes/users.js` and the
+ * real source file is `.ts`. Neither case is knowable from the specifier
+ * text alone, and we have no filesystem access here. Instead we compare,
+ * extension-insensitively, against the file paths Semgrep actually reported
+ * matches in during this same run (`knownFiles`) and take the one whose
+ * extension-stripped path matches. When nothing matches, we return the
+ * normalised specifier path as our best-effort guess rather than fabricate
+ * an extension.
  */
-function resolveModuleFile(importingFile, specifier) {
+function resolveModuleFile(importingFile, specifier, knownFiles) {
     if (!specifier.startsWith('.'))
         return specifier;
     const dir = importingFile.split('/').slice(0, -1).join('/');
@@ -177,8 +307,13 @@ function resolveModuleFile(importingFile, specifier) {
         else
             stack.push(part);
     }
-    const base = stack.join('/');
-    return /\.[cm]?[jt]sx?$/.test(base) ? base : `${base}.ts`;
+    const joined = stack.join('/');
+    const base = stripKnownExtension(joined);
+    for (const file of knownFiles) {
+        if (stripKnownExtension(file) === base)
+            return file;
+    }
+    return joined;
 }
 function buildCoverage(routes, ctx) {
     const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
@@ -197,23 +332,56 @@ function buildCoverage(routes, ctx) {
     }
     return entries;
 }
-function summarize(snapshot, snapshotId, toolsRun) {
+const NO_STACK_NOTE = 'No stack snapshot found for this project — run detect_stack first for fuller coverage context.';
+function summarize(snapshot, snapshotId, toolsRun, ctx) {
     const byLanguage = new Map();
     for (const route of snapshot.routes) {
         byLanguage.set(route.language, (byLanguage.get(route.language) ?? 0) + 1);
     }
+    // Deterministic across runs: order by language then path before slicing,
+    // rather than relying on Semgrep's (unspecified) match order.
+    const sample = [...snapshot.routes]
+        .sort((a, b) => a.language.localeCompare(b.language) || a.path_resolved.localeCompare(b.path_resolved))
+        .slice(0, SAMPLE_SIZE);
+    const stackDetected = ctx.storage.stack.getLatest() !== null;
     return {
         ok: true,
         routes_total: snapshot.routes.length,
         by_language: [...byLanguage].map(([language, routes]) => ({ language, routes })),
         coverage: snapshot.coverage,
         snapshot_id: snapshotId,
-        sample: snapshot.routes.slice(0, SAMPLE_SIZE),
+        sample,
         env_vars_total: snapshot.env_vars.length,
         ports: snapshot.ports,
         webhooks_total: snapshot.webhooks.length,
         tools_run: toolsRun,
         missing_tools: snapshot.missing_tools,
+        stack_detected: stackDetected,
+        ...(stackDetected ? {} : { note: NO_STACK_NOTE }),
+    };
+}
+/**
+ * Shared shape for every "Semgrep could not produce a usable result" exit —
+ * unavailable, no output, unparseable output. All three must persist
+ * nothing (see the module doc comment) and must return the same field set
+ * as `summarize` so a consumer never sees `undefined` on the fields it reads
+ * hardest (e.g. `webhooks_total`) just because this run happened to degrade.
+ */
+function degradedResult(toolsRun, missingTools, note, ctx) {
+    return {
+        ok: true,
+        routes_total: 0,
+        by_language: [],
+        coverage: [],
+        snapshot_id: null,
+        sample: [],
+        env_vars_total: 0,
+        ports: [],
+        webhooks_total: 0,
+        tools_run: toolsRun,
+        missing_tools: missingTools,
+        stack_detected: ctx.storage.stack.getLatest() !== null,
+        note,
     };
 }
 //# sourceMappingURL=mapAttackSurface.js.map

@@ -41351,6 +41351,7 @@ function hashFiles(parts) {
 }
 
 // src/tools/mapAttackSurface.ts
+import { copyFileSync as copyFileSync2 } from "node:fs";
 import { join as join40 } from "node:path";
 
 // src/surface/collectors/envVars.ts
@@ -41665,13 +41666,15 @@ var COVERED_LANGUAGES = /* @__PURE__ */ new Set([
   "java",
   "csharp"
 ]);
+var IncludeEnvVars = external_exports.boolean().optional().default(true).describe("Collect environment-variable names the code reads. Default: true.");
 var tool39 = {
   name: "map_attack_surface",
   title: "Map the application attack surface",
   description: "Statically extract the externally reachable surface of the project \u2014 HTTP routes (method, path, params, auth hint), referenced environment variables, and declared container ports \u2014 across all supported stacks. Persists a snapshot readable via guardian://surface/latest. Returns a summary plus a 20-route sample; read the resource for the full list.",
   inputSchema: {
     project_path: ProjectPath,
-    force: Force
+    force: Force,
+    include_env_vars: IncludeEnvVars
   },
   handler: async (input, ctx) => handler39(input, ctx)
 };
@@ -41687,79 +41690,141 @@ async function handler39(input, ctx) {
   const treeHash = await computeTreeHash(projectPath);
   if (inp.force !== true) {
     const cached2 = ctx.storage.surface.getByTreeHash(treeHash);
-    if (cached2) return summarize3(cached2.snapshot, cached2.id, [
-      { name: "semgrep", status: "skipped", reason: "cached" }
-    ]);
+    if (cached2) {
+      return summarize3(
+        cached2.snapshot,
+        cached2.id,
+        [{ name: "semgrep", status: "skipped", reason: "cached" }],
+        ctx
+      );
+    }
   }
-  const semgrepBin = await scannerAvailable("semgrep");
-  if (semgrepBin === null) {
-    return {
-      ok: true,
-      routes_total: 0,
-      by_language: [],
-      coverage: [],
-      snapshot_id: null,
-      sample: [],
-      env_vars_total: 0,
-      ports: [],
-      tools_run: [{ name: "semgrep", status: "skipped", reason: "not_installed" }],
-      missing_tools: ["semgrep"],
-      note: "Semgrep is not installed, so no surface was mapped and nothing was persisted. Run install_toolchain, then retry."
-    };
-  }
+  const includeEnvVars = inp.include_env_vars !== false;
   const reportDir = ensureReportDir(projectPath, treeHash, "surface");
   const outFile = join40(reportDir, "surface.json");
   const rulesPath = join40(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
-  const run = await runProcess({
-    command: "semgrep",
-    args: [
-      "--config",
-      rulesPath,
-      "--json",
-      "--output",
-      outFile,
-      "--quiet",
-      "--no-git-ignore",
-      projectPath
-    ],
-    cwd: projectPath
-  });
+  const invocation = await invokeSemgrep(projectPath, rulesPath, outFile, reportDir);
+  if (invocation === null) {
+    return degradedResult(
+      [
+        {
+          name: "semgrep",
+          status: "skipped",
+          reason: "not_installed (no docker fallback available)"
+        }
+      ],
+      ["semgrep"],
+      "Semgrep is not installed and no Docker fallback is available, so no surface was mapped and nothing was persisted. Run install_toolchain, then retry.",
+      ctx
+    );
+  }
+  const { toolRun } = invocation;
   const raw = readJsonSafe(outFile);
   if (raw === null) {
-    return {
-      ok: true,
-      routes_total: 0,
-      by_language: [],
-      coverage: [],
-      snapshot_id: null,
-      sample: [],
-      env_vars_total: 0,
-      ports: [],
-      tools_run: [{ name: "semgrep", status: "failed", reason: "no_output" }],
-      missing_tools: [],
-      note: "Semgrep produced no parseable output; nothing was persisted."
+    const failedToolRun = {
+      ...toolRun,
+      status: "failed",
+      reason: toolRun.reason ?? "no_output"
     };
+    return degradedResult(
+      [failedToolRun],
+      [],
+      "Semgrep produced no readable output file; nothing was persisted.",
+      ctx
+    );
   }
-  const parsed = JSON.parse(raw);
-  const toolRun = {
-    name: "semgrep",
-    status: run.outcome === "completed" ? "ok" : "failed"
-  };
-  const snapshot = buildSnapshot(parsed, projectPath, ctx, [toolRun]);
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    const failedToolRun = {
+      name: "semgrep",
+      status: "failed",
+      reason: `unparseable output: ${e.message}`
+    };
+    return degradedResult(
+      [failedToolRun],
+      [],
+      "Semgrep output was not valid JSON; nothing was persisted.",
+      ctx
+    );
+  }
+  const snapshot = buildSnapshot(parsed, projectPath, ctx, [toolRun], includeEnvVars);
   const persisted = ctx.storage.surface.insert({
     project_path: projectPath,
     tree_hash: treeHash,
     snapshot
   });
-  return summarize3(snapshot, persisted.id, [toolRun]);
+  return summarize3(snapshot, persisted.id, [toolRun], ctx);
 }
-function buildSnapshot(parsed, projectPath, ctx, toolsRun) {
+async function invokeSemgrep(projectPath, rulesPath, outFile, reportDir) {
+  const semgrepBin = await scannerAvailable("semgrep");
+  if (semgrepBin !== null) {
+    const run2 = await runProcess({
+      command: "semgrep",
+      args: ["--config", rulesPath, "--json", "--output", outFile, "--quiet", projectPath],
+      cwd: projectPath
+    });
+    return { toolRun: buildToolRun(run2) };
+  }
+  const dockerBin = await scannerAvailable("docker");
+  if (dockerBin === null) return null;
+  let containerRules;
+  try {
+    const stagedRules = join40(reportDir, "routes.yml");
+    copyFileSync2(rulesPath, stagedRules);
+    containerRules = toContainerPath(projectPath, stagedRules);
+  } catch (e) {
+    return {
+      toolRun: {
+        name: "semgrep",
+        status: "failed",
+        reason: `docker: could not stage rule pack: ${e.message}`
+      }
+    };
+  }
+  const image = process.env["GUARDIAN_SEMGREP_IMAGE"] || DEFAULT_SEMGREP_IMAGE;
+  const containerOut = toContainerPath(projectPath, outFile);
+  const run = await runProcess({
+    command: "docker",
+    args: [
+      "run",
+      "--rm",
+      "--mount",
+      `type=bind,source=${projectPath},target=/src`,
+      "-w",
+      "/src",
+      image,
+      "semgrep",
+      "--config",
+      containerRules,
+      "--json",
+      "--quiet",
+      "--output",
+      containerOut,
+      "/src"
+    ],
+    cwd: projectPath
+  });
+  return { toolRun: buildToolRun(run, `docker (${image})`) };
+}
+function buildToolRun(run, via) {
+  const ok = run.outcome === "completed" || run.exitCode === 1;
+  if (ok) {
+    return via ? { name: "semgrep", status: "ok", reason: `ran via ${via}` } : { name: "semgrep", status: "ok" };
+  }
+  const firstLine = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  const reason = via ? `${via}: ${firstLine ?? "fallback failed"}` : firstLine ?? "unknown";
+  return { name: "semgrep", status: "failed", reason };
+}
+function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars) {
   const { routes, mounts } = extractSurface(parsed);
-  const imports = extractImports(parsed);
+  const knownFiles = collectAllFiles(parsed);
+  const imports = extractImports(parsed, knownFiles);
   const resolved = resolveWordpressRoutes(resolveNodeMounts(routes, mounts, imports));
   return {
     routes: resolved,
-    env_vars: collectEnvVars(parsed),
+    env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
     ports: collectPorts(projectPath),
     webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
     coverage: buildCoverage(resolved, ctx),
@@ -41767,22 +41832,39 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun) {
     missing_tools: []
   };
 }
-function extractImports(parsed) {
+function collectAllFiles(parsed) {
+  const results = parsed.results;
+  const out = /* @__PURE__ */ new Set();
+  if (!Array.isArray(results)) return out;
+  for (const raw of results) {
+    const path6 = raw.path;
+    if (typeof path6 === "string") out.add(path6);
+  }
+  return out;
+}
+function extractImports(parsed, knownFiles) {
   const results = parsed.results;
   if (!Array.isArray(results)) return [];
   const out = [];
   for (const raw of results) {
     const record2 = raw;
     if (record2.extra?.metadata?.guardian_kind !== "import") continue;
-    const symbol = record2.extra.metavars?.["$SYMBOL"]?.abstract_content;
-    const modulePath = record2.extra.metavars?.["$MODULE"]?.abstract_content;
+    const symbol = stripQuotes2(record2.extra.metavars?.["$SYMBOL"]?.abstract_content);
+    const modulePath = stripQuotes2(record2.extra.metavars?.["$MODULE"]?.abstract_content);
     const file = record2.path;
     if (symbol === void 0 || modulePath === void 0 || file === void 0) continue;
-    out.push({ symbol, module_file: resolveModuleFile(file, modulePath), file });
+    out.push({ symbol, module_file: resolveModuleFile(file, modulePath, knownFiles), file });
   }
   return out;
 }
-function resolveModuleFile(importingFile, specifier) {
+function stripQuotes2(value) {
+  if (value === void 0) return void 0;
+  return value.replace(/^['"`]|['"`]$/g, "");
+}
+function stripKnownExtension(path6) {
+  return path6.replace(/\.[cm]?[jt]sx?$/, "");
+}
+function resolveModuleFile(importingFile, specifier, knownFiles) {
   if (!specifier.startsWith(".")) return specifier;
   const dir = importingFile.split("/").slice(0, -1).join("/");
   const parts = `${dir}/${specifier}`.split("/");
@@ -41792,8 +41874,12 @@ function resolveModuleFile(importingFile, specifier) {
     if (part === "..") stack.pop();
     else stack.push(part);
   }
-  const base = stack.join("/");
-  return /\.[cm]?[jt]sx?$/.test(base) ? base : `${base}.ts`;
+  const joined = stack.join("/");
+  const base = stripKnownExtension(joined);
+  for (const file of knownFiles) {
+    if (stripKnownExtension(file) === base) return file;
+  }
+  return joined;
 }
 function buildCoverage(routes, ctx) {
   const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
@@ -41812,23 +41898,47 @@ function buildCoverage(routes, ctx) {
   }
   return entries;
 }
-function summarize3(snapshot, snapshotId, toolsRun) {
+var NO_STACK_NOTE = "No stack snapshot found for this project \u2014 run detect_stack first for fuller coverage context.";
+function summarize3(snapshot, snapshotId, toolsRun, ctx) {
   const byLanguage = /* @__PURE__ */ new Map();
   for (const route of snapshot.routes) {
     byLanguage.set(route.language, (byLanguage.get(route.language) ?? 0) + 1);
   }
+  const sample = [...snapshot.routes].sort(
+    (a2, b) => a2.language.localeCompare(b.language) || a2.path_resolved.localeCompare(b.path_resolved)
+  ).slice(0, SAMPLE_SIZE);
+  const stackDetected = ctx.storage.stack.getLatest() !== null;
   return {
     ok: true,
     routes_total: snapshot.routes.length,
     by_language: [...byLanguage].map(([language, routes]) => ({ language, routes })),
     coverage: snapshot.coverage,
     snapshot_id: snapshotId,
-    sample: snapshot.routes.slice(0, SAMPLE_SIZE),
+    sample,
     env_vars_total: snapshot.env_vars.length,
     ports: snapshot.ports,
     webhooks_total: snapshot.webhooks.length,
     tools_run: toolsRun,
-    missing_tools: snapshot.missing_tools
+    missing_tools: snapshot.missing_tools,
+    stack_detected: stackDetected,
+    ...stackDetected ? {} : { note: NO_STACK_NOTE }
+  };
+}
+function degradedResult(toolsRun, missingTools, note, ctx) {
+  return {
+    ok: true,
+    routes_total: 0,
+    by_language: [],
+    coverage: [],
+    snapshot_id: null,
+    sample: [],
+    env_vars_total: 0,
+    ports: [],
+    webhooks_total: 0,
+    tools_run: toolsRun,
+    missing_tools: missingTools,
+    stack_detected: ctx.storage.stack.getLatest() !== null,
+    note
   };
 }
 
