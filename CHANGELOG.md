@@ -36,6 +36,37 @@ version bump.
 
 ### Fixed
 
+- **`map_attack_surface` extracted zero routes on every current Semgrep.** Semgrep changed
+  behaviour between 1.95.0 and 1.120.1: unless the user has run `semgrep login` it redacts
+  match content, so `extra.metavars` is absent entirely and `extra.lines` reads
+  `"requires login"`. The extractor reads `extra.metavars.$PATH.abstract_content`, so the
+  tool reported *no routes at all* while Semgrep itself reported matches — nothing looked
+  broken, and the persisted snapshot said the application exposes nothing. Requiring an
+  account is not an option for a tool whose stated position is 100% open-source and local.
+  What redaction does not remove is the position: `start.offset` / `end.offset` survive, so
+  a new pure module `mcp/src/surface/recoverMetavars.ts` slices the matched source out of
+  the file and reconstructs the captures the rules would have bound, keyed off
+  `guardian_kind` and `framework`. It synthesizes into the shape the extractor already
+  reads, so `mcp/src/surface/extract.ts` is untouched. Measured end to end against Semgrep
+  1.164.0 on a nine-language fixture: 22 routes and 6 environment variables recovered where
+  the tool previously found none. Verified capture-by-capture against Semgrep 1.86.0 — the
+  last version that still emits metavariables — as ground truth.
+  - Offsets are **byte** offsets, so the span is sliced from a `Buffer`; a source file with
+    any non-ASCII character before the match desyncs a plain `String.prototype.slice` and
+    yields a confidently wrong path. Source quoting is preserved verbatim, because that is
+    exactly how `isLiteralPath` separates `'/items'` from `self::NAMESPACE` — and
+    `register_rest_route(self::NAMESPACE, '/computed', …)`, the dominant idiom in real
+    WordPress plugins, survives as a `path_partial` route rather than vanishing.
+  - The module is pure and never throws: a file it cannot read, an offset past
+    end-of-file, or a span with nothing to capture is counted `unrecoverable` and skipped.
+    Reading the files stays in the tool, which is already the impure layer.
+  - **Honest degradation.** If Semgrep reported matches and *not one* could be recovered,
+    that is a broken toolchain, not a project without routes: the tool now persists
+    nothing and says why — naming the redacting-Semgrep cause and that `map_attack_surface`
+    does not require an account — instead of writing a zero-route snapshot that later reads
+    as "this application exposes nothing". A partial recovery is persisted but reported, via
+    a `semgrep-metavar-recovery` entry in `tools_run` carrying the counts, so it is visible
+    rather than silent.
 - **A path we could not resolve is never emitted as a resolved path.** Only one route rule
   in the pack constrained its path capture to a string literal; the other thirteen let a
   Semgrep metavariable that had bound a *code expression* through as a confident path —

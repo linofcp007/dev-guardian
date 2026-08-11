@@ -20,10 +20,17 @@
  * blocks persistence only when it also failed to leave parseable JSON behind;
  * if it left partial-but-parseable JSON, that partial data is persisted with
  * a `failed` tools_run entry carrying the diagnostic.
+ *
+ * The same guarantee covers a fourth failure mode: Semgrep reporting matches
+ * whose content we cannot read. Current versions redact `extra.metavars`
+ * unless the user has run `semgrep login`, so the captures are rebuilt from
+ * the matched byte range (see `surface/recoverMetavars.ts`). If Semgrep
+ * reported matches and not one could be recovered, that is a broken
+ * toolchain, not a project without routes — nothing is persisted.
  */
 
-import { copyFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { copyFileSync, readFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -37,6 +44,11 @@ import { Force, ProjectPath } from '../schemas.js';
 import { collectEnvVars } from '../surface/collectors/envVars.js';
 import { collectPorts } from '../surface/collectors/ports.js';
 import { extractSurface } from '../surface/extract.js';
+import {
+  recoverMetavars,
+  type RecoveryOutcome,
+  type SourceMap,
+} from '../surface/recoverMetavars.js';
 import { resolveNodeMounts, type ImportRecord } from '../surface/resolvers/node.js';
 import { resolveWordpressRoutes } from '../surface/resolvers/wordpress.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
@@ -180,14 +192,105 @@ async function handler(
     );
   }
 
-  const snapshot = buildSnapshot(parsed, projectPath, ctx, [toolRun], includeEnvVars);
+  // Rebuild the captures modern Semgrep redacts, before anything downstream
+  // looks for them. Reading the files is the impure half and belongs here;
+  // `recoverMetavars` itself is pure and takes the text.
+  const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
+  if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable > 0) {
+    return degradedResult(
+      [toolRun, unreadableMatchesToolRun(recovery)],
+      [],
+      unreadableMatchesNote(recovery),
+      ctx,
+    );
+  }
+
+  const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
+  const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars);
   const persisted = ctx.storage.surface.insert({
     project_path: projectPath,
     tree_hash: treeHash,
     snapshot,
   });
 
-  return summarize(snapshot, persisted.id, [toolRun], ctx);
+  return summarize(snapshot, persisted.id, toolsRun, ctx);
+}
+
+/** Name used for the recovery step in `tools_run`; it is not a real binary. */
+const RECOVERY_STEP = 'semgrep-metavar-recovery';
+
+/**
+ * Source text of every file Semgrep reported a match in, keyed by the `path`
+ * value verbatim so `recoverMetavars` can look it up without re-deriving it.
+ *
+ * Semgrep reports absolute paths when handed an absolute target (which this
+ * tool does) and relative ones when handed a relative target, so both are
+ * resolved. A file that cannot be read is simply absent from the map — the
+ * recovery counts it `unrecoverable` rather than guessing.
+ */
+function readSources(parsed: unknown, projectPath: string): SourceMap {
+  const sources = new Map<string, string>();
+  for (const path of collectAllFiles(parsed)) {
+    try {
+      const buffer = readFileSync(isAbsolute(path) ? path : join(projectPath, path));
+      const text = buffer.toString('utf8');
+      // Offsets are byte offsets into the file as it sits on disk. Bytes that
+      // are not valid UTF-8 decode to U+FFFD, which re-encodes to a different
+      // length and shifts every later offset — so a file that does not
+      // round-trip is dropped rather than sliced at the wrong place.
+      if (Buffer.byteLength(text, 'utf8') !== buffer.length) continue;
+      sources.set(path, text);
+    } catch {
+      // Unreadable / deleted since the scan: absent from the map, by design.
+    }
+  }
+  return sources;
+}
+
+/**
+ * Make a recovered run visible instead of silent — including the partial case,
+ * where some routes are real and some matches were lost. Persisted with the
+ * snapshot, so `cachedToolsRun` keeps reporting it on later cache hits.
+ * Emitted only when there was something to recover: a run against an older
+ * (or logged-in) Semgrep is `intact` throughout and says nothing new.
+ */
+function recoveryToolRun(recovery: RecoveryOutcome): ToolRun[] {
+  if (recovery.recovered === 0 && recovery.unrecoverable === 0) return [];
+  const base =
+    `recovered ${recovery.recovered} redacted match(es) from byte offsets` +
+    (recovery.intact > 0 ? `; ${recovery.intact} already carried metavariables` : '');
+  if (recovery.unrecoverable === 0) {
+    return [{ name: RECOVERY_STEP, status: 'ok', reason: base }];
+  }
+  return [
+    {
+      name: RECOVERY_STEP,
+      status: 'failed',
+      reason: `${base}; ${recovery.unrecoverable} could not be recovered and are missing from the surface`,
+    },
+  ];
+}
+
+function unreadableMatchesToolRun(recovery: RecoveryOutcome): ToolRun {
+  return {
+    name: RECOVERY_STEP,
+    status: 'failed',
+    reason:
+      `no match content: all ${recovery.unrecoverable} match(es) lacked metavariables ` +
+      'and none could be recovered from the reported byte offsets',
+  };
+}
+
+function unreadableMatchesNote(recovery: RecoveryOutcome): string {
+  return (
+    `Semgrep reported ${recovery.unrecoverable} match(es) but not one could be read, so no ` +
+    'surface was mapped and nothing was persisted. Current Semgrep versions redact match ' +
+    'content (extra.metavars) unless you run `semgrep login`; map_attack_surface rebuilds it ' +
+    'from the matched byte range in the file and therefore does not require an account — so ' +
+    'this points at the files themselves being unreadable at the paths Semgrep reported, or ' +
+    'changed since the scan. Nothing was written: a zero-route snapshot here would read as ' +
+    '"this application exposes nothing", which is the inverse of what was measured.'
+  );
 }
 
 /**

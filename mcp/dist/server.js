@@ -107,7 +107,7 @@ var require_code = __commonJS({
     }
     exports._ = _;
     var plus = new _Code("+");
-    function str3(strs, ...args) {
+    function str4(strs, ...args) {
       const expr = [safeStringify(strs[0])];
       let i2 = 0;
       while (i2 < args.length) {
@@ -118,7 +118,7 @@ var require_code = __commonJS({
       optimize(expr);
       return new _Code(expr);
     }
-    exports.str = str3;
+    exports.str = str4;
     function addCodeArg(code, arg) {
       if (arg instanceof _Code)
         code.push(...arg._items);
@@ -161,7 +161,7 @@ var require_code = __commonJS({
       return;
     }
     function strConcat(c1, c22) {
-      return c22.emptyStr() ? c1 : c1.emptyStr() ? c22 : str3`${c1}${c22}`;
+      return c22.emptyStr() ? c1 : c1.emptyStr() ? c22 : str4`${c1}${c22}`;
     }
     exports.strConcat = strConcat;
     function interpolate(x) {
@@ -1123,22 +1123,22 @@ var require_util = __commonJS({
       return (0, codegen_1._)`${topSchemaRef}${schemaPath}${(0, codegen_1.getProperty)(keyword)}`;
     }
     exports.schemaRefOrVal = schemaRefOrVal;
-    function unescapeFragment(str3) {
-      return unescapeJsonPointer(decodeURIComponent(str3));
+    function unescapeFragment(str4) {
+      return unescapeJsonPointer(decodeURIComponent(str4));
     }
     exports.unescapeFragment = unescapeFragment;
-    function escapeFragment(str3) {
-      return encodeURIComponent(escapeJsonPointer(str3));
+    function escapeFragment(str4) {
+      return encodeURIComponent(escapeJsonPointer(str4));
     }
     exports.escapeFragment = escapeFragment;
-    function escapeJsonPointer(str3) {
-      if (typeof str3 == "number")
-        return `${str3}`;
-      return str3.replace(/~/g, "~0").replace(/\//g, "~1");
+    function escapeJsonPointer(str4) {
+      if (typeof str4 == "number")
+        return `${str4}`;
+      return str4.replace(/~/g, "~0").replace(/\//g, "~1");
     }
     exports.escapeJsonPointer = escapeJsonPointer;
-    function unescapeJsonPointer(str3) {
-      return str3.replace(/~1/g, "/").replace(/~0/g, "~");
+    function unescapeJsonPointer(str4) {
+      return str4.replace(/~1/g, "/").replace(/~0/g, "~");
     }
     exports.unescapeJsonPointer = unescapeJsonPointer;
     function eachItem(xs, f) {
@@ -1694,11 +1694,11 @@ var require_defaults = __commonJS({
       }
     }
     exports.assignDefaults = assignDefaults;
-    function assignDefault(it, prop3, defaultValue) {
+    function assignDefault(it, prop4, defaultValue) {
       const { gen, compositeRule, data, opts } = it;
       if (defaultValue === void 0)
         return;
-      const childData = (0, codegen_1._)`${data}${(0, codegen_1.getProperty)(prop3)}`;
+      const childData = (0, codegen_1._)`${data}${(0, codegen_1.getProperty)(prop4)}`;
       if (compositeRule) {
         (0, util_1.checkStrictMode)(it, `default is ignored for: ${childData}`);
         return;
@@ -1722,16 +1722,16 @@ var require_code2 = __commonJS({
     var util_1 = require_util();
     var names_1 = require_names();
     var util_2 = require_util();
-    function checkReportMissingProp(cxt, prop3) {
+    function checkReportMissingProp(cxt, prop4) {
       const { gen, data, it } = cxt;
-      gen.if(noPropertyInData(gen, data, prop3, it.opts.ownProperties), () => {
-        cxt.setParams({ missingProperty: (0, codegen_1._)`${prop3}` }, true);
+      gen.if(noPropertyInData(gen, data, prop4, it.opts.ownProperties), () => {
+        cxt.setParams({ missingProperty: (0, codegen_1._)`${prop4}` }, true);
         cxt.error();
       });
     }
     exports.checkReportMissingProp = checkReportMissingProp;
     function checkMissingProp({ gen, data, it: { opts } }, properties, missing) {
-      return (0, codegen_1.or)(...properties.map((prop3) => (0, codegen_1.and)(noPropertyInData(gen, data, prop3, opts.ownProperties), (0, codegen_1._)`${missing} = ${prop3}`)));
+      return (0, codegen_1.or)(...properties.map((prop4) => (0, codegen_1.and)(noPropertyInData(gen, data, prop4, opts.ownProperties), (0, codegen_1._)`${missing} = ${prop4}`)));
     }
     exports.checkMissingProp = checkMissingProp;
     function reportMissingProp(cxt, missing) {
@@ -2153,8 +2153,8 @@ var require_json_schema_traverse = __commonJS({
             }
           } else if (key in traverse.propsKeywords) {
             if (sch && typeof sch == "object") {
-              for (var prop3 in sch)
-                _traverse(opts, pre, post, sch[prop3], jsonPtr + "/" + key + "/" + escapeJsonPtr(prop3), rootSchema, jsonPtr, key, schema, prop3);
+              for (var prop4 in sch)
+                _traverse(opts, pre, post, sch[prop4], jsonPtr + "/" + key + "/" + escapeJsonPtr(prop4), rootSchema, jsonPtr, key, schema, prop4);
             }
           } else if (key in traverse.keywords || opts.allKeys && !(key in traverse.skipKeywords)) {
             _traverse(opts, pre, post, sch, jsonPtr + "/" + key, rootSchema, jsonPtr, key, schema);
@@ -2163,8 +2163,8 @@ var require_json_schema_traverse = __commonJS({
         post(schema, jsonPtr, rootSchema, parentJsonPtr, parentKeyword, parentSchema, keyIndex);
       }
     }
-    function escapeJsonPtr(str3) {
-      return str3.replace(/~/g, "~0").replace(/\//g, "~1");
+    function escapeJsonPtr(str4) {
+      return str4.replace(/~/g, "~0").replace(/\//g, "~1");
     }
   }
 });
@@ -3228,10 +3228,10 @@ var require_utils = __commonJS({
         return { host, isIPV6: false };
       }
     }
-    function findToken(str3, token) {
+    function findToken(str4, token) {
       let ind = 0;
-      for (let i2 = 0; i2 < str3.length; i2++) {
-        if (str3[i2] === token) ind++;
+      for (let i2 = 0; i2 < str4.length; i2++) {
+        if (str4[i2] === token) ind++;
       }
       return ind;
     }
@@ -3968,7 +3968,7 @@ var require_core = __commonJS({
     var util_1 = require_util();
     var $dataRefSchema = require_data();
     var uri_1 = require_uri();
-    var defaultRegExp = (str3, flags) => new RegExp(str3, flags);
+    var defaultRegExp = (str4, flags) => new RegExp(str4, flags);
     defaultRegExp.code = "new RegExp";
     var META_IGNORE_OPTIONS = ["removeAdditional", "useDefaults", "coerceTypes"];
     var EXT_SCOPE_NAMES = /* @__PURE__ */ new Set([
@@ -4763,16 +4763,16 @@ var require_ucs2length = __commonJS({
   "node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    function ucs2length(str3) {
-      const len = str3.length;
+    function ucs2length(str4) {
+      const len = str4.length;
       let length = 0;
       let pos = 0;
       let value;
       while (pos < len) {
         length++;
-        value = str3.charCodeAt(pos++);
+        value = str4.charCodeAt(pos++);
         if (value >= 55296 && value <= 56319 && pos < len) {
-          value = str3.charCodeAt(pos);
+          value = str4.charCodeAt(pos);
           if ((value & 64512) === 56320)
             pos++;
         }
@@ -4925,8 +4925,8 @@ var require_required = __commonJS({
           if (useLoop || $data) {
             cxt.block$data(codegen_1.nil, loopAllRequired);
           } else {
-            for (const prop3 of schema) {
-              (0, code_1.checkReportMissingProp)(cxt, prop3);
+            for (const prop4 of schema) {
+              (0, code_1.checkReportMissingProp)(cxt, prop4);
             }
           }
         }
@@ -4943,9 +4943,9 @@ var require_required = __commonJS({
           }
         }
         function loopAllRequired() {
-          gen.forOf("prop", schemaCode, (prop3) => {
-            cxt.setParams({ missingProperty: prop3 });
-            gen.if((0, code_1.noPropertyInData)(gen, data, prop3, opts.ownProperties), () => cxt.error());
+          gen.forOf("prop", schemaCode, (prop4) => {
+            cxt.setParams({ missingProperty: prop4 });
+            gen.if((0, code_1.noPropertyInData)(gen, data, prop4, opts.ownProperties), () => cxt.error());
           });
         }
         function loopUntilMissing(missing, valid) {
@@ -5490,13 +5490,13 @@ var require_dependencies = __commonJS({
       if (Object.keys(propertyDeps).length === 0)
         return;
       const missing = gen.let("missing");
-      for (const prop3 in propertyDeps) {
-        const deps = propertyDeps[prop3];
+      for (const prop4 in propertyDeps) {
+        const deps = propertyDeps[prop4];
         if (deps.length === 0)
           continue;
-        const hasProperty = (0, code_1.propertyInData)(gen, data, prop3, it.opts.ownProperties);
+        const hasProperty = (0, code_1.propertyInData)(gen, data, prop4, it.opts.ownProperties);
         cxt.setParams({
-          property: prop3,
+          property: prop4,
           depsCount: deps.length,
           deps: deps.join(", ")
         });
@@ -5517,13 +5517,13 @@ var require_dependencies = __commonJS({
     function validateSchemaDeps(cxt, schemaDeps = cxt.schema) {
       const { gen, data, keyword, it } = cxt;
       const valid = gen.name("valid");
-      for (const prop3 in schemaDeps) {
-        if ((0, util_1.alwaysValidSchema)(it, schemaDeps[prop3]))
+      for (const prop4 in schemaDeps) {
+        if ((0, util_1.alwaysValidSchema)(it, schemaDeps[prop4]))
           continue;
         gen.if(
-          (0, code_1.propertyInData)(gen, data, prop3, it.opts.ownProperties),
+          (0, code_1.propertyInData)(gen, data, prop4, it.opts.ownProperties),
           () => {
-            const schCxt = cxt.subschema({ keyword, schemaProp: prop3 }, valid);
+            const schCxt = cxt.subschema({ keyword, schemaProp: prop4 }, valid);
             cxt.mergeValidEvaluated(schCxt, valid);
           },
           () => gen.var(valid, true)
@@ -5705,8 +5705,8 @@ var require_properties = __commonJS({
           additionalProperties_1.default.code(new validate_1.KeywordCxt(it, additionalProperties_1.default, "additionalProperties"));
         }
         const allProps = (0, code_1.allSchemaProperties)(schema);
-        for (const prop3 of allProps) {
-          it.definedProperties.add(prop3);
+        for (const prop4 of allProps) {
+          it.definedProperties.add(prop4);
         }
         if (it.opts.unevaluated && allProps.length && it.props !== true) {
           it.props = util_1.mergeEvaluated.props(gen, (0, util_1.toHash)(allProps), it.props);
@@ -5715,27 +5715,27 @@ var require_properties = __commonJS({
         if (properties.length === 0)
           return;
         const valid = gen.name("valid");
-        for (const prop3 of properties) {
-          if (hasDefault(prop3)) {
-            applyPropertySchema(prop3);
+        for (const prop4 of properties) {
+          if (hasDefault(prop4)) {
+            applyPropertySchema(prop4);
           } else {
-            gen.if((0, code_1.propertyInData)(gen, data, prop3, it.opts.ownProperties));
-            applyPropertySchema(prop3);
+            gen.if((0, code_1.propertyInData)(gen, data, prop4, it.opts.ownProperties));
+            applyPropertySchema(prop4);
             if (!it.allErrors)
               gen.else().var(valid, true);
             gen.endIf();
           }
-          cxt.it.definedProperties.add(prop3);
+          cxt.it.definedProperties.add(prop4);
           cxt.ok(valid);
         }
-        function hasDefault(prop3) {
-          return it.opts.useDefaults && !it.compositeRule && schema[prop3].default !== void 0;
+        function hasDefault(prop4) {
+          return it.opts.useDefaults && !it.compositeRule && schema[prop4].default !== void 0;
         }
-        function applyPropertySchema(prop3) {
+        function applyPropertySchema(prop4) {
           cxt.subschema({
             keyword: "properties",
-            schemaProp: prop3,
-            dataProp: prop3
+            schemaProp: prop4,
+            dataProp: prop4
           }, valid);
         }
       }
@@ -5786,9 +5786,9 @@ var require_patternProperties = __commonJS({
           }
         }
         function checkMatchingProperties(pat) {
-          for (const prop3 in checkProperties) {
-            if (new RegExp(pat).test(prop3)) {
-              (0, util_1.checkStrictMode)(it, `property ${prop3} matches pattern ${pat} (use allowMatchingProperties)`);
+          for (const prop4 in checkProperties) {
+            if (new RegExp(pat).test(prop4)) {
+              (0, util_1.checkStrictMode)(it, `property ${prop4} matches pattern ${pat} (use allowMatchingProperties)`);
             }
           }
         }
@@ -6655,8 +6655,8 @@ var require_formats = __commonJS({
     }
     var DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
     var DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    function date3(str3) {
-      const matches = DATE.exec(str3);
+    function date3(str4) {
+      const matches = DATE.exec(str4);
       if (!matches)
         return false;
       const year = +matches[1];
@@ -6675,8 +6675,8 @@ var require_formats = __commonJS({
     }
     var TIME = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)(z|([+-])(\d\d)(?::?(\d\d))?)?$/i;
     function getTime(strictTimeZone) {
-      return function time3(str3) {
-        const matches = TIME.exec(str3);
+      return function time3(str4) {
+        const matches = TIME.exec(str4);
         if (!matches)
           return false;
         const hr = +matches[1];
@@ -6722,8 +6722,8 @@ var require_formats = __commonJS({
     var DATE_TIME_SEPARATOR = /t|\s/i;
     function getDateTime(strictTimeZone) {
       const time3 = getTime(strictTimeZone);
-      return function date_time(str3) {
-        const dateTime = str3.split(DATE_TIME_SEPARATOR);
+      return function date_time(str4) {
+        const dateTime = str4.split(DATE_TIME_SEPARATOR);
         return dateTime.length === 2 && date3(dateTime[0]) && time3(dateTime[1]);
       };
     }
@@ -6748,13 +6748,13 @@ var require_formats = __commonJS({
     }
     var NOT_URI_FRAGMENT = /\/|:/;
     var URI = /^(?:[a-z][a-z0-9+\-.]*:)(?:\/?\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:(?:[0-9a-f]{1,4}:){6}|::(?:[0-9a-f]{1,4}:){5}|(?:[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){4}|(?:(?:[0-9a-f]{1,4}:){0,1}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){3}|(?:(?:[0-9a-f]{1,4}:){0,2}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){2}|(?:(?:[0-9a-f]{1,4}:){0,3}[0-9a-f]{1,4})?::[0-9a-f]{1,4}:|(?:(?:[0-9a-f]{1,4}:){0,4}[0-9a-f]{1,4})?::)(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))|(?:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})?::[0-9a-f]{1,4}|(?:(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4})?::)|[Vv][0-9a-f]+\.[a-z0-9\-._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)|(?:[a-z0-9\-._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)(?:\?(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
-    function uri(str3) {
-      return NOT_URI_FRAGMENT.test(str3) && URI.test(str3);
+    function uri(str4) {
+      return NOT_URI_FRAGMENT.test(str4) && URI.test(str4);
     }
     var BYTE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/gm;
-    function byte(str3) {
+    function byte(str4) {
       BYTE.lastIndex = 0;
-      return BYTE.test(str3);
+      return BYTE.test(str4);
     }
     var MIN_INT32 = -(2 ** 31);
     var MAX_INT32 = 2 ** 31 - 1;
@@ -6768,11 +6768,11 @@ var require_formats = __commonJS({
       return true;
     }
     var Z_ANCHOR = /[^\\]\\Z/;
-    function regex(str3) {
-      if (Z_ANCHOR.test(str3))
+    function regex(str4) {
+      if (Z_ANCHOR.test(str4))
         return false;
       try {
-        new RegExp(str3);
+        new RegExp(str4);
         return true;
       } catch (e) {
         return false;
@@ -13609,26 +13609,26 @@ var init_pipe_arguments = __esm({
         return { destinationError: error2 };
       }
     };
-    getDestination = (boundOptions, createNested, firstArgument, ...pipeArguments) => {
-      if (Array.isArray(firstArgument)) {
-        const destination = createNested(mapDestinationArguments, boundOptions)(firstArgument, ...pipeArguments);
+    getDestination = (boundOptions, createNested, firstArgument2, ...pipeArguments) => {
+      if (Array.isArray(firstArgument2)) {
+        const destination = createNested(mapDestinationArguments, boundOptions)(firstArgument2, ...pipeArguments);
         return { destination, pipeOptions: boundOptions };
       }
-      if (typeof firstArgument === "string" || firstArgument instanceof URL || isDenoExecPath(firstArgument)) {
+      if (typeof firstArgument2 === "string" || firstArgument2 instanceof URL || isDenoExecPath(firstArgument2)) {
         if (Object.keys(boundOptions).length > 0) {
           throw new TypeError('Please use .pipe("file", ..., options) or .pipe(execa("file", ..., options)) instead of .pipe(options)("file", ...).');
         }
-        const [rawFile, rawArguments, rawOptions] = normalizeParameters(firstArgument, ...pipeArguments);
+        const [rawFile, rawArguments, rawOptions] = normalizeParameters(firstArgument2, ...pipeArguments);
         const destination = createNested(mapDestinationArguments)(rawFile, rawArguments, rawOptions);
         return { destination, pipeOptions: rawOptions };
       }
-      if (SUBPROCESS_OPTIONS.has(firstArgument)) {
+      if (SUBPROCESS_OPTIONS.has(firstArgument2)) {
         if (Object.keys(boundOptions).length > 0) {
           throw new TypeError("Please use .pipe(options)`command` or .pipe($(options)`command`) instead of .pipe(options)($`command`).");
         }
-        return { destination: firstArgument, pipeOptions: pipeArguments[0] };
+        return { destination: firstArgument2, pipeOptions: pipeArguments[0] };
       }
-      throw new TypeError(`The first argument must be a template string, an options object, or an Execa subprocess: ${firstArgument}`);
+      throw new TypeError(`The first argument must be a template string, an options object, or an Execa subprocess: ${firstArgument2}`);
     };
     mapDestinationArguments = ({ options }) => ({ options: { ...options, stdin: "pipe", piped: true } });
     getSourceStream = (source, from) => {
@@ -15016,21 +15016,21 @@ var init_create = __esm({
       }
       return boundExeca;
     };
-    callBoundExeca = ({ mapArguments, deepOptions = {}, boundOptions = {}, setBoundExeca, createNested }, firstArgument, ...nextArguments) => {
-      if (isPlainObject3(firstArgument)) {
-        return createNested(mapArguments, mergeOptions(boundOptions, firstArgument), setBoundExeca);
+    callBoundExeca = ({ mapArguments, deepOptions = {}, boundOptions = {}, setBoundExeca, createNested }, firstArgument2, ...nextArguments) => {
+      if (isPlainObject3(firstArgument2)) {
+        return createNested(mapArguments, mergeOptions(boundOptions, firstArgument2), setBoundExeca);
       }
       const { file, commandArguments, options, isSync } = parseArguments({
         mapArguments,
-        firstArgument,
+        firstArgument: firstArgument2,
         nextArguments,
         deepOptions,
         boundOptions
       });
       return isSync ? execaCoreSync(file, commandArguments, options) : execaCoreAsync(file, commandArguments, options, createNested);
     };
-    parseArguments = ({ mapArguments, firstArgument, nextArguments, deepOptions, boundOptions }) => {
-      const callArguments = isTemplateString(firstArgument) ? parseTemplates(firstArgument, nextArguments) : [firstArgument, ...nextArguments];
+    parseArguments = ({ mapArguments, firstArgument: firstArgument2, nextArguments, deepOptions, boundOptions }) => {
+      const callArguments = isTemplateString(firstArgument2) ? parseTemplates(firstArgument2, nextArguments) : [firstArgument2, ...nextArguments];
       const [initialFile, initialArguments, initialOptions] = normalizeParameters(...callArguments);
       const mergedOptions = mergeOptions(mergeOptions(deepOptions, boundOptions), initialOptions);
       const {
@@ -19371,8 +19371,8 @@ function defineLazy(object3, key, getter) {
     configurable: true
   });
 }
-function assignProp(target, prop3, value) {
-  Object.defineProperty(target, prop3, {
+function assignProp(target, prop4, value) {
+  Object.defineProperty(target, prop4, {
     value,
     writable: true,
     enumerable: true,
@@ -19397,14 +19397,14 @@ function promiseAllObject(promisesObj) {
 }
 function randomString(length = 10) {
   const chars = "abcdefghijklmnopqrstuvwxyz";
-  let str3 = "";
+  let str4 = "";
   for (let i2 = 0; i2 < length; i2++) {
-    str3 += chars[Math.floor(Math.random() * chars.length)];
+    str4 += chars[Math.floor(Math.random() * chars.length)];
   }
-  return str3;
+  return str4;
 }
-function esc(str3) {
-  return JSON.stringify(str3);
+function esc(str4) {
+  return JSON.stringify(str4);
 }
 var captureStackTrace = Error.captureStackTrace ? Error.captureStackTrace : (..._args) => {
 };
@@ -19492,8 +19492,8 @@ var getParsedType2 = (data) => {
 };
 var propertyKeyTypes = /* @__PURE__ */ new Set(["string", "number", "symbol"]);
 var primitiveTypes = /* @__PURE__ */ new Set(["string", "number", "bigint", "boolean", "symbol", "undefined"]);
-function escapeRegex(str3) {
-  return str3.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function escapeRegex(str4) {
+  return str4.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function clone(inst, def, params) {
   const cl = new inst._zod.constr(def ?? inst._zod.def);
@@ -19520,33 +19520,33 @@ function normalizeParams(_params) {
 function createTransparentProxy(getter) {
   let target;
   return new Proxy({}, {
-    get(_, prop3, receiver) {
+    get(_, prop4, receiver) {
       target ?? (target = getter());
-      return Reflect.get(target, prop3, receiver);
+      return Reflect.get(target, prop4, receiver);
     },
-    set(_, prop3, value, receiver) {
+    set(_, prop4, value, receiver) {
       target ?? (target = getter());
-      return Reflect.set(target, prop3, value, receiver);
+      return Reflect.set(target, prop4, value, receiver);
     },
-    has(_, prop3) {
+    has(_, prop4) {
       target ?? (target = getter());
-      return Reflect.has(target, prop3);
+      return Reflect.has(target, prop4);
     },
-    deleteProperty(_, prop3) {
+    deleteProperty(_, prop4) {
       target ?? (target = getter());
-      return Reflect.deleteProperty(target, prop3);
+      return Reflect.deleteProperty(target, prop4);
     },
     ownKeys(_) {
       target ?? (target = getter());
       return Reflect.ownKeys(target);
     },
-    getOwnPropertyDescriptor(_, prop3) {
+    getOwnPropertyDescriptor(_, prop4) {
       target ?? (target = getter());
-      return Reflect.getOwnPropertyDescriptor(target, prop3);
+      return Reflect.getOwnPropertyDescriptor(target, prop4);
     },
-    defineProperty(_, prop3, descriptor) {
+    defineProperty(_, prop4, descriptor) {
       target ?? (target = getter());
-      return Reflect.defineProperty(target, prop3, descriptor);
+      return Reflect.defineProperty(target, prop4, descriptor);
     }
   });
 }
@@ -28409,12 +28409,12 @@ var UriTemplate = class _UriTemplate {
    * A template expression is a sequence of characters enclosed in curly braces,
    * like {foo} or {?bar}.
    */
-  static isTemplate(str3) {
-    return /\{[^}\s]+\}/.test(str3);
+  static isTemplate(str4) {
+    return /\{[^}\s]+\}/.test(str4);
   }
-  static validateLength(str3, max, context) {
-    if (str3.length > max) {
-      throw new Error(`${context} exceeds maximum length of ${max} characters (got ${str3.length})`);
+  static validateLength(str4, max, context) {
+    if (str4.length > max) {
+      throw new Error(`${context} exceeds maximum length of ${max} characters (got ${str4.length})`);
     }
   }
   get variableNames() {
@@ -28543,8 +28543,8 @@ var UriTemplate = class _UriTemplate {
     }
     return result;
   }
-  escapeRegExp(str3) {
-    return str3.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  escapeRegExp(str4) {
+    return str4.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
   partToRegExp(part) {
     const patterns = [];
@@ -29602,7 +29602,7 @@ var StdioServerTransport = class {
 };
 
 // src/server.ts
-import { readFileSync as readFileSync18 } from "node:fs";
+import { readFileSync as readFileSync19 } from "node:fs";
 import { dirname as dirname4, resolve as resolve5 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
@@ -41351,8 +41351,8 @@ function hashFiles(parts) {
 }
 
 // src/tools/mapAttackSurface.ts
-import { copyFileSync as copyFileSync2 } from "node:fs";
-import { join as join40 } from "node:path";
+import { copyFileSync as copyFileSync2, readFileSync as readFileSync18 } from "node:fs";
+import { isAbsolute, join as join40 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -41615,6 +41615,269 @@ function metavar(metavars, name) {
   return str2(prop2(metavars, name), "abstract_content");
 }
 
+// src/surface/recoverMetavars.ts
+var RECOVERABLE_KINDS = /* @__PURE__ */ new Set(["route", "mount", "import", "env"]);
+function recoverMetavars(semgrepJson, sources) {
+  const results = prop3(semgrepJson, "results");
+  if (!isRecord(semgrepJson) || !Array.isArray(results)) {
+    return { json: semgrepJson, intact: 0, recovered: 0, unrecoverable: 0 };
+  }
+  const buffers = /* @__PURE__ */ new Map();
+  let intact = 0;
+  let recovered = 0;
+  let unrecoverable = 0;
+  const rebuilt = results.map((raw) => {
+    const extra = prop3(raw, "extra");
+    const metadata = prop3(extra, "metadata");
+    const kind = str3(metadata, "guardian_kind");
+    if (kind === void 0 || !RECOVERABLE_KINDS.has(kind)) return raw;
+    if (hasMetavars(extra)) {
+      intact += 1;
+      return raw;
+    }
+    const span = sliceSpan(raw, sources, buffers);
+    const metavars = span === void 0 ? void 0 : synthesize(kind, span, metadata);
+    if (metavars === void 0 || !isRecord(raw)) {
+      unrecoverable += 1;
+      return raw;
+    }
+    recovered += 1;
+    return { ...raw, extra: { ...isRecord(extra) ? extra : {}, metavars } };
+  });
+  return { json: { ...semgrepJson, results: rebuilt }, intact, recovered, unrecoverable };
+}
+function sliceSpan(raw, sources, buffers) {
+  const path6 = str3(raw, "path");
+  if (path6 === void 0) return void 0;
+  const start = num2(prop3(raw, "start"), "offset");
+  const end = num2(prop3(raw, "end"), "offset");
+  if (start === void 0 || end === void 0) return void 0;
+  if (!Number.isInteger(start) || !Number.isInteger(end)) return void 0;
+  if (start < 0 || end <= start) return void 0;
+  const text = sources.get(path6);
+  if (text === void 0) return void 0;
+  let buffer = buffers.get(path6);
+  if (buffer === void 0) {
+    buffer = Buffer.from(text, "utf8");
+    buffers.set(path6, buffer);
+  }
+  if (end > buffer.length) return void 0;
+  const span = buffer.subarray(start, end).toString("utf8");
+  return span.trim().length === 0 ? void 0 : span;
+}
+function synthesize(kind, span, metadata) {
+  switch (kind) {
+    case "route":
+      return synthesizeRoute(span, metadata);
+    case "mount":
+      return synthesizeMount(span);
+    case "import":
+      return synthesizeImport(span);
+    case "env":
+      return synthesizeEnv(span);
+    default:
+      return void 0;
+  }
+}
+function synthesizeRoute(span, metadata) {
+  if (str3(metadata, "framework") === "wp-rest") return synthesizeNamespacedRoute(span);
+  const path6 = routePath(span);
+  if (path6 === void 0) return void 0;
+  const metavars = { $PATH: { abstract_content: path6 } };
+  if (str3(metadata, "method") === void 0) {
+    const verb = calleeIdentifier(span);
+    if (verb !== void 0) metavars["$METHOD"] = { abstract_content: verb };
+  }
+  return metavars;
+}
+function routePath(span) {
+  const args = argumentList(span);
+  if (args !== void 0) return args[0];
+  return findOpener(span) === void 0 ? firstStringLiteral(span) : void 0;
+}
+function synthesizeNamespacedRoute(span) {
+  const args = argumentList(span);
+  if (args === void 0) return void 0;
+  const namespace = args[0];
+  const route = args[1];
+  if (namespace === void 0 || route === void 0) return void 0;
+  return {
+    $NS: { abstract_content: namespace },
+    $ROUTE: { abstract_content: route }
+  };
+}
+function synthesizeMount(span) {
+  const literal2 = findStringLiteral(span);
+  if (literal2 === void 0) return void 0;
+  const router = IDENTIFIER.exec(span.slice(literal2.end))?.[1];
+  if (router === void 0) return void 0;
+  return {
+    $PREFIX: { abstract_content: literal2.text },
+    $ROUTER: { abstract_content: router }
+  };
+}
+function synthesizeImport(span) {
+  const literal2 = findStringLiteral(span);
+  if (literal2 === void 0) return void 0;
+  const module = stripQuotes2(literal2.text);
+  if (module.length === 0) return void 0;
+  const symbol = /\bimport\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span)?.[1];
+  if (symbol === void 0) return void 0;
+  return {
+    $SYMBOL: { abstract_content: symbol },
+    $MODULE: { abstract_content: module }
+  };
+}
+function synthesizeEnv(span) {
+  const arg = firstArgument(span);
+  if (arg !== void 0) return { $NAME: { abstract_content: arg } };
+  const member = /\.([A-Za-z_$][\w$]*)\s*$/.exec(span.trim())?.[1];
+  if (member === void 0) return void 0;
+  return { $NAME: { abstract_content: member } };
+}
+var IDENTIFIER = /([A-Za-z_$][\w$]*)/;
+var CLOSERS = { "(": ")", "[": "]", "{": "}" };
+function isQuote(ch) {
+  return ch === "'" || ch === '"' || ch === "`";
+}
+function skipString(text, start) {
+  const quote = text[start];
+  let i2 = start + 1;
+  while (i2 < text.length) {
+    const ch = text[i2];
+    if (ch === void 0) break;
+    if (ch === "\\") {
+      i2 += 2;
+      continue;
+    }
+    if (ch === quote) return i2 + 1;
+    i2 += 1;
+  }
+  return text.length;
+}
+function findStringLiteral(span, from = 0) {
+  let i2 = from;
+  while (i2 < span.length) {
+    const ch = span[i2];
+    if (ch === void 0) break;
+    if (isQuote(ch)) {
+      const end = skipString(span, i2);
+      return { text: span.slice(i2, end), end };
+    }
+    i2 += 1;
+  }
+  return void 0;
+}
+function firstStringLiteral(span) {
+  return findStringLiteral(span)?.text;
+}
+function findOpener(span) {
+  let bracket = -1;
+  let i2 = 0;
+  while (i2 < span.length) {
+    const ch = span[i2];
+    if (ch === void 0) break;
+    if (isQuote(ch)) {
+      i2 = skipString(span, i2);
+      continue;
+    }
+    if (ch === "(") return i2;
+    if (ch === "[" && bracket < 0) bracket = i2;
+    i2 += 1;
+  }
+  return bracket >= 0 ? bracket : void 0;
+}
+function matchingClose(span, open) {
+  const stack = [];
+  let i2 = open;
+  while (i2 < span.length) {
+    const ch = span[i2];
+    if (ch === void 0) break;
+    if (isQuote(ch)) {
+      i2 = skipString(span, i2);
+      continue;
+    }
+    const closer = CLOSERS[ch];
+    if (closer !== void 0) {
+      stack.push(closer);
+      i2 += 1;
+      continue;
+    }
+    if (ch === ")" || ch === "]" || ch === "}") {
+      const expected = stack.pop();
+      if (expected !== ch) return void 0;
+      if (stack.length === 0) return i2;
+    }
+    i2 += 1;
+  }
+  return void 0;
+}
+function splitTopLevel(inner) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  let i2 = 0;
+  while (i2 < inner.length) {
+    const ch = inner[i2];
+    if (ch === void 0) break;
+    if (isQuote(ch)) {
+      i2 = skipString(inner, i2);
+      continue;
+    }
+    if (CLOSERS[ch] !== void 0) depth += 1;
+    else if (ch === ")" || ch === "]" || ch === "}") depth -= 1;
+    else if (ch === "," && depth === 0) {
+      parts.push(inner.slice(start, i2).trim());
+      start = i2 + 1;
+    }
+    i2 += 1;
+  }
+  parts.push(inner.slice(start).trim());
+  return parts.filter((part) => part.length > 0);
+}
+function argumentList(span) {
+  const open = findOpener(span);
+  if (open === void 0) return void 0;
+  const close = matchingClose(span, open);
+  if (close === void 0) return void 0;
+  const args = splitTopLevel(span.slice(open + 1, close));
+  return args.length > 0 ? args : void 0;
+}
+function firstArgument(span) {
+  return argumentList(span)?.[0];
+}
+function calleeIdentifier(span) {
+  const open = findOpener(span);
+  if (open !== void 0 && span[open] === "(") {
+    const callee = /([A-Za-z_$][\w$]*)\s*$/.exec(span.slice(0, open))?.[1];
+    if (callee !== void 0) return callee;
+  }
+  return /^\s*([A-Za-z_][\w]*)\s+['"`]/.exec(span)?.[1];
+}
+function stripQuotes2(value) {
+  return value.replace(/^['"`]|['"`]$/g, "");
+}
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function prop3(value, key) {
+  if (value === null || typeof value !== "object") return void 0;
+  return value[key];
+}
+function str3(value, key) {
+  const v = prop3(value, key);
+  return typeof v === "string" ? v : void 0;
+}
+function num2(value, key) {
+  const v = prop3(value, key);
+  return typeof v === "number" ? v : void 0;
+}
+function hasMetavars(extra) {
+  const metavars = prop3(extra, "metavars");
+  if (!isRecord(metavars)) return false;
+  return Object.keys(metavars).length > 0;
+}
+
 // src/surface/resolvers/node.ts
 var NODE_LANGUAGES = /* @__PURE__ */ new Set(["javascript", "typescript"]);
 function resolveNodeMounts(routes, mounts, imports) {
@@ -41769,13 +42032,61 @@ async function handler39(input, ctx) {
       ctx
     );
   }
-  const snapshot = buildSnapshot(parsed, projectPath, ctx, [toolRun], includeEnvVars);
+  const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
+  if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable > 0) {
+    return degradedResult(
+      [toolRun, unreadableMatchesToolRun(recovery)],
+      [],
+      unreadableMatchesNote(recovery),
+      ctx
+    );
+  }
+  const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
+  const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars);
   const persisted = ctx.storage.surface.insert({
     project_path: projectPath,
     tree_hash: treeHash,
     snapshot
   });
-  return summarize3(snapshot, persisted.id, [toolRun], ctx);
+  return summarize3(snapshot, persisted.id, toolsRun, ctx);
+}
+var RECOVERY_STEP = "semgrep-metavar-recovery";
+function readSources(parsed, projectPath) {
+  const sources = /* @__PURE__ */ new Map();
+  for (const path6 of collectAllFiles(parsed)) {
+    try {
+      const buffer = readFileSync18(isAbsolute(path6) ? path6 : join40(projectPath, path6));
+      const text = buffer.toString("utf8");
+      if (Buffer.byteLength(text, "utf8") !== buffer.length) continue;
+      sources.set(path6, text);
+    } catch {
+    }
+  }
+  return sources;
+}
+function recoveryToolRun(recovery) {
+  if (recovery.recovered === 0 && recovery.unrecoverable === 0) return [];
+  const base = `recovered ${recovery.recovered} redacted match(es) from byte offsets` + (recovery.intact > 0 ? `; ${recovery.intact} already carried metavariables` : "");
+  if (recovery.unrecoverable === 0) {
+    return [{ name: RECOVERY_STEP, status: "ok", reason: base }];
+  }
+  return [
+    {
+      name: RECOVERY_STEP,
+      status: "failed",
+      reason: `${base}; ${recovery.unrecoverable} could not be recovered and are missing from the surface`
+    }
+  ];
+}
+function unreadableMatchesToolRun(recovery) {
+  return {
+    name: RECOVERY_STEP,
+    status: "failed",
+    reason: `no match content: all ${recovery.unrecoverable} match(es) lacked metavariables and none could be recovered from the reported byte offsets`
+  };
+}
+function unreadableMatchesNote(recovery) {
+  return `Semgrep reported ${recovery.unrecoverable} match(es) but not one could be read, so no surface was mapped and nothing was persisted. Current Semgrep versions redact match content (extra.metavars) unless you run \`semgrep login\`; map_attack_surface rebuilds it from the matched byte range in the file and therefore does not require an account \u2014 so this points at the files themselves being unreadable at the paths Semgrep reported, or changed since the scan. Nothing was written: a zero-route snapshot here would read as "this application exposes nothing", which is the inverse of what was measured.`;
 }
 function cachedToolsRun(snapshot) {
   const marker = { name: "semgrep", status: "skipped", reason: "cached" };
@@ -41865,15 +42176,15 @@ function extractImports(parsed, knownFiles) {
   for (const raw of results) {
     const record2 = raw;
     if (record2.extra?.metadata?.guardian_kind !== "import") continue;
-    const symbol = stripQuotes2(record2.extra.metavars?.["$SYMBOL"]?.abstract_content);
-    const modulePath = stripQuotes2(record2.extra.metavars?.["$MODULE"]?.abstract_content);
+    const symbol = stripQuotes3(record2.extra.metavars?.["$SYMBOL"]?.abstract_content);
+    const modulePath = stripQuotes3(record2.extra.metavars?.["$MODULE"]?.abstract_content);
     const file = record2.path;
     if (symbol === void 0 || modulePath === void 0 || file === void 0) continue;
     out.push({ symbol, module_file: resolveModuleFile(file, modulePath, knownFiles), file });
   }
   return out;
 }
-function stripQuotes2(value) {
+function stripQuotes3(value) {
   if (value === void 0) return void 0;
   return value.replace(/^['"`]|['"`]$/g, "");
 }
@@ -42367,7 +42678,7 @@ function resolveServerVersion() {
   ];
   for (const path6 of candidates) {
     try {
-      const parsed = JSON.parse(readFileSync18(path6, "utf8"));
+      const parsed = JSON.parse(readFileSync19(path6, "utf8"));
       if (parsed.version) return parsed.version;
     } catch {
     }

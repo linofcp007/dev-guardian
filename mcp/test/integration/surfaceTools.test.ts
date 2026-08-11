@@ -10,7 +10,7 @@ vi.mock('../../src/tools/scanHelpers.js', async (importOriginal) => {
 });
 vi.mock('../../src/runners/processRunner.js', () => ({ runProcess: vi.fn() }));
 
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
@@ -498,6 +498,207 @@ describe('map_attack_surface', () => {
     const route = result.sample.find((r) => r.file === 'src/routes/users.ts');
     expect(route?.path_resolved).toBe('/api/users');
     expect(route?.path_partial).toBe(false);
+  });
+
+  /* ---- redacted output (Semgrep >= ~1.120 without `semgrep login`) ------- */
+
+  /**
+   * A two-file Express app: the routes, the mount and the import that binds
+   * them. Recovering all three from byte offsets is what makes `/api/list`
+   * resolvable — a single-file fixture would not exercise the chain.
+   */
+  const REDACTED_FILES = new Map<string, string>([
+    [
+      'src/app.ts',
+      "import usersRouter from './routes/users';\n" +
+        'const app = express();\n' +
+        "app.use('/api', usersRouter);\n" +
+        "app.get('/health', (req, res) => res.send('ok'));\n" +
+        "app.post('/items/:id', handler);\n",
+    ],
+    ['src/routes/users.ts', "router.get('/list', (req, res) => res.json([]));\n"],
+  ]);
+
+  const EXPRESS_ROUTE = { guardian_kind: 'route', framework: 'express', confidence: 'high' };
+
+  const REDACTED_SPANS: { file: string; span: string; metadata: Record<string, unknown> }[] = [
+    {
+      file: 'src/app.ts',
+      span: "import usersRouter from './routes/users'",
+      metadata: { guardian_kind: 'import', framework: 'esm' },
+    },
+    {
+      file: 'src/app.ts',
+      span: "app.use('/api', usersRouter)",
+      metadata: { guardian_kind: 'mount', framework: 'express' },
+    },
+    {
+      file: 'src/app.ts',
+      span: "app.get('/health', (req, res) => res.send('ok'))",
+      metadata: EXPRESS_ROUTE,
+    },
+    { file: 'src/app.ts', span: "app.post('/items/:id', handler)", metadata: EXPRESS_ROUTE },
+    {
+      file: 'src/routes/users.ts',
+      span: "router.get('/list', (req, res) => res.json([]))",
+      metadata: EXPRESS_ROUTE,
+    },
+  ];
+
+  /**
+   * The exact shape modern Semgrep emits: `extra.metavars` absent, `lines`
+   * and `fingerprint` replaced by "requires login", byte offsets intact.
+   * Verified against Semgrep 1.164.0 on this machine.
+   */
+  function redactedOutput(
+    spans: { file: string; span: string; metadata: Record<string, unknown> }[],
+    reportedPath: (file: string) => string = (file) => file,
+  ): string {
+    return JSON.stringify({
+      results: spans.map(({ file, span, metadata }, i) => {
+        const source = REDACTED_FILES.get(file);
+        if (source === undefined) throw new Error(`no test source for ${file}`);
+        const start = Buffer.from(source, 'utf8').indexOf(Buffer.from(span, 'utf8'));
+        if (start < 0) throw new Error(`test span not present in source: ${span}`);
+        return {
+          check_id: `guardian-redacted-${i}`,
+          path: reportedPath(file),
+          start: { line: 1, col: 1, offset: start },
+          end: { line: 1, col: 1, offset: start + Buffer.byteLength(span, 'utf8') },
+          extra: {
+            metadata,
+            severity: 'INFO',
+            fingerprint: 'requires login',
+            lines: 'requires login',
+          },
+        };
+      }),
+    });
+  }
+
+  /** Write REDACTED_FILES into a fresh project and return its path. */
+  function projectWithSource(): string {
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    for (const [file, source] of REDACTED_FILES) {
+      const absolute = join(projectPath, file);
+      mkdirSync(join(absolute, '..'), { recursive: true });
+      writeFileSync(absolute, source, 'utf8');
+    }
+    return projectPath;
+  }
+
+  it('extracts routes from redacted output by recovering metavars from the file', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+
+    const projectPath = projectWithSource();
+    vi.mocked(readJsonSafe).mockReturnValue(redactedOutput(REDACTED_SPANS));
+
+    const ctx = makeCtx();
+    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      routes_total: number;
+      snapshot_id: number | null;
+      sample: { method: string; path_resolved: string; path_partial: boolean; params: string[] }[];
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+
+    expect(result.routes_total).toBe(3);
+
+    const health = result.sample.find((r) => r.path_resolved === '/health');
+    expect(health?.method).toBe('GET');
+    expect(health?.path_partial).toBe(false);
+
+    const items = result.sample.find((r) => r.path_resolved === '/items/:id');
+    expect(items?.method).toBe('POST');
+    expect(items?.params).toEqual(['id']);
+
+    // The whole chain — route + mount + import — recovered from byte offsets.
+    const mounted = result.sample.find((r) => r.path_resolved === '/api/list');
+    expect(mounted?.method).toBe('GET');
+    expect(mounted?.path_partial).toBe(false);
+
+    // A recovered run must not be silent.
+    const recovery = result.tools_run.find((r) => r.name.includes('metavar'));
+    expect(recovery?.status).toBe('ok');
+    expect(recovery?.reason).toMatch(/5/);
+    expect(ctx.storage.surface.getById(result.snapshot_id ?? 0)?.snapshot.routes).toHaveLength(3);
+  });
+
+  it('recovers when semgrep reports absolute paths (what it does for an absolute target)', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+
+    const projectPath = projectWithSource();
+    vi.mocked(readJsonSafe).mockReturnValue(
+      redactedOutput(REDACTED_SPANS, (file) => join(projectPath, file)),
+    );
+
+    const ctx = makeCtx();
+    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      routes_total: number;
+    };
+    expect(result.routes_total).toBe(3);
+  });
+
+  it('persists NOTHING when every redacted match is unrecoverable', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    // Offsets point into files that were never written — nothing to slice.
+    vi.mocked(readJsonSafe).mockReturnValue(
+      redactedOutput(REDACTED_SPANS, (file) => file.replace('src/', 'never-written/')),
+    );
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      ok: boolean;
+      routes_total: number;
+      snapshot_id: number | null;
+      note?: string;
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+
+    // Semgrep found matches; we could not read one of them. That is a broken
+    // toolchain, not an application with no routes.
+    expect(result.ok).toBe(true);
+    expect(result.routes_total).toBe(0);
+    expect(result.snapshot_id).toBeNull();
+    expect(ctx.storage.surface.getLatest()).toBeNull();
+    expect(result.note).toMatch(/semgrep login/i);
+    expect(result.note).toMatch(/does not require an account/i);
+    expect(result.tools_run.some((r) => r.status === 'failed')).toBe(true);
+  });
+
+  it('persists a partial recovery and reports the matches it could not read', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+
+    const projectPath = projectWithSource();
+    const readable = REDACTED_SPANS.filter((s) => s.file === 'src/app.ts');
+    const lost = REDACTED_SPANS.filter((s) => s.file === 'src/routes/users.ts');
+    const results = [
+      ...(JSON.parse(redactedOutput(readable)) as { results: unknown[] }).results,
+      ...(
+        JSON.parse(redactedOutput(lost, (f) => f.replace('src/', 'gone/'))) as {
+          results: unknown[];
+        }
+      ).results,
+    ];
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results }));
+
+    const ctx = makeCtx();
+    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      routes_total: number;
+      snapshot_id: number | null;
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+
+    // The two app.ts routes survive; the unreadable one is reported, not hidden.
+    expect(result.routes_total).toBe(2);
+    expect(result.snapshot_id).not.toBeNull();
+    const recovery = result.tools_run.find((r) => r.name.includes('metavar'));
+    expect(recovery?.status).toBe('failed');
+    expect(recovery?.reason).toMatch(/1 could not be recovered/);
   });
 
   it('returns a domain error for an unusable project_path', async () => {
