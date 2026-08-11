@@ -42,21 +42,21 @@
 #
 # All three become exact when the pattern includes the item the attribute is
 # attached to (`#[get($PATH, ...)] fn $F(...) { ... }`). The match span then
-# covers the attribute *and* the declaration — and that has a consequence you
-# must not undo.
+# covers the attribute *and* the declaration — and that used to cost these
+# three families their recovery entirely.
 #
-# ---- Spanning the declaration costs these three families their recovery ----
+# ---- Why they need `focus-metavariable: $PATH` -----------------------------
 #
-# Semgrep's span for such a match starts at the FIRST attribute on the
-# declaration, which is very often not the route one:
+# Semgrep's span for a declaration-spanning match starts at the FIRST attribute
+# on the declaration, which is very often not the route one:
 #
 #   #[allow(dead_code)]              [Produces("application/json")]
 #   #[get("/d")]                     // [HttpGet("/orders/legacy")]
 #   async fn d() { … }               [HttpGet("/orders")]
 #
 # On any Semgrep that redacts match content (>= ~1.120 without `semgrep login`)
-# `surface/recoverMetavars.ts` has only that span to work from. Two ways of
-# reading it were tried and both INVENTED routes:
+# `surface/recoverMetavars.ts` has only that span to work from. FOUR ways of
+# reading it were tried and every one INVENTED routes:
 #
 #   - anchoring on the first argument list read `dead_code` and
 #     `"application/json"` as paths;
@@ -64,29 +64,47 @@
 #     `/orders/legacy` above, while the live `/orders` disappeared.
 #
 # Both pass the extractor's literal test, so each was emitted as a *resolved*
-# path — a URL a DAST consumer would go on to request. The second failure is
-# the general one: deciding whether text is code, a comment or a string is not
-# local information, and the span starts mid-file.
+# path — a URL a DAST consumer would go on to request. That is not a tuning
+# problem: deciding whether text is code, a comment or a string is not local
+# information, and the span starts mid-file.
 #
-# So these three families are NOT reconstructed. On a redacting Semgrep their
-# routes are absent, `coverage` reports `unreadable` (never `no_matches`) for
-# the language, and `tools_run` names the remedy: log in, or use a Semgrep
-# older than ~1.100. The other ten families are unaffected — their spans start
-# at the call or annotation that matched, so the capture sits at a known place.
+# `focus-metavariable: $PATH` removes the question rather than answering it.
+# Semgrep narrows the REPORTED RANGE to the metavariable's own range, so the
+# byte offsets point at the path literal itself. There is nothing left to
+# search for and nothing to lex — Semgrep resolved it, with a real parser for
+# the language. Recovery for such a rule is simply "the span is the value".
 #
-# If you widen another rule family to span its declaration, add its
-# `metadata.framework` to UNREADABLE_UNDER_REDACTION in
-# `mcp/src/surface/recoverMetavars.ts`. The two lists are asserted equal by
-# `mcp/test/unit/surface/rulePack.test.ts`, which fails if you forget — that
-# assertion is the only thing that stopped this shipping a third time.
+# So each of the three declares BOTH `focus-metavariable: $PATH` and
+# `metadata.guardian_focus: path`. The flag is what `recoverMetavars.ts` reads:
+# the rule pack is the thing that knows whether it focused, so the coupling is
+# explicit and testable instead of inferred from the framework name.
+# `mcp/test/unit/surface/rulePack.test.ts` asserts the two stay in lock-step —
+# declaring either without the other fails the suite. If you widen a fourth
+# family to span its declaration, focus it the same way.
 #
-# Rust is one rule, not five, because Semgrep's Rust engine *does* bind the
-# attribute name to `$METHOD` once the pattern is well-formed — and the actix /
-# Rocket attribute name IS the HTTP verb, so the extractor's `normalizeMethod`
-# reads it directly. The other two families stay one-rule-per-verb for reasons
-# that are not stylistic: in TypeScript `@$DEC($PATH)` does not parse at all, and
-# in C# the attribute name is `HttpGet`, which is not a verb the extractor
-# knows, so the verb has to arrive as `metadata.method`.
+# Measured on Semgrep 1.164.0 (redacting) against the adversarial fixtures,
+# which carry a commented-out route attribute, attribute-shaped text inside a
+# string, a foreign leading attribute, apostrophes and a Rust lifetime: every
+# decoy ignored, quotes preserved, and the reported spans byte-for-byte equal to
+# 1.86.0's `$PATH` captures. All thirteen route families now read identically on
+# both versions — coverage no longer depends on the Semgrep version, or on being
+# logged in.
+#
+# ---- Focusing discards every other capture, `$METHOD` included -------------
+#
+# That is why actix is five rules again, one per verb, each declaring
+# `metadata.method`: with the range narrowed to `$PATH` there is no `$METHOD`
+# left to read, on either Semgrep version. Per-verb discrimination was measured
+# across all three languages — six rules over three files, each matching only
+# its own verb — so the reason actix was once collapsed into a single
+# `$METHOD`-binding rule no longer holds.
+#
+# The other ten families are deliberately NOT focused. Their spans already begin
+# at the call or annotation that matched, their recovery is verified
+# slot-for-slot against 1.86.0 (60 captures, zero disagreements), and several of
+# them capture `$METHOD` as a metavariable, which focusing would throw away.
+# Uniformity is not worth re-opening ten working families; focusing them all is
+# a possible future simplification, not a pending fix.
 #
 # ---- Do NOT add a $PATH literal guard to a route rule ----------------------
 #
@@ -167,7 +185,12 @@ rules:
       - pattern: const $SYMBOL = require("$MODULE")
 
   # NestJS: one rule per verb — the decorator name is the method, and Semgrep
-  # cannot report which pattern-either alternative matched.
+  # cannot report which pattern-either alternative matched. `@$DEC($PATH)` is
+  # not a parseable TypeScript pattern either way.
+  #
+  # focus-metavariable narrows the reported range to $PATH; see the header.
+  # `@HttpCode(204)` and a commented-out `// @Get('legacy/:id')` above the live
+  # decorator are both ignored, because nothing is searched for.
   - id: guardian-route-nestjs-get
     languages: [typescript]
     severity: INFO
@@ -177,9 +200,12 @@ rules:
       framework: nestjs
       confidence: medium
       method: GET
-    pattern: |
-      @Get($PATH, ...)
-      $M(...) { ... }
+      guardian_focus: path
+    patterns:
+      - pattern: |
+          @Get($PATH, ...)
+          $M(...) { ... }
+      - focus-metavariable: $PATH
 
   - id: guardian-route-nestjs-post
     languages: [typescript]
@@ -190,9 +216,12 @@ rules:
       framework: nestjs
       confidence: medium
       method: POST
-    pattern: |
-      @Post($PATH, ...)
-      $M(...) { ... }
+      guardian_focus: path
+    patterns:
+      - pattern: |
+          @Post($PATH, ...)
+          $M(...) { ... }
+      - focus-metavariable: $PATH
 
   - id: guardian-route-nestjs-put
     languages: [typescript]
@@ -203,9 +232,12 @@ rules:
       framework: nestjs
       confidence: medium
       method: PUT
-    pattern: |
-      @Put($PATH, ...)
-      $M(...) { ... }
+      guardian_focus: path
+    patterns:
+      - pattern: |
+          @Put($PATH, ...)
+          $M(...) { ... }
+      - focus-metavariable: $PATH
 
   - id: guardian-route-nestjs-patch
     languages: [typescript]
@@ -216,9 +248,12 @@ rules:
       framework: nestjs
       confidence: medium
       method: PATCH
-    pattern: |
-      @Patch($PATH, ...)
-      $M(...) { ... }
+      guardian_focus: path
+    patterns:
+      - pattern: |
+          @Patch($PATH, ...)
+          $M(...) { ... }
+      - focus-metavariable: $PATH
 
   - id: guardian-route-nestjs-delete
     languages: [typescript]
@@ -229,9 +264,12 @@ rules:
       framework: nestjs
       confidence: medium
       method: DELETE
-    pattern: |
-      @Delete($PATH, ...)
-      $M(...) { ... }
+      guardian_focus: path
+    patterns:
+      - pattern: |
+          @Delete($PATH, ...)
+          $M(...) { ... }
+      - focus-metavariable: $PATH
 
   # ---------- Python ----------
   - id: guardian-route-flask
@@ -335,30 +373,33 @@ rules:
           regex: ^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD|Any)$
 
   # ---------- Rust ----------
-  # ONE rule, because Semgrep's Rust engine binds the attribute name — the
-  # only attribute family in this pack where it does. The verb therefore
-  # arrives as $METHOD and the rule declares no metadata.method.
+  # FIVE rules, one per verb. Semgrep's Rust engine does bind the attribute name
+  # to `$METHOD`, and this was a single `#[$METHOD($PATH, ...)]` rule for that
+  # reason — but `focus-metavariable: $PATH` narrows the reported range to the
+  # path and discards every other capture, `$METHOD` included, so the verb has
+  # to arrive as `metadata.method`. Per-verb discrimination is measured: each
+  # rule below matches only its own attribute.
   #
   # The trailing `fn $F(...) { ... }` is load-bearing, not decoration: without
-  # it the five per-verb rules this replaces matched every node in the file and
-  # bound nothing, so one `#[get("/x")]` produced five routes — the real GET
-  # plus four fabricated ones — and spans that were function bodies rather than
-  # routes. See the attribute note in the header.
+  # it, per-verb rules matched every node in the file and bound nothing, so one
+  # `#[get("/x")]` produced five routes — the real GET plus four fabricated ones
+  # — with spans that were function bodies rather than routes. That is what the
+  # `$F` and the braces prevent; the focus is what makes the resulting span
+  # readable again. See the attribute note in the header.
   #
   # KNOWN LIMITATION — single-argument attributes only. Despite the `, ...`,
-  # this does NOT match Rocket's multi-argument forms:
+  # these do NOT match Rocket's multi-argument forms:
   #
   #   #[post("/x", data = "<t>")]        0 matches on 1.164.0 and on 1.86.0
   #   #[get("/x", rank = 2)]             0 matches on 1.164.0 and on 1.86.0
   #
   # Measured, not assumed. `#[$METHOD($PATH, $EXTRA)] fn $F(...) { ... }` does
   # not match them either; only a bare `#[$METHOD(...)]` does, and that binds no
-  # $PATH at all — which would hand the extractor a route with no path on any
-  # Semgrep that still emits metavariables. Actix's single-argument attribute,
-  # the common case, works; Rocket routes carrying `data`, `rank` or `format`
-  # are simply not reported. Under-reporting a route is a gap; reporting one at
-  # a path we did not read would be a lie.
-  - id: guardian-route-rust-actix
+  # $PATH at all — which would hand the extractor a route with no path. Actix's
+  # single-argument attribute, the common case, works; Rocket routes carrying
+  # `data`, `rank` or `format` are simply not reported. Under-reporting a route
+  # is a gap; reporting one at a path we did not read would be a lie.
+  - id: guardian-route-rust-actix-get
     languages: [rust]
     severity: INFO
     message: Actix/Rocket route attribute
@@ -366,11 +407,67 @@ rules:
       guardian_kind: route
       framework: actix
       confidence: medium
+      method: GET
+      guardian_focus: path
     patterns:
-      - pattern: "#[$METHOD($PATH, ...)] fn $F(...) { ... }"
-      - metavariable-regex:
-          metavariable: $METHOD
-          regex: ^(get|post|put|patch|delete|options|head)$
+      - pattern: "#[get($PATH, ...)] fn $F(...) { ... }"
+      - focus-metavariable: $PATH
+
+  - id: guardian-route-rust-actix-post
+    languages: [rust]
+    severity: INFO
+    message: Actix/Rocket route attribute
+    metadata:
+      guardian_kind: route
+      framework: actix
+      confidence: medium
+      method: POST
+      guardian_focus: path
+    patterns:
+      - pattern: "#[post($PATH, ...)] fn $F(...) { ... }"
+      - focus-metavariable: $PATH
+
+  - id: guardian-route-rust-actix-put
+    languages: [rust]
+    severity: INFO
+    message: Actix/Rocket route attribute
+    metadata:
+      guardian_kind: route
+      framework: actix
+      confidence: medium
+      method: PUT
+      guardian_focus: path
+    patterns:
+      - pattern: "#[put($PATH, ...)] fn $F(...) { ... }"
+      - focus-metavariable: $PATH
+
+  - id: guardian-route-rust-actix-patch
+    languages: [rust]
+    severity: INFO
+    message: Actix/Rocket route attribute
+    metadata:
+      guardian_kind: route
+      framework: actix
+      confidence: medium
+      method: PATCH
+      guardian_focus: path
+    patterns:
+      - pattern: "#[patch($PATH, ...)] fn $F(...) { ... }"
+      - focus-metavariable: $PATH
+
+  - id: guardian-route-rust-actix-delete
+    languages: [rust]
+    severity: INFO
+    message: Actix/Rocket route attribute
+    metadata:
+      guardian_kind: route
+      framework: actix
+      confidence: medium
+      method: DELETE
+      guardian_focus: path
+    patterns:
+      - pattern: "#[delete($PATH, ...)] fn $F(...) { ... }"
+      - focus-metavariable: $PATH
 
   # ---------- Ruby ----------
   - id: guardian-route-rails
@@ -494,6 +591,9 @@ rules:
           metavariable: $METHOD
           regex: ^Map(Get|Post|Put|Patch|Delete)$
 
+  # Attribute routing, focused on $PATH — see the header. `[Produces("…")]`,
+  # `[Roles("HttpGet(")]` and a commented-out `// [HttpGet("/orders/legacy")]`
+  # above the live attribute are all ignored, because nothing is searched for.
   - id: guardian-route-aspnet-attribute-get
     languages: [csharp]
     severity: INFO
@@ -503,9 +603,12 @@ rules:
       framework: aspnet
       confidence: medium
       method: GET
-    pattern: |
-      [HttpGet($PATH, ...)]
-      $RET $M(...) { ... }
+      guardian_focus: path
+    patterns:
+      - pattern: |
+          [HttpGet($PATH, ...)]
+          $RET $M(...) { ... }
+      - focus-metavariable: $PATH
 
   - id: guardian-route-aspnet-attribute-post
     languages: [csharp]
@@ -516,9 +619,12 @@ rules:
       framework: aspnet
       confidence: medium
       method: POST
-    pattern: |
-      [HttpPost($PATH, ...)]
-      $RET $M(...) { ... }
+      guardian_focus: path
+    patterns:
+      - pattern: |
+          [HttpPost($PATH, ...)]
+          $RET $M(...) { ... }
+      - focus-metavariable: $PATH
 
   - id: guardian-route-aspnet-attribute-put
     languages: [csharp]
@@ -529,9 +635,12 @@ rules:
       framework: aspnet
       confidence: medium
       method: PUT
-    pattern: |
-      [HttpPut($PATH, ...)]
-      $RET $M(...) { ... }
+      guardian_focus: path
+    patterns:
+      - pattern: |
+          [HttpPut($PATH, ...)]
+          $RET $M(...) { ... }
+      - focus-metavariable: $PATH
 
   - id: guardian-route-aspnet-attribute-patch
     languages: [csharp]
@@ -542,9 +651,12 @@ rules:
       framework: aspnet
       confidence: medium
       method: PATCH
-    pattern: |
-      [HttpPatch($PATH, ...)]
-      $RET $M(...) { ... }
+      guardian_focus: path
+    patterns:
+      - pattern: |
+          [HttpPatch($PATH, ...)]
+          $RET $M(...) { ... }
+      - focus-metavariable: $PATH
 
   - id: guardian-route-aspnet-attribute-delete
     languages: [csharp]
@@ -555,9 +667,12 @@ rules:
       framework: aspnet
       confidence: medium
       method: DELETE
-    pattern: |
-      [HttpDelete($PATH, ...)]
-      $RET $M(...) { ... }
+      guardian_focus: path
+    patterns:
+      - pattern: |
+          [HttpDelete($PATH, ...)]
+          $RET $M(...) { ... }
+      - focus-metavariable: $PATH
 
   # ---------- Environment variables (all stacks) ----------
   - id: guardian-env-node

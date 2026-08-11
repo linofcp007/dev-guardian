@@ -27,12 +27,11 @@ async fn delete_item(path: web::Path<u32>) -> impl Responder {
     HttpResponse::NoContent().finish()
 }
 
-// ADVERSARIAL. A foreign attribute precedes the route one, so Semgrep's span
-// starts at `#[allow(...)]`. Reconstruction from a redacted span cannot tell
-// which attribute is the route, so actix routes are refused outright and NONE
-// of the routes in this file appear on a redacting Semgrep. What must never
-// happen is a route named `dead_code`, which is what anchoring on the first
-// argument list produced.
+// ADVERSARIAL. A foreign attribute precedes the route one, so the span of an
+// unfocused rule would start at `#[allow(...)]` — and anchoring on the first
+// argument list in it produced a route named `dead_code`. The rule focuses on
+// $PATH, so Semgrep reports the path literal itself and `/rust/gated` is what
+// comes back. `dead_code` must never appear.
 #[allow(dead_code)]
 #[get("/rust/gated")]
 async fn gated() -> impl Responder {
@@ -42,7 +41,8 @@ async fn gated() -> impl Responder {
 // ADVERSARIAL. A commented-out old route above the live one — about as
 // ordinary as source gets — plus apostrophes in the doc comment and a lifetime
 // in the signature. Anchoring by name produced `/rust/legacy`; lexing strings
-// lost the route. Neither is acceptable, so the family is refused.
+// lost the route. Focusing on $PATH answers neither question: Semgrep's own
+// parser decides what the attribute is, and reports only the path.
 #[allow(dead_code)]
 /// Don't call this directly; it's the router's job.
 // #[get("/rust/legacy")]

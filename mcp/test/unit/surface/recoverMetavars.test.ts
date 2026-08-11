@@ -69,6 +69,16 @@ function recoverSpan(
 
 const ROUTE = { guardian_kind: 'route' };
 
+/* The three focused families, exactly as `configs/semgrep/routes.yml` declares
+   them: one rule per verb, `metadata.method` for the verb, and the
+   `guardian_focus: path` flag that tells this module the reported range was
+   narrowed to $PATH. rulePack.test.ts holds these in lock-step with the pack. */
+const FOCUS = { guardian_focus: 'path' };
+const ACTIX_GET = { guardian_kind: 'route', framework: 'actix', method: 'GET', ...FOCUS };
+const ACTIX_PATCH = { guardian_kind: 'route', framework: 'actix', method: 'PATCH', ...FOCUS };
+const NEST_GET = { guardian_kind: 'route', framework: 'nestjs', method: 'GET', ...FOCUS };
+const ASPNET_GET = { guardian_kind: 'route', framework: 'aspnet', method: 'GET', ...FOCUS };
+
 describe('recoverMetavars — $PATH from the first string literal', () => {
   // The captured spans, one per framework. Quoting is asserted verbatim
   // because it is what `isLiteralPath` in extract.ts keys off.
@@ -154,117 +164,170 @@ describe('recoverMetavars — $METHOD from the callee', () => {
     expect(extractSurface(outcome.json).routes[0]?.method).toBe('GET');
   });
 
-  it('recovers no $METHOD for actix — that whole family is refused', () => {
-    // The actix rule binds the attribute name to $METHOD and declares no
-    // metadata.method, so on a redacting Semgrep the verb exists only if it can
-    // be reconstructed. It cannot be, safely — see the refusal suite below.
-    const span = [
-      '#[patch("/rust/items/{id}/status")]',
-      '#[allow(clippy::unused_async)]',
-      'async fn patch_item(path: web::Path<u32>) -> impl Responder { HttpResponse::Ok().finish() }',
-    ].join('\n');
-    const outcome = recoverSpan(span, { guardian_kind: 'route', framework: 'actix' });
+  it('recovers no $METHOD for a focused rule — there is no callee in the span', () => {
+    // A focused span is a bare path literal. The actix rules are one per verb
+    // and declare metadata.method precisely because focusing discards $METHOD;
+    // reading a verb out of `"/rust/items/{id}/status"` would be invention.
+    const outcome = recoverSpan('"/rust/items/{id}/status"', {
+      ...ACTIX_PATCH,
+    });
     expect(mv(outcome, '$METHOD')).toBeUndefined();
-    expect(outcome.unrecoverable).toBe(1);
+    expect(mv(outcome, '$PATH')).toBe('"/rust/items/{id}/status"');
+    expect(extractSurface(outcome.json).routes[0]?.method).toBe('PATCH');
   });
 });
 
 /**
- * Three rule families match the attribute PLUS the declaration it decorates,
-/**
- * The three families whose Semgrep pattern must span the decorated declaration
- * are refused outright when metavariables are redacted, because the reported
- * span starts at whatever attribute comes first and no local rule can tell code
- * from a comment from a string.
+ * The three families whose Semgrep pattern must span the decorated declaration:
+ * actix, NestJS and ASP.NET attribute routes.
  *
- * Two reconstructions were tried and both invented routes that `isLiteralPath`
- * accepted, so they were emitted as RESOLVED paths a DAST tool would request:
- * anchoring on the first argument list turned `#[allow(dead_code)]` into a
- * route named `dead_code`; anchoring on the attribute by name turned a
- * commented-out `// [HttpGet("/orders/legacy")]` into `/orders/legacy` while
- * the live `/orders` vanished.
+ * They used to be refused outright. Four generations of "find the route
+ * attribute inside the declaration span" each invented routes that
+ * `isLiteralPath` accepted, so they were emitted as RESOLVED paths a DAST tool
+ * would request: anchoring on the first argument list turned
+ * `#[allow(dead_code)]` into a route named `dead_code`; anchoring on the
+ * attribute by name turned a commented-out `// [HttpGet("/orders/legacy")]`
+ * into `/orders/legacy` while the live `/orders` vanished.
  *
- * Every span below is real Semgrep 1.164.0 output whose 1.86.0 ground truth is
- * a different, real route. The assertion is that we now produce NOTHING for
- * them — a visible gap rather than a plausible lie. These tests are what stop
- * the heuristic being reintroduced.
+ * `focus-metavariable: $PATH` removes the question instead of answering it:
+ * Semgrep narrows its own reported range to the metavariable, so the offsets
+ * point at the path literal and recovery is "the span is the value". The decoys
+ * below are all still present in the SOURCE — they are simply not in the span,
+ * which is why no assertion here depends on being able to tell them apart.
+ *
+ * The spans and sources are the real fixtures. That Semgrep really does report
+ * these narrow ranges for them is measured by `test/e2e/rulePackFixture.test.ts`
+ * against the actual binary; ground-truthed against 1.86.0, whose `$PATH`
+ * captures are byte-for-byte equal to these spans.
  */
-describe('recoverMetavars — decorated-declaration families are refused', () => {
-  const ACTIX = { guardian_kind: 'route', framework: 'actix', confidence: 'medium' };
-  const NEST_GET = { guardian_kind: 'route', framework: 'nestjs', method: 'GET' };
-  const ASPNET_GET = { guardian_kind: 'route', framework: 'aspnet', method: 'GET' };
-
-  const refused: [name: string, span: string, metadata: Record<string, unknown>][] = [
-    // --- a commented-out old route above the live one. The realistic case.
+describe('recoverMetavars — focused rules: the span IS the value', () => {
+  const focused: [
+    name: string,
+    span: string,
+    source: string,
+    metadata: Record<string, unknown>,
+  ][] = [
+    // --- a commented-out old route above the live one. The realistic case,
+    // and the one that defeated round 4.
     [
       'rust, commented-out route above the live one',
+      '"/rust/real"',
       '#[allow(dead_code)]\n// #[get("/rust/legacy")]\n#[get("/rust/real")]\nasync fn r() -> String { String::new() }',
-      ACTIX,
+      ACTIX_GET,
     ],
     [
       'aspnet, commented-out route above the live one',
-      'Produces("application/json")]\n    // [HttpGet("/orders/legacy")]\n    [HttpGet("/orders")]\n    public IActionResult L() => Ok();',
+      '"/orders"',
+      '[Produces("application/json")]\n    // [HttpGet("/orders/legacy")]\n    [HttpGet("/orders")]\n    public IActionResult L() => Ok();',
       ASPNET_GET,
     ],
     [
       'nestjs, commented-out route above the live one',
+      "'/n/real'",
       "@UseGuards(AuthGuard)\n  // @Get('/n/legacy')\n  @Get('/n/real')\n  r(): string { return 'ok'; }",
       NEST_GET,
     ],
     // --- a foreign decorator above the route one.
     [
       'rust, #[allow(dead_code)] first',
+      '"/real/d"',
       '#[allow(dead_code)]\n#[get("/real/d")]\nasync fn d() -> String { String::new() }',
-      ACTIX,
+      ACTIX_GET,
     ],
     [
       'aspnet, [Produces("application/json")] first',
-      'Produces("application/json")]\n    [HttpGet("/real/orders")]\n    public IActionResult L() => Ok();',
+      '"/real/orders"',
+      '[Produces("application/json")]\n    [HttpGet("/real/orders")]\n    public IActionResult L() => Ok();',
       ASPNET_GET,
     ],
     [
       "nestjs, @Roles('admin') first",
+      "'/real/users'",
       "@Roles('admin')\n  @Get('/real/users')\n  findAll(): string[] { return []; }",
       NEST_GET,
     ],
-    // --- the route attribute first, which used to work. Still refused: the
-    // point is that we cannot TELL which case we are in.
+    // --- the route attribute first.
     [
       'rust, route attribute first',
+      '"/plain/ok"',
       '#[get("/plain/ok")]\n#[allow(clippy::unused_async)]\nasync fn p() -> String { String::new() }',
-      ACTIX,
+      ACTIX_GET,
     ],
     [
       'aspnet, route attribute first',
-      'HttpGet("/plain/ok")]\n    [Authorize]\n    public IActionResult P() => Ok();',
+      '"/plain/ok"',
+      '[HttpGet("/plain/ok")]\n    [Authorize]\n    public IActionResult P() => Ok();',
       ASPNET_GET,
     ],
     // --- anchor text inside a string.
     [
       'aspnet, anchor text inside a preceding attribute string',
+      '"/q3/real"',
       'Roles("HttpGet(")]\n    [HttpGet("/q3/real")]\n    public IActionResult Q() => Ok();',
       ASPNET_GET,
     ],
     // --- apostrophes in comments / Rust lifetimes.
     [
       'rust, apostrophes in a doc comment and a lifetime',
+      '"/t1/real"',
       '#[allow(dead_code)]\n/// Don\'t call this directly; use the router.\n#[get("/t1/real")]\nasync fn t1(n: &\'static str) -> impl Responder { ok(n) }',
-      ACTIX,
+      ACTIX_GET,
     ],
   ];
 
-  for (const [name, span, metadata] of refused) {
-    it(`recovers nothing — ${name}`, () => {
-      const outcome = recoverSpan(span, metadata);
-      expect(mv(outcome, '$PATH')).toBeUndefined();
-      expect(outcome.recovered).toBe(0);
-      expect(outcome.unrecoverable).toBe(1);
-      expect(extractSurface(outcome.json).routes).toHaveLength(0);
+  for (const [name, span, source, metadata] of focused) {
+    it(`recovers the real route — ${name}`, () => {
+      const outcome = recoverSpan(span, metadata, source);
+      expect(mv(outcome, '$PATH')).toBe(span);
+      expect(outcome.recovered).toBe(1);
+      expect(outcome.unrecoverable).toBe(0);
+
+      // End to end: a resolved path, not a partial, and never the decoy.
+      const route = extractSurface(outcome.json).routes[0];
+      expect(route?.path_resolved).toBe(span.slice(1, -1));
+      expect(route?.path_partial).toBe(false);
+      for (const decoy of ['legacy', 'dead_code', 'application/json', 'admin', 'Authorize']) {
+        expect(route?.path_resolved, `fabricated ${decoy}`).not.toContain(decoy);
+      }
     });
   }
 
-  it('reports the file of every refused match so coverage can attribute it', () => {
-    const outcome = recoverSpan('#[get("/x")]\nasync fn x() -> String { String::new() }', ACTIX);
+  it('does no searching, so a decoy INSIDE the span is returned verbatim', () => {
+    // The flag path must not care what the span looks like: it slices and
+    // stops. A path that itself contains attribute-shaped text is the sharpest
+    // form of that — every previous generation would have dug the inner
+    // `/fake` out of it, because every one of them searched.
+    const span = '"/api/[HttpGet(\\"/fake\\")]/ok"';
+    const outcome = recoverSpan(span, ASPNET_GET);
+    expect(mv(outcome, '$PATH')).toBe(span);
+    expect(mv(outcome, '$PATH')).not.toBe('"/fake"');
+    expect(outcome.recovered).toBe(1);
+  });
+
+  it('keeps the source quoting, which is what isLiteralPath reads', () => {
+    // Single quotes (TS), double quotes (Rust/C#) and a computed path all
+    // arrive exactly as they sit in source. Adding a quote would fabricate a
+    // URL; stripping one would erase a route we can legitimately name.
+    expect(mv(recoverSpan("':id'", NEST_GET), '$PATH')).toBe("':id'");
+    expect(mv(recoverSpan('"/x"', ACTIX_GET), '$PATH')).toBe('"/x"');
+
+    // A focused capture that is not a literal — `#[get(ROUTE_CONST)]`. It stays
+    // unquoted, so isLiteralPath rejects it and the route survives as partial
+    // rather than being resolved to a name that is not a URL.
+    const outcome = recoverSpan('ROUTE_CONST', ACTIX_GET);
+    const route = extractSurface(outcome.json).routes[0];
+    expect(route?.path_raw).toBe('ROUTE_CONST');
+    expect(route?.path_partial).toBe(true);
+    expect(route?.confidence).toBe('low');
+  });
+
+  it('reports the file of a genuinely unreadable route so coverage can attribute it', () => {
+    // No family is refused any more, so this is the remaining real case: the
+    // source is not in the map at all (deleted or rewritten mid-scan, or not
+    // valid UTF-8). It must still not read as "no routes in this language".
+    const { json } = scenario('#[get("/x")]', '"/x"', ACTIX_GET);
+    const outcome = recoverMetavars(json, new Map());
+    expect(outcome.unrecoverable).toBe(1);
     expect(outcome.unreadableRouteFiles).toEqual([FILE]);
   });
 
@@ -279,9 +342,10 @@ describe('recoverMetavars — decorated-declaration families are refused', () =>
     expect(outcome.unreadableRouteFiles).toEqual([]);
   });
 
-  it('still recovers the ten families whose span starts at the construct', () => {
-    // The refusal must be surgical. aspnet-minimal is a call, not an attribute,
-    // and shares a language with the refused aspnet family.
+  it('still recovers the ten unfocused families by scanning their span', () => {
+    // The flag must be surgical: an unfocused rule still goes through the
+    // scanner. aspnet-minimal is a call, not an attribute, and shares both its
+    // language and its `aspnet` name prefix with a focused family.
     expect(
       mv(
         recoverSpan('app.MapGet("/minimal/health", () => "ok")', {
@@ -304,16 +368,38 @@ describe('recoverMetavars — decorated-declaration families are refused', () =>
   });
 
   it('never throws on a metadata.method that is not a plain verb', () => {
+    // `metadata.method` was once interpolated raw into `new RegExp`, so
+    // `method: "a("` threw a SyntaxError out of a module documented as never
+    // throwing. Nothing reads it as a pattern any more — the focused path does
+    // not look at it at all — but the input is user-controllable through
+    // register_custom_rules, so the guard stays on both paths.
     for (const method of ['a(', 'Get|Post', '[', '\\', '(?<', '']) {
-      const run = (): RecoveryOutcome =>
-        recoverSpan('HttpGet("/x")]\n public IActionResult X() => Ok();', {
+      const focused = (): RecoveryOutcome => recoverSpan('"/x"', { ...ASPNET_GET, method });
+      const scanned = (): RecoveryOutcome =>
+        recoverSpan('app.MapGet("/x", h)', {
           guardian_kind: 'route',
-          framework: 'aspnet',
+          framework: 'aspnet-minimal',
           method,
         });
-      expect(run).not.toThrow();
-      expect(run().unrecoverable).toBe(1);
+      expect(focused).not.toThrow();
+      expect(scanned).not.toThrow();
+      // A nonsense verb must not cost us the path: normalizeMethod degrades the
+      // method to ANY, and the route is still reported.
+      expect(mv(focused(), '$PATH')).toBe('"/x"');
+      expect(focused().unrecoverable).toBe(0);
     }
+  });
+
+  it('ignores the focus flag on a kind that has no $PATH', () => {
+    // `guardian_focus` is a route concept (rulePack.test.ts pins that), but a
+    // rule registered through register_custom_rules can set anything. A mount
+    // rule needs two captures, so the flag must not short-circuit it into one.
+    const outcome = recoverSpan("app.use('/api', usersRouter)", {
+      guardian_kind: 'mount',
+      ...FOCUS,
+    });
+    expect(mv(outcome, '$PREFIX')).toBe("'/api'");
+    expect(mv(outcome, '$ROUTER')).toBe('usersRouter');
   });
 });
 

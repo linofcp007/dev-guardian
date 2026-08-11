@@ -240,7 +240,9 @@ export interface CoverageEntry {
   /**
    * Matches Semgrep reported for this language whose captures could not be
    * read, so the routes exist but are absent from the inventory. Non-zero only
-   * on a Semgrep that redacts match content (see `surface/recoverMetavars.ts`).
+   * on a Semgrep that redacts match content AND when re-reading the source at
+   * the reported offsets failed (see `surface/recoverMetavars.ts`) — no rule
+   * family is refused, so this does not track any framework or language.
    */
   unreadable_matches: number;
   /**
@@ -251,6 +253,10 @@ export interface CoverageEntry {
    * them. It exists so that case never collapses into 'no_matches', which a
    * consumer reads as "this language exposes nothing" — the inverse of the
    * truth, and the falsehood this whole tool is built to avoid.
+   *
+   * It no longer describes any rule family: every family is now recovered on
+   * every Semgrep version. What remains is the genuine case — source that could
+   * not be read at the offsets reported, e.g. a file rewritten mid-scan.
    */
   status: 'ok' | 'no_matches' | 'no_rules' | 'unreadable';
 }

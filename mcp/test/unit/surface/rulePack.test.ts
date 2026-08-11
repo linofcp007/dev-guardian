@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { UNREADABLE_UNDER_REDACTION } from '../../../src/surface/recoverMetavars.js';
+import { FOCUS_METADATA_KEY, FOCUS_PATH } from '../../../src/surface/recoverMetavars.js';
 
 const PACK_PATH = join(__dirname, '../../../../configs/semgrep/routes.yml');
 
@@ -59,6 +59,27 @@ function patternsOf(rule: Rule): string[] {
   };
   if (typeof rule.pattern === 'string') found.push(rule.pattern);
   walk(rule.patterns ?? rule['pattern-either'] ?? []);
+  return found;
+}
+
+/** The metavariables a rule narrows its reported range to, at any depth. */
+function focusedMetavars(rule: Rule): Set<string> {
+  const found = new Set<string>();
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child);
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    const record = node as Record<string, unknown>;
+    const focus = record['focus-metavariable'];
+    if (typeof focus === 'string') found.add(focus);
+    else if (Array.isArray(focus)) {
+      for (const name of focus) if (typeof name === 'string') found.add(name);
+    }
+    for (const value of Object.values(record)) walk(value);
+  };
+  walk(rule.patterns ?? rule['pattern-either'] ?? rule.pattern);
   return found;
 }
 
@@ -138,7 +159,11 @@ describe('configs/semgrep/routes.yml', () => {
       if (rule.metadata?.method !== undefined) methods.add(rule.metadata.method);
       byFramework.set(framework, methods);
     }
-    for (const framework of ['nestjs', 'spring', 'aspnet']) {
+    // actix is here too, and was not always: it was one rule binding the
+    // attribute name to $METHOD. `focus-metavariable: $PATH` narrows the
+    // reported range to the path and discards every other capture, $METHOD
+    // included, so the verb has to come from the rule identity again.
+    for (const framework of ['nestjs', 'spring', 'aspnet', 'actix']) {
       const methods = byFramework.get(framework);
       expect(methods?.has('GET'), `${framework} has no GET rule`).toBe(true);
       expect(methods?.has('POST'), `${framework} has no POST rule`).toBe(true);
@@ -146,60 +171,80 @@ describe('configs/semgrep/routes.yml', () => {
     }
   });
 
-  it('keeps the Rust rule single, with the verb in $METHOD', () => {
-    // actix used to be in the list above: five per-verb rules, one per
-    // attribute. Measured against Semgrep 1.86.0 they all matched the SAME
-    // spans — every node in the file — and bound `metavars: {}`, so one real
-    // `#[get("/x")]` produced five routes: the correct GET plus four
-    // fabricated verbs, some anchored on function bodies rather than routes.
-    //
-    // Semgrep's Rust engine does bind the attribute name once the pattern
-    // includes the item the attribute is attached to, and an actix/Rocket
-    // attribute name IS the HTTP verb, so one rule with a $METHOD guard is
-    // both correct and sufficient. The other attribute families cannot do
-    // this: `@$DEC($PATH)` is not a parseable TypeScript pattern, and C#'s
-    // `HttpGet` is not a verb the extractor's normalizeMethod knows.
-    const actix = rules().filter((r) => r.metadata?.framework === 'actix');
-    expect(actix).toHaveLength(1);
-    const rule = actix[0];
-    expect(rule?.metadata?.method).toBeUndefined();
-    expect(rule === undefined ? new Set() : guardedMetavars(rule)).toContain('$METHOD');
+  it('gives every focused route rule its own verb, since focusing discards $METHOD', () => {
+    // A focused rule reports only $PATH, so a `$METHOD` metavariable in its
+    // pattern would bind nothing readable on a redacting Semgrep while binding
+    // correctly on an old one — the two versions would disagree about the verb.
+    // Declaring the verb per rule is what makes them agree.
+    for (const rule of rules().filter((r) => r.metadata?.[FOCUS_METADATA_KEY] !== undefined)) {
+      expect(rule.metadata?.method, `${rule.id} declares no metadata.method`).toBeDefined();
+      expect(guardedMetavars(rule), `${rule.id} still guards $METHOD`).not.toContain('$METHOD');
+      expect(patternsOf(rule).join('\n'), `${rule.id} still binds $METHOD`).not.toContain(
+        '$METHOD',
+      );
+    }
   });
 
-  it('refuses recovery for every route rule whose pattern spans the declaration', () => {
-    // The lock-step that would have caught a shipped Critical defect.
+  it('keeps `focus-metavariable` and the guardian_focus flag in lock-step', () => {
+    // The successor to the UNREADABLE_UNDER_REDACTION assertion, and the reason
+    // it can be simpler: recovery for a focused rule is "the span is the value",
+    // so there is no list of frameworks to keep current and no fail-open default
+    // for an unlisted one to fall into. What must hold is only that the flag
+    // `recoverMetavars.ts` reads and the operator Semgrep acts on travel
+    // together — in BOTH directions.
     //
-    // A pattern ending in `{ ... }` matches the attribute PLUS the declaration
-    // it decorates, so Semgrep's reported span starts at the FIRST attribute on
-    // that declaration — not necessarily the route one. `recoverMetavars.ts`
-    // must then locate the route attribute by name; if it instead reads the
-    // first argument list in the span it recovers a *different* attribute's
-    // argument, and because that usually succeeds the real route is silently
-    // replaced rather than reported missing:
-    //
-    //   #[allow(dead_code)] / #[get("/d")]  ->  a resolved route `dead_code`
-    //
-    // Such a span cannot be read back on a redacting Semgrep: it starts at
-    // whatever attribute comes first, and no local rule can tell code from a
-    // comment from a string. Those families are therefore REFUSED — see
-    // UNREADABLE_UNDER_REDACTION. Widening a fourth family the same way without
-    // listing it there silently reintroduces route fabrication, so the two
-    // lists are asserted equal here rather than merely compatible.
-    //
-    // The detector keys on a brace-delimited BODY appearing in the pattern,
-    // not on the literal text `{ ... }`. Sniffing for that exact string passed
-    // green when the same rule was written `{ $BODY }` — a spelling difference
-    // Semgrep treats as equivalent — and fabricated exactly as before. No
-    // pattern in this pack that matches a call or an annotation alone contains
-    // a brace; every one that swallows a declaration does.
-    const spansDeclaration = new Set<string>();
-    for (const rule of rules().filter((r) => r.metadata?.guardian_kind === 'route')) {
-      if (patternsOf(rule).some(hasBracedBody)) {
-        spansDeclaration.add(String(rule.metadata?.framework));
+    // Declaring the flag without the operator is the dangerous direction: the
+    // span would then be the whole decorated declaration and "the span is the
+    // value" would emit a route whose path is a function body. Declaring the
+    // operator without the flag is merely lossy — the span is the path literal
+    // and the scanner would refuse it — but it means a rule silently stopped
+    // being recovered, so it fails too.
+    for (const rule of rules()) {
+      const declared = rule.metadata?.[FOCUS_METADATA_KEY];
+      const focused = focusedMetavars(rule);
+      if (declared !== undefined) {
+        expect(declared, `${rule.id}: unknown ${FOCUS_METADATA_KEY} value`).toBe(FOCUS_PATH);
+        expect(rule.metadata?.guardian_kind, `${rule.id}: focus is a route concept`).toBe('route');
+        expect([...focused], `${rule.id} declares the flag but focuses nothing`).toEqual(['$PATH']);
+      } else {
+        expect([...focused], `${rule.id} focuses but declares no flag`).toEqual([]);
       }
     }
+  });
+
+  it('focuses every route rule whose pattern spans the declaration', () => {
+    // The lock-step that would have caught a shipped Critical defect, restated
+    // for the fix that removed the defect class.
+    //
+    // A pattern containing a brace-delimited body matches the attribute PLUS the
+    // declaration it decorates, so Semgrep's reported span starts at the FIRST
+    // attribute on that declaration — not necessarily the route one:
+    //
+    //   #[allow(dead_code)] / #[get("/d")]  ->  a resolved route `dead_code`
+    //   // [HttpGet("/orders/legacy")] / [HttpGet("/orders")]  ->  /orders/legacy
+    //
+    // Four generations of "find the route attribute in the span" produced routes
+    // like those, silently, because reconstruction SUCCEEDED and isLiteralPath
+    // accepts a fabrication as readily as the truth. No local predicate can tell
+    // code from a comment from a string, so the answer is not to read the span
+    // better but to make Semgrep report a narrower one. Widening a fourth family
+    // to span its declaration without focusing it reintroduces the whole class,
+    // which is why this is an equality and not a compatibility check.
+    //
+    // The detector keys on a brace-delimited BODY appearing in the pattern, not
+    // on the literal text `{ ... }`. Sniffing for that exact string passed green
+    // when the same rule was written `{ $BODY }` — a spelling difference Semgrep
+    // treats as equivalent — and fabricated exactly as before.
+    const spansDeclaration = new Set<string>();
+    const focusedFrameworks = new Set<string>();
+    for (const rule of rules().filter((r) => r.metadata?.guardian_kind === 'route')) {
+      const framework = String(rule.metadata?.framework);
+      if (patternsOf(rule).some(hasBracedBody)) spansDeclaration.add(framework);
+      if (rule.metadata?.[FOCUS_METADATA_KEY] !== undefined) focusedFrameworks.add(framework);
+    }
     expect(spansDeclaration.size).toBeGreaterThan(0);
-    expect([...spansDeclaration].sort()).toEqual([...UNREADABLE_UNDER_REDACTION].sort());
+    expect([...spansDeclaration].sort()).toEqual(['actix', 'aspnet', 'nestjs']);
+    expect([...focusedFrameworks].sort()).toEqual([...spansDeclaration].sort());
   });
 
   it('constrains $PATH to a literal on exactly the two rules that need it', () => {

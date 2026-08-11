@@ -14,20 +14,44 @@
  * Slicing the file between them yields the exact matched source text, from
  * which the captures can be reconstructed.
  *
- * ---- What this can and cannot rebuild ----------------------------------
+ * ---- Two kinds of span, and only one of them is scanned -----------------
  *
- * Reconstruction is only sound when the span *starts at the construct that
+ * Scanning a span is sound only when it *starts at the construct that
  * matched*, because then the capture sits in it at a known place. Ten of the
  * thirteen route families are like that (express + its mount/import rules,
  * flask, fastapi, django, laravel, gin, net/http, spring, wp-rest,
  * aspnet-minimal) along with every `env` rule, and all of them are verified
  * capture-for-capture against Semgrep 1.86.0.
  *
- * Three are not: actix, NestJS and ASP.NET attribute routes, whose Semgrep
- * pattern has to swallow the decorated declaration, so the span begins at
- * whatever attribute happens to come first. Those are refused rather than
- * guessed — see UNRECOVERABLE_FRAMEWORKS below for the two attempts that were
- * made and the routes each of them invented.
+ * The other three — actix, NestJS and ASP.NET attribute routes — have a pattern
+ * that must swallow the decorated declaration in order to parse at all, so
+ * their span can begin at a foreign attribute. Four successive attempts to
+ * locate the route attribute inside such a span each FABRICATED routes: a
+ * commented-out `// [HttpGet("/orders/legacy")]` between attributes became the
+ * only reported endpoint while the live `/orders` never entered the inventory.
+ * The general failure is that "is this text code, a comment, or a string" is
+ * not local information, and the span starts mid-file.
+ *
+ * Those three now declare `focus-metavariable: $PATH`, which makes Semgrep
+ * narrow the REPORTED RANGE to the metavariable's own range. The offsets then
+ * point at the path literal itself, so recovery is "the span is the value" — no
+ * anchoring, no argument parsing, nothing searched for. That is what makes the
+ * defect structurally impossible rather than merely unobserved: a decoy cannot
+ * be picked out of a span it is not in. Such a rule marks itself with
+ * `metadata.guardian_focus: path` (see FOCUS_METADATA_KEY) and this module
+ * reads that flag rather than inferring anything from the framework name — the
+ * rule pack is the thing that knows whether it focused.
+ *
+ * The point of all this: coverage no longer depends on the Semgrep version, or
+ * on being logged in. All thirteen families yield the same routes on 1.86.0
+ * (real metavariables) and on 1.164.0 (redacted, rebuilt from offsets) —
+ * measured over `mcp/test/fixtures/surface/apps/`, adversarial decoys included.
+ *
+ * A simplification deliberately NOT taken: the other ten families could be
+ * focused too, which would make the scanner below redundant. They work, they
+ * are verified slot-for-slot against 1.86.0, and several of them capture
+ * $METHOD as a metavariable that focusing would discard — so re-opening ten
+ * working families is not worth the uniformity today.
  *
  * Design: this module synthesizes into the *same shape the extractor already
  * reads* (`extra.metavars.$NAME.abstract_content`), so `extract.ts` — pure and
@@ -157,6 +181,19 @@ function synthesize(kind, span, metadata) {
             return undefined;
     }
 }
+/**
+ * The metadata key a rule sets to declare that it narrowed Semgrep's reported
+ * range with `focus-metavariable`, and the only value this module acts on.
+ *
+ * Exported so `test/unit/surface/rulePack.test.ts` asserts the flag and the
+ * `focus-metavariable` operator stay in lock-step across the two files: a rule
+ * declaring one without the other fails the suite, in either direction. That
+ * assertion is the successor to UNREADABLE_UNDER_REDACTION's, and it has no
+ * fail-open default to guard — there is no list of frameworks any more, so an
+ * unlisted framework has no wrong path to fall into.
+ */
+export const FOCUS_METADATA_KEY = 'guardian_focus';
+export const FOCUS_PATH = 'path';
 /* ---- route ---------------------------------------------------------------
  *
  * Captured shapes (Semgrep 1.164.0, multi-language fixture):
@@ -168,16 +205,29 @@ function synthesize(kind, span, metadata) {
  *   path(settings.ADMIN_URL, flask_route)
  *
  * Every one of those spans starts at the call or annotation that matched, so
- * the capture sits in it at a known place. The three frameworks whose span
- * starts somewhere else are refused outright — see UNRECOVERABLE_FRAMEWORKS.
+ * the capture sits in it at a known place. A focused rule is the other kind and
+ * is handled first, before any of the scanning below can touch it.
  */
 function synthesizeRoute(span, metadata) {
+    // The rule narrowed Semgrep's own reported range to $PATH, so the span IS the
+    // capture — quotes and all, which is what `isLiteralPath` reads. Nothing is
+    // searched for and nothing is lexed; Semgrep resolved the metavariable with a
+    // real parser for the language, and a decoy elsewhere in the declaration is
+    // not in this span to be found. Emitting the span verbatim (no trimming) is
+    // deliberate: if a range ever arrived wider than the literal, the extra
+    // whitespace makes `isLiteralPath` reject it and the route is flagged
+    // `path_partial` rather than resolved to something we did not read.
+    //
+    // No $METHOD, ever: focusing discards every other capture, so a focused rule
+    // declares `metadata.method` instead (the rule pack test pins that the three
+    // focused families are one rule per verb). Reading a verb out of a bare path
+    // literal would be pure invention.
+    if (str(metadata, FOCUS_METADATA_KEY) === FOCUS_PATH) {
+        return { $PATH: { abstract_content: span } };
+    }
     const framework = str(metadata, 'framework');
     if (framework === 'wp-rest')
         return synthesizeNamespacedRoute(span);
-    // Not "try and fall back" — there is no safe reading of these spans.
-    if (framework !== undefined && UNRECOVERABLE_FRAMEWORKS.has(framework))
-        return undefined;
     const declaredMethod = str(metadata, 'method');
     const path = routePath(span);
     if (path === undefined)
@@ -197,80 +247,17 @@ function synthesizeRoute(span, metadata) {
     }
     return metavars;
 }
-/* ---- decorated-declaration frameworks: deliberately NOT recovered ---------
- *
- * Three rule families in `configs/semgrep/routes.yml` cannot match their route
- * attribute alone — Semgrep's Rust engine matches every node in the file, its
- * C# engine reads `[HttpGet($PATH)]` as a collection expression, and its
- * TypeScript engine rejects a bare decorator pattern outright. All three
- * therefore match the attribute *plus the declaration it decorates*, and the
- * reported span begins at the FIRST attribute on that declaration.
- *
- * That span is not something this module can read. Two attempts were made and
- * both fabricated routes:
- *
- *   1. Anchor on the first argument list in the span. `#[allow(dead_code)]`
- *      above `#[get("/d")]` yielded a route named `dead_code`;
- *      `[Produces("application/json")]` above `[HttpGet("/orders")]` yielded
- *      `application/json`.
- *   2. Anchor on the route attribute located by name, in "attribute position".
- *      A commented-out old route — `// [HttpGet("/orders/legacy")]` above the
- *      live one, about as ordinary as source code gets — yielded
- *      `/orders/legacy` while `/orders` never entered the inventory.
- *
- * The second failure is the general one, and it is not a tuning problem.
- * Deciding whether text is code, a comment, or a string literal is not local
- * information: it depends on everything from the start of the file, and the
- * span we are handed starts in the middle. A predicate that inspects the
- * characters around a match cannot answer it, in nine languages or in one.
- *
- * Both failures produced a *resolved* path — `isLiteralPath` accepts
- * `/orders/legacy` exactly as readily as `/orders` — and both were silent,
- * because reconstruction SUCCEEDED. The real route was replaced, not merely
- * missed, and `map_attack_surface` feeds a DAST tool that would go on to
- * request the fabrication.
- *
- * So these three recover nothing and are counted `unrecoverable`. The caller
- * reports the count and names the remedy. A missing route is a gap a person
- * can see and act on; a fabricated URL is a lie acted on for them.
- *
- * This costs nothing on a Semgrep that still emits metavariables: those runs
- * are `intact` and never reach this module's synthesis at all.
- *
- * ---- This list is FAIL-OPEN. Read before adding a rule. ----------------
- *
- * A framework that is not in this set is RECOVERED, not refused. That is the
- * right default for the ten families that are safe, but it means a fourth
- * declaration-spanning family added to `configs/semgrep/routes.yml` without
- * being listed here would silently fabricate again, exactly as rounds 1 and 2
- * of this fix did. Nothing in the recovery path can detect that on its own —
- * the span looks like any other.
- *
- * What holds it shut is one assertion in `test/unit/surface/rulePack.test.ts`,
- * which parses every route rule's pattern, collects the frameworks whose
- * pattern swallows a brace-delimited declaration body, and requires that set to
- * equal this one. Keep them in lock-step; if you widen a pattern and the suite
- * goes red here, the fix is to add the framework to this set, not to relax the
- * assertion.
- */
-const UNRECOVERABLE_FRAMEWORKS = new Set(['actix', 'nestjs', 'aspnet']);
-/**
- * Frameworks whose Semgrep pattern spans the decorated declaration, so their
- * captures cannot be rebuilt from a redacted span. Exported so
- * `test/unit/surface/rulePack.test.ts` can assert this set and the rule pack's
- * declaration-spanning rules stay in lock-step — the single guard on the
- * fail-open default described above.
- */
-export const UNREADABLE_UNDER_REDACTION = UNRECOVERABLE_FRAMEWORKS;
 /**
  * The path a route rule captured: the FIRST ARGUMENT of the registration
  * call, not merely the first string literal in the span.
  *
  * The distinction is load-bearing, and measured. Semgrep can report a span far
- * wider than the call that matched — the Rust attribute rules report the whole
- * item, `#[get("/rust-route")]` *plus the function body* — and "first string
- * literal anywhere in the span" would happily pick a string out of that body.
- * Anchoring to the argument list keeps the capture where the rule bound it.
+ * wider than the call that matched — an unfocused Rust attribute rule reports
+ * the whole item, `#[get("/rust-route")]` *plus the function body* — and "first
+ * string literal anywhere in the span" would happily pick a string out of that
+ * body. Anchoring to the argument list keeps the capture where the rule bound
+ * it. The pack's own attribute rules are focused now and never reach here, but
+ * a rule added through `register_custom_rules` can produce exactly that shape.
  *
  * Two deliberate exits:
  *

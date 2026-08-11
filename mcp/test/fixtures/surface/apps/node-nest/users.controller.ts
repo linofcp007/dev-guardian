@@ -48,9 +48,11 @@ export class UsersController {
     return this.service.remove(id);
   }
 
-  // ADVERSARIAL. A foreign decorator precedes the route one, so Semgrep's span
-  // starts at `@HttpCode(...)`. Anchoring on the first argument list read `204`
-  // as the path. NestJS routes are refused on a redacting Semgrep; none appear.
+  // ADVERSARIAL. A foreign decorator precedes the route one, so an unfocused
+  // rule's span starts at `@HttpCode(...)` — anchoring on the first argument
+  // list read `204` as the path. The rule focuses on $PATH, so the reported
+  // range is the literal and `purge/:id` is what comes back. `204` must never
+  // appear as a route.
   @HttpCode(204)
   @Delete('purge/:id')
   purge(@Param('id') id: string): string {
@@ -59,7 +61,8 @@ export class UsersController {
 
   // ADVERSARIAL: a commented-out old route, an apostrophe in the comment, and
   // decorator-shaped text in the body. Anchoring by name emitted `legacy/:id`;
-  // lexing strings emitted `audit/FABRICATED`.
+  // lexing strings emitted `audit/FABRICATED`. Neither is reachable from a span
+  // that is just the path literal — the expected route is `audit/:id`.
   @HttpCode(200)
   // Don't expose this without the guard.
   // @Get('legacy/:id')

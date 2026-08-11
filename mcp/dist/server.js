@@ -41694,10 +41694,14 @@ function synthesize(kind, span, metadata) {
       return void 0;
   }
 }
+var FOCUS_METADATA_KEY = "guardian_focus";
+var FOCUS_PATH = "path";
 function synthesizeRoute(span, metadata) {
+  if (str3(metadata, FOCUS_METADATA_KEY) === FOCUS_PATH) {
+    return { $PATH: { abstract_content: span } };
+  }
   const framework = str3(metadata, "framework");
   if (framework === "wp-rest") return synthesizeNamespacedRoute(span);
-  if (framework !== void 0 && UNRECOVERABLE_FRAMEWORKS.has(framework)) return void 0;
   const declaredMethod = str3(metadata, "method");
   const path6 = routePath(span);
   if (path6 === void 0) return void 0;
@@ -41708,7 +41712,6 @@ function synthesizeRoute(span, metadata) {
   }
   return metavars;
 }
-var UNRECOVERABLE_FRAMEWORKS = /* @__PURE__ */ new Set(["actix", "nestjs", "aspnet"]);
 function routePath(span) {
   const args = argumentList(span);
   if (args !== void 0) return args[0];
@@ -42093,7 +42096,7 @@ function readSources(parsed, projectPath) {
   }
   return sources;
 }
-var REDACTION_REMEDY = "this Semgrep version redacts match content unless you run `semgrep login`; either log in, or use a Semgrep older than ~1.100, and the routes appear. dev-guardian does not require an account \u2014 most route families are rebuilt from byte offsets either way";
+var REDACTION_REMEDY = "this Semgrep version redacts match content unless you run `semgrep login`, so the captures are rebuilt by re-reading the source at the reported byte offsets, and that read failed for these matches. Either log in, or use a Semgrep older than ~1.100, and the captures arrive directly. dev-guardian does not require an account \u2014 every route family is rebuilt from byte offsets either way";
 function recoveryToolRun(recovery) {
   if (recovery.recovered === 0 && recovery.unrecoverable === 0) return [];
   const base = `recovered ${recovery.recovered} redacted match(es) from byte offsets` + (recovery.intact > 0 ? `; ${recovery.intact} already carried metavariables` : "");
@@ -42116,7 +42119,7 @@ function unreadableMatchesToolRun(recovery) {
   };
 }
 function unreadableMatchesNote(recovery) {
-  return `Semgrep reported ${recovery.unrecoverable} match(es) and not one could be read, so no surface was mapped and nothing was persisted \u2014 a zero-route snapshot here would read as "this application exposes nothing", the inverse of what was measured. Cause: ${REDACTION_REMEDY}. Three route families are affected regardless of that: NestJS, ASP.NET attribute routes and actix cannot be reconstructed from a redacted match at all, because their Semgrep pattern must span the decorated declaration and the reported span can start at an unrelated attribute \u2014 so a project built only from those is exactly this case.`;
+  return `Semgrep reported ${recovery.unrecoverable} match(es) and not one could be read, so no surface was mapped and nothing was persisted \u2014 a zero-route snapshot here would read as "this application exposes nothing", the inverse of what was measured. Cause: ${REDACTION_REMEDY}. Every match failing this way at once usually means the working tree changed under the scan, or the files are not valid UTF-8 \u2014 check that the project was not being written to while the scan ran, then re-run.`;
 }
 function cachedToolsRun(snapshot) {
   const marker = { name: "semgrep", status: "skipped", reason: "cached" };

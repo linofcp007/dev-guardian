@@ -17,10 +17,10 @@ public class OrdersController : ControllerBase
         return Ok();
     }
 
-    // ADVERSARIAL. A foreign attribute precedes the route one, so Semgrep's
-    // span starts at `Produces(...)`. Anchoring on the first argument list read
-    // "application/json" as the path. ASP.NET attribute routes are therefore
-    // refused on a redacting Semgrep; none of them appear.
+    // ADVERSARIAL. A foreign attribute precedes the route one, so an unfocused
+    // rule's span starts at `Produces(...)` — anchoring on the first argument
+    // list read "application/json" as the path. The rule focuses on $PATH, so
+    // the reported range is the literal. "application/json" must never appear.
     [Produces("application/json")]
     [HttpGet("/aspnet/orders/{id}")]
     public IActionResult GetOne(int id) => Ok(id);
@@ -29,7 +29,8 @@ public class OrdersController : ControllerBase
     // attribute's string, a commented-out old route, and attribute-shaped text
     // in the body. Anchoring by name emitted `/aspnet/orders/legacy`; lexing
     // strings emitted the body's FABRICATED path. Both were `path_partial:
-    // false`, i.e. presented as verified URLs.
+    // false`, i.e. presented as verified URLs. None of the three is inside the
+    // focused span — the expected route is `/aspnet/orders/audit`.
     [Roles("HttpGet(")]
     // Don't expose this without the guard.
     // [HttpGet("/aspnet/orders/legacy")]

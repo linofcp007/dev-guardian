@@ -335,15 +335,29 @@ write nothing on failure.
 | `unreadable` | Rules matched, but `unreadable_matches` of them could not be read, so those routes are missing from the inventory. |
 
 `unreadable` exists for one reason: it is the opposite of `no_matches`, and collapsing the
-two would be the "this application exposes nothing" falsehood in miniature. It is what a
-Rust, NestJS or ASP.NET-attribute project gets on a Semgrep that redacts match content
-(>= ~1.120 without `semgrep login`), because those three rule families must match the
-attribute *plus the declaration it decorates* — so the reported span begins at whatever
-attribute happens to come first, and nothing local can tell a route attribute from a
-commented-out one. `surface/recoverMetavars.ts` refuses to guess for those families rather
-than emit a plausible fabrication; the other ten reconstruct fine on any Semgrep version,
-so the tool still requires no account. See that module's header for the two reconstructions
-that were tried and the routes each invented.
+two would be the "this application exposes nothing" falsehood in miniature.
+
+It used to be what a Rust, NestJS or ASP.NET-attribute project got on a Semgrep that
+redacts match content (>= ~1.120 without `semgrep login`): those three rule families must
+match the attribute *plus the declaration it decorates*, so the reported span began at
+whatever attribute came first, and nothing local can tell a route attribute from a
+commented-out one. `surface/recoverMetavars.ts` refused to guess rather than emit a
+plausible fabrication.
+
+**That limitation is gone.** The three families now declare `focus-metavariable: $PATH`,
+which makes Semgrep narrow its *reported range* to the metavariable itself — so the byte
+offsets point at the path literal and recovery is "the span is the value", with nothing
+searched for and nothing lexed. All thirteen route families are now read on every Semgrep
+version: measured over `test/fixtures/surface/apps/`, 1.164.0 (redacting, rebuilt from
+offsets) and 1.86.0 (real metavariables) produce the **same 64 routes**, and every
+adversarial decoy in the fixtures is absent from both. Coverage no longer depends on the
+Semgrep version or on being logged in.
+
+`unreadable` stays, and stays correct, for the case it always also covered: a match whose
+source could not be read at the reported offsets — a file rewritten or deleted mid-scan,
+one that is not valid UTF-8, or offsets past end-of-file. That is now the only way to reach
+it. See `recoverMetavars.ts`'s header for the four reconstructions that were tried before
+focusing, and the routes each of them invented.
 
 `no_rules` is the case most tools hide. If a project uses Hapi or Actix and the pack has no
 rule for it, the output says so rather than reporting zero and implying safety. This
@@ -464,11 +478,12 @@ through that gap.
 
 ### A precondition for whoever writes the DAST consumer
 
-`routes_total` alone is not a complete answer, because a redacting Semgrep leaves the
-three decorated-declaration families out of the inventory (see `CoverageEntry.status:
-'unreadable'`). **A consumer that acts on the route list must read `coverage` alongside
-it** and treat an `unreadable` language as "surface exists here that I have not been
-given", not as "nothing to scan".
+`routes_total` alone is not a complete answer. It no longer varies with the Semgrep
+version — every rule family is read on every version — but a language can still report
+`no_rules` (the pack covers no framework for it) or `unreadable` (matches whose source
+could not be read at the reported offsets; see `CoverageEntry.status`). **A consumer that
+acts on the route list must read `coverage` alongside it** and treat either as "surface
+exists here that I have not been given", not as "nothing to scan".
 
 This is not a live defect and needs no guard today: `summarize()` returns `routes_total`
 and `coverage` in the same object, `scan_dast` does not exist yet, and `risk_score` does
