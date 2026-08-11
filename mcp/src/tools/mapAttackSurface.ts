@@ -212,7 +212,7 @@ async function handler(
     ctx,
     toolsRun,
     includeEnvVars,
-    recovery.unreadableFiles,
+    recovery.unreadableRouteFiles,
   );
   const persisted = ctx.storage.surface.insert({
     project_path: projectPath,
@@ -424,7 +424,7 @@ function buildSnapshot(
   ctx: PluginContext,
   toolsRun: ToolRun[],
   includeEnvVars: boolean,
-  unreadableFiles: readonly string[],
+  unreadableRouteFiles: readonly string[],
 ): AttackSurfaceSnapshot {
   const { routes, mounts } = extractSurface(parsed);
   const knownFiles = collectAllFiles(parsed);
@@ -437,7 +437,7 @@ function buildSnapshot(
     env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
     ports: collectPorts(projectPath),
     webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
-    coverage: buildCoverage(resolved, ctx, unreadableFiles),
+    coverage: buildCoverage(resolved, ctx, unreadableRouteFiles),
     tools_run: toolsRun,
     missing_tools: [],
   };
@@ -560,13 +560,13 @@ function resolveModuleFile(importingFile: string, specifier: string, knownFiles:
 function buildCoverage(
   routes: RouteRecord[],
   ctx: PluginContext,
-  unreadableFiles: readonly string[],
+  unreadableRouteFiles: readonly string[],
 ): CoverageEntry[] {
   const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
 
   // One entry per lost route, so the count is routes-not-shown, not files.
   const unreadableByLanguage = new Map<string, number>();
-  for (const file of unreadableFiles) {
+  for (const file of unreadableRouteFiles) {
     const language = languageFromPath(file);
     if (language === 'unknown') continue;
     unreadableByLanguage.set(language, (unreadableByLanguage.get(language) ?? 0) + 1);

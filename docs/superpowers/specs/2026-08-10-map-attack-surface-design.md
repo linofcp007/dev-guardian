@@ -446,22 +446,35 @@ From `CLAUDE.md`:
 Recorded at merge so they are not rediscovered from scratch. Nothing here is a
 regression; each is a gap between what the tool reports and what it could report.
 
-### The one that must be checked first
+### Resolved: the pipeline has now been run against real Semgrep
 
-**No test in this repo has ever seen real Semgrep output.** Semgrep was not installed
-on the machine this was built on, so the whole pipeline was exercised against
-hand-written JSON fixtures. When a real Semgrep is available, verify **`guardian-route-express`'s
-`$PATH` guard before anything else** — its `metavariable-regex` requires the capture to
-start with a quote character, so it matches only if `abstract_content` retains the source
-quoting. If it does not, the
-flagship rule for the most common stack matches nothing and JS/TS surface mapping is
-silently empty. This is a higher priority than the Ruby and Rust rules, which are
-openly unvalidated guesses but fail visibly rather than silently.
+This section previously opened with "no test in this repo has ever seen real Semgrep
+output". That is no longer true. `test/e2e/rulePackFixture.test.ts` runs the real binary
+over `test/fixtures/surface/apps/` and pins the whole route set; every rule family has
+been verified capture-for-capture against Semgrep 1.86.0, which still emits
+`extra.metavars`, and reproduced on 1.164.0, which redacts them. `abstract_content` does
+retain the source quoting, so `guardian-route-express`'s `$PATH` guard fires correctly —
+the specific risk called out here did not materialise.
 
-The repo's own fixtures disagree on this point — `test/fixtures/surface/express.json`
-encodes `abstract_content` unquoted, `surfaceTools.test.ts` encodes it quoted — and both
-pass, because `stripQuotes` is a no-op on unquoted input. The suite is structurally
-incapable of telling the two worlds apart.
+The e2e is skipped when Semgrep is absent, and **a skip is reported as a skip, not a
+pass**. Set `GUARDIAN_REQUIRE_SEMGREP=1` to make absence a hard failure. That distinction
+is not cosmetic: while both e2e files used `console.warn` plus a bare `return`, vitest
+counted them as passing, and two separate route-fabrication defects reached a green suite
+through that gap.
+
+### A precondition for whoever writes the DAST consumer
+
+`routes_total` alone is not a complete answer, because a redacting Semgrep leaves the
+three decorated-declaration families out of the inventory (see `CoverageEntry.status:
+'unreadable'`). **A consumer that acts on the route list must read `coverage` alongside
+it** and treat an `unreadable` language as "surface exists here that I have not been
+given", not as "nothing to scan".
+
+This is not a live defect and needs no guard today: `summarize()` returns `routes_total`
+and `coverage` in the same object, `scan_dast` does not exist yet, and `risk_score` does
+not read the surface snapshot at all. It becomes real the day that consumer is written,
+so it belongs in that consumer's spec as an explicit precondition rather than as a
+speculative check here.
 
 ### Fields that are advertised but thin
 

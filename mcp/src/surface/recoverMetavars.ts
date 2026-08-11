@@ -64,12 +64,20 @@ export interface RecoveryOutcome {
   /** Matches that had no metavars and could not be recovered. */
   unrecoverable: number;
   /**
-   * The `path` of every unrecoverable match, in match order and with repeats —
-   * one entry per lost route, not per file. `map_attack_surface` maps these to
-   * languages so `coverage` can report "matched but unreadable" for exactly the
-   * languages it happened in, rather than letting them read as `no_matches`.
+   * The `path` of every unrecoverable match whose `guardian_kind` is `route`,
+   * in match order and with repeats — one entry per lost ROUTE, not per file.
+   *
+   * Routes only, deliberately. `map_attack_surface` maps these to languages so
+   * `coverage` can report "matched but unreadable" for exactly the languages it
+   * happened in, and a CoverageEntry is a per-language *route* report: it sits
+   * beside `routes_found`, and its sibling status `no_matches` means "no routes
+   * matched". Letting a lost `env` or `import` match flip a language to
+   * `unreadable` would say "routes here could not be read" when no route was
+   * involved — safe in direction, but false. Those losses are not hidden: the
+   * `unrecoverable` total above counts every kind and is what `tools_run`
+   * reports.
    */
-  unreadableFiles: string[];
+  unreadableRouteFiles: string[];
 }
 
 /** The shape `extract.ts`, `collectEnvVars` and `extractImports` all read. */
@@ -87,7 +95,13 @@ const RECOVERABLE_KINDS = new Set(['route', 'mount', 'import', 'env']);
 export function recoverMetavars(semgrepJson: unknown, sources: SourceMap): RecoveryOutcome {
   const results = prop(semgrepJson, 'results');
   if (!isRecord(semgrepJson) || !Array.isArray(results)) {
-    return { json: semgrepJson, intact: 0, recovered: 0, unrecoverable: 0, unreadableFiles: [] };
+    return {
+      json: semgrepJson,
+      intact: 0,
+      recovered: 0,
+      unrecoverable: 0,
+      unreadableRouteFiles: [],
+    };
   }
 
   // One encode per file, not one per match: a busy file can carry hundreds.
@@ -95,7 +109,7 @@ export function recoverMetavars(semgrepJson: unknown, sources: SourceMap): Recov
   let intact = 0;
   let recovered = 0;
   let unrecoverable = 0;
-  const unreadableFiles: string[] = [];
+  const unreadableRouteFiles: string[] = [];
 
   const rebuilt = results.map((raw) => {
     const extra = prop(raw, 'extra');
@@ -114,8 +128,9 @@ export function recoverMetavars(semgrepJson: unknown, sources: SourceMap): Recov
     const metavars = span === undefined ? undefined : synthesize(kind, span, metadata);
     if (metavars === undefined || !isRecord(raw)) {
       unrecoverable += 1;
-      const path = str(raw, 'path');
-      if (path !== undefined) unreadableFiles.push(path);
+      // Routes only — see the field's doc comment.
+      const path = kind === 'route' ? str(raw, 'path') : undefined;
+      if (path !== undefined) unreadableRouteFiles.push(path);
       return raw;
     }
 
@@ -128,7 +143,7 @@ export function recoverMetavars(semgrepJson: unknown, sources: SourceMap): Recov
     intact,
     recovered,
     unrecoverable,
-    unreadableFiles,
+    unreadableRouteFiles,
   };
 }
 
@@ -264,6 +279,22 @@ function synthesizeRoute(span: string, metadata: unknown): Metavars | undefined 
  *
  * This costs nothing on a Semgrep that still emits metavariables: those runs
  * are `intact` and never reach this module's synthesis at all.
+ *
+ * ---- This list is FAIL-OPEN. Read before adding a rule. ----------------
+ *
+ * A framework that is not in this set is RECOVERED, not refused. That is the
+ * right default for the ten families that are safe, but it means a fourth
+ * declaration-spanning family added to `configs/semgrep/routes.yml` without
+ * being listed here would silently fabricate again, exactly as rounds 1 and 2
+ * of this fix did. Nothing in the recovery path can detect that on its own —
+ * the span looks like any other.
+ *
+ * What holds it shut is one assertion in `test/unit/surface/rulePack.test.ts`,
+ * which parses every route rule's pattern, collects the frameworks whose
+ * pattern swallows a brace-delimited declaration body, and requires that set to
+ * equal this one. Keep them in lock-step; if you widen a pattern and the suite
+ * goes red here, the fix is to add the framework to this set, not to relax the
+ * assertion.
  */
 const UNRECOVERABLE_FRAMEWORKS: ReadonlySet<string> = new Set(['actix', 'nestjs', 'aspnet']);
 
@@ -271,8 +302,8 @@ const UNRECOVERABLE_FRAMEWORKS: ReadonlySet<string> = new Set(['actix', 'nestjs'
  * Frameworks whose Semgrep pattern spans the decorated declaration, so their
  * captures cannot be rebuilt from a redacted span. Exported so
  * `test/unit/surface/rulePack.test.ts` can assert this set and the rule pack's
- * declaration-spanning rules stay in lock-step: widening a fourth family the
- * same way without listing it here is how the fabrication class shipped twice.
+ * declaration-spanning rules stay in lock-step — the single guard on the
+ * fail-open default described above.
  */
 export const UNREADABLE_UNDER_REDACTION = UNRECOVERABLE_FRAMEWORKS;
 

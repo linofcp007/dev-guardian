@@ -73,7 +73,7 @@ describe('E2E — eval-vuln fixture', () => {
     expect(
       SEMGREP_INSTALLED,
       'GUARDIAN_REQUIRE_SEMGREP=1 but semgrep is not on PATH. On Windows it is usually in ' +
-        '%APPDATA%\Roaming\Python\Python3xx\Scripts.',
+        '%APPDATA%\\Roaming\\Python\\Python3xx\\Scripts.',
     ).toBe(true);
     expect(
       FIXTURE_PRESENT,

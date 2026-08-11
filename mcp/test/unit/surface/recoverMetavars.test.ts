@@ -265,7 +265,18 @@ describe('recoverMetavars — decorated-declaration families are refused', () =>
 
   it('reports the file of every refused match so coverage can attribute it', () => {
     const outcome = recoverSpan('#[get("/x")]\nasync fn x() -> String { String::new() }', ACTIX);
-    expect(outcome.unreadableFiles).toEqual([FILE]);
+    expect(outcome.unreadableRouteFiles).toEqual([FILE]);
+  });
+
+  it('does not let a lost env match flip a language to unreadable route coverage', () => {
+    // `unreadableRouteFiles` feeds CoverageEntry, which is a per-language ROUTE
+    // report. An unreadable `env` match is a real loss and stays in the
+    // `unrecoverable` total that tools_run reports — but attributing it to
+    // route coverage would claim a route was lost when none was involved.
+    // A truncated span: no argument list and no trailing member to read.
+    const outcome = recoverSpan('getenv', { guardian_kind: 'env' });
+    expect(outcome.unrecoverable).toBe(1);
+    expect(outcome.unreadableRouteFiles).toEqual([]);
   });
 
   it('still recovers the ten families whose span starts at the construct', () => {

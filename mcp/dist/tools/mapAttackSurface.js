@@ -151,7 +151,7 @@ async function handler(input, ctx) {
         return degradedResult([toolRun, unreadableMatchesToolRun(recovery)], [], unreadableMatchesNote(recovery), ctx);
     }
     const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
-    const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars, recovery.unreadableFiles);
+    const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars, recovery.unreadableRouteFiles);
     const persisted = ctx.storage.surface.insert({
         project_path: projectPath,
         tree_hash: treeHash,
@@ -335,7 +335,7 @@ function buildToolRun(run, via) {
     const reason = via ? `${via}: ${firstLine ?? 'fallback failed'}` : (firstLine ?? 'unknown');
     return { name: 'semgrep', status: 'failed', reason };
 }
-function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unreadableFiles) {
+function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unreadableRouteFiles) {
     const { routes, mounts } = extractSurface(parsed);
     const knownFiles = collectAllFiles(parsed);
     const imports = extractImports(parsed, knownFiles);
@@ -345,7 +345,7 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
         env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
         ports: collectPorts(projectPath),
         webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
-        coverage: buildCoverage(resolved, ctx, unreadableFiles),
+        coverage: buildCoverage(resolved, ctx, unreadableRouteFiles),
         tools_run: toolsRun,
         missing_tools: [],
     };
@@ -461,11 +461,11 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
  * redacting Semgrep, since those families cannot be reconstructed from a
  * redacted span at all (surface/recoverMetavars.ts).
  */
-function buildCoverage(routes, ctx, unreadableFiles) {
+function buildCoverage(routes, ctx, unreadableRouteFiles) {
     const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
     // One entry per lost route, so the count is routes-not-shown, not files.
     const unreadableByLanguage = new Map();
-    for (const file of unreadableFiles) {
+    for (const file of unreadableRouteFiles) {
         const language = languageFromPath(file);
         if (language === 'unknown')
             continue;

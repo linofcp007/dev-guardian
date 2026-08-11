@@ -41620,13 +41620,19 @@ var RECOVERABLE_KINDS = /* @__PURE__ */ new Set(["route", "mount", "import", "en
 function recoverMetavars(semgrepJson, sources) {
   const results = prop3(semgrepJson, "results");
   if (!isRecord(semgrepJson) || !Array.isArray(results)) {
-    return { json: semgrepJson, intact: 0, recovered: 0, unrecoverable: 0, unreadableFiles: [] };
+    return {
+      json: semgrepJson,
+      intact: 0,
+      recovered: 0,
+      unrecoverable: 0,
+      unreadableRouteFiles: []
+    };
   }
   const buffers = /* @__PURE__ */ new Map();
   let intact = 0;
   let recovered = 0;
   let unrecoverable = 0;
-  const unreadableFiles = [];
+  const unreadableRouteFiles = [];
   const rebuilt = results.map((raw) => {
     const extra = prop3(raw, "extra");
     const metadata = prop3(extra, "metadata");
@@ -41640,8 +41646,8 @@ function recoverMetavars(semgrepJson, sources) {
     const metavars = span === void 0 ? void 0 : synthesize(kind, span, metadata);
     if (metavars === void 0 || !isRecord(raw)) {
       unrecoverable += 1;
-      const path6 = str3(raw, "path");
-      if (path6 !== void 0) unreadableFiles.push(path6);
+      const path6 = kind === "route" ? str3(raw, "path") : void 0;
+      if (path6 !== void 0) unreadableRouteFiles.push(path6);
       return raw;
     }
     recovered += 1;
@@ -41652,7 +41658,7 @@ function recoverMetavars(semgrepJson, sources) {
     intact,
     recovered,
     unrecoverable,
-    unreadableFiles
+    unreadableRouteFiles
   };
 }
 function sliceSpan(raw, sources, buffers) {
@@ -42064,7 +42070,7 @@ async function handler39(input, ctx) {
     ctx,
     toolsRun,
     includeEnvVars,
-    recovery.unreadableFiles
+    recovery.unreadableRouteFiles
   );
   const persisted = ctx.storage.surface.insert({
     project_path: projectPath,
@@ -42168,7 +42174,7 @@ function buildToolRun(run, via) {
   const reason = via ? `${via}: ${firstLine ?? "fallback failed"}` : firstLine ?? "unknown";
   return { name: "semgrep", status: "failed", reason };
 }
-function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unreadableFiles) {
+function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unreadableRouteFiles) {
   const { routes, mounts } = extractSurface(parsed);
   const knownFiles = collectAllFiles(parsed);
   const imports = extractImports(parsed, knownFiles);
@@ -42178,7 +42184,7 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
     env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
     ports: collectPorts(projectPath),
     webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
-    coverage: buildCoverage(resolved, ctx, unreadableFiles),
+    coverage: buildCoverage(resolved, ctx, unreadableRouteFiles),
     tools_run: toolsRun,
     missing_tools: []
   };
@@ -42235,10 +42241,10 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
   }
   return joined;
 }
-function buildCoverage(routes, ctx, unreadableFiles) {
+function buildCoverage(routes, ctx, unreadableRouteFiles) {
   const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
   const unreadableByLanguage = /* @__PURE__ */ new Map();
-  for (const file of unreadableFiles) {
+  for (const file of unreadableRouteFiles) {
     const language = languageFromPath(file);
     if (language === "unknown") continue;
     unreadableByLanguage.set(language, (unreadableByLanguage.get(language) ?? 0) + 1);
