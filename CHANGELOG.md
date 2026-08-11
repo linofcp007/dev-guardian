@@ -34,6 +34,47 @@ version bump.
   coverage report) by snapshot id or the most recent one. Return `{ snapshot: null }`
   when nothing has been captured yet, consistent with the rest of the resource surface.
 
+### Fixed
+
+- **A path we could not resolve is never emitted as a resolved path.** Only two rules in
+  the pack constrained their capture to a string literal; the other twelve let a Semgrep
+  metavariable that had bound a *code expression* through as a confident path —
+  `self::NAMESPACE`, `$this->namespace`, `SETTINGS.users_path`, `Paths.ORDERS`, a bare
+  `routeVar`. The first two are the dominant idioms in real WordPress plugins, not edge
+  cases, and the next tool in this series will send HTTP requests to whatever path it is
+  handed. A new `isLiteralPath` predicate in `mcp/src/surface/extract.ts` now gates every
+  route, in the one place they all flow through, so it also covers rules users add via
+  `register_custom_rules`. A capture that fails it keeps its route — a route we cannot
+  name is still evidence of surface — but is flagged `path_partial: true`, keeps the raw
+  text in `path_resolved`, and drops to `low` confidence. Both resolvers now honour that
+  flag instead of clearing it when they prepend a mount prefix or a `/wp-json` namespace.
+  Literal guards were added to the rule pack as a second layer, deliberately excluding the
+  WordPress rule, where dropping the non-literal matches would erase the surface instead of
+  reporting it as partial.
+- **The HTTP method was lost for five of thirteen route rules.** `aspnet-minimal`,
+  `aspnet`, `spring`, `nestjs` and `actix` all reported `ANY`. Semgrep never reports which
+  `pattern-either` alternative fired, so a rule whose verb is encoded in the alternative
+  cannot recover it — those families are now one rule per verb, each declaring
+  `metadata.method` (which the extractor already read as a fallback, until now dead code).
+  `normalizeMethod` also understands ASP.NET's `MapGet` / `MapPost` builder names.
+- **A cached snapshot no longer hides the failed run that produced it.** The cache path
+  reported a hardcoded `tools_run: [{semgrep, skipped, cached}]`, so the one case where a
+  failing run is still persisted (Semgrep exited non-zero but left parseable JSON) carried
+  its warning for exactly one call. Every later call on the same tree hash presented a
+  snapshot that was empty *because the scan died* as "this application exposes nothing" —
+  the falsehood this tool exists to prevent. The persisted `tools_run` entries are now
+  reported alongside the cache marker.
+- **`auth_hint` is no longer advertised as a feature.** No rule sets `metadata.auth`, so
+  the field is always `unknown`. The claim was removed from the tool description, and the
+  reason is recorded at `normalizeAuth` so the constant reads as deliberate rather than
+  broken. Detecting auth properly needs to see the handler, not the registration site;
+  that is its own piece of work.
+- Regression coverage for the Semgrep exit-code gate (`exitCode === 1` means *matches
+  found*, i.e. success), which previously could be deleted with the suite staying green.
+- The Docker fallback in `map_attack_surface` no longer re-implements
+  `buildSemgrepDockerArgs`; the shared builder takes a `configs` option (default
+  `['auto']`) so both callers inherit anything added to it later.
+
 ## [1.2.1] — 2026-08-10
 
 ### Fixed

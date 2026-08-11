@@ -48,7 +48,7 @@ The plugin registers an MCP server on stdio that Claude Code launches automatica
 
 **Resources** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`, `guardian://surface/latest`, `guardian://surface/{id}`.
 
-**Storage** — SQLite at `.guardian/guardian.db`. Tables: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`. Enables baseline tracking, scan-to-scan deltas, time-bounded suppressions, regression alerts.
+**Storage** — SQLite at `.guardian/guardian.db`. Tables: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`, `surface_snapshots`. Enables baseline tracking, scan-to-scan deltas, time-bounded suppressions, regression alerts.
 
 ### Guardrail hooks (auto-active)
 
@@ -241,7 +241,7 @@ O plugin regista um servidor MCP em stdio que o Claude Code arranca automaticame
 
 **Resources** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`, `guardian://surface/latest`, `guardian://surface/{id}`.
 
-**Storage** — SQLite em `.guardian/guardian.db`. Tabelas: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`. Permite tracking de baseline, deltas scan-a-scan, supressões com expiração, alertas de regressão.
+**Storage** — SQLite em `.guardian/guardian.db`. Tabelas: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`, `surface_snapshots`. Permite tracking de baseline, deltas scan-a-scan, supressões com expiração, alertas de regressão.
 
 ### Hooks de proteção (auto-ativos)
 
@@ -434,7 +434,7 @@ El plugin registra un servidor MCP en stdio que Claude Code arranca automáticam
 
 **Recursos** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`, `guardian://surface/latest`, `guardian://surface/{id}`.
 
-**Almacenamiento** — SQLite en `.guardian/guardian.db`. Tablas: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`. Permite tracking de baseline, deltas scan-a-scan, supresiones con caducidad, alertas de regresión.
+**Almacenamiento** — SQLite en `.guardian/guardian.db`. Tablas: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`, `surface_snapshots`. Permite tracking de baseline, deltas scan-a-scan, supresiones con caducidad, alertas de regresión.
 
 ### Hooks de protección (auto-activos)
 
