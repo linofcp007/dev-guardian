@@ -120,7 +120,20 @@ interface RouteRecord {
   method: HttpMethod;
   path_raw: string;          // exactly as written at the match site
   path_resolved: string;     // after prefix resolution; equals path_raw when no resolver applies
-  path_partial: boolean;     // true when a prefix may be missing and we know it
+  /**
+   * True when `path_resolved` is NOT a usable URL path. Two causes:
+   *   1. a prefix may be missing and we know it (unresolved router mount,
+   *      missing WordPress namespace);
+   *   2. the captured value is a code expression rather than a literal —
+   *      `self::NAMESPACE`, `$this->namespace`, `Paths.ORDERS`, `routeVar`.
+   *
+   * Case 2 matters more than it looks: `register_rest_route(self::NAMESPACE, …)`
+   * is the dominant idiom in real WordPress plugins, and emitting the variable
+   * name as a resolved path would hand a DAST tool a fabricated URL to attack.
+   * The route is still reported — surface we cannot name is still surface — but
+   * never as though we knew where it lives.
+   */
+  path_partial: boolean;
   file: string;
   line: number;
   framework: string;         // 'express' | 'fastapi' | 'aspnet-minimal' | 'gin' | ...
@@ -272,6 +285,28 @@ Two properties this contract guarantees:
 `extract.ts` must tolerate rules whose metadata is incomplete: a match missing
 `guardian_kind: route` is skipped; a match missing `confidence` defaults to `'low'`.
 The rule pack is user-extensible, so malformed third-party rules must not crash the tool.
+
+### Literal guards belong in the extractor, not in the rules
+
+A metavariable can bind a code expression rather than a string — `self::NAMESPACE`,
+`$this->namespace`, `Paths.ORDERS`. Those must be reported as routes with
+`path_partial: true`, never as resolved paths.
+
+The guard lives in `extract.ts`, not in the YAML, and the reason is mechanical:
+Semgrep's `metavariable-regex` is a **conjunct**. A rule carrying one does not
+report a non-matching capture as a weaker match — it discards the match entirely.
+So a literal guard in the pack deletes exactly the routes this design wants
+flagged, and `coverage` then reports `no_matches` for the language: the
+"this application exposes nothing" falsehood §6 exists to prevent.
+
+Two rules keep a YAML guard because there the capture genuinely disambiguates
+*whether a match is a route at all* rather than whether its path is literal:
+`guardian-route-rails` (its `$METHOD $PATH` pattern matches any one-argument Ruby
+call) and `guardian-route-express`. Everywhere else, a match already means "this
+is a route registration", and the only open question is whether we can name it.
+
+Putting the guard in the extractor also covers rules users add through
+`register_custom_rules`, which the pack cannot.
 
 ---
 
