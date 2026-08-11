@@ -74,3 +74,4 @@ import './resources/findings.js';
 import './resources/misc.js';
 import './resources/wp.js';
 import './resources/dotnet.js';
+import './resources/surface.js';

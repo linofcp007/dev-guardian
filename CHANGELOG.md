@@ -6,6 +6,34 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
+## [Unreleased]
+
+### Added
+
+- **`map_attack_surface` — static route/env-var/port inventory across all 8 stacks.**
+  New tool that runs a dedicated Semgrep rule pack (`configs/semgrep/routes.yml`) over
+  the project to extract HTTP routes, referenced environment variables, declared ports
+  and webhook endpoints, resolving Express-style router mount prefixes and WordPress
+  REST namespaces to their effective path. Reports per-language `coverage`
+  (`ok` / `no_rules` / ...) so an uncovered framework shows up as a gap rather than a
+  silent zero. Persists one snapshot per run to a new `surface_snapshots` SQLite table,
+  keyed by a tree hash so an unchanged working tree reuses the previous snapshot instead
+  of re-scanning. The tool result itself returns a summary plus a 20-route sample and a
+  `snapshot_id` — the full route list is deliberately kept out of the tool response (see
+  the new resources below) so a project with hundreds of routes cannot exhaust the
+  agent's context window on a single call.
+  - **Not yet validated against a real Semgrep run.** Semgrep is not installed on the
+    machine this was built on, so the whole pipeline — extraction, prefix resolution,
+    coverage reporting — has only been exercised against hand-written JSON fixtures
+    standing in for Semgrep's output. The Ruby and Rust rules in
+    `configs/semgrep/routes.yml` are unvalidated guesses at the framework's route
+    syntax, not rules checked against real code. Treat this as an unverified first cut,
+    not a production-ready scanner.
+- **`guardian://surface/latest` and `guardian://surface/{id}` resources.** Serve the
+  full persisted attack-surface snapshot (every route, env var, port, webhook and the
+  coverage report) by snapshot id or the most recent one. Return `{ snapshot: null }`
+  when nothing has been captured yet, consistent with the rest of the resource surface.
+
 ## [1.2.1] — 2026-08-10
 
 ### Fixed

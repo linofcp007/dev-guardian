@@ -21,6 +21,8 @@ import { runProcess, type ProcessRunResult } from '../../src/runners/processRunn
 import { TOOLS } from '../../src/tools/index.js';
 import type { PluginContext } from '../../src/context.js';
 import '../../src/tools/mapAttackSurface.js';
+import { RESOURCES } from '../../src/resources/index.js';
+import '../../src/resources/surface.js';
 
 const SEMGREP_OUTPUT = JSON.stringify({
   results: [
@@ -448,5 +450,65 @@ describe('map_attack_surface', () => {
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe('not_a_git_repo');
     expect(ctx.storage.surface.getLatest()).toBeNull();
+  });
+});
+
+describe('guardian://surface resources', () => {
+  function resource(name: string) {
+    const found = RESOURCES.find((r) => r.name === name);
+    if (!found) throw new Error(`${name} is not registered`);
+    return found;
+  }
+
+  it('returns { snapshot: null } before anything is captured', async () => {
+    const ctx = makeCtx();
+    const { json } = await resource('guardian-surface-latest').handler(
+      new URL('guardian://surface/latest'),
+      {},
+      ctx,
+    );
+    expect(json).toEqual({ snapshot: null });
+  });
+
+  it('serves the latest snapshot with its full route list', async () => {
+    const ctx = makeCtx();
+    ctx.storage.surface.insert({
+      project_path: '/p',
+      tree_hash: 'h',
+      snapshot: {
+        routes: [], env_vars: [], ports: [], webhooks: [], coverage: [],
+        tools_run: [], missing_tools: [],
+      },
+    });
+    const { json } = await resource('guardian-surface-latest').handler(
+      new URL('guardian://surface/latest'),
+      {},
+      ctx,
+    );
+    expect(json).toHaveProperty('captured_at');
+    expect(json).toHaveProperty('snapshot.routes');
+  });
+
+  it('serves a snapshot by id and nulls an unknown id', async () => {
+    const ctx = makeCtx();
+    const inserted = ctx.storage.surface.insert({
+      project_path: '/p',
+      tree_hash: 'h',
+      snapshot: {
+        routes: [], env_vars: [], ports: [], webhooks: [], coverage: [],
+        tools_run: [], missing_tools: [],
+      },
+    });
+
+    const byId = resource('guardian-surface-by-id');
+    const hit = await byId.handler(
+      new URL(`guardian://surface/${inserted.id}`),
+      { id: String(inserted.id) },
+      ctx,
+    );
+    expect(hit.json).toHaveProperty('snapshot.routes');
+
+    const miss = await byId.handler(new URL('guardian://surface/999'), { id: '999' }, ctx);
+    expect(miss.json).toEqual({ snapshot: null });
   });
 });
