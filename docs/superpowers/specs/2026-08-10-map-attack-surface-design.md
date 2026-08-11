@@ -52,7 +52,7 @@ Deferred to later specs (not this one):
 | Primary consumer | Single schema serving DAST **and** `risk_score` **and** human inventory, with DAST driving priority | The expensive work is parsing routes. Once the parse is running, `handler_file:line` (for `risk_score`) and referenced env vars (for inventory) are byproducts of the same pass, not extra work. |
 | Language coverage | All 8 stacks `detect_stack` knows: JS/TS, Python, PHP, Go, Rust, Ruby, Java, C#/.NET | User requirement. Drives the engine choice below. |
 | Extraction engine | **Hybrid**: a Semgrep rule pack as the universal extractor, plus a pure-TypeScript resolver pass for route-prefix resolution | Semgrep already parses all 8 languages and is already a hard dependency. Rules are data, so a new framework is a YAML entry rather than a new parser. Hand-written extractors for 8 languages would turn the project into a parser-maintenance effort. |
-| Resolver scope | JS/TS router mounting and WordPress `register_rest_route` namespaces only | These two cover the stacks with the largest user base and the worst raw-path accuracy. Codified as rule metadata, not as conditionals in code. |
+| Resolver scope | JS/TS router mounting and WordPress `register_rest_route` namespaces only | These two cover the stacks with the largest user base and the worst raw-path accuracy. Each resolver gates on the route's own language/framework — see §5, which records why a rule-metadata flag was rejected. |
 | Persistence | New `surface_snapshots` table, not the `findings` table | A route is not a finding: no severity, no fingerprint, no meaningful suppression. Same reasoning that gave `detect_stack` its own `stack_snapshots` table. |
 | Tool return shape | Summary + `snapshot_id` + 20-route sample; full list via MCP resource | A 400-route project would exhaust the agent's context window on every call. Downstream tools read the snapshot from SQLite rather than receiving routes as arguments. |
 | Failed scan | Persist **nothing** | See §6. This is a correctness decision, not cosmetics. |
@@ -231,8 +231,8 @@ rules:
     metadata:
       guardian_kind: route      # extract.ts ignores any match without this
       framework: express
-      confidence: high
-      mountable: true           # opts this framework into the Node prefix resolver
+      confidence: high          # flows to RouteRecord.confidence — a trust signal, so
+                                # rate it honestly rather than optimistically
     patterns:
       - pattern: $APP.$METHOD($PATH, ...)
       - metavariable-regex:
@@ -258,9 +258,16 @@ Two properties this contract guarantees:
 1. **This Semgrep run produces no findings.** It is a separate `--config` invocation whose
    output is consumed by the surface extractor and never reaches `findingsRepo`.
    `severity: INFO` exists only because Semgrep requires the field.
-2. **The resolver runs only where `mountable: true`.** For the other six stacks the key is
-   absent, `path_resolved === path_raw`, and `path_partial` is `false`. The hybrid's
-   boundary lives in the data, not in conditionals spread through the code.
+2. **The resolvers gate on the route's language and framework, not on a rule-pack flag.**
+   `resolveNodeMounts` runs only for `javascript` / `typescript` routes;
+   `resolveWordpressRoutes` only for `framework: wp-rest`. Everything else passes through
+   with `path_resolved === path_raw` and `path_partial: false`.
+
+   An earlier draft of this design put a `mountable: true` flag in the rule metadata and
+   claimed the boundary lived in the data. That was rejected during implementation: a flag
+   only works if every future rule author remembers to set it, and a forgotten flag fails
+   silently — the route simply never gets its prefix. Deriving the gate from the language
+   the route was extracted from cannot be forgotten. The rule pack carries no such flag.
 
 `extract.ts` must tolerate rules whose metadata is incomplete: a match missing
 `guardian_kind: route` is skipped; a match missing `confidence` defaults to `'low'`.
