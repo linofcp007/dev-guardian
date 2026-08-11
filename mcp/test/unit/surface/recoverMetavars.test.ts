@@ -103,10 +103,12 @@ describe('recoverMetavars — $PATH from the first string literal', () => {
   });
 
   it('invents nothing for a call with an empty argument list', () => {
-    // A real over-match from the Rust rules: Semgrep reports `"ok".to_string()`
-    // as a route span. Semgrep 1.86.0 binds `metavars: {}` there — it captured
-    // nothing — so taking the receiver string would fabricate a route named
-    // `ok` that no ground-truth run ever produced.
+    // A real over-match from the Rust rules as they were before validation:
+    // Semgrep reported `"ok".to_string()` as a route span. Semgrep 1.86.0
+    // binds `metavars: {}` there — it captured nothing — so taking the
+    // receiver string would fabricate a route named `ok` that no ground-truth
+    // run ever produced. The rule no longer emits such spans, but the guard
+    // stays: a user rule registered through register_custom_rules can.
     const outcome = recoverSpan('"ok".to_string()', ROUTE);
     expect(mv(outcome, '$PATH')).toBeUndefined();
     expect(outcome.unrecoverable).toBe(1);
@@ -150,6 +152,22 @@ describe('recoverMetavars — $METHOD from the callee', () => {
       framework: 'aspnet-minimal',
     });
     expect(extractSurface(outcome.json).routes[0]?.method).toBe('GET');
+  });
+
+  it('reads the verb out of a Rust attribute span, where it is the callee', () => {
+    // The actix rule binds the attribute name to $METHOD and declares no
+    // metadata.method, so on a redacting Semgrep the verb exists only if the
+    // recovery finds it — and the `(` it must anchor on is inside `#[patch(`,
+    // not at the start of the span. A second attribute follows the first.
+    const span =
+      '#[patch("/rust/items/{id}/status")]\n#[allow(clippy::unused_async)]\n' +
+      'async fn patch_item(path: web::Path<u32>) -> impl Responder { HttpResponse::Ok().finish() }';
+    const outcome = recoverSpan(span, { guardian_kind: 'route', framework: 'actix' });
+    expect(mv(outcome, '$METHOD')).toBe('patch');
+    const route = extractSurface(outcome.json).routes[0];
+    expect(route?.method).toBe('PATCH');
+    expect(route?.path_resolved).toBe('/rust/items/{id}/status');
+    expect(route?.path_partial).toBe(false);
   });
 });
 

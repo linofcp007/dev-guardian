@@ -42191,9 +42191,12 @@ function stripQuotes3(value) {
 function stripKnownExtension(path6) {
   return path6.replace(/\.[cm]?[jt]sx?$/, "");
 }
+function toPosixPath2(path6) {
+  return path6.replace(/\\/g, "/");
+}
 function resolveModuleFile(importingFile, specifier, knownFiles) {
   if (!specifier.startsWith(".")) return specifier;
-  const dir = importingFile.split("/").slice(0, -1).join("/");
+  const dir = toPosixPath2(importingFile).split("/").slice(0, -1).join("/");
   const parts = `${dir}/${specifier}`.split("/");
   const stack = [];
   for (const part of parts) {
@@ -42204,7 +42207,7 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
   const joined = stack.join("/");
   const base = stripKnownExtension(joined);
   for (const file of knownFiles) {
-    if (stripKnownExtension(file) === base) return file;
+    if (stripKnownExtension(toPosixPath2(file)) === base) return file;
   }
   return joined;
 }

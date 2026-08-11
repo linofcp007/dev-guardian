@@ -96,12 +96,32 @@ describe('configs/semgrep/routes.yml', () => {
       if (rule.metadata?.method !== undefined) methods.add(rule.metadata.method);
       byFramework.set(framework, methods);
     }
-    for (const framework of ['nestjs', 'spring', 'aspnet', 'actix']) {
+    for (const framework of ['nestjs', 'spring', 'aspnet']) {
       const methods = byFramework.get(framework);
       expect(methods?.has('GET'), `${framework} has no GET rule`).toBe(true);
       expect(methods?.has('POST'), `${framework} has no POST rule`).toBe(true);
       expect(methods?.has('DELETE'), `${framework} has no DELETE rule`).toBe(true);
     }
+  });
+
+  it('keeps the Rust rule single, with the verb in $METHOD', () => {
+    // actix used to be in the list above: five per-verb rules, one per
+    // attribute. Measured against Semgrep 1.86.0 they all matched the SAME
+    // spans — every node in the file — and bound `metavars: {}`, so one real
+    // `#[get("/x")]` produced five routes: the correct GET plus four
+    // fabricated verbs, some anchored on function bodies rather than routes.
+    //
+    // Semgrep's Rust engine does bind the attribute name once the pattern
+    // includes the item the attribute is attached to, and an actix/Rocket
+    // attribute name IS the HTTP verb, so one rule with a $METHOD guard is
+    // both correct and sufficient. The other attribute families cannot do
+    // this: `@$DEC($PATH)` is not a parseable TypeScript pattern, and C#'s
+    // `HttpGet` is not a verb the extractor's normalizeMethod knows.
+    const actix = rules().filter((r) => r.metadata?.framework === 'actix');
+    expect(actix).toHaveLength(1);
+    const rule = actix[0];
+    expect(rule?.metadata?.method).toBeUndefined();
+    expect(rule === undefined ? new Set() : guardedMetavars(rule)).toContain('$METHOD');
   });
 
   it('constrains $PATH to a literal on exactly the two rules that need it', () => {

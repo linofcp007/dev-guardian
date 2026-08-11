@@ -120,6 +120,49 @@ const TS_NODENEXT_MOUNT_OUTPUT = JSON.stringify({
   ],
 });
 
+/**
+ * The same JS project as `JS_MOUNT_OUTPUT`, spelled the way Semgrep reports it
+ * on Windows: absolute, backslash-separated. Every other field is identical,
+ * so a difference in the result can only come from path handling.
+ */
+const WINDOWS_MOUNT_OUTPUT = JSON.stringify({
+  results: [
+    {
+      check_id: 'guardian-route-express',
+      path: 'C:\\work\\proj\\src\\routes\\users.js',
+      start: { line: 5 },
+      extra: {
+        metadata: { guardian_kind: 'route', framework: 'express', confidence: 'high' },
+        metavars: { $METHOD: { abstract_content: 'get' }, $PATH: { abstract_content: '/users' } },
+      },
+    },
+    {
+      check_id: 'guardian-mount-express',
+      path: 'C:\\work\\proj\\src\\app.js',
+      start: { line: 10 },
+      extra: {
+        metadata: { guardian_kind: 'mount', framework: 'express' },
+        metavars: {
+          $PREFIX: { abstract_content: "'/api'" },
+          $ROUTER: { abstract_content: 'usersRouter' },
+        },
+      },
+    },
+    {
+      check_id: 'guardian-import-esm',
+      path: 'C:\\work\\proj\\src\\app.js',
+      start: { line: 1 },
+      extra: {
+        metadata: { guardian_kind: 'import' },
+        metavars: {
+          $SYMBOL: { abstract_content: 'usersRouter' },
+          $MODULE: { abstract_content: "'./routes/users'" },
+        },
+      },
+    },
+  ],
+});
+
 function makeCtx(): PluginContext {
   const db = new Database(':memory:');
   runMigrations(db);
@@ -496,6 +539,29 @@ describe('map_attack_surface', () => {
     };
 
     const route = result.sample.find((r) => r.file === 'src/routes/users.ts');
+    expect(route?.path_resolved).toBe('/api/users');
+    expect(route?.path_partial).toBe(false);
+  });
+
+  it('resolves a mount when Semgrep reports Windows paths', async () => {
+    // Semgrep reports paths in the host's native separator, and this tool
+    // always hands it an absolute target — so on Windows every path comes back
+    // as `C:\project\src\routes\users.js`. An import specifier is always
+    // `./routes/users`, so before the paths are normalised the two never met:
+    // resolveModuleFile saw one path segment, matched no known file, and every
+    // mounted router degraded to path_partial. The bug was invisible to the
+    // other mount tests because their fixtures are POSIX strings.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(WINDOWS_MOUNT_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      sample: { path_resolved: string; path_partial: boolean; file: string }[];
+    };
+
+    const route = result.sample.find((r) => r.file.endsWith('users.js'));
     expect(route?.path_resolved).toBe('/api/users');
     expect(route?.path_partial).toBe(false);
   });

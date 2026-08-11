@@ -26,6 +26,34 @@
 # (Flask's @app.route, Django path(), Spring @RequestMapping) correctly omit
 # the key and are reported as ANY.
 #
+# ---- Attribute/decorator patterns must include the declaration -------------
+#
+# Measured against Semgrep 1.86.0 on mcp/test/fixtures/surface/apps/:
+#
+#   `#[get($PATH)]`     (Rust)  parses, and then matches EVERY node in the
+#                               file — 95 matches for 3 routes, all binding
+#                               `metavars: {}`. Spans included `use` lines and
+#                               function bodies.
+#   `[HttpGet($PATH)]`  (C#)    parses as a collection expression and matches
+#                               nothing at all.
+#   `@Get($PATH)`       (TS)    does not parse: "Invalid pattern for
+#                               TypeScript", which Semgrep reports as a rule
+#                               error on every run.
+#
+# All three become exact when the pattern includes the item the attribute is
+# attached to (`#[get($PATH, ...)] fn $F(...) { ... }`). The match span then
+# covers the attribute *and* the declaration, which is fine: the extractor
+# never sees the span, and `surface/recoverMetavars.ts` anchors its capture to
+# the first argument list, i.e. the attribute's own.
+#
+# Rust is one rule, not five, because Semgrep's Rust engine *does* bind the
+# attribute name to `$METHOD` once the pattern is well-formed — and the actix /
+# Rocket attribute name IS the HTTP verb, so the extractor's `normalizeMethod`
+# reads it directly. The other two families stay one-rule-per-verb for reasons
+# that are not stylistic: in TypeScript `@$DEC($PATH)` does not parse at all, and
+# in C# the attribute name is `HttpGet`, which is not a verb the extractor
+# knows, so the verb has to arrive as `metadata.method`.
+#
 # ---- Do NOT add a $PATH literal guard to a route rule ----------------------
 #
 # A `metavariable-regex` pinning $PATH to a string literal DROPS the match:
@@ -115,7 +143,9 @@ rules:
       framework: nestjs
       confidence: medium
       method: GET
-    pattern: "@Get($PATH)"
+    pattern: |
+      @Get($PATH, ...)
+      $M(...) { ... }
 
   - id: guardian-route-nestjs-post
     languages: [typescript]
@@ -126,7 +156,9 @@ rules:
       framework: nestjs
       confidence: medium
       method: POST
-    pattern: "@Post($PATH)"
+    pattern: |
+      @Post($PATH, ...)
+      $M(...) { ... }
 
   - id: guardian-route-nestjs-put
     languages: [typescript]
@@ -137,7 +169,9 @@ rules:
       framework: nestjs
       confidence: medium
       method: PUT
-    pattern: "@Put($PATH)"
+    pattern: |
+      @Put($PATH, ...)
+      $M(...) { ... }
 
   - id: guardian-route-nestjs-patch
     languages: [typescript]
@@ -148,7 +182,9 @@ rules:
       framework: nestjs
       confidence: medium
       method: PATCH
-    pattern: "@Patch($PATH)"
+    pattern: |
+      @Patch($PATH, ...)
+      $M(...) { ... }
 
   - id: guardian-route-nestjs-delete
     languages: [typescript]
@@ -159,7 +195,9 @@ rules:
       framework: nestjs
       confidence: medium
       method: DELETE
-    pattern: "@Delete($PATH)"
+    pattern: |
+      @Delete($PATH, ...)
+      $M(...) { ... }
 
   # ---------- Python ----------
   - id: guardian-route-flask
@@ -188,6 +226,16 @@ rules:
           metavariable: $METHOD
           regex: ^(get|post|put|patch|delete|options|head)$
 
+  # Qualified callee, not the bare name. `path(...)` is an ordinary function
+  # name: measured against Semgrep 1.86.0, the bare form reported three routes
+  # out of a module whose only crime was defining `def path(*parts)` around
+  # os.path.join — and two of them ("etc", "var") passed the extractor's
+  # literal test, so they were emitted as resolved URLs that exist nowhere.
+  # Writing the fully-qualified name makes Semgrep resolve the import instead
+  # of the spelling, so a local helper of the same name no longer matches while
+  # `from django.urls import path` still does. This is NOT a $PATH guard: a
+  # computed path (`path(settings.ADMIN_URL, ...)`) still matches and is still
+  # reported, flagged path_partial by the extractor.
   - id: guardian-route-django
     languages: [python]
     severity: INFO
@@ -197,8 +245,8 @@ rules:
       framework: django
       confidence: medium
     pattern-either:
-      - pattern: path($PATH, ...)
-      - pattern: re_path($PATH, ...)
+      - pattern: django.urls.path($PATH, ...)
+      - pattern: django.urls.re_path($PATH, ...)
 
   # ---------- PHP / WordPress ----------
   - id: guardian-route-wp-rest
@@ -253,61 +301,31 @@ rules:
           regex: ^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD|Any)$
 
   # ---------- Rust ----------
-  # One rule per attribute: the attribute name is the verb.
-  - id: guardian-route-rust-actix-get
+  # ONE rule, because Semgrep's Rust engine binds the attribute name — the
+  # only attribute family in this pack where it does. The verb therefore
+  # arrives as $METHOD and the rule declares no metadata.method.
+  #
+  # The trailing `fn $F(...) { ... }` is load-bearing, not decoration: without
+  # it the five per-verb rules this replaces matched every node in the file and
+  # bound nothing, so one `#[get("/x")]` produced five routes — the real GET
+  # plus four fabricated ones — and spans that were function bodies rather than
+  # routes. See the attribute note in the header.
+  #
+  # `$PATH, ...` covers Rocket's `#[post("/x", data = "<t>")]`; `...` matches
+  # zero arguments, so actix's single-argument form still matches.
+  - id: guardian-route-rust-actix
     languages: [rust]
     severity: INFO
     message: Actix/Rocket route attribute
     metadata:
       guardian_kind: route
       framework: actix
-      confidence: low
-      method: GET
-    pattern: "#[get($PATH)]"
-
-  - id: guardian-route-rust-actix-post
-    languages: [rust]
-    severity: INFO
-    message: Actix/Rocket route attribute
-    metadata:
-      guardian_kind: route
-      framework: actix
-      confidence: low
-      method: POST
-    pattern: "#[post($PATH)]"
-
-  - id: guardian-route-rust-actix-put
-    languages: [rust]
-    severity: INFO
-    message: Actix/Rocket route attribute
-    metadata:
-      guardian_kind: route
-      framework: actix
-      confidence: low
-      method: PUT
-    pattern: "#[put($PATH)]"
-
-  - id: guardian-route-rust-actix-patch
-    languages: [rust]
-    severity: INFO
-    message: Actix/Rocket route attribute
-    metadata:
-      guardian_kind: route
-      framework: actix
-      confidence: low
-      method: PATCH
-    pattern: "#[patch($PATH)]"
-
-  - id: guardian-route-rust-actix-delete
-    languages: [rust]
-    severity: INFO
-    message: Actix/Rocket route attribute
-    metadata:
-      guardian_kind: route
-      framework: actix
-      confidence: low
-      method: DELETE
-    pattern: "#[delete($PATH)]"
+      confidence: medium
+    patterns:
+      - pattern: "#[$METHOD($PATH, ...)] fn $F(...) { ... }"
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(get|post|put|patch|delete|options|head)$
 
   # ---------- Ruby ----------
   - id: guardian-route-rails
@@ -429,7 +447,9 @@ rules:
       framework: aspnet
       confidence: medium
       method: GET
-    pattern: "[HttpGet($PATH)]"
+    pattern: |
+      [HttpGet($PATH, ...)]
+      $RET $M(...) { ... }
 
   - id: guardian-route-aspnet-attribute-post
     languages: [csharp]
@@ -440,7 +460,9 @@ rules:
       framework: aspnet
       confidence: medium
       method: POST
-    pattern: "[HttpPost($PATH)]"
+    pattern: |
+      [HttpPost($PATH, ...)]
+      $RET $M(...) { ... }
 
   - id: guardian-route-aspnet-attribute-put
     languages: [csharp]
@@ -451,7 +473,9 @@ rules:
       framework: aspnet
       confidence: medium
       method: PUT
-    pattern: "[HttpPut($PATH)]"
+    pattern: |
+      [HttpPut($PATH, ...)]
+      $RET $M(...) { ... }
 
   - id: guardian-route-aspnet-attribute-patch
     languages: [csharp]
@@ -462,7 +486,9 @@ rules:
       framework: aspnet
       confidence: medium
       method: PATCH
-    pattern: "[HttpPatch($PATH)]"
+    pattern: |
+      [HttpPatch($PATH, ...)]
+      $RET $M(...) { ... }
 
   - id: guardian-route-aspnet-attribute-delete
     languages: [csharp]
@@ -473,7 +499,9 @@ rules:
       framework: aspnet
       confidence: medium
       method: DELETE
-    pattern: "[HttpDelete($PATH)]"
+    pattern: |
+      [HttpDelete($PATH, ...)]
+      $RET $M(...) { ... }
 
   # ---------- Environment variables (all stacks) ----------
   - id: guardian-env-node

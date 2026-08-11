@@ -471,6 +471,20 @@ function stripKnownExtension(path: string): string {
 }
 
 /**
+ * Semgrep reports paths in the host's native separator: on Windows a match in
+ * `node-express/routes/users.js` comes back as
+ * `C:\project\node-express\routes\users.js`. An import specifier is always
+ * POSIX-ish (`./routes/users.js`), so the two are only comparable once the
+ * reported path is normalised. Without this, `resolveModuleFile` below split a
+ * Windows path into a single segment, matched no known file, and every mounted
+ * router silently degraded to `path_partial` — mount resolution was dead on
+ * Windows while looking healthy everywhere else.
+ */
+function toPosixPath(path: string): string {
+  return path.replace(/\\/g, '/');
+}
+
+/**
  * Turn a specifier like `./routes/users` (imported from `src/app.ts`) into
  * the project-relative file the route was actually matched in, e.g.
  * `src/routes/users.ts`.
@@ -485,10 +499,14 @@ function stripKnownExtension(path: string): string {
  * extension-stripped path matches. When nothing matches, we return the
  * normalised specifier path as our best-effort guess rather than fabricate
  * an extension.
+ *
+ * The comparison is separator-insensitive, but the value returned on a hit is
+ * the known file *verbatim*: it is later looked up against `RouteRecord.file`,
+ * which carries Semgrep's spelling unchanged.
  */
 function resolveModuleFile(importingFile: string, specifier: string, knownFiles: Set<string>): string {
   if (!specifier.startsWith('.')) return specifier;
-  const dir = importingFile.split('/').slice(0, -1).join('/');
+  const dir = toPosixPath(importingFile).split('/').slice(0, -1).join('/');
   const parts = `${dir}/${specifier}`.split('/');
   const stack: string[] = [];
   for (const part of parts) {
@@ -500,7 +518,7 @@ function resolveModuleFile(importingFile: string, specifier: string, knownFiles:
   const base = stripKnownExtension(joined);
 
   for (const file of knownFiles) {
-    if (stripKnownExtension(file) === base) return file;
+    if (stripKnownExtension(toPosixPath(file)) === base) return file;
   }
   return joined;
 }
