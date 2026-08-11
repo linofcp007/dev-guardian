@@ -771,19 +771,17 @@ describe('map_attack_surface', () => {
   });
 
   it('reports coverage `unreadable`, never `no_matches`, when routes were lost', async () => {
-    // A NestJS/actix/ASP.NET-attribute project on a redacting Semgrep. Those
-    // families cannot be reconstructed at all, so every route is lost — and the
-    // language must NOT report `no_matches`, which reads as "this language
-    // exposes nothing" when the truth is "it exposes things we could not read".
+    // No rule family is refused any more, so the remaining way to lose a route
+    // is a genuinely unreadable match: here, a TypeScript file Semgrep matched
+    // that is not on disk when the recovery goes to read it — rewritten or
+    // deleted mid-scan. The language must NOT report `no_matches`, which reads
+    // as "this language exposes nothing" when the truth is "it exposes
+    // something we could not read". That distinction is why the status exists,
+    // and it outlives the limitation that first motivated it.
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockResolvedValue(okRun());
 
     const projectPath = projectWithSource();
-    const nestSource = "@Get('/n/real')\n  n(): string { return 'ok'; }\n";
-    mkdirSync(join(projectPath, 'src'), { recursive: true });
-    writeFileSync(join(projectPath, 'src', 'users.controller.ts'), nestSource, 'utf8');
-
-    const buf = Buffer.from(nestSource, 'utf8');
     vi.mocked(readJsonSafe).mockReturnValue(
       JSON.stringify({
         results: [
@@ -792,11 +790,16 @@ describe('map_attack_surface', () => {
             .results,
           {
             check_id: 'guardian-route-nestjs-get',
-            path: 'src/users.controller.ts',
+            path: 'src/vanished.controller.ts',
             start: { line: 1, col: 1, offset: 0 },
-            end: { line: 1, col: 1, offset: buf.length },
+            end: { line: 1, col: 1, offset: 42 },
             extra: {
-              metadata: { guardian_kind: 'route', framework: 'nestjs', method: 'GET' },
+              metadata: {
+                guardian_kind: 'route',
+                framework: 'nestjs',
+                method: 'GET',
+                guardian_focus: 'path',
+              },
               severity: 'INFO',
               lines: 'requires login',
             },

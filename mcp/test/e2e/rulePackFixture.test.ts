@@ -86,8 +86,8 @@ function describeRoute(route: RouteRecord): string {
    against Semgrep 1.86.0 (which still emits `extra.metavars`) and reproduced
    through the byte-offset recovery on 1.164.0 (which redacts them).
 
-   Split in two because the answer legitimately depends on the Semgrep version.
-   See DECORATED_DECLARATION_ROUTES below. */
+   Still split in two, but no longer because the answer depends on the Semgrep
+   version — it does not, and this file now asserts that. See FOCUSED_ROUTES. */
 const BASE_ROUTES = [
   // ---- ASP.NET minimal API. `/stats` is registered on a MapGroup("/admin")
   // builder; route groups are not resolved, so it is reported at the path the
@@ -102,7 +102,10 @@ const BASE_ROUTES = [
   'django ANY django/api/',
   'django ANY django/orders/',
   'django ANY django/orders/<int:order_id>/',
-  'django ANY r"^django/legacy/(?P<slug>[\\w-]+)/$ [partial]',
+  // Python raw string, kept whole. `stripQuotes` removes only a MATCHED pair,
+  // so the closing quote of `r"…"` is no longer chopped off on its own — the
+  // raw text a human reads is now complete. Still partial: a regex is not a URL.
+  'django ANY r"^django/legacy/(?P<slug>[\\w-]+)/$" [partial]',
   'django ANY settings.ADMIN_URL [partial]',
   // ---- Express. The four mounted routes carry their mount prefix; the two
   // declared in the mounting file itself do not.
@@ -153,22 +156,25 @@ const BASE_ROUTES = [
 ].sort();
 
 /**
- * Routes that exist ONLY when Semgrep still emits metavariables.
+ * The 21 routes from the three families whose Semgrep pattern must span the
+ * decorated declaration: actix, NestJS and ASP.NET attribute routing.
  *
- * actix, NestJS and ASP.NET attribute routing are the three families whose
- * Semgrep pattern must span the decorated declaration. On a Semgrep that
- * redacts match content, the reported span starts at whatever attribute comes
- * first, and `surface/recoverMetavars.ts` refuses to guess which one is the
- * route — so these are absent, and `coverage` says `unreadable` for their
- * languages rather than `no_matches`.
+ * These were absent on a redacting Semgrep for four rounds. The reported span
+ * started at whatever attribute came first, and every attempt to find the route
+ * attribute inside it fabricated paths, so `surface/recoverMetavars.ts` refused
+ * them outright and `coverage` reported `unreadable` for their languages.
+ *
+ * They now declare `focus-metavariable: $PATH`, which makes Semgrep narrow its
+ * own reported range to the path literal — so they recover on every version and
+ * are part of the one expected set below, not a version-dependent addendum.
  *
  * The fixture files for all three carry deliberate decoys (a commented-out old
  * route, anchor text inside a string, attribute-shaped text in a method body).
  * The assertion that matters most in this file is that NONE of those decoys
- * ever appears as a route: two earlier reconstructions emitted them as resolved
+ * ever appears as a route: earlier reconstructions emitted them as resolved
  * paths, which is the failure this whole tool exists to prevent.
  */
-const DECORATED_DECLARATION_ROUTES = [
+const FOCUSED_ROUTES = [
   'actix DELETE /rust/items/{id}',
   'actix GET /rust/documented',
   'actix GET /rust/gated',
@@ -191,6 +197,15 @@ const DECORATED_DECLARATION_ROUTES = [
   'nestjs POST /create [partial]',
   'nestjs PUT :id [partial]',
 ].sort();
+
+/**
+ * The whole expected surface — one set, on any Semgrep version.
+ *
+ * That it no longer forks on the version is the point of the focus change, so
+ * the tests below assert the version-independence explicitly rather than
+ * letting a single-version run imply it.
+ */
+const EXPECTED_ROUTES = [...BASE_ROUTES, ...FOCUSED_ROUTES].sort();
 
 /** Paths that must NEVER appear: every decoy planted in the fixture. */
 const FABRICATION_DECOYS = [
@@ -290,17 +305,22 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     expect(snapshot).toBeDefined();
     if (!snapshot) return;
 
-    // Whether the decorated-declaration families appear depends on the Semgrep
-    // version, and the recovery step's presence in tools_run is exactly that
-    // signal: it is emitted only when metavariables had to be rebuilt.
-    const redacting = result.tools_run.some((t) => t.name === 'semgrep-metavar-recovery');
-    const expected = redacting
-      ? BASE_ROUTES
-      : [...BASE_ROUTES, ...DECORATED_DECLARATION_ROUTES].sort();
-
+    // ONE expected set, whichever Semgrep is installed. This used to fork on
+    // whether match content was redacted, because the three decorated-
+    // declaration families were then absent; `focus-metavariable: $PATH` makes
+    // Semgrep report a span that is the path itself, so they recover either way.
+    // The fork is deliberately gone rather than made version-aware — a test that
+    // accepts two answers cannot notice one of them silently becoming wrong.
     const actual = snapshot.routes.map(describeRoute).sort();
-    expect(actual).toEqual(expected);
-    expect(result.routes_total).toBe(expected.length);
+    expect(actual).toEqual(EXPECTED_ROUTES);
+    expect(result.routes_total).toBe(EXPECTED_ROUTES.length);
+
+    // Named explicitly so a regression reads as what it is. `redacting` is true
+    // on any Semgrep >= ~1.120 without `semgrep login`; on those runs every one
+    // of these 21 routes came back through the byte-offset recovery.
+    const redacting = result.tools_run.some((t) => t.name === 'semgrep-metavar-recovery');
+    expect(FOCUSED_ROUTES.every((r) => actual.includes(r)), `redacting=${redacting}`).toBe(true);
+    expect(FOCUSED_ROUTES).toHaveLength(21);
 
     // The load-bearing assertion. Every decoy planted in the fixture — a
     // commented-out old route, anchor text inside a string, attribute-shaped
@@ -345,10 +365,10 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     expect(snapshot.ports).toEqual([{ port: 8080, source: 'Dockerfile' }]);
     expect(snapshot.webhooks).toEqual([]);
 
-    // Semgrep matched routes in all nine languages. Each must therefore report
-    // either `ok` (read) or `unreadable` (matched, refused) — never
-    // `no_matches`, which a consumer reads as "this language exposes nothing",
-    // and never `no_rules`, which would mean a rule family stopped firing.
+    // Semgrep matched routes in all nine languages, and every one of them is now
+    // READ — `ok`, on any Semgrep version. Never `no_matches`, which a consumer
+    // reads as "this language exposes nothing"; never `no_rules`, which would
+    // mean a rule family stopped firing; and no longer `unreadable` either.
     const matched = snapshot.coverage.filter(
       (c) => c.routes_found > 0 || c.unreadable_matches > 0,
     );
@@ -363,24 +383,20 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
       'rust',
       'typescript',
     ]);
-    expect(matched.every((c) => c.status === 'ok' || c.status === 'unreadable')).toBe(true);
+    expect(matched.every((c) => c.status === 'ok')).toBe(true);
+    expect(snapshot.coverage.every((c) => c.unreadable_matches === 0)).toBe(true);
 
+    // Rust and TypeScript are the sharpest cases: every route the fixture
+    // declares in them comes from actix / NestJS, the families that were
+    // refused. Both reported `unreadable` with zero routes on a redacting
+    // Semgrep — a Rust web service described as exposing nothing readable.
+    // They now report their routes on either version.
     const redacting = result.tools_run.some((t) => t.name === 'semgrep-metavar-recovery');
-    if (redacting) {
-      // Rust and TypeScript are the pure cases: every route the fixture
-      // declares in them comes from actix / NestJS, so all of them are refused.
-      // Without the `unreadable` status both would report `no_matches` — a
-      // Rust web service described as exposing nothing at all.
-      for (const language of ['rust', 'typescript']) {
-        const entry = snapshot.coverage.find((c) => c.language === language);
-        expect(entry?.status, `${language} coverage status`).toBe('unreadable');
-        expect(entry?.routes_found, `${language} routes_found`).toBe(0);
-        expect(entry?.unreadable_matches, `${language} unreadable_matches`).toBeGreaterThan(0);
-      }
-      // C# is the mixed case: minimal-API routes read, attribute routes refused.
-      const csharp = snapshot.coverage.find((c) => c.language === 'csharp');
-      expect(csharp?.status).toBe('unreadable');
-      expect(csharp?.routes_found).toBeGreaterThan(0);
+    for (const language of ['rust', 'typescript', 'csharp']) {
+      const entry = snapshot.coverage.find((c) => c.language === language);
+      expect(entry?.status, `${language} coverage status (redacting=${redacting})`).toBe('ok');
+      expect(entry?.routes_found, `${language} routes_found`).toBeGreaterThan(0);
+      expect(entry?.unreadable_matches, `${language} unreadable_matches`).toBe(0);
     }
   }, 6 * 60_000);
 
@@ -395,22 +411,24 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     const result = (await tool.handler({ project_path: work, force: true }, ctx)) as SurfaceResult;
 
     // Either Semgrep emitted metavariables (older / logged-in) and there is no
-    // recovery entry at all, or it redacted them — in which case the ten
-    // reconstructable families were rebuilt and the three that cannot be are
-    // reported as losses. A loss is legitimate here; a SILENT loss is not, so
-    // the entry must name the count and the remedy.
+    // recovery entry at all, or it redacted them — in which case every family
+    // was rebuilt from byte offsets and the step reports `ok` with no losses.
+    // A loss here would now mean a genuinely unreadable file, not a rule family
+    // we decline to reconstruct; it stays legitimate but must never be SILENT,
+    // so the entry still has to name the count and the remedy.
     const recovery = result.tools_run.find((t) => t.name === 'semgrep-metavar-recovery');
     if (recovery !== undefined) {
       expect(recovery.reason ?? '').toMatch(/recovered \d+ redacted match/);
+      expect(recovery.status, recovery.reason ?? '').toBe('ok');
       if (recovery.status === 'failed') {
         expect(recovery.reason ?? '').toMatch(/MISSING/);
         expect(recovery.reason ?? '').toMatch(/semgrep login/);
         expect(recovery.reason ?? '').toMatch(/does not require an account/);
       }
     }
-    const redacting = result.tools_run.some((t) => t.name === 'semgrep-metavar-recovery');
-    expect(result.routes_total).toBe(
-      redacting ? BASE_ROUTES.length : BASE_ROUTES.length + DECORATED_DECLARATION_ROUTES.length,
-    );
+
+    // The whole point, stated as one assertion: the same number of routes on a
+    // redacting Semgrep as on one that emits metavariables.
+    expect(result.routes_total).toBe(EXPECTED_ROUTES.length);
   }, 6 * 60_000);
 });

@@ -200,12 +200,20 @@ function readSources(parsed, projectPath) {
 /**
  * How to get the unreadable matches back. Named wherever a loss is reported,
  * because the fix is not obvious and the obvious guess — "this tool needs a
- * Semgrep account" — is wrong: ten of the thirteen route families are rebuilt
- * from byte offsets and work on any version, logged in or not.
+ * Semgrep account" — is wrong: all thirteen route families are rebuilt from
+ * byte offsets and work on any version, logged in or not.
+ *
+ * A loss therefore no longer means "this rule family cannot be read". It means
+ * the source could not be read at the offsets Semgrep reported — the file was
+ * deleted or rewritten mid-scan, is not valid UTF-8, or the span carried no
+ * capture. Logging in still fixes it, by making the captures arrive directly so
+ * the file never has to be re-read; that is why the remedy is still named.
  */
-const REDACTION_REMEDY = 'this Semgrep version redacts match content unless you run `semgrep login`; either log ' +
-    'in, or use a Semgrep older than ~1.100, and the routes appear. dev-guardian does not ' +
-    'require an account — most route families are rebuilt from byte offsets either way';
+const REDACTION_REMEDY = 'this Semgrep version redacts match content unless you run `semgrep login`, so the ' +
+    'captures are rebuilt by re-reading the source at the reported byte offsets, and that ' +
+    'read failed for these matches. Either log in, or use a Semgrep older than ~1.100, and ' +
+    'the captures arrive directly. dev-guardian does not require an account — every route ' +
+    'family is rebuilt from byte offsets either way';
 function recoveryToolRun(recovery) {
     if (recovery.recovered === 0 && recovery.unrecoverable === 0)
         return [];
@@ -236,11 +244,9 @@ function unreadableMatchesNote(recovery) {
     return (`Semgrep reported ${recovery.unrecoverable} match(es) and not one could be read, so no ` +
         'surface was mapped and nothing was persisted — a zero-route snapshot here would read as ' +
         '"this application exposes nothing", the inverse of what was measured. Cause: ' +
-        `${REDACTION_REMEDY}. Three route families are affected regardless of that: NestJS, ` +
-        'ASP.NET attribute routes and actix cannot be reconstructed from a redacted match at ' +
-        'all, because their Semgrep pattern must span the decorated declaration and the reported ' +
-        'span can start at an unrelated attribute — so a project built only from those is exactly ' +
-        'this case.');
+        `${REDACTION_REMEDY}. Every match failing this way at once usually means the working ` +
+        'tree changed under the scan, or the files are not valid UTF-8 — check that the project ' +
+        'was not being written to while the scan ran, then re-run.');
 }
 /**
  * What a cache hit reports as `tools_run`.
@@ -457,9 +463,12 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
  * could not read never reports `no_matches`. The two are opposite facts — "we
  * looked and there is nothing" versus "there is something and we could not read
  * it" — and collapsing them is the "this application exposes nothing" falsehood
- * this tool is built to avoid. It is what a Rust or NestJS project gets on a
- * redacting Semgrep, since those families cannot be reconstructed from a
- * redacted span at all (surface/recoverMetavars.ts).
+ * this tool is built to avoid.
+ *
+ * No rule family is refused any more (surface/recoverMetavars.ts), so this is
+ * now the genuinely-unreadable case only: source that changed under the scan,
+ * is not valid UTF-8, or offsets that land past end-of-file. Rare, and still
+ * not something to round down to zero.
  */
 function buildCoverage(routes, ctx, unreadableRouteFiles) {
     const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];

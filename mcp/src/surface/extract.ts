@@ -42,9 +42,16 @@ export function languageFromPath(file: string): string {
  * `register_rest_route('myplugin/v1', '/items')` and, just as happily,
  * `register_rest_route(self::NAMESPACE, $route)` — the dominant idiom in real
  * WordPress plugins. Only two rules in the pack pin their capture to a string
- * literal, and a rule a user adds through `register_custom_rules` pins
- * nothing at all. So the guard lives here, in the one place every route
- * flows through, rather than being replicated per rule in YAML.
+ * literal, and a rule added to the pack later need not pin anything either. So
+ * the guard lives here, in the one place every route flows through, rather than
+ * being replicated per rule in YAML: `toRoute` applies it unconditionally, so a
+ * new rule in `configs/semgrep/routes.yml` is covered the moment it is written,
+ * with nothing to opt into and nothing to remember.
+ *
+ * (It is not covering rules from anywhere else: `map_attack_surface` runs that
+ * one file as its only `--config`. `register_custom_rules` never reaches this
+ * pipeline — it records paths in `runtime_meta` for the SAST tools, and as of
+ * today nothing reads them back, so it reaches no scan at all.)
  *
  * This matters because the next tool in this series sends HTTP requests to
  * whatever path it is handed: emitting `Paths.ORDERS` with
@@ -200,11 +207,33 @@ function toRoute(
 /**
  * Semgrep's `abstract_content` keeps the source quoting, so a captured path
  * arrives as `'/users'` rather than `/users`.
+ *
+ * Only a MATCHED pair is stripped, and that is load-bearing rather than tidy.
+ * An unbalanced quote means the capture is not a whole string literal — the
+ * likeliest cause being a reported range that ends inside one. Stripping the
+ * lone opening quote turned such a fragment into a clean-looking path:
+ * `"/orders/secret` cut six bytes short became `/orders/s`, which
+ * `isLiteralPath` accepts, so a truncated PREFIX was published as a resolved
+ * URL at full confidence. Keeping the quote makes `CODE_TOKENS` reject it, so
+ * the route survives as `path_partial` with the raw text visible.
+ *
+ * This is the one guard behind `recoverMetavars`'s focused branch, which
+ * deliberately trusts Semgrep's range and does no validation of its own: it
+ * converts the only shape where a bad range yields a WRONG path into one that
+ * yields an incomplete one. Truncation is not hypothetical — a TypeScript
+ * template literal has been observed arriving two bytes short of its closing
+ * backtick.
  */
 function stripQuotes(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
-  return value.replace(/^['"`]|['"`]$/g, '');
+  const quote = value[0];
+  if (quote === undefined || !QUOTES.test(quote)) return value;
+  // `"` alone is an opening quote with nothing after it, not an empty literal.
+  if (value.length < 2 || !value.endsWith(quote)) return value;
+  return value.slice(1, -1);
 }
+
+const QUOTES = /^['"`]$/;
 
 function toMount(metavars: unknown, file: string, line: number): MountRecord | null {
   const prefix = stripQuotes(metavar(metavars, '$PREFIX'));
