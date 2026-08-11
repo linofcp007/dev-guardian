@@ -10,9 +10,27 @@
  * a rule that silently stops matching — or starts matching too much — fails
  * here rather than in a user's repository.
  *
- * Skipped, with a warning, when Semgrep is not installed: `map_attack_surface`
- * would fall back to Docker, and pulling an image is not something a unit-test
- * runner should do. Same policy as evalVulnFixture.test.ts.
+ * ---- When Semgrep is missing ------------------------------------------
+ *
+ * These tests are SKIPPED, not passed, when Semgrep is not installed:
+ * `map_attack_surface` would fall back to Docker, and pulling an image is not
+ * something a unit-test runner should do.
+ *
+ * The distinction is load-bearing and was learned the hard way. This file used
+ * to `console.warn` and `return`, which vitest reports as a **passing** test —
+ * so on a machine where Semgrep is installed but not on PATH (Windows puts it
+ * in `%APPDATA%\Roaming\Python\Python314\Scripts`), the only test that runs a
+ * real Semgrep reported green while measuring nothing at all. A Critical
+ * route-fabrication defect reached a green suite that way. `it.skipIf` makes the
+ * skip visible in the run output as a skip.
+ *
+ * Set `GUARDIAN_REQUIRE_SEMGREP=1` to turn absence into a hard failure, so at
+ * least one gate cannot silently pass:
+ *
+ *     GUARDIAN_REQUIRE_SEMGREP=1 npm test
+ *
+ * Use it in any environment that is supposed to have Semgrep — a release check,
+ * or a machine where you have just added it to PATH and want proof.
  *
  * ---- Why the fixture is copied out of the repo -------------------------
  *
@@ -79,6 +97,11 @@ const EXPECTED_ROUTES = [
   // route that exists nowhere.
   'aspnet DELETE /aspnet/orders/{id}',
   'aspnet GET /aspnet/orders',
+  // `/aspnet/orders/audit` additionally carries an apostrophe in a comment
+  // between its attributes and `[HttpGet("…FABRICATED…")]` inside a string in
+  // its body. A recovery that lexes strings to find the anchor reports the
+  // fabricated path here instead.
+  'aspnet GET /aspnet/orders/audit',
   'aspnet GET /aspnet/orders/{id}',
   'aspnet PATCH /aspnet/orders/{id}/status',
   'aspnet POST /aspnet/orders',
@@ -94,6 +117,10 @@ const EXPECTED_ROUTES = [
   // `/rust/gated` carries a PRECEDING `#[allow(dead_code)]`; read literally,
   // the span's first argument list yields `dead_code` as a resolved path.
   'actix DELETE /rust/items/{id}',
+  // `/rust/documented` sits behind a doc comment with two apostrophes and a
+  // `&'static` lifetime — the shape that made a string-lexing anchor search
+  // skip the attribute and lose the route.
+  'actix GET /rust/documented',
   'actix GET /rust/gated',
   'actix GET /rust/health',
   'actix PATCH /rust/items/{id}/status',
@@ -133,6 +160,9 @@ const EXPECTED_ROUTES = [
   // span's first argument list yields `204` as a resolved path.
   'nestjs DELETE :id [partial]',
   'nestjs DELETE purge/:id [partial]',
+  // `audit/:id` carries the apostrophe-in-a-comment plus decorator-shaped text
+  // in the body.
+  'nestjs GET audit/:id [partial]',
   'nestjs GET :id [partial]',
   'nestjs PATCH :id/status [partial]',
   'nestjs POST /create [partial]',
@@ -179,6 +209,13 @@ async function isInstalled(bin: string): Promise<boolean> {
   }
 }
 
+/**
+ * Resolved once, at collection time, so `it.skipIf` can report a skip as a
+ * skip rather than each test deciding for itself and returning early.
+ */
+const SEMGREP_AVAILABLE = existsSync(FIXTURE) && (await isInstalled('semgrep'));
+const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
+
 function makeContext(): PluginContext {
   const db = new Database(':memory:');
   runMigrations(db);
@@ -202,12 +239,19 @@ interface SurfaceResult {
 }
 
 describe('E2E — attack-surface rule pack against the multi-language fixture', () => {
-  it('maps every route the fixture declares, and nothing else', async () => {
-    if (!existsSync(FIXTURE) || !(await isInstalled('semgrep'))) {
-      console.warn('[e2e] semgrep not installed, skipping');
-      return;
-    }
+  // Present in every run so the gate itself is visible; only *executed* when
+  // the caller has asked for it. Without this, "Semgrep is missing" and
+  // "Semgrep ran and agreed" are indistinguishable in the suite output.
+  it.runIf(REQUIRE_SEMGREP)('GUARDIAN_REQUIRE_SEMGREP=1 — Semgrep must be on PATH', () => {
+    expect(
+      SEMGREP_AVAILABLE,
+      'GUARDIAN_REQUIRE_SEMGREP=1 but semgrep is not on PATH, so the only test that ' +
+        'exercises the real rule pack would have been skipped. On Windows it is usually ' +
+        'in %APPDATA%\\Roaming\\Python\\Python3xx\\Scripts.',
+    ).toBe(true);
+  });
 
+  it.skipIf(!SEMGREP_AVAILABLE)('maps every route the fixture declares, and nothing else', async () => {
     // Outside any `test/` path — see the module comment.
     const work = mkdtempSync(join(tmpdir(), 'guardian-rulepack-'));
     cpSync(FIXTURE, work, { recursive: true });
@@ -235,12 +279,7 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     expect(result.routes_total).toBe(EXPECTED_ROUTES.length);
   }, 6 * 60_000);
 
-  it('reports env vars, ports and per-language coverage from the same run', async () => {
-    if (!existsSync(FIXTURE) || !(await isInstalled('semgrep'))) {
-      console.warn('[e2e] semgrep not installed, skipping');
-      return;
-    }
-
+  it.skipIf(!SEMGREP_AVAILABLE)('reports env vars, ports and per-language coverage from the same run', async () => {
     const work = mkdtempSync(join(tmpdir(), 'guardian-rulepack-'));
     cpSync(FIXTURE, work, { recursive: true });
 
@@ -288,12 +327,7 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     expect(covered.every((c) => c.status === 'ok')).toBe(true);
   }, 6 * 60_000);
 
-  it('recovers the captures Semgrep redacts, or says so in tools_run', async () => {
-    if (!existsSync(FIXTURE) || !(await isInstalled('semgrep'))) {
-      console.warn('[e2e] semgrep not installed, skipping');
-      return;
-    }
-
+  it.skipIf(!SEMGREP_AVAILABLE)('recovers the captures Semgrep redacts, or says so in tools_run', async () => {
     const work = mkdtempSync(join(tmpdir(), 'guardian-rulepack-'));
     cpSync(FIXTURE, work, { recursive: true });
 

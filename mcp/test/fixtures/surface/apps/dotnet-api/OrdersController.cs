@@ -25,6 +25,16 @@ public class OrdersController : ControllerBase
     [HttpGet("/aspnet/orders/{id}")]
     public IActionResult GetOne(int id) => Ok(id);
 
+    // An apostrophe in a comment BETWEEN the attributes, and attribute-shaped
+    // text in the body. Lexing strings to find the anchor closes the phantom
+    // string on the body's apostrophe and recovers the FABRICATED path below as
+    // a resolved route. `[Roles("HttpGet(")]` is the mirror case: anchor text
+    // genuinely inside a string, which must still be ignored.
+    [Roles("HttpGet(")]
+    // Don't expose this without the guard.
+    [HttpGet("/aspnet/orders/audit")]
+    public IActionResult Audit() => Ok("it's [HttpGet(\"/aspnet/FABRICATED\")]");
+
     [HttpPost("/aspnet/orders")]
     public async Task<IActionResult> Create()
     {

@@ -309,6 +309,86 @@ describe('recoverMetavars — attribute routes with a PRECEDING decorator', () =
     );
     expect(outcome.unrecoverable).toBe(1);
   });
+
+  /**
+   * An apostrophe is a string delimiter in JS/PHP/Python, a lifetime in Rust,
+   * and an English contraction in every comment ever written. An earlier
+   * version of the anchor search scanned the span forward treating every `'` as
+   * a string opener; an odd number of them before the route attribute made it
+   * jump straight over it. Every span below is real Semgrep 1.164.0 output, and
+   * every expectation is Semgrep 1.86.0's own capture for the same match.
+   */
+  describe('apostrophes in comments and Rust lifetimes', () => {
+    it('recovers past a doc comment containing an apostrophe (route was LOST)', () => {
+      const outcome = recoverSpan(
+        '#[allow(dead_code)]\n/// Don\'t call this directly; use the router.\n' +
+          '#[get("/t1/real")]\nasync fn t1(name: &\'static str) -> impl Responder { ok(name) }',
+        ACTIX,
+      );
+      expect(mv(outcome, '$PATH')).toBe('"/t1/real"');
+      expect(outcome.unrecoverable).toBe(0);
+    });
+
+    it('is not confused by a lifetime in the signature', () => {
+      expect(
+        mv(
+          recoverSpan(
+            '#[get("/t2/real")]\nasync fn t2(name: &\'static str) -> impl Responder { ok(name) }',
+            ACTIX,
+          ),
+          '$PATH',
+        ),
+      ).toBe('"/t2/real"');
+    });
+
+    it('recovers past an apostrophe between C# attributes (route was FABRICATED)', () => {
+      // The parity used to close the phantom string inside the body, landing
+      // the scanner on `[HttpGet("…FABRICATED…")]` written in a string there.
+      const outcome = recoverSpan(
+        'Produces("application/json")]\n    // Don\'t expose this without the guard.\n' +
+          '    [HttpGet("/q1/real")]\n' +
+          '    public IActionResult Q1() => Ok("it\'s [HttpGet(\\"/q1/FABRICATED\\")]");',
+        ASPNET_GET,
+      );
+      expect(mv(outcome, '$PATH')).toBe('"/q1/real"');
+    });
+
+    it('recovers past an apostrophe between NestJS decorators (route was FABRICATED)', () => {
+      const outcome = recoverSpan(
+        "@UseGuards(AuthGuard)\n  // Don't expose this without the guard.\n" +
+          "  @Get('/n1/real')\n  n1(): string { return \"it's @Get('/n1/FABRICATED')\"; }",
+        NEST_GET,
+      );
+      expect(mv(outcome, '$PATH')).toBe("'/n1/real'");
+      expect(extractSurface(outcome.json).routes[0]?.path_resolved).toBe('/n1/real');
+    });
+
+    it('prefers the real attribute over anchor-shaped text in the body', () => {
+      const outcome = recoverSpan(
+        '#[get("/s1/real")]\nasync fn s1() -> impl Responder { body("get(\\"/s1/FABRICATED\\")") }',
+        ACTIX,
+      );
+      expect(mv(outcome, '$PATH')).toBe('"/s1/real"');
+    });
+  });
+
+  it('never throws on a metadata.method that is not a plain verb', () => {
+    // `metadata.method` comes from a YAML file a user can edit. It used to be
+    // interpolated into `new RegExp`, so this threw a SyntaxError out of a
+    // module whose contract is that it never throws — and out of an unguarded
+    // call site in mapAttackSurface.ts.
+    for (const method of ['a(', 'Get|Post', '[', '\\', '(?<', '']) {
+      const run = (): RecoveryOutcome =>
+        recoverSpan('HttpGet("/x")]\n public IActionResult X() => Ok();', {
+          guardian_kind: 'route',
+          framework: 'aspnet',
+          method,
+        });
+      expect(run).not.toThrow();
+      // Rejected rather than guessed: no anchor name, so nothing is recovered.
+      expect(run().unrecoverable).toBe(1);
+    }
+  });
 });
 
 describe('recoverMetavars — paths that are code, not literals', () => {
@@ -502,6 +582,16 @@ describe('recoverMetavars — counting and degradation', () => {
     };
     const outcome = recoverMetavars(json, new Map([[FILE, source]]));
     expect(outcome.unrecoverable).toBe(1);
+  });
+
+  it('degrades rather than hangs on an unterminated string literal', () => {
+    // `skipString` runs to end-of-span when a quote never closes. That exit was
+    // an uncovered statement while it was also the mechanism behind a route
+    // -fabrication defect, so it is pinned here. A truncated span is not
+    // hypothetical: `end.offset` can land mid-literal if the file changed.
+    const outcome = recoverSpan("app.use('/api", { guardian_kind: 'mount' });
+    expect(outcome.unrecoverable).toBe(1);
+    expect(recoverSpan("app.get('/oops", ROUTE).recovered + outcome.recovered).toBe(0);
   });
 
   it('never throws on malformed input', () => {

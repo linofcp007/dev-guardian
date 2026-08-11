@@ -41700,25 +41700,67 @@ var DECORATED_DECLARATION_FRAMEWORKS = /* @__PURE__ */ new Set([
   "nestjs",
   "aspnet"
 ]);
-var ACTIX_VERBS = "get|post|put|patch|delete|options|head";
-function routeAttributePattern(framework, method) {
-  if (framework === "actix") return new RegExp(`#\\[\\s*(${ACTIX_VERBS})\\s*\\(`, "y");
-  if (method === void 0) return void 0;
+var ACTIX_VERBS = ["get", "post", "put", "patch", "delete", "options", "head"];
+var PLAIN_VERB = /^[A-Za-z]+$/;
+function routeAttributeNames(framework, method) {
+  if (framework === "actix") return ACTIX_VERBS.map((verb) => ({ text: verb, verb }));
+  if (method === void 0 || !PLAIN_VERB.test(method)) return void 0;
   const name = method.charAt(0).toUpperCase() + method.slice(1).toLowerCase();
-  if (framework === "nestjs") return new RegExp(`@\\s*(${name})\\s*\\(`, "y");
-  if (framework === "aspnet") return new RegExp(`(?<![A-Za-z0-9_])Http${name}\\s*\\(`, "y");
+  if (framework === "nestjs") return [{ text: name }];
+  if (framework === "aspnet") return [{ text: `Http${name}` }];
+  return void 0;
+}
+function isAttributePosition(span, framework, at) {
+  const prev = lastNonSpaceBefore(span, at);
+  const prevChar = prev < 0 ? void 0 : span[prev];
+  if (framework === "nestjs") return prevChar === "@";
+  if (framework === "actix") {
+    if (prevChar !== "[") return false;
+    const hash = lastNonSpaceBefore(span, prev);
+    return hash >= 0 && span[hash] === "#";
+  }
+  return prev < 0 || prevChar === "[" || prevChar === ",";
+}
+function lastNonSpaceBefore(span, index) {
+  let i2 = index - 1;
+  while (i2 >= 0) {
+    const ch = span[i2];
+    if (ch === void 0 || !/\s/.test(ch)) break;
+    i2 -= 1;
+  }
+  return i2;
+}
+function isWordBoundary(span, at, length) {
+  const before = at === 0 ? void 0 : span[at - 1];
+  const after = span[at + length];
+  const wordChar = /[A-Za-z0-9_]/;
+  if (before !== void 0 && wordChar.test(before)) return false;
+  return after === void 0 || !wordChar.test(after);
+}
+function findRouteAttribute(span, framework, names) {
+  for (let i2 = 0; i2 < span.length; i2 += 1) {
+    for (const name of names) {
+      if (!span.startsWith(name.text, i2)) continue;
+      if (!isWordBoundary(span, i2, name.text.length)) continue;
+      let open = i2 + name.text.length;
+      while (open < span.length && /\s/.test(span[open] ?? "")) open += 1;
+      if (span[open] !== "(") continue;
+      if (!isAttributePosition(span, framework, i2)) continue;
+      if (matchingClose(span, open) === void 0) continue;
+      return { open, verb: name.verb };
+    }
+  }
   return void 0;
 }
 function synthesizeAttributeRoute(span, framework, declaredMethod) {
-  const pattern = routeAttributePattern(framework, declaredMethod);
-  if (pattern === void 0) return void 0;
-  const match = scanOutsideStrings(span, pattern);
-  if (match === void 0) return void 0;
-  const open = match.index + match[0].length - 1;
-  const path6 = argumentsAt(span, open)?.[0];
+  const names = routeAttributeNames(framework, declaredMethod);
+  if (names === void 0) return void 0;
+  const attribute = findRouteAttribute(span, framework, names);
+  if (attribute === void 0) return void 0;
+  const path6 = argumentsAt(span, attribute.open)?.[0];
   if (path6 === void 0) return void 0;
   const metavars = { $PATH: { abstract_content: path6 } };
-  const verb = match[1];
+  const verb = attribute.verb;
   if (declaredMethod === void 0 && verb !== void 0) {
     metavars["$METHOD"] = { abstract_content: verb };
   }
@@ -41879,22 +41921,6 @@ function argumentList(span) {
   const open = findOpener(span);
   if (open === void 0) return void 0;
   return argumentsAt(span, open);
-}
-function scanOutsideStrings(span, sticky) {
-  let i2 = 0;
-  while (i2 < span.length) {
-    const ch = span[i2];
-    if (ch === void 0) break;
-    if (isQuote(ch)) {
-      i2 = skipString(span, i2);
-      continue;
-    }
-    sticky.lastIndex = i2;
-    const match = sticky.exec(span);
-    if (match !== null) return match;
-    i2 += 1;
-  }
-  return void 0;
 }
 function firstArgument(span) {
   return argumentList(span)?.[0];

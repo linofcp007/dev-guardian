@@ -58,4 +58,14 @@ export class UsersController {
   purge(@Param('id') id: string): string {
     return this.service.remove(id);
   }
+
+  // An apostrophe in a comment BETWEEN the decorators, and decorator-shaped
+  // text in the body: the pair that made a string-lexing anchor search recover
+  // `/n1/FABRICATED` as a resolved route.
+  @HttpCode(200)
+  // Don't expose this without the guard.
+  @Get('audit/:id')
+  audit(@Param('id') id: string): string {
+    return `it's @Get('audit/FABRICATED') for ${id}`;
+  }
 }

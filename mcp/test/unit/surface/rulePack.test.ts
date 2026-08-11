@@ -43,6 +43,47 @@ function rules(): Rule[] {
   return doc.rules ?? [];
 }
 
+/** Every `pattern:` string a rule declares, at any nesting depth. */
+function patternsOf(rule: Rule): string[] {
+  const found: string[] = [];
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child);
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (key === 'pattern' && typeof value === 'string') found.push(value);
+      else walk(value);
+    }
+  };
+  if (typeof rule.pattern === 'string') found.push(rule.pattern);
+  walk(rule.patterns ?? rule['pattern-either'] ?? []);
+  return found;
+}
+
+/**
+ * Does this pattern swallow a brace-delimited declaration body?
+ *
+ * Structural, so `{ ... }`, `{ $BODY }`, `{}` and `{ ...; }` all count. A
+ * brace inside a string literal in the pattern does not.
+ */
+function hasBracedBody(pattern: string): boolean {
+  let inString: string | undefined;
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i];
+    if (ch === undefined) continue;
+    if (inString !== undefined) {
+      if (ch === '\\') i += 1;
+      else if (ch === inString) inString = undefined;
+      continue;
+    }
+    if (ch === '"' || ch === "'") inString = ch;
+    else if (ch === '{') return true;
+  }
+  return false;
+}
+
 const KINDS = new Set(['route', 'mount', 'import', 'env']);
 
 describe('configs/semgrep/routes.yml', () => {
@@ -141,10 +182,18 @@ describe('configs/semgrep/routes.yml', () => {
     // Widening another family's pattern this way without adding its framework
     // to ATTRIBUTE_ANCHORED_FRAMEWORKS reintroduces exactly that bug, so the
     // two lists are asserted equal here rather than merely compatible.
+    //
+    // The detector keys on a brace-delimited BODY appearing in the pattern,
+    // not on the literal text `{ ... }`. Sniffing for that exact string passed
+    // green when the same rule was written `{ $BODY }` — a spelling difference
+    // Semgrep treats as equivalent — and fabricated exactly as before. No
+    // pattern in this pack that matches a call or an annotation alone contains
+    // a brace; every one that swallows a declaration does.
     const spansDeclaration = new Set<string>();
     for (const rule of rules().filter((r) => r.metadata?.guardian_kind === 'route')) {
-      const text = JSON.stringify(rule.pattern ?? rule.patterns ?? rule['pattern-either'] ?? '');
-      if (text.includes('{ ... }')) spansDeclaration.add(String(rule.metadata?.framework));
+      if (patternsOf(rule).some(hasBracedBody)) {
+        spansDeclaration.add(String(rule.metadata?.framework));
+      }
     }
     expect(spansDeclaration.size).toBeGreaterThan(0);
     expect([...spansDeclaration].sort()).toEqual([...ATTRIBUTE_ANCHORED_FRAMEWORKS].sort());

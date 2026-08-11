@@ -38,6 +38,17 @@ async fn gated() -> impl Responder {
     HttpResponse::Ok().finish()
 }
 
+// An apostrophe in an ordinary doc comment, plus a lifetime in the signature.
+// A recovery that lexes strings to find the attribute treats both `'`s as
+// string delimiters and jumps straight over `#[get(...)]`, losing the route
+// entirely. Anchoring by position needs no string state at all.
+#[allow(dead_code)]
+/// Don't call this directly; it's the router's job.
+#[get("/rust/documented")]
+async fn documented(name: &'static str) -> impl Responder {
+    HttpResponse::Ok().body(name)
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     HttpServer::new(|| {

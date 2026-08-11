@@ -207,46 +207,128 @@ const DECORATED_DECLARATION_FRAMEWORKS = new Set([
  */
 export const ATTRIBUTE_ANCHORED_FRAMEWORKS = DECORATED_DECLARATION_FRAMEWORKS;
 /** actix/Rocket attribute names, which are themselves the HTTP verb. */
-const ACTIX_VERBS = 'get|post|put|patch|delete|options|head';
+const ACTIX_VERBS = ['get', 'post', 'put', 'patch', 'delete', 'options', 'head'];
+/** `metadata.method` is interpolated into an attribute name; keep it a word. */
+const PLAIN_VERB = /^[A-Za-z]+$/;
 /**
- * A sticky pattern matching the route attribute's own opening parenthesis.
- * `undefined` when the framework does not name its attribute in the rule
- * identity — we then have nothing to anchor on and must not guess.
+ * The literal attribute names that identify this rule's route attribute.
+ * `undefined` when the rule identity does not name one — we then have nothing
+ * to anchor on and must not guess.
+ *
+ * Deliberately literal strings, not a `RegExp`: `metadata.method` comes from a
+ * YAML file a user can edit, and interpolating it into a pattern let
+ * `method: "a("` throw a SyntaxError out of a module whose contract is that it
+ * never throws. A non-word verb is now simply rejected here.
  */
-function routeAttributePattern(framework, method) {
+function routeAttributeNames(framework, method) {
     // Rust: `#[get(` / `#[post(` … the name is the verb, so no metadata.method.
     if (framework === 'actix')
-        return new RegExp(`#\\[\\s*(${ACTIX_VERBS})\\s*\\(`, 'y');
-    if (method === undefined)
+        return ACTIX_VERBS.map((verb) => ({ text: verb, verb }));
+    if (method === undefined || !PLAIN_VERB.test(method))
         return undefined;
     const name = method.charAt(0).toUpperCase() + method.slice(1).toLowerCase();
-    // NestJS: `@Get(`, `@Post(` …
     if (framework === 'nestjs')
-        return new RegExp(`@\\s*(${name})\\s*\\(`, 'y');
-    // C#: `HttpGet(`. No lead-in character is required, because Semgrep reports
-    // the attribute *inside* the bracket list — a span starting at the route
-    // attribute begins `HttpGet(`, with the `[` outside it. A preceding
-    // identifier character is still excluded, so `MyHttpGet(` cannot match.
+        return [{ text: name }]; // `@Get(`
     if (framework === 'aspnet')
-        return new RegExp(`(?<![A-Za-z0-9_])Http${name}\\s*\\(`, 'y');
+        return [{ text: `Http${name}` }]; // `[HttpGet(`
+    return undefined;
+}
+/**
+ * Is the attribute name at `at` in a genuine attribute position?
+ *
+ * This is what replaced tracking string state across nine languages. The
+ * previous version scanned the span forward treating every `'` as a string
+ * opener, which is right for JS/PHP/Python, wrong for a Rust lifetime
+ * (`&'static str`), and catastrophic for the apostrophe in an ordinary English
+ * comment (`/// Don't call this directly`): an odd number of them made the scan
+ * jump *over* the route attribute, losing the route — or land inside the method
+ * body and recover a path out of a string there.
+ *
+ * Position is decidable locally and needs no such state. Anchor text sitting
+ * inside a string is preceded by a quote, so it fails this test without anyone
+ * tracking where strings begin.
+ */
+function isAttributePosition(span, framework, at) {
+    const prev = lastNonSpaceBefore(span, at);
+    const prevChar = prev < 0 ? undefined : span[prev];
+    // NestJS decorator: `@Get(`.
+    if (framework === 'nestjs')
+        return prevChar === '@';
+    // Rust attribute: `#[get(`, i.e. a `[` whose own lead-in is `#`.
+    if (framework === 'actix') {
+        if (prevChar !== '[')
+            return false;
+        const hash = lastNonSpaceBefore(span, prev);
+        return hash >= 0 && span[hash] === '#';
+    }
+    // C# attribute: `[HttpGet(`, `[Produces("…"), HttpGet(`, or the span itself
+    // beginning at the attribute — Semgrep reports the attribute from *inside*
+    // the bracket list, so the `[` can be outside the span entirely.
+    return prev < 0 || prevChar === '[' || prevChar === ',';
+}
+/** Index of the last non-whitespace character before `index`, or -1. */
+function lastNonSpaceBefore(span, index) {
+    let i = index - 1;
+    while (i >= 0) {
+        const ch = span[i];
+        if (ch === undefined || !/\s/.test(ch))
+            break;
+        i -= 1;
+    }
+    return i;
+}
+/** Would `name` at `at` be part of a longer identifier? */
+function isWordBoundary(span, at, length) {
+    const before = at === 0 ? undefined : span[at - 1];
+    const after = span[at + length];
+    const wordChar = /[A-Za-z0-9_]/;
+    if (before !== undefined && wordChar.test(before))
+        return false;
+    return after === undefined || !wordChar.test(after);
+}
+/**
+ * The `(` opening the route attribute's argument list.
+ *
+ * Scans span order and takes the FIRST candidate that is a whole word, sits in
+ * attribute position, and opens an argument list that balances. Span order
+ * matters: the route attribute always precedes the declaration body, so
+ * attribute-shaped text inside the body can never win over the real one.
+ */
+function findRouteAttribute(span, framework, names) {
+    for (let i = 0; i < span.length; i += 1) {
+        for (const name of names) {
+            if (!span.startsWith(name.text, i))
+                continue;
+            if (!isWordBoundary(span, i, name.text.length))
+                continue;
+            let open = i + name.text.length;
+            while (open < span.length && /\s/.test(span[open] ?? ''))
+                open += 1;
+            if (span[open] !== '(')
+                continue;
+            if (!isAttributePosition(span, framework, i))
+                continue;
+            if (matchingClose(span, open) === undefined)
+                continue;
+            return { open, verb: name.verb };
+        }
+    }
     return undefined;
 }
 function synthesizeAttributeRoute(span, framework, declaredMethod) {
-    const pattern = routeAttributePattern(framework, declaredMethod);
-    if (pattern === undefined)
+    const names = routeAttributeNames(framework, declaredMethod);
+    if (names === undefined)
         return undefined;
-    const match = scanOutsideStrings(span, pattern);
-    if (match === undefined)
+    const attribute = findRouteAttribute(span, framework, names);
+    if (attribute === undefined)
         return undefined;
-    // The pattern ends at the `(`, so that is the last character it consumed.
-    const open = match.index + match[0].length - 1;
-    const path = argumentsAt(span, open)?.[0];
+    const path = argumentsAt(span, attribute.open)?.[0];
     if (path === undefined)
         return undefined;
     const metavars = { $PATH: { abstract_content: path } };
     // Rust binds the attribute name to $METHOD; the other two carry the verb in
     // `metadata.method`, which extract.ts already reads.
-    const verb = match[1];
+    const verb = attribute.verb;
     if (declaredMethod === undefined && verb !== undefined) {
         metavars['$METHOD'] = { abstract_content: verb };
     }
@@ -503,31 +585,6 @@ function argumentList(span) {
     if (open === undefined)
         return undefined;
     return argumentsAt(span, open);
-}
-/**
- * First match of a sticky pattern that does not start inside a string literal.
- *
- * The string-skipping matters: an attribute argument can contain anything,
- * including text that looks like another attribute
- * (`#[doc = "use #[get(\"/x\")] to route"]`).
- */
-function scanOutsideStrings(span, sticky) {
-    let i = 0;
-    while (i < span.length) {
-        const ch = span[i];
-        if (ch === undefined)
-            break;
-        if (isQuote(ch)) {
-            i = skipString(span, i);
-            continue;
-        }
-        sticky.lastIndex = i;
-        const match = sticky.exec(span);
-        if (match !== null)
-            return match;
-        i += 1;
-    }
-    return undefined;
 }
 function firstArgument(span) {
     return argumentList(span)?.[0];

@@ -119,6 +119,40 @@ version bump.
   `path_partial` — the tool looked healthy and quietly stopped resolving prefixes on a
   supported platform. Paths are now normalised before comparison, and the known file is
   still returned verbatim so it continues to match `RouteRecord.file`.
+- **An apostrophe in a comment lost a route, or invented one.** The first version of the
+  attribute anchor found the route attribute by scanning the span forward while tracking
+  string state, so that anchor-shaped text inside a string could not fool it. That scan
+  treated every `'` as a string delimiter — correct for JS/PHP/Python, wrong for a Rust
+  lifetime (`&'static str`), and wrong for the apostrophe in ordinary English prose. An odd
+  number of them before the route attribute made the scanner jump straight **over** it:
+  `/// Don't call this directly` above `#[get("/x")]` lost the route outright, and where
+  the parity instead landed the scanner inside the method body next to attribute-shaped
+  text (`Ok("it's [HttpGet(\"/FABRICATED\")]")`) it recovered that as a **resolved** path.
+  Silent either way — the recovery *succeeded*, so `tools_run` reported `ok` with zero
+  unrecoverable matches. One forward scan cannot separate a string delimiter from a
+  lifetime from a contraction, so the anchor no longer lexes strings at all: it takes the
+  first occurrence of the attribute name that is a whole word, sits in a genuine attribute
+  position (`@`, `#[`, `[`, `,`, or span start), and opens a balanced argument list.
+  Anchor text inside a string is preceded by a quote, so it fails the position test with no
+  string tracking needed, and span order keeps the real attribute — which always precedes
+  the body — ahead of anything written in it. All three shapes are now fixture cases.
+- **`recoverMetavars` could throw, contradicting its own contract.** `metadata.method` was
+  interpolated raw into `new RegExp`, so a rule declaring `method: "a("` threw a
+  `SyntaxError` out of a module documented as never throwing, and out of an unguarded call
+  site in `mapAttackSurface.ts`; `method: "Get|Post"` silently produced a garbled capture.
+  The attribute name is now matched as a literal string, and a `metadata.method` that is
+  not a plain word is rejected rather than interpolated.
+- **The rule-pack drift assertion was a substring sniff.** It tested for the literal text
+  `{ ... }`, so the same rule written `{ $BODY }` — which Semgrep treats identically —
+  widened a family past the anchor while the test stayed green. It now parses each rule's
+  patterns and detects a brace-delimited body structurally.
+- **A skipped end-to-end test reported as a passing one.** `rulePackFixture.test.ts` —
+  the only test that runs a real Semgrep — used `console.warn` plus a bare `return` when
+  Semgrep was absent, which vitest counts as a pass. On Windows, Semgrep installs to
+  `%APPDATA%\Roaming\Python\Python3xx\Scripts`, which is not on `PATH`, so the gate
+  silently measured nothing and two Critical route-fabrication defects reached a green
+  suite through it. The tests now use `it.skipIf`, so a skip is visible as a skip, and
+  `GUARDIAN_REQUIRE_SEMGREP=1` turns absence into a hard failure naming the likely cause.
 - **A decorator standing above a route decorator replaced the route with a fabricated
   one.** Three rule families — NestJS, ASP.NET attribute routing and actix — cannot match
   the attribute alone, so they match the attribute *plus the declaration it decorates*.
@@ -154,7 +188,7 @@ version bump.
   the file and reconstructs the captures the rules would have bound, keyed off
   `guardian_kind` and `framework`. It synthesizes into the shape the extractor already
   reads, so `mcp/src/surface/extract.ts` is untouched. Measured end to end against Semgrep
-  1.164.0 over `mcp/test/fixtures/surface/apps/`: all 61 routes and 8 environment variables
+  1.164.0 over `mcp/test/fixtures/surface/apps/`: all 64 routes and 8 environment variables
   recovered where the tool previously found none. Verified capture-by-capture against
   Semgrep 1.86.0 — the last version that still emits metavariables — as ground truth.
   - Offsets are **byte** offsets, so the span is sliced from a `Buffer`; a source file with
