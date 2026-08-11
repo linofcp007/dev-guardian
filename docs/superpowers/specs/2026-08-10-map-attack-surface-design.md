@@ -174,7 +174,8 @@ interface CoverageEntry {
   language: string;
   detected: boolean;         // the stack snapshot reported this language
   routes_found: number;
-  status: 'ok' | 'no_matches' | 'no_rules';
+  unreadable_matches: number; // matched, but the captures could not be read
+  status: 'ok' | 'no_matches' | 'no_rules' | 'unreadable';
 }
 
 interface AttackSurfaceSnapshot {
@@ -328,9 +329,21 @@ write nothing on failure.
 
 | `status` | Meaning |
 | --- | --- |
-| `ok` | Rules existed for this language and matched. |
+| `ok` | Rules existed for this language and matched, and every match was read. |
 | `no_matches` | Rules existed and found nothing — most likely there are no routes. |
 | `no_rules` | The language was detected but no rule covers its framework. |
+| `unreadable` | Rules matched, but `unreadable_matches` of them could not be read, so those routes are missing from the inventory. |
+
+`unreadable` exists for one reason: it is the opposite of `no_matches`, and collapsing the
+two would be the "this application exposes nothing" falsehood in miniature. It is what a
+Rust, NestJS or ASP.NET-attribute project gets on a Semgrep that redacts match content
+(>= ~1.120 without `semgrep login`), because those three rule families must match the
+attribute *plus the declaration it decorates* — so the reported span begins at whatever
+attribute happens to come first, and nothing local can tell a route attribute from a
+commented-out one. `surface/recoverMetavars.ts` refuses to guess for those families rather
+than emit a plausible fabrication; the other ten reconstruct fine on any Semgrep version,
+so the tool still requires no account. See that module's header for the two reconstructions
+that were tried and the routes each invented.
 
 `no_rules` is the case most tools hide. If a project uses Hapi or Actix and the pack has no
 rule for it, the output says so rather than reporting zero and implying safety. This
@@ -433,22 +446,35 @@ From `CLAUDE.md`:
 Recorded at merge so they are not rediscovered from scratch. Nothing here is a
 regression; each is a gap between what the tool reports and what it could report.
 
-### The one that must be checked first
+### Resolved: the pipeline has now been run against real Semgrep
 
-**No test in this repo has ever seen real Semgrep output.** Semgrep was not installed
-on the machine this was built on, so the whole pipeline was exercised against
-hand-written JSON fixtures. When a real Semgrep is available, verify **`guardian-route-express`'s
-`$PATH` guard before anything else** — its `metavariable-regex` requires the capture to
-start with a quote character, so it matches only if `abstract_content` retains the source
-quoting. If it does not, the
-flagship rule for the most common stack matches nothing and JS/TS surface mapping is
-silently empty. This is a higher priority than the Ruby and Rust rules, which are
-openly unvalidated guesses but fail visibly rather than silently.
+This section previously opened with "no test in this repo has ever seen real Semgrep
+output". That is no longer true. `test/e2e/rulePackFixture.test.ts` runs the real binary
+over `test/fixtures/surface/apps/` and pins the whole route set; every rule family has
+been verified capture-for-capture against Semgrep 1.86.0, which still emits
+`extra.metavars`, and reproduced on 1.164.0, which redacts them. `abstract_content` does
+retain the source quoting, so `guardian-route-express`'s `$PATH` guard fires correctly —
+the specific risk called out here did not materialise.
 
-The repo's own fixtures disagree on this point — `test/fixtures/surface/express.json`
-encodes `abstract_content` unquoted, `surfaceTools.test.ts` encodes it quoted — and both
-pass, because `stripQuotes` is a no-op on unquoted input. The suite is structurally
-incapable of telling the two worlds apart.
+The e2e is skipped when Semgrep is absent, and **a skip is reported as a skip, not a
+pass**. Set `GUARDIAN_REQUIRE_SEMGREP=1` to make absence a hard failure. That distinction
+is not cosmetic: while both e2e files used `console.warn` plus a bare `return`, vitest
+counted them as passing, and two separate route-fabrication defects reached a green suite
+through that gap.
+
+### A precondition for whoever writes the DAST consumer
+
+`routes_total` alone is not a complete answer, because a redacting Semgrep leaves the
+three decorated-declaration families out of the inventory (see `CoverageEntry.status:
+'unreadable'`). **A consumer that acts on the route list must read `coverage` alongside
+it** and treat an `unreadable` language as "surface exists here that I have not been
+given", not as "nothing to scan".
+
+This is not a live defect and needs no guard today: `summarize()` returns `routes_total`
+and `coverage` in the same object, `scan_dast` does not exist yet, and `risk_score` does
+not read the surface snapshot at all. It becomes real the day that consumer is written,
+so it belongs in that consumer's spec as an explicit precondition rather than as a
+speculative check here.
 
 ### Fields that are advertised but thin
 

@@ -26,6 +26,68 @@
 # (Flask's @app.route, Django path(), Spring @RequestMapping) correctly omit
 # the key and are reported as ANY.
 #
+# ---- Attribute/decorator patterns must include the declaration -------------
+#
+# Measured against Semgrep 1.86.0 on mcp/test/fixtures/surface/apps/:
+#
+#   `#[get($PATH)]`     (Rust)  parses, and then matches EVERY node in the
+#                               file — 95 matches for 3 routes, all binding
+#                               `metavars: {}`. Spans included `use` lines and
+#                               function bodies.
+#   `[HttpGet($PATH)]`  (C#)    parses as a collection expression and matches
+#                               nothing at all.
+#   `@Get($PATH)`       (TS)    does not parse: "Invalid pattern for
+#                               TypeScript", which Semgrep reports as a rule
+#                               error on every run.
+#
+# All three become exact when the pattern includes the item the attribute is
+# attached to (`#[get($PATH, ...)] fn $F(...) { ... }`). The match span then
+# covers the attribute *and* the declaration — and that has a consequence you
+# must not undo.
+#
+# ---- Spanning the declaration costs these three families their recovery ----
+#
+# Semgrep's span for such a match starts at the FIRST attribute on the
+# declaration, which is very often not the route one:
+#
+#   #[allow(dead_code)]              [Produces("application/json")]
+#   #[get("/d")]                     // [HttpGet("/orders/legacy")]
+#   async fn d() { … }               [HttpGet("/orders")]
+#
+# On any Semgrep that redacts match content (>= ~1.120 without `semgrep login`)
+# `surface/recoverMetavars.ts` has only that span to work from. Two ways of
+# reading it were tried and both INVENTED routes:
+#
+#   - anchoring on the first argument list read `dead_code` and
+#     `"application/json"` as paths;
+#   - anchoring on the route attribute by name read the commented-out
+#     `/orders/legacy` above, while the live `/orders` disappeared.
+#
+# Both pass the extractor's literal test, so each was emitted as a *resolved*
+# path — a URL a DAST consumer would go on to request. The second failure is
+# the general one: deciding whether text is code, a comment or a string is not
+# local information, and the span starts mid-file.
+#
+# So these three families are NOT reconstructed. On a redacting Semgrep their
+# routes are absent, `coverage` reports `unreadable` (never `no_matches`) for
+# the language, and `tools_run` names the remedy: log in, or use a Semgrep
+# older than ~1.100. The other ten families are unaffected — their spans start
+# at the call or annotation that matched, so the capture sits at a known place.
+#
+# If you widen another rule family to span its declaration, add its
+# `metadata.framework` to UNREADABLE_UNDER_REDACTION in
+# `mcp/src/surface/recoverMetavars.ts`. The two lists are asserted equal by
+# `mcp/test/unit/surface/rulePack.test.ts`, which fails if you forget — that
+# assertion is the only thing that stopped this shipping a third time.
+#
+# Rust is one rule, not five, because Semgrep's Rust engine *does* bind the
+# attribute name to `$METHOD` once the pattern is well-formed — and the actix /
+# Rocket attribute name IS the HTTP verb, so the extractor's `normalizeMethod`
+# reads it directly. The other two families stay one-rule-per-verb for reasons
+# that are not stylistic: in TypeScript `@$DEC($PATH)` does not parse at all, and
+# in C# the attribute name is `HttpGet`, which is not a verb the extractor
+# knows, so the verb has to arrive as `metadata.method`.
+#
 # ---- Do NOT add a $PATH literal guard to a route rule ----------------------
 #
 # A `metavariable-regex` pinning $PATH to a string literal DROPS the match:
@@ -115,7 +177,9 @@ rules:
       framework: nestjs
       confidence: medium
       method: GET
-    pattern: "@Get($PATH)"
+    pattern: |
+      @Get($PATH, ...)
+      $M(...) { ... }
 
   - id: guardian-route-nestjs-post
     languages: [typescript]
@@ -126,7 +190,9 @@ rules:
       framework: nestjs
       confidence: medium
       method: POST
-    pattern: "@Post($PATH)"
+    pattern: |
+      @Post($PATH, ...)
+      $M(...) { ... }
 
   - id: guardian-route-nestjs-put
     languages: [typescript]
@@ -137,7 +203,9 @@ rules:
       framework: nestjs
       confidence: medium
       method: PUT
-    pattern: "@Put($PATH)"
+    pattern: |
+      @Put($PATH, ...)
+      $M(...) { ... }
 
   - id: guardian-route-nestjs-patch
     languages: [typescript]
@@ -148,7 +216,9 @@ rules:
       framework: nestjs
       confidence: medium
       method: PATCH
-    pattern: "@Patch($PATH)"
+    pattern: |
+      @Patch($PATH, ...)
+      $M(...) { ... }
 
   - id: guardian-route-nestjs-delete
     languages: [typescript]
@@ -159,7 +229,9 @@ rules:
       framework: nestjs
       confidence: medium
       method: DELETE
-    pattern: "@Delete($PATH)"
+    pattern: |
+      @Delete($PATH, ...)
+      $M(...) { ... }
 
   # ---------- Python ----------
   - id: guardian-route-flask
@@ -188,6 +260,16 @@ rules:
           metavariable: $METHOD
           regex: ^(get|post|put|patch|delete|options|head)$
 
+  # Qualified callee, not the bare name. `path(...)` is an ordinary function
+  # name: measured against Semgrep 1.86.0, the bare form reported three routes
+  # out of a module whose only crime was defining `def path(*parts)` around
+  # os.path.join — and two of them ("etc", "var") passed the extractor's
+  # literal test, so they were emitted as resolved URLs that exist nowhere.
+  # Writing the fully-qualified name makes Semgrep resolve the import instead
+  # of the spelling, so a local helper of the same name no longer matches while
+  # `from django.urls import path` still does. This is NOT a $PATH guard: a
+  # computed path (`path(settings.ADMIN_URL, ...)`) still matches and is still
+  # reported, flagged path_partial by the extractor.
   - id: guardian-route-django
     languages: [python]
     severity: INFO
@@ -197,8 +279,8 @@ rules:
       framework: django
       confidence: medium
     pattern-either:
-      - pattern: path($PATH, ...)
-      - pattern: re_path($PATH, ...)
+      - pattern: django.urls.path($PATH, ...)
+      - pattern: django.urls.re_path($PATH, ...)
 
   # ---------- PHP / WordPress ----------
   - id: guardian-route-wp-rest
@@ -253,61 +335,42 @@ rules:
           regex: ^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD|Any)$
 
   # ---------- Rust ----------
-  # One rule per attribute: the attribute name is the verb.
-  - id: guardian-route-rust-actix-get
+  # ONE rule, because Semgrep's Rust engine binds the attribute name — the
+  # only attribute family in this pack where it does. The verb therefore
+  # arrives as $METHOD and the rule declares no metadata.method.
+  #
+  # The trailing `fn $F(...) { ... }` is load-bearing, not decoration: without
+  # it the five per-verb rules this replaces matched every node in the file and
+  # bound nothing, so one `#[get("/x")]` produced five routes — the real GET
+  # plus four fabricated ones — and spans that were function bodies rather than
+  # routes. See the attribute note in the header.
+  #
+  # KNOWN LIMITATION — single-argument attributes only. Despite the `, ...`,
+  # this does NOT match Rocket's multi-argument forms:
+  #
+  #   #[post("/x", data = "<t>")]        0 matches on 1.164.0 and on 1.86.0
+  #   #[get("/x", rank = 2)]             0 matches on 1.164.0 and on 1.86.0
+  #
+  # Measured, not assumed. `#[$METHOD($PATH, $EXTRA)] fn $F(...) { ... }` does
+  # not match them either; only a bare `#[$METHOD(...)]` does, and that binds no
+  # $PATH at all — which would hand the extractor a route with no path on any
+  # Semgrep that still emits metavariables. Actix's single-argument attribute,
+  # the common case, works; Rocket routes carrying `data`, `rank` or `format`
+  # are simply not reported. Under-reporting a route is a gap; reporting one at
+  # a path we did not read would be a lie.
+  - id: guardian-route-rust-actix
     languages: [rust]
     severity: INFO
     message: Actix/Rocket route attribute
     metadata:
       guardian_kind: route
       framework: actix
-      confidence: low
-      method: GET
-    pattern: "#[get($PATH)]"
-
-  - id: guardian-route-rust-actix-post
-    languages: [rust]
-    severity: INFO
-    message: Actix/Rocket route attribute
-    metadata:
-      guardian_kind: route
-      framework: actix
-      confidence: low
-      method: POST
-    pattern: "#[post($PATH)]"
-
-  - id: guardian-route-rust-actix-put
-    languages: [rust]
-    severity: INFO
-    message: Actix/Rocket route attribute
-    metadata:
-      guardian_kind: route
-      framework: actix
-      confidence: low
-      method: PUT
-    pattern: "#[put($PATH)]"
-
-  - id: guardian-route-rust-actix-patch
-    languages: [rust]
-    severity: INFO
-    message: Actix/Rocket route attribute
-    metadata:
-      guardian_kind: route
-      framework: actix
-      confidence: low
-      method: PATCH
-    pattern: "#[patch($PATH)]"
-
-  - id: guardian-route-rust-actix-delete
-    languages: [rust]
-    severity: INFO
-    message: Actix/Rocket route attribute
-    metadata:
-      guardian_kind: route
-      framework: actix
-      confidence: low
-      method: DELETE
-    pattern: "#[delete($PATH)]"
+      confidence: medium
+    patterns:
+      - pattern: "#[$METHOD($PATH, ...)] fn $F(...) { ... }"
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(get|post|put|patch|delete|options|head)$
 
   # ---------- Ruby ----------
   - id: guardian-route-rails
@@ -338,6 +401,17 @@ rules:
   # One rule per annotation. @RequestMapping carries no verb of its own (the
   # method= attribute is a separate argument we do not read), so it declares
   # no metadata.method and is reported as ANY — which is the truth.
+  #
+  # KNOWN LIMITATION — single-argument annotations only. The named-argument
+  # form, which is common in real Spring code, is NOT matched:
+  #
+  #   @GetMapping(value = "/x", produces = "application/json")   0 matches
+  #
+  # It cannot be fixed by adding `, ...` here: `@GetMapping($PATH, ...)` is
+  # rejected outright by Semgrep as "Invalid pattern for Java", which would
+  # take the whole rule (and its single-argument matches) with it. Measured on
+  # 1.164.0. Those routes are absent from the inventory rather than reported at
+  # a guessed path.
   - id: guardian-route-spring-get
     languages: [java]
     severity: INFO
@@ -429,7 +503,9 @@ rules:
       framework: aspnet
       confidence: medium
       method: GET
-    pattern: "[HttpGet($PATH)]"
+    pattern: |
+      [HttpGet($PATH, ...)]
+      $RET $M(...) { ... }
 
   - id: guardian-route-aspnet-attribute-post
     languages: [csharp]
@@ -440,7 +516,9 @@ rules:
       framework: aspnet
       confidence: medium
       method: POST
-    pattern: "[HttpPost($PATH)]"
+    pattern: |
+      [HttpPost($PATH, ...)]
+      $RET $M(...) { ... }
 
   - id: guardian-route-aspnet-attribute-put
     languages: [csharp]
@@ -451,7 +529,9 @@ rules:
       framework: aspnet
       confidence: medium
       method: PUT
-    pattern: "[HttpPut($PATH)]"
+    pattern: |
+      [HttpPut($PATH, ...)]
+      $RET $M(...) { ... }
 
   - id: guardian-route-aspnet-attribute-patch
     languages: [csharp]
@@ -462,7 +542,9 @@ rules:
       framework: aspnet
       confidence: medium
       method: PATCH
-    pattern: "[HttpPatch($PATH)]"
+    pattern: |
+      [HttpPatch($PATH, ...)]
+      $RET $M(...) { ... }
 
   - id: guardian-route-aspnet-attribute-delete
     languages: [csharp]
@@ -473,7 +555,9 @@ rules:
       framework: aspnet
       confidence: medium
       method: DELETE
-    pattern: "[HttpDelete($PATH)]"
+    pattern: |
+      [HttpDelete($PATH, ...)]
+      $RET $M(...) { ... }
 
   # ---------- Environment variables (all stacks) ----------
   - id: guardian-env-node

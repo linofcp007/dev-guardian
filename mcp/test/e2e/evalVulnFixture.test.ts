@@ -2,8 +2,15 @@
  * End-to-end test against the eval-vuln fixture (test/e2e/eval-vuln-fixture/):
  *   - app.js with `eval(parsed.query.expr)`.
  *
- * Skipped when Semgrep is not installed, so a bare runner stays green; CI
- * installs Semgrep and runs it. We scan with a **self-contained, offline rule**
+ * SKIPPED — not passed — when Semgrep is not installed, so a bare runner stays
+ * green without ever claiming to have verified anything. This file previously
+ * used `console.warn` plus a bare `return`, which vitest reports as a PASSING
+ * test; combined with Semgrep living off PATH on Windows
+ * (%APPDATA%\Roaming\Python\Python3xx\Scripts), that is how route-fabrication
+ * defects reached a green suite through its sibling, rulePackFixture.test.ts.
+ * Set `GUARDIAN_REQUIRE_SEMGREP=1` to turn absence into a hard failure.
+ *
+ * We scan with a **self-contained, offline rule**
  * (no registry/token, no dependency on the bundled config's per-version quirks)
  * so the result is deterministic: real Semgrep must flag the eval().
  */
@@ -56,14 +63,27 @@ async function isInstalled(bin: string): Promise<boolean> {
   }
 }
 
-describe('E2E — eval-vuln fixture', () => {
-  it.skipIf(true)('placeholder so the suite always has at least one test in this file', () => {});
+/** Resolved once at collection time so `it.skipIf` can report a skip as a skip. */
+const FIXTURE_PRESENT = existsSync(FIXTURE);
+const SEMGREP_INSTALLED = await isInstalled('semgrep');
+const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
-  it('real Semgrep flags eval() in the fixture (self-contained offline rule)', async () => {
-    if (!(await isInstalled('semgrep'))) {
-      console.warn('[e2e] semgrep not installed, skipping');
-      return;
-    }
+describe('E2E — eval-vuln fixture', () => {
+  it.runIf(REQUIRE_SEMGREP)('GUARDIAN_REQUIRE_SEMGREP=1 — this suite must be runnable', () => {
+    expect(
+      SEMGREP_INSTALLED,
+      'GUARDIAN_REQUIRE_SEMGREP=1 but semgrep is not on PATH. On Windows it is usually in ' +
+        '%APPDATA%\\Roaming\\Python\\Python3xx\\Scripts.',
+    ).toBe(true);
+    expect(
+      FIXTURE_PRESENT,
+      `GUARDIAN_REQUIRE_SEMGREP=1 but the fixture tree is missing at ${FIXTURE}.`,
+    ).toBe(true);
+  });
+
+  it.skipIf(!SEMGREP_INSTALLED)(
+    'real Semgrep flags eval() in the fixture (self-contained offline rule)',
+    async () => {
 
     // Write rule AND target into a temp dir OUTSIDE any `test/` path. Semgrep's
     // built-in default ignore skips `test/` directories, so scanning the in-repo
@@ -102,11 +122,9 @@ describe('E2E — eval-vuln fixture', () => {
     expect(ruleIds.some((id) => /eval/i.test(id))).toBe(true);
   }, 6 * 60_000);
 
-  it('security_scan_full runs end-to-end without crashing (orchestration smoke)', async () => {
-    if (!existsSync(FIXTURE) || !(await isInstalled('semgrep'))) {
-      console.warn('[e2e] semgrep/fixture absent, skipping orchestration smoke');
-      return;
-    }
+  it.skipIf(!SEMGREP_INSTALLED || !FIXTURE_PRESENT)(
+    'security_scan_full runs end-to-end without crashing (orchestration smoke)',
+    async () => {
 
     const db = new Database(':memory:');
     runMigrations(db);

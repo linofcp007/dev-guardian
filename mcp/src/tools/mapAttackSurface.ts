@@ -20,10 +20,17 @@
  * blocks persistence only when it also failed to leave parseable JSON behind;
  * if it left partial-but-parseable JSON, that partial data is persisted with
  * a `failed` tools_run entry carrying the diagnostic.
+ *
+ * The same guarantee covers a fourth failure mode: Semgrep reporting matches
+ * whose content we cannot read. Current versions redact `extra.metavars`
+ * unless the user has run `semgrep login`, so the captures are rebuilt from
+ * the matched byte range (see `surface/recoverMetavars.ts`). If Semgrep
+ * reported matches and not one could be recovered, that is a broken
+ * toolchain, not a project without routes — nothing is persisted.
  */
 
-import { copyFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { copyFileSync, readFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -36,7 +43,12 @@ import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { Force, ProjectPath } from '../schemas.js';
 import { collectEnvVars } from '../surface/collectors/envVars.js';
 import { collectPorts } from '../surface/collectors/ports.js';
-import { extractSurface } from '../surface/extract.js';
+import { extractSurface, languageFromPath } from '../surface/extract.js';
+import {
+  recoverMetavars,
+  type RecoveryOutcome,
+  type SourceMap,
+} from '../surface/recoverMetavars.js';
 import { resolveNodeMounts, type ImportRecord } from '../surface/resolvers/node.js';
 import { resolveWordpressRoutes } from '../surface/resolvers/wordpress.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
@@ -180,14 +192,127 @@ async function handler(
     );
   }
 
-  const snapshot = buildSnapshot(parsed, projectPath, ctx, [toolRun], includeEnvVars);
+  // Rebuild the captures modern Semgrep redacts, before anything downstream
+  // looks for them. Reading the files is the impure half and belongs here;
+  // `recoverMetavars` itself is pure and takes the text.
+  const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
+  if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable > 0) {
+    return degradedResult(
+      [toolRun, unreadableMatchesToolRun(recovery)],
+      [],
+      unreadableMatchesNote(recovery),
+      ctx,
+    );
+  }
+
+  const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
+  const snapshot = buildSnapshot(
+    recovery.json,
+    projectPath,
+    ctx,
+    toolsRun,
+    includeEnvVars,
+    recovery.unreadableRouteFiles,
+  );
   const persisted = ctx.storage.surface.insert({
     project_path: projectPath,
     tree_hash: treeHash,
     snapshot,
   });
 
-  return summarize(snapshot, persisted.id, [toolRun], ctx);
+  return summarize(snapshot, persisted.id, toolsRun, ctx);
+}
+
+/** Name used for the recovery step in `tools_run`; it is not a real binary. */
+const RECOVERY_STEP = 'semgrep-metavar-recovery';
+
+/**
+ * Source text of every file Semgrep reported a match in, keyed by the `path`
+ * value verbatim so `recoverMetavars` can look it up without re-deriving it.
+ *
+ * Semgrep reports absolute paths when handed an absolute target (which this
+ * tool does) and relative ones when handed a relative target, so both are
+ * resolved. A file that cannot be read is simply absent from the map — the
+ * recovery counts it `unrecoverable` rather than guessing.
+ */
+function readSources(parsed: unknown, projectPath: string): SourceMap {
+  const sources = new Map<string, string>();
+  for (const path of collectAllFiles(parsed)) {
+    try {
+      const buffer = readFileSync(isAbsolute(path) ? path : join(projectPath, path));
+      const text = buffer.toString('utf8');
+      // Offsets are byte offsets into the file as it sits on disk. Bytes that
+      // are not valid UTF-8 decode to U+FFFD, which re-encodes to a different
+      // length and shifts every later offset — so a file that does not
+      // round-trip is dropped rather than sliced at the wrong place.
+      if (Buffer.byteLength(text, 'utf8') !== buffer.length) continue;
+      sources.set(path, text);
+    } catch {
+      // Unreadable / deleted since the scan: absent from the map, by design.
+    }
+  }
+  return sources;
+}
+
+/**
+ * Make a recovered run visible instead of silent — including the partial case,
+ * where some routes are real and some matches were lost. Persisted with the
+ * snapshot, so `cachedToolsRun` keeps reporting it on later cache hits.
+ * Emitted only when there was something to recover: a run against an older
+ * (or logged-in) Semgrep is `intact` throughout and says nothing new.
+ */
+/**
+ * How to get the unreadable matches back. Named wherever a loss is reported,
+ * because the fix is not obvious and the obvious guess — "this tool needs a
+ * Semgrep account" — is wrong: ten of the thirteen route families are rebuilt
+ * from byte offsets and work on any version, logged in or not.
+ */
+const REDACTION_REMEDY =
+  'this Semgrep version redacts match content unless you run `semgrep login`; either log ' +
+  'in, or use a Semgrep older than ~1.100, and the routes appear. dev-guardian does not ' +
+  'require an account — most route families are rebuilt from byte offsets either way';
+
+function recoveryToolRun(recovery: RecoveryOutcome): ToolRun[] {
+  if (recovery.recovered === 0 && recovery.unrecoverable === 0) return [];
+  const base =
+    `recovered ${recovery.recovered} redacted match(es) from byte offsets` +
+    (recovery.intact > 0 ? `; ${recovery.intact} already carried metavariables` : '');
+  if (recovery.unrecoverable === 0) {
+    return [{ name: RECOVERY_STEP, status: 'ok', reason: base }];
+  }
+  return [
+    {
+      name: RECOVERY_STEP,
+      status: 'failed',
+      reason:
+        `${base}; ${recovery.unrecoverable} match(es) could not be read and are MISSING ` +
+        `from the surface (see coverage[].unreadable_matches for which languages) — ` +
+        `${REDACTION_REMEDY}`,
+    },
+  ];
+}
+
+function unreadableMatchesToolRun(recovery: RecoveryOutcome): ToolRun {
+  return {
+    name: RECOVERY_STEP,
+    status: 'failed',
+    reason:
+      `no match content: all ${recovery.unrecoverable} match(es) lacked metavariables ` +
+      'and none could be recovered from the reported byte offsets',
+  };
+}
+
+function unreadableMatchesNote(recovery: RecoveryOutcome): string {
+  return (
+    `Semgrep reported ${recovery.unrecoverable} match(es) and not one could be read, so no ` +
+    'surface was mapped and nothing was persisted — a zero-route snapshot here would read as ' +
+    '"this application exposes nothing", the inverse of what was measured. Cause: ' +
+    `${REDACTION_REMEDY}. Three route families are affected regardless of that: NestJS, ` +
+    'ASP.NET attribute routes and actix cannot be reconstructed from a redacted match at ' +
+    'all, because their Semgrep pattern must span the decorated declaration and the reported ' +
+    'span can start at an unrelated attribute — so a project built only from those is exactly ' +
+    'this case.'
+  );
 }
 
 /**
@@ -299,6 +424,7 @@ function buildSnapshot(
   ctx: PluginContext,
   toolsRun: ToolRun[],
   includeEnvVars: boolean,
+  unreadableRouteFiles: readonly string[],
 ): AttackSurfaceSnapshot {
   const { routes, mounts } = extractSurface(parsed);
   const knownFiles = collectAllFiles(parsed);
@@ -311,7 +437,7 @@ function buildSnapshot(
     env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
     ports: collectPorts(projectPath),
     webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
-    coverage: buildCoverage(resolved, ctx),
+    coverage: buildCoverage(resolved, ctx, unreadableRouteFiles),
     tools_run: toolsRun,
     missing_tools: [],
   };
@@ -368,6 +494,20 @@ function stripKnownExtension(path: string): string {
 }
 
 /**
+ * Semgrep reports paths in the host's native separator: on Windows a match in
+ * `node-express/routes/users.js` comes back as
+ * `C:\project\node-express\routes\users.js`. An import specifier is always
+ * POSIX-ish (`./routes/users.js`), so the two are only comparable once the
+ * reported path is normalised. Without this, `resolveModuleFile` below split a
+ * Windows path into a single segment, matched no known file, and every mounted
+ * router silently degraded to `path_partial` — mount resolution was dead on
+ * Windows while looking healthy everywhere else.
+ */
+function toPosixPath(path: string): string {
+  return path.replace(/\\/g, '/');
+}
+
+/**
  * Turn a specifier like `./routes/users` (imported from `src/app.ts`) into
  * the project-relative file the route was actually matched in, e.g.
  * `src/routes/users.ts`.
@@ -382,10 +522,14 @@ function stripKnownExtension(path: string): string {
  * extension-stripped path matches. When nothing matches, we return the
  * normalised specifier path as our best-effort guess rather than fabricate
  * an extension.
+ *
+ * The comparison is separator-insensitive, but the value returned on a hit is
+ * the known file *verbatim*: it is later looked up against `RouteRecord.file`,
+ * which carries Semgrep's spelling unchanged.
  */
 function resolveModuleFile(importingFile: string, specifier: string, knownFiles: Set<string>): string {
   if (!specifier.startsWith('.')) return specifier;
-  const dir = importingFile.split('/').slice(0, -1).join('/');
+  const dir = toPosixPath(importingFile).split('/').slice(0, -1).join('/');
   const parts = `${dir}/${specifier}`.split('/');
   const stack: string[] = [];
   for (const part of parts) {
@@ -397,25 +541,57 @@ function resolveModuleFile(importingFile: string, specifier: string, knownFiles:
   const base = stripKnownExtension(joined);
 
   for (const file of knownFiles) {
-    if (stripKnownExtension(file) === base) return file;
+    if (stripKnownExtension(toPosixPath(file)) === base) return file;
   }
   return joined;
 }
 
-function buildCoverage(routes: RouteRecord[], ctx: PluginContext): CoverageEntry[] {
+/**
+ * Per-language coverage.
+ *
+ * `unreadable` exists so that a language whose routes Semgrep matched but we
+ * could not read never reports `no_matches`. The two are opposite facts — "we
+ * looked and there is nothing" versus "there is something and we could not read
+ * it" — and collapsing them is the "this application exposes nothing" falsehood
+ * this tool is built to avoid. It is what a Rust or NestJS project gets on a
+ * redacting Semgrep, since those families cannot be reconstructed from a
+ * redacted span at all (surface/recoverMetavars.ts).
+ */
+function buildCoverage(
+  routes: RouteRecord[],
+  ctx: PluginContext,
+  unreadableRouteFiles: readonly string[],
+): CoverageEntry[] {
   const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
-  const languages = new Set<string>([...detected, ...routes.map((r) => r.language)]);
+
+  // One entry per lost route, so the count is routes-not-shown, not files.
+  const unreadableByLanguage = new Map<string, number>();
+  for (const file of unreadableRouteFiles) {
+    const language = languageFromPath(file);
+    if (language === 'unknown') continue;
+    unreadableByLanguage.set(language, (unreadableByLanguage.get(language) ?? 0) + 1);
+  }
+
+  const languages = new Set<string>([
+    ...detected,
+    ...routes.map((r) => r.language),
+    ...unreadableByLanguage.keys(),
+  ]);
   languages.delete('unknown');
 
   const entries: CoverageEntry[] = [];
   for (const language of [...languages].sort()) {
     const found = routes.filter((r) => r.language === language).length;
+    const unreadable = unreadableByLanguage.get(language) ?? 0;
     const hasRules = COVERED_LANGUAGES.has(language);
     entries.push({
       language,
       detected: detected.includes(language),
       routes_found: found,
-      status: !hasRules ? 'no_rules' : found > 0 ? 'ok' : 'no_matches',
+      unreadable_matches: unreadable,
+      // `unreadable` outranks `ok`: a language with some routes read and some
+      // lost is not fully covered, and saying `ok` would hide the gap.
+      status: unreadable > 0 ? 'unreadable' : !hasRules ? 'no_rules' : found > 0 ? 'ok' : 'no_matches',
     });
   }
   return entries;

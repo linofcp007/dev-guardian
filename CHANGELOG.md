@@ -22,20 +22,194 @@ version bump.
   `snapshot_id` — the full route list is deliberately kept out of the tool response (see
   the new resources below) so a project with hundreds of routes cannot exhaust the
   agent's context window on a single call.
-  - **Not yet validated against a real Semgrep run.** Semgrep is not installed on the
-    machine this was built on, so the whole pipeline — extraction, prefix resolution,
-    coverage reporting — has only been exercised against hand-written JSON fixtures
-    standing in for Semgrep's output. The Ruby and Rust rules in
-    `configs/semgrep/routes.yml` are unvalidated guesses at the framework's route
-    syntax, not rules checked against real code. Treat this as an unverified first cut,
-    not a production-ready scanner.
+  - **Validation status, per rule.** Every rule in `configs/semgrep/routes.yml` now
+    matches real code in `mcp/test/fixtures/surface/apps/`, checked capture-by-capture
+    against Semgrep **1.86.0** (the last version that still emits `extra.metavars`, so
+    what a rule binds is directly observable) and re-run end to end through the tool on
+    Semgrep **1.164.0** (which redacts them, exercising the byte-offset recovery). Both
+    versions produce the same 75 matches with no rule errors. Verified working:
+    `express` + its `mount` and `import` rules, `nestjs` (5), `flask`, `fastapi`,
+    `django`, `wp-rest` (literal *and* `self::NAMESPACE` namespaces), `laravel`,
+    `go-nethttp`, `gin`, `rails` (bare and `to:` forms), `spring` (all 6, including
+    `@RequestMapping`, in their single-argument form), `aspnet-minimal`, `aspnet`
+    attribute routing (5), `actix`, and all 5 `env` rules. Four rule families were
+    **broken** and are fixed below.
+  - **What is still not covered.** The verb alternations absent from the fixture —
+    `OPTIONS`, `HEAD`, `ALL`/`ANY`, and `PUT`/`PATCH` for some frameworks — are
+    untested, being extra literals in an already-verified `metavariable-regex`. A
+    parameterless decorator (`@Get()`, `[HttpGet]`) is deliberately not reported: there
+    is no path to capture, and neither the NestJS `@Controller` prefix nor an ASP.NET
+    `MapGroup` prefix is resolved, so those routes are reported at their own
+    registration path. Go's `os.Getenv` is not collected — no `env` rule covers Go.
+    The Docker fallback path of `map_attack_surface` is still only exercised by mocks.
+    Two **named-argument** forms are measured as unmatched and pinned as fixture bait:
+    Spring's `@GetMapping(value = "/x", produces = "…")` — common in real code, and not
+    fixable by adding `, ...`, which Semgrep rejects as "Invalid pattern for Java" —
+    and Rocket's `#[post("/x", data = "<t>")]` (see the actix entry below). Both are
+    absent from the inventory rather than reported at a guessed path.
 - **`guardian://surface/latest` and `guardian://surface/{id}` resources.** Serve the
   full persisted attack-surface snapshot (every route, env var, port, webhook and the
   coverage report) by snapshot id or the most recent one. Return `{ snapshot: null }`
   when nothing has been captured yet, consistent with the rest of the resource surface.
+- **A multi-language fixture and an end-to-end rule-pack test.**
+  `mcp/test/fixtures/surface/apps/` is a small twelve-directory application tree — one
+  framework per directory — carrying the route shapes every rule targets plus realistic
+  surrounding code that must *not* match: a Python module whose local helper is named
+  `path`, a Ruby class calling `Rails.cache.delete 'orders/index'`, `cache.get(...)` in
+  the Express app, `Route::middleware(...)`, `r.Use(...)`, `@app.on_event(...)`,
+  `app.MapGroup(...)`. It also carries the cases that must survive *as* partial results:
+  a computed Django path, a computed WordPress namespace next to a literal one, and a
+  non-ASCII comment sitting before every match in two files so the byte-offset recovery
+  is exercised rather than assumed. `mcp/test/e2e/rulePackFixture.test.ts` runs the real
+  `map_attack_surface` handler over it and asserts the **complete** route set — 58
+  routes by framework, method, resolved path and `path_partial` — because a count
+  assertion passes when one rule breaks and another over-matches. It skips with a
+  warning when Semgrep is absent, and copies the tree out of `test/` first, which
+  Semgrep's default ignore list would otherwise skip entirely.
 
 ### Fixed
 
+- **The Rust route rules fabricated four routes for every real one.** The five per-verb
+  actix rules were `#[get($PATH)]`, `#[post($PATH)]` and so on. A bare attribute is not a
+  Rust item, and Semgrep degraded each of them to a pattern that matched *every node in
+  the file* while binding `metavars: {}` — measured on 1.86.0, a three-route file produced
+  95 matches, spans including `use` lines and function bodies, with all five rules
+  reporting the same spans. So one `#[get("/x")]` yielded the correct GET plus four
+  invented POST/PUT/PATCH/DELETE routes at the same path, and `map_attack_surface` feeds
+  a DAST tool that would send a request to each. Semgrep's Rust engine *does* bind the
+  attribute name once the pattern includes the item the attribute is attached to, so the
+  five rules are replaced by **one**, `guardian-route-rust-actix`, capturing the verb into
+  `$METHOD` under a `metavariable-regex` — the shape `express`, `gin`, `laravel` and
+  `aspnet-minimal` already use. Verified: exactly five matches for five routes, each with
+  the right verb and path, and the `#[allow(...)]` attribute stacked on one of them
+  correctly ignored. It does **not** cover Rocket's multi-argument attributes:
+  `#[post("/x", data = "<t>")]` and `#[get("/x", rank = 2)]` produce zero matches on
+  both 1.164.0 and 1.86.0 despite the `, ...`, and so does an explicit
+  `#[$METHOD($PATH, $EXTRA)]`. Only a bare `#[$METHOD(...)]` matches them, and it binds
+  no `$PATH` — a route with no path is worse than a route we did not report. Pinned as
+  fixture bait in `rust-actix/rocket.rs` so the limitation stays measured.
+- **The five ASP.NET attribute-routing rules matched nothing at all.**
+  `[HttpGet($PATH)]` parses as a C# collection expression, not an attribute, so every
+  `[HttpGet("/orders")]` in a controller was invisible — a whole style of ASP.NET routing
+  silently missing from the inventory while `coverage` reported `ok` for C# on the
+  strength of the minimal-API rules alone. Fixed by extending each pattern to include the
+  method the attribute decorates.
+- **The five NestJS rules were rule *errors*, not merely unmatched.** `@Get($PATH)` is not
+  a parseable TypeScript pattern ("Invalid pattern for TypeScript"), so every single run
+  of `map_attack_surface` on any project emitted five rule-parse errors and reported zero
+  NestJS routes. Same fix: the pattern now includes the decorated method. The decorator
+  name cannot be a metavariable in TypeScript (`@$DEC($PATH)` does not parse either), so
+  these stay one rule per verb.
+- **The Django rule reported filesystem-path helpers as HTTP routes.** `path($PATH, ...)`
+  keys on the callee *spelling*, and `path` is an ordinary function name. Measured against
+  a module doing nothing worse than `def path(*parts): return os.path.join(*parts)`, the
+  rule produced three routes, two of which (`etc`, `var`) passed the extractor's literal
+  test and were therefore emitted as resolved URLs that exist nowhere. The rule now names
+  the callee in full — `django.urls.path` / `django.urls.re_path` — so Semgrep resolves
+  the import instead of the spelling. This is **not** a `$PATH` literal guard: a computed
+  path (`path(settings.ADMIN_URL, ...)`) still matches and is still reported, flagged
+  `path_partial`. The Ruby rule was checked for the same failure and does not have it:
+  `Rails.cache.delete 'orders/index'` and `store.get 'orders/index'` produce no matches,
+  because `$METHOD $PATH` does not match a call with an explicit receiver.
+- **Express/Fastify mount resolution never worked on Windows.** Semgrep reports paths in
+  the host's native separator and this tool always hands it an absolute target, so on
+  Windows a match arrives as `C:\project\src\routes\users.js` while the import specifier
+  is `./routes/users`. `resolveModuleFile` split on `/` only, so a Windows path was one
+  segment, matched no known file, and every route in a mounted router silently degraded to
+  `path_partial` — the tool looked healthy and quietly stopped resolving prefixes on a
+  supported platform. Paths are now normalised before comparison, and the known file is
+  still returned verbatim so it continues to match `RouteRecord.file`.
+- **Three route families are not reconstructed from a redacted Semgrep match, by design.**
+  NestJS, ASP.NET attribute routing and actix are the families whose Semgrep pattern must
+  match the attribute *plus the declaration it decorates* — the attribute alone does not
+  parse, or matches every node in the file. The reported span therefore begins at whatever
+  attribute comes first, and two attempts to read a route out of it both **invented** one:
+  anchoring on the first argument list turned `#[allow(dead_code)]` into a route named
+  `dead_code` and `[Produces("application/json")]` into `application/json`; anchoring on
+  the route attribute by name turned a commented-out `// [HttpGet("/orders/legacy")]` into
+  `/orders/legacy` while the live `/orders` disappeared. Both passed `isLiteralPath`, so
+  each was emitted as a **resolved** path — a URL `scan_dast` would request — and both were
+  silent, because reconstruction *succeeded*: `tools_run` reported `ok` with zero
+  unrecoverable matches.
+  - The second failure is the general one and it is not a tuning problem: deciding whether
+    text is code, a comment or a string literal is **not local information** — it depends on
+    everything from the start of the file, and the span starts in the middle. No predicate
+    over the characters around a match can answer it, in nine languages or in one. The
+    anchoring machinery is therefore deleted rather than disabled, and these three families
+    now recover **nothing** and are counted `unrecoverable`. A missing route is a gap
+    someone can see and act on; a fabricated URL is a lie acted on for them.
+  - **Only these three.** The other ten route families (express + its mount/import rules,
+    flask, fastapi, django, laravel, gin, net/http, spring, wp-rest, aspnet-minimal) and all
+    five `env` rules have spans that begin at the call or annotation that matched, so the
+    capture sits at a known place. They are verified slot-for-slot against Semgrep 1.86.0 —
+    every capture the extractor reads, identical — and work on any Semgrep version.
+  - **Coverage gained a fourth status so this can never read as "nothing found".**
+    `CoverageEntry.status` is now `'ok' | 'no_matches' | 'no_rules' | 'unreadable'`, with a
+    companion `unreadable_matches` count. A Rust project whose every route was refused
+    previously reported `no_matches` — "this language exposes nothing", the exact inverse of
+    the truth. It now reports `unreadable` with the count.
+  - **The remedy travels with the loss.** `tools_run` and the degraded `note` name the
+    cause (this Semgrep version redacts match content without `semgrep login`) and both
+    fixes — log in, *or* use a Semgrep older than ~1.100 — while stating plainly that
+    dev-guardian does not require an account, because most families are rebuilt regardless.
+  - The fixture keeps the adversarial cases that caught this — a commented-out route
+    attribute, anchor text inside a string, attribute-shaped text in a method body, an
+    apostrophe in a comment, a Rust lifetime — for all three frameworks, and the E2E now
+    asserts they yield **no route at all**. Pinning the absence is what stops the heuristic
+    being reintroduced.
+- **`recoverMetavars` could throw, contradicting its own contract.** `metadata.method` was
+  interpolated raw into `new RegExp`, so a rule declaring `method: "a("` raised a
+  `SyntaxError` out of a module documented as never throwing, and out of an unguarded call
+  site in `mapAttackSurface.ts`. That path is gone with the anchoring, and a
+  `metadata.method` that is not a plain word is rejected outright.
+- **The rule-pack drift assertion was a substring sniff.** It tested for the literal text
+  `{ ... }`, so the same rule written `{ $BODY }` — which Semgrep treats identically —
+  widened a family past the guard while the test stayed green. It now parses each rule's
+  patterns and detects a brace-delimited body structurally, and asserts the pack's
+  declaration-spanning frameworks are exactly `UNREADABLE_UNDER_REDACTION`.
+- **A skipped end-to-end test reported as a passing one.** Both e2e files —
+  `rulePackFixture.test.ts` and `evalVulnFixture.test.ts`, the only tests that run a real
+  Semgrep — used `console.warn` plus a bare `return` when Semgrep was absent, which vitest
+  counts as a pass. On Windows, Semgrep installs to
+  `%APPDATA%\Roaming\Python\Python3xx\Scripts`, which is not on `PATH`, so both gates
+  silently measured nothing and route-fabrication defects reached a green suite through
+  them twice. They now use `it.skipIf`, so a skip reads as a skip, and
+  `GUARDIAN_REQUIRE_SEMGREP=1` turns absence into a hard failure that distinguishes "not on
+  PATH" from "fixture tree missing".
+- **`map_attack_surface` extracted zero routes on every current Semgrep.** Semgrep changed
+  behaviour between 1.95.0 and 1.120.1: unless the user has run `semgrep login` it redacts
+  match content, so `extra.metavars` is absent entirely and `extra.lines` reads
+  `"requires login"`. The extractor reads `extra.metavars.$PATH.abstract_content`, so the
+  tool reported *no routes at all* while Semgrep itself reported matches — nothing looked
+  broken, and the persisted snapshot said the application exposes nothing. Requiring an
+  account is not an option for a tool whose stated position is 100% open-source and local.
+  What redaction does not remove is the position: `start.offset` / `end.offset` survive, so
+  a new pure module `mcp/src/surface/recoverMetavars.ts` slices the matched source out of
+  the file and reconstructs the captures the rules would have bound, keyed off
+  `guardian_kind` and `framework`. It synthesizes into the shape the extractor already
+  reads, so `mcp/src/surface/extract.ts` is untouched. Measured end to end against Semgrep
+  1.164.0 over `mcp/test/fixtures/surface/apps/`: 43 of the fixture's 64 routes and all 8
+  environment variables recovered, where the tool previously found none at all. The
+  remaining 21 are the three families that cannot be reconstructed from a redacted span and
+  are reported as `unreadable` rather than guessed (see the entry above). Verified
+  capture-by-capture against Semgrep 1.86.0 — the last version that still emits
+  metavariables, and which finds all 64 — as ground truth.
+  - Offsets are **byte** offsets, so the span is sliced from a `Buffer`; a source file with
+    any non-ASCII character before the match desyncs a plain `String.prototype.slice` and
+    yields a confidently wrong path. Source quoting is preserved verbatim, because that is
+    exactly how `isLiteralPath` separates `'/items'` from `self::NAMESPACE` — and
+    `register_rest_route(self::NAMESPACE, '/computed', …)`, the dominant idiom in real
+    WordPress plugins, survives as a `path_partial` route rather than vanishing.
+  - The module is pure and never throws: a file it cannot read, an offset past
+    end-of-file, or a span with nothing to capture is counted `unrecoverable` and skipped.
+    Reading the files stays in the tool, which is already the impure layer.
+  - **Honest degradation.** If Semgrep reported matches and *not one* could be recovered,
+    that is a broken toolchain, not a project without routes: the tool now persists
+    nothing and says why — naming the redacting-Semgrep cause and that `map_attack_surface`
+    does not require an account — instead of writing a zero-route snapshot that later reads
+    as "this application exposes nothing". A partial recovery is persisted but reported, via
+    a `semgrep-metavar-recovery` entry in `tools_run` carrying the counts, so it is visible
+    rather than silent.
 - **A path we could not resolve is never emitted as a resolved path.** Only one route rule
   in the pack constrained its path capture to a string literal; the other thirteen let a
   Semgrep metavariable that had bound a *code expression* through as a confident path —
@@ -67,6 +241,9 @@ version bump.
   cannot recover it — those families are now one rule per verb, each declaring
   `metadata.method` (which the extractor already read as a fallback, until now dead code).
   `normalizeMethod` also understands ASP.NET's `MapGet` / `MapPost` builder names.
+  (`actix` has since been collapsed back to a single rule — see the Rust entry above:
+  once the pattern is well-formed Semgrep binds the attribute name itself, and an
+  actix/Rocket attribute name *is* the HTTP verb.)
 - **A cached snapshot no longer hides the failed run that produced it.** The cache path
   reported a hardcoded `tools_run: [{semgrep, skipped, cached}]`, so the one case where a
   failing run is still persisted (Semgrep exited non-zero but left parseable JSON) carried

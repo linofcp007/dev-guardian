@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { UNREADABLE_UNDER_REDACTION } from '../../../src/surface/recoverMetavars.js';
 
 const PACK_PATH = join(__dirname, '../../../../configs/semgrep/routes.yml');
 
@@ -40,6 +41,47 @@ function guardedMetavars(rule: Rule): Set<string> {
 function rules(): Rule[] {
   const doc = parse(readFileSync(PACK_PATH, 'utf8')) as { rules?: Rule[] };
   return doc.rules ?? [];
+}
+
+/** Every `pattern:` string a rule declares, at any nesting depth. */
+function patternsOf(rule: Rule): string[] {
+  const found: string[] = [];
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child);
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (key === 'pattern' && typeof value === 'string') found.push(value);
+      else walk(value);
+    }
+  };
+  if (typeof rule.pattern === 'string') found.push(rule.pattern);
+  walk(rule.patterns ?? rule['pattern-either'] ?? []);
+  return found;
+}
+
+/**
+ * Does this pattern swallow a brace-delimited declaration body?
+ *
+ * Structural, so `{ ... }`, `{ $BODY }`, `{}` and `{ ...; }` all count. A
+ * brace inside a string literal in the pattern does not.
+ */
+function hasBracedBody(pattern: string): boolean {
+  let inString: string | undefined;
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i];
+    if (ch === undefined) continue;
+    if (inString !== undefined) {
+      if (ch === '\\') i += 1;
+      else if (ch === inString) inString = undefined;
+      continue;
+    }
+    if (ch === '"' || ch === "'") inString = ch;
+    else if (ch === '{') return true;
+  }
+  return false;
 }
 
 const KINDS = new Set(['route', 'mount', 'import', 'env']);
@@ -96,12 +138,68 @@ describe('configs/semgrep/routes.yml', () => {
       if (rule.metadata?.method !== undefined) methods.add(rule.metadata.method);
       byFramework.set(framework, methods);
     }
-    for (const framework of ['nestjs', 'spring', 'aspnet', 'actix']) {
+    for (const framework of ['nestjs', 'spring', 'aspnet']) {
       const methods = byFramework.get(framework);
       expect(methods?.has('GET'), `${framework} has no GET rule`).toBe(true);
       expect(methods?.has('POST'), `${framework} has no POST rule`).toBe(true);
       expect(methods?.has('DELETE'), `${framework} has no DELETE rule`).toBe(true);
     }
+  });
+
+  it('keeps the Rust rule single, with the verb in $METHOD', () => {
+    // actix used to be in the list above: five per-verb rules, one per
+    // attribute. Measured against Semgrep 1.86.0 they all matched the SAME
+    // spans — every node in the file — and bound `metavars: {}`, so one real
+    // `#[get("/x")]` produced five routes: the correct GET plus four
+    // fabricated verbs, some anchored on function bodies rather than routes.
+    //
+    // Semgrep's Rust engine does bind the attribute name once the pattern
+    // includes the item the attribute is attached to, and an actix/Rocket
+    // attribute name IS the HTTP verb, so one rule with a $METHOD guard is
+    // both correct and sufficient. The other attribute families cannot do
+    // this: `@$DEC($PATH)` is not a parseable TypeScript pattern, and C#'s
+    // `HttpGet` is not a verb the extractor's normalizeMethod knows.
+    const actix = rules().filter((r) => r.metadata?.framework === 'actix');
+    expect(actix).toHaveLength(1);
+    const rule = actix[0];
+    expect(rule?.metadata?.method).toBeUndefined();
+    expect(rule === undefined ? new Set() : guardedMetavars(rule)).toContain('$METHOD');
+  });
+
+  it('refuses recovery for every route rule whose pattern spans the declaration', () => {
+    // The lock-step that would have caught a shipped Critical defect.
+    //
+    // A pattern ending in `{ ... }` matches the attribute PLUS the declaration
+    // it decorates, so Semgrep's reported span starts at the FIRST attribute on
+    // that declaration — not necessarily the route one. `recoverMetavars.ts`
+    // must then locate the route attribute by name; if it instead reads the
+    // first argument list in the span it recovers a *different* attribute's
+    // argument, and because that usually succeeds the real route is silently
+    // replaced rather than reported missing:
+    //
+    //   #[allow(dead_code)] / #[get("/d")]  ->  a resolved route `dead_code`
+    //
+    // Such a span cannot be read back on a redacting Semgrep: it starts at
+    // whatever attribute comes first, and no local rule can tell code from a
+    // comment from a string. Those families are therefore REFUSED — see
+    // UNREADABLE_UNDER_REDACTION. Widening a fourth family the same way without
+    // listing it there silently reintroduces route fabrication, so the two
+    // lists are asserted equal here rather than merely compatible.
+    //
+    // The detector keys on a brace-delimited BODY appearing in the pattern,
+    // not on the literal text `{ ... }`. Sniffing for that exact string passed
+    // green when the same rule was written `{ $BODY }` — a spelling difference
+    // Semgrep treats as equivalent — and fabricated exactly as before. No
+    // pattern in this pack that matches a call or an annotation alone contains
+    // a brace; every one that swallows a declaration does.
+    const spansDeclaration = new Set<string>();
+    for (const rule of rules().filter((r) => r.metadata?.guardian_kind === 'route')) {
+      if (patternsOf(rule).some(hasBracedBody)) {
+        spansDeclaration.add(String(rule.metadata?.framework));
+      }
+    }
+    expect(spansDeclaration.size).toBeGreaterThan(0);
+    expect([...spansDeclaration].sort()).toEqual([...UNREADABLE_UNDER_REDACTION].sort());
   });
 
   it('constrains $PATH to a literal on exactly the two rules that need it', () => {
