@@ -65,6 +65,8 @@ import './tools/dotnetDescribeSetup.js';
 import './tools/prioritizeFindings.js';
 // AI-agent supply chain (Phase 17):
 import './tools/scanSkill.js';
+// Attack surface (Phase 18):
+import './tools/mapAttackSurface.js';
 
 // Resources:
 import './resources/scans.js';
@@ -72,3 +74,4 @@ import './resources/findings.js';
 import './resources/misc.js';
 import './resources/wp.js';
 import './resources/dotnet.js';
+import './resources/surface.js';

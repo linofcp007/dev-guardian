@@ -35,6 +35,7 @@ const EXPECTED_TOOLS = [
   'init_project',
   'install_toolchain',
   'license_compatibility',
+  'map_attack_surface',
   'observability_setup',
   'perf_check',
   'precommit_install',
@@ -82,6 +83,8 @@ const EXPECTED_RESOURCES = [
   'guardian-scans-history',
   'guardian-scans-latest',
   'guardian-stack',
+  'guardian-surface-by-id',
+  'guardian-surface-latest',
   'guardian-wp-audit-by-id',
   'guardian-wp-audit-latest',
   'guardian-wp-cron',
@@ -96,8 +99,8 @@ describe('MCP surface — stability snapshot', () => {
     expect(RESOURCES.map((r) => r.name).sort()).toEqual(EXPECTED_RESOURCES);
   });
 
-  it('matches the counts documented in the README (50 tools, 16 resources)', () => {
-    expect(TOOLS).toHaveLength(50);
-    expect(RESOURCES).toHaveLength(16);
+  it('matches the counts documented in the README (51 tools, 18 resources)', () => {
+    expect(TOOLS).toHaveLength(51);
+    expect(RESOURCES).toHaveLength(18);
   });
 });

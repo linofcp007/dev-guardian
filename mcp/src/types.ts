@@ -172,6 +172,89 @@ export interface StackSnapshot {
   has_gitlab_ci: boolean;
 }
 
+export const HTTP_METHODS = [
+  'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'ANY',
+] as const;
+export type HttpMethod = (typeof HTTP_METHODS)[number];
+
+/**
+ * One externally reachable HTTP route, extracted statically.
+ *
+ * `path_raw` is what the source literally says at the match site.
+ * `path_resolved` adds any prefix we could resolve (router mounting,
+ * WordPress REST namespaces).
+ *
+ * `path_partial` is true whenever `path_resolved` is not a usable URL path,
+ * which happens for two distinct reasons:
+ *   1. A prefix may be missing and we could not resolve it — the module is
+ *      mounted twice, or at a computed prefix, or not mounted anywhere we can
+ *      see.
+ *   2. The captured value is not a literal path at all but a code expression
+ *      (`self::NAMESPACE`, `Paths.ORDERS`, `$route`). No prefix is involved;
+ *      the path itself is unknown. `path_resolved` then holds the raw source
+ *      text so a human can read what was written, and `confidence` is 'low'.
+ *      See `isLiteralPath` in surface/extract.ts.
+ *
+ * Either way consumers must not treat `path_resolved` as a complete URL path
+ * — in particular, must not send a request to it.
+ */
+export interface RouteRecord {
+  method: HttpMethod;
+  path_raw: string;
+  path_resolved: string;
+  path_partial: boolean;
+  file: string;
+  line: number;
+  framework: string;
+  language: string;
+  /**
+   * Never inferred from the absence of an auth decorator — see the design
+   * doc. 'none' is emitted only for affirmative public declarations such as
+   * WordPress `permission_callback: '__return_true'`.
+   */
+  auth_hint: 'none' | 'required' | 'unknown';
+  params: string[];
+  confidence: 'high' | 'medium' | 'low';
+  /**
+   * Framework-level route namespace, when the framework has one. Currently
+   * only WordPress: `register_rest_route('myplugin/v1', '/items')` yields
+   * namespace 'myplugin/v1'. Semgrep cannot concatenate two metavariables
+   * into a third, so the extractor keeps them as separate fields and the WP
+   * resolver combines them.
+   */
+  namespace?: string;
+}
+
+/** A `app.use('/prefix', router)`-style mount, consumed by the Node resolver. */
+export interface MountRecord {
+  prefix: string;
+  router_var: string;
+  file: string;
+  line: number;
+}
+
+export interface CoverageEntry {
+  language: string;
+  detected: boolean;
+  routes_found: number;
+  /**
+   * 'no_rules' means the language was detected but the rule pack covers no
+   * framework for it — the case most tools hide by reporting zero.
+   */
+  status: 'ok' | 'no_matches' | 'no_rules';
+}
+
+export interface AttackSurfaceSnapshot {
+  routes: RouteRecord[];
+  env_vars: { name: string; file: string; line: number }[];
+  ports: { port: number; source: string }[];
+  /** Precomputed view over `routes`; duplicated so consumers need no regex. */
+  webhooks: RouteRecord[];
+  coverage: CoverageEntry[];
+  tools_run: ToolRun[];
+  missing_tools: string[];
+}
+
 /**
  * Discriminated union covering every domain-level failure a tool can return.
  * Protocol-level failures (validation, internal exceptions) are surfaced as

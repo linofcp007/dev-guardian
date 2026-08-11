@@ -36,6 +36,34 @@ describe('buildSemgrepDockerArgs', () => {
     expect(args).toContain('--autofix');
   });
 
+  it('replaces --config=auto with the caller-supplied configs', () => {
+    // map_attack_surface runs its own rule pack instead of `auto`; before this
+    // option it re-implemented the whole argv builder to change one flag.
+    const args = buildSemgrepDockerArgs({
+      projectPath: '/p',
+      outFileHost: '/p/.guardian/reports/surface-abc/surface.json',
+      configs: ['/src/.guardian/reports/surface-abc/routes.yml'],
+    });
+    expect(args).not.toContain('--config=auto');
+    expect(args).toContain('--config=/src/.guardian/reports/surface-abc/routes.yml');
+    // Everything else still comes from the shared builder.
+    expect(argAfter(args, '--mount')).toBe('type=bind,source=/p,target=/src');
+    expect(argAfter(args, '--output')).toBe('/src/.guardian/reports/surface-abc/surface.json');
+    expect(args[args.length - 1]).toBe('/src');
+  });
+
+  it('accepts several configs and still appends p/csharp', () => {
+    const args = buildSemgrepDockerArgs({
+      projectPath: '/p',
+      outFileHost: '/p/o.json',
+      configs: ['auto', 'p/secrets'],
+      hasCsproj: true,
+    });
+    expect(args).toContain('--config=auto');
+    expect(args).toContain('--config=p/secrets');
+    expect(args).toContain('--config=p/csharp');
+  });
+
   it('honours a custom image', () => {
     const args = buildSemgrepDockerArgs({
       projectPath: '/p',

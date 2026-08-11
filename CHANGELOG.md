@@ -6,6 +6,85 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
+## [Unreleased]
+
+### Added
+
+- **`map_attack_surface` — static route/env-var/port inventory across all 8 stacks.**
+  New tool that runs a dedicated Semgrep rule pack (`configs/semgrep/routes.yml`) over
+  the project to extract HTTP routes, referenced environment variables, declared ports
+  and webhook endpoints, resolving Express-style router mount prefixes and WordPress
+  REST namespaces to their effective path. Reports per-language `coverage`
+  (`ok` / `no_rules` / ...) so an uncovered framework shows up as a gap rather than a
+  silent zero. Persists one snapshot per run to a new `surface_snapshots` SQLite table,
+  keyed by a tree hash so an unchanged working tree reuses the previous snapshot instead
+  of re-scanning. The tool result itself returns a summary plus a 20-route sample and a
+  `snapshot_id` — the full route list is deliberately kept out of the tool response (see
+  the new resources below) so a project with hundreds of routes cannot exhaust the
+  agent's context window on a single call.
+  - **Not yet validated against a real Semgrep run.** Semgrep is not installed on the
+    machine this was built on, so the whole pipeline — extraction, prefix resolution,
+    coverage reporting — has only been exercised against hand-written JSON fixtures
+    standing in for Semgrep's output. The Ruby and Rust rules in
+    `configs/semgrep/routes.yml` are unvalidated guesses at the framework's route
+    syntax, not rules checked against real code. Treat this as an unverified first cut,
+    not a production-ready scanner.
+- **`guardian://surface/latest` and `guardian://surface/{id}` resources.** Serve the
+  full persisted attack-surface snapshot (every route, env var, port, webhook and the
+  coverage report) by snapshot id or the most recent one. Return `{ snapshot: null }`
+  when nothing has been captured yet, consistent with the rest of the resource surface.
+
+### Fixed
+
+- **A path we could not resolve is never emitted as a resolved path.** Only one route rule
+  in the pack constrained its path capture to a string literal; the other thirteen let a
+  Semgrep metavariable that had bound a *code expression* through as a confident path —
+  `self::NAMESPACE`, `$this->namespace`, `SETTINGS.users_path`, `Paths.ORDERS`, a bare
+  `routeVar`. The first two are the dominant idioms in real WordPress plugins, not edge
+  cases, and the next tool in this series will send HTTP requests to whatever path it is
+  handed. A new `isLiteralPath` predicate in `mcp/src/surface/extract.ts` now gates every
+  route, in the one place they all flow through, so it also covers rules users add via
+  `register_custom_rules`. A capture that fails it keeps its route — a route we cannot
+  name is still evidence of surface — but is flagged `path_partial: true`, keeps the raw
+  text in `path_resolved`, and drops to `low` confidence. Both resolvers now honour that
+  flag instead of clearing it when they prepend a mount prefix or a `/wp-json` namespace.
+  A `metavariable-regex` guard in the rule pack would be the wrong second layer here: it
+  *drops* the match, so the extractor never sees it, and a route registered with a computed
+  path is still surface — dropping it would make `coverage` report `no_matches` for the
+  language, which is the same "this application exposes nothing" falsehood in a different
+  place. `$PATH` literal guards are therefore confined to the two rules whose pattern does
+  not identify a route on its own (`guardian-route-express`, `guardian-route-rails`), where
+  the literal disambiguates rather than discards, and the pack header now states that rule
+  so it is not re-added by pattern-matching.
+- **`params` is derived from the path alone.** It was gated on both the path and the
+  namespace being literal, so `register_rest_route(self::NAMESPACE, '/items/(?P<id>\d+)')`
+  reported `params: []` — an assertion that the route takes no parameters — when `id` is
+  plainly knowable from the path. Where the route is served stays unknown
+  (`path_partial: true`); the parameters no longer do.
+- **The HTTP method was lost for five of thirteen route rules.** `aspnet-minimal`,
+  `aspnet`, `spring`, `nestjs` and `actix` all reported `ANY`. Semgrep never reports which
+  `pattern-either` alternative fired, so a rule whose verb is encoded in the alternative
+  cannot recover it — those families are now one rule per verb, each declaring
+  `metadata.method` (which the extractor already read as a fallback, until now dead code).
+  `normalizeMethod` also understands ASP.NET's `MapGet` / `MapPost` builder names.
+- **A cached snapshot no longer hides the failed run that produced it.** The cache path
+  reported a hardcoded `tools_run: [{semgrep, skipped, cached}]`, so the one case where a
+  failing run is still persisted (Semgrep exited non-zero but left parseable JSON) carried
+  its warning for exactly one call. Every later call on the same tree hash presented a
+  snapshot that was empty *because the scan died* as "this application exposes nothing" —
+  the falsehood this tool exists to prevent. The persisted `tools_run` entries are now
+  reported alongside the cache marker.
+- **`auth_hint` is no longer advertised as a feature.** No rule sets `metadata.auth`, so
+  the field is always `unknown`. The claim was removed from the tool description, and the
+  reason is recorded at `normalizeAuth` so the constant reads as deliberate rather than
+  broken. Detecting auth properly needs to see the handler, not the registration site;
+  that is its own piece of work.
+- Regression coverage for the Semgrep exit-code gate (`exitCode === 1` means *matches
+  found*, i.e. success), which previously could be deleted with the suite staying green.
+- The Docker fallback in `map_attack_surface` no longer re-implements
+  `buildSemgrepDockerArgs`; the shared builder takes a `configs` option (default
+  `['auto']`) so both callers inherit anything added to it later.
+
 ## [1.2.1] — 2026-08-10
 
 ### Fixed

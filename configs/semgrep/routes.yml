@@ -1,0 +1,516 @@
+# dev-guardian — attack-surface extraction rules.
+#
+# NOT a findings rule pack. `map_attack_surface` runs this with its own
+# --config; the matches are consumed by mcp/src/surface/extract.ts and never
+# reach the findings table. severity: INFO exists only because Semgrep
+# requires the field.
+#
+# Contract with the extractor (mcp/src/surface/extract.ts):
+#   metadata.guardian_kind: route | mount | import | env   (required)
+#   route  → captures $PATH, optionally $METHOD or metadata.method
+#   mount  → captures $PREFIX and $ROUTER
+#   import → captures $SYMBOL and $MODULE
+#   env    → captures $NAME
+#
+# Namespaced frameworks: register_rest_route takes the namespace and the route
+# as two arguments. Semgrep cannot concatenate metavariables into a third, so
+# the rule captures $NS and $ROUTE separately; extract.ts puts $NS on
+# RouteRecord.namespace and $ROUTE on path_raw, and resolvers/wordpress.ts
+# combines them into the served /wp-json path.
+#
+# HTTP verb: Semgrep reports *that* a pattern-either fired, never *which*
+# alternative did. A rule whose verb is encoded in the alternative therefore
+# has to be one rule per verb, each declaring `metadata.method` — which the
+# extractor reads as the fallback when no $METHOD metavariable was captured.
+# That is why @Get/@Post/... are five rules and not one. Verb-less rules
+# (Flask's @app.route, Django path(), Spring @RequestMapping) correctly omit
+# the key and are reported as ANY.
+#
+# ---- Do NOT add a $PATH literal guard to a route rule ----------------------
+#
+# A `metavariable-regex` pinning $PATH to a string literal DROPS the match:
+# the extractor never sees it. That is the wrong outcome for a route rule,
+# because a route registered with a computed path — `@GetMapping(Paths.ORDERS)`,
+# `path(settings.ADMIN_URL, ...)`, `register_rest_route(self::NAMESPACE, ...)` —
+# is still surface, and dropping it makes `coverage` report `no_matches` for
+# the language: a "this application exposes nothing" falsehood of exactly the
+# class mcp/src/tools/mapAttackSurface.ts:8-15 forbids. The extractor's
+# `isLiteralPath` is what handles those: it keeps the route and flags it
+# `path_partial: true` at 'low' confidence, never guessing the path. That
+# guard is load-bearing and lives in one place, so it also covers rules users
+# add through register_custom_rules.
+#
+# Exactly two rules carry a $PATH guard, and only because their pattern does
+# not identify a route on its own — there the guard disambiguates rather than
+# discards:
+#
+#   guardian-route-rails    `$METHOD $PATH` matches ANY one-argument Ruby
+#                           call (`get foo`), so without the literal the rule
+#                           would report arbitrary method calls as routes.
+#   guardian-route-express  `$APP.$METHOD($PATH, ...)` matches any two-arg
+#                           method call on any object.
+#
+# `guardian-mount-express` keeps its $PREFIX guard for the same reason.
+# Every other rule below names its framework's registration API explicitly, so
+# a match IS a route and the path is the extractor's problem, not the pack's.
+#
+# Mount resolution (Node only): resolvers/node.ts's resolveNodeMounts()
+# resolves a route's prefix for any route whose `language` is javascript or
+# typescript — gated purely on that field, not on a per-rule opt-in flag. A
+# rule pack author adding a new JS/TS-family framework gets mount resolution
+# for free; nothing in this file needs to be set for it.
+
+rules:
+  # ---------- JavaScript / TypeScript ----------
+  - id: guardian-route-express
+    languages: [javascript, typescript]
+    severity: INFO
+    message: express/fastify route
+    metadata:
+      guardian_kind: route
+      framework: express
+      confidence: high
+    patterns:
+      - pattern: $APP.$METHOD($PATH, ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(get|post|put|patch|delete|options|head|all)$
+      # Disambiguating, not discarding — see the header.
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^['"`]/.*
+
+  - id: guardian-mount-express
+    languages: [javascript, typescript]
+    severity: INFO
+    message: express router mount
+    metadata:
+      guardian_kind: mount
+      framework: express
+    patterns:
+      - pattern: $APP.use($PREFIX, $ROUTER)
+      - metavariable-regex:
+          metavariable: $PREFIX
+          regex: ^['"`]/.*
+
+  - id: guardian-import-esm
+    languages: [javascript, typescript]
+    severity: INFO
+    message: module import
+    metadata:
+      guardian_kind: import
+      framework: esm
+    pattern-either:
+      - pattern: import $SYMBOL from "$MODULE"
+      - pattern: const $SYMBOL = require("$MODULE")
+
+  # NestJS: one rule per verb — the decorator name is the method, and Semgrep
+  # cannot report which pattern-either alternative matched.
+  - id: guardian-route-nestjs-get
+    languages: [typescript]
+    severity: INFO
+    message: NestJS route
+    metadata:
+      guardian_kind: route
+      framework: nestjs
+      confidence: medium
+      method: GET
+    pattern: "@Get($PATH)"
+
+  - id: guardian-route-nestjs-post
+    languages: [typescript]
+    severity: INFO
+    message: NestJS route
+    metadata:
+      guardian_kind: route
+      framework: nestjs
+      confidence: medium
+      method: POST
+    pattern: "@Post($PATH)"
+
+  - id: guardian-route-nestjs-put
+    languages: [typescript]
+    severity: INFO
+    message: NestJS route
+    metadata:
+      guardian_kind: route
+      framework: nestjs
+      confidence: medium
+      method: PUT
+    pattern: "@Put($PATH)"
+
+  - id: guardian-route-nestjs-patch
+    languages: [typescript]
+    severity: INFO
+    message: NestJS route
+    metadata:
+      guardian_kind: route
+      framework: nestjs
+      confidence: medium
+      method: PATCH
+    pattern: "@Patch($PATH)"
+
+  - id: guardian-route-nestjs-delete
+    languages: [typescript]
+    severity: INFO
+    message: NestJS route
+    metadata:
+      guardian_kind: route
+      framework: nestjs
+      confidence: medium
+      method: DELETE
+    pattern: "@Delete($PATH)"
+
+  # ---------- Python ----------
+  - id: guardian-route-flask
+    languages: [python]
+    severity: INFO
+    message: Flask route
+    metadata:
+      guardian_kind: route
+      framework: flask
+      confidence: high
+    pattern-either:
+      - pattern: "@$APP.route($PATH, ...)"
+      - pattern: "@$APP.route($PATH)"
+
+  - id: guardian-route-fastapi
+    languages: [python]
+    severity: INFO
+    message: FastAPI route
+    metadata:
+      guardian_kind: route
+      framework: fastapi
+      confidence: high
+    patterns:
+      - pattern: "@$APP.$METHOD($PATH, ...)"
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(get|post|put|patch|delete|options|head)$
+
+  - id: guardian-route-django
+    languages: [python]
+    severity: INFO
+    message: Django URL pattern
+    metadata:
+      guardian_kind: route
+      framework: django
+      confidence: medium
+    pattern-either:
+      - pattern: path($PATH, ...)
+      - pattern: re_path($PATH, ...)
+
+  # ---------- PHP / WordPress ----------
+  - id: guardian-route-wp-rest
+    languages: [php]
+    severity: INFO
+    message: WordPress REST route
+    metadata:
+      guardian_kind: route
+      framework: wp-rest
+      confidence: medium
+    pattern: register_rest_route($NS, $ROUTE, ...)
+
+  - id: guardian-route-laravel
+    languages: [php]
+    severity: INFO
+    message: Laravel route
+    metadata:
+      guardian_kind: route
+      framework: laravel
+      confidence: medium
+    patterns:
+      - pattern: Route::$METHOD($PATH, ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(get|post|put|patch|delete|options|any)$
+
+  # ---------- Go ----------
+  - id: guardian-route-go-nethttp
+    languages: [go]
+    severity: INFO
+    message: net/http handler
+    metadata:
+      guardian_kind: route
+      framework: net-http
+      confidence: medium
+    pattern-either:
+      - pattern: http.HandleFunc($PATH, ...)
+      - pattern: $MUX.HandleFunc($PATH, ...)
+
+  - id: guardian-route-go-gin
+    languages: [go]
+    severity: INFO
+    message: Gin route
+    metadata:
+      guardian_kind: route
+      framework: gin
+      confidence: medium
+    patterns:
+      - pattern: $R.$METHOD($PATH, ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD|Any)$
+
+  # ---------- Rust ----------
+  # One rule per attribute: the attribute name is the verb.
+  - id: guardian-route-rust-actix-get
+    languages: [rust]
+    severity: INFO
+    message: Actix/Rocket route attribute
+    metadata:
+      guardian_kind: route
+      framework: actix
+      confidence: low
+      method: GET
+    pattern: "#[get($PATH)]"
+
+  - id: guardian-route-rust-actix-post
+    languages: [rust]
+    severity: INFO
+    message: Actix/Rocket route attribute
+    metadata:
+      guardian_kind: route
+      framework: actix
+      confidence: low
+      method: POST
+    pattern: "#[post($PATH)]"
+
+  - id: guardian-route-rust-actix-put
+    languages: [rust]
+    severity: INFO
+    message: Actix/Rocket route attribute
+    metadata:
+      guardian_kind: route
+      framework: actix
+      confidence: low
+      method: PUT
+    pattern: "#[put($PATH)]"
+
+  - id: guardian-route-rust-actix-patch
+    languages: [rust]
+    severity: INFO
+    message: Actix/Rocket route attribute
+    metadata:
+      guardian_kind: route
+      framework: actix
+      confidence: low
+      method: PATCH
+    pattern: "#[patch($PATH)]"
+
+  - id: guardian-route-rust-actix-delete
+    languages: [rust]
+    severity: INFO
+    message: Actix/Rocket route attribute
+    metadata:
+      guardian_kind: route
+      framework: actix
+      confidence: low
+      method: DELETE
+    pattern: "#[delete($PATH)]"
+
+  # ---------- Ruby ----------
+  - id: guardian-route-rails
+    languages: [ruby]
+    severity: INFO
+    message: Rails / Sinatra route
+    metadata:
+      guardian_kind: route
+      framework: rails
+      confidence: low
+    patterns:
+      - pattern-either:
+          # Bare form: get '/users'
+          - pattern: $METHOD $PATH
+          # Idiomatic form with trailing options: get '/users', to: 'users#index'
+          - pattern: $METHOD $PATH, ...
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(get|post|put|patch|delete)$
+      # Disambiguating, not discarding — see the header. `$METHOD $PATH`
+      # matches any one-argument Ruby call, so without this the rule reports
+      # `get foo` as a route.
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^['"]
+
+  # ---------- Java ----------
+  # One rule per annotation. @RequestMapping carries no verb of its own (the
+  # method= attribute is a separate argument we do not read), so it declares
+  # no metadata.method and is reported as ANY — which is the truth.
+  - id: guardian-route-spring-get
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: medium
+      method: GET
+    pattern: "@GetMapping($PATH)"
+
+  - id: guardian-route-spring-post
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: medium
+      method: POST
+    pattern: "@PostMapping($PATH)"
+
+  - id: guardian-route-spring-put
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: medium
+      method: PUT
+    pattern: "@PutMapping($PATH)"
+
+  - id: guardian-route-spring-patch
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: medium
+      method: PATCH
+    pattern: "@PatchMapping($PATH)"
+
+  - id: guardian-route-spring-delete
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: medium
+      method: DELETE
+    pattern: "@DeleteMapping($PATH)"
+
+  - id: guardian-route-spring-request
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: medium
+    pattern: "@RequestMapping($PATH)"
+
+  # ---------- C# / .NET ----------
+  # $METHOD binds the whole builder name (`MapGet`); extract.ts's
+  # normalizeMethod strips the Map prefix.
+  - id: guardian-route-aspnet-minimal
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET minimal API route
+    metadata:
+      guardian_kind: route
+      framework: aspnet-minimal
+      confidence: medium
+    patterns:
+      - pattern: $APP.$METHOD($PATH, ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^Map(Get|Post|Put|Patch|Delete)$
+
+  - id: guardian-route-aspnet-attribute-get
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET attribute route
+    metadata:
+      guardian_kind: route
+      framework: aspnet
+      confidence: medium
+      method: GET
+    pattern: "[HttpGet($PATH)]"
+
+  - id: guardian-route-aspnet-attribute-post
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET attribute route
+    metadata:
+      guardian_kind: route
+      framework: aspnet
+      confidence: medium
+      method: POST
+    pattern: "[HttpPost($PATH)]"
+
+  - id: guardian-route-aspnet-attribute-put
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET attribute route
+    metadata:
+      guardian_kind: route
+      framework: aspnet
+      confidence: medium
+      method: PUT
+    pattern: "[HttpPut($PATH)]"
+
+  - id: guardian-route-aspnet-attribute-patch
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET attribute route
+    metadata:
+      guardian_kind: route
+      framework: aspnet
+      confidence: medium
+      method: PATCH
+    pattern: "[HttpPatch($PATH)]"
+
+  - id: guardian-route-aspnet-attribute-delete
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET attribute route
+    metadata:
+      guardian_kind: route
+      framework: aspnet
+      confidence: medium
+      method: DELETE
+    pattern: "[HttpDelete($PATH)]"
+
+  # ---------- Environment variables (all stacks) ----------
+  - id: guardian-env-node
+    languages: [javascript, typescript]
+    severity: INFO
+    message: environment variable read
+    metadata:
+      guardian_kind: env
+    pattern-either:
+      - pattern: process.env.$NAME
+      - pattern: process.env[$NAME]
+
+  - id: guardian-env-python
+    languages: [python]
+    severity: INFO
+    message: environment variable read
+    metadata:
+      guardian_kind: env
+    pattern-either:
+      - pattern: os.environ[$NAME]
+      - pattern: os.environ.get($NAME, ...)
+      - pattern: os.getenv($NAME, ...)
+
+  - id: guardian-env-php
+    languages: [php]
+    severity: INFO
+    message: environment variable read
+    metadata:
+      guardian_kind: env
+    pattern-either:
+      - pattern: getenv($NAME)
+      - pattern: $_ENV[$NAME]
+
+  - id: guardian-env-dotnet
+    languages: [csharp]
+    severity: INFO
+    message: environment variable read
+    metadata:
+      guardian_kind: env
+    pattern: Environment.GetEnvironmentVariable($NAME)

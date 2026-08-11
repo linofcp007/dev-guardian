@@ -1,0 +1,39 @@
+{
+  "results": [
+    {
+      "check_id": "guardian-route-express",
+      "path": "src/routes/users.ts",
+      "start": { "line": 12 },
+      "extra": {
+        "metadata": {
+          "guardian_kind": "route",
+          "framework": "express",
+          "confidence": "high",
+          "mountable": true
+        },
+        "metavars": {
+          "$METHOD": { "abstract_content": "get" },
+          "$PATH": { "abstract_content": "/users/:id" }
+        }
+      }
+    },
+    {
+      "check_id": "guardian-mount-express",
+      "path": "src/app.ts",
+      "start": { "line": 4 },
+      "extra": {
+        "metadata": { "guardian_kind": "mount", "framework": "express" },
+        "metavars": {
+          "$PREFIX": { "abstract_content": "/api" },
+          "$ROUTER": { "abstract_content": "usersRouter" }
+        }
+      }
+    },
+    {
+      "check_id": "some-other-rule",
+      "path": "src/app.ts",
+      "start": { "line": 9 },
+      "extra": { "metadata": { "category": "security" }, "metavars": {} }
+    }
+  ]
+}

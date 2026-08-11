@@ -56,6 +56,9 @@ export const SCAN_TYPES = [
     'skill_audit',
 ];
 export const TOOL_RUN_STATUSES = ['ok', 'skipped', 'failed'];
+export const HTTP_METHODS = [
+    'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'ANY',
+];
 /**
  * Discriminated union covering every domain-level failure a tool can return.
  * Protocol-level failures (validation, internal exceptions) are surfaced as

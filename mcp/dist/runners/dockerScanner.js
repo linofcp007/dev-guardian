@@ -31,8 +31,9 @@ export function buildSemgrepDockerArgs(opts) {
         '/src',
         image,
         'semgrep',
-        '--config=auto',
     ];
+    for (const config of opts.configs ?? ['auto'])
+        args.push(`--config=${config}`);
     if (opts.hasCsproj)
         args.push('--config=p/csharp');
     args.push('--json', '--quiet', '--output', containerOut);

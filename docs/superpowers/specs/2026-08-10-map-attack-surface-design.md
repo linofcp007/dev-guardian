@@ -52,7 +52,7 @@ Deferred to later specs (not this one):
 | Primary consumer | Single schema serving DAST **and** `risk_score` **and** human inventory, with DAST driving priority | The expensive work is parsing routes. Once the parse is running, `handler_file:line` (for `risk_score`) and referenced env vars (for inventory) are byproducts of the same pass, not extra work. |
 | Language coverage | All 8 stacks `detect_stack` knows: JS/TS, Python, PHP, Go, Rust, Ruby, Java, C#/.NET | User requirement. Drives the engine choice below. |
 | Extraction engine | **Hybrid**: a Semgrep rule pack as the universal extractor, plus a pure-TypeScript resolver pass for route-prefix resolution | Semgrep already parses all 8 languages and is already a hard dependency. Rules are data, so a new framework is a YAML entry rather than a new parser. Hand-written extractors for 8 languages would turn the project into a parser-maintenance effort. |
-| Resolver scope | JS/TS router mounting and WordPress `register_rest_route` namespaces only | These two cover the stacks with the largest user base and the worst raw-path accuracy. Codified as rule metadata, not as conditionals in code. |
+| Resolver scope | JS/TS router mounting and WordPress `register_rest_route` namespaces only | These two cover the stacks with the largest user base and the worst raw-path accuracy. Each resolver gates on the route's own language/framework — see §5, which records why a rule-metadata flag was rejected. |
 | Persistence | New `surface_snapshots` table, not the `findings` table | A route is not a finding: no severity, no fingerprint, no meaningful suppression. Same reasoning that gave `detect_stack` its own `stack_snapshots` table. |
 | Tool return shape | Summary + `snapshot_id` + 20-route sample; full list via MCP resource | A 400-route project would exhaust the agent's context window on every call. Downstream tools read the snapshot from SQLite rather than receiving routes as arguments. |
 | Failed scan | Persist **nothing** | See §6. This is a correctness decision, not cosmetics. |
@@ -120,7 +120,20 @@ interface RouteRecord {
   method: HttpMethod;
   path_raw: string;          // exactly as written at the match site
   path_resolved: string;     // after prefix resolution; equals path_raw when no resolver applies
-  path_partial: boolean;     // true when a prefix may be missing and we know it
+  /**
+   * True when `path_resolved` is NOT a usable URL path. Two causes:
+   *   1. a prefix may be missing and we know it (unresolved router mount,
+   *      missing WordPress namespace);
+   *   2. the captured value is a code expression rather than a literal —
+   *      `self::NAMESPACE`, `$this->namespace`, `Paths.ORDERS`, `routeVar`.
+   *
+   * Case 2 matters more than it looks: `register_rest_route(self::NAMESPACE, …)`
+   * is the dominant idiom in real WordPress plugins, and emitting the variable
+   * name as a resolved path would hand a DAST tool a fabricated URL to attack.
+   * The route is still reported — surface we cannot name is still surface — but
+   * never as though we knew where it lives.
+   */
+  path_partial: boolean;
   file: string;
   line: number;
   framework: string;         // 'express' | 'fastapi' | 'aspnet-minimal' | 'gin' | ...
@@ -128,6 +141,13 @@ interface RouteRecord {
   auth_hint: 'none' | 'required' | 'unknown';
   params: string[];          // path parameters, normalised: ':id' and '{id}' both → 'id'
   confidence: 'high' | 'medium' | 'low';
+  /**
+   * Framework-level route namespace, when the framework has one. Currently
+   * only WordPress: `register_rest_route('myplugin/v1', '/items')` yields
+   * namespace 'myplugin/v1'. The WP resolver combines it with path_raw to
+   * produce the served /wp-json path.
+   */
+  namespace?: string;
 }
 ```
 
@@ -153,7 +173,6 @@ falsehood. `'unknown'` is the honest answer and downstream tools must treat it a
 interface CoverageEntry {
   language: string;
   detected: boolean;         // the stack snapshot reported this language
-  rules_applied: number;
   routes_found: number;
   status: 'ok' | 'no_matches' | 'no_rules';
 }
@@ -225,8 +244,8 @@ rules:
     metadata:
       guardian_kind: route      # extract.ts ignores any match without this
       framework: express
-      confidence: high
-      mountable: true           # opts this framework into the Node prefix resolver
+      confidence: high          # flows to RouteRecord.confidence — a trust signal, so
+                                # rate it honestly rather than optimistically
     patterns:
       - pattern: $APP.$METHOD($PATH, ...)
       - metavariable-regex:
@@ -240,19 +259,54 @@ rules:
   roughly 15–20 rules across 8 languages instead of 100+.
 - Decorator- and attribute-based frameworks (`@app.get`, `@GetMapping`, `[HttpGet]`,
   `Route::get`) use the same shape with the pattern written against the decorator.
+- **Namespaced frameworks capture two metavariables.** WordPress's
+  `register_rest_route($NS, $ROUTE, ...)` yields `$NS` and `$ROUTE` rather than `$PATH`.
+  Semgrep cannot concatenate metavariables into a third, so the extractor reads both and
+  fills `RouteRecord.namespace` alongside `path_raw`. Any future namespaced framework
+  follows the same shape — the composition lives in `extract.ts`, where it is testable,
+  never in a magic separator inside a path string.
 
 Two properties this contract guarantees:
 
 1. **This Semgrep run produces no findings.** It is a separate `--config` invocation whose
    output is consumed by the surface extractor and never reaches `findingsRepo`.
    `severity: INFO` exists only because Semgrep requires the field.
-2. **The resolver runs only where `mountable: true`.** For the other six stacks the key is
-   absent, `path_resolved === path_raw`, and `path_partial` is `false`. The hybrid's
-   boundary lives in the data, not in conditionals spread through the code.
+2. **The resolvers gate on the route's language and framework, not on a rule-pack flag.**
+   `resolveNodeMounts` runs only for `javascript` / `typescript` routes;
+   `resolveWordpressRoutes` only for `framework: wp-rest`. Everything else passes through
+   with `path_resolved === path_raw` and `path_partial: false`.
+
+   An earlier draft of this design put a `mountable: true` flag in the rule metadata and
+   claimed the boundary lived in the data. That was rejected during implementation: a flag
+   only works if every future rule author remembers to set it, and a forgotten flag fails
+   silently — the route simply never gets its prefix. Deriving the gate from the language
+   the route was extracted from cannot be forgotten. The rule pack carries no such flag.
 
 `extract.ts` must tolerate rules whose metadata is incomplete: a match missing
 `guardian_kind: route` is skipped; a match missing `confidence` defaults to `'low'`.
 The rule pack is user-extensible, so malformed third-party rules must not crash the tool.
+
+### Literal guards belong in the extractor, not in the rules
+
+A metavariable can bind a code expression rather than a string — `self::NAMESPACE`,
+`$this->namespace`, `Paths.ORDERS`. Those must be reported as routes with
+`path_partial: true`, never as resolved paths.
+
+The guard lives in `extract.ts`, not in the YAML, and the reason is mechanical:
+Semgrep's `metavariable-regex` is a **conjunct**. A rule carrying one does not
+report a non-matching capture as a weaker match — it discards the match entirely.
+So a literal guard in the pack deletes exactly the routes this design wants
+flagged, and `coverage` then reports `no_matches` for the language: the
+"this application exposes nothing" falsehood §6 exists to prevent.
+
+Two rules keep a YAML guard because there the capture genuinely disambiguates
+*whether a match is a route at all* rather than whether its path is literal:
+`guardian-route-rails` (its `$METHOD $PATH` pattern matches any one-argument Ruby
+call) and `guardian-route-express`. Everywhere else, a match already means "this
+is a route registration", and the only open question is whether we can name it.
+
+Putting the guard in the extractor also covers rules users add through
+`register_custom_rules`, which the pack cannot.
 
 ---
 
@@ -371,3 +425,66 @@ From `CLAUDE.md`:
 - [ ] A failed or scanner-less run persists nothing and says why.
 - [ ] Full test matrix in §8 passes with `npm test`, with Semgrep absent from the machine.
 - [ ] `mcp/dist/` rebuilt and staged in the same commit.
+
+---
+
+## 11. Known limitations at first release
+
+Recorded at merge so they are not rediscovered from scratch. Nothing here is a
+regression; each is a gap between what the tool reports and what it could report.
+
+### The one that must be checked first
+
+**No test in this repo has ever seen real Semgrep output.** Semgrep was not installed
+on the machine this was built on, so the whole pipeline was exercised against
+hand-written JSON fixtures. When a real Semgrep is available, verify **`guardian-route-express`'s
+`$PATH` guard before anything else** — its `metavariable-regex` requires the capture to
+start with a quote character, so it matches only if `abstract_content` retains the source
+quoting. If it does not, the
+flagship rule for the most common stack matches nothing and JS/TS surface mapping is
+silently empty. This is a higher priority than the Ruby and Rust rules, which are
+openly unvalidated guesses but fail visibly rather than silently.
+
+The repo's own fixtures disagree on this point — `test/fixtures/surface/express.json`
+encodes `abstract_content` unquoted, `surfaceTools.test.ts` encodes it quoted — and both
+pass, because `stripQuotes` is a no-op on unquoted input. The suite is structurally
+incapable of telling the two worlds apart.
+
+### Fields that are advertised but thin
+
+- **`auth_hint` is always `'unknown'`.** No rule sets `metadata.auth`, so the design's
+  rule — never infer `'none'` from the absence of a decorator — holds vacuously. The tool
+  description no longer claims to extract it. Implementing it properly means a rule cannot
+  see whether its handler carries `[Authorize]`; that needs its own design.
+- **`method` is `ANY` for `guardian-route-spring-request`** (`@RequestMapping` without a
+  verb), which is correct — the annotation genuinely does not name one.
+
+### Resolution gaps, all failing toward `path_partial`
+
+- Directory imports (`./routes` → `routes/index.ts`) do not resolve.
+- Bare and aliased specifiers (`@/routes/users`, tsconfig `paths`, `#routes/users`) do not
+  resolve.
+- `resolveModuleFile` is first-match-wins if a project holds both `users.js` and `users.ts`
+  with matches in each.
+- `toMount` applies no literal guard to `$PREFIX`. Today that is masked by the YAML guard on
+  `guardian-mount-express`, but a mount rule added through `register_custom_rules` could
+  inject a code expression that gets joined into a confident path. Same bug class as §5's;
+  the fix is the same predicate.
+- `isLiteralPath` accepts an absolute URL (`https://api.example.com/v1`) — technically a
+  literal, but `joinPath` would then prefix it into nonsense. Unreachable from the current
+  pack.
+- The bare-word branch separates `items` (a valid WordPress route) from `routeVar` (an
+  identifier) on capitalisation. An all-lowercase `snake_case` identifier with no
+  punctuation is still accepted as a path. The tie had to break this way because `items` is
+  real route syntax.
+
+### Under-reporting in the collectors
+
+- `EXPOSE 8080-8090` is read as the single port 8080.
+- Compose's three-part `127.0.0.1:8000:80` form is dropped.
+
+### Caching
+
+`computeTreeHash` covers the project tree only, so a change to `configs/semgrep/routes.yml`
+— a plugin upgrade adding frameworks, or a user's `register_custom_rules` — does not
+invalidate a cached snapshot. Pass `force: true` after changing rules.
