@@ -37,9 +37,16 @@ export function languageFromPath(file) {
  * `register_rest_route('myplugin/v1', '/items')` and, just as happily,
  * `register_rest_route(self::NAMESPACE, $route)` — the dominant idiom in real
  * WordPress plugins. Only two rules in the pack pin their capture to a string
- * literal, and a rule a user adds through `register_custom_rules` pins
- * nothing at all. So the guard lives here, in the one place every route
- * flows through, rather than being replicated per rule in YAML.
+ * literal, and a rule added to the pack later need not pin anything either. So
+ * the guard lives here, in the one place every route flows through, rather than
+ * being replicated per rule in YAML: `toRoute` applies it unconditionally, so a
+ * new rule in `configs/semgrep/routes.yml` is covered the moment it is written,
+ * with nothing to opt into and nothing to remember.
+ *
+ * (It is not covering rules from anywhere else: `map_attack_surface` runs that
+ * one file as its only `--config`. `register_custom_rules` never reaches this
+ * pipeline — it records paths in `runtime_meta` for the SAST tools, and as of
+ * today nothing reads them back, so it reaches no scan at all.)
  *
  * This matters because the next tool in this series sends HTTP requests to
  * whatever path it is handed: emitting `Paths.ORDERS` with

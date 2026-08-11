@@ -117,8 +117,13 @@ describe('recoverMetavars — $PATH from the first string literal', () => {
     // Semgrep reported `"ok".to_string()` as a route span. Semgrep 1.86.0
     // binds `metavars: {}` there — it captured nothing — so taking the
     // receiver string would fabricate a route named `ok` that no ground-truth
-    // run ever produced. The rule no longer emits such spans, but the guard
-    // stays: a user rule registered through register_custom_rules can.
+    // run ever produced. The rule that produced it is fixed and no rule in the
+    // pack emits such a span today, but the guard stays: this exact span came
+    // from a pattern that was widened by hand in `configs/semgrep/routes.yml`,
+    // which is the only source `map_attack_surface` reads, and the next hand
+    // edit can do it again. Nothing outside that file reaches here —
+    // `register_custom_rules` records paths for the SAST tools, and as of today
+    // nothing reads them back.
     const outcome = recoverSpan('"ok".to_string()', ROUTE);
     expect(mv(outcome, '$PATH')).toBeUndefined();
     expect(outcome.unrecoverable).toBe(1);

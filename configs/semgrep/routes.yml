@@ -116,9 +116,16 @@
 # the language: a "this application exposes nothing" falsehood of exactly the
 # class mcp/src/tools/mapAttackSurface.ts:8-15 forbids. The extractor's
 # `isLiteralPath` is what handles those: it keeps the route and flags it
-# `path_partial: true` at 'low' confidence, never guessing the path. That
-# guard is load-bearing and lives in one place, so it also covers rules users
-# add through register_custom_rules.
+# `path_partial: true` at 'low' confidence, never guessing the path. That guard
+# is load-bearing and lives in one place — `toRoute` applies it to every route
+# unconditionally — so a rule added to THIS FILE is covered the moment it is
+# written, with no per-rule opt-in to forget.
+#
+# It covers this file and only this file: `map_attack_surface` runs
+# `configs/semgrep/routes.yml` as its single `--config` and discovers nothing
+# else. A project's own rules registered through `register_custom_rules` are
+# recorded for the SAST tools, not for this scan (and as of today nothing reads
+# them back, so they reach no scan at all).
 #
 # Exactly two rules carry a $PATH guard, and only because their pattern does
 # not identify a route on its own — there the guard disambiguates rather than

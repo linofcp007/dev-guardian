@@ -272,8 +272,10 @@ function synthesizeRoute(span, metadata) {
  * it.
  *
  * The pack's own attribute rules are focused now and never reach here, and no
- * user rule can: `map_attack_surface` runs `configs/semgrep/routes.yml` and
- * nothing else, and `register_custom_rules` only feeds the SAST path. The
+ * user rule can: `map_attack_surface` runs `configs/semgrep/routes.yml` as its
+ * single `--config` and discovers nothing else. (`register_custom_rules` does
+ * not feed this scan — it records paths in `runtime_meta` for the SAST tools,
+ * and as of today nothing reads them back, so it feeds no scan at all.) The
  * residual risk is an in-repo edit to that one file — a new declaration-
  * spanning family left unfocused — which is what the lock-step assertion in
  * `test/unit/surface/rulePack.test.ts` exists to stop.
