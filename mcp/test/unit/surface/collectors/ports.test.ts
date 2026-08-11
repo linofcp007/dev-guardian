@@ -46,4 +46,15 @@ describe('collectPorts', () => {
     const dir = project({ Dockerfile: 'EXPOSE $PORT\nEXPOSE 3000\n' });
     expect(collectPorts(dir)).toEqual([{ port: 3000, source: 'Dockerfile' }]);
   });
+
+  it('does not double-count a single Dockerfile and reports its real on-disk casing as source', () => {
+    // Only a lowercase `dockerfile` exists on disk. The collector probes
+    // both `Dockerfile` and `dockerfile` candidates; on a case-insensitive
+    // filesystem both resolve to this same file, so it must be read once,
+    // not twice -- and the reported `source` must reflect the actual
+    // on-disk name (`dockerfile`), not whichever candidate happened to be
+    // checked first (`Dockerfile`).
+    const dir = project({ dockerfile: 'EXPOSE 5000\n' });
+    expect(collectPorts(dir)).toEqual([{ port: 5000, source: 'dockerfile' }]);
+  });
 });

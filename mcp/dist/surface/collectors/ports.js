@@ -8,8 +8,8 @@
  * This is declaration-reading, not port scanning: nothing here touches the
  * network or inspects a running host.
  */
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { basename, join } from 'node:path';
 const DOCKERFILES = ['Dockerfile', 'dockerfile'];
 const COMPOSE_FILES = [
     'docker-compose.yml',
@@ -33,15 +33,19 @@ export function collectPorts(projectPath) {
     for (const name of DOCKERFILES) {
         const path = join(projectPath, name);
         // On case-insensitive filesystems (Windows, default macOS), `Dockerfile`
-        // and `dockerfile` can be the very same on-disk file; comparing device +
-        // inode (rather than the path string) keeps it from being read twice.
-        const identity = fileIdentity(path);
-        if (identity !== undefined) {
-            if (seenDockerfiles.has(identity))
-                continue;
-            seenDockerfiles.add(identity);
-        }
-        for (const line of readLines(path)) {
+        // and `dockerfile` can be the very same on-disk file. Resolving to the
+        // canonical on-disk path -- rather than comparing device+inode, which
+        // can collide (ino: 0) on some FAT/exFAT/SMB/FUSE filesystems -- both
+        // de-duplicates correctly and yields the real on-disk casing for
+        // `source`, instead of whichever candidate name happened to be checked.
+        const canonical = canonicalPath(path);
+        if (canonical === undefined)
+            continue;
+        if (seenDockerfiles.has(canonical))
+            continue;
+        seenDockerfiles.add(canonical);
+        const source = basename(canonical);
+        for (const line of readLines(canonical)) {
             const match = /^\s*EXPOSE\s+(.+)$/i.exec(line);
             if (match?.[1] === undefined)
                 continue;
@@ -52,7 +56,7 @@ export function collectPorts(projectPath) {
                 const port = Number.parseInt(portPart, 10);
                 if (Number.isNaN(port))
                     continue;
-                push(port, name);
+                push(port, source);
             }
         }
     }
@@ -83,13 +87,16 @@ function readLines(path) {
         return [];
     }
 }
-/** `device:inode`, used to tell genuinely distinct files apart from the same
- *  file reached through two differently-cased paths. Undefined if the path
- *  doesn't exist or can't be stat'd. */
-function fileIdentity(path) {
+/**
+ * Canonical on-disk path (real casing, symlinks resolved) for a candidate
+ * file. Returns undefined if the file doesn't exist, can't be resolved, or
+ * `realpathSync.native` throws for any other reason (including not being
+ * available on this platform) -- in every one of those cases the candidate
+ * is simply skipped, not treated as a crash.
+ */
+function canonicalPath(path) {
     try {
-        const stat = statSync(path);
-        return `${stat.dev}:${stat.ino}`;
+        return realpathSync.native(path);
     }
     catch {
         return undefined;
