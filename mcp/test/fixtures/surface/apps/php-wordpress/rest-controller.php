@@ -11,11 +11,12 @@ namespace Guardian\Fixture;
 class Rest_Controller {
 
 	// `const NAMESPACE` is legal PHP 7+ (semi-reserved words are allowed as
-	// class-constant names) and common in real plugins, but Semgrep's PHP
-	// parser cannot read it: every run over this file emits a `PartialParsing`
-	// *warning* naming these lines. That is expected, and deliberately left in
-	// — both register_rest_route() calls below still match, which is the point
-	// worth pinning. Renaming the constant makes the warning disappear.
+	// class-constant names) and common in real plugins, but current Semgrep's
+	// PHP parser cannot read it: 1.164.0 emits a `PartialParsing` *warning*
+	// naming these lines. 1.86.0 parses the same file with no error at all, so
+	// this is a regression in Semgrep, not a property of the fixture. Either
+	// way both register_rest_route() calls below still match, which is the
+	// point worth pinning. Renaming the constant makes the warning disappear.
 	const NAMESPACE = 'guardian/v2';
 
 	public function register(): void {

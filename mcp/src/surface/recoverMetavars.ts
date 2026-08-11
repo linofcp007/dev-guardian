@@ -161,12 +161,21 @@ function synthesize(kind: string, span: string, metadata: unknown): Metavars | u
  *   @app.route('/flask-route')
  *   http.HandleFunc("/go-route", handler)
  *   @GetMapping("/spring-route")
- *   #[get("/rust-route")]\nasync fn hello() -> String { … }
  *   get '/ruby-route', to: 'users#index'
  *   path(settings.ADMIN_URL, flask_route)
+ *
+ * …and, for the three frameworks below, the attribute PLUS the declaration it
+ * decorates:
+ *   #[allow(dead_code)]\n#[get("/d")]\nasync fn d() -> String { … }
  */
 function synthesizeRoute(span: string, metadata: unknown): Metavars | undefined {
-  if (str(metadata, 'framework') === 'wp-rest') return synthesizeNamespacedRoute(span);
+  const framework = str(metadata, 'framework');
+  if (framework === 'wp-rest') return synthesizeNamespacedRoute(span);
+
+  const declaredMethod = str(metadata, 'method');
+  if (framework !== undefined && DECORATED_DECLARATION_FRAMEWORKS.has(framework)) {
+    return synthesizeAttributeRoute(span, framework, declaredMethod);
+  }
 
   const path = routePath(span);
   if (path === undefined) return undefined;
@@ -176,13 +185,105 @@ function synthesizeRoute(span: string, metadata: unknown): Metavars | undefined 
   // $METHOD only when the rule declares no `metadata.method`. That flag is the
   // rule pack's own record of where the verb lives: a rule has to declare it
   // precisely because the verb is NOT in the callee but in the rule identity
-  // (@GetMapping, #[get(…)], [HttpGet(…)] — see the routes.yml header). For
-  // those, synthesizing the callee would be actively harmful: `GetMapping` is
-  // not a verb, `normalizeMethod` returns ANY, and because extract.ts reads
+  // (@GetMapping — see the routes.yml header). For those, synthesizing the
+  // callee would be actively harmful: `GetMapping` is not a verb,
+  // `normalizeMethod` returns ANY, and because extract.ts reads
   // `$METHOD ?? metadata.method` our guess would *override* the correct GET.
-  if (str(metadata, 'method') === undefined) {
+  if (declaredMethod === undefined) {
     const verb = calleeIdentifier(span);
     if (verb !== undefined) metavars['$METHOD'] = { abstract_content: verb };
+  }
+  return metavars;
+}
+
+/* ---- attribute-anchored routes -------------------------------------------
+ *
+ * Three rule families in `configs/semgrep/routes.yml` cannot match the
+ * attribute alone — Semgrep's Rust engine matches every node in the file, its
+ * C# engine reads `[HttpGet($PATH)]` as a collection expression, and its
+ * TypeScript engine rejects a bare decorator pattern outright. All three
+ * therefore match the attribute *plus the declaration it decorates*.
+ *
+ * The consequence, measured on Semgrep 1.164.0: the reported span begins at
+ * the FIRST attribute on that declaration, which is very often not the route
+ * one. Anchoring on the first argument list in the span then reads the wrong
+ * attribute's argument — and because that usually *succeeds*, the real route
+ * is silently replaced rather than reported missing:
+ *
+ *   #[allow(dead_code)] / #[get("/d")]              →  route `dead_code`
+ *   [Produces("application/json")] / [HttpGet("/o")] →  route `application/json`
+ *   @Roles('admin') / @Get('/users')                 →  route `admin`
+ *
+ * Each of those passes `isLiteralPath`, so it is emitted as a RESOLVED path a
+ * DAST tool would go on to request. That is the precise class of falsehood
+ * this tool exists to prevent, so the route attribute is located by name
+ * instead. The rule identity always carries enough to name it: `metadata.method`
+ * for NestJS and ASP.NET, and the verb itself for Rust, whose attribute name IS
+ * the HTTP verb.
+ *
+ * When the named attribute is not found in the span we recover NOTHING and
+ * count the match `unrecoverable`. A route we cannot read is a gap in the
+ * inventory; a route we invent is a lie acted on downstream.
+ */
+const DECORATED_DECLARATION_FRAMEWORKS: ReadonlySet<string> = new Set([
+  'actix',
+  'nestjs',
+  'aspnet',
+]);
+
+/**
+ * Frameworks whose rule pattern spans the decorated declaration, exported so
+ * `test/unit/surface/rulePack.test.ts` can assert the two stay in lock-step:
+ * widening another family's pattern the same way without adding it here is
+ * exactly how the defect above shipped.
+ */
+export const ATTRIBUTE_ANCHORED_FRAMEWORKS = DECORATED_DECLARATION_FRAMEWORKS;
+
+/** actix/Rocket attribute names, which are themselves the HTTP verb. */
+const ACTIX_VERBS = 'get|post|put|patch|delete|options|head';
+
+/**
+ * A sticky pattern matching the route attribute's own opening parenthesis.
+ * `undefined` when the framework does not name its attribute in the rule
+ * identity — we then have nothing to anchor on and must not guess.
+ */
+function routeAttributePattern(framework: string, method: string | undefined): RegExp | undefined {
+  // Rust: `#[get(` / `#[post(` … the name is the verb, so no metadata.method.
+  if (framework === 'actix') return new RegExp(`#\\[\\s*(${ACTIX_VERBS})\\s*\\(`, 'y');
+  if (method === undefined) return undefined;
+  const name = method.charAt(0).toUpperCase() + method.slice(1).toLowerCase();
+  // NestJS: `@Get(`, `@Post(` …
+  if (framework === 'nestjs') return new RegExp(`@\\s*(${name})\\s*\\(`, 'y');
+  // C#: `HttpGet(`. No lead-in character is required, because Semgrep reports
+  // the attribute *inside* the bracket list — a span starting at the route
+  // attribute begins `HttpGet(`, with the `[` outside it. A preceding
+  // identifier character is still excluded, so `MyHttpGet(` cannot match.
+  if (framework === 'aspnet') return new RegExp(`(?<![A-Za-z0-9_])Http${name}\\s*\\(`, 'y');
+  return undefined;
+}
+
+function synthesizeAttributeRoute(
+  span: string,
+  framework: string,
+  declaredMethod: string | undefined,
+): Metavars | undefined {
+  const pattern = routeAttributePattern(framework, declaredMethod);
+  if (pattern === undefined) return undefined;
+
+  const match = scanOutsideStrings(span, pattern);
+  if (match === undefined) return undefined;
+
+  // The pattern ends at the `(`, so that is the last character it consumed.
+  const open = match.index + match[0].length - 1;
+  const path = argumentsAt(span, open)?.[0];
+  if (path === undefined) return undefined;
+
+  const metavars: Metavars = { $PATH: { abstract_content: path } };
+  // Rust binds the attribute name to $METHOD; the other two carry the verb in
+  // `metadata.method`, which extract.ts already reads.
+  const verb = match[1];
+  if (declaredMethod === undefined && verb !== undefined) {
+    metavars['$METHOD'] = { abstract_content: verb };
   }
   return metavars;
 }
@@ -427,13 +528,42 @@ function splitTopLevel(inner: string): string[] {
   return parts.filter((part) => part.length > 0);
 }
 
-function argumentList(span: string): string[] | undefined {
-  const open = findOpener(span);
-  if (open === undefined) return undefined;
+/** The arguments of the bracket that opens at `open`. */
+function argumentsAt(span: string, open: number): string[] | undefined {
   const close = matchingClose(span, open);
   if (close === undefined) return undefined;
   const args = splitTopLevel(span.slice(open + 1, close));
   return args.length > 0 ? args : undefined;
+}
+
+function argumentList(span: string): string[] | undefined {
+  const open = findOpener(span);
+  if (open === undefined) return undefined;
+  return argumentsAt(span, open);
+}
+
+/**
+ * First match of a sticky pattern that does not start inside a string literal.
+ *
+ * The string-skipping matters: an attribute argument can contain anything,
+ * including text that looks like another attribute
+ * (`#[doc = "use #[get(\"/x\")] to route"]`).
+ */
+function scanOutsideStrings(span: string, sticky: RegExp): RegExpExecArray | undefined {
+  let i = 0;
+  while (i < span.length) {
+    const ch = span[i];
+    if (ch === undefined) break;
+    if (isQuote(ch)) {
+      i = skipString(span, i);
+      continue;
+    }
+    sticky.lastIndex = i;
+    const match = sticky.exec(span);
+    if (match !== null) return match;
+    i += 1;
+  }
+  return undefined;
 }
 
 function firstArgument(span: string): string | undefined {

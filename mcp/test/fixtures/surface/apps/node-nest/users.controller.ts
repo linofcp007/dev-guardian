@@ -1,4 +1,14 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Patch,
+  Post,
+  Put,
+} from '@nestjs/common';
 
 import UsersService from './users.service.js';
 
@@ -35,6 +45,17 @@ export class UsersController {
 
   @Delete(':id')
   remove(@Param('id') id: string): string {
+    return this.service.remove(id);
+  }
+
+  // A non-route decorator PRECEDING the route one. Semgrep's span starts at
+  // `@HttpCode(...)`, so recovery anchored on the first argument list reads
+  // `204` as the path — and a bare lower-case/numeric word passes the literal
+  // test, so it is emitted as a RESOLVED route. The capture has to be anchored
+  // on `@Delete(` by name.
+  @HttpCode(204)
+  @Delete('purge/:id')
+  purge(@Param('id') id: string): string {
     return this.service.remove(id);
   }
 }

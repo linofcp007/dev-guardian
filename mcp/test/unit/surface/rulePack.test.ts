@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { ATTRIBUTE_ANCHORED_FRAMEWORKS } from '../../../src/surface/recoverMetavars.js';
 
 const PACK_PATH = join(__dirname, '../../../../configs/semgrep/routes.yml');
 
@@ -122,6 +123,31 @@ describe('configs/semgrep/routes.yml', () => {
     const rule = actix[0];
     expect(rule?.metadata?.method).toBeUndefined();
     expect(rule === undefined ? new Set() : guardedMetavars(rule)).toContain('$METHOD');
+  });
+
+  it('anchors every route rule whose pattern spans the decorated declaration', () => {
+    // The lock-step that would have caught a shipped Critical defect.
+    //
+    // A pattern ending in `{ ... }` matches the attribute PLUS the declaration
+    // it decorates, so Semgrep's reported span starts at the FIRST attribute on
+    // that declaration — not necessarily the route one. `recoverMetavars.ts`
+    // must then locate the route attribute by name; if it instead reads the
+    // first argument list in the span it recovers a *different* attribute's
+    // argument, and because that usually succeeds the real route is silently
+    // replaced rather than reported missing:
+    //
+    //   #[allow(dead_code)] / #[get("/d")]  ->  a resolved route `dead_code`
+    //
+    // Widening another family's pattern this way without adding its framework
+    // to ATTRIBUTE_ANCHORED_FRAMEWORKS reintroduces exactly that bug, so the
+    // two lists are asserted equal here rather than merely compatible.
+    const spansDeclaration = new Set<string>();
+    for (const rule of rules().filter((r) => r.metadata?.guardian_kind === 'route')) {
+      const text = JSON.stringify(rule.pattern ?? rule.patterns ?? rule['pattern-either'] ?? '');
+      if (text.includes('{ ... }')) spansDeclaration.add(String(rule.metadata?.framework));
+    }
+    expect(spansDeclaration.size).toBeGreaterThan(0);
+    expect([...spansDeclaration].sort()).toEqual([...ATTRIBUTE_ANCHORED_FRAMEWORKS].sort());
   });
 
   it('constrains $PATH to a literal on exactly the two rules that need it', () => {

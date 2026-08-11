@@ -27,6 +27,17 @@ async fn delete_item(path: web::Path<u32>) -> impl Responder {
     HttpResponse::NoContent().finish()
 }
 
+// A non-route attribute PRECEDING the route one. Semgrep's span for this match
+// starts at `#[allow(...)]`, so recovery that anchors on the first argument
+// list in the span reads `dead_code` as the path — and `dead_code` passes the
+// literal test, so it is emitted as a RESOLVED route. The capture has to be
+// anchored on `#[<verb>(` by name. Not registered below, hence the allow.
+#[allow(dead_code)]
+#[get("/rust/gated")]
+async fn gated() -> impl Responder {
+    HttpResponse::Ok().finish()
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     HttpServer::new(|| {

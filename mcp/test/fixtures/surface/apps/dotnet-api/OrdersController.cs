@@ -17,6 +17,14 @@ public class OrdersController : ControllerBase
         return Ok();
     }
 
+    // A non-route attribute PRECEDING the route one. Semgrep's span starts at
+    // `Produces(...)`, so recovery anchored on the first argument list reads
+    // "application/json" as the path — a RESOLVED route that exists nowhere.
+    // The capture has to be anchored on `HttpGet(` by name.
+    [Produces("application/json")]
+    [HttpGet("/aspnet/orders/{id}")]
+    public IActionResult GetOne(int id) => Ok(id);
+
     [HttpPost("/aspnet/orders")]
     public async Task<IActionResult> Create()
     {

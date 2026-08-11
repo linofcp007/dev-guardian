@@ -71,8 +71,15 @@ const EXPECTED_ROUTES = [
   // ---- ASP.NET attribute routing. The verb lives in the attribute name, so
   // each rule declares metadata.method; `[HttpGet]` with no argument has no
   // path to capture and is deliberately absent.
+  //
+  // `/aspnet/orders/{id}` GET carries a PRECEDING `[Produces("…")]` attribute:
+  // its rule matches the decorated declaration, so the span starts at the
+  // wrong attribute and the recovery has to find `HttpGet(` by name. Read
+  // literally, the first argument list yields `application/json` — a resolved
+  // route that exists nowhere.
   'aspnet DELETE /aspnet/orders/{id}',
   'aspnet GET /aspnet/orders',
+  'aspnet GET /aspnet/orders/{id}',
   'aspnet PATCH /aspnet/orders/{id}/status',
   'aspnet POST /aspnet/orders',
   'aspnet PUT /aspnet/orders/{id}',
@@ -84,7 +91,10 @@ const EXPECTED_ROUTES = [
   'aspnet-minimal GET /stats',
   'aspnet-minimal POST /minimal/orders',
   // ---- actix / Rocket. One rule binding the attribute name to $METHOD.
+  // `/rust/gated` carries a PRECEDING `#[allow(dead_code)]`; read literally,
+  // the span's first argument list yields `dead_code` as a resolved path.
   'actix DELETE /rust/items/{id}',
+  'actix GET /rust/gated',
   'actix GET /rust/health',
   'actix PATCH /rust/items/{id}/status',
   'actix POST /rust/items',
@@ -118,7 +128,11 @@ const EXPECTED_ROUTES = [
   // ---- NestJS. Every route is partial: the `@Controller('users')` prefix is
   // not resolvable from the method decorator, and resolveNodeMounts flags any
   // JS/TS route whose file it cannot tie to exactly one mount point.
+  //
+  // `purge/:id` carries a PRECEDING `@HttpCode(204)`; read literally, the
+  // span's first argument list yields `204` as a resolved path.
   'nestjs DELETE :id [partial]',
+  'nestjs DELETE purge/:id [partial]',
   'nestjs GET :id [partial]',
   'nestjs PATCH :id/status [partial]',
   'nestjs POST /create [partial]',

@@ -171,6 +171,146 @@ describe('recoverMetavars — $METHOD from the callee', () => {
   });
 });
 
+/**
+ * Three rule families match the attribute PLUS the declaration it decorates,
+ * so Semgrep's span starts at the first attribute on that declaration — not
+ * necessarily the route one. Every span below was captured from Semgrep
+ * 1.164.0; every expected value is what Semgrep 1.86.0 binds for the same
+ * match. Before the attribute anchor these produced a *fabricated* route from
+ * the wrong attribute's argument, and five of them were emitted as resolved
+ * paths a DAST tool would request.
+ */
+describe('recoverMetavars — attribute routes with a PRECEDING decorator', () => {
+  const ACTIX = { guardian_kind: 'route', framework: 'actix', confidence: 'medium' };
+  const NEST_GET = { guardian_kind: 'route', framework: 'nestjs', method: 'GET' };
+  const ASPNET_GET = { guardian_kind: 'route', framework: 'aspnet', method: 'GET' };
+
+  const cases: [name: string, span: string, metadata: Record<string, unknown>, path: string][] = [
+    [
+      'rust #[allow(dead_code)]',
+      '#[allow(dead_code)]\n#[get("/real/d")]\nasync fn d() -> String { String::new() }',
+      ACTIX,
+      '"/real/d"',
+    ],
+    [
+      'rust #[instrument(skip_all)]',
+      '#[instrument(skip_all)]\n#[get("/real/health")]\nasync fn health() -> String { String::new() }',
+      ACTIX,
+      '"/real/health"',
+    ],
+    [
+      'rust #[cfg(test)]',
+      '#[cfg(test)]\n#[get("/real/items")]\nasync fn items() -> String { String::new() }',
+      ACTIX,
+      '"/real/items"',
+    ],
+    [
+      'rust #[cfg(feature = "api")]',
+      '#[cfg(feature = "api")]\n#[get("/real/r3")]\nasync fn r3() -> String { String::new() }',
+      ACTIX,
+      '"/real/r3"',
+    ],
+    [
+      // Semgrep reports the C# attribute from *inside* the bracket list, so a
+      // span that starts at the route attribute has no leading `[`.
+      'aspnet [Produces("application/json")]',
+      'Produces("application/json")]\n    [HttpGet("/real/orders")]\n    public IActionResult List() => Ok();',
+      ASPNET_GET,
+      '"/real/orders"',
+    ],
+    [
+      'aspnet [ProducesResponseType(...)]',
+      'ProducesResponseType(StatusCodes.Status200OK)]\n    [HttpGet("/c1")]\n    public IActionResult C1() => Ok();',
+      ASPNET_GET,
+      '"/c1"',
+    ],
+    [
+      'aspnet attributes sharing one bracket list',
+      'Produces("application/json"), HttpGet("/shared")]\n    public IActionResult S() => Ok();',
+      ASPNET_GET,
+      '"/shared"',
+    ],
+    [
+      "nestjs @Roles('admin')",
+      "@Roles('admin')\n  @Get('/real/users')\n  findAll(): string[] { return []; }",
+      NEST_GET,
+      "'/real/users'",
+    ],
+    [
+      'nestjs @ApiOperation({ summary })',
+      "@ApiOperation({ summary: 'list' })\n  @Get('/n1')\n  n1(): string[] { return []; }",
+      NEST_GET,
+      "'/n1'",
+    ],
+  ];
+
+  for (const [name, span, metadata, expected] of cases) {
+    it(`anchors on the route attribute, not the first one — ${name}`, () => {
+      const outcome = recoverSpan(span, metadata);
+      expect(mv(outcome, '$PATH')).toBe(expected);
+      expect(outcome.recovered).toBe(1);
+    });
+  }
+
+  it('still recovers when the route attribute comes first', () => {
+    expect(
+      mv(
+        recoverSpan(
+          '#[get("/plain/ok")]\n#[allow(clippy::unused_async)]\nasync fn p() -> String { String::new() }',
+          ACTIX,
+        ),
+        '$PATH',
+      ),
+    ).toBe('"/plain/ok"');
+    expect(
+      mv(
+        recoverSpan(
+          'HttpGet("/plain/ok")]\n    [Authorize]\n    public IActionResult P() => Ok();',
+          ASPNET_GET,
+        ),
+        '$PATH',
+      ),
+    ).toBe('"/plain/ok"');
+  });
+
+  it('binds the Rust attribute name to $METHOD, as Semgrep does', () => {
+    const outcome = recoverSpan(
+      '#[cfg(test)]\n#[delete("/rust/items/{id}")]\nasync fn d() -> String { String::new() }',
+      ACTIX,
+    );
+    expect(mv(outcome, '$METHOD')).toBe('delete');
+    expect(extractSurface(outcome.json).routes[0]?.method).toBe('DELETE');
+  });
+
+  it('recovers NOTHING when the named route attribute is absent from the span', () => {
+    // Never fall back to "the first argument list": that is exactly how a
+    // decorator's argument became a resolved route path.
+    const outcome = recoverSpan(
+      "@Roles('admin')\n  somethingElse(): void {}",
+      NEST_GET,
+    );
+    expect(mv(outcome, '$PATH')).toBeUndefined();
+    expect(outcome.unrecoverable).toBe(1);
+    expect(extractSurface(outcome.json).routes).toHaveLength(0);
+  });
+
+  it('does not read a route attribute out of a string literal', () => {
+    const outcome = recoverSpan(
+      '#[doc = "use #[get(\\"/fake\\")] here"]\n#[get("/real")]\nasync fn r() -> String { String::new() }',
+      ACTIX,
+    );
+    expect(mv(outcome, '$PATH')).toBe('"/real"');
+  });
+
+  it('does not match an identifier merely ending in the attribute name', () => {
+    const outcome = recoverSpan(
+      'MyHttpGet("/decoy")]\n    public IActionResult X() => Ok();',
+      ASPNET_GET,
+    );
+    expect(outcome.unrecoverable).toBe(1);
+  });
+});
+
 describe('recoverMetavars — paths that are code, not literals', () => {
   it('synthesizes $PATH unquoted from the first argument when there is no literal', () => {
     const outcome = recoverSpan('path(settings.ADMIN_URL, flask_route)', {

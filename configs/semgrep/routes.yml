@@ -42,9 +42,30 @@
 #
 # All three become exact when the pattern includes the item the attribute is
 # attached to (`#[get($PATH, ...)] fn $F(...) { ... }`). The match span then
-# covers the attribute *and* the declaration, which is fine: the extractor
-# never sees the span, and `surface/recoverMetavars.ts` anchors its capture to
-# the first argument list, i.e. the attribute's own.
+# covers the attribute *and* the declaration — and that has a consequence you
+# must not undo.
+#
+# ---- Spanning the declaration obliges the recovery to anchor by name -------
+#
+# Semgrep's span for such a match starts at the FIRST attribute on the
+# declaration, which is very often not the route one:
+#
+#   #[allow(dead_code)]              [Produces("application/json")]
+#   #[get("/d")]                     [HttpGet("/orders")]
+#
+# On any Semgrep that redacts match content (>= ~1.120 without `semgrep login`)
+# `surface/recoverMetavars.ts` rebuilds the captures from the span. An earlier
+# version of it anchored on the first argument list, which read `dead_code` and
+# `"application/json"` as the paths — both pass the literal test, so the real
+# route was silently replaced by a *resolved* one that exists nowhere. It now
+# locates the route attribute by name (`#[<verb>(`, `@Get(`, `HttpGet(`) using
+# `metadata.method`, or the verb regex for Rust, and recovers nothing at all
+# when that attribute is absent from the span.
+#
+# So: if you widen another rule family to span its declaration, add its
+# `metadata.framework` to ATTRIBUTE_ANCHORED_FRAMEWORKS in
+# `mcp/src/surface/recoverMetavars.ts`. The two lists are asserted equal by
+# `mcp/test/unit/surface/rulePack.test.ts`, which fails if you forget.
 #
 # Rust is one rule, not five, because Semgrep's Rust engine *does* bind the
 # attribute name to `$METHOD` once the pattern is well-formed — and the actix /
@@ -311,8 +332,19 @@ rules:
   # plus four fabricated ones — and spans that were function bodies rather than
   # routes. See the attribute note in the header.
   #
-  # `$PATH, ...` covers Rocket's `#[post("/x", data = "<t>")]`; `...` matches
-  # zero arguments, so actix's single-argument form still matches.
+  # KNOWN LIMITATION — single-argument attributes only. Despite the `, ...`,
+  # this does NOT match Rocket's multi-argument forms:
+  #
+  #   #[post("/x", data = "<t>")]        0 matches on 1.164.0 and on 1.86.0
+  #   #[get("/x", rank = 2)]             0 matches on 1.164.0 and on 1.86.0
+  #
+  # Measured, not assumed. `#[$METHOD($PATH, $EXTRA)] fn $F(...) { ... }` does
+  # not match them either; only a bare `#[$METHOD(...)]` does, and that binds no
+  # $PATH at all — which would hand the extractor a route with no path on any
+  # Semgrep that still emits metavariables. Actix's single-argument attribute,
+  # the common case, works; Rocket routes carrying `data`, `rank` or `format`
+  # are simply not reported. Under-reporting a route is a gap; reporting one at
+  # a path we did not read would be a lie.
   - id: guardian-route-rust-actix
     languages: [rust]
     severity: INFO
@@ -356,6 +388,17 @@ rules:
   # One rule per annotation. @RequestMapping carries no verb of its own (the
   # method= attribute is a separate argument we do not read), so it declares
   # no metadata.method and is reported as ANY — which is the truth.
+  #
+  # KNOWN LIMITATION — single-argument annotations only. The named-argument
+  # form, which is common in real Spring code, is NOT matched:
+  #
+  #   @GetMapping(value = "/x", produces = "application/json")   0 matches
+  #
+  # It cannot be fixed by adding `, ...` here: `@GetMapping($PATH, ...)` is
+  # rejected outright by Semgrep as "Invalid pattern for Java", which would
+  # take the whole rule (and its single-argument matches) with it. Measured on
+  # 1.164.0. Those routes are absent from the inventory rather than reported at
+  # a guessed path.
   - id: guardian-route-spring-get
     languages: [java]
     severity: INFO

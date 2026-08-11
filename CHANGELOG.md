@@ -31,8 +31,9 @@ version bump.
     `express` + its `mount` and `import` rules, `nestjs` (5), `flask`, `fastapi`,
     `django`, `wp-rest` (literal *and* `self::NAMESPACE` namespaces), `laravel`,
     `go-nethttp`, `gin`, `rails` (bare and `to:` forms), `spring` (all 6, including
-    `@RequestMapping`), `aspnet-minimal`, `aspnet` attribute routing (5), `actix`, and
-    all 5 `env` rules. Four rule families were **broken** and are fixed below.
+    `@RequestMapping`, in their single-argument form), `aspnet-minimal`, `aspnet`
+    attribute routing (5), `actix`, and all 5 `env` rules. Four rule families were
+    **broken** and are fixed below.
   - **What is still not covered.** The verb alternations absent from the fixture —
     `OPTIONS`, `HEAD`, `ALL`/`ANY`, and `PUT`/`PATCH` for some frameworks — are
     untested, being extra literals in an already-verified `metavariable-regex`. A
@@ -41,6 +42,11 @@ version bump.
     `MapGroup` prefix is resolved, so those routes are reported at their own
     registration path. Go's `os.Getenv` is not collected — no `env` rule covers Go.
     The Docker fallback path of `map_attack_surface` is still only exercised by mocks.
+    Two **named-argument** forms are measured as unmatched and pinned as fixture bait:
+    Spring's `@GetMapping(value = "/x", produces = "…")` — common in real code, and not
+    fixable by adding `, ...`, which Semgrep rejects as "Invalid pattern for Java" —
+    and Rocket's `#[post("/x", data = "<t>")]` (see the actix entry below). Both are
+    absent from the inventory rather than reported at a guessed path.
 - **`guardian://surface/latest` and `guardian://surface/{id}` resources.** Serve the
   full persisted attack-surface snapshot (every route, env var, port, webhook and the
   coverage report) by snapshot id or the most recent one. Return `{ snapshot: null }`
@@ -76,8 +82,12 @@ version bump.
   `$METHOD` under a `metavariable-regex` — the shape `express`, `gin`, `laravel` and
   `aspnet-minimal` already use. Verified: exactly five matches for five routes, each with
   the right verb and path, and the `#[allow(...)]` attribute stacked on one of them
-  correctly ignored. `$PATH, ...` additionally covers Rocket's
-  `#[post("/x", data = "<t>")]`.
+  correctly ignored. It does **not** cover Rocket's multi-argument attributes:
+  `#[post("/x", data = "<t>")]` and `#[get("/x", rank = 2)]` produce zero matches on
+  both 1.164.0 and 1.86.0 despite the `, ...`, and so does an explicit
+  `#[$METHOD($PATH, $EXTRA)]`. Only a bare `#[$METHOD(...)]` matches them, and it binds
+  no `$PATH` — a route with no path is worse than a route we did not report. Pinned as
+  fixture bait in `rust-actix/rocket.rs` so the limitation stays measured.
 - **The five ASP.NET attribute-routing rules matched nothing at all.**
   `[HttpGet($PATH)]` parses as a C# collection expression, not an attribute, so every
   `[HttpGet("/orders")]` in a controller was invisible — a whole style of ASP.NET routing
@@ -109,6 +119,29 @@ version bump.
   `path_partial` — the tool looked healthy and quietly stopped resolving prefixes on a
   supported platform. Paths are now normalised before comparison, and the known file is
   still returned verbatim so it continues to match `RouteRecord.file`.
+- **A decorator standing above a route decorator replaced the route with a fabricated
+  one.** Three rule families — NestJS, ASP.NET attribute routing and actix — cannot match
+  the attribute alone, so they match the attribute *plus the declaration it decorates*.
+  Semgrep's span for such a match therefore starts at the **first** attribute on that
+  declaration, which is very often not the route one. The byte-offset recovery anchored on
+  the first argument list in the span, so it read the wrong attribute's argument:
+  `#[allow(dead_code)]` above `#[get("/d")]` produced a route named `dead_code`,
+  `[Produces("application/json")]` above `[HttpGet("/orders")]` produced
+  `application/json`, and `@HttpCode(204)` above `@Delete('purge/:id')` produced `204`.
+  Each of those passes `isLiteralPath`, so the fabrication was emitted as a **resolved**
+  path — the real route silently gone, and a plausible-looking replacement in its place for
+  a DAST consumer to request. It was also silent in `tools_run`: recovery *succeeded*, so
+  the run reported `ok` with zero unrecoverable matches. The capture is now anchored on the
+  route attribute by name — `#[<verb>(`, `@Get(`, `HttpGet(`, taken from the rule's own
+  `metadata.method` or, for Rust, its verb regex — and a span in which that attribute
+  cannot be found recovers **nothing** and is counted `unrecoverable` rather than guessed.
+  A route we cannot read is a gap in the inventory; a route we invent is a lie acted on
+  downstream. The defect existed only on redacting Semgrep (1.86.0 binds these captures
+  itself), and every fixture stacked its extra attribute *after* the route one — the single
+  ordering that works — so the fixture now carries a preceding decorator for all three
+  families, and `rulePack.test.ts` asserts the rule pack's declaration-spanning frameworks
+  and `ATTRIBUTE_ANCHORED_FRAMEWORKS` are the same set, so widening a fourth family without
+  anchoring it fails the suite.
 - **`map_attack_surface` extracted zero routes on every current Semgrep.** Semgrep changed
   behaviour between 1.95.0 and 1.120.1: unless the user has run `semgrep login` it redacts
   match content, so `extra.metavars` is absent entirely and `extra.lines` reads
@@ -121,9 +154,9 @@ version bump.
   the file and reconstructs the captures the rules would have bound, keyed off
   `guardian_kind` and `framework`. It synthesizes into the shape the extractor already
   reads, so `mcp/src/surface/extract.ts` is untouched. Measured end to end against Semgrep
-  1.164.0 on a nine-language fixture: 22 routes and 6 environment variables recovered where
-  the tool previously found none. Verified capture-by-capture against Semgrep 1.86.0 — the
-  last version that still emits metavariables — as ground truth.
+  1.164.0 over `mcp/test/fixtures/surface/apps/`: all 61 routes and 8 environment variables
+  recovered where the tool previously found none. Verified capture-by-capture against
+  Semgrep 1.86.0 — the last version that still emits metavariables — as ground truth.
   - Offsets are **byte** offsets, so the span is sliced from a `Buffer`; a source file with
     any non-ASCII character before the match desyncs a plain `String.prototype.slice` and
     yields a confidently wrong path. Source quoting is preserved verbatim, because that is

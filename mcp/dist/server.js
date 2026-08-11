@@ -41680,13 +41680,47 @@ function synthesize(kind, span, metadata) {
   }
 }
 function synthesizeRoute(span, metadata) {
-  if (str3(metadata, "framework") === "wp-rest") return synthesizeNamespacedRoute(span);
+  const framework = str3(metadata, "framework");
+  if (framework === "wp-rest") return synthesizeNamespacedRoute(span);
+  const declaredMethod = str3(metadata, "method");
+  if (framework !== void 0 && DECORATED_DECLARATION_FRAMEWORKS.has(framework)) {
+    return synthesizeAttributeRoute(span, framework, declaredMethod);
+  }
   const path6 = routePath(span);
   if (path6 === void 0) return void 0;
   const metavars = { $PATH: { abstract_content: path6 } };
-  if (str3(metadata, "method") === void 0) {
+  if (declaredMethod === void 0) {
     const verb = calleeIdentifier(span);
     if (verb !== void 0) metavars["$METHOD"] = { abstract_content: verb };
+  }
+  return metavars;
+}
+var DECORATED_DECLARATION_FRAMEWORKS = /* @__PURE__ */ new Set([
+  "actix",
+  "nestjs",
+  "aspnet"
+]);
+var ACTIX_VERBS = "get|post|put|patch|delete|options|head";
+function routeAttributePattern(framework, method) {
+  if (framework === "actix") return new RegExp(`#\\[\\s*(${ACTIX_VERBS})\\s*\\(`, "y");
+  if (method === void 0) return void 0;
+  const name = method.charAt(0).toUpperCase() + method.slice(1).toLowerCase();
+  if (framework === "nestjs") return new RegExp(`@\\s*(${name})\\s*\\(`, "y");
+  if (framework === "aspnet") return new RegExp(`(?<![A-Za-z0-9_])Http${name}\\s*\\(`, "y");
+  return void 0;
+}
+function synthesizeAttributeRoute(span, framework, declaredMethod) {
+  const pattern = routeAttributePattern(framework, declaredMethod);
+  if (pattern === void 0) return void 0;
+  const match = scanOutsideStrings(span, pattern);
+  if (match === void 0) return void 0;
+  const open = match.index + match[0].length - 1;
+  const path6 = argumentsAt(span, open)?.[0];
+  if (path6 === void 0) return void 0;
+  const metavars = { $PATH: { abstract_content: path6 } };
+  const verb = match[1];
+  if (declaredMethod === void 0 && verb !== void 0) {
+    metavars["$METHOD"] = { abstract_content: verb };
   }
   return metavars;
 }
@@ -41835,13 +41869,32 @@ function splitTopLevel(inner) {
   parts.push(inner.slice(start).trim());
   return parts.filter((part) => part.length > 0);
 }
-function argumentList(span) {
-  const open = findOpener(span);
-  if (open === void 0) return void 0;
+function argumentsAt(span, open) {
   const close = matchingClose(span, open);
   if (close === void 0) return void 0;
   const args = splitTopLevel(span.slice(open + 1, close));
   return args.length > 0 ? args : void 0;
+}
+function argumentList(span) {
+  const open = findOpener(span);
+  if (open === void 0) return void 0;
+  return argumentsAt(span, open);
+}
+function scanOutsideStrings(span, sticky) {
+  let i2 = 0;
+  while (i2 < span.length) {
+    const ch = span[i2];
+    if (ch === void 0) break;
+    if (isQuote(ch)) {
+      i2 = skipString(span, i2);
+      continue;
+    }
+    sticky.lastIndex = i2;
+    const match = sticky.exec(span);
+    if (match !== null) return match;
+    i2 += 1;
+  }
+  return void 0;
 }
 function firstArgument(span) {
   return argumentList(span)?.[0];

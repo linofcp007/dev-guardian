@@ -1,8 +1,9 @@
 """Bait for the Django rule: a module-level helper named `path`.
 
-`path(...)` is an ordinary function name. A rule that keys on the callee alone
-reports every call here as an HTTP route, which is why the Django rule is
-anchored to a `urlpatterns` list instead.
+`path(...)` is an ordinary function name. A rule that keys on the bare callee
+reports every call here as an HTTP route, which is why the Django rule matches
+the *qualified* callee — `django.urls.path($PATH, ...)` — so a local helper of
+the same name does not match.
 """
 
 import os
