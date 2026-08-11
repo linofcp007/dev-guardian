@@ -27,7 +27,11 @@ version bump.
     against Semgrep **1.86.0** (the last version that still emits `extra.metavars`, so
     what a rule binds is directly observable) and re-run end to end through the tool on
     Semgrep **1.164.0** (which redacts them, exercising the byte-offset recovery). Both
-    versions produce the same 81 matches — 64 routes — with no rule errors. Verified
+    versions produce the same 81 matches — 64 routes — with no rule errors. (1.164.0 also
+    emits one `warn`-level `PartialParsing` on `php-wordpress/rest-controller.php:20`,
+    where its PHP parser rejects `const NAMESPACE`; 1.86.0 parses it. That is a target-file
+    parse warning, not a rule error, it predates every change here, and both `wp-rest`
+    matches in that file still fire.) Verified
     working: `express` + its `mount` and `import` rules, `nestjs` (5), `flask`, `fastapi`,
     `django`, `wp-rest` (literal *and* `self::NAMESPACE` namespaces), `laravel`,
     `go-nethttp`, `gin`, `rails` (bare and `to:` forms), `spring` (all 6, including
@@ -149,12 +153,26 @@ version bump.
     unobserved.
   - **Measured on both Semgrep versions, against the adversarial fixtures.** 1.164.0
     (redacts match content) and 1.86.0 (still emits `extra.metavars`) produce the **same 64
-    routes** over `mcp/test/fixtures/surface/apps/` — 81 matches each, zero unrecoverable on
+    routes** over `mcp/test/fixtures/surface/apps/` — 81 matches each, zero rule errors on
+    either (1.164.0 emits one pre-existing PHP parse warning; see above), zero unrecoverable on
     either — and the reported spans on 1.164.0 are byte-for-byte equal to 1.86.0's `$PATH`
     captures, quotes included. Every planted decoy is absent from both: `dead_code`,
     `application/json`, `204`, the commented-out `/rust/legacy`, `/aspnet/orders/legacy` and
     `legacy/:id`, and the attribute-shaped `FABRICATED` text inside method bodies. Coverage
     no longer depends on the Semgrep version, or on being logged in.
+  - **A truncated range can no longer become a resolved path.** The focused branch trusts
+    Semgrep's range by design — validating it would mean re-deriving what Semgrep already
+    decided, the mistake of all four earlier rounds — so the safety argument has to be that
+    every way a range can be wrong degrades to *incomplete*. One shape did not: a range
+    ending **inside** the string literal left the opening quote unmatched, and `stripQuotes`
+    in `extract.ts` removed it anyway, so `"/orders/secret` cut six bytes short read as the
+    clean path `/orders/s` at full confidence — a URL that exists nowhere, published as
+    verified, while the real one was absent. `stripQuotes` now strips only a **matched**
+    pair, so the stray quote reaches `isLiteralPath`, which rejects it: the route survives
+    as `path_partial` at `low` confidence with its raw text visible. Unreached by anything
+    measured — 115 captures (81 fixture + 34 probe) were byte-exact against 1.86.0 — but
+    truncation is not hypothetical: a TypeScript template literal was observed arriving two
+    bytes short of its closing backtick. Pinned for all three quote styles.
   - **actix is five rules again, one per verb.** Focusing on `$PATH` discards every other
     capture, `$METHOD` included, so the verb has to come from `metadata.method` — the shape
     NestJS, ASP.NET attribute routing and Spring already use. Per-verb discrimination was

@@ -41571,8 +41571,12 @@ function toRoute(metadata, metavars, file, line) {
 }
 function stripQuotes(value) {
   if (value === void 0) return void 0;
-  return value.replace(/^['"`]|['"`]$/g, "");
+  const quote = value[0];
+  if (quote === void 0 || !QUOTES.test(quote)) return value;
+  if (value.length < 2 || !value.endsWith(quote)) return value;
+  return value.slice(1, -1);
 }
+var QUOTES = /^['"`]$/;
 function toMount(metavars, file, line) {
   const prefix = stripQuotes(metavar(metavars, "$PREFIX"));
   const routerVar = metavar(metavars, "$ROUTER");

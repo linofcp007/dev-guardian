@@ -304,6 +304,41 @@ describe('recoverMetavars — focused rules: the span IS the value', () => {
     expect(outcome.recovered).toBe(1);
   });
 
+  it('degrades a range that ends INSIDE the literal to partial, not to a prefix', () => {
+    // The one shape where a bad focused range could still produce a WRONG
+    // resolved path rather than an incomplete one. A range six bytes short of
+    // `"/orders/secret"` yields `"/orders/s`; stripping the lone opening quote
+    // made that read as the clean path `/orders/s` at full confidence — a URL
+    // that does not exist, published as verified, while the real one is absent.
+    // The unmatched quote now survives into isLiteralPath, which rejects it.
+    //
+    // Not reachable from any measured input: 115 real captures (81 fixture + 34
+    // probe) were byte-exact against Semgrep 1.86.0. But truncation has been
+    // observed — a TypeScript template literal arrived two bytes short of its
+    // closing backtick — and this feature has produced five fabrications, so
+    // the remaining theoretical failure is converted from wrong to incomplete.
+    const truncated: [style: string, span: string][] = [
+      ['double', '"/orders/s'],
+      ['single', "'/orders/s"],
+      ['backtick', '`/orders/s'],
+    ];
+    for (const [style, span] of truncated) {
+      const outcome = recoverSpan(span, ASPNET_GET);
+      // Still recovered — the route exists and must stay visible as surface.
+      expect(outcome.recovered, style).toBe(1);
+      expect(mv(outcome, '$PATH'), style).toBe(span);
+
+      const route = extractSurface(outcome.json).routes[0];
+      expect(route, style).toBeDefined();
+      expect(route?.path_partial, `${style} must not read as a resolved path`).toBe(true);
+      expect(route?.confidence, style).toBe('low');
+      // The raw text stays readable, and is never presented as a clean path.
+      expect(route?.path_resolved, style).toBe(span);
+      expect(route?.path_resolved, style).not.toBe('/orders/s');
+      expect(route?.params, style).toEqual([]);
+    }
+  });
+
   it('keeps the source quoting, which is what isLiteralPath reads', () => {
     // Single quotes (TS), double quotes (Rust/C#) and a computed path all
     // arrive exactly as they sit in source. Adding a quote would fabricate a
@@ -371,8 +406,9 @@ describe('recoverMetavars — focused rules: the span IS the value', () => {
     // `metadata.method` was once interpolated raw into `new RegExp`, so
     // `method: "a("` threw a SyntaxError out of a module documented as never
     // throwing. Nothing reads it as a pattern any more — the focused path does
-    // not look at it at all — but the input is user-controllable through
-    // register_custom_rules, so the guard stays on both paths.
+    // not look at it at all — but "never throws" is this module's contract to
+    // an unguarded call site in mapAttackSurface.ts, and metadata is free text
+    // in a YAML file. The guard stays on both paths.
     for (const method of ['a(', 'Get|Post', '[', '\\', '(?<', '']) {
       const focused = (): RecoveryOutcome => recoverSpan('"/x"', { ...ASPNET_GET, method });
       const scanned = (): RecoveryOutcome =>
@@ -391,9 +427,12 @@ describe('recoverMetavars — focused rules: the span IS the value', () => {
   });
 
   it('ignores the focus flag on a kind that has no $PATH', () => {
-    // `guardian_focus` is a route concept (rulePack.test.ts pins that), but a
-    // rule registered through register_custom_rules can set anything. A mount
-    // rule needs two captures, so the flag must not short-circuit it into one.
+    // `guardian_focus` is a route concept and rulePack.test.ts pins that no
+    // rule in the pack sets it on another kind. This is the second layer: a
+    // mount needs two captures, so if an in-repo edit ever put the flag on one,
+    // the flag must not short-circuit it into a single $PATH and silently drop
+    // $ROUTER. Nothing outside the pack can reach here — map_attack_surface
+    // runs routes.yml and nothing else — so the edit is the whole threat model.
     const outcome = recoverSpan("app.use('/api', usersRouter)", {
       guardian_kind: 'mount',
       ...FOCUS,

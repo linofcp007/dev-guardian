@@ -102,7 +102,10 @@ const BASE_ROUTES = [
   'django ANY django/api/',
   'django ANY django/orders/',
   'django ANY django/orders/<int:order_id>/',
-  'django ANY r"^django/legacy/(?P<slug>[\\w-]+)/$ [partial]',
+  // Python raw string, kept whole. `stripQuotes` removes only a MATCHED pair,
+  // so the closing quote of `r"…"` is no longer chopped off on its own — the
+  // raw text a human reads is now complete. Still partial: a regex is not a URL.
+  'django ANY r"^django/legacy/(?P<slug>[\\w-]+)/$" [partial]',
   'django ANY settings.ADMIN_URL [partial]',
   // ---- Express. The four mounted routes carry their mount prefix; the two
   // declared in the mounting file itself do not.

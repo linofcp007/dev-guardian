@@ -213,15 +213,28 @@ function synthesizeRoute(span, metadata) {
     // capture — quotes and all, which is what `isLiteralPath` reads. Nothing is
     // searched for and nothing is lexed; Semgrep resolved the metavariable with a
     // real parser for the language, and a decoy elsewhere in the declaration is
-    // not in this span to be found. Emitting the span verbatim (no trimming) is
-    // deliberate: if a range ever arrived wider than the literal, the extra
-    // whitespace makes `isLiteralPath` reject it and the route is flagged
-    // `path_partial` rather than resolved to something we did not read.
+    // not in this span to be found.
+    //
+    // This branch trusts the range, deliberately: validating it would mean
+    // re-deriving what Semgrep already decided, which is the mistake the four
+    // previous rounds made. Emitting the span verbatim — no trimming, no
+    // repairing — is part of that. A range wider than the literal brings
+    // whitespace, which `isLiteralPath` rejects; a range that ends INSIDE the
+    // literal leaves the opening quote unmatched, which `stripQuotes` in
+    // extract.ts now refuses to strip, so `CODE_TOKENS` rejects it too. Both land
+    // as `path_partial` rather than as a confident prefix of a path we did not
+    // finish reading. That is the whole safety argument for trusting the range:
+    // every way it can be wrong degrades to incomplete, never to wrong.
     //
     // No $METHOD, ever: focusing discards every other capture, so a focused rule
     // declares `metadata.method` instead (the rule pack test pins that the three
     // focused families are one rule per verb). Reading a verb out of a bare path
     // literal would be pure invention.
+    //
+    // Checked before the wp-rest branch below, which is safe only because that
+    // rule captures $NS and $ROUTE and binds no $PATH, so it can never carry this
+    // flag. If wp-rest is ever reshaped to focus, this ordering must be revisited
+    // — returning $PATH alone would silently drop its namespace.
     if (str(metadata, FOCUS_METADATA_KEY) === FOCUS_PATH) {
         return { $PATH: { abstract_content: span } };
     }
@@ -256,8 +269,14 @@ function synthesizeRoute(span, metadata) {
  * the whole item, `#[get("/rust-route")]` *plus the function body* — and "first
  * string literal anywhere in the span" would happily pick a string out of that
  * body. Anchoring to the argument list keeps the capture where the rule bound
- * it. The pack's own attribute rules are focused now and never reach here, but
- * a rule added through `register_custom_rules` can produce exactly that shape.
+ * it.
+ *
+ * The pack's own attribute rules are focused now and never reach here, and no
+ * user rule can: `map_attack_surface` runs `configs/semgrep/routes.yml` and
+ * nothing else, and `register_custom_rules` only feeds the SAST path. The
+ * residual risk is an in-repo edit to that one file — a new declaration-
+ * spanning family left unfocused — which is what the lock-step assertion in
+ * `test/unit/surface/rulePack.test.ts` exists to stop.
  *
  * Two deliberate exits:
  *

@@ -190,12 +190,35 @@ function toRoute(metadata, metavars, file, line) {
 /**
  * Semgrep's `abstract_content` keeps the source quoting, so a captured path
  * arrives as `'/users'` rather than `/users`.
+ *
+ * Only a MATCHED pair is stripped, and that is load-bearing rather than tidy.
+ * An unbalanced quote means the capture is not a whole string literal — the
+ * likeliest cause being a reported range that ends inside one. Stripping the
+ * lone opening quote turned such a fragment into a clean-looking path:
+ * `"/orders/secret` cut six bytes short became `/orders/s`, which
+ * `isLiteralPath` accepts, so a truncated PREFIX was published as a resolved
+ * URL at full confidence. Keeping the quote makes `CODE_TOKENS` reject it, so
+ * the route survives as `path_partial` with the raw text visible.
+ *
+ * This is the one guard behind `recoverMetavars`'s focused branch, which
+ * deliberately trusts Semgrep's range and does no validation of its own: it
+ * converts the only shape where a bad range yields a WRONG path into one that
+ * yields an incomplete one. Truncation is not hypothetical — a TypeScript
+ * template literal has been observed arriving two bytes short of its closing
+ * backtick.
  */
 function stripQuotes(value) {
     if (value === undefined)
         return undefined;
-    return value.replace(/^['"`]|['"`]$/g, '');
+    const quote = value[0];
+    if (quote === undefined || !QUOTES.test(quote))
+        return value;
+    // `"` alone is an opening quote with nothing after it, not an empty literal.
+    if (value.length < 2 || !value.endsWith(quote))
+        return value;
+    return value.slice(1, -1);
 }
+const QUOTES = /^['"`]$/;
 function toMount(metavars, file, line) {
     const prefix = stripQuotes(metavar(metavars, '$PREFIX'));
     const routerVar = metavar(metavars, '$ROUTER');
