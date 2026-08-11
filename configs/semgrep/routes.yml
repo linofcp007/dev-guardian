@@ -17,6 +17,12 @@
 # the rule captures $NS and $ROUTE separately; extract.ts puts $NS on
 # RouteRecord.namespace and $ROUTE on path_raw, and resolvers/wordpress.ts
 # combines them into the served /wp-json path.
+#
+# Mount resolution (Node only): resolvers/node.ts's resolveNodeMounts()
+# resolves a route's prefix for any route whose `language` is javascript or
+# typescript — gated purely on that field, not on a per-rule opt-in flag. A
+# rule pack author adding a new JS/TS-family framework gets mount resolution
+# for free; nothing in this file needs to be set for it.
 
 rules:
   # ---------- JavaScript / TypeScript ----------
@@ -28,7 +34,6 @@ rules:
       guardian_kind: route
       framework: express
       confidence: high
-      mountable: true
     patterns:
       - pattern: $APP.$METHOD($PATH, ...)
       - metavariable-regex:
@@ -70,7 +75,6 @@ rules:
       guardian_kind: route
       framework: nestjs
       confidence: medium
-      mountable: true
     pattern-either:
       - pattern: "@Get($PATH)"
       - pattern: "@Post($PATH)"
@@ -125,7 +129,7 @@ rules:
     metadata:
       guardian_kind: route
       framework: wp-rest
-      confidence: high
+      confidence: medium
     pattern: register_rest_route($NS, $ROUTE, ...)
 
   - id: guardian-route-laravel
@@ -135,7 +139,7 @@ rules:
     metadata:
       guardian_kind: route
       framework: laravel
-      confidence: high
+      confidence: medium
     patterns:
       - pattern: Route::$METHOD($PATH, ...)
       - metavariable-regex:
@@ -195,7 +199,11 @@ rules:
       framework: rails
       confidence: low
     patterns:
-      - pattern: $METHOD $PATH
+      - pattern-either:
+          # Bare form: get '/users'
+          - pattern: $METHOD $PATH
+          # Idiomatic form with trailing options: get '/users', to: 'users#index'
+          - pattern: $METHOD $PATH, ...
       - metavariable-regex:
           metavariable: $METHOD
           regex: ^(get|post|put|patch|delete)$
@@ -225,7 +233,7 @@ rules:
     metadata:
       guardian_kind: route
       framework: aspnet-minimal
-      confidence: high
+      confidence: medium
     patterns:
       - pattern: $APP.$METHOD($PATH, ...)
       - metavariable-regex:
