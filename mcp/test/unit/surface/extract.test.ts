@@ -205,6 +205,36 @@ describe('extractSurface path-literal guard', () => {
     expect(routes[0]?.confidence).toBe('medium');
   });
 
+  it('still reports params when the path is literal but the namespace is not', () => {
+    // register_rest_route(self::NAMESPACE, '/items/(?P<id>\d+)') — the
+    // dominant WordPress idiom. We cannot say WHERE the route is served, but
+    // `id` is knowable from the path alone, and emitting [] would assert
+    // "this route takes no parameters", which is untrue.
+    const { routes } = extractSurface({
+      results: [
+        {
+          check_id: 'guardian-route-wp-rest',
+          path: 'api.php',
+          start: { line: 1 },
+          extra: {
+            metadata: { guardian_kind: 'route', framework: 'wp-rest', confidence: 'medium' },
+            metavars: {
+              $NS: { abstract_content: 'self::NAMESPACE' },
+              $ROUTE: { abstract_content: "'/items/(?P<id>\\d+)'" },
+            },
+          },
+        },
+      ],
+    });
+    expect(routes[0]?.params).toEqual(['id']);
+    expect(routes[0]?.path_partial).toBe(true);
+  });
+
+  it('reports no params for a path that is itself a code expression', () => {
+    const { routes } = extractSurface(routeFrom('SETTINGS.users_path'));
+    expect(routes[0]?.params).toEqual([]);
+  });
+
   it('flags a non-literal $NS namespace too', () => {
     const { routes } = extractSurface({
       results: [

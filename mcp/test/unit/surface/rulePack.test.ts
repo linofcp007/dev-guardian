@@ -11,6 +11,30 @@ interface Rule {
   severity?: string;
   message?: string;
   metadata?: Record<string, unknown> & { guardian_kind?: string; method?: unknown };
+  pattern?: unknown;
+  patterns?: unknown;
+  'pattern-either'?: unknown;
+}
+
+/** Metavariables a rule constrains with `metavariable-regex`, at any depth. */
+function guardedMetavars(rule: Rule): Set<string> {
+  const found = new Set<string>();
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child);
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    const record = node as Record<string, unknown>;
+    const guard = record['metavariable-regex'];
+    if (guard !== null && typeof guard === 'object') {
+      const name = (guard as Record<string, unknown>)['metavariable'];
+      if (typeof name === 'string') found.add(name);
+    }
+    for (const value of Object.values(record)) walk(value);
+  };
+  walk(rule.patterns ?? rule['pattern-either'] ?? rule.pattern);
+  return found;
 }
 
 function rules(): Rule[] {
@@ -78,6 +102,28 @@ describe('configs/semgrep/routes.yml', () => {
       expect(methods?.has('POST'), `${framework} has no POST rule`).toBe(true);
       expect(methods?.has('DELETE'), `${framework} has no DELETE rule`).toBe(true);
     }
+  });
+
+  it('constrains $PATH to a literal on exactly the two rules that need it', () => {
+    // A $PATH literal guard DROPS the match, so the extractor never sees it —
+    // and a route registered with a computed path (@GetMapping(Paths.ORDERS),
+    // path(settings.ADMIN_URL, ...)) is still surface. Dropping it makes
+    // `coverage` report no_matches for the language, i.e. "this application
+    // exposes nothing" — the falsehood the tool exists to prevent. The
+    // extractor's isLiteralPath keeps those routes and flags them
+    // path_partial instead.
+    //
+    // The guard is correct ONLY where the pattern does not identify a route on
+    // its own, so the literal disambiguates rather than discards. Two rules
+    // qualify. If you are adding a third, the bar is: does a match on this
+    // pattern, with a non-literal path, mean "not a route" (guard) or "a route
+    // whose path is computed" (no guard)?
+    const guarded = rules()
+      .filter((r) => r.metadata?.guardian_kind === 'route')
+      .filter((r) => guardedMetavars(r).has('$PATH'))
+      .map((r) => r.id)
+      .sort();
+    expect(guarded).toEqual(['guardian-route-express', 'guardian-route-rails']);
   });
 
   it('covers all 8 supported stacks with at least one route rule', () => {

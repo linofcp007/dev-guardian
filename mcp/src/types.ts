@@ -182,9 +182,21 @@ export type HttpMethod = (typeof HTTP_METHODS)[number];
  *
  * `path_raw` is what the source literally says at the match site.
  * `path_resolved` adds any prefix we could resolve (router mounting,
- * WordPress REST namespaces). When we know a prefix may be missing but could
- * not resolve it, `path_partial` is true — consumers must not treat
- * `path_resolved` as a complete URL path in that case.
+ * WordPress REST namespaces).
+ *
+ * `path_partial` is true whenever `path_resolved` is not a usable URL path,
+ * which happens for two distinct reasons:
+ *   1. A prefix may be missing and we could not resolve it — the module is
+ *      mounted twice, or at a computed prefix, or not mounted anywhere we can
+ *      see.
+ *   2. The captured value is not a literal path at all but a code expression
+ *      (`self::NAMESPACE`, `Paths.ORDERS`, `$route`). No prefix is involved;
+ *      the path itself is unknown. `path_resolved` then holds the raw source
+ *      text so a human can read what was written, and `confidence` is 'low'.
+ *      See `isLiteralPath` in surface/extract.ts.
+ *
+ * Either way consumers must not treat `path_resolved` as a complete URL path
+ * — in particular, must not send a request to it.
  */
 export interface RouteRecord {
   method: HttpMethod;

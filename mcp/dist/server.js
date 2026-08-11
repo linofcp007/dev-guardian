@@ -41547,7 +41547,8 @@ function toRoute(metadata, metavars, file, line) {
   const namespace = stripQuotes(metavar(metavars, "$NS"));
   const path6 = stripQuotes(metavar(metavars, "$PATH") ?? metavar(metavars, "$ROUTE"));
   if (path6 === void 0) return null;
-  const usable = isLiteralPath(path6) && (namespace === void 0 || isLiteralPath(namespace));
+  const literalPath = isLiteralPath(path6);
+  const usable = literalPath && (namespace === void 0 || isLiteralPath(namespace));
   const route = {
     method: normalizeMethod(metavar(metavars, "$METHOD") ?? str2(metadata, "method")),
     path_raw: path6,
@@ -41558,7 +41559,11 @@ function toRoute(metadata, metavars, file, line) {
     framework: str2(metadata, "framework") ?? "unknown",
     language: languageFromPath(file),
     auth_hint: normalizeAuth(str2(metadata, "auth")),
-    params: usable ? extractParams(path6) : [],
+    // Gated on the path alone, not on `usable`: for
+    // `register_rest_route(self::NAMESPACE, '/items/(?P<id>\d+)')` we cannot
+    // say where the route is served, but `id` is knowable from the path, and
+    // emitting [] would assert "this route takes no parameters".
+    params: literalPath ? extractParams(path6) : [],
     confidence: usable ? normalizeConfidence(str2(metadata, "confidence")) : "low"
   };
   if (namespace !== void 0) route.namespace = namespace;

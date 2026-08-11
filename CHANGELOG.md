@@ -48,9 +48,19 @@ version bump.
   name is still evidence of surface — but is flagged `path_partial: true`, keeps the raw
   text in `path_resolved`, and drops to `low` confidence. Both resolvers now honour that
   flag instead of clearing it when they prepend a mount prefix or a `/wp-json` namespace.
-  Literal guards were added to the rule pack as a second layer, deliberately excluding the
-  WordPress rule, where dropping the non-literal matches would erase the surface instead of
-  reporting it as partial.
+  A `metavariable-regex` guard in the rule pack would be the wrong second layer here: it
+  *drops* the match, so the extractor never sees it, and a route registered with a computed
+  path is still surface — dropping it would make `coverage` report `no_matches` for the
+  language, which is the same "this application exposes nothing" falsehood in a different
+  place. `$PATH` literal guards are therefore confined to the two rules whose pattern does
+  not identify a route on its own (`guardian-route-express`, `guardian-route-rails`), where
+  the literal disambiguates rather than discards, and the pack header now states that rule
+  so it is not re-added by pattern-matching.
+- **`params` is derived from the path alone.** It was gated on both the path and the
+  namespace being literal, so `register_rest_route(self::NAMESPACE, '/items/(?P<id>\d+)')`
+  reported `params: []` — an assertion that the route takes no parameters — when `id` is
+  plainly knowable from the path. Where the route is served stays unknown
+  (`path_partial: true`); the parameters no longer do.
 - **The HTTP method was lost for five of thirteen route rules.** `aspnet-minimal`,
   `aspnet`, `spring`, `nestjs` and `actix` all reported `ANY`. Semgrep never reports which
   `pattern-either` alternative fired, so a rule whose verb is encoded in the alternative

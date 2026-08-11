@@ -173,8 +173,8 @@ function toRoute(
   // The namespace gets the same treatment — a `self::NAMESPACE` prefix
   // concatenated into `/wp-json/self::NAMESPACE/items` is a fabricated URL
   // (resolvers/wordpress.ts honours the flag rather than clearing it).
-  const usable =
-    isLiteralPath(path) && (namespace === undefined || isLiteralPath(namespace));
+  const literalPath = isLiteralPath(path);
+  const usable = literalPath && (namespace === undefined || isLiteralPath(namespace));
 
   const route: RouteRecord = {
     method: normalizeMethod(metavar(metavars, '$METHOD') ?? str(metadata, 'method')),
@@ -186,7 +186,11 @@ function toRoute(
     framework: str(metadata, 'framework') ?? 'unknown',
     language: languageFromPath(file),
     auth_hint: normalizeAuth(str(metadata, 'auth')),
-    params: usable ? extractParams(path) : [],
+    // Gated on the path alone, not on `usable`: for
+    // `register_rest_route(self::NAMESPACE, '/items/(?P<id>\d+)')` we cannot
+    // say where the route is served, but `id` is knowable from the path, and
+    // emitting [] would assert "this route takes no parameters".
+    params: literalPath ? extractParams(path) : [],
     confidence: usable ? normalizeConfidence(str(metadata, 'confidence')) : 'low',
   };
   if (namespace !== undefined) route.namespace = namespace;
