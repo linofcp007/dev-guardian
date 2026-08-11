@@ -23,6 +23,7 @@ describe('migrations runner', () => {
       'schema_meta',
       'stack_snapshots',
       'suppressions',
+      'surface_snapshots',
       'tree_cache',
     ]) {
       expect(names).toContain(expected);
@@ -35,7 +36,7 @@ describe('migrations runner', () => {
     const row = db
       .prepare(`SELECT value FROM schema_meta WHERE key = 'version'`)
       .get() as { value: string } | undefined;
-    expect(row?.value).toBe('1');
+    expect(row?.value).toBe('2');
   });
 
   it('is idempotent (running twice does not throw and version stays the same)', () => {
@@ -45,6 +46,6 @@ describe('migrations runner', () => {
     const row = db
       .prepare(`SELECT value FROM schema_meta WHERE key = 'version'`)
       .get() as { value: string };
-    expect(row.value).toBe('1');
+    expect(row.value).toBe('2');
   });
 });

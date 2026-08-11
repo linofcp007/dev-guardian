@@ -14,6 +14,7 @@ import { RuntimeMetaRepo } from './runtimeMetaRepo.js';
 import { ScansRepo } from './scansRepo.js';
 import { StackRepo } from './stackRepo.js';
 import { SuppressionsRepo } from './suppressionsRepo.js';
+import { SurfaceRepo } from './surfaceRepo.js';
 
 export class Storage {
   readonly scans: ScansRepo;
@@ -23,6 +24,7 @@ export class Storage {
   readonly baselines: BaselinesRepo;
   readonly stack: StackRepo;
   readonly runtimeMeta: RuntimeMetaRepo;
+  readonly surface: SurfaceRepo;
 
   constructor(private readonly db: DB) {
     this.scans = new ScansRepo(db);
@@ -32,6 +34,7 @@ export class Storage {
     this.baselines = new BaselinesRepo(db);
     this.stack = new StackRepo(db);
     this.runtimeMeta = new RuntimeMetaRepo(db);
+    this.surface = new SurfaceRepo(db);
   }
 
   close(): void {

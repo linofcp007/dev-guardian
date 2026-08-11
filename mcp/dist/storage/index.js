@@ -12,6 +12,7 @@ import { RuntimeMetaRepo } from './runtimeMetaRepo.js';
 import { ScansRepo } from './scansRepo.js';
 import { StackRepo } from './stackRepo.js';
 import { SuppressionsRepo } from './suppressionsRepo.js';
+import { SurfaceRepo } from './surfaceRepo.js';
 export class Storage {
     db;
     scans;
@@ -21,6 +22,7 @@ export class Storage {
     baselines;
     stack;
     runtimeMeta;
+    surface;
     constructor(db) {
         this.db = db;
         this.scans = new ScansRepo(db);
@@ -30,6 +32,7 @@ export class Storage {
         this.baselines = new BaselinesRepo(db);
         this.stack = new StackRepo(db);
         this.runtimeMeta = new RuntimeMetaRepo(db);
+        this.surface = new SurfaceRepo(db);
     }
     close() {
         this.db.close();
