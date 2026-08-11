@@ -107,7 +107,7 @@ var require_code = __commonJS({
     }
     exports._ = _;
     var plus = new _Code("+");
-    function str(strs, ...args) {
+    function str3(strs, ...args) {
       const expr = [safeStringify(strs[0])];
       let i2 = 0;
       while (i2 < args.length) {
@@ -118,7 +118,7 @@ var require_code = __commonJS({
       optimize(expr);
       return new _Code(expr);
     }
-    exports.str = str;
+    exports.str = str3;
     function addCodeArg(code, arg) {
       if (arg instanceof _Code)
         code.push(...arg._items);
@@ -161,7 +161,7 @@ var require_code = __commonJS({
       return;
     }
     function strConcat(c1, c22) {
-      return c22.emptyStr() ? c1 : c1.emptyStr() ? c22 : str`${c1}${c22}`;
+      return c22.emptyStr() ? c1 : c1.emptyStr() ? c22 : str3`${c1}${c22}`;
     }
     exports.strConcat = strConcat;
     function interpolate(x) {
@@ -1123,22 +1123,22 @@ var require_util = __commonJS({
       return (0, codegen_1._)`${topSchemaRef}${schemaPath}${(0, codegen_1.getProperty)(keyword)}`;
     }
     exports.schemaRefOrVal = schemaRefOrVal;
-    function unescapeFragment(str) {
-      return unescapeJsonPointer(decodeURIComponent(str));
+    function unescapeFragment(str3) {
+      return unescapeJsonPointer(decodeURIComponent(str3));
     }
     exports.unescapeFragment = unescapeFragment;
-    function escapeFragment(str) {
-      return encodeURIComponent(escapeJsonPointer(str));
+    function escapeFragment(str3) {
+      return encodeURIComponent(escapeJsonPointer(str3));
     }
     exports.escapeFragment = escapeFragment;
-    function escapeJsonPointer(str) {
-      if (typeof str == "number")
-        return `${str}`;
-      return str.replace(/~/g, "~0").replace(/\//g, "~1");
+    function escapeJsonPointer(str3) {
+      if (typeof str3 == "number")
+        return `${str3}`;
+      return str3.replace(/~/g, "~0").replace(/\//g, "~1");
     }
     exports.escapeJsonPointer = escapeJsonPointer;
-    function unescapeJsonPointer(str) {
-      return str.replace(/~1/g, "/").replace(/~0/g, "~");
+    function unescapeJsonPointer(str3) {
+      return str3.replace(/~1/g, "/").replace(/~0/g, "~");
     }
     exports.unescapeJsonPointer = unescapeJsonPointer;
     function eachItem(xs, f) {
@@ -1694,11 +1694,11 @@ var require_defaults = __commonJS({
       }
     }
     exports.assignDefaults = assignDefaults;
-    function assignDefault(it, prop, defaultValue) {
+    function assignDefault(it, prop3, defaultValue) {
       const { gen, compositeRule, data, opts } = it;
       if (defaultValue === void 0)
         return;
-      const childData = (0, codegen_1._)`${data}${(0, codegen_1.getProperty)(prop)}`;
+      const childData = (0, codegen_1._)`${data}${(0, codegen_1.getProperty)(prop3)}`;
       if (compositeRule) {
         (0, util_1.checkStrictMode)(it, `default is ignored for: ${childData}`);
         return;
@@ -1722,16 +1722,16 @@ var require_code2 = __commonJS({
     var util_1 = require_util();
     var names_1 = require_names();
     var util_2 = require_util();
-    function checkReportMissingProp(cxt, prop) {
+    function checkReportMissingProp(cxt, prop3) {
       const { gen, data, it } = cxt;
-      gen.if(noPropertyInData(gen, data, prop, it.opts.ownProperties), () => {
-        cxt.setParams({ missingProperty: (0, codegen_1._)`${prop}` }, true);
+      gen.if(noPropertyInData(gen, data, prop3, it.opts.ownProperties), () => {
+        cxt.setParams({ missingProperty: (0, codegen_1._)`${prop3}` }, true);
         cxt.error();
       });
     }
     exports.checkReportMissingProp = checkReportMissingProp;
     function checkMissingProp({ gen, data, it: { opts } }, properties, missing) {
-      return (0, codegen_1.or)(...properties.map((prop) => (0, codegen_1.and)(noPropertyInData(gen, data, prop, opts.ownProperties), (0, codegen_1._)`${missing} = ${prop}`)));
+      return (0, codegen_1.or)(...properties.map((prop3) => (0, codegen_1.and)(noPropertyInData(gen, data, prop3, opts.ownProperties), (0, codegen_1._)`${missing} = ${prop3}`)));
     }
     exports.checkMissingProp = checkMissingProp;
     function reportMissingProp(cxt, missing) {
@@ -2153,8 +2153,8 @@ var require_json_schema_traverse = __commonJS({
             }
           } else if (key in traverse.propsKeywords) {
             if (sch && typeof sch == "object") {
-              for (var prop in sch)
-                _traverse(opts, pre, post, sch[prop], jsonPtr + "/" + key + "/" + escapeJsonPtr(prop), rootSchema, jsonPtr, key, schema, prop);
+              for (var prop3 in sch)
+                _traverse(opts, pre, post, sch[prop3], jsonPtr + "/" + key + "/" + escapeJsonPtr(prop3), rootSchema, jsonPtr, key, schema, prop3);
             }
           } else if (key in traverse.keywords || opts.allKeys && !(key in traverse.skipKeywords)) {
             _traverse(opts, pre, post, sch, jsonPtr + "/" + key, rootSchema, jsonPtr, key, schema);
@@ -2163,8 +2163,8 @@ var require_json_schema_traverse = __commonJS({
         post(schema, jsonPtr, rootSchema, parentJsonPtr, parentKeyword, parentSchema, keyIndex);
       }
     }
-    function escapeJsonPtr(str) {
-      return str.replace(/~/g, "~0").replace(/\//g, "~1");
+    function escapeJsonPtr(str3) {
+      return str3.replace(/~/g, "~0").replace(/\//g, "~1");
     }
   }
 });
@@ -3228,10 +3228,10 @@ var require_utils = __commonJS({
         return { host, isIPV6: false };
       }
     }
-    function findToken(str, token) {
+    function findToken(str3, token) {
       let ind = 0;
-      for (let i2 = 0; i2 < str.length; i2++) {
-        if (str[i2] === token) ind++;
+      for (let i2 = 0; i2 < str3.length; i2++) {
+        if (str3[i2] === token) ind++;
       }
       return ind;
     }
@@ -3968,7 +3968,7 @@ var require_core = __commonJS({
     var util_1 = require_util();
     var $dataRefSchema = require_data();
     var uri_1 = require_uri();
-    var defaultRegExp = (str, flags) => new RegExp(str, flags);
+    var defaultRegExp = (str3, flags) => new RegExp(str3, flags);
     defaultRegExp.code = "new RegExp";
     var META_IGNORE_OPTIONS = ["removeAdditional", "useDefaults", "coerceTypes"];
     var EXT_SCOPE_NAMES = /* @__PURE__ */ new Set([
@@ -4763,16 +4763,16 @@ var require_ucs2length = __commonJS({
   "node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    function ucs2length(str) {
-      const len = str.length;
+    function ucs2length(str3) {
+      const len = str3.length;
       let length = 0;
       let pos = 0;
       let value;
       while (pos < len) {
         length++;
-        value = str.charCodeAt(pos++);
+        value = str3.charCodeAt(pos++);
         if (value >= 55296 && value <= 56319 && pos < len) {
-          value = str.charCodeAt(pos);
+          value = str3.charCodeAt(pos);
           if ((value & 64512) === 56320)
             pos++;
         }
@@ -4925,8 +4925,8 @@ var require_required = __commonJS({
           if (useLoop || $data) {
             cxt.block$data(codegen_1.nil, loopAllRequired);
           } else {
-            for (const prop of schema) {
-              (0, code_1.checkReportMissingProp)(cxt, prop);
+            for (const prop3 of schema) {
+              (0, code_1.checkReportMissingProp)(cxt, prop3);
             }
           }
         }
@@ -4943,9 +4943,9 @@ var require_required = __commonJS({
           }
         }
         function loopAllRequired() {
-          gen.forOf("prop", schemaCode, (prop) => {
-            cxt.setParams({ missingProperty: prop });
-            gen.if((0, code_1.noPropertyInData)(gen, data, prop, opts.ownProperties), () => cxt.error());
+          gen.forOf("prop", schemaCode, (prop3) => {
+            cxt.setParams({ missingProperty: prop3 });
+            gen.if((0, code_1.noPropertyInData)(gen, data, prop3, opts.ownProperties), () => cxt.error());
           });
         }
         function loopUntilMissing(missing, valid) {
@@ -5490,13 +5490,13 @@ var require_dependencies = __commonJS({
       if (Object.keys(propertyDeps).length === 0)
         return;
       const missing = gen.let("missing");
-      for (const prop in propertyDeps) {
-        const deps = propertyDeps[prop];
+      for (const prop3 in propertyDeps) {
+        const deps = propertyDeps[prop3];
         if (deps.length === 0)
           continue;
-        const hasProperty = (0, code_1.propertyInData)(gen, data, prop, it.opts.ownProperties);
+        const hasProperty = (0, code_1.propertyInData)(gen, data, prop3, it.opts.ownProperties);
         cxt.setParams({
-          property: prop,
+          property: prop3,
           depsCount: deps.length,
           deps: deps.join(", ")
         });
@@ -5517,13 +5517,13 @@ var require_dependencies = __commonJS({
     function validateSchemaDeps(cxt, schemaDeps = cxt.schema) {
       const { gen, data, keyword, it } = cxt;
       const valid = gen.name("valid");
-      for (const prop in schemaDeps) {
-        if ((0, util_1.alwaysValidSchema)(it, schemaDeps[prop]))
+      for (const prop3 in schemaDeps) {
+        if ((0, util_1.alwaysValidSchema)(it, schemaDeps[prop3]))
           continue;
         gen.if(
-          (0, code_1.propertyInData)(gen, data, prop, it.opts.ownProperties),
+          (0, code_1.propertyInData)(gen, data, prop3, it.opts.ownProperties),
           () => {
-            const schCxt = cxt.subschema({ keyword, schemaProp: prop }, valid);
+            const schCxt = cxt.subschema({ keyword, schemaProp: prop3 }, valid);
             cxt.mergeValidEvaluated(schCxt, valid);
           },
           () => gen.var(valid, true)
@@ -5705,8 +5705,8 @@ var require_properties = __commonJS({
           additionalProperties_1.default.code(new validate_1.KeywordCxt(it, additionalProperties_1.default, "additionalProperties"));
         }
         const allProps = (0, code_1.allSchemaProperties)(schema);
-        for (const prop of allProps) {
-          it.definedProperties.add(prop);
+        for (const prop3 of allProps) {
+          it.definedProperties.add(prop3);
         }
         if (it.opts.unevaluated && allProps.length && it.props !== true) {
           it.props = util_1.mergeEvaluated.props(gen, (0, util_1.toHash)(allProps), it.props);
@@ -5715,27 +5715,27 @@ var require_properties = __commonJS({
         if (properties.length === 0)
           return;
         const valid = gen.name("valid");
-        for (const prop of properties) {
-          if (hasDefault(prop)) {
-            applyPropertySchema(prop);
+        for (const prop3 of properties) {
+          if (hasDefault(prop3)) {
+            applyPropertySchema(prop3);
           } else {
-            gen.if((0, code_1.propertyInData)(gen, data, prop, it.opts.ownProperties));
-            applyPropertySchema(prop);
+            gen.if((0, code_1.propertyInData)(gen, data, prop3, it.opts.ownProperties));
+            applyPropertySchema(prop3);
             if (!it.allErrors)
               gen.else().var(valid, true);
             gen.endIf();
           }
-          cxt.it.definedProperties.add(prop);
+          cxt.it.definedProperties.add(prop3);
           cxt.ok(valid);
         }
-        function hasDefault(prop) {
-          return it.opts.useDefaults && !it.compositeRule && schema[prop].default !== void 0;
+        function hasDefault(prop3) {
+          return it.opts.useDefaults && !it.compositeRule && schema[prop3].default !== void 0;
         }
-        function applyPropertySchema(prop) {
+        function applyPropertySchema(prop3) {
           cxt.subschema({
             keyword: "properties",
-            schemaProp: prop,
-            dataProp: prop
+            schemaProp: prop3,
+            dataProp: prop3
           }, valid);
         }
       }
@@ -5786,9 +5786,9 @@ var require_patternProperties = __commonJS({
           }
         }
         function checkMatchingProperties(pat) {
-          for (const prop in checkProperties) {
-            if (new RegExp(pat).test(prop)) {
-              (0, util_1.checkStrictMode)(it, `property ${prop} matches pattern ${pat} (use allowMatchingProperties)`);
+          for (const prop3 in checkProperties) {
+            if (new RegExp(pat).test(prop3)) {
+              (0, util_1.checkStrictMode)(it, `property ${prop3} matches pattern ${pat} (use allowMatchingProperties)`);
             }
           }
         }
@@ -6655,8 +6655,8 @@ var require_formats = __commonJS({
     }
     var DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
     var DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    function date3(str) {
-      const matches = DATE.exec(str);
+    function date3(str3) {
+      const matches = DATE.exec(str3);
       if (!matches)
         return false;
       const year = +matches[1];
@@ -6675,8 +6675,8 @@ var require_formats = __commonJS({
     }
     var TIME = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)(z|([+-])(\d\d)(?::?(\d\d))?)?$/i;
     function getTime(strictTimeZone) {
-      return function time3(str) {
-        const matches = TIME.exec(str);
+      return function time3(str3) {
+        const matches = TIME.exec(str3);
         if (!matches)
           return false;
         const hr = +matches[1];
@@ -6722,8 +6722,8 @@ var require_formats = __commonJS({
     var DATE_TIME_SEPARATOR = /t|\s/i;
     function getDateTime(strictTimeZone) {
       const time3 = getTime(strictTimeZone);
-      return function date_time(str) {
-        const dateTime = str.split(DATE_TIME_SEPARATOR);
+      return function date_time(str3) {
+        const dateTime = str3.split(DATE_TIME_SEPARATOR);
         return dateTime.length === 2 && date3(dateTime[0]) && time3(dateTime[1]);
       };
     }
@@ -6748,13 +6748,13 @@ var require_formats = __commonJS({
     }
     var NOT_URI_FRAGMENT = /\/|:/;
     var URI = /^(?:[a-z][a-z0-9+\-.]*:)(?:\/?\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:(?:[0-9a-f]{1,4}:){6}|::(?:[0-9a-f]{1,4}:){5}|(?:[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){4}|(?:(?:[0-9a-f]{1,4}:){0,1}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){3}|(?:(?:[0-9a-f]{1,4}:){0,2}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){2}|(?:(?:[0-9a-f]{1,4}:){0,3}[0-9a-f]{1,4})?::[0-9a-f]{1,4}:|(?:(?:[0-9a-f]{1,4}:){0,4}[0-9a-f]{1,4})?::)(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))|(?:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})?::[0-9a-f]{1,4}|(?:(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4})?::)|[Vv][0-9a-f]+\.[a-z0-9\-._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)|(?:[a-z0-9\-._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)(?:\?(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
-    function uri(str) {
-      return NOT_URI_FRAGMENT.test(str) && URI.test(str);
+    function uri(str3) {
+      return NOT_URI_FRAGMENT.test(str3) && URI.test(str3);
     }
     var BYTE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/gm;
-    function byte(str) {
+    function byte(str3) {
       BYTE.lastIndex = 0;
-      return BYTE.test(str);
+      return BYTE.test(str3);
     }
     var MIN_INT32 = -(2 ** 31);
     var MAX_INT32 = 2 ** 31 - 1;
@@ -6768,11 +6768,11 @@ var require_formats = __commonJS({
       return true;
     }
     var Z_ANCHOR = /[^\\]\\Z/;
-    function regex(str) {
-      if (Z_ANCHOR.test(str))
+    function regex(str3) {
+      if (Z_ANCHOR.test(str3))
         return false;
       try {
-        new RegExp(str);
+        new RegExp(str3);
         return true;
       } catch (e) {
         return false;
@@ -13364,16 +13364,16 @@ var init_mjs = __esm({
     };
     SignalExitBase = class {
     };
-    signalExitWrap = (handler39) => {
+    signalExitWrap = (handler40) => {
       return {
         onExit(cb, opts) {
-          return handler39.onExit(cb, opts);
+          return handler40.onExit(cb, opts);
         },
         load() {
-          return handler39.load();
+          return handler40.load();
         },
         unload() {
-          return handler39.unload();
+          return handler40.unload();
         }
       };
     };
@@ -19371,8 +19371,8 @@ function defineLazy(object3, key, getter) {
     configurable: true
   });
 }
-function assignProp(target, prop, value) {
-  Object.defineProperty(target, prop, {
+function assignProp(target, prop3, value) {
+  Object.defineProperty(target, prop3, {
     value,
     writable: true,
     enumerable: true,
@@ -19397,14 +19397,14 @@ function promiseAllObject(promisesObj) {
 }
 function randomString(length = 10) {
   const chars = "abcdefghijklmnopqrstuvwxyz";
-  let str = "";
+  let str3 = "";
   for (let i2 = 0; i2 < length; i2++) {
-    str += chars[Math.floor(Math.random() * chars.length)];
+    str3 += chars[Math.floor(Math.random() * chars.length)];
   }
-  return str;
+  return str3;
 }
-function esc(str) {
-  return JSON.stringify(str);
+function esc(str3) {
+  return JSON.stringify(str3);
 }
 var captureStackTrace = Error.captureStackTrace ? Error.captureStackTrace : (..._args) => {
 };
@@ -19492,8 +19492,8 @@ var getParsedType2 = (data) => {
 };
 var propertyKeyTypes = /* @__PURE__ */ new Set(["string", "number", "symbol"]);
 var primitiveTypes = /* @__PURE__ */ new Set(["string", "number", "bigint", "boolean", "symbol", "undefined"]);
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function escapeRegex(str3) {
+  return str3.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function clone(inst, def, params) {
   const cl = new inst._zod.constr(def ?? inst._zod.def);
@@ -19520,33 +19520,33 @@ function normalizeParams(_params) {
 function createTransparentProxy(getter) {
   let target;
   return new Proxy({}, {
-    get(_, prop, receiver) {
+    get(_, prop3, receiver) {
       target ?? (target = getter());
-      return Reflect.get(target, prop, receiver);
+      return Reflect.get(target, prop3, receiver);
     },
-    set(_, prop, value, receiver) {
+    set(_, prop3, value, receiver) {
       target ?? (target = getter());
-      return Reflect.set(target, prop, value, receiver);
+      return Reflect.set(target, prop3, value, receiver);
     },
-    has(_, prop) {
+    has(_, prop3) {
       target ?? (target = getter());
-      return Reflect.has(target, prop);
+      return Reflect.has(target, prop3);
     },
-    deleteProperty(_, prop) {
+    deleteProperty(_, prop3) {
       target ?? (target = getter());
-      return Reflect.deleteProperty(target, prop);
+      return Reflect.deleteProperty(target, prop3);
     },
     ownKeys(_) {
       target ?? (target = getter());
       return Reflect.ownKeys(target);
     },
-    getOwnPropertyDescriptor(_, prop) {
+    getOwnPropertyDescriptor(_, prop3) {
       target ?? (target = getter());
-      return Reflect.getOwnPropertyDescriptor(target, prop);
+      return Reflect.getOwnPropertyDescriptor(target, prop3);
     },
-    defineProperty(_, prop, descriptor) {
+    defineProperty(_, prop3, descriptor) {
       target ?? (target = getter());
-      return Reflect.defineProperty(target, prop, descriptor);
+      return Reflect.defineProperty(target, prop3, descriptor);
     }
   });
 }
@@ -26957,25 +26957,25 @@ var Protocol = class {
     const error2 = McpError.fromError(ErrorCode.ConnectionClosed, "Connection closed");
     this._transport = void 0;
     this.onclose?.();
-    for (const handler39 of responseHandlers.values()) {
-      handler39(error2);
+    for (const handler40 of responseHandlers.values()) {
+      handler40(error2);
     }
   }
   _onerror(error2) {
     this.onerror?.(error2);
   }
   _onnotification(notification) {
-    const handler39 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
-    if (handler39 === void 0) {
+    const handler40 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
+    if (handler40 === void 0) {
       return;
     }
-    Promise.resolve().then(() => handler39(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
+    Promise.resolve().then(() => handler40(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
   }
   _onrequest(request, extra) {
-    const handler39 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
+    const handler40 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
     const capturedTransport = this._transport;
     const relatedTaskId = request.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
-    if (handler39 === void 0) {
+    if (handler40 === void 0) {
       const errorResponse = {
         jsonrpc: "2.0",
         id: request.id,
@@ -27039,7 +27039,7 @@ var Protocol = class {
       if (taskCreationParams) {
         this.assertTaskHandlerCapability(request.method);
       }
-    }).then(() => handler39(request, fullExtra)).then(async (result) => {
+    }).then(() => handler40(request, fullExtra)).then(async (result) => {
       if (abortController.signal.aborted) {
         return;
       }
@@ -27088,8 +27088,8 @@ var Protocol = class {
   _onprogress(notification) {
     const { progressToken, ...params } = notification.params;
     const messageId = Number(progressToken);
-    const handler39 = this._progressHandlers.get(messageId);
-    if (!handler39) {
+    const handler40 = this._progressHandlers.get(messageId);
+    if (!handler40) {
       this._onerror(new Error(`Received a progress notification for an unknown token: ${JSON.stringify(notification)}`));
       return;
     }
@@ -27106,7 +27106,7 @@ var Protocol = class {
         return;
       }
     }
-    handler39(params);
+    handler40(params);
   }
   _onresponse(response) {
     const messageId = Number(response.id);
@@ -27121,8 +27121,8 @@ var Protocol = class {
       }
       return;
     }
-    const handler39 = this._responseHandlers.get(messageId);
-    if (handler39 === void 0) {
+    const handler40 = this._responseHandlers.get(messageId);
+    if (handler40 === void 0) {
       this._onerror(new Error(`Received a response for an unknown message ID: ${JSON.stringify(response)}`));
       return;
     }
@@ -27143,10 +27143,10 @@ var Protocol = class {
       this._progressHandlers.delete(messageId);
     }
     if (isJSONRPCResultResponse(response)) {
-      handler39(response);
+      handler40(response);
     } else {
       const error2 = McpError.fromError(response.error.code, response.error.message, response.error.data);
-      handler39(error2);
+      handler40(error2);
     }
   }
   get transport() {
@@ -27344,9 +27344,9 @@ var Protocol = class {
       const relatedTaskId = relatedTask?.taskId;
       if (relatedTaskId) {
         const responseResolver = (response) => {
-          const handler39 = this._responseHandlers.get(messageId);
-          if (handler39) {
-            handler39(response);
+          const handler40 = this._responseHandlers.get(messageId);
+          if (handler40) {
+            handler40(response);
           } else {
             this._onerror(new Error(`Response handler missing for side-channeled request ${messageId}`));
           }
@@ -27483,12 +27483,12 @@ var Protocol = class {
    *
    * Note that this will replace any previous request handler for the same method.
    */
-  setRequestHandler(requestSchema, handler39) {
+  setRequestHandler(requestSchema, handler40) {
     const method = getMethodLiteral(requestSchema);
     this.assertRequestHandlerCapability(method);
     this._requestHandlers.set(method, (request, extra) => {
       const parsed = parseWithCompat(requestSchema, request);
-      return Promise.resolve(handler39(parsed, extra));
+      return Promise.resolve(handler40(parsed, extra));
     });
   }
   /**
@@ -27510,11 +27510,11 @@ var Protocol = class {
    *
    * Note that this will replace any previous notification handler for the same method.
    */
-  setNotificationHandler(notificationSchema, handler39) {
+  setNotificationHandler(notificationSchema, handler40) {
     const method = getMethodLiteral(notificationSchema);
     this._notificationHandlers.set(method, (notification) => {
       const parsed = parseWithCompat(notificationSchema, notification);
-      return Promise.resolve(handler39(parsed));
+      return Promise.resolve(handler40(parsed));
     });
   }
   /**
@@ -28064,7 +28064,7 @@ var Server = class extends Protocol {
   /**
    * Override request handler registration to enforce server-side validation for tools/call.
    */
-  setRequestHandler(requestSchema, handler39) {
+  setRequestHandler(requestSchema, handler40) {
     const shape = getObjectShape(requestSchema);
     const methodSchema = shape?.method;
     if (!methodSchema) {
@@ -28092,7 +28092,7 @@ var Server = class extends Protocol {
           throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler39(request, extra));
+        const result = await Promise.resolve(handler40(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
@@ -28110,7 +28110,7 @@ var Server = class extends Protocol {
       };
       return super.setRequestHandler(requestSchema, wrappedHandler);
     }
-    return super.setRequestHandler(requestSchema, handler39);
+    return super.setRequestHandler(requestSchema, handler40);
   }
   assertCapabilityForMethod(method) {
     switch (method) {
@@ -28409,12 +28409,12 @@ var UriTemplate = class _UriTemplate {
    * A template expression is a sequence of characters enclosed in curly braces,
    * like {foo} or {?bar}.
    */
-  static isTemplate(str) {
-    return /\{[^}\s]+\}/.test(str);
+  static isTemplate(str3) {
+    return /\{[^}\s]+\}/.test(str3);
   }
-  static validateLength(str, max, context) {
-    if (str.length > max) {
-      throw new Error(`${context} exceeds maximum length of ${max} characters (got ${str.length})`);
+  static validateLength(str3, max, context) {
+    if (str3.length > max) {
+      throw new Error(`${context} exceeds maximum length of ${max} characters (got ${str3.length})`);
     }
   }
   get variableNames() {
@@ -28543,8 +28543,8 @@ var UriTemplate = class _UriTemplate {
     }
     return result;
   }
-  escapeRegExp(str) {
-    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  escapeRegExp(str3) {
+    return str3.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
   partToRegExp(part) {
     const patterns = [];
@@ -28683,13 +28683,13 @@ var ExperimentalMcpServerTasks = class {
   constructor(_mcpServer) {
     this._mcpServer = _mcpServer;
   }
-  registerToolTask(name, config2, handler39) {
+  registerToolTask(name, config2, handler40) {
     const execution = { taskSupport: "required", ...config2.execution };
     if (execution.taskSupport === "forbidden") {
       throw new Error(`Cannot register task-based tool '${name}' with taskSupport 'forbidden'. Use registerTool() instead.`);
     }
     const mcpServerInternal = this._mcpServer;
-    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler39);
+    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler40);
   }
 };
 
@@ -28747,24 +28747,24 @@ var McpServer = class {
       }
     });
     this.server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: Object.entries(this._registeredTools).filter(([, tool39]) => tool39.enabled).map(([name, tool39]) => {
+      tools: Object.entries(this._registeredTools).filter(([, tool40]) => tool40.enabled).map(([name, tool40]) => {
         const toolDefinition = {
           name,
-          title: tool39.title,
-          description: tool39.description,
+          title: tool40.title,
+          description: tool40.description,
           inputSchema: (() => {
-            const obj = normalizeObjectSchema(tool39.inputSchema);
+            const obj = normalizeObjectSchema(tool40.inputSchema);
             return obj ? toJsonSchemaCompat(obj, {
               strictUnions: true,
               pipeStrategy: "input"
             }) : EMPTY_OBJECT_JSON_SCHEMA;
           })(),
-          annotations: tool39.annotations,
-          execution: tool39.execution,
-          _meta: tool39._meta
+          annotations: tool40.annotations,
+          execution: tool40.execution,
+          _meta: tool40._meta
         };
-        if (tool39.outputSchema) {
-          const obj = normalizeObjectSchema(tool39.outputSchema);
+        if (tool40.outputSchema) {
+          const obj = normalizeObjectSchema(tool40.outputSchema);
           if (obj) {
             toolDefinition.outputSchema = toJsonSchemaCompat(obj, {
               strictUnions: true,
@@ -28777,16 +28777,16 @@ var McpServer = class {
     }));
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       try {
-        const tool39 = this._registeredTools[request.params.name];
-        if (!tool39) {
+        const tool40 = this._registeredTools[request.params.name];
+        if (!tool40) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
         }
-        if (!tool39.enabled) {
+        if (!tool40.enabled) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} disabled`);
         }
         const isTaskRequest = !!request.params.task;
-        const taskSupport = tool39.execution?.taskSupport;
-        const isTaskHandler = "createTask" in tool39.handler;
+        const taskSupport = tool40.execution?.taskSupport;
+        const isTaskHandler = "createTask" in tool40.handler;
         if ((taskSupport === "required" || taskSupport === "optional") && !isTaskHandler) {
           throw new McpError(ErrorCode.InternalError, `Tool ${request.params.name} has taskSupport '${taskSupport}' but was not registered with registerToolTask`);
         }
@@ -28794,14 +28794,14 @@ var McpServer = class {
           throw new McpError(ErrorCode.MethodNotFound, `Tool ${request.params.name} requires task augmentation (taskSupport: 'required')`);
         }
         if (taskSupport === "optional" && !isTaskRequest && isTaskHandler) {
-          return await this.handleAutomaticTaskPolling(tool39, request, extra);
+          return await this.handleAutomaticTaskPolling(tool40, request, extra);
         }
-        const args = await this.validateToolInput(tool39, request.params.arguments, request.params.name);
-        const result = await this.executeToolHandler(tool39, args, extra);
+        const args = await this.validateToolInput(tool40, request.params.arguments, request.params.name);
+        const result = await this.executeToolHandler(tool40, args, extra);
         if (isTaskRequest) {
           return result;
         }
-        await this.validateToolOutput(tool39, result, request.params.name);
+        await this.validateToolOutput(tool40, result, request.params.name);
         return result;
       } catch (error2) {
         if (error2 instanceof McpError) {
@@ -28834,12 +28834,12 @@ var McpServer = class {
   /**
    * Validates tool input arguments against the tool's input schema.
    */
-  async validateToolInput(tool39, args, toolName) {
-    if (!tool39.inputSchema) {
+  async validateToolInput(tool40, args, toolName) {
+    if (!tool40.inputSchema) {
       return void 0;
     }
-    const inputObj = normalizeObjectSchema(tool39.inputSchema);
-    const schemaToParse = inputObj ?? tool39.inputSchema;
+    const inputObj = normalizeObjectSchema(tool40.inputSchema);
+    const schemaToParse = inputObj ?? tool40.inputSchema;
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -28851,8 +28851,8 @@ var McpServer = class {
   /**
    * Validates tool output against the tool's output schema.
    */
-  async validateToolOutput(tool39, result, toolName) {
-    if (!tool39.outputSchema) {
+  async validateToolOutput(tool40, result, toolName) {
+    if (!tool40.outputSchema) {
       return;
     }
     if (!("content" in result)) {
@@ -28864,7 +28864,7 @@ var McpServer = class {
     if (!result.structuredContent) {
       throw new McpError(ErrorCode.InvalidParams, `Output validation error: Tool ${toolName} has an output schema but no structured content was provided`);
     }
-    const outputObj = normalizeObjectSchema(tool39.outputSchema);
+    const outputObj = normalizeObjectSchema(tool40.outputSchema);
     const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -28875,43 +28875,43 @@ var McpServer = class {
   /**
    * Executes a tool handler (either regular or task-based).
    */
-  async executeToolHandler(tool39, args, extra) {
-    const handler39 = tool39.handler;
-    const isTaskHandler = "createTask" in handler39;
+  async executeToolHandler(tool40, args, extra) {
+    const handler40 = tool40.handler;
+    const isTaskHandler = "createTask" in handler40;
     if (isTaskHandler) {
       if (!extra.taskStore) {
         throw new Error("No task store provided.");
       }
       const taskExtra = { ...extra, taskStore: extra.taskStore };
-      if (tool39.inputSchema) {
-        const typedHandler = handler39;
+      if (tool40.inputSchema) {
+        const typedHandler = handler40;
         return await Promise.resolve(typedHandler.createTask(args, taskExtra));
       } else {
-        const typedHandler = handler39;
+        const typedHandler = handler40;
         return await Promise.resolve(typedHandler.createTask(taskExtra));
       }
     }
-    if (tool39.inputSchema) {
-      const typedHandler = handler39;
+    if (tool40.inputSchema) {
+      const typedHandler = handler40;
       return await Promise.resolve(typedHandler(args, extra));
     } else {
-      const typedHandler = handler39;
+      const typedHandler = handler40;
       return await Promise.resolve(typedHandler(extra));
     }
   }
   /**
    * Handles automatic task polling for tools with taskSupport 'optional'.
    */
-  async handleAutomaticTaskPolling(tool39, request, extra) {
+  async handleAutomaticTaskPolling(tool40, request, extra) {
     if (!extra.taskStore) {
       throw new Error("No task store provided for task-capable tool.");
     }
-    const args = await this.validateToolInput(tool39, request.params.arguments, request.params.name);
-    const handler39 = tool39.handler;
+    const args = await this.validateToolInput(tool40, request.params.arguments, request.params.name);
+    const handler40 = tool40.handler;
     const taskExtra = { ...extra, taskStore: extra.taskStore };
-    const createTaskResult = args ? await Promise.resolve(handler39.createTask(args, taskExtra)) : (
+    const createTaskResult = args ? await Promise.resolve(handler40.createTask(args, taskExtra)) : (
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await Promise.resolve(handler39.createTask(taskExtra))
+      await Promise.resolve(handler40.createTask(taskExtra))
     );
     const taskId = createTaskResult.task.taskId;
     let task = createTaskResult.task;
@@ -29247,7 +29247,7 @@ var McpServer = class {
     }
     return registeredPrompt;
   }
-  _createRegisteredTool(name, title, description, inputSchema26, outputSchema, annotations, execution, _meta, handler39) {
+  _createRegisteredTool(name, title, description, inputSchema26, outputSchema, annotations, execution, _meta, handler40) {
     validateAndWarnToolName(name);
     const registeredTool = {
       title,
@@ -29257,7 +29257,7 @@ var McpServer = class {
       annotations,
       execution,
       _meta,
-      handler: handler39,
+      handler: handler40,
       enabled: true,
       disable: () => registeredTool.update({ enabled: false }),
       enable: () => registeredTool.update({ enabled: true }),
@@ -29602,7 +29602,7 @@ var StdioServerTransport = class {
 };
 
 // src/server.ts
-import { readFileSync as readFileSync17 } from "node:fs";
+import { readFileSync as readFileSync18 } from "node:fs";
 import { dirname as dirname4, resolve as resolve5 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
@@ -30737,20 +30737,20 @@ function normalizeParams2(params) {
 
 // src/tools/index.ts
 var TOOLS = [];
-function registerToolModule(tool39) {
-  if (TOOLS.some((t) => t.name === tool39.name)) {
-    throw new Error(`Tool '${tool39.name}' is already registered`);
+function registerToolModule(tool40) {
+  if (TOOLS.some((t) => t.name === tool40.name)) {
+    throw new Error(`Tool '${tool40.name}' is already registered`);
   }
-  TOOLS.push(tool39);
+  TOOLS.push(tool40);
 }
 function attachAllTools(server, ctx) {
-  for (const tool39 of TOOLS) {
+  for (const tool40 of TOOLS) {
     server.registerTool(
-      tool39.name,
+      tool40.name,
       {
-        ...tool39.title ? { title: tool39.title } : {},
-        description: tool39.description,
-        inputSchema: tool39.inputSchema
+        ...tool40.title ? { title: tool40.title } : {},
+        description: tool40.description,
+        inputSchema: tool40.inputSchema
       },
       async (input, extra) => {
         const callMeta = {};
@@ -30762,7 +30762,7 @@ function attachAllTools(server, ctx) {
         if (typedExtra?.signal instanceof AbortSignal) {
           callMeta.signal = typedExtra.signal;
         }
-        const result = await tool39.handler(input, ctx, callMeta);
+        const result = await tool40.handler(input, ctx, callMeta);
         return toCallToolResult(result);
       }
     );
@@ -41350,6 +41350,488 @@ function hashFiles(parts) {
   return h2.digest("hex").slice(0, 32);
 }
 
+// src/tools/mapAttackSurface.ts
+import { join as join40 } from "node:path";
+
+// src/surface/collectors/envVars.ts
+function collectEnvVars(semgrepJson) {
+  const results = prop(semgrepJson, "results");
+  if (!Array.isArray(results)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const raw of results) {
+    const extra = prop(raw, "extra");
+    if (str(prop(extra, "metadata"), "guardian_kind") !== "env") continue;
+    const captured = str(prop(prop(extra, "metavars"), "$NAME"), "abstract_content");
+    const file = str(raw, "path");
+    if (captured === void 0 || file === void 0) continue;
+    const name = captured.replace(/^['"`]|['"`]$/g, "");
+    if (name.length === 0 || seen.has(name)) continue;
+    seen.add(name);
+    const line = numProp(prop(raw, "start"), "line") ?? 0;
+    out.push({ name, file, line });
+  }
+  return out;
+}
+function prop(value, key) {
+  if (value === null || typeof value !== "object") return void 0;
+  return value[key];
+}
+function str(value, key) {
+  const v = prop(value, key);
+  return typeof v === "string" ? v : void 0;
+}
+function numProp(value, key) {
+  const v = prop(value, key);
+  return typeof v === "number" ? v : void 0;
+}
+
+// src/surface/collectors/ports.ts
+import { existsSync as existsSync29, readFileSync as readFileSync17, realpathSync } from "node:fs";
+import { basename as basename2, join as join39 } from "node:path";
+var DOCKERFILES = ["Dockerfile", "dockerfile"];
+var COMPOSE_FILES = [
+  "docker-compose.yml",
+  "docker-compose.yaml",
+  "compose.yml",
+  "compose.yaml"
+];
+function collectPorts(projectPath) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (port, source) => {
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) return;
+    const key = `${port}:${source}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ port, source });
+  };
+  const seenDockerfiles = /* @__PURE__ */ new Set();
+  for (const name of DOCKERFILES) {
+    const path6 = join39(projectPath, name);
+    const canonical = canonicalPath(path6);
+    if (canonical === void 0) continue;
+    if (seenDockerfiles.has(canonical)) continue;
+    seenDockerfiles.add(canonical);
+    const source = basename2(canonical);
+    for (const line of readLines(canonical)) {
+      const match = /^\s*EXPOSE\s+(.+)$/i.exec(line);
+      if (match?.[1] === void 0) continue;
+      for (const token of match[1].split(/\s+/)) {
+        const portPart = token.split("/")[0];
+        if (portPart === void 0) continue;
+        const port = Number.parseInt(portPart, 10);
+        if (Number.isNaN(port)) continue;
+        push(port, source);
+      }
+    }
+  }
+  for (const name of COMPOSE_FILES) {
+    for (const line of readLines(join39(projectPath, name))) {
+      const published = /^\s*published:\s*"?(\d+)"?\s*$/.exec(line);
+      if (published?.[1] !== void 0) {
+        push(Number.parseInt(published[1], 10), name);
+        continue;
+      }
+      const short = /^\s*-\s*"?(\d+)(?::\d+)?"?\s*$/.exec(line);
+      if (short?.[1] !== void 0) {
+        push(Number.parseInt(short[1], 10), name);
+      }
+    }
+  }
+  return out;
+}
+function readLines(path6) {
+  if (!existsSync29(path6)) return [];
+  try {
+    return readFileSync17(path6, "utf8").split(/\r?\n/);
+  } catch {
+    return [];
+  }
+}
+function canonicalPath(path6) {
+  try {
+    return realpathSync.native(path6);
+  } catch {
+    return void 0;
+  }
+}
+
+// src/surface/extract.ts
+var METHOD_NAMES = /* @__PURE__ */ new Set([
+  "get",
+  "post",
+  "put",
+  "patch",
+  "delete",
+  "options",
+  "head",
+  "all",
+  "any"
+]);
+var EXTENSION_LANGUAGES = {
+  ts: "typescript",
+  tsx: "typescript",
+  mts: "typescript",
+  cts: "typescript",
+  js: "javascript",
+  jsx: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  py: "python",
+  php: "php",
+  go: "go",
+  rs: "rust",
+  rb: "ruby",
+  java: "java",
+  cs: "csharp"
+};
+function languageFromPath(file) {
+  const ext = file.split(".").pop()?.toLowerCase();
+  if (ext === void 0) return "unknown";
+  return EXTENSION_LANGUAGES[ext] ?? "unknown";
+}
+function extractParams(path6) {
+  const params = [];
+  for (const match of path6.matchAll(/:([A-Za-z_][\w]*)\??/g)) {
+    const name = match[1];
+    if (name !== void 0) params.push(name);
+  }
+  for (const match of path6.matchAll(/\{([^}]+)\}/g)) {
+    const inner = match[1];
+    if (inner === void 0) continue;
+    const name = inner.split(":").pop()?.trim();
+    if (name !== void 0 && name.length > 0) params.push(name);
+  }
+  for (const match of path6.matchAll(/<([^>]+)>/g)) {
+    const inner = match[1];
+    if (inner === void 0) continue;
+    const name = inner.split(":").pop()?.trim();
+    if (name !== void 0 && name.length > 0) params.push(name);
+  }
+  return [...new Set(params)];
+}
+function extractSurface(semgrepJson) {
+  const routes = [];
+  const mounts = [];
+  for (const raw of asArray2(prop2(semgrepJson, "results"))) {
+    const extra = prop2(raw, "extra");
+    const metadata = prop2(extra, "metadata");
+    const kind = str2(metadata, "guardian_kind");
+    const file = str2(raw, "path");
+    const line = num(prop2(raw, "start"), "line") ?? 0;
+    if (file === void 0) continue;
+    if (kind === "route") {
+      const route = toRoute(metadata, prop2(extra, "metavars"), file, line);
+      if (route) routes.push(route);
+    } else if (kind === "mount") {
+      const mount = toMount(prop2(extra, "metavars"), file, line);
+      if (mount) mounts.push(mount);
+    }
+  }
+  return { routes, mounts };
+}
+function toRoute(metadata, metavars, file, line) {
+  const namespace = stripQuotes(metavar(metavars, "$NS"));
+  const path6 = stripQuotes(metavar(metavars, "$PATH") ?? metavar(metavars, "$ROUTE"));
+  if (path6 === void 0) return null;
+  const route = {
+    method: normalizeMethod(metavar(metavars, "$METHOD") ?? str2(metadata, "method")),
+    path_raw: path6,
+    path_resolved: path6,
+    path_partial: false,
+    file,
+    line,
+    framework: str2(metadata, "framework") ?? "unknown",
+    language: languageFromPath(file),
+    auth_hint: normalizeAuth(str2(metadata, "auth")),
+    params: extractParams(path6),
+    confidence: normalizeConfidence(str2(metadata, "confidence"))
+  };
+  if (namespace !== void 0) route.namespace = namespace;
+  return route;
+}
+function stripQuotes(value) {
+  if (value === void 0) return void 0;
+  return value.replace(/^['"`]|['"`]$/g, "");
+}
+function toMount(metavars, file, line) {
+  const prefix = stripQuotes(metavar(metavars, "$PREFIX"));
+  const routerVar = metavar(metavars, "$ROUTER");
+  if (prefix === void 0 || routerVar === void 0) return null;
+  return { prefix, router_var: routerVar, file, line };
+}
+function normalizeMethod(raw) {
+  if (raw === void 0) return "ANY";
+  const lowered = raw.toLowerCase();
+  if (!METHOD_NAMES.has(lowered)) return "ANY";
+  if (lowered === "all" || lowered === "any") return "ANY";
+  return lowered.toUpperCase();
+}
+function normalizeAuth(raw) {
+  if (raw === "required" || raw === "none") return raw;
+  return "unknown";
+}
+function normalizeConfidence(raw) {
+  if (raw === "high" || raw === "medium" || raw === "low") return raw;
+  return "low";
+}
+function prop2(value, key) {
+  if (value === null || typeof value !== "object") return void 0;
+  return value[key];
+}
+function str2(value, key) {
+  const v = prop2(value, key);
+  return typeof v === "string" ? v : void 0;
+}
+function num(value, key) {
+  const v = prop2(value, key);
+  return typeof v === "number" ? v : void 0;
+}
+function asArray2(value) {
+  return Array.isArray(value) ? value : [];
+}
+function metavar(metavars, name) {
+  return str2(prop2(metavars, name), "abstract_content");
+}
+
+// src/surface/resolvers/node.ts
+var NODE_LANGUAGES = /* @__PURE__ */ new Set(["javascript", "typescript"]);
+function resolveNodeMounts(routes, mounts, imports) {
+  const prefixesByFile = buildPrefixIndex(mounts, imports);
+  const mountingFiles = new Set(mounts.map((m) => m.file));
+  return routes.map((route) => {
+    if (!NODE_LANGUAGES.has(route.language)) return route;
+    if (mountingFiles.has(route.file)) return route;
+    const prefixes = prefixesByFile.get(route.file);
+    if (prefixes === void 0 || prefixes.size !== 1) {
+      return { ...route, path_partial: true };
+    }
+    const prefix = [...prefixes][0];
+    if (prefix === void 0) return { ...route, path_partial: true };
+    return { ...route, path_resolved: joinPath(prefix, route.path_raw), path_partial: false };
+  });
+}
+function buildPrefixIndex(mounts, imports) {
+  const index = /* @__PURE__ */ new Map();
+  for (const mount of mounts) {
+    const binding = imports.find(
+      (i2) => i2.file === mount.file && i2.symbol === mount.router_var
+    );
+    if (binding === void 0) continue;
+    const existing = index.get(binding.module_file);
+    if (existing === void 0) {
+      index.set(binding.module_file, /* @__PURE__ */ new Set([mount.prefix]));
+    } else {
+      existing.add(mount.prefix);
+    }
+  }
+  return index;
+}
+function joinPath(prefix, path6) {
+  const left = prefix.replace(/\/+$/, "");
+  const right = path6.startsWith("/") ? path6 : `/${path6}`;
+  const joined = `${left}${right}`;
+  return joined.startsWith("/") ? joined : `/${joined}`;
+}
+
+// src/surface/resolvers/wordpress.ts
+var WP_REST_PREFIX = "/wp-json";
+var WP_FRAMEWORK = "wp-rest";
+function resolveWordpressRoutes(routes) {
+  return routes.map((route) => {
+    if (route.framework !== WP_FRAMEWORK) return route;
+    const namespace = (route.namespace ?? "").trim().replace(/^\/+|\/+$/g, "");
+    if (namespace.length === 0) return { ...route, path_partial: true };
+    return {
+      ...route,
+      path_resolved: joinPath(`${WP_REST_PREFIX}/${namespace}`, route.path_raw),
+      path_partial: false
+    };
+  });
+}
+
+// src/tools/mapAttackSurface.ts
+var SAMPLE_SIZE = 20;
+var WEBHOOK_PATTERN = /webhook|callback|hook/i;
+var COVERED_LANGUAGES = /* @__PURE__ */ new Set([
+  "javascript",
+  "typescript",
+  "python",
+  "php",
+  "go",
+  "rust",
+  "ruby",
+  "java",
+  "csharp"
+]);
+var tool39 = {
+  name: "map_attack_surface",
+  title: "Map the application attack surface",
+  description: "Statically extract the externally reachable surface of the project \u2014 HTTP routes (method, path, params, auth hint), referenced environment variables, and declared container ports \u2014 across all supported stacks. Persists a snapshot readable via guardian://surface/latest. Returns a summary plus a 20-route sample; read the resource for the full list.",
+  inputSchema: {
+    project_path: ProjectPath,
+    force: Force
+  },
+  handler: async (input, ctx) => handler39(input, ctx)
+};
+registerToolModule(tool39);
+async function handler39(input, ctx) {
+  const inp = input;
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const treeHash = await computeTreeHash(projectPath);
+  if (inp.force !== true) {
+    const cached2 = ctx.storage.surface.getByTreeHash(treeHash);
+    if (cached2) return summarize3(cached2.snapshot, cached2.id, [
+      { name: "semgrep", status: "skipped", reason: "cached" }
+    ]);
+  }
+  const semgrepBin = await scannerAvailable("semgrep");
+  if (semgrepBin === null) {
+    return {
+      ok: true,
+      routes_total: 0,
+      by_language: [],
+      coverage: [],
+      snapshot_id: null,
+      sample: [],
+      env_vars_total: 0,
+      ports: [],
+      tools_run: [{ name: "semgrep", status: "skipped", reason: "not_installed" }],
+      missing_tools: ["semgrep"],
+      note: "Semgrep is not installed, so no surface was mapped and nothing was persisted. Run install_toolchain, then retry."
+    };
+  }
+  const reportDir = ensureReportDir(projectPath, treeHash, "surface");
+  const outFile = join40(reportDir, "surface.json");
+  const rulesPath = join40(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
+  const run = await runProcess({
+    command: "semgrep",
+    args: [
+      "--config",
+      rulesPath,
+      "--json",
+      "--output",
+      outFile,
+      "--quiet",
+      "--no-git-ignore",
+      projectPath
+    ],
+    cwd: projectPath
+  });
+  const raw = readJsonSafe(outFile);
+  if (raw === null) {
+    return {
+      ok: true,
+      routes_total: 0,
+      by_language: [],
+      coverage: [],
+      snapshot_id: null,
+      sample: [],
+      env_vars_total: 0,
+      ports: [],
+      tools_run: [{ name: "semgrep", status: "failed", reason: "no_output" }],
+      missing_tools: [],
+      note: "Semgrep produced no parseable output; nothing was persisted."
+    };
+  }
+  const parsed = JSON.parse(raw);
+  const toolRun = {
+    name: "semgrep",
+    status: run.outcome === "completed" ? "ok" : "failed"
+  };
+  const snapshot = buildSnapshot(parsed, projectPath, ctx, [toolRun]);
+  const persisted = ctx.storage.surface.insert({
+    project_path: projectPath,
+    tree_hash: treeHash,
+    snapshot
+  });
+  return summarize3(snapshot, persisted.id, [toolRun]);
+}
+function buildSnapshot(parsed, projectPath, ctx, toolsRun) {
+  const { routes, mounts } = extractSurface(parsed);
+  const imports = extractImports(parsed);
+  const resolved = resolveWordpressRoutes(resolveNodeMounts(routes, mounts, imports));
+  return {
+    routes: resolved,
+    env_vars: collectEnvVars(parsed),
+    ports: collectPorts(projectPath),
+    webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
+    coverage: buildCoverage(resolved, ctx),
+    tools_run: toolsRun,
+    missing_tools: []
+  };
+}
+function extractImports(parsed) {
+  const results = parsed.results;
+  if (!Array.isArray(results)) return [];
+  const out = [];
+  for (const raw of results) {
+    const record2 = raw;
+    if (record2.extra?.metadata?.guardian_kind !== "import") continue;
+    const symbol = record2.extra.metavars?.["$SYMBOL"]?.abstract_content;
+    const modulePath = record2.extra.metavars?.["$MODULE"]?.abstract_content;
+    const file = record2.path;
+    if (symbol === void 0 || modulePath === void 0 || file === void 0) continue;
+    out.push({ symbol, module_file: resolveModuleFile(file, modulePath), file });
+  }
+  return out;
+}
+function resolveModuleFile(importingFile, specifier) {
+  if (!specifier.startsWith(".")) return specifier;
+  const dir = importingFile.split("/").slice(0, -1).join("/");
+  const parts = `${dir}/${specifier}`.split("/");
+  const stack = [];
+  for (const part of parts) {
+    if (part === "." || part === "") continue;
+    if (part === "..") stack.pop();
+    else stack.push(part);
+  }
+  const base = stack.join("/");
+  return /\.[cm]?[jt]sx?$/.test(base) ? base : `${base}.ts`;
+}
+function buildCoverage(routes, ctx) {
+  const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
+  const languages = /* @__PURE__ */ new Set([...detected, ...routes.map((r) => r.language)]);
+  languages.delete("unknown");
+  const entries = [];
+  for (const language of [...languages].sort()) {
+    const found = routes.filter((r) => r.language === language).length;
+    const hasRules = COVERED_LANGUAGES.has(language);
+    entries.push({
+      language,
+      detected: detected.includes(language),
+      routes_found: found,
+      status: !hasRules ? "no_rules" : found > 0 ? "ok" : "no_matches"
+    });
+  }
+  return entries;
+}
+function summarize3(snapshot, snapshotId, toolsRun) {
+  const byLanguage = /* @__PURE__ */ new Map();
+  for (const route of snapshot.routes) {
+    byLanguage.set(route.language, (byLanguage.get(route.language) ?? 0) + 1);
+  }
+  return {
+    ok: true,
+    routes_total: snapshot.routes.length,
+    by_language: [...byLanguage].map(([language, routes]) => ({ language, routes })),
+    coverage: snapshot.coverage,
+    snapshot_id: snapshotId,
+    sample: snapshot.routes.slice(0, SAMPLE_SIZE),
+    env_vars_total: snapshot.env_vars.length,
+    ports: snapshot.ports,
+    webhooks_total: snapshot.webhooks.length,
+    tools_run: toolsRun,
+    missing_tools: snapshot.missing_tools
+  };
+}
+
 // src/resources/scans.ts
 registerResourceModule({
   name: "guardian-scans-latest",
@@ -41721,7 +42203,7 @@ function resolveServerVersion() {
   ];
   for (const path6 of candidates) {
     try {
-      const parsed = JSON.parse(readFileSync17(path6, "utf8"));
+      const parsed = JSON.parse(readFileSync18(path6, "utf8"));
       if (parsed.version) return parsed.version;
     } catch {
     }
