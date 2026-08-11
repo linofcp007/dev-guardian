@@ -41492,6 +41492,17 @@ function languageFromPath(file) {
   if (ext === void 0) return "unknown";
   return EXTENSION_LANGUAGES[ext] ?? "unknown";
 }
+var CODE_TOKENS = /[$`'"]|::|->|=>|\|\||&&/;
+var CALL_OR_INDEX = /[A-Za-z_]\w*\s*[([]/;
+var BARE_ROUTE = /^[a-z0-9][a-z0-9_~-]*$/;
+function isLiteralPath(value) {
+  if (value.trim().length === 0) return false;
+  if (/\s/.test(value)) return false;
+  if (CODE_TOKENS.test(value)) return false;
+  if (CALL_OR_INDEX.test(value)) return false;
+  if (value.includes("/")) return true;
+  return BARE_ROUTE.test(value);
+}
 function extractParams(path6) {
   const params = [];
   for (const match of path6.matchAll(/:([A-Za-z_][\w]*)\??/g)) {
@@ -41536,18 +41547,19 @@ function toRoute(metadata, metavars, file, line) {
   const namespace = stripQuotes(metavar(metavars, "$NS"));
   const path6 = stripQuotes(metavar(metavars, "$PATH") ?? metavar(metavars, "$ROUTE"));
   if (path6 === void 0) return null;
+  const usable = isLiteralPath(path6) && (namespace === void 0 || isLiteralPath(namespace));
   const route = {
     method: normalizeMethod(metavar(metavars, "$METHOD") ?? str2(metadata, "method")),
     path_raw: path6,
     path_resolved: path6,
-    path_partial: false,
+    path_partial: !usable,
     file,
     line,
     framework: str2(metadata, "framework") ?? "unknown",
     language: languageFromPath(file),
     auth_hint: normalizeAuth(str2(metadata, "auth")),
-    params: extractParams(path6),
-    confidence: normalizeConfidence(str2(metadata, "confidence"))
+    params: usable ? extractParams(path6) : [],
+    confidence: usable ? normalizeConfidence(str2(metadata, "confidence")) : "low"
   };
   if (namespace !== void 0) route.namespace = namespace;
   return route;
@@ -41565,9 +41577,11 @@ function toMount(metavars, file, line) {
 function normalizeMethod(raw) {
   if (raw === void 0) return "ANY";
   const lowered = raw.toLowerCase();
-  if (!METHOD_NAMES.has(lowered)) return "ANY";
-  if (lowered === "all" || lowered === "any") return "ANY";
-  return lowered.toUpperCase();
+  const unmapped = lowered.startsWith("map") ? lowered.slice(3) : lowered;
+  const verb = METHOD_NAMES.has(unmapped) ? unmapped : lowered;
+  if (!METHOD_NAMES.has(verb)) return "ANY";
+  if (verb === "all" || verb === "any") return "ANY";
+  return verb.toUpperCase();
 }
 function normalizeAuth(raw) {
   if (raw === "required" || raw === "none") return raw;
@@ -41603,6 +41617,7 @@ function resolveNodeMounts(routes, mounts, imports) {
   const mountingFiles = new Set(mounts.map((m) => m.file));
   return routes.map((route) => {
     if (!NODE_LANGUAGES.has(route.language)) return route;
+    if (route.path_partial) return route;
     if (mountingFiles.has(route.file)) return route;
     const prefixes = prefixesByFile.get(route.file);
     if (prefixes === void 0 || prefixes.size !== 1) {
@@ -41642,6 +41657,7 @@ var WP_FRAMEWORK = "wp-rest";
 function resolveWordpressRoutes(routes) {
   return routes.map((route) => {
     if (route.framework !== WP_FRAMEWORK) return route;
+    if (route.path_partial) return route;
     const namespace = (route.namespace ?? "").trim().replace(/^\/+|\/+$/g, "");
     if (namespace.length === 0) return { ...route, path_partial: true };
     return {

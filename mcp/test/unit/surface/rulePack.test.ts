@@ -10,7 +10,7 @@ interface Rule {
   languages?: string[];
   severity?: string;
   message?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, unknown> & { guardian_kind?: string; method?: unknown };
 }
 
 function rules(): Rule[] {
@@ -47,6 +47,36 @@ describe('configs/semgrep/routes.yml', () => {
   it('keeps every rule at INFO severity so it never reads as a finding', () => {
     for (const rule of rules()) {
       expect(rule.severity).toBe('INFO');
+    }
+  });
+
+  it('declares metadata.method only as a real HTTP verb the extractor knows', () => {
+    const declared = rules()
+      .filter((r) => r.metadata?.guardian_kind === 'route')
+      .map((r) => r.metadata?.method)
+      .filter((m) => m !== undefined);
+    expect(declared.length).toBeGreaterThan(0);
+    for (const method of declared) {
+      expect(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD']).toContain(method);
+    }
+  });
+
+  it('carries the verb per rule for the frameworks that encode it in the pattern', () => {
+    // Semgrep never reports which pattern-either alternative fired, so these
+    // families must be one rule per verb, each declaring metadata.method.
+    // Collapsing them back into a single pattern-either loses the method.
+    const byFramework = new Map<string, Set<unknown>>();
+    for (const rule of rules().filter((r) => r.metadata?.guardian_kind === 'route')) {
+      const framework = String(rule.metadata?.framework);
+      const methods = byFramework.get(framework) ?? new Set();
+      if (rule.metadata?.method !== undefined) methods.add(rule.metadata.method);
+      byFramework.set(framework, methods);
+    }
+    for (const framework of ['nestjs', 'spring', 'aspnet', 'actix']) {
+      const methods = byFramework.get(framework);
+      expect(methods?.has('GET'), `${framework} has no GET rule`).toBe(true);
+      expect(methods?.has('POST'), `${framework} has no POST rule`).toBe(true);
+      expect(methods?.has('DELETE'), `${framework} has no DELETE rule`).toBe(true);
     }
   });
 

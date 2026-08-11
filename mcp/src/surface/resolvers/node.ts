@@ -38,6 +38,10 @@ export function resolveNodeMounts(
 
   return routes.map((route) => {
     if (!NODE_LANGUAGES.has(route.language)) return route;
+    // The extractor could not read this route's own path as a literal
+    // (extract.ts `isLiteralPath`). Prefixing an expression with a mount point
+    // produces a URL that exists nowhere, so leave the flag standing.
+    if (route.path_partial) return route;
     // A route declared in the same file that does the mounting is attached to
     // the app directly, not to a mounted sub-router.
     if (mountingFiles.has(route.file)) return route;

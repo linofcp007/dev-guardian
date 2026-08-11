@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   extractParams,
   extractSurface,
+  isLiteralPath,
   languageFromPath,
 } from '../../../src/surface/extract.js';
 
@@ -111,6 +112,151 @@ describe('extractSurface', () => {
       ],
     });
     expect(routes[0]?.auth_hint).toBe('required');
+  });
+});
+
+describe('isLiteralPath', () => {
+  // Every value a Semgrep metavariable was observed to bind that is a code
+  // expression, not a path. The next tool in this series sends HTTP requests
+  // to whatever path it is handed, so any of these leaking through as a
+  // confident path is a correctness bug, not cosmetics.
+  const CODE_EXPRESSIONS = [
+    'self::NAMESPACE',
+    '$this->namespace',
+    '$route',
+    'SETTINGS.users_path',
+    'Paths.ORDERS',
+    'routeVar',
+    'MyController.BASE',
+  ];
+
+  // Real route syntax across the stacks the pack covers. `items` is a valid
+  // WordPress route (no leading slash) and the (?P<id>\d+) form is a valid WP
+  // regex route — parentheses, ?, <, > and a backslash are all legitimate.
+  const REAL_PATHS = [
+    '/users/:id',
+    '/items',
+    'items',
+    '/items/(?P<id>\\d+)',
+    '/users/{id}',
+    '/opt/:id?',
+    '/items/<int:item_id>',
+  ];
+
+  for (const value of CODE_EXPRESSIONS) {
+    it(`rejects the code expression ${value}`, () => {
+      expect(isLiteralPath(value)).toBe(false);
+    });
+  }
+
+  for (const value of REAL_PATHS) {
+    it(`accepts the real path ${value}`, () => {
+      expect(isLiteralPath(value)).toBe(true);
+    });
+  }
+
+  it('rejects an empty or blank capture', () => {
+    expect(isLiteralPath('')).toBe(false);
+    expect(isLiteralPath('   ')).toBe(false);
+  });
+
+  it('rejects concatenation and calls even when a slash is present', () => {
+    expect(isLiteralPath('basePath + /users')).toBe(false);
+    expect(isLiteralPath('prefix()/users')).toBe(false);
+    expect(isLiteralPath('routes[0]/users')).toBe(false);
+  });
+});
+
+describe('extractSurface path-literal guard', () => {
+  function routeFrom(pathValue: string, metadata: Record<string, unknown> = {}): unknown {
+    return {
+      results: [
+        {
+          check_id: 'guardian-route-x',
+          path: 'src/a.php',
+          start: { line: 1 },
+          extra: {
+            metadata: { guardian_kind: 'route', framework: 'wp-rest', confidence: 'medium', ...metadata },
+            metavars: { $PATH: { abstract_content: pathValue } },
+          },
+        },
+      ],
+    };
+  }
+
+  it('flags a non-literal capture partial, keeps the raw value, drops confidence', () => {
+    const { routes } = extractSurface(routeFrom('self::NAMESPACE'));
+    expect(routes).toHaveLength(1);
+    expect(routes[0]?.path_partial).toBe(true);
+    expect(routes[0]?.path_resolved).toBe('self::NAMESPACE');
+    expect(routes[0]?.path_raw).toBe('self::NAMESPACE');
+    expect(routes[0]?.confidence).toBe('low');
+  });
+
+  it('keeps the route — a path we cannot name is still evidence of surface', () => {
+    const { routes } = extractSurface(routeFrom('$this->namespace'));
+    expect(routes).toHaveLength(1);
+    expect(routes[0]?.file).toBe('src/a.php');
+  });
+
+  it('leaves a real path resolved and at its rule confidence', () => {
+    const { routes } = extractSurface(routeFrom('/items/(?P<id>\\d+)'));
+    expect(routes[0]?.path_partial).toBe(false);
+    expect(routes[0]?.confidence).toBe('medium');
+  });
+
+  it('flags a non-literal $NS namespace too', () => {
+    const { routes } = extractSurface({
+      results: [
+        {
+          check_id: 'guardian-route-wp-rest',
+          path: 'api.php',
+          start: { line: 1 },
+          extra: {
+            metadata: { guardian_kind: 'route', framework: 'wp-rest', confidence: 'medium' },
+            metavars: {
+              $NS: { abstract_content: 'self::NAMESPACE' },
+              $ROUTE: { abstract_content: "'/items'" },
+            },
+          },
+        },
+      ],
+    });
+    expect(routes[0]?.namespace).toBe('self::NAMESPACE');
+    expect(routes[0]?.path_partial).toBe(true);
+  });
+});
+
+describe('normalizeMethod via extractSurface', () => {
+  function methodFrom(metavars: Record<string, unknown>, metadata: Record<string, unknown> = {}) {
+    const { routes } = extractSurface({
+      results: [
+        {
+          check_id: 'guardian-route-x',
+          path: 'a.cs',
+          start: { line: 1 },
+          extra: {
+            metadata: { guardian_kind: 'route', framework: 'aspnet-minimal', ...metadata },
+            metavars: { $PATH: { abstract_content: '/users' }, ...metavars },
+          },
+        },
+      ],
+    });
+    return routes[0]?.method;
+  }
+
+  it('understands the ASP.NET minimal-API Map* form', () => {
+    expect(methodFrom({ $METHOD: { abstract_content: 'MapGet' } })).toBe('GET');
+    expect(methodFrom({ $METHOD: { abstract_content: 'MapDelete' } })).toBe('DELETE');
+  });
+
+  it('falls back to metadata.method when the rule captures no $METHOD', () => {
+    expect(methodFrom({}, { method: 'POST' })).toBe('POST');
+  });
+
+  it('still reports ANY for an unrecognised verb', () => {
+    expect(methodFrom({ $METHOD: { abstract_content: 'MapGroup' } })).toBe('ANY');
+    expect(methodFrom({ $METHOD: { abstract_content: 'map' } })).toBe('ANY');
   });
 });
 

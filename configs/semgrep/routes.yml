@@ -7,10 +7,26 @@
 #
 # Contract with the extractor (mcp/src/surface/extract.ts):
 #   metadata.guardian_kind: route | mount | import | env   (required)
-#   route  → captures $PATH, optionally $METHOD
+#   route  → captures $PATH, optionally $METHOD or metadata.method
 #   mount  → captures $PREFIX and $ROUTER
 #   import → captures $SYMBOL and $MODULE
 #   env    → captures $NAME
+#
+# HTTP verb: Semgrep reports *that* a pattern-either fired, never *which*
+# alternative did. A rule whose verb is encoded in the alternative therefore
+# has to be one rule per verb, each declaring `metadata.method` — which the
+# extractor reads as the fallback when no $METHOD metavariable was captured.
+# That is why @Get/@Post/... are five rules and not one. Verb-less rules
+# (Flask's @app.route, Django path(), Spring @RequestMapping) correctly omit
+# the key and are reported as ANY.
+#
+# Literal guards: most rules pin $PATH to a string literal so a captured code
+# expression never reaches the extractor as a path. This is a SECOND layer —
+# mcp/src/surface/extract.ts `isLiteralPath` is the load-bearing one, because
+# it also covers rules a user adds through register_custom_rules. The WordPress
+# rule deliberately has NO literal guard: `register_rest_route(self::NAMESPACE,
+# $route, …)` is the dominant idiom in real plugins, and dropping those matches
+# would erase the surface entirely instead of reporting it as path_partial.
 #
 # Namespaced frameworks: register_rest_route takes the namespace and the route
 # as two arguments. Semgrep cannot concatenate metavariables into a third, so
@@ -67,7 +83,9 @@ rules:
       - pattern: import $SYMBOL from "$MODULE"
       - pattern: const $SYMBOL = require("$MODULE")
 
-  - id: guardian-route-nestjs
+  # NestJS: one rule per verb — the decorator name is the method, and Semgrep
+  # cannot report which pattern-either alternative matched.
+  - id: guardian-route-nestjs-get
     languages: [typescript]
     severity: INFO
     message: NestJS route
@@ -75,14 +93,76 @@ rules:
       guardian_kind: route
       framework: nestjs
       confidence: medium
-    pattern-either:
+      method: GET
+    patterns:
       - pattern: "@Get($PATH)"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^['"`]
+
+  - id: guardian-route-nestjs-post
+    languages: [typescript]
+    severity: INFO
+    message: NestJS route
+    metadata:
+      guardian_kind: route
+      framework: nestjs
+      confidence: medium
+      method: POST
+    patterns:
       - pattern: "@Post($PATH)"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^['"`]
+
+  - id: guardian-route-nestjs-put
+    languages: [typescript]
+    severity: INFO
+    message: NestJS route
+    metadata:
+      guardian_kind: route
+      framework: nestjs
+      confidence: medium
+      method: PUT
+    patterns:
       - pattern: "@Put($PATH)"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^['"`]
+
+  - id: guardian-route-nestjs-patch
+    languages: [typescript]
+    severity: INFO
+    message: NestJS route
+    metadata:
+      guardian_kind: route
+      framework: nestjs
+      confidence: medium
+      method: PATCH
+    patterns:
       - pattern: "@Patch($PATH)"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^['"`]
+
+  - id: guardian-route-nestjs-delete
+    languages: [typescript]
+    severity: INFO
+    message: NestJS route
+    metadata:
+      guardian_kind: route
+      framework: nestjs
+      confidence: medium
+      method: DELETE
+    patterns:
       - pattern: "@Delete($PATH)"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^['"`]
 
   # ---------- Python ----------
+  # Python literal guard allows a prefix (r'', b'', f'', rb''); an f-string
+  # still reaches the extractor, which is where interpolation is judged.
   - id: guardian-route-flask
     languages: [python]
     severity: INFO
@@ -91,9 +171,13 @@ rules:
       guardian_kind: route
       framework: flask
       confidence: high
-    pattern-either:
-      - pattern: "@$APP.route($PATH, ...)"
-      - pattern: "@$APP.route($PATH)"
+    patterns:
+      - pattern-either:
+          - pattern: "@$APP.route($PATH, ...)"
+          - pattern: "@$APP.route($PATH)"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^[A-Za-z]{0,2}['"]
 
   - id: guardian-route-fastapi
     languages: [python]
@@ -108,6 +192,9 @@ rules:
       - metavariable-regex:
           metavariable: $METHOD
           regex: ^(get|post|put|patch|delete|options|head)$
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^[A-Za-z]{0,2}['"]
 
   - id: guardian-route-django
     languages: [python]
@@ -117,11 +204,18 @@ rules:
       guardian_kind: route
       framework: django
       confidence: medium
-    pattern-either:
-      - pattern: path($PATH, ...)
-      - pattern: re_path($PATH, ...)
+    patterns:
+      - pattern-either:
+          - pattern: path($PATH, ...)
+          - pattern: re_path($PATH, ...)
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^[A-Za-z]{0,2}['"]
 
   # ---------- PHP / WordPress ----------
+  # No $NS/$ROUTE literal guard on purpose — see the header. `self::NAMESPACE`
+  # and `$this->namespace` are how real plugins write this; the extractor keeps
+  # the route and flags it path_partial rather than dropping it.
   - id: guardian-route-wp-rest
     languages: [php]
     severity: INFO
@@ -145,6 +239,9 @@ rules:
       - metavariable-regex:
           metavariable: $METHOD
           regex: ^(get|post|put|patch|delete|options|any)$
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^['"]
 
   # ---------- Go ----------
   - id: guardian-route-go-nethttp
@@ -155,9 +252,13 @@ rules:
       guardian_kind: route
       framework: net-http
       confidence: medium
-    pattern-either:
-      - pattern: http.HandleFunc($PATH, ...)
-      - pattern: $MUX.HandleFunc($PATH, ...)
+    patterns:
+      - pattern-either:
+          - pattern: http.HandleFunc($PATH, ...)
+          - pattern: $MUX.HandleFunc($PATH, ...)
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^["`]
 
   - id: guardian-route-go-gin
     languages: [go]
@@ -172,9 +273,13 @@ rules:
       - metavariable-regex:
           metavariable: $METHOD
           regex: ^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD|Any)$
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^["`]
 
   # ---------- Rust ----------
-  - id: guardian-route-rust-actix
+  # One rule per attribute: the attribute name is the verb.
+  - id: guardian-route-rust-actix-get
     languages: [rust]
     severity: INFO
     message: Actix/Rocket route attribute
@@ -182,12 +287,72 @@ rules:
       guardian_kind: route
       framework: actix
       confidence: low
-    pattern-either:
+      method: GET
+    patterns:
       - pattern: "#[get($PATH)]"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^r?"
+
+  - id: guardian-route-rust-actix-post
+    languages: [rust]
+    severity: INFO
+    message: Actix/Rocket route attribute
+    metadata:
+      guardian_kind: route
+      framework: actix
+      confidence: low
+      method: POST
+    patterns:
       - pattern: "#[post($PATH)]"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^r?"
+
+  - id: guardian-route-rust-actix-put
+    languages: [rust]
+    severity: INFO
+    message: Actix/Rocket route attribute
+    metadata:
+      guardian_kind: route
+      framework: actix
+      confidence: low
+      method: PUT
+    patterns:
       - pattern: "#[put($PATH)]"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^r?"
+
+  - id: guardian-route-rust-actix-patch
+    languages: [rust]
+    severity: INFO
+    message: Actix/Rocket route attribute
+    metadata:
+      guardian_kind: route
+      framework: actix
+      confidence: low
+      method: PATCH
+    patterns:
       - pattern: "#[patch($PATH)]"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^r?"
+
+  - id: guardian-route-rust-actix-delete
+    languages: [rust]
+    severity: INFO
+    message: Actix/Rocket route attribute
+    metadata:
+      guardian_kind: route
+      framework: actix
+      confidence: low
+      method: DELETE
+    patterns:
       - pattern: "#[delete($PATH)]"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^r?"
 
   # ---------- Ruby ----------
   - id: guardian-route-rails
@@ -207,9 +372,17 @@ rules:
       - metavariable-regex:
           metavariable: $METHOD
           regex: ^(get|post|put|patch|delete)$
+      # `$METHOD $PATH` matches any one-argument Ruby call, so the literal
+      # guard here is what keeps `get foo` out of the route list entirely.
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^['"]
 
   # ---------- Java ----------
-  - id: guardian-route-spring
+  # One rule per annotation. @RequestMapping carries no verb of its own (the
+  # method= attribute is a separate argument we do not read), so it declares
+  # no metadata.method and is reported as ANY — which is the truth.
+  - id: guardian-route-spring-get
     languages: [java]
     severity: INFO
     message: Spring MVC mapping
@@ -217,15 +390,90 @@ rules:
       guardian_kind: route
       framework: spring
       confidence: medium
-    pattern-either:
+      method: GET
+    patterns:
       - pattern: "@GetMapping($PATH)"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^"
+
+  - id: guardian-route-spring-post
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: medium
+      method: POST
+    patterns:
       - pattern: "@PostMapping($PATH)"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^"
+
+  - id: guardian-route-spring-put
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: medium
+      method: PUT
+    patterns:
       - pattern: "@PutMapping($PATH)"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^"
+
+  - id: guardian-route-spring-patch
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: medium
+      method: PATCH
+    patterns:
       - pattern: "@PatchMapping($PATH)"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^"
+
+  - id: guardian-route-spring-delete
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: medium
+      method: DELETE
+    patterns:
       - pattern: "@DeleteMapping($PATH)"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^"
+
+  - id: guardian-route-spring-request
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: medium
+    patterns:
       - pattern: "@RequestMapping($PATH)"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^"
 
   # ---------- C# / .NET ----------
+  # $METHOD binds the whole builder name (`MapGet`); extract.ts's
+  # normalizeMethod strips the Map prefix.
   - id: guardian-route-aspnet-minimal
     languages: [csharp]
     severity: INFO
@@ -239,8 +487,13 @@ rules:
       - metavariable-regex:
           metavariable: $METHOD
           regex: ^Map(Get|Post|Put|Patch|Delete)$
+      # `@"..."` is a C# verbatim literal; `$"..."` is interpolated and is
+      # deliberately excluded.
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^@?"
 
-  - id: guardian-route-aspnet-attribute
+  - id: guardian-route-aspnet-attribute-get
     languages: [csharp]
     severity: INFO
     message: ASP.NET attribute route
@@ -248,12 +501,72 @@ rules:
       guardian_kind: route
       framework: aspnet
       confidence: medium
-    pattern-either:
+      method: GET
+    patterns:
       - pattern: "[HttpGet($PATH)]"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^@?"
+
+  - id: guardian-route-aspnet-attribute-post
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET attribute route
+    metadata:
+      guardian_kind: route
+      framework: aspnet
+      confidence: medium
+      method: POST
+    patterns:
       - pattern: "[HttpPost($PATH)]"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^@?"
+
+  - id: guardian-route-aspnet-attribute-put
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET attribute route
+    metadata:
+      guardian_kind: route
+      framework: aspnet
+      confidence: medium
+      method: PUT
+    patterns:
       - pattern: "[HttpPut($PATH)]"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^@?"
+
+  - id: guardian-route-aspnet-attribute-patch
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET attribute route
+    metadata:
+      guardian_kind: route
+      framework: aspnet
+      confidence: medium
+      method: PATCH
+    patterns:
       - pattern: "[HttpPatch($PATH)]"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^@?"
+
+  - id: guardian-route-aspnet-attribute-delete
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET attribute route
+    metadata:
+      guardian_kind: route
+      framework: aspnet
+      confidence: medium
+      method: DELETE
+    patterns:
       - pattern: "[HttpDelete($PATH)]"
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^@?"
 
   # ---------- Environment variables (all stacks) ----------
   - id: guardian-env-node

@@ -78,6 +78,13 @@ describe('resolveNodeMounts', () => {
     expect(resolved?.path_partial).toBe(false);
   });
 
+  it('never clears a path_partial the extractor set on a non-literal capture', () => {
+    const expr = route({ path_raw: 'routeVar', path_resolved: 'routeVar', path_partial: true });
+    const [resolved] = resolveNodeMounts([expr], [mount], [imp]);
+    expect(resolved?.path_partial).toBe(true);
+    expect(resolved?.path_resolved).toBe('routeVar');
+  });
+
   it('ignores non-JS/TS routes entirely', () => {
     const py = route({ file: 'app/main.py', language: 'python', framework: 'fastapi' });
     const [resolved] = resolveNodeMounts([py], [mount], [imp]);

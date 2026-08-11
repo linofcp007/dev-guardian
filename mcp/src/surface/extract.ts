@@ -35,6 +35,73 @@ export function languageFromPath(file: string): string {
   return EXTENSION_LANGUAGES[ext] ?? 'unknown';
 }
 
+/* ---- the path-literal guard ----------------------------------------------
+ *
+ * A Semgrep metavariable binds whatever expression sits in the argument
+ * position. `register_rest_route($NS, $ROUTE)` matches the literal
+ * `register_rest_route('myplugin/v1', '/items')` and, just as happily,
+ * `register_rest_route(self::NAMESPACE, $route)` — the dominant idiom in real
+ * WordPress plugins. Only two rules in the pack pin their capture to a string
+ * literal, and a rule a user adds through `register_custom_rules` pins
+ * nothing at all. So the guard lives here, in the one place every route
+ * flows through, rather than being replicated per rule in YAML.
+ *
+ * This matters because the next tool in this series sends HTTP requests to
+ * whatever path it is handed: emitting `Paths.ORDERS` with
+ * `path_partial: false` is worse than emitting nothing, because it reads as
+ * a path we verified.
+ *
+ * The predicate is deliberately biased towards rejection. A false "partial"
+ * costs a consumer one skipped probe; a false "resolved" costs it a request
+ * to a path that never existed — and hides the one that does.
+ */
+
+/**
+ * Sigils and operators that appear in source expressions and never in a URL
+ * path: PHP/shell variables, PHP/Rust/C++ scope resolution, member arrows,
+ * and any quote left over after `stripQuotes` (an interior quote means the
+ * capture was a concatenation, not a single literal).
+ */
+const CODE_TOKENS = /[$`'"]|::|->|=>|\|\||&&/;
+
+/**
+ * A call or an index — `getPath(`, `routes[`. Anchored on an identifier
+ * immediately before the bracket so it does not fire on a WordPress regex
+ * route (`/items/(?P<id>\d+)`, where `(` follows a slash) or a Next.js-style
+ * `/posts/[id]` a custom rule might produce.
+ */
+const CALL_OR_INDEX = /[A-Za-z_]\w*\s*[([]/;
+
+/**
+ * A bare relative route, i.e. one with no path punctuation at all:
+ * `register_rest_route('ns/v1', 'items')` is valid WordPress. This is the
+ * only genuinely ambiguous shape — `items` is a route, `routeVar` is a Go
+ * variable, and nothing but convention separates them. We split on case:
+ * URL path segments are lower-case by convention, while identifiers in every
+ * language the pack covers are camelCase, PascalCase or SCREAMING_SNAKE. A
+ * capital letter (or a dot, i.e. member access) in a bare word is our
+ * evidence of code.
+ */
+const BARE_ROUTE = /^[a-z0-9][a-z0-9_~-]*$/;
+
+/**
+ * Can this captured value be read as a path? When false the caller keeps the
+ * route — a route we cannot name is still evidence of surface — but flags it
+ * `path_partial` and drops its confidence to 'low'.
+ */
+export function isLiteralPath(value: string): boolean {
+  if (value.trim().length === 0) return false;
+  // Whitespace inside a capture means an expression (`base + '/users'`,
+  // `ns . $route`); no route literal we support contains one.
+  if (/\s/.test(value)) return false;
+  if (CODE_TOKENS.test(value)) return false;
+  if (CALL_OR_INDEX.test(value)) return false;
+  // Path punctuation is the positive signal; everything else must survive the
+  // bare-word test above.
+  if (value.includes('/')) return true;
+  return BARE_ROUTE.test(value);
+}
+
 /**
  * Normalise every path-parameter syntax we support to a bare name:
  *   :id  ·  :id?  ·  {id}  ·  <int:item_id>  →  id / item_id
@@ -100,18 +167,27 @@ function toRoute(
   const path = stripQuotes(metavar(metavars, '$PATH') ?? metavar(metavars, '$ROUTE'));
   if (path === undefined) return null;
 
+  // A capture that is code, not a path, is kept but never presented as
+  // resolved: `path_resolved` stays the raw text so a human can still read
+  // what the source said, and the low confidence tells a consumer why.
+  // The namespace gets the same treatment — a `self::NAMESPACE` prefix
+  // concatenated into `/wp-json/self::NAMESPACE/items` is a fabricated URL
+  // (resolvers/wordpress.ts honours the flag rather than clearing it).
+  const usable =
+    isLiteralPath(path) && (namespace === undefined || isLiteralPath(namespace));
+
   const route: RouteRecord = {
     method: normalizeMethod(metavar(metavars, '$METHOD') ?? str(metadata, 'method')),
     path_raw: path,
     path_resolved: path,
-    path_partial: false,
+    path_partial: !usable,
     file,
     line,
     framework: str(metadata, 'framework') ?? 'unknown',
     language: languageFromPath(file),
     auth_hint: normalizeAuth(str(metadata, 'auth')),
-    params: extractParams(path),
-    confidence: normalizeConfidence(str(metadata, 'confidence')),
+    params: usable ? extractParams(path) : [],
+    confidence: usable ? normalizeConfidence(str(metadata, 'confidence')) : 'low',
   };
   if (namespace !== undefined) route.namespace = namespace;
   return route;
@@ -133,14 +209,32 @@ function toMount(metavars: unknown, file: string, line: number): MountRecord | n
   return { prefix, router_var: routerVar, file, line };
 }
 
+/**
+ * ASP.NET minimal APIs spell the verb `MapGet` / `MapPost` — the rule's
+ * `$METHOD` capture is the whole builder name, so a plain lower-case lookup
+ * reports every minimal-API route as ANY. Only strip `Map` when what remains
+ * is itself a verb, so `MapGroup` and a bare `map` still fall through.
+ */
 function normalizeMethod(raw: string | undefined): HttpMethod {
   if (raw === undefined) return 'ANY';
   const lowered = raw.toLowerCase();
-  if (!METHOD_NAMES.has(lowered)) return 'ANY';
-  if (lowered === 'all' || lowered === 'any') return 'ANY';
-  return lowered.toUpperCase() as HttpMethod;
+  const unmapped = lowered.startsWith('map') ? lowered.slice(3) : lowered;
+  const verb = METHOD_NAMES.has(unmapped) ? unmapped : lowered;
+  if (!METHOD_NAMES.has(verb)) return 'ANY';
+  if (verb === 'all' || verb === 'any') return 'ANY';
+  return verb.toUpperCase() as HttpMethod;
 }
 
+/**
+ * No rule in `configs/semgrep/routes.yml` sets `metadata.auth` today, so this
+ * always returns 'unknown' — deliberately, not by omission. A route rule
+ * matches the registration site and cannot see whether the handler carries
+ * `[Authorize]`, a `permission_callback`, or a middleware chain; inferring
+ * 'none' from the absence of a decorator would be exactly the false
+ * reassurance this tool exists to avoid. The parsing lives here so that a
+ * rule which *can* prove it (an affirmative public declaration such as
+ * WordPress `permission_callback: '__return_true'`) only has to add the key.
+ */
 function normalizeAuth(raw: string | undefined): RouteRecord['auth_hint'] {
   if (raw === 'required' || raw === 'none') return raw;
   return 'unknown';

@@ -55,6 +55,16 @@ describe('resolveWordpressRoutes', () => {
     expect(r?.path_partial).toBe(true);
   });
 
+  it('never clears a path_partial the extractor set on a non-literal capture', () => {
+    // `register_rest_route(self::NAMESPACE, $route)` — the dominant real-world
+    // idiom. /wp-json/self::NAMESPACE/$route is a URL that exists nowhere.
+    const [r] = resolveWordpressRoutes([
+      wpRoute('$route', { namespace: 'self::NAMESPACE', path_partial: true }),
+    ]);
+    expect(r?.path_partial).toBe(true);
+    expect(r?.path_resolved).toBe('$route');
+  });
+
   it('leaves non-wp-rest routes untouched', () => {
     const other = wpRoute('/x', { framework: 'laravel' });
     expect(resolveWordpressRoutes([other])[0]?.path_resolved).toBe('/x');

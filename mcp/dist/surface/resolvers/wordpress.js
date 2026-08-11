@@ -8,7 +8,12 @@
  * `path_raw`. This module is the only place that knows how they combine.
  *
  * Without a namespace we cannot know where the route is served, so it is
- * flagged `path_partial` rather than guessed at.
+ * flagged `path_partial` rather than guessed at. The same applies when either
+ * half is a code expression instead of a literal — `self::NAMESPACE` and
+ * `$this->namespace` are the dominant idioms in real plugins, and
+ * `/wp-json/self::NAMESPACE/items` is a URL that exists nowhere. The
+ * extractor already decided that (extract.ts `isLiteralPath`); this module
+ * only has to not undo it.
  */
 import { joinPath } from './node.js';
 const WP_REST_PREFIX = '/wp-json';
@@ -16,6 +21,10 @@ const WP_FRAMEWORK = 'wp-rest';
 export function resolveWordpressRoutes(routes) {
     return routes.map((route) => {
         if (route.framework !== WP_FRAMEWORK)
+            return route;
+        // Already unusable upstream: a namespace can only ever add a prefix, never
+        // rescue a route value we could not read.
+        if (route.path_partial)
             return route;
         const namespace = (route.namespace ?? '').trim().replace(/^\/+|\/+$/g, '');
         if (namespace.length === 0)
