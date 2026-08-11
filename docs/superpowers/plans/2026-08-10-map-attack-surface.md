@@ -855,7 +855,7 @@ function metavar(metavars: unknown, name: string): string | undefined {
 - [ ] **Step 5: Run the test to verify it passes**
 
 Run: `npm test -- test/unit/surface/extract.test.ts`
-Expected: PASS, 12 tests.
+Expected: PASS, 10 tests (6 in `extractSurface`, 2 in `extractParams` and `languageFromPath` combined with the namespace cases — count the `it()` blocks in Step 2 rather than trusting this number).
 
 - [ ] **Step 6: Build and commit**
 
