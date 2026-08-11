@@ -425,3 +425,66 @@ From `CLAUDE.md`:
 - [ ] A failed or scanner-less run persists nothing and says why.
 - [ ] Full test matrix in §8 passes with `npm test`, with Semgrep absent from the machine.
 - [ ] `mcp/dist/` rebuilt and staged in the same commit.
+
+---
+
+## 11. Known limitations at first release
+
+Recorded at merge so they are not rediscovered from scratch. Nothing here is a
+regression; each is a gap between what the tool reports and what it could report.
+
+### The one that must be checked first
+
+**No test in this repo has ever seen real Semgrep output.** Semgrep was not installed
+on the machine this was built on, so the whole pipeline was exercised against
+hand-written JSON fixtures. When a real Semgrep is available, verify **`guardian-route-express`'s
+`$PATH` guard before anything else** — its `metavariable-regex` requires the capture to
+start with a quote character, so it matches only if `abstract_content` retains the source
+quoting. If it does not, the
+flagship rule for the most common stack matches nothing and JS/TS surface mapping is
+silently empty. This is a higher priority than the Ruby and Rust rules, which are
+openly unvalidated guesses but fail visibly rather than silently.
+
+The repo's own fixtures disagree on this point — `test/fixtures/surface/express.json`
+encodes `abstract_content` unquoted, `surfaceTools.test.ts` encodes it quoted — and both
+pass, because `stripQuotes` is a no-op on unquoted input. The suite is structurally
+incapable of telling the two worlds apart.
+
+### Fields that are advertised but thin
+
+- **`auth_hint` is always `'unknown'`.** No rule sets `metadata.auth`, so the design's
+  rule — never infer `'none'` from the absence of a decorator — holds vacuously. The tool
+  description no longer claims to extract it. Implementing it properly means a rule cannot
+  see whether its handler carries `[Authorize]`; that needs its own design.
+- **`method` is `ANY` for `guardian-route-spring-request`** (`@RequestMapping` without a
+  verb), which is correct — the annotation genuinely does not name one.
+
+### Resolution gaps, all failing toward `path_partial`
+
+- Directory imports (`./routes` → `routes/index.ts`) do not resolve.
+- Bare and aliased specifiers (`@/routes/users`, tsconfig `paths`, `#routes/users`) do not
+  resolve.
+- `resolveModuleFile` is first-match-wins if a project holds both `users.js` and `users.ts`
+  with matches in each.
+- `toMount` applies no literal guard to `$PREFIX`. Today that is masked by the YAML guard on
+  `guardian-mount-express`, but a mount rule added through `register_custom_rules` could
+  inject a code expression that gets joined into a confident path. Same bug class as §5's;
+  the fix is the same predicate.
+- `isLiteralPath` accepts an absolute URL (`https://api.example.com/v1`) — technically a
+  literal, but `joinPath` would then prefix it into nonsense. Unreachable from the current
+  pack.
+- The bare-word branch separates `items` (a valid WordPress route) from `routeVar` (an
+  identifier) on capitalisation. An all-lowercase `snake_case` identifier with no
+  punctuation is still accepted as a path. The tie had to break this way because `items` is
+  real route syntax.
+
+### Under-reporting in the collectors
+
+- `EXPOSE 8080-8090` is read as the single port 8080.
+- Compose's three-part `127.0.0.1:8000:80` form is dropped.
+
+### Caching
+
+`computeTreeHash` covers the project tree only, so a change to `configs/semgrep/routes.yml`
+— a plugin upgrade adding frameworks, or a user's `register_custom_rules` — does not
+invalidate a cached snapshot. Pass `force: true` after changing rules.

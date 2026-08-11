@@ -36,9 +36,9 @@ version bump.
 
 ### Fixed
 
-- **A path we could not resolve is never emitted as a resolved path.** Only two rules in
-  the pack constrained their capture to a string literal; the other twelve let a Semgrep
-  metavariable that had bound a *code expression* through as a confident path —
+- **A path we could not resolve is never emitted as a resolved path.** Only one route rule
+  in the pack constrained its path capture to a string literal; the other thirteen let a
+  Semgrep metavariable that had bound a *code expression* through as a confident path —
   `self::NAMESPACE`, `$this->namespace`, `SETTINGS.users_path`, `Paths.ORDERS`, a bare
   `routeVar`. The first two are the dominant idioms in real WordPress plugins, not edge
   cases, and the next tool in this series will send HTTP requests to whatever path it is
