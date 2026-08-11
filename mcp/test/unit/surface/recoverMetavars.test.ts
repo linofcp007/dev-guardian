@@ -154,229 +154,145 @@ describe('recoverMetavars — $METHOD from the callee', () => {
     expect(extractSurface(outcome.json).routes[0]?.method).toBe('GET');
   });
 
-  it('reads the verb out of a Rust attribute span, where it is the callee', () => {
+  it('recovers no $METHOD for actix — that whole family is refused', () => {
     // The actix rule binds the attribute name to $METHOD and declares no
-    // metadata.method, so on a redacting Semgrep the verb exists only if the
-    // recovery finds it — and the `(` it must anchor on is inside `#[patch(`,
-    // not at the start of the span. A second attribute follows the first.
-    const span =
-      '#[patch("/rust/items/{id}/status")]\n#[allow(clippy::unused_async)]\n' +
-      'async fn patch_item(path: web::Path<u32>) -> impl Responder { HttpResponse::Ok().finish() }';
+    // metadata.method, so on a redacting Semgrep the verb exists only if it can
+    // be reconstructed. It cannot be, safely — see the refusal suite below.
+    const span = [
+      '#[patch("/rust/items/{id}/status")]',
+      '#[allow(clippy::unused_async)]',
+      'async fn patch_item(path: web::Path<u32>) -> impl Responder { HttpResponse::Ok().finish() }',
+    ].join('\n');
     const outcome = recoverSpan(span, { guardian_kind: 'route', framework: 'actix' });
-    expect(mv(outcome, '$METHOD')).toBe('patch');
-    const route = extractSurface(outcome.json).routes[0];
-    expect(route?.method).toBe('PATCH');
-    expect(route?.path_resolved).toBe('/rust/items/{id}/status');
-    expect(route?.path_partial).toBe(false);
+    expect(mv(outcome, '$METHOD')).toBeUndefined();
+    expect(outcome.unrecoverable).toBe(1);
   });
 });
 
 /**
  * Three rule families match the attribute PLUS the declaration it decorates,
- * so Semgrep's span starts at the first attribute on that declaration — not
- * necessarily the route one. Every span below was captured from Semgrep
- * 1.164.0; every expected value is what Semgrep 1.86.0 binds for the same
- * match. Before the attribute anchor these produced a *fabricated* route from
- * the wrong attribute's argument, and five of them were emitted as resolved
- * paths a DAST tool would request.
+/**
+ * The three families whose Semgrep pattern must span the decorated declaration
+ * are refused outright when metavariables are redacted, because the reported
+ * span starts at whatever attribute comes first and no local rule can tell code
+ * from a comment from a string.
+ *
+ * Two reconstructions were tried and both invented routes that `isLiteralPath`
+ * accepted, so they were emitted as RESOLVED paths a DAST tool would request:
+ * anchoring on the first argument list turned `#[allow(dead_code)]` into a
+ * route named `dead_code`; anchoring on the attribute by name turned a
+ * commented-out `// [HttpGet("/orders/legacy")]` into `/orders/legacy` while
+ * the live `/orders` vanished.
+ *
+ * Every span below is real Semgrep 1.164.0 output whose 1.86.0 ground truth is
+ * a different, real route. The assertion is that we now produce NOTHING for
+ * them — a visible gap rather than a plausible lie. These tests are what stop
+ * the heuristic being reintroduced.
  */
-describe('recoverMetavars — attribute routes with a PRECEDING decorator', () => {
+describe('recoverMetavars — decorated-declaration families are refused', () => {
   const ACTIX = { guardian_kind: 'route', framework: 'actix', confidence: 'medium' };
   const NEST_GET = { guardian_kind: 'route', framework: 'nestjs', method: 'GET' };
   const ASPNET_GET = { guardian_kind: 'route', framework: 'aspnet', method: 'GET' };
 
-  const cases: [name: string, span: string, metadata: Record<string, unknown>, path: string][] = [
+  const refused: [name: string, span: string, metadata: Record<string, unknown>][] = [
+    // --- a commented-out old route above the live one. The realistic case.
     [
-      'rust #[allow(dead_code)]',
+      'rust, commented-out route above the live one',
+      '#[allow(dead_code)]\n// #[get("/rust/legacy")]\n#[get("/rust/real")]\nasync fn r() -> String { String::new() }',
+      ACTIX,
+    ],
+    [
+      'aspnet, commented-out route above the live one',
+      'Produces("application/json")]\n    // [HttpGet("/orders/legacy")]\n    [HttpGet("/orders")]\n    public IActionResult L() => Ok();',
+      ASPNET_GET,
+    ],
+    [
+      'nestjs, commented-out route above the live one',
+      "@UseGuards(AuthGuard)\n  // @Get('/n/legacy')\n  @Get('/n/real')\n  r(): string { return 'ok'; }",
+      NEST_GET,
+    ],
+    // --- a foreign decorator above the route one.
+    [
+      'rust, #[allow(dead_code)] first',
       '#[allow(dead_code)]\n#[get("/real/d")]\nasync fn d() -> String { String::new() }',
       ACTIX,
-      '"/real/d"',
     ],
     [
-      'rust #[instrument(skip_all)]',
-      '#[instrument(skip_all)]\n#[get("/real/health")]\nasync fn health() -> String { String::new() }',
-      ACTIX,
-      '"/real/health"',
-    ],
-    [
-      'rust #[cfg(test)]',
-      '#[cfg(test)]\n#[get("/real/items")]\nasync fn items() -> String { String::new() }',
-      ACTIX,
-      '"/real/items"',
-    ],
-    [
-      'rust #[cfg(feature = "api")]',
-      '#[cfg(feature = "api")]\n#[get("/real/r3")]\nasync fn r3() -> String { String::new() }',
-      ACTIX,
-      '"/real/r3"',
-    ],
-    [
-      // Semgrep reports the C# attribute from *inside* the bracket list, so a
-      // span that starts at the route attribute has no leading `[`.
-      'aspnet [Produces("application/json")]',
-      'Produces("application/json")]\n    [HttpGet("/real/orders")]\n    public IActionResult List() => Ok();',
+      'aspnet, [Produces("application/json")] first',
+      'Produces("application/json")]\n    [HttpGet("/real/orders")]\n    public IActionResult L() => Ok();',
       ASPNET_GET,
-      '"/real/orders"',
     ],
     [
-      'aspnet [ProducesResponseType(...)]',
-      'ProducesResponseType(StatusCodes.Status200OK)]\n    [HttpGet("/c1")]\n    public IActionResult C1() => Ok();',
-      ASPNET_GET,
-      '"/c1"',
-    ],
-    [
-      'aspnet attributes sharing one bracket list',
-      'Produces("application/json"), HttpGet("/shared")]\n    public IActionResult S() => Ok();',
-      ASPNET_GET,
-      '"/shared"',
-    ],
-    [
-      "nestjs @Roles('admin')",
+      "nestjs, @Roles('admin') first",
       "@Roles('admin')\n  @Get('/real/users')\n  findAll(): string[] { return []; }",
       NEST_GET,
-      "'/real/users'",
+    ],
+    // --- the route attribute first, which used to work. Still refused: the
+    // point is that we cannot TELL which case we are in.
+    [
+      'rust, route attribute first',
+      '#[get("/plain/ok")]\n#[allow(clippy::unused_async)]\nasync fn p() -> String { String::new() }',
+      ACTIX,
     ],
     [
-      'nestjs @ApiOperation({ summary })',
-      "@ApiOperation({ summary: 'list' })\n  @Get('/n1')\n  n1(): string[] { return []; }",
-      NEST_GET,
-      "'/n1'",
+      'aspnet, route attribute first',
+      'HttpGet("/plain/ok")]\n    [Authorize]\n    public IActionResult P() => Ok();',
+      ASPNET_GET,
+    ],
+    // --- anchor text inside a string.
+    [
+      'aspnet, anchor text inside a preceding attribute string',
+      'Roles("HttpGet(")]\n    [HttpGet("/q3/real")]\n    public IActionResult Q() => Ok();',
+      ASPNET_GET,
+    ],
+    // --- apostrophes in comments / Rust lifetimes.
+    [
+      'rust, apostrophes in a doc comment and a lifetime',
+      '#[allow(dead_code)]\n/// Don\'t call this directly; use the router.\n#[get("/t1/real")]\nasync fn t1(n: &\'static str) -> impl Responder { ok(n) }',
+      ACTIX,
     ],
   ];
 
-  for (const [name, span, metadata, expected] of cases) {
-    it(`anchors on the route attribute, not the first one — ${name}`, () => {
+  for (const [name, span, metadata] of refused) {
+    it(`recovers nothing — ${name}`, () => {
       const outcome = recoverSpan(span, metadata);
-      expect(mv(outcome, '$PATH')).toBe(expected);
-      expect(outcome.recovered).toBe(1);
+      expect(mv(outcome, '$PATH')).toBeUndefined();
+      expect(outcome.recovered).toBe(0);
+      expect(outcome.unrecoverable).toBe(1);
+      expect(extractSurface(outcome.json).routes).toHaveLength(0);
     });
   }
 
-  it('still recovers when the route attribute comes first', () => {
+  it('reports the file of every refused match so coverage can attribute it', () => {
+    const outcome = recoverSpan('#[get("/x")]\nasync fn x() -> String { String::new() }', ACTIX);
+    expect(outcome.unreadableFiles).toEqual([FILE]);
+  });
+
+  it('still recovers the ten families whose span starts at the construct', () => {
+    // The refusal must be surgical. aspnet-minimal is a call, not an attribute,
+    // and shares a language with the refused aspnet family.
     expect(
       mv(
-        recoverSpan(
-          '#[get("/plain/ok")]\n#[allow(clippy::unused_async)]\nasync fn p() -> String { String::new() }',
-          ACTIX,
-        ),
+        recoverSpan('app.MapGet("/minimal/health", () => "ok")', {
+          guardian_kind: 'route',
+          framework: 'aspnet-minimal',
+        }),
         '$PATH',
       ),
-    ).toBe('"/plain/ok"');
+    ).toBe('"/minimal/health"');
     expect(
       mv(
-        recoverSpan(
-          'HttpGet("/plain/ok")]\n    [Authorize]\n    public IActionResult P() => Ok();',
-          ASPNET_GET,
-        ),
+        recoverSpan('@GetMapping("/spring/list")', {
+          guardian_kind: 'route',
+          framework: 'spring',
+          method: 'GET',
+        }),
         '$PATH',
       ),
-    ).toBe('"/plain/ok"');
-  });
-
-  it('binds the Rust attribute name to $METHOD, as Semgrep does', () => {
-    const outcome = recoverSpan(
-      '#[cfg(test)]\n#[delete("/rust/items/{id}")]\nasync fn d() -> String { String::new() }',
-      ACTIX,
-    );
-    expect(mv(outcome, '$METHOD')).toBe('delete');
-    expect(extractSurface(outcome.json).routes[0]?.method).toBe('DELETE');
-  });
-
-  it('recovers NOTHING when the named route attribute is absent from the span', () => {
-    // Never fall back to "the first argument list": that is exactly how a
-    // decorator's argument became a resolved route path.
-    const outcome = recoverSpan(
-      "@Roles('admin')\n  somethingElse(): void {}",
-      NEST_GET,
-    );
-    expect(mv(outcome, '$PATH')).toBeUndefined();
-    expect(outcome.unrecoverable).toBe(1);
-    expect(extractSurface(outcome.json).routes).toHaveLength(0);
-  });
-
-  it('does not read a route attribute out of a string literal', () => {
-    const outcome = recoverSpan(
-      '#[doc = "use #[get(\\"/fake\\")] here"]\n#[get("/real")]\nasync fn r() -> String { String::new() }',
-      ACTIX,
-    );
-    expect(mv(outcome, '$PATH')).toBe('"/real"');
-  });
-
-  it('does not match an identifier merely ending in the attribute name', () => {
-    const outcome = recoverSpan(
-      'MyHttpGet("/decoy")]\n    public IActionResult X() => Ok();',
-      ASPNET_GET,
-    );
-    expect(outcome.unrecoverable).toBe(1);
-  });
-
-  /**
-   * An apostrophe is a string delimiter in JS/PHP/Python, a lifetime in Rust,
-   * and an English contraction in every comment ever written. An earlier
-   * version of the anchor search scanned the span forward treating every `'` as
-   * a string opener; an odd number of them before the route attribute made it
-   * jump straight over it. Every span below is real Semgrep 1.164.0 output, and
-   * every expectation is Semgrep 1.86.0's own capture for the same match.
-   */
-  describe('apostrophes in comments and Rust lifetimes', () => {
-    it('recovers past a doc comment containing an apostrophe (route was LOST)', () => {
-      const outcome = recoverSpan(
-        '#[allow(dead_code)]\n/// Don\'t call this directly; use the router.\n' +
-          '#[get("/t1/real")]\nasync fn t1(name: &\'static str) -> impl Responder { ok(name) }',
-        ACTIX,
-      );
-      expect(mv(outcome, '$PATH')).toBe('"/t1/real"');
-      expect(outcome.unrecoverable).toBe(0);
-    });
-
-    it('is not confused by a lifetime in the signature', () => {
-      expect(
-        mv(
-          recoverSpan(
-            '#[get("/t2/real")]\nasync fn t2(name: &\'static str) -> impl Responder { ok(name) }',
-            ACTIX,
-          ),
-          '$PATH',
-        ),
-      ).toBe('"/t2/real"');
-    });
-
-    it('recovers past an apostrophe between C# attributes (route was FABRICATED)', () => {
-      // The parity used to close the phantom string inside the body, landing
-      // the scanner on `[HttpGet("…FABRICATED…")]` written in a string there.
-      const outcome = recoverSpan(
-        'Produces("application/json")]\n    // Don\'t expose this without the guard.\n' +
-          '    [HttpGet("/q1/real")]\n' +
-          '    public IActionResult Q1() => Ok("it\'s [HttpGet(\\"/q1/FABRICATED\\")]");',
-        ASPNET_GET,
-      );
-      expect(mv(outcome, '$PATH')).toBe('"/q1/real"');
-    });
-
-    it('recovers past an apostrophe between NestJS decorators (route was FABRICATED)', () => {
-      const outcome = recoverSpan(
-        "@UseGuards(AuthGuard)\n  // Don't expose this without the guard.\n" +
-          "  @Get('/n1/real')\n  n1(): string { return \"it's @Get('/n1/FABRICATED')\"; }",
-        NEST_GET,
-      );
-      expect(mv(outcome, '$PATH')).toBe("'/n1/real'");
-      expect(extractSurface(outcome.json).routes[0]?.path_resolved).toBe('/n1/real');
-    });
-
-    it('prefers the real attribute over anchor-shaped text in the body', () => {
-      const outcome = recoverSpan(
-        '#[get("/s1/real")]\nasync fn s1() -> impl Responder { body("get(\\"/s1/FABRICATED\\")") }',
-        ACTIX,
-      );
-      expect(mv(outcome, '$PATH')).toBe('"/s1/real"');
-    });
+    ).toBe('"/spring/list"');
   });
 
   it('never throws on a metadata.method that is not a plain verb', () => {
-    // `metadata.method` comes from a YAML file a user can edit. It used to be
-    // interpolated into `new RegExp`, so this threw a SyntaxError out of a
-    // module whose contract is that it never throws — and out of an unguarded
-    // call site in mapAttackSurface.ts.
     for (const method of ['a(', 'Get|Post', '[', '\\', '(?<', '']) {
       const run = (): RecoveryOutcome =>
         recoverSpan('HttpGet("/x")]\n public IActionResult X() => Ok();', {
@@ -385,7 +301,6 @@ describe('recoverMetavars — attribute routes with a PRECEDING decorator', () =
           method,
         });
       expect(run).not.toThrow();
-      // Rejected rather than guessed: no anchor name, so nothing is recovered.
       expect(run().unrecoverable).toBe(1);
     }
   });

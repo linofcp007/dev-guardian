@@ -41620,12 +41620,13 @@ var RECOVERABLE_KINDS = /* @__PURE__ */ new Set(["route", "mount", "import", "en
 function recoverMetavars(semgrepJson, sources) {
   const results = prop3(semgrepJson, "results");
   if (!isRecord(semgrepJson) || !Array.isArray(results)) {
-    return { json: semgrepJson, intact: 0, recovered: 0, unrecoverable: 0 };
+    return { json: semgrepJson, intact: 0, recovered: 0, unrecoverable: 0, unreadableFiles: [] };
   }
   const buffers = /* @__PURE__ */ new Map();
   let intact = 0;
   let recovered = 0;
   let unrecoverable = 0;
+  const unreadableFiles = [];
   const rebuilt = results.map((raw) => {
     const extra = prop3(raw, "extra");
     const metadata = prop3(extra, "metadata");
@@ -41639,12 +41640,20 @@ function recoverMetavars(semgrepJson, sources) {
     const metavars = span === void 0 ? void 0 : synthesize(kind, span, metadata);
     if (metavars === void 0 || !isRecord(raw)) {
       unrecoverable += 1;
+      const path6 = str3(raw, "path");
+      if (path6 !== void 0) unreadableFiles.push(path6);
       return raw;
     }
     recovered += 1;
     return { ...raw, extra: { ...isRecord(extra) ? extra : {}, metavars } };
   });
-  return { json: { ...semgrepJson, results: rebuilt }, intact, recovered, unrecoverable };
+  return {
+    json: { ...semgrepJson, results: rebuilt },
+    intact,
+    recovered,
+    unrecoverable,
+    unreadableFiles
+  };
 }
 function sliceSpan(raw, sources, buffers) {
   const path6 = str3(raw, "path");
@@ -41682,10 +41691,8 @@ function synthesize(kind, span, metadata) {
 function synthesizeRoute(span, metadata) {
   const framework = str3(metadata, "framework");
   if (framework === "wp-rest") return synthesizeNamespacedRoute(span);
+  if (framework !== void 0 && UNRECOVERABLE_FRAMEWORKS.has(framework)) return void 0;
   const declaredMethod = str3(metadata, "method");
-  if (framework !== void 0 && DECORATED_DECLARATION_FRAMEWORKS.has(framework)) {
-    return synthesizeAttributeRoute(span, framework, declaredMethod);
-  }
   const path6 = routePath(span);
   if (path6 === void 0) return void 0;
   const metavars = { $PATH: { abstract_content: path6 } };
@@ -41695,77 +41702,7 @@ function synthesizeRoute(span, metadata) {
   }
   return metavars;
 }
-var DECORATED_DECLARATION_FRAMEWORKS = /* @__PURE__ */ new Set([
-  "actix",
-  "nestjs",
-  "aspnet"
-]);
-var ACTIX_VERBS = ["get", "post", "put", "patch", "delete", "options", "head"];
-var PLAIN_VERB = /^[A-Za-z]+$/;
-function routeAttributeNames(framework, method) {
-  if (framework === "actix") return ACTIX_VERBS.map((verb) => ({ text: verb, verb }));
-  if (method === void 0 || !PLAIN_VERB.test(method)) return void 0;
-  const name = method.charAt(0).toUpperCase() + method.slice(1).toLowerCase();
-  if (framework === "nestjs") return [{ text: name }];
-  if (framework === "aspnet") return [{ text: `Http${name}` }];
-  return void 0;
-}
-function isAttributePosition(span, framework, at) {
-  const prev = lastNonSpaceBefore(span, at);
-  const prevChar = prev < 0 ? void 0 : span[prev];
-  if (framework === "nestjs") return prevChar === "@";
-  if (framework === "actix") {
-    if (prevChar !== "[") return false;
-    const hash = lastNonSpaceBefore(span, prev);
-    return hash >= 0 && span[hash] === "#";
-  }
-  return prev < 0 || prevChar === "[" || prevChar === ",";
-}
-function lastNonSpaceBefore(span, index) {
-  let i2 = index - 1;
-  while (i2 >= 0) {
-    const ch = span[i2];
-    if (ch === void 0 || !/\s/.test(ch)) break;
-    i2 -= 1;
-  }
-  return i2;
-}
-function isWordBoundary(span, at, length) {
-  const before = at === 0 ? void 0 : span[at - 1];
-  const after = span[at + length];
-  const wordChar = /[A-Za-z0-9_]/;
-  if (before !== void 0 && wordChar.test(before)) return false;
-  return after === void 0 || !wordChar.test(after);
-}
-function findRouteAttribute(span, framework, names) {
-  for (let i2 = 0; i2 < span.length; i2 += 1) {
-    for (const name of names) {
-      if (!span.startsWith(name.text, i2)) continue;
-      if (!isWordBoundary(span, i2, name.text.length)) continue;
-      let open = i2 + name.text.length;
-      while (open < span.length && /\s/.test(span[open] ?? "")) open += 1;
-      if (span[open] !== "(") continue;
-      if (!isAttributePosition(span, framework, i2)) continue;
-      if (matchingClose(span, open) === void 0) continue;
-      return { open, verb: name.verb };
-    }
-  }
-  return void 0;
-}
-function synthesizeAttributeRoute(span, framework, declaredMethod) {
-  const names = routeAttributeNames(framework, declaredMethod);
-  if (names === void 0) return void 0;
-  const attribute = findRouteAttribute(span, framework, names);
-  if (attribute === void 0) return void 0;
-  const path6 = argumentsAt(span, attribute.open)?.[0];
-  if (path6 === void 0) return void 0;
-  const metavars = { $PATH: { abstract_content: path6 } };
-  const verb = attribute.verb;
-  if (declaredMethod === void 0 && verb !== void 0) {
-    metavars["$METHOD"] = { abstract_content: verb };
-  }
-  return metavars;
-}
+var UNRECOVERABLE_FRAMEWORKS = /* @__PURE__ */ new Set(["actix", "nestjs", "aspnet"]);
 function routePath(span) {
   const args = argumentList(span);
   if (args !== void 0) return args[0];
@@ -42121,7 +42058,14 @@ async function handler39(input, ctx) {
     );
   }
   const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
-  const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars);
+  const snapshot = buildSnapshot(
+    recovery.json,
+    projectPath,
+    ctx,
+    toolsRun,
+    includeEnvVars,
+    recovery.unreadableFiles
+  );
   const persisted = ctx.storage.surface.insert({
     project_path: projectPath,
     tree_hash: treeHash,
@@ -42143,6 +42087,7 @@ function readSources(parsed, projectPath) {
   }
   return sources;
 }
+var REDACTION_REMEDY = "this Semgrep version redacts match content unless you run `semgrep login`; either log in, or use a Semgrep older than ~1.100, and the routes appear. dev-guardian does not require an account \u2014 most route families are rebuilt from byte offsets either way";
 function recoveryToolRun(recovery) {
   if (recovery.recovered === 0 && recovery.unrecoverable === 0) return [];
   const base = `recovered ${recovery.recovered} redacted match(es) from byte offsets` + (recovery.intact > 0 ? `; ${recovery.intact} already carried metavariables` : "");
@@ -42153,7 +42098,7 @@ function recoveryToolRun(recovery) {
     {
       name: RECOVERY_STEP,
       status: "failed",
-      reason: `${base}; ${recovery.unrecoverable} could not be recovered and are missing from the surface`
+      reason: `${base}; ${recovery.unrecoverable} match(es) could not be read and are MISSING from the surface (see coverage[].unreadable_matches for which languages) \u2014 ${REDACTION_REMEDY}`
     }
   ];
 }
@@ -42165,7 +42110,7 @@ function unreadableMatchesToolRun(recovery) {
   };
 }
 function unreadableMatchesNote(recovery) {
-  return `Semgrep reported ${recovery.unrecoverable} match(es) but not one could be read, so no surface was mapped and nothing was persisted. Current Semgrep versions redact match content (extra.metavars) unless you run \`semgrep login\`; map_attack_surface rebuilds it from the matched byte range in the file and therefore does not require an account \u2014 so this points at the files themselves being unreadable at the paths Semgrep reported, or changed since the scan. Nothing was written: a zero-route snapshot here would read as "this application exposes nothing", which is the inverse of what was measured.`;
+  return `Semgrep reported ${recovery.unrecoverable} match(es) and not one could be read, so no surface was mapped and nothing was persisted \u2014 a zero-route snapshot here would read as "this application exposes nothing", the inverse of what was measured. Cause: ${REDACTION_REMEDY}. Three route families are affected regardless of that: NestJS, ASP.NET attribute routes and actix cannot be reconstructed from a redacted match at all, because their Semgrep pattern must span the decorated declaration and the reported span can start at an unrelated attribute \u2014 so a project built only from those is exactly this case.`;
 }
 function cachedToolsRun(snapshot) {
   const marker = { name: "semgrep", status: "skipped", reason: "cached" };
@@ -42223,7 +42168,7 @@ function buildToolRun(run, via) {
   const reason = via ? `${via}: ${firstLine ?? "fallback failed"}` : firstLine ?? "unknown";
   return { name: "semgrep", status: "failed", reason };
 }
-function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars) {
+function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unreadableFiles) {
   const { routes, mounts } = extractSurface(parsed);
   const knownFiles = collectAllFiles(parsed);
   const imports = extractImports(parsed, knownFiles);
@@ -42233,7 +42178,7 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars) {
     env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
     ports: collectPorts(projectPath),
     webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
-    coverage: buildCoverage(resolved, ctx),
+    coverage: buildCoverage(resolved, ctx, unreadableFiles),
     tools_run: toolsRun,
     missing_tools: []
   };
@@ -42290,19 +42235,33 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
   }
   return joined;
 }
-function buildCoverage(routes, ctx) {
+function buildCoverage(routes, ctx, unreadableFiles) {
   const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
-  const languages = /* @__PURE__ */ new Set([...detected, ...routes.map((r) => r.language)]);
+  const unreadableByLanguage = /* @__PURE__ */ new Map();
+  for (const file of unreadableFiles) {
+    const language = languageFromPath(file);
+    if (language === "unknown") continue;
+    unreadableByLanguage.set(language, (unreadableByLanguage.get(language) ?? 0) + 1);
+  }
+  const languages = /* @__PURE__ */ new Set([
+    ...detected,
+    ...routes.map((r) => r.language),
+    ...unreadableByLanguage.keys()
+  ]);
   languages.delete("unknown");
   const entries = [];
   for (const language of [...languages].sort()) {
     const found = routes.filter((r) => r.language === language).length;
+    const unreadable = unreadableByLanguage.get(language) ?? 0;
     const hasRules = COVERED_LANGUAGES.has(language);
     entries.push({
       language,
       detected: detected.includes(language),
       routes_found: found,
-      status: !hasRules ? "no_rules" : found > 0 ? "ok" : "no_matches"
+      unreadable_matches: unreadable,
+      // `unreadable` outranks `ok`: a language with some routes read and some
+      // lost is not fully covered, and saying `ok` would hide the gap.
+      status: unreadable > 0 ? "unreadable" : !hasRules ? "no_rules" : found > 0 ? "ok" : "no_matches"
     });
   }
   return entries;

@@ -238,10 +238,21 @@ export interface CoverageEntry {
   detected: boolean;
   routes_found: number;
   /**
+   * Matches Semgrep reported for this language whose captures could not be
+   * read, so the routes exist but are absent from the inventory. Non-zero only
+   * on a Semgrep that redacts match content (see `surface/recoverMetavars.ts`).
+   */
+  unreadable_matches: number;
+  /**
    * 'no_rules' means the language was detected but the rule pack covers no
    * framework for it — the case most tools hide by reporting zero.
+   *
+   * 'unreadable' means Semgrep DID match routes here and we could not read
+   * them. It exists so that case never collapses into 'no_matches', which a
+   * consumer reads as "this language exposes nothing" — the inverse of the
+   * truth, and the falsehood this whole tool is built to avoid.
    */
-  status: 'ok' | 'no_matches' | 'no_rules';
+  status: 'ok' | 'no_matches' | 'no_rules' | 'unreadable';
 }
 
 export interface AttackSurfaceSnapshot {

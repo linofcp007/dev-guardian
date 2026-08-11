@@ -43,7 +43,7 @@ import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { Force, ProjectPath } from '../schemas.js';
 import { collectEnvVars } from '../surface/collectors/envVars.js';
 import { collectPorts } from '../surface/collectors/ports.js';
-import { extractSurface } from '../surface/extract.js';
+import { extractSurface, languageFromPath } from '../surface/extract.js';
 import {
   recoverMetavars,
   type RecoveryOutcome,
@@ -206,7 +206,14 @@ async function handler(
   }
 
   const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
-  const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars);
+  const snapshot = buildSnapshot(
+    recovery.json,
+    projectPath,
+    ctx,
+    toolsRun,
+    includeEnvVars,
+    recovery.unreadableFiles,
+  );
   const persisted = ctx.storage.surface.insert({
     project_path: projectPath,
     tree_hash: treeHash,
@@ -254,6 +261,17 @@ function readSources(parsed: unknown, projectPath: string): SourceMap {
  * Emitted only when there was something to recover: a run against an older
  * (or logged-in) Semgrep is `intact` throughout and says nothing new.
  */
+/**
+ * How to get the unreadable matches back. Named wherever a loss is reported,
+ * because the fix is not obvious and the obvious guess — "this tool needs a
+ * Semgrep account" — is wrong: ten of the thirteen route families are rebuilt
+ * from byte offsets and work on any version, logged in or not.
+ */
+const REDACTION_REMEDY =
+  'this Semgrep version redacts match content unless you run `semgrep login`; either log ' +
+  'in, or use a Semgrep older than ~1.100, and the routes appear. dev-guardian does not ' +
+  'require an account — most route families are rebuilt from byte offsets either way';
+
 function recoveryToolRun(recovery: RecoveryOutcome): ToolRun[] {
   if (recovery.recovered === 0 && recovery.unrecoverable === 0) return [];
   const base =
@@ -266,7 +284,10 @@ function recoveryToolRun(recovery: RecoveryOutcome): ToolRun[] {
     {
       name: RECOVERY_STEP,
       status: 'failed',
-      reason: `${base}; ${recovery.unrecoverable} could not be recovered and are missing from the surface`,
+      reason:
+        `${base}; ${recovery.unrecoverable} match(es) could not be read and are MISSING ` +
+        `from the surface (see coverage[].unreadable_matches for which languages) — ` +
+        `${REDACTION_REMEDY}`,
     },
   ];
 }
@@ -283,13 +304,14 @@ function unreadableMatchesToolRun(recovery: RecoveryOutcome): ToolRun {
 
 function unreadableMatchesNote(recovery: RecoveryOutcome): string {
   return (
-    `Semgrep reported ${recovery.unrecoverable} match(es) but not one could be read, so no ` +
-    'surface was mapped and nothing was persisted. Current Semgrep versions redact match ' +
-    'content (extra.metavars) unless you run `semgrep login`; map_attack_surface rebuilds it ' +
-    'from the matched byte range in the file and therefore does not require an account — so ' +
-    'this points at the files themselves being unreadable at the paths Semgrep reported, or ' +
-    'changed since the scan. Nothing was written: a zero-route snapshot here would read as ' +
-    '"this application exposes nothing", which is the inverse of what was measured.'
+    `Semgrep reported ${recovery.unrecoverable} match(es) and not one could be read, so no ` +
+    'surface was mapped and nothing was persisted — a zero-route snapshot here would read as ' +
+    '"this application exposes nothing", the inverse of what was measured. Cause: ' +
+    `${REDACTION_REMEDY}. Three route families are affected regardless of that: NestJS, ` +
+    'ASP.NET attribute routes and actix cannot be reconstructed from a redacted match at ' +
+    'all, because their Semgrep pattern must span the decorated declaration and the reported ' +
+    'span can start at an unrelated attribute — so a project built only from those is exactly ' +
+    'this case.'
   );
 }
 
@@ -402,6 +424,7 @@ function buildSnapshot(
   ctx: PluginContext,
   toolsRun: ToolRun[],
   includeEnvVars: boolean,
+  unreadableFiles: readonly string[],
 ): AttackSurfaceSnapshot {
   const { routes, mounts } = extractSurface(parsed);
   const knownFiles = collectAllFiles(parsed);
@@ -414,7 +437,7 @@ function buildSnapshot(
     env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
     ports: collectPorts(projectPath),
     webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
-    coverage: buildCoverage(resolved, ctx),
+    coverage: buildCoverage(resolved, ctx, unreadableFiles),
     tools_run: toolsRun,
     missing_tools: [],
   };
@@ -523,20 +546,52 @@ function resolveModuleFile(importingFile: string, specifier: string, knownFiles:
   return joined;
 }
 
-function buildCoverage(routes: RouteRecord[], ctx: PluginContext): CoverageEntry[] {
+/**
+ * Per-language coverage.
+ *
+ * `unreadable` exists so that a language whose routes Semgrep matched but we
+ * could not read never reports `no_matches`. The two are opposite facts — "we
+ * looked and there is nothing" versus "there is something and we could not read
+ * it" — and collapsing them is the "this application exposes nothing" falsehood
+ * this tool is built to avoid. It is what a Rust or NestJS project gets on a
+ * redacting Semgrep, since those families cannot be reconstructed from a
+ * redacted span at all (surface/recoverMetavars.ts).
+ */
+function buildCoverage(
+  routes: RouteRecord[],
+  ctx: PluginContext,
+  unreadableFiles: readonly string[],
+): CoverageEntry[] {
   const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
-  const languages = new Set<string>([...detected, ...routes.map((r) => r.language)]);
+
+  // One entry per lost route, so the count is routes-not-shown, not files.
+  const unreadableByLanguage = new Map<string, number>();
+  for (const file of unreadableFiles) {
+    const language = languageFromPath(file);
+    if (language === 'unknown') continue;
+    unreadableByLanguage.set(language, (unreadableByLanguage.get(language) ?? 0) + 1);
+  }
+
+  const languages = new Set<string>([
+    ...detected,
+    ...routes.map((r) => r.language),
+    ...unreadableByLanguage.keys(),
+  ]);
   languages.delete('unknown');
 
   const entries: CoverageEntry[] = [];
   for (const language of [...languages].sort()) {
     const found = routes.filter((r) => r.language === language).length;
+    const unreadable = unreadableByLanguage.get(language) ?? 0;
     const hasRules = COVERED_LANGUAGES.has(language);
     entries.push({
       language,
       detected: detected.includes(language),
       routes_found: found,
-      status: !hasRules ? 'no_rules' : found > 0 ? 'ok' : 'no_matches',
+      unreadable_matches: unreadable,
+      // `unreadable` outranks `ok`: a language with some routes read and some
+      // lost is not fully covered, and saying `ok` would hide the gap.
+      status: unreadable > 0 ? 'unreadable' : !hasRules ? 'no_rules' : found > 0 ? 'ok' : 'no_matches',
     });
   }
   return entries;

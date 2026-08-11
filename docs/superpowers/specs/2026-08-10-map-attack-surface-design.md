@@ -174,7 +174,8 @@ interface CoverageEntry {
   language: string;
   detected: boolean;         // the stack snapshot reported this language
   routes_found: number;
-  status: 'ok' | 'no_matches' | 'no_rules';
+  unreadable_matches: number; // matched, but the captures could not be read
+  status: 'ok' | 'no_matches' | 'no_rules' | 'unreadable';
 }
 
 interface AttackSurfaceSnapshot {
@@ -328,9 +329,21 @@ write nothing on failure.
 
 | `status` | Meaning |
 | --- | --- |
-| `ok` | Rules existed for this language and matched. |
+| `ok` | Rules existed for this language and matched, and every match was read. |
 | `no_matches` | Rules existed and found nothing — most likely there are no routes. |
 | `no_rules` | The language was detected but no rule covers its framework. |
+| `unreadable` | Rules matched, but `unreadable_matches` of them could not be read, so those routes are missing from the inventory. |
+
+`unreadable` exists for one reason: it is the opposite of `no_matches`, and collapsing the
+two would be the "this application exposes nothing" falsehood in miniature. It is what a
+Rust, NestJS or ASP.NET-attribute project gets on a Semgrep that redacts match content
+(>= ~1.120 without `semgrep login`), because those three rule families must match the
+attribute *plus the declaration it decorates* — so the reported span begins at whatever
+attribute happens to come first, and nothing local can tell a route attribute from a
+commented-out one. `surface/recoverMetavars.ts` refuses to guess for those families rather
+than emit a plausible fabrication; the other ten reconstruct fine on any Semgrep version,
+so the tool still requires no account. See that module's header for the two reconstructions
+that were tried and the routes each invented.
 
 `no_rules` is the case most tools hide. If a project uses Hapi or Actix and the pack has no
 rule for it, the output says so rather than reporting zero and implying safety. This

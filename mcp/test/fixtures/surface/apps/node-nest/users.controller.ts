@@ -48,22 +48,21 @@ export class UsersController {
     return this.service.remove(id);
   }
 
-  // A non-route decorator PRECEDING the route one. Semgrep's span starts at
-  // `@HttpCode(...)`, so recovery anchored on the first argument list reads
-  // `204` as the path — and a bare lower-case/numeric word passes the literal
-  // test, so it is emitted as a RESOLVED route. The capture has to be anchored
-  // on `@Delete(` by name.
+  // ADVERSARIAL. A foreign decorator precedes the route one, so Semgrep's span
+  // starts at `@HttpCode(...)`. Anchoring on the first argument list read `204`
+  // as the path. NestJS routes are refused on a redacting Semgrep; none appear.
   @HttpCode(204)
   @Delete('purge/:id')
   purge(@Param('id') id: string): string {
     return this.service.remove(id);
   }
 
-  // An apostrophe in a comment BETWEEN the decorators, and decorator-shaped
-  // text in the body: the pair that made a string-lexing anchor search recover
-  // `/n1/FABRICATED` as a resolved route.
+  // ADVERSARIAL: a commented-out old route, an apostrophe in the comment, and
+  // decorator-shaped text in the body. Anchoring by name emitted `legacy/:id`;
+  // lexing strings emitted `audit/FABRICATED`.
   @HttpCode(200)
   // Don't expose this without the guard.
+  // @Get('legacy/:id')
   @Get('audit/:id')
   audit(@Param('id') id: string): string {
     return `it's @Get('audit/FABRICATED') for ${id}`;

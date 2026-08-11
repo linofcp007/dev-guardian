@@ -764,7 +764,57 @@ describe('map_attack_surface', () => {
     expect(result.snapshot_id).not.toBeNull();
     const recovery = result.tools_run.find((r) => r.name.includes('metavar'));
     expect(recovery?.status).toBe('failed');
-    expect(recovery?.reason).toMatch(/1 could not be recovered/);
+    expect(recovery?.reason).toMatch(/1 match\(es\) could not be read/);
+    // The remedy has to travel with the loss, or the reader is left guessing.
+    expect(recovery?.reason).toMatch(/semgrep login/);
+    expect(recovery?.reason).toMatch(/does not require an account/);
+  });
+
+  it('reports coverage `unreadable`, never `no_matches`, when routes were lost', async () => {
+    // A NestJS/actix/ASP.NET-attribute project on a redacting Semgrep. Those
+    // families cannot be reconstructed at all, so every route is lost — and the
+    // language must NOT report `no_matches`, which reads as "this language
+    // exposes nothing" when the truth is "it exposes things we could not read".
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+
+    const projectPath = projectWithSource();
+    const nestSource = "@Get('/n/real')\n  n(): string { return 'ok'; }\n";
+    mkdirSync(join(projectPath, 'src'), { recursive: true });
+    writeFileSync(join(projectPath, 'src', 'users.controller.ts'), nestSource, 'utf8');
+
+    const buf = Buffer.from(nestSource, 'utf8');
+    vi.mocked(readJsonSafe).mockReturnValue(
+      JSON.stringify({
+        results: [
+          // One readable express route, so the run is not wholly degraded.
+          ...(JSON.parse(redactedOutput([REDACTED_SPANS[2] as never])) as { results: unknown[] })
+            .results,
+          {
+            check_id: 'guardian-route-nestjs-get',
+            path: 'src/users.controller.ts',
+            start: { line: 1, col: 1, offset: 0 },
+            end: { line: 1, col: 1, offset: buf.length },
+            extra: {
+              metadata: { guardian_kind: 'route', framework: 'nestjs', method: 'GET' },
+              severity: 'INFO',
+              lines: 'requires login',
+            },
+          },
+        ],
+      }),
+    );
+
+    const ctx = makeCtx();
+    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      coverage: { language: string; status: string; unreadable_matches: number }[];
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+
+    const ts = result.coverage.find((c) => c.language === 'typescript');
+    expect(ts?.status).toBe('unreadable');
+    expect(ts?.unreadable_matches).toBe(1);
+    expect(result.coverage.every((c) => c.status !== 'no_matches')).toBe(true);
   });
 
   it('returns a domain error for an unusable project_path', async () => {

@@ -14,6 +14,21 @@
  * Slicing the file between them yields the exact matched source text, from
  * which the captures can be reconstructed.
  *
+ * ---- What this can and cannot rebuild ----------------------------------
+ *
+ * Reconstruction is only sound when the span *starts at the construct that
+ * matched*, because then the capture sits in it at a known place. Ten of the
+ * thirteen route families are like that (express + its mount/import rules,
+ * flask, fastapi, django, laravel, gin, net/http, spring, wp-rest,
+ * aspnet-minimal) along with every `env` rule, and all of them are verified
+ * capture-for-capture against Semgrep 1.86.0.
+ *
+ * Three are not: actix, NestJS and ASP.NET attribute routes, whose Semgrep
+ * pattern has to swallow the decorated declaration, so the span begins at
+ * whatever attribute happens to come first. Those are refused rather than
+ * guessed — see UNRECOVERABLE_FRAMEWORKS below for the two attempts that were
+ * made and the routes each of them invented.
+ *
  * Design: this module synthesizes into the *same shape the extractor already
  * reads* (`extra.metavars.$NAME.abstract_content`), so `extract.ts` — pure and
  * fully tested — needs no change at all. One new module, zero risk to code
@@ -46,13 +61,14 @@ const RECOVERABLE_KINDS = new Set(['route', 'mount', 'import', 'env']);
 export function recoverMetavars(semgrepJson, sources) {
     const results = prop(semgrepJson, 'results');
     if (!isRecord(semgrepJson) || !Array.isArray(results)) {
-        return { json: semgrepJson, intact: 0, recovered: 0, unrecoverable: 0 };
+        return { json: semgrepJson, intact: 0, recovered: 0, unrecoverable: 0, unreadableFiles: [] };
     }
     // One encode per file, not one per match: a busy file can carry hundreds.
     const buffers = new Map();
     let intact = 0;
     let recovered = 0;
     let unrecoverable = 0;
+    const unreadableFiles = [];
     const rebuilt = results.map((raw) => {
         const extra = prop(raw, 'extra');
         const metadata = prop(extra, 'metadata');
@@ -69,12 +85,21 @@ export function recoverMetavars(semgrepJson, sources) {
         const metavars = span === undefined ? undefined : synthesize(kind, span, metadata);
         if (metavars === undefined || !isRecord(raw)) {
             unrecoverable += 1;
+            const path = str(raw, 'path');
+            if (path !== undefined)
+                unreadableFiles.push(path);
             return raw;
         }
         recovered += 1;
         return { ...raw, extra: { ...(isRecord(extra) ? extra : {}), metavars } };
     });
-    return { json: { ...semgrepJson, results: rebuilt }, intact, recovered, unrecoverable };
+    return {
+        json: { ...semgrepJson, results: rebuilt },
+        intact,
+        recovered,
+        unrecoverable,
+        unreadableFiles,
+    };
 }
 /**
  * The matched source text, sliced by BYTE offset.
@@ -135,18 +160,18 @@ function synthesize(kind, span, metadata) {
  *   get '/ruby-route', to: 'users#index'
  *   path(settings.ADMIN_URL, flask_route)
  *
- * …and, for the three frameworks below, the attribute PLUS the declaration it
- * decorates:
- *   #[allow(dead_code)]\n#[get("/d")]\nasync fn d() -> String { … }
+ * Every one of those spans starts at the call or annotation that matched, so
+ * the capture sits in it at a known place. The three frameworks whose span
+ * starts somewhere else are refused outright — see UNRECOVERABLE_FRAMEWORKS.
  */
 function synthesizeRoute(span, metadata) {
     const framework = str(metadata, 'framework');
     if (framework === 'wp-rest')
         return synthesizeNamespacedRoute(span);
+    // Not "try and fall back" — there is no safe reading of these spans.
+    if (framework !== undefined && UNRECOVERABLE_FRAMEWORKS.has(framework))
+        return undefined;
     const declaredMethod = str(metadata, 'method');
-    if (framework !== undefined && DECORATED_DECLARATION_FRAMEWORKS.has(framework)) {
-        return synthesizeAttributeRoute(span, framework, declaredMethod);
-    }
     const path = routePath(span);
     if (path === undefined)
         return undefined;
@@ -165,175 +190,55 @@ function synthesizeRoute(span, metadata) {
     }
     return metavars;
 }
-/* ---- attribute-anchored routes -------------------------------------------
+/* ---- decorated-declaration frameworks: deliberately NOT recovered ---------
  *
- * Three rule families in `configs/semgrep/routes.yml` cannot match the
+ * Three rule families in `configs/semgrep/routes.yml` cannot match their route
  * attribute alone — Semgrep's Rust engine matches every node in the file, its
  * C# engine reads `[HttpGet($PATH)]` as a collection expression, and its
  * TypeScript engine rejects a bare decorator pattern outright. All three
- * therefore match the attribute *plus the declaration it decorates*.
+ * therefore match the attribute *plus the declaration it decorates*, and the
+ * reported span begins at the FIRST attribute on that declaration.
  *
- * The consequence, measured on Semgrep 1.164.0: the reported span begins at
- * the FIRST attribute on that declaration, which is very often not the route
- * one. Anchoring on the first argument list in the span then reads the wrong
- * attribute's argument — and because that usually *succeeds*, the real route
- * is silently replaced rather than reported missing:
+ * That span is not something this module can read. Two attempts were made and
+ * both fabricated routes:
  *
- *   #[allow(dead_code)] / #[get("/d")]              →  route `dead_code`
- *   [Produces("application/json")] / [HttpGet("/o")] →  route `application/json`
- *   @Roles('admin') / @Get('/users')                 →  route `admin`
+ *   1. Anchor on the first argument list in the span. `#[allow(dead_code)]`
+ *      above `#[get("/d")]` yielded a route named `dead_code`;
+ *      `[Produces("application/json")]` above `[HttpGet("/orders")]` yielded
+ *      `application/json`.
+ *   2. Anchor on the route attribute located by name, in "attribute position".
+ *      A commented-out old route — `// [HttpGet("/orders/legacy")]` above the
+ *      live one, about as ordinary as source code gets — yielded
+ *      `/orders/legacy` while `/orders` never entered the inventory.
  *
- * Each of those passes `isLiteralPath`, so it is emitted as a RESOLVED path a
- * DAST tool would go on to request. That is the precise class of falsehood
- * this tool exists to prevent, so the route attribute is located by name
- * instead. The rule identity always carries enough to name it: `metadata.method`
- * for NestJS and ASP.NET, and the verb itself for Rust, whose attribute name IS
- * the HTTP verb.
+ * The second failure is the general one, and it is not a tuning problem.
+ * Deciding whether text is code, a comment, or a string literal is not local
+ * information: it depends on everything from the start of the file, and the
+ * span we are handed starts in the middle. A predicate that inspects the
+ * characters around a match cannot answer it, in nine languages or in one.
  *
- * When the named attribute is not found in the span we recover NOTHING and
- * count the match `unrecoverable`. A route we cannot read is a gap in the
- * inventory; a route we invent is a lie acted on downstream.
+ * Both failures produced a *resolved* path — `isLiteralPath` accepts
+ * `/orders/legacy` exactly as readily as `/orders` — and both were silent,
+ * because reconstruction SUCCEEDED. The real route was replaced, not merely
+ * missed, and `map_attack_surface` feeds a DAST tool that would go on to
+ * request the fabrication.
+ *
+ * So these three recover nothing and are counted `unrecoverable`. The caller
+ * reports the count and names the remedy. A missing route is a gap a person
+ * can see and act on; a fabricated URL is a lie acted on for them.
+ *
+ * This costs nothing on a Semgrep that still emits metavariables: those runs
+ * are `intact` and never reach this module's synthesis at all.
  */
-const DECORATED_DECLARATION_FRAMEWORKS = new Set([
-    'actix',
-    'nestjs',
-    'aspnet',
-]);
+const UNRECOVERABLE_FRAMEWORKS = new Set(['actix', 'nestjs', 'aspnet']);
 /**
- * Frameworks whose rule pattern spans the decorated declaration, exported so
- * `test/unit/surface/rulePack.test.ts` can assert the two stay in lock-step:
- * widening another family's pattern the same way without adding it here is
- * exactly how the defect above shipped.
+ * Frameworks whose Semgrep pattern spans the decorated declaration, so their
+ * captures cannot be rebuilt from a redacted span. Exported so
+ * `test/unit/surface/rulePack.test.ts` can assert this set and the rule pack's
+ * declaration-spanning rules stay in lock-step: widening a fourth family the
+ * same way without listing it here is how the fabrication class shipped twice.
  */
-export const ATTRIBUTE_ANCHORED_FRAMEWORKS = DECORATED_DECLARATION_FRAMEWORKS;
-/** actix/Rocket attribute names, which are themselves the HTTP verb. */
-const ACTIX_VERBS = ['get', 'post', 'put', 'patch', 'delete', 'options', 'head'];
-/** `metadata.method` is interpolated into an attribute name; keep it a word. */
-const PLAIN_VERB = /^[A-Za-z]+$/;
-/**
- * The literal attribute names that identify this rule's route attribute.
- * `undefined` when the rule identity does not name one — we then have nothing
- * to anchor on and must not guess.
- *
- * Deliberately literal strings, not a `RegExp`: `metadata.method` comes from a
- * YAML file a user can edit, and interpolating it into a pattern let
- * `method: "a("` throw a SyntaxError out of a module whose contract is that it
- * never throws. A non-word verb is now simply rejected here.
- */
-function routeAttributeNames(framework, method) {
-    // Rust: `#[get(` / `#[post(` … the name is the verb, so no metadata.method.
-    if (framework === 'actix')
-        return ACTIX_VERBS.map((verb) => ({ text: verb, verb }));
-    if (method === undefined || !PLAIN_VERB.test(method))
-        return undefined;
-    const name = method.charAt(0).toUpperCase() + method.slice(1).toLowerCase();
-    if (framework === 'nestjs')
-        return [{ text: name }]; // `@Get(`
-    if (framework === 'aspnet')
-        return [{ text: `Http${name}` }]; // `[HttpGet(`
-    return undefined;
-}
-/**
- * Is the attribute name at `at` in a genuine attribute position?
- *
- * This is what replaced tracking string state across nine languages. The
- * previous version scanned the span forward treating every `'` as a string
- * opener, which is right for JS/PHP/Python, wrong for a Rust lifetime
- * (`&'static str`), and catastrophic for the apostrophe in an ordinary English
- * comment (`/// Don't call this directly`): an odd number of them made the scan
- * jump *over* the route attribute, losing the route — or land inside the method
- * body and recover a path out of a string there.
- *
- * Position is decidable locally and needs no such state. Anchor text sitting
- * inside a string is preceded by a quote, so it fails this test without anyone
- * tracking where strings begin.
- */
-function isAttributePosition(span, framework, at) {
-    const prev = lastNonSpaceBefore(span, at);
-    const prevChar = prev < 0 ? undefined : span[prev];
-    // NestJS decorator: `@Get(`.
-    if (framework === 'nestjs')
-        return prevChar === '@';
-    // Rust attribute: `#[get(`, i.e. a `[` whose own lead-in is `#`.
-    if (framework === 'actix') {
-        if (prevChar !== '[')
-            return false;
-        const hash = lastNonSpaceBefore(span, prev);
-        return hash >= 0 && span[hash] === '#';
-    }
-    // C# attribute: `[HttpGet(`, `[Produces("…"), HttpGet(`, or the span itself
-    // beginning at the attribute — Semgrep reports the attribute from *inside*
-    // the bracket list, so the `[` can be outside the span entirely.
-    return prev < 0 || prevChar === '[' || prevChar === ',';
-}
-/** Index of the last non-whitespace character before `index`, or -1. */
-function lastNonSpaceBefore(span, index) {
-    let i = index - 1;
-    while (i >= 0) {
-        const ch = span[i];
-        if (ch === undefined || !/\s/.test(ch))
-            break;
-        i -= 1;
-    }
-    return i;
-}
-/** Would `name` at `at` be part of a longer identifier? */
-function isWordBoundary(span, at, length) {
-    const before = at === 0 ? undefined : span[at - 1];
-    const after = span[at + length];
-    const wordChar = /[A-Za-z0-9_]/;
-    if (before !== undefined && wordChar.test(before))
-        return false;
-    return after === undefined || !wordChar.test(after);
-}
-/**
- * The `(` opening the route attribute's argument list.
- *
- * Scans span order and takes the FIRST candidate that is a whole word, sits in
- * attribute position, and opens an argument list that balances. Span order
- * matters: the route attribute always precedes the declaration body, so
- * attribute-shaped text inside the body can never win over the real one.
- */
-function findRouteAttribute(span, framework, names) {
-    for (let i = 0; i < span.length; i += 1) {
-        for (const name of names) {
-            if (!span.startsWith(name.text, i))
-                continue;
-            if (!isWordBoundary(span, i, name.text.length))
-                continue;
-            let open = i + name.text.length;
-            while (open < span.length && /\s/.test(span[open] ?? ''))
-                open += 1;
-            if (span[open] !== '(')
-                continue;
-            if (!isAttributePosition(span, framework, i))
-                continue;
-            if (matchingClose(span, open) === undefined)
-                continue;
-            return { open, verb: name.verb };
-        }
-    }
-    return undefined;
-}
-function synthesizeAttributeRoute(span, framework, declaredMethod) {
-    const names = routeAttributeNames(framework, declaredMethod);
-    if (names === undefined)
-        return undefined;
-    const attribute = findRouteAttribute(span, framework, names);
-    if (attribute === undefined)
-        return undefined;
-    const path = argumentsAt(span, attribute.open)?.[0];
-    if (path === undefined)
-        return undefined;
-    const metavars = { $PATH: { abstract_content: path } };
-    // Rust binds the attribute name to $METHOD; the other two carry the verb in
-    // `metadata.method`, which extract.ts already reads.
-    const verb = attribute.verb;
-    if (declaredMethod === undefined && verb !== undefined) {
-        metavars['$METHOD'] = { abstract_content: verb };
-    }
-    return metavars;
-}
+export const UNREADABLE_UNDER_REDACTION = UNRECOVERABLE_FRAMEWORKS;
 /**
  * The path a route rule captured: the FIRST ARGUMENT of the registration
  * call, not merely the first string literal in the span.

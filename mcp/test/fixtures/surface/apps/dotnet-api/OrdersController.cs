@@ -17,21 +17,22 @@ public class OrdersController : ControllerBase
         return Ok();
     }
 
-    // A non-route attribute PRECEDING the route one. Semgrep's span starts at
-    // `Produces(...)`, so recovery anchored on the first argument list reads
-    // "application/json" as the path — a RESOLVED route that exists nowhere.
-    // The capture has to be anchored on `HttpGet(` by name.
+    // ADVERSARIAL. A foreign attribute precedes the route one, so Semgrep's
+    // span starts at `Produces(...)`. Anchoring on the first argument list read
+    // "application/json" as the path. ASP.NET attribute routes are therefore
+    // refused on a redacting Semgrep; none of them appear.
     [Produces("application/json")]
     [HttpGet("/aspnet/orders/{id}")]
     public IActionResult GetOne(int id) => Ok(id);
 
-    // An apostrophe in a comment BETWEEN the attributes, and attribute-shaped
-    // text in the body. Lexing strings to find the anchor closes the phantom
-    // string on the body's apostrophe and recovers the FABRICATED path below as
-    // a resolved route. `[Roles("HttpGet(")]` is the mirror case: anchor text
-    // genuinely inside a string, which must still be ignored.
+    // ADVERSARIAL, three decoys at once: anchor text inside a preceding
+    // attribute's string, a commented-out old route, and attribute-shaped text
+    // in the body. Anchoring by name emitted `/aspnet/orders/legacy`; lexing
+    // strings emitted the body's FABRICATED path. Both were `path_partial:
+    // false`, i.e. presented as verified URLs.
     [Roles("HttpGet(")]
     // Don't expose this without the guard.
+    // [HttpGet("/aspnet/orders/legacy")]
     [HttpGet("/aspnet/orders/audit")]
     public IActionResult Audit() => Ok("it's [HttpGet(\"/aspnet/FABRICATED\")]");
 

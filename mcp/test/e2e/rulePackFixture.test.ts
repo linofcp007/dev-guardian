@@ -82,30 +82,13 @@ function describeRoute(route: RouteRecord): string {
   return `${route.framework} ${route.method} ${route.path_resolved}${route.path_partial ? ' [partial]' : ''}`;
 }
 
-/* The full surface of test/fixtures/surface/apps/, verified capture-by-capture
+/* The surface of test/fixtures/surface/apps/, verified capture-by-capture
    against Semgrep 1.86.0 (which still emits `extra.metavars`) and reproduced
-   through the byte-offset recovery on 1.164.0 (which redacts them). */
-const EXPECTED_ROUTES = [
-  // ---- ASP.NET attribute routing. The verb lives in the attribute name, so
-  // each rule declares metadata.method; `[HttpGet]` with no argument has no
-  // path to capture and is deliberately absent.
-  //
-  // `/aspnet/orders/{id}` GET carries a PRECEDING `[Produces("…")]` attribute:
-  // its rule matches the decorated declaration, so the span starts at the
-  // wrong attribute and the recovery has to find `HttpGet(` by name. Read
-  // literally, the first argument list yields `application/json` — a resolved
-  // route that exists nowhere.
-  'aspnet DELETE /aspnet/orders/{id}',
-  'aspnet GET /aspnet/orders',
-  // `/aspnet/orders/audit` additionally carries an apostrophe in a comment
-  // between its attributes and `[HttpGet("…FABRICATED…")]` inside a string in
-  // its body. A recovery that lexes strings to find the anchor reports the
-  // fabricated path here instead.
-  'aspnet GET /aspnet/orders/audit',
-  'aspnet GET /aspnet/orders/{id}',
-  'aspnet PATCH /aspnet/orders/{id}/status',
-  'aspnet POST /aspnet/orders',
-  'aspnet PUT /aspnet/orders/{id}',
+   through the byte-offset recovery on 1.164.0 (which redacts them).
+
+   Split in two because the answer legitimately depends on the Semgrep version.
+   See DECORATED_DECLARATION_ROUTES below. */
+const BASE_ROUTES = [
   // ---- ASP.NET minimal API. `/stats` is registered on a MapGroup("/admin")
   // builder; route groups are not resolved, so it is reported at the path the
   // registration itself names.
@@ -113,19 +96,6 @@ const EXPECTED_ROUTES = [
   'aspnet-minimal GET /minimal/health',
   'aspnet-minimal GET /stats',
   'aspnet-minimal POST /minimal/orders',
-  // ---- actix / Rocket. One rule binding the attribute name to $METHOD.
-  // `/rust/gated` carries a PRECEDING `#[allow(dead_code)]`; read literally,
-  // the span's first argument list yields `dead_code` as a resolved path.
-  'actix DELETE /rust/items/{id}',
-  // `/rust/documented` sits behind a doc comment with two apostrophes and a
-  // `&'static` lifetime — the shape that made a string-lexing anchor search
-  // skip the attribute and lose the route.
-  'actix GET /rust/documented',
-  'actix GET /rust/gated',
-  'actix GET /rust/health',
-  'actix PATCH /rust/items/{id}/status',
-  'actix POST /rust/items',
-  'actix PUT /rust/items/{id}',
   // ---- Django. The computed path survives as a route and is flagged, never
   // resolved; the regex route is flagged too, because a regex is not a URL.
   // Nothing from py-django/helpers.py, whose local `path()` helper is bait.
@@ -152,21 +122,6 @@ const EXPECTED_ROUTES = [
   'gin DELETE /gin/items/:id',
   'gin GET /gin/ping',
   'gin POST /gin/items',
-  // ---- NestJS. Every route is partial: the `@Controller('users')` prefix is
-  // not resolvable from the method decorator, and resolveNodeMounts flags any
-  // JS/TS route whose file it cannot tie to exactly one mount point.
-  //
-  // `purge/:id` carries a PRECEDING `@HttpCode(204)`; read literally, the
-  // span's first argument list yields `204` as a resolved path.
-  'nestjs DELETE :id [partial]',
-  'nestjs DELETE purge/:id [partial]',
-  // `audit/:id` carries the apostrophe-in-a-comment plus decorator-shaped text
-  // in the body.
-  'nestjs GET audit/:id [partial]',
-  'nestjs GET :id [partial]',
-  'nestjs PATCH :id/status [partial]',
-  'nestjs POST /create [partial]',
-  'nestjs PUT :id [partial]',
   'net-http ANY /go/health',
   'net-http ANY /go/orders',
   'laravel DELETE /laravel/orders/{order}',
@@ -197,6 +152,58 @@ const EXPECTED_ROUTES = [
   'wp-rest ANY /wp-json/guardian/v1/items',
 ].sort();
 
+/**
+ * Routes that exist ONLY when Semgrep still emits metavariables.
+ *
+ * actix, NestJS and ASP.NET attribute routing are the three families whose
+ * Semgrep pattern must span the decorated declaration. On a Semgrep that
+ * redacts match content, the reported span starts at whatever attribute comes
+ * first, and `surface/recoverMetavars.ts` refuses to guess which one is the
+ * route — so these are absent, and `coverage` says `unreadable` for their
+ * languages rather than `no_matches`.
+ *
+ * The fixture files for all three carry deliberate decoys (a commented-out old
+ * route, anchor text inside a string, attribute-shaped text in a method body).
+ * The assertion that matters most in this file is that NONE of those decoys
+ * ever appears as a route: two earlier reconstructions emitted them as resolved
+ * paths, which is the failure this whole tool exists to prevent.
+ */
+const DECORATED_DECLARATION_ROUTES = [
+  'actix DELETE /rust/items/{id}',
+  'actix GET /rust/documented',
+  'actix GET /rust/gated',
+  'actix GET /rust/health',
+  'actix PATCH /rust/items/{id}/status',
+  'actix POST /rust/items',
+  'actix PUT /rust/items/{id}',
+  'aspnet DELETE /aspnet/orders/{id}',
+  'aspnet GET /aspnet/orders',
+  'aspnet GET /aspnet/orders/audit',
+  'aspnet GET /aspnet/orders/{id}',
+  'aspnet PATCH /aspnet/orders/{id}/status',
+  'aspnet POST /aspnet/orders',
+  'aspnet PUT /aspnet/orders/{id}',
+  'nestjs DELETE :id [partial]',
+  'nestjs DELETE purge/:id [partial]',
+  'nestjs GET :id [partial]',
+  'nestjs GET audit/:id [partial]',
+  'nestjs PATCH :id/status [partial]',
+  'nestjs POST /create [partial]',
+  'nestjs PUT :id [partial]',
+].sort();
+
+/** Paths that must NEVER appear: every decoy planted in the fixture. */
+const FABRICATION_DECOYS = [
+  'dead_code',
+  '/rust/legacy',
+  'application/json',
+  '/aspnet/orders/legacy',
+  '/aspnet/FABRICATED',
+  '204',
+  'legacy/:id',
+  'audit/FABRICATED',
+];
+
 async function isInstalled(bin: string): Promise<boolean> {
   try {
     const r = await execa(detectOs() === 'win32' ? 'where' : 'which', [bin], {
@@ -213,7 +220,9 @@ async function isInstalled(bin: string): Promise<boolean> {
  * Resolved once, at collection time, so `it.skipIf` can report a skip as a
  * skip rather than each test deciding for itself and returning early.
  */
-const SEMGREP_AVAILABLE = existsSync(FIXTURE) && (await isInstalled('semgrep'));
+const FIXTURE_PRESENT = existsSync(FIXTURE);
+const SEMGREP_INSTALLED = await isInstalled('semgrep');
+const SEMGREP_AVAILABLE = FIXTURE_PRESENT && SEMGREP_INSTALLED;
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
 function makeContext(): PluginContext {
@@ -242,12 +251,18 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
   // Present in every run so the gate itself is visible; only *executed* when
   // the caller has asked for it. Without this, "Semgrep is missing" and
   // "Semgrep ran and agreed" are indistinguishable in the suite output.
-  it.runIf(REQUIRE_SEMGREP)('GUARDIAN_REQUIRE_SEMGREP=1 — Semgrep must be on PATH', () => {
+  it.runIf(REQUIRE_SEMGREP)('GUARDIAN_REQUIRE_SEMGREP=1 — this suite must be runnable', () => {
+    // Two distinct reasons the suite can be skipped; saying "check your PATH"
+    // when the fixture tree is missing sends the reader the wrong way.
     expect(
-      SEMGREP_AVAILABLE,
+      SEMGREP_INSTALLED,
       'GUARDIAN_REQUIRE_SEMGREP=1 but semgrep is not on PATH, so the only test that ' +
         'exercises the real rule pack would have been skipped. On Windows it is usually ' +
         'in %APPDATA%\\Roaming\\Python\\Python3xx\\Scripts.',
+    ).toBe(true);
+    expect(
+      FIXTURE_PRESENT,
+      `GUARDIAN_REQUIRE_SEMGREP=1 but the fixture tree is missing at ${FIXTURE}.`,
     ).toBe(true);
   });
 
@@ -275,8 +290,28 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     expect(snapshot).toBeDefined();
     if (!snapshot) return;
 
-    expect(snapshot.routes.map(describeRoute).sort()).toEqual(EXPECTED_ROUTES);
-    expect(result.routes_total).toBe(EXPECTED_ROUTES.length);
+    // Whether the decorated-declaration families appear depends on the Semgrep
+    // version, and the recovery step's presence in tools_run is exactly that
+    // signal: it is emitted only when metavariables had to be rebuilt.
+    const redacting = result.tools_run.some((t) => t.name === 'semgrep-metavar-recovery');
+    const expected = redacting
+      ? BASE_ROUTES
+      : [...BASE_ROUTES, ...DECORATED_DECLARATION_ROUTES].sort();
+
+    const actual = snapshot.routes.map(describeRoute).sort();
+    expect(actual).toEqual(expected);
+    expect(result.routes_total).toBe(expected.length);
+
+    // The load-bearing assertion. Every decoy planted in the fixture — a
+    // commented-out old route, anchor text inside a string, attribute-shaped
+    // text in a method body — must be absent. Two earlier reconstructions
+    // emitted them as RESOLVED paths while the real route vanished.
+    for (const decoy of FABRICATION_DECOYS) {
+      expect(
+        snapshot.routes.filter((r) => r.path_resolved.includes(decoy)),
+        `fabricated route containing ${decoy}`,
+      ).toEqual([]);
+    }
   }, 6 * 60_000);
 
   it.skipIf(!SEMGREP_AVAILABLE)('reports env vars, ports and per-language coverage from the same run', async () => {
@@ -310,10 +345,14 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     expect(snapshot.ports).toEqual([{ port: 8080, source: 'Dockerfile' }]);
     expect(snapshot.webhooks).toEqual([]);
 
-    // Every language the fixture contains has rules AND matches. `no_matches`
-    // or `no_rules` appearing here means a rule family stopped firing.
-    const covered = snapshot.coverage.filter((c) => c.routes_found > 0);
-    expect(covered.map((c) => c.language).sort()).toEqual([
+    // Semgrep matched routes in all nine languages. Each must therefore report
+    // either `ok` (read) or `unreadable` (matched, refused) — never
+    // `no_matches`, which a consumer reads as "this language exposes nothing",
+    // and never `no_rules`, which would mean a rule family stopped firing.
+    const matched = snapshot.coverage.filter(
+      (c) => c.routes_found > 0 || c.unreadable_matches > 0,
+    );
+    expect(matched.map((c) => c.language).sort()).toEqual([
       'csharp',
       'go',
       'java',
@@ -324,7 +363,25 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
       'rust',
       'typescript',
     ]);
-    expect(covered.every((c) => c.status === 'ok')).toBe(true);
+    expect(matched.every((c) => c.status === 'ok' || c.status === 'unreadable')).toBe(true);
+
+    const redacting = result.tools_run.some((t) => t.name === 'semgrep-metavar-recovery');
+    if (redacting) {
+      // Rust and TypeScript are the pure cases: every route the fixture
+      // declares in them comes from actix / NestJS, so all of them are refused.
+      // Without the `unreadable` status both would report `no_matches` — a
+      // Rust web service described as exposing nothing at all.
+      for (const language of ['rust', 'typescript']) {
+        const entry = snapshot.coverage.find((c) => c.language === language);
+        expect(entry?.status, `${language} coverage status`).toBe('unreadable');
+        expect(entry?.routes_found, `${language} routes_found`).toBe(0);
+        expect(entry?.unreadable_matches, `${language} unreadable_matches`).toBeGreaterThan(0);
+      }
+      // C# is the mixed case: minimal-API routes read, attribute routes refused.
+      const csharp = snapshot.coverage.find((c) => c.language === 'csharp');
+      expect(csharp?.status).toBe('unreadable');
+      expect(csharp?.routes_found).toBeGreaterThan(0);
+    }
   }, 6 * 60_000);
 
   it.skipIf(!SEMGREP_AVAILABLE)('recovers the captures Semgrep redacts, or says so in tools_run', async () => {
@@ -338,14 +395,22 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     const result = (await tool.handler({ project_path: work, force: true }, ctx)) as SurfaceResult;
 
     // Either Semgrep emitted metavariables (older / logged-in) and there is no
-    // recovery entry at all, or it redacted them and every match was rebuilt.
-    // What must never happen is a recovery step reporting losses: those
-    // matches are routes missing from the inventory.
+    // recovery entry at all, or it redacted them — in which case the ten
+    // reconstructable families were rebuilt and the three that cannot be are
+    // reported as losses. A loss is legitimate here; a SILENT loss is not, so
+    // the entry must name the count and the remedy.
     const recovery = result.tools_run.find((t) => t.name === 'semgrep-metavar-recovery');
     if (recovery !== undefined) {
-      expect(recovery.status).toBe('ok');
       expect(recovery.reason ?? '').toMatch(/recovered \d+ redacted match/);
+      if (recovery.status === 'failed') {
+        expect(recovery.reason ?? '').toMatch(/MISSING/);
+        expect(recovery.reason ?? '').toMatch(/semgrep login/);
+        expect(recovery.reason ?? '').toMatch(/does not require an account/);
+      }
     }
-    expect(result.routes_total).toBe(EXPECTED_ROUTES.length);
+    const redacting = result.tools_run.some((t) => t.name === 'semgrep-metavar-recovery');
+    expect(result.routes_total).toBe(
+      redacting ? BASE_ROUTES.length : BASE_ROUTES.length + DECORATED_DECLARATION_ROUTES.length,
+    );
   }, 6 * 60_000);
 });

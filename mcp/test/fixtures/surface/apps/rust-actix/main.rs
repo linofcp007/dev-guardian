@@ -27,23 +27,25 @@ async fn delete_item(path: web::Path<u32>) -> impl Responder {
     HttpResponse::NoContent().finish()
 }
 
-// A non-route attribute PRECEDING the route one. Semgrep's span for this match
-// starts at `#[allow(...)]`, so recovery that anchors on the first argument
-// list in the span reads `dead_code` as the path — and `dead_code` passes the
-// literal test, so it is emitted as a RESOLVED route. The capture has to be
-// anchored on `#[<verb>(` by name. Not registered below, hence the allow.
+// ADVERSARIAL. A foreign attribute precedes the route one, so Semgrep's span
+// starts at `#[allow(...)]`. Reconstruction from a redacted span cannot tell
+// which attribute is the route, so actix routes are refused outright and NONE
+// of the routes in this file appear on a redacting Semgrep. What must never
+// happen is a route named `dead_code`, which is what anchoring on the first
+// argument list produced.
 #[allow(dead_code)]
 #[get("/rust/gated")]
 async fn gated() -> impl Responder {
     HttpResponse::Ok().finish()
 }
 
-// An apostrophe in an ordinary doc comment, plus a lifetime in the signature.
-// A recovery that lexes strings to find the attribute treats both `'`s as
-// string delimiters and jumps straight over `#[get(...)]`, losing the route
-// entirely. Anchoring by position needs no string state at all.
+// ADVERSARIAL. A commented-out old route above the live one — about as
+// ordinary as source gets — plus apostrophes in the doc comment and a lifetime
+// in the signature. Anchoring by name produced `/rust/legacy`; lexing strings
+// lost the route. Neither is acceptable, so the family is refused.
 #[allow(dead_code)]
 /// Don't call this directly; it's the router's job.
+// #[get("/rust/legacy")]
 #[get("/rust/documented")]
 async fn documented(name: &'static str) -> impl Responder {
     HttpResponse::Ok().body(name)

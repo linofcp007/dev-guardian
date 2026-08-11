@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { ATTRIBUTE_ANCHORED_FRAMEWORKS } from '../../../src/surface/recoverMetavars.js';
+import { UNREADABLE_UNDER_REDACTION } from '../../../src/surface/recoverMetavars.js';
 
 const PACK_PATH = join(__dirname, '../../../../configs/semgrep/routes.yml');
 
@@ -166,7 +166,7 @@ describe('configs/semgrep/routes.yml', () => {
     expect(rule === undefined ? new Set() : guardedMetavars(rule)).toContain('$METHOD');
   });
 
-  it('anchors every route rule whose pattern spans the decorated declaration', () => {
+  it('refuses recovery for every route rule whose pattern spans the declaration', () => {
     // The lock-step that would have caught a shipped Critical defect.
     //
     // A pattern ending in `{ ... }` matches the attribute PLUS the declaration
@@ -179,9 +179,12 @@ describe('configs/semgrep/routes.yml', () => {
     //
     //   #[allow(dead_code)] / #[get("/d")]  ->  a resolved route `dead_code`
     //
-    // Widening another family's pattern this way without adding its framework
-    // to ATTRIBUTE_ANCHORED_FRAMEWORKS reintroduces exactly that bug, so the
-    // two lists are asserted equal here rather than merely compatible.
+    // Such a span cannot be read back on a redacting Semgrep: it starts at
+    // whatever attribute comes first, and no local rule can tell code from a
+    // comment from a string. Those families are therefore REFUSED — see
+    // UNREADABLE_UNDER_REDACTION. Widening a fourth family the same way without
+    // listing it there silently reintroduces route fabrication, so the two
+    // lists are asserted equal here rather than merely compatible.
     //
     // The detector keys on a brace-delimited BODY appearing in the pattern,
     // not on the literal text `{ ... }`. Sniffing for that exact string passed
@@ -196,7 +199,7 @@ describe('configs/semgrep/routes.yml', () => {
       }
     }
     expect(spansDeclaration.size).toBeGreaterThan(0);
-    expect([...spansDeclaration].sort()).toEqual([...ATTRIBUTE_ANCHORED_FRAMEWORKS].sort());
+    expect([...spansDeclaration].sort()).toEqual([...UNREADABLE_UNDER_REDACTION].sort());
   });
 
   it('constrains $PATH to a literal on exactly the two rules that need it', () => {
