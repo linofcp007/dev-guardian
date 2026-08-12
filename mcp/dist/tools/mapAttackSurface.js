@@ -40,7 +40,7 @@ import { recoverMetavars, } from '../surface/recoverMetavars.js';
 import { resolveNodeMounts } from '../surface/resolvers/node.js';
 import { resolveWordpressRoutes } from '../surface/resolvers/wordpress.js';
 import { invokeSemgrep } from '../surface/scanSemgrep.js';
-import { discoverSpecs, MAX_SPEC_BYTES, MAX_SPEC_FILES, } from '../surface/specDiscover.js';
+import { dedupeResolved, discoverSpecs, MAX_SPEC_BYTES, MAX_SPEC_FILES, } from '../surface/specDiscover.js';
 import { diffSpecRoutes } from '../surface/specDiff.js';
 import { importSpec } from '../surface/specImport.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
@@ -373,7 +373,13 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
  * them, so one dropped during a directory walk is not a broken promise.
  */
 function importSpecs(projectPath, specPaths) {
-    const resolvedSpecPaths = specPaths?.map((p) => resolveExplicitSpecPath(projectPath, p));
+    // Deduped HERE, not just inside `discoverSpecs`, so the "which named paths
+    // were not read" accounting below applies the file cap to the same list
+    // discovery did. See `dedupeResolved`'s doc comment for what slides
+    // otherwise.
+    const resolvedSpecPaths = specPaths === undefined
+        ? undefined
+        : dedupeResolved(specPaths.map((p) => resolveExplicitSpecPath(projectPath, p)));
     const discovery = discoverSpecs(projectPath, resolvedSpecPaths);
     const specRoutes = [];
     const specFiles = [];
@@ -409,7 +415,8 @@ function importSpecs(projectPath, specPaths) {
     if (resolvedSpecPaths !== undefined) {
         // Mirrors discoverSpecs' own file-count cap (candidates.slice(0,
         // MAX_SPEC_FILES)) so a path beyond the cap is not double-reported here
-        // AND in the `truncated` block above.
+        // AND in the `truncated` block above. `resolvedSpecPaths` is already
+        // deduped, so this window is byte-for-byte the one discovery selected.
         const attempted = resolvedSpecPaths.slice(0, MAX_SPEC_FILES);
         const accountedFor = new Set([
             ...discovery.specs.map((s) => s.file),

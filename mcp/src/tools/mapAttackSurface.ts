@@ -47,6 +47,7 @@ import { resolveNodeMounts, type ImportRecord } from '../surface/resolvers/node.
 import { resolveWordpressRoutes } from '../surface/resolvers/wordpress.js';
 import { invokeSemgrep } from '../surface/scanSemgrep.js';
 import {
+  dedupeResolved,
   discoverSpecs,
   MAX_SPEC_BYTES,
   MAX_SPEC_FILES,
@@ -476,7 +477,14 @@ function importSpecs(
   projectPath: string,
   specPaths: string[] | undefined,
 ): { specRoutes: RouteRecord[]; specFiles: SpecFileReport[]; specsParsed: number } {
-  const resolvedSpecPaths = specPaths?.map((p) => resolveExplicitSpecPath(projectPath, p));
+  // Deduped HERE, not just inside `discoverSpecs`, so the "which named paths
+  // were not read" accounting below applies the file cap to the same list
+  // discovery did. See `dedupeResolved`'s doc comment for what slides
+  // otherwise.
+  const resolvedSpecPaths =
+    specPaths === undefined
+      ? undefined
+      : dedupeResolved(specPaths.map((p) => resolveExplicitSpecPath(projectPath, p)));
   const discovery = discoverSpecs(projectPath, resolvedSpecPaths);
 
   const specRoutes: RouteRecord[] = [];
@@ -517,7 +525,8 @@ function importSpecs(
   if (resolvedSpecPaths !== undefined) {
     // Mirrors discoverSpecs' own file-count cap (candidates.slice(0,
     // MAX_SPEC_FILES)) so a path beyond the cap is not double-reported here
-    // AND in the `truncated` block above.
+    // AND in the `truncated` block above. `resolvedSpecPaths` is already
+    // deduped, so this window is byte-for-byte the one discovery selected.
     const attempted = resolvedSpecPaths.slice(0, MAX_SPEC_FILES);
     const accountedFor = new Set<string>([
       ...discovery.specs.map((s) => s.file),

@@ -1133,6 +1133,49 @@ describe('map_attack_surface — spec import and diff', () => {
     expect(r.spec_files[0]?.reason).toMatch(/could not be read/);
   });
 
+  it('applies the file cap to the deduped spec_paths, so a duplicate cannot hide an unreadable path', async () => {
+    // Measured bug: `discoverSpecs` dedupes and THEN caps, while this tool's
+    // "which named paths were not read" accounting capped the raw list. With
+    // duplicates present the caller's window ends earlier than the one
+    // discovery actually used, and a path in the gap is reported by neither
+    // side: no parse_error row (outside the caller's window) and no
+    // truncation row (the deduped set never exceeded the cap). It vanishes.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'dup.yaml'), SPEC);
+    const fillers: string[] = [];
+    for (let i = 0; i < MAX_SPEC_FILES - 2; i += 1) {
+      writeFileSync(join(projectPath, `f${i}.yaml`), 'openapi: "3.0.0"\npaths: {}\n');
+      fillers.push(`f${i}.yaml`);
+    }
+
+    // Raw length MAX_SPEC_FILES + 1 (the duplicate pushes 'missing.yaml' past
+    // the cap); deduped length exactly MAX_SPEC_FILES (nothing is dropped).
+    const r = (await tool().handler(
+      {
+        project_path: projectPath,
+        spec_paths: ['dup.yaml', 'dup.yaml', ...fillers, 'missing.yaml'],
+      },
+      ctx,
+    )) as {
+      spec_routes_total: number;
+      spec_files: { status: string; file: string; reason?: string }[];
+    };
+
+    expect(
+      r.spec_files.some((f) => f.file.endsWith('missing.yaml') && f.status === 'parse_error'),
+    ).toBe(true);
+    // Not a truncation: the deduped candidate set fits inside the cap.
+    expect(r.spec_files.some((f) => f.reason?.includes('More than'))).toBe(false);
+    // And the duplicate is read once, so its two routes are not counted twice.
+    expect(r.spec_routes_total).toBe(2);
+    expect(r.spec_files.filter((f) => f.file.endsWith('dup.yaml'))).toHaveLength(1);
+  });
+
   it('counts a spec that parses but declares no paths toward specsParsed (diff is not null)', async () => {
     // Pins the `|| report.status === 'no_paths'` clause: a valid document
     // that declares nothing is still a successfully parsed spec and must not
