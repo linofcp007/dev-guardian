@@ -195,7 +195,11 @@ regression is a failing test rather than a live misfire:
   anonymous and authenticated.
 - **Bounds, all reported when they cut**, never silent: max concurrency 4, per-
   request timeout 5s, a global request ceiling and a global wall-clock ceiling.
-  A truncated run says so, the same discipline as the item-1 file caps.
+  A truncated run says so, the same discipline as the item-1 file caps. The
+  global wall-clock ceiling is implemented by aborting the shared `AbortSignal`
+  that `probe.ts` already honours, so probes cut by the deadline record
+  `outcome: 'cancelled'` — distinct from `timeout`, which is the target
+  failing to answer.
 
 ## 6. Checks (own engine)
 
@@ -295,8 +299,13 @@ misled into thinking nuclei validated their routes.
 - **Raw evidence** — the redacted request and response for each finding — is
   written under `.guardian/reports/dast-<short-scan-id>/`, pointed at by the
   finding, not inlined into the SQLite row.
-- The tool **reads the latest surface snapshot** for the current tree via
-  `surfaceRepo`. No snapshot → refuse (see §3). It does not re-run
+- The tool **reads the latest surface snapshot** via `surfaceRepo.getLatest()`,
+  *not* the snapshot keyed to the current tree hash. Tree-scoping would refuse
+  after any edit to any file — a README change moves the tree hash while the
+  route inventory is still perfectly valid — and refusing constantly is how a
+  tool stops being used. Instead, a snapshot whose tree hash differs from the
+  working tree is used **with a warning**, so the mismatch is stated rather
+  than either hidden or fatal. No snapshot at all → refuse (see §3). It does not re-run
   `map_attack_surface`; composing the two is the caller's (or a future
   orchestrator's) job, keeping this tool single-purpose.
 
@@ -324,7 +333,7 @@ derived from `tools_run` + `missing_tools` by `tools/scanCoverage.ts` — reused
 not reinvented. On top of it, a DAST summary: routes planned, probed and skipped
 (with the reason per skip — partial-path, method-envelope, duplicate), plus a
 **per-check status** (`ok` / `skipped_envelope` / `no_candidate` /
-`needs_credentials` / `target_error`) so a check that never ran is visible as
+`needs_credentials` / `scanner_missing` / `target_error`) so a check that never ran is visible as
 such rather than as a check that found nothing.
 
 The consumer contract carried forward from item 1 verbatim: **a route count
