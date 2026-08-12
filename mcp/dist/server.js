@@ -41351,8 +41351,8 @@ function hashFiles(parts) {
 }
 
 // src/tools/mapAttackSurface.ts
-import { copyFileSync as copyFileSync2, readFileSync as readFileSync18 } from "node:fs";
-import { isAbsolute, join as join40 } from "node:path";
+import { readFileSync as readFileSync18 } from "node:fs";
+import { isAbsolute, join as join41 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -41965,6 +41965,59 @@ function resolveWordpressRoutes(routes) {
   });
 }
 
+// src/surface/scanSemgrep.ts
+import { copyFileSync as copyFileSync2 } from "node:fs";
+import { join as join40 } from "node:path";
+async function invokeSemgrep(options) {
+  const { projectPath, rulesPath, outFile, reportDir } = options;
+  const semgrepBin = await scannerAvailable("semgrep");
+  if (semgrepBin !== null) {
+    const run2 = await runProcess({
+      command: "semgrep",
+      args: ["--config", rulesPath, "--json", "--output", outFile, "--quiet", projectPath],
+      cwd: projectPath
+    });
+    return { toolRun: buildToolRun(run2) };
+  }
+  const dockerBin = await scannerAvailable("docker");
+  if (dockerBin === null) return null;
+  let containerRules;
+  try {
+    const stagedRules = join40(reportDir, "routes.yml");
+    copyFileSync2(rulesPath, stagedRules);
+    containerRules = toContainerPath(projectPath, stagedRules);
+  } catch (e) {
+    return {
+      toolRun: {
+        name: "semgrep",
+        status: "failed",
+        reason: `docker: could not stage rule pack: ${e.message}`
+      }
+    };
+  }
+  const image = process.env["GUARDIAN_SEMGREP_IMAGE"] || DEFAULT_SEMGREP_IMAGE;
+  const run = await runProcess({
+    command: "docker",
+    args: buildSemgrepDockerArgs({
+      projectPath,
+      outFileHost: outFile,
+      image,
+      configs: [containerRules]
+    }),
+    cwd: projectPath
+  });
+  return { toolRun: buildToolRun(run, `docker (${image})`) };
+}
+function buildToolRun(run, via) {
+  const ok = run.outcome === "completed" || run.exitCode === 1;
+  if (ok) {
+    return via ? { name: "semgrep", status: "ok", reason: `ran via ${via}` } : { name: "semgrep", status: "ok" };
+  }
+  const firstLine = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  const reason = via ? `${via}: ${firstLine ?? "fallback failed"}` : firstLine ?? "unknown";
+  return { name: "semgrep", status: "failed", reason };
+}
+
 // src/tools/mapAttackSurface.ts
 var SAMPLE_SIZE = 20;
 var WEBHOOK_PATTERN = /webhook|callback|hook/i;
@@ -42013,9 +42066,9 @@ async function handler39(input, ctx) {
   }
   const includeEnvVars = inp.include_env_vars !== false;
   const reportDir = ensureReportDir(projectPath, treeHash, "surface");
-  const outFile = join40(reportDir, "surface.json");
-  const rulesPath = join40(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
-  const invocation = await invokeSemgrep(projectPath, rulesPath, outFile, reportDir);
+  const outFile = join41(reportDir, "surface.json");
+  const rulesPath = join41(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
+  const invocation = await invokeSemgrep({ projectPath, rulesPath, outFile, reportDir });
   if (invocation === null) {
     return degradedResult(
       [
@@ -42091,7 +42144,7 @@ function readSources(parsed, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path6 of collectAllFiles(parsed)) {
     try {
-      const buffer = readFileSync18(isAbsolute(path6) ? path6 : join40(projectPath, path6));
+      const buffer = readFileSync18(isAbsolute(path6) ? path6 : join41(projectPath, path6));
       const text = buffer.toString("utf8");
       if (Buffer.byteLength(text, "utf8") !== buffer.length) continue;
       sources.set(path6, text);
@@ -42132,54 +42185,6 @@ function cachedToolsRun(snapshot) {
     reason: run.reason === void 0 ? "from the cached run" : `${run.reason} (from the cached run)`
   }));
   return [marker, ...persisted];
-}
-async function invokeSemgrep(projectPath, rulesPath, outFile, reportDir) {
-  const semgrepBin = await scannerAvailable("semgrep");
-  if (semgrepBin !== null) {
-    const run2 = await runProcess({
-      command: "semgrep",
-      args: ["--config", rulesPath, "--json", "--output", outFile, "--quiet", projectPath],
-      cwd: projectPath
-    });
-    return { toolRun: buildToolRun(run2) };
-  }
-  const dockerBin = await scannerAvailable("docker");
-  if (dockerBin === null) return null;
-  let containerRules;
-  try {
-    const stagedRules = join40(reportDir, "routes.yml");
-    copyFileSync2(rulesPath, stagedRules);
-    containerRules = toContainerPath(projectPath, stagedRules);
-  } catch (e) {
-    return {
-      toolRun: {
-        name: "semgrep",
-        status: "failed",
-        reason: `docker: could not stage rule pack: ${e.message}`
-      }
-    };
-  }
-  const image = process.env["GUARDIAN_SEMGREP_IMAGE"] || DEFAULT_SEMGREP_IMAGE;
-  const run = await runProcess({
-    command: "docker",
-    args: buildSemgrepDockerArgs({
-      projectPath,
-      outFileHost: outFile,
-      image,
-      configs: [containerRules]
-    }),
-    cwd: projectPath
-  });
-  return { toolRun: buildToolRun(run, `docker (${image})`) };
-}
-function buildToolRun(run, via) {
-  const ok = run.outcome === "completed" || run.exitCode === 1;
-  if (ok) {
-    return via ? { name: "semgrep", status: "ok", reason: `ran via ${via}` } : { name: "semgrep", status: "ok" };
-  }
-  const firstLine = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  const reason = via ? `${via}: ${firstLine ?? "fallback failed"}` : firstLine ?? "unknown";
-  return { name: "semgrep", status: "failed", reason };
 }
 function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unreadableRouteFiles) {
   const { routes, mounts } = extractSurface(parsed);
