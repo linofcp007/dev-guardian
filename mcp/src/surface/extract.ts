@@ -185,6 +185,7 @@ function toRoute(
 
   const route: RouteRecord = {
     method: normalizeMethod(metavar(metavars, '$METHOD') ?? str(metadata, 'method')),
+    provenance: 'code',
     path_raw: path,
     path_resolved: path,
     path_partial: !usable,

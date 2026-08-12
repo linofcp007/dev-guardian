@@ -178,6 +178,15 @@ export const HTTP_METHODS = [
 export type HttpMethod = (typeof HTTP_METHODS)[number];
 
 /**
+ * Where a route came from. `'code'` means Semgrep matched a route registration
+ * in source; `'spec'` means an OpenAPI or Swagger document declared it. The two
+ * live in the same `routes[]` array so a consumer sees one inventory, but the
+ * difference between them is the whole point of the spec diff — a route that is
+ * only `'code'` is undocumented, and one that is only `'spec'` may not exist.
+ */
+export type RouteProvenance = 'code' | 'spec';
+
+/**
  * One externally reachable HTTP route, extracted statically.
  *
  * `path_raw` is what the source literally says at the match site.
@@ -200,6 +209,7 @@ export type HttpMethod = (typeof HTTP_METHODS)[number];
  */
 export interface RouteRecord {
   method: HttpMethod;
+  provenance: RouteProvenance;
   path_raw: string;
   path_resolved: string;
   path_partial: boolean;

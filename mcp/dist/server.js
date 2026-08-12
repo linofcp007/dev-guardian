@@ -30441,7 +30441,21 @@ function rowToSnapshot2(row) {
     project_path: row.project_path,
     captured_at: row.captured_at,
     tree_hash: row.tree_hash,
-    snapshot: { ...EMPTY_SNAPSHOT, ...parsed }
+    snapshot: {
+      ...EMPTY_SNAPSHOT,
+      ...parsed,
+      // Snapshots written before provenance existed carry routes without it. A
+      // snapshot is a point-in-time artifact and stale ones are history, so this
+      // backfills on read rather than migrating: every pre-existing route came from
+      // source extraction, because spec import did not exist yet. Typed without
+      // `provenance` (rather than as `RouteRecord[]`) so the compiler does not
+      // "know" every element already has it — otherwise it flags the fallback
+      // below as dead code (TS2783), when the whole point is that it is live
+      // for exactly the legacy rows that lack the field.
+      routes: (parsed["routes"] ?? []).map(
+        (r) => ({ provenance: "code", ...r })
+      )
+    }
   };
 }
 
@@ -41551,6 +41565,7 @@ function toRoute(metadata, metavars, file, line) {
   const usable = literalPath && (namespace === void 0 || isLiteralPath(namespace));
   const route = {
     method: normalizeMethod(metavar(metavars, "$METHOD") ?? str2(metadata, "method")),
+    provenance: "code",
     path_raw: path6,
     path_resolved: path6,
     path_partial: !usable,
@@ -42254,6 +42269,7 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
   return joined;
 }
 function buildCoverage(routes, ctx, unreadableRouteFiles) {
+  const codeRoutes = routes.filter((r) => r.provenance === "code");
   const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
   const unreadableByLanguage = /* @__PURE__ */ new Map();
   for (const file of unreadableRouteFiles) {
@@ -42263,13 +42279,13 @@ function buildCoverage(routes, ctx, unreadableRouteFiles) {
   }
   const languages = /* @__PURE__ */ new Set([
     ...detected,
-    ...routes.map((r) => r.language),
+    ...codeRoutes.map((r) => r.language),
     ...unreadableByLanguage.keys()
   ]);
   languages.delete("unknown");
   const entries = [];
   for (const language of [...languages].sort()) {
-    const found = routes.filter((r) => r.language === language).length;
+    const found = codeRoutes.filter((r) => r.language === language).length;
     const unreadable = unreadableByLanguage.get(language) ?? 0;
     const hasRules = COVERED_LANGUAGES.has(language);
     entries.push({

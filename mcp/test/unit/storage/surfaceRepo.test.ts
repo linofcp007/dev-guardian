@@ -7,6 +7,7 @@ import type { AttackSurfaceSnapshot, RouteRecord } from '../../../src/types.js';
 function makeRoute(overrides: Partial<RouteRecord> = {}): RouteRecord {
   return {
     method: 'GET',
+    provenance: 'code',
     path_raw: '/users',
     path_resolved: '/users',
     path_partial: false,
@@ -91,5 +92,19 @@ describe('SurfaceRepo', () => {
 
     const repo = new SurfaceRepo(db);
     expect(repo.getLatest()?.snapshot.routes).toEqual([]);
+  });
+
+  it('backfills provenance as code for snapshots written before the field existed', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    const legacyRoute = { ...makeRoute() } as Record<string, unknown>;
+    delete legacyRoute['provenance'];
+    db.prepare(
+      `INSERT INTO surface_snapshots (project_path, captured_at, tree_hash, json)
+       VALUES ('/p', '2026-01-01T00:00:00.000Z', 'h', ?)`,
+    ).run(JSON.stringify({ routes: [legacyRoute] }));
+
+    const repo = new SurfaceRepo(db);
+    expect(repo.getLatest()?.snapshot.routes[0]?.provenance).toBe('code');
   });
 });

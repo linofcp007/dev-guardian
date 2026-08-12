@@ -5,6 +5,7 @@ import type { MountRecord, RouteRecord } from '../../../../src/types.js';
 function route(overrides: Partial<RouteRecord> = {}): RouteRecord {
   return {
     method: 'GET',
+    provenance: 'code',
     path_raw: '/list',
     path_resolved: '/list',
     path_partial: false,

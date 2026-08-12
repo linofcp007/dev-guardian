@@ -175,6 +175,7 @@ function toRoute(metadata, metavars, file, line) {
     const usable = literalPath && (namespace === undefined || isLiteralPath(namespace));
     const route = {
         method: normalizeMethod(metavar(metavars, '$METHOD') ?? str(metadata, 'method')),
+        provenance: 'code',
         path_raw: path,
         path_resolved: path,
         path_partial: !usable,

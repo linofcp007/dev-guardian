@@ -485,6 +485,11 @@ function buildCoverage(
   ctx: PluginContext,
   unreadableRouteFiles: readonly string[],
 ): CoverageEntry[] {
+  // `coverage[]` is a per-language report about source code. Spec routes carry
+  // `language: 'spec'`, which is not a language the rule pack could ever cover —
+  // including them would create a phantom entry reading `status: 'no_rules'`,
+  // literally true and completely meaningless.
+  const codeRoutes = routes.filter((r) => r.provenance === 'code');
   const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
 
   // One entry per lost route, so the count is routes-not-shown, not files.
@@ -497,14 +502,14 @@ function buildCoverage(
 
   const languages = new Set<string>([
     ...detected,
-    ...routes.map((r) => r.language),
+    ...codeRoutes.map((r) => r.language),
     ...unreadableByLanguage.keys(),
   ]);
   languages.delete('unknown');
 
   const entries: CoverageEntry[] = [];
   for (const language of [...languages].sort()) {
-    const found = routes.filter((r) => r.language === language).length;
+    const found = codeRoutes.filter((r) => r.language === language).length;
     const unreadable = unreadableByLanguage.get(language) ?? 0;
     const hasRules = COVERED_LANGUAGES.has(language);
     entries.push({
