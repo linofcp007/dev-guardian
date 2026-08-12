@@ -15,5 +15,14 @@ export const DAST_CHECKS = [
     'method_surface',
     'open_redirect',
     'rate_limit',
+    // Not one of the own engine's nine checks above — nuclei is a separate
+    // scanning engine (design doc §7) whose hits are normalised in
+    // `normalizeNuclei.ts`. It still needs a `DastCheck` value of its own:
+    // `DastFinding.check` is this closed union, and reusing an existing own-
+    // engine value (e.g. tagging a nuclei hit `info_disclosure`) would make
+    // `subcategory` lie about which engine produced the finding — precisely
+    // what §7 says the result must never do — and risks two unrelated findings
+    // colliding onto one fingerprint if they ever share a (method, path).
+    'nuclei',
 ];
 //# sourceMappingURL=types.js.map
