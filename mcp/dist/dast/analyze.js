@@ -16,8 +16,13 @@ import { CORS_PROBE_ORIGIN, substituteParams } from './plan.js';
  * The canonical `rule_id` shape for every DAST finding. Shared by
  * `dastFingerprint` and `buildFinding` so the string stored on the `Finding`
  * and the one fed to the hash can never drift apart.
+ *
+ * Exported for `rateLimitFinding.ts`, the one check whose finding is built
+ * outside this module (its burst runs outside the main probe plan). Building
+ * that `rule_id` from a second copy of this format string is precisely the
+ * drift this function exists to prevent.
  */
-function dastRuleId(check, method, path) {
+export function dastRuleId(check, method, path) {
     return `${check}:${method}:${path}`;
 }
 /**

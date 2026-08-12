@@ -13364,16 +13364,16 @@ var init_mjs = __esm({
     };
     SignalExitBase = class {
     };
-    signalExitWrap = (handler40) => {
+    signalExitWrap = (handler41) => {
       return {
         onExit(cb, opts) {
-          return handler40.onExit(cb, opts);
+          return handler41.onExit(cb, opts);
         },
         load() {
-          return handler40.load();
+          return handler41.load();
         },
         unload() {
-          return handler40.unload();
+          return handler41.unload();
         }
       };
     };
@@ -34284,25 +34284,25 @@ var Protocol = class {
     const error2 = McpError.fromError(ErrorCode.ConnectionClosed, "Connection closed");
     this._transport = void 0;
     this.onclose?.();
-    for (const handler40 of responseHandlers.values()) {
-      handler40(error2);
+    for (const handler41 of responseHandlers.values()) {
+      handler41(error2);
     }
   }
   _onerror(error2) {
     this.onerror?.(error2);
   }
   _onnotification(notification) {
-    const handler40 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
-    if (handler40 === void 0) {
+    const handler41 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
+    if (handler41 === void 0) {
       return;
     }
-    Promise.resolve().then(() => handler40(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
+    Promise.resolve().then(() => handler41(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
   }
   _onrequest(request, extra) {
-    const handler40 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
+    const handler41 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
     const capturedTransport = this._transport;
     const relatedTaskId = request.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
-    if (handler40 === void 0) {
+    if (handler41 === void 0) {
       const errorResponse = {
         jsonrpc: "2.0",
         id: request.id,
@@ -34366,7 +34366,7 @@ var Protocol = class {
       if (taskCreationParams) {
         this.assertTaskHandlerCapability(request.method);
       }
-    }).then(() => handler40(request, fullExtra)).then(async (result) => {
+    }).then(() => handler41(request, fullExtra)).then(async (result) => {
       if (abortController.signal.aborted) {
         return;
       }
@@ -34415,8 +34415,8 @@ var Protocol = class {
   _onprogress(notification) {
     const { progressToken, ...params } = notification.params;
     const messageId = Number(progressToken);
-    const handler40 = this._progressHandlers.get(messageId);
-    if (!handler40) {
+    const handler41 = this._progressHandlers.get(messageId);
+    if (!handler41) {
       this._onerror(new Error(`Received a progress notification for an unknown token: ${JSON.stringify(notification)}`));
       return;
     }
@@ -34433,7 +34433,7 @@ var Protocol = class {
         return;
       }
     }
-    handler40(params);
+    handler41(params);
   }
   _onresponse(response) {
     const messageId = Number(response.id);
@@ -34448,8 +34448,8 @@ var Protocol = class {
       }
       return;
     }
-    const handler40 = this._responseHandlers.get(messageId);
-    if (handler40 === void 0) {
+    const handler41 = this._responseHandlers.get(messageId);
+    if (handler41 === void 0) {
       this._onerror(new Error(`Received a response for an unknown message ID: ${JSON.stringify(response)}`));
       return;
     }
@@ -34470,10 +34470,10 @@ var Protocol = class {
       this._progressHandlers.delete(messageId);
     }
     if (isJSONRPCResultResponse(response)) {
-      handler40(response);
+      handler41(response);
     } else {
       const error2 = McpError.fromError(response.error.code, response.error.message, response.error.data);
-      handler40(error2);
+      handler41(error2);
     }
   }
   get transport() {
@@ -34671,9 +34671,9 @@ var Protocol = class {
       const relatedTaskId = relatedTask?.taskId;
       if (relatedTaskId) {
         const responseResolver = (response) => {
-          const handler40 = this._responseHandlers.get(messageId);
-          if (handler40) {
-            handler40(response);
+          const handler41 = this._responseHandlers.get(messageId);
+          if (handler41) {
+            handler41(response);
           } else {
             this._onerror(new Error(`Response handler missing for side-channeled request ${messageId}`));
           }
@@ -34810,12 +34810,12 @@ var Protocol = class {
    *
    * Note that this will replace any previous request handler for the same method.
    */
-  setRequestHandler(requestSchema, handler40) {
+  setRequestHandler(requestSchema, handler41) {
     const method = getMethodLiteral(requestSchema);
     this.assertRequestHandlerCapability(method);
     this._requestHandlers.set(method, (request, extra) => {
       const parsed = parseWithCompat(requestSchema, request);
-      return Promise.resolve(handler40(parsed, extra));
+      return Promise.resolve(handler41(parsed, extra));
     });
   }
   /**
@@ -34837,11 +34837,11 @@ var Protocol = class {
    *
    * Note that this will replace any previous notification handler for the same method.
    */
-  setNotificationHandler(notificationSchema, handler40) {
+  setNotificationHandler(notificationSchema, handler41) {
     const method = getMethodLiteral(notificationSchema);
     this._notificationHandlers.set(method, (notification) => {
       const parsed = parseWithCompat(notificationSchema, notification);
-      return Promise.resolve(handler40(parsed));
+      return Promise.resolve(handler41(parsed));
     });
   }
   /**
@@ -35391,7 +35391,7 @@ var Server = class extends Protocol {
   /**
    * Override request handler registration to enforce server-side validation for tools/call.
    */
-  setRequestHandler(requestSchema, handler40) {
+  setRequestHandler(requestSchema, handler41) {
     const shape = getObjectShape(requestSchema);
     const methodSchema = shape?.method;
     if (!methodSchema) {
@@ -35419,7 +35419,7 @@ var Server = class extends Protocol {
           throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler40(request, extra));
+        const result = await Promise.resolve(handler41(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
@@ -35437,7 +35437,7 @@ var Server = class extends Protocol {
       };
       return super.setRequestHandler(requestSchema, wrappedHandler);
     }
-    return super.setRequestHandler(requestSchema, handler40);
+    return super.setRequestHandler(requestSchema, handler41);
   }
   assertCapabilityForMethod(method) {
     switch (method) {
@@ -36010,13 +36010,13 @@ var ExperimentalMcpServerTasks = class {
   constructor(_mcpServer) {
     this._mcpServer = _mcpServer;
   }
-  registerToolTask(name, config2, handler40) {
+  registerToolTask(name, config2, handler41) {
     const execution = { taskSupport: "required", ...config2.execution };
     if (execution.taskSupport === "forbidden") {
       throw new Error(`Cannot register task-based tool '${name}' with taskSupport 'forbidden'. Use registerTool() instead.`);
     }
     const mcpServerInternal = this._mcpServer;
-    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler40);
+    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler41);
   }
 };
 
@@ -36074,24 +36074,24 @@ var McpServer = class {
       }
     });
     this.server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: Object.entries(this._registeredTools).filter(([, tool40]) => tool40.enabled).map(([name, tool40]) => {
+      tools: Object.entries(this._registeredTools).filter(([, tool41]) => tool41.enabled).map(([name, tool41]) => {
         const toolDefinition = {
           name,
-          title: tool40.title,
-          description: tool40.description,
+          title: tool41.title,
+          description: tool41.description,
           inputSchema: (() => {
-            const obj = normalizeObjectSchema(tool40.inputSchema);
+            const obj = normalizeObjectSchema(tool41.inputSchema);
             return obj ? toJsonSchemaCompat(obj, {
               strictUnions: true,
               pipeStrategy: "input"
             }) : EMPTY_OBJECT_JSON_SCHEMA;
           })(),
-          annotations: tool40.annotations,
-          execution: tool40.execution,
-          _meta: tool40._meta
+          annotations: tool41.annotations,
+          execution: tool41.execution,
+          _meta: tool41._meta
         };
-        if (tool40.outputSchema) {
-          const obj = normalizeObjectSchema(tool40.outputSchema);
+        if (tool41.outputSchema) {
+          const obj = normalizeObjectSchema(tool41.outputSchema);
           if (obj) {
             toolDefinition.outputSchema = toJsonSchemaCompat(obj, {
               strictUnions: true,
@@ -36104,16 +36104,16 @@ var McpServer = class {
     }));
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       try {
-        const tool40 = this._registeredTools[request.params.name];
-        if (!tool40) {
+        const tool41 = this._registeredTools[request.params.name];
+        if (!tool41) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
         }
-        if (!tool40.enabled) {
+        if (!tool41.enabled) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} disabled`);
         }
         const isTaskRequest = !!request.params.task;
-        const taskSupport = tool40.execution?.taskSupport;
-        const isTaskHandler = "createTask" in tool40.handler;
+        const taskSupport = tool41.execution?.taskSupport;
+        const isTaskHandler = "createTask" in tool41.handler;
         if ((taskSupport === "required" || taskSupport === "optional") && !isTaskHandler) {
           throw new McpError(ErrorCode.InternalError, `Tool ${request.params.name} has taskSupport '${taskSupport}' but was not registered with registerToolTask`);
         }
@@ -36121,14 +36121,14 @@ var McpServer = class {
           throw new McpError(ErrorCode.MethodNotFound, `Tool ${request.params.name} requires task augmentation (taskSupport: 'required')`);
         }
         if (taskSupport === "optional" && !isTaskRequest && isTaskHandler) {
-          return await this.handleAutomaticTaskPolling(tool40, request, extra);
+          return await this.handleAutomaticTaskPolling(tool41, request, extra);
         }
-        const args = await this.validateToolInput(tool40, request.params.arguments, request.params.name);
-        const result = await this.executeToolHandler(tool40, args, extra);
+        const args = await this.validateToolInput(tool41, request.params.arguments, request.params.name);
+        const result = await this.executeToolHandler(tool41, args, extra);
         if (isTaskRequest) {
           return result;
         }
-        await this.validateToolOutput(tool40, result, request.params.name);
+        await this.validateToolOutput(tool41, result, request.params.name);
         return result;
       } catch (error2) {
         if (error2 instanceof McpError) {
@@ -36161,12 +36161,12 @@ var McpServer = class {
   /**
    * Validates tool input arguments against the tool's input schema.
    */
-  async validateToolInput(tool40, args, toolName) {
-    if (!tool40.inputSchema) {
+  async validateToolInput(tool41, args, toolName) {
+    if (!tool41.inputSchema) {
       return void 0;
     }
-    const inputObj = normalizeObjectSchema(tool40.inputSchema);
-    const schemaToParse = inputObj ?? tool40.inputSchema;
+    const inputObj = normalizeObjectSchema(tool41.inputSchema);
+    const schemaToParse = inputObj ?? tool41.inputSchema;
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36178,8 +36178,8 @@ var McpServer = class {
   /**
    * Validates tool output against the tool's output schema.
    */
-  async validateToolOutput(tool40, result, toolName) {
-    if (!tool40.outputSchema) {
+  async validateToolOutput(tool41, result, toolName) {
+    if (!tool41.outputSchema) {
       return;
     }
     if (!("content" in result)) {
@@ -36191,7 +36191,7 @@ var McpServer = class {
     if (!result.structuredContent) {
       throw new McpError(ErrorCode.InvalidParams, `Output validation error: Tool ${toolName} has an output schema but no structured content was provided`);
     }
-    const outputObj = normalizeObjectSchema(tool40.outputSchema);
+    const outputObj = normalizeObjectSchema(tool41.outputSchema);
     const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36202,43 +36202,43 @@ var McpServer = class {
   /**
    * Executes a tool handler (either regular or task-based).
    */
-  async executeToolHandler(tool40, args, extra) {
-    const handler40 = tool40.handler;
-    const isTaskHandler = "createTask" in handler40;
+  async executeToolHandler(tool41, args, extra) {
+    const handler41 = tool41.handler;
+    const isTaskHandler = "createTask" in handler41;
     if (isTaskHandler) {
       if (!extra.taskStore) {
         throw new Error("No task store provided.");
       }
       const taskExtra = { ...extra, taskStore: extra.taskStore };
-      if (tool40.inputSchema) {
-        const typedHandler = handler40;
+      if (tool41.inputSchema) {
+        const typedHandler = handler41;
         return await Promise.resolve(typedHandler.createTask(args, taskExtra));
       } else {
-        const typedHandler = handler40;
+        const typedHandler = handler41;
         return await Promise.resolve(typedHandler.createTask(taskExtra));
       }
     }
-    if (tool40.inputSchema) {
-      const typedHandler = handler40;
+    if (tool41.inputSchema) {
+      const typedHandler = handler41;
       return await Promise.resolve(typedHandler(args, extra));
     } else {
-      const typedHandler = handler40;
+      const typedHandler = handler41;
       return await Promise.resolve(typedHandler(extra));
     }
   }
   /**
    * Handles automatic task polling for tools with taskSupport 'optional'.
    */
-  async handleAutomaticTaskPolling(tool40, request, extra) {
+  async handleAutomaticTaskPolling(tool41, request, extra) {
     if (!extra.taskStore) {
       throw new Error("No task store provided for task-capable tool.");
     }
-    const args = await this.validateToolInput(tool40, request.params.arguments, request.params.name);
-    const handler40 = tool40.handler;
+    const args = await this.validateToolInput(tool41, request.params.arguments, request.params.name);
+    const handler41 = tool41.handler;
     const taskExtra = { ...extra, taskStore: extra.taskStore };
-    const createTaskResult = args ? await Promise.resolve(handler40.createTask(args, taskExtra)) : (
+    const createTaskResult = args ? await Promise.resolve(handler41.createTask(args, taskExtra)) : (
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await Promise.resolve(handler40.createTask(taskExtra))
+      await Promise.resolve(handler41.createTask(taskExtra))
     );
     const taskId = createTaskResult.task.taskId;
     let task = createTaskResult.task;
@@ -36574,17 +36574,17 @@ var McpServer = class {
     }
     return registeredPrompt;
   }
-  _createRegisteredTool(name, title, description, inputSchema26, outputSchema, annotations, execution, _meta, handler40) {
+  _createRegisteredTool(name, title, description, inputSchema27, outputSchema, annotations, execution, _meta, handler41) {
     validateAndWarnToolName(name);
     const registeredTool = {
       title,
       description,
-      inputSchema: getZodSchemaObject(inputSchema26),
+      inputSchema: getZodSchemaObject(inputSchema27),
       outputSchema: getZodSchemaObject(outputSchema),
       annotations,
       execution,
       _meta,
-      handler: handler40,
+      handler: handler41,
       enabled: true,
       disable: () => registeredTool.update({ enabled: false }),
       enable: () => registeredTool.update({ enabled: true }),
@@ -36630,7 +36630,7 @@ var McpServer = class {
       throw new Error(`Tool ${name} is already registered`);
     }
     let description;
-    let inputSchema26;
+    let inputSchema27;
     let outputSchema;
     let annotations;
     if (typeof rest[0] === "string") {
@@ -36639,7 +36639,7 @@ var McpServer = class {
     if (rest.length > 1) {
       const firstArg = rest[0];
       if (isZodRawShapeCompat(firstArg)) {
-        inputSchema26 = rest.shift();
+        inputSchema27 = rest.shift();
         if (rest.length > 1 && typeof rest[0] === "object" && rest[0] !== null && !isZodRawShapeCompat(rest[0])) {
           annotations = rest.shift();
         }
@@ -36651,7 +36651,7 @@ var McpServer = class {
       }
     }
     const callback = rest[0];
-    return this._createRegisteredTool(name, void 0, description, inputSchema26, outputSchema, annotations, { taskSupport: "forbidden" }, void 0, callback);
+    return this._createRegisteredTool(name, void 0, description, inputSchema27, outputSchema, annotations, { taskSupport: "forbidden" }, void 0, callback);
   }
   /**
    * Registers a tool with a config object and callback.
@@ -36660,8 +36660,8 @@ var McpServer = class {
     if (this._registeredTools[name]) {
       throw new Error(`Tool ${name} is already registered`);
     }
-    const { title, description, inputSchema: inputSchema26, outputSchema, annotations, _meta } = config2;
-    return this._createRegisteredTool(name, title, description, inputSchema26, outputSchema, annotations, { taskSupport: "forbidden" }, _meta, cb);
+    const { title, description, inputSchema: inputSchema27, outputSchema, annotations, _meta } = config2;
+    return this._createRegisteredTool(name, title, description, inputSchema27, outputSchema, annotations, { taskSupport: "forbidden" }, _meta, cb);
   }
   prompt(name, ...rest) {
     if (this._registeredPrompts[name]) {
@@ -36930,7 +36930,7 @@ var StdioServerTransport = class {
 
 // src/server.ts
 import { readFileSync as readFileSync20 } from "node:fs";
-import { dirname as dirname4, resolve as resolve7 } from "node:path";
+import { dirname as dirname5, resolve as resolve7 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // src/gitignoreGuard.ts
@@ -38082,20 +38082,20 @@ function normalizeParams2(params) {
 
 // src/tools/index.ts
 var TOOLS = [];
-function registerToolModule(tool40) {
-  if (TOOLS.some((t) => t.name === tool40.name)) {
-    throw new Error(`Tool '${tool40.name}' is already registered`);
+function registerToolModule(tool41) {
+  if (TOOLS.some((t) => t.name === tool41.name)) {
+    throw new Error(`Tool '${tool41.name}' is already registered`);
   }
-  TOOLS.push(tool40);
+  TOOLS.push(tool41);
 }
 function attachAllTools(server, ctx) {
-  for (const tool40 of TOOLS) {
+  for (const tool41 of TOOLS) {
     server.registerTool(
-      tool40.name,
+      tool41.name,
       {
-        ...tool40.title ? { title: tool40.title } : {},
-        description: tool40.description,
-        inputSchema: tool40.inputSchema
+        ...tool41.title ? { title: tool41.title } : {},
+        description: tool41.description,
+        inputSchema: tool41.inputSchema
       },
       async (input, extra) => {
         const callMeta = {};
@@ -38107,7 +38107,7 @@ function attachAllTools(server, ctx) {
         if (typedExtra?.signal instanceof AbortSignal) {
           callMeta.signal = typedExtra.signal;
         }
-        const result = await tool40.handler(input, ctx, callMeta);
+        const result = await tool41.handler(input, ctx, callMeta);
         return toCallToolResult(result);
       }
     );
@@ -40612,8 +40612,8 @@ async function tryNativeAudit(opts) {
   });
   if (isNpmStdout && result.stdout.length > 0) {
     try {
-      const { writeFileSync: writeFileSync9 } = await import("node:fs");
-      writeFileSync9(opts.outFile, result.stdout, "utf8");
+      const { writeFileSync: writeFileSync10 } = await import("node:fs");
+      writeFileSync10(opts.outFile, result.stdout, "utf8");
     } catch {
     }
   }
@@ -49982,12 +49982,12 @@ function cachedToolsRun(snapshot) {
   }));
   return [marker, ...persisted];
 }
-function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unreadableRouteFiles, specPaths) {
+function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unreadableRouteFiles, specPaths2) {
   const { routes, mounts } = extractSurface(parsed);
   const knownFiles = collectAllFiles(parsed);
   const imports = extractImports(parsed, knownFiles);
   const resolved = resolveWordpressRoutes(resolveNodeMounts(routes, mounts, imports));
-  const { specRoutes, specFiles, specsParsed } = importSpecs(projectPath, specPaths);
+  const { specRoutes, specFiles, specsParsed } = importSpecs(projectPath, specPaths2);
   const specDiff = diffSpecRoutes(resolved, specRoutes, specsParsed);
   return {
     routes: [...resolved, ...specRoutes],
@@ -50001,8 +50001,8 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
     spec_diff: specDiff
   };
 }
-function importSpecs(projectPath, specPaths) {
-  const resolvedSpecPaths = specPaths === void 0 ? void 0 : dedupeResolved(specPaths.map((p) => resolveExplicitSpecPath(projectPath, p)));
+function importSpecs(projectPath, specPaths2) {
+  const resolvedSpecPaths = specPaths2 === void 0 ? void 0 : dedupeResolved(specPaths2.map((p) => resolveExplicitSpecPath(projectPath, p)));
   const discovery = discoverSpecs(projectPath, resolvedSpecPaths);
   const specRoutes = [];
   const specFiles = [];
@@ -50215,6 +50215,1518 @@ function degradedResult(toolsRun, missingTools, note, ctx) {
   };
 }
 
+// src/tools/scanDast.ts
+import { randomUUID as randomUUID14 } from "node:crypto";
+import { join as join45 } from "node:path";
+
+// src/dast/plan.ts
+var READ_METHODS = ["GET", "HEAD", "OPTIONS"];
+var WRITE_METHODS = ["POST", "PUT", "PATCH", "DELETE"];
+var DEFAULT_MAX_REQUESTS = 750;
+var CORS_PROBE_ORIGIN = "https://dev-guardian-cors-probe.invalid";
+var SYNTHETIC_PARAM_VALUE = "1";
+function planProbes(routes, opts) {
+  const requests = [];
+  const kept = [];
+  const skipped = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const r of routes) {
+    if (r.path_partial) {
+      skipped.push({ method: r.method, path: r.path_resolved, reason: "partial_path" });
+      continue;
+    }
+    const methods = expandMethods(r.method, opts.allowWriteMethods);
+    if (methods.length === 0) {
+      skipped.push({ method: r.method, path: r.path_resolved, reason: "method_envelope" });
+      continue;
+    }
+    const { path: path6, synthetic } = substituteParams(r.path_resolved);
+    const fresh = [];
+    for (const method of methods) {
+      if (seen.has(`${method} ${path6}`)) {
+        skipped.push({ method, path: r.path_resolved, reason: "duplicate" });
+      } else {
+        fresh.push(method);
+      }
+    }
+    const corsKey = `cors ${path6}`;
+    const needCors = !seen.has(corsKey);
+    if (fresh.length === 0 && !needCors) continue;
+    const routeIndex = kept.length;
+    kept.push(r);
+    for (const method of fresh) {
+      seen.add(`${method} ${path6}`);
+      requests.push(build2(method, path6, "anonymous", {}, opts, synthetic, routeIndex));
+      if (opts.authHeaderValue !== null) {
+        requests.push(
+          build2(
+            method,
+            path6,
+            "authenticated",
+            { authorization: opts.authHeaderValue },
+            opts,
+            synthetic,
+            routeIndex
+          )
+        );
+      }
+    }
+    if (needCors) {
+      seen.add(corsKey);
+      requests.push(
+        build2("GET", path6, "cors", { origin: CORS_PROBE_ORIGIN }, opts, synthetic, routeIndex)
+      );
+    }
+  }
+  if (requests.length <= opts.maxRequests) {
+    return { requests, routes: kept, skipped, truncated: false };
+  }
+  const cut = requests.slice(opts.maxRequests);
+  for (const r of cut) {
+    skipped.push({ method: r.method, path: r.path, reason: "cap" });
+  }
+  return {
+    requests: requests.slice(0, opts.maxRequests),
+    routes: kept,
+    skipped,
+    truncated: true
+  };
+}
+function expandMethods(method, allowWrites) {
+  if (method === "ANY") {
+    return allowWrites ? [...READ_METHODS, ...WRITE_METHODS] : [...READ_METHODS];
+  }
+  const isWrite = WRITE_METHODS.includes(method);
+  if (isWrite && !allowWrites) return [];
+  return [method];
+}
+function build2(method, path6, variant, extraHeaders, opts, synthetic, routeIndex) {
+  const isWrite = WRITE_METHODS.includes(method);
+  const req = {
+    id: `${variant} ${method} ${path6}`,
+    method,
+    path: path6,
+    url: `${opts.origin}${path6}`,
+    headers: { accept: "*/*", ...extraHeaders },
+    variant,
+    synthetic_params: synthetic,
+    route_index: routeIndex
+  };
+  if (isWrite) req.body = "";
+  return req;
+}
+function substituteParams(path6) {
+  let out = path6;
+  let synthetic = false;
+  for (const pattern of PARAM_SYNTAX) {
+    const re = new RegExp(pattern.source, pattern.flags);
+    out = out.replace(re, () => {
+      synthetic = true;
+      return SYNTHETIC_PARAM_VALUE;
+    });
+  }
+  return { path: out, synthetic };
+}
+
+// src/dast/analyze.ts
+function dastRuleId(check2, method, path6) {
+  return `${check2}:${method}:${path6}`;
+}
+function dastFingerprint(check2, method, path6, file) {
+  const fp = {
+    tool: "dast",
+    rule_id: dastRuleId(check2, method, path6)
+  };
+  if (file !== void 0) fp.file_path = file;
+  return computeFingerprint(fp);
+}
+function originRuleId(check2, origin) {
+  return `${check2}:${origin}`;
+}
+function originFingerprint(check2, origin) {
+  return computeFingerprint({ tool: "dast", rule_id: originRuleId(check2, origin) });
+}
+function buildFinding(args) {
+  const { check: check2, severity, title, message, route, request, origin } = args;
+  const path6 = route?.path_resolved ?? request.path;
+  const finding2 = {
+    fingerprint: origin === void 0 ? dastFingerprint(check2, request.method, path6, route?.file) : originFingerprint(check2, origin),
+    tool: "dast",
+    rule_id: origin === void 0 ? dastRuleId(check2, request.method, path6) : originRuleId(check2, origin),
+    severity,
+    category: "security",
+    subcategory: check2,
+    title,
+    message,
+    fix_available: false,
+    check: check2,
+    evidence_id: request.id
+  };
+  if (route !== void 0) {
+    finding2.file_path = route.file;
+    finding2.line_start = route.line;
+  }
+  return finding2;
+}
+function routeFor(routes, routeIndex) {
+  return routeIndex === null ? void 0 : routes[routeIndex];
+}
+function checkAnonymousExposure(input, findings) {
+  for (const r of input.results) {
+    if (r.request.variant !== "anonymous" || r.outcome !== "completed" || r.status === null) continue;
+    if (r.status < 200 || r.status >= 300) continue;
+    const route = routeFor(input.plan.routes, r.request.route_index);
+    if (route === void 0 || route.auth_hint !== "required") continue;
+    findings.push(buildFinding({
+      check: "anonymous_exposure",
+      // 'high', not 'critical': auth_hint 'required' can be INHERITED from a
+      // document-level OpenAPI `security` default, not just declared on the
+      // operation (see `authHint` in surface/specImport.ts). A genuinely
+      // public route whose author forgot `security: []` inherits 'required'
+      // and would otherwise be reported as a critical auth bypass on a
+      // homepage — severity inflation, which is over-reporting by another
+      // name.
+      severity: "high",
+      title: "Auth-required route served anonymously",
+      message: `${r.request.method} ${route.path_resolved} is marked auth_hint: 'required' in the route inventory but returned ${r.status} to a request carrying no credentials.`,
+      route,
+      request: r.request
+    }));
+  }
+}
+function reachabilityFinding(route, r, severity, title, message) {
+  return buildFinding({ check: "reachability", severity, title, message, route, request: r.request });
+}
+function checkReachability(input, findings) {
+  for (const r of input.results) {
+    if (r.request.variant !== "anonymous" || r.outcome !== "completed" || r.status === null) continue;
+    const route = routeFor(input.plan.routes, r.request.route_index);
+    if (route === void 0) continue;
+    const live = r.status !== 404;
+    if (!live && r.request.synthetic_params) continue;
+    if (route.provenance === "code" && live && input.shadowPaths.has(route.path_resolved)) {
+      findings.push(reachabilityFinding(
+        route,
+        r,
+        "medium",
+        "Confirmed shadow endpoint",
+        `${r.request.method} ${route.path_resolved} is undocumented in any spec but the running server answers it (status ${r.status}).`
+      ));
+    } else if (route.provenance === "spec" && input.deadDocPaths.has(route.path_resolved)) {
+      if (live) {
+        findings.push(reachabilityFinding(
+          route,
+          r,
+          "info",
+          "Extractor coverage gap",
+          `${r.request.method} ${route.path_resolved} is documented and answers (status ${r.status}), but the static extractor found no implementing code route \u2014 a tooling gap, not dead documentation.`
+        ));
+      } else {
+        findings.push(reachabilityFinding(
+          route,
+          r,
+          "medium",
+          "Confirmed dead documentation",
+          `${r.request.method} ${route.path_resolved} is documented but the running server returns 404.`
+        ));
+      }
+    }
+  }
+}
+function checkDifferentialAuthz(input, findings) {
+  if (!input.hasCredentials) return;
+  const anonByKey = /* @__PURE__ */ new Map();
+  for (const r of input.results) {
+    if (r.request.variant === "anonymous") anonByKey.set(`${r.request.method} ${r.request.path}`, r);
+  }
+  for (const authed of input.results) {
+    if (authed.request.variant !== "authenticated" || authed.outcome !== "completed") continue;
+    const anon = anonByKey.get(`${authed.request.method} ${authed.request.path}`);
+    if (anon === void 0 || anon.outcome !== "completed" || anon.status === null) continue;
+    if (anon.status < 200 || anon.status >= 300) continue;
+    if (anon.status !== authed.status || anon.body_hash !== authed.body_hash) continue;
+    const route = routeFor(input.plan.routes, anon.request.route_index);
+    findings.push(buildFinding({
+      check: "differential_authz",
+      severity: "high",
+      title: "Anonymous response matches the authenticated response",
+      message: `${anon.request.method} ${anon.request.path} returns a byte-identical response (status ${anon.status}) with and without credentials.`,
+      route,
+      request: anon.request
+    }));
+  }
+}
+function checkCors(input, findings) {
+  for (const r of input.results) {
+    if (r.request.variant !== "cors" || r.outcome !== "completed") continue;
+    const allowOrigin = r.headers["access-control-allow-origin"];
+    const allowCreds = r.headers["access-control-allow-credentials"];
+    if (allowOrigin === void 0 || allowCreds?.toLowerCase() !== "true") continue;
+    const wildcard = allowOrigin === "*";
+    if (!wildcard && allowOrigin !== CORS_PROBE_ORIGIN) continue;
+    const route = routeFor(input.plan.routes, r.request.route_index);
+    findings.push(buildFinding({
+      check: "cors",
+      severity: "critical",
+      title: wildcard ? "CORS allows any origin alongside credentials" : "CORS reflects the request origin alongside credentials",
+      message: `Access-Control-Allow-Origin: ${allowOrigin} combined with Access-Control-Allow-Credentials: true lets a page on any origin read this response with the caller's credentials attached.`,
+      route,
+      request: r.request
+    }));
+  }
+}
+function checkOpenRedirect(input, findings) {
+  for (const r of input.results) {
+    if (r.request.variant !== "anonymous" || r.outcome !== "completed" || r.status === null) continue;
+    if (r.status < 300 || r.status >= 400) continue;
+    const location = r.headers["location"];
+    if (location === void 0 || location.trim() === "") continue;
+    let resolved;
+    try {
+      resolved = new URL(location, r.request.url);
+    } catch {
+      continue;
+    }
+    if (resolved.origin === input.origin) continue;
+    const route = routeFor(input.plan.routes, r.request.route_index);
+    findings.push(buildFinding({
+      check: "open_redirect",
+      severity: "medium",
+      title: "Redirect leaves the target origin",
+      message: `${r.status} on ${r.request.path} redirects to ${resolved.origin}, outside the target origin.`,
+      route,
+      request: r.request
+    }));
+  }
+}
+function knownMethodsForPath(routes, path6) {
+  const known = /* @__PURE__ */ new Set();
+  for (const route of routes) {
+    if (route.path_partial) continue;
+    if (substituteParams(route.path_resolved).path !== path6) continue;
+    if (route.method === "ANY") return null;
+    known.add(route.method);
+  }
+  return known;
+}
+function isImpliedMethod(method, known) {
+  return method === "OPTIONS" || method === "HEAD" && known.has("GET");
+}
+function checkMethodSurface(input, findings) {
+  const reported = /* @__PURE__ */ new Set();
+  for (const r of input.results) {
+    if (r.request.variant !== "anonymous" || r.outcome !== "completed") continue;
+    const allow = r.headers["allow"];
+    if (allow === void 0 || allow.trim() === "" || reported.has(r.request.path)) continue;
+    const known = knownMethodsForPath(input.plan.routes, r.request.path);
+    if (known === null) continue;
+    const extra = allow.split(",").map((m) => m.trim().toUpperCase()).filter((m) => m !== "" && !known.has(m) && !isImpliedMethod(m, known));
+    if (extra.length === 0) continue;
+    reported.add(r.request.path);
+    const route = routeFor(input.plan.routes, r.request.route_index);
+    findings.push(buildFinding({
+      check: "method_surface",
+      severity: "medium",
+      title: "Server answers an undocumented HTTP method",
+      message: `Allow on ${r.request.path} advertises ${extra.join(", ")}, absent from the extracted route inventory.`,
+      route,
+      request: r.request
+    }));
+  }
+}
+function analyzeRoutes(input) {
+  const findings = [];
+  checkAnonymousExposure(input, findings);
+  checkReachability(input, findings);
+  checkDifferentialAuthz(input, findings);
+  checkCors(input, findings);
+  checkMethodSurface(input, findings);
+  checkOpenRedirect(input, findings);
+  return findings;
+}
+var BASELINE_SECURITY_HEADERS = [
+  "content-security-policy",
+  "x-content-type-options",
+  "x-frame-options"
+];
+var HSTS_HEADER = "strict-transport-security";
+function expectedSecurityHeaders(origin) {
+  const expected = [...BASELINE_SECURITY_HEADERS];
+  if (origin.startsWith("https:")) expected.push(HSTS_HEADER);
+  return expected;
+}
+function checkSecurityHeaders(input, findings) {
+  const completed = input.results.filter((r) => r.outcome === "completed" && r.status !== null);
+  const first = completed[0];
+  if (first === void 0) return;
+  const expected = expectedSecurityHeaders(input.origin);
+  const present = /* @__PURE__ */ new Set();
+  for (const r of completed) {
+    for (const header of expected) {
+      if (r.headers[header] !== void 0) present.add(header);
+    }
+  }
+  const missing = expected.filter((h2) => !present.has(h2));
+  if (missing.length === 0) return;
+  findings.push(buildFinding({
+    check: "security_headers",
+    // Per the design doc (section 8): severity is a property of the check,
+    // and a missing security header is explicitly called out as low there —
+    // unlike a confirmed auth bypass, a missing header is a hardening gap,
+    // not proof anything has actually been exploited.
+    severity: "low",
+    title: "Missing security headers",
+    message: `${input.origin} did not return ${missing.join(", ")} on any of ${completed.length} completed response(s) observed during this scan.`,
+    route: void 0,
+    request: first.request,
+    // This finding's identity is the origin, not whichever request happened
+    // to be `completed[0]` — see `originFingerprint`'s doc comment for why
+    // that distinction matters here specifically.
+    origin: input.origin
+  }));
+}
+var STACK_TRACE_SIGNATURES = [
+  /Traceback \(most recent call last\)/,
+  // Python
+  /\n\tat [\w.$]+\(/,
+  // Java: "\n\tat com.example.Main.run("
+  /\n {4}at .*\(.*:\d+:\d+\)/,
+  // Node: "\n    at fn (file:line:col)"
+  /\/\S+ on line \d+/,
+  // PHP: a filesystem path immediately before "on line N"
+  /SQLSTATE\[/
+  // PDO / SQL driver errors
+];
+var VERSION_BANNER_HEADERS = ["server", "x-powered-by"];
+var VERSION_SUBSTRING = /\d+\.\d+/;
+function versionBanner(headers) {
+  for (const header of VERSION_BANNER_HEADERS) {
+    const value = headers[header];
+    if (value !== void 0 && VERSION_SUBSTRING.test(value)) return { header, value };
+  }
+  return null;
+}
+function infoDisclosureFinding(route, request, title, message) {
+  return buildFinding({ check: "info_disclosure", severity: "low", title, message, route, request });
+}
+function checkInfoDisclosure(input, findings) {
+  const reportedBanners = /* @__PURE__ */ new Set();
+  for (const r of input.results) {
+    if (r.outcome !== "completed" || r.status === null) continue;
+    const route = routeFor(input.plan.routes, r.request.route_index);
+    if (STACK_TRACE_SIGNATURES.some((re) => re.test(r.body_prefix))) {
+      findings.push(infoDisclosureFinding(
+        route,
+        r.request,
+        "Stack trace disclosed in response body",
+        `${r.request.method} ${r.request.path} returned a stack trace in its response body (status ${r.status}).`
+      ));
+    }
+    const banner = versionBanner(r.headers);
+    if (banner !== null) {
+      const key = `${banner.header}:${banner.value}`;
+      if (!reportedBanners.has(key)) {
+        reportedBanners.add(key);
+        findings.push(infoDisclosureFinding(
+          route,
+          r.request,
+          "Version banner disclosed in response headers",
+          `${r.request.method} ${r.request.path} discloses ${banner.header}: ${banner.value}.`
+        ));
+      }
+    }
+  }
+}
+function analyzeOrigin(input) {
+  const findings = [];
+  checkSecurityHeaders(input, findings);
+  checkInfoDisclosure(input, findings);
+  return findings;
+}
+
+// src/dast/types.ts
+var DAST_CHECKS = [
+  "reachability",
+  "anonymous_exposure",
+  "differential_authz",
+  "cors",
+  "security_headers",
+  "info_disclosure",
+  "method_surface",
+  "open_redirect",
+  "rate_limit",
+  // Not one of the own engine's nine checks above — nuclei is a separate
+  // scanning engine (design doc §7) whose hits are normalised in
+  // `normalizeNuclei.ts`. It still needs a `DastCheck` value of its own:
+  // `DastFinding.check` is this closed union, and reusing an existing own-
+  // engine value (e.g. tagging a nuclei hit `info_disclosure`) would make
+  // `subcategory` lie about which engine produced the finding — precisely
+  // what §7 says the result must never do — and risks two unrelated findings
+  // colliding onto one fingerprint if they ever share a (method, path).
+  "nuclei"
+];
+
+// src/dast/checkStatus.ts
+function fromProbes(planned, completed) {
+  if (!planned) return "no_candidate";
+  return completed ? "ok" : "target_error";
+}
+function computeCheckStatuses(input) {
+  const { plan, results } = input;
+  const plannedAnonymous = plan.requests.some((r) => r.variant === "anonymous");
+  const completedAnonymous = results.some(
+    (r) => r.request.variant === "anonymous" && r.outcome === "completed"
+  );
+  const plannedAuthenticated = plan.requests.some((r) => r.variant === "authenticated");
+  const completedAuthenticated = results.some(
+    (r) => r.request.variant === "authenticated" && r.outcome === "completed"
+  );
+  const plannedCors = plan.requests.some((r) => r.variant === "cors");
+  const completedCors = results.some(
+    (r) => r.request.variant === "cors" && r.outcome === "completed"
+  );
+  const plannedAny = plan.requests.length > 0;
+  const completedAny = results.some((r) => r.outcome === "completed");
+  const anonymousExposureCandidates = plan.routes.some((r) => r.auth_hint === "required");
+  const statuses = {
+    reachability: fromProbes(input.hasSpecDiff && plannedAnonymous, completedAnonymous),
+    anonymous_exposure: fromProbes(
+      anonymousExposureCandidates && plannedAnonymous,
+      completedAnonymous
+    ),
+    differential_authz: !input.hasCredentials ? "needs_credentials" : fromProbes(plannedAuthenticated, completedAuthenticated),
+    cors: fromProbes(plannedCors, completedCors),
+    security_headers: fromProbes(plannedAny, completedAny),
+    info_disclosure: fromProbes(plannedAny, completedAny),
+    method_surface: fromProbes(plannedAnonymous, completedAnonymous),
+    open_redirect: fromProbes(plannedAnonymous, completedAnonymous),
+    rate_limit: rateLimitStatus(input.rateLimit),
+    nuclei: nucleiStatus(input.nuclei)
+  };
+  for (const check2 of DAST_CHECKS) {
+    if (statuses[check2] === void 0) throw new Error(`No status computed for check '${check2}'`);
+  }
+  return statuses;
+}
+function rateLimitStatus(outcome) {
+  switch (outcome) {
+    case "not_requested":
+      return "skipped_envelope";
+    case "no_candidate":
+      return "no_candidate";
+    case "no_response":
+      return "target_error";
+    case "ran":
+      return "ok";
+  }
+}
+function nucleiStatus(outcome) {
+  switch (outcome) {
+    case "not_requested":
+    case "unavailable":
+      return "skipped_envelope";
+    case "failed":
+      return "target_error";
+    case "ran":
+      return "ok";
+  }
+}
+
+// src/dast/evidence.ts
+import { writeFileSync as writeFileSync9 } from "node:fs";
+import { join as join43 } from "node:path";
+var EVIDENCE_BODY_CHARS = 2e3;
+var MAX_EVIDENCE_FILES = 200;
+function toExchange(result) {
+  return { ...requestPart(result.request), response: responsePart(result) };
+}
+function requestPart(request) {
+  const part = {
+    variant: request.variant,
+    request: { method: request.method, url: request.url, headers: request.headers }
+  };
+  if (request.body !== void 0) part.request.body = request.body;
+  return part;
+}
+function responsePart(result) {
+  const body = result.body_prefix;
+  return {
+    outcome: result.outcome,
+    status: result.status,
+    headers: result.headers,
+    body_excerpt: body.slice(0, EVIDENCE_BODY_CHARS),
+    body_truncated: body.length > EVIDENCE_BODY_CHARS,
+    elapsed_ms: result.elapsed_ms,
+    error: result.error
+  };
+}
+function buildEvidence(finding2, origin, results) {
+  const primary = results.find((r) => r.request.id === finding2.evidence_id);
+  const record2 = {
+    fingerprint: finding2.fingerprint,
+    check: finding2.check,
+    evidence_id: finding2.evidence_id,
+    origin,
+    exchanges: []
+  };
+  if (finding2.rule_id !== void 0) record2.rule_id = finding2.rule_id;
+  if (primary === void 0) {
+    record2.note = "No probe exchange recorded for this finding; it was reported by an external engine. See nuclei.jsonl in this directory for the raw output.";
+    return record2;
+  }
+  record2.exchanges.push(toExchange(primary));
+  for (const other of results) {
+    if (other === primary) continue;
+    if (other.request.method !== primary.request.method) continue;
+    if (other.request.path !== primary.request.path) continue;
+    record2.exchanges.push(toExchange(other));
+  }
+  return record2;
+}
+function buildBurstEvidence(finding2, origin, burst, planned, observed) {
+  const first = burst[0];
+  const record2 = {
+    fingerprint: finding2.fingerprint,
+    check: finding2.check,
+    evidence_id: finding2.evidence_id,
+    origin,
+    exchanges: first === void 0 ? [] : [toExchange(first)],
+    burst: {
+      planned,
+      sent: burst.filter((r) => r.outcome === "completed").length,
+      statuses: burst.map((r) => r.status),
+      observed
+    }
+  };
+  if (finding2.rule_id !== void 0) record2.rule_id = finding2.rule_id;
+  if (first === void 0) record2.note = "The burst produced no results at all.";
+  return record2;
+}
+function writeEvidenceFiles(dir, records, redact) {
+  const outcome = { written: /* @__PURE__ */ new Set(), capped: 0, failed: 0 };
+  for (const [index, record2] of records.entries()) {
+    if (index >= MAX_EVIDENCE_FILES) {
+      outcome.capped += 1;
+      continue;
+    }
+    try {
+      writeFileSync9(
+        join43(dir, `${record2.fingerprint}.json`),
+        redact(JSON.stringify(record2, null, 2)),
+        "utf8"
+      );
+      outcome.written.add(record2.fingerprint);
+    } catch {
+      outcome.failed += 1;
+    }
+  }
+  return outcome;
+}
+
+// src/dast/liveness.ts
+function livenessRequest(origin) {
+  return {
+    // `ProbeVariant` has no 'liveness' member, and this request never reaches
+    // the analyser, so 'anonymous' is a label here and nothing more.
+    id: "liveness GET /",
+    method: "GET",
+    path: "/",
+    url: `${origin}/`,
+    headers: { accept: "*/*" },
+    variant: "anonymous",
+    synthetic_params: false,
+    route_index: null
+  };
+}
+function livenessMessage(target, liveness, timeoutMs) {
+  const detail = liveness.outcome === "timeout" ? `nothing answered within ${timeoutMs}ms` : `the connection failed (${liveness.error ?? "no detail"})`;
+  return `Nothing is listening at ${target.origin} \u2014 ${detail}. Start the application first, then re-run scan_dast. This is a refusal, not a scan that found no problems: no probes were sent and nothing was recorded.`;
+}
+
+// src/dast/passes.ts
+import { join as join44 } from "node:path";
+
+// src/dast/nuclei.ts
+import { dirname as dirname4 } from "node:path";
+var DEFAULT_NUCLEI_RATE_LIMIT = 10;
+var ALWAYS_EXCLUDED_TAGS = ["dos", "fuzz"];
+function excludedTags(allowIntrusive) {
+  return allowIntrusive ? [...ALWAYS_EXCLUDED_TAGS] : [...ALWAYS_EXCLUDED_TAGS, "intrusive"];
+}
+function buildNucleiArgs(opts) {
+  return [
+    "-target",
+    opts.targetUrl,
+    "-jsonl",
+    "-output",
+    opts.outputPath,
+    "-silent",
+    "-no-interactsh",
+    "-exclude-tags",
+    excludedTags(opts.allowIntrusive).join(","),
+    "-rate-limit",
+    String(DEFAULT_NUCLEI_RATE_LIMIT)
+  ];
+}
+async function invokeNuclei(opts) {
+  const run = await runProcess({
+    command: opts.binaryPath,
+    args: buildNucleiArgs(opts),
+    // nuclei targets a URL, not a filesystem tree, so the working directory
+    // has no bearing on what gets scanned; `outputPath`'s own directory is
+    // used only because it is a real, already-relevant path handed to us,
+    // rather than reaching for ambient process state.
+    cwd: dirname4(opts.outputPath),
+    timeoutMs: opts.timeoutMs,
+    signal: opts.signal
+  });
+  return interpretRun(run);
+}
+function interpretRun(run) {
+  if (run.outcome === "completed") return { ok: true };
+  const firstLine = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  return { ok: false, reason: firstLine ?? `nuclei ${run.outcome}` };
+}
+
+// src/dast/normalizeNuclei.ts
+var SEVERITY_MAP = {
+  critical: "critical",
+  high: "high",
+  medium: "medium",
+  low: "low",
+  info: "info"
+};
+function mapSeverity3(value) {
+  if (typeof value === "string") {
+    const mapped = SEVERITY_MAP[value.toLowerCase()];
+    if (mapped !== void 0) return mapped;
+  }
+  return "info";
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function pathnameOf(matchedAt) {
+  if (matchedAt === "") return "";
+  try {
+    return new URL(matchedAt).pathname;
+  } catch {
+    return matchedAt;
+  }
+}
+function matchRoute(pathname, routes) {
+  if (pathname === "") return void 0;
+  return routes.find(
+    (r) => !r.path_partial && substituteParams(r.path_resolved).path === pathname
+  );
+}
+function buildMessage(templateId, matchedAt, description) {
+  const where = matchedAt === "" ? "(no matched-at reported)" : matchedAt;
+  const base = `nuclei template '${templateId}' matched ${where}.`;
+  return description === void 0 || description === "" ? base : `${base} ${description}`;
+}
+function normalizeLine(line, routes) {
+  let parsed;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!isRecord2(parsed)) return null;
+  const templateId = parsed["template-id"];
+  if (typeof templateId !== "string" || templateId === "") return null;
+  const info = isRecord2(parsed["info"]) ? parsed["info"] : void 0;
+  const nameValue = info !== void 0 ? info["name"] : void 0;
+  const title = typeof nameValue === "string" && nameValue !== "" ? nameValue : templateId;
+  const descriptionValue = info !== void 0 ? info["description"] : void 0;
+  const description = typeof descriptionValue === "string" ? descriptionValue : void 0;
+  const severity = mapSeverity3(info !== void 0 ? info["severity"] : void 0);
+  const matchedAtValue = parsed["matched-at"];
+  const matchedAt = typeof matchedAtValue === "string" ? matchedAtValue : "";
+  const pathname = pathnameOf(matchedAt);
+  const route = matchRoute(pathname, routes);
+  const finding2 = {
+    // `dastFingerprint`'s `method` slot plays the role of "the specific
+    // signal at this path" — an HTTP verb for the own engine's checks, the
+    // template-id here. Two different templates matching the SAME path must
+    // never collide into one fingerprint (one would silently overwrite the
+    // other in storage), and the template-id is what keeps them apart.
+    // `line_start`/`line_end` are excluded from the hash the same way
+    // `dastFingerprint` already excludes them for route-scoped own-engine
+    // findings — see that function's doc comment — so an unrelated edit that
+    // shifts a route's line number does not make this finding look new.
+    fingerprint: dastFingerprint("nuclei", templateId, pathname, route?.file),
+    tool: "nuclei",
+    rule_id: templateId,
+    severity,
+    category: "security",
+    subcategory: "nuclei",
+    title,
+    message: buildMessage(templateId, matchedAt, description),
+    fix_available: false,
+    check: "nuclei",
+    // No `ProbeRequest` exists for a nuclei hit to borrow an id from — this is
+    // the closest analogue: a deterministic string identifying which nuclei
+    // hit produced this finding, for whichever evidence file later gets
+    // written against it.
+    evidence_id: `nuclei ${templateId} ${matchedAt}`
+  };
+  if (route !== void 0) {
+    finding2.file_path = route.file;
+    finding2.line_start = route.line;
+  }
+  return finding2;
+}
+function normalizeNucleiJsonl(jsonl, routes) {
+  const findings = [];
+  for (const line of jsonl.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+    const finding2 = normalizeLine(trimmed, routes);
+    if (finding2 !== null) findings.push(finding2);
+  }
+  return findings;
+}
+
+// src/dast/probe.ts
+import { createHash as createHash5 } from "node:crypto";
+var BODY_PREFIX_BYTES = 8192;
+var BODY_READ_CAP_BYTES = 256 * 1024;
+var DEFAULT_PROBE_TIMEOUT_MS = 5e3;
+var DEFAULT_CONCURRENCY = 4;
+async function executeProbe(req, opts) {
+  const started = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+  const onOuterAbort = () => controller.abort();
+  if (opts.signal?.aborted === true) {
+    controller.abort();
+  } else {
+    opts.signal?.addEventListener("abort", onOuterAbort);
+  }
+  try {
+    const init = {
+      method: req.method,
+      headers: req.headers,
+      redirect: "manual",
+      signal: controller.signal
+    };
+    if (req.body !== void 0 && req.method !== "GET" && req.method !== "HEAD") {
+      init.body = req.body;
+    }
+    const res = await fetch(req.url, init);
+    const text = await readCapped(res);
+    const headers = {};
+    res.headers.forEach((value, key) => {
+      headers[key.toLowerCase()] = value;
+    });
+    return {
+      request: req,
+      outcome: "completed",
+      status: res.status,
+      headers,
+      body_prefix: text.slice(0, BODY_PREFIX_BYTES),
+      body_hash: createHash5("sha256").update(text).digest("hex"),
+      elapsed_ms: Date.now() - started,
+      error: null
+    };
+  } catch (e) {
+    const elapsed = Date.now() - started;
+    let outcome;
+    if (opts.signal?.aborted === true) {
+      outcome = "cancelled";
+    } else if (controller.signal.aborted) {
+      outcome = "timeout";
+    } else {
+      outcome = "network_error";
+    }
+    return {
+      request: req,
+      outcome,
+      status: null,
+      headers: {},
+      body_prefix: "",
+      body_hash: "",
+      elapsed_ms: elapsed,
+      // Never assert `e` is an Error: this catch is the module's whole "never
+      // throws" guarantee. A cast (`e as Error`) would type-check and still
+      // throw at runtime if anything ever rejects with a non-Error value,
+      // which would escape as an unhandled rejection from this function.
+      error: e instanceof Error ? e.message : String(e)
+    };
+  } finally {
+    clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", onOuterAbort);
+  }
+}
+async function executeProbes(reqs, opts) {
+  const results = new Array(reqs.length);
+  let next = 0;
+  const worker = async () => {
+    for (; ; ) {
+      const i2 = next;
+      next += 1;
+      const req = reqs[i2];
+      if (req === void 0) return;
+      results[i2] = await executeProbe(req, opts);
+    }
+  };
+  const lanes = Math.max(1, Math.min(opts.concurrency, reqs.length));
+  await Promise.all(Array.from({ length: lanes }, () => worker()));
+  return results;
+}
+async function readCapped(res) {
+  const body = res.body;
+  if (body === null) return "";
+  const reader = body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (; ; ) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value === void 0) continue;
+    chunks.push(value);
+    total += value.byteLength;
+    if (total >= BODY_READ_CAP_BYTES) {
+      await reader.cancel();
+      break;
+    }
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// src/dast/rateLimit.ts
+var RATE_LIMIT_BURST = 30;
+var AUTH_PATH_HINTS = [
+  "login",
+  "signin",
+  "sign-in",
+  "auth",
+  "authenticate",
+  "token",
+  "session",
+  "oauth"
+];
+var SYNTHETIC_USERNAME = "dev-guardian-probe-1@invalid";
+var SYNTHETIC_PASSWORD = "dev-guardian-probe";
+function selectRateLimitTarget(routes, explicitPath) {
+  if (explicitPath !== null) {
+    const named = routes.find((r) => !r.path_partial && r.path_resolved === explicitPath);
+    return named === void 0 ? null : { route: named, inferred: false };
+  }
+  const guessed = routes.find(
+    (r) => !r.path_partial && looksLikeAuthPath(r.path_resolved) && isWriteCapable(r.method)
+  );
+  return guessed === void 0 ? null : { route: guessed, inferred: true };
+}
+function looksLikeAuthPath(path6) {
+  const segments = path6.toLowerCase().split("/");
+  return AUTH_PATH_HINTS.some((hint) => segments.includes(hint));
+}
+var WRITE_CAPABLE_METHODS = ["POST", "PUT", "PATCH", "DELETE", "ANY"];
+function isWriteCapable(method) {
+  return WRITE_CAPABLE_METHODS.includes(method);
+}
+function buildBurst(route, origin, size) {
+  const { path: path6, synthetic } = substituteParams(route.path_resolved);
+  const body = JSON.stringify({ username: SYNTHETIC_USERNAME, password: SYNTHETIC_PASSWORD });
+  const id = `rate_limit POST ${path6}`;
+  return Array.from({ length: size }, () => ({
+    id,
+    method: "POST",
+    path: path6,
+    url: `${origin}${path6}`,
+    headers: { accept: "*/*", "content-type": "application/json" },
+    body,
+    variant: "rate_limit",
+    synthetic_params: synthetic,
+    route_index: null
+  }));
+}
+function isLimiterSignal(r) {
+  if (r.status === 429) return true;
+  return r.status === 503 && r.headers["retry-after"] !== void 0;
+}
+function rateLimitVerdict(results) {
+  let sent = 0;
+  for (const r of results) {
+    if (r.outcome !== "completed") continue;
+    sent += 1;
+    if (isLimiterSignal(r)) return { observed: true, at_request: sent };
+  }
+  return { observed: false, sent };
+}
+
+// src/dast/rateLimitFinding.ts
+var RATE_LIMIT_FINDING_TITLE = "No rate limiting observed on an authentication endpoint";
+var RATE_LIMIT_SEVERITY = "medium";
+var BURST_METHOD = "POST";
+function noRateLimitObservedFinding(args) {
+  const { route, path: path6, evidenceId, sent, planned } = args;
+  return {
+    fingerprint: dastFingerprint("rate_limit", BURST_METHOD, path6, route.file),
+    tool: "dast",
+    rule_id: dastRuleId("rate_limit", BURST_METHOD, path6),
+    severity: RATE_LIMIT_SEVERITY,
+    category: "security",
+    subcategory: "rate_limit",
+    title: RATE_LIMIT_FINDING_TITLE,
+    message: `${sent} of ${planned} identical ${BURST_METHOD} requests to ${path6}, all carrying the same synthetic un-ownable credential, were answered without a 429 or a Retry-After header. This is not proof that rate limiting is missing: a limiter whose threshold sits above ${sent} requests is indistinguishable from no limiter at all at this sample size.`,
+    fix_available: false,
+    file_path: route.file,
+    line_start: route.line,
+    check: "rate_limit",
+    evidence_id: evidenceId
+  };
+}
+
+// src/dast/passes.ts
+var NUCLEI_TIMEOUT_MS = 3e5;
+async function runRateLimitBurst(opts) {
+  const empty = {
+    outcome: "not_requested",
+    finding: null,
+    summary: null,
+    evidence: /* @__PURE__ */ new Map()
+  };
+  if (!opts.requested) return empty;
+  const selected = selectRateLimitTarget(opts.routes, opts.explicitPath);
+  if (selected === null) return { ...empty, outcome: "no_candidate" };
+  const requests = buildBurst(selected.route, opts.origin, RATE_LIMIT_BURST);
+  const burstResults = [];
+  for (const request of requests) {
+    const result = await executeProbe(request, opts.probeOpts);
+    burstResults.push(result);
+    if (rateLimitVerdict([result]).observed) break;
+    if (opts.aborted()) break;
+  }
+  const verdict = rateLimitVerdict(burstResults);
+  const base = {
+    path: selected.route.path_resolved,
+    inferred: selected.inferred,
+    burst_planned: RATE_LIMIT_BURST
+  };
+  if (verdict.observed) {
+    return {
+      outcome: "ran",
+      finding: null,
+      summary: { ...base, sent: verdict.at_request, observed: true, at_request: verdict.at_request },
+      evidence: /* @__PURE__ */ new Map()
+    };
+  }
+  if (verdict.sent === 0) {
+    return {
+      outcome: "no_response",
+      finding: null,
+      summary: { ...base, sent: 0, observed: false },
+      evidence: /* @__PURE__ */ new Map()
+    };
+  }
+  const path6 = substituteParams(selected.route.path_resolved).path;
+  const finding2 = noRateLimitObservedFinding({
+    route: selected.route,
+    path: path6,
+    // Every burst request shares one id by design (see `buildBurst`), which
+    // is exactly why the evidence for this finding is a single aggregate
+    // record keyed by fingerprint rather than one file per request.
+    evidenceId: requests[0]?.id ?? `rate_limit POST ${path6}`,
+    sent: verdict.sent,
+    planned: RATE_LIMIT_BURST
+  });
+  return {
+    outcome: "ran",
+    finding: finding2,
+    summary: { ...base, sent: verdict.sent, observed: false },
+    evidence: /* @__PURE__ */ new Map([
+      [
+        finding2.fingerprint,
+        buildBurstEvidence(finding2, opts.origin, burstResults, RATE_LIMIT_BURST, false)
+      ]
+    ])
+  };
+}
+async function runNuclei(opts) {
+  if (!opts.requested) {
+    return { outcome: "not_requested", findings: [], toolRun: null, missing: false };
+  }
+  if (opts.binaryPath === null) {
+    return {
+      outcome: "unavailable",
+      findings: [],
+      toolRun: {
+        name: "nuclei",
+        status: "skipped",
+        reason: "requested via use_nuclei but not installed \u2014 run install_toolchain, or drop use_nuclei to scan with the own engine only"
+      },
+      missing: true
+    };
+  }
+  const outputPath = join44(opts.outputDir, "nuclei.jsonl");
+  const run = await invokeNuclei({
+    binaryPath: opts.binaryPath,
+    targetUrl: opts.origin,
+    outputPath,
+    // The default envelope excludes intrusive templates entirely, and this
+    // tool exposes no flag that widens it (design §7).
+    allowIntrusive: false,
+    timeoutMs: NUCLEI_TIMEOUT_MS,
+    ...opts.signal === void 0 ? {} : { signal: opts.signal }
+  });
+  if (!run.ok) {
+    return {
+      outcome: "failed",
+      findings: [],
+      toolRun: { name: "nuclei", status: "failed", reason: run.reason ?? "nuclei run failed" },
+      missing: true
+    };
+  }
+  const jsonl = opts.readOutput(outputPath);
+  const findings = jsonl === null ? [] : normalizeNucleiJsonl(jsonl, opts.routes);
+  return {
+    outcome: "ran",
+    findings,
+    toolRun: {
+      name: "nuclei",
+      status: "ok",
+      reason: jsonl === null ? "no template matched" : `${findings.length} template match(es)`
+    },
+    missing: false
+  };
+}
+
+// src/dast/redact.ts
+var REDACTED = "\xABredacted\xBB";
+function collectSecrets(...values) {
+  const out = /* @__PURE__ */ new Set();
+  for (const value of values) {
+    if (value === null || value === void 0) continue;
+    const trimmed = value.trim();
+    if (trimmed === "") continue;
+    out.add(trimmed);
+    const schemeAndToken = /^\S+\s+(\S.*)$/.exec(trimmed);
+    const token = schemeAndToken?.[1];
+    if (token !== void 0) out.add(token);
+  }
+  return [...out];
+}
+function makeRedactor(secrets) {
+  const variants = /* @__PURE__ */ new Set();
+  for (const secret of secrets) {
+    if (secret === "") continue;
+    variants.add(secret);
+    variants.add(JSON.stringify(secret).slice(1, -1));
+  }
+  const ordered = [...variants].sort((a2, b) => b.length - a2.length);
+  if (ordered.length === 0) return (value) => value;
+  return (value) => {
+    let out = value;
+    for (const secret of ordered) out = out.split(secret).join(REDACTED);
+    return out;
+  };
+}
+function redactObject(value, redact) {
+  const json = JSON.stringify(value);
+  if (json === void 0) return value;
+  return JSON.parse(redact(json));
+}
+
+// src/dast/target.ts
+var LOOPBACK_HOSTS = /* @__PURE__ */ new Set(["localhost", "::1", "[::1]"]);
+function classifyTarget(baseUrl, authorized) {
+  let parsed;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return {
+      allowed: false,
+      target_class: "public",
+      origin: "",
+      host: "",
+      reason: `\`${baseUrl}\` is not a valid URL.`
+    };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return {
+      allowed: false,
+      target_class: "public",
+      origin: "",
+      host: parsed.hostname,
+      reason: `Only http and https targets are supported (got \`${parsed.protocol}\`).`
+    };
+  }
+  const host = parsed.hostname;
+  const targetClass = classifyHost(host);
+  const origin = parsed.origin;
+  if (targetClass === "loopback") {
+    return { allowed: true, target_class: targetClass, origin, host, reason: null };
+  }
+  if (authorized) {
+    return { allowed: true, target_class: targetClass, origin, host, reason: null };
+  }
+  const where = targetClass === "private" ? "is on your private network" : "is on the public internet";
+  return {
+    allowed: false,
+    target_class: targetClass,
+    origin,
+    host,
+    reason: `\`${host}\` ${where}, not loopback. Re-run with \`authorized_target: true\` to confirm you are authorised to send scan traffic to it. A hostname that resolves to localhost still needs this: the classification is lexical on purpose, so it can never be tricked into treating someone else's server as your own.`
+  };
+}
+function classifyHost(host) {
+  const lower = host.toLowerCase();
+  if (LOOPBACK_HOSTS.has(lower)) return "loopback";
+  const v4 = parseIpv4(lower);
+  if (v4 !== null) {
+    const [a2, b] = v4;
+    if (a2 === 127) return "loopback";
+    if (a2 === 10) return "private";
+    if (a2 === 172 && b >= 16 && b <= 31) return "private";
+    if (a2 === 192 && b === 168) return "private";
+    if (a2 === 169 && b === 254) return "private";
+    return "public";
+  }
+  const v6 = lower.startsWith("[") && lower.endsWith("]") ? lower.slice(1, -1) : lower;
+  if (v6 === "::1") return "loopback";
+  if (/^f[cd][0-9a-f]{2}:/.test(v6)) return "private";
+  if (/^fe80:/.test(v6)) return "private";
+  return "public";
+}
+function parseIpv4(host) {
+  const parts = host.split(".");
+  if (parts.length !== 4) return null;
+  const nums = [];
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const n2 = Number(part);
+    if (n2 > 255) return null;
+    nums.push(n2);
+  }
+  const [a2, b, c3, d] = nums;
+  if (a2 === void 0 || b === void 0 || c3 === void 0 || d === void 0) return null;
+  return [a2, b, c3, d];
+}
+
+// src/tools/scanDast.ts
+var DAST_ENGINE = "guardian-dast";
+var inputSchema26 = {
+  project_path: ProjectPath,
+  base_url: external_exports.string().min(1).describe(
+    "Origin of the ALREADY-RUNNING application, e.g. http://localhost:3000. This tool never starts, builds or stops the app; if nothing answers it returns target_not_found."
+  ),
+  authorized_target: external_exports.boolean().optional().describe(
+    "Attestation that you are authorised to send scan traffic to a non-loopback host. Required for every host that is not localhost / 127.0.0.0/8 / ::1 \u2014 including a hostname that merely resolves to loopback, because classification is lexical and never resolves DNS. Recorded in the scan for audit. Do not set this on a caller's behalf."
+  ),
+  allow_write_methods: external_exports.boolean().optional().describe(
+    'Allow POST/PUT/PATCH/DELETE probes, always with an empty body (the 400/422-vs-401/403 signal answers the authorization question without writing). Default: false \u2014 read-only GET/HEAD/OPTIONS. A 2xx on a write method is reported as "may have mutated state".'
+  ),
+  probe_rate_limit: external_exports.boolean().optional().describe(
+    "Send a bounded burst of identical requests carrying a synthetic, un-ownable credential to one authentication endpoint, to see whether a limiter answers. Default: false. This flag is its own authorization and does not open write methods for any other check."
+  ),
+  rate_limit_path: external_exports.string().min(1).optional().describe(
+    "Exact path (as it appears in the inventory) to aim the rate-limit burst at. When omitted the target is inferred from auth-shaped paths and the chosen route is reported; when the named path is not in the inventory the check reports no_candidate rather than bursting something else."
+  ),
+  auth_header_env: external_exports.string().min(1).optional().describe(
+    "RECOMMENDED credential path: the NAME of an environment variable holding an Authorization header value. The secret never enters the conversation or the MCP request log. An unset variable is reported as a warning, never a silent anonymous run."
+  ),
+  auth_header: external_exports.string().min(1).optional().describe(
+    "Literal Authorization header value. Lands in the transcript \u2014 prefer auth_header_env. Never persisted and redacted from every finding, evidence file and result field."
+  ),
+  use_nuclei: external_exports.boolean().optional().describe(
+    "Also run nuclei against the origin. Default: false (nuclei is an active scanner with a large template download). When requested and not installed the gap is reported in tools_run and missing_tools, never silently skipped. nuclei's default templates test the ORIGIN, not this project's routes \u2014 the own engine is what tests those."
+  ),
+  max_requests: external_exports.number().int().positive().optional().describe(`Global request ceiling. Default: ${DEFAULT_MAX_REQUESTS}. Reported when it cuts.`),
+  timeout_ms: external_exports.number().int().positive().optional().describe(`Per-request timeout in milliseconds. Default: ${DEFAULT_PROBE_TIMEOUT_MS}.`)
+};
+var tool40 = {
+  name: "scan_dast",
+  title: "Probe a running application against its route inventory",
+  // The description is the only discovery surface an agent has, so it states
+  // the preconditions and the envelope, not just the capability: the two
+  // things that make a caller pick this tool wrongly are not knowing the app
+  // must already be running, and not knowing a prior map_attack_surface run
+  // is required.
+  description: "ACTIVE DAST: sends real HTTP requests to an ALREADY-RUNNING application and reports what is actually reachable, what is served without credentials, and what leaks. REQUIRES a prior map_attack_surface run \u2014 it probes that route inventory and refuses with no_surface_snapshot when there is none. The app must already be up: this tool never starts, builds or stops it, and returns target_not_found when nothing answers at base_url. Safety envelope: LOOPBACK TARGETS ONLY (localhost / 127.0.0.0/8 / ::1) unless the caller passes authorized_target: true attesting they may scan that host; READ-ONLY methods (GET/HEAD/OPTIONS) unless allow_write_methods is set, and even then with empty bodies; redirects are never followed; no injection payloads and no credential guessing. Checks reachability against the spec diff, anonymous exposure of auth-required routes, differential authorization, CORS, security headers, information disclosure, method surface and open redirects, plus an opt-in benign rate-limit burst and an optional nuclei pass. Findings persist with scan_type dast and point at the source file the route was extracted from. A clean result is NOT evidence of injection safety.",
+  inputSchema: inputSchema26,
+  handler: (input, ctx, callMeta) => handler40(input, ctx, callMeta)
+};
+registerToolModule(tool40);
+function fail(code, message, retryWith) {
+  return {
+    ok: false,
+    error: { code, message, ...retryWith === void 0 ? {} : { retry_with: retryWith } }
+  };
+}
+async function handler40(input, ctx, callMeta) {
+  const inp = input;
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return fail("not_a_git_repo", e.message);
+  }
+  const target = classifyTarget(inp.base_url ?? "", inp.authorized_target === true);
+  if (!target.allowed) {
+    const code = target.origin === "" ? "unsupported_target" : "target_not_authorized";
+    return fail(code, target.reason ?? "Target refused.");
+  }
+  const persisted = ctx.storage.surface.getLatest();
+  if (persisted === null) {
+    return fail(
+      "no_surface_snapshot",
+      'No attack-surface snapshot exists for this project, so there is no route inventory to probe. Run map_attack_surface first, then re-run scan_dast. This is a refusal and not an empty scan on purpose: "zero routes probed" must never read as "zero problems found".',
+      { run_first: "map_attack_surface", project_path: projectPath }
+    );
+  }
+  const snapshot = persisted.snapshot;
+  const warnings = [];
+  const credential = resolveCredential(inp, warnings);
+  const redact = makeRedactor(collectSecrets(credential.value));
+  const timeoutMs = typeof inp.timeout_ms === "number" && inp.timeout_ms > 0 ? Math.floor(inp.timeout_ms) : DEFAULT_PROBE_TIMEOUT_MS;
+  const maxRequests = typeof inp.max_requests === "number" && inp.max_requests > 0 ? Math.floor(inp.max_requests) : DEFAULT_MAX_REQUESTS;
+  const probeOpts = { timeoutMs, concurrency: DEFAULT_CONCURRENCY };
+  if (callMeta?.signal !== void 0) probeOpts.signal = callMeta.signal;
+  const aborted3 = () => callMeta?.signal?.aborted === true;
+  const liveness = await executeProbe(livenessRequest(target.origin), probeOpts);
+  if (liveness.outcome !== "completed") {
+    if (aborted3()) return fail("cancelled", "Scan was cancelled by the host.");
+    return fail("target_not_found", livenessMessage(target, liveness, timeoutMs));
+  }
+  const scanId = randomUUID14();
+  const treeHash = await computeTreeHash(projectPath);
+  if (persisted.tree_hash !== treeHash) {
+    warnings.push(
+      "The attack-surface snapshot was taken at a different working-tree state than the one on disk now \u2014 routes added or moved since then were not probed. Re-run map_attack_surface for an up-to-date inventory."
+    );
+  }
+  const evidenceDir = ensureReportDir(projectPath, scanId, "dast");
+  ctx.storage.scans.insert({
+    scan_id: scanId,
+    scan_type: "dast",
+    project_path: projectPath,
+    tree_hash: treeHash,
+    report_dir: evidenceDir
+  });
+  const plan = planProbes(snapshot.routes, {
+    origin: target.origin,
+    allowWriteMethods: inp.allow_write_methods === true,
+    authHeaderValue: credential.value,
+    maxRequests
+  });
+  if (snapshot.routes.length === 0) {
+    warnings.push(
+      "The attack-surface snapshot contains no routes, so nothing was probed. Every per-route check reports no_candidate rather than a clean result \u2014 this is not a scan that found nothing."
+    );
+  }
+  if (plan.truncated) {
+    warnings.push(
+      `The max_requests ceiling (${maxRequests}) cut the plan: ${plan.skipped.filter((s) => s.reason === "cap").length} request(s) were not sent. Raise max_requests to cover the whole inventory.`
+    );
+  }
+  const cancel = () => {
+    ctx.storage.scans.finalize({
+      scan_id: scanId,
+      status: "cancelled",
+      tools_run: [{ name: DAST_ENGINE, status: "failed", reason: "cancelled by the host" }],
+      missing_tools: []
+    });
+    return fail("cancelled", "Scan was cancelled by the host.");
+  };
+  const results = await executeProbes(plan.requests, probeOpts);
+  if (aborted3()) return cancel();
+  const analyzeInput = {
+    plan,
+    results,
+    origin: target.origin,
+    shadowPaths: specPaths(snapshot, "code_only"),
+    deadDocPaths: specPaths(snapshot, "spec_only"),
+    hasCredentials: credential.value !== null
+  };
+  const findings = [...analyzeRoutes(analyzeInput), ...analyzeOrigin(analyzeInput)];
+  const completed = results.filter((r) => r.outcome === "completed").length;
+  const toolsRun = [
+    {
+      name: DAST_ENGINE,
+      status: "ok",
+      reason: `${plan.requests.length} request(s) planned, ${completed} completed, ${results.length - completed} did not answer`
+    }
+  ];
+  const missingTools = [];
+  const burst = await runRateLimitBurst({
+    requested: inp.probe_rate_limit === true,
+    explicitPath: inp.rate_limit_path ?? null,
+    // The full inventory, not `plan.routes`: the burst's target is almost
+    // always a POST, which the default read-only envelope drops from the
+    // plan. `probe_rate_limit` is its own authorization for exactly that one
+    // route (design §6).
+    routes: snapshot.routes,
+    origin: target.origin,
+    probeOpts,
+    aborted: aborted3
+  });
+  if (burst.finding !== null) findings.push(burst.finding);
+  const nuclei = await runNuclei({
+    requested: inp.use_nuclei === true,
+    binaryPath: inp.use_nuclei === true ? await scannerAvailable("nuclei") : null,
+    origin: target.origin,
+    outputDir: evidenceDir,
+    routes: snapshot.routes,
+    readOutput: readJsonSafe,
+    ...callMeta?.signal === void 0 ? {} : { signal: callMeta.signal }
+  });
+  findings.push(...nuclei.findings);
+  if (nuclei.toolRun !== null) toolsRun.push(nuclei.toolRun);
+  if (nuclei.missing) missingTools.push("nuclei");
+  if (aborted3()) return cancel();
+  const ordered = [...findings].sort(
+    (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
+  );
+  const records = ordered.map(
+    (f) => burst.evidence.get(f.fingerprint) ?? buildEvidence(f, target.origin, results)
+  );
+  const written = writeEvidenceFiles(evidenceDir, records, redact);
+  if (written.capped > 0) {
+    warnings.push(
+      `${written.capped} finding(s) have no evidence file: the per-scan evidence cap was reached. The findings themselves are complete; only their raw request/response pairs were dropped.`
+    );
+  }
+  if (written.failed > 0) {
+    warnings.push(`${written.failed} evidence file(s) could not be written to ${evidenceDir}.`);
+  }
+  ctx.storage.findings.bulkInsert(
+    ordered.map(
+      (f) => redactObject(
+        toInsertInput(f, scanId, written.written.has(f.fingerprint) ? evidenceDir : null),
+        redact
+      )
+    )
+  );
+  const checks = computeCheckStatuses({
+    plan,
+    results,
+    hasSpecDiff: snapshot.spec_diff !== null,
+    hasCredentials: credential.value !== null,
+    rateLimit: burst.outcome,
+    nuclei: nuclei.outcome
+  });
+  const { coverage, warning: coverageWarning } = assessCoverage("dast", toolsRun, missingTools);
+  if (coverageWarning !== null) warnings.unshift(coverageWarning);
+  const meta = {
+    target_origin: target.origin,
+    target_class: target.target_class,
+    target_host: target.host,
+    // Recorded for the audit trail the design asks for: a non-loopback scan
+    // must show that someone attested to it.
+    authorized_target: inp.authorized_target === true,
+    allow_write_methods: inp.allow_write_methods === true,
+    // The env var NAME is not a secret; the value never appears anywhere.
+    credential_source: credential.source,
+    requests_planned: plan.requests.length,
+    requests_completed: completed,
+    truncated: plan.truncated,
+    checks,
+    evidence_dir: evidenceDir
+  };
+  ctx.storage.scans.finalize({
+    scan_id: scanId,
+    status: "completed",
+    tools_run: toolsRun,
+    missing_tools: missingTools,
+    report_dir: evidenceDir,
+    meta: redactObject(meta, redact)
+  });
+  const record2 = ctx.storage.scans.getById(scanId);
+  const payload = {
+    scan_id: scanId,
+    scan_type: "dast",
+    project_path: projectPath,
+    tree_hash: treeHash,
+    started_at: record2?.started_at ?? (/* @__PURE__ */ new Date()).toISOString(),
+    finished_at: record2?.finished_at ?? (/* @__PURE__ */ new Date()).toISOString(),
+    status: "completed",
+    tools_run: toolsRun,
+    missing_tools: missingTools,
+    report_paths: [evidenceDir],
+    evidence_dir: evidenceDir,
+    coverage,
+    findings_count_by_severity: countBySeverity4(ordered),
+    // `top_findings` is the `ScanResult` contract every roll-up already reads
+    // (`audit_executive`, `guardian://scans/{id}`); `findings` is the full
+    // list, which a DAST run can afford to inline because its size is bounded
+    // by the request ceiling. The overlap is deliberate, not an oversight.
+    top_findings: ordered.slice(0, 10),
+    findings: ordered,
+    warnings,
+    target: {
+      origin: target.origin,
+      host: target.host,
+      target_class: target.target_class,
+      authorized_target: inp.authorized_target === true
+    },
+    summary: {
+      routes_in_snapshot: snapshot.routes.length,
+      routes_planned: plan.routes.length,
+      requests_planned: plan.requests.length,
+      requests_completed: completed,
+      requests_failed: results.length - completed,
+      truncated: plan.truncated,
+      max_requests: maxRequests,
+      skipped: plan.skipped,
+      checks,
+      rate_limit: burst.summary
+    }
+  };
+  return { ok: true, ...redactObject(payload, redact) };
+}
+function resolveCredential(inp, warnings) {
+  const envName = inp.auth_header_env;
+  if (envName !== void 0 && envName !== "") {
+    if (inp.auth_header !== void 0) {
+      warnings.push(
+        `Both auth_header_env and auth_header were supplied; auth_header_env (${envName}) was used and the literal auth_header was ignored.`
+      );
+    }
+    const value = process.env[envName];
+    if (value === void 0 || value === "") {
+      warnings.push(
+        `auth_header_env named the environment variable ${envName}, but it is not set in this process. The scan ran ANONYMOUSLY: the differential-authorization check did not run and no authenticated probe was sent. Export the variable and re-run.`
+      );
+      return { value: null, source: `env:${envName} (unset)` };
+    }
+    return { value, source: `env:${envName}` };
+  }
+  if (inp.auth_header !== void 0 && inp.auth_header !== "") {
+    return { value: inp.auth_header, source: "literal" };
+  }
+  return { value: null, source: "none" };
+}
+function specPaths(snapshot, side) {
+  const out = /* @__PURE__ */ new Set();
+  const diff = snapshot.spec_diff;
+  if (diff === null) return out;
+  for (const entry of diff[side]) {
+    const route = side === "code_only" ? entry.code_route : entry.spec_route;
+    if (route !== void 0) out.add(route.path_resolved);
+  }
+  return out;
+}
+function toInsertInput(finding2, scanId, evidenceDir) {
+  const { check: check2, evidence_id, ...rest } = finding2;
+  return {
+    ...rest,
+    scan_id: scanId,
+    raw: {
+      check: check2,
+      evidence_id,
+      evidence_file: evidenceDir === null ? null : join45(evidenceDir, `${finding2.fingerprint}.json`)
+    }
+  };
+}
+function countBySeverity4(findings) {
+  const out = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
+  for (const finding2 of findings) out[finding2.severity] += 1;
+  return out;
+}
+
 // src/resources/scans.ts
 registerResourceModule({
   name: "guardian-scans-latest",
@@ -50257,7 +51769,7 @@ function enrich(scanId, ctx) {
   const record2 = ctx.storage.scans.getById(scanId);
   if (!record2) return { last_run: null };
   const findings = ctx.storage.findings.listByScan(scanId);
-  const counts = countBySeverity4(findings);
+  const counts = countBySeverity5(findings);
   const top = topFindings4(findings, 10);
   return {
     ...record2,
@@ -50265,7 +51777,7 @@ function enrich(scanId, ctx) {
     top_findings: top
   };
 }
-function countBySeverity4(findings) {
+function countBySeverity5(findings) {
   const out = {
     info: 0,
     low: 0,
@@ -50617,7 +52129,7 @@ registerResourceModule({
 // src/server.ts
 var SERVER_NAME = "dev-guardian";
 function resolveServerVersion() {
-  const here = dirname4(fileURLToPath4(import.meta.url));
+  const here = dirname5(fileURLToPath4(import.meta.url));
   const candidates = [
     resolve7(here, "..", "..", ".claude-plugin", "plugin.json"),
     resolve7(here, "..", "package.json")
@@ -50674,7 +52186,7 @@ async function main() {
   logErr("listening on stdio");
 }
 function resolveScriptsDir() {
-  const here = dirname4(fileURLToPath4(import.meta.url));
+  const here = dirname5(fileURLToPath4(import.meta.url));
   return resolve7(here, "..", "..", "scripts");
 }
 function installShutdownHooks(mcp, storage) {

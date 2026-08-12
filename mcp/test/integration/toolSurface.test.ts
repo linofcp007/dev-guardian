@@ -48,6 +48,7 @@ const EXPECTED_TOOLS = [
   'risk_score',
   'sbom_diff',
   'scan_containers',
+  'scan_dast',
   'scan_deps',
   'scan_dotnet_secrets',
   'scan_iac',
@@ -99,8 +100,8 @@ describe('MCP surface — stability snapshot', () => {
     expect(RESOURCES.map((r) => r.name).sort()).toEqual(EXPECTED_RESOURCES);
   });
 
-  it('matches the counts documented in the README (51 tools, 18 resources)', () => {
-    expect(TOOLS).toHaveLength(51);
+  it('matches the counts documented in the README (52 tools, 18 resources)', () => {
+    expect(TOOLS).toHaveLength(52);
     expect(RESOURCES).toHaveLength(18);
   });
 });

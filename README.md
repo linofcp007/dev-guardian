@@ -8,7 +8,7 @@
 
 All-in-one **100% open-source** plugin for Claude Code / Cowork. Handles security, bug detection and fixing, code quality, dependency management, observability, performance and compliance for any dev project. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), trilingual triggers (EN + PT + ES) — responds in the user's language.
 
-Under the hood it ships a Claude Code plugin (13 skills + 48 slash commands) **and** an MCP server with **51 tools and 18 resources**, with persistent SQLite state for baselines, deltas and suppressions. It also vets **third-party AI skills / MCP servers / agents before you install them** — the supply-chain check for the agent ecosystem.
+Under the hood it ships a Claude Code plugin (13 skills + 48 slash commands) **and** an MCP server with **52 tools and 18 resources**, with persistent SQLite state for baselines, deltas and suppressions. It also vets **third-party AI skills / MCP servers / agents before you install them** — the supply-chain check for the agent ecosystem.
 
 ### Skills (Claude Code front-end)
 
@@ -31,7 +31,7 @@ Under the hood it ships a Claude Code plugin (13 skills + 48 slash commands) **a
 
 You can also trigger everything via **natural language** (EN, PT or ES). Skills fire on descriptions — *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*, *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*.
 
-### MCP server (51 tools, 18 resources)
+### MCP server (52 tools, 18 resources)
 
 The plugin registers an MCP server on stdio that Claude Code launches automatically. The tools group into:
 
@@ -201,7 +201,7 @@ Carlos Pereira · prodigitalkey.com
 
 Plugin all-in-one **100% open-source** para Claude Code / Cowork. Faz segurança, deteção e correção de bugs, qualidade de código, gestão de dependências, observability, performance e compliance em qualquer projeto de desenvolvimento. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), triggers trilingues (EN + PT + ES) — responde no idioma do utilizador.
 
-Por baixo do capot fornece um plugin Claude Code (13 skills + 48 slash commands) **e** um servidor MCP com **51 tools e 18 resources**, com estado persistente em SQLite para baselines, deltas e supressões. Também faz **vet de skills / MCP servers / agentes de terceiros antes de os instalares** — a verificação de supply-chain do ecossistema de agentes.
+Por baixo do capot fornece um plugin Claude Code (13 skills + 48 slash commands) **e** um servidor MCP com **52 tools e 18 resources**, com estado persistente em SQLite para baselines, deltas e supressões. Também faz **vet de skills / MCP servers / agentes de terceiros antes de os instalares** — a verificação de supply-chain do ecossistema de agentes.
 
 ### Skills (front-end Claude Code)
 
@@ -224,7 +224,7 @@ Por baixo do capot fornece um plugin Claude Code (13 skills + 48 slash commands)
 
 Também podes invocar tudo em **linguagem natural** (PT, EN ou ES). As skills disparam por descrição — *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*, *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*.
 
-### Servidor MCP (51 tools, 18 resources)
+### Servidor MCP (52 tools, 18 resources)
 
 O plugin regista um servidor MCP em stdio que o Claude Code arranca automaticamente. As tools agrupam-se em:
 
@@ -394,7 +394,7 @@ Carlos Pereira · prodigitalkey.com
 
 Plugin todo-en-uno **100% open-source** para Claude Code / Cowork. Cubre seguridad, detección y corrección de bugs, calidad de código, gestión de dependencias, observabilidad, rendimiento y cumplimiento para cualquier proyecto de desarrollo. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), triggers trilingües (EN + PT + ES) — responde en el idioma del usuario.
 
-Bajo el capó incluye un plugin Claude Code (13 skills + 48 slash commands) **y** un servidor MCP con **51 herramientas y 18 recursos**, con estado persistente en SQLite para baselines, deltas y supresiones. También hace **vet de skills / MCP servers / agentes de terceros antes de instalarlos** — la verificación de supply-chain del ecosistema de agentes.
+Bajo el capó incluye un plugin Claude Code (13 skills + 48 slash commands) **y** un servidor MCP con **52 herramientas y 18 recursos**, con estado persistente en SQLite para baselines, deltas y supresiones. También hace **vet de skills / MCP servers / agentes de terceros antes de instalarlos** — la verificación de supply-chain del ecosistema de agentes.
 
 ### Skills (front-end de Claude Code)
 
@@ -417,7 +417,7 @@ Bajo el capó incluye un plugin Claude Code (13 skills + 48 slash commands) **y*
 
 También puedes invocarlo todo en **lenguaje natural** (ES, EN o PT). Las skills se disparan por descripción — *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*, *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*.
 
-### Servidor MCP (51 herramientas, 18 recursos)
+### Servidor MCP (52 herramientas, 18 recursos)
 
 El plugin registra un servidor MCP en stdio que Claude Code arranca automáticamente. Las herramientas se agrupan en:
 
