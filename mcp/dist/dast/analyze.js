@@ -277,6 +277,20 @@ function knownMethodsForPath(routes, path) {
     return known;
 }
 /**
+ * `OPTIONS` is never news: nearly every HTTP server answers some form of it,
+ * so its presence in `Allow` reveals nothing the inventory didn't already
+ * imply. `HEAD` is news only when `GET` is NOT already known — HTTP defines
+ * `HEAD` as `GET` without a body, and mainstream frameworks (Express, Flask,
+ * ...) wire it up automatically for any GET route, with no separate
+ * registration for the static extractor to ever have seen. Skipping this
+ * carve-out would fire `method_surface` on nearly every GET route in
+ * existence — the exact over-reporting this file's checks all exist to
+ * avoid. Do not "fix" it back out.
+ */
+function isImpliedMethod(method, known) {
+    return method === 'OPTIONS' || (method === 'HEAD' && known.has('GET'));
+}
+/**
  * The server admits a verb the static extractor never saw. Deduped per path:
  * the same `Allow` fact can surface on more than one probe to the same
  * resource, and repeating it would bury every other finding in the report.
@@ -292,7 +306,8 @@ function checkMethodSurface(input, findings) {
         const known = knownMethodsForPath(input.plan.routes, r.request.path);
         if (known === null)
             continue;
-        const extra = allow.split(',').map((m) => m.trim().toUpperCase()).filter((m) => m !== '' && !known.has(m));
+        const extra = allow.split(',').map((m) => m.trim().toUpperCase())
+            .filter((m) => m !== '' && !known.has(m) && !isImpliedMethod(m, known));
         if (extra.length === 0)
             continue;
         reported.add(r.request.path);
