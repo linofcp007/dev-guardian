@@ -37236,7 +37236,9 @@ var DOMAIN_ERROR_CODES = [
   "not_a_wordpress_install",
   "not_a_wordpress_project",
   "target_not_found",
-  "unsupported_target"
+  "unsupported_target",
+  "target_not_authorized",
+  "no_surface_snapshot"
 ];
 
 // src/storage/findingsRepo.ts
