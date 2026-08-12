@@ -377,3 +377,164 @@ export function analyzeRoutes(input: AnalyzeInput): DastFinding[] {
   checkOpenRedirect(input, findings);
   return findings;
 }
+
+/**
+ * Headers expected on every response. HSTS is deliberately not in this
+ * baseline — see `expectedSecurityHeaders` — because it only means anything
+ * on a connection that is already TLS. `frame-ancestors` from the design
+ * doc's check table is represented here as the `X-Frame-Options` header: the
+ * concrete, single-header signal for clickjacking defence, rather than
+ * parsing the (already separately-required) CSP value for a directive.
+ */
+const BASELINE_SECURITY_HEADERS = [
+  'content-security-policy',
+  'x-content-type-options',
+  'x-frame-options',
+] as const;
+
+const HSTS_HEADER = 'strict-transport-security';
+
+/** HSTS joins the baseline only when the origin can act on it. */
+function expectedSecurityHeaders(origin: string): string[] {
+  const expected: string[] = [...BASELINE_SECURITY_HEADERS];
+  if (origin.startsWith('https:')) expected.push(HSTS_HEADER);
+  return expected;
+}
+
+/**
+ * One finding per origin, never per route. The wrong implementation loops
+ * over every probed route and emits an identical "missing CSP" finding per
+ * route, so a 300-route scan buries every other finding under near-duplicate
+ * copies of this one. A header counts as present the moment ANY completed
+ * response carries it — a single handler (e.g. a 404 page) that forgets to
+ * set it is not evidence the origin never sets it; only a header absent from
+ * every completed response earns the finding.
+ *
+ * Nothing is concluded when every probe failed to complete: a timeout or a
+ * cancelled probe carries no headers, and "no evidence" must never render as
+ * "confirmed missing".
+ */
+function checkSecurityHeaders(input: AnalyzeInput, findings: DastFinding[]): void {
+  const completed = input.results.filter((r) => r.outcome === 'completed' && r.status !== null);
+  const first = completed[0];
+  if (first === undefined) return;
+
+  const expected = expectedSecurityHeaders(input.origin);
+  const present = new Set<string>();
+  for (const r of completed) {
+    for (const header of expected) {
+      if (r.headers[header] !== undefined) present.add(header);
+    }
+  }
+  const missing = expected.filter((h) => !present.has(h));
+  if (missing.length === 0) return;
+
+  findings.push(buildFinding({
+    check: 'security_headers',
+    // Per the design doc (section 8): severity is a property of the check,
+    // and a missing security header is explicitly called out as low there —
+    // unlike a confirmed auth bypass, a missing header is a hardening gap,
+    // not proof anything has actually been exploited.
+    severity: 'low',
+    title: 'Missing security headers',
+    message:
+      `${input.origin} did not return ${missing.join(', ')} on any of ${completed.length} ` +
+      `completed response(s) observed during this scan.`,
+    route: undefined,
+    request: first.request,
+  }));
+}
+
+/**
+ * Stack-trace signatures, anchored per language family — never the bare word
+ * "error". The false positive this exists to avoid is ordinary user-facing
+ * prose ("An error occurred, please try again"), which contains that word
+ * and nothing else a real trace produces. Each pattern instead requires a
+ * shape only a genuine trace has: a language-specific frame marker, a
+ * filesystem path, or a driver-specific error code.
+ */
+const STACK_TRACE_SIGNATURES: readonly RegExp[] = [
+  /Traceback \(most recent call last\)/, // Python
+  /\n\tat [\w.$]+\(/, // Java: "\n\tat com.example.Main.run("
+  /\n {4}at .*\(.*:\d+:\d+\)/, // Node: "\n    at fn (file:line:col)"
+  /\/\S+ on line \d+/, // PHP: a filesystem path immediately before "on line N"
+  /SQLSTATE\[/, // PDO / SQL driver errors
+];
+
+const VERSION_BANNER_HEADERS = ['server', 'x-powered-by'] as const;
+const VERSION_SUBSTRING = /\d+\.\d+/;
+
+/**
+ * A `Server` / `X-Powered-By` value only counts once it names a version: a
+ * bare `nginx` says which product answered, not which patch level, and that
+ * gap — knowing the product versus knowing what to patch — is exactly what
+ * this check must not blur.
+ */
+function versionBanner(headers: Record<string, string>): { header: string; value: string } | null {
+  for (const header of VERSION_BANNER_HEADERS) {
+    const value = headers[header];
+    if (value !== undefined && VERSION_SUBSTRING.test(value)) return { header, value };
+  }
+  return null;
+}
+
+/** Shared tail of `checkInfoDisclosure`'s two branches. */
+function infoDisclosureFinding(
+  route: RouteRecord | undefined,
+  request: ProbeRequest,
+  title: string,
+  message: string,
+): DastFinding {
+  return buildFinding({ check: 'info_disclosure', severity: 'low', title, message, route, request });
+}
+
+/**
+ * Two independent leaks, held to different granularities on purpose.
+ *
+ * A stack trace is reported per occurrence, never deduped: a trace on `/a`
+ * and one on `/b` are different evidence (different code paths, potentially
+ * different leaked file paths or line numbers), unlike a missing security
+ * header, which is the identical fact repeated at every route. Collapsing
+ * these to one finding would hide which route is actually at fault.
+ *
+ * A version banner is the opposite case, which is why `reportedBanners`
+ * exists: `Server` / `X-Powered-By` is normally stamped by one global
+ * middleware layer, so the exact same header/value pair shows up on every
+ * route an app serves — an Express default on 300 probed routes is 300
+ * byte-identical response headers, not 300 discoveries. Deduping by the
+ * (header, value) pair keeps a *second, distinct* banner (a second backend
+ * behind the same origin, say) its own finding, while collapsing the
+ * "N routes = N duplicates" case `security_headers` was already written to
+ * avoid — reusing the exact `reported`-Set idiom `checkMethodSurface` above
+ * already applies to `Allow`, for the same reason.
+ */
+function checkInfoDisclosure(input: AnalyzeInput, findings: DastFinding[]): void {
+  const reportedBanners = new Set<string>();
+  for (const r of input.results) {
+    if (r.outcome !== 'completed' || r.status === null) continue;
+    const route = routeFor(input.plan.routes, r.request.route_index);
+
+    if (STACK_TRACE_SIGNATURES.some((re) => re.test(r.body_prefix))) {
+      findings.push(infoDisclosureFinding(route, r.request, 'Stack trace disclosed in response body',
+        `${r.request.method} ${r.request.path} returned a stack trace in its response body ` +
+        `(status ${r.status}).`));
+    }
+
+    const banner = versionBanner(r.headers);
+    if (banner !== null) {
+      const key = `${banner.header}:${banner.value}`;
+      if (!reportedBanners.has(key)) {
+        reportedBanners.add(key);
+        findings.push(infoDisclosureFinding(route, r.request, 'Version banner disclosed in response headers',
+          `${r.request.method} ${r.request.path} discloses ${banner.header}: ${banner.value}.`));
+      }
+    }
+  }
+}
+
+export function analyzeOrigin(input: AnalyzeInput): DastFinding[] {
+  const findings: DastFinding[] = [];
+  checkSecurityHeaders(input, findings);
+  checkInfoDisclosure(input, findings);
+  return findings;
+}
