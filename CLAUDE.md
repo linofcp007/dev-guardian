@@ -22,10 +22,15 @@ quality, deps, observability, performance and compliance. Two halves:
 
 ```bash
 cd mcp
-npm install          # first time only (native better-sqlite3)
-npm run build        # tsc -> mcp/dist + copy-assets
+npm install          # first time only — no native modules, storage is node:sqlite
+npm run build        # tsc -> mcp/dist + copy-assets + esbuild bundle
 npm test             # vitest run (full suite)
+npm run test:coverage # the only run that enforces the coverage thresholds
 ```
+
+Semgrep-dependent e2e tests skip when Semgrep is absent. A skip is visible as a
+skip, and `GUARDIAN_REQUIRE_SEMGREP=1` turns absence into a hard failure — set it
+when you need to know the rule pack was actually exercised.
 
 ## Conventions that bite if ignored
 
