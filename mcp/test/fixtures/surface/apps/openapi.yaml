@@ -1,0 +1,52 @@
+# Deliberately small OpenAPI document, imported alongside the multi-language
+# fixture app tree so the code-vs-spec diff has something real to compare
+# against. Every path below is either copied verbatim from `EXPECTED_ROUTES`
+# in `test/e2e/rulePackFixture.test.ts`, or deliberately never there — see the
+# inline notes. Do not add or edit a path without updating EXPECTED_SHADOW /
+# EXPECTED_DEAD in that file to match.
+#
+# No `servers` block: the base path is `/`, so the paths below must match the
+# fixture routes' `path_resolved` exactly as written.
+openapi: "3.0.3"
+info:
+  title: Fixture surface spec
+  version: "1.0.0"
+paths:
+  # ---- MATCHED: copied verbatim from EXPECTED_ROUTES (BASE_ROUTES), none
+  # `[partial]`. These three make `matched` non-empty.
+  /health:
+    get:
+      summary: express GET /health
+      responses:
+        "200":
+          description: ok
+  /login:
+    post:
+      summary: express POST /login
+      responses:
+        "200":
+          description: ok
+  /gin/ping:
+    get:
+      summary: gin GET /gin/ping
+      responses:
+        "200":
+          description: ok
+
+  # ---- DEAD DOCUMENTATION: appears nowhere in EXPECTED_ROUTES — no code
+  # route implements it. Must surface in `spec_diff.spec_only`.
+  /deprecated/v0/orders:
+    get:
+      summary: documented but never implemented
+      responses:
+        "200":
+          description: ok
+
+# ---- SHADOW ENDPOINT (by omission): `express GET /api/users/list` is a real,
+# non-partial route in EXPECTED_ROUTES that this document deliberately does
+# NOT declare. It has no counterpart above, so it — along with every other
+# undocumented, resolvable code route — must surface in
+# `spec_diff.code_only`. (`/api/users/list` is called out here because it is
+# the one intentionally chosen for that purpose; the diff being an exact set
+# means the rest of the 64-route surface ends up there too, which is
+# expected and asserted in full.)

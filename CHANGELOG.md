@@ -51,6 +51,43 @@ version bump.
     fixable by adding `, ...`, which Semgrep rejects as "Invalid pattern for Java" —
     and Rocket's `#[post("/x", data = "<t>")]` (see the actix entry below). Both are
     absent from the inventory rather than reported at a guessed path.
+- **`map_attack_surface` imports OpenAPI 3.x and Swagger 2.0 documents and diffs them
+  against the code.** Discovery walks the project for conventionally-named files
+  (`openapi.*`, `swagger.*`, `api-docs.*`, or anything under an `openapi/` directory
+  inside the project — never matched against the absolute filesystem path, so a
+  checkout nested under an ancestor directory happening to be named `openapi` does not
+  pull in unrelated files) or reads exactly the paths passed as `spec_paths`. Both JSON
+  and YAML are accepted for either version; **Postman collections are not supported** —
+  the parser only recognises an `openapi: 3.x` or `swagger: 2.0` document. Every
+  imported route carries `provenance: 'spec'` alongside the code-extracted routes'
+  `provenance: 'code'` (routes read back from a snapshot persisted before this feature
+  default to `'code'`, so old data is never mistaken for spec data), and
+  `auth_hint: 'none'` is now emitted for an operation or document declaring
+  `security: []` — an explicit "this route is public" — never inferred from the field
+  being absent, which stays `'unknown'`.
+  - **The diff has two honesty rules, not one.** First: with no spec discovered, or every
+    discovered spec failing to parse, `spec_diff` is `null` — never a diff in which
+    every code route reads as undocumented, which is a different claim than "there is no
+    spec to compare against." Second: a route whose full path could not be resolved (an
+    unresolved router-mount prefix on the code side, a templated `servers[].url` /
+    `basePath` on the spec side) is **never** reported as a shadow endpoint or as dead
+    documentation — it lands in a fourth bucket, `unmatchable`, together with a reason,
+    and is never surfaced as a finding. This costs real findings when an unresolved
+    route happens to be the very shadow/dead one, so the counts of findings withheld for
+    that reason (`code_only_withheld`, `spec_only_withheld`) are reported alongside the
+    diff rather than the gap being silent.
+  - `routes_total` and `coverage[]` stay code-only, unchanged by this feature: a spec
+    importing 200 paths must not make `coverage` claim a `'spec'` language exists, and
+    must not inflate the code-route count a consumer already relies on.
+  - Discovery is capped at 20 candidate files and 5 MB per file, both reported
+    (`truncated`, `oversized`) rather than silently applied, and an unresolved external
+    `$ref` (a whole path item, or a parameter, pointing outside the document) is counted
+    in `unresolved_refs` rather than the path item vanishing with no trace — which would
+    read as "the spec never declared this," a false claim about a real route this module
+    simply could not follow to its file.
+  - New runtime dependency: [`yaml`](https://www.npmjs.com/package/yaml), used to parse
+    YAML specs and to recover the source line each path is declared on (JSON specs
+    always report `line: 0`, since `JSON.parse` carries no position information).
 - **`guardian://surface/latest` and `guardian://surface/{id}` resources.** Serve the
   full persisted attack-surface snapshot (every route, env var, port, webhook and the
   coverage report) by snapshot id or the most recent one. Return `{ snapshot: null }`
@@ -72,6 +109,15 @@ version bump.
   redacted is asserted rather than assumed. It skips (visibly, via `it.skipIf`) when
   Semgrep is absent, and copies the tree out of `test/` first, which Semgrep's default
   ignore list would otherwise skip entirely.
+  - **A companion `openapi.yaml` exercises the spec-diff against the same real Semgrep
+    run**, rather than against hand-written `RouteRecord`s. It documents three routes
+    copied verbatim from the fixture's expected set (so `matched` is non-empty), omits
+    the rest of the 51 resolvable code routes on purpose (asserted as the exact
+    `code_only` set — shadow endpoints), and declares one path,
+    `/deprecated/v0/orders`, that no code route implements (asserted as `spec_only` —
+    dead documentation). The comparison is an exact sorted set on both buckets, the same
+    style as the route-set assertion above and for the same reason: a count passes when
+    one rule breaks and another over-matches by the same amount.
 
 ### Fixed
 

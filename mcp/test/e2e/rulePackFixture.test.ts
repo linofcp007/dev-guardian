@@ -64,7 +64,7 @@ import { Storage } from '../../src/storage/index.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { TOOLS } from '../../src/tools/index.js';
 import '../../src/tools/mapAttackSurface.js';
-import type { AttackSurfaceSnapshot, RouteRecord } from '../../src/types.js';
+import type { AttackSurfaceSnapshot, RouteRecord, SpecDiffEntry } from '../../src/types.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(here, '..', '..', '..');
@@ -80,6 +80,11 @@ const SCRIPTS_DIR = resolve(ROOT, 'scripts');
  */
 function describeRoute(route: RouteRecord): string {
   return `${route.framework} ${route.method} ${route.path_resolved}${route.path_partial ? ' [partial]' : ''}`;
+}
+
+/** Same shape as the file's existing `describeRoute`, for diff entries. */
+function describeDiffEntry(e: SpecDiffEntry): string {
+  return `${e.method} ${e.path}`;
 }
 
 /* The surface of test/fixtures/surface/apps/, verified capture-by-capture
@@ -219,6 +224,79 @@ const FABRICATION_DECOYS = [
   'audit/FABRICATED',
 ];
 
+/**
+ * The code-vs-spec diff produced against `openapi.yaml` sitting alongside
+ * the fixture app tree (see that file's own comments for which three
+ * intentions each path serves).
+ *
+ * `EXPECTED_SHADOW` is every non-partial route in `EXPECTED_ROUTES` that
+ * `openapi.yaml` does not document — not just the one route called out by
+ * name in the fixture's comment, but the whole remainder, because the
+ * diff itself is asserted as an exact set (see the module comment on "why
+ * an explicit route set, not a count"). `EXPECTED_DEAD` is the one path
+ * `openapi.yaml` declares that no code route implements.
+ *
+ * Filled from the tool's own output, then checked entry-by-entry against
+ * `EXPECTED_ROUTES` and `openapi.yaml` before being kept here — see Task 7
+ * step 3: pasting output in without reading it is how a wrong result
+ * becomes a regression test.
+ */
+const EXPECTED_SHADOW = [
+  'ANY /django/api',
+  'ANY /django/orders',
+  'ANY /django/orders/{}',
+  'ANY /flask/health',
+  'ANY /flask/items/{}',
+  'ANY /go/health',
+  'ANY /go/orders',
+  'ANY /legacy',
+  'ANY /spring/orders',
+  'ANY /wp-json/guardian/v1/items',
+  'DELETE /api/users/{}',
+  'DELETE /aspnet/orders/{}',
+  'DELETE /fastapi/items/{}',
+  'DELETE /gin/items/{}',
+  'DELETE /laravel/orders/{}',
+  'DELETE /minimal/orders/{}',
+  'DELETE /rails/orders/{}',
+  'DELETE /rust/items/{}',
+  'DELETE /{}',
+  'GET /admin/reports',
+  'GET /api/users/list',
+  'GET /aspnet/orders',
+  'GET /aspnet/orders/audit',
+  'GET /aspnet/orders/{}',
+  'GET /fastapi/items',
+  'GET /laravel/orders',
+  'GET /list',
+  'GET /minimal/health',
+  'GET /rails/orders',
+  'GET /rails/orders/{}',
+  'GET /rust/documented',
+  'GET /rust/gated',
+  'GET /rust/health',
+  'GET /stats',
+  'PATCH /aspnet/orders/{}/status',
+  'PATCH /laravel/orders/{}/status',
+  'PATCH /rust/items/{}/status',
+  'PATCH /{}/status',
+  'POST /api/users/create',
+  'POST /aspnet/orders',
+  'POST /create',
+  'POST /fastapi/items',
+  'POST /gin/items',
+  'POST /laravel/orders',
+  'POST /minimal/orders',
+  'POST /rails/orders',
+  'POST /rust/items',
+  'PUT /aspnet/orders/{}',
+  'PUT /laravel/orders/{}',
+  'PUT /rust/items/{}',
+  'PUT /{}',
+].sort();
+
+const EXPECTED_DEAD = ['GET /deprecated/v0/orders'];
+
 async function isInstalled(bin: string): Promise<boolean> {
   try {
     const r = await execa(detectOs() === 'win32' ? 'where' : 'which', [bin], {
@@ -311,7 +389,15 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     // Semgrep report a span that is the path itself, so they recover either way.
     // The fork is deliberately gone rather than made version-aware — a test that
     // accepts two answers cannot notice one of them silently becoming wrong.
-    const actual = snapshot.routes.map(describeRoute).sort();
+    //
+    // Code routes only: the fixture tree now also carries `openapi.yaml` (see
+    // that file), whose imported routes land in `snapshot.routes` too, tagged
+    // `provenance: 'spec'`. EXPECTED_ROUTES is the code-extracted surface, so
+    // the comparison filters to `'code'` the same way `routes_total` does.
+    const actual = snapshot.routes
+      .filter((r) => r.provenance === 'code')
+      .map(describeRoute)
+      .sort();
     expect(actual).toEqual(EXPECTED_ROUTES);
     expect(result.routes_total).toBe(EXPECTED_ROUTES.length);
 
@@ -430,5 +516,30 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     // The whole point, stated as one assertion: the same number of routes on a
     // redacting Semgrep as on one that emits metavariables.
     expect(result.routes_total).toBe(EXPECTED_ROUTES.length);
+  }, 6 * 60_000);
+
+  it.skipIf(!SEMGREP_AVAILABLE)('reports shadow endpoints and dead documentation', async () => {
+    // Outside any `test/` path — see the module comment. `openapi.yaml`
+    // ships alongside the rest of the fixture tree and is copied with it.
+    const work = mkdtempSync(join(tmpdir(), 'guardian-rulepack-'));
+    cpSync(FIXTURE, work, { recursive: true });
+
+    const ctx = makeContext();
+    const tool = TOOLS.find((t) => t.name === 'map_attack_surface');
+    if (!tool) throw new Error('map_attack_surface is not registered');
+
+    const result = (await tool.handler({ project_path: work, force: true }, ctx)) as SurfaceResult;
+    const snapshotId = result.snapshot_id;
+    expect(snapshotId).not.toBeNull();
+    if (snapshotId === null) return;
+    const snapshot = ctx.storage.surface.getById(snapshotId)?.snapshot;
+    if (!snapshot) throw new Error('snapshot was not persisted');
+
+    const diff = snapshot.spec_diff;
+    expect(diff).not.toBeNull();
+    if (!diff) return;
+
+    expect(diff.code_only.map(describeDiffEntry).sort()).toEqual(EXPECTED_SHADOW);
+    expect(diff.spec_only.map(describeDiffEntry).sort()).toEqual(EXPECTED_DEAD);
   }, 6 * 60_000);
 });
