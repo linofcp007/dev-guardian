@@ -38,16 +38,24 @@ const SYNTHETIC_PASSWORD = 'dev-guardian-probe';
  * which silently bursts a different endpoint than the one the caller
  * asked about — worse than refusing, because the operator believes the
  * named route was the one tested. Inference only runs when the caller named
- * nothing. `path_partial` routes are never selectable either way: they are
- * not a usable URL path (see `RouteRecord.path_partial`), so there is
- * nothing a burst could be aimed at.
+ * nothing, and additionally requires the candidate be `isWriteCapable` —
+ * see that function's doc comment for why a path match alone is not enough.
+ * `path_partial` routes are never selectable either way: they are not a
+ * usable URL path (see `RouteRecord.path_partial`), so there is nothing a
+ * burst could be aimed at.
+ *
+ * The explicit branch applies no method filter. A caller who names an exact
+ * path has made a deliberate choice; the same reasoning that already sends
+ * a named-but-absent path to `null` rather than a substitute bounds the
+ * risk here too, and second-guessing a deliberate, named choice is a
+ * different (and worse) failure than refusing an inferred guess.
  */
 export function selectRateLimitTarget(routes, explicitPath) {
     if (explicitPath !== null) {
         const named = routes.find((r) => !r.path_partial && r.path_resolved === explicitPath);
         return named === undefined ? null : { route: named, inferred: false };
     }
-    const guessed = routes.find((r) => !r.path_partial && looksLikeAuthPath(r.path_resolved));
+    const guessed = routes.find((r) => !r.path_partial && looksLikeAuthPath(r.path_resolved) && isWriteCapable(r.method));
     return guessed === undefined ? null : { route: guessed, inferred: true };
 }
 /**
@@ -60,6 +68,23 @@ export function selectRateLimitTarget(routes, explicitPath) {
 function looksLikeAuthPath(path) {
     const segments = path.toLowerCase().split('/');
     return AUTH_PATH_HINTS.some((hint) => segments.includes(hint));
+}
+/**
+ * Methods structurally capable of answering `buildBurst`'s hardcoded POST.
+ * A server-rendered login PAGE — `{ method: 'GET', path_resolved: '/login' }`
+ * — matches `AUTH_PATH_HINTS` on path alone exactly as well as the form
+ * handler that actually checks credentials, but a GET-only route cannot be
+ * that handler. Inferring it anyway sends the burst to a route the
+ * target's own router rejects before the request ever reaches
+ * authentication code: thirty 404s or 405s, never a 429 — a
+ * confident-shaped `{ observed: false, sent: 30 }` produced by a
+ * methodologically empty test, indistinguishable from a genuine negative to
+ * anything reading `rateLimitVerdict`'s output. `ANY` qualifies: an
+ * `app.all()`-style route answers POST by construction.
+ */
+const WRITE_CAPABLE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE', 'ANY'];
+function isWriteCapable(method) {
+    return WRITE_CAPABLE_METHODS.includes(method);
 }
 /**
  * `size` identical requests, method always `POST` regardless of what the

@@ -42,6 +42,29 @@ describe('selectRateLimitTarget', () => {
     const routes = [route({ path_resolved: '/login', path_partial: true })];
     expect(selectRateLimitTarget(routes, '/login')).toBeNull();
   });
+
+  it('does not infer a GET-only route as an auth endpoint — a login page is not a login handler', () => {
+    // A server-rendered login PAGE matches AUTH_PATH_HINTS on path alone,
+    // exactly like the form handler that actually checks credentials would.
+    // Bursting it produces thirty 404s/405s, never a 429 — a confident-shaped
+    // `{ observed: false, sent: 30 }` from a burst that never reached
+    // authentication code, indistinguishable from a genuine negative.
+    const routes = [route({ path_resolved: '/login', method: 'GET' })];
+    expect(selectRateLimitTarget(routes, null)).toBeNull();
+  });
+
+  it('skips a GET auth-shaped route in favor of a write-capable one elsewhere', () => {
+    // Guards against a fix that filters by method but still returns the
+    // first PATH match: the correct implementation must keep looking past
+    // the disqualified GET /login and find the real POST handler.
+    const routes = [
+      route({ path_resolved: '/login', method: 'GET' }),
+      route({ path_resolved: '/api/auth/login', method: 'POST' }),
+    ];
+    const sel = selectRateLimitTarget(routes, null);
+    expect(sel?.route.path_resolved).toBe('/api/auth/login');
+    expect(sel?.inferred).toBe(true);
+  });
 });
 
 describe('buildBurst', () => {
