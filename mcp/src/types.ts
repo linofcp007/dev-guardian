@@ -235,6 +235,28 @@ export interface RouteRecord {
   namespace?: string;
 }
 
+/**
+ * Outcome of importing one OpenAPI 3.x or Swagger 2.0 document via
+ * `surface/specImport.ts`. One report per spec file, regardless of how many
+ * routes it yielded — a spec that parses cleanly but declares nothing is
+ * still `'ok'` at the format-detection level, distinct from a document that
+ * could not be parsed at all or names no recognisable version.
+ */
+export interface SpecFileReport {
+  file: string;
+  format: 'openapi-3' | 'swagger-2' | 'unknown';
+  status: 'ok' | 'parse_error' | 'unsupported_version' | 'no_paths';
+  routes_found: number;
+  /** Present for every status except 'ok'. One line, names the cause. */
+  reason?: string;
+  /**
+   * Path items that were an unresolved external `$ref`. Counted, never
+   * ignored: a path item that vanished silently would resurface as false
+   * dead documentation in the diff.
+   */
+  unresolved_refs: number;
+}
+
 /** A `app.use('/prefix', router)`-style mount, consumed by the Node resolver. */
 export interface MountRecord {
   prefix: string;
