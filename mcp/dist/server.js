@@ -49777,7 +49777,7 @@ var COVERED_LANGUAGES = /* @__PURE__ */ new Set([
 ]);
 var IncludeEnvVars = external_exports.boolean().optional().default(true).describe("Collect environment-variable names the code reads. Default: true.");
 var SpecPaths = external_exports.array(external_exports.string().min(1)).optional().describe(
-  "Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when supplied."
+  "Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when supplied. Relative paths resolve against project_path, not the current working directory. Bypasses the tree-hash cache: a call supplying this always computes a fresh snapshot. Any named path that cannot be read is reported in spec_files, not silently dropped."
 );
 var tool39 = {
   name: "map_attack_surface",
@@ -49805,7 +49805,7 @@ async function handler39(input, ctx) {
     return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
   }
   const treeHash = await computeTreeHash(projectPath);
-  if (inp.force !== true) {
+  if (inp.force !== true && inp.spec_paths === void 0) {
     const cached2 = ctx.storage.surface.getByTreeHash(treeHash);
     if (cached2) {
       return summarize3(cached2.snapshot, cached2.id, cachedToolsRun(cached2.snapshot), ctx);
@@ -49954,7 +49954,8 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
   };
 }
 function importSpecs(projectPath, specPaths) {
-  const discovery = discoverSpecs(projectPath, specPaths);
+  const resolvedSpecPaths = specPaths?.map((p) => resolveExplicitSpecPath(projectPath, p));
+  const discovery = discoverSpecs(projectPath, resolvedSpecPaths);
   const specRoutes = [];
   const specFiles = [];
   let specsParsed = 0;
@@ -49984,7 +49985,28 @@ function importSpecs(projectPath, specPaths) {
       unresolved_refs: 0
     });
   }
+  if (resolvedSpecPaths !== void 0) {
+    const attempted = resolvedSpecPaths.slice(0, MAX_SPEC_FILES);
+    const accountedFor = /* @__PURE__ */ new Set([
+      ...discovery.specs.map((s) => s.file),
+      ...discovery.oversized
+    ]);
+    for (const path6 of attempted) {
+      if (accountedFor.has(path6)) continue;
+      specFiles.push({
+        file: path6,
+        format: "unknown",
+        status: "parse_error",
+        routes_found: 0,
+        reason: "Explicit spec path could not be read (missing, not a file, or unreadable).",
+        unresolved_refs: 0
+      });
+    }
+  }
   return { specRoutes, specFiles, specsParsed };
+}
+function resolveExplicitSpecPath(projectPath, path6) {
+  return isAbsolute(path6) ? path6 : join42(projectPath, path6);
 }
 function collectAllFiles(parsed) {
   const results = parsed.results;
@@ -50077,9 +50099,11 @@ function summarize3(snapshot, snapshotId, toolsRun, ctx) {
   for (const route of codeRoutes) {
     byLanguage.set(route.language, (byLanguage.get(route.language) ?? 0) + 1);
   }
-  const sample = [...snapshot.routes].sort(
+  const sample = [...codeRoutes].sort(
     (a2, b) => a2.language.localeCompare(b.language) || a2.path_resolved.localeCompare(b.path_resolved)
   ).slice(0, SAMPLE_SIZE);
+  const specRoutesList = snapshot.routes.filter((r) => r.provenance === "spec");
+  const specSample = [...specRoutesList].sort((a2, b) => a2.path_resolved.localeCompare(b.path_resolved)).slice(0, SAMPLE_SIZE);
   const stackDetected = ctx.storage.stack.getLatest() !== null;
   return {
     ok: true,
@@ -50099,6 +50123,7 @@ function summarize3(snapshot, snapshotId, toolsRun, ctx) {
     stack_detected: stackDetected,
     spec_routes_total: snapshot.routes.length - codeRoutes.length,
     spec_files: snapshot.spec_files,
+    spec_sample: specSample,
     spec_diff_summary: specDiffSummary(snapshot.spec_diff),
     shadow_sample: shadowSample(snapshot.spec_diff),
     ...stackDetected ? {} : { note: NO_STACK_NOTE }
@@ -50135,6 +50160,7 @@ function degradedResult(toolsRun, missingTools, note, ctx) {
     stack_detected: ctx.storage.stack.getLatest() !== null,
     spec_routes_total: 0,
     spec_files: [],
+    spec_sample: [],
     spec_diff_summary: null,
     shadow_sample: [],
     note

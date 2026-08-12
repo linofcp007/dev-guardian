@@ -60,7 +60,11 @@ const IncludeEnvVars = z
 const SpecPaths = z
     .array(z.string().min(1))
     .optional()
-    .describe('Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when supplied.');
+    .describe('Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when ' +
+    'supplied. Relative paths resolve against project_path, not the current working ' +
+    'directory. Bypasses the tree-hash cache: a call supplying this always computes a ' +
+    "fresh snapshot. Any named path that cannot be read is reported in spec_files, not " +
+    'silently dropped.');
 const tool = {
     name: 'map_attack_surface',
     title: 'Map the application attack surface',
@@ -97,7 +101,17 @@ async function handler(input, ctx) {
         return { ok: false, error: { code: 'not_a_git_repo', message: e.message } };
     }
     const treeHash = await computeTreeHash(projectPath);
-    if (inp.force !== true) {
+    // The cache key is the project's tree hash, which says nothing about which
+    // document an explicit `spec_paths` argument names — an out-of-tree spec
+    // path in particular can change without the tree hash moving at all.
+    // Serving a cached snapshot in that case would silently diff against the
+    // wrong document (or the auto-discovered one) and misattribute shadow
+    // endpoints / dead documentation. So `spec_paths` bypasses the cache read
+    // exactly like `force` does. (`include_env_vars` has an analogous,
+    // narrower gap — a cache hit can return env_vars collected under a
+    // different value of that flag — but that only omits data, never
+    // misattributes a finding, so it is left as-is here.)
+    if (inp.force !== true && inp.spec_paths === undefined) {
         const cached = ctx.storage.surface.getByTreeHash(treeHash);
         if (cached) {
             return summarize(cached.snapshot, cached.id, cachedToolsRun(cached.snapshot), ctx);
@@ -305,9 +319,23 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
  * `specFiles` as `parse_error` reports rather than dropped, so a capped
  * result is visible in the same place a reader already looks instead of
  * silently reading as "there were only 20 documents".
+ *
+ * Explicit `specPaths` get two more guarantees discovery alone does not
+ * provide: relative entries resolve against `projectPath` (every other path
+ * in this tool's contract derives from `project_path`, so a relative
+ * argument is the likely default of a calling agent — resolving it against
+ * `process.cwd()` instead would silently read the wrong file or nothing at
+ * all), and any named path `discoverSpecs` had to drop (missing, unreadable,
+ * removed after discovery) is reported rather than vanishing. A caller that
+ * *names* a document has made a claim this tool must be able to contradict —
+ * "that document could not be read" must stay distinguishable from "this
+ * project has no spec", the exact conflation the rest of this feature exists
+ * to avoid. Auto-discovered candidates get no such treatment: nothing named
+ * them, so one dropped during a directory walk is not a broken promise.
  */
 function importSpecs(projectPath, specPaths) {
-    const discovery = discoverSpecs(projectPath, specPaths);
+    const resolvedSpecPaths = specPaths?.map((p) => resolveExplicitSpecPath(projectPath, p));
+    const discovery = discoverSpecs(projectPath, resolvedSpecPaths);
     const specRoutes = [];
     const specFiles = [];
     let specsParsed = 0;
@@ -339,7 +367,37 @@ function importSpecs(projectPath, specPaths) {
             unresolved_refs: 0,
         });
     }
+    if (resolvedSpecPaths !== undefined) {
+        // Mirrors discoverSpecs' own file-count cap (candidates.slice(0,
+        // MAX_SPEC_FILES)) so a path beyond the cap is not double-reported here
+        // AND in the `truncated` block above.
+        const attempted = resolvedSpecPaths.slice(0, MAX_SPEC_FILES);
+        const accountedFor = new Set([
+            ...discovery.specs.map((s) => s.file),
+            ...discovery.oversized,
+        ]);
+        for (const path of attempted) {
+            if (accountedFor.has(path))
+                continue;
+            specFiles.push({
+                file: path,
+                format: 'unknown',
+                status: 'parse_error',
+                routes_found: 0,
+                reason: 'Explicit spec path could not be read (missing, not a file, or unreadable).',
+                unresolved_refs: 0,
+            });
+        }
+    }
     return { specRoutes, specFiles, specsParsed };
+}
+/**
+ * Resolve one `spec_paths` entry against `projectPath` when it is relative.
+ * An absolute path is used verbatim — it may legitimately point outside the
+ * project (a spec vendored elsewhere, a shared team document).
+ */
+function resolveExplicitSpecPath(projectPath, path) {
+    return isAbsolute(path) ? path : join(projectPath, path);
 }
 /** Every file path Semgrep reported a match in, across all `guardian_kind`s. */
 function collectAllFiles(parsed) {
@@ -505,10 +563,21 @@ function summarize(snapshot, snapshotId, toolsRun, ctx) {
     for (const route of codeRoutes) {
         byLanguage.set(route.language, (byLanguage.get(route.language) ?? 0) + 1);
     }
-    // Deterministic across runs: order by language then path before slicing,
-    // rather than relying on Semgrep's (unspecified) match order.
-    const sample = [...snapshot.routes]
+    // `sample` is code routes only, same reasoning as `routes_total` right
+    // below: it is the field a reading agent looks at first, and it must stay
+    // consistent with that count. Sorting `snapshot.routes` (code + spec mixed)
+    // by language first let spec routes — all `language: 'spec'` — evict every
+    // code route from the 20 slots whenever the project's spec declared more
+    // paths than the code had routes, and which language 'spec' happened to
+    // sort next to (before 'typescript', after 'javascript'/'php'/'python')
+    // made the eviction inconsistent across otherwise-identical projects. Spec
+    // routes get their own sample below instead of competing for these slots.
+    const sample = [...codeRoutes]
         .sort((a, b) => a.language.localeCompare(b.language) || a.path_resolved.localeCompare(b.path_resolved))
+        .slice(0, SAMPLE_SIZE);
+    const specRoutesList = snapshot.routes.filter((r) => r.provenance === 'spec');
+    const specSample = [...specRoutesList]
+        .sort((a, b) => a.path_resolved.localeCompare(b.path_resolved))
         .slice(0, SAMPLE_SIZE);
     const stackDetected = ctx.storage.stack.getLatest() !== null;
     return {
@@ -529,6 +598,7 @@ function summarize(snapshot, snapshotId, toolsRun, ctx) {
         stack_detected: stackDetected,
         spec_routes_total: snapshot.routes.length - codeRoutes.length,
         spec_files: snapshot.spec_files,
+        spec_sample: specSample,
         spec_diff_summary: specDiffSummary(snapshot.spec_diff),
         shadow_sample: shadowSample(snapshot.spec_diff),
         ...(stackDetected ? {} : { note: NO_STACK_NOTE }),
@@ -580,6 +650,7 @@ function degradedResult(toolsRun, missingTools, note, ctx) {
         stack_detected: ctx.storage.stack.getLatest() !== null,
         spec_routes_total: 0,
         spec_files: [],
+        spec_sample: [],
         spec_diff_summary: null,
         shadow_sample: [],
         note,

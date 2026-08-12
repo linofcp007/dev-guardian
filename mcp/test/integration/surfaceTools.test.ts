@@ -23,6 +23,7 @@ import type { PluginContext } from '../../src/context.js';
 import '../../src/tools/mapAttackSurface.js';
 import { RESOURCES } from '../../src/resources/index.js';
 import '../../src/resources/surface.js';
+import { MAX_SPEC_FILES } from '../../src/surface/specDiscover.js';
 
 const SEMGREP_OUTPUT = JSON.stringify({
   results: [
@@ -973,6 +974,201 @@ describe('map_attack_surface — spec import and diff', () => {
     };
     expect(r.spec_files.some((f) => f.status === 'parse_error')).toBe(true);
     expect(r.spec_diff_summary).not.toBeNull();
+  });
+
+  /** 25 spec paths — more than SAMPLE_SIZE (20) and more than the single code route below. */
+  const MANY_PATHS_SPEC =
+    'openapi: "3.0.0"\npaths:\n' +
+    Array.from({ length: 25 }, (_, i) => `  /spec-path-${i}:\n    get: {}\n`).join('');
+
+  it('does not let spec routes evict code routes from `sample`', async () => {
+    // Reproduces the measured bug: `sample` used to slice snapshot.routes
+    // (code + spec mixed) sorted by language first. `'spec'` sorts before
+    // `'typescript'`, so 20 spec entries filled every slot and the sole code
+    // route never appeared — even though routes_total said 1. A spec sample
+    // is served separately in `spec_sample` instead of competing for the
+    // same 20 slots.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT); // one code route: GET /users
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'openapi.yaml'), MANY_PATHS_SPEC);
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      routes_total: number;
+      spec_routes_total: number;
+      sample: { path_resolved: string }[];
+      spec_sample: { path_resolved: string }[];
+    };
+
+    expect(r.routes_total).toBe(1);
+    expect(r.spec_routes_total).toBe(25);
+    // The result must be internally consistent: routes_total says 1 code
+    // route exists, so `sample` — the field a reading agent looks at first —
+    // must contain exactly that one, not be dominated by spec entries.
+    expect(r.sample).toHaveLength(1);
+    expect(r.sample[0]?.path_resolved).toBe('/users');
+    // The spec sample is capped at 20 and holds only spec-provenance routes.
+    expect(r.spec_sample).toHaveLength(20);
+    expect(r.spec_sample.every((s) => s.path_resolved.startsWith('/spec-path-'))).toBe(true);
+  });
+
+  it('bypasses the cache when spec_paths is supplied, so different explicit specs are not confused', async () => {
+    // Measured bug: the tree-hash cache key says nothing about spec_paths, so
+    // a second call with a DIFFERENT explicit spec silently returned the
+    // first call's spec_files. Two calls that name different documents must
+    // never report the same spec_files.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'a.yaml'), SPEC);
+    writeFileSync(join(projectPath, 'b.yaml'), MANY_PATHS_SPEC);
+
+    const first = (await tool().handler(
+      { project_path: projectPath, spec_paths: ['a.yaml'] },
+      ctx,
+    )) as { spec_files: { file: string }[]; spec_routes_total: number };
+    const second = (await tool().handler(
+      { project_path: projectPath, spec_paths: ['b.yaml'] },
+      ctx,
+    )) as { spec_files: { file: string }[]; spec_routes_total: number };
+
+    expect(first.spec_routes_total).toBe(2); // SPEC declares /users + /documented-but-gone
+    expect(second.spec_routes_total).toBe(25); // MANY_PATHS_SPEC
+    expect(first.spec_files.map((f) => f.file)).not.toEqual(second.spec_files.map((f) => f.file));
+    expect(second.spec_files.some((f) => f.file.endsWith('b.yaml'))).toBe(true);
+    expect(second.spec_files.some((f) => f.file.endsWith('a.yaml'))).toBe(false);
+  });
+
+  it('resolves a relative spec_paths entry against project_path, not process.cwd()', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    mkdirSync(join(projectPath, 'docs'), { recursive: true });
+    writeFileSync(join(projectPath, 'docs', 'openapi.yaml'), SPEC);
+
+    const r = (await tool().handler(
+      { project_path: projectPath, spec_paths: ['docs/openapi.yaml'] },
+      ctx,
+    )) as { spec_routes_total: number; spec_files: { status: string; file: string }[] };
+
+    expect(r.spec_routes_total).toBe(2);
+    expect(r.spec_files[0]?.status).toBe('ok');
+    expect(r.spec_files[0]?.file).toBe(join(projectPath, 'docs', 'openapi.yaml'));
+  });
+
+  it('reports an explicit spec_paths entry that does not exist, rather than reading as no spec', async () => {
+    // Measured bug: a nonexistent explicit path produced spec_files: [],
+    // spec_diff: null — indistinguishable from "this project has no spec".
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+
+    const r = (await tool().handler(
+      { project_path: projectPath, spec_paths: ['does-not-exist.yaml'] },
+      ctx,
+    )) as { spec_files: { status: string; file: string; reason?: string }[] };
+
+    expect(r.spec_files).toHaveLength(1);
+    expect(r.spec_files[0]?.status).toBe('parse_error');
+    expect(r.spec_files[0]?.file).toBe(join(projectPath, 'does-not-exist.yaml'));
+    expect(r.spec_files[0]?.reason).toMatch(/could not be read/);
+  });
+
+  it('counts a spec that parses but declares no paths toward specsParsed (diff is not null)', async () => {
+    // Pins the `|| report.status === 'no_paths'` clause: a valid document
+    // that declares nothing is still a successfully parsed spec and must not
+    // disable the diff the way "no spec was found at all" does.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'openapi.yaml'), 'openapi: "3.0.0"\npaths: {}\n');
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      spec_files: { status: string }[];
+      spec_diff_summary: unknown;
+    };
+
+    expect(r.spec_files[0]?.status).toBe('no_paths');
+    expect(r.spec_diff_summary).not.toBeNull();
+  });
+
+  it('reports spec_diff as null when the ONLY spec present fails to parse', async () => {
+    // The malformed-spec test above always writes a good spec alongside, so
+    // it would still pass even if a parse_error counted toward specsParsed.
+    // This pins the case that actually matters: no good spec anywhere means
+    // specsParsed stays 0 and the diff must be null, not an empty diff.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'openapi.yaml'), 'paths:\n  - [unclosed\n');
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      spec_files: { status: string }[];
+      spec_diff_summary: unknown;
+    };
+
+    expect(r.spec_files.some((f) => f.status === 'parse_error')).toBe(true);
+    expect(r.spec_diff_summary).toBeNull();
+  });
+
+  it('reports the file-count discovery cap as a parse_error spec_files entry', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    mkdirSync(join(projectPath, 'openapi'), { recursive: true });
+    for (let i = 0; i < MAX_SPEC_FILES + 3; i += 1) {
+      writeFileSync(join(projectPath, 'openapi', `s${i}.yaml`), 'openapi: "3.0.0"\npaths: {}\n');
+    }
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      spec_files: { status: string; reason?: string }[];
+    };
+
+    expect(r.spec_files).toHaveLength(MAX_SPEC_FILES + 1); // 20 read + 1 cap report
+    expect(
+      r.spec_files.some(
+        (f) => f.status === 'parse_error' && f.reason?.includes(`${MAX_SPEC_FILES}`),
+      ),
+    ).toBe(true);
+  });
+
+  it('reports an oversized spec file as a parse_error spec_files entry', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'openapi.yaml'), 'x'.repeat(6 * 1024 * 1024));
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      spec_files: { status: string; reason?: string }[];
+    };
+
+    expect(
+      r.spec_files.some((f) => f.status === 'parse_error' && f.reason?.includes('size cap')),
+    ).toBe(true);
   });
 });
 
