@@ -12,7 +12,13 @@ describe('analyzeRoutes — anonymous exposure', () => {
     }));
     const hit = f.find((x) => x.check === 'anonymous_exposure');
     expect(hit).toBeDefined();
-    expect(hit?.severity).toBe('critical');
+    // 'high', not 'critical', and the spec (design doc section 8) is the
+    // reason: auth_hint 'required' can be inherited from a DOCUMENT-level
+    // `security` default, so a genuinely public route whose author forgot to
+    // write `security: []` on it would otherwise be reported as a critical
+    // auth bypass on a homepage. Severity inflation is over-reporting, and
+    // this feature under-reports by construction.
+    expect(hit?.severity).toBe('high');
     expect(hit?.file_path).toBe('src/users.ts');
     expect(hit?.line_start).toBe(10);
   });

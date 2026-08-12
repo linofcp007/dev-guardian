@@ -25,6 +25,14 @@ function dastRuleId(check, method, path) {
  * design doc §8 — and deliberately excludes the HTTP status and response
  * body: a fixed app restarting and flipping 500 -> 200 must not spawn a "new"
  * finding, and surviving exactly that is this function's whole job.
+ *
+ * `line_start` is deliberately excluded too, even though the route it comes
+ * from always has one (see `buildFinding`, which still puts it on the
+ * `Finding` for display). Hashing it in means inserting one blank line above
+ * a route registration — no behaviour change at all — makes every finding on
+ * that route look brand new on the next scan. That destroys the diffability
+ * the fingerprint exists to provide, the same reason the status code is
+ * excluded. Do not "improve" this by adding it back in.
  */
 export function dastFingerprint(check, method, path, file) {
     const fp = {
@@ -85,7 +93,14 @@ function checkAnonymousExposure(input, findings) {
             continue;
         findings.push(buildFinding({
             check: 'anonymous_exposure',
-            severity: 'critical',
+            // 'high', not 'critical': auth_hint 'required' can be INHERITED from a
+            // document-level OpenAPI `security` default, not just declared on the
+            // operation (see `authHint` in surface/specImport.ts). A genuinely
+            // public route whose author forgot `security: []` inherits 'required'
+            // and would otherwise be reported as a critical auth bypass on a
+            // homepage — severity inflation, which is over-reporting by another
+            // name.
+            severity: 'high',
             title: 'Auth-required route served anonymously',
             message: `${r.request.method} ${route.path_resolved} is marked auth_hint: 'required' in the ` +
                 `route inventory but returned ${r.status} to a request carrying no credentials.`,
