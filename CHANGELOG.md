@@ -121,6 +121,17 @@ version bump.
 
 ### Fixed
 
+- **A duplicate in `spec_paths` could hide an unreadable spec document.** `discoverSpecs`
+  deduplicates the explicit paths and *then* applies the 20-file cap, while
+  `map_attack_surface`'s own "which named paths were not read" accounting capped the raw
+  list. With duplicates present the caller's window ended earlier than the one discovery
+  used, and a genuinely missing path landing in the gap was reported by neither side: no
+  `parse_error` row (outside the caller's window) and no truncation row (the deduplicated
+  set never exceeded the cap). It vanished — the same "could not be read" reading as "there
+  is no spec" conflation the rest of the feature exists to prevent. Both call sites now
+  share one deduplicated list, which also stops a duplicated document from double-counting
+  its routes in `spec_routes_total`.
+
 - **The Rust route rules fabricated four routes for every real one.** The five per-verb
   actix rules were `#[get($PATH)]`, `#[post($PATH)]` and so on. A bare attribute is not a
   Rust item, and Semgrep degraded each of them to a pattern that matched *every node in

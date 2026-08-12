@@ -49974,7 +49974,7 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
   };
 }
 function importSpecs(projectPath, specPaths) {
-  const resolvedSpecPaths = specPaths?.map((p) => resolveExplicitSpecPath(projectPath, p));
+  const resolvedSpecPaths = specPaths === void 0 ? void 0 : dedupeResolved(specPaths.map((p) => resolveExplicitSpecPath(projectPath, p)));
   const discovery = discoverSpecs(projectPath, resolvedSpecPaths);
   const specRoutes = [];
   const specFiles = [];

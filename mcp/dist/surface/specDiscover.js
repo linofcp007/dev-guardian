@@ -50,13 +50,19 @@ export function discoverSpecs(projectPath, explicit) {
  * two paths differing only by a symlink hop are still read twice, a
  * narrower gap than the one this closes.
  *
- * `resolveExplicitSpecPath` (mapAttackSurface.ts) canonicalises with the same
- * `resolve()` before an explicit path ever reaches here, so the caller's own
- * accounting of which named paths were "not read" (built by string equality
- * against what this function returns) stays consistent with what actually
- * got deduped.
+ * Exported because the caller's accounting of which named paths were "not
+ * read" has to be built from the SAME list this function returns. Applying
+ * the `MAX_SPEC_FILES` cap to the raw (un-deduped) list instead would slide
+ * that window: with duplicates present, the caller's window ends earlier
+ * than the one discovery actually selected, and a genuinely unreadable path
+ * falling in the gap vanishes with no diagnostic — the exact conflation
+ * ("that document could not be read" reading as "there is no spec") the rest
+ * of this feature exists to prevent. `resolveExplicitSpecPath`
+ * (mapAttackSurface.ts) canonicalises with the same `resolve()` before an
+ * explicit path reaches either call site, so the two lists agree by string
+ * equality.
  */
-function dedupeResolved(paths) {
+export function dedupeResolved(paths) {
     const seen = new Set();
     const out = [];
     for (const path of paths) {
