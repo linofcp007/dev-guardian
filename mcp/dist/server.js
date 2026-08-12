@@ -51189,7 +51189,7 @@ var RATE_LIMIT_FINDING_TITLE = "No rate limiting observed on an authentication e
 var RATE_LIMIT_SEVERITY = "medium";
 var BURST_METHOD = "POST";
 function noRateLimitObservedFinding(args) {
-  const { route, path: path6, evidenceId, sent, planned } = args;
+  const { route, path: path6, evidenceId, sent, planned, cutByCeiling } = args;
   return {
     fingerprint: dastFingerprint("rate_limit", BURST_METHOD, path6, route.file),
     tool: "dast",
@@ -51198,7 +51198,7 @@ function noRateLimitObservedFinding(args) {
     category: "security",
     subcategory: "rate_limit",
     title: RATE_LIMIT_FINDING_TITLE,
-    message: `${sent} of ${planned} identical ${BURST_METHOD} requests to ${path6}, all carrying the same synthetic un-ownable credential, were answered without a 429 or a Retry-After header. This is not proof that rate limiting is missing: a limiter whose threshold sits above ${sent} requests is indistinguishable from no limiter at all at this sample size.`,
+    message: `${sent} of ${planned} identical ${BURST_METHOD} requests to ${path6}, all carrying the same synthetic un-ownable credential, were answered without a 429 or a Retry-After header. ` + (cutByCeiling ? `The burst was cut short by the scan's wall-clock ceiling before the remaining ${planned - sent} request(s) were sent, so this rests on a smaller sample than the probe was configured for \u2014 raise wall_clock_ms and re-run to strengthen it. ` : "") + `This is not proof that rate limiting is missing: a limiter whose threshold sits above ${sent} requests is indistinguishable from no limiter at all at this sample size.`,
     fix_available: false,
     file_path: route.file,
     line_start: route.line,
@@ -51228,10 +51228,12 @@ async function runRateLimitBurst(opts) {
     if (opts.aborted()) break;
   }
   const verdict = rateLimitVerdict(burstResults);
+  const cutByCeiling = burstResults.length < requests.length && !verdict.observed;
   const base = {
     path: selected.route.path_resolved,
     inferred: selected.inferred,
-    burst_planned: RATE_LIMIT_BURST
+    burst_planned: RATE_LIMIT_BURST,
+    cut_by_ceiling: cutByCeiling
   };
   if (verdict.observed) {
     return {
@@ -51258,7 +51260,8 @@ async function runRateLimitBurst(opts) {
     // record keyed by fingerprint rather than one file per request.
     evidenceId: requests[0]?.id ?? `rate_limit POST ${path6}`,
     sent: verdict.sent,
-    planned: RATE_LIMIT_BURST
+    planned: RATE_LIMIT_BURST,
+    cutByCeiling
   });
   return {
     outcome: "ran",
@@ -51594,12 +51597,6 @@ async function handler40(input, ctx, callMeta) {
   const findings = [...analyzeRoutes(analyzeInput), ...analyzeOrigin(analyzeInput)];
   const outcomes = outcomeCounts(results);
   const completed = outcomes.completed;
-  const timedOut = deadline.hit();
-  if (timedOut) {
-    warnings.push(
-      `The scan reached its wall-clock ceiling (${wallClockMs}ms) and was cut: ${outcomes.cancelled} of ${plan.requests.length} probe(s) never ran. Any check reporting target_error below may simply not have been reached rather than having failed against the target \u2014 raise wall_clock_ms and re-run before drawing a conclusion from it.`
-    );
-  }
   const engineFailed = plan.requests.length > 0 && completed === 0;
   const toolsRun = [
     {
@@ -51608,13 +51605,6 @@ async function handler40(input, ctx, callMeta) {
       reason: `${plan.requests.length} request(s) planned, ${completed} completed, ${outcomes.timeout} timed out, ${outcomes.network_error} failed to connect` + (outcomes.cancelled > 0 ? `, ${outcomes.cancelled} cut short` : "")
     }
   ];
-  if (timedOut) {
-    toolsRun.push({
-      name: `${DAST_ENGINE}:wall-clock`,
-      status: "failed",
-      reason: `cut after ${completed} of ${plan.requests.length} probe(s): the ${wallClockMs}ms wall-clock ceiling was reached`
-    });
-  }
   const missingTools = [];
   const burst = await runRateLimitBurst({
     requested: inp.probe_rate_limit === true,
@@ -51632,6 +51622,18 @@ async function handler40(input, ctx, callMeta) {
     aborted: () => aborted3() || deadline.hit()
   });
   if (burst.finding !== null) findings.push(burst.finding);
+  const timedOut = deadline.hit();
+  deadline.dispose();
+  if (timedOut) {
+    toolsRun.push({
+      name: `${DAST_ENGINE}:wall-clock`,
+      status: "failed",
+      reason: `cut after ${completed} of ${plan.requests.length} probe(s): the ${wallClockMs}ms wall-clock ceiling was reached`
+    });
+    warnings.push(
+      `The scan reached its wall-clock ceiling (${wallClockMs}ms) and was cut: ${outcomes.cancelled} of ${plan.requests.length} probe(s) never ran` + (burst.summary?.cut_by_ceiling === true ? `, and the rate-limit burst stopped after ${burst.summary.sent} of ${burst.summary.burst_planned} requests` : "") + ". Any check reporting target_error below may simply not have been reached rather than having failed against the target \u2014 raise wall_clock_ms and re-run before drawing a conclusion from it."
+    );
+  }
   const nuclei = await runNuclei({
     requested: inp.use_nuclei === true,
     binaryPath: inp.use_nuclei === true ? await scannerAvailable("nuclei") : null,
@@ -51639,14 +51641,15 @@ async function handler40(input, ctx, callMeta) {
     outputDir: evidenceDir,
     routes: snapshot.routes,
     readOutput: readJsonSafe,
-    cutByDeadline: deadline.hit(),
+    // The same value the summary reports, not a second read — that divergence
+    // is exactly the contradiction described above.
+    cutByDeadline: timedOut,
     ...callMeta?.signal === void 0 ? {} : { signal: callMeta.signal }
   });
   findings.push(...nuclei.findings);
   if (nuclei.toolRun !== null) toolsRun.push(nuclei.toolRun);
   if (nuclei.missing) missingTools.push("nuclei");
   if (aborted3()) return cancel();
-  deadline.dispose();
   const ordered = [...findings].sort(
     (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
   );
@@ -51700,8 +51703,13 @@ async function handler40(input, ctx, callMeta) {
   ctx.storage.scans.finalize({
     scan_id: scanId,
     status: "completed",
-    tools_run: toolsRun,
-    missing_tools: missingTools,
+    // Through the choke point, not because a credential is known to be in
+    // here but because requirement 2 is unconditional. `tools_run` carries
+    // one string this codebase does not author — nuclei's first stderr line,
+    // stored verbatim (`nuclei.ts#interpretRun`) — and "we never put it
+    // there" is the exact argument that failed for the evidence files.
+    tools_run: redactObject(toolsRun, redact),
+    missing_tools: redactObject(missingTools, redact),
     report_dir: evidenceDir,
     meta: redactObject(meta, redact)
   });

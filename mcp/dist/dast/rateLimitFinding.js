@@ -33,7 +33,7 @@ const RATE_LIMIT_SEVERITY = 'medium';
 /** The method `rateLimit.ts#buildBurst` always sends, whatever the route says. */
 const BURST_METHOD = 'POST';
 export function noRateLimitObservedFinding(args) {
-    const { route, path, evidenceId, sent, planned } = args;
+    const { route, path, evidenceId, sent, planned, cutByCeiling } = args;
     return {
         fingerprint: dastFingerprint('rate_limit', BURST_METHOD, path, route.file),
         tool: 'dast',
@@ -44,6 +44,11 @@ export function noRateLimitObservedFinding(args) {
         title: RATE_LIMIT_FINDING_TITLE,
         message: `${sent} of ${planned} identical ${BURST_METHOD} requests to ${path}, all carrying the same ` +
             `synthetic un-ownable credential, were answered without a 429 or a Retry-After header. ` +
+            (cutByCeiling
+                ? `The burst was cut short by the scan's wall-clock ceiling before the remaining ` +
+                    `${planned - sent} request(s) were sent, so this rests on a smaller sample than the ` +
+                    `probe was configured for — raise wall_clock_ms and re-run to strengthen it. `
+                : '') +
             `This is not proof that rate limiting is missing: a limiter whose threshold sits above ` +
             `${sent} requests is indistinguishable from no limiter at all at this sample size.`,
         fix_available: false,

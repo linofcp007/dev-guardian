@@ -287,14 +287,6 @@ async function handler(input, ctx, callMeta) {
     const findings = [...analyzeRoutes(analyzeInput), ...analyzeOrigin(analyzeInput)];
     const outcomes = outcomeCounts(results);
     const completed = outcomes.completed;
-    const timedOut = deadline.hit();
-    if (timedOut) {
-        warnings.push(`The scan reached its wall-clock ceiling (${wallClockMs}ms) and was cut: ` +
-            `${outcomes.cancelled} of ${plan.requests.length} probe(s) never ran. Any check ` +
-            'reporting target_error below may simply not have been reached rather than having ' +
-            'failed against the target — raise wall_clock_ms and re-run before drawing a ' +
-            'conclusion from it.');
-    }
     // The engine "ran" when it either measured something or had nothing to
     // measure; it FAILED when probes were planned and the target answered none
     // of them. That second case used to report `ok` unconditionally, which made
@@ -313,19 +305,6 @@ async function handler(input, ctx, callMeta) {
                 (outcomes.cancelled > 0 ? `, ${outcomes.cancelled} cut short` : ''),
         },
     ];
-    if (timedOut) {
-        // A separate entry, not a status on the engine's own: it is a distinct
-        // gap ("the run was cut") from "the target did not answer", and keeping
-        // them apart is what lets `computeCoverage` report 'partial' for a run
-        // that measured some of the inventory before the ceiling fired, and
-        // 'none' for one that measured nothing at all.
-        toolsRun.push({
-            name: `${DAST_ENGINE}:wall-clock`,
-            status: 'failed',
-            reason: `cut after ${completed} of ${plan.requests.length} probe(s): the ${wallClockMs}ms ` +
-                'wall-clock ceiling was reached',
-        });
-    }
     const missingTools = [];
     // ---- 8. Optional rate-limit burst ------------------------------------
     const burst = await runRateLimitBurst({
@@ -345,6 +324,45 @@ async function handler(input, ctx, callMeta) {
     });
     if (burst.finding !== null)
         findings.push(burst.finding);
+    // The ceiling governs the probe plan and the burst, and nothing after, so
+    // this is both the last moment it can fire and the right moment to read it.
+    //
+    // ONE read, held in ONE variable, used by every channel that reports the
+    // cut. Reading `deadline.hit()` separately at each use site is how the
+    // first version of this got it wrong: the flag was captured right after
+    // `executeProbes`, so a ceiling that fired *during* the burst truncated the
+    // rate-limit sample while the result still said `timed_out: false`, carried
+    // no warning and reported full coverage — and, with nuclei requested, sat
+    // next to a nuclei entry that DID re-read the flag and said the ceiling had
+    // fired. Self-contradictory output in one object.
+    //
+    // Reading it here rather than after the nuclei pass also keeps a long
+    // nuclei run — which has its own timeout and is deliberately outside this
+    // ceiling — from being reported as a cut probe plan.
+    const timedOut = deadline.hit();
+    deadline.dispose();
+    if (timedOut) {
+        // A separate `tools_run` entry, not a status on the engine's own: "the
+        // run was cut" is a distinct gap from "the target did not answer", and
+        // keeping them apart is what lets `computeCoverage` report 'partial' for
+        // a run that measured some of the inventory before the ceiling fired, and
+        // 'none' for one that measured nothing at all.
+        toolsRun.push({
+            name: `${DAST_ENGINE}:wall-clock`,
+            status: 'failed',
+            reason: `cut after ${completed} of ${plan.requests.length} probe(s): the ${wallClockMs}ms ` +
+                'wall-clock ceiling was reached',
+        });
+        warnings.push(`The scan reached its wall-clock ceiling (${wallClockMs}ms) and was cut: ` +
+            `${outcomes.cancelled} of ${plan.requests.length} probe(s) never ran` +
+            (burst.summary?.cut_by_ceiling === true
+                ? `, and the rate-limit burst stopped after ${burst.summary.sent} of ` +
+                    `${burst.summary.burst_planned} requests`
+                : '') +
+            '. Any check reporting target_error below may simply not have been reached rather ' +
+            'than having failed against the target — raise wall_clock_ms and re-run before ' +
+            'drawing a conclusion from it.');
+    }
     // ---- 9. Optional nuclei pass -----------------------------------------
     const nuclei = await runNuclei({
         requested: inp.use_nuclei === true,
@@ -353,7 +371,9 @@ async function handler(input, ctx, callMeta) {
         outputDir: evidenceDir,
         routes: snapshot.routes,
         readOutput: readJsonSafe,
-        cutByDeadline: deadline.hit(),
+        // The same value the summary reports, not a second read — that divergence
+        // is exactly the contradiction described above.
+        cutByDeadline: timedOut,
         ...(callMeta?.signal === undefined ? {} : { signal: callMeta.signal }),
     });
     findings.push(...nuclei.findings);
@@ -365,9 +385,6 @@ async function handler(input, ctx, callMeta) {
     // second check here is what stops a half-run being written as `completed`.
     if (aborted())
         return cancel();
-    // Past every network step: nothing below needs the signal, and a live timer
-    // must not outlast the call that armed it.
-    deadline.dispose();
     // ---- 10. Evidence + persistence --------------------------------------
     const ordered = [...findings].sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] ||
         a.fingerprint.localeCompare(b.fingerprint));
@@ -415,8 +432,13 @@ async function handler(input, ctx, callMeta) {
     ctx.storage.scans.finalize({
         scan_id: scanId,
         status: 'completed',
-        tools_run: toolsRun,
-        missing_tools: missingTools,
+        // Through the choke point, not because a credential is known to be in
+        // here but because requirement 2 is unconditional. `tools_run` carries
+        // one string this codebase does not author — nuclei's first stderr line,
+        // stored verbatim (`nuclei.ts#interpretRun`) — and "we never put it
+        // there" is the exact argument that failed for the evidence files.
+        tools_run: redactObject(toolsRun, redact),
+        missing_tools: redactObject(missingTools, redact),
         report_dir: evidenceDir,
         meta: redactObject(meta, redact),
     });

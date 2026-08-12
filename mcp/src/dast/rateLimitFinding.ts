@@ -48,8 +48,15 @@ export function noRateLimitObservedFinding(args: {
   sent: number;
   /** Requests the burst was willing to send. */
   planned: number;
+  /**
+   * True when the scan's own wall-clock ceiling stopped the burst early. The
+   * message says so: a reader must never take a five-request sample this tool
+   * truncated for a completed thirty-request measurement, and `sent` alone
+   * does not say WHY it fell short.
+   */
+  cutByCeiling: boolean;
 }): DastFinding {
-  const { route, path, evidenceId, sent, planned } = args;
+  const { route, path, evidenceId, sent, planned, cutByCeiling } = args;
   return {
     fingerprint: dastFingerprint('rate_limit', BURST_METHOD, path, route.file),
     tool: 'dast',
@@ -61,6 +68,11 @@ export function noRateLimitObservedFinding(args: {
     message:
       `${sent} of ${planned} identical ${BURST_METHOD} requests to ${path}, all carrying the same ` +
       `synthetic un-ownable credential, were answered without a 429 or a Retry-After header. ` +
+      (cutByCeiling
+        ? `The burst was cut short by the scan's wall-clock ceiling before the remaining ` +
+          `${planned - sent} request(s) were sent, so this rests on a smaller sample than the ` +
+          `probe was configured for — raise wall_clock_ms and re-run to strengthen it. `
+        : '') +
       `This is not proof that rate limiting is missing: a limiter whose threshold sits above ` +
       `${sent} requests is indistinguishable from no limiter at all at this sample size.`,
     fix_available: false,

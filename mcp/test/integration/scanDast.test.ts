@@ -70,6 +70,9 @@ let loginHits = 0;
 let usersStatus = 200;
 /** Responses to `/stall` that were never answered; destroyed on teardown. */
 let stalled: ServerResponse[] = [];
+/** Makes each POST /login slow, so a ceiling can fire mid-burst. */
+let loginDelayMs = 0;
+let pendingTimers: NodeJS.Timeout[] = [];
 
 function headerOf(req: IncomingMessage, name: string): string | undefined {
   const value = req.headers[name];
@@ -106,13 +109,22 @@ beforeAll(async () => {
     }
     if (url === '/login' && req.method === 'POST') {
       loginHits += 1;
-      if (loginHits > loginLimitAfter) {
-        res.writeHead(429, { 'retry-after': '60' });
-        res.end('slow down');
-        return;
+      const hit = loginHits;
+      const respond = (): void => {
+        if (res.destroyed) return;
+        if (hit > loginLimitAfter) {
+          res.writeHead(429, { 'retry-after': '60' });
+          res.end('slow down');
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"token":null}');
+      };
+      if (loginDelayMs > 0) {
+        pendingTimers.push(setTimeout(respond, loginDelayMs));
+      } else {
+        respond();
       }
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end('{"token":null}');
       return;
     }
     res.writeHead(404, { 'content-type': 'text/plain' });
@@ -281,6 +293,7 @@ beforeEach(() => {
   received = [];
   loginHits = 0;
   loginLimitAfter = Number.POSITIVE_INFINITY;
+  loginDelayMs = 0;
   usersStatus = 200;
   vi.mocked(scannerAvailable).mockReset();
   vi.mocked(scannerAvailable).mockResolvedValue(null);
@@ -288,9 +301,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // Held-open responses would keep `server.close()` waiting forever.
+  // Held-open responses would keep `server.close()` waiting forever, and a
+  // delayed reply firing into the next test would corrupt its `received` log.
   for (const res of stalled) res.destroy();
   stalled = [];
+  for (const timer of pendingTimers) clearTimeout(timer);
+  pendingTimers = [];
   vi.restoreAllMocks();
 });
 
@@ -542,6 +558,31 @@ describe('scan_dast credentials', () => {
     }
   });
 
+  it('redacts the credential from tools_run before it reaches SQLite', async () => {
+    // `tools_run` holds one string this codebase does not author: nuclei's
+    // first stderr line, stored verbatim. A target that echoes the
+    // Authorization header into an error is all it takes for a credential to
+    // reach the scans row. Requirement 2 is absolute precisely so this does
+    // not depend on nuclei's wording.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/nuclei');
+    vi.mocked(invokeNuclei).mockResolvedValue({
+      ok: false,
+      reason: `connection failed while sending Authorization: ${SECRET}`,
+    });
+    seedSnapshot([route('/users')]);
+
+    const r = expectOk(await run({ base_url: origin, auth_header: SECRET, use_nuclei: true }));
+
+    const leak = 's3cr3t-do-not-leak-9f2a';
+    // The scans row is the only copy that was outside the choke point.
+    expect(JSON.stringify(rawRows('scans'))).not.toContain(leak);
+    expect(JSON.stringify(r)).not.toContain(leak);
+    // Anti-vacuity: the string really did pass through tools_run, redacted.
+    // Without this an implementation that dropped the reason entirely would
+    // pass the two assertions above while proving nothing.
+    expect(r.tools_run.find((t) => t.name === 'nuclei')?.reason).toContain('«redacted»');
+  });
+
   it('warns loudly when auth_header_env names an unset variable', async () => {
     delete process.env['GUARDIAN_TEST_DAST_MISSING'];
     seedSnapshot([route('/users')]);
@@ -669,6 +710,9 @@ describe('scan_dast rate-limit probe', () => {
       sent: 4,
       observed: true,
       at_request: 4,
+      // The limiter stopped this burst, not the wall clock. Reported on both
+      // branches so a reader never has to infer it from a missing field.
+      cut_by_ceiling: false,
     });
     // A limiter that works is not a finding.
     expect(r.findings.some((f) => f.subcategory === 'rate_limit')).toBe(false);
@@ -704,6 +748,43 @@ describe('scan_dast rate-limit probe', () => {
     ) as { burst?: { planned: number; sent: number; statuses: (number | null)[] } };
     expect(record.burst?.planned).toBe(RATE_LIMIT_BURST);
     expect(record.burst?.statuses).toHaveLength(RATE_LIMIT_BURST);
+  });
+
+  it('reports a ceiling that fires DURING the burst, not just before it', async () => {
+    // The main plan is two fast requests and finishes well inside the
+    // ceiling; the burst then runs into it. A `timed_out` flag read once,
+    // right after executeProbes, reports `false` here — the run looks
+    // complete while the rate-limit verdict rests on a sample this tool's own
+    // ceiling truncated.
+    loginDelayMs = 100;
+    seedSnapshot(loginRoutes());
+
+    const r = expectOk(
+      await run({
+        base_url: origin,
+        probe_rate_limit: true,
+        rate_limit_path: '/login',
+        wall_clock_ms: 500,
+      }),
+    );
+
+    // The burst really was cut: some requests landed, but not the full 30.
+    const posts = loginPosts().length;
+    expect(posts).toBeGreaterThan(0);
+    expect(posts).toBeLessThan(RATE_LIMIT_BURST);
+
+    expect(r.summary.timed_out).toBe(true);
+    expect(r.warnings.some((w) => /wall-clock ceiling \(500ms\)/.test(w))).toBe(true);
+    const cutEntry = r.tools_run.find((t) => t.name === 'guardian-dast:wall-clock');
+    expect(cutEntry?.status).toBe('failed');
+    // The main plan completed, so some of the inventory WAS measured.
+    expect(r.coverage).toBe('partial');
+
+    // And the finding must not read as a completed 30-request measurement.
+    expect(r.summary.rate_limit).toMatchObject({ observed: false, cut_by_ceiling: true });
+    const finding = r.findings.find((f) => f.subcategory === 'rate_limit');
+    if (finding === undefined) throw new Error('expected a rate_limit finding');
+    expect(finding.message).toMatch(/cut short by the scan's wall-clock ceiling/);
   });
 
   it('never bursts an arbitrary endpoint when nothing looks like an auth route', async () => {

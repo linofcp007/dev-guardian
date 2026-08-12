@@ -59,10 +59,16 @@ export async function runRateLimitBurst(opts) {
             break;
     }
     const verdict = rateLimitVerdict(burstResults);
+    // Derived rather than tracked through the loop: the burst was cut short
+    // exactly when fewer requests were sent than planned and no limiter was
+    // what stopped it. A flag set at the `break` would have to be kept in step
+    // with every future exit from that loop; this cannot drift.
+    const cutByCeiling = burstResults.length < requests.length && !verdict.observed;
     const base = {
         path: selected.route.path_resolved,
         inferred: selected.inferred,
         burst_planned: RATE_LIMIT_BURST,
+        cut_by_ceiling: cutByCeiling,
     };
     if (verdict.observed) {
         return {
@@ -90,6 +96,7 @@ export async function runRateLimitBurst(opts) {
         evidenceId: requests[0]?.id ?? `rate_limit POST ${path}`,
         sent: verdict.sent,
         planned: RATE_LIMIT_BURST,
+        cutByCeiling,
     });
     return {
         outcome: 'ran',
