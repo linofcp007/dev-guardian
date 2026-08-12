@@ -64,4 +64,28 @@ describe('discoverSpecs', () => {
     expect(out.specs).toEqual([]);
     expect(out.oversized).toHaveLength(1);
   });
+
+  it('does not match a project that merely lives beneath an ancestor directory named openapi', () => {
+    // The project root itself sits under .../openapi/my-service — no
+    // directory *inside* the project is named openapi. A file under an
+    // unrelated subdirectory must not be swept in just because some
+    // ancestor of the project root happens to be called "openapi".
+    const outer = mkdtempSync(join(tmpdir(), 'guardian-outer-'));
+    const projectRoot = join(outer, 'openapi', 'my-service');
+    mkdirSync(join(projectRoot, 'config'), { recursive: true });
+    writeFileSync(join(projectRoot, 'config', 'random-unrelated.yml'), 'not: a spec');
+
+    expect(discoverSpecs(projectRoot).specs).toEqual([]);
+  });
+
+  it('applies the file cap to an over-cap explicit list too', () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < MAX_SPEC_FILES + 10; i += 1) files[`spec${i}.yaml`] = 'x';
+    const dir = project(files);
+    const explicit = Object.keys(files).map((rel) => join(dir, rel));
+
+    const out = discoverSpecs(dir, explicit);
+    expect(out.specs).toHaveLength(MAX_SPEC_FILES);
+    expect(out.truncated).toBe(true);
+  });
 });

@@ -17,31 +17,10 @@
  * exist, race with a concurrent delete) is simply absent from the result.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
+import { FS_EXCLUDE } from '../treeHash/computeTreeHash.js';
 export const MAX_SPEC_FILES = 20;
 export const MAX_SPEC_BYTES = 5 * 1024 * 1024;
-// Kept in sync by hand with FS_EXCLUDE in `mcp/src/treeHash/computeTreeHash.ts`
-// (not exported from there, so copied rather than imported). If you add an
-// exclusion to one, add it to the other.
-const EXCLUDED_DIRS = new Set([
-    '.git',
-    '.guardian',
-    '.specs',
-    '.kiro',
-    'node_modules',
-    'dist',
-    'build',
-    'target',
-    '.venv',
-    'venv',
-    '__pycache__',
-    '.next',
-    '.nuxt',
-    '.cache',
-    'coverage',
-    '.pytest_cache',
-    '.tox',
-]);
 const SPEC_BASENAMES = new Set(['openapi', 'swagger', 'api-docs']);
 const SPEC_EXTENSIONS = new Set(['.json', '.yaml', '.yml']);
 /**
@@ -50,11 +29,10 @@ const SPEC_EXTENSIONS = new Set(['.json', '.yaml', '.yml']);
  */
 export function discoverSpecs(projectPath, explicit) {
     const root = resolve(projectPath);
-    if (explicit && explicit.length > 0) {
-        return readCandidates(explicit);
-    }
-    const candidates = walk(root, root);
-    candidates.sort();
+    const candidates = explicit && explicit.length > 0 ? [...explicit] : walk(root, root).sort();
+    // The file cap applies on both entry paths: discovery can find more than
+    // MAX_SPEC_FILES candidates, and a caller can just as easily hand in an
+    // over-cap explicit list. Either way `truncated` must reflect it.
     const truncated = candidates.length > MAX_SPEC_FILES;
     const selected = candidates.slice(0, MAX_SPEC_FILES);
     const outcome = readCandidates(selected);
@@ -100,19 +78,27 @@ function walk(root, dir) {
     const out = [];
     for (const entry of entries) {
         if (entry.isDirectory()) {
-            if (EXCLUDED_DIRS.has(entry.name))
+            if (FS_EXCLUDE.has(entry.name))
                 continue;
             out.push(...walk(root, join(dir, entry.name)));
         }
         else if (entry.isFile()) {
-            if (isSpecCandidate(dir, entry.name)) {
+            if (isSpecCandidate(root, dir, entry.name)) {
                 out.push(join(dir, entry.name));
             }
         }
     }
     return out;
 }
-function isSpecCandidate(dir, name) {
+/**
+ * `dir` matches the "under an openapi/ directory" rule only when a
+ * *project-relative* path segment is named `openapi` — i.e. relative to
+ * `root`, not the absolute path. Checking the absolute path would also match
+ * any project that merely happens to live beneath a directory named
+ * `openapi` (a checkout path, a monorepo namespace), pulling in unrelated
+ * files from outside the project entirely.
+ */
+function isSpecCandidate(root, dir, name) {
     const dot = name.lastIndexOf('.');
     if (dot <= 0)
         return false;
@@ -122,6 +108,9 @@ function isSpecCandidate(dir, name) {
         return false;
     if (SPEC_BASENAMES.has(base.toLowerCase()))
         return true;
-    return dir.split(sep).some((segment) => segment.toLowerCase() === 'openapi');
+    const relDir = relative(root, dir);
+    if (relDir === '')
+        return false;
+    return relDir.split(sep).some((segment) => segment.toLowerCase() === 'openapi');
 }
 //# sourceMappingURL=specDiscover.js.map
