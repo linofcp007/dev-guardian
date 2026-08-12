@@ -261,6 +261,37 @@ export interface SpecFileReport {
   unresolved_refs: number;
 }
 
+/**
+ * One row of `surface/specDiff.ts`'s comparison of code-extracted routes
+ * against spec-declared ones. `path` is the normalised comparison key
+ * (`normalisePath` output), not either route's raw or resolved path — read
+ * that from `code_route` / `spec_route` when present.
+ */
+export interface SpecDiffEntry {
+  method: HttpMethod;
+  /** The normalised comparison key, human-readable: `/users/{}`. */
+  path: string;
+  code_route?: RouteRecord;
+  spec_route?: RouteRecord;
+  /** Present on `unmatchable` entries: one line saying why. */
+  reason?: string;
+}
+
+/**
+ * Output of `surface/specDiff.ts#diffSpecRoutes`. `null` at the call site
+ * (never this type) is how "no spec was found" is distinguished from "the
+ * spec documents nothing" — see that module's doc comment.
+ */
+export interface SpecDiff {
+  matched: SpecDiffEntry[];
+  /** In the code, absent from every spec — shadow endpoints. */
+  code_only: SpecDiffEntry[];
+  /** In a spec, absent from the code — dead documentation. */
+  spec_only: SpecDiffEntry[];
+  /** Could not be classified either way. Never reported as a finding. */
+  unmatchable: SpecDiffEntry[];
+}
+
 /** A `app.use('/prefix', router)`-style mount, consumed by the Node resolver. */
 export interface MountRecord {
   prefix: string;
