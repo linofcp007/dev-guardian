@@ -173,6 +173,13 @@ export interface NucleiOptions {
   routes: readonly RouteRecord[];
   /** Reads the JSONL file back; injected so the caller owns all filesystem access policy. */
   readOutput: (path: string) => string | null;
+  /**
+   * True when the scan's wall-clock ceiling fired before this pass could
+   * start. nuclei is not started at all in that case — a 5-minute external
+   * scan begun after the ceiling expired would make the ceiling meaningless —
+   * and the reason says so rather than blaming the target or the install.
+   */
+  cutByDeadline: boolean;
   signal?: AbortSignal;
 }
 
@@ -198,6 +205,21 @@ export async function runNuclei(opts: NucleiOptions): Promise<NucleiStep> {
         reason:
           'requested via use_nuclei but not installed — run install_toolchain, or drop use_nuclei ' +
           'to scan with the own engine only',
+      },
+      missing: true,
+    };
+  }
+
+  if (opts.cutByDeadline) {
+    return {
+      outcome: 'failed',
+      findings: [],
+      toolRun: {
+        name: 'nuclei',
+        status: 'skipped',
+        reason:
+          'not started: the scan reached its wall-clock ceiling before the nuclei pass began — ' +
+          'raise wall_clock_ms and re-run',
       },
       missing: true,
     };

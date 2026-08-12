@@ -29,7 +29,12 @@ vi.mock('../../src/tools/scanHelpers.js', async (importOriginal) => {
 vi.mock('../../src/dast/nuclei.js', () => ({ invokeNuclei: vi.fn() }));
 
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { createServer, type IncomingMessage, type Server } from 'node:http';
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PluginContext } from '../../src/context.js';
@@ -63,6 +68,8 @@ let loginLimitAfter = Number.POSITIVE_INFINITY;
 let loginHits = 0;
 /** Flipped between two runs to prove a fingerprint does not follow the status. */
 let usersStatus = 200;
+/** Responses to `/stall` that were never answered; destroyed on teardown. */
+let stalled: ServerResponse[] = [];
 
 function headerOf(req: IncomingMessage, name: string): string | undefined {
   const value = req.headers[name];
@@ -78,6 +85,13 @@ beforeAll(async () => {
       auth: headerOf(req, 'authorization'),
     });
     req.resume();
+
+    // Never answers. Held open so the wall-clock ceiling — not the
+    // per-request timeout — is what ends the probe.
+    if (url.startsWith('/stall')) {
+      stalled.push(res);
+      return;
+    }
 
     // Deliberately no security headers anywhere — `security_headers` is an
     // origin-level check and needs a target that never sets them.
@@ -205,7 +219,11 @@ interface DastOk {
     requests_planned: number;
     requests_completed: number;
     requests_failed: number;
+    probe_outcomes: { completed: number; timeout: number; cancelled: number; network_error: number };
     truncated: boolean;
+    timed_out: boolean;
+    wall_clock_ms: number;
+    probes_not_run: number;
     skipped: { method: string; path: string; reason: string }[];
     checks: Record<string, string>;
     rate_limit: Record<string, unknown> | null;
@@ -270,6 +288,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Held-open responses would keep `server.close()` waiting forever.
+  for (const res of stalled) res.destroy();
+  stalled = [];
   vi.restoreAllMocks();
 });
 
@@ -375,6 +396,80 @@ describe('scan_dast envelope reporting', () => {
     expect(r.summary.requests_planned).toBe(2);
     expect(r.summary.skipped.filter((s) => s.reason === 'cap').length).toBeGreaterThan(0);
     expect(r.warnings.some((w) => /max_requests|ceiling/i.test(w))).toBe(true);
+  });
+
+  it('reports the wall-clock ceiling when it cuts, and cut probes read cancelled', async () => {
+    // Eight stalling routes, a 400ms ceiling, and a per-request timeout an
+    // order of magnitude LARGER than the ceiling. That gap is what makes the
+    // assertion decisive: nothing here can time out before the ceiling fires,
+    // so any 'timeout' outcome would mean the cut came from somewhere else.
+    seedSnapshot(Array.from({ length: 8 }, (_, i) => route(`/stall/${i}`)));
+
+    const started = Date.now();
+    const r = expectOk(
+      await run({ base_url: origin, wall_clock_ms: 400, timeout_ms: 20_000 }),
+    );
+    const elapsed = Date.now() - started;
+
+    // It returned at all, rather than hanging for 8 x 20s.
+    expect(elapsed).toBeLessThan(10_000);
+
+    expect(r.summary.timed_out).toBe(true);
+    expect(r.summary.wall_clock_ms).toBe(400);
+    expect(r.summary.probes_not_run).toBeGreaterThan(0);
+    expect(r.summary.requests_completed).toBe(0);
+
+    // THE assertion. A probe the ceiling cut must read 'cancelled' — we
+    // stopped asking — never 'timeout', which claims the target failed to
+    // answer. Task 3 separated these two outcomes for exactly this moment.
+    expect(r.summary.probe_outcomes.cancelled).toBe(r.summary.requests_planned);
+    expect(r.summary.probe_outcomes.timeout).toBe(0);
+    expect(r.summary.probe_outcomes.network_error).toBe(0);
+
+    // A ceiling that cuts silently is worse than no ceiling.
+    expect(r.warnings.some((w) => /wall-clock ceiling \(400ms\)/.test(w))).toBe(true);
+    // Nothing completed, so a "0 findings" result here is meaningless — the
+    // shared coverage signal has to say so, and 'none' is what it means.
+    expect(r.coverage).toBe('none');
+    expect(r.tools_run.find((t) => t.name === 'guardian-dast')?.status).toBe('failed');
+    const cut = r.tools_run.find((t) => t.name === 'guardian-dast:wall-clock');
+    expect(cut?.status).toBe('failed');
+    expect(cut?.reason).toMatch(/400ms wall-clock ceiling/);
+  });
+
+  it('reports partial coverage when the ceiling cuts a run that measured something', async () => {
+    // One fast route the scan gets through, then stalls. The distinction from
+    // the test above is the whole point of splitting the wall-clock gap into
+    // its own tools_run entry: 'none' means nothing was measured, 'partial'
+    // means some of the inventory was.
+    seedSnapshot([route('/users'), ...Array.from({ length: 8 }, (_, i) => route(`/stall/${i}`))]);
+
+    const r = expectOk(
+      await run({ base_url: origin, wall_clock_ms: 400, timeout_ms: 20_000 }),
+    );
+
+    expect(r.summary.timed_out).toBe(true);
+    expect(r.summary.requests_completed).toBeGreaterThan(0);
+    expect(r.summary.probe_outcomes.timeout).toBe(0);
+    expect(r.coverage).toBe('partial');
+  });
+
+  it('does not start nuclei once the wall-clock ceiling has fired', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/nuclei');
+    seedSnapshot(Array.from({ length: 8 }, (_, i) => route(`/stall/${i}`)));
+
+    const r = expectOk(
+      await run({ base_url: origin, wall_clock_ms: 400, timeout_ms: 20_000, use_nuclei: true }),
+    );
+
+    // Starting a five-minute external scan after the ceiling expired would
+    // make the ceiling meaningless.
+    expect(vi.mocked(invokeNuclei)).not.toHaveBeenCalled();
+    const entry = r.tools_run.find((t) => t.name === 'nuclei');
+    expect(entry?.status).toBe('skipped');
+    expect(entry?.reason).toMatch(/wall-clock ceiling/);
+    // Not blamed on the install or on the target.
+    expect(entry?.reason).not.toMatch(/not installed/);
   });
 
   it('keeps a zero-route snapshot distinguishable from a clean scan', async () => {
@@ -641,7 +736,9 @@ describe('scan_dast nuclei pass', () => {
     // The gap must reach `coverage`, or a caller reads the finding count as
     // complete when a whole engine did not run.
     expect(r.coverage).toBe('partial');
-    expect(r.summary.checks.nuclei).not.toBe('ok');
+    // Not `skipped_envelope`: the envelope did not exclude nuclei, a missing
+    // binary did, and the status must not blame the wrong thing.
+    expect(r.summary.checks.nuclei).toBe('scanner_missing');
     expect(vi.mocked(invokeNuclei)).not.toHaveBeenCalled();
   });
 

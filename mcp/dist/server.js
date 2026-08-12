@@ -50723,13 +50723,40 @@ function rateLimitStatus(outcome) {
 function nucleiStatus(outcome) {
   switch (outcome) {
     case "not_requested":
-    case "unavailable":
       return "skipped_envelope";
+    case "unavailable":
+      return "scanner_missing";
     case "failed":
       return "target_error";
     case "ran":
       return "ok";
   }
+}
+
+// src/dast/deadline.ts
+var DEFAULT_WALL_CLOCK_MS = 6e5;
+function armDeadline(ms, hostSignal) {
+  const controller = new AbortController();
+  let deadlineFired = false;
+  const timer = setTimeout(() => {
+    deadlineFired = true;
+    controller.abort();
+  }, ms);
+  timer.unref();
+  const onHostAbort = () => controller.abort();
+  if (hostSignal?.aborted === true) {
+    controller.abort();
+  } else {
+    hostSignal?.addEventListener("abort", onHostAbort);
+  }
+  return {
+    signal: controller.signal,
+    hit: () => deadlineFired,
+    dispose: () => {
+      clearTimeout(timer);
+      hostSignal?.removeEventListener("abort", onHostAbort);
+    }
+  };
 }
 
 // src/dast/evidence.ts
@@ -51261,6 +51288,18 @@ async function runNuclei(opts) {
       missing: true
     };
   }
+  if (opts.cutByDeadline) {
+    return {
+      outcome: "failed",
+      findings: [],
+      toolRun: {
+        name: "nuclei",
+        status: "skipped",
+        reason: "not started: the scan reached its wall-clock ceiling before the nuclei pass began \u2014 raise wall_clock_ms and re-run"
+      },
+      missing: true
+    };
+  }
   const outputPath = join44(opts.outputDir, "nuclei.jsonl");
   const run = await invokeNuclei({
     binaryPath: opts.binaryPath,
@@ -51435,7 +51474,10 @@ var inputSchema26 = {
     "Also run nuclei against the origin. Default: false (nuclei is an active scanner with a large template download). When requested and not installed the gap is reported in tools_run and missing_tools, never silently skipped. nuclei's default templates test the ORIGIN, not this project's routes \u2014 the own engine is what tests those."
   ),
   max_requests: external_exports.number().int().positive().optional().describe(`Global request ceiling. Default: ${DEFAULT_MAX_REQUESTS}. Reported when it cuts.`),
-  timeout_ms: external_exports.number().int().positive().optional().describe(`Per-request timeout in milliseconds. Default: ${DEFAULT_PROBE_TIMEOUT_MS}.`)
+  timeout_ms: external_exports.number().int().positive().optional().describe(`Per-request timeout in milliseconds. Default: ${DEFAULT_PROBE_TIMEOUT_MS}.`),
+  wall_clock_ms: external_exports.number().int().positive().optional().describe(
+    `Global wall-clock ceiling for the probing phase, in milliseconds. Default: ${DEFAULT_WALL_CLOCK_MS}. Bounds the total, which neither timeout_ms (one request) nor max_requests (how many are planned) does. When it cuts, the run still returns and says so: summary.timed_out, summary.probes_not_run, and a degraded coverage. Probes it cut record outcome 'cancelled', never 'timeout' \u2014 the target did not fail to answer, this tool stopped asking. Does not cover the one liveness request, which timeout_ms bounds.`
+  )
 };
 var tool40 = {
   name: "scan_dast",
@@ -51483,10 +51525,11 @@ async function handler40(input, ctx, callMeta) {
   const redact = makeRedactor(collectSecrets(credential.value));
   const timeoutMs = typeof inp.timeout_ms === "number" && inp.timeout_ms > 0 ? Math.floor(inp.timeout_ms) : DEFAULT_PROBE_TIMEOUT_MS;
   const maxRequests = typeof inp.max_requests === "number" && inp.max_requests > 0 ? Math.floor(inp.max_requests) : DEFAULT_MAX_REQUESTS;
-  const probeOpts = { timeoutMs, concurrency: DEFAULT_CONCURRENCY };
-  if (callMeta?.signal !== void 0) probeOpts.signal = callMeta.signal;
+  const wallClockMs = typeof inp.wall_clock_ms === "number" && inp.wall_clock_ms > 0 ? Math.floor(inp.wall_clock_ms) : DEFAULT_WALL_CLOCK_MS;
   const aborted3 = () => callMeta?.signal?.aborted === true;
-  const liveness = await executeProbe(livenessRequest(target.origin), probeOpts);
+  const livenessOpts = { timeoutMs, concurrency: 1 };
+  if (callMeta?.signal !== void 0) livenessOpts.signal = callMeta.signal;
+  const liveness = await executeProbe(livenessRequest(target.origin), livenessOpts);
   if (liveness.outcome !== "completed") {
     if (aborted3()) return fail("cancelled", "Scan was cancelled by the host.");
     return fail("target_not_found", livenessMessage(target, liveness, timeoutMs));
@@ -51522,7 +51565,14 @@ async function handler40(input, ctx, callMeta) {
       `The max_requests ceiling (${maxRequests}) cut the plan: ${plan.skipped.filter((s) => s.reason === "cap").length} request(s) were not sent. Raise max_requests to cover the whole inventory.`
     );
   }
+  const deadline = armDeadline(wallClockMs, callMeta?.signal);
+  const probeOpts = {
+    timeoutMs,
+    concurrency: DEFAULT_CONCURRENCY,
+    signal: deadline.signal
+  };
   const cancel = () => {
+    deadline.dispose();
     ctx.storage.scans.finalize({
       scan_id: scanId,
       status: "cancelled",
@@ -51542,14 +51592,29 @@ async function handler40(input, ctx, callMeta) {
     hasCredentials: credential.value !== null
   };
   const findings = [...analyzeRoutes(analyzeInput), ...analyzeOrigin(analyzeInput)];
-  const completed = results.filter((r) => r.outcome === "completed").length;
+  const outcomes = outcomeCounts(results);
+  const completed = outcomes.completed;
+  const timedOut = deadline.hit();
+  if (timedOut) {
+    warnings.push(
+      `The scan reached its wall-clock ceiling (${wallClockMs}ms) and was cut: ${outcomes.cancelled} of ${plan.requests.length} probe(s) never ran. Any check reporting target_error below may simply not have been reached rather than having failed against the target \u2014 raise wall_clock_ms and re-run before drawing a conclusion from it.`
+    );
+  }
+  const engineFailed = plan.requests.length > 0 && completed === 0;
   const toolsRun = [
     {
       name: DAST_ENGINE,
-      status: "ok",
-      reason: `${plan.requests.length} request(s) planned, ${completed} completed, ${results.length - completed} did not answer`
+      status: engineFailed ? "failed" : "ok",
+      reason: `${plan.requests.length} request(s) planned, ${completed} completed, ${outcomes.timeout} timed out, ${outcomes.network_error} failed to connect` + (outcomes.cancelled > 0 ? `, ${outcomes.cancelled} cut short` : "")
     }
   ];
+  if (timedOut) {
+    toolsRun.push({
+      name: `${DAST_ENGINE}:wall-clock`,
+      status: "failed",
+      reason: `cut after ${completed} of ${plan.requests.length} probe(s): the ${wallClockMs}ms wall-clock ceiling was reached`
+    });
+  }
   const missingTools = [];
   const burst = await runRateLimitBurst({
     requested: inp.probe_rate_limit === true,
@@ -51560,8 +51625,11 @@ async function handler40(input, ctx, callMeta) {
     // route (design §6).
     routes: snapshot.routes,
     origin: target.origin,
+    // Shares the deadline's signal, so the burst is inside the ceiling too:
+    // it is thirty requests, and thirty per-request timeouts after the
+    // ceiling expired would put the total right back where it started.
     probeOpts,
-    aborted: aborted3
+    aborted: () => aborted3() || deadline.hit()
   });
   if (burst.finding !== null) findings.push(burst.finding);
   const nuclei = await runNuclei({
@@ -51571,12 +51639,14 @@ async function handler40(input, ctx, callMeta) {
     outputDir: evidenceDir,
     routes: snapshot.routes,
     readOutput: readJsonSafe,
+    cutByDeadline: deadline.hit(),
     ...callMeta?.signal === void 0 ? {} : { signal: callMeta.signal }
   });
   findings.push(...nuclei.findings);
   if (nuclei.toolRun !== null) toolsRun.push(nuclei.toolRun);
   if (nuclei.missing) missingTools.push("nuclei");
   if (aborted3()) return cancel();
+  deadline.dispose();
   const ordered = [...findings].sort(
     (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
   );
@@ -51623,6 +51693,7 @@ async function handler40(input, ctx, callMeta) {
     requests_planned: plan.requests.length,
     requests_completed: completed,
     truncated: plan.truncated,
+    timed_out: timedOut,
     checks,
     evidence_dir: evidenceDir
   };
@@ -51668,8 +51739,16 @@ async function handler40(input, ctx, callMeta) {
       requests_planned: plan.requests.length,
       requests_completed: completed,
       requests_failed: results.length - completed,
+      /** completed / timeout / cancelled / network_error, so a run cut by the
+       *  ceiling is not mistaken for a target that stopped answering. */
+      probe_outcomes: outcomes,
       truncated: plan.truncated,
       max_requests: maxRequests,
+      /** True when the wall-clock ceiling cut the run. Never silent. */
+      timed_out: timedOut,
+      wall_clock_ms: wallClockMs,
+      /** Probes the ceiling cut before they were ever sent. */
+      probes_not_run: timedOut ? outcomes.cancelled : 0,
       skipped: plan.skipped,
       checks,
       rate_limit: burst.summary
@@ -51724,6 +51803,16 @@ function toInsertInput(finding2, scanId, evidenceDir) {
 function countBySeverity4(findings) {
   const out = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const finding2 of findings) out[finding2.severity] += 1;
+  return out;
+}
+function outcomeCounts(results) {
+  const out = {
+    completed: 0,
+    timeout: 0,
+    cancelled: 0,
+    network_error: 0
+  };
+  for (const result of results) out[result.outcome] += 1;
   return out;
 }
 

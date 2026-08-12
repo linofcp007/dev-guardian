@@ -46,12 +46,21 @@ export type DastCheck = (typeof DAST_CHECKS)[number];
  * Why a check produced no findings. `ok` is the only value that means "this
  * check ran and what it found is what there is"; every other value means the
  * check did not run, and must never be read as a clean result.
+ *
+ * `scanner_missing` exists because the other five all attribute the gap to
+ * something that is not the truth for an uninstalled external engine:
+ * `skipped_envelope` says the safety envelope excluded it (it did not),
+ * `no_candidate` says there was nothing to test (there was), and
+ * `target_error` blames the target (which answered fine). The fuller cause
+ * still lives in `tools_run` / `missing_tools` / `coverage` — this value is
+ * the summary, not the explanation.
  */
 export type CheckStatus =
   | 'ok'
   | 'skipped_envelope'
   | 'no_candidate'
   | 'needs_credentials'
+  | 'scanner_missing'
   | 'target_error';
 
 export type SkipReason = 'partial_path' | 'method_envelope' | 'duplicate' | 'cap';

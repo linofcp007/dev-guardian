@@ -127,6 +127,19 @@ export async function runNuclei(opts) {
             missing: true,
         };
     }
+    if (opts.cutByDeadline) {
+        return {
+            outcome: 'failed',
+            findings: [],
+            toolRun: {
+                name: 'nuclei',
+                status: 'skipped',
+                reason: 'not started: the scan reached its wall-clock ceiling before the nuclei pass began — ' +
+                    'raise wall_clock_ms and re-run',
+            },
+            missing: true,
+        };
+    }
     const outputPath = join(opts.outputDir, 'nuclei.jsonl');
     const run = await invokeNuclei({
         binaryPath: opts.binaryPath,

@@ -36,6 +36,7 @@ import {
   type DastFinding,
 } from '../dast/analyze.js';
 import { computeCheckStatuses } from '../dast/checkStatus.js';
+import { armDeadline, DEFAULT_WALL_CLOCK_MS } from '../dast/deadline.js';
 import { buildEvidence, writeEvidenceFiles, type EvidenceRecord } from '../dast/evidence.js';
 import { livenessMessage, livenessRequest } from '../dast/liveness.js';
 import { runNuclei, runRateLimitBurst } from '../dast/passes.js';
@@ -49,6 +50,7 @@ import {
 } from '../dast/probe.js';
 import { collectSecrets, makeRedactor, redactObject } from '../dast/redact.js';
 import { classifyTarget } from '../dast/target.js';
+import type { ProbeResult } from '../dast/types.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
@@ -149,6 +151,19 @@ const inputSchema = {
     .positive()
     .optional()
     .describe(`Per-request timeout in milliseconds. Default: ${DEFAULT_PROBE_TIMEOUT_MS}.`),
+  wall_clock_ms: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      `Global wall-clock ceiling for the probing phase, in milliseconds. Default: ` +
+        `${DEFAULT_WALL_CLOCK_MS}. Bounds the total, which neither timeout_ms (one request) nor ` +
+        `max_requests (how many are planned) does. When it cuts, the run still returns and says ` +
+        `so: summary.timed_out, summary.probes_not_run, and a degraded coverage. Probes it cut ` +
+        `record outcome 'cancelled', never 'timeout' — the target did not fail to answer, this ` +
+        `tool stopped asking. Does not cover the one liveness request, which timeout_ms bounds.`,
+    ),
 };
 
 const tool: ToolModule = {
@@ -192,6 +207,7 @@ interface Inputs {
   use_nuclei?: boolean;
   max_requests?: number;
   timeout_ms?: number;
+  wall_clock_ms?: number;
 }
 
 /**
@@ -272,15 +288,22 @@ async function handler(
     typeof inp.max_requests === 'number' && inp.max_requests > 0
       ? Math.floor(inp.max_requests)
       : DEFAULT_MAX_REQUESTS;
-  const probeOpts: ProbeOptions = { timeoutMs, concurrency: DEFAULT_CONCURRENCY };
-  if (callMeta?.signal !== undefined) probeOpts.signal = callMeta.signal;
+  const wallClockMs =
+    typeof inp.wall_clock_ms === 'number' && inp.wall_clock_ms > 0
+      ? Math.floor(inp.wall_clock_ms)
+      : DEFAULT_WALL_CLOCK_MS;
   const aborted = (): boolean => callMeta?.signal?.aborted === true;
 
   // ---- 5. Liveness -----------------------------------------------------
   // Deliberately NOT fed into the analysis: it is a connectivity check, not a
   // planned probe, and letting an unplanned request at `/` reach the checks
-  // would produce findings about a path the inventory never listed.
-  const liveness = await executeProbe(livenessRequest(target.origin), probeOpts);
+  // would produce findings about a path the inventory never listed. It runs
+  // outside the wall-clock ceiling, which is armed below: this is one request
+  // already bounded by `timeoutMs`, and arming the ceiling first would make a
+  // deadline that fired here indistinguishable from a dead target.
+  const livenessOpts: ProbeOptions = { timeoutMs, concurrency: 1 };
+  if (callMeta?.signal !== undefined) livenessOpts.signal = callMeta.signal;
+  const liveness = await executeProbe(livenessRequest(target.origin), livenessOpts);
   if (liveness.outcome !== 'completed') {
     if (aborted()) return fail('cancelled', 'Scan was cancelled by the host.');
     return fail('target_not_found', livenessMessage(target, liveness, timeoutMs));
@@ -327,10 +350,23 @@ async function handler(
     );
   }
 
+  // The wall-clock ceiling is armed here, around the probing phase only —
+  // the part whose duration scales with the inventory and which neither
+  // `timeoutMs` (one request) nor `maxRequests` (how many are planned)
+  // bounds. It shares the AbortSignal mechanism `probe.ts` already honours,
+  // so a probe it cuts records `outcome: 'cancelled'`, never `'timeout'`.
+  const deadline = armDeadline(wallClockMs, callMeta?.signal);
+  const probeOpts: ProbeOptions = {
+    timeoutMs,
+    concurrency: DEFAULT_CONCURRENCY,
+    signal: deadline.signal,
+  };
+
   // A host cancellation is a half-finished scan. Finalizing it `cancelled`
   // rather than `completed` is what keeps a partial run out of `getLatest()`
   // and out of every diff and baseline computed from it.
   const cancel = (): ToolResult<Record<string, unknown>> => {
+    deadline.dispose();
     ctx.storage.scans.finalize({
       scan_id: scanId,
       status: 'cancelled',
@@ -353,16 +389,51 @@ async function handler(
   };
   const findings: DastFinding[] = [...analyzeRoutes(analyzeInput), ...analyzeOrigin(analyzeInput)];
 
-  const completed = results.filter((r) => r.outcome === 'completed').length;
+  const outcomes = outcomeCounts(results);
+  const completed = outcomes.completed;
+  const timedOut = deadline.hit();
+  if (timedOut) {
+    warnings.push(
+      `The scan reached its wall-clock ceiling (${wallClockMs}ms) and was cut: ` +
+        `${outcomes.cancelled} of ${plan.requests.length} probe(s) never ran. Any check ` +
+        'reporting target_error below may simply not have been reached rather than having ' +
+        'failed against the target — raise wall_clock_ms and re-run before drawing a ' +
+        'conclusion from it.',
+    );
+  }
+  // The engine "ran" when it either measured something or had nothing to
+  // measure; it FAILED when probes were planned and the target answered none
+  // of them. That second case used to report `ok` unconditionally, which made
+  // a scan whose every probe timed out come back `coverage: 'full'` — a
+  // "0 findings" result that scanned nothing, reading as a clean bill of
+  // health. `computeCoverage`'s own contract says a run with nothing to do is
+  // 'full' (no gaps, just no work), which is why zero planned requests is not
+  // a failure here.
+  const engineFailed = plan.requests.length > 0 && completed === 0;
   const toolsRun: ToolRun[] = [
     {
       name: DAST_ENGINE,
-      status: 'ok',
+      status: engineFailed ? 'failed' : 'ok',
       reason:
         `${plan.requests.length} request(s) planned, ${completed} completed, ` +
-        `${results.length - completed} did not answer`,
+        `${outcomes.timeout} timed out, ${outcomes.network_error} failed to connect` +
+        (outcomes.cancelled > 0 ? `, ${outcomes.cancelled} cut short` : ''),
     },
   ];
+  if (timedOut) {
+    // A separate entry, not a status on the engine's own: it is a distinct
+    // gap ("the run was cut") from "the target did not answer", and keeping
+    // them apart is what lets `computeCoverage` report 'partial' for a run
+    // that measured some of the inventory before the ceiling fired, and
+    // 'none' for one that measured nothing at all.
+    toolsRun.push({
+      name: `${DAST_ENGINE}:wall-clock`,
+      status: 'failed',
+      reason:
+        `cut after ${completed} of ${plan.requests.length} probe(s): the ${wallClockMs}ms ` +
+        'wall-clock ceiling was reached',
+    });
+  }
   const missingTools: string[] = [];
 
   // ---- 8. Optional rate-limit burst ------------------------------------
@@ -375,8 +446,11 @@ async function handler(
     // route (design §6).
     routes: snapshot.routes,
     origin: target.origin,
+    // Shares the deadline's signal, so the burst is inside the ceiling too:
+    // it is thirty requests, and thirty per-request timeouts after the
+    // ceiling expired would put the total right back where it started.
     probeOpts,
-    aborted,
+    aborted: () => aborted() || deadline.hit(),
   });
   if (burst.finding !== null) findings.push(burst.finding);
 
@@ -388,6 +462,7 @@ async function handler(
     outputDir: evidenceDir,
     routes: snapshot.routes,
     readOutput: readJsonSafe,
+    cutByDeadline: deadline.hit(),
     ...(callMeta?.signal === undefined ? {} : { signal: callMeta.signal }),
   });
   findings.push(...nuclei.findings);
@@ -397,6 +472,9 @@ async function handler(
   // The burst and the nuclei pass both stop early on cancellation, so a
   // second check here is what stops a half-run being written as `completed`.
   if (aborted()) return cancel();
+  // Past every network step: nothing below needs the signal, and a live timer
+  // must not outlast the call that armed it.
+  deadline.dispose();
 
   // ---- 10. Evidence + persistence --------------------------------------
   const ordered = [...findings].sort(
@@ -455,6 +533,7 @@ async function handler(
     requests_planned: plan.requests.length,
     requests_completed: completed,
     truncated: plan.truncated,
+    timed_out: timedOut,
     checks,
     evidence_dir: evidenceDir,
   };
@@ -501,8 +580,16 @@ async function handler(
       requests_planned: plan.requests.length,
       requests_completed: completed,
       requests_failed: results.length - completed,
+      /** completed / timeout / cancelled / network_error, so a run cut by the
+       *  ceiling is not mistaken for a target that stopped answering. */
+      probe_outcomes: outcomes,
       truncated: plan.truncated,
       max_requests: maxRequests,
+      /** True when the wall-clock ceiling cut the run. Never silent. */
+      timed_out: timedOut,
+      wall_clock_ms: wallClockMs,
+      /** Probes the ceiling cut before they were ever sent. */
+      probes_not_run: timedOut ? outcomes.cancelled : 0,
       skipped: plan.skipped,
       checks,
       rate_limit: burst.summary,
@@ -612,5 +699,22 @@ function toInsertInput(
 function countBySeverity(findings: readonly Finding[]): Record<Severity, number> {
   const out: Record<Severity, number> = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const finding of findings) out[finding.severity] += 1;
+  return out;
+}
+
+/**
+ * The four probe outcomes, counted. Reported because `requests_completed`
+ * alone cannot tell "the target stopped answering" (`timeout`) from "this
+ * tool stopped asking" (`cancelled`) — the distinction `probe.ts` was
+ * deliberately built to preserve, and the one a wall-clock cut turns on.
+ */
+function outcomeCounts(results: readonly ProbeResult[]): Record<ProbeResult['outcome'], number> {
+  const out: Record<ProbeResult['outcome'], number> = {
+    completed: 0,
+    timeout: 0,
+    cancelled: 0,
+    network_error: 0,
+  };
+  for (const result of results) out[result.outcome] += 1;
   return out;
 }

@@ -9,25 +9,31 @@
  * the only value that means "this check ran, and what it found is what there
  * is" (see `CheckStatus`'s doc comment in `types.ts`).
  *
- * The status vocabulary is closed at five values by the design, so two facts
- * this module must express have to share a slot with something else:
+ * Which value goes where:
  *
- *   - **A check with nothing to run against** (`cors` when no CORS probe was
+ *   - **Nothing to run the check against** (`cors` when no CORS probe was
  *     planned, `anonymous_exposure` when no route declares `auth_hint:
  *     'required'`, `reachability` when the snapshot carries no spec diff) is
  *     `no_candidate`.
- *   - **A check that was gated off** — the rate-limit burst without
- *     `probe_rate_limit`, nuclei without `use_nuclei`, and nuclei requested
- *     but not installed — is `skipped_envelope`. The last of those three is
- *     the imperfect fit: the envelope did not exclude it, a missing binary
- *     did. It is reported redundantly and exactly in `tools_run` (status
+ *   - **Gated off by the envelope** — the rate-limit burst without
+ *     `probe_rate_limit`, nuclei without `use_nuclei` — is `skipped_envelope`.
+ *   - **The engine that performs the check is not installed** — nuclei
+ *     requested and unresolvable — is `scanner_missing`, never
+ *     `skipped_envelope`: the envelope did not exclude it, a missing binary
+ *     did. The fuller cause is still reported in `tools_run` (status
  *     `skipped`, with the reason), in `missing_tools`, and through the
- *     resulting `coverage: 'partial'`, so nothing is hidden by the
- *     approximation — but `ok` it is emphatically not.
+ *     resulting `coverage: 'partial'`.
+ *   - **The check had candidates and the target answered none of them** —
+ *     probes planned, none completed — is `target_error`. That must never
+ *     round down to "found nothing".
  *
- * `target_error` means the check had candidates and the target did not answer
- * any of them: probes planned, none completed. That must never round down to
- * "found nothing".
+ * One ambiguity this vocabulary cannot express on its own: probes cut by the
+ * scan's wall-clock ceiling record `outcome: 'cancelled'`, so a check whose
+ * every probe was cut reads `target_error` even though the target was never
+ * at fault. The orchestrator resolves it out of band — `summary.timed_out`,
+ * `summary.probes_not_run`, a degraded `coverage`, and a warning that says in
+ * words that a `target_error` after a time cut may simply mean the probe was
+ * never sent.
  */
 import { DAST_CHECKS } from './types.js';
 /**
@@ -90,8 +96,9 @@ function rateLimitStatus(outcome) {
 function nucleiStatus(outcome) {
     switch (outcome) {
         case 'not_requested':
-        case 'unavailable':
             return 'skipped_envelope';
+        case 'unavailable':
+            return 'scanner_missing';
         case 'failed':
             return 'target_error';
         case 'ran':
