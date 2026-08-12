@@ -5,6 +5,7 @@ import type { RouteRecord } from '../../../../src/types.js';
 function wpRoute(pathRaw: string, overrides: Partial<RouteRecord> = {}): RouteRecord {
   return {
     method: 'GET',
+    provenance: 'code',
     path_raw: pathRaw,
     path_resolved: pathRaw,
     path_partial: false,

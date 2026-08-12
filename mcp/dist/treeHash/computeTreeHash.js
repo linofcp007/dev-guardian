@@ -14,7 +14,12 @@ import { execa } from 'execa';
 import { createHash } from 'node:crypto';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
-const FS_EXCLUDE = new Set([
+/**
+ * Directories excluded from filesystem walks. Exported so other modules that
+ * walk the project tree (e.g. `surface/specDiscover.ts`) share this exact
+ * denylist instead of maintaining a second, driftable copy.
+ */
+export const FS_EXCLUDE = new Set([
     '.git',
     '.guardian',
     '.specs',

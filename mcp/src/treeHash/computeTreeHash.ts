@@ -24,7 +24,12 @@ export interface TreeHashOptions {
   forceFilesystemWalk?: boolean;
 }
 
-const FS_EXCLUDE = new Set([
+/**
+ * Directories excluded from filesystem walks. Exported so other modules that
+ * walk the project tree (e.g. `surface/specDiscover.ts`) share this exact
+ * denylist instead of maintaining a second, driftable copy.
+ */
+export const FS_EXCLUDE = new Set([
   '.git',
   '.guardian',
   '.specs',

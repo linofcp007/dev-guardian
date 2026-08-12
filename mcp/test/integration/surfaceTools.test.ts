@@ -23,6 +23,7 @@ import type { PluginContext } from '../../src/context.js';
 import '../../src/tools/mapAttackSurface.js';
 import { RESOURCES } from '../../src/resources/index.js';
 import '../../src/resources/surface.js';
+import { MAX_SPEC_FILES } from '../../src/surface/specDiscover.js';
 
 const SEMGREP_OUTPUT = JSON.stringify({
   results: [
@@ -33,6 +34,55 @@ const SEMGREP_OUTPUT = JSON.stringify({
       extra: {
         metadata: { guardian_kind: 'route', framework: 'express', confidence: 'high' },
         metavars: { $METHOD: { abstract_content: 'get' }, $PATH: { abstract_content: '/users' } },
+      },
+    },
+  ],
+});
+
+/**
+ * Same as `SEMGREP_OUTPUT` plus a second code route the spec does not
+ * document, and a `guardian-mount-express` match in the same file. Without
+ * the mount match, `resolveNodeMounts` cannot tell this file apart from an
+ * unmounted router module and marks both routes `path_partial: true` (see
+ * "marks a route partial when nothing mounts its module" in
+ * `resolvers/node.test.ts`) — a partial route is `unmatchable`, never
+ * `matched` or `code_only`, which would silently break the diff assertions
+ * below. The mount match makes `src/routes/users.ts` a known "mounting
+ * file", so both routes it declares are left resolved as-is.
+ */
+const SEMGREP_OUTPUT_WITH_SHADOW = JSON.stringify({
+  results: [
+    {
+      check_id: 'guardian-route-express',
+      path: 'src/routes/users.ts',
+      start: { line: 12 },
+      extra: {
+        metadata: { guardian_kind: 'route', framework: 'express', confidence: 'high' },
+        metavars: { $METHOD: { abstract_content: 'get' }, $PATH: { abstract_content: '/users' } },
+      },
+    },
+    {
+      check_id: 'guardian-route-express',
+      path: 'src/routes/users.ts',
+      start: { line: 20 },
+      extra: {
+        metadata: { guardian_kind: 'route', framework: 'express', confidence: 'high' },
+        metavars: {
+          $METHOD: { abstract_content: 'get' },
+          $PATH: { abstract_content: '/internal/metrics' },
+        },
+      },
+    },
+    {
+      check_id: 'guardian-mount-express',
+      path: 'src/routes/users.ts',
+      start: { line: 1 },
+      extra: {
+        metadata: { guardian_kind: 'mount', framework: 'express' },
+        metavars: {
+          $PREFIX: { abstract_content: "'/'" },
+          $ROUTER: { abstract_content: 'someRouter' },
+        },
       },
     },
   ],
@@ -833,6 +883,361 @@ describe('map_attack_surface', () => {
   });
 });
 
+describe('map_attack_surface — spec import and diff', () => {
+  const SPEC = [
+    'openapi: "3.0.0"',
+    'paths:',
+    '  /users:',
+    '    get: {}',
+    '  /documented-but-gone:',
+    '    get: {}',
+  ].join('\n');
+
+  it('imports spec routes, keeps routes_total counting code only, and finds both findings', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT); // one route: GET /users
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'openapi.yaml'), SPEC);
+    // A second code route the spec does not document.
+    // SEMGREP_OUTPUT_WITH_SHADOW adds GET /internal/metrics.
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT_WITH_SHADOW);
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      routes_total: number;
+      spec_routes_total: number;
+      spec_diff_summary: { matched: number; code_only: number; spec_only: number } | null;
+      shadow_sample: { path: string }[];
+    };
+
+    expect(r.routes_total).toBe(2);        // code routes only
+    expect(r.spec_routes_total).toBe(2);
+    expect(r.spec_diff_summary?.matched).toBe(1);
+    expect(r.spec_diff_summary?.code_only).toBe(1);
+    expect(r.spec_diff_summary?.spec_only).toBe(1);
+    expect(r.shadow_sample[0]?.path).toBe('/internal/metrics');
+  });
+
+  it('produces no diff at all when the project has no spec', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      spec_diff_summary: unknown;
+      routes_total: number;
+    };
+
+    // The trap this guards: with no spec, every code route would otherwise
+    // look undocumented.
+    expect(r.spec_diff_summary).toBeNull();
+    expect(r.routes_total).toBeGreaterThan(0);
+  });
+
+  it('keeps spec routes out of the per-language coverage report and the by_language breakdown', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'openapi.yaml'), SPEC);
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      coverage: { language: string }[];
+      by_language: { language: string }[];
+    };
+    expect(r.coverage.some((c) => c.language === 'spec')).toBe(false);
+    // Same trap one layer up: by_language iterates snapshot.routes directly
+    // and must filter to provenance === 'code' the same way buildCoverage
+    // does, or a spec-provenance language sneaks into the breakdown.
+    expect(r.by_language.some((c) => c.language === 'spec')).toBe(false);
+  });
+
+  it('reports a malformed spec without losing the diff of the good one', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'openapi.yaml'), SPEC);
+    writeFileSync(join(projectPath, 'swagger.yaml'), 'paths:\n  - [unclosed\n');
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      spec_files: { status: string }[];
+      spec_diff_summary: unknown;
+    };
+    expect(r.spec_files.some((f) => f.status === 'parse_error')).toBe(true);
+    expect(r.spec_diff_summary).not.toBeNull();
+  });
+
+  /** 25 spec paths — more than SAMPLE_SIZE (20) and more than the single code route below. */
+  const MANY_PATHS_SPEC =
+    'openapi: "3.0.0"\npaths:\n' +
+    Array.from({ length: 25 }, (_, i) => `  /spec-path-${i}:\n    get: {}\n`).join('');
+
+  it('does not let spec routes evict code routes from `sample`', async () => {
+    // Reproduces the measured bug: `sample` used to slice snapshot.routes
+    // (code + spec mixed) sorted by language first. `'spec'` sorts before
+    // `'typescript'`, so 20 spec entries filled every slot and the sole code
+    // route never appeared — even though routes_total said 1. A spec sample
+    // is served separately in `spec_sample` instead of competing for the
+    // same 20 slots.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT); // one code route: GET /users
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'openapi.yaml'), MANY_PATHS_SPEC);
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      routes_total: number;
+      spec_routes_total: number;
+      sample: { path_resolved: string }[];
+      spec_sample: { path_resolved: string }[];
+    };
+
+    expect(r.routes_total).toBe(1);
+    expect(r.spec_routes_total).toBe(25);
+    // The result must be internally consistent: routes_total says 1 code
+    // route exists, so `sample` — the field a reading agent looks at first —
+    // must contain exactly that one, not be dominated by spec entries.
+    expect(r.sample).toHaveLength(1);
+    expect(r.sample[0]?.path_resolved).toBe('/users');
+    // The spec sample is capped at 20 and holds only spec-provenance routes.
+    expect(r.spec_sample).toHaveLength(20);
+    expect(r.spec_sample.every((s) => s.path_resolved.startsWith('/spec-path-'))).toBe(true);
+  });
+
+  it('bypasses the cache when spec_paths is supplied, so different explicit specs are not confused', async () => {
+    // Measured bug: the tree-hash cache key says nothing about spec_paths, so
+    // a second call with a DIFFERENT explicit spec silently returned the
+    // first call's spec_files. Two calls that name different documents must
+    // never report the same spec_files.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'a.yaml'), SPEC);
+    writeFileSync(join(projectPath, 'b.yaml'), MANY_PATHS_SPEC);
+
+    const first = (await tool().handler(
+      { project_path: projectPath, spec_paths: ['a.yaml'] },
+      ctx,
+    )) as { spec_files: { file: string }[]; spec_routes_total: number };
+    const second = (await tool().handler(
+      { project_path: projectPath, spec_paths: ['b.yaml'] },
+      ctx,
+    )) as { spec_files: { file: string }[]; spec_routes_total: number };
+
+    expect(first.spec_routes_total).toBe(2); // SPEC declares /users + /documented-but-gone
+    expect(second.spec_routes_total).toBe(25); // MANY_PATHS_SPEC
+    expect(first.spec_files.map((f) => f.file)).not.toEqual(second.spec_files.map((f) => f.file));
+    expect(second.spec_files.some((f) => f.file.endsWith('b.yaml'))).toBe(true);
+    expect(second.spec_files.some((f) => f.file.endsWith('a.yaml'))).toBe(false);
+  });
+
+  it('does not persist an explicit spec_paths snapshot, so a later plain call never inherits it', async () => {
+    // The write-side half of the same conflation the read-side cache-bypass
+    // fixes above: if the explicit-spec_paths snapshot were persisted, it
+    // would become "latest for this tree hash", and a later PLAIN call (no
+    // spec_paths, same unchanged tree) would read it back from the cache and
+    // report the explicitly-named document as if auto-discovery had found
+    // it — even though nothing about this project's own layout ever named
+    // it. Not persisting closes it at the source.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    // 'a.yaml' is not a conventional spec basename (openapi/swagger/api-docs)
+    // and does not live under an openapi/ directory, so auto-discovery would
+    // never find it on its own.
+    writeFileSync(join(projectPath, 'a.yaml'), MANY_PATHS_SPEC);
+
+    const explicit = (await tool().handler(
+      { project_path: projectPath, spec_paths: ['a.yaml'] },
+      ctx,
+    )) as {
+      spec_routes_total: number;
+      spec_files: { file: string }[];
+      snapshot_id: number | null;
+    };
+
+    expect(explicit.spec_routes_total).toBe(25);
+    expect(explicit.spec_files.some((f) => f.file.endsWith('a.yaml'))).toBe(true);
+    // Nothing was written: no row exists to become "latest for this tree hash".
+    expect(explicit.snapshot_id).toBeNull();
+    expect(ctx.storage.surface.getLatest()).toBeNull();
+
+    const plain = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      spec_routes_total: number;
+      spec_files: { file: string }[];
+      spec_diff_summary: unknown;
+    };
+
+    // The critical assertion: the plain call must NOT report a.yaml — it was
+    // never auto-discoverable, so the plain call must see no spec at all.
+    expect(plain.spec_routes_total).toBe(0);
+    expect(plain.spec_files).toEqual([]);
+    expect(plain.spec_diff_summary).toBeNull();
+  });
+
+  it('resolves a relative spec_paths entry against project_path, not process.cwd()', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    mkdirSync(join(projectPath, 'docs'), { recursive: true });
+    writeFileSync(join(projectPath, 'docs', 'openapi.yaml'), SPEC);
+
+    const r = (await tool().handler(
+      { project_path: projectPath, spec_paths: ['docs/openapi.yaml'] },
+      ctx,
+    )) as { spec_routes_total: number; spec_files: { status: string; file: string }[] };
+
+    expect(r.spec_routes_total).toBe(2);
+    expect(r.spec_files[0]?.status).toBe('ok');
+    expect(r.spec_files[0]?.file).toBe(join(projectPath, 'docs', 'openapi.yaml'));
+  });
+
+  it('reports an explicit spec_paths entry that does not exist, rather than reading as no spec', async () => {
+    // Measured bug: a nonexistent explicit path produced spec_files: [],
+    // spec_diff: null — indistinguishable from "this project has no spec".
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+
+    const r = (await tool().handler(
+      { project_path: projectPath, spec_paths: ['does-not-exist.yaml'] },
+      ctx,
+    )) as { spec_files: { status: string; file: string; reason?: string }[] };
+
+    expect(r.spec_files).toHaveLength(1);
+    expect(r.spec_files[0]?.status).toBe('parse_error');
+    expect(r.spec_files[0]?.file).toBe(join(projectPath, 'does-not-exist.yaml'));
+    expect(r.spec_files[0]?.reason).toMatch(/could not be read/);
+  });
+
+  it('counts a spec that parses but declares no paths toward specsParsed (diff is not null)', async () => {
+    // Pins the `|| report.status === 'no_paths'` clause: a valid document
+    // that declares nothing is still a successfully parsed spec and must not
+    // disable the diff the way "no spec was found at all" does.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'openapi.yaml'), 'openapi: "3.0.0"\npaths: {}\n');
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      spec_files: { status: string }[];
+      spec_diff_summary: unknown;
+    };
+
+    expect(r.spec_files[0]?.status).toBe('no_paths');
+    expect(r.spec_diff_summary).not.toBeNull();
+  });
+
+  it('reports spec_diff as null when the ONLY spec present fails to parse', async () => {
+    // The malformed-spec test above always writes a good spec alongside, so
+    // it would still pass even if a parse_error counted toward specsParsed.
+    // This pins the case that actually matters: no good spec anywhere means
+    // specsParsed stays 0 and the diff must be null, not an empty diff.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'openapi.yaml'), 'paths:\n  - [unclosed\n');
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      spec_files: { status: string }[];
+      spec_diff_summary: unknown;
+    };
+
+    expect(r.spec_files.some((f) => f.status === 'parse_error')).toBe(true);
+    expect(r.spec_diff_summary).toBeNull();
+  });
+
+  it('reports the file-count discovery cap as a parse_error spec_files entry', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    mkdirSync(join(projectPath, 'openapi'), { recursive: true });
+    for (let i = 0; i < MAX_SPEC_FILES + 3; i += 1) {
+      writeFileSync(join(projectPath, 'openapi', `s${i}.yaml`), 'openapi: "3.0.0"\npaths: {}\n');
+    }
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      spec_files: { status: string; reason?: string }[];
+    };
+
+    expect(r.spec_files).toHaveLength(MAX_SPEC_FILES + 1); // 20 read + 1 cap report
+    expect(
+      r.spec_files.some(
+        (f) => f.status === 'parse_error' && f.reason?.includes(`${MAX_SPEC_FILES}`),
+      ),
+    ).toBe(true);
+  });
+
+  it('reports an oversized spec file as a parse_error spec_files entry', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'openapi.yaml'), 'x'.repeat(6 * 1024 * 1024));
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      spec_files: { status: string; reason?: string }[];
+    };
+
+    expect(
+      r.spec_files.some((f) => f.status === 'parse_error' && f.reason?.includes('size cap')),
+    ).toBe(true);
+  });
+
+  it('rejects an empty spec_paths array at the schema level, so it cannot silently revert to auto-discovery', () => {
+    // Measured bug: `discoverSpecs` gates on `explicit && explicit.length >
+    // 0`, so `spec_paths: []` falls through to the auto-discovery walk —
+    // but this tool's own cache-bypass gate (`spec_paths === undefined`,
+    // handler.ts:154) and no-persist gate (`spec_paths !== undefined`,
+    // handler.ts:261) both treat `[]` as "explicit was supplied". Net: an
+    // auto-discovered result that is never cached and never persisted,
+    // contradicting spec_paths' own description ("Replaces automatic
+    // discovery entirely when supplied") and making `snapshot_id: null`
+    // ambiguous between "degraded run" and "successful unpersisted run".
+    // `.min(1)` on the array — not just on each element — closes both by
+    // rejecting `[]` before it ever reaches the handler.
+    const specPathsSchema = tool().inputSchema['spec_paths'];
+    if (!specPathsSchema) throw new Error('spec_paths is not in the input schema');
+    expect(specPathsSchema.safeParse([]).success).toBe(false);
+    expect(specPathsSchema.safeParse(['openapi.yaml']).success).toBe(true);
+    expect(specPathsSchema.safeParse(undefined).success).toBe(true);
+  });
+});
+
 describe('guardian://surface resources', () => {
   function resource(name: string) {
     const found = RESOURCES.find((r) => r.name === name);
@@ -857,7 +1262,7 @@ describe('guardian://surface resources', () => {
       tree_hash: 'h',
       snapshot: {
         routes: [], env_vars: [], ports: [], webhooks: [], coverage: [],
-        tools_run: [], missing_tools: [],
+        tools_run: [], missing_tools: [], spec_files: [], spec_diff: null,
       },
     });
     const { json } = await resource('guardian-surface-latest').handler(
@@ -876,7 +1281,7 @@ describe('guardian://surface resources', () => {
       tree_hash: 'h',
       snapshot: {
         routes: [], env_vars: [], ports: [], webhooks: [], coverage: [],
-        tools_run: [], missing_tools: [],
+        tools_run: [], missing_tools: [], spec_files: [], spec_diff: null,
       },
     });
 

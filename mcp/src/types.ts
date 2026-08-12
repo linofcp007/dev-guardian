@@ -178,6 +178,15 @@ export const HTTP_METHODS = [
 export type HttpMethod = (typeof HTTP_METHODS)[number];
 
 /**
+ * Where a route came from. `'code'` means Semgrep matched a route registration
+ * in source; `'spec'` means an OpenAPI or Swagger document declared it. The two
+ * live in the same `routes[]` array so a consumer sees one inventory, but the
+ * difference between them is the whole point of the spec diff — a route that is
+ * only `'code'` is undocumented, and one that is only `'spec'` may not exist.
+ */
+export type RouteProvenance = 'code' | 'spec';
+
+/**
  * One externally reachable HTTP route, extracted statically.
  *
  * `path_raw` is what the source literally says at the match site.
@@ -200,6 +209,7 @@ export type HttpMethod = (typeof HTTP_METHODS)[number];
  */
 export interface RouteRecord {
   method: HttpMethod;
+  provenance: RouteProvenance;
   path_raw: string;
   path_resolved: string;
   path_partial: boolean;
@@ -223,6 +233,89 @@ export interface RouteRecord {
    * resolver combines them.
    */
   namespace?: string;
+}
+
+/**
+ * Outcome of importing one OpenAPI 3.x or Swagger 2.0 document via
+ * `surface/specImport.ts`. One report per spec file, regardless of how many
+ * routes it yielded — a spec that parses cleanly but declares nothing is
+ * still `'ok'` at the format-detection level, distinct from a document that
+ * could not be parsed at all or names no recognisable version.
+ */
+export interface SpecFileReport {
+  file: string;
+  format: 'openapi-3' | 'swagger-2' | 'unknown';
+  status: 'ok' | 'parse_error' | 'unsupported_version' | 'no_paths';
+  routes_found: number;
+  /** Present for every status except 'ok'. One line, names the cause. */
+  reason?: string;
+  /**
+   * Path items whose value was a `$ref` this module did not turn into a
+   * route — whether the ref is external (this module reads text, never a
+   * filesystem, so it can't be followed) or internal (`#/...`): internal
+   * `$ref`s are resolved for `parameters` entries only, never for a whole
+   * path item, so an internal path-item ref is exactly as unresolved as an
+   * external one. Counted, never ignored: a path item that vanished
+   * silently would resurface as false dead documentation in the diff.
+   */
+  unresolved_refs: number;
+}
+
+/**
+ * One row of `surface/specDiff.ts`'s comparison of code-extracted routes
+ * against spec-declared ones. `path` is the normalised comparison key
+ * (`normalisePath` output), not either route's raw or resolved path — read
+ * that from `code_route` / `spec_route` when present.
+ */
+export interface SpecDiffEntry {
+  method: HttpMethod;
+  /** The normalised comparison key, human-readable: `/users/{}`. */
+  path: string;
+  code_route?: RouteRecord;
+  spec_route?: RouteRecord;
+  /** Present on `unmatchable` entries: one line saying why. */
+  reason?: string;
+}
+
+/**
+ * Output of `surface/specDiff.ts#diffSpecRoutes`. `null` at the call site
+ * (never this type) is how "no spec was found" is distinguished from "the
+ * spec documents nothing" — see that module's doc comment.
+ */
+export interface SpecDiff {
+  /**
+   * One row per (code route, spec route) PAIR sharing a normalised path and
+   * a compatible method — not one row per route documented. A single `ANY`
+   * code route paired against a spec path that declares both `get` and
+   * `post` contributes two entries here, so `matched.length` can exceed the
+   * number of distinct code or spec routes involved. Read it as "matched
+   * pairs", never as "N routes are documented".
+   */
+  matched: SpecDiffEntry[];
+  /** In the code, absent from every spec — shadow endpoints. */
+  code_only: SpecDiffEntry[];
+  /** In a spec, absent from the code — dead documentation. */
+  spec_only: SpecDiffEntry[];
+  /** Could not be classified either way. Never reported as a finding. */
+  unmatchable: SpecDiffEntry[];
+  /**
+   * Resolvable code routes that looked like shadow endpoints — no spec route
+   * matched them — but were withheld from `code_only` because a partial spec
+   * route's raw path is a suffix of theirs: that spec route (its own prefix
+   * unresolved, e.g. from a templated `servers[].url`) may be this very
+   * route, so it was filed under `unmatchable` instead. Not a clean bill of
+   * health: a single templated server URL can drive this arbitrarily high,
+   * silently withholding every shadow-endpoint finding the diff would
+   * otherwise report. Surfaced so that gap is visible, not just safe.
+   */
+  code_only_withheld: number;
+  /**
+   * The mirror of `code_only_withheld`: resolvable spec routes that looked
+   * like dead documentation but were withheld from `spec_only` because a
+   * partial code route's raw path is a suffix of theirs. Same caveat, other
+   * direction — see that field's doc comment.
+   */
+  spec_only_withheld: number;
 }
 
 /** A `app.use('/prefix', router)`-style mount, consumed by the Node resolver. */
@@ -270,6 +363,13 @@ export interface AttackSurfaceSnapshot {
   coverage: CoverageEntry[];
   tools_run: ToolRun[];
   missing_tools: string[];
+  spec_files: SpecFileReport[];
+  /**
+   * `null` when no spec parsed. Deliberately not an empty diff: "no spec was
+   * found" and "the spec documents nothing" must stay distinguishable, or a
+   * project without a spec reads as one where every endpoint is undocumented.
+   */
+  spec_diff: SpecDiff | null;
 }
 
 /**

@@ -15,7 +15,7 @@
  * MCP dispatch site), and we never treat garbage output as zero routes.
  *
  * The one case where a non-zero Semgrep exit DOES get persisted: Semgrep
- * exits 1 when it *finds* matches (see `buildToolRun` below) — that is
+ * exits 1 when it *finds* matches (see `buildToolRun` in `surface/scanSemgrep.ts`) — that is
  * success, not failure. A genuine failure (crash, bad config, timeout) still
  * blocks persistence only when it also failed to leave parseable JSON behind;
  * if it left partial-but-parseable JSON, that partial data is persisted with
@@ -28,12 +28,10 @@
  * reported matches and not one could be recovered, that is a broken
  * toolchain, not a project without routes — nothing is persisted.
  */
-import { copyFileSync, readFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { resolveProjectPath } from '../platform/projectPath.js';
-import { buildSemgrepDockerArgs, DEFAULT_SEMGREP_IMAGE, toContainerPath, } from '../runners/dockerScanner.js';
-import { runProcess } from '../runners/processRunner.js';
 import { Force, ProjectPath } from '../schemas.js';
 import { collectEnvVars } from '../surface/collectors/envVars.js';
 import { collectPorts } from '../surface/collectors/ports.js';
@@ -41,9 +39,13 @@ import { extractSurface, languageFromPath } from '../surface/extract.js';
 import { recoverMetavars, } from '../surface/recoverMetavars.js';
 import { resolveNodeMounts } from '../surface/resolvers/node.js';
 import { resolveWordpressRoutes } from '../surface/resolvers/wordpress.js';
+import { invokeSemgrep } from '../surface/scanSemgrep.js';
+import { discoverSpecs, MAX_SPEC_BYTES, MAX_SPEC_FILES, } from '../surface/specDiscover.js';
+import { diffSpecRoutes } from '../surface/specDiff.js';
+import { importSpec } from '../surface/specImport.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import { registerToolModule } from './index.js';
-import { ensureReportDir, readJsonSafe, scannerAvailable } from './scanHelpers.js';
+import { ensureReportDir, readJsonSafe } from './scanHelpers.js';
 const SAMPLE_SIZE = 20;
 const WEBHOOK_PATTERN = /webhook|callback|hook/i;
 /** Languages the rule pack covers, for honest `no_rules` reporting. */
@@ -55,22 +57,57 @@ const IncludeEnvVars = z
     .optional()
     .default(true)
     .describe('Collect environment-variable names the code reads. Default: true.');
+const SpecPaths = z
+    // `.min(1)` on the array itself, not just on each element: an empty array
+    // is "explicit was supplied" to this tool's own cache-bypass and
+    // no-persist gates (both test `spec_paths !== undefined`), but
+    // `discoverSpecs` treats an empty array as "nothing explicit" and falls
+    // back to auto-discovery (`explicit && explicit.length > 0`). Left
+    // unconstrained, `spec_paths: []` would silently produce an
+    // auto-discovered result that is never cached and never persisted —
+    // contradicting this field's own "replaces automatic discovery entirely"
+    // description below, and leaving `snapshot_id: null` ambiguous between a
+    // degraded run and a successful-but-unpersisted one. Rejecting `[]`
+    // outright closes both at the one place every caller passes through.
+    .array(z.string().min(1))
+    .min(1)
+    .optional()
+    .describe('Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when ' +
+    'supplied — must be non-empty; omit the field to use automatic discovery instead. ' +
+    'Relative paths resolve against project_path, not the current working ' +
+    'directory. Bypasses the tree-hash cache (always computes a fresh snapshot) and is ' +
+    'never persisted as the project\'s cached surface, so a later plain call cannot ' +
+    'inherit these paths. Any named path that cannot be read is reported in spec_files, ' +
+    'not silently dropped.');
 const tool = {
     name: 'map_attack_surface',
     title: 'Map the application attack surface',
-    // No "auth hint" in this description on purpose: `auth_hint` exists on every
-    // RouteRecord but no rule can populate it yet, so it is always 'unknown'
-    // (see normalizeAuth in surface/extract.ts). Advertising a constant as a
-    // feature is how an agent ends up reasoning from it.
+    // No "auth hint" in this description on purpose, for code-extracted routes:
+    // `auth_hint` exists on every RouteRecord, but no Semgrep rule populates it
+    // for a route extracted from source, so it is always 'unknown' there (see
+    // normalizeAuth in surface/extract.ts). Spec-imported routes are the one
+    // real source: an operation's (or document's) `security` declaration
+    // yields 'none' (an affirmative "this route is public") or 'required' (see
+    // authHint in surface/specImport.ts). That is a property of spec import
+    // specifically, not something this tool can promise in general — a
+    // project with no importable spec still gets 'unknown' on every route —
+    // so the description below still does not advertise "auth hint" as a
+    // general feature. Advertising a mostly-constant field as a feature is how
+    // an agent ends up reasoning from it.
     description: 'Statically extract the externally reachable surface of the project — HTTP routes ' +
         '(method, path, params), referenced environment variables, and declared ' +
-        'container ports — across all supported stacks. Persists a snapshot readable via ' +
-        'guardian://surface/latest. Returns a summary plus a 20-route sample; read the ' +
-        'resource for the full list.',
+        'container ports — across all supported stacks. Also discovers OpenAPI 3.x / ' +
+        'Swagger 2.0 documents (or reads exactly the paths given as spec_paths) and diffs ' +
+        'them against the code-extracted routes, reporting shadow endpoints (routes the code ' +
+        'registers that no spec documents) and dead documentation (spec paths no code ' +
+        'implements). Persists a snapshot readable via guardian://surface/latest. Returns a ' +
+        'summary plus a 20-route code sample and a spec sample; read the resource for the ' +
+        'full route list and the full spec diff.',
     inputSchema: {
         project_path: ProjectPath,
         force: Force,
         include_env_vars: IncludeEnvVars,
+        spec_paths: SpecPaths,
     },
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -90,7 +127,17 @@ async function handler(input, ctx) {
         return { ok: false, error: { code: 'not_a_git_repo', message: e.message } };
     }
     const treeHash = await computeTreeHash(projectPath);
-    if (inp.force !== true) {
+    // The cache key is the project's tree hash, which says nothing about which
+    // document an explicit `spec_paths` argument names — an out-of-tree spec
+    // path in particular can change without the tree hash moving at all.
+    // Serving a cached snapshot in that case would silently diff against the
+    // wrong document (or the auto-discovered one) and misattribute shadow
+    // endpoints / dead documentation. So `spec_paths` bypasses the cache read
+    // exactly like `force` does. (`include_env_vars` has an analogous,
+    // narrower gap — a cache hit can return env_vars collected under a
+    // different value of that flag — but that only omits data, never
+    // misattributes a finding, so it is left as-is here.)
+    if (inp.force !== true && inp.spec_paths === undefined) {
         const cached = ctx.storage.surface.getByTreeHash(treeHash);
         if (cached) {
             return summarize(cached.snapshot, cached.id, cachedToolsRun(cached.snapshot), ctx);
@@ -100,7 +147,7 @@ async function handler(input, ctx) {
     const reportDir = ensureReportDir(projectPath, treeHash, 'surface');
     const outFile = join(reportDir, 'surface.json');
     const rulesPath = join(ctx.scriptsDir, '..', 'configs', 'semgrep', 'routes.yml');
-    const invocation = await invokeSemgrep(projectPath, rulesPath, outFile, reportDir);
+    const invocation = await invokeSemgrep({ projectPath, rulesPath, outFile, reportDir });
     if (invocation === null) {
         return degradedResult([
             {
@@ -151,7 +198,20 @@ async function handler(input, ctx) {
         return degradedResult([toolRun, unreadableMatchesToolRun(recovery)], [], unreadableMatchesNote(recovery), ctx);
     }
     const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
-    const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars, recovery.unreadableRouteFiles);
+    const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars, recovery.unreadableRouteFiles, inp.spec_paths);
+    // An explicit `spec_paths` snapshot must never become "latest for this
+    // tree hash": it answers the caller's one-off question about a document
+    // THEY named, not a claim about what this project's own spec layout is. If
+    // it were persisted, a later PLAIN call (no spec_paths) on the same
+    // unchanged tree would read it back from the tree-hash cache and report
+    // the explicitly-named document as if auto-discovery had found it —
+    // exactly the "silently attributed to the wrong document" failure the
+    // spec_paths-bypasses-cache-read fix above exists to prevent, just
+    // triggered from the write side instead of the read side. Skipping the
+    // insert closes it at the source: nothing is ever there to be inherited.
+    if (inp.spec_paths !== undefined) {
+        return summarize(snapshot, null, toolsRun, ctx);
+    }
     const persisted = ctx.storage.surface.insert({
         project_path: projectPath,
         tree_hash: treeHash,
@@ -268,93 +328,124 @@ function cachedToolsRun(snapshot) {
     }));
     return [marker, ...persisted];
 }
-/**
- * Run Semgrep against the routes rule pack, natively if it's on PATH,
- * otherwise via Docker. Returns null only when neither is available — the
- * caller treats that as "cannot run at all" and persists nothing.
- *
- * Mirrors scan_sast's Docker fallback (scanSast.ts:95-130): probe `docker`,
- * bind the project at `/src`, run the container, and check for real output.
- * The argv comes from the shared `buildSemgrepDockerArgs` — this tool only
- * differs in `--config`, which the builder now takes as an option, so the
- * mount shape, the output rewriting and anything added there later apply
- * here too. The rule pack lives outside the project tree (in the
- * dev-guardian install), so we stage a copy inside the report dir — already
- * inside the project, already inside the bind mount — instead of adding a
- * second `--mount`.
- */
-async function invokeSemgrep(projectPath, rulesPath, outFile, reportDir) {
-    const semgrepBin = await scannerAvailable('semgrep');
-    if (semgrepBin !== null) {
-        const run = await runProcess({
-            command: 'semgrep',
-            args: ['--config', rulesPath, '--json', '--output', outFile, '--quiet', projectPath],
-            cwd: projectPath,
-        });
-        return { toolRun: buildToolRun(run) };
-    }
-    const dockerBin = await scannerAvailable('docker');
-    if (dockerBin === null)
-        return null;
-    let containerRules;
-    try {
-        const stagedRules = join(reportDir, 'routes.yml');
-        copyFileSync(rulesPath, stagedRules);
-        containerRules = toContainerPath(projectPath, stagedRules);
-    }
-    catch (e) {
-        return {
-            toolRun: {
-                name: 'semgrep',
-                status: 'failed',
-                reason: `docker: could not stage rule pack: ${e.message}`,
-            },
-        };
-    }
-    const image = process.env['GUARDIAN_SEMGREP_IMAGE'] || DEFAULT_SEMGREP_IMAGE;
-    const run = await runProcess({
-        command: 'docker',
-        args: buildSemgrepDockerArgs({
-            projectPath,
-            outFileHost: outFile,
-            image,
-            configs: [containerRules],
-        }),
-        cwd: projectPath,
-    });
-    return { toolRun: buildToolRun(run, `docker (${image})`) };
-}
-/**
- * Semgrep exits 1 when it *finds* matches — that is success, not failure.
- * Repo convention: scanSast.ts:87-94, bugHunt.ts:158, scanWordpress.ts
- * (semgrep-wp/gitleaks/etc.) all treat `outcome === 'completed' ||
- * exitCode === 1` as ok. Reading the raw outcome alone (as an earlier
- * version of this tool did) reports every successful route-finding run as
- * `failed`.
- */
-function buildToolRun(run, via) {
-    const ok = run.outcome === 'completed' || run.exitCode === 1;
-    if (ok) {
-        return via ? { name: 'semgrep', status: 'ok', reason: `ran via ${via}` } : { name: 'semgrep', status: 'ok' };
-    }
-    const firstLine = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-    const reason = via ? `${via}: ${firstLine ?? 'fallback failed'}` : (firstLine ?? 'unknown');
-    return { name: 'semgrep', status: 'failed', reason };
-}
-function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unreadableRouteFiles) {
+function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unreadableRouteFiles, specPaths) {
     const { routes, mounts } = extractSurface(parsed);
     const knownFiles = collectAllFiles(parsed);
     const imports = extractImports(parsed, knownFiles);
     const resolved = resolveWordpressRoutes(resolveNodeMounts(routes, mounts, imports));
+    const { specRoutes, specFiles, specsParsed } = importSpecs(projectPath, specPaths);
+    const specDiff = diffSpecRoutes(resolved, specRoutes, specsParsed);
     return {
-        routes: resolved,
+        routes: [...resolved, ...specRoutes],
         env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
         ports: collectPorts(projectPath),
         webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
         coverage: buildCoverage(resolved, ctx, unreadableRouteFiles),
         tools_run: toolsRun,
         missing_tools: [],
+        spec_files: specFiles,
+        spec_diff: specDiff,
     };
+}
+/**
+ * Discover, import and report every OpenAPI/Swagger document for the
+ * project. `specsParsed` counts reports whose status is `'ok'` or
+ * `'no_paths'` — a valid document that declares nothing is still a
+ * successfully parsed spec, and must not disable the diff the way "no spec
+ * was found at all" does (see `diffSpecRoutes`'s doc comment).
+ *
+ * Discovery's own caps (`truncated`, `oversized`) are folded into
+ * `specFiles` as `parse_error` reports rather than dropped, so a capped
+ * result is visible in the same place a reader already looks instead of
+ * silently reading as "there were only 20 documents".
+ *
+ * Explicit `specPaths` get two more guarantees discovery alone does not
+ * provide: relative entries resolve against `projectPath` (every other path
+ * in this tool's contract derives from `project_path`, so a relative
+ * argument is the likely default of a calling agent — resolving it against
+ * `process.cwd()` instead would silently read the wrong file or nothing at
+ * all), and any named path `discoverSpecs` had to drop (missing, unreadable,
+ * removed after discovery) is reported rather than vanishing. A caller that
+ * *names* a document has made a claim this tool must be able to contradict —
+ * "that document could not be read" must stay distinguishable from "this
+ * project has no spec", the exact conflation the rest of this feature exists
+ * to avoid. Auto-discovered candidates get no such treatment: nothing named
+ * them, so one dropped during a directory walk is not a broken promise.
+ */
+function importSpecs(projectPath, specPaths) {
+    const resolvedSpecPaths = specPaths?.map((p) => resolveExplicitSpecPath(projectPath, p));
+    const discovery = discoverSpecs(projectPath, resolvedSpecPaths);
+    const specRoutes = [];
+    const specFiles = [];
+    let specsParsed = 0;
+    for (const { file, text } of discovery.specs) {
+        const { routes, report } = importSpec(file, text);
+        specRoutes.push(...routes);
+        specFiles.push(report);
+        if (report.status === 'ok' || report.status === 'no_paths')
+            specsParsed += 1;
+    }
+    if (discovery.truncated) {
+        specFiles.push({
+            file: '(spec discovery)',
+            format: 'unknown',
+            status: 'parse_error',
+            routes_found: 0,
+            reason: `More than ${MAX_SPEC_FILES} candidate spec documents were found; only the first ` +
+                `${MAX_SPEC_FILES} were read.`,
+            unresolved_refs: 0,
+        });
+    }
+    for (const file of discovery.oversized) {
+        specFiles.push({
+            file,
+            format: 'unknown',
+            status: 'parse_error',
+            routes_found: 0,
+            reason: `File exceeds the ${MAX_SPEC_BYTES}-byte size cap and was not read.`,
+            unresolved_refs: 0,
+        });
+    }
+    if (resolvedSpecPaths !== undefined) {
+        // Mirrors discoverSpecs' own file-count cap (candidates.slice(0,
+        // MAX_SPEC_FILES)) so a path beyond the cap is not double-reported here
+        // AND in the `truncated` block above.
+        const attempted = resolvedSpecPaths.slice(0, MAX_SPEC_FILES);
+        const accountedFor = new Set([
+            ...discovery.specs.map((s) => s.file),
+            ...discovery.oversized,
+        ]);
+        for (const path of attempted) {
+            if (accountedFor.has(path))
+                continue;
+            specFiles.push({
+                file: path,
+                format: 'unknown',
+                status: 'parse_error',
+                routes_found: 0,
+                reason: 'Explicit spec path could not be read (missing, not a file, or unreadable).',
+                unresolved_refs: 0,
+            });
+        }
+    }
+    return { specRoutes, specFiles, specsParsed };
+}
+/**
+ * Resolve one `spec_paths` entry against `projectPath` when it is relative.
+ * An absolute path is used verbatim (modulo `resolve()`'s normalisation) —
+ * it may legitimately point outside the project (a spec vendored elsewhere,
+ * a shared team document).
+ *
+ * Always run through `resolve()`, not just `join()`, so a redundant `.`/`..`
+ * segment inside an already-absolute input is canonicalised the same way
+ * `discoverSpecs`' own dedupe canonicalises its candidates — the "not
+ * accounted for" loop below compares this function's output against
+ * `discoverSpecs`' output by plain string equality, so the two must agree on
+ * one canonical spelling for the same file, or a deduped-away duplicate here
+ * would misreport as "could not be read".
+ */
+function resolveExplicitSpecPath(projectPath, path) {
+    return resolve(isAbsolute(path) ? path : join(projectPath, path));
 }
 /** Every file path Semgrep reported a match in, across all `guardian_kind`s. */
 function collectAllFiles(parsed) {
@@ -471,6 +562,11 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
  * not something to round down to zero.
  */
 function buildCoverage(routes, ctx, unreadableRouteFiles) {
+    // `coverage[]` is a per-language report about source code. Spec routes carry
+    // `language: 'spec'`, which is not a language the rule pack could ever cover —
+    // including them would create a phantom entry reading `status: 'no_rules'`,
+    // literally true and completely meaningless.
+    const codeRoutes = routes.filter((r) => r.provenance === 'code');
     const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
     // One entry per lost route, so the count is routes-not-shown, not files.
     const unreadableByLanguage = new Map();
@@ -482,13 +578,13 @@ function buildCoverage(routes, ctx, unreadableRouteFiles) {
     }
     const languages = new Set([
         ...detected,
-        ...routes.map((r) => r.language),
+        ...codeRoutes.map((r) => r.language),
         ...unreadableByLanguage.keys(),
     ]);
     languages.delete('unknown');
     const entries = [];
     for (const language of [...languages].sort()) {
-        const found = routes.filter((r) => r.language === language).length;
+        const found = codeRoutes.filter((r) => r.language === language).length;
         const unreadable = unreadableByLanguage.get(language) ?? 0;
         const hasRules = COVERED_LANGUAGES.has(language);
         entries.push({
@@ -504,20 +600,44 @@ function buildCoverage(routes, ctx, unreadableRouteFiles) {
     return entries;
 }
 const NO_STACK_NOTE = 'No stack snapshot found for this project — run detect_stack first for fuller coverage context.';
-function summarize(snapshot, snapshotId, toolsRun, ctx) {
+function summarize(snapshot, 
+// `null` for an explicit-`spec_paths` run that was deliberately not
+// persisted (see the call site in `handler`) — there is no row to point
+// to, the same reason `degradedResult` uses `null` for "nothing written".
+snapshotId, toolsRun, ctx) {
+    // `by_language` is a report about source code, same reasoning as
+    // `buildCoverage`'s `codeRoutes` filter above: spec routes all carry
+    // `language: 'spec'`, which is not a language the rule pack could ever
+    // report on. Including them would add a phantom `{ language: 'spec', ... }`
+    // entry to a breakdown that otherwise only ever names real languages.
+    const codeRoutes = snapshot.routes.filter((r) => r.provenance === 'code');
     const byLanguage = new Map();
-    for (const route of snapshot.routes) {
+    for (const route of codeRoutes) {
         byLanguage.set(route.language, (byLanguage.get(route.language) ?? 0) + 1);
     }
-    // Deterministic across runs: order by language then path before slicing,
-    // rather than relying on Semgrep's (unspecified) match order.
-    const sample = [...snapshot.routes]
+    // `sample` is code routes only, same reasoning as `routes_total` right
+    // below: it is the field a reading agent looks at first, and it must stay
+    // consistent with that count. Sorting `snapshot.routes` (code + spec mixed)
+    // by language first let spec routes — all `language: 'spec'` — evict every
+    // code route from the 20 slots whenever the project's spec declared more
+    // paths than the code had routes, and which language 'spec' happened to
+    // sort next to (before 'typescript', after 'javascript'/'php'/'python')
+    // made the eviction inconsistent across otherwise-identical projects. Spec
+    // routes get their own sample below instead of competing for these slots.
+    const sample = [...codeRoutes]
         .sort((a, b) => a.language.localeCompare(b.language) || a.path_resolved.localeCompare(b.path_resolved))
+        .slice(0, SAMPLE_SIZE);
+    const specRoutesList = snapshot.routes.filter((r) => r.provenance === 'spec');
+    const specSample = [...specRoutesList]
+        .sort((a, b) => a.path_resolved.localeCompare(b.path_resolved))
         .slice(0, SAMPLE_SIZE);
     const stackDetected = ctx.storage.stack.getLatest() !== null;
     return {
         ok: true,
-        routes_total: snapshot.routes.length,
+        // Code routes only — a consumer reading `routes_total` today must get the
+        // same number tomorrow now that spec-declared routes share `routes[]`.
+        // Spec routes are counted separately in `spec_routes_total`.
+        routes_total: codeRoutes.length,
         by_language: [...byLanguage].map(([language, routes]) => ({ language, routes })),
         coverage: snapshot.coverage,
         snapshot_id: snapshotId,
@@ -528,8 +648,36 @@ function summarize(snapshot, snapshotId, toolsRun, ctx) {
         tools_run: toolsRun,
         missing_tools: snapshot.missing_tools,
         stack_detected: stackDetected,
+        spec_routes_total: snapshot.routes.length - codeRoutes.length,
+        spec_files: snapshot.spec_files,
+        spec_sample: specSample,
+        spec_diff_summary: specDiffSummary(snapshot.spec_diff),
+        shadow_sample: shadowSample(snapshot.spec_diff),
         ...(stackDetected ? {} : { note: NO_STACK_NOTE }),
     };
+}
+/** Counts only — the full entry lists stay out of the tool result and are
+ *  served by the surface resources, for the same reason the full route list
+ *  already is. `null` mirrors `snapshot.spec_diff`: "no spec was found" must
+ *  stay distinguishable from "the spec documents nothing". */
+function specDiffSummary(diff) {
+    if (diff === null)
+        return null;
+    return {
+        matched: diff.matched.length,
+        code_only: diff.code_only.length,
+        spec_only: diff.spec_only.length,
+        unmatchable: diff.unmatchable.length,
+        code_only_withheld: diff.code_only_withheld,
+        spec_only_withheld: diff.spec_only_withheld,
+    };
+}
+/** First 20 shadow endpoints — code routes no spec documents — ordered
+ *  deterministically the same way `sample` above is. */
+function shadowSample(diff) {
+    if (diff === null)
+        return [];
+    return [...diff.code_only].sort((a, b) => a.path.localeCompare(b.path)).slice(0, SAMPLE_SIZE);
 }
 /**
  * Shared shape for every "Semgrep could not produce a usable result" exit —
@@ -552,6 +700,11 @@ function degradedResult(toolsRun, missingTools, note, ctx) {
         tools_run: toolsRun,
         missing_tools: missingTools,
         stack_detected: ctx.storage.stack.getLatest() !== null,
+        spec_routes_total: 0,
+        spec_files: [],
+        spec_sample: [],
+        spec_diff_summary: null,
+        shadow_sample: [],
         note,
     };
 }

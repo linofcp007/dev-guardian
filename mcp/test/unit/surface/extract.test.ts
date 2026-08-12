@@ -308,3 +308,10 @@ describe('languageFromPath', () => {
     expect(languageFromPath('a/b.unknown')).toBe('unknown');
   });
 });
+
+describe('provenance', () => {
+  it('marks every extracted route as coming from code', () => {
+    const { routes } = extractSurface(fixture('express.json'));
+    expect(routes.every((r) => r.provenance === 'code')).toBe(true);
+  });
+});
