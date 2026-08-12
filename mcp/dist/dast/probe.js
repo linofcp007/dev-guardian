@@ -21,7 +21,21 @@ export async function executeProbe(req, opts) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
     const onOuterAbort = () => controller.abort();
-    opts.signal?.addEventListener('abort', onOuterAbort);
+    if (opts.signal?.aborted === true) {
+        // Already aborted before this call started — e.g. a later request
+        // claimed by `executeProbes`' worker pool after the caller cancelled the
+        // scan. Adding an 'abort' listener to an AbortSignal that is already
+        // aborted never fires it (the event already happened, per the DOM
+        // event model), so react to the stale signal directly here instead of
+        // silently wiring up a listener that would never trigger — the
+        // alternative is this request running to completion, or its own
+        // `timeoutMs`, against the live target after the scan was supposedly
+        // stopped.
+        controller.abort();
+    }
+    else {
+        opts.signal?.addEventListener('abort', onOuterAbort);
+    }
     try {
         const init = {
             method: req.method,
@@ -51,10 +65,26 @@ export async function executeProbe(req, opts) {
     }
     catch (e) {
         const elapsed = Date.now() - started;
-        const aborted = controller.signal.aborted;
+        // The timer's abort and the outer signal's abort both land on this same
+        // `controller`, so `controller.signal.aborted` alone cannot tell "the
+        // host stopped this scan" from "the target didn't answer" — the two
+        // routes are indistinguishable at that point. Check the outer signal
+        // first: it is the more specific fact, and a host cancellation is true
+        // regardless of whether the internal timer had also fired by the time
+        // the fetch actually unwound.
+        let outcome;
+        if (opts.signal?.aborted === true) {
+            outcome = 'cancelled';
+        }
+        else if (controller.signal.aborted) {
+            outcome = 'timeout';
+        }
+        else {
+            outcome = 'network_error';
+        }
         return {
             request: req,
-            outcome: aborted ? 'timeout' : 'network_error',
+            outcome,
             status: null,
             headers: {},
             body_prefix: '',

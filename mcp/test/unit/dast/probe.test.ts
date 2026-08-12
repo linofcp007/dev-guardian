@@ -81,10 +81,33 @@ describe('executeProbe', () => {
   });
 
   it('times out without throwing, recording outcome timeout', async () => {
+    // No `signal` in OPTS: this pins the internal-timer path specifically,
+    // so it is the assertion that would break if the cancelled/timeout
+    // precedence in the catch block were ever reversed.
     const r = await executeProbe(req('/slow'), { ...OPTS, timeoutMs: 200 });
     expect(r.outcome).toBe('timeout');
     expect(r.status).toBeNull();
     expect(r.error).not.toBeNull();
+  });
+
+  it('records outcome cancelled — not timeout — when the caller aborts an in-flight probe', async () => {
+    // A host stopping a scan and a target failing to answer are different
+    // facts. The timer and an outer AbortSignal both abort the same internal
+    // controller, so `controller.signal.aborted` alone cannot tell them
+    // apart — a wrong implementation reports 'timeout' here. `timeoutMs`
+    // comes from OPTS (DEFAULT_PROBE_TIMEOUT_MS, 5000ms), far longer than
+    // this test runs, so only the outer abort can explain a non-'completed'
+    // outcome.
+    const outer = new AbortController();
+    const pending = executeProbe(req('/slow'), { ...OPTS, signal: outer.signal });
+    // Let the request actually reach the server's /slow handler before
+    // cancelling from the outside — a real in-flight cancellation, not a
+    // same-tick race.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    outer.abort();
+    const r = await pending;
+    expect(r.outcome).toBe('cancelled');
+    expect(r.status).toBeNull();
   });
 
   it('records a network error without throwing when nothing is listening', async () => {
@@ -119,5 +142,32 @@ describe('executeProbes', () => {
     const results = await executeProbes(reqs, OPTS);
     expect(results).toHaveLength(3);
     expect(results.map((r) => r.status)).toEqual([200, 404, 200]);
+  });
+
+  it('a worker does not keep issuing live requests after the caller cancels mid-run', async () => {
+    // concurrency: 1 means every request is dequeued by the SAME worker
+    // loop, one at a time, so #2 and #3 are claimed strictly after the abort
+    // below has already fired on the shared signal. Adding an 'abort'
+    // listener to an AbortSignal that is already aborted never fires it (the
+    // event already happened) — so without an explicit up-front `aborted`
+    // check, executeProbe would wire up no cancellation for #2/#3 and let
+    // each run to completion (or its own 5s internal timeout) against the
+    // live target instead of stopping immediately, i.e. the worker keeps
+    // spinning through the queue after the scan was supposedly cancelled.
+    const outer = new AbortController();
+    const reqs = [req('/slow'), req('/slow'), req('/slow')];
+    const pending = executeProbes(reqs, { ...OPTS, concurrency: 1, signal: outer.signal });
+    // Let request #1 actually start before cancelling out from under it.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    outer.abort();
+    const start = Date.now();
+    const results = await pending;
+    // A worker that kept spinning would run #2 and/or #3 into the /slow
+    // route's real 2000ms server delay; stopping promptly finishes in low
+    // milliseconds. 1000ms is a loose bound that only a spinning worker
+    // could cross.
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(results.map((r) => r.outcome)).toEqual(['cancelled', 'cancelled', 'cancelled']);
+    expect(results.every((r) => r.status === null)).toBe(true);
   });
 });
