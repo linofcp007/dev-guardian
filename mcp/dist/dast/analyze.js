@@ -44,6 +44,40 @@ export function dastFingerprint(check, method, path, file) {
     return computeFingerprint(fp);
 }
 /**
+ * The canonical `rule_id` shape for a finding whose identity is the origin
+ * itself — no method, no path, because an origin-level fact has neither.
+ * Shared by `originFingerprint` and `buildFinding` for the same reason
+ * `dastRuleId` is: the string on the `Finding` and the one fed to the hash
+ * must never drift apart.
+ */
+function originRuleId(check, origin) {
+    return `${check}:${origin}`;
+}
+/**
+ * Fingerprint for an origin-scoped finding. `security_headers` is the first
+ * consumer: which of a scan's completed probes ends up first in `results`
+ * (and so gets attached to the finding for `evidence_id`) is a race in a
+ * live scan, not a property of the target — a per-request timeout means the
+ * literal first request can complete on one run and time out on the next,
+ * promoting a different request with nothing about the target having
+ * changed. Hashing that request's method or path into this fingerprint the
+ * way `dastFingerprint` does for a route-scoped finding would make the SAME
+ * "this origin never returns header Y" fact fingerprint differently run to
+ * run — silently breaking `diff_scans` / `regression_alert` / `set_baseline`
+ * / `suppress_finding`, all of which key on this value. So this hashes only
+ * `(check, origin)` and nothing else, deliberately excluding both method and
+ * path — the same discipline `dastFingerprint` applies to status and
+ * `line_start`, for the same reason.
+ *
+ * A side effect worth keeping deliberately: because no per-header detail is
+ * hashed either, an origin going from "2 headers missing" to "1 missing"
+ * between scans still reads as the same evolving finding rather than a new
+ * one each time — the right behaviour for a coarse, origin-wide signal.
+ */
+export function originFingerprint(check, origin) {
+    return computeFingerprint({ tool: 'dast', rule_id: originRuleId(check, origin) });
+}
+/**
  * Every check funnels its finding through here so `evidence_id`, `rule_id`
  * and the fingerprint are always built the same way. `evidence_id` identifies
  * the probe request/response pair that produced the finding: it is exactly
@@ -51,12 +85,14 @@ export function dastFingerprint(check, method, path, file) {
  * deterministic across runs.
  */
 function buildFinding(args) {
-    const { check, severity, title, message, route, request } = args;
+    const { check, severity, title, message, route, request, origin } = args;
     const path = route?.path_resolved ?? request.path;
     const finding = {
-        fingerprint: dastFingerprint(check, request.method, path, route?.file),
+        fingerprint: origin === undefined
+            ? dastFingerprint(check, request.method, path, route?.file)
+            : originFingerprint(check, origin),
         tool: 'dast',
-        rule_id: dastRuleId(check, request.method, path),
+        rule_id: origin === undefined ? dastRuleId(check, request.method, path) : originRuleId(check, origin),
         severity,
         category: 'security',
         subcategory: check,
@@ -395,6 +431,10 @@ function checkSecurityHeaders(input, findings) {
             `completed response(s) observed during this scan.`,
         route: undefined,
         request: first.request,
+        // This finding's identity is the origin, not whichever request happened
+        // to be `completed[0]` — see `originFingerprint`'s doc comment for why
+        // that distinction matters here specifically.
+        origin: input.origin,
     }));
 }
 /**

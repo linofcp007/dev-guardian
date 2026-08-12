@@ -121,3 +121,33 @@ describe('analyzeOrigin — information disclosure', () => {
     expect(f.filter((x) => x.check === 'info_disclosure')).toHaveLength(2);
   });
 });
+
+describe('analyzeOrigin fingerprints', () => {
+  it('security_headers fingerprints identically across runs even when a ' +
+    'different probe completes first', () => {
+    // The real trigger needs no code change and no route-inventory edit: a
+    // per-request timeout means the literal first request can complete on
+    // one run and time out on the next, promoting a different request to
+    // `completed[0]` with nothing about the target having changed. The wrong
+    // implementation (route: undefined, request: completed[0].request fed
+    // straight into the (method, path)-based fingerprint) hashes whichever
+    // request happens to land first, so run A and run B below — same origin,
+    // same missing headers — would get different fingerprints for the
+    // identical fact.
+    const a = result({ status: 200, request: { path: '/a', id: 'anonymous GET /a' } });
+    const b = result({ status: 200, request: { path: '/b', id: 'anonymous GET /b' } });
+    const timedOutA = result({
+      outcome: 'timeout',
+      status: null,
+      request: { path: '/a', id: 'anonymous GET /a' },
+    });
+
+    const runA = analyzeOrigin(input({ results: [a, b] }));
+    const runB = analyzeOrigin(input({ results: [timedOutA, b] }));
+
+    const fpA = runA.find((x) => x.check === 'security_headers')?.fingerprint;
+    const fpB = runB.find((x) => x.check === 'security_headers')?.fingerprint;
+    expect(fpA).toBeDefined();
+    expect(fpA).toBe(fpB);
+  });
+});
