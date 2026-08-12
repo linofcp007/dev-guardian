@@ -290,6 +290,24 @@ export interface SpecDiff {
   spec_only: SpecDiffEntry[];
   /** Could not be classified either way. Never reported as a finding. */
   unmatchable: SpecDiffEntry[];
+  /**
+   * Resolvable code routes that looked like shadow endpoints — no spec route
+   * matched them — but were withheld from `code_only` because a partial spec
+   * route's raw path is a suffix of theirs: that spec route (its own prefix
+   * unresolved, e.g. from a templated `servers[].url`) may be this very
+   * route, so it was filed under `unmatchable` instead. Not a clean bill of
+   * health: a single templated server URL can drive this arbitrarily high,
+   * silently withholding every shadow-endpoint finding the diff would
+   * otherwise report. Surfaced so that gap is visible, not just safe.
+   */
+  code_only_withheld: number;
+  /**
+   * The mirror of `code_only_withheld`: resolvable spec routes that looked
+   * like dead documentation but were withheld from `spec_only` because a
+   * partial code route's raw path is a suffix of theirs. Same caveat, other
+   * direction — see that field's doc comment.
+   */
+  spec_only_withheld: number;
 }
 
 /** A `app.use('/prefix', router)`-style mount, consumed by the Node resolver. */

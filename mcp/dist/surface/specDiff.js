@@ -60,7 +60,10 @@ export function diffSpecRoutes(codeRoutes, specRoutes, specsParsed) {
     const spec = specRoutes.filter((r) => r.provenance === 'spec');
     // No spec was found — that is not the same fact as "the spec documents
     // nothing" (specsParsed > 0 with specRoutes empty falls through below).
-    if (specsParsed === 0)
+    // `<= 0`, not `=== 0`: a caller computing `parsed − failed` could hand us
+    // a negative, and that must gate the same way zero does, not fall through
+    // to a full diff where every code route reads as undocumented.
+    if (specsParsed <= 0)
         return null;
     const codeResolvable = code.filter((r) => !r.path_partial);
     const codePartial = code.filter((r) => r.path_partial);
@@ -88,9 +91,6 @@ export function diffSpecRoutes(codeRoutes, specRoutes, specsParsed) {
             matchedSpec.add(s);
         }
     }
-    const code_only = codeResolvable
-        .filter((c) => !matchedCode.has(c))
-        .map((c) => ({ method: c.method, path: normalisePath(c.path_resolved), code_route: c }));
     const unmatchable = [];
     for (const c of codePartial) {
         unmatchable.push({
@@ -108,15 +108,47 @@ export function diffSpecRoutes(codeRoutes, specRoutes, specsParsed) {
             reason: 'spec server url is templated',
         });
     }
-    // A resolvable spec route nobody's code matched LOOKS like dead
-    // documentation — unless a partial code route's raw path is a suffix of
-    // it. A partial route is missing exactly a prefix, never a suffix, so
-    // suffix is the test that asks "could this unresolved route BE this spec
-    // path": if so, the spec route joins unmatchable instead — it is not dead,
-    // it is the very route this diff could not resolve. This costs some true
-    // dead-documentation findings; that is the correct direction, because a
-    // false "this no longer exists" is what gets working docs deleted.
+    // A resolvable code route nobody's spec matched LOOKS like a shadow
+    // endpoint — unless a partial spec route's raw path is a suffix of it. A
+    // partial spec route (its own prefix unresolved — typically a templated
+    // `servers[].url`) is missing exactly a prefix, never a suffix, so suffix
+    // is the test that asks "could this unresolved spec route BE this code
+    // path": if so, the code route joins unmatchable instead — it is not a
+    // shadow endpoint, it is the very route this diff could not resolve. This
+    // costs some true shadow-endpoint findings; that is the correct direction
+    // — see the mirror-image comment on spec_only below for why a false
+    // positive here is worse than a withheld true one. `code_only_withheld`
+    // counts how many, so the cost is visible rather than a silent gap.
+    const code_only = [];
+    let code_only_withheld = 0;
+    for (const c of codeResolvable) {
+        if (matchedCode.has(c))
+            continue;
+        const path = normalisePath(c.path_resolved);
+        const shadowing = specPartial.find((p) => path.endsWith(normalisePath(p.path_raw)));
+        if (shadowing === undefined) {
+            code_only.push({ method: c.method, path, code_route: c });
+        }
+        else {
+            unmatchable.push({
+                method: c.method,
+                path,
+                code_route: c,
+                reason: `may be the same route as the partial spec route at ${shadowing.file}:${shadowing.line}`,
+            });
+            code_only_withheld += 1;
+        }
+    }
+    // Mirror of the guard above: a resolvable spec route nobody's code matched
+    // LOOKS like dead documentation — unless a partial code route's raw path is
+    // a suffix of it. If so, the spec route joins unmatchable instead — it is
+    // not dead, it is the very route this diff could not resolve. This costs
+    // some true dead-documentation findings; that is the correct direction,
+    // because a false "this no longer exists" is what gets working docs
+    // deleted. `spec_only_withheld` counts how many, so the cost is visible
+    // rather than a silent gap.
     const spec_only = [];
+    let spec_only_withheld = 0;
     for (const s of specResolvable) {
         if (matchedSpec.has(s))
             continue;
@@ -132,8 +164,9 @@ export function diffSpecRoutes(codeRoutes, specRoutes, specsParsed) {
                 spec_route: s,
                 reason: `may be the same route as the partial code route at ${shadowing.file}:${shadowing.line}`,
             });
+            spec_only_withheld += 1;
         }
     }
-    return { matched, code_only, spec_only, unmatchable };
+    return { matched, code_only, spec_only, unmatchable, code_only_withheld, spec_only_withheld };
 }
 //# sourceMappingURL=specDiff.js.map
