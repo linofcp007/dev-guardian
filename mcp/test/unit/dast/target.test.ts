@@ -52,6 +52,39 @@ describe('classifyTarget', () => {
     }
   });
 
+  // Classic SSRF numeral-obfuscation loopback forms: decimal (`2130706433`),
+  // hex-octet (`0x7f.0.0.1`), shorthand (`127.1`), and IPv4-mapped IPv6
+  // (`::ffff:127.0.0.1`). `classifyHost`/`parseIpv4` have no decimal, hex or
+  // octal parsing of their own — the first three are safe today only because
+  // WHATWG `new URL()` canonicalises them to plain dotted-decimal
+  // (`127.0.0.1`) before classification ever sees the string. This test pins
+  // that dependency: it exists to fail loudly if a future change moves any of
+  // this parsing into `parseIpv4` (hand-rolled hex/octal support "for
+  // robustness", say) instead of leaving it to the URL parser — such a change
+  // could flip the safe direction into the unsafe one with nothing else here
+  // to catch it.
+  //
+  // `::ffff:127.0.0.1` is the deliberate exception, not a gap: `new URL()`
+  // keeps it as an IPv6 literal (canonicalised to `[::ffff:7f00:1]`), which
+  // the IPv6 branch of `classifyHost` does not recognise as loopback, so it
+  // is classified `public` and refused without attestation. That is
+  // over-restriction — this module's sanctioned failure direction (see the
+  // file doc comment) — so it must stay refused; do not "fix" it by teaching
+  // `classifyHost` to unwrap IPv4-mapped IPv6.
+  it('pins numeral-obfuscated loopback forms to what the URL parser canonicalises them to', () => {
+    const cases: [string, string, boolean][] = [
+      ['http://2130706433', 'loopback', true],
+      ['http://127.1', 'loopback', true],
+      ['http://0x7f.0.0.1', 'loopback', true],
+      ['http://[::ffff:127.0.0.1]', 'public', false],
+    ];
+    for (const [url, expectedClass, expectedAllowed] of cases) {
+      const d = classifyTarget(url, false);
+      expect(d.target_class, url).toBe(expectedClass);
+      expect(d.allowed, url).toBe(expectedAllowed);
+    }
+  });
+
   it('classifies every RFC1918 range plus link-local and ULA as private', () => {
     const cases: [string, string][] = [
       ['http://10.0.0.1', 'private'],
