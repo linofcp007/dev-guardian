@@ -46,11 +46,20 @@ import {
 import { resolveNodeMounts, type ImportRecord } from '../surface/resolvers/node.js';
 import { resolveWordpressRoutes } from '../surface/resolvers/wordpress.js';
 import { invokeSemgrep } from '../surface/scanSemgrep.js';
+import {
+  discoverSpecs,
+  MAX_SPEC_BYTES,
+  MAX_SPEC_FILES,
+} from '../surface/specDiscover.js';
+import { diffSpecRoutes } from '../surface/specDiff.js';
+import { importSpec } from '../surface/specImport.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import type {
   AttackSurfaceSnapshot,
   CoverageEntry,
   RouteRecord,
+  SpecDiff,
+  SpecFileReport,
   ToolResult,
   ToolRun,
 } from '../types.js';
@@ -71,6 +80,13 @@ const IncludeEnvVars = z
   .default(true)
   .describe('Collect environment-variable names the code reads. Default: true.');
 
+const SpecPaths = z
+  .array(z.string().min(1))
+  .optional()
+  .describe(
+    'Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when supplied.',
+  );
+
 const tool: ToolModule = {
   name: 'map_attack_surface',
   title: 'Map the application attack surface',
@@ -88,6 +104,7 @@ const tool: ToolModule = {
     project_path: ProjectPath,
     force: Force,
     include_env_vars: IncludeEnvVars,
+    spec_paths: SpecPaths,
   },
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -98,7 +115,12 @@ async function handler(
   input: Record<string, unknown>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string; force?: boolean; include_env_vars?: boolean };
+  const inp = input as {
+    project_path?: string;
+    force?: boolean;
+    include_env_vars?: boolean;
+    spec_paths?: string[];
+  };
 
   let projectPath: string;
   try {
@@ -208,6 +230,7 @@ async function handler(
     toolsRun,
     includeEnvVars,
     recovery.unreadableRouteFiles,
+    inp.spec_paths,
   );
   const persisted = ctx.storage.surface.insert({
     project_path: projectPath,
@@ -345,6 +368,7 @@ function buildSnapshot(
   toolsRun: ToolRun[],
   includeEnvVars: boolean,
   unreadableRouteFiles: readonly string[],
+  specPaths: string[] | undefined,
 ): AttackSurfaceSnapshot {
   const { routes, mounts } = extractSurface(parsed);
   const knownFiles = collectAllFiles(parsed);
@@ -352,15 +376,76 @@ function buildSnapshot(
 
   const resolved = resolveWordpressRoutes(resolveNodeMounts(routes, mounts, imports));
 
+  const { specRoutes, specFiles, specsParsed } = importSpecs(projectPath, specPaths);
+  const specDiff = diffSpecRoutes(resolved, specRoutes, specsParsed);
+
   return {
-    routes: resolved,
+    routes: [...resolved, ...specRoutes],
     env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
     ports: collectPorts(projectPath),
     webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
     coverage: buildCoverage(resolved, ctx, unreadableRouteFiles),
     tools_run: toolsRun,
     missing_tools: [],
+    spec_files: specFiles,
+    spec_diff: specDiff,
   };
+}
+
+/**
+ * Discover, import and report every OpenAPI/Swagger document for the
+ * project. `specsParsed` counts reports whose status is `'ok'` or
+ * `'no_paths'` — a valid document that declares nothing is still a
+ * successfully parsed spec, and must not disable the diff the way "no spec
+ * was found at all" does (see `diffSpecRoutes`'s doc comment).
+ *
+ * Discovery's own caps (`truncated`, `oversized`) are folded into
+ * `specFiles` as `parse_error` reports rather than dropped, so a capped
+ * result is visible in the same place a reader already looks instead of
+ * silently reading as "there were only 20 documents".
+ */
+function importSpecs(
+  projectPath: string,
+  specPaths: string[] | undefined,
+): { specRoutes: RouteRecord[]; specFiles: SpecFileReport[]; specsParsed: number } {
+  const discovery = discoverSpecs(projectPath, specPaths);
+
+  const specRoutes: RouteRecord[] = [];
+  const specFiles: SpecFileReport[] = [];
+  let specsParsed = 0;
+
+  for (const { file, text } of discovery.specs) {
+    const { routes, report } = importSpec(file, text);
+    specRoutes.push(...routes);
+    specFiles.push(report);
+    if (report.status === 'ok' || report.status === 'no_paths') specsParsed += 1;
+  }
+
+  if (discovery.truncated) {
+    specFiles.push({
+      file: '(spec discovery)',
+      format: 'unknown',
+      status: 'parse_error',
+      routes_found: 0,
+      reason:
+        `More than ${MAX_SPEC_FILES} candidate spec documents were found; only the first ` +
+        `${MAX_SPEC_FILES} were read.`,
+      unresolved_refs: 0,
+    });
+  }
+
+  for (const file of discovery.oversized) {
+    specFiles.push({
+      file,
+      format: 'unknown',
+      status: 'parse_error',
+      routes_found: 0,
+      reason: `File exceeds the ${MAX_SPEC_BYTES}-byte size cap and was not read.`,
+      unresolved_refs: 0,
+    });
+  }
+
+  return { specRoutes, specFiles, specsParsed };
 }
 
 /** Every file path Semgrep reported a match in, across all `guardian_kind`s. */
@@ -534,8 +619,15 @@ function summarize(
   toolsRun: ToolRun[],
   ctx: PluginContext,
 ): ToolResult<Record<string, unknown>> {
+  // `by_language` is a report about source code, same reasoning as
+  // `buildCoverage`'s `codeRoutes` filter above: spec routes all carry
+  // `language: 'spec'`, which is not a language the rule pack could ever
+  // report on. Including them would add a phantom `{ language: 'spec', ... }`
+  // entry to a breakdown that otherwise only ever names real languages.
+  const codeRoutes = snapshot.routes.filter((r) => r.provenance === 'code');
+
   const byLanguage = new Map<string, number>();
-  for (const route of snapshot.routes) {
+  for (const route of codeRoutes) {
     byLanguage.set(route.language, (byLanguage.get(route.language) ?? 0) + 1);
   }
 
@@ -552,7 +644,10 @@ function summarize(
 
   return {
     ok: true,
-    routes_total: snapshot.routes.length,
+    // Code routes only — a consumer reading `routes_total` today must get the
+    // same number tomorrow now that spec-declared routes share `routes[]`.
+    // Spec routes are counted separately in `spec_routes_total`.
+    routes_total: codeRoutes.length,
     by_language: [...byLanguage].map(([language, routes]) => ({ language, routes })),
     coverage: snapshot.coverage,
     snapshot_id: snapshotId,
@@ -563,8 +658,35 @@ function summarize(
     tools_run: toolsRun,
     missing_tools: snapshot.missing_tools,
     stack_detected: stackDetected,
+    spec_routes_total: snapshot.routes.length - codeRoutes.length,
+    spec_files: snapshot.spec_files,
+    spec_diff_summary: specDiffSummary(snapshot.spec_diff),
+    shadow_sample: shadowSample(snapshot.spec_diff),
     ...(stackDetected ? {} : { note: NO_STACK_NOTE }),
   };
+}
+
+/** Counts only — the full entry lists stay out of the tool result and are
+ *  served by the surface resources, for the same reason the full route list
+ *  already is. `null` mirrors `snapshot.spec_diff`: "no spec was found" must
+ *  stay distinguishable from "the spec documents nothing". */
+function specDiffSummary(diff: SpecDiff | null): Record<string, number> | null {
+  if (diff === null) return null;
+  return {
+    matched: diff.matched.length,
+    code_only: diff.code_only.length,
+    spec_only: diff.spec_only.length,
+    unmatchable: diff.unmatchable.length,
+    code_only_withheld: diff.code_only_withheld,
+    spec_only_withheld: diff.spec_only_withheld,
+  };
+}
+
+/** First 20 shadow endpoints — code routes no spec documents — ordered
+ *  deterministically the same way `sample` above is. */
+function shadowSample(diff: SpecDiff | null): SpecDiff['code_only'] {
+  if (diff === null) return [];
+  return [...diff.code_only].sort((a, b) => a.path.localeCompare(b.path)).slice(0, SAMPLE_SIZE);
 }
 
 /**
@@ -593,6 +715,10 @@ function degradedResult(
     tools_run: toolsRun,
     missing_tools: missingTools,
     stack_detected: ctx.storage.stack.getLatest() !== null,
+    spec_routes_total: 0,
+    spec_files: [],
+    spec_diff_summary: null,
+    shadow_sample: [],
     note,
   };
 }

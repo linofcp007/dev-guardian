@@ -38,6 +38,55 @@ const SEMGREP_OUTPUT = JSON.stringify({
   ],
 });
 
+/**
+ * Same as `SEMGREP_OUTPUT` plus a second code route the spec does not
+ * document, and a `guardian-mount-express` match in the same file. Without
+ * the mount match, `resolveNodeMounts` cannot tell this file apart from an
+ * unmounted router module and marks both routes `path_partial: true` (see
+ * "marks a route partial when nothing mounts its module" in
+ * `resolvers/node.test.ts`) — a partial route is `unmatchable`, never
+ * `matched` or `code_only`, which would silently break the diff assertions
+ * below. The mount match makes `src/routes/users.ts` a known "mounting
+ * file", so both routes it declares are left resolved as-is.
+ */
+const SEMGREP_OUTPUT_WITH_SHADOW = JSON.stringify({
+  results: [
+    {
+      check_id: 'guardian-route-express',
+      path: 'src/routes/users.ts',
+      start: { line: 12 },
+      extra: {
+        metadata: { guardian_kind: 'route', framework: 'express', confidence: 'high' },
+        metavars: { $METHOD: { abstract_content: 'get' }, $PATH: { abstract_content: '/users' } },
+      },
+    },
+    {
+      check_id: 'guardian-route-express',
+      path: 'src/routes/users.ts',
+      start: { line: 20 },
+      extra: {
+        metadata: { guardian_kind: 'route', framework: 'express', confidence: 'high' },
+        metavars: {
+          $METHOD: { abstract_content: 'get' },
+          $PATH: { abstract_content: '/internal/metrics' },
+        },
+      },
+    },
+    {
+      check_id: 'guardian-mount-express',
+      path: 'src/routes/users.ts',
+      start: { line: 1 },
+      extra: {
+        metadata: { guardian_kind: 'mount', framework: 'express' },
+        metavars: {
+          $PREFIX: { abstract_content: "'/'" },
+          $ROUTER: { abstract_content: 'someRouter' },
+        },
+      },
+    },
+  ],
+});
+
 /** JS project: extension-less specifier, real route file is `.js` (B2 scenario 1). */
 const JS_MOUNT_OUTPUT = JSON.stringify({
   results: [
@@ -833,6 +882,100 @@ describe('map_attack_surface', () => {
   });
 });
 
+describe('map_attack_surface — spec import and diff', () => {
+  const SPEC = [
+    'openapi: "3.0.0"',
+    'paths:',
+    '  /users:',
+    '    get: {}',
+    '  /documented-but-gone:',
+    '    get: {}',
+  ].join('\n');
+
+  it('imports spec routes, keeps routes_total counting code only, and finds both findings', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT); // one route: GET /users
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'openapi.yaml'), SPEC);
+    // A second code route the spec does not document.
+    // SEMGREP_OUTPUT_WITH_SHADOW adds GET /internal/metrics.
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT_WITH_SHADOW);
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      routes_total: number;
+      spec_routes_total: number;
+      spec_diff_summary: { matched: number; code_only: number; spec_only: number } | null;
+      shadow_sample: { path: string }[];
+    };
+
+    expect(r.routes_total).toBe(2);        // code routes only
+    expect(r.spec_routes_total).toBe(2);
+    expect(r.spec_diff_summary?.matched).toBe(1);
+    expect(r.spec_diff_summary?.code_only).toBe(1);
+    expect(r.spec_diff_summary?.spec_only).toBe(1);
+    expect(r.shadow_sample[0]?.path).toBe('/internal/metrics');
+  });
+
+  it('produces no diff at all when the project has no spec', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      spec_diff_summary: unknown;
+      routes_total: number;
+    };
+
+    // The trap this guards: with no spec, every code route would otherwise
+    // look undocumented.
+    expect(r.spec_diff_summary).toBeNull();
+    expect(r.routes_total).toBeGreaterThan(0);
+  });
+
+  it('keeps spec routes out of the per-language coverage report and the by_language breakdown', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'openapi.yaml'), SPEC);
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      coverage: { language: string }[];
+      by_language: { language: string }[];
+    };
+    expect(r.coverage.some((c) => c.language === 'spec')).toBe(false);
+    // Same trap one layer up: by_language iterates snapshot.routes directly
+    // and must filter to provenance === 'code' the same way buildCoverage
+    // does, or a spec-provenance language sneaks into the breakdown.
+    expect(r.by_language.some((c) => c.language === 'spec')).toBe(false);
+  });
+
+  it('reports a malformed spec without losing the diff of the good one', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    writeFileSync(join(projectPath, 'openapi.yaml'), SPEC);
+    writeFileSync(join(projectPath, 'swagger.yaml'), 'paths:\n  - [unclosed\n');
+
+    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      spec_files: { status: string }[];
+      spec_diff_summary: unknown;
+    };
+    expect(r.spec_files.some((f) => f.status === 'parse_error')).toBe(true);
+    expect(r.spec_diff_summary).not.toBeNull();
+  });
+});
+
 describe('guardian://surface resources', () => {
   function resource(name: string) {
     const found = RESOURCES.find((r) => r.name === name);
@@ -857,7 +1000,7 @@ describe('guardian://surface resources', () => {
       tree_hash: 'h',
       snapshot: {
         routes: [], env_vars: [], ports: [], webhooks: [], coverage: [],
-        tools_run: [], missing_tools: [],
+        tools_run: [], missing_tools: [], spec_files: [], spec_diff: null,
       },
     });
     const { json } = await resource('guardian-surface-latest').handler(
@@ -876,7 +1019,7 @@ describe('guardian://surface resources', () => {
       tree_hash: 'h',
       snapshot: {
         routes: [], env_vars: [], ports: [], webhooks: [], coverage: [],
-        tools_run: [], missing_tools: [],
+        tools_run: [], missing_tools: [], spec_files: [], spec_diff: null,
       },
     });
 

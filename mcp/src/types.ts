@@ -355,6 +355,13 @@ export interface AttackSurfaceSnapshot {
   coverage: CoverageEntry[];
   tools_run: ToolRun[];
   missing_tools: string[];
+  spec_files: SpecFileReport[];
+  /**
+   * `null` when no spec parsed. Deliberately not an empty diff: "no spec was
+   * found" and "the spec documents nothing" must stay distinguishable, or a
+   * project without a spec reads as one where every endpoint is undocumented.
+   */
+  spec_diff: SpecDiff | null;
 }
 
 /**

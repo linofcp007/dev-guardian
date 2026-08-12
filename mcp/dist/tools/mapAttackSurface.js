@@ -40,6 +40,9 @@ import { recoverMetavars, } from '../surface/recoverMetavars.js';
 import { resolveNodeMounts } from '../surface/resolvers/node.js';
 import { resolveWordpressRoutes } from '../surface/resolvers/wordpress.js';
 import { invokeSemgrep } from '../surface/scanSemgrep.js';
+import { discoverSpecs, MAX_SPEC_BYTES, MAX_SPEC_FILES, } from '../surface/specDiscover.js';
+import { diffSpecRoutes } from '../surface/specDiff.js';
+import { importSpec } from '../surface/specImport.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe } from './scanHelpers.js';
@@ -54,6 +57,10 @@ const IncludeEnvVars = z
     .optional()
     .default(true)
     .describe('Collect environment-variable names the code reads. Default: true.');
+const SpecPaths = z
+    .array(z.string().min(1))
+    .optional()
+    .describe('Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when supplied.');
 const tool = {
     name: 'map_attack_surface',
     title: 'Map the application attack surface',
@@ -70,6 +77,7 @@ const tool = {
         project_path: ProjectPath,
         force: Force,
         include_env_vars: IncludeEnvVars,
+        spec_paths: SpecPaths,
     },
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -150,7 +158,7 @@ async function handler(input, ctx) {
         return degradedResult([toolRun, unreadableMatchesToolRun(recovery)], [], unreadableMatchesNote(recovery), ctx);
     }
     const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
-    const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars, recovery.unreadableRouteFiles);
+    const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars, recovery.unreadableRouteFiles, inp.spec_paths);
     const persisted = ctx.storage.surface.insert({
         project_path: projectPath,
         tree_hash: treeHash,
@@ -267,20 +275,71 @@ function cachedToolsRun(snapshot) {
     }));
     return [marker, ...persisted];
 }
-function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unreadableRouteFiles) {
+function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unreadableRouteFiles, specPaths) {
     const { routes, mounts } = extractSurface(parsed);
     const knownFiles = collectAllFiles(parsed);
     const imports = extractImports(parsed, knownFiles);
     const resolved = resolveWordpressRoutes(resolveNodeMounts(routes, mounts, imports));
+    const { specRoutes, specFiles, specsParsed } = importSpecs(projectPath, specPaths);
+    const specDiff = diffSpecRoutes(resolved, specRoutes, specsParsed);
     return {
-        routes: resolved,
+        routes: [...resolved, ...specRoutes],
         env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
         ports: collectPorts(projectPath),
         webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
         coverage: buildCoverage(resolved, ctx, unreadableRouteFiles),
         tools_run: toolsRun,
         missing_tools: [],
+        spec_files: specFiles,
+        spec_diff: specDiff,
     };
+}
+/**
+ * Discover, import and report every OpenAPI/Swagger document for the
+ * project. `specsParsed` counts reports whose status is `'ok'` or
+ * `'no_paths'` — a valid document that declares nothing is still a
+ * successfully parsed spec, and must not disable the diff the way "no spec
+ * was found at all" does (see `diffSpecRoutes`'s doc comment).
+ *
+ * Discovery's own caps (`truncated`, `oversized`) are folded into
+ * `specFiles` as `parse_error` reports rather than dropped, so a capped
+ * result is visible in the same place a reader already looks instead of
+ * silently reading as "there were only 20 documents".
+ */
+function importSpecs(projectPath, specPaths) {
+    const discovery = discoverSpecs(projectPath, specPaths);
+    const specRoutes = [];
+    const specFiles = [];
+    let specsParsed = 0;
+    for (const { file, text } of discovery.specs) {
+        const { routes, report } = importSpec(file, text);
+        specRoutes.push(...routes);
+        specFiles.push(report);
+        if (report.status === 'ok' || report.status === 'no_paths')
+            specsParsed += 1;
+    }
+    if (discovery.truncated) {
+        specFiles.push({
+            file: '(spec discovery)',
+            format: 'unknown',
+            status: 'parse_error',
+            routes_found: 0,
+            reason: `More than ${MAX_SPEC_FILES} candidate spec documents were found; only the first ` +
+                `${MAX_SPEC_FILES} were read.`,
+            unresolved_refs: 0,
+        });
+    }
+    for (const file of discovery.oversized) {
+        specFiles.push({
+            file,
+            format: 'unknown',
+            status: 'parse_error',
+            routes_found: 0,
+            reason: `File exceeds the ${MAX_SPEC_BYTES}-byte size cap and was not read.`,
+            unresolved_refs: 0,
+        });
+    }
+    return { specRoutes, specFiles, specsParsed };
 }
 /** Every file path Semgrep reported a match in, across all `guardian_kind`s. */
 function collectAllFiles(parsed) {
@@ -436,8 +495,14 @@ function buildCoverage(routes, ctx, unreadableRouteFiles) {
 }
 const NO_STACK_NOTE = 'No stack snapshot found for this project — run detect_stack first for fuller coverage context.';
 function summarize(snapshot, snapshotId, toolsRun, ctx) {
+    // `by_language` is a report about source code, same reasoning as
+    // `buildCoverage`'s `codeRoutes` filter above: spec routes all carry
+    // `language: 'spec'`, which is not a language the rule pack could ever
+    // report on. Including them would add a phantom `{ language: 'spec', ... }`
+    // entry to a breakdown that otherwise only ever names real languages.
+    const codeRoutes = snapshot.routes.filter((r) => r.provenance === 'code');
     const byLanguage = new Map();
-    for (const route of snapshot.routes) {
+    for (const route of codeRoutes) {
         byLanguage.set(route.language, (byLanguage.get(route.language) ?? 0) + 1);
     }
     // Deterministic across runs: order by language then path before slicing,
@@ -448,7 +513,10 @@ function summarize(snapshot, snapshotId, toolsRun, ctx) {
     const stackDetected = ctx.storage.stack.getLatest() !== null;
     return {
         ok: true,
-        routes_total: snapshot.routes.length,
+        // Code routes only — a consumer reading `routes_total` today must get the
+        // same number tomorrow now that spec-declared routes share `routes[]`.
+        // Spec routes are counted separately in `spec_routes_total`.
+        routes_total: codeRoutes.length,
         by_language: [...byLanguage].map(([language, routes]) => ({ language, routes })),
         coverage: snapshot.coverage,
         snapshot_id: snapshotId,
@@ -459,8 +527,35 @@ function summarize(snapshot, snapshotId, toolsRun, ctx) {
         tools_run: toolsRun,
         missing_tools: snapshot.missing_tools,
         stack_detected: stackDetected,
+        spec_routes_total: snapshot.routes.length - codeRoutes.length,
+        spec_files: snapshot.spec_files,
+        spec_diff_summary: specDiffSummary(snapshot.spec_diff),
+        shadow_sample: shadowSample(snapshot.spec_diff),
         ...(stackDetected ? {} : { note: NO_STACK_NOTE }),
     };
+}
+/** Counts only — the full entry lists stay out of the tool result and are
+ *  served by the surface resources, for the same reason the full route list
+ *  already is. `null` mirrors `snapshot.spec_diff`: "no spec was found" must
+ *  stay distinguishable from "the spec documents nothing". */
+function specDiffSummary(diff) {
+    if (diff === null)
+        return null;
+    return {
+        matched: diff.matched.length,
+        code_only: diff.code_only.length,
+        spec_only: diff.spec_only.length,
+        unmatchable: diff.unmatchable.length,
+        code_only_withheld: diff.code_only_withheld,
+        spec_only_withheld: diff.spec_only_withheld,
+    };
+}
+/** First 20 shadow endpoints — code routes no spec documents — ordered
+ *  deterministically the same way `sample` above is. */
+function shadowSample(diff) {
+    if (diff === null)
+        return [];
+    return [...diff.code_only].sort((a, b) => a.path.localeCompare(b.path)).slice(0, SAMPLE_SIZE);
 }
 /**
  * Shared shape for every "Semgrep could not produce a usable result" exit —
@@ -483,6 +578,10 @@ function degradedResult(toolsRun, missingTools, note, ctx) {
         tools_run: toolsRun,
         missing_tools: missingTools,
         stack_detected: ctx.storage.stack.getLatest() !== null,
+        spec_routes_total: 0,
+        spec_files: [],
+        spec_diff_summary: null,
+        shadow_sample: [],
         note,
     };
 }

@@ -17,6 +17,8 @@ const EMPTY_SNAPSHOT = {
     coverage: [],
     tools_run: [],
     missing_tools: [],
+    spec_files: [],
+    spec_diff: null,
 };
 export class SurfaceRepo {
     insertStmt;
