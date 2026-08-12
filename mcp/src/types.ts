@@ -250,9 +250,13 @@ export interface SpecFileReport {
   /** Present for every status except 'ok'. One line, names the cause. */
   reason?: string;
   /**
-   * Path items that were an unresolved external `$ref`. Counted, never
-   * ignored: a path item that vanished silently would resurface as false
-   * dead documentation in the diff.
+   * Path items whose value was a `$ref` this module did not turn into a
+   * route — whether the ref is external (this module reads text, never a
+   * filesystem, so it can't be followed) or internal (`#/...`): internal
+   * `$ref`s are resolved for `parameters` entries only, never for a whole
+   * path item, so an internal path-item ref is exactly as unresolved as an
+   * external one. Counted, never ignored: a path item that vanished
+   * silently would resurface as false dead documentation in the diff.
    */
   unresolved_refs: number;
 }

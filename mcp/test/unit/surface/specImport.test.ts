@@ -64,9 +64,48 @@ describe('importSpec — OpenAPI 3', () => {
     expect(routes.find((r) => r.path_raw === '/users/{id}')?.params).toEqual(['id']);
   });
 
+  it('resolves an internal $ref parameter to its name and location', () => {
+    const text = [
+      'openapi: "3.0.0"',
+      'components:',
+      '  parameters:',
+      '    idParam:',
+      '      name: id',
+      '      in: path',
+      'paths:',
+      '  /users/{id}:',
+      '    get:',
+      '      parameters:',
+      '        - $ref: "#/components/parameters/idParam"',
+      '',
+    ].join('\n');
+    const { routes } = importSpec('o.yaml', text);
+    expect(routes[0]?.params).toEqual(['id']);
+  });
+
   it('reports a YAML line for each route', () => {
     const { routes } = importSpec('openapi.yaml', OPENAPI);
     expect(routes.every((r) => r.line > 0)).toBe(true);
+  });
+
+  it('reports the key\'s own line even when the first operation is several lines below it', () => {
+    // "/x:" is on line 3; its first operation ("get:") is on line 7. A line
+    // computed from the path item's VALUE node (rather than its key) would
+    // land on line 4 — the value node's range starts at its first child,
+    // `summary`, not at the key itself. `line > 0` alone cannot tell these
+    // two implementations apart; this asserts the exact line.
+    const text = [
+      'openapi: "3.0.0"',
+      'paths:',
+      '  /x:',
+      '    summary: pushes the operation down several lines',
+      '    description: more filler',
+      '    parameters: []',
+      '    get: {}',
+      '',
+    ].join('\n');
+    const { routes } = importSpec('o.yaml', text);
+    expect(routes[0]?.line).toBe(3);
   });
 
   it('is not partial when the document declares no servers — the default base is /', () => {
@@ -84,6 +123,37 @@ describe('importSpec — OpenAPI 3', () => {
     const text =
       'openapi: "3.0.0"\nservers:\n  - url: https://a.example.com/one\n  - url: https://b.example.com/two\npaths:\n  /x:\n    get: {}\n';
     expect(importSpec('o.yaml', text).routes[0]?.path_resolved).toBe('/one/x');
+  });
+
+  it('uses a relative server url (an absolute-path reference) as the base path directly', () => {
+    const text = 'openapi: "3.0.0"\nservers:\n  - url: /v1\npaths:\n  /x:\n    get: {}\n';
+    const { routes } = importSpec('o.yaml', text);
+    expect(routes[0]?.path_partial).toBe(false);
+    expect(routes[0]?.path_resolved).toBe('/v1/x');
+  });
+
+  it('is partial when the server url is a scheme-less host with a path (not an absolute path)', () => {
+    const text = 'openapi: "3.0.0"\nservers:\n  - url: api.example.com/v1\npaths:\n  /x:\n    get: {}\n';
+    const { routes } = importSpec('o.yaml', text);
+    expect(routes[0]?.path_partial).toBe(true);
+    expect(routes[0]?.path_resolved).toBe('/x');
+  });
+
+  it('is partial when the server url is a bare host with no path', () => {
+    const text = 'openapi: "3.0.0"\nservers:\n  - url: api.example.com\npaths:\n  /x:\n    get: {}\n';
+    const { routes } = importSpec('o.yaml', text);
+    expect(routes[0]?.path_partial).toBe(true);
+  });
+
+  it('is partial when the server url is protocol-relative', () => {
+    const text = 'openapi: "3.0.0"\nservers:\n  - url: "//api.example.com/v1"\npaths:\n  /x:\n    get: {}\n';
+    const { routes } = importSpec('o.yaml', text);
+    expect(routes[0]?.path_partial).toBe(true);
+  });
+
+  it('maps a trace operation to method ANY', () => {
+    const { routes } = importSpec('o.yaml', 'openapi: "3.0.0"\npaths:\n  /x:\n    trace: {}\n');
+    expect(routes[0]?.method).toBe('ANY');
   });
 });
 
@@ -114,6 +184,49 @@ describe('importSpec — degradation', () => {
     expect(routes).toEqual([]);
   });
 
+  it('reports a parse error rather than throwing on an unresolved alias', () => {
+    // Valid YAML syntax — `doc.errors` is empty. `yaml` resolves aliases
+    // lazily, so a reference to an anchor that was never set surfaces only
+    // when the document is materialised (`doc.toJS()`), as a thrown
+    // `ReferenceError`, not as a parse error.
+    const { routes, report } = importSpec('bad.yaml', 'openapi: "3.0.0"\npaths: *nope\n');
+    expect(report.status).toBe('parse_error');
+    expect(report.reason).toBeTruthy();
+    expect(routes).toEqual([]);
+  });
+
+  it('reports a parse error rather than throwing on a forward alias reference', () => {
+    const { routes, report } = importSpec('bad.yaml', 'foo: *later\nbar: &later 1\n');
+    expect(report.status).toBe('parse_error');
+    expect(report.reason).toBeTruthy();
+    expect(routes).toEqual([]);
+  });
+
+  it('reports a parse error rather than throwing on a merge key from a missing anchor', () => {
+    const text = 'openapi: "3.0.0"\npaths:\n  /x:\n    <<: *base\n    get: {}\n';
+    const { routes, report } = importSpec('bad.yaml', text);
+    expect(report.status).toBe('parse_error');
+    expect(report.reason).toBeTruthy();
+    expect(routes).toEqual([]);
+  });
+
+  it('reports a parse error rather than throwing on an alias-expansion bomb', () => {
+    // A 7-level exponential alias expansion ("billion laughs"). `yaml`
+    // itself throws "Excessive alias count indicates a resource exhaustion
+    // attack" out of `toJS()` — this only asserts that the throw never
+    // reaches the caller of `importSpec`.
+    let text = 'a: &a ["x","x","x","x","x","x","x","x","x"]\n';
+    let prev = 'a';
+    for (const name of ['b', 'c', 'd', 'e', 'f', 'g']) {
+      text += `${name}: &${name} [*${prev},*${prev},*${prev},*${prev},*${prev},*${prev},*${prev},*${prev},*${prev}]\n`;
+      prev = name;
+    }
+    const { routes, report } = importSpec('bomb.yaml', text);
+    expect(report.status).toBe('parse_error');
+    expect(report.reason).toBeTruthy();
+    expect(routes).toEqual([]);
+  });
+
   it('reports an unsupported version when neither openapi nor swagger is present', () => {
     const { report } = importSpec('x.yaml', 'foo: bar\n');
     expect(report.status).toBe('unsupported_version');
@@ -128,6 +241,16 @@ describe('importSpec — degradation', () => {
 
   it('counts an external $ref path item instead of dropping it', () => {
     const text = 'openapi: "3.0.0"\npaths:\n  /x:\n    $ref: "./paths/x.yaml"\n';
+    const { routes, report } = importSpec('o.yaml', text);
+    expect(report.unresolved_refs).toBe(1);
+    expect(routes).toEqual([]);
+  });
+
+  it('counts an internal path-item $ref the same as an external one', () => {
+    // This module resolves internal `$ref`s for `parameters` entries only,
+    // never for a whole path item — an internal path-item ref is exactly as
+    // unresolved as an external one, so it must not fall through uncounted.
+    const text = 'openapi: "3.0.0"\npaths:\n  /x:\n    $ref: "#/components/pathItems/Foo"\n';
     const { routes, report } = importSpec('o.yaml', text);
     expect(report.unresolved_refs).toBe(1);
     expect(routes).toEqual([]);

@@ -164,7 +164,9 @@ function parseRoot(text: string): ParsedRoot {
   // `doc.getIn(['paths', p], true)` returns the path item's VALUE node, whose
   // range starts at its first operation — a key on source line 7 would
   // compute to line 8. Reading `item.key.range` off each entry in the
-  // `paths` map instead gives the key's own line.
+  // `paths` map instead gives the key's own line. `doc.get(..., true)` walks
+  // the AST without resolving aliases, so this loop is safe even when
+  // `paths` (or something inside it) is itself an unresolved alias.
   const lineByPath = new Map<string, number>();
   const pathsNode = doc.get('paths', true);
   if (isMap(pathsNode)) {
@@ -177,21 +179,43 @@ function parseRoot(text: string): ParsedRoot {
     }
   }
 
-  return {
-    kind: 'ok',
-    root: doc.toJS(),
-    lineFor: (pathKey) => lineByPath.get(pathKey) ?? 0,
-  };
+  // `doc.errors` only reports SYNTAX problems. `yaml` resolves aliases
+  // lazily, so a reference to an anchor that doesn't exist — or an
+  // alias-expansion bomb — is not a parse error: `doc.errors` stays empty,
+  // and the throw (a `ReferenceError`) happens only here, inside `toJS()`,
+  // when the document is actually materialised. The comment on
+  // `parseDocument` above is true and answers a different question — this
+  // is the guard that keeps the "never throws" promise at the top of this
+  // file.
+  try {
+    return {
+      kind: 'ok',
+      root: doc.toJS(),
+      lineFor: (pathKey) => lineByPath.get(pathKey) ?? 0,
+    };
+  } catch (err) {
+    return { kind: 'parse_error', reason: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /* ---- version + base path -------------------------------------------------
  *
  * A server/basePath URL "may be templated or relative": `{` makes the base
  * genuinely unknown (a templated host, e.g. `https://{env}.example.com/v2`),
- * so that check runs BEFORE `new URL` ever sees the string. A relative URL
- * with no `{` — `/v1`, legal OpenAPI — has no base to resolve against, so
- * `new URL` throws; the caught branch then treats the literal value as the
- * base path directly, and it is not partial.
+ * so that check runs BEFORE `new URL` ever sees the string. A URL with no
+ * `{` that `new URL` still rejects is relative in one of several distinct
+ * RFC 3986 senses, only one of which is unambiguous enough to use: an
+ * absolute-path reference (a leading `/`, e.g. `/v1`) IS the base path,
+ * legal OpenAPI with nothing else to resolve it against. Anything else —
+ * a scheme-less `host/path` (`api.example.com/v1`, the Swagger 2 `host:`
+ * habit — a common authoring slip, not a path), a bare host
+ * (`api.example.com`), a protocol-relative reference (`//api.example.com/v1`)
+ * or a bare relative-path segment (`v1`) — is not a path this module
+ * understands, so the base stays unknown rather than guessing. Guessing
+ * would silently turn a typo into `path_resolved: 'api.example.com/v1/x'`,
+ * `path_partial: false`, `confidence: 'high'` — a claim that the path is
+ * verified, which for a request-sending consumer is worse than admitting
+ * ignorance.
  */
 
 function detectFormat(root: unknown): SpecFileReport['format'] {
@@ -209,8 +233,20 @@ function openapiBasePath(root: unknown): { base: string; partial: boolean } {
   try {
     return { base: stripTrailingSlash(new URL(url).pathname), partial: false };
   } catch {
-    return { base: stripTrailingSlash(url), partial: false };
+    if (isAbsolutePathReference(url)) return { base: stripTrailingSlash(url), partial: false };
+    return { base: '', partial: true };
   }
+}
+
+/**
+ * An RFC 3986 absolute-path reference: a single leading `/` with no scheme
+ * or authority — unambiguous enough to use as a base path directly. A
+ * leading `//` is a distinct reference form (network-path / protocol-
+ * relative, e.g. `//api.example.com/v1`) that names a *host*, not a path,
+ * and must not be mistaken for one just because `.startsWith('/')` is true.
+ */
+function isAbsolutePathReference(url: string): boolean {
+  return url.startsWith('/') && !url.startsWith('//');
 }
 
 function swaggerBasePath(root: unknown): { base: string; partial: boolean } {
