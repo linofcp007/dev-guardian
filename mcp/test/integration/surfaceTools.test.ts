@@ -1045,6 +1045,53 @@ describe('map_attack_surface — spec import and diff', () => {
     expect(second.spec_files.some((f) => f.file.endsWith('a.yaml'))).toBe(false);
   });
 
+  it('does not persist an explicit spec_paths snapshot, so a later plain call never inherits it', async () => {
+    // The write-side half of the same conflation the read-side cache-bypass
+    // fixes above: if the explicit-spec_paths snapshot were persisted, it
+    // would become "latest for this tree hash", and a later PLAIN call (no
+    // spec_paths, same unchanged tree) would read it back from the cache and
+    // report the explicitly-named document as if auto-discovery had found
+    // it — even though nothing about this project's own layout ever named
+    // it. Not persisting closes it at the source.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    // 'a.yaml' is not a conventional spec basename (openapi/swagger/api-docs)
+    // and does not live under an openapi/ directory, so auto-discovery would
+    // never find it on its own.
+    writeFileSync(join(projectPath, 'a.yaml'), MANY_PATHS_SPEC);
+
+    const explicit = (await tool().handler(
+      { project_path: projectPath, spec_paths: ['a.yaml'] },
+      ctx,
+    )) as {
+      spec_routes_total: number;
+      spec_files: { file: string }[];
+      snapshot_id: number | null;
+    };
+
+    expect(explicit.spec_routes_total).toBe(25);
+    expect(explicit.spec_files.some((f) => f.file.endsWith('a.yaml'))).toBe(true);
+    // Nothing was written: no row exists to become "latest for this tree hash".
+    expect(explicit.snapshot_id).toBeNull();
+    expect(ctx.storage.surface.getLatest()).toBeNull();
+
+    const plain = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      spec_routes_total: number;
+      spec_files: { file: string }[];
+      spec_diff_summary: unknown;
+    };
+
+    // The critical assertion: the plain call must NOT report a.yaml — it was
+    // never auto-discoverable, so the plain call must see no spec at all.
+    expect(plain.spec_routes_total).toBe(0);
+    expect(plain.spec_files).toEqual([]);
+    expect(plain.spec_diff_summary).toBeNull();
+  });
+
   it('resolves a relative spec_paths entry against project_path, not process.cwd()', async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockResolvedValue(okRun());

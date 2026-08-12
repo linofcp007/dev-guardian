@@ -49777,7 +49777,7 @@ var COVERED_LANGUAGES = /* @__PURE__ */ new Set([
 ]);
 var IncludeEnvVars = external_exports.boolean().optional().default(true).describe("Collect environment-variable names the code reads. Default: true.");
 var SpecPaths = external_exports.array(external_exports.string().min(1)).optional().describe(
-  "Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when supplied. Relative paths resolve against project_path, not the current working directory. Bypasses the tree-hash cache: a call supplying this always computes a fresh snapshot. Any named path that cannot be read is reported in spec_files, not silently dropped."
+  "Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when supplied. Relative paths resolve against project_path, not the current working directory. Bypasses the tree-hash cache (always computes a fresh snapshot) and is never persisted as the project's cached surface, so a later plain call cannot inherit these paths. Any named path that cannot be read is reported in spec_files, not silently dropped."
 );
 var tool39 = {
   name: "map_attack_surface",
@@ -49880,6 +49880,9 @@ async function handler39(input, ctx) {
     recovery.unreadableRouteFiles,
     inp.spec_paths
   );
+  if (inp.spec_paths !== void 0) {
+    return summarize3(snapshot, null, toolsRun, ctx);
+  }
   const persisted = ctx.storage.surface.insert({
     project_path: projectPath,
     tree_hash: treeHash,

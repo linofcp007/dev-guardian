@@ -62,9 +62,10 @@ const SpecPaths = z
     .optional()
     .describe('Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when ' +
     'supplied. Relative paths resolve against project_path, not the current working ' +
-    'directory. Bypasses the tree-hash cache: a call supplying this always computes a ' +
-    "fresh snapshot. Any named path that cannot be read is reported in spec_files, not " +
-    'silently dropped.');
+    'directory. Bypasses the tree-hash cache (always computes a fresh snapshot) and is ' +
+    'never persisted as the project\'s cached surface, so a later plain call cannot ' +
+    'inherit these paths. Any named path that cannot be read is reported in spec_files, ' +
+    'not silently dropped.');
 const tool = {
     name: 'map_attack_surface',
     title: 'Map the application attack surface',
@@ -173,6 +174,19 @@ async function handler(input, ctx) {
     }
     const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
     const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars, recovery.unreadableRouteFiles, inp.spec_paths);
+    // An explicit `spec_paths` snapshot must never become "latest for this
+    // tree hash": it answers the caller's one-off question about a document
+    // THEY named, not a claim about what this project's own spec layout is. If
+    // it were persisted, a later PLAIN call (no spec_paths) on the same
+    // unchanged tree would read it back from the tree-hash cache and report
+    // the explicitly-named document as if auto-discovery had found it —
+    // exactly the "silently attributed to the wrong document" failure the
+    // spec_paths-bypasses-cache-read fix above exists to prevent, just
+    // triggered from the write side instead of the read side. Skipping the
+    // insert closes it at the source: nothing is ever there to be inherited.
+    if (inp.spec_paths !== undefined) {
+        return summarize(snapshot, null, toolsRun, ctx);
+    }
     const persisted = ctx.storage.surface.insert({
         project_path: projectPath,
         tree_hash: treeHash,
@@ -552,7 +566,11 @@ function buildCoverage(routes, ctx, unreadableRouteFiles) {
     return entries;
 }
 const NO_STACK_NOTE = 'No stack snapshot found for this project — run detect_stack first for fuller coverage context.';
-function summarize(snapshot, snapshotId, toolsRun, ctx) {
+function summarize(snapshot, 
+// `null` for an explicit-`spec_paths` run that was deliberately not
+// persisted (see the call site in `handler`) — there is no row to point
+// to, the same reason `degradedResult` uses `null` for "nothing written".
+snapshotId, toolsRun, ctx) {
     // `by_language` is a report about source code, same reasoning as
     // `buildCoverage`'s `codeRoutes` filter above: spec routes all carry
     // `language: 'spec'`, which is not a language the rule pack could ever
