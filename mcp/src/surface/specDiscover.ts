@@ -1,0 +1,150 @@
+/**
+ * Find OpenAPI / Swagger documents in a project and read their contents.
+ *
+ * This is the only I/O in the spec-import feature; `specImport.ts` (parsing)
+ * and `specDiff.ts` (comparison) are both pure. Discovery walks the project
+ * tree looking for conventionally-named documents, or — when the caller
+ * supplies an explicit list — reads exactly those paths instead.
+ *
+ * Two caps keep this bounded on large or adversarial trees: at most
+ * `MAX_SPEC_FILES` candidate files, and at most `MAX_SPEC_BYTES` per file.
+ * Both caps are reported rather than silently applied — a truncated result
+ * with no signal reads as "there were only 20 specs", and a vanished
+ * oversized file reads as "that spec doesn't exist". `DiscoveryOutcome`
+ * carries `truncated` and `oversized` so callers can surface both.
+ *
+ * Never throws: an unreadable file (permission error, path that doesn't
+ * exist, race with a concurrent delete) is simply absent from the result.
+ */
+
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
+
+export interface DiscoveredSpec {
+  file: string;
+  text: string;
+}
+
+export interface DiscoveryOutcome {
+  specs: DiscoveredSpec[];
+  /** Files skipped for exceeding the size cap, with their paths. */
+  oversized: string[];
+  /** True when the file cap truncated the candidate set. */
+  truncated: boolean;
+}
+
+export const MAX_SPEC_FILES = 20;
+export const MAX_SPEC_BYTES = 5 * 1024 * 1024;
+
+// Kept in sync by hand with FS_EXCLUDE in `mcp/src/treeHash/computeTreeHash.ts`
+// (not exported from there, so copied rather than imported). If you add an
+// exclusion to one, add it to the other.
+const EXCLUDED_DIRS = new Set([
+  '.git',
+  '.guardian',
+  '.specs',
+  '.kiro',
+  'node_modules',
+  'dist',
+  'build',
+  'target',
+  '.venv',
+  'venv',
+  '__pycache__',
+  '.next',
+  '.nuxt',
+  '.cache',
+  'coverage',
+  '.pytest_cache',
+  '.tox',
+]);
+
+const SPEC_BASENAMES = new Set(['openapi', 'swagger', 'api-docs']);
+const SPEC_EXTENSIONS = new Set(['.json', '.yaml', '.yml']);
+
+/**
+ * Find OpenAPI/Swagger documents under `projectPath`, or read exactly the
+ * `explicit` paths when given. Never throws.
+ */
+export function discoverSpecs(projectPath: string, explicit?: readonly string[]): DiscoveryOutcome {
+  const root = resolve(projectPath);
+
+  if (explicit && explicit.length > 0) {
+    return readCandidates(explicit);
+  }
+
+  const candidates = walk(root, root);
+  candidates.sort();
+
+  const truncated = candidates.length > MAX_SPEC_FILES;
+  const selected = candidates.slice(0, MAX_SPEC_FILES);
+
+  const outcome = readCandidates(selected);
+  outcome.truncated = truncated;
+  return outcome;
+}
+
+function readCandidates(paths: readonly string[]): DiscoveryOutcome {
+  const specs: DiscoveredSpec[] = [];
+  const oversized: string[] = [];
+
+  for (const path of paths) {
+    let size: number;
+    try {
+      size = statSync(path).size;
+    } catch {
+      // Path doesn't exist, isn't readable, or a race removed it — absent
+      // from the result, not an error.
+      continue;
+    }
+
+    if (size > MAX_SPEC_BYTES) {
+      oversized.push(path);
+      continue;
+    }
+
+    try {
+      const text = readFileSync(path, 'utf8');
+      specs.push({ file: path, text });
+    } catch {
+      // Unreadable (permissions, race between stat and read) — absent.
+      continue;
+    }
+  }
+
+  return { specs, oversized, truncated: false };
+}
+
+function walk(root: string, dir: string): string[] {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const out: string[] = [];
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (EXCLUDED_DIRS.has(entry.name)) continue;
+      out.push(...walk(root, join(dir, entry.name)));
+    } else if (entry.isFile()) {
+      if (isSpecCandidate(dir, entry.name)) {
+        out.push(join(dir, entry.name));
+      }
+    }
+  }
+  return out;
+}
+
+function isSpecCandidate(dir: string, name: string): boolean {
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0) return false;
+  const base = name.slice(0, dot);
+  const ext = name.slice(dot).toLowerCase();
+  if (!SPEC_EXTENSIONS.has(ext)) return false;
+
+  if (SPEC_BASENAMES.has(base.toLowerCase())) return true;
+
+  return dir.split(sep).some((segment) => segment.toLowerCase() === 'openapi');
+}
