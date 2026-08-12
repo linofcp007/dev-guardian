@@ -357,6 +357,16 @@ version bump.
 - The Docker fallback in `map_attack_surface` no longer re-implements
   `buildSemgrepDockerArgs`; the shared builder takes a `configs` option (default
   `['auto']`) so both callers inherit anything added to it later.
+- **A spec's `trace` operation no longer suppresses shadow-endpoint findings.** Spec
+  import mapped `trace` (an OpenAPI/Swagger operation key with no matching `HttpMethod`
+  member) onto the `'ANY'` routing sentinel, which `specDiff.ts` treats as matching every
+  method at a path. A document declaring only `trace: /foo` therefore made both
+  `GET /foo` and `POST /foo` in the code read as documented — two genuine shadow
+  endpoints silently suppressed. `trace` operations are now excluded from import
+  entirely rather than folded into `'ANY'`; the alternative (adding a `TRACE` member to
+  the persisted `HttpMethod` union) was rejected to avoid touching a type serialized into
+  every stored snapshot for the sake of an operation this feature does not otherwise need
+  to represent.
 
 ## [1.2.1] — 2026-08-10
 

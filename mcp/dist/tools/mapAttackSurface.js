@@ -29,7 +29,7 @@
  * toolchain, not a project without routes — nothing is persisted.
  */
 import { readFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { Force, ProjectPath } from '../schemas.js';
@@ -58,10 +58,23 @@ const IncludeEnvVars = z
     .default(true)
     .describe('Collect environment-variable names the code reads. Default: true.');
 const SpecPaths = z
+    // `.min(1)` on the array itself, not just on each element: an empty array
+    // is "explicit was supplied" to this tool's own cache-bypass and
+    // no-persist gates (both test `spec_paths !== undefined`), but
+    // `discoverSpecs` treats an empty array as "nothing explicit" and falls
+    // back to auto-discovery (`explicit && explicit.length > 0`). Left
+    // unconstrained, `spec_paths: []` would silently produce an
+    // auto-discovered result that is never cached and never persisted —
+    // contradicting this field's own "replaces automatic discovery entirely"
+    // description below, and leaving `snapshot_id: null` ambiguous between a
+    // degraded run and a successful-but-unpersisted one. Rejecting `[]`
+    // outright closes both at the one place every caller passes through.
     .array(z.string().min(1))
+    .min(1)
     .optional()
     .describe('Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when ' +
-    'supplied. Relative paths resolve against project_path, not the current working ' +
+    'supplied — must be non-empty; omit the field to use automatic discovery instead. ' +
+    'Relative paths resolve against project_path, not the current working ' +
     'directory. Bypasses the tree-hash cache (always computes a fresh snapshot) and is ' +
     'never persisted as the project\'s cached surface, so a later plain call cannot ' +
     'inherit these paths. Any named path that cannot be read is reported in spec_files, ' +
@@ -69,15 +82,27 @@ const SpecPaths = z
 const tool = {
     name: 'map_attack_surface',
     title: 'Map the application attack surface',
-    // No "auth hint" in this description on purpose: `auth_hint` exists on every
-    // RouteRecord but no rule can populate it yet, so it is always 'unknown'
-    // (see normalizeAuth in surface/extract.ts). Advertising a constant as a
-    // feature is how an agent ends up reasoning from it.
+    // No "auth hint" in this description on purpose, for code-extracted routes:
+    // `auth_hint` exists on every RouteRecord, but no Semgrep rule populates it
+    // for a route extracted from source, so it is always 'unknown' there (see
+    // normalizeAuth in surface/extract.ts). Spec-imported routes are the one
+    // real source: an operation's (or document's) `security` declaration
+    // yields 'none' (an affirmative "this route is public") or 'required' (see
+    // authHint in surface/specImport.ts). That is a property of spec import
+    // specifically, not something this tool can promise in general — a
+    // project with no importable spec still gets 'unknown' on every route —
+    // so the description below still does not advertise "auth hint" as a
+    // general feature. Advertising a mostly-constant field as a feature is how
+    // an agent ends up reasoning from it.
     description: 'Statically extract the externally reachable surface of the project — HTTP routes ' +
         '(method, path, params), referenced environment variables, and declared ' +
-        'container ports — across all supported stacks. Persists a snapshot readable via ' +
-        'guardian://surface/latest. Returns a summary plus a 20-route sample; read the ' +
-        'resource for the full list.',
+        'container ports — across all supported stacks. Also discovers OpenAPI 3.x / ' +
+        'Swagger 2.0 documents (or reads exactly the paths given as spec_paths) and diffs ' +
+        'them against the code-extracted routes, reporting shadow endpoints (routes the code ' +
+        'registers that no spec documents) and dead documentation (spec paths no code ' +
+        'implements). Persists a snapshot readable via guardian://surface/latest. Returns a ' +
+        'summary plus a 20-route code sample and a spec sample; read the resource for the ' +
+        'full route list and the full spec diff.',
     inputSchema: {
         project_path: ProjectPath,
         force: Force,
@@ -407,11 +432,20 @@ function importSpecs(projectPath, specPaths) {
 }
 /**
  * Resolve one `spec_paths` entry against `projectPath` when it is relative.
- * An absolute path is used verbatim — it may legitimately point outside the
- * project (a spec vendored elsewhere, a shared team document).
+ * An absolute path is used verbatim (modulo `resolve()`'s normalisation) —
+ * it may legitimately point outside the project (a spec vendored elsewhere,
+ * a shared team document).
+ *
+ * Always run through `resolve()`, not just `join()`, so a redundant `.`/`..`
+ * segment inside an already-absolute input is canonicalised the same way
+ * `discoverSpecs`' own dedupe canonicalises its candidates — the "not
+ * accounted for" loop below compares this function's output against
+ * `discoverSpecs`' output by plain string equality, so the two must agree on
+ * one canonical spelling for the same file, or a deduped-away duplicate here
+ * would misreport as "could not be read".
  */
 function resolveExplicitSpecPath(projectPath, path) {
-    return isAbsolute(path) ? path : join(projectPath, path);
+    return resolve(isAbsolute(path) ? path : join(projectPath, path));
 }
 /** Every file path Semgrep reported a match in, across all `guardian_kind`s. */
 function collectAllFiles(parsed) {

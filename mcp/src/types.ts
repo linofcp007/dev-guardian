@@ -283,6 +283,14 @@ export interface SpecDiffEntry {
  * spec documents nothing" — see that module's doc comment.
  */
 export interface SpecDiff {
+  /**
+   * One row per (code route, spec route) PAIR sharing a normalised path and
+   * a compatible method — not one row per route documented. A single `ANY`
+   * code route paired against a spec path that declares both `get` and
+   * `post` contributes two entries here, so `matched.length` can exceed the
+   * number of distinct code or spec routes involved. Read it as "matched
+   * pairs", never as "N routes are documented".
+   */
   matched: SpecDiffEntry[];
   /** In the code, absent from every spec — shadow endpoints. */
   code_only: SpecDiffEntry[];

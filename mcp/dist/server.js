@@ -2990,7 +2990,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve7.call(this, root, ref);
+      let _sch = resolve8.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3017,7 +3017,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve7(root, ref) {
+    function resolve8(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3648,7 +3648,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve7(baseURI, relativeURI, options) {
+    function resolve8(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse5(baseURI, schemelessOptions), parse5(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -3906,7 +3906,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve7,
+      resolve: resolve8,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -7946,12 +7946,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve7, reject) {
+        return new Promise(function(resolve8, reject) {
           isexe(path6, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve7(is);
+              resolve8(is);
             }
           });
         });
@@ -8017,27 +8017,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve7, reject) => {
+      const step = (i2) => new Promise((resolve8, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve7(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve8(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path6.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve7(subStep(p, i2, 0));
+        resolve8(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve7, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve8, reject) => {
         if (ii === pathExt.length)
-          return resolve7(step(i2 + 1));
+          return resolve8(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve7(p + ext);
+              return resolve8(p + ext);
           }
-          return resolve7(subStep(p, i2, ii + 1));
+          return resolve8(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -9117,8 +9117,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve7, reject) => {
-        Object.assign(methods, { resolve: resolve7, reject });
+      const promise = new Promise((resolve8, reject) => {
+        Object.assign(methods, { resolve: resolve8, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -14415,11 +14415,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve7 = promise.resolve.bind(promise);
-      return { resolve: resolve7, promises };
+      const resolve8 = promise.resolve.bind(promise);
+      return { resolve: resolve8, promises };
     };
-    waitForConcurrentStreams = async ({ resolve: resolve7, promises }, subprocess) => {
-      resolve7();
+    waitForConcurrentStreams = async ({ resolve: resolve8, promises }, subprocess) => {
+      resolve8();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -34561,7 +34561,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve7) => setTimeout(resolve7, pollInterval));
+        await new Promise((resolve8) => setTimeout(resolve8, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -34578,7 +34578,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve7, reject) => {
+    return new Promise((resolve8, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -34656,7 +34656,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve7(parseResult.data);
+            resolve8(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -34917,12 +34917,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve7, reject) => {
+    return new Promise((resolve8, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve7, interval);
+      const timeoutId = setTimeout(resolve8, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -36244,7 +36244,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve7) => setTimeout(resolve7, pollInterval));
+      await new Promise((resolve8) => setTimeout(resolve8, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -36917,12 +36917,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve7) => {
+    return new Promise((resolve8) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve7();
+        resolve8();
       } else {
-        this._stdout.once("drain", resolve7);
+        this._stdout.once("drain", resolve8);
       }
     });
   }
@@ -36930,7 +36930,7 @@ var StdioServerTransport = class {
 
 // src/server.ts
 import { readFileSync as readFileSync20 } from "node:fs";
-import { dirname as dirname4, resolve as resolve6 } from "node:path";
+import { dirname as dirname4, resolve as resolve7 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // src/gitignoreGuard.ts
@@ -37765,6 +37765,8 @@ var SurfaceRepo = class {
 };
 function rowToSnapshot2(row) {
   const parsed = parseJsonObject(row.json, {});
+  const rawRoutes = parsed["routes"];
+  const storedRoutes = Array.isArray(rawRoutes) ? rawRoutes : [];
   return {
     id: row.id,
     project_path: row.project_path,
@@ -37781,9 +37783,7 @@ function rowToSnapshot2(row) {
       // "know" every element already has it — otherwise it flags the fallback
       // below as dead code (TS2783), when the whole point is that it is live
       // for exactly the legacy rows that lack the field.
-      routes: (parsed["routes"] ?? []).map(
-        (r) => ({ provenance: "code", ...r })
-      )
+      routes: storedRoutes.map((r) => ({ provenance: "code", ...r }))
     }
   };
 }
@@ -38886,7 +38886,7 @@ var Semaphore = class {
       this.active += 1;
       return;
     }
-    await new Promise((resolve7) => this.waiting.push(resolve7));
+    await new Promise((resolve8) => this.waiting.push(resolve8));
     this.active += 1;
   }
   release() {
@@ -48695,7 +48695,7 @@ function hashFiles(parts) {
 
 // src/tools/mapAttackSurface.ts
 import { readFileSync as readFileSync19 } from "node:fs";
-import { isAbsolute, join as join42 } from "node:path";
+import { isAbsolute, join as join42, resolve as resolve6 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -49371,12 +49371,23 @@ var SPEC_BASENAMES = /* @__PURE__ */ new Set(["openapi", "swagger", "api-docs"])
 var SPEC_EXTENSIONS = /* @__PURE__ */ new Set([".json", ".yaml", ".yml"]);
 function discoverSpecs(projectPath, explicit) {
   const root = resolve5(projectPath);
-  const candidates = explicit && explicit.length > 0 ? [...explicit] : walk3(root, root).sort();
+  const candidates = explicit && explicit.length > 0 ? dedupeResolved(explicit) : walk3(root, root).sort();
   const truncated = candidates.length > MAX_SPEC_FILES;
   const selected = candidates.slice(0, MAX_SPEC_FILES);
   const outcome = readCandidates(selected);
   outcome.truncated = truncated;
   return outcome;
+}
+function dedupeResolved(paths) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const path6 of paths) {
+    const resolved = resolve5(path6);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    out.push(resolved);
+  }
+  return out;
 }
 function readCandidates(paths) {
   const specs = [];
@@ -49555,8 +49566,7 @@ var OPERATION_KEYS = [
   "delete",
   "options",
   "head",
-  "patch",
-  "trace"
+  "patch"
 ];
 function importSpec(file, text) {
   const parsed = parseRoot(text);
@@ -49708,7 +49718,6 @@ function stripTrailingSlash(value) {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 function operationMethod(key) {
-  if (key === "trace") return "ANY";
   return key.toUpperCase();
 }
 function authHint(rawOperationSecurity, docSecurityNonEmpty) {
@@ -49776,17 +49785,25 @@ var COVERED_LANGUAGES = /* @__PURE__ */ new Set([
   "csharp"
 ]);
 var IncludeEnvVars = external_exports.boolean().optional().default(true).describe("Collect environment-variable names the code reads. Default: true.");
-var SpecPaths = external_exports.array(external_exports.string().min(1)).optional().describe(
-  "Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when supplied. Relative paths resolve against project_path, not the current working directory. Bypasses the tree-hash cache (always computes a fresh snapshot) and is never persisted as the project's cached surface, so a later plain call cannot inherit these paths. Any named path that cannot be read is reported in spec_files, not silently dropped."
+var SpecPaths = external_exports.array(external_exports.string().min(1)).min(1).optional().describe(
+  "Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when supplied \u2014 must be non-empty; omit the field to use automatic discovery instead. Relative paths resolve against project_path, not the current working directory. Bypasses the tree-hash cache (always computes a fresh snapshot) and is never persisted as the project's cached surface, so a later plain call cannot inherit these paths. Any named path that cannot be read is reported in spec_files, not silently dropped."
 );
 var tool39 = {
   name: "map_attack_surface",
   title: "Map the application attack surface",
-  // No "auth hint" in this description on purpose: `auth_hint` exists on every
-  // RouteRecord but no rule can populate it yet, so it is always 'unknown'
-  // (see normalizeAuth in surface/extract.ts). Advertising a constant as a
-  // feature is how an agent ends up reasoning from it.
-  description: "Statically extract the externally reachable surface of the project \u2014 HTTP routes (method, path, params), referenced environment variables, and declared container ports \u2014 across all supported stacks. Persists a snapshot readable via guardian://surface/latest. Returns a summary plus a 20-route sample; read the resource for the full list.",
+  // No "auth hint" in this description on purpose, for code-extracted routes:
+  // `auth_hint` exists on every RouteRecord, but no Semgrep rule populates it
+  // for a route extracted from source, so it is always 'unknown' there (see
+  // normalizeAuth in surface/extract.ts). Spec-imported routes are the one
+  // real source: an operation's (or document's) `security` declaration
+  // yields 'none' (an affirmative "this route is public") or 'required' (see
+  // authHint in surface/specImport.ts). That is a property of spec import
+  // specifically, not something this tool can promise in general — a
+  // project with no importable spec still gets 'unknown' on every route —
+  // so the description below still does not advertise "auth hint" as a
+  // general feature. Advertising a mostly-constant field as a feature is how
+  // an agent ends up reasoning from it.
+  description: "Statically extract the externally reachable surface of the project \u2014 HTTP routes (method, path, params), referenced environment variables, and declared container ports \u2014 across all supported stacks. Also discovers OpenAPI 3.x / Swagger 2.0 documents (or reads exactly the paths given as spec_paths) and diffs them against the code-extracted routes, reporting shadow endpoints (routes the code registers that no spec documents) and dead documentation (spec paths no code implements). Persists a snapshot readable via guardian://surface/latest. Returns a summary plus a 20-route code sample and a spec sample; read the resource for the full route list and the full spec diff.",
   inputSchema: {
     project_path: ProjectPath,
     force: Force,
@@ -50009,7 +50026,7 @@ function importSpecs(projectPath, specPaths) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path6) {
-  return isAbsolute(path6) ? path6 : join42(projectPath, path6);
+  return resolve6(isAbsolute(path6) ? path6 : join42(projectPath, path6));
 }
 function collectAllFiles(parsed) {
   const results = parsed.results;
@@ -50535,7 +50552,7 @@ function findLatestOfType4(ctx, type) {
 registerResourceModule({
   name: "guardian-surface-latest",
   uri: "guardian://surface/latest",
-  description: "Latest attack-surface snapshot from `map_attack_surface`: every route with its resolved path, method, params and auth hint, plus env vars, declared ports and per-language coverage. Returns `{ snapshot: null }` when none exists yet.",
+  description: "Latest attack-surface snapshot from `map_attack_surface`: every route (code- and spec-provenance) with its resolved path, method, params and auth hint, plus env vars, declared ports, per-language coverage, the discovered spec_files, and the full spec_diff \u2014 matched pairs, code_only (shadow endpoints), spec_only (dead documentation) and unmatchable. Returns `{ snapshot: null }` when none exists yet.",
   handler: async (_uri, _params, ctx) => {
     const latest = ctx.storage.surface.getLatest();
     if (!latest) return { json: { snapshot: null } };
@@ -50574,8 +50591,8 @@ var SERVER_NAME = "dev-guardian";
 function resolveServerVersion() {
   const here = dirname4(fileURLToPath4(import.meta.url));
   const candidates = [
-    resolve6(here, "..", "..", ".claude-plugin", "plugin.json"),
-    resolve6(here, "..", "package.json")
+    resolve7(here, "..", "..", ".claude-plugin", "plugin.json"),
+    resolve7(here, "..", "package.json")
   ];
   for (const path6 of candidates) {
     try {
@@ -50588,7 +50605,7 @@ function resolveServerVersion() {
 }
 var SERVER_VERSION = resolveServerVersion();
 async function main() {
-  const projectPath = resolve6(process.cwd());
+  const projectPath = resolve7(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
@@ -50630,7 +50647,7 @@ async function main() {
 }
 function resolveScriptsDir() {
   const here = dirname4(fileURLToPath4(import.meta.url));
-  return resolve6(here, "..", "..", "scripts");
+  return resolve7(here, "..", "..", "scripts");
 }
 function installShutdownHooks(mcp, storage) {
   const shutdown = (signal) => {

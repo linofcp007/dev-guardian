@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { discoverSpecs, MAX_SPEC_FILES } from '../../../src/surface/specDiscover.js';
 
 function project(files: Record<string, string>): string {
@@ -76,6 +76,22 @@ describe('discoverSpecs', () => {
     writeFileSync(join(projectRoot, 'config', 'random-unrelated.yml'), 'not: a spec');
 
     expect(discoverSpecs(projectRoot).specs).toEqual([]);
+  });
+
+  it('dedupes explicit entries that resolve to the same file', () => {
+    // Measured bug: two spellings of the same document — a clean path and
+    // one carrying a redundant `.` segment — were read (and imported) twice,
+    // silently doubling that document's routes and inflating
+    // spec_routes_total / matched / spec_only downstream, even though
+    // classification itself stayed correct. Built with raw string
+    // concatenation, not `join`/`resolve`, so the `.` segment survives into
+    // the candidate list exactly as a caller might type it.
+    const dir = project({ 'openapi.yaml': 'openapi: "3.0.0"\npaths: {}\n' });
+    const clean = join(dir, 'openapi.yaml');
+    const withDotSegment = `${dir}${sep}.${sep}openapi.yaml`;
+
+    const out = discoverSpecs(dir, [clean, withDotSegment]);
+    expect(out.specs).toHaveLength(1);
   });
 
   it('applies the file cap to an over-cap explicit list too', () => {

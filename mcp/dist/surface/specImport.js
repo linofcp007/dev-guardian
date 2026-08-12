@@ -12,8 +12,24 @@
  * `line` is `0` for every route pulled from a JSON document (see `parseRoot`).
  */
 import { isMap, isScalar, parseDocument } from 'yaml';
+/**
+ * `trace` is deliberately absent. It is a recognised OpenAPI/Swagger
+ * operation key with no matching `HttpMethod` member — every other key here,
+ * upper-cased, is itself a valid member. The choice is between adding
+ * `TRACE` to `HttpMethod` (a persisted, JSON-stored type — every existing
+ * snapshot and every consumer that switches on `HttpMethod` would need to
+ * account for a member that used to be exhaustive without it) and mapping
+ * `trace` to the `'ANY'` sentinel instead. `'ANY'` means "this handler
+ * accepts every method" in `specDiff.ts`'s `methodsMatch`, so mapping a real
+ * (if rare) wire method onto it is not a relabelling, it is a false claim: a
+ * spec declaring only `trace: /foo` would make `GET /foo` and `POST /foo` in
+ * the code both read as documented, silently suppressing two genuine shadow
+ * endpoints. Excluding `trace` from import costs the (rare) ability to see a
+ * documented TRACE operation in the diff at all — a smaller, contained cost
+ * than either fabricating a match or extending a persisted type for it.
+ */
 const OPERATION_KEYS = [
-    'get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace',
+    'get', 'put', 'post', 'delete', 'options', 'head', 'patch',
 ];
 /** Pure: `text` is the document, `file` is only used to label the output. */
 export function importSpec(file, text) {
@@ -236,14 +252,11 @@ function stripTrailingSlash(value) {
 }
 /* ---- per-operation fields -------------------------------------------------- */
 /**
- * `trace` is a recognised OpenAPI/Swagger operation key but has no matching
- * member in `HttpMethod` — mapped to `'ANY'` rather than dropping the route.
- * Every other key in `OPERATION_KEYS`, upper-cased, is itself a valid
- * `HttpMethod` member.
+ * Every key in `OPERATION_KEYS`, upper-cased, is itself a valid `HttpMethod`
+ * member — `trace` is excluded from that array precisely so this never has
+ * to special-case it (see the comment on `OPERATION_KEYS`).
  */
 function operationMethod(key) {
-    if (key === 'trace')
-        return 'ANY';
     return key.toUpperCase();
 }
 /**

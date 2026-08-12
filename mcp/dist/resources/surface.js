@@ -13,9 +13,11 @@ import { registerResourceModule } from './index.js';
 registerResourceModule({
     name: 'guardian-surface-latest',
     uri: 'guardian://surface/latest',
-    description: 'Latest attack-surface snapshot from `map_attack_surface`: every route with its ' +
-        'resolved path, method, params and auth hint, plus env vars, declared ports and ' +
-        'per-language coverage. Returns `{ snapshot: null }` when none exists yet.',
+    description: 'Latest attack-surface snapshot from `map_attack_surface`: every route (code- and ' +
+        'spec-provenance) with its resolved path, method, params and auth hint, plus env ' +
+        'vars, declared ports, per-language coverage, the discovered spec_files, and the ' +
+        'full spec_diff — matched pairs, code_only (shadow endpoints), spec_only (dead ' +
+        'documentation) and unmatchable. Returns `{ snapshot: null }` when none exists yet.',
     handler: async (_uri, _params, ctx) => {
         const latest = ctx.storage.surface.getLatest();
         if (!latest)

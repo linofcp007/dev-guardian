@@ -1217,6 +1217,25 @@ describe('map_attack_surface — spec import and diff', () => {
       r.spec_files.some((f) => f.status === 'parse_error' && f.reason?.includes('size cap')),
     ).toBe(true);
   });
+
+  it('rejects an empty spec_paths array at the schema level, so it cannot silently revert to auto-discovery', () => {
+    // Measured bug: `discoverSpecs` gates on `explicit && explicit.length >
+    // 0`, so `spec_paths: []` falls through to the auto-discovery walk —
+    // but this tool's own cache-bypass gate (`spec_paths === undefined`,
+    // handler.ts:154) and no-persist gate (`spec_paths !== undefined`,
+    // handler.ts:261) both treat `[]` as "explicit was supplied". Net: an
+    // auto-discovered result that is never cached and never persisted,
+    // contradicting spec_paths' own description ("Replaces automatic
+    // discovery entirely when supplied") and making `snapshot_id: null`
+    // ambiguous between "degraded run" and "successful unpersisted run".
+    // `.min(1)` on the array — not just on each element — closes both by
+    // rejecting `[]` before it ever reaches the handler.
+    const specPathsSchema = tool().inputSchema['spec_paths'];
+    if (!specPathsSchema) throw new Error('spec_paths is not in the input schema');
+    expect(specPathsSchema.safeParse([]).success).toBe(false);
+    expect(specPathsSchema.safeParse(['openapi.yaml']).success).toBe(true);
+    expect(specPathsSchema.safeParse(undefined).success).toBe(true);
+  });
 });
 
 describe('guardian://surface resources', () => {

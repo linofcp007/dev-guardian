@@ -48,7 +48,7 @@ export function discoverSpecs(projectPath: string, explicit?: readonly string[])
   const root = resolve(projectPath);
 
   const candidates =
-    explicit && explicit.length > 0 ? [...explicit] : walk(root, root).sort();
+    explicit && explicit.length > 0 ? dedupeResolved(explicit) : walk(root, root).sort();
 
   // The file cap applies on both entry paths: discovery can find more than
   // MAX_SPEC_FILES candidates, and a caller can just as easily hand in an
@@ -59,6 +59,35 @@ export function discoverSpecs(projectPath: string, explicit?: readonly string[])
   const outcome = readCandidates(selected);
   outcome.truncated = truncated;
   return outcome;
+}
+
+/**
+ * Canonicalise and dedupe explicit paths so two spellings of the same file —
+ * e.g. `<dir>/openapi.yaml` and `<dir>/./openapi.yaml` — are read once, not
+ * twice. Without this, a caller-supplied duplicate silently doubles that
+ * document's routes in the diff (`spec_routes_total`, `matched`, `spec_only`
+ * all inflate); classification itself stays correct, only the counts lie.
+ * `resolve()` collapses `.`/`..` segments and repeated separators the same
+ * way the filesystem does — it does not touch case or follow symlinks, so
+ * two paths differing only by a symlink hop are still read twice, a
+ * narrower gap than the one this closes.
+ *
+ * `resolveExplicitSpecPath` (mapAttackSurface.ts) canonicalises with the same
+ * `resolve()` before an explicit path ever reaches here, so the caller's own
+ * accounting of which named paths were "not read" (built by string equality
+ * against what this function returns) stays consistent with what actually
+ * got deduped.
+ */
+function dedupeResolved(paths: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const path of paths) {
+    const resolved = resolve(path);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    out.push(resolved);
+  }
+  return out;
 }
 
 function readCandidates(paths: readonly string[]): DiscoveryOutcome {

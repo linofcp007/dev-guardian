@@ -73,6 +73,17 @@ export class SurfaceRepo {
 }
 function rowToSnapshot(row) {
     const parsed = parseJsonObject(row.json, {});
+    // `?? []` alone only catches a missing/null `routes` field — a row whose
+    // `routes` is valid JSON but not an array (e.g. `{"routes": {}}`, from a
+    // corrupted write) still reaches `.map` and throws a TypeError out of
+    // getLatest()/getById(), i.e. out of the guardian://surface/* resource
+    // handlers. This file's own convention (`parseJsonObject`) is to tolerate
+    // malformed stored data rather than throw, so `routes` gets the same
+    // treatment: anything that isn't an array reads back as no routes.
+    const rawRoutes = parsed['routes'];
+    const storedRoutes = Array.isArray(rawRoutes)
+        ? rawRoutes
+        : [];
     return {
         id: row.id,
         project_path: row.project_path,
@@ -89,7 +100,7 @@ function rowToSnapshot(row) {
             // "know" every element already has it — otherwise it flags the fallback
             // below as dead code (TS2783), when the whole point is that it is live
             // for exactly the legacy rows that lack the field.
-            routes: (parsed['routes'] ?? []).map((r) => ({ provenance: 'code', ...r })),
+            routes: storedRoutes.map((r) => ({ provenance: 'code', ...r })),
         },
     };
 }

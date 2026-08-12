@@ -107,4 +107,44 @@ describe('SurfaceRepo', () => {
     const repo = new SurfaceRepo(db);
     expect(repo.getLatest()?.snapshot.routes[0]?.provenance).toBe('code');
   });
+
+  it('tolerates a stored `routes` that is valid JSON but not an array, instead of throwing', () => {
+    // `?? []` only catches null/undefined. A row containing `{"routes": {}}`
+    // is valid JSON — `parseJsonObject` succeeds — but `.map` is called on a
+    // plain object, which throws a TypeError out of getLatest()/getById(),
+    // i.e. out of the guardian://surface/* resource handlers. This file's
+    // own convention (parseJsonObject) is to tolerate malformed stored data
+    // rather than throw; a corrupted `routes` field should be no different.
+    const db = new Database(':memory:');
+    runMigrations(db);
+    db.prepare(
+      `INSERT INTO surface_snapshots (project_path, captured_at, tree_hash, json)
+       VALUES ('/p', '2026-01-01T00:00:00.000Z', 'h', ?)`,
+    ).run(JSON.stringify({ routes: {} }));
+
+    const repo = new SurfaceRepo(db);
+    expect(() => repo.getLatest()).not.toThrow();
+    expect(repo.getLatest()?.snapshot.routes).toEqual([]);
+  });
+
+  it('reads back a stored spec-provenance route as spec, not backfilled to code', () => {
+    // Sibling of the backfill test above: that one pins the missing-field
+    // (legacy) case; this pins the other branch of the same `{ provenance:
+    // 'code' as const, ...r }` spread in rowToSnapshot — a route that DOES
+    // carry a stored provenance must have that value win over the default.
+    // Spec routes are now genuinely persisted in routes[] (this branch), so
+    // this is reachable in production, not just a hypothetical. Reversing
+    // the spread order (`{ ...r, provenance: 'code' as const }`) would make
+    // this fail by always reporting 'code' regardless of what was stored.
+    const db = new Database(':memory:');
+    runMigrations(db);
+    const specRoute = makeRoute({ provenance: 'spec' });
+    db.prepare(
+      `INSERT INTO surface_snapshots (project_path, captured_at, tree_hash, json)
+       VALUES ('/p', '2026-01-01T00:00:00.000Z', 'h', ?)`,
+    ).run(JSON.stringify({ routes: [specRoute] }));
+
+    const repo = new SurfaceRepo(db);
+    expect(repo.getLatest()?.snapshot.routes[0]?.provenance).toBe('spec');
+  });
 });

@@ -151,9 +151,28 @@ describe('importSpec — OpenAPI 3', () => {
     expect(routes[0]?.path_partial).toBe(true);
   });
 
-  it('maps a trace operation to method ANY', () => {
-    const { routes } = importSpec('o.yaml', 'openapi: "3.0.0"\npaths:\n  /x:\n    trace: {}\n');
-    expect(routes[0]?.method).toBe('ANY');
+  it('excludes trace operations from import instead of overloading the ANY sentinel', () => {
+    // `'ANY'` means "this handler accepts every method" in specDiff.ts's
+    // methodsMatch — mapping the real (if rare) wire method TRACE onto it
+    // would make a spec declaring only `trace: /x` falsely document every
+    // method at /x. Excluding it is the contained fix; see the comment on
+    // OPERATION_KEYS in specImport.ts for the alternative considered and
+    // rejected (adding TRACE to the persisted HttpMethod union).
+    const { routes, report } = importSpec(
+      'o.yaml',
+      'openapi: "3.0.0"\npaths:\n  /x:\n    trace: {}\n',
+    );
+    expect(routes).toEqual([]);
+    expect(report.status).toBe('ok');
+    expect(report.routes_found).toBe(0);
+  });
+
+  it('imports the other operations at a path even when trace is also present', () => {
+    const { routes } = importSpec(
+      'o.yaml',
+      'openapi: "3.0.0"\npaths:\n  /x:\n    trace: {}\n    get: {}\n',
+    );
+    expect(routes.map((r) => r.method)).toEqual(['GET']);
   });
 });
 

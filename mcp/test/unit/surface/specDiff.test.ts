@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { diffSpecRoutes, normalisePath } from '../../../src/surface/specDiff.js';
+import { importSpec } from '../../../src/surface/specImport.js';
 import type { RouteRecord } from '../../../src/types.js';
 
 function route(over: Partial<RouteRecord> & { path_resolved: string }): RouteRecord {
@@ -185,5 +186,30 @@ describe('diffSpecRoutes', () => {
     expect(d?.code_only).toEqual([]);
     expect(d?.matched).toEqual([]);
     expect(d?.spec_only.map((e) => e.path)).toEqual(['/x']);
+  });
+
+  it('does not let a spec declaring only trace suppress real GET/POST shadow endpoints', () => {
+    // Measured bug: `operationMethod` mapped `trace` to the `'ANY'` sentinel,
+    // and `methodsMatch` treats `'ANY'` as matching every method — so a spec
+    // that declares nothing but `trace: /foo` used to make BOTH `GET /foo`
+    // and `POST /foo` in the code read as `matched`, suppressing two genuine
+    // shadow endpoints. `'ANY'` means "this handler accepts every method" as
+    // a routing sentinel; overloading it with the real (if rare) wire method
+    // TRACE conflated the two. Fixed by excluding `trace` operations from
+    // spec import entirely — see specImport.ts.
+    const { routes: specRoutes } = importSpec(
+      'o.yaml',
+      'openapi: "3.0.0"\npaths:\n  /foo:\n    trace: {}\n',
+    );
+    const codeRoutes = [
+      route({ path_resolved: '/foo', method: 'GET' }),
+      route({ path_resolved: '/foo', method: 'POST' }),
+    ];
+    const d = diffSpecRoutes(codeRoutes, specRoutes, 1);
+    expect(d?.matched).toEqual([]);
+    expect(d?.code_only.map((e) => `${e.method} ${e.path}`).sort()).toEqual([
+      'GET /foo',
+      'POST /foo',
+    ]);
   });
 });
