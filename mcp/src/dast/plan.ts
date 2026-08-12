@@ -68,17 +68,33 @@ export function planProbes(
     }
 
     const { path, synthetic } = substituteParams(r.path_resolved);
-    const dedupeKey = `${methods.join(',')} ${path}`;
-    if (seen.has(dedupeKey)) {
-      skipped.push({ method: r.method, path: r.path_resolved, reason: 'duplicate' });
-      continue;
+    // Dedupe at (method, path) granularity, NOT on the route's whole expanded
+    // method set. Keying on the set gives `DELETE /users/1` and
+    // `ANY /users/1` different keys, so both plan an anonymous DELETE at the
+    // same URL: two destructive-shaped requests at a live target, sharing an
+    // identical `id` that downstream correlation keys on. A spec declaring
+    // `delete` alongside an `app.all()` in code produces exactly that pair.
+    // (method, path) is also the natural granularity for `PlanSkip`, whose
+    // own shape is `{ method, path, reason }`.
+    const fresh: Exclude<HttpMethod, 'ANY'>[] = [];
+    for (const method of methods) {
+      if (seen.has(`${method} ${path}`)) {
+        skipped.push({ method, path: r.path_resolved, reason: 'duplicate' });
+      } else {
+        fresh.push(method);
+      }
     }
-    seen.add(dedupeKey);
+    const corsKey = `cors ${path}`;
+    const needCors = !seen.has(corsKey);
+    // Nothing new for this route: every method already planned and the path
+    // already carries a cors probe.
+    if (fresh.length === 0 && !needCors) continue;
 
     const routeIndex = kept.length;
     kept.push(r);
 
-    for (const method of methods) {
+    for (const method of fresh) {
+      seen.add(`${method} ${path}`);
       requests.push(build(method, path, 'anonymous', {}, opts, synthetic, routeIndex));
       if (opts.authHeaderValue !== null) {
         requests.push(
@@ -94,9 +110,12 @@ export function planProbes(
         );
       }
     }
-    requests.push(
-      build('GET', path, 'cors', { origin: CORS_PROBE_ORIGIN }, opts, synthetic, routeIndex),
-    );
+    if (needCors) {
+      seen.add(corsKey);
+      requests.push(
+        build('GET', path, 'cors', { origin: CORS_PROBE_ORIGIN }, opts, synthetic, routeIndex),
+      );
+    }
   }
 
   if (requests.length <= opts.maxRequests) {

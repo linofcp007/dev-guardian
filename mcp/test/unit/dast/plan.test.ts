@@ -107,6 +107,33 @@ describe('planProbes — safety envelope', () => {
     expect(out.skipped.some((s) => s.reason === 'duplicate')).toBe(true);
   });
 
+  it('dedupes per (method, path), so an ANY route cannot re-fire a specific route write probe', () => {
+    // Measured defect: keying dedupe on the whole expanded method-set string
+    // gave `DELETE /users/1` and `ANY /users/1` different keys, so BOTH planned
+    // an anonymous DELETE at the same URL — two destructive-shaped requests at
+    // a live target, carrying an identical `id` that downstream correlation
+    // keys on. A spec declaring `delete` plus an `app.all()` in code produces
+    // exactly this pair.
+    const out = planProbes(
+      [
+        route({ method: 'DELETE', path_resolved: '/users/1', file: 'a.ts' }),
+        route({ method: 'ANY', path_resolved: '/users/1', file: 'b.ts' }),
+      ],
+      { ...OPTS, allowWriteMethods: true },
+    );
+    const deletes = out.requests.filter(
+      (r) => r.variant === 'anonymous' && r.method === 'DELETE',
+    );
+    expect(deletes).toHaveLength(1);
+    expect(out.requests.filter((r) => r.variant === 'cors')).toHaveLength(1);
+    expect(
+      out.skipped.filter((s) => s.reason === 'duplicate' && s.method === 'DELETE'),
+    ).toHaveLength(1);
+    // Every planned request id is unique: `id` is the correlation key.
+    const ids = out.requests.map((r) => r.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it('caps the plan at maxRequests and reports truncated', () => {
     const routes = Array.from({ length: 20 }, (_, i) =>
       route({ path_resolved: `/r${i}` }),
