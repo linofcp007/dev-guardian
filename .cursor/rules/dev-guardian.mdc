@@ -73,8 +73,9 @@ regression tracking.
   not this project's specific routes)
 - "is this finding reachable / exploitable?" → `map_attack_surface` then
   `validate_finding` (per-finding reachable/unreachable/unknown verdict with
-  evidence, report-only; `unreachable` never available for Ruby/Java/C#/PHP
-  or a file reached only via a CLI/cron/queue entry point)
+  evidence, report-only; `unreachable` never available for Ruby/Java/C#/PHP —
+  it IS produced, and can be wrong, for a CLI/cron/queue-only file or an
+  unresolvable dynamic import)
 
 ### Meta
 - "full audit" → `audit_executive` (stack-aware: auto includes WP/.NET when detected)

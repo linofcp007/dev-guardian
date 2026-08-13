@@ -34,8 +34,9 @@ dotnet_efcore_audit · dotnet_describe_setup
 scan_dast (active DAST against the already-running app — loopback-only
 unless authorized_target: true; a clean result is not evidence of
 injection safety) or validate_finding (per-finding reachability verdict,
-report-only; unreachable unavailable for Ruby/Java/C#/PHP or a file reached
-only via a CLI/cron/queue entry point)
+report-only; unreachable unavailable for Ruby/Java/C#/PHP — it IS produced,
+and can be wrong, for a CLI/cron/queue-only file or an unresolvable dynamic
+import)
 
 **Meta**: audit_executive (stack-aware) · risk_score · diff_scans ·
 set_baseline · triage_findings · prioritize_findings · suggest_fix ·

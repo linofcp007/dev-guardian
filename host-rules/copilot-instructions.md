@@ -36,8 +36,9 @@ inventory), then either `scan_dast` (active DAST against the app once it is
 already running — loopback-only unless `authorized_target: true`; a clean
 result is not evidence of injection safety) or `validate_finding`
 (per-finding reachability verdict — reachable / unreachable / unknown,
-report-only; `unreachable` unavailable for Ruby/Java/C#/PHP or a file reached
-only by a CLI/cron/queue entry point).
+report-only; `unreachable` unavailable for Ruby/Java/C#/PHP — it IS produced,
+and can be wrong, for a CLI/cron/queue-only file or an unresolvable dynamic
+import).
 
 **Meta**: `audit_executive` (stack-aware — includes WP/.NET tools when
 detected), `risk_score`, `diff_scans`, `set_baseline`, `triage_findings`,

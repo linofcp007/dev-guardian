@@ -25,7 +25,8 @@ diff_scans, baselines, suppressions, and the regression history.
   safety)
 - "is this finding reachable?" → `map_attack_surface` then `validate_finding`
   (reachable/unreachable/unknown per finding, report-only; unreachable never
-  available for Ruby/Java/C#/PHP or CLI/cron/queue-only files)
+  available for Ruby/Java/C#/PHP — it IS produced, and can be wrong, for a
+  CLI/cron/queue-only file or an unresolvable dynamic import)
 
 ### Quality
 - "review before PR" → `review_pr`

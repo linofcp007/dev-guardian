@@ -28,9 +28,10 @@ cache that avoids re-running unchanged scans.
 - "is this finding actually reachable / exploitable?" → `map_attack_surface`
   (if no recent snapshot) then `validate_finding` — reachable / unreachable /
   unknown per finding with evidence, report-only, never suppresses or touches
-  severity; `unreachable` is never available for Ruby, Java, C#, PHP, or a file
-  reached only by a CLI/cron/queue entry point — see its tool description for
-  the full limits
+  severity; `unreachable` is never available for Ruby, Java, C#, or PHP. It
+  IS produced — and can be wrong — for a file reached only by a CLI/cron/queue
+  entry point, or an unresolvable dynamic import — see its tool description
+  for the full limits
 
 **Quality**
 - "review before PR" → `review_pr`
