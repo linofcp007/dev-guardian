@@ -636,7 +636,12 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
       'node-legacy/app.js -> node-legacy/admin-router.js',
       'node-mount-forms/app.js -> node-mount-forms/named-router.js',
       'node-mount-forms/app.js -> node-mount-forms/ns-router.js',
+      // Task 6's three-hop chain for validate_finding's e2e test — see
+      // slug.util.ts's doc comment. node-nest/orphan.util.ts deliberately
+      // contributes NO edge (neither side): that absence is the point.
+      'node-nest/identifiers.util.ts -> node-nest/slug.util.ts',
       'node-nest/users.controller.ts -> node-nest/users.service.ts',
+      'node-nest/users.service.ts -> node-nest/identifiers.util.ts',
     ]);
 
     // Concern 1 of the Task 3b report: snapshot.imports must be

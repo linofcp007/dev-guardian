@@ -1,3 +1,6 @@
+// Hop 1 of the three-hop chain — see slug.util.ts's doc comment.
+import { normalizeId } from './identifiers.util.js';
+
 export default class UsersService {
   private readonly rows = new Map<string, unknown>();
 
@@ -6,7 +9,7 @@ export default class UsersService {
   }
 
   one(id: string): string {
-    return id;
+    return normalizeId(id);
   }
 
   create(body: unknown): unknown {
