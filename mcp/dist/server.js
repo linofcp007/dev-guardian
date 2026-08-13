@@ -13364,16 +13364,16 @@ var init_mjs = __esm({
     };
     SignalExitBase = class {
     };
-    signalExitWrap = (handler41) => {
+    signalExitWrap = (handler42) => {
       return {
         onExit(cb, opts) {
-          return handler41.onExit(cb, opts);
+          return handler42.onExit(cb, opts);
         },
         load() {
-          return handler41.load();
+          return handler42.load();
         },
         unload() {
-          return handler41.unload();
+          return handler42.unload();
         }
       };
     };
@@ -34284,25 +34284,25 @@ var Protocol = class {
     const error2 = McpError.fromError(ErrorCode.ConnectionClosed, "Connection closed");
     this._transport = void 0;
     this.onclose?.();
-    for (const handler41 of responseHandlers.values()) {
-      handler41(error2);
+    for (const handler42 of responseHandlers.values()) {
+      handler42(error2);
     }
   }
   _onerror(error2) {
     this.onerror?.(error2);
   }
   _onnotification(notification) {
-    const handler41 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
-    if (handler41 === void 0) {
+    const handler42 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
+    if (handler42 === void 0) {
       return;
     }
-    Promise.resolve().then(() => handler41(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
+    Promise.resolve().then(() => handler42(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
   }
   _onrequest(request, extra) {
-    const handler41 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
+    const handler42 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
     const capturedTransport = this._transport;
     const relatedTaskId = request.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
-    if (handler41 === void 0) {
+    if (handler42 === void 0) {
       const errorResponse = {
         jsonrpc: "2.0",
         id: request.id,
@@ -34366,7 +34366,7 @@ var Protocol = class {
       if (taskCreationParams) {
         this.assertTaskHandlerCapability(request.method);
       }
-    }).then(() => handler41(request, fullExtra)).then(async (result) => {
+    }).then(() => handler42(request, fullExtra)).then(async (result) => {
       if (abortController.signal.aborted) {
         return;
       }
@@ -34415,8 +34415,8 @@ var Protocol = class {
   _onprogress(notification) {
     const { progressToken, ...params } = notification.params;
     const messageId = Number(progressToken);
-    const handler41 = this._progressHandlers.get(messageId);
-    if (!handler41) {
+    const handler42 = this._progressHandlers.get(messageId);
+    if (!handler42) {
       this._onerror(new Error(`Received a progress notification for an unknown token: ${JSON.stringify(notification)}`));
       return;
     }
@@ -34433,7 +34433,7 @@ var Protocol = class {
         return;
       }
     }
-    handler41(params);
+    handler42(params);
   }
   _onresponse(response) {
     const messageId = Number(response.id);
@@ -34448,8 +34448,8 @@ var Protocol = class {
       }
       return;
     }
-    const handler41 = this._responseHandlers.get(messageId);
-    if (handler41 === void 0) {
+    const handler42 = this._responseHandlers.get(messageId);
+    if (handler42 === void 0) {
       this._onerror(new Error(`Received a response for an unknown message ID: ${JSON.stringify(response)}`));
       return;
     }
@@ -34470,10 +34470,10 @@ var Protocol = class {
       this._progressHandlers.delete(messageId);
     }
     if (isJSONRPCResultResponse(response)) {
-      handler41(response);
+      handler42(response);
     } else {
       const error2 = McpError.fromError(response.error.code, response.error.message, response.error.data);
-      handler41(error2);
+      handler42(error2);
     }
   }
   get transport() {
@@ -34671,9 +34671,9 @@ var Protocol = class {
       const relatedTaskId = relatedTask?.taskId;
       if (relatedTaskId) {
         const responseResolver = (response) => {
-          const handler41 = this._responseHandlers.get(messageId);
-          if (handler41) {
-            handler41(response);
+          const handler42 = this._responseHandlers.get(messageId);
+          if (handler42) {
+            handler42(response);
           } else {
             this._onerror(new Error(`Response handler missing for side-channeled request ${messageId}`));
           }
@@ -34810,12 +34810,12 @@ var Protocol = class {
    *
    * Note that this will replace any previous request handler for the same method.
    */
-  setRequestHandler(requestSchema, handler41) {
+  setRequestHandler(requestSchema, handler42) {
     const method = getMethodLiteral(requestSchema);
     this.assertRequestHandlerCapability(method);
     this._requestHandlers.set(method, (request, extra) => {
       const parsed = parseWithCompat(requestSchema, request);
-      return Promise.resolve(handler41(parsed, extra));
+      return Promise.resolve(handler42(parsed, extra));
     });
   }
   /**
@@ -34837,11 +34837,11 @@ var Protocol = class {
    *
    * Note that this will replace any previous notification handler for the same method.
    */
-  setNotificationHandler(notificationSchema, handler41) {
+  setNotificationHandler(notificationSchema, handler42) {
     const method = getMethodLiteral(notificationSchema);
     this._notificationHandlers.set(method, (notification) => {
       const parsed = parseWithCompat(notificationSchema, notification);
-      return Promise.resolve(handler41(parsed));
+      return Promise.resolve(handler42(parsed));
     });
   }
   /**
@@ -35391,7 +35391,7 @@ var Server = class extends Protocol {
   /**
    * Override request handler registration to enforce server-side validation for tools/call.
    */
-  setRequestHandler(requestSchema, handler41) {
+  setRequestHandler(requestSchema, handler42) {
     const shape = getObjectShape(requestSchema);
     const methodSchema = shape?.method;
     if (!methodSchema) {
@@ -35419,7 +35419,7 @@ var Server = class extends Protocol {
           throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler41(request, extra));
+        const result = await Promise.resolve(handler42(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
@@ -35437,7 +35437,7 @@ var Server = class extends Protocol {
       };
       return super.setRequestHandler(requestSchema, wrappedHandler);
     }
-    return super.setRequestHandler(requestSchema, handler41);
+    return super.setRequestHandler(requestSchema, handler42);
   }
   assertCapabilityForMethod(method) {
     switch (method) {
@@ -36010,13 +36010,13 @@ var ExperimentalMcpServerTasks = class {
   constructor(_mcpServer) {
     this._mcpServer = _mcpServer;
   }
-  registerToolTask(name, config2, handler41) {
+  registerToolTask(name, config2, handler42) {
     const execution = { taskSupport: "required", ...config2.execution };
     if (execution.taskSupport === "forbidden") {
       throw new Error(`Cannot register task-based tool '${name}' with taskSupport 'forbidden'. Use registerTool() instead.`);
     }
     const mcpServerInternal = this._mcpServer;
-    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler41);
+    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler42);
   }
 };
 
@@ -36074,24 +36074,24 @@ var McpServer = class {
       }
     });
     this.server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: Object.entries(this._registeredTools).filter(([, tool41]) => tool41.enabled).map(([name, tool41]) => {
+      tools: Object.entries(this._registeredTools).filter(([, tool42]) => tool42.enabled).map(([name, tool42]) => {
         const toolDefinition = {
           name,
-          title: tool41.title,
-          description: tool41.description,
+          title: tool42.title,
+          description: tool42.description,
           inputSchema: (() => {
-            const obj = normalizeObjectSchema(tool41.inputSchema);
+            const obj = normalizeObjectSchema(tool42.inputSchema);
             return obj ? toJsonSchemaCompat(obj, {
               strictUnions: true,
               pipeStrategy: "input"
             }) : EMPTY_OBJECT_JSON_SCHEMA;
           })(),
-          annotations: tool41.annotations,
-          execution: tool41.execution,
-          _meta: tool41._meta
+          annotations: tool42.annotations,
+          execution: tool42.execution,
+          _meta: tool42._meta
         };
-        if (tool41.outputSchema) {
-          const obj = normalizeObjectSchema(tool41.outputSchema);
+        if (tool42.outputSchema) {
+          const obj = normalizeObjectSchema(tool42.outputSchema);
           if (obj) {
             toolDefinition.outputSchema = toJsonSchemaCompat(obj, {
               strictUnions: true,
@@ -36104,16 +36104,16 @@ var McpServer = class {
     }));
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       try {
-        const tool41 = this._registeredTools[request.params.name];
-        if (!tool41) {
+        const tool42 = this._registeredTools[request.params.name];
+        if (!tool42) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
         }
-        if (!tool41.enabled) {
+        if (!tool42.enabled) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} disabled`);
         }
         const isTaskRequest = !!request.params.task;
-        const taskSupport = tool41.execution?.taskSupport;
-        const isTaskHandler = "createTask" in tool41.handler;
+        const taskSupport = tool42.execution?.taskSupport;
+        const isTaskHandler = "createTask" in tool42.handler;
         if ((taskSupport === "required" || taskSupport === "optional") && !isTaskHandler) {
           throw new McpError(ErrorCode.InternalError, `Tool ${request.params.name} has taskSupport '${taskSupport}' but was not registered with registerToolTask`);
         }
@@ -36121,14 +36121,14 @@ var McpServer = class {
           throw new McpError(ErrorCode.MethodNotFound, `Tool ${request.params.name} requires task augmentation (taskSupport: 'required')`);
         }
         if (taskSupport === "optional" && !isTaskRequest && isTaskHandler) {
-          return await this.handleAutomaticTaskPolling(tool41, request, extra);
+          return await this.handleAutomaticTaskPolling(tool42, request, extra);
         }
-        const args = await this.validateToolInput(tool41, request.params.arguments, request.params.name);
-        const result = await this.executeToolHandler(tool41, args, extra);
+        const args = await this.validateToolInput(tool42, request.params.arguments, request.params.name);
+        const result = await this.executeToolHandler(tool42, args, extra);
         if (isTaskRequest) {
           return result;
         }
-        await this.validateToolOutput(tool41, result, request.params.name);
+        await this.validateToolOutput(tool42, result, request.params.name);
         return result;
       } catch (error2) {
         if (error2 instanceof McpError) {
@@ -36161,12 +36161,12 @@ var McpServer = class {
   /**
    * Validates tool input arguments against the tool's input schema.
    */
-  async validateToolInput(tool41, args, toolName) {
-    if (!tool41.inputSchema) {
+  async validateToolInput(tool42, args, toolName) {
+    if (!tool42.inputSchema) {
       return void 0;
     }
-    const inputObj = normalizeObjectSchema(tool41.inputSchema);
-    const schemaToParse = inputObj ?? tool41.inputSchema;
+    const inputObj = normalizeObjectSchema(tool42.inputSchema);
+    const schemaToParse = inputObj ?? tool42.inputSchema;
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36178,8 +36178,8 @@ var McpServer = class {
   /**
    * Validates tool output against the tool's output schema.
    */
-  async validateToolOutput(tool41, result, toolName) {
-    if (!tool41.outputSchema) {
+  async validateToolOutput(tool42, result, toolName) {
+    if (!tool42.outputSchema) {
       return;
     }
     if (!("content" in result)) {
@@ -36191,7 +36191,7 @@ var McpServer = class {
     if (!result.structuredContent) {
       throw new McpError(ErrorCode.InvalidParams, `Output validation error: Tool ${toolName} has an output schema but no structured content was provided`);
     }
-    const outputObj = normalizeObjectSchema(tool41.outputSchema);
+    const outputObj = normalizeObjectSchema(tool42.outputSchema);
     const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36202,43 +36202,43 @@ var McpServer = class {
   /**
    * Executes a tool handler (either regular or task-based).
    */
-  async executeToolHandler(tool41, args, extra) {
-    const handler41 = tool41.handler;
-    const isTaskHandler = "createTask" in handler41;
+  async executeToolHandler(tool42, args, extra) {
+    const handler42 = tool42.handler;
+    const isTaskHandler = "createTask" in handler42;
     if (isTaskHandler) {
       if (!extra.taskStore) {
         throw new Error("No task store provided.");
       }
       const taskExtra = { ...extra, taskStore: extra.taskStore };
-      if (tool41.inputSchema) {
-        const typedHandler = handler41;
+      if (tool42.inputSchema) {
+        const typedHandler = handler42;
         return await Promise.resolve(typedHandler.createTask(args, taskExtra));
       } else {
-        const typedHandler = handler41;
+        const typedHandler = handler42;
         return await Promise.resolve(typedHandler.createTask(taskExtra));
       }
     }
-    if (tool41.inputSchema) {
-      const typedHandler = handler41;
+    if (tool42.inputSchema) {
+      const typedHandler = handler42;
       return await Promise.resolve(typedHandler(args, extra));
     } else {
-      const typedHandler = handler41;
+      const typedHandler = handler42;
       return await Promise.resolve(typedHandler(extra));
     }
   }
   /**
    * Handles automatic task polling for tools with taskSupport 'optional'.
    */
-  async handleAutomaticTaskPolling(tool41, request, extra) {
+  async handleAutomaticTaskPolling(tool42, request, extra) {
     if (!extra.taskStore) {
       throw new Error("No task store provided for task-capable tool.");
     }
-    const args = await this.validateToolInput(tool41, request.params.arguments, request.params.name);
-    const handler41 = tool41.handler;
+    const args = await this.validateToolInput(tool42, request.params.arguments, request.params.name);
+    const handler42 = tool42.handler;
     const taskExtra = { ...extra, taskStore: extra.taskStore };
-    const createTaskResult = args ? await Promise.resolve(handler41.createTask(args, taskExtra)) : (
+    const createTaskResult = args ? await Promise.resolve(handler42.createTask(args, taskExtra)) : (
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await Promise.resolve(handler41.createTask(taskExtra))
+      await Promise.resolve(handler42.createTask(taskExtra))
     );
     const taskId = createTaskResult.task.taskId;
     let task = createTaskResult.task;
@@ -36574,7 +36574,7 @@ var McpServer = class {
     }
     return registeredPrompt;
   }
-  _createRegisteredTool(name, title, description, inputSchema27, outputSchema, annotations, execution, _meta, handler41) {
+  _createRegisteredTool(name, title, description, inputSchema27, outputSchema, annotations, execution, _meta, handler42) {
     validateAndWarnToolName(name);
     const registeredTool = {
       title,
@@ -36584,7 +36584,7 @@ var McpServer = class {
       annotations,
       execution,
       _meta,
-      handler: handler41,
+      handler: handler42,
       enabled: true,
       disable: () => registeredTool.update({ enabled: false }),
       enable: () => registeredTool.update({ enabled: true }),
@@ -38212,20 +38212,20 @@ function normalizeParams2(params) {
 
 // src/tools/index.ts
 var TOOLS = [];
-function registerToolModule(tool41) {
-  if (TOOLS.some((t) => t.name === tool41.name)) {
-    throw new Error(`Tool '${tool41.name}' is already registered`);
+function registerToolModule(tool42) {
+  if (TOOLS.some((t) => t.name === tool42.name)) {
+    throw new Error(`Tool '${tool42.name}' is already registered`);
   }
-  TOOLS.push(tool41);
+  TOOLS.push(tool42);
 }
 function attachAllTools(server, ctx) {
-  for (const tool41 of TOOLS) {
+  for (const tool42 of TOOLS) {
     server.registerTool(
-      tool41.name,
+      tool42.name,
       {
-        ...tool41.title ? { title: tool41.title } : {},
-        description: tool41.description,
-        inputSchema: tool41.inputSchema
+        ...tool42.title ? { title: tool42.title } : {},
+        description: tool42.description,
+        inputSchema: tool42.inputSchema
       },
       async (input, extra) => {
         const callMeta = {};
@@ -38237,7 +38237,7 @@ function attachAllTools(server, ctx) {
         if (typedExtra?.signal instanceof AbortSignal) {
           callMeta.signal = typedExtra.signal;
         }
-        const result = await tool41.handler(input, ctx, callMeta);
+        const result = await tool42.handler(input, ctx, callMeta);
         return toCallToolResult(result);
       }
     );
@@ -52394,6 +52394,391 @@ function outcomeCounts(results) {
   };
   for (const result of results) out[result.outcome] += 1;
   return out;
+}
+
+// src/validate/importGraph.ts
+var MAX_GRAPH_EDGES = 2e4;
+function buildImportGraph(records) {
+  const edges = /* @__PURE__ */ new Map();
+  const files = /* @__PURE__ */ new Set();
+  let edgeCount2 = 0;
+  let truncated = false;
+  for (const record2 of records) {
+    files.add(record2.file);
+    files.add(record2.module_file);
+    const existing = edges.get(record2.file);
+    if (existing !== void 0 && existing.has(record2.module_file)) continue;
+    if (edgeCount2 >= MAX_GRAPH_EDGES) {
+      truncated = true;
+      continue;
+    }
+    if (existing === void 0) {
+      edges.set(record2.file, /* @__PURE__ */ new Set([record2.module_file]));
+    } else {
+      existing.add(record2.module_file);
+    }
+    edgeCount2 += 1;
+  }
+  return { edges, files, truncated };
+}
+function shortestDistance(graph, root, target) {
+  if (root === target) return 0;
+  const visited = /* @__PURE__ */ new Set([root]);
+  let frontier = [root];
+  let hops = 0;
+  while (frontier.length > 0) {
+    hops += 1;
+    const next = [];
+    for (const file of frontier) {
+      const imported = graph.edges.get(file);
+      if (imported === void 0) continue;
+      for (const candidate of imported) {
+        if (candidate === target) return hops;
+        if (visited.has(candidate)) continue;
+        visited.add(candidate);
+        next.push(candidate);
+      }
+    }
+    frontier = next;
+  }
+  return null;
+}
+function reachFrom(graph, roots, target) {
+  const found = [];
+  for (const root of roots) {
+    const hops = shortestDistance(graph, root, target);
+    if (hops !== null) found.push({ root, hops });
+  }
+  if (found.length === 0) return { hops: null, reachingRoots: [] };
+  found.sort((a2, b) => a2.hops - b.hops || a2.root.localeCompare(b.root));
+  return {
+    hops: Math.min(...found.map((f) => f.hops)),
+    reachingRoots: found.map((f) => f.root)
+  };
+}
+
+// src/validate/staticProvider.ts
+var RUNTIME_RESOLUTION_LANGUAGES = /* @__PURE__ */ new Set([
+  "ruby",
+  "java",
+  "csharp",
+  "php"
+]);
+function validateStatically(input) {
+  const routesByFile = groupRoutesByRelFile(input.snapshot.routes, input.projectPath);
+  const roots = [...routesByFile.keys()];
+  const exposedFiles = relativizeSet(input.anonymouslyExposedRouteFiles, input.projectPath);
+  const reachCache = /* @__PURE__ */ new Map();
+  return input.findings.map((finding2) => validateOne(finding2, input, roots, routesByFile, exposedFiles, reachCache));
+}
+function relativizeSet(files, projectPath) {
+  return new Set([...files].map((file) => toRelativeIfPossible(file, projectPath)));
+}
+function groupRoutesByRelFile(routes, projectPath) {
+  const byFile = /* @__PURE__ */ new Map();
+  for (const route of routes) {
+    if (route.provenance !== "code") continue;
+    const relFile = toRelativeIfPossible(route.file, projectPath);
+    const existing = byFile.get(relFile);
+    if (existing === void 0) byFile.set(relFile, [route]);
+    else existing.push(route);
+  }
+  return byFile;
+}
+function makeEnvelope(finding2, input) {
+  return {
+    fingerprint: finding2.fingerprint,
+    provider: "static",
+    snapshot_id: input.snapshotId,
+    tree_hash: input.treeHash,
+    computed_at: input.computedAt
+  };
+}
+function validateOne(finding2, input, roots, routesByFile, exposedFiles, reachCache) {
+  const envelope = makeEnvelope(finding2, input);
+  if (finding2.file_path === void 0) {
+    return unknownVerdict(envelope, ["finding has no file_path; nothing to evaluate"]);
+  }
+  const relFile = toRelativeIfPossible(finding2.file_path, input.projectPath);
+  const { language, entry, gaps } = resolveLanguageContext(relFile, input);
+  const reach = cachedReachFrom(input.graph, roots, relFile, reachCache);
+  if (reach.hops !== null) {
+    return reachableVerdict(envelope, reach.hops, reach.reachingRoots, routesByFile, exposedFiles, gaps);
+  }
+  if (language === null) {
+    return unknownVerdict(envelope, [`could not determine the language of '${relFile}'`, ...gaps]);
+  }
+  const blocked = negativeVerdictBlockedBy(language, entry, input.graph.truncated);
+  if (blocked !== null) return unknownVerdict(envelope, [blocked, ...gaps]);
+  return unreachableVerdict(envelope, relFile, gaps);
+}
+function resolveLanguageContext(relFile, input) {
+  const language = input.languageOf(relFile);
+  if (language === null) return { language: null, entry: void 0, gaps: [] };
+  const entry = input.snapshot.coverage.find((c3) => c3.language === language);
+  const gaps = entry === void 0 ? [] : unresolvedImportsGap(language, entry);
+  return { language, entry, gaps };
+}
+function unresolvedImportsGap(language, entry) {
+  if (entry.unresolved_imports === 0) return [];
+  return [
+    `${entry.unresolved_imports} import(s) for '${language}' could not be resolved to a project file (third-party/stdlib specifiers or an unresolvable dynamic import) and are absent from the graph`
+  ];
+}
+function negativeVerdictBlockedBy(language, entry, graphTruncated) {
+  if (entry === void 0) {
+    return `no coverage entry was recorded for language '${language}'`;
+  }
+  if (entry.status !== "ok" && entry.status !== "no_matches") {
+    return `coverage for '${language}' is '${entry.status}', so its route list cannot be trusted as complete`;
+  }
+  if (RUNTIME_RESOLUTION_LANGUAGES.has(language)) {
+    return `'${language}' resolves code at runtime (autoload/DI container/injection), not by static import \u2014 an absent path proves nothing here`;
+  }
+  if (graphTruncated) {
+    return "the import graph was truncated at its edge cap, so it cannot certify the absence of any path";
+  }
+  return null;
+}
+function cachedReachFrom(graph, roots, target, cache) {
+  const cached2 = cache.get(target);
+  if (cached2 !== void 0) return cached2;
+  const result = reachFrom(graph, roots, target);
+  cache.set(target, result);
+  return result;
+}
+function unreachableVerdict(envelope, relFile, gaps) {
+  return {
+    ...envelope,
+    verdict: "unreachable",
+    confidence: "medium",
+    // a claim about an over-approximating graph, never 'high'
+    evidence: [{ detail: `no route imports '${relFile}', directly or transitively` }],
+    coverage_gaps: [...gaps]
+  };
+}
+function unknownVerdict(envelope, gaps) {
+  return { ...envelope, verdict: "unknown", confidence: "low", evidence: [], coverage_gaps: gaps };
+}
+function reachableVerdict(envelope, hops, reachingRoots, routesByFile, exposedFiles, gaps) {
+  const nearestFile = reachingRoots[0];
+  if (nearestFile === void 0) {
+    return unknownVerdict(envelope, [...gaps, "reachability result was inconsistent: hops without a reaching root"]);
+  }
+  return {
+    ...envelope,
+    verdict: "reachable",
+    confidence: hops === 0 ? "high" : "medium",
+    evidence: buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, exposedFiles),
+    coverage_gaps: [...gaps]
+  };
+}
+function buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, exposedFiles) {
+  const evidence = [];
+  const nearestRoute = routesByFile.get(nearestFile)?.[0];
+  if (nearestRoute !== void 0) {
+    evidence.push({
+      detail: `reachable in ${hopWord(hops)} via ${nearestRoute.method} ${nearestRoute.path_resolved} (${nearestFile})`
+    });
+  }
+  const totalReaching = reachingRoots.reduce((sum, root) => sum + (routesByFile.get(root)?.length ?? 0), 0);
+  const totalRoutes = [...routesByFile.values()].reduce((sum, rs) => sum + rs.length, 0);
+  evidence.push({ detail: `reached by ${totalReaching} of ${totalRoutes} known route(s)` });
+  const exposed = exposedEvidence(reachingRoots, routesByFile, exposedFiles);
+  if (exposed !== null) evidence.push(exposed);
+  return evidence;
+}
+function exposedEvidence(reachingRoots, routesByFile, exposedFiles) {
+  const exposedFile = reachingRoots.find((root) => exposedFiles.has(root));
+  if (exposedFile === void 0) return null;
+  const route = routesByFile.get(exposedFile)?.[0];
+  const label = route === void 0 ? exposedFile : `${route.method} ${route.path_resolved} (${exposedFile})`;
+  return { detail: `${label} is confirmed anonymously exposed by a live scan` };
+}
+function hopWord(hops) {
+  return hops === 1 ? "1 hop" : `${hops} hops`;
+}
+
+// src/validate/types.ts
+var VERDICTS = ["unreachable", "reachable", "confirmed", "unknown"];
+
+// src/validate/summary.ts
+function buildSummary(input) {
+  const { persisted, graph, validations, dast } = input;
+  const stale = persisted.tree_hash !== input.workingTreeHash;
+  return {
+    findings_selected: validations.length,
+    counts_by_verdict: countByVerdict(validations),
+    coverage_gaps: collectGaps(input, stale),
+    snapshot: {
+      id: persisted.id,
+      tree_hash: persisted.tree_hash,
+      captured_at: persisted.captured_at,
+      routes_total: persisted.snapshot.routes.length,
+      import_records: persisted.snapshot.imports.length
+    },
+    working_tree_hash: input.workingTreeHash,
+    snapshot_stale: stale,
+    graph: { files: graph.files.size, edges: edgeCount(graph), truncated: graph.truncated },
+    // Verbatim and unfiltered. This is where "the languages with no rules"
+    // (design §9) is answered. Filtering it to the ones that look interesting
+    // would be a coverage-status decision, which belongs to the provider and
+    // only ever for the language a finding is actually in.
+    snapshot_coverage: persisted.snapshot.coverage,
+    dast: {
+      available: dast.scan !== null,
+      scan_id: dast.scan?.scan_id ?? null,
+      finished_at: dast.scan?.finished_at ?? null,
+      age_hours: dast.scan === null ? null : ageHours(dast.scan, input.now),
+      anonymous_exposure_files: dast.files.size,
+      scans_searched: dast.scansSearched
+    },
+    providers_run: ["static"]
+  };
+}
+function countByVerdict(validations) {
+  const counts = Object.fromEntries(VERDICTS.map((v) => [v, 0]));
+  for (const v of validations) counts[v.verdict] += 1;
+  return counts;
+}
+function edgeCount(graph) {
+  let total = 0;
+  for (const targets of graph.edges.values()) total += targets.size;
+  return total;
+}
+function ageHours(scan, now) {
+  const stamp = Date.parse(scan.finished_at ?? scan.started_at);
+  if (Number.isNaN(stamp)) return null;
+  return Math.round((now - stamp) / 36e5 * 100) / 100;
+}
+function collectGaps(input, stale) {
+  const gaps = /* @__PURE__ */ new Set();
+  for (const validation of input.validations) {
+    for (const gap of validation.coverage_gaps) gaps.add(gap);
+  }
+  if (stale) {
+    gaps.add(
+      `the surface snapshot describes tree ${input.persisted.tree_hash} but the working tree is now ${input.workingTreeHash} \u2014 every verdict here was computed against the snapshot's tree, not the current one; re-run map_attack_surface to refresh it`
+    );
+  }
+  if (input.graph.truncated) {
+    gaps.add(
+      `the import graph was truncated at its ${MAX_GRAPH_EDGES}-edge cap, so it cannot certify the absence of any path`
+    );
+  }
+  if (input.persisted.snapshot.imports.length === 0) {
+    gaps.add(
+      "the surface snapshot carries 0 resolved import edges, so the import graph has no paths at all and every file outside a route-declaring file is unreached by construction, not by evidence \u2014 re-run map_attack_surface (a snapshot captured before import edges were persisted carries none)"
+    );
+  }
+  if (input.dast.scan === null) {
+    gaps.add(
+      `no completed scan_dast run was found for this project among the ${input.dast.scansSearched} most recent scans, so no reaching route could be cross-referenced as confirmed anonymously exposed \u2014 that is a missing input, not evidence that nothing is exposed`
+    );
+  }
+  gaps.add(
+    "only the 'static' provider exists in this version \u2014 'runtime' (live confirmation) and 'dependency' are not implemented, so no verdict here can be 'confirmed'"
+  );
+  return [...gaps];
+}
+
+// src/tools/validateFinding.ts
+var DAST_SCAN_SEARCH_LIMIT = 200;
+var ANONYMOUS_EXPOSURE = "anonymous_exposure";
+var Fingerprint = external_exports.string().min(1).optional().describe(
+  "Validate exactly this finding. Omitted (the default) validates EVERY open finding \u2014 batch is the point, since validating one finding at a time saves nobody any triage effort. A fingerprint that matches no open finding is an error, never an empty result."
+);
+var Providers = external_exports.array(external_exports.enum(["static"])).min(1).optional().describe(
+  "Evidence providers to run. This version implements only 'static' (import graph + surface snapshot); 'runtime' and 'dependency' are planned and will widen this enum. Omit the field to run every provider available in this version, so a caller written today keeps working when the others land. Must be non-empty when supplied."
+);
+var tool41 = {
+  name: "validate_finding",
+  title: "Qualify findings by reachability",
+  // An agent's only discovery surface. It must carry the preconditions and
+  // the honest limits, not just the capability: the ways a caller misuses
+  // this tool are trusting `unreachable` in a stack where it cannot be
+  // earned, and expecting it to close findings.
+  description: 'Answers, per finding, whether anything outside the process can reach the FILE the finding lives in. Builds a file-level import graph from the latest map_attack_surface snapshot, roots it at the route-declaring files, and returns one verdict per finding \u2014 reachable / unreachable / unknown \u2014 with concrete evidence (nearest route and its hop count, how many routes reach the file, any live-confirmed anonymous exposure) plus the coverage gaps behind it. REQUIRES a prior map_attack_surface run and refuses with no_surface_snapshot when there is none. Validates every open finding by default; pass a fingerprint for one, and an unknown fingerprint is an error rather than an empty result. REPORT ONLY: it never suppresses a finding, never writes a suppression, and never changes a severity \u2014 closing a finding stays a human decision. Honest limits, every one of them load-bearing: granularity is the file, not the function, so "reachable" means a route imports the file and NOT that the vulnerable line is called; "unreachable" is never emitted for Ruby, Java, C# or PHP, which resolve code at runtime (autoload, annotation injection, DI/service container) rather than by import; reachability is measured from HTTP route entry points only, so a file reached solely by a CLI, a cron job or a queue consumer reads as unreachable-by-route, which is not a claim that the code never runs; and NOTHING here detects dynamic imports \u2014 import(expr), require(variable), reflection, plugin registries \u2014 so IN A CODEBASE USING THEM "unreachable" CAN BE WRONG AND THIS TOOL CANNOT TELL YOU WHEN. Verdicts persist against the snapshot id and tree hash they were computed from and come back flagged stale once the working tree moves. Read summary.coverage_gaps beside the counts: a verdict count without them is not an answer.',
+  inputSchema: {
+    project_path: ProjectPath,
+    fingerprint: Fingerprint,
+    providers: Providers
+  },
+  handler: async (input, ctx) => handler41(input, ctx)
+};
+registerToolModule(tool41);
+function fail2(code, message, retryWith) {
+  return {
+    ok: false,
+    error: { code, message, ...retryWith === void 0 ? {} : { retry_with: retryWith } }
+  };
+}
+var NO_OPEN_FINDINGS_NOTE = "No open findings to validate, so nothing was computed and nothing was persisted. This is NOT a statement that the project is clean \u2014 it means the latest completed scan recorded no unsuppressed findings. Run security_scan_full (or scan_sast) first, then re-run validate_finding.";
+async function handler41(input, ctx) {
+  const inp = input;
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return fail2("not_a_git_repo", e.message);
+  }
+  const persisted = ctx.storage.surface.getLatest();
+  if (persisted === null) {
+    return fail2(
+      "no_surface_snapshot",
+      'No attack-surface snapshot exists for this project, so there are no route files to root a reachability graph at. Run map_attack_surface first, then re-run validate_finding. This is a refusal and not a batch of "unknown" verdicts on purpose: a verdict nobody computed must not occupy the same slot as one that was.',
+      { run_first: "map_attack_surface", project_path: projectPath }
+    );
+  }
+  const open = ctx.storage.findings.listOpen();
+  const selected = inp.fingerprint === void 0 ? open : open.filter((f) => f.fingerprint === inp.fingerprint);
+  if (inp.fingerprint !== void 0 && selected.length === 0) {
+    return fail2(
+      "target_not_found",
+      `No OPEN finding carries the fingerprint '${inp.fingerprint}'. It may never have existed, it may belong to an older scan, or it may be suppressed \u2014 this tool only reads the open list and cannot tell those apart. Read guardian://findings/open for the fingerprints that are actually validatable, or omit the argument to validate all of them.`
+    );
+  }
+  const workingTreeHash = await computeTreeHash(projectPath);
+  const graph = buildImportGraph(persisted.snapshot.imports);
+  const dast = collectAnonymousExposures(ctx, projectPath);
+  const validations = validateStatically({
+    snapshot: persisted.snapshot,
+    snapshotId: persisted.id,
+    // The snapshot's tree, not the working tree — see the module doc comment.
+    treeHash: persisted.tree_hash,
+    graph,
+    findings: selected,
+    anonymouslyExposedRouteFiles: dast.files,
+    // Injected so the provider stays pure, and minted once so a whole batch
+    // carries one timestamp rather than N that drift across a long run.
+    computedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    languageOf: languageOfPath,
+    projectPath
+  });
+  ctx.storage.validations.upsert(projectPath, validations);
+  return {
+    ok: true,
+    validations: validations.map((v) => ({ ...v, stale: v.tree_hash !== workingTreeHash })),
+    summary: buildSummary({ persisted, graph, validations, dast, workingTreeHash, now: Date.now() }),
+    ...selected.length === 0 ? { note: NO_OPEN_FINDINGS_NOTE } : {}
+  };
+}
+function languageOfPath(filePath) {
+  const language = languageFromPath(filePath);
+  return language === "unknown" ? null : language;
+}
+function collectAnonymousExposures(ctx, projectPath) {
+  const history = ctx.storage.scans.listHistory(DAST_SCAN_SEARCH_LIMIT);
+  const scan = history.find(
+    (s) => s.scan_type === "dast" && s.status === "completed" && s.project_path === projectPath
+  ) ?? null;
+  if (scan === null) return { scan: null, files: /* @__PURE__ */ new Set(), scansSearched: history.length };
+  const files = /* @__PURE__ */ new Set();
+  for (const f of ctx.storage.findings.listByScan(scan.scan_id)) {
+    if (f.subcategory !== ANONYMOUS_EXPOSURE || f.file_path === void 0) continue;
+    files.add(f.file_path);
+  }
+  return { scan, files, scansSearched: history.length };
 }
 
 // src/resources/scans.ts

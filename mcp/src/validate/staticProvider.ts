@@ -130,7 +130,21 @@ export interface StaticProviderInput {
    */
   anonymouslyExposedRouteFiles: ReadonlySet<string>;
   computedAt: string; // injected, never Date.now() — keeps this module pure
-  /** Files whose language could not be determined. */
+  /**
+   * The language of a file, or `null` for one whose language could not be
+   * determined — which blocks gates 2 and 3 (there is nothing to check a
+   * per-language coverage entry or a runtime-resolution flag against) and
+   * never the positive direction.
+   *
+   * PATH CONVENTION: project-relative POSIX (`src/db.ts`). `validateOne`
+   * calls this with a finding's `file_path` only AFTER running it through
+   * `toRelativeIfPossible`, so an implementation may assume that form. The
+   * shipped implementation (`languageOfPath` in `tools/validateFinding.ts`)
+   * resolves by extension and is therefore insensitive to the convention in
+   * practice; it is written down because every other path-shaped field on
+   * this interface states one, and a path-convention mismatch is the defect
+   * class the module doc comment above opens with.
+   */
   languageOf: (filePath: string) => string | null;
   /**
    * Absolute project root, native separators — the same value a caller

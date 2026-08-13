@@ -68,6 +68,7 @@ import './tools/scanSkill.js';
 // Attack surface (Phase 18):
 import './tools/mapAttackSurface.js';
 import './tools/scanDast.js';
+import './tools/validateFinding.js';
 
 // Resources:
 import './resources/scans.js';
