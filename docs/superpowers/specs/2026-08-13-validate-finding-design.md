@@ -118,12 +118,40 @@ lands.
 
 `unreachable` is the tool's strongest output and its most dangerous. Emitting it
 wrongly deprioritises an exploitable finding, and nobody looks again. It is
-therefore gated on **three** conditions, all of which must hold:
+therefore gated on **three** conditions, all of which must hold.
+
+*(As built, these three became six checks in `validate/staticProvider.ts`: an
+empty graph blocks the negative verdict outright — ruled in during Task 5 and
+not anticipated here — and §5.1 is enforced as its own per-language gate, see
+the amendment below. The module's own doc comment is the authority on the
+order they run in.)*
 
 ### 5.1 The graph must cover the file's language
 
 No import rule for a language means no edges for its files. A Go file in a
 project whose Go rules did not run is `unknown` — not `unreachable`.
+
+**Amended after the final whole-branch review — how this is actually
+enforced.** As first implemented, this section was folded into §5.2's
+`CoverageEntry.status` check, which measures *route extraction*, not *import
+resolution*. Those are different dimensions, and the gap between them shipped
+a Critical defect: `map_attack_surface` resolved zero import edges for Python,
+Go and Rust (it fed the resolvers absolute paths while every candidate they
+build from a specifier is project-relative), so every finding in those three
+languages read `unreachable` — while coverage said `ok`, because route
+extraction was fine, and the graph was non-empty, because JS/TS resolved.
+Neither existing gate could see it.
+
+The condition this section actually states is now its own gate, checked
+against the graph rather than against route coverage: **the finding's language
+must have contributed at least one RESOLVED import edge whenever
+`CoverageEntry.unresolved_imports` for it is non-zero.** Both halves are
+load-bearing. Gating on unresolved imports alone would delete the negative
+verdict in every project with third-party dependencies (that count is non-zero
+almost everywhere — see §5.2's note on why it is reported, not gated). Gating
+on "this language contributed no edges" alone would delete it for every
+language whose files genuinely import nothing, where zero resolved *and* zero
+unresolved is a complete picture rather than a hole.
 
 ### 5.2 The route set must be complete
 

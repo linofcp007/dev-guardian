@@ -89,17 +89,19 @@ On startup the server:
 
 Single SQLite file at `<project_root>/.guardian/guardian.db`:
 
-| Table              | Purpose                                                       |
-|--------------------|---------------------------------------------------------------|
-| `scans`            | One row per scan invocation (any tool).                       |
-| `findings`         | One row per finding instance, keyed by stable fingerprint.    |
-| `cves`             | CVE rows deduped across scans (Trivy fs output).              |
-| `suppressions`     | False-positive marks (with optional TTL).                     |
-| `baselines`        | Regression baselines (history-preserving; latest = active).   |
-| `tree_cache`       | tree_hash → scan_id helper for the 5-minute cache window.     |
-| `stack_snapshots`  | Persisted `detect_stack` outputs.                             |
-| `runtime_meta`     | Server-level KV (chosen shell, etc.).                         |
-| `schema_meta`      | Migration version.                                            |
+| Table                 | Purpose                                                            |
+|-----------------------|--------------------------------------------------------------------|
+| `scans`               | One row per scan invocation (any tool).                            |
+| `findings`            | One row per finding instance, keyed by stable fingerprint.         |
+| `cves`                | CVE rows deduped across scans (Trivy fs output).                   |
+| `suppressions`        | False-positive marks (with optional TTL).                          |
+| `baselines`           | Regression baselines (history-preserving; latest = active).        |
+| `tree_cache`          | tree_hash → scan_id helper for the 5-minute cache window.          |
+| `stack_snapshots`     | Persisted `detect_stack` outputs.                                  |
+| `surface_snapshots`   | Persisted `map_attack_surface` snapshots (routes, imports, spec).  |
+| `finding_validations` | `validate_finding` verdicts, keyed by project + fingerprint.       |
+| `runtime_meta`        | Server-level KV (chosen shell, etc.).                              |
+| `schema_meta`         | Migration version.                                                 |
 
 ## Tools (53)
 

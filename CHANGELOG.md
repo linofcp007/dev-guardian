@@ -248,7 +248,7 @@ version bump.
     modern TypeScript — which was also silently weakening `map_attack_surface`'s own
     mount resolution.
   - **The negative verdict is the tool's strongest claim and its most dangerous, so
-    `unreachable` is gated on five independent conditions, checked in order, ALL of
+    `unreachable` is gated on six independent conditions, checked in order, ALL of
     which must hold, or the answer is `unknown` with the blocking reason named in
     `coverage_gaps`:** the import graph holds at least one edge at all (an empty graph
     is missing DATA, not missing reachability — a pre-existing snapshot backfills
@@ -256,8 +256,12 @@ version bump.
     zero evidence); the finding's file path and language are determinable; the
     snapshot's per-language coverage is `ok` or `no_matches` (never `no_rules` or
     `unreadable`, where the route list for that language is known to be incomplete);
-    the language does not resolve code at runtime (see below); and the import graph was
-    not truncated at its edge cap. None of this gates the *positive* direction — any
+    the language does not resolve code at runtime (see below); the import graph was
+    not truncated at its edge cap; and **the finding's language contributed at least
+    one resolved import edge whenever some of its imports failed to resolve** — the
+    first gate's reasoning one language down, so a language whose resolver produces
+    nothing can never have that emptiness spent as evidence (see *Fixed* below for the
+    defect that earned this gate). None of this gates the *positive* direction — any
     discovered import path is reported as `reachable` regardless, down to a finding in
     a route file itself, which reads `reachable` at 0 hops with `high` confidence, the
     only case that earns it.
@@ -290,13 +294,67 @@ version bump.
       here, but newly relevant.** `validate_finding` reads open findings the same way
       `triage_findings` and `prioritize_findings` already do (`listOpen()`, which is
       not project- or scan-type-scoped): run it right after `scan_dast` and it
-      validates the DAST findings, not your last SAST run.
+      validates the DAST findings, not your last SAST run. The summary now names that
+      scan — `findings_from_scan` carries its `scan_id`, `scan_type`, `tree_hash` and
+      whether that tree matches the surface snapshot's — so the confusion is
+      detectable in the result instead of only documented here.
   - Discoverable via the `map_attack_surface` → `validate_finding` two-step, now
     documented in `host-rules/AGENTS.md` (and its paired host-context files) and in
     both tools' own descriptions.
 
 ### Fixed
 
+- **`validate_finding` fabricated `unreachable` for every Python, Go and Rust file.**
+  `map_attack_surface` resolved import edges against the *absolute* paths Semgrep
+  reports for the absolute target it always passes, while every candidate a resolver
+  builds from an import specifier is project-relative (`app.helpers` can only ever name
+  `app/helpers.py`). Only the JS/TS resolver survived, because it anchors on the
+  importing file's own path; Python, Go and Rust resolved **zero** edges, and every
+  finding in those three languages came back `unreachable` — "no route imports this
+  file" — on a graph that had never held one of their edges. Every gate passed: the
+  graph was non-empty (JS/TS resolved) and coverage read `ok` (route extraction was
+  fine). Measured end to end on a four-language project where each helper is imported
+  directly by a route in its own language: three `unreachable`, one `reachable`. Both
+  sides are now relativized *before* resolution rather than after it, the in-repo
+  fixture carries one genuinely resolvable intra-project import per language (there was
+  none in Python, Go or Rust, so no test could see the defect), and the new sixth gate
+  above blocks the negative verdict for any language that resolved nothing while some
+  of its imports failed to resolve — turning a silent, confident falsehood into
+  `unknown` with the reason named.
+- **Go import resolution matched a file basename instead of the package directory.**
+  `import "myapp/pkg/util"` names the *directory* `pkg/util`, and every `.go` file in
+  it belongs to the imported package. Matching the extension-stripped file path instead
+  resolved only the accidental `pkg/util/util.go` spelling — so an ordinary
+  `pkg/util/service.go` read as imported by nothing — and, in the other direction,
+  claimed an edge into `pkg/handler.go` for a specifier (`myapp/pkg/handler`) that does
+  not import it. Resolution is now by package directory, and returns **every** file in
+  it, so no file in a multi-file package is left without the inbound edge its package
+  actually has.
+- **An absolute POSIX path lost its leading `/` during import resolution.** The
+  path-joining helper dropped empty segments, and an absolute path's leading slash *is*
+  an empty first segment, so `/src/api` + `./helper.js` normalised to
+  `src/api/helper.js` and matched no file. On Linux, macOS and every Docker-Semgrep run
+  — where absolute POSIX paths are all Semgrep reports — the import graph came back
+  entirely empty and every verdict was `unknown`. `map_attack_surface`'s own
+  `resolveModuleFile`, which the helper mirrors, carried the same defect and silently
+  degraded Node mount resolution on those hosts; both are fixed.
+- **`validate_finding` read the newest surface snapshot in the database, from any
+  project.** Everything else in the tool is keyed to the resolved `project_path` —
+  routes and findings are relativized against it, verdicts are persisted under it, the
+  DAST cross-reference filters by it — so a snapshot mapped for a *different* project
+  produced a graph in a foreign key space where no root matched any node, and, because
+  that graph is non-empty, `unreachable` for every finding rather than an error. The
+  read is now project-scoped (`SurfaceRepo.getLatestForProject`); `getLatest()` remains
+  for the callers whose contract really is "whatever this server last mapped" (the
+  `guardian://surface/latest` resource and `scan_dast`).
+- **`validate_finding`'s `summary.snapshot.routes_total` counted routes that were never
+  roots.** Spec-provenance routes are deliberately excluded from the reachability roots
+  (a spec route's `file` is the OpenAPI document, which no code import graph contains),
+  but the summary counted them anyway — so a project whose routes came only from an
+  imported spec read `routes_total: 40` beside a batch of `unreachable` verdicts
+  computed from zero roots, and disagreed with `map_attack_surface`'s own code-only
+  `routes_total`. It now counts the code routes actually used, alongside `root_files`
+  (the deduplicated files the traversal starts from) and `spec_routes_excluded`.
 - **A duplicate in `spec_paths` could hide an unreadable spec document.** `discoverSpecs`
   deduplicates the explicit paths and *then* applies the 20-file cap, while
   `map_attack_surface`'s own "which named paths were not read" accounting capped the raw
