@@ -186,10 +186,28 @@ positive direction and the hop evidence.
 
 `import(expr)`, `require(variable)`, reflection, and plugin registries are
 invisible to any import graph. They under-approximate reachability in *every*
-stack, including the four above. Where the extractor can see that a file
-contains a dynamic import it cannot resolve, that file's dependents are
-`unknown` rather than `unreachable`, and the unresolved import is named in
-`coverage_gaps`.
+stack, including the four above.
+
+**This is a limitation, not a gate — corrected after implementation.** The
+original wording said a file with an unresolvable dynamic import made its
+dependents `unknown`. That describes a signal this tool does not have: nothing
+detects dynamic imports, and no rule in the pack matches `import(expr)` or
+`require(variable)`. A gate resting on a signal that was never built is the
+fabrication this feature exists to prevent, so it is written down as what it is.
+
+`CoverageEntry.unresolved_imports` is **not** that signal and must not be
+mistaken for it: it is a per-language aggregate dominated by ordinary
+third-party and standard-library specifiers (`express`, `os`, `net/http`),
+which are *supposed* to be unresolvable and say nothing about holes in
+intra-project reachability. Gating the negative verdict on it would make
+`unreachable` unobtainable in any real project. It is reported in
+`coverage_gaps` so a reader sees the graph had unresolved edges, and it blocks
+nothing.
+
+The consequence must be stated wherever this tool is described: **in a codebase
+using dynamic imports, `unreachable` can be wrong**, and this tool cannot tell
+you when. That belongs in the tool description and the CHANGELOG, not only
+here.
 
 ## 6. Import rules — the rule pack extension
 
