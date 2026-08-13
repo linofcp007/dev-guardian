@@ -197,7 +197,12 @@ async function handler(
     );
   }
 
-  const open = ctx.storage.findings.listOpen();
+  // PROJECT-SCOPED, same reasoning as the surface-snapshot read above:
+  // listOpen() answers with the latest completed scan in the WHOLE
+  // database, from any project, which would validate a different project's
+  // findings under this run whenever that project's scan happened to
+  // complete more recently.
+  const open = ctx.storage.findings.listOpenForProject(projectPath);
   const selected =
     inp.fingerprint === undefined ? open : open.filter((f) => f.fingerprint === inp.fingerprint);
   if (inp.fingerprint !== undefined && selected.length === 0) {
@@ -239,8 +244,8 @@ async function handler(
       graph,
       validations,
       dast,
-      // The scan `listOpen()` drew from — see `sourceScanOf`.
-      sourceScan: sourceScanOf(ctx),
+      // The scan `listOpenForProject()` drew from — see `sourceScanOf`.
+      sourceScan: sourceScanOf(ctx, projectPath),
       workingTreeHash,
       now: Date.now(),
     }),
@@ -278,24 +283,28 @@ function languageOfPath(filePath: string): string | null {
 /**
  * The scan whose findings this batch validated.
  *
- * `findings.listOpen()` selects from the latest COMPLETED scan
- * (`listOpenLatestScanStmt`), and `scans.getLatest()` returns that same row —
- * identical predicate, identical `ORDER BY started_at DESC, rowid DESC LIMIT
- * 1`. The two must stay in lockstep: if one ever changes its ordering, this
+ * `findings.listOpenForProject(projectPath)` selects from the latest
+ * COMPLETED scan FOR THIS PROJECT, and `scans.getLatestForProject(
+ * projectPath)` returns that same row — identical predicate (`status =
+ * 'completed' AND project_path = ?`, identical `ORDER BY started_at DESC,
+ * rowid DESC LIMIT 1`), both scoped to the same project. The two must stay in
+ * lockstep: if one ever changes its ordering or its project filter, this
  * summary starts naming a scan the findings did not come from, which is worse
- * than naming none. Kept as a lookup rather than derived from the selected
- * findings because a finding carries no scan id in its domain type, and
- * because the answer must exist even when zero findings were selected — the
- * case where a reader most needs to know WHICH scan came back empty.
+ * than naming none — including naming another project's scan entirely, which
+ * `getLatest()` (no project filter) could do silently. Kept as a lookup
+ * rather than derived from the selected findings because a finding carries no
+ * scan id in its domain type, and because the answer must exist even when
+ * zero findings were selected — the case where a reader most needs to know
+ * WHICH scan came back empty.
  *
  * This is what makes the documented hazard detectable: `validate_finding`
- * validates whatever the latest completed scan left open, so running it
- * immediately after `scan_dast` validates the DAST findings rather than the
- * SAST ones. The tool cannot know which the caller meant — it can, and now
- * does, say which it used.
+ * validates whatever the latest completed scan left open FOR THIS PROJECT, so
+ * running it immediately after `scan_dast` validates the DAST findings rather
+ * than the SAST ones. The tool cannot know which the caller meant — it can,
+ * and now does, say which it used.
  */
-function sourceScanOf(ctx: PluginContext): ScanRecord | null {
-  return ctx.storage.scans.getLatest();
+function sourceScanOf(ctx: PluginContext, projectPath: string): ScanRecord | null {
+  return ctx.storage.scans.getLatestForProject(projectPath);
 }
 
 /**

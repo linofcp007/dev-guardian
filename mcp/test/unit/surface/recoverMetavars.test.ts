@@ -566,6 +566,43 @@ describe('recoverMetavars — mount, import and env', () => {
     expect(mv(outcome, '$MODULE')).toBe('./multi');
   });
 
+  it('recovers a destructuring require, first symbol only — the CommonJS counterpart of the named-import gap', () => {
+    // The span a redacting Semgrep 1.164.0 actually reports for
+    // `const { a, b } = require("./x")` starts at `const`, not `import` —
+    // three of the four pre-existing regexes require the literal `import`
+    // keyword, and the fourth requires an identifier immediately after
+    // `const`/`let`/`var`, which `{` is not. Before the destructuring
+    // alternative was added, this synthesizer returned undefined for this
+    // shape and the match was reported unrecoverable, even though
+    // guardian-import-esm now matches it.
+    const outcome = recoverSpan("const { formatDate, formatCurrency } = require('./format-utils')", {
+      guardian_kind: 'import',
+      framework: 'esm',
+    });
+    expect(mv(outcome, '$SYMBOL')).toBe('formatDate');
+    expect(mv(outcome, '$MODULE')).toBe('./format-utils');
+  });
+
+  it('does not mistake a destructuring require for a plain one, or vice versa', () => {
+    // Both shapes must resolve to their OWN first-bound name, never fall
+    // through to the other branch — the failure mode a regex ordering bug
+    // would produce (e.g. reading "formatDate" out of the plain form because
+    // a `{`-requiring check ran too late, or reading undefined out of the
+    // destructured form because a bare-identifier check ran too early and
+    // partially matched).
+    const plain = recoverSpan("const adminRouter = require('./admin-router')", {
+      guardian_kind: 'import',
+      framework: 'esm',
+    });
+    expect(mv(plain, '$SYMBOL')).toBe('adminRouter');
+
+    const destructured = recoverSpan("const { adminRouter } = require('./admin-router')", {
+      guardian_kind: 'import',
+      framework: 'esm',
+    });
+    expect(mv(destructured, '$SYMBOL')).toBe('adminRouter');
+  });
+
   it('recovers a namespace import', () => {
     const outcome = recoverSpan("import * as ns from './namespaced'", {
       guardian_kind: 'import',

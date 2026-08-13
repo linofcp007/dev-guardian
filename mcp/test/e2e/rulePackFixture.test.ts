@@ -643,6 +643,12 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
       'go-api/main.go -> go-api/pkg/util/shout.go',
       'node-express/server.js -> node-express/routes/users.js',
       'node-legacy/app.js -> node-legacy/admin-router.js',
+      // The CommonJS destructuring-require form (`const { $SYMBOL, ... } =
+      // require("$MODULE")`), guardian-import-esm's counterpart to the ESM
+      // named-import alternative right above it in routes.yml. Absent before
+      // that alternative existed — a destructuring require produced NO
+      // guardian_kind:import match at all, not merely an unresolved one.
+      'node-legacy/app.js -> node-legacy/format-utils.js',
       'node-mount-forms/app.js -> node-mount-forms/named-router.js',
       'node-mount-forms/app.js -> node-mount-forms/ns-router.js',
       // Task 6's three-hop chain for validate_finding's e2e test — see

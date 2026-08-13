@@ -91,6 +91,44 @@ describe('FindingsRepo', () => {
     expect(open).not.toContain('hidden');
   });
 
+  it('listOpenForProject ignores a newer completed scan belonging to another project', () => {
+    // listOpen() selects the latest completed scan across the WHOLE
+    // database, no project filter — correct for a caller with no project in
+    // scope, wrong for one that resolved a specific projectPath and must not
+    // read another project's findings just because that project's scan
+    // happened to complete more recently.
+    const { scans, findings } = setup();
+    scans.insert({ scan_id: 'a1', scan_type: 'sast', project_path: '/project-a', tree_hash: 'ha' });
+    findings.bulkInsert([{ ...makeFinding({ fingerprint: 'a-finding' }), scan_id: 'a1' }]);
+    scans.finalize({ scan_id: 'a1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    // Inserted second, so it wins listOpen()'s unscoped `started_at DESC,
+    // rowid DESC` ordering — the "newer, belongs to project B" case.
+    scans.insert({ scan_id: 'b1', scan_type: 'sast', project_path: '/project-b', tree_hash: 'hb' });
+    findings.bulkInsert([{ ...makeFinding({ fingerprint: 'b-finding' }), scan_id: 'b1' }]);
+    scans.finalize({ scan_id: 'b1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    // listOpen() must NOT move for the callers that keep it: still answers
+    // with project B's finding, the newer scan, from ANY project.
+    expect(findings.listOpen().map((f) => f.fingerprint)).toEqual(['b-finding']);
+
+    expect(findings.listOpenForProject('/project-a').map((f) => f.fingerprint)).toEqual([
+      'a-finding',
+    ]);
+    expect(findings.listOpenForProject('/project-b').map((f) => f.fingerprint)).toEqual([
+      'b-finding',
+    ]);
+  });
+
+  it('listOpenForProject returns nothing for a project whose only scan belongs to someone else', () => {
+    const { scans, findings } = setup();
+    scans.insert({ scan_id: 's1', scan_type: 'sast', project_path: '/theirs', tree_hash: 'h' });
+    findings.bulkInsert([{ ...makeFinding({ fingerprint: 'theirs' }), scan_id: 's1' }]);
+    scans.finalize({ scan_id: 's1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    expect(findings.listOpenForProject('/mine')).toEqual([]);
+  });
+
   it('listBySeverity uses the latest completed scan only', () => {
     const { scans, findings } = setup();
     scans.insert({ scan_id: 'older', scan_type: 'sast', project_path: '/p', tree_hash: 'h1' });

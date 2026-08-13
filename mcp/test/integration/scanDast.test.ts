@@ -362,6 +362,47 @@ describe('scan_dast refusals', () => {
     expect(rawRows('scans')).toHaveLength(0);
     expect(rawRows('findings')).toHaveLength(0);
   });
+
+  it('refuses when the only snapshot belongs to a DIFFERENT project, never probing it', async () => {
+    // `surface.getLatest()` returns the newest row in the WHOLE database,
+    // regardless of project. Seed a snapshot for a foreign project only —
+    // this project (`projectPath`) has none of its own — then call scan_dast
+    // for THIS project. The plausible-wrong implementation reads getLatest(),
+    // finds the foreign snapshot, and proceeds to probe ITS routes instead of
+    // refusing, which contradicts the refusal message eleven lines above
+    // ("No attack-surface snapshot exists for this project") and would emit
+    // findings whose file_path points at another project's tree entirely.
+    const otherProject = mkdtempSync(join(tmpdir(), 'guardian-dast-other-'));
+    const foreignSnapshot: AttackSurfaceSnapshot = {
+      routes: [route('/other-projects-route')],
+      env_vars: [],
+      ports: [],
+      webhooks: [],
+      coverage: [],
+      tools_run: [],
+      missing_tools: [],
+      spec_files: [],
+      spec_diff: null,
+    };
+    ctx.storage.surface.insert({
+      project_path: otherProject,
+      tree_hash: 'other-tree',
+      snapshot: foreignSnapshot,
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const r = expectErr(await run({ base_url: deadOrigin }));
+
+    expect(r.error.code).toBe('no_surface_snapshot');
+    expect(r.error.message).toMatch(/map_attack_surface/);
+    // The decisive assertion: an implementation that scanned the foreign
+    // snapshot would have gone on to liveness-probe `deadOrigin` and answered
+    // `target_not_found` instead — a different code AND a network call that
+    // must never happen against an unvetted, foreign route inventory.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(rawRows('scans')).toHaveLength(0);
+    expect(rawRows('findings')).toHaveLength(0);
+  });
 });
 
 /* ------------------------------------------------------------------ */

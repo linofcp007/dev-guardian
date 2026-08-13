@@ -410,6 +410,51 @@ describe('validate_finding selection', () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* Project scoping — open findings must not leak across projects       */
+/* ------------------------------------------------------------------ */
+
+describe('validate_finding project scoping', () => {
+  it('validates only THIS project’s open findings, not a newer scan belonging to another project', async () => {
+    // findings.listOpen() used to select the latest completed scan in the
+    // WHOLE database, no project filter — the same class of bug the surface
+    // snapshot read already had (see the refusal test above). Project A
+    // (this test's `projectPath`) gets a snapshot and one open finding;
+    // project B's scan is seeded AFTER — so it wins the unscoped "latest"
+    // ordering — and belongs to a completely different project_path. The
+    // plausible-wrong implementation validates B's finding under A's run.
+    seedSnapshot();
+    const mineScanId = seedScan([finding({ fingerprint: 'mine' })]);
+
+    const otherProject = mkdtempSync(join(tmpdir(), 'guardian-validate-other-'));
+    ctx.storage.scans.insert({
+      scan_id: 'scan-other-project',
+      scan_type: 'sast',
+      project_path: otherProject,
+      tree_hash: 'other-tree',
+    });
+    ctx.storage.findings.bulkInsert([
+      { ...finding({ fingerprint: 'theirs' }), scan_id: 'scan-other-project' },
+    ]);
+    ctx.storage.scans.finalize({
+      scan_id: 'scan-other-project',
+      status: 'completed',
+      tools_run: [],
+      missing_tools: [],
+    });
+
+    const r = expectOk(await run());
+
+    expect(r.validations.map((v) => v.fingerprint)).toEqual(['mine']);
+    expect(r.summary.findings_selected).toBe(1);
+    // sourceScanOf must move in lockstep with the findings.listOpen() ->
+    // listOpenForProject() fix above, per that function's own doc comment —
+    // otherwise the summary NAMES the other project's scan as the source of
+    // findings that did not come from it, which is worse than naming none.
+    expect(r.summary.findings_from_scan?.scan_id).toBe(mineScanId);
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* Path conventions — the load-bearing one                             */
 /* ------------------------------------------------------------------ */
 

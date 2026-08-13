@@ -57,6 +57,7 @@ export class ScansRepo {
   private readonly reapRunningStmt: Statement<[string]>;
   private readonly getByIdStmt: Statement<[string], ScanRow>;
   private readonly getLatestStmt: Statement<[], ScanRow>;
+  private readonly getLatestForProjectStmt: Statement<[string], ScanRow>;
   private readonly listHistoryStmt: Statement<[number], ScanRow>;
   private readonly findCacheStmt: Statement<[string, string, string], ScanRow>;
   private readonly attachCacheStmt: Statement<[string, string, string, string]>;
@@ -98,6 +99,16 @@ export class ScansRepo {
     this.getLatestStmt = db.prepare<[], ScanRow>(`
       SELECT * FROM scans
       WHERE status = 'completed'
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT 1
+    `);
+
+    // Identical predicate to getLatestStmt above, plus `project_path = ?` on
+    // the WHERE clause — same relationship as surfaceRepo's / findingsRepo's
+    // getLatestForProject / listOpenForProject siblings.
+    this.getLatestForProjectStmt = db.prepare<[string], ScanRow>(`
+      SELECT * FROM scans
+      WHERE status = 'completed' AND project_path = ?
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);
@@ -180,8 +191,26 @@ export class ScansRepo {
     return row ? rowToRecord(row) : null;
   }
 
+  /**
+   * The latest completed scan in the WHOLE database, from ANY project — no
+   * `project_path` filter. Correct for a caller with no project in scope
+   * (most resources and tools here take no `project_path` input at all and
+   * report on "whatever this server last scanned"). A caller that DID
+   * resolve a `project_path` and attributes something to the scan it names
+   * (e.g. `validate_finding`'s `findings_from_scan`) must use
+   * `getLatestForProject` instead — see that method and
+   * `findingsRepo.ts`'s `listOpen`/`listOpenForProject` for the identical
+   * split.
+   */
   getLatest(): ScanRecord | null {
     const row = this.getLatestStmt.get();
+    return row ? rowToRecord(row) : null;
+  }
+
+  /** The latest completed scan FOR ONE project. Mirrors `surfaceRepo.ts`'s
+   *  `getLatestForProject` and `findingsRepo.ts`'s `listOpenForProject`. */
+  getLatestForProject(projectPath: string): ScanRecord | null {
+    const row = this.getLatestForProjectStmt.get(projectPath);
     return row ? rowToRecord(row) : null;
   }
 
