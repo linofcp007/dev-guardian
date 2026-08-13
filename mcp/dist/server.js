@@ -37279,6 +37279,24 @@ var FindingsRepo = class {
           WHEN 'low' THEN 1 ELSE 0 END DESC,
         f.fingerprint ASC
     `);
+    this.listOpenForProjectStmt = db.prepare(`
+      WITH latest AS (
+        SELECT id FROM scans WHERE status = 'completed' AND project_path = ?
+        ORDER BY started_at DESC, rowid DESC LIMIT 1
+      )
+      SELECT f.* FROM findings f
+      JOIN latest l ON l.id = f.scan_id
+      WHERE NOT EXISTS (
+        SELECT 1 FROM suppressions s
+        WHERE s.finding_fingerprint = f.fingerprint
+          AND (s.expires_at IS NULL OR s.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      )
+      ORDER BY
+        CASE f.severity
+          WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2
+          WHEN 'low' THEN 1 ELSE 0 END DESC,
+        f.fingerprint ASC
+    `);
     this.listBySeverityLatestStmt = db.prepare(`
       WITH latest AS (
         SELECT id FROM scans WHERE status = 'completed'
@@ -37304,6 +37322,7 @@ var FindingsRepo = class {
   insertStmt;
   listByScanStmt;
   listOpenLatestScanStmt;
+  listOpenForProjectStmt;
   listBySeverityLatestStmt;
   countBySeverityStmt;
   bulkInsert(findings) {
@@ -37338,8 +37357,36 @@ var FindingsRepo = class {
   listByScan(scanId) {
     return this.listByScanStmt.all(scanId).map(rowToFinding);
   }
+  /**
+   * Open findings from the latest completed scan IN THE WHOLE DATABASE, from
+   * ANY project — no `project_path` filter.
+   *
+   * Correct for a caller that has no project in scope at all: an aggregate
+   * tool like `risk_score` or `prioritize_findings` takes no `project_path`
+   * input and reports on "whatever this server last scanned", the same
+   * contract `scans.getLatest()` already has.
+   *
+   * A caller that DID resolve a `project_path` — and relativizes paths
+   * against it, or persists something keyed by it — must use
+   * `listOpenForProject` instead: this method would hand it another
+   * project's findings whenever that project's scan happened to complete
+   * more recently, silently, since the result is never empty and nothing
+   * about it looks wrong. `validate_finding` (tools/validateFinding.ts) made
+   * exactly that mistake before being fixed alongside `listOpenForProject`'s
+   * addition.
+   */
   listOpen() {
     return this.listOpenLatestScanStmt.all().map(rowToFinding);
+  }
+  /**
+   * Open findings from the latest completed scan FOR ONE project.
+   * `project_path` is matched exactly, against the same
+   * `resolveProjectPath()` output every scan persists and every caller of
+   * this method resolves its own argument through — see `surfaceRepo.ts`'s
+   * `getLatestForProject`, which this mirrors.
+   */
+  listOpenForProject(projectPath) {
+    return this.listOpenForProjectStmt.all(projectPath).map(rowToFinding);
   }
   listBySeverity(severity) {
     return this.listBySeverityLatestStmt.all(severity).map(rowToFinding);
@@ -37443,6 +37490,7 @@ var ScansRepo = class {
   reapRunningStmt;
   getByIdStmt;
   getLatestStmt;
+  getLatestForProjectStmt;
   listHistoryStmt;
   findCacheStmt;
   attachCacheStmt;
@@ -37475,6 +37523,12 @@ var ScansRepo = class {
     this.getLatestStmt = db.prepare(`
       SELECT * FROM scans
       WHERE status = 'completed'
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT 1
+    `);
+    this.getLatestForProjectStmt = db.prepare(`
+      SELECT * FROM scans
+      WHERE status = 'completed' AND project_path = ?
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);
@@ -37548,8 +37602,25 @@ var ScansRepo = class {
     const row = this.getByIdStmt.get(scanId);
     return row ? rowToRecord(row) : null;
   }
+  /**
+   * The latest completed scan in the WHOLE database, from ANY project — no
+   * `project_path` filter. Correct for a caller with no project in scope
+   * (most resources and tools here take no `project_path` input at all and
+   * report on "whatever this server last scanned"). A caller that DID
+   * resolve a `project_path` and attributes something to the scan it names
+   * (e.g. `validate_finding`'s `findings_from_scan`) must use
+   * `getLatestForProject` instead — see that method and
+   * `findingsRepo.ts`'s `listOpen`/`listOpenForProject` for the identical
+   * split.
+   */
   getLatest() {
     const row = this.getLatestStmt.get();
+    return row ? rowToRecord(row) : null;
+  }
+  /** The latest completed scan FOR ONE project. Mirrors `surfaceRepo.ts`'s
+   *  `getLatestForProject` and `findingsRepo.ts`'s `listOpenForProject`. */
+  getLatestForProject(projectPath) {
+    const row = this.getLatestForProjectStmt.get(projectPath);
     return row ? rowToRecord(row) : null;
   }
   listHistory(limit = 50) {
@@ -52858,7 +52929,7 @@ async function handler41(input, ctx) {
       { run_first: "map_attack_surface", project_path: projectPath }
     );
   }
-  const open = ctx.storage.findings.listOpen();
+  const open = ctx.storage.findings.listOpenForProject(projectPath);
   const selected = inp.fingerprint === void 0 ? open : open.filter((f) => f.fingerprint === inp.fingerprint);
   if (inp.fingerprint !== void 0 && selected.length === 0) {
     return fail2(
@@ -52892,8 +52963,8 @@ async function handler41(input, ctx) {
       graph,
       validations,
       dast,
-      // The scan `listOpen()` drew from — see `sourceScanOf`.
-      sourceScan: sourceScanOf(ctx),
+      // The scan `listOpenForProject()` drew from — see `sourceScanOf`.
+      sourceScan: sourceScanOf(ctx, projectPath),
       workingTreeHash,
       now: Date.now()
     }),
@@ -52904,8 +52975,8 @@ function languageOfPath(filePath) {
   const language = languageFromPath(filePath);
   return language === "unknown" ? null : language;
 }
-function sourceScanOf(ctx) {
-  return ctx.storage.scans.getLatest();
+function sourceScanOf(ctx, projectPath) {
+  return ctx.storage.scans.getLatestForProject(projectPath);
 }
 function collectAnonymousExposures(ctx, projectPath) {
   const history = ctx.storage.scans.listHistory(DAST_SCAN_SEARCH_LIMIT);

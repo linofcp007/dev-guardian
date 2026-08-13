@@ -48,6 +48,7 @@ export class FindingsRepo {
   ]>;
   private readonly listByScanStmt: Statement<[string], FindingRow>;
   private readonly listOpenLatestScanStmt: Statement<[], FindingRow>;
+  private readonly listOpenForProjectStmt: Statement<[string], FindingRow>;
   private readonly listBySeverityLatestStmt: Statement<[string], FindingRow>;
   private readonly countBySeverityStmt: Statement<[string], { severity: string; n: number }>;
 
@@ -75,6 +76,28 @@ export class FindingsRepo {
     this.listOpenLatestScanStmt = db.prepare<[], FindingRow>(`
       WITH latest AS (
         SELECT id FROM scans WHERE status = 'completed'
+        ORDER BY started_at DESC, rowid DESC LIMIT 1
+      )
+      SELECT f.* FROM findings f
+      JOIN latest l ON l.id = f.scan_id
+      WHERE NOT EXISTS (
+        SELECT 1 FROM suppressions s
+        WHERE s.finding_fingerprint = f.fingerprint
+          AND (s.expires_at IS NULL OR s.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      )
+      ORDER BY
+        CASE f.severity
+          WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2
+          WHEN 'low' THEN 1 ELSE 0 END DESC,
+        f.fingerprint ASC
+    `);
+
+    // Same predicate as listOpenLatestScanStmt above, with one addition:
+    // `AND project_path = ?` on the `latest` CTE, so "latest completed scan"
+    // means latest FOR THIS PROJECT rather than latest in the whole table.
+    this.listOpenForProjectStmt = db.prepare<[string], FindingRow>(`
+      WITH latest AS (
+        SELECT id FROM scans WHERE status = 'completed' AND project_path = ?
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -148,8 +171,37 @@ export class FindingsRepo {
     return this.listByScanStmt.all(scanId).map(rowToFinding);
   }
 
+  /**
+   * Open findings from the latest completed scan IN THE WHOLE DATABASE, from
+   * ANY project — no `project_path` filter.
+   *
+   * Correct for a caller that has no project in scope at all: an aggregate
+   * tool like `risk_score` or `prioritize_findings` takes no `project_path`
+   * input and reports on "whatever this server last scanned", the same
+   * contract `scans.getLatest()` already has.
+   *
+   * A caller that DID resolve a `project_path` — and relativizes paths
+   * against it, or persists something keyed by it — must use
+   * `listOpenForProject` instead: this method would hand it another
+   * project's findings whenever that project's scan happened to complete
+   * more recently, silently, since the result is never empty and nothing
+   * about it looks wrong. `validate_finding` (tools/validateFinding.ts) made
+   * exactly that mistake before being fixed alongside `listOpenForProject`'s
+   * addition.
+   */
   listOpen(): Finding[] {
     return this.listOpenLatestScanStmt.all().map(rowToFinding);
+  }
+
+  /**
+   * Open findings from the latest completed scan FOR ONE project.
+   * `project_path` is matched exactly, against the same
+   * `resolveProjectPath()` output every scan persists and every caller of
+   * this method resolves its own argument through — see `surfaceRepo.ts`'s
+   * `getLatestForProject`, which this mirrors.
+   */
+  listOpenForProject(projectPath: string): Finding[] {
+    return this.listOpenForProjectStmt.all(projectPath).map(rowToFinding);
   }
 
   listBySeverity(severity: Severity): Finding[] {
