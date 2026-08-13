@@ -1,9 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../../src/runners/processRunner.js', () => ({ runProcess: vi.fn() }));
 
 import { runProcess, type ProcessRunResult } from '../../../src/runners/processRunner.js';
-import { buildNucleiArgs, interpretRun, invokeNuclei } from '../../../src/dast/nuclei.js';
+import { buildNucleiArgs, interpretRun, invokeNuclei, nucleiEnv } from '../../../src/dast/nuclei.js';
 
 const BASE = {
   binaryPath: '/usr/bin/nuclei', targetUrl: 'http://localhost:3000',
@@ -116,5 +116,102 @@ describe('invokeNuclei', () => {
 
     const result = await invokeNuclei(BASE);
     expect(result).toEqual({ ok: false, reason: 'bad flag' });
+  });
+});
+
+/**
+ * nuclei is handed a target URL and nothing else — never the caller's
+ * Authorization header. But a child process inherits the parent's whole
+ * environment by default, and `scan_dast`'s recommended credential path is
+ * `auth_header_env`, which names a variable holding exactly that header
+ * value. So the secret the tool takes care never to put on nuclei's command
+ * line was being handed to it anyway, one level down.
+ */
+describe('the nuclei child environment', () => {
+  const SECRET_VAR = 'GUARDIAN_DAST_TEST_AUTH';
+  const SECRET = 'Bearer nuclei-must-never-see-this';
+
+  /**
+   * What the child ACTUALLY receives, modelling execa's own contract:
+   * `env` is MERGED over `process.env` unless `extendEnv: false`. Asserting
+   * on `options.env` alone is the trap here — it passes vacuously today,
+   * when `env` is undefined and the child inherits everything.
+   */
+  function childEnv(options: Parameters<typeof runProcess>[0]): NodeJS.ProcessEnv {
+    return options.extendEnv === false
+      ? (options.env ?? {})
+      : { ...process.env, ...(options.env ?? {}) };
+  }
+
+  beforeEach(() => {
+    vi.mocked(runProcess).mockReset();
+    vi.mocked(runProcess).mockResolvedValue({
+      outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false,
+    });
+    process.env[SECRET_VAR] = SECRET;
+  });
+
+  afterEach(() => {
+    delete process.env[SECRET_VAR];
+  });
+
+  it('does not reach the child, even though execa merges with process.env by default', async () => {
+    await invokeNuclei(BASE);
+    const call = vi.mocked(runProcess).mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    if (call === undefined) return;
+    expect(Object.values(childEnv(call)).join('\n')).not.toContain(SECRET);
+    expect(Object.keys(childEnv(call))).not.toContain(SECRET_VAR);
+  });
+
+  it('passes extendEnv: false, without which the allowlist is a no-op', async () => {
+    // Stated as its own assertion because it is the entire mechanism: an
+    // allowlisted `env` with `extendEnv` left at its default is merged ON TOP
+    // of the full parent environment and scrubs nothing.
+    await invokeNuclei(BASE);
+    expect(vi.mocked(runProcess).mock.calls[0]?.[0].extendEnv).toBe(false);
+  });
+
+  it('still carries what the binary needs to run', async () => {
+    // The other half of the envelope: an over-tight allowlist turns a working
+    // scan into a mysteriously failing one. PATH must survive.
+    await invokeNuclei(BASE);
+    const env = childEnv(vi.mocked(runProcess).mock.calls[0]?.[0] ?? { command: '', cwd: '' });
+    const names = Object.keys(env).map((k) => k.toLowerCase());
+    expect(names).toContain('path');
+  });
+});
+
+describe('nucleiEnv', () => {
+  it('copies allowlisted names and drops everything else', () => {
+    const out = nucleiEnv({
+      PATH: '/usr/bin',
+      HOME: '/home/dev',
+      API_TOKEN: 'sk-live-secret',
+      GUARDIAN_DAST_AUTH: 'Bearer secret',
+    });
+    expect(out['PATH']).toBe('/usr/bin');
+    expect(out['HOME']).toBe('/home/dev');
+    expect(out['API_TOKEN']).toBeUndefined();
+    expect(out['GUARDIAN_DAST_AUTH']).toBeUndefined();
+  });
+
+  it('matches names case-insensitively, so Windows PATH survives', () => {
+    // Windows spells it `Path`. A case-sensitive allowlist drops it there and
+    // nowhere else — a failure that reproduces on one platform only.
+    expect(nucleiEnv({ Path: 'C:\\Windows', SystemRoot: 'C:\\Windows' })).toEqual({
+      Path: 'C:\\Windows',
+      SystemRoot: 'C:\\Windows',
+    });
+  });
+
+  it('drops a variable whose name merely contains an allowlisted one', () => {
+    // Guards a substring/prefix match: `PATH_TO_VAULT_TOKEN` is not `PATH`.
+    expect(nucleiEnv({ PATH_TO_VAULT_TOKEN: 'shhh', MY_HOME: 'x' })).toEqual({});
+  });
+
+  it('omits an allowlisted name that is unset rather than defining it as undefined', () => {
+    // `{ PATH: undefined }` is not the same as `{}` once execa spreads it.
+    expect(Object.keys(nucleiEnv({ HOME: '/home/dev' }))).toEqual(['HOME']);
   });
 });

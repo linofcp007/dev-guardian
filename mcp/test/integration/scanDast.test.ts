@@ -235,7 +235,7 @@ interface DastOk {
     truncated: boolean;
     timed_out: boolean;
     wall_clock_ms: number;
-    probes_not_run: number;
+    probes_cut: number;
     skipped: { method: string; path: string; reason: string }[];
     checks: Record<string, string>;
     rate_limit: Record<string, unknown> | null;
@@ -432,7 +432,7 @@ describe('scan_dast envelope reporting', () => {
 
     expect(r.summary.timed_out).toBe(true);
     expect(r.summary.wall_clock_ms).toBe(400);
-    expect(r.summary.probes_not_run).toBeGreaterThan(0);
+    expect(r.summary.probes_cut).toBeGreaterThan(0);
     expect(r.summary.requests_completed).toBe(0);
 
     // THE assertion. A probe the ceiling cut must read 'cancelled' — we
@@ -468,6 +468,65 @@ describe('scan_dast envelope reporting', () => {
     expect(r.summary.requests_completed).toBeGreaterThan(0);
     expect(r.summary.probe_outcomes.timeout).toBe(0);
     expect(r.coverage).toBe('partial');
+  });
+
+  it('degrades coverage when the target answered almost nothing, without any ceiling firing', async () => {
+    // The gap this closes: `engineFailed` was true only when ZERO probes
+    // completed, so a target answering one probe and timing out on the rest
+    // reported tools_run: ok, coverage: 'full' and no warning — while
+    // probe_outcomes.timeout said otherwise two fields away. `coverage` is the
+    // field the consumer contract points at, so that is a "0 findings reads as
+    // all clear" path.
+    //
+    // Note the inverted knobs versus the wall-clock tests above: a per-request
+    // timeout an order of magnitude SMALLER than the ceiling, so the probes
+    // genuinely time out against the target and nothing is cancelled. The
+    // `timed_out: false` assertion is what proves this is a different route to
+    // 'partial' than the ceiling's, rather than the ceiling firing early.
+    seedSnapshot([route('/users'), ...Array.from({ length: 8 }, (_, i) => route(`/stall/${i}`))]);
+
+    const r = expectOk(
+      await run({ base_url: origin, timeout_ms: 250, wall_clock_ms: 30_000 }),
+    );
+
+    expect(r.summary.timed_out).toBe(false);
+    expect(r.summary.probe_outcomes.cancelled).toBe(0);
+    expect(r.summary.requests_completed).toBeGreaterThan(0);
+    expect(r.summary.probe_outcomes.timeout).toBeGreaterThan(0);
+
+    // A run that measured something but lost most of the plan is 'partial',
+    // never 'full'.
+    expect(r.coverage).toBe('partial');
+    const gap = r.tools_run.find((t) => t.name === 'guardian-dast:unanswered');
+    expect(gap?.status).toBe('failed');
+    expect(gap?.reason).toMatch(/never answered/);
+    // The engine itself still ran — the two facts stay separate, exactly as
+    // the wall-clock entry keeps "we stopped asking" separate from "the target
+    // did not answer".
+    expect(r.tools_run.find((t) => t.name === 'guardian-dast')?.status).toBe('ok');
+    expect(r.warnings.some((w) => /partial coverage/i.test(w))).toBe(true);
+  });
+
+  it('does not degrade coverage for a stray unanswered probe', async () => {
+    // The other side of the threshold, and the reason it is not zero: a scan
+    // that degrades on any single flaky timeout trains readers to ignore the
+    // signal. Fourteen distinct routes answer (a 404 is an ANSWER — the probe
+    // completed), one stalls: 2 unanswered out of 30 planned requests.
+    // Distinct paths matter — `plan.ts` dedupes on (method, path), so
+    // repeating one path would collapse the denominator and push the ratio
+    // back over the line.
+    seedSnapshot([
+      ...Array.from({ length: 14 }, (_, i) => route(`/ok/${i}`)),
+      route('/stall/solo'),
+    ]);
+
+    const r = expectOk(
+      await run({ base_url: origin, timeout_ms: 250, wall_clock_ms: 30_000 }),
+    );
+
+    expect(r.summary.probe_outcomes.timeout).toBeGreaterThan(0);
+    expect(r.tools_run.some((t) => t.name === 'guardian-dast:unanswered')).toBe(false);
+    expect(r.coverage).toBe('full');
   });
 
   it('does not start nuclei once the wall-clock ceiling has fired', async () => {

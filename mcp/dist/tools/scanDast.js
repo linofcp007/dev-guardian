@@ -46,6 +46,23 @@ import { assessCoverage } from './scanCoverage.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable } from './scanHelpers.js';
 /** Name the own engine reports under in `tools_run`. Not a binary. */
 const DAST_ENGINE = 'guardian-dast';
+/**
+ * Share of the PLANNED probes that must go unanswered — timed out or failed
+ * to connect — before the run declares a coverage gap of its own.
+ *
+ * 10%, and the number is a balance between two ways of misleading a reader.
+ * At 0 every scan with one flaky socket reports 'partial', which trains the
+ * reader to ignore the field that exists to be believed. Too high and a
+ * target answering a handful of probes out of hundreds still reports
+ * `coverage: 'full'` — a "0 findings" result that scanned almost nothing,
+ * which is precisely the failure `computeCoverage` was written to prevent.
+ * One in ten planned probes going unanswered is past what flake explains.
+ *
+ * Measured against the plan rather than against what was attempted: probes
+ * cut by the wall-clock ceiling record `cancelled` and are reported by the
+ * separate `:wall-clock` entry, so they neither count here nor hide anything.
+ */
+const UNANSWERED_COVERAGE_THRESHOLD = 0.1;
 const inputSchema = {
     project_path: ProjectPath,
     base_url: z
@@ -120,7 +137,7 @@ const inputSchema = {
         .describe(`Global wall-clock ceiling for the probing phase, in milliseconds. Default: ` +
         `${DEFAULT_WALL_CLOCK_MS}. Bounds the total, which neither timeout_ms (one request) nor ` +
         `max_requests (how many are planned) does. When it cuts, the run still returns and says ` +
-        `so: summary.timed_out, summary.probes_not_run, and a degraded coverage. Probes it cut ` +
+        `so: summary.timed_out, summary.probes_cut, and a degraded coverage. Probes it cut ` +
         `record outcome 'cancelled', never 'timeout' — the target did not fail to answer, this ` +
         `tool stopped asking. Does not cover the one liveness request, which timeout_ms bounds.`),
 };
@@ -139,7 +156,9 @@ const tool = {
         'and returns target_not_found when nothing answers at base_url. Safety envelope: LOOPBACK ' +
         'TARGETS ONLY (localhost / 127.0.0.0/8 / ::1) unless the caller passes authorized_target: ' +
         'true attesting they may scan that host; READ-ONLY methods (GET/HEAD/OPTIONS) unless ' +
-        'allow_write_methods is set, and even then with empty bodies; redirects are never followed; ' +
+        'allow_write_methods is set, and even then with empty bodies — plus the opt-in ' +
+        'probe_rate_limit burst, the one exception, which sends POST to exactly one route; ' +
+        'redirects are never followed; ' +
         'no injection payloads and no credential guessing. Checks reachability against the spec diff, ' +
         'anonymous exposure of auth-required routes, differential authorization, CORS, security ' +
         'headers, information disclosure, method surface and open redirects, plus an opt-in benign ' +
@@ -311,6 +330,33 @@ async function handler(input, ctx, callMeta) {
                 (outcomes.cancelled > 0 ? `, ${outcomes.cancelled} cut short` : ''),
         },
     ];
+    // A run in which the target answered SOME probes but silently dropped a
+    // material share of them is not a full-coverage run, and `engineFailed`
+    // above cannot say so — it only fires when literally nothing completed. A
+    // target answering 1 of 300 used to report `tools_run: ok`, `coverage:
+    // 'full'` and no warning, with `probe_outcomes.timeout: 299` sitting two
+    // fields away contradicting it. Lose the same probes to the wall clock
+    // instead and coverage correctly degrades; losing them to the target must
+    // read the same way.
+    //
+    // A separate entry rather than a status on the engine's own, mirroring the
+    // `:wall-clock` entry below: "the target did not answer" and "this tool
+    // stopped asking" are different gaps, and keeping them apart is what lets
+    // `computeCoverage` report 'partial' for a run that measured part of the
+    // inventory instead of collapsing everything to 'none'.
+    const unanswered = outcomes.timeout + outcomes.network_error;
+    if (!engineFailed &&
+        plan.requests.length > 0 &&
+        unanswered / plan.requests.length >= UNANSWERED_COVERAGE_THRESHOLD) {
+        toolsRun.push({
+            name: `${DAST_ENGINE}:unanswered`,
+            status: 'failed',
+            reason: `the target never answered ${unanswered} of ${plan.requests.length} probe(s) ` +
+                `(${outcomes.timeout} timed out, ${outcomes.network_error} failed to connect) — ` +
+                'the checks covering those routes reached no verdict, so this scan is not a ' +
+                'complete picture of the inventory',
+        });
+    }
     const missingTools = [];
     // ---- 8. Optional rate-limit burst ------------------------------------
     const burst = await runRateLimitBurst({
@@ -490,8 +536,17 @@ async function handler(input, ctx, callMeta) {
             /** True when the wall-clock ceiling cut the run. Never silent. */
             timed_out: timedOut,
             wall_clock_ms: wallClockMs,
-            /** Probes the ceiling cut before they were ever sent. */
-            probes_not_run: timedOut ? outcomes.cancelled : 0,
+            /**
+             * Probes the wall-clock ceiling cut. NOT "probes that never touched the
+             * target": up to `DEFAULT_CONCURRENCY` of these were in flight when the
+             * ceiling fired and had already reached the target, and the executor
+             * cannot say afterwards which. It was called `probes_not_run`, which
+             * claimed the stronger, unknowable thing and had an active scanner
+             * under-reporting its own traffic — the wrong direction for an audit
+             * trail. Renamed rather than adjusted by a guess: the count of probes
+             * cut is exact, the count of probes untouched is not.
+             */
+            probes_cut: timedOut ? outcomes.cancelled : 0,
             skipped: plan.skipped,
             checks,
             rate_limit: burst.summary,

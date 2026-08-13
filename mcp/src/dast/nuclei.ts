@@ -72,6 +72,56 @@ export function buildNucleiArgs(opts: NucleiRunOptions): string[] {
   ];
 }
 
+/**
+ * Environment variables the nuclei child is allowed to see, matched
+ * case-insensitively (Windows spells `PATH` as `Path`, and a case-sensitive
+ * list would drop it on exactly one platform).
+ *
+ * Everything here is needed to LOCATE and RUN the binary, or to let it find
+ * its own template cache — nothing is here to configure a scan. In
+ * particular, nuclei is deliberately never handed the caller's Authorization
+ * header, so the variable `scan_dast`'s `auth_header_env` names must not
+ * reach it either.
+ *
+ * The proxy variables are the one judgement call: they are standard for any
+ * network tool, and omitting them turns a working scan behind a corporate
+ * proxy into a mysterious failure. A proxy URL can itself embed credentials,
+ * so this is not a claim that the child environment is secret-free — only
+ * that the credential THIS TOOL was handed is not in it.
+ */
+const NUCLEI_ENV_ALLOWLIST: ReadonlySet<string> = new Set([
+  // Locating and executing the binary.
+  'path', 'pathext', 'comspec', 'systemroot', 'windir', 'systemdrive',
+  // Where nuclei keeps its config and template cache.
+  'home', 'homedrive', 'homepath', 'userprofile', 'xdg_config_home',
+  'appdata', 'localappdata',
+  // Scratch space.
+  'temp', 'tmp', 'tmpdir',
+  // Locale and time, so timestamps and any parsing behave as the user expects.
+  'lang', 'lc_all', 'tz',
+  // Network egress.
+  'http_proxy', 'https_proxy', 'no_proxy',
+]);
+
+/**
+ * Build the child environment for the nuclei spawn from a source environment
+ * (normally `process.env`). Pure, so the allowlist is testable without
+ * spawning anything.
+ *
+ * Exact name matches only, never prefixes or substrings: `PATH_TO_VAULT_TOKEN`
+ * is not `PATH`. An unset name is omitted rather than defined as `undefined`,
+ * because the two differ once the object is spread.
+ */
+export function nucleiEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    if (!NUCLEI_ENV_ALLOWLIST.has(name.toLowerCase())) continue;
+    out[name] = value;
+  }
+  return out;
+}
+
 export async function invokeNuclei(
   opts: NucleiRunOptions,
 ): Promise<{ ok: boolean; reason?: string }> {
@@ -83,6 +133,14 @@ export async function invokeNuclei(
     // used only because it is a real, already-relevant path handed to us,
     // rather than reaching for ambient process state.
     cwd: dirname(opts.outputPath),
+    // An allowlisted environment, and `extendEnv: false` so it REPLACES the
+    // parent's rather than being merged over it. Without the second half the
+    // first is decorative: execa extends `process.env` by default, and the
+    // child would inherit the value of whatever variable `auth_header_env`
+    // named — a credential this tool goes out of its way never to put on
+    // nuclei's command line.
+    env: nucleiEnv(process.env),
+    extendEnv: false,
     timeoutMs: opts.timeoutMs,
     signal: opts.signal,
   });

@@ -31,7 +31,7 @@
  * scan's wall-clock ceiling record `outcome: 'cancelled'`, so a check whose
  * every probe was cut reads `target_error` even though the target was never
  * at fault. The orchestrator resolves it out of band — `summary.timed_out`,
- * `summary.probes_not_run`, a degraded `coverage`, and a warning that says in
+ * `summary.probes_cut`, a degraded `coverage`, and a warning that says in
  * words that a `target_error` after a time cut may simply mean the probe was
  * never sent.
  */

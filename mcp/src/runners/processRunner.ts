@@ -27,6 +27,17 @@ export interface ProcessRunOptions {
   args?: string[];
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  /**
+   * False replaces the child's environment with `env` instead of merging
+   * `env` over the parent's. Defaults to execa's own default (true).
+   *
+   * This is the difference between an allowlist and a decoration: execa merges
+   * with `process.env` by default, so passing a scrubbed `env` WITHOUT this
+   * set to false hands the child every parent variable anyway and scrubs
+   * nothing. Any caller passing `env` in order to withhold something must
+   * pass `extendEnv: false` too.
+   */
+  extendEnv?: boolean;
   signal?: AbortSignal;
   timeoutMs?: number;
   onLog?: (line: string) => void;
@@ -60,6 +71,10 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
   const child = execa(options.command, options.args ?? [], {
     cwd: options.cwd,
     env: options.env,
+    // `?? true` restates execa's own default explicitly rather than relying
+    // on `undefined` meaning it, so the merge behaviour is visible here
+    // instead of only in execa's docs.
+    extendEnv: options.extendEnv ?? true,
     shell: false,
     encoding: 'utf8',
     timeout: timeoutMs,

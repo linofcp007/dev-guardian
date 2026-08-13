@@ -38615,6 +38615,10 @@ async function runProcess(options) {
   const child = execa(options.command, options.args ?? [], {
     cwd: options.cwd,
     env: options.env,
+    // `?? true` restates execa's own default explicitly rather than relying
+    // on `undefined` meaning it, so the merge behaviour is visible here
+    // instead of only in execa's docs.
+    extendEnv: options.extendEnv ?? true,
     shell: false,
     encoding: "utf8",
     timeout: timeoutMs,
@@ -50905,6 +50909,44 @@ function buildNucleiArgs(opts) {
     String(DEFAULT_NUCLEI_RATE_LIMIT)
   ];
 }
+var NUCLEI_ENV_ALLOWLIST = /* @__PURE__ */ new Set([
+  // Locating and executing the binary.
+  "path",
+  "pathext",
+  "comspec",
+  "systemroot",
+  "windir",
+  "systemdrive",
+  // Where nuclei keeps its config and template cache.
+  "home",
+  "homedrive",
+  "homepath",
+  "userprofile",
+  "xdg_config_home",
+  "appdata",
+  "localappdata",
+  // Scratch space.
+  "temp",
+  "tmp",
+  "tmpdir",
+  // Locale and time, so timestamps and any parsing behave as the user expects.
+  "lang",
+  "lc_all",
+  "tz",
+  // Network egress.
+  "http_proxy",
+  "https_proxy",
+  "no_proxy"
+]);
+function nucleiEnv(source) {
+  const out = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value === void 0) continue;
+    if (!NUCLEI_ENV_ALLOWLIST.has(name.toLowerCase())) continue;
+    out[name] = value;
+  }
+  return out;
+}
 async function invokeNuclei(opts) {
   const run = await runProcess({
     command: opts.binaryPath,
@@ -50914,6 +50956,14 @@ async function invokeNuclei(opts) {
     // used only because it is a real, already-relevant path handed to us,
     // rather than reaching for ambient process state.
     cwd: dirname4(opts.outputPath),
+    // An allowlisted environment, and `extendEnv: false` so it REPLACES the
+    // parent's rather than being merged over it. Without the second half the
+    // first is decorative: execa extends `process.env` by default, and the
+    // child would inherit the value of whatever variable `auth_header_env`
+    // named — a credential this tool goes out of its way never to put on
+    // nuclei's command line.
+    env: nucleiEnv(process.env),
+    extendEnv: false,
     timeoutMs: opts.timeoutMs,
     signal: opts.signal
   });
@@ -51460,6 +51510,7 @@ function parseIpv4(host) {
 
 // src/tools/scanDast.ts
 var DAST_ENGINE = "guardian-dast";
+var UNANSWERED_COVERAGE_THRESHOLD = 0.1;
 var inputSchema26 = {
   project_path: ProjectPath,
   base_url: external_exports.string().min(1).describe(
@@ -51489,7 +51540,7 @@ var inputSchema26 = {
   max_requests: external_exports.number().int().positive().optional().describe(`Global request ceiling. Default: ${DEFAULT_MAX_REQUESTS}. Reported when it cuts.`),
   timeout_ms: external_exports.number().int().positive().optional().describe(`Per-request timeout in milliseconds. Default: ${DEFAULT_PROBE_TIMEOUT_MS}.`),
   wall_clock_ms: external_exports.number().int().positive().optional().describe(
-    `Global wall-clock ceiling for the probing phase, in milliseconds. Default: ${DEFAULT_WALL_CLOCK_MS}. Bounds the total, which neither timeout_ms (one request) nor max_requests (how many are planned) does. When it cuts, the run still returns and says so: summary.timed_out, summary.probes_not_run, and a degraded coverage. Probes it cut record outcome 'cancelled', never 'timeout' \u2014 the target did not fail to answer, this tool stopped asking. Does not cover the one liveness request, which timeout_ms bounds.`
+    `Global wall-clock ceiling for the probing phase, in milliseconds. Default: ${DEFAULT_WALL_CLOCK_MS}. Bounds the total, which neither timeout_ms (one request) nor max_requests (how many are planned) does. When it cuts, the run still returns and says so: summary.timed_out, summary.probes_cut, and a degraded coverage. Probes it cut record outcome 'cancelled', never 'timeout' \u2014 the target did not fail to answer, this tool stopped asking. Does not cover the one liveness request, which timeout_ms bounds.`
   )
 };
 var tool40 = {
@@ -51500,7 +51551,7 @@ var tool40 = {
   // things that make a caller pick this tool wrongly are not knowing the app
   // must already be running, and not knowing a prior map_attack_surface run
   // is required.
-  description: "ACTIVE DAST: sends real HTTP requests to an ALREADY-RUNNING application and reports what is actually reachable, what is served without credentials, and what leaks. REQUIRES a prior map_attack_surface run \u2014 it probes that route inventory and refuses with no_surface_snapshot when there is none. The app must already be up: this tool never starts, builds or stops it, and returns target_not_found when nothing answers at base_url. Safety envelope: LOOPBACK TARGETS ONLY (localhost / 127.0.0.0/8 / ::1) unless the caller passes authorized_target: true attesting they may scan that host; READ-ONLY methods (GET/HEAD/OPTIONS) unless allow_write_methods is set, and even then with empty bodies; redirects are never followed; no injection payloads and no credential guessing. Checks reachability against the spec diff, anonymous exposure of auth-required routes, differential authorization, CORS, security headers, information disclosure, method surface and open redirects, plus an opt-in benign rate-limit burst and an optional nuclei pass. Findings persist with scan_type dast and point at the source file the route was extracted from. A clean result is NOT evidence of injection safety.",
+  description: "ACTIVE DAST: sends real HTTP requests to an ALREADY-RUNNING application and reports what is actually reachable, what is served without credentials, and what leaks. REQUIRES a prior map_attack_surface run \u2014 it probes that route inventory and refuses with no_surface_snapshot when there is none. The app must already be up: this tool never starts, builds or stops it, and returns target_not_found when nothing answers at base_url. Safety envelope: LOOPBACK TARGETS ONLY (localhost / 127.0.0.0/8 / ::1) unless the caller passes authorized_target: true attesting they may scan that host; READ-ONLY methods (GET/HEAD/OPTIONS) unless allow_write_methods is set, and even then with empty bodies \u2014 plus the opt-in probe_rate_limit burst, the one exception, which sends POST to exactly one route; redirects are never followed; no injection payloads and no credential guessing. Checks reachability against the spec diff, anonymous exposure of auth-required routes, differential authorization, CORS, security headers, information disclosure, method surface and open redirects, plus an opt-in benign rate-limit burst and an optional nuclei pass. Findings persist with scan_type dast and point at the source file the route was extracted from. A clean result is NOT evidence of injection safety.",
   inputSchema: inputSchema26,
   handler: (input, ctx, callMeta) => handler40(input, ctx, callMeta)
 };
@@ -51621,6 +51672,14 @@ async function handler40(input, ctx, callMeta) {
       reason: `${plan.requests.length} request(s) planned, ${completed} completed, ${outcomes.timeout} timed out, ${outcomes.network_error} failed to connect` + (outcomes.cancelled > 0 ? `, ${outcomes.cancelled} cut short` : "")
     }
   ];
+  const unanswered = outcomes.timeout + outcomes.network_error;
+  if (!engineFailed && plan.requests.length > 0 && unanswered / plan.requests.length >= UNANSWERED_COVERAGE_THRESHOLD) {
+    toolsRun.push({
+      name: `${DAST_ENGINE}:unanswered`,
+      status: "failed",
+      reason: `the target never answered ${unanswered} of ${plan.requests.length} probe(s) (${outcomes.timeout} timed out, ${outcomes.network_error} failed to connect) \u2014 the checks covering those routes reached no verdict, so this scan is not a complete picture of the inventory`
+    });
+  }
   const missingTools = [];
   const burst = await runRateLimitBurst({
     requested: inp.probe_rate_limit === true,
@@ -51771,8 +51830,17 @@ async function handler40(input, ctx, callMeta) {
       /** True when the wall-clock ceiling cut the run. Never silent. */
       timed_out: timedOut,
       wall_clock_ms: wallClockMs,
-      /** Probes the ceiling cut before they were ever sent. */
-      probes_not_run: timedOut ? outcomes.cancelled : 0,
+      /**
+       * Probes the wall-clock ceiling cut. NOT "probes that never touched the
+       * target": up to `DEFAULT_CONCURRENCY` of these were in flight when the
+       * ceiling fired and had already reached the target, and the executor
+       * cannot say afterwards which. It was called `probes_not_run`, which
+       * claimed the stronger, unknowable thing and had an active scanner
+       * under-reporting its own traffic — the wrong direction for an audit
+       * trail. Renamed rather than adjusted by a guess: the count of probes
+       * cut is exact, the count of probes untouched is not.
+       */
+      probes_cut: timedOut ? outcomes.cancelled : 0,
       skipped: plan.skipped,
       checks,
       rate_limit: burst.summary
