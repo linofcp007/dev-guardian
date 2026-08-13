@@ -85,6 +85,13 @@ const NUCLEI_ENV_ALLOWLIST = new Set([
     'lang', 'lc_all', 'tz',
     // Network egress.
     'http_proxy', 'https_proxy', 'no_proxy',
+    // The CA bundle Go's crypto/x509 reads on Linux. These are filesystem
+    // paths, not secrets, so allowing them doesn't weaken the scrub above --
+    // and without them, a host with a non-default trust store (a container
+    // image with its own bundle, or the corporate MITM proxy http_proxy/
+    // https_proxy above already supports) fails TLS, including nuclei's own
+    // template-update fetch.
+    'ssl_cert_file', 'ssl_cert_dir',
 ]);
 /**
  * Build the child environment for the nuclei spawn from a source environment

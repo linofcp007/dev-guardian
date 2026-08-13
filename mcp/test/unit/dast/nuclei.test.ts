@@ -180,6 +180,44 @@ describe('the nuclei child environment', () => {
     const names = Object.keys(env).map((k) => k.toLowerCase());
     expect(names).toContain('path');
   });
+
+  it('lets SSL_CERT_FILE and SSL_CERT_DIR through, without reopening the credential path', async () => {
+    // Go's crypto/x509 reads these two for a non-default CA bundle: a
+    // container image with its own trust store, or the corporate MITM proxy
+    // this allowlist already supports via http_proxy/https_proxy. Without
+    // them, extendEnv: false silently breaks TLS -- including nuclei's own
+    // template-update fetch -- on exactly those hosts.
+    //
+    // Wrong implementation guarded against: adding the names to
+    // NUCLEI_ENV_ALLOWLIST in their natural uppercase spelling instead of the
+    // lowercase every existing entry uses. The matcher looks up
+    // `name.toLowerCase()`, so an uppercase Set entry never matches and the
+    // variable is dropped exactly as if no fix had been applied -- this
+    // assertion fails identically in both cases, which is why it has to be
+    // checked against the real child env rather than the allowlist source.
+    const CERT_FILE = '/etc/ssl/certs/corporate-ca.pem';
+    const CERT_DIR = '/etc/ssl/certs';
+    process.env.SSL_CERT_FILE = CERT_FILE;
+    process.env.SSL_CERT_DIR = CERT_DIR;
+    try {
+      await invokeNuclei(BASE);
+      const call = vi.mocked(runProcess).mock.calls[0]?.[0];
+      expect(call).toBeDefined();
+      if (call === undefined) return;
+      const env = childEnv(call);
+      expect(env['SSL_CERT_FILE']).toBe(CERT_FILE);
+      expect(env['SSL_CERT_DIR']).toBe(CERT_DIR);
+      // Same breath as the credential check above: a "fix" that widens the
+      // scrub by turning extendEnv back on would make the two assertions
+      // above pass too, so the secret must stay excluded from the very same
+      // child env this test just proved the CA paths are present in.
+      expect(Object.values(env).join('\n')).not.toContain(SECRET);
+      expect(Object.keys(env)).not.toContain(SECRET_VAR);
+    } finally {
+      delete process.env.SSL_CERT_FILE;
+      delete process.env.SSL_CERT_DIR;
+    }
+  });
 });
 
 describe('nucleiEnv', () => {

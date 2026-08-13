@@ -50936,7 +50936,15 @@ var NUCLEI_ENV_ALLOWLIST = /* @__PURE__ */ new Set([
   // Network egress.
   "http_proxy",
   "https_proxy",
-  "no_proxy"
+  "no_proxy",
+  // The CA bundle Go's crypto/x509 reads on Linux. These are filesystem
+  // paths, not secrets, so allowing them doesn't weaken the scrub above --
+  // and without them, a host with a non-default trust store (a container
+  // image with its own bundle, or the corporate MITM proxy http_proxy/
+  // https_proxy above already supports) fails TLS, including nuclei's own
+  // template-update fetch.
+  "ssl_cert_file",
+  "ssl_cert_dir"
 ]);
 function nucleiEnv(source) {
   const out = {};
