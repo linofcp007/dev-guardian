@@ -607,19 +607,29 @@ function toPosixPath(path) {
 function resolveModuleFile(importingFile, specifier, knownFiles) {
     if (!specifier.startsWith('.'))
         return specifier;
-    const dir = toPosixPath(importingFile).split('/').slice(0, -1).join('/');
-    const combined = `${dir}/${specifier}`;
+    const posixImporting = toPosixPath(importingFile);
     // An absolute POSIX path's leading `/` is an empty first segment, and
     // dropping empty segments ate it: `/srv/app/src/app.js` + `./routes/users`
     // normalised to `src/routes/users`, which matches no known file on Linux,
     // macOS, or any Docker-Semgrep run (Semgrep reports absolute paths for the
     // absolute target this tool always passes). Node mount resolution then
     // silently fell back to the specifier text on every POSIX host.
-    // `moduleEdges.ts`'s `joinAndNormalize`, which this mirrors, carries the
-    // same guard and the same reasoning.
-    const absolute = combined.startsWith('/');
+    //
+    // Absoluteness is read from the DIRECTORY, never from the joined string:
+    // the join always contributes a separator, so a directory-less importing
+    // file (`app.js`, whose directory is '') would look absolute and resolve
+    // to `/routes/users` — matching nothing, and turning the root-level
+    // `app.js` + `./routes/users.js` shape into an unresolved mount. That
+    // requires keeping '' (no directory) distinct from '/' (the filesystem
+    // root), which is why the fallback below is not simply ''.
+    // `moduleEdges.ts`'s `joinAndNormalize`/`dirOf` pair, which this mirrors,
+    // carries the same guard and the same reasoning.
+    const parts = posixImporting.split('/');
+    parts.pop();
+    const dir = parts.join('/') === '' && posixImporting.startsWith('/') ? '/' : parts.join('/');
+    const absolute = dir.startsWith('/');
     const stack = [];
-    for (const part of combined.split('/')) {
+    for (const part of `${dir}/${specifier}`.split('/')) {
         if (part === '.' || part === '')
             continue;
         if (part === '..')

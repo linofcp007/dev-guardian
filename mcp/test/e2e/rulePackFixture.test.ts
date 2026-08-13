@@ -652,7 +652,13 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
       'node-nest/users.controller.ts -> node-nest/users.service.ts',
       'node-nest/users.service.ts -> node-nest/identifiers.util.ts',
       'py-fastapi/main.py -> pylib/textutil.py',
-      'rust-actix/main.rs -> rust-actix/settings.rs',
+      // `crate::`-anchored, not `self::`: the anchor is derived from the
+      // specifier alone (Cargo's `src/` crate root), so unlike an anchor
+      // taken from the importing file's own path it cannot survive being
+      // resolved in the wrong path space. Both a route file and a non-route
+      // file contribute one.
+      'rust-actix/config.rs -> src/settings.rs',
+      'rust-actix/main.rs -> src/settings.rs',
     ]);
 
     // The same three, stated as the property that matters rather than as

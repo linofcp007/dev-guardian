@@ -376,12 +376,14 @@ function buildResolutionIndex(projectFiles) {
         byPosixPath.set(posix, file);
         if (!posix.endsWith('.go'))
             continue;
-        // A root-level .go file has no directory to import: Go's own rule needs
-        // a package path, and the `/`-anchored match below could never accept an
-        // empty one anyway. Skipped here so the map never carries a key that
-        // exists only to be rejected.
+        // A .go file at the root of the scanned tree has no package path to be
+        // imported by: Go's own rule needs one, and the `/`-anchored match below
+        // could never accept an empty one anyway. `dirOf` reports that root as
+        // `''` for a project-relative path and `'/'` for a filesystem-absolute
+        // one; both are skipped here, so the map never carries a key that exists
+        // only to be rejected.
         const dir = dirOf(posix);
-        if (dir.length === 0)
+        if (dir === '' || dir === '/')
             continue;
         const existing = goPackages.get(dir);
         if (existing === undefined)
@@ -402,10 +404,24 @@ function lookupCandidates(byPosixPath, candidates) {
 function toPosix(path) {
     return path.replace(/\\/g, '/');
 }
+/**
+ * The importing file's directory, POSIX-normalised.
+ *
+ * `''` for a file with no directory at all (`server.js`, project-relative)
+ * and `'/'` for one sitting at the FILESYSTEM root (`/server.js`). Popping
+ * the last segment collapses both to `''` — `'/server.js'` splits to
+ * `['', 'server.js']` — and the two need different answers from
+ * `joinAndNormalize`: `routes.js` for the first, `/routes.js` for the
+ * second. Keeping them distinct HERE is what lets that function decide
+ * absoluteness from the directory rather than from the joined string, which
+ * is the only reading that is right for both.
+ */
 function dirOf(file) {
-    const parts = toPosix(file).split('/');
+    const posix = toPosix(file);
+    const parts = posix.split('/');
     parts.pop();
-    return parts.join('/');
+    const dir = parts.join('/');
+    return dir === '' && posix.startsWith('/') ? '/' : dir;
 }
 /**
  * Join a directory and a `/`-separated tail, resolving `.` and `..`
@@ -417,18 +433,26 @@ function dirOf(file) {
  * empty segment that precedes an absolute path's first component:
  * `joinAndNormalize('/src/api', './helper.js')` returned
  * `src/api/helper.js`, which can never equal the index key
- * `/src/api/helper.ts`. Callers now hand this project-relative paths (see
- * `resolveModuleEdges`' PATH SPACE note), so nothing in production depends
- * on it any more — but on Linux, macOS, and any Docker-Semgrep run the
+ * `/src/api/helper.ts`. On Linux, macOS and any Docker-Semgrep run the
  * absolute form was ALL this module ever saw, and every JS/TS and Rust
- * `self::` edge silently failed to resolve. Restored so the same input can
- * never mean two different things again.
+ * `self::` edge silently failed to resolve.
+ *
+ * Absoluteness is decided from `dir`, NEVER from the joined string. The
+ * joined string always carries the separator — `${dir}/${tail}` — so for a
+ * directory-less importing file (`server.js`, whose `dirOf` is `''`) it
+ * begins with `/` while naming nothing absolute at all, and a check written
+ * against it returned `/routes.js` where the project-relative index holds
+ * `routes.js`. That is not a hypothetical: relativizing this module's inputs
+ * is what made Python, Go and Rust resolve, and it is also what first
+ * exposed the resolvers to a root-level `server.js` / `app.js` / `index.js`
+ * — one of the most common shapes there is, and previously always absolute,
+ * hence always carrying a directory. Reading `dir` instead distinguishes the
+ * two, given `dirOf` keeps `'/'` for a file at the filesystem root.
  */
 function joinAndNormalize(dir, tail) {
-    const combined = `${dir}/${tail}`;
-    const absolute = combined.startsWith('/');
+    const absolute = dir.startsWith('/');
     const stack = [];
-    for (const part of combined.split('/')) {
+    for (const part of `${dir}/${tail}`.split('/')) {
         if (part === '' || part === '.')
             continue;
         if (part === '..')

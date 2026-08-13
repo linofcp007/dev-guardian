@@ -128,6 +128,101 @@ const JS_MOUNT_OUTPUT = JSON.stringify({
 });
 
 /**
+ * The same Express app with the mounting file at the ROOT of the scanned
+ * tree — a plain `app.js`, no directory at all, which is how most small Node
+ * projects are laid out. `resolveModuleFile` derives the importing file's
+ * directory by dropping the last segment, which is `''` here, so a
+ * leading-separator check written against the JOINED path reads
+ * `'' + '/' + './routes/users'` as absolute and resolves to `/routes/users`
+ * — matching no known file, leaving the router unresolved and every route it
+ * declares `path_partial`. Nothing else in this file exercises a
+ * directory-less importer.
+ */
+const ROOT_LEVEL_MOUNT_OUTPUT = JSON.stringify({
+  results: [
+    {
+      check_id: 'guardian-route-express',
+      path: 'routes/users.js',
+      start: { line: 5 },
+      extra: {
+        metadata: { guardian_kind: 'route', framework: 'express', confidence: 'high' },
+        metavars: { $METHOD: { abstract_content: 'get' }, $PATH: { abstract_content: '/users' } },
+      },
+    },
+    {
+      check_id: 'guardian-mount-express',
+      path: 'app.js',
+      start: { line: 10 },
+      extra: {
+        metadata: { guardian_kind: 'mount', framework: 'express' },
+        metavars: {
+          $PREFIX: { abstract_content: "'/api'" },
+          $ROUTER: { abstract_content: 'usersRouter' },
+        },
+      },
+    },
+    {
+      check_id: 'guardian-import-esm',
+      path: 'app.js',
+      start: { line: 1 },
+      extra: {
+        metadata: { guardian_kind: 'import' },
+        metavars: {
+          $SYMBOL: { abstract_content: 'usersRouter' },
+          $MODULE: { abstract_content: "'./routes/users'" },
+        },
+      },
+    },
+  ],
+});
+
+/**
+ * The same app spelled the way Semgrep reports it on Linux, macOS and every
+ * Docker-Semgrep run: absolute POSIX. The companion to
+ * `WINDOWS_MOUNT_OUTPUT` below, and the case that had no test at all while
+ * `resolveModuleFile` silently dropped the leading `/` — on those hosts the
+ * normalised candidate could never equal a known file, so mount resolution
+ * degraded to the specifier text and every mounted route went partial.
+ */
+const POSIX_ABSOLUTE_MOUNT_OUTPUT = JSON.stringify({
+  results: [
+    {
+      check_id: 'guardian-route-express',
+      path: '/srv/app/src/routes/users.js',
+      start: { line: 5 },
+      extra: {
+        metadata: { guardian_kind: 'route', framework: 'express', confidence: 'high' },
+        metavars: { $METHOD: { abstract_content: 'get' }, $PATH: { abstract_content: '/users' } },
+      },
+    },
+    {
+      check_id: 'guardian-mount-express',
+      path: '/srv/app/src/app.js',
+      start: { line: 10 },
+      extra: {
+        metadata: { guardian_kind: 'mount', framework: 'express' },
+        metavars: {
+          $PREFIX: { abstract_content: "'/api'" },
+          $ROUTER: { abstract_content: 'usersRouter' },
+        },
+      },
+    },
+    {
+      check_id: 'guardian-import-esm',
+      path: '/srv/app/src/app.js',
+      start: { line: 1 },
+      extra: {
+        metadata: { guardian_kind: 'import' },
+        metavars: {
+          $SYMBOL: { abstract_content: 'usersRouter' },
+          $MODULE: { abstract_content: "'./routes/users'" },
+        },
+      },
+    },
+  ],
+});
+
+/**
  * TS project under NodeNext (this repo's own convention): the import
  * specifier says `.js` but the real matched source file is `.ts` (B2
  * scenario 2 — the mismatch the extension-insensitive match must bridge).
@@ -589,6 +684,47 @@ describe('map_attack_surface', () => {
     };
 
     const route = result.sample.find((r) => r.file === 'src/routes/users.ts');
+    expect(route?.path_resolved).toBe('/api/users');
+    expect(route?.path_partial).toBe(false);
+  });
+
+  it('resolves a mount whose mounting file sits at the root of the tree', async () => {
+    // `app.js`, no directory — the shape `resolveModuleFile`'s
+    // directory-derivation gets wrong when absoluteness is read from the
+    // joined path instead of the directory. The wrong implementation leaves
+    // the router unresolved and reports GET /users as `path_partial`, which
+    // is a real route reported at the wrong URL, not a missing one.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(ROOT_LEVEL_MOUNT_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      sample: { path_resolved: string; path_partial: boolean; file: string }[];
+    };
+
+    const route = result.sample.find((r) => r.file === 'routes/users.js');
+    expect(route?.path_resolved).toBe('/api/users');
+    expect(route?.path_partial).toBe(false);
+  });
+
+  it('resolves a mount when Semgrep reports absolute POSIX paths', async () => {
+    // The Linux/macOS/Docker-Semgrep spelling, and the one `resolveModuleFile`
+    // had no test for while it was dropping the leading `/`: the normalised
+    // candidate `src/routes/users` could never equal the known file
+    // `/srv/app/src/routes/users.js`, so the mount silently degraded.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(POSIX_ABSOLUTE_MOUNT_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      sample: { path_resolved: string; path_partial: boolean; file: string }[];
+    };
+
+    const route = result.sample.find((r) => r.file.endsWith('routes/users.js'));
     expect(route?.path_resolved).toBe('/api/users');
     expect(route?.path_partial).toBe(false);
   });

@@ -1,10 +1,11 @@
 use actix_web::{delete, get, patch, post, put, web, App, HttpResponse, HttpServer, Responder};
 
-mod settings;
-
-// The fixture's one resolvable intra-project Rust import. `self::` anchors at
-// this file's own directory; see rust-actix/settings.rs.
-use self::settings::Config;
+// The fixture's resolvable intra-project Rust import, and the dominant
+// real-world shape. `crate::` anchors at the crate root (`src/` by Cargo
+// convention) — a PROJECT-RELATIVE anchor derived from the specifier alone,
+// which is what makes this arm discriminate a resolver fed absolute paths.
+// See src/settings.rs.
+use crate::settings::Config;
 
 #[get("/rust/health")]
 async fn health() -> impl Responder {

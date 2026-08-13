@@ -37755,13 +37755,25 @@ var SurfaceRepo = class {
     };
   }
   /**
-   * The newest snapshot in the database, from ANY project. Kept for the
-   * callers whose contract is "whatever this server last mapped" — the
-   * `guardian://surface/latest` resource and `scan_dast`'s route source.
-   * A consumer that relativizes paths against a specific project root, or
-   * keys anything by one, must use `getLatestForProject` instead: a snapshot
-   * of a different tree relativizes into a different key space, and every
-   * comparison against it silently answers "not found" rather than failing.
+   * The newest snapshot in the database, from ANY project.
+   *
+   * Correct for exactly one caller: the `guardian://surface/latest` resource,
+   * whose contract really is "whatever this server last mapped" and which
+   * claims nothing about a project.
+   *
+   * Any consumer that relativizes paths against a specific project root,
+   * keys anything by one, or TELLS THE CALLER it answered about their
+   * project must use `getLatestForProject`: a snapshot of a different tree
+   * relativizes into a different key space, so every comparison against it
+   * silently answers "not found" rather than failing.
+   *
+   * KNOWN MISMATCH, not an endorsement: `scan_dast` (tools/scanDast.ts) uses
+   * this method and then refuses with "No attack-surface snapshot exists for
+   * THIS PROJECT", so it already believes it is project-scoped — meaning it
+   * can probe one project's routes while another project's snapshot is the
+   * newest row. That predates the project-scoped read added for
+   * `validate_finding` and is recorded here so the next reader sees a bug to
+   * fix rather than a contract to copy.
    */
   getLatest() {
     const row = this.getLatestStmt.get();
@@ -49309,7 +49321,7 @@ function buildResolutionIndex(projectFiles) {
     byPosixPath.set(posix, file);
     if (!posix.endsWith(".go")) continue;
     const dir = dirOf(posix);
-    if (dir.length === 0) continue;
+    if (dir === "" || dir === "/") continue;
     const existing = goPackages.get(dir);
     if (existing === void 0) goPackages.set(dir, [file]);
     else existing.push(file);
@@ -49327,15 +49339,16 @@ function toPosix(path6) {
   return path6.replace(/\\/g, "/");
 }
 function dirOf(file) {
-  const parts = toPosix(file).split("/");
+  const posix = toPosix(file);
+  const parts = posix.split("/");
   parts.pop();
-  return parts.join("/");
+  const dir = parts.join("/");
+  return dir === "" && posix.startsWith("/") ? "/" : dir;
 }
 function joinAndNormalize(dir, tail) {
-  const combined = `${dir}/${tail}`;
-  const absolute = combined.startsWith("/");
+  const absolute = dir.startsWith("/");
   const stack = [];
-  for (const part of combined.split("/")) {
+  for (const part of `${dir}/${tail}`.split("/")) {
     if (part === "" || part === ".") continue;
     if (part === "..") stack.pop();
     else stack.push(part);
@@ -50611,11 +50624,13 @@ function toPosixPath2(path6) {
 }
 function resolveModuleFile(importingFile, specifier, knownFiles) {
   if (!specifier.startsWith(".")) return specifier;
-  const dir = toPosixPath2(importingFile).split("/").slice(0, -1).join("/");
-  const combined = `${dir}/${specifier}`;
-  const absolute = combined.startsWith("/");
+  const posixImporting = toPosixPath2(importingFile);
+  const parts = posixImporting.split("/");
+  parts.pop();
+  const dir = parts.join("/") === "" && posixImporting.startsWith("/") ? "/" : parts.join("/");
+  const absolute = dir.startsWith("/");
   const stack = [];
-  for (const part of combined.split("/")) {
+  for (const part of `${dir}/${specifier}`.split("/")) {
     if (part === "." || part === "") continue;
     if (part === "..") stack.pop();
     else stack.push(part);

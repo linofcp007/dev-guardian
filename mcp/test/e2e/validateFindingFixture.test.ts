@@ -87,11 +87,20 @@ const ROOT_CONTROLLER_FILE = 'node-nest/users.controller.ts';
  * three languages came back `unreachable` with full confidence. Only an
  * assertion in each language can see it — which is why the fixture now
  * carries one resolvable intra-project import per language.
+ *
+ * Each arm's anchor is derived from the SPECIFIER, never from the importing
+ * file's own path: a dotted Python module, a Go package directory, and a
+ * Rust `crate::` path (Cargo's `src/` root). That is what makes them
+ * discriminate. An anchor taken from the importing file — `./x` in JS/TS,
+ * `self::x` in Rust — is already in whatever path space that file is in, so
+ * it resolves in both and proves nothing about which space the resolver was
+ * handed. The Rust arm was `self::`-anchored at first and had exactly that
+ * blind spot.
  */
 const REACHABLE_BY_LANGUAGE: { fingerprint: string; file: string; root: string }[] = [
   { fingerprint: 'e2e-py-1', file: 'pylib/textutil.py', root: 'py-fastapi/main.py' },
   { fingerprint: 'e2e-go-1', file: 'go-api/pkg/util/shout.go', root: 'go-api/main.go' },
-  { fingerprint: 'e2e-rs-1', file: 'rust-actix/settings.rs', root: 'rust-actix/main.rs' },
+  { fingerprint: 'e2e-rs-1', file: 'src/settings.rs', root: 'rust-actix/main.rs' },
 ];
 
 /**

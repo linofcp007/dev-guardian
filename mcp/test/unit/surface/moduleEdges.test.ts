@@ -201,6 +201,65 @@ describe('resolveModuleEdges', () => {
     expect(unresolved).toHaveLength(1);
   });
 
+  /* ---- the importing file has NO directory --------------------------- *
+   * A root-level `server.js` / `app.js` / `index.js` that declares routes
+   * and imports `./routes/users.js` is one of the most common shapes there
+   * is, and relativizing the resolver's inputs (which is what makes Python,
+   * Go and Rust resolve at all) is exactly what makes it reachable in
+   * production: before that, every importing file was absolute and always
+   * had a directory. `dirOf` returns '' for such a file, so the joined path
+   * starts with the separator — and a leading-slash check written against
+   * the JOINED string reads that as "absolute" and returns '/routes.js',
+   * which can never equal the project-relative key 'routes.js'.
+   *
+   * Gate 6 cannot catch it: any other resolved JS/TS edge anywhere in the
+   * project satisfies "this language resolved something", so the file and
+   * everything downstream of it read `unreachable` at confidence medium —
+   * the fabricated negative verdict this whole feature forbids.
+   * ------------------------------------------------------------------- */
+
+  it('resolves a relative specifier from an importing file with no directory', () => {
+    const files = new Set(['server.js', 'routes.js']);
+    const { resolved } = resolveModuleEdges(
+      [edge('server.js', './routes.js', 'javascript')], files,
+    );
+    expect(resolved).toEqual([{ file: 'server.js', module_file: 'routes.js' }]);
+  });
+
+  it('resolves from a directory-less importer into a subdirectory', () => {
+    // The dominant real shape: `app.js` at the project root mounting
+    // `./routes/users.js`.
+    const files = new Set(['app.js', 'routes/users.js']);
+    const { resolved } = resolveModuleEdges(
+      [edge('app.js', './routes/users.js', 'javascript')], files,
+    );
+    expect(resolved).toEqual([{ file: 'app.js', module_file: 'routes/users.js' }]);
+  });
+
+  it("resolves a Rust self:: path from a root-level main.rs", () => {
+    // The other resolver anchored on the importing file's own directory, and
+    // therefore the other one a directory-less importer breaks.
+    const files = new Set(['main.rs', 'settings.rs']);
+    const { resolved } = resolveModuleEdges(
+      [edge('main.rs', 'self::settings', 'rust')], files,
+    );
+    expect(resolved).toEqual([{ file: 'main.rs', module_file: 'settings.rs' }]);
+  });
+
+  it('still resolves a file at the FILESYSTEM root, which is a different case entirely', () => {
+    // The ambiguity a fix must not collapse: `dirOf` maps BOTH 'server.js'
+    // (no directory, project-relative) and '/server.js' (the filesystem
+    // root) to the same empty string, yet the correct answers differ —
+    // 'routes.js' for the first, '/routes.js' for this one. A fix that
+    // simply stops treating the joined path as absolute trades the
+    // regression above for this one.
+    const files = new Set(['/server.js', '/routes.js']);
+    const { resolved } = resolveModuleEdges(
+      [edge('/server.js', './routes.js', 'javascript')], files,
+    );
+    expect(resolved).toEqual([{ file: '/server.js', module_file: '/routes.js' }]);
+  });
+
   it('resolves an absolute POSIX path without eating its leading slash', () => {
     // Linux, macOS and every Docker-Semgrep run report absolute POSIX paths.
     // `joinAndNormalize` dropped empty segments, and an absolute path's
