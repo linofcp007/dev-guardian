@@ -2,7 +2,7 @@
 
 Stdio MCP server that exposes the dev-guardian plugin's security, quality,
 bugfix, deps, compliance, observability, and performance capabilities as
-**23 MCP tools** and **11 MCP resources**.
+**52 MCP tools** and **18 MCP resources**.
 
 The server is registered in the plugin manifest at
 `.claude-plugin/plugin.json` under `mcpServers.dev-guardian` — Claude Code
@@ -15,8 +15,8 @@ plugin is installed.
 mcp/
 ├── src/
 │   ├── server.ts                # entry point (stdio transport)
-│   ├── tools/                   # 23 MCP tool handlers + scan-tool factory
-│   ├── resources/               # 11 MCP resources (guardian://…)
+│   ├── tools/                   # 52 MCP tool handlers + scan-tool factory
+│   ├── resources/               # 18 MCP resources (guardian://…)
 │   ├── runners/                 # process + shell + scanner-parser registry
 │   ├── storage/                 # better-sqlite3 + migrations
 │   ├── platform/                # OS / shell / pkg-mgr / path detection
@@ -101,7 +101,10 @@ Single SQLite file at `<project_root>/.guardian/guardian.db`:
 | `runtime_meta`     | Server-level KV (chosen shell, etc.).                         |
 | `schema_meta`      | Migration version.                                            |
 
-## Tools (23)
+## Tools (52)
+
+This grouping covers a subset, kept for illustration; it is not exhaustive. The root
+[`README.md`](../README.md) carries the complete, current tool table.
 
 Grouped by category:
 
@@ -116,7 +119,10 @@ Grouped by category:
   `set_baseline`
 - **Toolchain (2)**: `check_toolchain`, `install_toolchain`
 
-## Resources (11)
+## Resources (18)
+
+This list covers a subset, kept for illustration; it is not exhaustive. The root
+[`README.md`](../README.md) carries the complete, current resource list.
 
 ```
 guardian://scans/latest
