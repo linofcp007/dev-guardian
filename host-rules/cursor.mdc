@@ -7,8 +7,8 @@ alwaysApply: true
 
 # dev-guardian
 
-This project has the **dev-guardian MCP server** registered. ~50 tools and
-16 resources for security, quality, bugfix, deps, compliance,
+This project has the **dev-guardian MCP server** registered. 52 tools and
+18 resources for security, quality, bugfix, deps, compliance,
 observability, performance, plus first-class WordPress and .NET support.
 All scanners run **locally**, no telemetry.
 
@@ -64,6 +64,14 @@ regression tracking.
 - ".NET posture overview" → `dotnet_describe_setup`
 - ".NET SAST" → `scan_sast` (auto includes p/csharp + SCS when opted in)
 
+### Attack surface / DAST
+- "what routes does this app expose?" → `map_attack_surface`
+- "active DAST / pen-test the running app" → `map_attack_surface` first for
+  the route inventory, then `scan_dast` against the already-running app
+  (loopback-only unless `authorized_target: true`; a clean result is not
+  evidence of injection safety — nuclei's opt-in pass covers the origin,
+  not this project's specific routes)
+
 ### Meta
 - "full audit" → `audit_executive` (stack-aware: auto includes WP/.NET when detected)
 - "risk score" → `risk_score`
@@ -91,6 +99,8 @@ WordPress: `wp/audit/latest`, `wp/audit/{scan_id}`, `wp/cron`.
 
 .NET: `dotnet/target-frameworks`, `dotnet/efcore`.
 
+Attack surface: `surface/latest`, `surface/{id}`.
+
 ## Workflows
 
 **Bootstrap** → `detect_stack` → `init_project` → `install_toolchain` →
@@ -108,6 +118,9 @@ WordPress: `wp/audit/latest`, `wp/audit/{scan_id}`, `wp/cron`.
 **.NET-only** → `dotnet_target_framework_check` + `scan_dotnet_secrets` +
 `scan_sast` + `dotnet_efcore_audit` → `dotnet_describe_setup`.
 
+**Active DAST** → `map_attack_surface` → `scan_dast` (target app must
+already be running; `scan_dast` never starts, builds or stops it).
+
 ## Anti-patterns
 
 - Don't run `security_scan_full` for tiny changes — use `review_pr`.
@@ -116,3 +129,7 @@ WordPress: `wp/audit/latest`, `wp/audit/{scan_id}`, `wp/cron`.
 - Don't shell out to scanners directly — you lose persistence + baselines.
 - Don't run `scan_wordpress` on a non-WP project — `detect_stack` first.
 - Don't run `wp_audit` without WP-CLI — `install_toolchain tools=["wp-cli"]`.
+- Don't run `scan_dast` before `map_attack_surface` — it refuses with
+  `no_surface_snapshot` and has no route inventory to probe.
+- Don't read a clean `scan_dast` result as "no injection vulnerabilities" —
+  the own engine sends no injection payloads at all.

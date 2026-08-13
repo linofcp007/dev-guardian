@@ -54,6 +54,8 @@ export const SCAN_TYPES = [
     'dotnet_efcore_audit',
     // AI-agent supply chain
     'skill_audit',
+    // Active DAST
+    'dast',
 ];
 export const TOOL_RUN_STATUSES = ['ok', 'skipped', 'failed'];
 export const HTTP_METHODS = [
@@ -79,5 +81,7 @@ export const DOMAIN_ERROR_CODES = [
     'not_a_wordpress_project',
     'target_not_found',
     'unsupported_target',
+    'target_not_authorized',
+    'no_surface_snapshot',
 ];
 //# sourceMappingURL=types.js.map

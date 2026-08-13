@@ -1,6 +1,6 @@
 # dev-guardian (MCP)
 
-This project has the dev-guardian MCP server registered. ~50 tools and 16
+This project has the dev-guardian MCP server registered. 52 tools and 18
 resources for security, quality, bugfix, deps, compliance, observability,
 performance, WordPress, .NET. All scanners run locally, no telemetry,
 results persisted in `.guardian/guardian.db`.
@@ -30,6 +30,11 @@ bulk_audit_wordpress_sites
 **.NET / C#**: scan_dotnet_secrets · dotnet_target_framework_check ·
 dotnet_efcore_audit · dotnet_describe_setup
 
+**Attack surface**: map_attack_surface (static route inventory) then
+scan_dast (active DAST against the already-running app — loopback-only
+unless authorized_target: true; a clean result is not evidence of
+injection safety)
+
 **Meta**: audit_executive (stack-aware) · risk_score · diff_scans ·
 set_baseline · triage_findings · prioritize_findings · suggest_fix ·
 report_export · create_github_issues · precommit_install ·
@@ -43,7 +48,7 @@ check_toolchain · suppress_finding
 `guardian://sbom`, `guardian://stack`, `guardian://compliance/status`,
 `guardian://baseline`, `guardian://wp/audit/latest|{id}`,
 `guardian://wp/cron`, `guardian://dotnet/target-frameworks`,
-`guardian://dotnet/efcore`.
+`guardian://dotnet/efcore`, `guardian://surface/latest|{id}`.
 
 ## Workflows
 
@@ -56,6 +61,8 @@ check_toolchain · suppress_finding
   wp_recommend_hardening.
 - **.NET**: dotnet_target_framework_check + scan_dotnet_secrets +
   scan_sast + dotnet_efcore_audit → dotnet_describe_setup.
+- **Active DAST**: map_attack_surface → scan_dast (target app must already
+  be running; scan_dast never starts, builds or stops it).
 
 ## Don't
 
@@ -64,3 +71,8 @@ check_toolchain · suppress_finding
 - Don't propose fixes without suggest_fix first.
 - Don't shell out to scanners directly.
 - Don't scan_wordpress on a non-WP project — detect_stack first.
+- Don't run scan_dast before map_attack_surface — it refuses with
+  no_surface_snapshot.
+- Don't read a clean scan_dast result as "no injection vulnerabilities" —
+  the own engine sends none; nuclei's opt-in pass covers the origin, not
+  this project's specific routes.

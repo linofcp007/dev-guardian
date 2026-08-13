@@ -1,6 +1,6 @@
 # dev-guardian (MCP)
 
-This project has the dev-guardian MCP server registered. ~50 tools and 16
+This project has the dev-guardian MCP server registered. 52 tools and 18
 resources for security, quality, bugfix, deps, compliance, observability,
 performance, plus first-class WordPress and .NET (C#/F#) support. All
 scanners run locally, no telemetry, results persisted in
@@ -18,6 +18,11 @@ diff_scans, baselines, suppressions, and the regression history.
 - "Dockerfile / container" → `scan_containers`
 - "IaC" → `scan_iac`
 - "deep bug hunt" → `bug_hunt`
+- "what routes does this app expose?" → `map_attack_surface`
+- "active DAST / pen-test the running app" → `map_attack_surface` then
+  `scan_dast` (target app must already be running; loopback-only unless
+  `authorized_target: true`; a clean result is not evidence of injection
+  safety)
 
 ### Quality
 - "review before PR" → `review_pr`
@@ -79,7 +84,8 @@ diff_scans, baselines, suppressions, and the regression history.
 `guardian://scans/{latest|history|id}`, `guardian://cves/active`,
 `guardian://sbom`, `guardian://stack`, `guardian://compliance/status`,
 `guardian://baseline`, `guardian://wp/{audit/latest|audit/{id}|cron}`,
-`guardian://dotnet/{target-frameworks|efcore}`.
+`guardian://dotnet/{target-frameworks|efcore}`,
+`guardian://surface/{latest|id}`.
 
 ## Workflows
 
@@ -87,6 +93,7 @@ diff_scans, baselines, suppressions, and the regression history.
    security_scan_full (or scan_wordpress) → set_baseline
 2. Before PR: review_pr → triage_findings → prioritize_findings → suggest_fix
 3. Audit: audit_executive (stack-aware) → risk_score → compliance_evidence
+4. Active DAST: map_attack_surface → scan_dast (app must already be running)
 
 ## Anti-patterns
 
@@ -94,3 +101,7 @@ diff_scans, baselines, suppressions, and the regression history.
 - Don't suppress_finding before triage_findings
 - Don't shell out to scanners — lose persistence + baselines
 - Don't run scan_wordpress on non-WP — detect_stack first
+- Don't run scan_dast before map_attack_surface — it refuses with
+  no_surface_snapshot
+- Don't read a clean scan_dast result as "no injection vulnerabilities" —
+  the own engine sends none; that's nuclei's job, opt-in and origin-scoped

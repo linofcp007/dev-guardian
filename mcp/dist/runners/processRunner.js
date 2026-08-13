@@ -23,6 +23,10 @@ export async function runProcess(options) {
     const child = execa(options.command, options.args ?? [], {
         cwd: options.cwd,
         env: options.env,
+        // `?? true` restates execa's own default explicitly rather than relying
+        // on `undefined` meaning it, so the merge behaviour is visible here
+        // instead of only in execa's docs.
+        extendEnv: options.extendEnv ?? true,
         shell: false,
         encoding: 'utf8',
         timeout: timeoutMs,

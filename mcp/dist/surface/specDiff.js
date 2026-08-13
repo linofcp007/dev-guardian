@@ -8,7 +8,13 @@
  *   2. A route whose full path is unknown goes to `unmatchable`, and so does
  *      any spec route it might have been. See `spec_only` below.
  */
-const PARAM_SYNTAX = [
+/**
+ * Exported so `dast/plan.ts` substitutes path parameters using the SAME four
+ * syntaxes this module normalises with. Two independent copies of these
+ * regexes drift, and a syntax missing from the DAST copy becomes a literal
+ * `:id` sent down the wire at a live target.
+ */
+export const PARAM_SYNTAX = [
     // WordPress first: `(?P<id>\d+)` contains `<id>`, which the Flask rule would
     // otherwise eat and leave `(?P{}\d+)` behind.
     /\(\?P<[^>]+>[^)]*\)/g,

@@ -62,6 +62,8 @@ export const SCAN_TYPES = [
   'dotnet_efcore_audit',
   // AI-agent supply chain
   'skill_audit',
+  // Active DAST
+  'dast',
 ] as const;
 export type ScanType = (typeof SCAN_TYPES)[number];
 
@@ -392,6 +394,8 @@ export const DOMAIN_ERROR_CODES = [
   'not_a_wordpress_project',
   'target_not_found',
   'unsupported_target',
+  'target_not_authorized',
+  'no_surface_snapshot',
 ] as const;
 export type DomainErrorCode = (typeof DOMAIN_ERROR_CODES)[number];
 

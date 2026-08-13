@@ -118,6 +118,101 @@ version bump.
     dead documentation). The comparison is an exact sorted set on both buckets, the same
     style as the route-set assertion above and for the same reason: a count passes when
     one rule breaks and another over-matches by the same amount.
+- **`scan_dast` — active DAST that probes a *running* application against the
+  `map_attack_surface` route inventory.** New tool that sends real HTTP requests to an
+  application the caller already has running — it never starts, builds or stops
+  anything — and reports what is actually reachable, what is served without credentials,
+  and what leaks. It **requires a prior `map_attack_surface` run**: with no persisted
+  snapshot it refuses with `no_surface_snapshot` naming the tool to run first, and a
+  target that answers nothing refuses with `target_not_found`; neither refusal persists a
+  scan row, so an empty `dast` history entry can never be read by `diff_scans` /
+  `risk_score` as "this scan found nothing." Findings land in the existing `findings`
+  table (`scan_type: 'dast'`) with a fingerprint stable over `(check, method, path,
+  file)` — deliberately excluding the HTTP status, so a fixed app flipping 500→200 on
+  restart is not a "new" finding — so DAST findings dedupe, diff and baseline exactly
+  like every other finding.
+  - **Own engine, eight checks.** `reachability` (confirms the static spec diff's shadow
+    endpoints / dead documentation against the live server, and reports an extractor
+    coverage gap — never a project bug — when a documented route is live but no code
+    route was ever found for it), `anonymous_exposure` (a route the inventory marked
+    `auth_hint: 'required'` answering an anonymous request with `2xx` — the strongest
+    finding the tool can produce; `high` rather than `critical` because that hint can be
+    inherited from a document-level OpenAPI default rather than declared per-operation),
+    `differential_authz` (with credentials supplied, a byte-identical response with and
+    without them — equality only, never a similarity score, so response noise like
+    timestamps or CSRF tokens can only cause a missed finding, never a fabricated one),
+    `cors` (a reflected `Origin` **and** `Access-Control-Allow-Credentials: true`
+    together — either alone is inert and not reported), `security_headers` (missing CSP /
+    `X-Content-Type-Options` / `X-Frame-Options` / HSTS-on-HTTPS, one finding **per
+    origin** rather than per route), `info_disclosure` (stack-trace signatures and
+    versioned `Server` / `X-Powered-By` banners), `method_surface` (`OPTIONS`'s `Allow`
+    header advertising a verb the static extractor never saw, with framework-default
+    `HEAD`/`OPTIONS` carved out so it does not fire on nearly every `GET` route in
+    existence), and `open_redirect` (a `3xx` whose `Location` leaves the target origin —
+    free from `probe.ts` never following a redirect). Plus an opt-in `probe_rate_limit`
+    burst (30 requests, synthetic un-ownable credentials, stops early on the first `429`)
+    and an optional nuclei pass.
+  - **The safety envelope is the design, not a feature of it.** Target classification is
+    purely lexical (no DNS, so it cannot be rebound mid-scan): loopback (`localhost` /
+    `127.0.0.0/8` / `::1`) probes directly; anything else — including a hostname that
+    merely *resolves* to loopback — refuses with `target_not_authorized` unless the
+    caller passes `authorized_target: true`, recorded in the scan for audit. Read-only by
+    default (`GET`/`HEAD`/`OPTIONS`); `allow_write_methods` opens `POST`/`PUT`/`PATCH`/
+    `DELETE`, always with an empty body, so the `400`/`422`-vs-`401`/`403` split answers
+    the authorization question without writing. The one exception to read-only-by-default
+    is the opt-in `probe_rate_limit` burst, which sends `POST` to exactly one route — the
+    flag is its own authorization and opens nothing for any other check. Redirects are
+    never followed (`redirect: 'manual'`). Bounds — concurrency 4, a 5s per-request timeout, a 750-request ceiling,
+    a 10-minute wall-clock ceiling — are reported when they cut a run, never silently
+    applied; a run the wall-clock ceiling cut records its unsent probes `cancelled`,
+    distinct from `timeout`, because the target didn't fail to answer — this tool stopped
+    asking.
+  - **Credentials are opt-in, never persisted, always redacted.** `auth_header_env`
+    (recommended — the *name* of an environment variable; the secret never enters the
+    conversation or the MCP request log) or `auth_header` (the literal value, documented
+    as landing in the transcript). Neither is written to SQLite or an evidence file, and
+    both are redacted from every finding, evidence file and result field through a single
+    redaction choke-point applied to the whole response, not a hand-picked set of fields.
+  - **A deliberately-vulnerable fixture app** (`mcp/test/fixtures/dast-app/server.mjs`,
+    plain `node:http`, no framework) exercises every check end to end: an auth-required
+    route served anonymously, reflected-credentialed CORS, missing security headers, a
+    stack-trace leak, an open redirect, and a route with no rate limit.
+  - **Per-check status, not just findings.** Every check reports `ok` /
+    `skipped_envelope` / `no_candidate` / `needs_credentials` / `scanner_missing` /
+    `target_error`, so a check that never ran (wrong envelope, no credentials, nuclei
+    absent, the wall-clock ceiling cut it) is visible as such rather than reading as a
+    check that found nothing — the same `coverage: 'full' | 'partial' | 'none'`
+    discipline every other scan tool in this server already carries.
+  - **The known limits — read before trusting a clean result.**
+    - **No injection testing in the own engine.** No SQLi or XSS probes are sent; real
+      XSS needs a browser and blind SQLi needs timing or destructive probes, and a
+      fabricated injection finding is worse than none. That class is delegated entirely
+      to nuclei's `-dast` fuzzing mode, which the default envelope excludes — **a clean
+      `scan_dast` result is not evidence of injection safety.**
+    - **nuclei tests the origin, not this project's routes.** Most of nuclei's HTTP
+      templates use `{{BaseURL}}` and append their own known paths; the route inventory
+      only genuinely feeds nuclei once `-dast` fuzzing is turned on, and the default
+      envelope excludes that mode. nuclei still brings real value (component CVEs,
+      exposed panels, misconfigurations) — it is just not what confirms the project's own
+      endpoints; the own engine is. The result labels which findings came from which so
+      the two are never conflated.
+    - **The rate-limit finding is named `no_rate_limit_observed`, never "rate limiting is
+      missing."** A limiter whose threshold sits above the burst size (30) is
+      indistinguishable from no limiter at all at this sample size, and the finding name
+      says so on purpose — do not reword it into a stronger claim.
+    - **Synthetic path parameters give parametric routes a best-effort reachability
+      signal, never a definitive one.** `/users/{id}` is probed as `/users/1`; a `404`
+      there is ambiguous between "no such route" and "no such record 1," so it is never
+      reported as "unreachable" — the ambiguity is surfaced, not resolved.
+    - **nuclei has no verified Windows package manager install.** scoop, choco and winget
+      were all checked and none carry it, so `install_toolchain`'s catalogue has no win32
+      entry for it — Windows users install manually from nuclei's GitHub releases page
+      (macOS gets a `brew` formula; Linux gets a curl installer, also pointed at GitHub
+      releases). Consistent with that gap, nuclei is `default: false`: it never installs
+      silently, and a requested-but-absent nuclei is reported as `scanner_missing` in
+      `tools_run`, never a silent skip.
+  - Discoverable via the `map_attack_surface` → `scan_dast` two-step, now documented in
+    `host-rules/AGENTS.md` and in both tools' own descriptions.
 
 ### Fixed
 

@@ -151,6 +151,32 @@ export const TOOL_CATALOG = {
         },
         default: false,
     },
+    // ---------- DAST ----------
+    nuclei: {
+        name: 'nuclei',
+        version_floor: '3.0.0',
+        required_by: ['scan_dast'],
+        install: {
+            // No verified scoop/choco/winget package exists for nuclei: it is not
+            // among ProjectDiscovery's own documented install methods (go install,
+            // brew, docker, GitHub release binaries, Helm — checked against
+            // docs.projectdiscovery.io/opensource/nuclei/install), the
+            // ScoopInstaller/Extras bucket has no `nuclei.json` manifest, and
+            // winget's community repo returns zero results for it. Every other
+            // entry in this catalogue is a real, working command; pointing win32
+            // at a package manager that does not carry the tool would be exactly
+            // the kind of fabrication this project's whole DAST feature exists to
+            // avoid, so it is left empty rather than guessed at. `check_toolchain`
+            // / `install_toolchain` already degrade gracefully to "no known
+            // install command" when an OS bucket has none.
+            win32: {},
+            linux: {
+                curl: curlInstaller('https://github.com/projectdiscovery/nuclei/releases/latest'),
+            },
+            darwin: { brew: brewInstall('nuclei') },
+        },
+        default: false,
+    },
     // ---------- WordPress ----------
     'wp-cli': {
         name: 'wp-cli',

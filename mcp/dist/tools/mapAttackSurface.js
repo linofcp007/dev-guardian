@@ -102,7 +102,8 @@ const tool = {
         'registers that no spec documents) and dead documentation (spec paths no code ' +
         'implements). Persists a snapshot readable via guardian://surface/latest. Returns a ' +
         'summary plus a 20-route code sample and a spec sample; read the resource for the ' +
-        'full route list and the full spec diff.',
+        'full route list and the full spec diff. Follow up with scan_dast to actively probe an ' +
+        'already-running instance of the application against this inventory.',
     inputSchema: {
         project_path: ProjectPath,
         force: Force,

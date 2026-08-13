@@ -1,8 +1,8 @@
 # dev-guardian — context for Gemini CLI
 
 This repository has the **dev-guardian MCP server** registered (see
-`~/.gemini/settings.json` or `.gemini/settings.json`). It exposes ~50 tools and
-16 resources for security, quality, bugfix, deps, compliance, observability,
+`~/.gemini/settings.json` or `.gemini/settings.json`). It exposes 52 tools and
+18 resources for security, quality, bugfix, deps, compliance, observability,
 performance, plus first-class WordPress and .NET (C#/F#) support. All scanners
 run locally, no telemetry; results persist in `.guardian/guardian.db`.
 
@@ -21,6 +21,11 @@ to confirm this file is loaded, `/memory refresh` after editing it.
 - "Dockerfile / container" → `scan_containers`
 - "Terraform / K8s / IaC" → `scan_iac`
 - "deep bug hunt" → `bug_hunt`
+- "what routes/endpoints does this app expose?" → `map_attack_surface`
+- "active DAST / pen-test the running app" → `map_attack_surface` first for the
+  route inventory, then `scan_dast` against the already-running app (loopback
+  only unless `authorized_target: true` is set; a clean result is not evidence
+  of injection safety — see its tool description)
 
 **Quality**
 - "review before PR" → `review_pr`
@@ -87,6 +92,7 @@ to confirm this file is loaded, `/memory refresh` after editing it.
 - WordPress: `guardian://wp/audit/latest`, `guardian://wp/audit/{id}`,
   `guardian://wp/cron`
 - .NET: `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`
+- Attack surface: `guardian://surface/latest`, `guardian://surface/{id}`
 
 ## Typical sequences
 
@@ -100,6 +106,8 @@ to confirm this file is loaded, `/memory refresh` after editing it.
   `wp_rest_audit` → `wp_recommend_hardening`
 - **.NET-specific**: `dotnet_target_framework_check` + `scan_dotnet_secrets`
   + `scan_sast` + `dotnet_efcore_audit` → `dotnet_describe_setup`
+- **Active DAST**: `map_attack_surface` → `scan_dast` (the target app must
+  already be running; `scan_dast` never starts, builds or stops it)
 
 ## Anti-patterns
 
@@ -109,3 +117,9 @@ to confirm this file is loaded, `/memory refresh` after editing it.
 - Don't shell out to scanners directly when an MCP tool exists.
 - Don't run `scan_wordpress` on a non-WP project — `detect_stack` first.
 - Don't run `wp_audit` without WP-CLI — `install_toolchain tools=["wp-cli"]`.
+- Don't run `scan_dast` before `map_attack_surface` — it refuses with
+  `no_surface_snapshot` and has no route inventory to probe.
+- Don't read a clean `scan_dast` result as "no injection vulnerabilities" —
+  the own engine sends no injection payloads at all; that class is delegated
+  to an opt-in nuclei pass whose default templates test the origin, not this
+  project's specific routes.

@@ -1,6 +1,6 @@
 ---
 name: guardian-security
-description: Complete security scan using open-source tools (Semgrep, Trivy, gitleaks, OWASP ZAP). EN triggers — use when the user asks "guardian scan", "audit security", "check for vulnerabilities", "scan for secrets", "any security holes?", "SAST scan", "DAST scan", "check dependencies", "check the container", "check IaC", "is this safe?", "quick pen test", "I'm worried about security", "smells bad", "is this publishable?", "is this safe to ship?", or any request related to finding security problems before they reach production. PT triggers — usa quando pedirem "guardian scan", "audita segurança", "vê se há vulnerabilidades", "scan de secrets", "tem buracos de segurança?", "scan de SAST/DAST", "verifica deps", "verifica container", "verifica IaC", "vê se isto está safe", "pen test rápido", "preocupado com a segurança", "isto cheira-me mal", "publica-se isto?", "isto pode ir para produção?". ES triggers — úsala cuando pidan "guardian scan", "auditoría de seguridad", "comprueba vulnerabilidades", "escaneo de secretos", "¿hay agujeros de seguridad?", "escaneo SAST/DAST", "comprueba deps", "comprueba el contenedor", "comprueba IaC", "¿esto es seguro?", "pen test rápido", "preocupado por la seguridad", "huele mal", "¿se puede publicar esto?", "¿es seguro lanzarlo?". Trilingual EN/PT/ES — respond in the user's language.
+description: Complete security scan using open-source tools (Semgrep, Trivy, gitleaks, nuclei). EN triggers — use when the user asks "guardian scan", "audit security", "check for vulnerabilities", "scan for secrets", "any security holes?", "SAST scan", "DAST scan", "check dependencies", "check the container", "check IaC", "is this safe?", "quick pen test", "I'm worried about security", "smells bad", "is this publishable?", "is this safe to ship?", or any request related to finding security problems before they reach production. PT triggers — usa quando pedirem "guardian scan", "audita segurança", "vê se há vulnerabilidades", "scan de secrets", "tem buracos de segurança?", "scan de SAST/DAST", "verifica deps", "verifica container", "verifica IaC", "vê se isto está safe", "pen test rápido", "preocupado com a segurança", "isto cheira-me mal", "publica-se isto?", "isto pode ir para produção?". ES triggers — úsala cuando pidan "guardian scan", "auditoría de seguridad", "comprueba vulnerabilidades", "escaneo de secretos", "¿hay agujeros de seguridad?", "escaneo SAST/DAST", "comprueba deps", "comprueba el contenedor", "comprueba IaC", "¿esto es seguro?", "pen test rápido", "preocupado por la seguridad", "huele mal", "¿se puede publicar esto?", "¿es seguro lanzarlo?". Trilingual EN/PT/ES — respond in the user's language.
 ---
 
 # Guardian Security
@@ -17,7 +17,7 @@ A skill suporta quatro tipos. Pergunta ao utilizador qual (ou faz `--all` se ele
 | **Secrets**             | Procura API keys, tokens, passwords no código e histórico Git    | gitleaks                         |
 | **Dependencies**        | CVEs em bibliotecas/packages                                     | Trivy                            |
 | **Container/IaC**       | Dockerfile, imagens, Terraform, Kubernetes                       | Trivy + Checkov                  |
-| **DAST** (opcional)     | Scan runtime contra app a correr                                 | OWASP ZAP (baseline)             |
+| **DAST** (opcional)     | Scan runtime contra app JÁ a correr                              | `scan_dast` (+ nuclei)           |
 
 ## Fluxo
 
@@ -136,16 +136,42 @@ Se o utilizador pedir explicitamente "paranoid" ou "full deep":
 - Lista também CVEs com CVSS ≥ 4.0 (em vez do default ≥ 7.0)
 - Adiciona threat modeling rápido com STRIDE para os entry-points principais
 - Inclui análise de licenças (GPL em projeto comercial, etc.)
-- Sugere DAST com ZAP se a app for web
+- Sugere DAST (`scan_dast`) se a app for web **e estiver a correr**
 
-## DAST (OWASP ZAP)
+## DAST (runtime) — `scan_dast`
 
-Se o utilizador pedir scan runtime:
+Um pedido de "DAST scan" / "scan de DAST" / "escaneo DAST" resolve-se com a
+tool MCP `scan_dast`. Não invoques scanners à mão: `scan_dast` guarda
+baselines, faz diff e persiste histórico em SQLite, o que uma invocação
+direta não faz.
 
-1. Pergunta o URL (staging, dev local, etc.)
-2. Confirma que tem autorização (nunca scanar terceiros)
-3. Corre `zap-baseline.py -t <url> -r .guardian/zap-report.html`
-4. Resume os findings, prioriza, sugere fixes
+`scan_dast` é o **passo seguinte** a `map_attack_surface` — probe o inventário
+de rotas que este produziu, e recusa com `no_surface_snapshot` se não houver
+inventário. A app tem de já estar a correr: esta tool nunca a arranca,
+constrói ou pára.
+
+1. Corre `map_attack_surface` primeiro, se ainda não houver snapshot.
+2. Pergunta o URL da app **já em execução** (staging, dev local, etc.).
+3. Confirma autorização. Alvos loopback (localhost / 127.0.0.0/8 / ::1) passam
+   direto; qualquer outro host exige `authorized_target: true`, que o
+   utilizador tem de atestar — nunca o definas por ele.
+4. Corre `scan_dast` com `base_url`. Opcionalmente:
+   - `auth_header_env` (recomendado) para probes autenticados — o nome da
+     variável de ambiente, nunca o segredo em si;
+   - `probe_rate_limit: true` para o burst de rate-limit;
+   - `use_nuclei: true` para uma passagem adicional com **nuclei**, o scanner
+     externo que este plugin instala (`install_toolchain`).
+5. Lê o `coverage` antes dos findings: `partial` ou `none` significa que o scan
+   não viu tudo, e um "0 findings" aí não é um resultado limpo.
+6. Resume os findings, prioriza, sugere fixes — e diz que **um resultado limpo
+   não é prova de segurança contra injeção**: o motor próprio não testa
+   injeção, e os templates por defeito do nuclei testam a origem, não as rotas
+   específicas do projeto.
+
+Envelope de segurança (não o contornes): métodos só de leitura
+(GET/HEAD/OPTIONS) salvo se `allow_write_methods` estiver ativo, e mesmo assim
+com corpo vazio — mais o burst opcional de `probe_rate_limit`, a única
+exceção, que envia POST a exatamente uma rota. Redirects nunca são seguidos.
 
 ## Quando não correr scans completos
 

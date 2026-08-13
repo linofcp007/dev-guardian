@@ -10,8 +10,8 @@ quality, deps, observability, performance and compliance. Two halves:
 
 - **Plugin front-end** — `skills/` (13 skills) + `commands/` (slash commands),
   declared in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json).
-- **MCP server** — `mcp/` (TypeScript + SQLite), the real engine: 51 tools,
-  16 resources. Built to `mcp/dist/`.
+- **MCP server** — `mcp/` (TypeScript + SQLite), the real engine: 52 tools,
+  18 resources. Built to `mcp/dist/`.
 - **Guardrail hooks** — `hooks/hooks.json` (auto-discovered at the plugin root)
   with the `hooks/guardian-hook.mjs` dispatcher. Dependency-free and fail-open: SessionStart
   posture briefing, PostToolUse secret warning, PreToolUse catastrophic-Bash

@@ -11,7 +11,13 @@
 
 import type { HttpMethod, RouteRecord, SpecDiff, SpecDiffEntry } from '../types.js';
 
-const PARAM_SYNTAX: readonly RegExp[] = [
+/**
+ * Exported so `dast/plan.ts` substitutes path parameters using the SAME four
+ * syntaxes this module normalises with. Two independent copies of these
+ * regexes drift, and a syntax missing from the DAST copy becomes a literal
+ * `:id` sent down the wire at a live target.
+ */
+export const PARAM_SYNTAX: readonly RegExp[] = [
   // WordPress first: `(?P<id>\d+)` contains `<id>`, which the Flask rule would
   // otherwise eat and leave `(?P{}\d+)` behind.
   /\(\?P<[^>]+>[^)]*\)/g,
