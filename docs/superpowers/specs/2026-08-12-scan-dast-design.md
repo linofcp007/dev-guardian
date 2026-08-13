@@ -263,6 +263,32 @@ the finding requires *equality*, so noise causes a missed finding, never a
 fabricated one. This asymmetry is deliberate and must not be "fixed" by
 loosening the comparison into a similarity heuristic.
 
+### Environment inheritance: the nuclei scrub is necessary, not sufficient
+
+`auth_header_env` names a variable in *this server's* process environment, not
+a value scoped to one call. `dast/nuclei.ts` spawns nuclei with an explicit
+allowlist and `extendEnv: false`, so that credential cannot reach nuclei's
+child process — execa merges `env` over `process.env` unless told not to, so
+the allowlist alone would be decorative without the flag. nuclei is the only
+scanner this server treats that way.
+
+Semgrep, Trivy, gitleaks and git are all invoked through `ctx.scriptEnv`
+(`scanToolFactory.ts`), which is `{...process.env, PROJECT_PATH,
+GUARDIAN_SCAN_ID}` — full inheritance, by design: Semgrep reads `SEMGREP_*`,
+Trivy needs `DOCKER_CONFIG` for registry auth, git needs `SSH_AUTH_SOCK` and
+credential helpers. An allowlist there would break exactly the corporate-proxy
+and registry-auth cases those tools exist to support. That is deliberate and
+stays unchanged; nuclei is scrubbed only because `scan_dast` is the one tool
+that invites an operator to put a credential in an env var for a purpose (an
+Authorization header) nuclei has no use for.
+
+**Conclusion for an operator:** `auth_header_env` keeps the credential out of
+nuclei specifically, not out of this server process or out of any other
+scanner it spawns in the same session. Treat the variable as visible to the
+whole server and everything it runs, not as sandboxed to `scan_dast` — the
+same warning is stated on the `auth_header_env` parameter itself, since that
+is where a caller makes the decision.
+
 ## 7. nuclei integration, and an honest note about it
 
 nuclei enters `TOOL_CATALOG` with `required_by: ['scan_dast']` and

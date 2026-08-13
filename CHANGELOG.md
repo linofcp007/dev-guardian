@@ -173,6 +173,13 @@ version bump.
     as landing in the transcript). Neither is written to SQLite or an evidence file, and
     both are redacted from every finding, evidence file and result field through a single
     redaction choke-point applied to the whole response, not a hand-picked set of fields.
+    Naming a variable via `auth_header_env` keeps it out of nuclei specifically — nuclei is
+    spawned with an allowlisted environment and `extendEnv: false` for exactly that reason
+    — but not out of this server process, nor out of the other scanners (Semgrep, Trivy,
+    gitleaks, git) the same session spawns with the operator's full environment by design.
+    That is a deliberate, unchanged posture (those tools read `SEMGREP_*` / `DOCKER_CONFIG`
+    / `SSH_AUTH_SOCK` and the like), not an oversight; the parameter description now says
+    so directly.
   - **A deliberately-vulnerable fixture app** (`mcp/test/fixtures/dast-app/server.mjs`,
     plain `node:http`, no framework) exercises every check end to end: an auth-required
     route served anonymously, reflected-credentialed CORS, missing security headers, a

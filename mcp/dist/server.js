@@ -51537,7 +51537,7 @@ var inputSchema26 = {
     "Exact path (as it appears in the inventory) to aim the rate-limit burst at. When omitted the target is inferred from auth-shaped paths and the chosen route is reported; when the named path is not in the inventory the check reports no_candidate rather than bursting something else."
   ),
   auth_header_env: external_exports.string().min(1).optional().describe(
-    "RECOMMENDED credential path: the NAME of an environment variable holding an Authorization header value. The secret never enters the conversation or the MCP request log. An unset variable is reported as a warning, never a silent anonymous run."
+    "RECOMMENDED credential path: the NAME of an environment variable holding an Authorization header value. The secret never enters the conversation or the MCP request log. An unset variable is reported as a warning, never a silent anonymous run. WARNING: the named variable lives in this server's own environment \u2014 any OTHER scanner this session spawns (semgrep, trivy, gitleaks, git) inherits it too. nuclei is the one exception: it is always spawned with a scrubbed environment that excludes it."
   ),
   auth_header: external_exports.string().min(1).optional().describe(
     "Literal Authorization header value. Lands in the transcript \u2014 prefer auth_header_env. Never persisted and redacted from every finding, evidence file and result field."
