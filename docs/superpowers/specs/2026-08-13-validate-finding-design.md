@@ -139,9 +139,20 @@ missing Python rule pack does not block an `unreachable` verdict about a Go
 file, and must not, or the tool would answer `unknown` to almost everything in
 any polyglot repository.
 
-If the relevant entry is anything but `ok` — no rules for that language, Semgrep
-absent, the scan truncated — the negative verdict is unavailable for that file
-and the reason is named in `coverage_gaps`.
+`CoverageEntry.status` has four values and they split two-and-two:
+
+| status | `unreachable` permitted? | Why |
+| --- | --- | --- |
+| `ok` | **yes** | rules ran, routes found and readable |
+| `no_matches` | **yes** | rules ran and this language genuinely declares no routes — so no route in it can reach anything |
+| `no_rules` | **no** | the language is present and the pack covers no framework for it; routes may exist unseen |
+| `unreadable` | **no** | Semgrep matched routes here and the captures could not be read — routes exist and are missing from the inventory |
+
+`no_matches` permitting the negative is the non-obvious half, and it matters: the
+strict reading ("only `ok`") would answer `unknown` for every file in any
+language that legitimately has no HTTP surface, which is most of them in most
+repositories. When the entry is `no_rules` or `unreadable`, the negative verdict
+is unavailable for that file and the reason is named in `coverage_gaps`.
 
 This is the first time in this project that `coverage` carries weight rather
 than decorating a result. It becomes a **precondition of a verdict**.
