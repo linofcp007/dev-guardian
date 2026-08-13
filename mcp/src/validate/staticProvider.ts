@@ -15,9 +15,10 @@
  * and its most dangerous: emitting it wrongly deprioritises an exploitable
  * finding, and nobody looks again. So `reachable` is cheap to earn — any
  * discovered path is reported, gates or no gates — while `unreachable` is
- * gated on five independent conditions, ALL of which must hold, checked in
+ * gated on six independent conditions, ALL of which must hold, checked in
  * order, the first failure deciding `unknown` and naming itself in
- * `coverage_gaps` (design doc §5, plus gate 1 below, ruled in during Task 5):
+ * `coverage_gaps` (design doc §5, plus gates 1 and 6 below, ruled in during
+ * Task 5 and the final whole-branch review respectively):
  *
  *   1. The import graph holds at least one edge. An empty graph is evidence
  *      of missing DATA, not of missing reachability: nothing is reached from
@@ -36,7 +37,8 @@
  *      file, no query — that half is checked before even gate 1, since with
  *      no file there is nothing to query in the first place. An unrecognised
  *      extension means there is nothing to trust a per-language coverage
- *      entry (gate 3) or a runtime-resolution flag (gate 4) against — but it
+ *      entry (gate 3), a runtime-resolution flag (gate 4) or a per-language
+ *      edge count (gate 6) against — but it
  *      does NOT block the positive direction: reachability is computed from
  *      the file path alone, before language is even consulted, so a
  *      discovered path still reads `reachable`.
@@ -60,6 +62,26 @@
  *   5. The graph was not truncated (`ImportGraph.truncated`). A cut graph
  *      has unknown missing edges; asserting an absence from it would be
  *      indistinguishable from asserting an absence because nobody looked.
+ *   6. The finding's language contributed at least one RESOLVED edge to the
+ *      graph, whenever `CoverageEntry.unresolved_imports` for it is non-zero.
+ *      Gate 1's reasoning, one language down, and it is not hypothetical
+ *      either: `map_attack_surface` shipped handing the module-edge resolvers
+ *      absolute paths while every candidate they build from an import
+ *      specifier is project-relative, so Python, Go and Rust resolved
+ *      nothing — and every finding in those three languages read
+ *      `unreachable` against a graph that had never held one of their edges.
+ *      Gate 1 could not see it (JS/TS resolved, so the graph was non-empty)
+ *      and gate 3 could not either (route extraction was fine, so coverage
+ *      said `ok`). Zero resolved edges alongside imports that DID fail to
+ *      resolve means the graph has no coverage of the language, and a broken
+ *      resolver is indistinguishable from a genuinely unreferenced file.
+ *      Both halves are required: gating on `unresolved_imports > 0` alone
+ *      would delete the negative verdict in every project with dependencies
+ *      (see the note below), and gating on "no edges in this language" alone
+ *      would delete it for every language whose files genuinely import
+ *      nothing — where zero resolved AND zero unresolved is a complete
+ *      picture, not a hole. Checked last of the six; see
+ *      `negativeVerdictBlockedBy` for why.
  *
  * `CoverageEntry.unresolved_imports` is reported whenever it is non-zero for
  * the finding's language — on every verdict, including `reachable` — but
@@ -147,9 +169,14 @@ export interface StaticProviderInput {
   computedAt: string; // injected, never Date.now() — keeps this module pure
   /**
    * The language of a file, or `null` for one whose language could not be
-   * determined — which blocks gates 2 and 3 (there is nothing to check a
-   * per-language coverage entry or a runtime-resolution flag against) and
-   * never the positive direction.
+   * determined — which blocks gates 3 through 6 (there is nothing to check a
+   * per-language coverage entry, a runtime-resolution flag or a per-language
+   * edge count against) and never the positive direction.
+   *
+   * Also called with each import edge's SOURCE file, to decide which
+   * languages the graph actually covers (gate 6) — so an implementation must
+   * answer for an ordinary source file, not only for a file some finding
+   * happens to sit in.
    *
    * PATH CONVENTION: project-relative POSIX (`src/db.ts`). `validateOne`
    * calls this with a finding's `file_path` only AFTER running it through
@@ -178,8 +205,44 @@ export function validateStatically(input: StaticProviderInput): FindingValidatio
   const roots = [...routesByFile.keys()];
   const exposedFiles = relativizeSet(input.anonymouslyExposedRouteFiles, input.projectPath);
   const reachCache = new Map<string, ReachResult>();
+  const languagesWithEdges = languagesWithResolvedEdges(input);
+  const context: BatchContext = { roots, routesByFile, exposedFiles, reachCache, languagesWithEdges };
 
-  return input.findings.map((finding) => validateOne(finding, input, roots, routesByFile, exposedFiles, reachCache));
+  return input.findings.map((finding) => validateOne(finding, input, context));
+}
+
+/** Everything computed once for a whole batch and read per finding. */
+interface BatchContext {
+  roots: readonly string[];
+  routesByFile: ReadonlyMap<string, RouteRecord[]>;
+  exposedFiles: ReadonlySet<string>;
+  reachCache: Map<string, ReachResult>;
+  /** Languages the graph holds at least one outbound edge FROM — gate 6. */
+  languagesWithEdges: ReadonlySet<string>;
+}
+
+/**
+ * The languages the graph can actually say anything about: those with at
+ * least one resolved edge leaving a file of that language.
+ *
+ * Keyed on the edge's SOURCE file, matching how `buildCoverage`
+ * (mapAttackSurface.ts) buckets `unresolved_imports` — an edge is attributed
+ * to the language of the file that WROTE the import, so the resolved and
+ * unresolved counts gate 6 compares are counts of the same population.
+ *
+ * Read from the graph rather than from `snapshot.imports`, because the graph
+ * is what an absent path is measured against: an edge dropped at the
+ * truncation cap is missing from the traversal whether or not the snapshot
+ * still lists it.
+ */
+function languagesWithResolvedEdges(input: StaticProviderInput): ReadonlySet<string> {
+  const languages = new Set<string>();
+  for (const [file, targets] of input.graph.edges) {
+    if (targets.size === 0) continue;
+    const language = input.languageOf(file);
+    if (language !== null) languages.add(language);
+  }
+  return languages;
 }
 
 /**
@@ -234,10 +297,7 @@ function makeEnvelope(finding: Finding, input: StaticProviderInput): Envelope {
 function validateOne(
   finding: Finding,
   input: StaticProviderInput,
-  roots: readonly string[],
-  routesByFile: ReadonlyMap<string, RouteRecord[]>,
-  exposedFiles: ReadonlySet<string>,
-  reachCache: Map<string, ReachResult>,
+  context: BatchContext,
 ): FindingValidation {
   const envelope = makeEnvelope(finding, input);
   if (finding.file_path === undefined) {
@@ -246,10 +306,12 @@ function validateOne(
 
   const relFile = toRelativeIfPossible(finding.file_path, input.projectPath);
   const { language, entry, gaps } = resolveLanguageContext(relFile, input);
-  const reach = cachedReachFrom(input.graph, roots, relFile, reachCache);
+  const reach = cachedReachFrom(input.graph, context.roots, relFile, context.reachCache);
 
   if (reach.hops !== null) {
-    return reachableVerdict(envelope, reach.hops, reach.reachingRoots, routesByFile, exposedFiles, gaps);
+    return reachableVerdict(
+      envelope, reach.hops, reach.reachingRoots, context.routesByFile, context.exposedFiles, gaps,
+    );
   }
 
   // Gate 1, checked before everything else that could block the negative
@@ -266,7 +328,9 @@ function validateOne(
     return unknownVerdict(envelope, [`could not determine the language of '${relFile}'`, ...gaps]);
   }
 
-  const blocked = negativeVerdictBlockedBy(language, entry, input.graph.truncated);
+  const blocked = negativeVerdictBlockedBy(
+    language, entry, input.graph.truncated, context.languagesWithEdges.has(language),
+  );
   if (blocked !== null) return unknownVerdict(envelope, [blocked, ...gaps]);
 
   return unreachableVerdict(envelope, relFile, gaps);
@@ -326,14 +390,23 @@ function unresolvedImportsGap(language: string, entry: CoverageEntry): string[] 
 }
 
 /**
- * The first of gates 2–4 (design §5) that blocks `unreachable` for
- * `language`, or `null` when all three hold. Gate 1 (file_path + determinable
- * language) is handled by the caller before this is ever invoked.
+ * The first of gates 3–6 (see the module doc comment) that blocks
+ * `unreachable` for `language`, or `null` when all four hold. Gates 1 (a
+ * non-empty graph) and 2 (a file_path with a determinable language) are
+ * handled by the caller before this is ever invoked.
+ *
+ * ORDER. Gate 6 is checked LAST, even though its reasoning is the broadest,
+ * because it overlaps with gates 3 and 4 and its message is the least
+ * specific of the three. Java, C#, Ruby and PHP resolve zero imports BY
+ * DESIGN, so gate 6 fires for every finding in them — and would replace gate
+ * 4's permanent, accurate cause ("this stack resolves code at runtime") with
+ * one that reads like a fixable coverage hole no re-run can close.
  */
 function negativeVerdictBlockedBy(
   language: string,
   entry: CoverageEntry | undefined,
   graphTruncated: boolean,
+  languageHasResolvedEdges: boolean,
 ): string | null {
   if (entry === undefined) {
     return `no coverage entry was recorded for language '${language}'`;
@@ -346,6 +419,15 @@ function negativeVerdictBlockedBy(
   }
   if (graphTruncated) {
     return 'the import graph was truncated at its edge cap, so it cannot certify the absence of any path';
+  }
+  if (!languageHasResolvedEdges && entry.unresolved_imports > 0) {
+    return (
+      `no import edge in '${language}' resolved to a project file, while ` +
+      `${entry.unresolved_imports} did not — the graph holds no coverage of this language at all, ` +
+      'so an absent path here is missing DATA rather than evidence of missing reachability. ' +
+      'Every file in this language would read as imported by nothing, which is what a broken ' +
+      'resolver and a genuinely unreferenced file look like alike.'
+    );
   }
   return null;
 }

@@ -52488,7 +52488,18 @@ function validateStatically(input) {
   const roots = [...routesByFile.keys()];
   const exposedFiles = relativizeSet(input.anonymouslyExposedRouteFiles, input.projectPath);
   const reachCache = /* @__PURE__ */ new Map();
-  return input.findings.map((finding2) => validateOne(finding2, input, roots, routesByFile, exposedFiles, reachCache));
+  const languagesWithEdges = languagesWithResolvedEdges(input);
+  const context = { roots, routesByFile, exposedFiles, reachCache, languagesWithEdges };
+  return input.findings.map((finding2) => validateOne(finding2, input, context));
+}
+function languagesWithResolvedEdges(input) {
+  const languages = /* @__PURE__ */ new Set();
+  for (const [file, targets] of input.graph.edges) {
+    if (targets.size === 0) continue;
+    const language = input.languageOf(file);
+    if (language !== null) languages.add(language);
+  }
+  return languages;
 }
 function relativizeSet(files, projectPath) {
   return new Set([...files].map((file) => toRelativeIfPossible(file, projectPath)));
@@ -52513,16 +52524,23 @@ function makeEnvelope(finding2, input) {
     computed_at: input.computedAt
   };
 }
-function validateOne(finding2, input, roots, routesByFile, exposedFiles, reachCache) {
+function validateOne(finding2, input, context) {
   const envelope = makeEnvelope(finding2, input);
   if (finding2.file_path === void 0) {
     return unknownVerdict(envelope, ["finding has no file_path; nothing to evaluate"]);
   }
   const relFile = toRelativeIfPossible(finding2.file_path, input.projectPath);
   const { language, entry, gaps } = resolveLanguageContext(relFile, input);
-  const reach = cachedReachFrom(input.graph, roots, relFile, reachCache);
+  const reach = cachedReachFrom(input.graph, context.roots, relFile, context.reachCache);
   if (reach.hops !== null) {
-    return reachableVerdict(envelope, reach.hops, reach.reachingRoots, routesByFile, exposedFiles, gaps);
+    return reachableVerdict(
+      envelope,
+      reach.hops,
+      reach.reachingRoots,
+      context.routesByFile,
+      context.exposedFiles,
+      gaps
+    );
   }
   if (hasNoEdges(input.graph)) {
     return unknownVerdict(envelope, [EMPTY_GRAPH_GAP, ...gaps]);
@@ -52530,7 +52548,12 @@ function validateOne(finding2, input, roots, routesByFile, exposedFiles, reachCa
   if (language === null) {
     return unknownVerdict(envelope, [`could not determine the language of '${relFile}'`, ...gaps]);
   }
-  const blocked = negativeVerdictBlockedBy(language, entry, input.graph.truncated);
+  const blocked = negativeVerdictBlockedBy(
+    language,
+    entry,
+    input.graph.truncated,
+    context.languagesWithEdges.has(language)
+  );
   if (blocked !== null) return unknownVerdict(envelope, [blocked, ...gaps]);
   return unreachableVerdict(envelope, relFile, gaps);
 }
@@ -52554,7 +52577,7 @@ function unresolvedImportsGap(language, entry) {
     `${entry.unresolved_imports} import(s) for '${language}' could not be resolved to a project file (third-party/stdlib specifiers or an unresolvable dynamic import) and are absent from the graph`
   ];
 }
-function negativeVerdictBlockedBy(language, entry, graphTruncated) {
+function negativeVerdictBlockedBy(language, entry, graphTruncated, languageHasResolvedEdges) {
   if (entry === void 0) {
     return `no coverage entry was recorded for language '${language}'`;
   }
@@ -52566,6 +52589,9 @@ function negativeVerdictBlockedBy(language, entry, graphTruncated) {
   }
   if (graphTruncated) {
     return "the import graph was truncated at its edge cap, so it cannot certify the absence of any path";
+  }
+  if (!languageHasResolvedEdges && entry.unresolved_imports > 0) {
+    return `no import edge in '${language}' resolved to a project file, while ${entry.unresolved_imports} did not \u2014 the graph holds no coverage of this language at all, so an absent path here is missing DATA rather than evidence of missing reachability. Every file in this language would read as imported by nothing, which is what a broken resolver and a genuinely unreferenced file look like alike.`;
   }
   return null;
 }

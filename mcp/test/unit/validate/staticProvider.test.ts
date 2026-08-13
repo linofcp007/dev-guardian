@@ -303,6 +303,112 @@ describe('validateStatically — unresolved imports are reported, never gating',
   });
 });
 
+describe('validateStatically — the per-language coverage gate', () => {
+  /**
+   * Gate 1 ("the graph holds no edges at all") applied one language down.
+   *
+   * The defect it exists to catch shipped and was measured: `map_attack_
+   * surface` handed the module-edge resolvers absolute paths while every
+   * candidate they build from a specifier is project-relative, so Python, Go
+   * and Rust resolved ZERO edges — and every finding in those three languages
+   * came back `unreachable`, confidently, on a graph that had never contained
+   * a single edge in them. The global graph was non-empty (JS/TS resolved
+   * fine), so gate 1 passed; coverage status was `ok`, so gate 3 passed. Only
+   * a per-language check can see it.
+   *
+   * `languageOf` is extension-driven here, not a constant: the gate reads the
+   * language of each edge's SOURCE file, so a stub returning one language for
+   * every path would make every graph look like full coverage of it.
+   */
+  const byExtension = (path: string): string | null => {
+    if (path.endsWith('.py')) return 'python';
+    if (path.endsWith('.ts')) return 'typescript';
+    return null;
+  };
+
+  function pythonOrphan(over: Partial<StaticProviderInput> = {}): StaticProviderInput {
+    return input({
+      languageOf: byExtension,
+      findings: [finding({ file_path: 'app/db.py' })],
+      snapshot: {
+        ...input().snapshot,
+        routes: [route({ file: 'app/routes.py', language: 'python' })],
+        coverage: [coverage({ language: 'python', status: 'ok', unresolved_imports: 5 })],
+      },
+      // Non-empty, so gate 1 passes — but every edge in it is TypeScript.
+      graph: buildImportGraph([imp('src/routes.ts', 'src/other.ts')]),
+      ...over,
+    });
+  }
+
+  it('is unknown when the language resolved zero edges while some went unresolved', () => {
+    const v = validateStatically(pythonOrphan())[0];
+    expect(v?.verdict).toBe('unknown');
+    expect(v?.coverage_gaps.some((g) => g.includes('no import edge in') && g.includes('python'))).toBe(true);
+    // Names the count, so a reader can see how much was lost, not just that
+    // something was.
+    expect(v?.coverage_gaps.some((g) => g.includes('5'))).toBe(true);
+  });
+
+  it('STILL reports unreachable once the language resolves at least one edge', () => {
+    // The discriminator against a gate written as "unresolved_imports > 0"
+    // alone — which the provider deliberately does NOT do, because third-party
+    // and stdlib specifiers make that count non-zero in almost every real
+    // project and would delete the negative verdict everywhere.
+    const v = validateStatically(pythonOrphan({
+      graph: buildImportGraph([
+        imp('src/routes.ts', 'src/other.ts'),
+        imp('app/routes.py', 'app/helpers.py'),
+      ]),
+    }))[0];
+    expect(v?.verdict).toBe('unreachable');
+  });
+
+  it('STILL reports unreachable when the language has no imports to resolve at all', () => {
+    // The discriminator against a gate written as "this language contributed
+    // no edges" alone. A language whose files genuinely import nothing has
+    // nothing missing from the graph: zero resolved AND zero unresolved is a
+    // complete picture, and blocking on it would make `unreachable`
+    // unobtainable for exactly the self-contained files it describes best.
+    const v = validateStatically(pythonOrphan({
+      snapshot: {
+        ...input().snapshot,
+        routes: [route({ file: 'app/routes.py', language: 'python' })],
+        coverage: [coverage({ language: 'python', status: 'ok', unresolved_imports: 0 })],
+      },
+    }))[0];
+    expect(v?.verdict).toBe('unreachable');
+  });
+
+  it('leaves the positive direction untouched', () => {
+    // Gates only ever block the NEGATIVE verdict. A discovered path is
+    // evidence regardless of how little of the language resolved.
+    const v = validateStatically(pythonOrphan({
+      findings: [finding({ file_path: 'app/helpers.py' })],
+      graph: buildImportGraph([imp('app/routes.py', 'app/helpers.py')]),
+    }))[0];
+    expect(v?.verdict).toBe('reachable');
+  });
+
+  it('does not let a runtime-resolution language lose its more specific reason', () => {
+    // Java/C#/Ruby/PHP resolve zero edges BY DESIGN, so this gate would fire
+    // for all of them. The runtime-resolution gate is checked first because
+    // its message names the real, permanent cause; this one would read as a
+    // fixable coverage hole that no re-run can close.
+    const v = validateStatically(input({
+      languageOf: () => 'java',
+      findings: [finding({ file_path: 'src/Order.java' })],
+      snapshot: {
+        ...input().snapshot,
+        coverage: [coverage({ language: 'java', status: 'ok', unresolved_imports: 7 })],
+      },
+      graph: buildImportGraph([imp('src/routes.ts', 'src/other.ts')]),
+    }))[0];
+    expect(v?.verdict).toBe('unknown');
+    expect(v?.coverage_gaps.some((g) => /runtime|inject|autoload|container/i.test(g))).toBe(true);
+  });
+});
+
 describe('validateStatically — path conventions', () => {
   // Task 3b's review: snapshot.imports (and therefore every ImportGraph key)
   // is project-relative POSIX, but snapshot.routes[].file is absolute with
