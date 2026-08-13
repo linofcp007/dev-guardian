@@ -66,4 +66,46 @@ describe('ValidationsRepo', () => {
   it('returns null for an unknown fingerprint rather than throwing', () => {
     expect(makeStorage().validations.getByFingerprint('/proj', 'nope')).toBeNull();
   });
+
+  it('downgrades to unknown/low, naming the column, when evidence is not valid JSON', () => {
+    // coverage_gaps: [] means "nothing was missing" (see FindingValidation's
+    // doc comment) — so a wrong implementation that falls back to [] here
+    // would report a damaged row as the most reassuring possible answer.
+    // Guards against reading back the STORED verdict/confidence too: a
+    // damaged row's own claims about itself are exactly what can't be
+    // trusted.
+    const s = makeStorage();
+    s.rawHandle()
+      .prepare(
+        `INSERT INTO finding_validations
+         (project_path, fingerprint, provider, verdict, confidence, evidence, coverage_gaps, snapshot_id, tree_hash, computed_at)
+         VALUES ('/proj', 'fp1', 'static', 'unreachable', 'high', 'not valid json', '[]', 1, 'tree-a', '2026-08-13T00:00:00.000Z')`,
+      )
+      .run();
+
+    const got = s.validations.getByFingerprint('/proj', 'fp1');
+    expect(got?.verdict).toBe('unknown');
+    expect(got?.confidence).toBe('low');
+    expect(got?.coverage_gaps).toEqual(['stored verdict could not be read: evidence was not valid JSON']);
+  });
+
+  it('downgrades to unknown/low, naming the column, when coverage_gaps is not valid JSON', () => {
+    // Sibling of the evidence test above — a fix that only checks `evidence`
+    // would pass that test while this column still fails open.
+    const s = makeStorage();
+    s.rawHandle()
+      .prepare(
+        `INSERT INTO finding_validations
+         (project_path, fingerprint, provider, verdict, confidence, evidence, coverage_gaps, snapshot_id, tree_hash, computed_at)
+         VALUES ('/proj', 'fp1', 'static', 'unreachable', 'high', '[]', 'not valid json', 1, 'tree-a', '2026-08-13T00:00:00.000Z')`,
+      )
+      .run();
+
+    const got = s.validations.getByFingerprint('/proj', 'fp1');
+    expect(got?.verdict).toBe('unknown');
+    expect(got?.confidence).toBe('low');
+    expect(got?.coverage_gaps).toEqual([
+      'stored verdict could not be read: coverage_gaps was not valid JSON',
+    ]);
+  });
 });

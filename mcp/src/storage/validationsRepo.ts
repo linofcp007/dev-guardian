@@ -9,16 +9,22 @@
  * for code that moved must not leave the old answer readable next to the
  * new one.
  *
- * `evidence` and `coverage_gaps` are stored as JSON text and parsed back into
- * arrays on read via `parseJsonArray`, which — like every JSON column in this
- * codebase (see `surfaceRepo.ts`) — tolerates malformed or truncated stored
- * JSON by falling back to `[]` instead of throwing. A caller never receives a
- * raw JSON string typed as `ValidationEvidence[]`.
+ * `evidence` and `coverage_gaps` are stored as JSON text. They are deliberately
+ * NOT parsed with the shared `parseJsonArray` (`repoUtil.ts`), whose fallback
+ * on a parse failure is `[]` — right for most JSON columns in this codebase,
+ * wrong for this table specifically: `coverage_gaps: []` means "nothing was
+ * missing" (see `FindingValidation`'s doc comment), so silently falling back
+ * to it would make a damaged row read as the single most reassuring verdict
+ * this feature can produce, which is exactly the "absence of evidence became
+ * a confident answer" failure `validate_finding` exists to prevent. Instead,
+ * a row whose `evidence` or `coverage_gaps` fails to parse still comes back
+ * (never dropped, never thrown) but downgraded to `verdict: 'unknown'`,
+ * `confidence: 'low'`, with `coverage_gaps` naming which column broke — see
+ * `rowToValidation`.
  */
 
 import type { DB, Statement } from './db.js';
-import type { FindingValidation, Provider, Verdict } from '../validate/types.js';
-import { parseJsonArray } from './repoUtil.js';
+import type { FindingValidation, Provider, ValidationEvidence, Verdict } from '../validate/types.js';
 
 interface ValidationRow {
   project_path: string;
@@ -63,11 +69,8 @@ export class ValidationsRepo {
       ORDER BY fingerprint ASC, provider ASC
     `);
 
-    // (project_path, fingerprint) alone is not unique once more than one
-    // provider has a verdict for the same finding — the PRIMARY KEY also
-    // includes provider. This picks the most recently computed row so "the"
-    // verdict for a finding stays well-defined without a provider argument.
-    // listByProject is the method that returns every provider's row.
+    // ORDER BY computed_at DESC LIMIT 1 — see getByFingerprint's doc comment
+    // for why this method needs a tie-break at all.
     this.getByFingerprintStmt = db.prepare<[string, string], ValidationRow>(`
       SELECT * FROM finding_validations
       WHERE project_path = ? AND fingerprint = ?
@@ -108,20 +111,79 @@ export class ValidationsRepo {
     return this.listByProjectStmt.all(projectPath).map(rowToValidation);
   }
 
+  /**
+   * Returns one verdict for a finding, or `null` if none exists yet.
+   *
+   * The table's key is `(project_path, fingerprint, provider)`, not just
+   * `(project_path, fingerprint)`: once more than one provider has scored the
+   * same finding — `runtime`, `dependency`, both still to come — more than
+   * one row can match. This method takes no `provider` argument, so that
+   * case is resolved by returning the most recently computed row across all
+   * providers ("the latest answer, whoever gave it"), not by picking a
+   * preferred provider. A caller that wants a specific provider's verdict —
+   * e.g. "what did `static` say about this finding" — needs a different
+   * accessor; none exists yet because only `static` is implemented, and nothing
+   * today needs it. Recorded here for whoever adds `runtime` next, so this is
+   * a decision to revisit deliberately rather than a behaviour to rediscover.
+   */
   getByFingerprint(projectPath: string, fingerprint: string): FindingValidation | null {
     const row = this.getByFingerprintStmt.get(projectPath, fingerprint);
     return row ? rowToValidation(row) : null;
   }
 }
 
+/**
+ * Parses a JSON-array column, distinguishing "genuinely empty" from "failed
+ * to parse, or parsed to the wrong shape" — unlike the shared `parseJsonArray`
+ * (`repoUtil.ts`), which collapses both to `[]`. `rowToValidation` needs that
+ * distinction to avoid presenting a damaged column as an empty, fully-trusted
+ * one. Returns `null` on failure.
+ */
+function tryParseJsonArray<T>(raw: string): T[] | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as T[]) : null;
+  } catch {
+    return null;
+  }
+}
+
 function rowToValidation(row: ValidationRow): FindingValidation {
+  const evidence = tryParseJsonArray<ValidationEvidence>(row.evidence);
+  const coverageGaps = tryParseJsonArray<string>(row.coverage_gaps);
+
+  if (evidence === null || coverageGaps === null) {
+    // The row survives — never dropped, never thrown — but its stored
+    // verdict/confidence cannot be trusted once the record justifying it is
+    // damaged, and a successfully-parsed sibling array is discarded too
+    // rather than presented as if it still corroborates a verdict we no
+    // longer trust. A caller asking about this finding needs to learn its
+    // verdict is unreadable, not that the finding has no verdict at all.
+    const brokenColumns: string[] = [];
+    if (evidence === null) brokenColumns.push('evidence');
+    if (coverageGaps === null) brokenColumns.push('coverage_gaps');
+    return {
+      fingerprint: row.fingerprint,
+      verdict: 'unknown',
+      confidence: 'low',
+      provider: row.provider as Provider,
+      evidence: [],
+      coverage_gaps: brokenColumns.map(
+        (column) => `stored verdict could not be read: ${column} was not valid JSON`,
+      ),
+      snapshot_id: row.snapshot_id,
+      tree_hash: row.tree_hash,
+      computed_at: row.computed_at,
+    };
+  }
+
   return {
     fingerprint: row.fingerprint,
     verdict: row.verdict as Verdict,
     confidence: row.confidence as FindingValidation['confidence'],
     provider: row.provider as Provider,
-    evidence: parseJsonArray(row.evidence, []),
-    coverage_gaps: parseJsonArray(row.coverage_gaps, []),
+    evidence,
+    coverage_gaps: coverageGaps,
     snapshot_id: row.snapshot_id,
     tree_hash: row.tree_hash,
     computed_at: row.computed_at,

@@ -37855,19 +37855,62 @@ var ValidationsRepo = class {
   listByProject(projectPath) {
     return this.listByProjectStmt.all(projectPath).map(rowToValidation);
   }
+  /**
+   * Returns one verdict for a finding, or `null` if none exists yet.
+   *
+   * The table's key is `(project_path, fingerprint, provider)`, not just
+   * `(project_path, fingerprint)`: once more than one provider has scored the
+   * same finding — `runtime`, `dependency`, both still to come — more than
+   * one row can match. This method takes no `provider` argument, so that
+   * case is resolved by returning the most recently computed row across all
+   * providers ("the latest answer, whoever gave it"), not by picking a
+   * preferred provider. A caller that wants a specific provider's verdict —
+   * e.g. "what did `static` say about this finding" — needs a different
+   * accessor; none exists yet because only `static` is implemented, and nothing
+   * today needs it. Recorded here for whoever adds `runtime` next, so this is
+   * a decision to revisit deliberately rather than a behaviour to rediscover.
+   */
   getByFingerprint(projectPath, fingerprint) {
     const row = this.getByFingerprintStmt.get(projectPath, fingerprint);
     return row ? rowToValidation(row) : null;
   }
 };
+function tryParseJsonArray(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 function rowToValidation(row) {
+  const evidence = tryParseJsonArray(row.evidence);
+  const coverageGaps = tryParseJsonArray(row.coverage_gaps);
+  if (evidence === null || coverageGaps === null) {
+    const brokenColumns = [];
+    if (evidence === null) brokenColumns.push("evidence");
+    if (coverageGaps === null) brokenColumns.push("coverage_gaps");
+    return {
+      fingerprint: row.fingerprint,
+      verdict: "unknown",
+      confidence: "low",
+      provider: row.provider,
+      evidence: [],
+      coverage_gaps: brokenColumns.map(
+        (column) => `stored verdict could not be read: ${column} was not valid JSON`
+      ),
+      snapshot_id: row.snapshot_id,
+      tree_hash: row.tree_hash,
+      computed_at: row.computed_at
+    };
+  }
   return {
     fingerprint: row.fingerprint,
     verdict: row.verdict,
     confidence: row.confidence,
     provider: row.provider,
-    evidence: parseJsonArray(row.evidence, []),
-    coverage_gaps: parseJsonArray(row.coverage_gaps, []),
+    evidence,
+    coverage_gaps: coverageGaps,
     snapshot_id: row.snapshot_id,
     tree_hash: row.tree_hash,
     computed_at: row.computed_at
