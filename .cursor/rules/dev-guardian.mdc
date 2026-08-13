@@ -7,7 +7,7 @@ alwaysApply: true
 
 # dev-guardian
 
-This project has the **dev-guardian MCP server** registered. 52 tools and
+This project has the **dev-guardian MCP server** registered. 53 tools and
 18 resources for security, quality, bugfix, deps, compliance,
 observability, performance, plus first-class WordPress and .NET support.
 All scanners run **locally**, no telemetry.
@@ -71,6 +71,11 @@ regression tracking.
   (loopback-only unless `authorized_target: true`; a clean result is not
   evidence of injection safety — nuclei's opt-in pass covers the origin,
   not this project's specific routes)
+- "is this finding reachable / exploitable?" → `map_attack_surface` then
+  `validate_finding` (per-finding reachable/unreachable/unknown verdict with
+  evidence, report-only; `unreachable` never available for Ruby/Java/C#/PHP —
+  it IS produced, and can be wrong, for a CLI/cron/queue-only file or an
+  unresolvable dynamic import)
 
 ### Meta
 - "full audit" → `audit_executive` (stack-aware: auto includes WP/.NET when detected)
@@ -121,6 +126,10 @@ Attack surface: `surface/latest`, `surface/{id}`.
 **Active DAST** → `map_attack_surface` → `scan_dast` (target app must
 already be running; `scan_dast` never starts, builds or stops it).
 
+**Reachability** → `map_attack_surface` → `validate_finding` (needs a prior
+surface snapshot; validates whichever scan completed most recently — run
+right after a SAST scan, not after `scan_dast`).
+
 ## Anti-patterns
 
 - Don't run `security_scan_full` for tiny changes — use `review_pr`.
@@ -133,3 +142,6 @@ already be running; `scan_dast` never starts, builds or stops it).
   `no_surface_snapshot` and has no route inventory to probe.
 - Don't read a clean `scan_dast` result as "no injection vulnerabilities" —
   the own engine sends no injection payloads at all.
+- Don't treat `validate_finding`'s `unreachable` as safety proof or use it to
+  auto-suppress — it's an over-approximating import-graph signal, unavailable
+  for Ruby/Java/C#/PHP, blind to dynamic imports.

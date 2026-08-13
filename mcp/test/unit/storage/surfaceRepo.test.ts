@@ -75,6 +75,34 @@ describe('SurfaceRepo', () => {
     expect(repo.getLatest()?.snapshot.routes[0]?.path_raw).toBe('/newer');
   });
 
+  it('getLatestForProject ignores a newer snapshot belonging to another project', () => {
+    // The distinction `getLatest()` cannot make, and the one every consumer
+    // that relativizes paths against a project root needs: a snapshot of
+    // another tree relativizes into a different key space, so every
+    // comparison against it silently answers "not found" rather than failing.
+    const repo = setup();
+    repo.insert({ project_path: '/mine', tree_hash: 'h1', snapshot: makeSnapshot() });
+    repo.insert({
+      project_path: '/theirs',
+      tree_hash: 'h2',
+      snapshot: makeSnapshot({ routes: [makeRoute({ path_raw: '/theirs' })] }),
+    });
+
+    // getLatest() answers with the OTHER project's snapshot — kept, and
+    // asserted, because two callers still depend on exactly that behaviour.
+    expect(repo.getLatest()?.project_path).toBe('/theirs');
+
+    const mine = repo.getLatestForProject('/mine');
+    expect(mine?.project_path).toBe('/mine');
+    expect(mine?.snapshot.routes[0]?.path_raw).toBe('/users');
+  });
+
+  it('getLatestForProject returns null for a project with no snapshot, not another project’s', () => {
+    const repo = setup();
+    repo.insert({ project_path: '/theirs', tree_hash: 'h1', snapshot: makeSnapshot() });
+    expect(repo.getLatestForProject('/mine')).toBeNull();
+  });
+
   it('getByTreeHash finds a snapshot by hash — the cache lookup', () => {
     const repo = setup();
     repo.insert({ project_path: '/p', tree_hash: 'h1', snapshot: makeSnapshot() });

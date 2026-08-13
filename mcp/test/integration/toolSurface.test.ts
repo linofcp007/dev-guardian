@@ -61,6 +61,7 @@ const EXPECTED_TOOLS = [
   'suggest_fix',
   'suppress_finding',
   'triage_findings',
+  'validate_finding',
   'wp_audit',
   'wp_cron_audit',
   'wp_describe_setup',
@@ -100,8 +101,8 @@ describe('MCP surface — stability snapshot', () => {
     expect(RESOURCES.map((r) => r.name).sort()).toEqual(EXPECTED_RESOURCES);
   });
 
-  it('matches the counts documented in the README (52 tools, 18 resources)', () => {
-    expect(TOOLS).toHaveLength(52);
+  it('matches the counts documented in the README (53 tools, 18 resources)', () => {
+    expect(TOOLS).toHaveLength(53);
     expect(RESOURCES).toHaveLength(18);
   });
 });

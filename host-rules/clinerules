@@ -1,6 +1,6 @@
 # dev-guardian (MCP)
 
-This project has the dev-guardian MCP server registered. 52 tools and 18
+This project has the dev-guardian MCP server registered. 53 tools and 18
 resources for security, quality, bugfix, deps, compliance, observability,
 performance, plus first-class WordPress and .NET (C#/F#) support. All
 scanners run locally, no telemetry, results persisted in
@@ -23,6 +23,10 @@ diff_scans, baselines, suppressions, and the regression history.
   `scan_dast` (target app must already be running; loopback-only unless
   `authorized_target: true`; a clean result is not evidence of injection
   safety)
+- "is this finding reachable?" → `map_attack_surface` then `validate_finding`
+  (reachable/unreachable/unknown per finding, report-only; unreachable never
+  available for Ruby/Java/C#/PHP — it IS produced, and can be wrong, for a
+  CLI/cron/queue-only file or an unresolvable dynamic import)
 
 ### Quality
 - "review before PR" → `review_pr`
@@ -94,6 +98,9 @@ diff_scans, baselines, suppressions, and the regression history.
 2. Before PR: review_pr → triage_findings → prioritize_findings → suggest_fix
 3. Audit: audit_executive (stack-aware) → risk_score → compliance_evidence
 4. Active DAST: map_attack_surface → scan_dast (app must already be running)
+5. Reachability: map_attack_surface → validate_finding (needs a prior surface
+   snapshot; run right after a SAST scan, not scan_dast — it validates
+   whichever scan completed most recently)
 
 ## Anti-patterns
 
@@ -105,3 +112,5 @@ diff_scans, baselines, suppressions, and the regression history.
   no_surface_snapshot
 - Don't read a clean scan_dast result as "no injection vulnerabilities" —
   the own engine sends none; that's nuclei's job, opt-in and origin-scoped
+- Don't treat validate_finding's unreachable as safety proof — import-graph
+  signal, unavailable for Ruby/Java/C#/PHP, blind to dynamic imports

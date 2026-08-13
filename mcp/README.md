@@ -2,7 +2,7 @@
 
 Stdio MCP server that exposes the dev-guardian plugin's security, quality,
 bugfix, deps, compliance, observability, and performance capabilities as
-**52 MCP tools** and **18 MCP resources**.
+**53 MCP tools** and **18 MCP resources**.
 
 The server is registered in the plugin manifest at
 `.claude-plugin/plugin.json` under `mcpServers.dev-guardian` — Claude Code
@@ -15,7 +15,7 @@ plugin is installed.
 mcp/
 ├── src/
 │   ├── server.ts                # entry point (stdio transport)
-│   ├── tools/                   # 52 MCP tool handlers + scan-tool factory
+│   ├── tools/                   # 53 MCP tool handlers + scan-tool factory
 │   ├── resources/               # 18 MCP resources (guardian://…)
 │   ├── runners/                 # process + shell + scanner-parser registry
 │   ├── storage/                 # better-sqlite3 + migrations
@@ -89,19 +89,21 @@ On startup the server:
 
 Single SQLite file at `<project_root>/.guardian/guardian.db`:
 
-| Table              | Purpose                                                       |
-|--------------------|---------------------------------------------------------------|
-| `scans`            | One row per scan invocation (any tool).                       |
-| `findings`         | One row per finding instance, keyed by stable fingerprint.    |
-| `cves`             | CVE rows deduped across scans (Trivy fs output).              |
-| `suppressions`     | False-positive marks (with optional TTL).                     |
-| `baselines`        | Regression baselines (history-preserving; latest = active).   |
-| `tree_cache`       | tree_hash → scan_id helper for the 5-minute cache window.     |
-| `stack_snapshots`  | Persisted `detect_stack` outputs.                             |
-| `runtime_meta`     | Server-level KV (chosen shell, etc.).                         |
-| `schema_meta`      | Migration version.                                            |
+| Table                 | Purpose                                                            |
+|-----------------------|--------------------------------------------------------------------|
+| `scans`               | One row per scan invocation (any tool).                            |
+| `findings`            | One row per finding instance, keyed by stable fingerprint.         |
+| `cves`                | CVE rows deduped across scans (Trivy fs output).                   |
+| `suppressions`        | False-positive marks (with optional TTL).                          |
+| `baselines`           | Regression baselines (history-preserving; latest = active).        |
+| `tree_cache`          | tree_hash → scan_id helper for the 5-minute cache window.          |
+| `stack_snapshots`     | Persisted `detect_stack` outputs.                                  |
+| `surface_snapshots`   | Persisted `map_attack_surface` snapshots (routes, imports, spec).  |
+| `finding_validations` | `validate_finding` verdicts, keyed by project + fingerprint.       |
+| `runtime_meta`        | Server-level KV (chosen shell, etc.).                              |
+| `schema_meta`         | Migration version.                                                 |
 
-## Tools (52)
+## Tools (53)
 
 This grouping covers a subset, kept for illustration; it is not exhaustive. The root
 [`README.md`](../README.md) carries the complete, current tool table.

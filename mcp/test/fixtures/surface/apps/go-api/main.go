@@ -5,6 +5,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+
+	// The fixture's one resolvable intra-project Go import: a package
+	// DIRECTORY under this module. The path carries the `go-api/` segment
+	// because go.mod sits at the tree root (`module example.com/fixture`),
+	// which is the layout resolveGo's suffix match assumes — see its doc
+	// comment. See go-api/pkg/util/shout.go.
+	"example.com/fixture/go-api/pkg/util"
 )
 
 func main() {
@@ -22,5 +29,6 @@ func health(w http.ResponseWriter, r *http.Request) {
 }
 
 func orders(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Origin", util.Shout("go-api"))
 	w.WriteHeader(http.StatusNoContent)
 }

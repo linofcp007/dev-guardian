@@ -17,6 +17,7 @@ describe('migrations runner', () => {
     for (const expected of [
       'baselines',
       'cves',
+      'finding_validations',
       'findings',
       'runtime_meta',
       'scans',
@@ -36,7 +37,7 @@ describe('migrations runner', () => {
     const row = db
       .prepare(`SELECT value FROM schema_meta WHERE key = 'version'`)
       .get() as { value: string } | undefined;
-    expect(row?.value).toBe('2');
+    expect(row?.value).toBe('3');
   });
 
   it('is idempotent (running twice does not throw and version stays the same)', () => {
@@ -46,6 +47,6 @@ describe('migrations runner', () => {
     const row = db
       .prepare(`SELECT value FROM schema_meta WHERE key = 'version'`)
       .get() as { value: string };
-    expect(row.value).toBe('2');
+    expect(row.value).toBe('3');
   });
 });

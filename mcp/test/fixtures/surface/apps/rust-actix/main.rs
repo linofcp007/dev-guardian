@@ -1,8 +1,15 @@
 use actix_web::{delete, get, patch, post, put, web, App, HttpResponse, HttpServer, Responder};
 
+// The fixture's resolvable intra-project Rust import, and the dominant
+// real-world shape. `crate::` anchors at the crate root (`src/` by Cargo
+// convention) — a PROJECT-RELATIVE anchor derived from the specifier alone,
+// which is what makes this arm discriminate a resolver fed absolute paths.
+// See src/settings.rs.
+use crate::settings::Config;
+
 #[get("/rust/health")]
 async fn health() -> impl Responder {
-    HttpResponse::Ok().body("ok".to_string())
+    HttpResponse::Ok().body(Config::new().name)
 }
 
 #[post("/rust/items")]

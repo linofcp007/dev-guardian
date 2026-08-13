@@ -173,6 +173,40 @@ Envelope de segurança (não o contornes): métodos só de leitura
 com corpo vazio — mais o burst opcional de `probe_rate_limit`, a única
 exceção, que envia POST a exatamente uma rota. Redirects nunca são seguidos.
 
+## Alcançabilidade (estática) — `validate_finding`
+
+Depois de triares os findings (Secção 3), `validate_finding` acrescenta um
+sinal extra por finding — **nunca substitui a triagem acima, e nunca suprime
+nem altera severidade sozinho**. Responde se algo fora do processo consegue
+alcançar o ficheiro onde o finding vive, a partir de um grafo de imports com
+raiz nas rotas que `map_attack_surface` já mapeou.
+
+1. Corre `map_attack_surface` primeiro, se ainda não houver snapshot — sem
+   ele, `validate_finding` recusa com `no_surface_snapshot`.
+2. Corre `validate_finding` (sem `fingerprint` valida de uma vez todos os
+   findings abertos — é o comportamento por omissão).
+3. Lê o veredito por finding — `reachable` / `unreachable` / `unknown` — **ao
+   lado** de `coverage_gaps`, nunca sozinho: uma contagem de vereditos sem os
+   gaps ao lado não é uma resposta.
+4. Usa isto como CONTEXTO na conversa com o utilizador ("este finding não
+   parece alcançável por nenhuma rota, mas é uma leitura estática — quer
+   mesmo assim mantê-lo como prioridade?"), nunca como justificação
+   automática para o despromover na Secção 3.
+
+Limites a respeitar sempre que apresentares um `unreachable`:
+
+- **Nunca é emitido** para Ruby, Java, C# ou PHP — resolvem código em
+  runtime (autoload / injeção por anotação / DI / service container), não
+  por import.
+- **Não vê imports dinâmicos** (`import(expr)`, `require(variable)`,
+  reflection, registos de plugins) em nenhuma stack — nesses casos o
+  `unreachable` pode estar errado, sem forma de o detetar.
+- **Só conta rotas HTTP como ponto de entrada.** Um ficheiro chamado apenas
+  por CLI, cron job ou consumidor de fila lê `unreachable`-por-rota — isso
+  não é uma afirmação de que o código nunca corre.
+- **Granularidade de ficheiro, não de função.** Um finding dentro de um
+  helper nunca chamado, mas cujo ficheiro É importado, lê `reachable`.
+
 ## Quando não correr scans completos
 
 - Em commits triviais (1-2 linhas): só hooks pre-commit chegam

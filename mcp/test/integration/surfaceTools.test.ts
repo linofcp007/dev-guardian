@@ -128,6 +128,101 @@ const JS_MOUNT_OUTPUT = JSON.stringify({
 });
 
 /**
+ * The same Express app with the mounting file at the ROOT of the scanned
+ * tree — a plain `app.js`, no directory at all, which is how most small Node
+ * projects are laid out. `resolveModuleFile` derives the importing file's
+ * directory by dropping the last segment, which is `''` here, so a
+ * leading-separator check written against the JOINED path reads
+ * `'' + '/' + './routes/users'` as absolute and resolves to `/routes/users`
+ * — matching no known file, leaving the router unresolved and every route it
+ * declares `path_partial`. Nothing else in this file exercises a
+ * directory-less importer.
+ */
+const ROOT_LEVEL_MOUNT_OUTPUT = JSON.stringify({
+  results: [
+    {
+      check_id: 'guardian-route-express',
+      path: 'routes/users.js',
+      start: { line: 5 },
+      extra: {
+        metadata: { guardian_kind: 'route', framework: 'express', confidence: 'high' },
+        metavars: { $METHOD: { abstract_content: 'get' }, $PATH: { abstract_content: '/users' } },
+      },
+    },
+    {
+      check_id: 'guardian-mount-express',
+      path: 'app.js',
+      start: { line: 10 },
+      extra: {
+        metadata: { guardian_kind: 'mount', framework: 'express' },
+        metavars: {
+          $PREFIX: { abstract_content: "'/api'" },
+          $ROUTER: { abstract_content: 'usersRouter' },
+        },
+      },
+    },
+    {
+      check_id: 'guardian-import-esm',
+      path: 'app.js',
+      start: { line: 1 },
+      extra: {
+        metadata: { guardian_kind: 'import' },
+        metavars: {
+          $SYMBOL: { abstract_content: 'usersRouter' },
+          $MODULE: { abstract_content: "'./routes/users'" },
+        },
+      },
+    },
+  ],
+});
+
+/**
+ * The same app spelled the way Semgrep reports it on Linux, macOS and every
+ * Docker-Semgrep run: absolute POSIX. The companion to
+ * `WINDOWS_MOUNT_OUTPUT` below, and the case that had no test at all while
+ * `resolveModuleFile` silently dropped the leading `/` — on those hosts the
+ * normalised candidate could never equal a known file, so mount resolution
+ * degraded to the specifier text and every mounted route went partial.
+ */
+const POSIX_ABSOLUTE_MOUNT_OUTPUT = JSON.stringify({
+  results: [
+    {
+      check_id: 'guardian-route-express',
+      path: '/srv/app/src/routes/users.js',
+      start: { line: 5 },
+      extra: {
+        metadata: { guardian_kind: 'route', framework: 'express', confidence: 'high' },
+        metavars: { $METHOD: { abstract_content: 'get' }, $PATH: { abstract_content: '/users' } },
+      },
+    },
+    {
+      check_id: 'guardian-mount-express',
+      path: '/srv/app/src/app.js',
+      start: { line: 10 },
+      extra: {
+        metadata: { guardian_kind: 'mount', framework: 'express' },
+        metavars: {
+          $PREFIX: { abstract_content: "'/api'" },
+          $ROUTER: { abstract_content: 'usersRouter' },
+        },
+      },
+    },
+    {
+      check_id: 'guardian-import-esm',
+      path: '/srv/app/src/app.js',
+      start: { line: 1 },
+      extra: {
+        metadata: { guardian_kind: 'import' },
+        metavars: {
+          $SYMBOL: { abstract_content: 'usersRouter' },
+          $MODULE: { abstract_content: "'./routes/users'" },
+        },
+      },
+    },
+  ],
+});
+
+/**
  * TS project under NodeNext (this repo's own convention): the import
  * specifier says `.js` but the real matched source file is `.ts` (B2
  * scenario 2 — the mismatch the extension-insensitive match must bridge).
@@ -593,6 +688,47 @@ describe('map_attack_surface', () => {
     expect(route?.path_partial).toBe(false);
   });
 
+  it('resolves a mount whose mounting file sits at the root of the tree', async () => {
+    // `app.js`, no directory — the shape `resolveModuleFile`'s
+    // directory-derivation gets wrong when absoluteness is read from the
+    // joined path instead of the directory. The wrong implementation leaves
+    // the router unresolved and reports GET /users as `path_partial`, which
+    // is a real route reported at the wrong URL, not a missing one.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(ROOT_LEVEL_MOUNT_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      sample: { path_resolved: string; path_partial: boolean; file: string }[];
+    };
+
+    const route = result.sample.find((r) => r.file === 'routes/users.js');
+    expect(route?.path_resolved).toBe('/api/users');
+    expect(route?.path_partial).toBe(false);
+  });
+
+  it('resolves a mount when Semgrep reports absolute POSIX paths', async () => {
+    // The Linux/macOS/Docker-Semgrep spelling, and the one `resolveModuleFile`
+    // had no test for while it was dropping the leading `/`: the normalised
+    // candidate `src/routes/users` could never equal the known file
+    // `/srv/app/src/routes/users.js`, so the mount silently degraded.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(POSIX_ABSOLUTE_MOUNT_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      sample: { path_resolved: string; path_partial: boolean; file: string }[];
+    };
+
+    const route = result.sample.find((r) => r.file.endsWith('routes/users.js'));
+    expect(route?.path_resolved).toBe('/api/users');
+    expect(route?.path_partial).toBe(false);
+  });
+
   it('resolves a mount when Semgrep reports Windows paths', async () => {
     // Semgrep reports paths in the host's native separator, and this tool
     // always hands it an absolute target — so on Windows every path comes back
@@ -880,6 +1016,93 @@ describe('map_attack_surface', () => {
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe('not_a_git_repo');
     expect(ctx.storage.surface.getLatest()).toBeNull();
+  });
+
+  /**
+   * Every other fixture in this file spells Semgrep's `path` values
+   * RELATIVELY, which is not what production ever sees: `map_attack_surface`
+   * always hands Semgrep an ABSOLUTE target, and Semgrep then reports
+   * absolute, native-separator paths (this file's own WINDOWS_MOUNT_OUTPUT
+   * says so). That gap hid a Critical defect for a whole feature: the module-
+   * edge resolvers were handed the absolute set while every candidate they
+   * build from a specifier is project-relative, so Python, Go and Rust
+   * resolved NOTHING — and `validate_finding` reported every file in those
+   * three languages as imported by no route, which is precisely the verdict
+   * it must never fabricate. The paths below are therefore built from the
+   * real `projectPath`, so this test measures the production convention.
+   */
+  it('resolves Python, Go and Rust import edges when Semgrep reports absolute paths', async () => {
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const abs = (rel: string): string => join(projectPath, rel);
+    const importMatch = (rel: string, module: string, symbol?: string): unknown => ({
+      check_id: 'guardian-import',
+      path: abs(rel),
+      start: { line: 1 },
+      extra: {
+        metadata: { guardian_kind: 'import' },
+        metavars: {
+          $MODULE: { abstract_content: module },
+          ...(symbol === undefined ? {} : { $SYMBOL: { abstract_content: symbol } }),
+        },
+      },
+    });
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(
+      JSON.stringify({
+        results: [
+          {
+            check_id: 'guardian-route-express',
+            path: abs('api/server.ts'),
+            start: { line: 5 },
+            extra: {
+              metadata: { guardian_kind: 'route', framework: 'express', confidence: 'high' },
+              metavars: {
+                $METHOD: { abstract_content: 'get' },
+                $PATH: { abstract_content: '/items' },
+              },
+            },
+          },
+          importMatch('api/server.ts', "'./helper.js'", 'helper'),
+          importMatch('pyapp/routes.py', 'pyapp.helpers', 'shout'),
+          importMatch('gosvc/main.go', '"example.com/repro/gosvc/pkg/util"'),
+          // Rust binds $SYMBOL to the final path segment, and Semgrep joins a
+          // multi-segment $MODULE with a space — see buildSpecifier.
+          importMatch('src/main.rs', 'crate settings', 'Config'),
+        ],
+        paths: {
+          scanned: [
+            abs('api/server.ts'), abs('api/helper.ts'),
+            abs('pyapp/routes.py'), abs('pyapp/helpers.py'),
+            abs('gosvc/main.go'), abs('gosvc/pkg/util/util.go'),
+            abs('src/main.rs'), abs('src/settings.rs'),
+          ],
+        },
+      }),
+    );
+
+    const ctx = makeCtx();
+    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      snapshot_id: number;
+    };
+    const snapshot = ctx.storage.surface.getById(result.snapshot_id)?.snapshot;
+
+    // An exact set, not a count: a resolver that starts matching the wrong
+    // file (Go's basename-vs-directory defect produced exactly that) changes
+    // this list's shape, not its length.
+    expect(snapshot?.imports.map((e) => `${e.file} -> ${e.module_file}`).sort()).toEqual([
+      'api/server.ts -> api/helper.ts',
+      'gosvc/main.go -> gosvc/pkg/util/util.go',
+      'pyapp/routes.py -> pyapp/helpers.py',
+      'src/main.rs -> src/settings.rs',
+    ]);
+    // Nothing was left unresolved, so no language carries an import gap.
+    // Asserted over the whole table rather than per language: a coverage
+    // entry only exists for a language with a detected stack, a route, an
+    // unreadable match or an UNRESOLVED import, so naming languages here
+    // would assert on entries that legitimately do not exist.
+    expect(snapshot?.coverage.filter((c) => c.unresolved_imports > 0)).toEqual([]);
   });
 });
 

@@ -59,9 +59,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';
 import { detectOs } from '../../src/platform/osDetect.js';
+import { languageFromPath } from '../../src/surface/extract.js';
+import { invokeSemgrep } from '../../src/surface/scanSemgrep.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { Storage } from '../../src/storage/index.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
+import { ensureReportDir, readJsonSafe } from '../../src/tools/scanHelpers.js';
 import { TOOLS } from '../../src/tools/index.js';
 import '../../src/tools/mapAttackSurface.js';
 import type { AttackSurfaceSnapshot, RouteRecord, SpecDiffEntry } from '../../src/types.js';
@@ -70,6 +73,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(here, '..', '..', '..');
 const FIXTURE = resolve(here, '..', 'fixtures', 'surface', 'apps');
 const SCRIPTS_DIR = resolve(ROOT, 'scripts');
+const RULES_PATH = resolve(ROOT, 'configs', 'semgrep', 'routes.yml');
 
 /**
  * `framework method path_resolved` plus a `[partial]` marker.
@@ -120,6 +124,14 @@ const BASE_ROUTES = [
   'express GET /health',
   'express POST /api/users/create',
   'express POST /login',
+  // node-mount-forms/ is DELIBERATELY absent from this array. Its two routes
+  // (a router bound by a named import, one by a namespace import, each
+  // mounted) resolve differently depending on whether Semgrep reports real
+  // metavariables — see the `redacting`-conditioned assertion inside "maps
+  // every route the fixture declares, and nothing else" below, and
+  // guardian-import-esm's comment in routes.yml for the mechanism. Folding
+  // either possible value in here would contradict this array's own
+  // promise, two lines up, of ONE expected set on any Semgrep version.
   'fastapi DELETE /fastapi/items/{item_id}',
   'fastapi GET /fastapi/items',
   'fastapi POST /fastapi/items',
@@ -212,6 +224,16 @@ const FOCUSED_ROUTES = [
  */
 const EXPECTED_ROUTES = [...BASE_ROUTES, ...FOCUSED_ROUTES].sort();
 
+/**
+ * node-mount-forms/'s two routes, held out of EXPECTED_ROUTES because their
+ * resolution is genuinely Semgrep-version-dependent (see the "maps every
+ * route..." test below and guardian-import-esm's comment in routes.yml).
+ * The count is version-independent even though the resolved paths are not —
+ * both routes exist on every Semgrep version, only their `path_partial`
+ * differs — so `routes_total` can still be asserted exactly.
+ */
+const MOUNT_FORM_ROUTE_COUNT = 2;
+
 /** Paths that must NEVER appear: every decoy planted in the fixture. */
 const FABRICATION_DECOYS = [
   'dead_code',
@@ -223,6 +245,30 @@ const FABRICATION_DECOYS = [
   'legacy/:id',
   'audit/FABRICATED',
 ];
+
+/**
+ * The exact set of Semgrep languages (javascript and typescript counted
+ * separately, matching `languageFromPath` and the route-coverage assertion
+ * below) with at least one `guardian_kind: import` match in the fixture —
+ * all nine, one per `configs/semgrep/routes.yml` import rule.
+ *
+ * A SET, not a count: a count passes when one language's rule silently stops
+ * matching while an unrelated one over-matches by the same amount — the
+ * exact failure this fixture exists to catch (see the module comment). Each
+ * language's presence is checked independently here, so a rule that goes
+ * quiet cannot be masked by another rule matching more than it should.
+ */
+const EXPECTED_IMPORT_LANGUAGES = [
+  'csharp',
+  'go',
+  'java',
+  'javascript',
+  'php',
+  'python',
+  'ruby',
+  'rust',
+  'typescript',
+].sort();
 
 /**
  * The code-vs-spec diff produced against `openapi.yaml` sitting alongside
@@ -383,6 +429,11 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     expect(snapshot).toBeDefined();
     if (!snapshot) return;
 
+    // `redacting` is true on any Semgrep >= ~1.120 without `semgrep login`.
+    // Named explicitly so a regression reads as what it is, and reused below
+    // for the one pair of routes this fixture cannot make version-independent.
+    const redacting = result.tools_run.some((t) => t.name === 'semgrep-metavar-recovery');
+
     // ONE expected set, whichever Semgrep is installed. This used to fork on
     // whether match content was redacted, because the three decorated-
     // declaration families were then absent; `focus-metavariable: $PATH` makes
@@ -394,19 +445,47 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     // that file), whose imported routes land in `snapshot.routes` too, tagged
     // `provenance: 'spec'`. EXPECTED_ROUTES is the code-extracted surface, so
     // the comparison filters to `'code'` the same way `routes_total` does.
+    //
+    // node-mount-forms/ is excluded here and asserted separately below: unlike
+    // every other route in this fixture, its resolution genuinely cannot be
+    // made version-independent without touching resolvers/node.ts or
+    // recoverMetavars.ts (out of scope — see guardian-import-esm's comment in
+    // routes.yml), so folding it into a "same on any version" array would be
+    // exactly the silent-wrongness risk the paragraph above warns about.
+    const isMountForm = (r: RouteRecord): boolean => r.file.includes('node-mount-forms');
     const actual = snapshot.routes
-      .filter((r) => r.provenance === 'code')
+      .filter((r) => r.provenance === 'code' && !isMountForm(r))
       .map(describeRoute)
       .sort();
     expect(actual).toEqual(EXPECTED_ROUTES);
-    expect(result.routes_total).toBe(EXPECTED_ROUTES.length);
+    expect(result.routes_total).toBe(EXPECTED_ROUTES.length + MOUNT_FORM_ROUTE_COUNT);
 
-    // Named explicitly so a regression reads as what it is. `redacting` is true
-    // on any Semgrep >= ~1.120 without `semgrep login`; on those runs every one
-    // of these 21 routes came back through the byte-offset recovery.
-    const redacting = result.tools_run.some((t) => t.name === 'semgrep-metavar-recovery');
     expect(FOCUSED_ROUTES.every((r) => actual.includes(r)), `redacting=${redacting}`).toBe(true);
     expect(FOCUSED_ROUTES).toHaveLength(21);
+
+    // The Semgrep-version-dependent pair, pinned exactly rather than merely
+    // documented: on a redacting Semgrep (this project's actual pipeline)
+    // BOTH resolve, each by a different coincidence in pre-existing,
+    // untouched code (recoverMetavars.ts's synthesizeMount truncates
+    // "ns.router" to "ns", and never sees Semgrep's own constant-propagation
+    // doubling of a destructured name at all, since recovery slices raw
+    // bytes instead of reading `abstract_content`). On a Semgrep reporting
+    // real metavariables NEITHER resolves — verified via
+    // `docker run semgrep/semgrep:1.86.0` against this exact fixture file
+    // (see the fix report): the named case's $ROUTER doubles to
+    // "namedRouter namedRouter" and the namespace case's is the whole
+    // "ns.router" expression, so buildPrefixIndex's exact-string match fails
+    // for both and each route stays at its raw, unprefixed path.
+    const mountFormActual = snapshot.routes
+      .filter((r) => r.provenance === 'code' && isMountForm(r))
+      .map(describeRoute)
+      .sort();
+    const mountFormExpected = (
+      redacting
+        ? ['express GET /named/status', 'express GET /ns/ns-status']
+        : ['express GET /ns-status [partial]', 'express GET /status [partial]']
+    ).sort();
+    expect(mountFormActual, `redacting=${redacting}`).toEqual(mountFormExpected);
 
     // The load-bearing assertion. Every decoy planted in the fixture — a
     // commented-out old route, anchor text inside a string, attribute-shaped
@@ -419,6 +498,63 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
       ).toEqual([]);
     }
   }, 6 * 60_000);
+
+  it.skipIf(!SEMGREP_AVAILABLE)(
+    'matches an import in every one of the nine languages, and parses without a rule error',
+    async () => {
+      // Runs the rule pack directly against the fixture — the same technique
+      // as the plan's manual validation command — rather than through
+      // map_attack_surface: this test pins the RULE PACK's raw matching
+      // behaviour only (every language produces at least one
+      // guardian_kind:import match, and no rule fails to parse), independent
+      // of extraction and resolution. Imports ARE part of the persisted
+      // snapshot shape as of Task 3b (AttackSurfaceSnapshot.imports) — see
+      // 'reports env vars, ports and per-language coverage from the same
+      // run' below, which exercises extraction, resolution and persistence
+      // together through the real map_attack_surface tool.
+      const work = mkdtempSync(join(tmpdir(), 'guardian-rulepack-import-'));
+      cpSync(FIXTURE, work, { recursive: true });
+      const reportDir = ensureReportDir(work, 'import-rule-check', 'surface');
+      const outFile = join(reportDir, 'surface.json');
+
+      const invocation = await invokeSemgrep({
+        projectPath: work,
+        rulesPath: RULES_PATH,
+        outFile,
+        reportDir,
+      });
+      expect(invocation).not.toBeNull();
+      if (invocation === null) return;
+      expect(invocation.toolRun.status, invocation.toolRun.reason).toBe('ok');
+
+      const raw = readJsonSafe(outFile);
+      expect(raw).not.toBeNull();
+      if (raw === null) return;
+      const parsed = JSON.parse(raw) as {
+        results: { path: string; extra: { metadata: { guardian_kind?: string } } }[];
+        errors: { level: string }[];
+      };
+
+      // The bar from item 1's five-NestJS-rules incident: a rule that fails
+      // to parse matches nothing on every run while the suite stays green.
+      // `level: 'warn'` is tolerated — the one pre-existing entry here is a
+      // PartialParsing note on php-wordpress/rest-controller.php's
+      // `const NAMESPACE` (see that file's own comment), unrelated to any
+      // import rule. `level: 'error'` — a genuine rule parse error, like the
+      // one Rust's `use $MODULE::{ ..., $SYMBOL, ... };` produced during this
+      // rule's own development — is not.
+      const hardErrors = parsed.errors.filter((e) => e.level === 'error');
+      expect(hardErrors, JSON.stringify(hardErrors)).toEqual([]);
+
+      const languages = new Set(
+        parsed.results
+          .filter((r) => r.extra.metadata.guardian_kind === 'import')
+          .map((r) => languageFromPath(r.path)),
+      );
+      expect([...languages].sort()).toEqual(EXPECTED_IMPORT_LANGUAGES);
+    },
+    6 * 60_000,
+  );
 
   it.skipIf(!SEMGREP_AVAILABLE)('reports env vars, ports and per-language coverage from the same run', async () => {
     const work = mkdtempSync(join(tmpdir(), 'guardian-rulepack-'));
@@ -484,6 +620,80 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
       expect(entry?.routes_found, `${language} routes_found`).toBeGreaterThan(0);
       expect(entry?.unreadable_matches, `${language} unreadable_matches`).toBe(0);
     }
+
+    // Task 3b: AttackSurfaceSnapshot.imports, exercised through the real
+    // tool rather than moduleEdges.ts's own unit tests — this is the only
+    // place that verifies buildSnapshot actually calls extractModuleEdges /
+    // resolveModuleEdges, unions scannedFiles with the match-bearing file
+    // set, and reaches persistence. An explicit set, not a count, for the
+    // same reason EXPECTED_ROUTES is above: a resolver that silently drops
+    // or duplicates an edge changes this list's shape, not just its length.
+    const importEdges = snapshot.imports
+      .map((e) => `${e.file} -> ${e.module_file}`)
+      .sort();
+    expect(importEdges).toEqual([
+      // One resolvable intra-project import per non-JS resolvable language.
+      // Until these three existed, EVERY edge in this list was JS/TS — the
+      // one family whose resolver anchors on the importing file's own path
+      // and therefore kept working when the whole module-edge stage was fed
+      // absolute paths while building project-relative candidates. Python,
+      // Go and Rust silently resolved nothing in production, and this list
+      // could not tell: it had nothing in them to lose. Removing any of
+      // these three re-hides that entire class of defect.
+      'go-api/main.go -> go-api/pkg/util/shout.go',
+      'node-express/server.js -> node-express/routes/users.js',
+      'node-legacy/app.js -> node-legacy/admin-router.js',
+      'node-mount-forms/app.js -> node-mount-forms/named-router.js',
+      'node-mount-forms/app.js -> node-mount-forms/ns-router.js',
+      // Task 6's three-hop chain for validate_finding's e2e test — see
+      // slug.util.ts's doc comment. node-nest/orphan.util.ts deliberately
+      // contributes NO edge (neither side): that absence is the point.
+      'node-nest/identifiers.util.ts -> node-nest/slug.util.ts',
+      'node-nest/users.controller.ts -> node-nest/users.service.ts',
+      'node-nest/users.service.ts -> node-nest/identifiers.util.ts',
+      'py-fastapi/main.py -> pylib/textutil.py',
+      // `crate::`-anchored, not `self::`: the anchor is derived from the
+      // specifier alone (Cargo's `src/` crate root), so unlike an anchor
+      // taken from the importing file's own path it cannot survive being
+      // resolved in the wrong path space. Both a route file and a non-route
+      // file contribute one.
+      'rust-actix/config.rs -> src/settings.rs',
+      'rust-actix/main.rs -> src/settings.rs',
+    ]);
+
+    // The same three, stated as the property that matters rather than as
+    // membership of the list above: each of Python, Go and Rust resolved at
+    // least one edge. This is the assertion the coverage gate in
+    // `validate/staticProvider.ts` is the runtime counterpart of — a language
+    // with zero resolved edges cannot certify that nothing imports a file.
+    for (const language of ['python', 'go', 'rust']) {
+      const resolvedInLanguage = snapshot.imports.filter(
+        (e) => languageFromPath(e.file) === language,
+      );
+      expect(resolvedInLanguage.length, `${language} resolved import edges`).toBeGreaterThan(0);
+    }
+
+    // Concern 1 of the Task 3b report: snapshot.imports must be
+    // project-relative POSIX (unlike routes[].file, which stays absolute
+    // and native-separator — a separate, pre-existing inconsistency).
+    // Pinning it here through the real tool is what stops the
+    // toRelativeIfPossible call in buildSnapshot silently reverting.
+    for (const entry of [...snapshot.imports]) {
+      expect(entry.file, entry.file).not.toMatch(/^[A-Za-z]:/);
+      expect(entry.file, entry.file).not.toContain('\\');
+      expect(entry.module_file, entry.module_file).not.toMatch(/^[A-Za-z]:/);
+      expect(entry.module_file, entry.module_file).not.toContain('\\');
+    }
+
+    // java/csharp/ruby/php can never resolve an import (design doc §5.3) —
+    // every guardian_kind:import match the rule pack produced for them (the
+    // "matches an import in every one of the nine languages" test above
+    // proves each language matched at least one) must land in
+    // unresolved_imports, not vanish silently.
+    for (const language of ['java', 'csharp', 'ruby', 'php']) {
+      const entry = snapshot.coverage.find((c) => c.language === language);
+      expect(entry?.unresolved_imports, `${language} unresolved_imports`).toBeGreaterThan(0);
+    }
   }, 6 * 60_000);
 
   it.skipIf(!SEMGREP_AVAILABLE)('recovers the captures Semgrep redacts, or says so in tools_run', async () => {
@@ -514,8 +724,11 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     }
 
     // The whole point, stated as one assertion: the same number of routes on a
-    // redacting Semgrep as on one that emits metavariables.
-    expect(result.routes_total).toBe(EXPECTED_ROUTES.length);
+    // redacting Semgrep as on one that emits metavariables. node-mount-forms/'s
+    // two routes exist on both — only their resolved path and path_partial
+    // differ by version (see that test's own comment) — so the count still
+    // includes them.
+    expect(result.routes_total).toBe(EXPECTED_ROUTES.length + MOUNT_FORM_ROUTE_COUNT);
   }, 6 * 60_000);
 
   it.skipIf(!SEMGREP_AVAILABLE)('reports shadow endpoints and dead documentation', async () => {
@@ -539,7 +752,13 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     expect(diff).not.toBeNull();
     if (!diff) return;
 
-    expect(diff.code_only.map(describeDiffEntry).sort()).toEqual(EXPECTED_SHADOW);
+    // node-mount-forms/'s two routes are excluded the same way, and for the
+    // same reason, as the "maps every route..." test above: neither is in
+    // openapi.yaml, so both land in code_only regardless of Semgrep version,
+    // but WHICH path string they land under (prefixed or raw) is
+    // version-dependent — see that test for the covering assertion.
+    const codeOnly = diff.code_only.filter((e) => !e.code_route?.file.includes('node-mount-forms'));
+    expect(codeOnly.map(describeDiffEntry).sort()).toEqual(EXPECTED_SHADOW);
     expect(diff.spec_only.map(describeDiffEntry).sort()).toEqual(EXPECTED_DEAD);
   }, 6 * 60_000);
 });

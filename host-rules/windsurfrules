@@ -1,6 +1,6 @@
 # dev-guardian (MCP)
 
-This project has the dev-guardian MCP server registered. 52 tools and 18
+This project has the dev-guardian MCP server registered. 53 tools and 18
 resources for security, quality, bugfix, deps, compliance, observability,
 performance, WordPress, .NET. All scanners run locally, no telemetry,
 results persisted in `.guardian/guardian.db`.
@@ -30,10 +30,13 @@ bulk_audit_wordpress_sites
 **.NET / C#**: scan_dotnet_secrets · dotnet_target_framework_check ·
 dotnet_efcore_audit · dotnet_describe_setup
 
-**Attack surface**: map_attack_surface (static route inventory) then
+**Attack surface**: map_attack_surface (static route inventory) then either
 scan_dast (active DAST against the already-running app — loopback-only
 unless authorized_target: true; a clean result is not evidence of
-injection safety)
+injection safety) or validate_finding (per-finding reachability verdict,
+report-only; unreachable unavailable for Ruby/Java/C#/PHP — it IS produced,
+and can be wrong, for a CLI/cron/queue-only file or an unresolvable dynamic
+import)
 
 **Meta**: audit_executive (stack-aware) · risk_score · diff_scans ·
 set_baseline · triage_findings · prioritize_findings · suggest_fix ·
@@ -63,6 +66,9 @@ check_toolchain · suppress_finding
   scan_sast + dotnet_efcore_audit → dotnet_describe_setup.
 - **Active DAST**: map_attack_surface → scan_dast (target app must already
   be running; scan_dast never starts, builds or stops it).
+- **Reachability**: map_attack_surface → validate_finding (needs a prior
+  surface snapshot; validates whichever scan completed most recently — run
+  right after a SAST scan, not scan_dast).
 
 ## Don't
 
@@ -76,3 +82,6 @@ check_toolchain · suppress_finding
 - Don't read a clean scan_dast result as "no injection vulnerabilities" —
   the own engine sends none; nuclei's opt-in pass covers the origin, not
   this project's specific routes.
+- Don't treat validate_finding's unreachable as safety proof — reachability
+  signal from an import graph, unavailable for Ruby/Java/C#/PHP, blind to
+  dynamic imports.

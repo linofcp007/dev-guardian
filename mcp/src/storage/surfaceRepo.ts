@@ -45,11 +45,13 @@ const EMPTY_SNAPSHOT: AttackSurfaceSnapshot = {
   missing_tools: [],
   spec_files: [],
   spec_diff: null,
+  imports: [],
 };
 
 export class SurfaceRepo {
   private readonly insertStmt: Statement<[string, string, string, string]>;
   private readonly getLatestStmt: Statement<[], SurfaceRow>;
+  private readonly getLatestForProjectStmt: Statement<[string], SurfaceRow>;
   private readonly getByIdStmt: Statement<[number], SurfaceRow>;
   private readonly getByTreeHashStmt: Statement<[string], SurfaceRow>;
   private readonly listRecentStmt: Statement<[number], SurfaceRow>;
@@ -61,6 +63,9 @@ export class SurfaceRepo {
     `);
     this.getLatestStmt = db.prepare<[], SurfaceRow>(`
       SELECT * FROM surface_snapshots ORDER BY id DESC LIMIT 1
+    `);
+    this.getLatestForProjectStmt = db.prepare<[string], SurfaceRow>(`
+      SELECT * FROM surface_snapshots WHERE project_path = ? ORDER BY id DESC LIMIT 1
     `);
     this.getByIdStmt = db.prepare<[number], SurfaceRow>(`
       SELECT * FROM surface_snapshots WHERE id = ?
@@ -90,8 +95,41 @@ export class SurfaceRepo {
     };
   }
 
+  /**
+   * The newest snapshot in the database, from ANY project.
+   *
+   * Correct for exactly one caller: the `guardian://surface/latest` resource,
+   * whose contract really is "whatever this server last mapped" and which
+   * claims nothing about a project.
+   *
+   * Any consumer that relativizes paths against a specific project root,
+   * keys anything by one, or TELLS THE CALLER it answered about their
+   * project must use `getLatestForProject`: a snapshot of a different tree
+   * relativizes into a different key space, so every comparison against it
+   * silently answers "not found" rather than failing.
+   *
+   * KNOWN MISMATCH, not an endorsement: `scan_dast` (tools/scanDast.ts) uses
+   * this method and then refuses with "No attack-surface snapshot exists for
+   * THIS PROJECT", so it already believes it is project-scoped — meaning it
+   * can probe one project's routes while another project's snapshot is the
+   * newest row. That predates the project-scoped read added for
+   * `validate_finding` and is recorded here so the next reader sees a bug to
+   * fix rather than a contract to copy.
+   */
   getLatest(): PersistedSurfaceSnapshot | null {
     const row = this.getLatestStmt.get();
+    return row ? rowToSnapshot(row) : null;
+  }
+
+  /**
+   * The newest snapshot FOR ONE project. `project_path` is matched exactly,
+   * against the value `map_attack_surface` persisted — which is
+   * `resolveProjectPath()`'s output, the same normalisation every caller of
+   * this method resolves its own argument through, so two callers naming the
+   * same project agree on the string.
+   */
+  getLatestForProject(projectPath: string): PersistedSurfaceSnapshot | null {
+    const row = this.getLatestForProjectStmt.get(projectPath);
     return row ? rowToSnapshot(row) : null;
   }
 
