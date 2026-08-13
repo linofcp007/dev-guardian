@@ -159,8 +159,10 @@ version bump.
     caller passes `authorized_target: true`, recorded in the scan for audit. Read-only by
     default (`GET`/`HEAD`/`OPTIONS`); `allow_write_methods` opens `POST`/`PUT`/`PATCH`/
     `DELETE`, always with an empty body, so the `400`/`422`-vs-`401`/`403` split answers
-    the authorization question without writing. Redirects are never followed (`redirect:
-    'manual'`). Bounds — concurrency 4, a 5s per-request timeout, a 750-request ceiling,
+    the authorization question without writing. The one exception to read-only-by-default
+    is the opt-in `probe_rate_limit` burst, which sends `POST` to exactly one route — the
+    flag is its own authorization and opens nothing for any other check. Redirects are
+    never followed (`redirect: 'manual'`). Bounds — concurrency 4, a 5s per-request timeout, a 750-request ceiling,
     a 10-minute wall-clock ceiling — are reported when they cut a run, never silently
     applied; a run the wall-clock ceiling cut records its unsent probes `cancelled`,
     distinct from `timeout`, because the target didn't fail to answer — this tool stopped
