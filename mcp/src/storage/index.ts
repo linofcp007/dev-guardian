@@ -15,6 +15,7 @@ import { ScansRepo } from './scansRepo.js';
 import { StackRepo } from './stackRepo.js';
 import { SuppressionsRepo } from './suppressionsRepo.js';
 import { SurfaceRepo } from './surfaceRepo.js';
+import { ValidationsRepo } from './validationsRepo.js';
 
 export class Storage {
   readonly scans: ScansRepo;
@@ -25,6 +26,7 @@ export class Storage {
   readonly stack: StackRepo;
   readonly runtimeMeta: RuntimeMetaRepo;
   readonly surface: SurfaceRepo;
+  readonly validations: ValidationsRepo;
 
   constructor(private readonly db: DB) {
     this.scans = new ScansRepo(db);
@@ -35,6 +37,7 @@ export class Storage {
     this.stack = new StackRepo(db);
     this.runtimeMeta = new RuntimeMetaRepo(db);
     this.surface = new SurfaceRepo(db);
+    this.validations = new ValidationsRepo(db);
   }
 
   close(): void {

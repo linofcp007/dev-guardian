@@ -37790,6 +37790,90 @@ function rowToSnapshot2(row) {
   };
 }
 
+// src/storage/validationsRepo.ts
+var ValidationsRepo = class {
+  constructor(db) {
+    this.db = db;
+    this.upsertStmt = db.prepare(`
+      INSERT INTO finding_validations (
+        project_path, fingerprint, provider, verdict, confidence,
+        evidence, coverage_gaps, snapshot_id, tree_hash, computed_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_path, fingerprint, provider) DO UPDATE SET
+        verdict       = excluded.verdict,
+        confidence    = excluded.confidence,
+        evidence      = excluded.evidence,
+        coverage_gaps = excluded.coverage_gaps,
+        snapshot_id   = excluded.snapshot_id,
+        tree_hash     = excluded.tree_hash,
+        computed_at   = excluded.computed_at
+    `);
+    this.listByProjectStmt = db.prepare(`
+      SELECT * FROM finding_validations
+      WHERE project_path = ?
+      ORDER BY fingerprint ASC, provider ASC
+    `);
+    this.getByFingerprintStmt = db.prepare(`
+      SELECT * FROM finding_validations
+      WHERE project_path = ? AND fingerprint = ?
+      ORDER BY computed_at DESC
+      LIMIT 1
+    `);
+  }
+  db;
+  upsertStmt;
+  listByProjectStmt;
+  getByFingerprintStmt;
+  /**
+   * Replaces (never accumulates) the verdict for each row's
+   * `(projectPath, fingerprint, provider)`. `projectPath` is a parameter
+   * rather than a field on `FindingValidation` because a validation's
+   * identity is the finding plus the provider; the project only scopes
+   * the query.
+   */
+  upsert(projectPath, rows) {
+    if (rows.length === 0) return;
+    const tx = this.db.transaction((items) => {
+      for (const r of items) {
+        this.upsertStmt.run(
+          projectPath,
+          r.fingerprint,
+          r.provider,
+          r.verdict,
+          r.confidence,
+          JSON.stringify(r.evidence),
+          JSON.stringify(r.coverage_gaps),
+          r.snapshot_id,
+          r.tree_hash,
+          r.computed_at
+        );
+      }
+    });
+    tx(rows);
+  }
+  listByProject(projectPath) {
+    return this.listByProjectStmt.all(projectPath).map(rowToValidation);
+  }
+  getByFingerprint(projectPath, fingerprint) {
+    const row = this.getByFingerprintStmt.get(projectPath, fingerprint);
+    return row ? rowToValidation(row) : null;
+  }
+};
+function rowToValidation(row) {
+  return {
+    fingerprint: row.fingerprint,
+    verdict: row.verdict,
+    confidence: row.confidence,
+    provider: row.provider,
+    evidence: parseJsonArray(row.evidence, []),
+    coverage_gaps: parseJsonArray(row.coverage_gaps, []),
+    snapshot_id: row.snapshot_id,
+    tree_hash: row.tree_hash,
+    computed_at: row.computed_at
+  };
+}
+
 // src/storage/db.ts
 import { createHash } from "node:crypto";
 import { existsSync as existsSync3, mkdirSync, accessSync, constants as constants4 } from "node:fs";
@@ -38014,6 +38098,7 @@ var Storage = class {
     this.stack = new StackRepo(db);
     this.runtimeMeta = new RuntimeMetaRepo(db);
     this.surface = new SurfaceRepo(db);
+    this.validations = new ValidationsRepo(db);
   }
   db;
   scans;
@@ -38024,6 +38109,7 @@ var Storage = class {
   stack;
   runtimeMeta;
   surface;
+  validations;
   close() {
     this.db.close();
   }
