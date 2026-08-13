@@ -2,6 +2,10 @@ import os
 
 from fastapi import APIRouter, FastAPI
 
+# The fixture's one resolvable intra-project Python import: an absolute dotted
+# path naming a package at the project root. See pylib/textutil.py.
+from pylib.textutil import slugify
+
 app = FastAPI()
 router = APIRouter()
 
@@ -10,7 +14,7 @@ API_TOKEN = os.getenv("API_TOKEN", "")
 
 @app.get("/fastapi/items")
 async def list_items():
-    return []
+    return [slugify("Item One")]
 
 
 @app.post("/fastapi/items")

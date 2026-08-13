@@ -73,6 +73,37 @@ const THREE_HOP_FINGERPRINT = 'e2e-three-hop-1';
 const THREE_HOP_FILE = 'node-nest/slug.util.ts';
 const ROOT_CONTROLLER_FILE = 'node-nest/users.controller.ts';
 
+/**
+ * One helper per non-JS resolvable language, each imported DIRECTLY by a file
+ * that declares routes in the same language — so the correct answer is
+ * `reachable` at exactly 1 hop, and the answer a broken resolver gives is
+ * `unreachable`, which is the verdict this tool must never fabricate.
+ *
+ * This is the regression test for the defect that shipped: `map_attack_
+ * surface` fed the module-edge resolvers absolute paths while every candidate
+ * they build from an import specifier is project-relative, so Python, Go and
+ * Rust resolved ZERO edges. Every gate passed (JS/TS resolved, so the graph
+ * was non-empty; route extraction was fine, so coverage read `ok`) and all
+ * three languages came back `unreachable` with full confidence. Only an
+ * assertion in each language can see it — which is why the fixture now
+ * carries one resolvable intra-project import per language.
+ */
+const REACHABLE_BY_LANGUAGE: { fingerprint: string; file: string; root: string }[] = [
+  { fingerprint: 'e2e-py-1', file: 'pylib/textutil.py', root: 'py-fastapi/main.py' },
+  { fingerprint: 'e2e-go-1', file: 'go-api/pkg/util/shout.go', root: 'go-api/main.go' },
+  { fingerprint: 'e2e-rs-1', file: 'rust-actix/settings.rs', root: 'rust-actix/main.rs' },
+];
+
+/**
+ * A Python file nothing imports. The NEGATIVE direction, in a language where
+ * it was fabricated for every file until the resolver was fixed — so this
+ * pins that `unreachable` is genuinely available in Python, and that the
+ * per-language coverage gate (staticProvider gate 6) does not over-block once
+ * the language resolves at least one edge.
+ */
+const PY_ORPHAN_FINGERPRINT = 'e2e-py-orphan-1';
+const PY_ORPHAN_FILE = 'py-django/helpers.py';
+
 async function isInstalled(bin: string): Promise<boolean> {
   try {
     const r = await execa(detectOs() === 'win32' ? 'where' : 'which', [bin], {
@@ -275,6 +306,81 @@ describe('E2E — the real chain: map_attack_surface then validate_finding', () 
       // verdict (e.g. `unknown`) that per-finding assertions alone would miss.
       expect(result.summary.counts_by_verdict).toEqual({
         reachable: 1,
+        unreachable: 1,
+        unknown: 0,
+        confirmed: 0,
+      });
+    },
+    6 * 60_000,
+  );
+
+  it.skipIf(!SEMGREP_AVAILABLE)(
+    'answers reachable in Python, Go and Rust — not only in JS/TS',
+    async () => {
+      const work = mkdtempSync(join(tmpdir(), 'guardian-validate-lang-'));
+      cpSync(FIXTURE, work, { recursive: true });
+
+      const ctx = makeContext();
+      const surface = (await tool('map_attack_surface').handler(
+        { project_path: work, force: true },
+        ctx,
+      )) as SurfaceResult;
+      expect(surface.tools_run.map((t) => `${t.name}:${t.status}`)).toContain('semgrep:ok');
+      expect(surface.snapshot_id).not.toBeNull();
+      if (surface.snapshot_id === null) return;
+
+      const scanId = 'e2e-lang-scan';
+      ctx.storage.scans.insert({
+        scan_id: scanId,
+        scan_type: 'sast',
+        project_path: work,
+        tree_hash: 'e2e-lang-tree',
+      });
+      ctx.storage.findings.bulkInsert(
+        [
+          ...REACHABLE_BY_LANGUAGE.map((c) =>
+            seedFinding({ fingerprint: c.fingerprint, file_path: c.file }),
+          ),
+          seedFinding({ fingerprint: PY_ORPHAN_FINGERPRINT, file_path: PY_ORPHAN_FILE }),
+        ].map((f) => ({ ...f, scan_id: scanId })),
+      );
+      ctx.storage.scans.finalize({
+        scan_id: scanId,
+        status: 'completed',
+        tools_run: [],
+        missing_tools: [],
+      });
+
+      const result = expectOk(
+        (await tool('validate_finding').handler(
+          { project_path: work },
+          ctx,
+        )) as unknown as ValidateOk | ValidateErr,
+      );
+      const byFingerprint = new Map(result.validations.map((v) => [v.fingerprint, v]));
+
+      /* ---- The positive direction, once per language ------------------ */
+      for (const expected of REACHABLE_BY_LANGUAGE) {
+        const v = byFingerprint.get(expected.fingerprint);
+        expect(v, `no validation for ${expected.fingerprint}`).toBeDefined();
+        if (v === undefined) continue;
+        // The exact verdict AND the exact hop count and root: "reachable" on
+        // its own would also pass for a spurious edge from somewhere else.
+        expect(v.verdict, `${expected.file} verdict`).toBe('reachable');
+        const { hops, nearestFile } = parseReachableEvidence(v);
+        expect(hops, `${expected.file} hops`).toBe(1);
+        expect(nearestFile, `${expected.file} nearest route file`).toBe(expected.root);
+      }
+
+      /* ---- The negative direction, in one of those languages ---------- */
+      const pyOrphan = byFingerprint.get(PY_ORPHAN_FINGERPRINT);
+      expect(pyOrphan?.verdict).toBe('unreachable');
+      expect(pyOrphan?.evidence).toEqual([
+        { detail: `no route imports '${PY_ORPHAN_FILE}', directly or transitively` },
+      ]);
+
+      expect(result.summary.counts_by_verdict).toEqual({
+        reachable: 3,
         unreachable: 1,
         unknown: 0,
         confirmed: 0,

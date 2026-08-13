@@ -881,6 +881,93 @@ describe('map_attack_surface', () => {
     expect(result.error?.code).toBe('not_a_git_repo');
     expect(ctx.storage.surface.getLatest()).toBeNull();
   });
+
+  /**
+   * Every other fixture in this file spells Semgrep's `path` values
+   * RELATIVELY, which is not what production ever sees: `map_attack_surface`
+   * always hands Semgrep an ABSOLUTE target, and Semgrep then reports
+   * absolute, native-separator paths (this file's own WINDOWS_MOUNT_OUTPUT
+   * says so). That gap hid a Critical defect for a whole feature: the module-
+   * edge resolvers were handed the absolute set while every candidate they
+   * build from a specifier is project-relative, so Python, Go and Rust
+   * resolved NOTHING — and `validate_finding` reported every file in those
+   * three languages as imported by no route, which is precisely the verdict
+   * it must never fabricate. The paths below are therefore built from the
+   * real `projectPath`, so this test measures the production convention.
+   */
+  it('resolves Python, Go and Rust import edges when Semgrep reports absolute paths', async () => {
+    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const abs = (rel: string): string => join(projectPath, rel);
+    const importMatch = (rel: string, module: string, symbol?: string): unknown => ({
+      check_id: 'guardian-import',
+      path: abs(rel),
+      start: { line: 1 },
+      extra: {
+        metadata: { guardian_kind: 'import' },
+        metavars: {
+          $MODULE: { abstract_content: module },
+          ...(symbol === undefined ? {} : { $SYMBOL: { abstract_content: symbol } }),
+        },
+      },
+    });
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(
+      JSON.stringify({
+        results: [
+          {
+            check_id: 'guardian-route-express',
+            path: abs('api/server.ts'),
+            start: { line: 5 },
+            extra: {
+              metadata: { guardian_kind: 'route', framework: 'express', confidence: 'high' },
+              metavars: {
+                $METHOD: { abstract_content: 'get' },
+                $PATH: { abstract_content: '/items' },
+              },
+            },
+          },
+          importMatch('api/server.ts', "'./helper.js'", 'helper'),
+          importMatch('pyapp/routes.py', 'pyapp.helpers', 'shout'),
+          importMatch('gosvc/main.go', '"example.com/repro/gosvc/pkg/util"'),
+          // Rust binds $SYMBOL to the final path segment, and Semgrep joins a
+          // multi-segment $MODULE with a space — see buildSpecifier.
+          importMatch('src/main.rs', 'crate settings', 'Config'),
+        ],
+        paths: {
+          scanned: [
+            abs('api/server.ts'), abs('api/helper.ts'),
+            abs('pyapp/routes.py'), abs('pyapp/helpers.py'),
+            abs('gosvc/main.go'), abs('gosvc/pkg/util/util.go'),
+            abs('src/main.rs'), abs('src/settings.rs'),
+          ],
+        },
+      }),
+    );
+
+    const ctx = makeCtx();
+    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+      snapshot_id: number;
+    };
+    const snapshot = ctx.storage.surface.getById(result.snapshot_id)?.snapshot;
+
+    // An exact set, not a count: a resolver that starts matching the wrong
+    // file (Go's basename-vs-directory defect produced exactly that) changes
+    // this list's shape, not its length.
+    expect(snapshot?.imports.map((e) => `${e.file} -> ${e.module_file}`).sort()).toEqual([
+      'api/server.ts -> api/helper.ts',
+      'gosvc/main.go -> gosvc/pkg/util/util.go',
+      'pyapp/routes.py -> pyapp/helpers.py',
+      'src/main.rs -> src/settings.rs',
+    ]);
+    // Nothing was left unresolved, so no language carries an import gap.
+    // Asserted over the whole table rather than per language: a coverage
+    // entry only exists for a language with a detected stack, a route, an
+    // unreadable match or an UNRESOLVED import, so naming languages here
+    // would assert on entries that legitimately do not exist.
+    expect(snapshot?.coverage.filter((c) => c.unresolved_imports > 0)).toEqual([]);
+  });
 });
 
 describe('map_attack_surface — spec import and diff', () => {

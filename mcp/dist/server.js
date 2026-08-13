@@ -49186,33 +49186,38 @@ function stripQuotes2(value) {
   return value.slice(1, -1);
 }
 function resolveModuleEdges(edges, projectFiles) {
-  const byPosixPath = buildPosixIndex(projectFiles);
+  const index = buildResolutionIndex(projectFiles);
   const resolved = [];
   const unresolved = [];
   for (const edge of edges) {
-    const moduleFile = RESOLVABLE_LANGUAGES.has(edge.language) ? resolveSpecifier(edge, byPosixPath) : void 0;
-    if (moduleFile !== void 0) {
-      resolved.push({ file: edge.file, module_file: moduleFile });
-    } else {
+    const moduleFiles = RESOLVABLE_LANGUAGES.has(edge.language) ? resolveSpecifier(edge, index) : [];
+    if (moduleFiles.length === 0) {
       unresolved.push(edge);
+      continue;
+    }
+    for (const moduleFile of moduleFiles) {
+      resolved.push({ file: edge.file, module_file: moduleFile });
     }
   }
   return { resolved, unresolved };
 }
-function resolveSpecifier(edge, byPosixPath) {
+function resolveSpecifier(edge, index) {
   switch (edge.language) {
     case "typescript":
     case "javascript":
-      return resolveJsTs(edge.file, edge.specifier, byPosixPath);
+      return atMostOne(resolveJsTs(edge.file, edge.specifier, index.byPosixPath));
     case "python":
-      return resolvePython(edge.specifier, byPosixPath);
+      return atMostOne(resolvePython(edge.specifier, index.byPosixPath));
     case "go":
-      return resolveGo(edge.specifier, byPosixPath);
+      return resolveGo(edge.specifier, index.goPackages);
     case "rust":
-      return resolveRust(edge.file, edge.specifier, byPosixPath);
+      return atMostOne(resolveRust(edge.file, edge.specifier, index.byPosixPath));
     default:
-      return void 0;
+      return [];
   }
+}
+function atMostOne(hit) {
+  return hit === void 0 ? [] : [hit];
 }
 var JS_TS_SUFFIXES = [
   ".ts",
@@ -49260,26 +49265,32 @@ function resolveRust(importingFile, specifier, byPosixPath) {
   }
   return void 0;
 }
-function resolveGo(specifier, byPosixPath) {
-  let best;
+function resolveGo(specifier, goPackages) {
+  let best = [];
   let bestLength = -1;
-  for (const [posixPath, original] of byPosixPath) {
-    if (!posixPath.endsWith(".go")) continue;
-    const stripped = posixPath.slice(0, -".go".length);
-    if (!specifier.endsWith(`/${stripped}`)) continue;
-    if (stripped.length > bestLength) {
-      best = original;
-      bestLength = stripped.length;
+  for (const [dir, files] of goPackages) {
+    if (!specifier.endsWith(`/${dir}`)) continue;
+    if (dir.length > bestLength) {
+      best = files;
+      bestLength = dir.length;
     }
   }
   return best;
 }
-function buildPosixIndex(projectFiles) {
-  const index = /* @__PURE__ */ new Map();
+function buildResolutionIndex(projectFiles) {
+  const byPosixPath = /* @__PURE__ */ new Map();
+  const goPackages = /* @__PURE__ */ new Map();
   for (const file of projectFiles) {
-    index.set(toPosix(file), file);
+    const posix = toPosix(file);
+    byPosixPath.set(posix, file);
+    if (!posix.endsWith(".go")) continue;
+    const dir = dirOf(posix);
+    if (dir.length === 0) continue;
+    const existing = goPackages.get(dir);
+    if (existing === void 0) goPackages.set(dir, [file]);
+    else existing.push(file);
   }
-  return index;
+  return { byPosixPath, goPackages };
 }
 function lookupCandidates(byPosixPath, candidates) {
   for (const candidate of candidates) {
@@ -49297,13 +49308,15 @@ function dirOf(file) {
   return parts.join("/");
 }
 function joinAndNormalize(dir, tail) {
+  const combined = `${dir}/${tail}`;
+  const absolute = combined.startsWith("/");
   const stack = [];
-  for (const part of `${dir}/${tail}`.split("/")) {
+  for (const part of combined.split("/")) {
     if (part === "" || part === ".") continue;
     if (part === "..") stack.pop();
     else stack.push(part);
   }
-  return stack.join("/");
+  return `${absolute ? "/" : ""}${stack.join("/")}`;
 }
 
 // src/surface/recoverMetavars.ts
@@ -50432,8 +50445,13 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
   const knownFiles = collectAllFiles(parsed);
   const imports = extractImports(parsed, knownFiles);
   const resolved = resolveWordpressRoutes(resolveNodeMounts(routes, mounts, imports));
-  const moduleEdges = extractModuleEdges(resultsArrayOf(parsed));
-  const projectFiles = /* @__PURE__ */ new Set([...scannedFiles(parsed), ...knownFiles]);
+  const moduleEdges = extractModuleEdges(resultsArrayOf(parsed)).map((edge) => ({
+    ...edge,
+    file: toRelativeIfPossible(edge.file, projectPath)
+  }));
+  const projectFiles = new Set(
+    [...scannedFiles(parsed), ...knownFiles].map((file) => toRelativeIfPossible(file, projectPath))
+  );
   const { resolved: resolvedEdges, unresolved: unresolvedEdges } = resolveModuleEdges(
     moduleEdges,
     projectFiles
@@ -50450,19 +50468,19 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
     missing_tools: [],
     spec_files: specFiles,
     spec_diff: specDiff,
-    // Semgrep reports absolute, native-separator paths for an absolute
-    // target (which this tool always passes — see readSources' doc comment
-    // above), same as RouteRecord.file/ImportRecord.file. Unlike those,
-    // `imports` is relativized here to project-relative POSIX, matching
+    // Already project-relative POSIX, both sides: the relativization happens
+    // above, on the resolver's INPUT (see that comment). `module_file` is
+    // returned verbatim from `projectFiles`, which was relativized in the
+    // same expression as the edge's own `file`, so the two sides of an edge
+    // cannot drift into different spaces. This matches
     // `Finding.file_path`'s established convention (toRelativeIfPossible,
-    // used by every scan_sast parser — see runners/scannerParsers/index.ts)
-    // — that is the convention validate_finding's later cross-reference
-    // against a finding's file needs, and it is the one this field's own
-    // doc comment in types.ts promises.
-    imports: resolvedEdges.map((e) => ({
-      file: toRelativeIfPossible(e.file, projectPath),
-      module_file: toRelativeIfPossible(e.module_file, projectPath)
-    }))
+    // used by every scan_sast parser — see runners/scannerParsers/index.ts),
+    // which is the convention validate_finding's later cross-reference
+    // against a finding's file needs and the one this field's own doc
+    // comment in types.ts promises. RouteRecord.file/ImportRecord.file stay
+    // absolute and native-separator — a separate, pre-existing mismatch that
+    // `validate/staticProvider.ts` relativizes on its own side.
+    imports: resolvedEdges
   };
 }
 function importSpecs(projectPath, specPaths2) {
@@ -50570,14 +50588,15 @@ function toPosixPath2(path6) {
 function resolveModuleFile(importingFile, specifier, knownFiles) {
   if (!specifier.startsWith(".")) return specifier;
   const dir = toPosixPath2(importingFile).split("/").slice(0, -1).join("/");
-  const parts = `${dir}/${specifier}`.split("/");
+  const combined = `${dir}/${specifier}`;
+  const absolute = combined.startsWith("/");
   const stack = [];
-  for (const part of parts) {
+  for (const part of combined.split("/")) {
     if (part === "." || part === "") continue;
     if (part === "..") stack.pop();
     else stack.push(part);
   }
-  const joined = stack.join("/");
+  const joined = `${absolute ? "/" : ""}${stack.join("/")}`;
   const base = stripKnownExtension(joined);
   for (const file of knownFiles) {
     if (stripKnownExtension(toPosixPath2(file)) === base) return file;

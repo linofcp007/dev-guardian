@@ -632,6 +632,15 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
       .map((e) => `${e.file} -> ${e.module_file}`)
       .sort();
     expect(importEdges).toEqual([
+      // One resolvable intra-project import per non-JS resolvable language.
+      // Until these three existed, EVERY edge in this list was JS/TS — the
+      // one family whose resolver anchors on the importing file's own path
+      // and therefore kept working when the whole module-edge stage was fed
+      // absolute paths while building project-relative candidates. Python,
+      // Go and Rust silently resolved nothing in production, and this list
+      // could not tell: it had nothing in them to lose. Removing any of
+      // these three re-hides that entire class of defect.
+      'go-api/main.go -> go-api/pkg/util/shout.go',
       'node-express/server.js -> node-express/routes/users.js',
       'node-legacy/app.js -> node-legacy/admin-router.js',
       'node-mount-forms/app.js -> node-mount-forms/named-router.js',
@@ -642,7 +651,21 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
       'node-nest/identifiers.util.ts -> node-nest/slug.util.ts',
       'node-nest/users.controller.ts -> node-nest/users.service.ts',
       'node-nest/users.service.ts -> node-nest/identifiers.util.ts',
+      'py-fastapi/main.py -> pylib/textutil.py',
+      'rust-actix/main.rs -> rust-actix/settings.rs',
     ]);
+
+    // The same three, stated as the property that matters rather than as
+    // membership of the list above: each of Python, Go and Rust resolved at
+    // least one edge. This is the assertion the coverage gate in
+    // `validate/staticProvider.ts` is the runtime counterpart of — a language
+    // with zero resolved edges cannot certify that nothing imports a file.
+    for (const language of ['python', 'go', 'rust']) {
+      const resolvedInLanguage = snapshot.imports.filter(
+        (e) => languageFromPath(e.file) === language,
+      );
+      expect(resolvedInLanguage.length, `${language} resolved import edges`).toBeGreaterThan(0);
+    }
 
     // Concern 1 of the Task 3b report: snapshot.imports must be
     // project-relative POSIX (unlike routes[].file, which stays absolute

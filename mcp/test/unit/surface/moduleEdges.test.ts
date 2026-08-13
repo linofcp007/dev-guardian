@@ -67,15 +67,61 @@ describe('resolveModuleEdges', () => {
   // Rust's self:: form, the Python relative-import guard, or native-separator
   // safety. Each test below names the wrong implementation it distinguishes.
 
-  it('prefers the longer, more specific Go suffix match', () => {
+  it('prefers the longer, more specific Go package-directory match', () => {
     // A wrong implementation that returns the FIRST match found (order-
     // dependent on Map iteration) rather than the longest would sometimes
-    // pick 'handler.go' instead of the more specific 'pkg/handler.go'.
-    const files = new Set(['pkg/handler.go', 'handler.go']);
+    // pick the shallower 'handler/' package instead of 'pkg/handler/'.
+    const files = new Set(['pkg/handler/server.go', 'handler/server.go']);
     const { resolved } = resolveModuleEdges(
       [edge('cmd/main.go', 'myapp/pkg/handler', 'go')], files,
     );
-    expect(resolved).toEqual([{ file: 'cmd/main.go', module_file: 'pkg/handler.go' }]);
+    expect(resolved).toEqual([{ file: 'cmd/main.go', module_file: 'pkg/handler/server.go' }]);
+  });
+
+  it('resolves a Go import to EVERY file in the package directory, not a representative one', () => {
+    // Go imports a DIRECTORY; every file in it is part of the package. A
+    // wrong implementation that returns one file leaves the package's other
+    // files with no inbound edge — and `validate_finding` spends exactly that
+    // absence as "no route imports this file", fabricating `unreachable` for
+    // a file the route demonstrably reaches.
+    const files = new Set([
+      'pkg/util/util.go', 'pkg/util/strings.go', 'pkg/util/README.md', 'cmd/main.go',
+    ]);
+    const { resolved, unresolved } = resolveModuleEdges(
+      [edge('cmd/main.go', 'myapp/pkg/util', 'go')], files,
+    );
+    expect(resolved.map((r) => r.module_file).sort()).toEqual([
+      'pkg/util/strings.go', 'pkg/util/util.go',
+    ]);
+    expect(resolved.every((r) => r.file === 'cmd/main.go')).toBe(true);
+    expect(unresolved).toEqual([]);
+  });
+
+  it('does not resolve a Go import to a FILE whose basename matches the last path segment', () => {
+    // `pkg/handler.go` is a file in package `pkg`; `myapp/pkg/handler` names
+    // the DIRECTORY `pkg/handler`, which does not exist here. The shipped
+    // basename-matching resolver claimed an edge into a file that specifier
+    // does not import — a silent WRONG edge, not a missed one.
+    const files = new Set(['pkg/handler.go', 'cmd/main.go']);
+    const { resolved, unresolved } = resolveModuleEdges(
+      [edge('cmd/main.go', 'myapp/pkg/handler', 'go')], files,
+    );
+    expect(resolved).toEqual([]);
+    expect(unresolved).toHaveLength(1);
+  });
+
+  it('does not attribute a Go import to a root-level .go file (empty package directory)', () => {
+    // A root-level file's directory is the empty string. A wrong
+    // implementation that indexes it anyway matches `endsWith('/')`-style on
+    // any specifier ending in a separator, or — worse — treats every
+    // specifier as ending with the empty suffix and resolves everything to
+    // the repository root.
+    const files = new Set(['main.go', 'pkg/util/util.go']);
+    const { resolved, unresolved } = resolveModuleEdges(
+      [edge('pkg/util/util.go', 'myapp/', 'go')], files,
+    );
+    expect(resolved).toEqual([]);
+    expect(unresolved).toHaveLength(1);
   });
 
   it('leaves a Go standard-library import unresolved rather than matching an unrelated known file', () => {
@@ -153,6 +199,34 @@ describe('resolveModuleEdges', () => {
     );
     expect(resolved).toEqual([]);
     expect(unresolved).toHaveLength(1);
+  });
+
+  it('resolves an absolute POSIX path without eating its leading slash', () => {
+    // Linux, macOS and every Docker-Semgrep run report absolute POSIX paths.
+    // `joinAndNormalize` dropped empty segments, and an absolute path's
+    // leading `/` IS an empty first segment — so '/src/api' + './helper.js'
+    // normalised to 'src/api/helper.js', which never equals the index key
+    // '/src/api/helper.ts'. Measured effect: an entirely empty import graph
+    // and `unknown` for every finding on every non-Windows host.
+    const files = new Set(['/src/api/helper.ts', '/src/api/server.ts']);
+    const { resolved } = resolveModuleEdges(
+      [edge('/src/api/server.ts', './helper.js', 'typescript')], files,
+    );
+    expect(resolved).toEqual([
+      { file: '/src/api/server.ts', module_file: '/src/api/helper.ts' },
+    ]);
+  });
+
+  it("resolves an absolute POSIX Rust self:: path against the importing file's directory", () => {
+    // The second resolver that anchors on the importing file's own directory,
+    // and therefore the second one the leading-slash loss silently disabled.
+    const files = new Set(['/app/src/handlers/mod.rs', '/app/src/handlers/util.rs']);
+    const { resolved } = resolveModuleEdges(
+      [edge('/app/src/handlers/mod.rs', 'self::util', 'rust')], files,
+    );
+    expect(resolved).toEqual([
+      { file: '/app/src/handlers/mod.rs', module_file: '/app/src/handlers/util.rs' },
+    ]);
   });
 
   it('resolves against a native-Windows-separator project-file set and returns the file verbatim', () => {
@@ -332,9 +406,12 @@ describe('extractModuleEdges', () => {
     expect(extractModuleEdges([null, undefined, { nonsense: true }, 42])).toEqual([]);
   });
 
-  it('extracts an unaliased Go import end-to-end and resolves it by suffix match', () => {
+  it('extracts an unaliased Go import end-to-end and resolves it to its package directory', () => {
     // Combines extraction and resolution for the one language the given
     // Step-1 suite lists in RESOLVABLE_LANGUAGES but never actually resolves.
+    // The package file is NOT named after its directory — the shape a
+    // basename-matching resolver silently fails on, which is the norm in real
+    // Go code (`pkg/handler/server.go`, not `pkg/handler/handler.go`).
     const results = [
       {
         check_id: 'guardian-import-go',
@@ -351,9 +428,11 @@ describe('extractModuleEdges', () => {
       { file: 'cmd/server/main.go', specifier: 'myapp/pkg/handler', language: 'go' },
     ]);
 
-    const files = new Set(['pkg/handler.go', 'cmd/server/main.go']);
+    const files = new Set(['pkg/handler/server.go', 'cmd/server/main.go']);
     const { resolved, unresolved } = resolveModuleEdges(edges, files);
-    expect(resolved).toEqual([{ file: 'cmd/server/main.go', module_file: 'pkg/handler.go' }]);
+    expect(resolved).toEqual([
+      { file: 'cmd/server/main.go', module_file: 'pkg/handler/server.go' },
+    ]);
     expect(unresolved).toEqual([]);
   });
 });

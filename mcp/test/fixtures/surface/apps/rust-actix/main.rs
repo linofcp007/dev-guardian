@@ -1,8 +1,14 @@
 use actix_web::{delete, get, patch, post, put, web, App, HttpResponse, HttpServer, Responder};
 
+mod settings;
+
+// The fixture's one resolvable intra-project Rust import. `self::` anchors at
+// this file's own directory; see rust-actix/settings.rs.
+use self::settings::Config;
+
 #[get("/rust/health")]
 async fn health() -> impl Responder {
-    HttpResponse::Ok().body("ok".to_string())
+    HttpResponse::Ok().body(Config::new().name)
 }
 
 #[post("/rust/items")]

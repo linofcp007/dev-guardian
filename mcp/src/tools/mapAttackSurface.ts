@@ -448,8 +448,29 @@ function buildSnapshot(
   // tree") with `knownFiles` (match-bearing files) as a belt-and-suspenders
   // measure: both are Semgrep's own report of this same run, so the union
   // can only add legitimate candidates, never fabricate one.
-  const moduleEdges = extractModuleEdges(resultsArrayOf(parsed));
-  const projectFiles = new Set<string>([...scannedFiles(parsed), ...knownFiles]);
+  //
+  // RELATIVIZED BEFORE RESOLUTION, not after. Semgrep reports absolute,
+  // native-separator paths for an absolute target (which this tool always
+  // passes — see readSources' doc comment above), but an import specifier is
+  // written relative to the project root: `resolvePython('app.helpers')` can
+  // only ever produce the candidate `app/helpers.py`, and `resolveGo` can
+  // only ever match a project-relative package directory. Handing those
+  // resolvers an ABSOLUTE project-file set means their candidates match
+  // nothing — silently, for Python, Go and Rust, on every platform — and
+  // `validate_finding` then reports every file in those three languages as
+  // imported by no route. Relativizing afterwards (where this used to
+  // happen, on the resolver's OUTPUT) is far too late: there is nothing left
+  // to relativize, because nothing resolved. Both sides move into the same
+  // project-relative POSIX space here, which is the space `ModuleEdge.file`
+  // documents, the one the unit tests exercise, and the one
+  // `AttackSurfaceSnapshot.imports` promises its consumers.
+  const moduleEdges = extractModuleEdges(resultsArrayOf(parsed)).map((edge) => ({
+    ...edge,
+    file: toRelativeIfPossible(edge.file, projectPath),
+  }));
+  const projectFiles = new Set<string>(
+    [...scannedFiles(parsed), ...knownFiles].map((file) => toRelativeIfPossible(file, projectPath)),
+  );
   const { resolved: resolvedEdges, unresolved: unresolvedEdges } = resolveModuleEdges(
     moduleEdges,
     projectFiles,
@@ -468,19 +489,19 @@ function buildSnapshot(
     missing_tools: [],
     spec_files: specFiles,
     spec_diff: specDiff,
-    // Semgrep reports absolute, native-separator paths for an absolute
-    // target (which this tool always passes — see readSources' doc comment
-    // above), same as RouteRecord.file/ImportRecord.file. Unlike those,
-    // `imports` is relativized here to project-relative POSIX, matching
+    // Already project-relative POSIX, both sides: the relativization happens
+    // above, on the resolver's INPUT (see that comment). `module_file` is
+    // returned verbatim from `projectFiles`, which was relativized in the
+    // same expression as the edge's own `file`, so the two sides of an edge
+    // cannot drift into different spaces. This matches
     // `Finding.file_path`'s established convention (toRelativeIfPossible,
-    // used by every scan_sast parser — see runners/scannerParsers/index.ts)
-    // — that is the convention validate_finding's later cross-reference
-    // against a finding's file needs, and it is the one this field's own
-    // doc comment in types.ts promises.
-    imports: resolvedEdges.map((e) => ({
-      file: toRelativeIfPossible(e.file, projectPath),
-      module_file: toRelativeIfPossible(e.module_file, projectPath),
-    })),
+    // used by every scan_sast parser — see runners/scannerParsers/index.ts),
+    // which is the convention validate_finding's later cross-reference
+    // against a finding's file needs and the one this field's own doc
+    // comment in types.ts promises. RouteRecord.file/ImportRecord.file stay
+    // absolute and native-separator — a separate, pre-existing mismatch that
+    // `validate/staticProvider.ts` relativizes on its own side.
+    imports: resolvedEdges,
   };
 }
 
@@ -715,14 +736,23 @@ function toPosixPath(path: string): string {
 function resolveModuleFile(importingFile: string, specifier: string, knownFiles: Set<string>): string {
   if (!specifier.startsWith('.')) return specifier;
   const dir = toPosixPath(importingFile).split('/').slice(0, -1).join('/');
-  const parts = `${dir}/${specifier}`.split('/');
+  const combined = `${dir}/${specifier}`;
+  // An absolute POSIX path's leading `/` is an empty first segment, and
+  // dropping empty segments ate it: `/srv/app/src/app.js` + `./routes/users`
+  // normalised to `src/routes/users`, which matches no known file on Linux,
+  // macOS, or any Docker-Semgrep run (Semgrep reports absolute paths for the
+  // absolute target this tool always passes). Node mount resolution then
+  // silently fell back to the specifier text on every POSIX host.
+  // `moduleEdges.ts`'s `joinAndNormalize`, which this mirrors, carries the
+  // same guard and the same reasoning.
+  const absolute = combined.startsWith('/');
   const stack: string[] = [];
-  for (const part of parts) {
+  for (const part of combined.split('/')) {
     if (part === '.' || part === '') continue;
     if (part === '..') stack.pop();
     else stack.push(part);
   }
-  const joined = stack.join('/');
+  const joined = `${absolute ? '/' : ''}${stack.join('/')}`;
   const base = stripKnownExtension(joined);
 
   for (const file of knownFiles) {
