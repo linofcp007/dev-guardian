@@ -103,7 +103,10 @@ const inputSchema = {
         .optional()
         .describe('RECOMMENDED credential path: the NAME of an environment variable holding an Authorization ' +
         'header value. The secret never enters the conversation or the MCP request log. An unset ' +
-        'variable is reported as a warning, never a silent anonymous run.'),
+        'variable is reported as a warning, never a silent anonymous run. WARNING: the named ' +
+        'variable lives in this server\'s own environment — any OTHER scanner this session spawns ' +
+        '(semgrep, trivy, gitleaks, git) inherits it too. nuclei is the one exception: it is ' +
+        'always spawned with a scrubbed environment that excludes it.'),
     auth_header: z
         .string()
         .min(1)

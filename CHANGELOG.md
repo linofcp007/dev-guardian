@@ -173,6 +173,13 @@ version bump.
     as landing in the transcript). Neither is written to SQLite or an evidence file, and
     both are redacted from every finding, evidence file and result field through a single
     redaction choke-point applied to the whole response, not a hand-picked set of fields.
+    Naming a variable via `auth_header_env` keeps it out of nuclei specifically — nuclei is
+    spawned with an allowlisted environment and `extendEnv: false` for exactly that reason
+    — but not out of this server process, nor out of the other scanners (Semgrep, Trivy,
+    gitleaks, git) the same session spawns with the operator's full environment by design.
+    That is a deliberate, unchanged posture (those tools read `SEMGREP_*` / `DOCKER_CONFIG`
+    / `SSH_AUTH_SOCK` and the like), not an oversight; the parameter description now says
+    so directly.
   - **A deliberately-vulnerable fixture app** (`mcp/test/fixtures/dast-app/server.mjs`,
     plain `node:http`, no framework) exercises every check end to end: an auth-required
     route served anonymously, reflected-credentialed CORS, missing security headers, a
@@ -473,6 +480,42 @@ version bump.
   the persisted `HttpMethod` union) was rejected to avoid touching a type serialized into
   every stored snapshot for the sake of an operation this feature does not otherwise need
   to represent.
+- **The installers advertised a scanner this plugin has never integrated, and omitted the
+  one it can install.** `scripts/install/install-linux.sh` carried an OWASP ZAP banner
+  (`docker pull zaproxy/zap-stable`) held over from before `scan_dast` existed — `ZAP`
+  appears nowhere in `mcp/src`, is not in `TOOL_CATALOG`, and `install_toolchain` cannot
+  install it, so the banner advertised a capability the plugin does not have. Meanwhile
+  nuclei, which *is* in `TOOL_CATALOG` (`required_by: ['scan_dast']`, `default: false`)
+  and is what `scan_dast`'s `use_nuclei` actually drives, appeared in neither installer.
+  Both scripts now carry an honest nuclei banner instead: `install-linux.sh` states plainly
+  that Linux has no automatic install path (`TOOL_CATALOG`'s linux bucket for nuclei is
+  empty) and points at ProjectDiscovery's own install docs — `install_toolchain` is named
+  only as confirming the same gap, not as a working alternative. `install-macos.sh` gained
+  the equivalent banner naming the real `brew install nuclei` formula `TOOL_CATALOG` already
+  verifies for that platform, where `install_toolchain` genuinely installs it. Neither
+  banner reproduces `TOOL_CATALOG`'s linux `curl` fallback, which resolves to a GitHub
+  releases HTML page rather than a raw install script.
+- **`TOOL_CATALOG`'s linux install command for gitleaks and nuclei piped an HTML page into
+  `sh`.** `curlInstaller`'s contract is a raw install script, but the `gitleaks` and
+  `nuclei` linux entries pointed it at `.../releases/latest`, which redirects to the
+  release's HTML tag page. `curl -f` only fails on HTTP error status, so the fetch
+  "succeeded" and handed `sh` a full HTML document — a wall of shell syntax errors, not an
+  install. Because gitleaks is `default: true`, this sat on a supported path: `check_toolchain`
+  printed that broken one-liner as `install_command` for every caller on Linux regardless of
+  whether they ever called `install_toolchain`, and an explicit
+  `install_toolchain(tools: ["gitleaks"])` (or `["nuclei"]`) actually ran it. The default
+  bootstrap flow (`install_toolchain` with no `tools` filter) was unaffected — on Linux it
+  delegates to `install-linux.sh`, which resolves gitleaks's real download URL itself — so
+  the breakage was reachable only through the per-tool path and through `check_toolchain`'s
+  advisory output. Confirmed with `curl -sSIL` rather than assumed: gitleaks and nuclei both
+  returned `Content-Type: text/html` on the final `200`, while trivy's and syft's linux
+  entries (real `install.sh` scripts on `raw.githubusercontent.com`) returned `text/plain`,
+  confirming they were never affected. Both broken entries are removed rather than replaced
+  — neither tool ships a stable install script, and a hand-written per-arch downloader would
+  be new, unverified machinery — so `pickInstallSpec` now returns `null` for gitleaks and
+  nuclei on Linux and both degrade to `manual_steps` / no `install_command`, the same honest
+  gap nuclei's win32 entry already relied on. `curlInstaller` now carries a doc comment
+  stating the precondition the next caller must meet.
 
 ## [1.2.1] — 2026-08-10
 

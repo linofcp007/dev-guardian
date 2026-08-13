@@ -42692,7 +42692,16 @@ var TOOL_CATALOG = {
         winget: wingetInstall("gitleaks.gitleaks")
       },
       linux: {
-        curl: curlInstaller("https://github.com/gitleaks/gitleaks/releases/latest")
+        // No curl entry: `.../releases/latest` resolves to the release's
+        // HTML page, not an install script (measured: Content-Type:
+        // text/html on the final 200 — see curlInstaller's doc comment).
+        // gitleaks ships per-arch release archives, not a stable
+        // install.sh, so there is no safe URL to hand curlInstaller here.
+        // The default bootstrap flow is unaffected — it delegates to
+        // install-linux.sh, which resolves the real download URL itself;
+        // only an explicit install_toolchain(tools:["gitleaks"]) call on
+        // Linux reaches this empty bucket, and degrades to manual_steps
+        // the same way nuclei's win32 entry below already does.
       },
       darwin: { brew: brewInstall("gitleaks") }
     },
@@ -42805,7 +42814,11 @@ var TOOL_CATALOG = {
       // install command" when an OS bucket has none.
       win32: {},
       linux: {
-        curl: curlInstaller("https://github.com/projectdiscovery/nuclei/releases/latest")
+        // No curl entry, for the same reason as gitleaks' linux entry
+        // above and this tool's own win32 bucket: `.../releases/latest`
+        // resolves to the release's HTML page, not an install script
+        // (measured: Content-Type: text/html on the final 200). Left
+        // empty rather than fabricated, per curlInstaller's doc comment.
       },
       darwin: { brew: brewInstall("nuclei") }
     },
@@ -51537,7 +51550,7 @@ var inputSchema26 = {
     "Exact path (as it appears in the inventory) to aim the rate-limit burst at. When omitted the target is inferred from auth-shaped paths and the chosen route is reported; when the named path is not in the inventory the check reports no_candidate rather than bursting something else."
   ),
   auth_header_env: external_exports.string().min(1).optional().describe(
-    "RECOMMENDED credential path: the NAME of an environment variable holding an Authorization header value. The secret never enters the conversation or the MCP request log. An unset variable is reported as a warning, never a silent anonymous run."
+    "RECOMMENDED credential path: the NAME of an environment variable holding an Authorization header value. The secret never enters the conversation or the MCP request log. An unset variable is reported as a warning, never a silent anonymous run. WARNING: the named variable lives in this server's own environment \u2014 any OTHER scanner this session spawns (semgrep, trivy, gitleaks, git) inherits it too. nuclei is the one exception: it is always spawned with a scrubbed environment that excludes it."
   ),
   auth_header: external_exports.string().min(1).optional().describe(
     "Literal Authorization header value. Lands in the transcript \u2014 prefer auth_header_env. Never persisted and redacted from every finding, evidence file and result field."

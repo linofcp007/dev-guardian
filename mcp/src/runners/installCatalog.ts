@@ -93,7 +93,16 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
         winget: wingetInstall('gitleaks.gitleaks'),
       },
       linux: {
-        curl: curlInstaller('https://github.com/gitleaks/gitleaks/releases/latest'),
+        // No curl entry: `.../releases/latest` resolves to the release's
+        // HTML page, not an install script (measured: Content-Type:
+        // text/html on the final 200 — see curlInstaller's doc comment).
+        // gitleaks ships per-arch release archives, not a stable
+        // install.sh, so there is no safe URL to hand curlInstaller here.
+        // The default bootstrap flow is unaffected — it delegates to
+        // install-linux.sh, which resolves the real download URL itself;
+        // only an explicit install_toolchain(tools:["gitleaks"]) call on
+        // Linux reaches this empty bucket, and degrades to manual_steps
+        // the same way nuclei's win32 entry below already does.
       },
       darwin: { brew: brewInstall('gitleaks') },
     },
@@ -202,7 +211,11 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
       // install command" when an OS bucket has none.
       win32: {},
       linux: {
-        curl: curlInstaller('https://github.com/projectdiscovery/nuclei/releases/latest'),
+        // No curl entry, for the same reason as gitleaks' linux entry
+        // above and this tool's own win32 bucket: `.../releases/latest`
+        // resolves to the release's HTML page, not an install script
+        // (measured: Content-Type: text/html on the final 200). Left
+        // empty rather than fabricated, per curlInstaller's doc comment.
       },
       darwin: { brew: brewInstall('nuclei') },
     },
@@ -346,8 +359,24 @@ function npmInstallGlobal(pkg: string): InstallSpec {
   };
 }
 
+/**
+ * Single-shot install script — invocation is `bash -c "curl … | sh"`.
+ *
+ * PRECONDITION: `url` must resolve to a raw shell script (trivy's and
+ * syft's `contrib/install.sh` / `install.sh` on raw.githubusercontent.com
+ * are the real examples in this file), never a GitHub *page* — in
+ * particular never a bare `.../releases/latest`. That URL 302s to the
+ * release's HTML tag page, which `-f` accepts (it only fails on HTTP
+ * error status) and `sh` cannot execute: the caller gets a wall of shell
+ * syntax errors, not an install and not a usable instruction. Measured
+ * directly with `curl -sSIL` rather than assumed — gitleaks' and
+ * nuclei's linux entries both once took this shape and both came back
+ * `Content-Type: text/html` on the final 200; see the comments on those
+ * catalog entries. A broken command is worse than none: leave the OS
+ * bucket empty (as nuclei's win32 already does) rather than call this
+ * helper on a URL that has not been checked.
+ */
 function curlInstaller(url: string): InstallSpec {
-  // Single-shot install script — invocation is `bash -c "curl … | sh"`.
   return {
     command: 'bash',
     args: ['-c', `curl -sSfL ${url} | sh -s -- -b "$HOME/.local/bin"`],
