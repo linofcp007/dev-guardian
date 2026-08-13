@@ -124,19 +124,14 @@ const BASE_ROUTES = [
   'express GET /health',
   'express POST /api/users/create',
   'express POST /login',
-  // node-mount-forms/: pins the measured truth behind guardian-import-esm's
-  // comment. A router bound by a NAMED import and mounted directly resolves
-  // cleanly — the gap that rule closed. A router reached through a
-  // NAMESPACE import via member access (`ns.router`) ALSO resolves here,
-  // but not because buildPrefixIndex understands member access: it is
-  // recoverMetavars.ts's synthesizeMount truncating `$ROUTER` at the first
-  // non-identifier character, so "ns.router" recovers as bare "ns" and
-  // coincidentally matches the import's own $SYMBOL. See both rule
-  // comments for the full mechanism; this line pins the observed value on
-  // THIS project's actual (redacting-Semgrep) pipeline, not a claim that
-  // member access is genuinely resolved.
-  'express GET /named/status',
-  'express GET /ns/ns-status',
+  // node-mount-forms/ is DELIBERATELY absent from this array. Its two routes
+  // (a router bound by a named import, one by a namespace import, each
+  // mounted) resolve differently depending on whether Semgrep reports real
+  // metavariables — see the `redacting`-conditioned assertion inside "maps
+  // every route the fixture declares, and nothing else" below, and
+  // guardian-import-esm's comment in routes.yml for the mechanism. Folding
+  // either possible value in here would contradict this array's own
+  // promise, two lines up, of ONE expected set on any Semgrep version.
   'fastapi DELETE /fastapi/items/{item_id}',
   'fastapi GET /fastapi/items',
   'fastapi POST /fastapi/items',
@@ -229,6 +224,16 @@ const FOCUSED_ROUTES = [
  */
 const EXPECTED_ROUTES = [...BASE_ROUTES, ...FOCUSED_ROUTES].sort();
 
+/**
+ * node-mount-forms/'s two routes, held out of EXPECTED_ROUTES because their
+ * resolution is genuinely Semgrep-version-dependent (see the "maps every
+ * route..." test below and guardian-import-esm's comment in routes.yml).
+ * The count is version-independent even though the resolved paths are not —
+ * both routes exist on every Semgrep version, only their `path_partial`
+ * differs — so `routes_total` can still be asserted exactly.
+ */
+const MOUNT_FORM_ROUTE_COUNT = 2;
+
 /** Paths that must NEVER appear: every decoy planted in the fixture. */
 const FABRICATION_DECOYS = [
   'dead_code',
@@ -311,9 +316,6 @@ const EXPECTED_SHADOW = [
   'GET /laravel/orders',
   'GET /list',
   'GET /minimal/health',
-  // node-mount-forms/ — see BASE_ROUTES's comment on the same two routes.
-  'GET /named/status',
-  'GET /ns/ns-status',
   'GET /rails/orders',
   'GET /rails/orders/{}',
   'GET /rust/documented',
@@ -427,6 +429,11 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     expect(snapshot).toBeDefined();
     if (!snapshot) return;
 
+    // `redacting` is true on any Semgrep >= ~1.120 without `semgrep login`.
+    // Named explicitly so a regression reads as what it is, and reused below
+    // for the one pair of routes this fixture cannot make version-independent.
+    const redacting = result.tools_run.some((t) => t.name === 'semgrep-metavar-recovery');
+
     // ONE expected set, whichever Semgrep is installed. This used to fork on
     // whether match content was redacted, because the three decorated-
     // declaration families were then absent; `focus-metavariable: $PATH` makes
@@ -438,19 +445,47 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     // that file), whose imported routes land in `snapshot.routes` too, tagged
     // `provenance: 'spec'`. EXPECTED_ROUTES is the code-extracted surface, so
     // the comparison filters to `'code'` the same way `routes_total` does.
+    //
+    // node-mount-forms/ is excluded here and asserted separately below: unlike
+    // every other route in this fixture, its resolution genuinely cannot be
+    // made version-independent without touching resolvers/node.ts or
+    // recoverMetavars.ts (out of scope — see guardian-import-esm's comment in
+    // routes.yml), so folding it into a "same on any version" array would be
+    // exactly the silent-wrongness risk the paragraph above warns about.
+    const isMountForm = (r: RouteRecord): boolean => r.file.includes('node-mount-forms');
     const actual = snapshot.routes
-      .filter((r) => r.provenance === 'code')
+      .filter((r) => r.provenance === 'code' && !isMountForm(r))
       .map(describeRoute)
       .sort();
     expect(actual).toEqual(EXPECTED_ROUTES);
-    expect(result.routes_total).toBe(EXPECTED_ROUTES.length);
+    expect(result.routes_total).toBe(EXPECTED_ROUTES.length + MOUNT_FORM_ROUTE_COUNT);
 
-    // Named explicitly so a regression reads as what it is. `redacting` is true
-    // on any Semgrep >= ~1.120 without `semgrep login`; on those runs every one
-    // of these 21 routes came back through the byte-offset recovery.
-    const redacting = result.tools_run.some((t) => t.name === 'semgrep-metavar-recovery');
     expect(FOCUSED_ROUTES.every((r) => actual.includes(r)), `redacting=${redacting}`).toBe(true);
     expect(FOCUSED_ROUTES).toHaveLength(21);
+
+    // The Semgrep-version-dependent pair, pinned exactly rather than merely
+    // documented: on a redacting Semgrep (this project's actual pipeline)
+    // BOTH resolve, each by a different coincidence in pre-existing,
+    // untouched code (recoverMetavars.ts's synthesizeMount truncates
+    // "ns.router" to "ns", and never sees Semgrep's own constant-propagation
+    // doubling of a destructured name at all, since recovery slices raw
+    // bytes instead of reading `abstract_content`). On a Semgrep reporting
+    // real metavariables NEITHER resolves — verified via
+    // `docker run semgrep/semgrep:1.86.0` against this exact fixture file
+    // (see the fix report): the named case's $ROUTER doubles to
+    // "namedRouter namedRouter" and the namespace case's is the whole
+    // "ns.router" expression, so buildPrefixIndex's exact-string match fails
+    // for both and each route stays at its raw, unprefixed path.
+    const mountFormActual = snapshot.routes
+      .filter((r) => r.provenance === 'code' && isMountForm(r))
+      .map(describeRoute)
+      .sort();
+    const mountFormExpected = (
+      redacting
+        ? ['express GET /named/status', 'express GET /ns/ns-status']
+        : ['express GET /ns-status [partial]', 'express GET /status [partial]']
+    ).sort();
+    expect(mountFormActual, `redacting=${redacting}`).toEqual(mountFormExpected);
 
     // The load-bearing assertion. Every decoy planted in the fixture — a
     // commented-out old route, anchor text inside a string, attribute-shaped
@@ -610,8 +645,11 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     }
 
     // The whole point, stated as one assertion: the same number of routes on a
-    // redacting Semgrep as on one that emits metavariables.
-    expect(result.routes_total).toBe(EXPECTED_ROUTES.length);
+    // redacting Semgrep as on one that emits metavariables. node-mount-forms/'s
+    // two routes exist on both — only their resolved path and path_partial
+    // differ by version (see that test's own comment) — so the count still
+    // includes them.
+    expect(result.routes_total).toBe(EXPECTED_ROUTES.length + MOUNT_FORM_ROUTE_COUNT);
   }, 6 * 60_000);
 
   it.skipIf(!SEMGREP_AVAILABLE)('reports shadow endpoints and dead documentation', async () => {
@@ -635,7 +673,13 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     expect(diff).not.toBeNull();
     if (!diff) return;
 
-    expect(diff.code_only.map(describeDiffEntry).sort()).toEqual(EXPECTED_SHADOW);
+    // node-mount-forms/'s two routes are excluded the same way, and for the
+    // same reason, as the "maps every route..." test above: neither is in
+    // openapi.yaml, so both land in code_only regardless of Semgrep version,
+    // but WHICH path string they land under (prefixed or raw) is
+    // version-dependent — see that test for the covering assertion.
+    const codeOnly = diff.code_only.filter((e) => !e.code_route?.file.includes('node-mount-forms'));
+    expect(codeOnly.map(describeDiffEntry).sort()).toEqual(EXPECTED_SHADOW);
     expect(diff.spec_only.map(describeDiffEntry).sort()).toEqual(EXPECTED_DEAD);
   }, 6 * 60_000);
 });
