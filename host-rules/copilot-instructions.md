@@ -1,6 +1,6 @@
 # Copilot instructions — dev-guardian
 
-This project uses the **dev-guardian MCP server** — ~50 tools and 16
+This project uses the **dev-guardian MCP server** — 52 tools and 18
 resources for security, quality, bugfix, deps, compliance, observability,
 performance, WordPress, and .NET. All scanners run locally; results
 persist in `.guardian/guardian.db` for diffing and baselines.
@@ -31,6 +31,11 @@ bundler/dotnet).
 **.NET / C#**: `scan_dotnet_secrets`, `dotnet_target_framework_check`,
 `dotnet_efcore_audit`, `dotnet_describe_setup`.
 
+**Attack surface**: `map_attack_surface` (static route/env-var/port
+inventory) then `scan_dast` (active DAST against the app once it is
+already running — loopback-only unless `authorized_target: true`; a clean
+result is not evidence of injection safety).
+
 **Meta**: `audit_executive` (stack-aware — includes WP/.NET tools when
 detected), `risk_score`, `diff_scans`, `set_baseline`, `triage_findings`,
 `prioritize_findings`, `suggest_fix`, `report_export`,
@@ -50,6 +55,7 @@ detected), `risk_score`, `diff_scans`, `set_baseline`, `triage_findings`,
 - WordPress: `guardian://wp/audit/latest`, `guardian://wp/audit/{id}`,
   `guardian://wp/cron`
 - .NET: `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`
+- Attack surface: `guardian://surface/latest`, `guardian://surface/{id}`
 
 ## Workflows
 
@@ -68,6 +74,9 @@ detected), `risk_score`, `diff_scans`, `set_baseline`, `triage_findings`,
 **.NET**: `dotnet_target_framework_check` + `scan_dotnet_secrets` +
 `scan_sast` + `dotnet_efcore_audit` → `dotnet_describe_setup`.
 
+**Active DAST**: `map_attack_surface` → `scan_dast` (target app must
+already be running; `scan_dast` never starts, builds or stops it).
+
 ## Anti-patterns
 
 - Don't run `security_scan_full` for tiny changes — use `review_pr`.
@@ -76,3 +85,8 @@ detected), `risk_score`, `diff_scans`, `set_baseline`, `triage_findings`,
 - Don't shell out to scanners — you lose diff_scans, baselines, persistence.
 - Don't run `scan_wordpress` on a non-WP project — `detect_stack` first.
 - Don't run `wp_audit` without WP-CLI — `install_toolchain tools=["wp-cli"]`.
+- Don't run `scan_dast` before `map_attack_surface` — it refuses with
+  `no_surface_snapshot` and has no route inventory to probe.
+- Don't read a clean `scan_dast` result as "no injection vulnerabilities" —
+  the own engine sends none; that class is delegated to an opt-in nuclei
+  pass whose default templates test the origin, not this project's routes.
