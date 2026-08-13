@@ -49572,7 +49572,7 @@ function synthesizeEsmImport(span) {
   if (literal2 === void 0) return void 0;
   const module = stripQuotes3(literal2.text);
   if (module.length === 0) return void 0;
-  const symbol = /\bimport\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\bimport\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? /\bimport\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span)?.[1];
+  const symbol = /\bimport\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\bimport\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? /\bimport\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\b(?:const|let|var)\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span)?.[1];
   if (symbol === void 0) return void 0;
   return {
     $SYMBOL: { abstract_content: symbol },

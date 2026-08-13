@@ -379,7 +379,8 @@ function synthesizeImport(span, metadata) {
 /**
  * `import usersRouter from './routes/users'`,
  * `const usersRouter = require('./routes/users')`,
- * `import { usersRouter, ... } from './routes/users'` and
+ * `import { usersRouter, ... } from './routes/users'`,
+ * `const { usersRouter, ... } = require('./routes/users')` and
  * `import * as ns from './routes/users'`.
  *
  * $MODULE is emitted UNQUOTED, matching what a real (pre-redaction) run
@@ -390,11 +391,18 @@ function synthesizeImport(span, metadata) {
  *
  * The named-import and namespace-import branches were added alongside the
  * routes.yml rule that reads them (see that rule's comment for why a named
- * import binding several symbols still yields only the FIRST). Order matters
- * here only in that the namespace check must run before the bare-default
- * check: `import * as ns from "m"` would otherwise fail the default-import
- * regex (`*` is not an identifier character, so it already cannot match) but
- * checking the more specific shape first keeps the intent readable.
+ * import binding several symbols still yields only the FIRST); the
+ * destructuring-require branch the same way, for the CommonJS alternative
+ * added alongside it. Order matters in two places: the namespace check must
+ * run before the bare-default check (`import * as ns from "m"` would
+ * otherwise fail the default-import regex — `*` is not an identifier
+ * character, so it already cannot match — but checking the more specific
+ * shape first keeps the intent readable), and the destructuring-require
+ * check must run before the bare `const/let/var NAME =` one: the latter
+ * requires an identifier immediately after the keyword, which `{` is not, so
+ * a destructuring span already falls through it on its own — the ordering
+ * below groups the two `const`/`let`/`var` cases together rather than
+ * relying on that.
  */
 function synthesizeEsmImport(span) {
     const literal = findStringLiteral(span);
@@ -406,6 +414,7 @@ function synthesizeEsmImport(span) {
     const symbol = /\bimport\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ??
         /\bimport\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ??
         /\bimport\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ??
+        /\b(?:const|let|var)\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ??
         /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span)?.[1];
     if (symbol === undefined)
         return undefined;

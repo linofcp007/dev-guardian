@@ -294,6 +294,22 @@ rules:
       - pattern: import $SYMBOL from "$MODULE"
       - pattern: const $SYMBOL = require("$MODULE")
       - pattern: import { $SYMBOL, ... } from "$MODULE"
+      # The CommonJS counterpart of the named-import alternative directly
+      # above: `const { a, b } = require("./x")`. Before this existed, a
+      # destructuring require produced NO guardian_kind:import match at all —
+      # not merely an unresolved one — silently dropping the edge from both
+      # mount resolution and the validate_finding import graph for any
+      # CommonJS codebase using the form. Same multi-name behaviour as the
+      # ESM alternative, verified the same way (routes.yml's own convention:
+      # `docker run semgrep/semgrep:1.86.0` against a real 2-name and a
+      # 3rd renamed-property destructure): Semgrep produces exactly one
+      # match and binds $SYMBOL to the FIRST listed name
+      # (`const { a, b } = require(...)` -> "a"); a RENAMED property
+      # (`const { a: b } = require(...)`) does not match this pattern at
+      # all, the same shape of gap `import { a as b } from "$MODULE"` would
+      # be for the alternative above, and is left unfixed here for the same
+      # reason: out of scope for "follow the shape of the existing line".
+      - pattern: const { $SYMBOL, ... } = require("$MODULE")
       - pattern: import * as $SYMBOL from "$MODULE"
 
   # NestJS: one rule per verb — the decorator name is the method, and Semgrep
