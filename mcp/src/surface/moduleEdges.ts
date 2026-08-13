@@ -329,6 +329,19 @@ function resolveRust(
  * length, so at most one known file can match at each length — which also
  * makes the result order-independent: which file Semgrep happened to report
  * first never changes the answer.
+ *
+ * The match is anchored on a `/` boundary — `specifier.endsWith('/' +
+ * stripped)` — NEVER bare equality, even though every valid Go import
+ * carries at least the module-name prefix (go.mod's `module` directive is
+ * never empty), so `specifier === stripped` with nothing before it is not a
+ * real intra-project shape to begin with. The anchor is load-bearing, not
+ * cosmetic: without it, a zero-slash specifier — every stdlib and bare
+ * third-party import ('errors', 'time', 'context', 'log', 'sort', ...) —
+ * would satisfy bare equality against any project file that happens to
+ * share that common name ('errors.go'), producing a real, SILENT wrong
+ * edge (claiming the importer reaches a file it does not), not merely a
+ * missed one. Requiring the `/` anchor makes that structurally impossible:
+ * a zero-slash specifier can never end with `/${anything}`.
  */
 function resolveGo(specifier: string, byPosixPath: ReadonlyMap<string, string>): string | undefined {
   let best: string | undefined;
@@ -337,7 +350,7 @@ function resolveGo(specifier: string, byPosixPath: ReadonlyMap<string, string>):
   for (const [posixPath, original] of byPosixPath) {
     if (!posixPath.endsWith('.go')) continue;
     const stripped = posixPath.slice(0, -'.go'.length);
-    if (specifier !== stripped && !specifier.endsWith(`/${stripped}`)) continue;
+    if (!specifier.endsWith(`/${stripped}`)) continue;
 
     if (stripped.length > bestLength) {
       best = original;

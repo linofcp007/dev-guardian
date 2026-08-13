@@ -504,9 +504,14 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     async () => {
       // Runs the rule pack directly against the fixture — the same technique
       // as the plan's manual validation command — rather than through
-      // map_attack_surface: imports are not part of the persisted snapshot
-      // shape (that is a later task's job), so only the rule pack's own
-      // matching behaviour is under test here.
+      // map_attack_surface: this test pins the RULE PACK's raw matching
+      // behaviour only (every language produces at least one
+      // guardian_kind:import match, and no rule fails to parse), independent
+      // of extraction and resolution. Imports ARE part of the persisted
+      // snapshot shape as of Task 3b (AttackSurfaceSnapshot.imports) — see
+      // 'reports env vars, ports and per-language coverage from the same
+      // run' below, which exercises extraction, resolution and persistence
+      // together through the real map_attack_surface tool.
       const work = mkdtempSync(join(tmpdir(), 'guardian-rulepack-import-'));
       cpSync(FIXTURE, work, { recursive: true });
       const reportDir = ensureReportDir(work, 'import-rule-check', 'surface');
@@ -614,6 +619,46 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
       expect(entry?.status, `${language} coverage status (redacting=${redacting})`).toBe('ok');
       expect(entry?.routes_found, `${language} routes_found`).toBeGreaterThan(0);
       expect(entry?.unreadable_matches, `${language} unreadable_matches`).toBe(0);
+    }
+
+    // Task 3b: AttackSurfaceSnapshot.imports, exercised through the real
+    // tool rather than moduleEdges.ts's own unit tests — this is the only
+    // place that verifies buildSnapshot actually calls extractModuleEdges /
+    // resolveModuleEdges, unions scannedFiles with the match-bearing file
+    // set, and reaches persistence. An explicit set, not a count, for the
+    // same reason EXPECTED_ROUTES is above: a resolver that silently drops
+    // or duplicates an edge changes this list's shape, not just its length.
+    const importEdges = snapshot.imports
+      .map((e) => `${e.file} -> ${e.module_file}`)
+      .sort();
+    expect(importEdges).toEqual([
+      'node-express/server.js -> node-express/routes/users.js',
+      'node-legacy/app.js -> node-legacy/admin-router.js',
+      'node-mount-forms/app.js -> node-mount-forms/named-router.js',
+      'node-mount-forms/app.js -> node-mount-forms/ns-router.js',
+      'node-nest/users.controller.ts -> node-nest/users.service.ts',
+    ]);
+
+    // Concern 1 of the Task 3b report: snapshot.imports must be
+    // project-relative POSIX (unlike routes[].file, which stays absolute
+    // and native-separator — a separate, pre-existing inconsistency).
+    // Pinning it here through the real tool is what stops the
+    // toRelativeIfPossible call in buildSnapshot silently reverting.
+    for (const entry of [...snapshot.imports]) {
+      expect(entry.file, entry.file).not.toMatch(/^[A-Za-z]:/);
+      expect(entry.file, entry.file).not.toContain('\\');
+      expect(entry.module_file, entry.module_file).not.toMatch(/^[A-Za-z]:/);
+      expect(entry.module_file, entry.module_file).not.toContain('\\');
+    }
+
+    // java/csharp/ruby/php can never resolve an import (design doc §5.3) —
+    // every guardian_kind:import match the rule pack produced for them (the
+    // "matches an import in every one of the nine languages" test above
+    // proves each language matched at least one) must land in
+    // unresolved_imports, not vanish silently.
+    for (const language of ['java', 'csharp', 'ruby', 'php']) {
+      const entry = snapshot.coverage.find((c) => c.language === language);
+      expect(entry?.unresolved_imports, `${language} unresolved_imports`).toBeGreaterThan(0);
     }
   }, 6 * 60_000);
 

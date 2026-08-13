@@ -86,6 +86,23 @@ describe('resolveModuleEdges', () => {
     expect(unresolved).toHaveLength(1);
   });
 
+  it('does not attribute a zero-slash Go import to a same-named project file', () => {
+    // 'errors' is Go stdlib. A wrong implementation matches it by bare
+    // equality against a project's own errors.go — a real, silent WRONG
+    // edge (handler.go does NOT import errors.go), not just a missed one.
+    // Every valid Go import carries at least the module-name prefix
+    // (go.mod's `module` directive is never empty), so a specifier with no
+    // '/' at all is never a legitimate intra-project shape — this is what
+    // the reviewer's run of the previously-shipped dist/surface/
+    // moduleEdges.js demonstrated: resolved: [{module_file: 'errors.go'}].
+    const files = new Set(['pkg/handler.go', 'errors.go']);
+    const { resolved, unresolved } = resolveModuleEdges(
+      [edge('pkg/handler.go', 'errors', 'go')], files,
+    );
+    expect(resolved).toEqual([]);
+    expect(unresolved).toHaveLength(1);
+  });
+
   it("resolves a Rust self:: path relative to the importing file's own directory", () => {
     // Neither the brief's own suite nor RESOLVABLE_LANGUAGES membership on
     // its own proves self:: (as opposed to crate::) actually resolves.

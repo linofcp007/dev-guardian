@@ -49266,7 +49266,7 @@ function resolveGo(specifier, byPosixPath) {
   for (const [posixPath, original] of byPosixPath) {
     if (!posixPath.endsWith(".go")) continue;
     const stripped = posixPath.slice(0, -".go".length);
-    if (specifier !== stripped && !specifier.endsWith(`/${stripped}`)) continue;
+    if (!specifier.endsWith(`/${stripped}`)) continue;
     if (stripped.length > bestLength) {
       best = original;
       bestLength = stripped.length;
