@@ -557,6 +557,36 @@ describe('recoverMetavars — mount, import and env', () => {
     expect(mv(outcome, '$MODULE')).toBe('./routes/users');
   });
 
+  it('recovers a named import, first symbol only — the gap guardian-import-esm closed', () => {
+    const outcome = recoverSpan("import { alpha, beta, gamma } from './multi'", {
+      guardian_kind: 'import',
+      framework: 'esm',
+    });
+    expect(mv(outcome, '$SYMBOL')).toBe('alpha');
+    expect(mv(outcome, '$MODULE')).toBe('./multi');
+  });
+
+  it('recovers a namespace import', () => {
+    const outcome = recoverSpan("import * as ns from './namespaced'", {
+      guardian_kind: 'import',
+      framework: 'esm',
+    });
+    expect(mv(outcome, '$SYMBOL')).toBe('ns');
+    expect(mv(outcome, '$MODULE')).toBe('./namespaced');
+  });
+
+  it('recovers the first name from a real multi-line, 9-name NestJS import', () => {
+    // The exact shape node-nest/users.controller.ts's `import { Body,
+    // Controller, ... } from '@nestjs/common'` reports: the span is the WHOLE
+    // multi-line specifier list, not a single line.
+    const span =
+      'import {\n  Body,\n  Controller,\n  Delete,\n  Get,\n  HttpCode,\n  Param,\n  ' +
+      "Patch,\n  Post,\n  Put,\n} from '@nestjs/common'";
+    const outcome = recoverSpan(span, { guardian_kind: 'import', framework: 'esm' });
+    expect(mv(outcome, '$SYMBOL')).toBe('Body');
+    expect(mv(outcome, '$MODULE')).toBe('@nestjs/common');
+  });
+
   const envCases: [span: string, expected: string][] = [
     ['process.env.API_KEY', 'API_KEY'],
     ["process.env['DB_URL']", "'DB_URL'"],
@@ -571,6 +601,206 @@ describe('recoverMetavars — mount, import and env', () => {
       expect(mv(recoverSpan(span, { guardian_kind: 'env' }), '$NAME')).toBe(expected);
     });
   }
+});
+
+describe('recoverMetavars — import, per stack (Task 3: eight-language rule pack)', () => {
+  const PYTHON = { guardian_kind: 'import', framework: 'python' };
+  const GO = { guardian_kind: 'import', framework: 'go' };
+  const RUST = { guardian_kind: 'import', framework: 'rust' };
+  const PHP_IMPORT = { guardian_kind: 'import', framework: 'php' };
+  const JAVA_IMPORT = { guardian_kind: 'import', framework: 'java' };
+  const CSHARP_IMPORT = { guardian_kind: 'import', framework: 'csharp' };
+  const RUBY_IMPORT = { guardian_kind: 'import', framework: 'ruby' };
+
+  describe('Python', () => {
+    it('recovers a from-import', () => {
+      const outcome = recoverSpan('from pathlib import Path', PYTHON);
+      expect(mv(outcome, '$MODULE')).toBe('pathlib');
+      expect(mv(outcome, '$SYMBOL')).toBe('Path');
+    });
+
+    it('recovers the bare-dot relative form (`from . import x`)', () => {
+      const outcome = recoverSpan('from . import views', PYTHON);
+      expect(mv(outcome, '$MODULE')).toBe('.');
+      expect(mv(outcome, '$SYMBOL')).toBe('views');
+    });
+
+    it('recovers a named relative form (`from .x import y`)', () => {
+      const outcome = recoverSpan('from .models import User', PYTHON);
+      expect(mv(outcome, '$MODULE')).toBe('.models');
+      expect(mv(outcome, '$SYMBOL')).toBe('User');
+    });
+
+    it('recovers a multi-level relative form', () => {
+      const outcome = recoverSpan('from ..shared import util', PYTHON);
+      expect(mv(outcome, '$MODULE')).toBe('..shared');
+      expect(mv(outcome, '$SYMBOL')).toBe('util');
+    });
+
+    it('takes the first name of a multi-name from-import, matching the real rule', () => {
+      const outcome = recoverSpan('from fastapi import APIRouter, FastAPI', PYTHON);
+      expect(mv(outcome, '$SYMBOL')).toBe('APIRouter');
+      expect(mv(outcome, '$MODULE')).toBe('fastapi');
+    });
+
+    it('recovers a bare import with $MODULE only — no $SYMBOL is fabricated', () => {
+      // Guards the wrong implementation that reuses $MODULE as $SYMBOL: a bare
+      // `import os` binds no separate symbol on a real (non-redacted) run
+      // either, so inventing one here would make recovered output disagree
+      // with intact output — exactly the version-dependence this module
+      // exists to remove.
+      const outcome = recoverSpan('import os', PYTHON);
+      expect(mv(outcome, '$MODULE')).toBe('os');
+      expect(mv(outcome, '$SYMBOL')).toBeUndefined();
+    });
+  });
+
+  describe('Go', () => {
+    it('recovers an unaliased single import, no $SYMBOL', () => {
+      const outcome = recoverSpan('import "net/http"', GO);
+      expect(mv(outcome, '$MODULE')).toBe('net/http');
+      expect(mv(outcome, '$SYMBOL')).toBeUndefined();
+    });
+
+    it('recovers an aliased single import', () => {
+      const outcome = recoverSpan('import myjson "encoding/json"', GO);
+      expect(mv(outcome, '$MODULE')).toBe('encoding/json');
+      expect(mv(outcome, '$SYMBOL')).toBe('myjson');
+    });
+
+    it('recovers the CURRENT item from a grouped span that GROWS with each match', () => {
+      // Measured on 1.164.0: a grouped import's reported span is not tight
+      // per item — it starts at `import (` and grows to include every prior
+      // item too. Guards the wrong (and more obvious) implementation of
+      // "take the first string literal", which is correct for the single
+      // form but would recover "fmt" for every one of these four real,
+      // measured spans from go-api/main.go instead of each one's own item.
+      const cases: [span: string, module: string, symbol: string | undefined][] = [
+        ['import (\n\t"fmt"', 'fmt', undefined],
+        ['import (\n\t"fmt"\n\t"os"', 'os', undefined],
+        [
+          'import (\n\t"fmt"\n\t"os"\n\tmux "github.com/gorilla/mux"',
+          'github.com/gorilla/mux',
+          'mux',
+        ],
+        [
+          'import (\n\t"fmt"\n\t"os"\n\tmux "github.com/gorilla/mux"\n\t"myproject/internal/orders"',
+          'myproject/internal/orders',
+          undefined,
+        ],
+      ];
+      for (const [span, module, symbol] of cases) {
+        const outcome = recoverSpan(span, GO);
+        expect(mv(outcome, '$MODULE'), span).toBe(module);
+        expect(mv(outcome, '$SYMBOL'), span).toBe(symbol);
+      }
+    });
+  });
+
+  describe('Rust', () => {
+    it('recovers a single use, splitting at the LAST ::, module space-joined', () => {
+      // Guards the wrong implementation that leaves the literal `::` in
+      // $MODULE instead of reproducing Semgrep's own space-joined rendering
+      // for a multi-segment capture (measured: "crate models", not
+      // "crate::models").
+      const outcome = recoverSpan('use crate::models::User', RUST);
+      expect(mv(outcome, '$MODULE')).toBe('crate models');
+      expect(mv(outcome, '$SYMBOL')).toBe('User');
+    });
+
+    it('recovers a single-segment module untouched (nothing to join)', () => {
+      const outcome = recoverSpan('use std::HashMap', RUST);
+      expect(mv(outcome, '$MODULE')).toBe('std');
+      expect(mv(outcome, '$SYMBOL')).toBe('HashMap');
+    });
+
+    it('recovers the CURRENT item from a grouped span that GROWS with each match', () => {
+      // Same measured growth as Go's grouped import — guards "take the first
+      // item", which would recover "web" for all three of these real spans
+      // from rust-actix/main.rs's 10-item group instead of each one's own.
+      const cases: [span: string, symbol: string][] = [
+        ['use actix_web::{web', 'web'],
+        ['use actix_web::{web, App', 'App'],
+        ['use actix_web::{web, App, HttpServer', 'HttpServer'],
+      ];
+      for (const [span, symbol] of cases) {
+        const outcome = recoverSpan(span, RUST);
+        expect(mv(outcome, '$MODULE'), span).toBe('actix_web');
+        expect(mv(outcome, '$SYMBOL'), span).toBe(symbol);
+      }
+    });
+  });
+
+  describe('PHP', () => {
+    it('splits at the LAST namespace separator, module space-joined', () => {
+      // Guards the wrong implementation that leaves `\` in $MODULE instead of
+      // reproducing Semgrep's own space-joined rendering (measured: "App Http
+      // Controllers", not "App\Http\Controllers").
+      const outcome = recoverSpan('use App\\Http\\Controllers\\OrderController', PHP_IMPORT);
+      expect(mv(outcome, '$MODULE')).toBe('App Http Controllers');
+      expect(mv(outcome, '$SYMBOL')).toBe('OrderController');
+    });
+  });
+
+  describe('Java', () => {
+    it('recovers a plain import, no $SYMBOL, module space-joined', () => {
+      const outcome = recoverSpan('import java.util.List', JAVA_IMPORT);
+      expect(mv(outcome, '$MODULE')).toBe('java util List');
+      expect(mv(outcome, '$SYMBOL')).toBeUndefined();
+    });
+
+    it('recovers a static import', () => {
+      const outcome = recoverSpan('import static java.util.Collections.emptyList', JAVA_IMPORT);
+      expect(mv(outcome, '$MODULE')).toBe('java util Collections emptyList');
+      expect(mv(outcome, '$SYMBOL')).toBeUndefined();
+    });
+
+    it('recovers a wildcard import with the trailing .* excluded from $MODULE', () => {
+      // Guards the wrong implementation that leaves ".*" attached (recovering
+      // "com example util *", which no real run ever reports) or that drops
+      // the whole match instead of the wildcard marker alone.
+      const outcome = recoverSpan('import com.example.util.*', JAVA_IMPORT);
+      expect(mv(outcome, '$MODULE')).toBe('com example util');
+      expect(mv(outcome, '$SYMBOL')).toBeUndefined();
+    });
+  });
+
+  describe('C#', () => {
+    it('recovers a plain using — span includes the trailing ; — no $SYMBOL', () => {
+      // Measured: the plain form's span includes the `;`; the aliased form's
+      // (below) does not. Guards an implementation that assumes one shape and
+      // silently drops the other.
+      const outcome = recoverSpan('using System.Collections.Generic;', CSHARP_IMPORT);
+      expect(mv(outcome, '$MODULE')).toBe('System Collections Generic');
+      expect(mv(outcome, '$SYMBOL')).toBeUndefined();
+    });
+
+    it('recovers a single-segment plain using untouched (nothing to join)', () => {
+      const outcome = recoverSpan('using System;', CSHARP_IMPORT);
+      expect(mv(outcome, '$MODULE')).toBe('System');
+    });
+
+    it('recovers an aliased using — span does NOT include the trailing ;', () => {
+      const outcome = recoverSpan('using Json = System.Text.Json.JsonSerializer', CSHARP_IMPORT);
+      expect(mv(outcome, '$SYMBOL')).toBe('Json');
+      expect(mv(outcome, '$MODULE')).toBe('System Text Json JsonSerializer');
+    });
+  });
+
+  describe('Ruby', () => {
+    it('recovers require, require_relative and load — all $MODULE only', () => {
+      const cases: [span: string, expected: string][] = [
+        ['require "net/http"', 'net/http'],
+        ['require_relative "./user"', './user'],
+        ['load "legacy_tasks.rb"', 'legacy_tasks.rb'],
+      ];
+      for (const [span, expected] of cases) {
+        const outcome = recoverSpan(span, RUBY_IMPORT);
+        expect(mv(outcome, '$MODULE'), span).toBe(expected);
+        expect(mv(outcome, '$SYMBOL'), span).toBeUndefined();
+      }
+    });
+  });
 });
 
 describe('recoverMetavars — counting and degradation', () => {

@@ -59,9 +59,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';
 import { detectOs } from '../../src/platform/osDetect.js';
+import { languageFromPath } from '../../src/surface/extract.js';
+import { invokeSemgrep } from '../../src/surface/scanSemgrep.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { Storage } from '../../src/storage/index.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
+import { ensureReportDir, readJsonSafe } from '../../src/tools/scanHelpers.js';
 import { TOOLS } from '../../src/tools/index.js';
 import '../../src/tools/mapAttackSurface.js';
 import type { AttackSurfaceSnapshot, RouteRecord, SpecDiffEntry } from '../../src/types.js';
@@ -70,6 +73,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(here, '..', '..', '..');
 const FIXTURE = resolve(here, '..', 'fixtures', 'surface', 'apps');
 const SCRIPTS_DIR = resolve(ROOT, 'scripts');
+const RULES_PATH = resolve(ROOT, 'configs', 'semgrep', 'routes.yml');
 
 /**
  * `framework method path_resolved` plus a `[partial]` marker.
@@ -223,6 +227,30 @@ const FABRICATION_DECOYS = [
   'legacy/:id',
   'audit/FABRICATED',
 ];
+
+/**
+ * The exact set of Semgrep languages (javascript and typescript counted
+ * separately, matching `languageFromPath` and the route-coverage assertion
+ * below) with at least one `guardian_kind: import` match in the fixture —
+ * all nine, one per `configs/semgrep/routes.yml` import rule.
+ *
+ * A SET, not a count: a count passes when one language's rule silently stops
+ * matching while an unrelated one over-matches by the same amount — the
+ * exact failure this fixture exists to catch (see the module comment). Each
+ * language's presence is checked independently here, so a rule that goes
+ * quiet cannot be masked by another rule matching more than it should.
+ */
+const EXPECTED_IMPORT_LANGUAGES = [
+  'csharp',
+  'go',
+  'java',
+  'javascript',
+  'php',
+  'python',
+  'ruby',
+  'rust',
+  'typescript',
+].sort();
 
 /**
  * The code-vs-spec diff produced against `openapi.yaml` sitting alongside
@@ -419,6 +447,58 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
       ).toEqual([]);
     }
   }, 6 * 60_000);
+
+  it.skipIf(!SEMGREP_AVAILABLE)(
+    'matches an import in every one of the nine languages, and parses without a rule error',
+    async () => {
+      // Runs the rule pack directly against the fixture — the same technique
+      // as the plan's manual validation command — rather than through
+      // map_attack_surface: imports are not part of the persisted snapshot
+      // shape (that is a later task's job), so only the rule pack's own
+      // matching behaviour is under test here.
+      const work = mkdtempSync(join(tmpdir(), 'guardian-rulepack-import-'));
+      cpSync(FIXTURE, work, { recursive: true });
+      const reportDir = ensureReportDir(work, 'import-rule-check', 'surface');
+      const outFile = join(reportDir, 'surface.json');
+
+      const invocation = await invokeSemgrep({
+        projectPath: work,
+        rulesPath: RULES_PATH,
+        outFile,
+        reportDir,
+      });
+      expect(invocation).not.toBeNull();
+      if (invocation === null) return;
+      expect(invocation.toolRun.status, invocation.toolRun.reason).toBe('ok');
+
+      const raw = readJsonSafe(outFile);
+      expect(raw).not.toBeNull();
+      if (raw === null) return;
+      const parsed = JSON.parse(raw) as {
+        results: { path: string; extra: { metadata: { guardian_kind?: string } } }[];
+        errors: { level: string }[];
+      };
+
+      // The bar from item 1's five-NestJS-rules incident: a rule that fails
+      // to parse matches nothing on every run while the suite stays green.
+      // `level: 'warn'` is tolerated — the one pre-existing entry here is a
+      // PartialParsing note on php-wordpress/rest-controller.php's
+      // `const NAMESPACE` (see that file's own comment), unrelated to any
+      // import rule. `level: 'error'` — a genuine rule parse error, like the
+      // one Rust's `use $MODULE::{ ..., $SYMBOL, ... };` produced during this
+      // rule's own development — is not.
+      const hardErrors = parsed.errors.filter((e) => e.level === 'error');
+      expect(hardErrors, JSON.stringify(hardErrors)).toEqual([]);
+
+      const languages = new Set(
+        parsed.results
+          .filter((r) => r.extra.metadata.guardian_kind === 'import')
+          .map((r) => languageFromPath(r.path)),
+      );
+      expect([...languages].sort()).toEqual(EXPECTED_IMPORT_LANGUAGES);
+    },
+    6 * 60_000,
+  );
 
   it.skipIf(!SEMGREP_AVAILABLE)('reports env vars, ports and per-language coverage from the same run', async () => {
     const work = mkdtempSync(join(tmpdir(), 'guardian-rulepack-'));

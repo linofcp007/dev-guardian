@@ -49209,7 +49209,7 @@ function synthesize(kind, span, metadata) {
     case "mount":
       return synthesizeMount(span);
     case "import":
-      return synthesizeImport(span);
+      return synthesizeImport(span, metadata);
     case "env":
       return synthesizeEnv(span);
     default:
@@ -49260,17 +49260,136 @@ function synthesizeMount(span) {
     $ROUTER: { abstract_content: router }
   };
 }
-function synthesizeImport(span) {
+function synthesizeImport(span, metadata) {
+  switch (str3(metadata, "framework")) {
+    case "python":
+      return synthesizePythonImport(span);
+    case "go":
+      return synthesizeGoImport(span);
+    case "rust":
+      return synthesizeRustImport(span);
+    case "php":
+      return synthesizePhpImport(span);
+    case "java":
+      return synthesizeJavaImport(span);
+    case "csharp":
+      return synthesizeCsharpImport(span);
+    case "ruby":
+      return synthesizeRubyImport(span);
+    case "esm":
+    default:
+      return synthesizeEsmImport(span);
+  }
+}
+function synthesizeEsmImport(span) {
   const literal2 = findStringLiteral(span);
   if (literal2 === void 0) return void 0;
   const module = stripQuotes2(literal2.text);
   if (module.length === 0) return void 0;
-  const symbol = /\bimport\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span)?.[1];
+  const symbol = /\bimport\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\bimport\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? /\bimport\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span)?.[1];
   if (symbol === void 0) return void 0;
   return {
     $SYMBOL: { abstract_content: symbol },
     $MODULE: { abstract_content: module }
   };
+}
+function synthesizePythonImport(span) {
+  const trimmed = span.trim();
+  const fromMatch = /^from\s+(\.*[\w.]*)\s+import\s+([A-Za-z_]\w*)/.exec(trimmed);
+  const fromModule = fromMatch?.[1];
+  const fromSymbol = fromMatch?.[2];
+  if (fromModule !== void 0 && fromModule.length > 0 && fromSymbol !== void 0) {
+    return {
+      $MODULE: { abstract_content: fromModule },
+      $SYMBOL: { abstract_content: fromSymbol }
+    };
+  }
+  const bareModule = /^import\s+([\w.]+)/.exec(trimmed)?.[1];
+  if (bareModule === void 0 || bareModule.length === 0) return void 0;
+  return { $MODULE: { abstract_content: bareModule } };
+}
+function synthesizeGoImport(span) {
+  const literals = allStringLiterals(span);
+  const last = literals[literals.length - 1];
+  if (last === void 0) return void 0;
+  const module = stripQuotes2(last.text);
+  if (module.length === 0) return void 0;
+  const metavars = { $MODULE: { abstract_content: module } };
+  const before = span.slice(0, last.start);
+  const alias = /([A-Za-z_]\w*)\s*$/.exec(before)?.[1];
+  if (alias !== void 0 && alias !== "import") {
+    metavars["$SYMBOL"] = { abstract_content: alias };
+  }
+  return metavars;
+}
+function synthesizeRustImport(span) {
+  const trimmed = span.replace(/;\s*$/, "").trim();
+  const braceIdx = trimmed.indexOf("{");
+  if (braceIdx !== -1) {
+    const modulePath2 = trimmed.slice(0, braceIdx).replace(/^use\s+/, "").replace(/::\s*$/, "");
+    const items = trimmed.slice(braceIdx + 1).split(",").map((item) => item.trim()).filter((item) => item.length > 0);
+    const symbol2 = items[items.length - 1];
+    if (modulePath2.length === 0 || symbol2 === void 0 || symbol2.length === 0) return void 0;
+    return {
+      $MODULE: { abstract_content: modulePath2.replace(/::/g, " ") },
+      $SYMBOL: { abstract_content: symbol2 }
+    };
+  }
+  const withoutKeyword = trimmed.replace(/^use\s+/, "");
+  const lastSep = withoutKeyword.lastIndexOf("::");
+  if (lastSep === -1) return void 0;
+  const modulePath = withoutKeyword.slice(0, lastSep);
+  const symbol = withoutKeyword.slice(lastSep + 2);
+  if (modulePath.length === 0 || symbol.length === 0) return void 0;
+  return {
+    $MODULE: { abstract_content: modulePath.replace(/::/g, " ") },
+    $SYMBOL: { abstract_content: symbol }
+  };
+}
+function synthesizePhpImport(span) {
+  const trimmed = span.replace(/;\s*$/, "").trim();
+  const path6 = /^use\s+(\S+)$/.exec(trimmed)?.[1];
+  if (path6 === void 0) return void 0;
+  const lastSep = path6.lastIndexOf("\\");
+  if (lastSep === -1) return void 0;
+  const modulePath = path6.slice(0, lastSep);
+  const symbol = path6.slice(lastSep + 1);
+  if (modulePath.length === 0 || symbol.length === 0) return void 0;
+  return {
+    $MODULE: { abstract_content: modulePath.replace(/\\/g, " ") },
+    $SYMBOL: { abstract_content: symbol }
+  };
+}
+function synthesizeJavaImport(span) {
+  const trimmed = span.replace(/;\s*$/, "").trim();
+  const match = /^import\s+(static\s+)?(.+)$/.exec(trimmed);
+  const path6 = match?.[2];
+  if (path6 === void 0) return void 0;
+  const qualifiedName = path6.trim().replace(/\.\*$/, "");
+  if (qualifiedName.length === 0) return void 0;
+  return { $MODULE: { abstract_content: qualifiedName.replace(/\./g, " ") } };
+}
+function synthesizeCsharpImport(span) {
+  const trimmed = span.replace(/;\s*$/, "").trim();
+  const aliasMatch = /^using\s+([A-Za-z_]\w*)\s*=\s*(.+)$/.exec(trimmed);
+  const aliasSymbol = aliasMatch?.[1];
+  const aliasModule = aliasMatch?.[2];
+  if (aliasSymbol !== void 0 && aliasModule !== void 0 && aliasModule.length > 0) {
+    return {
+      $SYMBOL: { abstract_content: aliasSymbol },
+      $MODULE: { abstract_content: aliasModule.replace(/\./g, " ") }
+    };
+  }
+  const plainModule = /^using\s+(.+)$/.exec(trimmed)?.[1];
+  if (plainModule === void 0 || plainModule.length === 0) return void 0;
+  return { $MODULE: { abstract_content: plainModule.replace(/\./g, " ") } };
+}
+function synthesizeRubyImport(span) {
+  const literal2 = findStringLiteral(span);
+  if (literal2 === void 0) return void 0;
+  const module = stripQuotes2(literal2.text);
+  if (module.length === 0) return void 0;
+  return { $MODULE: { abstract_content: module } };
 }
 function synthesizeEnv(span) {
   const arg = firstArgument(span);
@@ -49314,6 +49433,17 @@ function findStringLiteral(span, from = 0) {
 }
 function firstStringLiteral(span) {
   return findStringLiteral(span)?.text;
+}
+function allStringLiterals(span) {
+  const out = [];
+  let from = 0;
+  while (from < span.length) {
+    const found = findStringLiteral(span, from);
+    if (found === void 0) break;
+    out.push({ ...found, start: found.end - found.text.length });
+    from = found.end;
+  }
+  return out;
 }
 function findOpener(span) {
   let bracket = -1;

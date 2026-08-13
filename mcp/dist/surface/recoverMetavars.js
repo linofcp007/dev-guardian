@@ -174,7 +174,7 @@ function synthesize(kind, span, metadata) {
         case 'mount':
             return synthesizeMount(span);
         case 'import':
-            return synthesizeImport(span);
+            return synthesizeImport(span, metadata);
         case 'env':
             return synthesizeEnv(span);
         default:
@@ -338,24 +338,74 @@ function synthesizeMount(span) {
         $ROUTER: { abstract_content: router },
     };
 }
+/* ---- import ---------------------------------------------------------------
+ *
+ * One synthesizer per stack, dispatched on `metadata.framework` — the same
+ * field `extract.ts`'s route synthesis already reads for wp-rest. The eight
+ * rules in `configs/semgrep/routes.yml` do not share a common span shape (a
+ * quoted string, a dotted path, a `::`/`\`-separated one, a brace-delimited
+ * group that Semgrep reports as a GROWING span — see the Go and Rust
+ * synthesizers below), so one scanner cannot cover all of them the way the
+ * route synthesizer's argument-position search does. Every synthesizer below
+ * was designed against, and its shape verified byte-for-byte against, real
+ * (non-redacted) Semgrep 1.86.0 output — see routes.yml's per-rule comments
+ * for the measurements.
+ */
+function synthesizeImport(span, metadata) {
+    switch (str(metadata, 'framework')) {
+        case 'python':
+            return synthesizePythonImport(span);
+        case 'go':
+            return synthesizeGoImport(span);
+        case 'rust':
+            return synthesizeRustImport(span);
+        case 'php':
+            return synthesizePhpImport(span);
+        case 'java':
+            return synthesizeJavaImport(span);
+        case 'csharp':
+            return synthesizeCsharpImport(span);
+        case 'ruby':
+            return synthesizeRubyImport(span);
+        case 'esm':
+        default:
+            // `framework` is free text in a rule pack file a project owner can
+            // edit; an unrecognised value degrades to the original (and still
+            // default) ESM synthesizer rather than to `undefined`, so a typo in
+            // `metadata.framework` loses precision instead of losing the match.
+            return synthesizeEsmImport(span);
+    }
+}
 /**
- * `import usersRouter from './routes/users'` and
- * `const usersRouter = require('./routes/users')`.
+ * `import usersRouter from './routes/users'`,
+ * `const usersRouter = require('./routes/users')`,
+ * `import { usersRouter, ... } from './routes/users'` and
+ * `import * as ns from './routes/users'`.
  *
  * $MODULE is emitted UNQUOTED, matching what a real (pre-redaction) run
  * reports — the rule pattern writes the quotes itself (`from "$MODULE"`), so
  * the capture binds the string contents. It matters: `resolveModuleFile` in
  * mapAttackSurface.ts tests `specifier.startsWith('.')`, and a leading quote
  * would silently disable mount resolution.
+ *
+ * The named-import and namespace-import branches were added alongside the
+ * routes.yml rule that reads them (see that rule's comment for why a named
+ * import binding several symbols still yields only the FIRST). Order matters
+ * here only in that the namespace check must run before the bare-default
+ * check: `import * as ns from "m"` would otherwise fail the default-import
+ * regex (`*` is not an identifier character, so it already cannot match) but
+ * checking the more specific shape first keeps the intent readable.
  */
-function synthesizeImport(span) {
+function synthesizeEsmImport(span) {
     const literal = findStringLiteral(span);
     if (literal === undefined)
         return undefined;
     const module = stripQuotes(literal.text);
     if (module.length === 0)
         return undefined;
-    const symbol = /\bimport\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ??
+    const symbol = /\bimport\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ??
+        /\bimport\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ??
+        /\bimport\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ??
         /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span)?.[1];
     if (symbol === undefined)
         return undefined;
@@ -363,6 +413,236 @@ function synthesizeImport(span) {
         $SYMBOL: { abstract_content: symbol },
         $MODULE: { abstract_content: module },
     };
+}
+/**
+ * `from pathlib import Path`, `from . import views`, `from .models import X`
+ * and `import os`.
+ *
+ * `from $MODULE import $SYMBOL` covers every relative form for free — $MODULE
+ * is simply whatever dotted/dotted-prefix text sits between `from` and
+ * `import`, leading dots included, so `.`, `.models` and `..shared` all fall
+ * out of the same regex. Multi-name imports
+ * (`from fastapi import APIRouter, FastAPI`) yield the FIRST name only,
+ * matching the real rule's own pattern-either limit (see routes.yml).
+ *
+ * `import $MODULE` (no `from`) binds $MODULE alone: Python's own semantics
+ * say the bound name IS the module text, but there is no second, distinct
+ * span in a bare import to capture separately as $SYMBOL, so — matching the
+ * real rule exactly — none is bound. A dotted bare import (`import os.path`)
+ * is out of scope: real Semgrep 1.86.0 measured that shape as matching the
+ * OTHER alternative instead ($MODULE="os", $SYMBOL="path", as if it read
+ * "from os import path"), a Semgrep matching quirk this function does not
+ * attempt to reproduce — not required by the rule pack's own minimum form
+ * list, and not present in the fixture.
+ */
+function synthesizePythonImport(span) {
+    const trimmed = span.trim();
+    const fromMatch = /^from\s+(\.*[\w.]*)\s+import\s+([A-Za-z_]\w*)/.exec(trimmed);
+    const fromModule = fromMatch?.[1];
+    const fromSymbol = fromMatch?.[2];
+    if (fromModule !== undefined && fromModule.length > 0 && fromSymbol !== undefined) {
+        return {
+            $MODULE: { abstract_content: fromModule },
+            $SYMBOL: { abstract_content: fromSymbol },
+        };
+    }
+    const bareModule = /^import\s+([\w.]+)/.exec(trimmed)?.[1];
+    if (bareModule === undefined || bareModule.length === 0)
+        return undefined;
+    return { $MODULE: { abstract_content: bareModule } };
+}
+/**
+ * `import "net/http"`, `import myjson "encoding/json"`, and both forms again
+ * inside a grouped `import ( ... )` block.
+ *
+ * Measured on 1.164.0: Semgrep's reported span for a grouped-block match
+ * GROWS with each match rather than tightly bounding one spec — the first
+ * spec's span is `import (\n\t"fmt"`, the second is
+ * `import (\n\t"fmt"\n\t"os"`, and so on, always starting at `import (` and
+ * ending just past the CURRENT spec. Taking the first string literal in the
+ * span (the pattern every other synthesizer in this file uses) would
+ * therefore recover `"fmt"` for every one of the four specs in
+ * go-api/main.go's block. This synthesizer takes the LAST string literal
+ * instead, which is correct for both shapes: a single (non-grouped) import's
+ * span holds exactly one literal, so "last" and "only" coincide.
+ *
+ * The identifier immediately before that literal, if any, is the alias
+ * (`myjson` in `import myjson "encoding/json"`). For an unaliased spec the
+ * preceding token is either the `import` keyword itself (single form) or a
+ * bracket/previous-literal's closing quote (grouped form) — neither is a
+ * bindable identifier, so $SYMBOL is correctly left unbound, matching what
+ * Go's own syntax makes available: an unaliased import's local package name
+ * lives in the TARGET package's own source, not in the importing statement.
+ */
+function synthesizeGoImport(span) {
+    const literals = allStringLiterals(span);
+    const last = literals[literals.length - 1];
+    if (last === undefined)
+        return undefined;
+    const module = stripQuotes(last.text);
+    if (module.length === 0)
+        return undefined;
+    const metavars = { $MODULE: { abstract_content: module } };
+    const before = span.slice(0, last.start);
+    const alias = /([A-Za-z_]\w*)\s*$/.exec(before)?.[1];
+    if (alias !== undefined && alias !== 'import') {
+        metavars['$SYMBOL'] = { abstract_content: alias };
+    }
+    return metavars;
+}
+/**
+ * `use crate::models::User;` and, one match per item, `use actix_web::{web,
+ * App, HttpServer};`.
+ *
+ * Grouped spans grow exactly the way Go's do (measured on 1.164.0): the first
+ * item's span is `use actix_web::{web`, the second is
+ * `use actix_web::{web, App`, and so on — always starting at `use $MODULE::{`
+ * and ending just past the CURRENT item. Splitting the text after `{` on
+ * commas and taking the LAST piece recovers the current item for every span
+ * in the sequence; taking the first would recover `web` four times over.
+ *
+ * The single-item form has no brace at all, so it takes the other branch:
+ * split on the LAST `::` into $MODULE (everything before) and $SYMBOL
+ * (everything after). When $MODULE itself spans more than one segment
+ * (`crate::models`), the `::` separators inside it are replaced with a single
+ * space to match Semgrep's own `abstract_content` rendering for a
+ * multi-segment path capture — measured, not a choice made here (see the
+ * rule's comment in routes.yml).
+ */
+function synthesizeRustImport(span) {
+    const trimmed = span.replace(/;\s*$/, '').trim();
+    const braceIdx = trimmed.indexOf('{');
+    if (braceIdx !== -1) {
+        const modulePath = trimmed.slice(0, braceIdx).replace(/^use\s+/, '').replace(/::\s*$/, '');
+        const items = trimmed
+            .slice(braceIdx + 1)
+            .split(',')
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0);
+        const symbol = items[items.length - 1];
+        if (modulePath.length === 0 || symbol === undefined || symbol.length === 0)
+            return undefined;
+        return {
+            $MODULE: { abstract_content: modulePath.replace(/::/g, ' ') },
+            $SYMBOL: { abstract_content: symbol },
+        };
+    }
+    const withoutKeyword = trimmed.replace(/^use\s+/, '');
+    const lastSep = withoutKeyword.lastIndexOf('::');
+    if (lastSep === -1)
+        return undefined;
+    const modulePath = withoutKeyword.slice(0, lastSep);
+    const symbol = withoutKeyword.slice(lastSep + 2);
+    if (modulePath.length === 0 || symbol.length === 0)
+        return undefined;
+    return {
+        $MODULE: { abstract_content: modulePath.replace(/::/g, ' ') },
+        $SYMBOL: { abstract_content: symbol },
+    };
+}
+/**
+ * `use App\Http\Controllers\OrderController;` — splits at the LAST `\`, the
+ * class name becomes $SYMBOL and the namespace prefix becomes $MODULE, its
+ * own internal `\` separators replaced with a single space to match
+ * Semgrep's own `abstract_content` rendering for a multi-segment capture
+ * (`App Http Controllers`, not `App\Http\Controllers`) — measured, not a
+ * choice made here.
+ */
+function synthesizePhpImport(span) {
+    const trimmed = span.replace(/;\s*$/, '').trim();
+    const path = /^use\s+(\S+)$/.exec(trimmed)?.[1];
+    if (path === undefined)
+        return undefined;
+    const lastSep = path.lastIndexOf('\\');
+    if (lastSep === -1)
+        return undefined;
+    const modulePath = path.slice(0, lastSep);
+    const symbol = path.slice(lastSep + 1);
+    if (modulePath.length === 0 || symbol.length === 0)
+        return undefined;
+    return {
+        $MODULE: { abstract_content: modulePath.replace(/\\/g, ' ') },
+        $SYMBOL: { abstract_content: symbol },
+    };
+}
+/**
+ * `import java.util.List;`, `import static java.util.Collections.emptyList;`
+ * and `import com.example.util.*;`.
+ *
+ * No $SYMBOL for any of the three — see the rule's comment in routes.yml for
+ * why a two-metavariable split was tried and abandoned (it mis-split the
+ * wildcard form). $MODULE is the qualified name verbatim, `static ` stripped
+ * from the front and a trailing `.*` stripped from the back before joining —
+ * the on-demand `.*` is not part of the qualified-name node Semgrep binds, so
+ * `import com.example.util.*;` recovers the same $MODULE
+ * (`com example util`) a real run reports, not `com example util *`. Internal
+ * `.` separators become a single space, matching Semgrep's own
+ * `abstract_content` rendering for a multi-segment capture — measured, not a
+ * choice made here.
+ */
+function synthesizeJavaImport(span) {
+    const trimmed = span.replace(/;\s*$/, '').trim();
+    const match = /^import\s+(static\s+)?(.+)$/.exec(trimmed);
+    const path = match?.[2];
+    if (path === undefined)
+        return undefined;
+    const qualifiedName = path.trim().replace(/\.\*$/, '');
+    if (qualifiedName.length === 0)
+        return undefined;
+    return { $MODULE: { abstract_content: qualifiedName.replace(/\./g, ' ') } };
+}
+/**
+ * `using System.Collections.Generic;` (plain) and
+ * `using Json = System.Text.Json.JsonSerializer;` (aliased).
+ *
+ * Measured on 1.164.0: the plain form's span includes the trailing `;`; the
+ * aliased form's does not. Both are handled by trimming an optional trailing
+ * `;` up front rather than relying on either shape.
+ *
+ * Plain `using` binds $MODULE only — see the rule's comment in routes.yml for
+ * why a `$MODULE.$SYMBOL`-shaped split was tried and abandoned (it split at
+ * the FIRST segment instead of the last, backwards relative to
+ * PHP/Java/Rust). Aliased `using` gives a real, distinct $SYMBOL for free:
+ * the alias IS the bound name, no split needed. Either way, when $MODULE
+ * spans more than one segment its internal `.` separators become a single
+ * space, matching Semgrep's own `abstract_content` rendering for a
+ * multi-segment capture — measured, not a choice made here.
+ */
+function synthesizeCsharpImport(span) {
+    const trimmed = span.replace(/;\s*$/, '').trim();
+    const aliasMatch = /^using\s+([A-Za-z_]\w*)\s*=\s*(.+)$/.exec(trimmed);
+    const aliasSymbol = aliasMatch?.[1];
+    const aliasModule = aliasMatch?.[2];
+    if (aliasSymbol !== undefined && aliasModule !== undefined && aliasModule.length > 0) {
+        return {
+            $SYMBOL: { abstract_content: aliasSymbol },
+            $MODULE: { abstract_content: aliasModule.replace(/\./g, ' ') },
+        };
+    }
+    const plainModule = /^using\s+(.+)$/.exec(trimmed)?.[1];
+    if (plainModule === undefined || plainModule.length === 0)
+        return undefined;
+    return { $MODULE: { abstract_content: plainModule.replace(/\./g, ' ') } };
+}
+/**
+ * `require "net/http"`, `require_relative "./user"` and `load "tasks.rb"`.
+ *
+ * $MODULE only: none of the three Ruby forms binds a local name — that is
+ * Ruby's own semantics (`require` runs the file; it does not introduce a
+ * scoped identifier the way an `import` or `use` statement does), not a gap
+ * in this synthesizer. The span holds exactly one string literal, so the
+ * same first-literal scan every other synthesizer in this file uses is
+ * already correct here — no Go/Rust-style "last literal" handling is needed
+ * because there is nothing else in the span to compete with it.
+ */
+function synthesizeRubyImport(span) {
+    const literal = findStringLiteral(span);
+    if (literal === undefined)
+        return undefined;
+    const module = stripQuotes(literal.text);
+    if (module.length === 0)
+        return undefined;
+    return { $MODULE: { abstract_content: module } };
 }
 /**
  * `process.env.API_KEY` → `API_KEY` (unquoted, as the real run reports it);
@@ -426,6 +706,25 @@ function findStringLiteral(span, from = 0) {
 }
 function firstStringLiteral(span) {
     return findStringLiteral(span)?.text;
+}
+/**
+ * Every string literal in the span, in source order, each tagged with its
+ * own start index — `findStringLiteral` only reports where a literal ENDS,
+ * which is enough to keep scanning past it but not enough to know where the
+ * one just found begins. `synthesizeGoImport` needs the start of the LAST
+ * literal to find what (if anything) immediately precedes it.
+ */
+function allStringLiterals(span) {
+    const out = [];
+    let from = 0;
+    while (from < span.length) {
+        const found = findStringLiteral(span, from);
+        if (found === undefined)
+            break;
+        out.push({ ...found, start: found.end - found.text.length });
+        from = found.end;
+    }
+    return out;
 }
 /**
  * Where the argument list starts: the first `(`, or the first `[` when the
