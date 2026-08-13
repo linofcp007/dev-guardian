@@ -20,8 +20,6 @@
  * direction; the positive direction is evidence, never proof.
  */
 
-import type { ImportRecord } from '../surface/resolvers/node.js';
-
 /**
  * Upper bound on distinct edges an `ImportGraph` will hold. A repository
  * large enough to hit this is rare, but silently dropping the overflow would
@@ -52,8 +50,17 @@ export interface ImportGraph {
  * file importing the same module under two different bound symbols — collapse
  * to one edge and do not consume the cap: `MAX_GRAPH_EDGES` bounds the shape
  * of the graph, not the volume of records fed into it.
+ *
+ * The parameter is a structural `{file, module_file}` shape rather than
+ * `resolvers/node.js`'s `ImportRecord` — this function never reads a
+ * `.symbol`, and `AttackSurfaceSnapshot.imports` (what `validate_finding`
+ * actually feeds it) does not carry one. Widening the parameter, rather than
+ * requiring every caller to fabricate a placeholder symbol, is the
+ * backward-compatible direction: any `ImportRecord[]` still satisfies this
+ * (it has both required fields plus one this function ignores), so this
+ * module's own existing tests keep compiling unchanged.
  */
-export function buildImportGraph(records: readonly ImportRecord[]): ImportGraph {
+export function buildImportGraph(records: readonly { file: string; module_file: string }[]): ImportGraph {
   const edges = new Map<string, Set<string>>();
   const files = new Set<string>();
   let edgeCount = 0;

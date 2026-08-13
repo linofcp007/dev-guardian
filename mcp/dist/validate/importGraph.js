@@ -32,6 +32,15 @@ export const MAX_GRAPH_EDGES = 20000;
  * file importing the same module under two different bound symbols — collapse
  * to one edge and do not consume the cap: `MAX_GRAPH_EDGES` bounds the shape
  * of the graph, not the volume of records fed into it.
+ *
+ * The parameter is a structural `{file, module_file}` shape rather than
+ * `resolvers/node.js`'s `ImportRecord` — this function never reads a
+ * `.symbol`, and `AttackSurfaceSnapshot.imports` (what `validate_finding`
+ * actually feeds it) does not carry one. Widening the parameter, rather than
+ * requiring every caller to fabricate a placeholder symbol, is the
+ * backward-compatible direction: any `ImportRecord[]` still satisfies this
+ * (it has both required fields plus one this function ignores), so this
+ * module's own existing tests keep compiling unchanged.
  */
 export function buildImportGraph(records) {
     const edges = new Map();
