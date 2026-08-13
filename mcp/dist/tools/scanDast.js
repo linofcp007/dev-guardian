@@ -201,7 +201,14 @@ async function handler(input, ctx, callMeta) {
         return fail(code, target.reason ?? 'Target refused.');
     }
     // ---- 3. The surface snapshot ----------------------------------------
-    const persisted = ctx.storage.surface.getLatest();
+    // PROJECT-SCOPED, deliberately: findings below carry `route.file` verbatim
+    // as `file_path`, which `validate_finding` and every host that reports a
+    // finding relativizes against THIS project's root. Reading "the newest
+    // snapshot in the database" instead would let this scan probe (and then
+    // persist findings pointing into) a DIFFERENT project's route inventory
+    // whenever that other project was mapped more recently — silently, since
+    // the snapshot would still be non-null and the scan would still "succeed".
+    const persisted = ctx.storage.surface.getLatestForProject(projectPath);
     if (persisted === null) {
         return fail('no_surface_snapshot', 'No attack-surface snapshot exists for this project, so there is no route inventory to ' +
             'probe. Run map_attack_surface first, then re-run scan_dast. This is a refusal and not ' +

@@ -37765,15 +37765,11 @@ var SurfaceRepo = class {
    * keys anything by one, or TELLS THE CALLER it answered about their
    * project must use `getLatestForProject`: a snapshot of a different tree
    * relativizes into a different key space, so every comparison against it
-   * silently answers "not found" rather than failing.
-   *
-   * KNOWN MISMATCH, not an endorsement: `scan_dast` (tools/scanDast.ts) uses
-   * this method and then refuses with "No attack-surface snapshot exists for
-   * THIS PROJECT", so it already believes it is project-scoped — meaning it
-   * can probe one project's routes while another project's snapshot is the
-   * newest row. That predates the project-scoped read added for
-   * `validate_finding` and is recorded here so the next reader sees a bug to
-   * fix rather than a contract to copy.
+   * silently answers "not found" rather than failing. `scan_dast`
+   * (tools/scanDast.ts) used to call this method while its own refusal
+   * message already claimed to be project-scoped — fixed alongside
+   * `validate_finding`'s read, so this is no longer a mismatch to route
+   * around, only a contract not to repeat.
    */
   getLatest() {
     const row = this.getLatestStmt.get();
@@ -52121,7 +52117,7 @@ async function handler40(input, ctx, callMeta) {
     const code = target.origin === "" ? "unsupported_target" : "target_not_authorized";
     return fail(code, target.reason ?? "Target refused.");
   }
-  const persisted = ctx.storage.surface.getLatest();
+  const persisted = ctx.storage.surface.getLatestForProject(projectPath);
   if (persisted === null) {
     return fail(
       "no_surface_snapshot",
