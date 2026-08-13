@@ -493,6 +493,27 @@ version bump.
   banner naming the real `brew install nuclei` formula `TOOL_CATALOG` already verifies for
   that platform. Neither banner reproduces `TOOL_CATALOG`'s linux `curl` fallback, which
   resolves to a GitHub releases HTML page rather than a raw install script.
+- **`TOOL_CATALOG`'s linux install command for gitleaks and nuclei piped an HTML page into
+  `sh`.** `curlInstaller`'s contract is a raw install script, but the `gitleaks` and
+  `nuclei` linux entries pointed it at `.../releases/latest`, which redirects to the
+  release's HTML tag page. `curl -f` only fails on HTTP error status, so the fetch
+  "succeeded" and handed `sh` a full HTML document — a wall of shell syntax errors, not an
+  install. Because gitleaks is `default: true`, this sat on a supported path: `check_toolchain`
+  printed that broken one-liner as `install_command` for every caller on Linux regardless of
+  whether they ever called `install_toolchain`, and an explicit
+  `install_toolchain(tools: ["gitleaks"])` (or `["nuclei"]`) actually ran it. The default
+  bootstrap flow (`install_toolchain` with no `tools` filter) was unaffected — on Linux it
+  delegates to `install-linux.sh`, which resolves gitleaks's real download URL itself — so
+  the breakage was reachable only through the per-tool path and through `check_toolchain`'s
+  advisory output. Confirmed with `curl -sSIL` rather than assumed: gitleaks and nuclei both
+  returned `Content-Type: text/html` on the final `200`, while trivy's and syft's linux
+  entries (real `install.sh` scripts on `raw.githubusercontent.com`) returned `text/plain`,
+  confirming they were never affected. Both broken entries are removed rather than replaced
+  — neither tool ships a stable install script, and a hand-written per-arch downloader would
+  be new, unverified machinery — so `pickInstallSpec` now returns `null` for gitleaks and
+  nuclei on Linux and both degrade to `manual_steps` / no `install_command`, the same honest
+  gap nuclei's win32 entry already relied on. `curlInstaller` now carries a doc comment
+  stating the precondition the next caller must meet.
 
 ## [1.2.1] — 2026-08-10
 

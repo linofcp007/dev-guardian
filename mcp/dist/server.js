@@ -42692,7 +42692,16 @@ var TOOL_CATALOG = {
         winget: wingetInstall("gitleaks.gitleaks")
       },
       linux: {
-        curl: curlInstaller("https://github.com/gitleaks/gitleaks/releases/latest")
+        // No curl entry: `.../releases/latest` resolves to the release's
+        // HTML page, not an install script (measured: Content-Type:
+        // text/html on the final 200 — see curlInstaller's doc comment).
+        // gitleaks ships per-arch release archives, not a stable
+        // install.sh, so there is no safe URL to hand curlInstaller here.
+        // The default bootstrap flow is unaffected — it delegates to
+        // install-linux.sh, which resolves the real download URL itself;
+        // only an explicit install_toolchain(tools:["gitleaks"]) call on
+        // Linux reaches this empty bucket, and degrades to manual_steps
+        // the same way nuclei's win32 entry below already does.
       },
       darwin: { brew: brewInstall("gitleaks") }
     },
@@ -42805,7 +42814,11 @@ var TOOL_CATALOG = {
       // install command" when an OS bucket has none.
       win32: {},
       linux: {
-        curl: curlInstaller("https://github.com/projectdiscovery/nuclei/releases/latest")
+        // No curl entry, for the same reason as gitleaks' linux entry
+        // above and this tool's own win32 bucket: `.../releases/latest`
+        // resolves to the release's HTML page, not an install script
+        // (measured: Content-Type: text/html on the final 200). Left
+        // empty rather than fabricated, per curlInstaller's doc comment.
       },
       darwin: { brew: brewInstall("nuclei") }
     },
