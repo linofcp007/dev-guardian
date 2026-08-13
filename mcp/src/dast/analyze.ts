@@ -18,6 +18,24 @@ import type { DastCheck, PlanOutcome, ProbeRequest, ProbeResult } from './types.
 
 export interface AnalyzeInput {
   plan: PlanOutcome;
+  /**
+   * The WHOLE route inventory from the surface snapshot — every route the
+   * static extractor and any spec import produced, including the ones the
+   * safety envelope refused to probe.
+   *
+   * Deliberately not the same array as `plan.routes`, which holds only the
+   * routes that SURVIVED the envelope (`plan.ts` `continue`s on
+   * `method_envelope` before `kept.push`). Under the default read-only
+   * envelope every POST/PUT/PATCH/DELETE route a project has written down is
+   * missing from `plan.routes` — so any check asking "does the inventory know
+   * about this?" must read THIS field, or it accuses the user of routes their
+   * own inventory contains and that the same scan just read.
+   *
+   * `route_index` on a `ProbeRequest` indexes `plan.routes` and nothing else.
+   * This array is never a substitute for it: only `knownMethodsForPath`
+   * consumes it.
+   */
+  inventoryRoutes: readonly RouteRecord[];
   results: readonly ProbeResult[];
   origin: string;
   /** From the surface snapshot's spec diff: paths the code has and no spec documents. */
@@ -81,8 +99,8 @@ export function dastFingerprint(
  * `dastRuleId` is: the string on the `Finding` and the one fed to the hash
  * must never drift apart.
  */
-function originRuleId(check: DastCheck, origin: string): string {
-  return `${check}:${origin}`;
+function originRuleId(check: DastCheck, origin: string, parts: readonly string[] = []): string {
+  return [check, origin, ...parts].join(':');
 }
 
 /**
@@ -101,13 +119,28 @@ function originRuleId(check: DastCheck, origin: string): string {
  * path — the same discipline `dastFingerprint` applies to status and
  * `line_start`, for the same reason.
  *
- * A side effect worth keeping deliberately: because no per-header detail is
- * hashed either, an origin going from "2 headers missing" to "1 missing"
- * between scans still reads as the same evolving finding rather than a new
- * one each time — the right behaviour for a coarse, origin-wide signal.
+ * A side effect worth keeping deliberately: for `security_headers`, which
+ * passes no `parts`, no per-header detail is hashed either — so an origin
+ * going from "2 headers missing" to "1 missing" between scans still reads as
+ * the same evolving finding rather than a new one each time, the right
+ * behaviour for a coarse, origin-wide signal.
+ *
+ * `parts` exists for the second consumer, the version banner, whose scope is
+ * origin-wide but which is NOT one fact per origin: an origin can genuinely
+ * serve two banners (two backends behind one load balancer), and those are
+ * two findings that must survive as two. So it hashes
+ * `(check, origin, header, value)`. Bare `(check, origin)` would collapse
+ * them into one identity; anything derived from the winning probe's method or
+ * path would reintroduce exactly the race this function exists to remove.
+ * Whatever goes in `parts` must therefore be a property of the OBSERVED FACT,
+ * never of the request that happened to observe it first.
  */
-export function originFingerprint(check: DastCheck, origin: string): string {
-  return computeFingerprint({ tool: 'dast', rule_id: originRuleId(check, origin) });
+export function originFingerprint(
+  check: DastCheck,
+  origin: string,
+  parts: readonly string[] = [],
+): string {
+  return computeFingerprint({ tool: 'dast', rule_id: originRuleId(check, origin, parts) });
 }
 
 interface BuildFindingArgs {
@@ -127,6 +160,13 @@ interface BuildFindingArgs {
    * must not (see `originFingerprint`'s doc comment).
    */
   origin?: string;
+  /**
+   * Extra identity components for an origin-scoped finding, hashed after
+   * `origin`. Only meaningful alongside `origin`. Every element must be a
+   * property of the observed FACT (a header name and its value, say), never
+   * of the request that happened to observe it — see `originFingerprint`.
+   */
+  identityParts?: readonly string[];
 }
 
 /**
@@ -137,14 +177,16 @@ interface BuildFindingArgs {
  * deterministic across runs.
  */
 function buildFinding(args: BuildFindingArgs): DastFinding {
-  const { check, severity, title, message, route, request, origin } = args;
+  const { check, severity, title, message, route, request, origin, identityParts } = args;
   const path = route?.path_resolved ?? request.path;
   const finding: DastFinding = {
     fingerprint: origin === undefined
       ? dastFingerprint(check, request.method, path, route?.file)
-      : originFingerprint(check, origin),
+      : originFingerprint(check, origin, identityParts),
     tool: 'dast',
-    rule_id: origin === undefined ? dastRuleId(check, request.method, path) : originRuleId(check, origin),
+    rule_id: origin === undefined
+      ? dastRuleId(check, request.method, path)
+      : originRuleId(check, origin, identityParts),
     severity,
     category: 'security',
     subcategory: check,
@@ -360,6 +402,14 @@ function checkOpenRedirect(input: AnalyzeInput, findings: DastFinding[]): void {
  * news. Otherwise the union of concrete methods the inventory declares for
  * the path, computed through the same `substituteParams` the planner used, so
  * `/users/1` matches an inventory entry at `/users/{id}`.
+ *
+ * `routes` here is `AnalyzeInput.inventoryRoutes` — the FULL inventory, never
+ * `plan.routes`. The `path_partial` guard below is only meaningful for that
+ * full set: partials are dropped at `plan.ts` before `kept.push`, so the
+ * guard can never hold for `plan.routes`. Its presence is the tell that this
+ * function was always meant to read the whole inventory, and the same route
+ * set `normalizeNuclei.ts#matchRoute` — documented as doing the same
+ * comparison — is already handed.
  */
 function knownMethodsForPath(routes: readonly RouteRecord[], path: string): Set<string> | null {
   const known = new Set<string>();
@@ -399,10 +449,16 @@ function checkMethodSurface(input: AnalyzeInput, findings: DastFinding[]): void 
     const allow = r.headers['allow'];
     if (allow === undefined || allow.trim() === '' || reported.has(r.request.path)) continue;
 
-    const known = knownMethodsForPath(input.plan.routes, r.request.path);
+    // The FULL inventory, never `plan.routes` — see `AnalyzeInput`.
+    const known = knownMethodsForPath(input.inventoryRoutes, r.request.path);
     if (known === null) continue;
-    const extra = allow.split(',').map((m) => m.trim().toUpperCase())
-      .filter((m) => m !== '' && !known.has(m) && !isImpliedMethod(m, known));
+    // A Set, not an array: a server is free to repeat a verb in `Allow`, and
+    // an un-deduped `extra.join(', ')` renders "DELETE, DELETE" — one
+    // discovery reported as though it were two.
+    const extra = [...new Set(
+      allow.split(',').map((m) => m.trim().toUpperCase())
+        .filter((m) => m !== '' && !known.has(m) && !isImpliedMethod(m, known)),
+    )];
     if (extra.length === 0) continue;
     reported.add(r.request.path);
 
@@ -535,7 +591,13 @@ function versionBanner(headers: Record<string, string>): { header: string; value
   return null;
 }
 
-/** Shared tail of `checkInfoDisclosure`'s two branches. */
+/**
+ * The stack-trace branch of `checkInfoDisclosure`. Route-scoped on purpose:
+ * a trace belongs to the handler that threw it, so `file_path` / `line_start`
+ * and a (method, path)-derived fingerprint are all correct here. The banner
+ * branch deliberately does NOT share this — it is origin-scoped and builds
+ * its own finding; see the comment at its call site.
+ */
 function infoDisclosureFinding(
   route: RouteRecord | undefined,
   request: ProbeRequest,
@@ -564,10 +626,36 @@ function infoDisclosureFinding(
  * "N routes = N duplicates" case `security_headers` was already written to
  * avoid — reusing the exact `reported`-Set idiom `checkMethodSurface` above
  * already applies to `Allow`, for the same reason.
+ *
+ * Because that scope is origin-wide, so is the banner finding's IDENTITY:
+ * `(check, origin, header, value)`, with no route attached. Deduping globally
+ * while identifying by whichever route won the race is the inconsistency this
+ * once shipped with — the finding pointed at a source line that never set the
+ * header, and its fingerprint moved when a different probe won on a later
+ * run.
+ *
+ * The whole loop is `variant === 'anonymous'` only, matching every
+ * route-scoped sibling. `plan.ts` sends a `cors` GET to every kept path (and
+ * an `authenticated` twin when a credential exists) on top of the route's own
+ * anonymous request, so an unfiltered loop reports one leak two or three
+ * times, with identical fingerprints.
  */
 function checkInfoDisclosure(input: AnalyzeInput, findings: DastFinding[]): void {
   const reportedBanners = new Set<string>();
   for (const r of input.results) {
+    // Anonymous only, exactly like the four route-scoped siblings. Without
+    // this, `plan.ts`'s unconditional `cors` GET at every kept path means any
+    // GET route leaking a trace produces TWO findings with a byte-identical
+    // fingerprint — three with credentials, which add an `authenticated`
+    // variant on top. `INSERT OR IGNORE` absorbs the duplicate row in SQLite,
+    // so the visible damage is in the returned `payload.findings` and in
+    // `findings_count_by_severity`, both of which are built before any
+    // database round-trip.
+    //
+    // The cost is real and deliberate: a trace visible ONLY under
+    // credentials is now missed. Under-reporting is the direction this file
+    // errs in — see the module header.
+    if (r.request.variant !== 'anonymous') continue;
     if (r.outcome !== 'completed' || r.status === null) continue;
     const route = routeFor(input.plan.routes, r.request.route_index);
 
@@ -582,8 +670,29 @@ function checkInfoDisclosure(input: AnalyzeInput, findings: DastFinding[]): void
       const key = `${banner.header}:${banner.value}`;
       if (!reportedBanners.has(key)) {
         reportedBanners.add(key);
-        findings.push(infoDisclosureFinding(route, r.request, 'Version banner disclosed in response headers',
-          `${r.request.method} ${r.request.path} discloses ${banner.header}: ${banner.value}.`));
+        // Origin-scoped identity, and NO route attribution — the banner comes
+        // from one global middleware layer, so whichever probe won the race to
+        // observe it first neither set the header nor owns the fact. Building
+        // this through the route-scoped path (as it once did) pointed the
+        // reader at a source line that does not set the header, and rotated
+        // the fingerprint whenever a different probe won on a later run. The
+        // `(header, value)` pair rides in `identityParts` so two banners from
+        // two backends behind one origin stay two findings.
+        findings.push(buildFinding({
+          check: 'info_disclosure',
+          severity: 'low',
+          title: 'Version banner disclosed in response headers',
+          message:
+            `${input.origin} discloses ${banner.header}: ${banner.value} in its response ` +
+            `headers, naming the exact version an attacker would look up advisories for.`,
+          route: undefined,
+          // Still the real request that observed it: `evidence_id` names the
+          // exchange the evidence file holds, and is deliberately allowed to
+          // float even when the identity above must not.
+          request: r.request,
+          origin: input.origin,
+          identityParts: [banner.header, banner.value],
+        }));
       }
     }
   }

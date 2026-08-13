@@ -32,6 +32,11 @@ export function result(
 export function input(over: Partial<AnalyzeInput> = {}): AnalyzeInput {
   return {
     plan: { requests: [], routes: [route()], skipped: [], truncated: false },
+    // Defaults to the same single route as `plan.routes` — the shape a scan
+    // has when the envelope dropped nothing. Tests about `method_surface`
+    // override BOTH, because the whole point of that check's input is that
+    // the two arrays differ whenever the envelope refused a route.
+    inventoryRoutes: [route()],
     results: [],
     origin: 'http://localhost:3000',
     shadowPaths: new Set<string>(),

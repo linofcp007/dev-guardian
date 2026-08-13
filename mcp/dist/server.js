@@ -50340,19 +50340,19 @@ function dastFingerprint(check2, method, path6, file) {
   if (file !== void 0) fp.file_path = file;
   return computeFingerprint(fp);
 }
-function originRuleId(check2, origin) {
-  return `${check2}:${origin}`;
+function originRuleId(check2, origin, parts = []) {
+  return [check2, origin, ...parts].join(":");
 }
-function originFingerprint(check2, origin) {
-  return computeFingerprint({ tool: "dast", rule_id: originRuleId(check2, origin) });
+function originFingerprint(check2, origin, parts = []) {
+  return computeFingerprint({ tool: "dast", rule_id: originRuleId(check2, origin, parts) });
 }
 function buildFinding(args) {
-  const { check: check2, severity, title, message, route, request, origin } = args;
+  const { check: check2, severity, title, message, route, request, origin, identityParts } = args;
   const path6 = route?.path_resolved ?? request.path;
   const finding2 = {
-    fingerprint: origin === void 0 ? dastFingerprint(check2, request.method, path6, route?.file) : originFingerprint(check2, origin),
+    fingerprint: origin === void 0 ? dastFingerprint(check2, request.method, path6, route?.file) : originFingerprint(check2, origin, identityParts),
     tool: "dast",
-    rule_id: origin === void 0 ? dastRuleId(check2, request.method, path6) : originRuleId(check2, origin),
+    rule_id: origin === void 0 ? dastRuleId(check2, request.method, path6) : originRuleId(check2, origin, identityParts),
     severity,
     category: "security",
     subcategory: check2,
@@ -50518,9 +50518,11 @@ function checkMethodSurface(input, findings) {
     if (r.request.variant !== "anonymous" || r.outcome !== "completed") continue;
     const allow = r.headers["allow"];
     if (allow === void 0 || allow.trim() === "" || reported.has(r.request.path)) continue;
-    const known = knownMethodsForPath(input.plan.routes, r.request.path);
+    const known = knownMethodsForPath(input.inventoryRoutes, r.request.path);
     if (known === null) continue;
-    const extra = allow.split(",").map((m) => m.trim().toUpperCase()).filter((m) => m !== "" && !known.has(m) && !isImpliedMethod(m, known));
+    const extra = [...new Set(
+      allow.split(",").map((m) => m.trim().toUpperCase()).filter((m) => m !== "" && !known.has(m) && !isImpliedMethod(m, known))
+    )];
     if (extra.length === 0) continue;
     reported.add(r.request.path);
     const route = routeFor(input.plan.routes, r.request.route_index);
@@ -50612,6 +50614,7 @@ function infoDisclosureFinding(route, request, title, message) {
 function checkInfoDisclosure(input, findings) {
   const reportedBanners = /* @__PURE__ */ new Set();
   for (const r of input.results) {
+    if (r.request.variant !== "anonymous") continue;
     if (r.outcome !== "completed" || r.status === null) continue;
     const route = routeFor(input.plan.routes, r.request.route_index);
     if (STACK_TRACE_SIGNATURES.some((re) => re.test(r.body_prefix))) {
@@ -50627,12 +50630,19 @@ function checkInfoDisclosure(input, findings) {
       const key = `${banner.header}:${banner.value}`;
       if (!reportedBanners.has(key)) {
         reportedBanners.add(key);
-        findings.push(infoDisclosureFinding(
-          route,
-          r.request,
-          "Version banner disclosed in response headers",
-          `${r.request.method} ${r.request.path} discloses ${banner.header}: ${banner.value}.`
-        ));
+        findings.push(buildFinding({
+          check: "info_disclosure",
+          severity: "low",
+          title: "Version banner disclosed in response headers",
+          message: `${input.origin} discloses ${banner.header}: ${banner.value} in its response headers, naming the exact version an attacker would look up advisories for.`,
+          route: void 0,
+          // Still the real request that observed it: `evidence_id` names the
+          // exchange the evidence file holds, and is deliberately allowed to
+          // float even when the identity above must not.
+          request: r.request,
+          origin: input.origin,
+          identityParts: [banner.header, banner.value]
+        }));
       }
     }
   }
@@ -51588,6 +51598,12 @@ async function handler40(input, ctx, callMeta) {
   if (aborted3()) return cancel();
   const analyzeInput = {
     plan,
+    // The full inventory alongside the probed subset, for the same reason the
+    // rate-limit burst above gets `snapshot.routes`: the default read-only
+    // envelope drops every write route from `plan.routes`, and a check that
+    // asks "does the inventory know about this method?" against the probed
+    // subset alone accuses the caller of routes this very snapshot contains.
+    inventoryRoutes: snapshot.routes,
     results,
     origin: target.origin,
     shadowPaths: specPaths(snapshot, "code_only"),

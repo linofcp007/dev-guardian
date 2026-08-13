@@ -278,6 +278,12 @@ async function handler(input, ctx, callMeta) {
         return cancel();
     const analyzeInput = {
         plan,
+        // The full inventory alongside the probed subset, for the same reason the
+        // rate-limit burst above gets `snapshot.routes`: the default read-only
+        // envelope drops every write route from `plan.routes`, and a check that
+        // asks "does the inventory know about this method?" against the probed
+        // subset alone accuses the caller of routes this very snapshot contains.
+        inventoryRoutes: snapshot.routes,
         results,
         origin: target.origin,
         shadowPaths: specPaths(snapshot, 'code_only'),

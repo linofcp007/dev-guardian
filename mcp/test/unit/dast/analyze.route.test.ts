@@ -209,6 +209,164 @@ describe('analyzeRoutes — open redirect and method surface', () => {
   });
 });
 
+/**
+ * Every route-scoped check filters to `variant === 'anonymous'`, and until
+ * now nothing exercised them with credentials in play — so the filters could
+ * be deleted one at a time and the suite would stay green. `plan.ts` builds
+ * an `authenticated` request for every (method, path) once a credential is
+ * supplied, on top of the `cors` GET it already adds at every kept path, so a
+ * missing filter is a check firing two or three times on one fact.
+ *
+ * This is the same defect `checkInfoDisclosure` actually shipped with. The
+ * assertions below are exact counts, not `some(...)`: a predicate passes for
+ * both the correct implementation and the one that double-fires.
+ */
+describe('analyzeRoutes — route-scoped checks fire once per fact, with credentials in play', () => {
+  const r = route({ auth_hint: 'required' });
+  /** The three variants `plan.ts` sends to one route when a credential exists. */
+  const variants = (over: Partial<ProbeResult> = {}): ProbeResult[] => [
+    result({ ...over, request: { id: 'anonymous GET /users', variant: 'anonymous' } }),
+    result({ ...over, request: { id: 'authenticated GET /users', variant: 'authenticated' } }),
+    result({ ...over, request: { id: 'cors GET /users', variant: 'cors' } }),
+  ];
+
+  function analyze(over: Partial<ProbeResult>): ReturnType<typeof analyzeRoutes> {
+    return analyzeRoutes(input({
+      hasCredentials: true,
+      plan: { requests: [], routes: [r], skipped: [], truncated: false },
+      inventoryRoutes: [r],
+      // Distinct body hashes per variant, so `differential_authz` (which
+      // needs a byte-identical pair) stays out of these counts and each
+      // assertion below is about its own check alone.
+      results: variants(over).map((x, i) => ({ ...x, body_hash: `h${i}` })),
+    }));
+  }
+
+  it('reports anonymous exposure once, not once per variant', () => {
+    const f = analyze({ status: 200 });
+    expect(f.filter((x) => x.check === 'anonymous_exposure')).toHaveLength(1);
+  });
+
+  it('reports an open redirect once, not once per variant', () => {
+    const f = analyze({ status: 302, headers: { location: 'https://evil.example.com/' } });
+    expect(f.filter((x) => x.check === 'open_redirect')).toHaveLength(1);
+  });
+
+  it('reports an undocumented method once, not once per variant', () => {
+    // Honest note on what this one proves: `checkMethodSurface` is defended
+    // twice over — the variant filter AND its own per-path `reported` Set —
+    // and each mechanism alone keeps this at 1. Verified by mutation: removing
+    // either one leaves this green, removing BOTH turns it red (3 findings).
+    // So it pins the contract rather than any single guard, unlike its three
+    // siblings above, each of which fails the moment its filter is dropped.
+    const f = analyze({ status: 204, headers: { allow: 'GET, DELETE' } });
+    expect(f.filter((x) => x.check === 'method_surface')).toHaveLength(1);
+  });
+
+  it('reports a confirmed shadow endpoint once, not once per variant', () => {
+    const f = analyzeRoutes(input({
+      hasCredentials: true,
+      plan: { requests: [], routes: [r], skipped: [], truncated: false },
+      inventoryRoutes: [r],
+      shadowPaths: new Set(['/users']),
+      results: variants({ status: 200 }).map((x, i) => ({ ...x, body_hash: `h${i}` })),
+    }));
+    expect(f.filter((x) => x.check === 'reachability')).toHaveLength(1);
+  });
+});
+
+/**
+ * `method_surface` compares what the server ADVERTISES against what the
+ * INVENTORY holds — never against the subset of the inventory this run
+ * happened to probe. Those two are the same array only when the envelope
+ * dropped nothing, which under the default read-only envelope is never true
+ * for any project that has a single POST route.
+ *
+ * The plausible-wrong implementation reads `plan.routes` (the routes that
+ * SURVIVED the envelope — `plan.ts` `continue`s on `method_envelope` before
+ * `kept.push`). Every test below is built so that `plan.routes` and
+ * `inventoryRoutes` genuinely differ: reading the wrong one accuses the user
+ * of a route their own inventory contains, and is contradicted by the very
+ * snapshot the scan just read.
+ */
+describe('analyzeRoutes — method_surface reads the full inventory, not the probed subset', () => {
+  const GET_X = route({ method: 'GET', path_raw: '/x', path_resolved: '/x' });
+  const POST_X = route({ method: 'POST', path_raw: '/x', path_resolved: '/x' });
+
+  /** The `Allow` probe as `plan.ts` actually builds it, aimed at `/x`. */
+  const allowResult = (allow: string): ProbeResult =>
+    result({
+      status: 204,
+      headers: { allow },
+      request: {
+        id: 'anonymous OPTIONS /x',
+        method: 'OPTIONS',
+        path: '/x',
+        url: 'http://localhost:3000/x',
+        variant: 'anonymous',
+      },
+    });
+
+  it('stays silent on a POST the inventory declares but the read-only envelope dropped', () => {
+    // The exact default-path shape: a DRF/Spring/Express project with both
+    // `GET /x` and `POST /x` written down. The default envelope keeps only
+    // the GET, so `plan.routes` is [GET /x] while the inventory holds both.
+    // Reading `plan.routes` yields known = {GET}, POST survives the
+    // `isImpliedMethod` carve-out, and a medium finding fires saying POST is
+    // "absent from the extracted route inventory" — about a route sitting in
+    // the inventory the same scan read.
+    const f = analyzeRoutes(input({
+      plan: { requests: [], routes: [GET_X], skipped: [], truncated: false },
+      inventoryRoutes: [GET_X, POST_X],
+      results: [allowResult('GET, POST')],
+    }));
+    expect(f.filter((x) => x.check === 'method_surface')).toEqual([]);
+  });
+
+  it('stays silent on the same inventory once allow_write_methods opens the envelope', () => {
+    // The control for the test above: with writes allowed, `plan.routes`
+    // holds both routes, so BOTH implementations stay silent here. Pinning
+    // it keeps the fix honest — the correct implementation must be silent in
+    // both configurations, not merely in the one the bug shows up in.
+    const f = analyzeRoutes(input({
+      plan: { requests: [], routes: [GET_X, POST_X], skipped: [], truncated: false },
+      inventoryRoutes: [GET_X, POST_X],
+      results: [allowResult('GET, POST')],
+    }));
+    expect(f.filter((x) => x.check === 'method_surface')).toEqual([]);
+  });
+
+  it('still reports a genuine discovery, naming only the method the inventory lacks', () => {
+    // The other direction, and the reason this check exists at all: DELETE is
+    // in neither the plan nor the inventory. Widening the comparison set must
+    // not blind the check — exactly one finding, naming DELETE and nothing
+    // else. `not.toMatch(/POST/)` is what separates "reads the inventory"
+    // from "reports every method in Allow".
+    const f = analyzeRoutes(input({
+      plan: { requests: [], routes: [GET_X], skipped: [], truncated: false },
+      inventoryRoutes: [GET_X, POST_X],
+      results: [allowResult('GET, POST, DELETE')],
+    }));
+    const hits = f.filter((x) => x.check === 'method_surface');
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.message).toMatch(/advertises DELETE, absent from/);
+    expect(hits[0]?.message).not.toMatch(/POST/);
+  });
+
+  it('names a repeated Allow entry once, not once per repetition', () => {
+    // `extra.join(', ')` over an un-deduped array renders "DELETE, DELETE"
+    // for a server that repeats a verb in its Allow header — a report that
+    // reads like two discoveries where there is one.
+    const f = analyzeRoutes(input({
+      plan: { requests: [], routes: [GET_X], skipped: [], truncated: false },
+      inventoryRoutes: [GET_X],
+      results: [allowResult('GET, DELETE, DELETE')],
+    }));
+    expect(f.find((x) => x.check === 'method_surface')?.message)
+      .toMatch(/advertises DELETE, absent from/);
+  });
+});
+
 describe('dast fingerprints', () => {
   it('is stable across a status change for the same check and route', () => {
     // Selected by check, never by index: analyzeRoutes may legitimately emit

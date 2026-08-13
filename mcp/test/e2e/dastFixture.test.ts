@@ -236,6 +236,24 @@ describe('E2E — scan_dast against a deliberately vulnerable fixture', () => {
     ]);
   });
 
+  it('run A returns no two findings sharing a fingerprint', () => {
+    // The fingerprint IS the finding's identity: `diff_scans`,
+    // `set_baseline`, `regression_alert` and `suppress_finding` all key on
+    // it, and SQLite's primary key is `(fingerprint, scan_id)`. Two entries
+    // sharing one means the returned `findings` array and
+    // `findings_count_by_severity` describe more problems than exist, while
+    // the persisted table — where `INSERT OR IGNORE` silently absorbs the
+    // second row — describes the right number. A reader of the live response
+    // and a reader of the database then disagree.
+    //
+    // This is the assertion the Task 9 report predicted would be red: before
+    // the `variant` filter landed in `checkInfoDisclosure`, `plan.ts`'s
+    // unconditional `cors` GET at every kept path made `GET /boom` produce
+    // two byte-identical `info_disclosure` fingerprints on every run.
+    const fingerprints = runA.findings.map((f) => f.fingerprint);
+    expect(new Set(fingerprints).size).toBe(fingerprints.length);
+  });
+
   it('run A never produces a differential_authz or rate_limit finding without their preconditions', () => {
     // Restated as its own assertion (rather than relying solely on set
     // exclusion above) because these two are the ones a plausible-wrong
@@ -249,11 +267,13 @@ describe('E2E — scan_dast against a deliberately vulnerable fixture', () => {
   });
 
   it('run B (probe_rate_limit against /login) finds the missing limiter and reports the check ok', () => {
-    // `ok` here is deliberate and easy to misread: the CHECK ran cleanly
-    // (it got a full, uncut sample and reached a verdict) even though what
-    // it found is a finding. `ok` is a statement about whether the check
-    // executed, never about whether the target is clean — conflating the
-    // two is exactly what `checkStatus.ts`'s doc comment warns against.
+    // `ok` here is deliberate and easy to misread: it says the check RAN and
+    // reached a verdict, nothing more. It is emphatically not a statement
+    // about the target being clean — conflating the two is exactly what
+    // `checkStatus.ts`'s doc comment warns against — and it is not a
+    // statement about the sample being complete either: `cut_by_ceiling`
+    // can be true alongside status `ok`, and `summary.rate_limit.sent` vs
+    // `burst_planned` is where the sample size actually lives.
     const finding = runB.findings.find((f) => f.subcategory === 'rate_limit');
     expect(finding).toBeDefined();
     expect(finding?.severity).toBe('medium');
@@ -290,7 +310,14 @@ describe('E2E — scan_dast against a deliberately vulnerable fixture', () => {
 });
 
 /**
- * ---- A defect this test surfaced, reported rather than hidden ----------
+ * ---- A defect this test surfaced, since FIXED --------------------------
+ *
+ * RESOLVED in the final review wave: `checkInfoDisclosure` now opens with
+ * `if (r.request.variant !== 'anonymous') continue;`, matching its four
+ * route-scoped siblings, and `it('run A returns no two findings sharing a
+ * fingerprint')` above is the assertion that keeps it fixed — it could only
+ * be added after the filter landed, because it was genuinely red before.
+ * The original report is kept below as the record of how it was found.
  *
  * `analyze.ts#checkInfoDisclosure`'s stack-trace branch has no `variant`
  * filter and no dedup, unlike every sibling route-scoped check (compare
