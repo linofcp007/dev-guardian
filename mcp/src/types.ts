@@ -354,6 +354,20 @@ export interface CoverageEntry {
    * not be read at the offsets reported, e.g. a file rewritten mid-scan.
    */
   status: 'ok' | 'no_matches' | 'no_rules' | 'unreadable';
+  /**
+   * `guardian_kind: import` matches for this language whose specifier could
+   * not be resolved to a file in the project — a bare/third-party specifier
+   * (`'express'`, `'os'`), a target outside the scanned tree, or a language
+   * whose imports are never resolvable at all (java, csharp, ruby, php — see
+   * `RESOLVABLE_LANGUAGES` in `surface/moduleEdges.ts`). Counted rather than
+   * silently dropped: `validate_finding`'s negative verdict depends on
+   * knowing the import graph has a hole here. Non-zero for those four
+   * languages BY DESIGN, not a defect — it is a different coverage
+   * dimension from `status` above, which is about route extraction, not
+   * import resolution, so a language can be `ok` here and still show 100%
+   * unresolved imports.
+   */
+  unresolved_imports: number;
 }
 
 export interface AttackSurfaceSnapshot {
@@ -372,6 +386,23 @@ export interface AttackSurfaceSnapshot {
    * project without a spec reads as one where every endpoint is undocumented.
    */
   spec_diff: SpecDiff | null;
+  /**
+   * Resolved file-level import edges — the data source for `validate_finding`'s
+   * import graph (`mcp/src/validate/importGraph.ts`; see that module's doc
+   * comment for why file-level, not call-level). Produced by
+   * `surface/moduleEdges.ts`'s `extractModuleEdges` + `resolveModuleEdges`,
+   * a second, wider extraction over the same `guardian_kind: import`
+   * matches `mapAttackSurface.ts` already reads for mount resolution — this
+   * one requires no bound symbol, so it covers languages the mount-
+   * resolution extraction does not.
+   *
+   * Every `module_file` here is confirmed to be a file Semgrep actually
+   * scanned in this run. An edge whose target could not be resolved to a
+   * real file is counted in `coverage[].unresolved_imports` instead of
+   * appearing here — never guessed, because a fabricated edge would read as
+   * reachability to a later consumer.
+   */
+  imports: { file: string; module_file: string }[];
 }
 
 /**

@@ -107,7 +107,7 @@ var require_code = __commonJS({
     }
     exports._ = _;
     var plus = new _Code("+");
-    function str5(strs, ...args) {
+    function str6(strs, ...args) {
       const expr = [safeStringify(strs[0])];
       let i2 = 0;
       while (i2 < args.length) {
@@ -118,7 +118,7 @@ var require_code = __commonJS({
       optimize(expr);
       return new _Code(expr);
     }
-    exports.str = str5;
+    exports.str = str6;
     function addCodeArg(code, arg) {
       if (arg instanceof _Code)
         code.push(...arg._items);
@@ -161,7 +161,7 @@ var require_code = __commonJS({
       return;
     }
     function strConcat(c1, c22) {
-      return c22.emptyStr() ? c1 : c1.emptyStr() ? c22 : str5`${c1}${c22}`;
+      return c22.emptyStr() ? c1 : c1.emptyStr() ? c22 : str6`${c1}${c22}`;
     }
     exports.strConcat = strConcat;
     function interpolate(x) {
@@ -1123,22 +1123,22 @@ var require_util = __commonJS({
       return (0, codegen_1._)`${topSchemaRef}${schemaPath}${(0, codegen_1.getProperty)(keyword)}`;
     }
     exports.schemaRefOrVal = schemaRefOrVal;
-    function unescapeFragment(str5) {
-      return unescapeJsonPointer(decodeURIComponent(str5));
+    function unescapeFragment(str6) {
+      return unescapeJsonPointer(decodeURIComponent(str6));
     }
     exports.unescapeFragment = unescapeFragment;
-    function escapeFragment(str5) {
-      return encodeURIComponent(escapeJsonPointer(str5));
+    function escapeFragment(str6) {
+      return encodeURIComponent(escapeJsonPointer(str6));
     }
     exports.escapeFragment = escapeFragment;
-    function escapeJsonPointer(str5) {
-      if (typeof str5 == "number")
-        return `${str5}`;
-      return str5.replace(/~/g, "~0").replace(/\//g, "~1");
+    function escapeJsonPointer(str6) {
+      if (typeof str6 == "number")
+        return `${str6}`;
+      return str6.replace(/~/g, "~0").replace(/\//g, "~1");
     }
     exports.escapeJsonPointer = escapeJsonPointer;
-    function unescapeJsonPointer(str5) {
-      return str5.replace(/~1/g, "/").replace(/~0/g, "~");
+    function unescapeJsonPointer(str6) {
+      return str6.replace(/~1/g, "/").replace(/~0/g, "~");
     }
     exports.unescapeJsonPointer = unescapeJsonPointer;
     function eachItem(xs, f) {
@@ -1694,11 +1694,11 @@ var require_defaults = __commonJS({
       }
     }
     exports.assignDefaults = assignDefaults;
-    function assignDefault(it, prop5, defaultValue) {
+    function assignDefault(it, prop6, defaultValue) {
       const { gen, compositeRule, data, opts } = it;
       if (defaultValue === void 0)
         return;
-      const childData = (0, codegen_1._)`${data}${(0, codegen_1.getProperty)(prop5)}`;
+      const childData = (0, codegen_1._)`${data}${(0, codegen_1.getProperty)(prop6)}`;
       if (compositeRule) {
         (0, util_1.checkStrictMode)(it, `default is ignored for: ${childData}`);
         return;
@@ -1722,16 +1722,16 @@ var require_code2 = __commonJS({
     var util_1 = require_util();
     var names_1 = require_names();
     var util_2 = require_util();
-    function checkReportMissingProp(cxt, prop5) {
+    function checkReportMissingProp(cxt, prop6) {
       const { gen, data, it } = cxt;
-      gen.if(noPropertyInData(gen, data, prop5, it.opts.ownProperties), () => {
-        cxt.setParams({ missingProperty: (0, codegen_1._)`${prop5}` }, true);
+      gen.if(noPropertyInData(gen, data, prop6, it.opts.ownProperties), () => {
+        cxt.setParams({ missingProperty: (0, codegen_1._)`${prop6}` }, true);
         cxt.error();
       });
     }
     exports.checkReportMissingProp = checkReportMissingProp;
     function checkMissingProp({ gen, data, it: { opts } }, properties, missing) {
-      return (0, codegen_1.or)(...properties.map((prop5) => (0, codegen_1.and)(noPropertyInData(gen, data, prop5, opts.ownProperties), (0, codegen_1._)`${missing} = ${prop5}`)));
+      return (0, codegen_1.or)(...properties.map((prop6) => (0, codegen_1.and)(noPropertyInData(gen, data, prop6, opts.ownProperties), (0, codegen_1._)`${missing} = ${prop6}`)));
     }
     exports.checkMissingProp = checkMissingProp;
     function reportMissingProp(cxt, missing) {
@@ -2153,8 +2153,8 @@ var require_json_schema_traverse = __commonJS({
             }
           } else if (key in traverse.propsKeywords) {
             if (sch && typeof sch == "object") {
-              for (var prop5 in sch)
-                _traverse(opts, pre, post, sch[prop5], jsonPtr + "/" + key + "/" + escapeJsonPtr(prop5), rootSchema, jsonPtr, key, schema, prop5);
+              for (var prop6 in sch)
+                _traverse(opts, pre, post, sch[prop6], jsonPtr + "/" + key + "/" + escapeJsonPtr(prop6), rootSchema, jsonPtr, key, schema, prop6);
             }
           } else if (key in traverse.keywords || opts.allKeys && !(key in traverse.skipKeywords)) {
             _traverse(opts, pre, post, sch, jsonPtr + "/" + key, rootSchema, jsonPtr, key, schema);
@@ -2163,8 +2163,8 @@ var require_json_schema_traverse = __commonJS({
         post(schema, jsonPtr, rootSchema, parentJsonPtr, parentKeyword, parentSchema, keyIndex);
       }
     }
-    function escapeJsonPtr(str5) {
-      return str5.replace(/~/g, "~0").replace(/\//g, "~1");
+    function escapeJsonPtr(str6) {
+      return str6.replace(/~/g, "~0").replace(/\//g, "~1");
     }
   }
 });
@@ -3228,10 +3228,10 @@ var require_utils = __commonJS({
         return { host, isIPV6: false };
       }
     }
-    function findToken(str5, token) {
+    function findToken(str6, token) {
       let ind = 0;
-      for (let i2 = 0; i2 < str5.length; i2++) {
-        if (str5[i2] === token) ind++;
+      for (let i2 = 0; i2 < str6.length; i2++) {
+        if (str6[i2] === token) ind++;
       }
       return ind;
     }
@@ -3968,7 +3968,7 @@ var require_core = __commonJS({
     var util_1 = require_util();
     var $dataRefSchema = require_data();
     var uri_1 = require_uri();
-    var defaultRegExp = (str5, flags) => new RegExp(str5, flags);
+    var defaultRegExp = (str6, flags) => new RegExp(str6, flags);
     defaultRegExp.code = "new RegExp";
     var META_IGNORE_OPTIONS = ["removeAdditional", "useDefaults", "coerceTypes"];
     var EXT_SCOPE_NAMES = /* @__PURE__ */ new Set([
@@ -4763,16 +4763,16 @@ var require_ucs2length = __commonJS({
   "node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    function ucs2length(str5) {
-      const len = str5.length;
+    function ucs2length(str6) {
+      const len = str6.length;
       let length = 0;
       let pos = 0;
       let value;
       while (pos < len) {
         length++;
-        value = str5.charCodeAt(pos++);
+        value = str6.charCodeAt(pos++);
         if (value >= 55296 && value <= 56319 && pos < len) {
-          value = str5.charCodeAt(pos);
+          value = str6.charCodeAt(pos);
           if ((value & 64512) === 56320)
             pos++;
         }
@@ -4925,8 +4925,8 @@ var require_required = __commonJS({
           if (useLoop || $data) {
             cxt.block$data(codegen_1.nil, loopAllRequired);
           } else {
-            for (const prop5 of schema) {
-              (0, code_1.checkReportMissingProp)(cxt, prop5);
+            for (const prop6 of schema) {
+              (0, code_1.checkReportMissingProp)(cxt, prop6);
             }
           }
         }
@@ -4943,9 +4943,9 @@ var require_required = __commonJS({
           }
         }
         function loopAllRequired() {
-          gen.forOf("prop", schemaCode, (prop5) => {
-            cxt.setParams({ missingProperty: prop5 });
-            gen.if((0, code_1.noPropertyInData)(gen, data, prop5, opts.ownProperties), () => cxt.error());
+          gen.forOf("prop", schemaCode, (prop6) => {
+            cxt.setParams({ missingProperty: prop6 });
+            gen.if((0, code_1.noPropertyInData)(gen, data, prop6, opts.ownProperties), () => cxt.error());
           });
         }
         function loopUntilMissing(missing, valid) {
@@ -5490,13 +5490,13 @@ var require_dependencies = __commonJS({
       if (Object.keys(propertyDeps).length === 0)
         return;
       const missing = gen.let("missing");
-      for (const prop5 in propertyDeps) {
-        const deps = propertyDeps[prop5];
+      for (const prop6 in propertyDeps) {
+        const deps = propertyDeps[prop6];
         if (deps.length === 0)
           continue;
-        const hasProperty = (0, code_1.propertyInData)(gen, data, prop5, it.opts.ownProperties);
+        const hasProperty = (0, code_1.propertyInData)(gen, data, prop6, it.opts.ownProperties);
         cxt.setParams({
-          property: prop5,
+          property: prop6,
           depsCount: deps.length,
           deps: deps.join(", ")
         });
@@ -5517,13 +5517,13 @@ var require_dependencies = __commonJS({
     function validateSchemaDeps(cxt, schemaDeps = cxt.schema) {
       const { gen, data, keyword, it } = cxt;
       const valid = gen.name("valid");
-      for (const prop5 in schemaDeps) {
-        if ((0, util_1.alwaysValidSchema)(it, schemaDeps[prop5]))
+      for (const prop6 in schemaDeps) {
+        if ((0, util_1.alwaysValidSchema)(it, schemaDeps[prop6]))
           continue;
         gen.if(
-          (0, code_1.propertyInData)(gen, data, prop5, it.opts.ownProperties),
+          (0, code_1.propertyInData)(gen, data, prop6, it.opts.ownProperties),
           () => {
-            const schCxt = cxt.subschema({ keyword, schemaProp: prop5 }, valid);
+            const schCxt = cxt.subschema({ keyword, schemaProp: prop6 }, valid);
             cxt.mergeValidEvaluated(schCxt, valid);
           },
           () => gen.var(valid, true)
@@ -5705,8 +5705,8 @@ var require_properties = __commonJS({
           additionalProperties_1.default.code(new validate_1.KeywordCxt(it, additionalProperties_1.default, "additionalProperties"));
         }
         const allProps = (0, code_1.allSchemaProperties)(schema);
-        for (const prop5 of allProps) {
-          it.definedProperties.add(prop5);
+        for (const prop6 of allProps) {
+          it.definedProperties.add(prop6);
         }
         if (it.opts.unevaluated && allProps.length && it.props !== true) {
           it.props = util_1.mergeEvaluated.props(gen, (0, util_1.toHash)(allProps), it.props);
@@ -5715,27 +5715,27 @@ var require_properties = __commonJS({
         if (properties.length === 0)
           return;
         const valid = gen.name("valid");
-        for (const prop5 of properties) {
-          if (hasDefault(prop5)) {
-            applyPropertySchema(prop5);
+        for (const prop6 of properties) {
+          if (hasDefault(prop6)) {
+            applyPropertySchema(prop6);
           } else {
-            gen.if((0, code_1.propertyInData)(gen, data, prop5, it.opts.ownProperties));
-            applyPropertySchema(prop5);
+            gen.if((0, code_1.propertyInData)(gen, data, prop6, it.opts.ownProperties));
+            applyPropertySchema(prop6);
             if (!it.allErrors)
               gen.else().var(valid, true);
             gen.endIf();
           }
-          cxt.it.definedProperties.add(prop5);
+          cxt.it.definedProperties.add(prop6);
           cxt.ok(valid);
         }
-        function hasDefault(prop5) {
-          return it.opts.useDefaults && !it.compositeRule && schema[prop5].default !== void 0;
+        function hasDefault(prop6) {
+          return it.opts.useDefaults && !it.compositeRule && schema[prop6].default !== void 0;
         }
-        function applyPropertySchema(prop5) {
+        function applyPropertySchema(prop6) {
           cxt.subschema({
             keyword: "properties",
-            schemaProp: prop5,
-            dataProp: prop5
+            schemaProp: prop6,
+            dataProp: prop6
           }, valid);
         }
       }
@@ -5786,9 +5786,9 @@ var require_patternProperties = __commonJS({
           }
         }
         function checkMatchingProperties(pat) {
-          for (const prop5 in checkProperties) {
-            if (new RegExp(pat).test(prop5)) {
-              (0, util_1.checkStrictMode)(it, `property ${prop5} matches pattern ${pat} (use allowMatchingProperties)`);
+          for (const prop6 in checkProperties) {
+            if (new RegExp(pat).test(prop6)) {
+              (0, util_1.checkStrictMode)(it, `property ${prop6} matches pattern ${pat} (use allowMatchingProperties)`);
             }
           }
         }
@@ -6655,8 +6655,8 @@ var require_formats = __commonJS({
     }
     var DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
     var DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    function date3(str5) {
-      const matches = DATE.exec(str5);
+    function date3(str6) {
+      const matches = DATE.exec(str6);
       if (!matches)
         return false;
       const year = +matches[1];
@@ -6675,8 +6675,8 @@ var require_formats = __commonJS({
     }
     var TIME = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)(z|([+-])(\d\d)(?::?(\d\d))?)?$/i;
     function getTime(strictTimeZone) {
-      return function time3(str5) {
-        const matches = TIME.exec(str5);
+      return function time3(str6) {
+        const matches = TIME.exec(str6);
         if (!matches)
           return false;
         const hr = +matches[1];
@@ -6722,8 +6722,8 @@ var require_formats = __commonJS({
     var DATE_TIME_SEPARATOR = /t|\s/i;
     function getDateTime(strictTimeZone) {
       const time3 = getTime(strictTimeZone);
-      return function date_time(str5) {
-        const dateTime = str5.split(DATE_TIME_SEPARATOR);
+      return function date_time(str6) {
+        const dateTime = str6.split(DATE_TIME_SEPARATOR);
         return dateTime.length === 2 && date3(dateTime[0]) && time3(dateTime[1]);
       };
     }
@@ -6748,13 +6748,13 @@ var require_formats = __commonJS({
     }
     var NOT_URI_FRAGMENT = /\/|:/;
     var URI = /^(?:[a-z][a-z0-9+\-.]*:)(?:\/?\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:(?:[0-9a-f]{1,4}:){6}|::(?:[0-9a-f]{1,4}:){5}|(?:[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){4}|(?:(?:[0-9a-f]{1,4}:){0,1}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){3}|(?:(?:[0-9a-f]{1,4}:){0,2}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){2}|(?:(?:[0-9a-f]{1,4}:){0,3}[0-9a-f]{1,4})?::[0-9a-f]{1,4}:|(?:(?:[0-9a-f]{1,4}:){0,4}[0-9a-f]{1,4})?::)(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))|(?:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})?::[0-9a-f]{1,4}|(?:(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4})?::)|[Vv][0-9a-f]+\.[a-z0-9\-._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)|(?:[a-z0-9\-._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)(?:\?(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
-    function uri(str5) {
-      return NOT_URI_FRAGMENT.test(str5) && URI.test(str5);
+    function uri(str6) {
+      return NOT_URI_FRAGMENT.test(str6) && URI.test(str6);
     }
     var BYTE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/gm;
-    function byte(str5) {
+    function byte(str6) {
       BYTE.lastIndex = 0;
-      return BYTE.test(str5);
+      return BYTE.test(str6);
     }
     var MIN_INT32 = -(2 ** 31);
     var MAX_INT32 = 2 ** 31 - 1;
@@ -6768,11 +6768,11 @@ var require_formats = __commonJS({
       return true;
     }
     var Z_ANCHOR = /[^\\]\\Z/;
-    function regex(str5) {
-      if (Z_ANCHOR.test(str5))
+    function regex(str6) {
+      if (Z_ANCHOR.test(str6))
         return false;
       try {
-        new RegExp(str5);
+        new RegExp(str6);
         return true;
       } catch (e) {
         return false;
@@ -16088,13 +16088,13 @@ var require_Collection = __commonJS({
 var require_stringifyComment = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyComment.js"(exports) {
     "use strict";
-    var stringifyComment = (str5) => str5.replace(/^(?!$)(?: $)?/gm, "#");
+    var stringifyComment = (str6) => str6.replace(/^(?!$)(?: $)?/gm, "#");
     function indentComment(comment, indent) {
       if (/^\n+$/.test(comment))
         return comment.substring(1);
       return indent ? comment.replace(/^(?! *$)/gm, indent) : comment;
     }
-    var lineComment = (str5, indent, comment) => str5.endsWith("\n") ? indentComment(comment, indent) : comment.includes("\n") ? "\n" + indentComment(comment, indent) : (str5.endsWith(" ") ? "" : " ") + comment;
+    var lineComment = (str6, indent, comment) => str6.endsWith("\n") ? indentComment(comment, indent) : comment.includes("\n") ? "\n" + indentComment(comment, indent) : (str6.endsWith(" ") ? "" : " ") + comment;
     exports.indentComment = indentComment;
     exports.lineComment = lineComment;
     exports.stringifyComment = stringifyComment;
@@ -16248,16 +16248,16 @@ var require_stringifyString = __commonJS({
       lineWidth: ctx.options.lineWidth,
       minContentWidth: ctx.options.minContentWidth
     });
-    var containsDocumentMarker = (str5) => /^(%|---|\.\.\.)/m.test(str5);
-    function lineLengthOverLimit(str5, lineWidth, indentLength) {
+    var containsDocumentMarker = (str6) => /^(%|---|\.\.\.)/m.test(str6);
+    function lineLengthOverLimit(str6, lineWidth, indentLength) {
       if (!lineWidth || lineWidth < 0)
         return false;
       const limit = lineWidth - indentLength;
-      const strLen = str5.length;
+      const strLen = str6.length;
       if (strLen <= limit)
         return false;
       for (let i2 = 0, start = 0; i2 < strLen; ++i2) {
-        if (str5[i2] === "\n") {
+        if (str6[i2] === "\n") {
           if (i2 - start > limit)
             return true;
           start = i2 + 1;
@@ -16274,11 +16274,11 @@ var require_stringifyString = __commonJS({
       const { implicitKey } = ctx;
       const minMultiLineLength = ctx.options.doubleQuotedMinMultiLineLength;
       const indent = ctx.indent || (containsDocumentMarker(value) ? "  " : "");
-      let str5 = "";
+      let str6 = "";
       let start = 0;
       for (let i2 = 0, ch = json[i2]; ch; ch = json[++i2]) {
         if (ch === " " && json[i2 + 1] === "\\" && json[i2 + 2] === "n") {
-          str5 += json.slice(start, i2) + "\\ ";
+          str6 += json.slice(start, i2) + "\\ ";
           i2 += 1;
           start = i2;
           ch = "\\";
@@ -16287,38 +16287,38 @@ var require_stringifyString = __commonJS({
           switch (json[i2 + 1]) {
             case "u":
               {
-                str5 += json.slice(start, i2);
+                str6 += json.slice(start, i2);
                 const code = json.substr(i2 + 2, 4);
                 switch (code) {
                   case "0000":
-                    str5 += "\\0";
+                    str6 += "\\0";
                     break;
                   case "0007":
-                    str5 += "\\a";
+                    str6 += "\\a";
                     break;
                   case "000b":
-                    str5 += "\\v";
+                    str6 += "\\v";
                     break;
                   case "001b":
-                    str5 += "\\e";
+                    str6 += "\\e";
                     break;
                   case "0085":
-                    str5 += "\\N";
+                    str6 += "\\N";
                     break;
                   case "00a0":
-                    str5 += "\\_";
+                    str6 += "\\_";
                     break;
                   case "2028":
-                    str5 += "\\L";
+                    str6 += "\\L";
                     break;
                   case "2029":
-                    str5 += "\\P";
+                    str6 += "\\P";
                     break;
                   default:
                     if (code.substr(0, 2) === "00")
-                      str5 += "\\x" + code.substr(2);
+                      str6 += "\\x" + code.substr(2);
                     else
-                      str5 += json.substr(i2, 6);
+                      str6 += json.substr(i2, 6);
                 }
                 i2 += 5;
                 start = i2 + 1;
@@ -16328,14 +16328,14 @@ var require_stringifyString = __commonJS({
               if (implicitKey || json[i2 + 2] === '"' || json.length < minMultiLineLength) {
                 i2 += 1;
               } else {
-                str5 += json.slice(start, i2) + "\n\n";
+                str6 += json.slice(start, i2) + "\n\n";
                 while (json[i2 + 2] === "\\" && json[i2 + 3] === "n" && json[i2 + 4] !== '"') {
-                  str5 += "\n";
+                  str6 += "\n";
                   i2 += 2;
                 }
-                str5 += indent;
+                str6 += indent;
                 if (json[i2 + 2] === " ")
-                  str5 += "\\";
+                  str6 += "\\";
                 i2 += 1;
                 start = i2 + 1;
               }
@@ -16344,8 +16344,8 @@ var require_stringifyString = __commonJS({
               i2 += 1;
           }
       }
-      str5 = start ? str5 + json.slice(start) : json;
-      return implicitKey ? str5 : foldFlowLines.foldFlowLines(str5, indent, foldFlowLines.FOLD_QUOTED, getFoldOptions(ctx, false));
+      str6 = start ? str6 + json.slice(start) : json;
+      return implicitKey ? str6 : foldFlowLines.foldFlowLines(str6, indent, foldFlowLines.FOLD_QUOTED, getFoldOptions(ctx, false));
     }
     function singleQuotedString(value, ctx) {
       if (ctx.options.singleQuote === false || ctx.implicitKey && value.includes("\n") || /[ \t]\n|\n[ \t]/.test(value))
@@ -16473,15 +16473,15 @@ ${indent}${start}${value}${end}`;
           return quotedString(value, ctx);
         }
       }
-      const str5 = value.replace(/\n+/g, `$&
+      const str6 = value.replace(/\n+/g, `$&
 ${indent}`);
       if (actualString) {
-        const test = (tag) => tag.default && tag.tag !== "tag:yaml.org,2002:str" && tag.test?.test(str5);
+        const test = (tag) => tag.default && tag.tag !== "tag:yaml.org,2002:str" && tag.test?.test(str6);
         const { compat, tags } = ctx.doc.schema;
         if (tags.some(test) || compat?.some(test))
           return quotedString(value, ctx);
       }
-      return implicitKey ? str5 : foldFlowLines.foldFlowLines(str5, indent, foldFlowLines.FOLD_FLOW, getFoldOptions(ctx, false));
+      return implicitKey ? str6 : foldFlowLines.foldFlowLines(str6, indent, foldFlowLines.FOLD_FLOW, getFoldOptions(ctx, false));
     }
     function stringifyString(item, ctx, onComment, onChompKeep) {
       const { implicitKey, inFlow } = ctx;
@@ -16633,11 +16633,11 @@ var require_stringify = __commonJS({
       const props = stringifyProps(node, tagObj, ctx);
       if (props.length > 0)
         ctx.indentAtStart = (ctx.indentAtStart ?? 0) + props.length + 1;
-      const str5 = typeof tagObj.stringify === "function" ? tagObj.stringify(node, ctx, onComment, onChompKeep) : identity3.isScalar(node) ? stringifyString.stringifyString(node, ctx, onComment, onChompKeep) : node.toString(ctx, onComment, onChompKeep);
+      const str6 = typeof tagObj.stringify === "function" ? tagObj.stringify(node, ctx, onComment, onChompKeep) : identity3.isScalar(node) ? stringifyString.stringifyString(node, ctx, onComment, onChompKeep) : node.toString(ctx, onComment, onChompKeep);
       if (!props)
-        return str5;
-      return identity3.isScalar(node) || str5[0] === "{" || str5[0] === "[" ? `${props} ${str5}` : `${props}
-${ctx.indent}${str5}`;
+        return str6;
+      return identity3.isScalar(node) || str6[0] === "{" || str6[0] === "[" ? `${props} ${str6}` : `${props}
+${ctx.indent}${str6}`;
     }
     exports.createStringifyContext = createStringifyContext;
     exports.stringify = stringify;
@@ -16672,8 +16672,8 @@ var require_stringifyPair = __commonJS({
       });
       let keyCommentDone = false;
       let chompKeep = false;
-      let str5 = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
-      if (!explicitKey && !ctx.inFlow && str5.length > 1024) {
+      let str6 = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
+      if (!explicitKey && !ctx.inFlow && str6.length > 1024) {
         if (simpleKeys)
           throw new Error("With simple keys, single line scalar must not span more than 1024 characters");
         explicitKey = true;
@@ -16682,27 +16682,27 @@ var require_stringifyPair = __commonJS({
         if (allNullValues || value == null) {
           if (keyCommentDone && onComment)
             onComment();
-          return str5 === "" ? "?" : explicitKey ? `? ${str5}` : str5;
+          return str6 === "" ? "?" : explicitKey ? `? ${str6}` : str6;
         }
       } else if (allNullValues && !simpleKeys || value == null && explicitKey) {
-        str5 = `? ${str5}`;
+        str6 = `? ${str6}`;
         if (keyComment && !keyCommentDone) {
-          str5 += stringifyComment.lineComment(str5, ctx.indent, commentString(keyComment));
+          str6 += stringifyComment.lineComment(str6, ctx.indent, commentString(keyComment));
         } else if (chompKeep && onChompKeep)
           onChompKeep();
-        return str5;
+        return str6;
       }
       if (keyCommentDone)
         keyComment = null;
       if (explicitKey) {
         if (keyComment)
-          str5 += stringifyComment.lineComment(str5, ctx.indent, commentString(keyComment));
-        str5 = `? ${str5}
+          str6 += stringifyComment.lineComment(str6, ctx.indent, commentString(keyComment));
+        str6 = `? ${str6}
 ${indent}:`;
       } else {
-        str5 = `${str5}:`;
+        str6 = `${str6}:`;
         if (keyComment)
-          str5 += stringifyComment.lineComment(str5, ctx.indent, commentString(keyComment));
+          str6 += stringifyComment.lineComment(str6, ctx.indent, commentString(keyComment));
       }
       let vsb, vcb, valueComment;
       if (identity3.isNode(value)) {
@@ -16718,7 +16718,7 @@ ${indent}:`;
       }
       ctx.implicitKey = false;
       if (!explicitKey && !keyComment && identity3.isScalar(value))
-        ctx.indentAtStart = str5.length + 1;
+        ctx.indentAtStart = str6.length + 1;
       chompKeep = false;
       if (!indentSeq && indentStep.length >= 2 && !ctx.inFlow && !explicitKey && identity3.isSeq(value) && !value.flow && !value.tag && !value.anchor) {
         ctx.indent = ctx.indent.substring(2);
@@ -16762,16 +16762,16 @@ ${ctx.indent}`;
       } else if (valueStr === "" || valueStr[0] === "\n") {
         ws = "";
       }
-      str5 += ws + valueStr;
+      str6 += ws + valueStr;
       if (ctx.inFlow) {
         if (valueCommentDone && onComment)
           onComment();
       } else if (valueComment && !valueCommentDone) {
-        str5 += stringifyComment.lineComment(str5, ctx.indent, commentString(valueComment));
+        str6 += stringifyComment.lineComment(str6, ctx.indent, commentString(valueComment));
       } else if (chompKeep && onChompKeep) {
         onChompKeep();
       }
-      return str5;
+      return str6;
     }
     exports.stringifyPair = stringifyPair;
   }
@@ -16998,31 +16998,31 @@ var require_stringifyCollection = __commonJS({
           }
         }
         chompKeep = false;
-        let str6 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
+        let str7 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
         if (comment2)
-          str6 += stringifyComment.lineComment(str6, itemIndent, commentString(comment2));
+          str7 += stringifyComment.lineComment(str7, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
           chompKeep = false;
-        lines.push(blockItemPrefix + str6);
+        lines.push(blockItemPrefix + str7);
       }
-      let str5;
+      let str6;
       if (lines.length === 0) {
-        str5 = flowChars.start + flowChars.end;
+        str6 = flowChars.start + flowChars.end;
       } else {
-        str5 = lines[0];
+        str6 = lines[0];
         for (let i2 = 1; i2 < lines.length; ++i2) {
           const line = lines[i2];
-          str5 += line ? `
+          str6 += line ? `
 ${indent}${line}` : "\n";
         }
       }
       if (comment) {
-        str5 += "\n" + stringifyComment.indentComment(commentString(comment), indent);
+        str6 += "\n" + stringifyComment.indentComment(commentString(comment), indent);
         if (onComment)
           onComment();
       } else if (chompKeep && onChompKeep)
         onChompKeep();
-      return str5;
+      return str6;
     }
     function stringifyFlowCollection({ items }, ctx, { flowChars, itemIndent }) {
       const { indent, indentStep, flowCollectionPadding: fcPadding, options: { commentString } } = ctx;
@@ -17065,21 +17065,21 @@ ${indent}${line}` : "\n";
         }
         if (comment)
           reqNewline = true;
-        let str5 = stringify.stringify(item, itemCtx, () => comment = null);
-        reqNewline || (reqNewline = lines.length > linesAtValue || str5.includes("\n"));
+        let str6 = stringify.stringify(item, itemCtx, () => comment = null);
+        reqNewline || (reqNewline = lines.length > linesAtValue || str6.includes("\n"));
         if (i2 < items.length - 1) {
-          str5 += ",";
+          str6 += ",";
         } else if (ctx.options.trailingComma) {
           if (ctx.options.lineWidth > 0) {
-            reqNewline || (reqNewline = lines.reduce((sum, line) => sum + line.length + 2, 2) + (str5.length + 2) > ctx.options.lineWidth);
+            reqNewline || (reqNewline = lines.reduce((sum, line) => sum + line.length + 2, 2) + (str6.length + 2) > ctx.options.lineWidth);
           }
           if (reqNewline) {
-            str5 += ",";
+            str6 += ",";
           }
         }
         if (comment)
-          str5 += stringifyComment.lineComment(str5, itemIndent, commentString(comment));
-        lines.push(str5);
+          str6 += stringifyComment.lineComment(str6, itemIndent, commentString(comment));
+        lines.push(str6);
         linesAtValue = lines.length;
       }
       const { start, end } = flowChars;
@@ -17091,11 +17091,11 @@ ${indent}${line}` : "\n";
           reqNewline = ctx.options.lineWidth > 0 && len > ctx.options.lineWidth;
         }
         if (reqNewline) {
-          let str5 = start;
+          let str6 = start;
           for (const line of lines)
-            str5 += line ? `
+            str6 += line ? `
 ${indentStep}${indent}${line}` : "\n";
-          return `${str5}
+          return `${str6}
 ${indent}${end}`;
         } else {
           return `${start}${fcPadding}${lines.join(" ")}${fcPadding}${end}`;
@@ -17427,7 +17427,7 @@ var require_string = __commonJS({
       identify: (value) => typeof value === "string",
       default: true,
       tag: "tag:yaml.org,2002:str",
-      resolve: (str5) => str5,
+      resolve: (str6) => str6,
       stringify(item, ctx, onComment, onChompKeep) {
         ctx = Object.assign({ actualString: true }, ctx);
         return stringifyString.stringifyString(item, ctx, onComment, onChompKeep);
@@ -17465,7 +17465,7 @@ var require_bool = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:bool",
       test: /^(?:[Tt]rue|TRUE|[Ff]alse|FALSE)$/,
-      resolve: (str5) => new Scalar.Scalar(str5[0] === "t" || str5[0] === "T"),
+      resolve: (str6) => new Scalar.Scalar(str6[0] === "t" || str6[0] === "T"),
       stringify({ source, value }, ctx) {
         if (source && boolTag.test.test(source)) {
           const sv = source[0] === "t" || source[0] === "T";
@@ -17517,7 +17517,7 @@ var require_float = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^(?:[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$/,
-      resolve: (str5) => str5.slice(-3).toLowerCase() === "nan" ? NaN : str5[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
+      resolve: (str6) => str6.slice(-3).toLowerCase() === "nan" ? NaN : str6[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
       stringify: stringifyNumber.stringifyNumber
     };
     var floatExp = {
@@ -17526,7 +17526,7 @@ var require_float = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "EXP",
       test: /^[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)[eE][-+]?[0-9]+$/,
-      resolve: (str5) => parseFloat(str5),
+      resolve: (str6) => parseFloat(str6),
       stringify(node) {
         const num3 = Number(node.value);
         return isFinite(num3) ? num3.toExponential() : stringifyNumber.stringifyNumber(node);
@@ -17537,11 +17537,11 @@ var require_float = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^[-+]?(?:\.[0-9]+|[0-9]+\.[0-9]*)$/,
-      resolve(str5) {
-        const node = new Scalar.Scalar(parseFloat(str5));
-        const dot = str5.indexOf(".");
-        if (dot !== -1 && str5[str5.length - 1] === "0")
-          node.minFractionDigits = str5.length - dot - 1;
+      resolve(str6) {
+        const node = new Scalar.Scalar(parseFloat(str6));
+        const dot = str6.indexOf(".");
+        if (dot !== -1 && str6[str6.length - 1] === "0")
+          node.minFractionDigits = str6.length - dot - 1;
         return node;
       },
       stringify: stringifyNumber.stringifyNumber
@@ -17558,7 +17558,7 @@ var require_int = __commonJS({
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
-    var intResolve = (str5, offset, radix, { intAsBigInt }) => intAsBigInt ? BigInt(str5) : parseInt(str5.substring(offset), radix);
+    var intResolve = (str6, offset, radix, { intAsBigInt }) => intAsBigInt ? BigInt(str6) : parseInt(str6.substring(offset), radix);
     function intStringify(node, radix, prefix) {
       const { value } = node;
       if (intIdentify(value) && value >= 0)
@@ -17571,7 +17571,7 @@ var require_int = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "OCT",
       test: /^0o[0-7]+$/,
-      resolve: (str5, _onError, opt) => intResolve(str5, 2, 8, opt),
+      resolve: (str6, _onError, opt) => intResolve(str6, 2, 8, opt),
       stringify: (node) => intStringify(node, 8, "0o")
     };
     var int2 = {
@@ -17579,7 +17579,7 @@ var require_int = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:int",
       test: /^[-+]?[0-9]+$/,
-      resolve: (str5, _onError, opt) => intResolve(str5, 0, 10, opt),
+      resolve: (str6, _onError, opt) => intResolve(str6, 0, 10, opt),
       stringify: stringifyNumber.stringifyNumber
     };
     var intHex = {
@@ -17588,7 +17588,7 @@ var require_int = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "HEX",
       test: /^0x[0-9a-fA-F]+$/,
-      resolve: (str5, _onError, opt) => intResolve(str5, 2, 16, opt),
+      resolve: (str6, _onError, opt) => intResolve(str6, 2, 16, opt),
       stringify: (node) => intStringify(node, 16, "0x")
     };
     exports.int = int2;
@@ -17641,7 +17641,7 @@ var require_schema2 = __commonJS({
         identify: (value) => typeof value === "string",
         default: true,
         tag: "tag:yaml.org,2002:str",
-        resolve: (str5) => str5,
+        resolve: (str6) => str6,
         stringify: stringifyJSON
       },
       {
@@ -17658,7 +17658,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:bool",
         test: /^true$|^false$/,
-        resolve: (str5) => str5 === "true",
+        resolve: (str6) => str6 === "true",
         stringify: stringifyJSON
       },
       {
@@ -17666,7 +17666,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:int",
         test: /^-?(?:0|[1-9][0-9]*)$/,
-        resolve: (str5, _onError, { intAsBigInt }) => intAsBigInt ? BigInt(str5) : parseInt(str5, 10),
+        resolve: (str6, _onError, { intAsBigInt }) => intAsBigInt ? BigInt(str6) : parseInt(str6, 10),
         stringify: ({ value }) => intIdentify(value) ? value.toString() : JSON.stringify(value)
       },
       {
@@ -17674,7 +17674,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:float",
         test: /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*)?(?:[eE][-+]?[0-9]+)?$/,
-        resolve: (str5) => parseFloat(str5),
+        resolve: (str6) => parseFloat(str6),
         stringify: stringifyJSON
       }
     ];
@@ -17682,9 +17682,9 @@ var require_schema2 = __commonJS({
       default: true,
       tag: "",
       test: /^/,
-      resolve(str5, onError) {
-        onError(`Unresolved plain scalar ${JSON.stringify(str5)}`);
-        return str5;
+      resolve(str6, onError) {
+        onError(`Unresolved plain scalar ${JSON.stringify(str6)}`);
+        return str6;
       }
     };
     var schema = [map.map, seq.seq].concat(jsonScalars, jsonError);
@@ -17716,10 +17716,10 @@ var require_binary = __commonJS({
         if (typeof node_buffer.Buffer === "function") {
           return node_buffer.Buffer.from(src, "base64");
         } else if (typeof atob === "function") {
-          const str5 = atob(src.replace(/[\n\r]/g, ""));
-          const buffer = new Uint8Array(str5.length);
-          for (let i2 = 0; i2 < str5.length; ++i2)
-            buffer[i2] = str5.charCodeAt(i2);
+          const str6 = atob(src.replace(/[\n\r]/g, ""));
+          const buffer = new Uint8Array(str6.length);
+          for (let i2 = 0; i2 < str6.length; ++i2)
+            buffer[i2] = str6.charCodeAt(i2);
           return buffer;
         } else {
           onError("This environment does not support reading binary tags; either Buffer or atob is required");
@@ -17730,28 +17730,28 @@ var require_binary = __commonJS({
         if (!value)
           return "";
         const buf = value;
-        let str5;
+        let str6;
         if (typeof node_buffer.Buffer === "function") {
-          str5 = buf instanceof node_buffer.Buffer ? buf.toString("base64") : node_buffer.Buffer.from(buf.buffer).toString("base64");
+          str6 = buf instanceof node_buffer.Buffer ? buf.toString("base64") : node_buffer.Buffer.from(buf.buffer).toString("base64");
         } else if (typeof btoa === "function") {
           let s = "";
           for (let i2 = 0; i2 < buf.length; ++i2)
             s += String.fromCharCode(buf[i2]);
-          str5 = btoa(s);
+          str6 = btoa(s);
         } else {
           throw new Error("This environment does not support writing binary tags; either Buffer or btoa is required");
         }
         type ?? (type = Scalar.Scalar.BLOCK_LITERAL);
         if (type !== Scalar.Scalar.QUOTE_DOUBLE) {
           const lineWidth = Math.max(ctx.options.lineWidth - ctx.indent.length, ctx.options.minContentWidth);
-          const n2 = Math.ceil(str5.length / lineWidth);
+          const n2 = Math.ceil(str6.length / lineWidth);
           const lines = new Array(n2);
           for (let i2 = 0, o2 = 0; i2 < n2; ++i2, o2 += lineWidth) {
-            lines[i2] = str5.substr(o2, lineWidth);
+            lines[i2] = str6.substr(o2, lineWidth);
           }
-          str5 = lines.join(type === Scalar.Scalar.BLOCK_LITERAL ? "\n" : " ");
+          str6 = lines.join(type === Scalar.Scalar.BLOCK_LITERAL ? "\n" : " ");
         }
-        return stringifyString.stringifyString({ comment, type, value: str5 }, ctx, onComment, onChompKeep);
+        return stringifyString.stringifyString({ comment, type, value: str6 }, ctx, onComment, onChompKeep);
       }
     };
     exports.binary = binary;
@@ -17957,7 +17957,7 @@ var require_float2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^(?:[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$/,
-      resolve: (str5) => str5.slice(-3).toLowerCase() === "nan" ? NaN : str5[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
+      resolve: (str6) => str6.slice(-3).toLowerCase() === "nan" ? NaN : str6[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
       stringify: stringifyNumber.stringifyNumber
     };
     var floatExp = {
@@ -17966,7 +17966,7 @@ var require_float2 = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "EXP",
       test: /^[-+]?(?:[0-9][0-9_]*)?(?:\.[0-9_]*)?[eE][-+]?[0-9]+$/,
-      resolve: (str5) => parseFloat(str5.replace(/_/g, "")),
+      resolve: (str6) => parseFloat(str6.replace(/_/g, "")),
       stringify(node) {
         const num3 = Number(node.value);
         return isFinite(num3) ? num3.toExponential() : stringifyNumber.stringifyNumber(node);
@@ -17977,11 +17977,11 @@ var require_float2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^[-+]?(?:[0-9][0-9_]*)?\.[0-9_]*$/,
-      resolve(str5) {
-        const node = new Scalar.Scalar(parseFloat(str5.replace(/_/g, "")));
-        const dot = str5.indexOf(".");
+      resolve(str6) {
+        const node = new Scalar.Scalar(parseFloat(str6.replace(/_/g, "")));
+        const dot = str6.indexOf(".");
         if (dot !== -1) {
-          const f = str5.substring(dot + 1).replace(/_/g, "");
+          const f = str6.substring(dot + 1).replace(/_/g, "");
           if (f[f.length - 1] === "0")
             node.minFractionDigits = f.length;
         }
@@ -18001,34 +18001,34 @@ var require_int2 = __commonJS({
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
-    function intResolve(str5, offset, radix, { intAsBigInt }) {
-      const sign = str5[0];
+    function intResolve(str6, offset, radix, { intAsBigInt }) {
+      const sign = str6[0];
       if (sign === "-" || sign === "+")
         offset += 1;
-      str5 = str5.substring(offset).replace(/_/g, "");
+      str6 = str6.substring(offset).replace(/_/g, "");
       if (intAsBigInt) {
         switch (radix) {
           case 2:
-            str5 = `0b${str5}`;
+            str6 = `0b${str6}`;
             break;
           case 8:
-            str5 = `0o${str5}`;
+            str6 = `0o${str6}`;
             break;
           case 16:
-            str5 = `0x${str5}`;
+            str6 = `0x${str6}`;
             break;
         }
-        const n3 = BigInt(str5);
+        const n3 = BigInt(str6);
         return sign === "-" ? BigInt(-1) * n3 : n3;
       }
-      const n2 = parseInt(str5, radix);
+      const n2 = parseInt(str6, radix);
       return sign === "-" ? -1 * n2 : n2;
     }
     function intStringify(node, radix, prefix) {
       const { value } = node;
       if (intIdentify(value)) {
-        const str5 = value.toString(radix);
-        return value < 0 ? "-" + prefix + str5.substr(1) : prefix + str5;
+        const str6 = value.toString(radix);
+        return value < 0 ? "-" + prefix + str6.substr(1) : prefix + str6;
       }
       return stringifyNumber.stringifyNumber(node);
     }
@@ -18038,7 +18038,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "BIN",
       test: /^[-+]?0b[0-1_]+$/,
-      resolve: (str5, _onError, opt) => intResolve(str5, 2, 2, opt),
+      resolve: (str6, _onError, opt) => intResolve(str6, 2, 2, opt),
       stringify: (node) => intStringify(node, 2, "0b")
     };
     var intOct = {
@@ -18047,7 +18047,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "OCT",
       test: /^[-+]?0[0-7_]+$/,
-      resolve: (str5, _onError, opt) => intResolve(str5, 1, 8, opt),
+      resolve: (str6, _onError, opt) => intResolve(str6, 1, 8, opt),
       stringify: (node) => intStringify(node, 8, "0")
     };
     var int2 = {
@@ -18055,7 +18055,7 @@ var require_int2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:int",
       test: /^[-+]?[0-9][0-9_]*$/,
-      resolve: (str5, _onError, opt) => intResolve(str5, 0, 10, opt),
+      resolve: (str6, _onError, opt) => intResolve(str6, 0, 10, opt),
       stringify: stringifyNumber.stringifyNumber
     };
     var intHex = {
@@ -18064,7 +18064,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "HEX",
       test: /^[-+]?0x[0-9a-fA-F_]+$/,
-      resolve: (str5, _onError, opt) => intResolve(str5, 2, 16, opt),
+      resolve: (str6, _onError, opt) => intResolve(str6, 2, 16, opt),
       stringify: (node) => intStringify(node, 16, "0x")
     };
     exports.int = int2;
@@ -18168,9 +18168,9 @@ var require_timestamp = __commonJS({
   "node_modules/yaml/dist/schema/yaml-1.1/timestamp.js"(exports) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
-    function parseSexagesimal(str5, asBigInt) {
-      const sign = str5[0];
-      const parts = sign === "-" || sign === "+" ? str5.substring(1) : str5;
+    function parseSexagesimal(str6, asBigInt) {
+      const sign = str6[0];
+      const parts = sign === "-" || sign === "+" ? str6.substring(1) : str6;
       const num3 = (n2) => asBigInt ? BigInt(n2) : Number(n2);
       const res = parts.replace(/_/g, "").split(":").reduce((res2, p) => res2 * num3(60) + num3(p), num3(0));
       return sign === "-" ? num3(-1) * res : res;
@@ -18207,7 +18207,7 @@ var require_timestamp = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "TIME",
       test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+$/,
-      resolve: (str5, _onError, { intAsBigInt }) => parseSexagesimal(str5, intAsBigInt),
+      resolve: (str6, _onError, { intAsBigInt }) => parseSexagesimal(str6, intAsBigInt),
       stringify: stringifySexagesimal
     };
     var floatTime = {
@@ -18216,7 +18216,7 @@ var require_timestamp = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "TIME",
       test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*$/,
-      resolve: (str5) => parseSexagesimal(str5, false),
+      resolve: (str6) => parseSexagesimal(str6, false),
       stringify: stringifySexagesimal
     };
     var timestamp = {
@@ -18227,8 +18227,8 @@ var require_timestamp = __commonJS({
       // may be omitted altogether, resulting in a date format. In such a case, the time part is
       // assumed to be 00:00:00Z (start of day, UTC).
       test: RegExp("^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?:(?:t|T|[ \\t]+)([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2}(\\.[0-9]+)?)(?:[ \\t]*(Z|[-+][012]?[0-9](?::[0-9]{2})?))?)?$"),
-      resolve(str5) {
-        const match = str5.match(timestamp.test);
+      resolve(str6) {
+        const match = str6.match(timestamp.test);
         if (!match)
           throw new Error("!!timestamp expects a date, starting with yyyy-mm-dd");
         const [, year, month, day, hour, minute, second] = match.map(Number);
@@ -26698,8 +26698,8 @@ function defineLazy(object3, key, getter) {
     configurable: true
   });
 }
-function assignProp(target, prop5, value) {
-  Object.defineProperty(target, prop5, {
+function assignProp(target, prop6, value) {
+  Object.defineProperty(target, prop6, {
     value,
     writable: true,
     enumerable: true,
@@ -26724,14 +26724,14 @@ function promiseAllObject(promisesObj) {
 }
 function randomString(length = 10) {
   const chars = "abcdefghijklmnopqrstuvwxyz";
-  let str5 = "";
+  let str6 = "";
   for (let i2 = 0; i2 < length; i2++) {
-    str5 += chars[Math.floor(Math.random() * chars.length)];
+    str6 += chars[Math.floor(Math.random() * chars.length)];
   }
-  return str5;
+  return str6;
 }
-function esc(str5) {
-  return JSON.stringify(str5);
+function esc(str6) {
+  return JSON.stringify(str6);
 }
 var captureStackTrace = Error.captureStackTrace ? Error.captureStackTrace : (..._args) => {
 };
@@ -26819,8 +26819,8 @@ var getParsedType2 = (data) => {
 };
 var propertyKeyTypes = /* @__PURE__ */ new Set(["string", "number", "symbol"]);
 var primitiveTypes = /* @__PURE__ */ new Set(["string", "number", "bigint", "boolean", "symbol", "undefined"]);
-function escapeRegex(str5) {
-  return str5.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function escapeRegex(str6) {
+  return str6.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function clone(inst, def, params) {
   const cl = new inst._zod.constr(def ?? inst._zod.def);
@@ -26847,33 +26847,33 @@ function normalizeParams(_params) {
 function createTransparentProxy(getter) {
   let target;
   return new Proxy({}, {
-    get(_, prop5, receiver) {
+    get(_, prop6, receiver) {
       target ?? (target = getter());
-      return Reflect.get(target, prop5, receiver);
+      return Reflect.get(target, prop6, receiver);
     },
-    set(_, prop5, value, receiver) {
+    set(_, prop6, value, receiver) {
       target ?? (target = getter());
-      return Reflect.set(target, prop5, value, receiver);
+      return Reflect.set(target, prop6, value, receiver);
     },
-    has(_, prop5) {
+    has(_, prop6) {
       target ?? (target = getter());
-      return Reflect.has(target, prop5);
+      return Reflect.has(target, prop6);
     },
-    deleteProperty(_, prop5) {
+    deleteProperty(_, prop6) {
       target ?? (target = getter());
-      return Reflect.deleteProperty(target, prop5);
+      return Reflect.deleteProperty(target, prop6);
     },
     ownKeys(_) {
       target ?? (target = getter());
       return Reflect.ownKeys(target);
     },
-    getOwnPropertyDescriptor(_, prop5) {
+    getOwnPropertyDescriptor(_, prop6) {
       target ?? (target = getter());
-      return Reflect.getOwnPropertyDescriptor(target, prop5);
+      return Reflect.getOwnPropertyDescriptor(target, prop6);
     },
-    defineProperty(_, prop5, descriptor) {
+    defineProperty(_, prop6, descriptor) {
       target ?? (target = getter());
-      return Reflect.defineProperty(target, prop5, descriptor);
+      return Reflect.defineProperty(target, prop6, descriptor);
     }
   });
 }
@@ -35736,12 +35736,12 @@ var UriTemplate = class _UriTemplate {
    * A template expression is a sequence of characters enclosed in curly braces,
    * like {foo} or {?bar}.
    */
-  static isTemplate(str5) {
-    return /\{[^}\s]+\}/.test(str5);
+  static isTemplate(str6) {
+    return /\{[^}\s]+\}/.test(str6);
   }
-  static validateLength(str5, max, context) {
-    if (str5.length > max) {
-      throw new Error(`${context} exceeds maximum length of ${max} characters (got ${str5.length})`);
+  static validateLength(str6, max, context) {
+    if (str6.length > max) {
+      throw new Error(`${context} exceeds maximum length of ${max} characters (got ${str6.length})`);
     }
   }
   get variableNames() {
@@ -35870,8 +35870,8 @@ var UriTemplate = class _UriTemplate {
     }
     return result;
   }
-  escapeRegExp(str5) {
-    return str5.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  escapeRegExp(str6) {
+    return str6.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
   partToRegExp(part) {
     const patterns = [];
@@ -37707,7 +37707,8 @@ var EMPTY_SNAPSHOT = {
   tools_run: [],
   missing_tools: [],
   spec_files: [],
-  spec_diff: null
+  spec_diff: null,
+  imports: []
 };
 var SurfaceRepo = class {
   insertStmt;
@@ -49137,10 +49138,178 @@ function metavar(metavars, name) {
   return str2(prop2(metavars, name), "abstract_content");
 }
 
+// src/surface/moduleEdges.ts
+var RESOLVABLE_LANGUAGES = /* @__PURE__ */ new Set([
+  "typescript",
+  "javascript",
+  "python",
+  "go",
+  "rust"
+]);
+function extractModuleEdges(results) {
+  const edges = [];
+  for (const raw of results) {
+    const extra = prop3(raw, "extra");
+    const metadata = prop3(extra, "metadata");
+    if (str3(metadata, "guardian_kind") !== "import") continue;
+    const file = str3(raw, "path");
+    if (file === void 0) continue;
+    const metavars = prop3(extra, "metavars");
+    const module = stripQuotes2(metavar2(metavars, "$MODULE"));
+    if (module === void 0) continue;
+    const symbol = stripQuotes2(metavar2(metavars, "$SYMBOL"));
+    const language = languageFromPath(file);
+    edges.push({ file, specifier: buildSpecifier(language, module, symbol), language });
+  }
+  return edges;
+}
+function buildSpecifier(language, module, symbol) {
+  if (language !== "rust" || symbol === void 0) return module;
+  return `${module.replace(/ /g, "::")}::${symbol}`;
+}
+function prop3(value, key) {
+  if (value === null || typeof value !== "object") return void 0;
+  return value[key];
+}
+function str3(value, key) {
+  const v = prop3(value, key);
+  return typeof v === "string" ? v : void 0;
+}
+function metavar2(metavars, name) {
+  return str3(prop3(metavars, name), "abstract_content");
+}
+function stripQuotes2(value) {
+  if (value === void 0) return void 0;
+  const quote = value[0];
+  if (quote === void 0 || !/^['"`]$/.test(quote)) return value;
+  if (value.length < 2 || !value.endsWith(quote)) return value;
+  return value.slice(1, -1);
+}
+function resolveModuleEdges(edges, projectFiles) {
+  const byPosixPath = buildPosixIndex(projectFiles);
+  const resolved = [];
+  const unresolved = [];
+  for (const edge of edges) {
+    const moduleFile = RESOLVABLE_LANGUAGES.has(edge.language) ? resolveSpecifier(edge, byPosixPath) : void 0;
+    if (moduleFile !== void 0) {
+      resolved.push({ file: edge.file, module_file: moduleFile });
+    } else {
+      unresolved.push(edge);
+    }
+  }
+  return { resolved, unresolved };
+}
+function resolveSpecifier(edge, byPosixPath) {
+  switch (edge.language) {
+    case "typescript":
+    case "javascript":
+      return resolveJsTs(edge.file, edge.specifier, byPosixPath);
+    case "python":
+      return resolvePython(edge.specifier, byPosixPath);
+    case "go":
+      return resolveGo(edge.specifier, byPosixPath);
+    case "rust":
+      return resolveRust(edge.file, edge.specifier, byPosixPath);
+    default:
+      return void 0;
+  }
+}
+var JS_TS_SUFFIXES = [
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  "/index.ts",
+  "/index.tsx",
+  "/index.js",
+  "/index.jsx"
+];
+function resolveJsTs(importingFile, specifier, byPosixPath) {
+  if (!specifier.startsWith(".")) return void 0;
+  const base = stripJsTsExtension(joinAndNormalize(dirOf(importingFile), specifier));
+  return lookupCandidates(byPosixPath, JS_TS_SUFFIXES.map((suffix) => `${base}${suffix}`));
+}
+function stripJsTsExtension(path6) {
+  return path6.replace(/\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/, "");
+}
+var PYTHON_SUFFIXES = [".py", "/__init__.py"];
+function resolvePython(specifier, byPosixPath) {
+  if (specifier.startsWith(".")) return void 0;
+  const base = specifier.split(".").join("/");
+  if (base.length === 0) return void 0;
+  return lookupCandidates(byPosixPath, PYTHON_SUFFIXES.map((suffix) => `${base}${suffix}`));
+}
+var RUST_SUFFIXES = [".rs", "/mod.rs"];
+function resolveRust(importingFile, specifier, byPosixPath) {
+  let root;
+  let tail;
+  if (specifier.startsWith("crate::")) {
+    root = "src";
+    tail = specifier.slice("crate::".length);
+  } else if (specifier.startsWith("self::")) {
+    root = dirOf(importingFile);
+    tail = specifier.slice("self::".length);
+  } else {
+    return void 0;
+  }
+  const segments = tail.split("::").filter((segment) => segment.length > 0);
+  for (let depth = segments.length; depth > 0; depth -= 1) {
+    const base = joinAndNormalize(root, segments.slice(0, depth).join("/"));
+    const hit = lookupCandidates(byPosixPath, RUST_SUFFIXES.map((suffix) => `${base}${suffix}`));
+    if (hit !== void 0) return hit;
+  }
+  return void 0;
+}
+function resolveGo(specifier, byPosixPath) {
+  let best;
+  let bestLength = -1;
+  for (const [posixPath, original] of byPosixPath) {
+    if (!posixPath.endsWith(".go")) continue;
+    const stripped = posixPath.slice(0, -".go".length);
+    if (specifier !== stripped && !specifier.endsWith(`/${stripped}`)) continue;
+    if (stripped.length > bestLength) {
+      best = original;
+      bestLength = stripped.length;
+    }
+  }
+  return best;
+}
+function buildPosixIndex(projectFiles) {
+  const index = /* @__PURE__ */ new Map();
+  for (const file of projectFiles) {
+    index.set(toPosix(file), file);
+  }
+  return index;
+}
+function lookupCandidates(byPosixPath, candidates) {
+  for (const candidate of candidates) {
+    const hit = byPosixPath.get(candidate);
+    if (hit !== void 0) return hit;
+  }
+  return void 0;
+}
+function toPosix(path6) {
+  return path6.replace(/\\/g, "/");
+}
+function dirOf(file) {
+  const parts = toPosix(file).split("/");
+  parts.pop();
+  return parts.join("/");
+}
+function joinAndNormalize(dir, tail) {
+  const stack = [];
+  for (const part of `${dir}/${tail}`.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") stack.pop();
+    else stack.push(part);
+  }
+  return stack.join("/");
+}
+
 // src/surface/recoverMetavars.ts
 var RECOVERABLE_KINDS = /* @__PURE__ */ new Set(["route", "mount", "import", "env"]);
 function recoverMetavars(semgrepJson, sources) {
-  const results = prop3(semgrepJson, "results");
+  const results = prop4(semgrepJson, "results");
   if (!isRecord(semgrepJson) || !Array.isArray(results)) {
     return {
       json: semgrepJson,
@@ -49156,9 +49325,9 @@ function recoverMetavars(semgrepJson, sources) {
   let unrecoverable = 0;
   const unreadableRouteFiles = [];
   const rebuilt = results.map((raw) => {
-    const extra = prop3(raw, "extra");
-    const metadata = prop3(extra, "metadata");
-    const kind = str3(metadata, "guardian_kind");
+    const extra = prop4(raw, "extra");
+    const metadata = prop4(extra, "metadata");
+    const kind = str4(metadata, "guardian_kind");
     if (kind === void 0 || !RECOVERABLE_KINDS.has(kind)) return raw;
     if (hasMetavars(extra)) {
       intact += 1;
@@ -49168,7 +49337,7 @@ function recoverMetavars(semgrepJson, sources) {
     const metavars = span === void 0 ? void 0 : synthesize(kind, span, metadata);
     if (metavars === void 0 || !isRecord(raw)) {
       unrecoverable += 1;
-      const path6 = kind === "route" ? str3(raw, "path") : void 0;
+      const path6 = kind === "route" ? str4(raw, "path") : void 0;
       if (path6 !== void 0) unreadableRouteFiles.push(path6);
       return raw;
     }
@@ -49184,10 +49353,10 @@ function recoverMetavars(semgrepJson, sources) {
   };
 }
 function sliceSpan(raw, sources, buffers) {
-  const path6 = str3(raw, "path");
+  const path6 = str4(raw, "path");
   if (path6 === void 0) return void 0;
-  const start = num2(prop3(raw, "start"), "offset");
-  const end = num2(prop3(raw, "end"), "offset");
+  const start = num2(prop4(raw, "start"), "offset");
+  const end = num2(prop4(raw, "end"), "offset");
   if (start === void 0 || end === void 0) return void 0;
   if (!Number.isInteger(start) || !Number.isInteger(end)) return void 0;
   if (start < 0 || end <= start) return void 0;
@@ -49219,12 +49388,12 @@ function synthesize(kind, span, metadata) {
 var FOCUS_METADATA_KEY = "guardian_focus";
 var FOCUS_PATH = "path";
 function synthesizeRoute(span, metadata) {
-  if (str3(metadata, FOCUS_METADATA_KEY) === FOCUS_PATH) {
+  if (str4(metadata, FOCUS_METADATA_KEY) === FOCUS_PATH) {
     return { $PATH: { abstract_content: span } };
   }
-  const framework = str3(metadata, "framework");
+  const framework = str4(metadata, "framework");
   if (framework === "wp-rest") return synthesizeNamespacedRoute(span);
-  const declaredMethod = str3(metadata, "method");
+  const declaredMethod = str4(metadata, "method");
   const path6 = routePath(span);
   if (path6 === void 0) return void 0;
   const metavars = { $PATH: { abstract_content: path6 } };
@@ -49261,7 +49430,7 @@ function synthesizeMount(span) {
   };
 }
 function synthesizeImport(span, metadata) {
-  switch (str3(metadata, "framework")) {
+  switch (str4(metadata, "framework")) {
     case "python":
       return synthesizePythonImport(span);
     case "go":
@@ -49284,7 +49453,7 @@ function synthesizeImport(span, metadata) {
 function synthesizeEsmImport(span) {
   const literal2 = findStringLiteral(span);
   if (literal2 === void 0) return void 0;
-  const module = stripQuotes2(literal2.text);
+  const module = stripQuotes3(literal2.text);
   if (module.length === 0) return void 0;
   const symbol = /\bimport\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\bimport\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? /\bimport\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span)?.[1];
   if (symbol === void 0) return void 0;
@@ -49312,7 +49481,7 @@ function synthesizeGoImport(span) {
   const literals = allStringLiterals(span);
   const last = literals[literals.length - 1];
   if (last === void 0) return void 0;
-  const module = stripQuotes2(last.text);
+  const module = stripQuotes3(last.text);
   if (module.length === 0) return void 0;
   const metavars = { $MODULE: { abstract_content: module } };
   const before = span.slice(0, last.start);
@@ -49387,7 +49556,7 @@ function synthesizeCsharpImport(span) {
 function synthesizeRubyImport(span) {
   const literal2 = findStringLiteral(span);
   if (literal2 === void 0) return void 0;
-  const module = stripQuotes2(literal2.text);
+  const module = stripQuotes3(literal2.text);
   if (module.length === 0) return void 0;
   return { $MODULE: { abstract_content: module } };
 }
@@ -49531,26 +49700,26 @@ function calleeIdentifier(span) {
   }
   return /^\s*([A-Za-z_][\w]*)\s+['"`]/.exec(span)?.[1];
 }
-function stripQuotes2(value) {
+function stripQuotes3(value) {
   return value.replace(/^['"`]|['"`]$/g, "");
 }
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-function prop3(value, key) {
+function prop4(value, key) {
   if (value === null || typeof value !== "object") return void 0;
   return value[key];
 }
-function str3(value, key) {
-  const v = prop3(value, key);
+function str4(value, key) {
+  const v = prop4(value, key);
   return typeof v === "string" ? v : void 0;
 }
 function num2(value, key) {
-  const v = prop3(value, key);
+  const v = prop4(value, key);
   return typeof v === "number" ? v : void 0;
 }
 function hasMetavars(extra) {
-  const metavars = prop3(extra, "metavars");
+  const metavars = prop4(extra, "metavars");
   if (!isRecord(metavars)) return false;
   return Object.keys(metavars).length > 0;
 }
@@ -49902,7 +50071,7 @@ function importSpec(file, text) {
       }
     };
   }
-  const pathsRaw = prop4(root, "paths");
+  const pathsRaw = prop5(root, "paths");
   const pathEntries = Object.entries(isPlainObject4(pathsRaw) ? pathsRaw : {});
   if (pathEntries.length === 0) {
     return {
@@ -49918,22 +50087,22 @@ function importSpec(file, text) {
     };
   }
   const { base, partial: basePartial } = format2 === "openapi-3" ? openapiBasePath(root) : swaggerBasePath(root);
-  const docSecurityRaw = prop4(root, "security");
+  const docSecurityRaw = prop5(root, "security");
   const docSecurityNonEmpty = Array.isArray(docSecurityRaw) && docSecurityRaw.length > 0;
   const routes = [];
   let unresolvedRefs = 0;
   for (const [pathTemplate, pathItem] of pathEntries) {
-    if (str4(pathItem, "$ref") !== void 0) {
+    if (str5(pathItem, "$ref") !== void 0) {
       unresolvedRefs += 1;
       continue;
     }
     const line = lineFor(pathTemplate);
     const templateParams = paramsFromTemplate(pathTemplate);
-    const pathItemParams = paramNamesInPath(root, prop4(pathItem, "parameters"));
+    const pathItemParams = paramNamesInPath(root, prop5(pathItem, "parameters"));
     for (const opKey of OPERATION_KEYS) {
-      const operation = prop4(pathItem, opKey);
+      const operation = prop5(pathItem, opKey);
       if (operation === void 0) continue;
-      const opParams = paramNamesInPath(root, prop4(operation, "parameters"));
+      const opParams = paramNamesInPath(root, prop5(operation, "parameters"));
       const params = [.../* @__PURE__ */ new Set([...templateParams, ...pathItemParams, ...opParams])];
       routes.push({
         method: operationMethod(opKey),
@@ -49945,7 +50114,7 @@ function importSpec(file, text) {
         line,
         framework: format2,
         language: "spec",
-        auth_hint: authHint(prop4(operation, "security"), docSecurityNonEmpty),
+        auth_hint: authHint(prop5(operation, "security"), docSecurityNonEmpty),
         params,
         confidence: "high"
       });
@@ -49993,14 +50162,14 @@ function parseRoot(text) {
   }
 }
 function detectFormat2(root) {
-  const openapi = str4(root, "openapi");
+  const openapi = str5(root, "openapi");
   if (openapi !== void 0 && openapi.startsWith("3.")) return "openapi-3";
-  if (str4(root, "swagger") === "2.0") return "swagger-2";
+  if (str5(root, "swagger") === "2.0") return "swagger-2";
   return "unknown";
 }
 function openapiBasePath(root) {
-  const servers = asArray3(prop4(root, "servers"));
-  const url = str4(servers[0], "url");
+  const servers = asArray3(prop5(root, "servers"));
+  const url = str5(servers[0], "url");
   if (url === void 0) return { base: "", partial: false };
   if (url.includes("{")) return { base: "", partial: true };
   try {
@@ -50014,7 +50183,7 @@ function isAbsolutePathReference(url) {
   return url.startsWith("/") && !url.startsWith("//");
 }
 function swaggerBasePath(root) {
-  const basePath = str4(root, "basePath") ?? "";
+  const basePath = str5(root, "basePath") ?? "";
   if (basePath.includes("{")) return { base: "", partial: true };
   return { base: stripTrailingSlash(basePath), partial: false };
 }
@@ -50041,10 +50210,10 @@ function paramsFromTemplate(pathTemplate) {
 function paramNamesInPath(root, rawList) {
   const names = [];
   for (const entry of asArray3(rawList)) {
-    const ref = str4(entry, "$ref");
+    const ref = str5(entry, "$ref");
     const resolved = ref !== void 0 ? resolveRef(root, ref) : entry;
-    if (str4(resolved, "in") !== "path") continue;
-    const name = str4(resolved, "name");
+    if (str5(resolved, "in") !== "path") continue;
+    const name = str5(resolved, "name");
     if (name !== void 0) names.push(name);
   }
   return names;
@@ -50054,17 +50223,17 @@ function resolveRef(root, ref) {
   let current = root;
   for (const segment of ref.slice(1).split("/")) {
     if (segment.length === 0) continue;
-    current = prop4(current, segment);
+    current = prop5(current, segment);
     if (current === void 0) return void 0;
   }
   return current;
 }
-function prop4(value, key) {
+function prop5(value, key) {
   if (value === null || typeof value !== "object") return void 0;
   return value[key];
 }
-function str4(value, key) {
-  const v = prop4(value, key);
+function str5(value, key) {
+  const v = prop5(value, key);
   return typeof v === "string" ? v : void 0;
 }
 function asArray3(value) {
@@ -50263,6 +50432,12 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
   const knownFiles = collectAllFiles(parsed);
   const imports = extractImports(parsed, knownFiles);
   const resolved = resolveWordpressRoutes(resolveNodeMounts(routes, mounts, imports));
+  const moduleEdges = extractModuleEdges(resultsArrayOf(parsed));
+  const projectFiles = /* @__PURE__ */ new Set([...scannedFiles(parsed), ...knownFiles]);
+  const { resolved: resolvedEdges, unresolved: unresolvedEdges } = resolveModuleEdges(
+    moduleEdges,
+    projectFiles
+  );
   const { specRoutes, specFiles, specsParsed } = importSpecs(projectPath, specPaths2);
   const specDiff = diffSpecRoutes(resolved, specRoutes, specsParsed);
   return {
@@ -50270,11 +50445,24 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
     env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
     ports: collectPorts(projectPath),
     webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
-    coverage: buildCoverage(resolved, ctx, unreadableRouteFiles),
+    coverage: buildCoverage(resolved, ctx, unreadableRouteFiles, unresolvedEdges),
     tools_run: toolsRun,
     missing_tools: [],
     spec_files: specFiles,
-    spec_diff: specDiff
+    spec_diff: specDiff,
+    // Semgrep reports absolute, native-separator paths for an absolute
+    // target (which this tool always passes — see readSources' doc comment
+    // above), same as RouteRecord.file/ImportRecord.file. Unlike those,
+    // `imports` is relativized here to project-relative POSIX, matching
+    // `Finding.file_path`'s established convention (toRelativeIfPossible,
+    // used by every scan_sast parser — see runners/scannerParsers/index.ts)
+    // — that is the convention validate_finding's later cross-reference
+    // against a finding's file needs, and it is the one this field's own
+    // doc comment in types.ts promises.
+    imports: resolvedEdges.map((e) => ({
+      file: toRelativeIfPossible(e.file, projectPath),
+      module_file: toRelativeIfPossible(e.module_file, projectPath)
+    }))
   };
 }
 function importSpecs(projectPath, specPaths2) {
@@ -50332,12 +50520,24 @@ function importSpecs(projectPath, specPaths2) {
 function resolveExplicitSpecPath(projectPath, path6) {
   return resolve6(isAbsolute(path6) ? path6 : join42(projectPath, path6));
 }
-function collectAllFiles(parsed) {
+function resultsArrayOf(parsed) {
   const results = parsed.results;
+  return Array.isArray(results) ? results : [];
+}
+function collectAllFiles(parsed) {
   const out = /* @__PURE__ */ new Set();
-  if (!Array.isArray(results)) return out;
-  for (const raw of results) {
+  for (const raw of resultsArrayOf(parsed)) {
     const path6 = raw.path;
+    if (typeof path6 === "string") out.add(path6);
+  }
+  return out;
+}
+function scannedFiles(parsed) {
+  const paths = parsed.paths;
+  const scanned = paths?.scanned;
+  const out = /* @__PURE__ */ new Set();
+  if (!Array.isArray(scanned)) return out;
+  for (const path6 of scanned) {
     if (typeof path6 === "string") out.add(path6);
   }
   return out;
@@ -50349,15 +50549,15 @@ function extractImports(parsed, knownFiles) {
   for (const raw of results) {
     const record2 = raw;
     if (record2.extra?.metadata?.guardian_kind !== "import") continue;
-    const symbol = stripQuotes3(record2.extra.metavars?.["$SYMBOL"]?.abstract_content);
-    const modulePath = stripQuotes3(record2.extra.metavars?.["$MODULE"]?.abstract_content);
+    const symbol = stripQuotes4(record2.extra.metavars?.["$SYMBOL"]?.abstract_content);
+    const modulePath = stripQuotes4(record2.extra.metavars?.["$MODULE"]?.abstract_content);
     const file = record2.path;
     if (symbol === void 0 || modulePath === void 0 || file === void 0) continue;
     out.push({ symbol, module_file: resolveModuleFile(file, modulePath, knownFiles), file });
   }
   return out;
 }
-function stripQuotes3(value) {
+function stripQuotes4(value) {
   if (value === void 0) return void 0;
   return value.replace(/^['"`]|['"`]$/g, "");
 }
@@ -50384,7 +50584,7 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
   }
   return joined;
 }
-function buildCoverage(routes, ctx, unreadableRouteFiles) {
+function buildCoverage(routes, ctx, unreadableRouteFiles, unresolvedEdges) {
   const codeRoutes = routes.filter((r) => r.provenance === "code");
   const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
   const unreadableByLanguage = /* @__PURE__ */ new Map();
@@ -50393,10 +50593,15 @@ function buildCoverage(routes, ctx, unreadableRouteFiles) {
     if (language === "unknown") continue;
     unreadableByLanguage.set(language, (unreadableByLanguage.get(language) ?? 0) + 1);
   }
+  const unresolvedByLanguage = /* @__PURE__ */ new Map();
+  for (const edge of unresolvedEdges) {
+    unresolvedByLanguage.set(edge.language, (unresolvedByLanguage.get(edge.language) ?? 0) + 1);
+  }
   const languages = /* @__PURE__ */ new Set([
     ...detected,
     ...codeRoutes.map((r) => r.language),
-    ...unreadableByLanguage.keys()
+    ...unreadableByLanguage.keys(),
+    ...unresolvedByLanguage.keys()
   ]);
   languages.delete("unknown");
   const entries = [];
@@ -50409,8 +50614,11 @@ function buildCoverage(routes, ctx, unreadableRouteFiles) {
       detected: detected.includes(language),
       routes_found: found,
       unreadable_matches: unreadable,
+      unresolved_imports: unresolvedByLanguage.get(language) ?? 0,
       // `unreadable` outranks `ok`: a language with some routes read and some
-      // lost is not fully covered, and saying `ok` would hide the gap.
+      // lost is not fully covered, and saying `ok` would hide the gap. Import
+      // resolution is a separate dimension (see the field's own doc comment)
+      // and deliberately does not affect this status.
       status: unreadable > 0 ? "unreadable" : !hasRules ? "no_rules" : found > 0 ? "ok" : "no_matches"
     });
   }

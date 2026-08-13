@@ -36,6 +36,7 @@ import { Force, ProjectPath } from '../schemas.js';
 import { collectEnvVars } from '../surface/collectors/envVars.js';
 import { collectPorts } from '../surface/collectors/ports.js';
 import { extractSurface, languageFromPath } from '../surface/extract.js';
+import { extractModuleEdges, resolveModuleEdges, } from '../surface/moduleEdges.js';
 import { recoverMetavars, } from '../surface/recoverMetavars.js';
 import { resolveNodeMounts } from '../surface/resolvers/node.js';
 import { resolveWordpressRoutes } from '../surface/resolvers/wordpress.js';
@@ -43,6 +44,7 @@ import { invokeSemgrep } from '../surface/scanSemgrep.js';
 import { dedupeResolved, discoverSpecs, MAX_SPEC_BYTES, MAX_SPEC_FILES, } from '../surface/specDiscover.js';
 import { diffSpecRoutes } from '../surface/specDiff.js';
 import { importSpec } from '../surface/specImport.js';
+import { toRelativeIfPossible } from '../runners/scannerParsers/index.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe } from './scanHelpers.js';
@@ -334,6 +336,18 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
     const knownFiles = collectAllFiles(parsed);
     const imports = extractImports(parsed, knownFiles);
     const resolved = resolveWordpressRoutes(resolveNodeMounts(routes, mounts, imports));
+    // Task 3b: a second, WIDER extraction over the same `guardian_kind:
+    // import` matches, feeding the validate_finding import graph rather than
+    // mount resolution — see moduleEdges.ts's own doc comment for why this
+    // does not reuse (and must not replace) extractImports/resolveModuleFile
+    // above. `projectFiles` unions `paths.scanned` (every file Semgrep
+    // actually scanned, matches or not — the closer reading of "the scanned
+    // tree") with `knownFiles` (match-bearing files) as a belt-and-suspenders
+    // measure: both are Semgrep's own report of this same run, so the union
+    // can only add legitimate candidates, never fabricate one.
+    const moduleEdges = extractModuleEdges(resultsArrayOf(parsed));
+    const projectFiles = new Set([...scannedFiles(parsed), ...knownFiles]);
+    const { resolved: resolvedEdges, unresolved: unresolvedEdges } = resolveModuleEdges(moduleEdges, projectFiles);
     const { specRoutes, specFiles, specsParsed } = importSpecs(projectPath, specPaths);
     const specDiff = diffSpecRoutes(resolved, specRoutes, specsParsed);
     return {
@@ -341,11 +355,24 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
         env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
         ports: collectPorts(projectPath),
         webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
-        coverage: buildCoverage(resolved, ctx, unreadableRouteFiles),
+        coverage: buildCoverage(resolved, ctx, unreadableRouteFiles, unresolvedEdges),
         tools_run: toolsRun,
         missing_tools: [],
         spec_files: specFiles,
         spec_diff: specDiff,
+        // Semgrep reports absolute, native-separator paths for an absolute
+        // target (which this tool always passes — see readSources' doc comment
+        // above), same as RouteRecord.file/ImportRecord.file. Unlike those,
+        // `imports` is relativized here to project-relative POSIX, matching
+        // `Finding.file_path`'s established convention (toRelativeIfPossible,
+        // used by every scan_sast parser — see runners/scannerParsers/index.ts)
+        // — that is the convention validate_finding's later cross-reference
+        // against a finding's file needs, and it is the one this field's own
+        // doc comment in types.ts promises.
+        imports: resolvedEdges.map((e) => ({
+            file: toRelativeIfPossible(e.file, projectPath),
+            module_file: toRelativeIfPossible(e.module_file, projectPath),
+        })),
     };
 }
 /**
@@ -455,14 +482,39 @@ function importSpecs(projectPath, specPaths) {
 function resolveExplicitSpecPath(projectPath, path) {
     return resolve(isAbsolute(path) ? path : join(projectPath, path));
 }
+/** `parsed.results`, or `[]` when absent/malformed — shared by every reader
+ *  below that only needs the match array, not the whole Semgrep JSON shape. */
+function resultsArrayOf(parsed) {
+    const results = parsed.results;
+    return Array.isArray(results) ? results : [];
+}
 /** Every file path Semgrep reported a match in, across all `guardian_kind`s. */
 function collectAllFiles(parsed) {
-    const results = parsed.results;
     const out = new Set();
-    if (!Array.isArray(results))
-        return out;
-    for (const raw of results) {
+    for (const raw of resultsArrayOf(parsed)) {
         const path = raw.path;
+        if (typeof path === 'string')
+            out.add(path);
+    }
+    return out;
+}
+/**
+ * Every file Semgrep actually scanned this run, matched or not — Semgrep's
+ * own `paths.scanned` in its `--json` output (confirmed present on both
+ * 1.86.0 and 1.164.0). Wider than `collectAllFiles`: a leaf file with an
+ * import but no route/mount/env-var match of its own — exactly the kind of
+ * file `validate_finding` cares about reaching — would never appear there,
+ * only here. Same raw, native-separator convention as `results[].path`
+ * (both come from the same Semgrep run), which is what lets
+ * `moduleEdges.ts` compare them without any conversion of its own.
+ */
+function scannedFiles(parsed) {
+    const paths = parsed.paths;
+    const scanned = paths?.scanned;
+    const out = new Set();
+    if (!Array.isArray(scanned))
+        return out;
+    for (const path of scanned) {
         if (typeof path === 'string')
             out.add(path);
     }
@@ -569,7 +621,7 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
  * is not valid UTF-8, or offsets that land past end-of-file. Rare, and still
  * not something to round down to zero.
  */
-function buildCoverage(routes, ctx, unreadableRouteFiles) {
+function buildCoverage(routes, ctx, unreadableRouteFiles, unresolvedEdges) {
     // `coverage[]` is a per-language report about source code. Spec routes carry
     // `language: 'spec'`, which is not a language the rule pack could ever cover —
     // including them would create a phantom entry reading `status: 'no_rules'`,
@@ -584,10 +636,18 @@ function buildCoverage(routes, ctx, unreadableRouteFiles) {
             continue;
         unreadableByLanguage.set(language, (unreadableByLanguage.get(language) ?? 0) + 1);
     }
+    // One entry per import edge moduleEdges.ts could not resolve to a project
+    // file — see CoverageEntry.unresolved_imports' doc comment in types.ts for
+    // why this is reported rather than folded silently into the graph.
+    const unresolvedByLanguage = new Map();
+    for (const edge of unresolvedEdges) {
+        unresolvedByLanguage.set(edge.language, (unresolvedByLanguage.get(edge.language) ?? 0) + 1);
+    }
     const languages = new Set([
         ...detected,
         ...codeRoutes.map((r) => r.language),
         ...unreadableByLanguage.keys(),
+        ...unresolvedByLanguage.keys(),
     ]);
     languages.delete('unknown');
     const entries = [];
@@ -600,8 +660,11 @@ function buildCoverage(routes, ctx, unreadableRouteFiles) {
             detected: detected.includes(language),
             routes_found: found,
             unreadable_matches: unreadable,
+            unresolved_imports: unresolvedByLanguage.get(language) ?? 0,
             // `unreadable` outranks `ok`: a language with some routes read and some
-            // lost is not fully covered, and saying `ok` would hide the gap.
+            // lost is not fully covered, and saying `ok` would hide the gap. Import
+            // resolution is a separate dimension (see the field's own doc comment)
+            // and deliberately does not affect this status.
             status: unreadable > 0 ? 'unreadable' : !hasRules ? 'no_rules' : found > 0 ? 'ok' : 'no_matches',
         });
     }

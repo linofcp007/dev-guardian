@@ -45,6 +45,7 @@ const EMPTY_SNAPSHOT: AttackSurfaceSnapshot = {
   missing_tools: [],
   spec_files: [],
   spec_diff: null,
+  imports: [],
 };
 
 export class SurfaceRepo {

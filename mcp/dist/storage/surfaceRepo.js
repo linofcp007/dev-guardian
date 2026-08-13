@@ -19,6 +19,7 @@ const EMPTY_SNAPSHOT = {
     missing_tools: [],
     spec_files: [],
     spec_diff: null,
+    imports: [],
 };
 export class SurfaceRepo {
     insertStmt;
