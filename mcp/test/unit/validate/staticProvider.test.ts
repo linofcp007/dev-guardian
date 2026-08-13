@@ -153,8 +153,42 @@ describe('validateStatically — unknown, never unreachable', () => {
   const orphanGraph = buildImportGraph([imp('src/routes.ts', 'src/other.ts')]);
   const orphan = { graph: orphanGraph, findings: [finding({ file_path: 'src/db.ts' })] };
 
-  it('reports unreachable when all four gates pass', () => {
+  it('reports unreachable when all five gates pass', () => {
     const v = validateStatically(input(orphan))[0];
+    expect(v?.verdict).toBe('unreachable');
+  });
+
+  it('is unknown when the import graph holds no edges at all', () => {
+    // An empty graph is evidence of missing DATA, not of missing
+    // reachability: nothing is reached from anywhere by construction, so
+    // "no route imports this file" would be true of EVERY file in the
+    // project and mean nothing.
+    //
+    // Not hypothetical. `surfaceRepo`'s EMPTY_SNAPSHOT backfills
+    // `imports: []` onto every snapshot persisted before import edges
+    // existed, so anyone who ran map_attack_surface before that and
+    // validate_finding after it would be told, confidently, that nothing in
+    // their codebase is reachable.
+    const v = validateStatically(input({ ...orphan, graph: buildImportGraph([]) }))[0];
+    expect(v?.verdict).toBe('unknown');
+    expect(v?.coverage_gaps.some((g) => g.includes('holds no import edges at all'))).toBe(true);
+    // The remedy, because the dominant cause is a fixable one.
+    expect(v?.coverage_gaps.some((g) => g.includes('re-run map_attack_surface'))).toBe(true);
+  });
+
+  it('STILL reports unreachable when the graph has edges that simply do not reach the file', () => {
+    // The discriminator for the gate above. A gate written as "no edges TO
+    // THIS FILE" instead of "no edges AT ALL" also passes that test — and
+    // destroys the negative verdict entirely, because every genuine orphan
+    // is by definition a file no edge reaches. The strongest output this
+    // provider has would become unobtainable, silently.
+    const v = validateStatically(input({
+      ...orphan,
+      graph: buildImportGraph([
+        imp('src/routes.ts', 'src/other.ts'),
+        imp('src/other.ts', 'src/deep.ts'),
+      ]),
+    }))[0];
     expect(v?.verdict).toBe('unreachable');
   });
 

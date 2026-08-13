@@ -15,17 +15,32 @@
  * and its most dangerous: emitting it wrongly deprioritises an exploitable
  * finding, and nobody looks again. So `reachable` is cheap to earn — any
  * discovered path is reported, gates or no gates — while `unreachable` is
- * gated on four independent conditions, ALL of which must hold, checked in
+ * gated on five independent conditions, ALL of which must hold, checked in
  * order, the first failure deciding `unknown` and naming itself in
- * `coverage_gaps` (design doc §5):
+ * `coverage_gaps` (design doc §5, plus gate 1 below, ruled in during Task 5):
  *
- *   1. The finding has a `file_path` and its language is determinable. No
- *      file, no query. An unrecognised extension means there is nothing to
- *      trust a per-language coverage entry (gate 2) or a runtime-resolution
- *      flag (gate 3) against — but it does NOT block the positive direction:
- *      reachability is computed from the file path alone, before language is
- *      even consulted, so a discovered path still reads `reachable`.
- *   2. The snapshot's per-language `CoverageEntry.status` is `ok` or
+ *   1. The import graph holds at least one edge. An empty graph is evidence
+ *      of missing DATA, not of missing reachability: nothing is reached from
+ *      anywhere by construction, so "no route imports this file" would be
+ *      true of every file in the project and would mean nothing. This is not
+ *      a hypothetical shape — `surfaceRepo`'s `EMPTY_SNAPSHOT` backfills
+ *      `imports: []` onto every snapshot persisted before import edges
+ *      existed, so without this gate anyone who ran `map_attack_surface`
+ *      before that and `validate_finding` after it is told, confidently,
+ *      that nothing in their codebase is reachable. Checked FIRST because it
+ *      is the most fundamental and its remedy is the most actionable. It
+ *      does not touch the positive direction either: a finding in a file
+ *      that itself declares a route still reads `reachable` at 0 hops, which
+ *      needs no edge at all.
+ *   2. The finding has a `file_path` and its language is determinable. No
+ *      file, no query — that half is checked before even gate 1, since with
+ *      no file there is nothing to query in the first place. An unrecognised
+ *      extension means there is nothing to trust a per-language coverage
+ *      entry (gate 3) or a runtime-resolution flag (gate 4) against — but it
+ *      does NOT block the positive direction: reachability is computed from
+ *      the file path alone, before language is even consulted, so a
+ *      discovered path still reads `reachable`.
+ *   3. The snapshot's per-language `CoverageEntry.status` is `ok` or
  *      `no_matches`. `unreachable` is a claim about the WHOLE route list for
  *      that language, so it is unsound when that list is known to be
  *      partial (`no_rules`, `unreadable`) — or entirely absent, which is
@@ -34,7 +49,7 @@
  *      declares no routes, so no route in it can reach anything. Excluding
  *      it would answer `unknown` for every file in any language with no HTTP
  *      surface, which is most of them in most repositories.
- *   3. The language is not one of `RUNTIME_RESOLUTION_LANGUAGES` (Ruby,
+ *   4. The language is not one of `RUNTIME_RESOLUTION_LANGUAGES` (Ruby,
  *      Java, C#, PHP). Those four resolve code at runtime — autoload,
  *      annotation-driven injection, a DI container — not by import, so
  *      "nothing imports this file" is true of nearly every file in them and
@@ -42,7 +57,7 @@
  *      import edge is evidence regardless of the language's resolution
  *      story, so these four stacks can still read `reachable`, only never
  *      `unreachable`.
- *   4. The graph was not truncated (`ImportGraph.truncated`). A cut graph
+ *   5. The graph was not truncated (`ImportGraph.truncated`). A cut graph
  *      has unknown missing edges; asserting an absence from it would be
  *      indistinguishable from asserting an absence because nobody looked.
  *
@@ -236,6 +251,17 @@ function validateOne(
   if (reach.hops !== null) {
     return reachableVerdict(envelope, reach.hops, reach.reachingRoots, routesByFile, exposedFiles, gaps);
   }
+
+  // Gate 1, checked before everything else that could block the negative
+  // verdict — including the language, whose absence is a fact about one file
+  // while this is a fact about the whole run. Deliberately "no edges AT ALL",
+  // never "no edge reaching this file": the latter is the definition of an
+  // orphan, so gating on it would make `unreachable` unobtainable and delete
+  // the strongest output this provider has.
+  if (hasNoEdges(input.graph)) {
+    return unknownVerdict(envelope, [EMPTY_GRAPH_GAP, ...gaps]);
+  }
+
   if (language === null) {
     return unknownVerdict(envelope, [`could not determine the language of '${relFile}'`, ...gaps]);
   }
@@ -244,6 +270,33 @@ function validateOne(
   if (blocked !== null) return unknownVerdict(envelope, [blocked, ...gaps]);
 
   return unreachableVerdict(envelope, relFile, gaps);
+}
+
+/**
+ * Gate 1's message. Names both causes because they need different actions:
+ * the first is fixed by re-running one tool, the second is a property of the
+ * project (or a hole in the rule pack) that no re-run will change.
+ */
+const EMPTY_GRAPH_GAP =
+  'the import graph holds no import edges at all, so it is evidence of missing DATA rather than ' +
+  'of missing reachability — every file would be unreached by construction. Either the surface ' +
+  'snapshot predates the persistence of import edges (re-run map_attack_surface) or no import ' +
+  'rule in the pack matched this project.';
+
+/**
+ * True when the graph contains no edge whatsoever.
+ *
+ * Counts members rather than testing `edges.size === 0`. `buildImportGraph`
+ * never stores an empty target set, so today the two agree — but this is the
+ * guard against a project-wide false negative, and it must not stop firing
+ * because some future producer of an `ImportGraph` (or a hand-built one in a
+ * test) records a key with no targets.
+ */
+function hasNoEdges(graph: ImportGraph): boolean {
+  for (const targets of graph.edges.values()) {
+    if (targets.size > 0) return false;
+  }
+  return true;
 }
 
 interface LanguageContext {

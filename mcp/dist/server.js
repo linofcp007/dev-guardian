@@ -52505,12 +52505,22 @@ function validateOne(finding2, input, roots, routesByFile, exposedFiles, reachCa
   if (reach.hops !== null) {
     return reachableVerdict(envelope, reach.hops, reach.reachingRoots, routesByFile, exposedFiles, gaps);
   }
+  if (hasNoEdges(input.graph)) {
+    return unknownVerdict(envelope, [EMPTY_GRAPH_GAP, ...gaps]);
+  }
   if (language === null) {
     return unknownVerdict(envelope, [`could not determine the language of '${relFile}'`, ...gaps]);
   }
   const blocked = negativeVerdictBlockedBy(language, entry, input.graph.truncated);
   if (blocked !== null) return unknownVerdict(envelope, [blocked, ...gaps]);
   return unreachableVerdict(envelope, relFile, gaps);
+}
+var EMPTY_GRAPH_GAP = "the import graph holds no import edges at all, so it is evidence of missing DATA rather than of missing reachability \u2014 every file would be unreached by construction. Either the surface snapshot predates the persistence of import edges (re-run map_attack_surface) or no import rule in the pack matched this project.";
+function hasNoEdges(graph) {
+  for (const targets of graph.edges.values()) {
+    if (targets.size > 0) return false;
+  }
+  return true;
 }
 function resolveLanguageContext(relFile, input) {
   const language = input.languageOf(relFile);
@@ -52668,7 +52678,7 @@ function collectGaps(input, stale) {
   }
   if (input.persisted.snapshot.imports.length === 0) {
     gaps.add(
-      "the surface snapshot carries 0 resolved import edges, so the import graph has no paths at all and every file outside a route-declaring file is unreached by construction, not by evidence \u2014 re-run map_attack_surface (a snapshot captured before import edges were persisted carries none)"
+      "the surface snapshot carries 0 resolved import edges, so the import graph has no paths at all: no finding in this batch can earn the `unreachable` verdict, and every file outside a route-declaring file reads `unknown` \u2014 re-run map_attack_surface (a snapshot captured before import edges were persisted carries none)"
     );
   }
   if (input.dast.scan === null) {

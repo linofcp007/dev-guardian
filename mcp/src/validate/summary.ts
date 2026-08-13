@@ -134,15 +134,17 @@ function collectGaps(input: SummaryInput, stale: boolean): string[] {
     );
   }
   if (input.persisted.snapshot.imports.length === 0) {
-    // The one hole none of the provider's four gates covers: with no edges,
-    // every file outside a route file is unreached BY CONSTRUCTION, not by
-    // evidence, and the negative verdict is still available. Loudest gap in
-    // the list, deliberately.
+    // The provider's gate 1 already refuses `unreachable` for every finding
+    // here and says so per finding, so this is not the safety net — it is the
+    // batch-level statement of the same fact, which the per-finding gaps
+    // cannot make when zero findings were selected, and which a reader
+    // scanning the summary alone would otherwise have to infer from
+    // `graph.edges: 0`.
     gaps.add(
       'the surface snapshot carries 0 resolved import edges, so the import graph has no paths at ' +
-        'all and every file outside a route-declaring file is unreached by construction, not by ' +
-        'evidence — re-run map_attack_surface (a snapshot captured before import edges were ' +
-        'persisted carries none)',
+        'all: no finding in this batch can earn the `unreachable` verdict, and every file outside ' +
+        'a route-declaring file reads `unknown` — re-run map_attack_surface (a snapshot captured ' +
+        'before import edges were persisted carries none)',
     );
   }
   if (input.dast.scan === null) {

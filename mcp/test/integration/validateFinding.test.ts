@@ -598,19 +598,24 @@ describe('validate_finding summary', () => {
     });
   });
 
-  it('reports an import-edge-less snapshot as a gap, because it makes every file read unreachable', async () => {
+  it('answers unknown, not unreachable, for a snapshot carrying no import edges', async () => {
     // A snapshot captured before import edges were persisted (or by a run
-    // where Semgrep matched no imports) carries `imports: []`. The graph then
-    // has no paths at all and every file outside a route file is unreached BY
-    // CONSTRUCTION — the negative verdict, project-wide, on no evidence. The
-    // provider's four gates do not catch this, so the orchestrator must at
-    // least say it out loud.
+    // where Semgrep matched no imports) carries `imports: []` — and
+    // `surfaceRepo`'s EMPTY_SNAPSHOT backfills exactly that onto every
+    // pre-Task-3b row. The graph then has no paths at all, so every file
+    // outside a route file is unreached BY CONSTRUCTION rather than by
+    // evidence. Before the provider's first gate existed this returned
+    // `unreachable` for the whole project, confidently, on no data. The
+    // end-to-end assertion that it now returns `unknown` is the one that
+    // matters: the verdict field is what consumers key on, and a gap beside
+    // an `unreachable` would not have stopped anyone.
     seedSnapshot({ imports: [] });
     seedScan([finding({ file_path: 'src/db.ts' })]);
 
     const r = expectOk(await run());
 
-    expect(only(r).verdict).toBe('unreachable');
+    expect(only(r).verdict).toBe('unknown');
+    expect(only(r).coverage_gaps.join(' | ')).toMatch(/holds no import edges at all/);
     expect(r.summary.graph).toEqual({ files: 0, edges: 0, truncated: false });
     expect(r.summary.coverage_gaps.join(' | ')).toMatch(/0 resolved import edge/i);
   });
