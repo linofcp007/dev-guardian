@@ -37713,6 +37713,7 @@ var EMPTY_SNAPSHOT = {
 var SurfaceRepo = class {
   insertStmt;
   getLatestStmt;
+  getLatestForProjectStmt;
   getByIdStmt;
   getByTreeHashStmt;
   listRecentStmt;
@@ -37723,6 +37724,9 @@ var SurfaceRepo = class {
     `);
     this.getLatestStmt = db.prepare(`
       SELECT * FROM surface_snapshots ORDER BY id DESC LIMIT 1
+    `);
+    this.getLatestForProjectStmt = db.prepare(`
+      SELECT * FROM surface_snapshots WHERE project_path = ? ORDER BY id DESC LIMIT 1
     `);
     this.getByIdStmt = db.prepare(`
       SELECT * FROM surface_snapshots WHERE id = ?
@@ -37750,8 +37754,28 @@ var SurfaceRepo = class {
       snapshot: input.snapshot
     };
   }
+  /**
+   * The newest snapshot in the database, from ANY project. Kept for the
+   * callers whose contract is "whatever this server last mapped" — the
+   * `guardian://surface/latest` resource and `scan_dast`'s route source.
+   * A consumer that relativizes paths against a specific project root, or
+   * keys anything by one, must use `getLatestForProject` instead: a snapshot
+   * of a different tree relativizes into a different key space, and every
+   * comparison against it silently answers "not found" rather than failing.
+   */
   getLatest() {
     const row = this.getLatestStmt.get();
+    return row ? rowToSnapshot2(row) : null;
+  }
+  /**
+   * The newest snapshot FOR ONE project. `project_path` is matched exactly,
+   * against the value `map_attack_surface` persisted — which is
+   * `resolveProjectPath()`'s output, the same normalisation every caller of
+   * this method resolves its own argument through, so two callers naming the
+   * same project agree on the string.
+   */
+  getLatestForProject(projectPath) {
+    const row = this.getLatestForProjectStmt.get(projectPath);
     return row ? rowToSnapshot2(row) : null;
   }
   getById(id) {
@@ -52661,6 +52685,7 @@ var VERDICTS = ["unreachable", "reachable", "confirmed", "unknown"];
 function buildSummary(input) {
   const { persisted, graph, validations, dast } = input;
   const stale = persisted.tree_hash !== input.workingTreeHash;
+  const codeRoutes = persisted.snapshot.routes.filter((r) => r.provenance === "code");
   return {
     findings_selected: validations.length,
     counts_by_verdict: countByVerdict(validations),
@@ -52669,9 +52694,35 @@ function buildSummary(input) {
       id: persisted.id,
       tree_hash: persisted.tree_hash,
       captured_at: persisted.captured_at,
-      routes_total: persisted.snapshot.routes.length,
+      /**
+       * The routes that were ROOTS, not every route in the snapshot.
+       * `groupRoutesByRelFile` (staticProvider.ts) excludes spec-provenance
+       * routes — a spec route's `file` is the OpenAPI document, which no code
+       * import graph contains — so counting them here put a number beside a
+       * batch of verdicts that nothing in it was computed from: a project
+       * whose routes came only from an imported spec read `routes_total: 40`
+       * next to `unreachable` verdicts produced from ZERO roots. It also
+       * disagreed with `map_attack_surface`'s own `routes_total`, which is
+       * code-only by explicit decision, and with the per-finding evidence
+       * sentence ("reached by X of Y known route(s)"), which counts the same
+       * code routes.
+       */
+      routes_total: codeRoutes.length,
+      /**
+       * Deduplicated root FILES — what `reachFrom` is actually rooted at.
+       * Deduplicated through the SAME `toRelativeIfPossible` the provider
+       * groups by, not on `route.file` verbatim: the raw value is absolute
+       * and native-separator, and two spellings of one file would count as
+       * two roots where the provider sees one.
+       */
+      root_files: new Set(
+        codeRoutes.map((r) => toRelativeIfPossible(r.file, persisted.project_path))
+      ).size,
+      /** Reported, never silently dropped: the difference is the point. */
+      spec_routes_excluded: persisted.snapshot.routes.length - codeRoutes.length,
       import_records: persisted.snapshot.imports.length
     },
+    findings_from_scan: describeSourceScan(input),
     working_tree_hash: input.workingTreeHash,
     snapshot_stale: stale,
     graph: { files: graph.files.size, edges: edgeCount(graph), truncated: graph.truncated },
@@ -52689,6 +52740,17 @@ function buildSummary(input) {
       scans_searched: dast.scansSearched
     },
     providers_run: ["static"]
+  };
+}
+function describeSourceScan(input) {
+  const scan = input.sourceScan;
+  if (scan === null) return null;
+  return {
+    scan_id: scan.scan_id,
+    scan_type: scan.scan_type,
+    tree_hash: scan.tree_hash,
+    finished_at: scan.finished_at,
+    matches_snapshot_tree: scan.tree_hash === input.persisted.tree_hash
   };
 }
 function countByVerdict(validations) {
@@ -52777,11 +52839,11 @@ async function handler41(input, ctx) {
   } catch (e) {
     return fail2("not_a_git_repo", e.message);
   }
-  const persisted = ctx.storage.surface.getLatest();
+  const persisted = ctx.storage.surface.getLatestForProject(projectPath);
   if (persisted === null) {
     return fail2(
       "no_surface_snapshot",
-      'No attack-surface snapshot exists for this project, so there are no route files to root a reachability graph at. Run map_attack_surface first, then re-run validate_finding. This is a refusal and not a batch of "unknown" verdicts on purpose: a verdict nobody computed must not occupy the same slot as one that was.',
+      'No attack-surface snapshot exists for this project, so there are no route files to root a reachability graph at. Run map_attack_surface first, then re-run validate_finding. This is a refusal and not a batch of "unknown" verdicts on purpose: a verdict nobody computed must not occupy the same slot as one that was. A snapshot mapped under a DIFFERENT project_path does not count: it describes another tree, and every verdict computed against it would be silently wrong rather than absent.',
       { run_first: "map_attack_surface", project_path: projectPath }
     );
   }
@@ -52814,13 +52876,25 @@ async function handler41(input, ctx) {
   return {
     ok: true,
     validations: validations.map((v) => ({ ...v, stale: v.tree_hash !== workingTreeHash })),
-    summary: buildSummary({ persisted, graph, validations, dast, workingTreeHash, now: Date.now() }),
+    summary: buildSummary({
+      persisted,
+      graph,
+      validations,
+      dast,
+      // The scan `listOpen()` drew from — see `sourceScanOf`.
+      sourceScan: sourceScanOf(ctx),
+      workingTreeHash,
+      now: Date.now()
+    }),
     ...selected.length === 0 ? { note: NO_OPEN_FINDINGS_NOTE } : {}
   };
 }
 function languageOfPath(filePath) {
   const language = languageFromPath(filePath);
   return language === "unknown" ? null : language;
+}
+function sourceScanOf(ctx) {
+  return ctx.storage.scans.getLatest();
 }
 function collectAnonymousExposures(ctx, projectPath) {
   const history = ctx.storage.scans.listHistory(DAST_SCAN_SEARCH_LIMIT);

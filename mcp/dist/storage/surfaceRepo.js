@@ -24,6 +24,7 @@ const EMPTY_SNAPSHOT = {
 export class SurfaceRepo {
     insertStmt;
     getLatestStmt;
+    getLatestForProjectStmt;
     getByIdStmt;
     getByTreeHashStmt;
     listRecentStmt;
@@ -34,6 +35,9 @@ export class SurfaceRepo {
     `);
         this.getLatestStmt = db.prepare(`
       SELECT * FROM surface_snapshots ORDER BY id DESC LIMIT 1
+    `);
+        this.getLatestForProjectStmt = db.prepare(`
+      SELECT * FROM surface_snapshots WHERE project_path = ? ORDER BY id DESC LIMIT 1
     `);
         this.getByIdStmt = db.prepare(`
       SELECT * FROM surface_snapshots WHERE id = ?
@@ -56,8 +60,28 @@ export class SurfaceRepo {
             snapshot: input.snapshot,
         };
     }
+    /**
+     * The newest snapshot in the database, from ANY project. Kept for the
+     * callers whose contract is "whatever this server last mapped" — the
+     * `guardian://surface/latest` resource and `scan_dast`'s route source.
+     * A consumer that relativizes paths against a specific project root, or
+     * keys anything by one, must use `getLatestForProject` instead: a snapshot
+     * of a different tree relativizes into a different key space, and every
+     * comparison against it silently answers "not found" rather than failing.
+     */
     getLatest() {
         const row = this.getLatestStmt.get();
+        return row ? rowToSnapshot(row) : null;
+    }
+    /**
+     * The newest snapshot FOR ONE project. `project_path` is matched exactly,
+     * against the value `map_attack_surface` persisted — which is
+     * `resolveProjectPath()`'s output, the same normalisation every caller of
+     * this method resolves its own argument through, so two callers naming the
+     * same project agree on the string.
+     */
+    getLatestForProject(projectPath) {
+        const row = this.getLatestForProjectStmt.get(projectPath);
         return row ? rowToSnapshot(row) : null;
     }
     getById(id) {

@@ -51,6 +51,7 @@ const EMPTY_SNAPSHOT: AttackSurfaceSnapshot = {
 export class SurfaceRepo {
   private readonly insertStmt: Statement<[string, string, string, string]>;
   private readonly getLatestStmt: Statement<[], SurfaceRow>;
+  private readonly getLatestForProjectStmt: Statement<[string], SurfaceRow>;
   private readonly getByIdStmt: Statement<[number], SurfaceRow>;
   private readonly getByTreeHashStmt: Statement<[string], SurfaceRow>;
   private readonly listRecentStmt: Statement<[number], SurfaceRow>;
@@ -62,6 +63,9 @@ export class SurfaceRepo {
     `);
     this.getLatestStmt = db.prepare<[], SurfaceRow>(`
       SELECT * FROM surface_snapshots ORDER BY id DESC LIMIT 1
+    `);
+    this.getLatestForProjectStmt = db.prepare<[string], SurfaceRow>(`
+      SELECT * FROM surface_snapshots WHERE project_path = ? ORDER BY id DESC LIMIT 1
     `);
     this.getByIdStmt = db.prepare<[number], SurfaceRow>(`
       SELECT * FROM surface_snapshots WHERE id = ?
@@ -91,8 +95,29 @@ export class SurfaceRepo {
     };
   }
 
+  /**
+   * The newest snapshot in the database, from ANY project. Kept for the
+   * callers whose contract is "whatever this server last mapped" — the
+   * `guardian://surface/latest` resource and `scan_dast`'s route source.
+   * A consumer that relativizes paths against a specific project root, or
+   * keys anything by one, must use `getLatestForProject` instead: a snapshot
+   * of a different tree relativizes into a different key space, and every
+   * comparison against it silently answers "not found" rather than failing.
+   */
   getLatest(): PersistedSurfaceSnapshot | null {
     const row = this.getLatestStmt.get();
+    return row ? rowToSnapshot(row) : null;
+  }
+
+  /**
+   * The newest snapshot FOR ONE project. `project_path` is matched exactly,
+   * against the value `map_attack_surface` persisted — which is
+   * `resolveProjectPath()`'s output, the same normalisation every caller of
+   * this method resolves its own argument through, so two callers naming the
+   * same project agree on the string.
+   */
+  getLatestForProject(projectPath: string): PersistedSurfaceSnapshot | null {
+    const row = this.getLatestForProjectStmt.get(projectPath);
     return row ? rowToSnapshot(row) : null;
   }
 

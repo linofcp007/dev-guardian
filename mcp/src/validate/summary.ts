@@ -18,6 +18,7 @@
  * returned together, rather than left for a caller to remember to pair.
  */
 
+import { toRelativeIfPossible } from '../runners/scannerParsers/index.js';
 import type { PersistedSurfaceSnapshot } from '../storage/surfaceRepo.js';
 import type { ScanRecord } from '../types.js';
 import { MAX_GRAPH_EDGES, type ImportGraph } from './importGraph.js';
@@ -37,6 +38,15 @@ export interface SummaryInput {
   graph: ImportGraph;
   validations: readonly FindingValidation[];
   dast: DastCrossReference;
+  /**
+   * The completed scan the validated findings were drawn from, or `null`
+   * when none could be identified. `validate_finding` validates whatever the
+   * latest completed scan left open — which is a documented hazard: run it
+   * straight after `scan_dast` and it validates the DAST findings, not the
+   * SAST ones the caller had in mind. Reporting the scan makes that
+   * detectable instead of merely documented.
+   */
+  sourceScan: ScanRecord | null;
   /** Hash of the working tree as it is right now, for the staleness check. */
   workingTreeHash: string;
   /** Injected epoch millis — keeps this module free of a clock. */
@@ -46,6 +56,9 @@ export interface SummaryInput {
 export function buildSummary(input: SummaryInput): Record<string, unknown> {
   const { persisted, graph, validations, dast } = input;
   const stale = persisted.tree_hash !== input.workingTreeHash;
+  // Code routes only, and their deduplicated files — the roots the provider
+  // actually traverses from. See `routeRoots`.
+  const codeRoutes = persisted.snapshot.routes.filter((r) => r.provenance === 'code');
 
   return {
     findings_selected: validations.length,
@@ -55,9 +68,35 @@ export function buildSummary(input: SummaryInput): Record<string, unknown> {
       id: persisted.id,
       tree_hash: persisted.tree_hash,
       captured_at: persisted.captured_at,
-      routes_total: persisted.snapshot.routes.length,
+      /**
+       * The routes that were ROOTS, not every route in the snapshot.
+       * `groupRoutesByRelFile` (staticProvider.ts) excludes spec-provenance
+       * routes — a spec route's `file` is the OpenAPI document, which no code
+       * import graph contains — so counting them here put a number beside a
+       * batch of verdicts that nothing in it was computed from: a project
+       * whose routes came only from an imported spec read `routes_total: 40`
+       * next to `unreachable` verdicts produced from ZERO roots. It also
+       * disagreed with `map_attack_surface`'s own `routes_total`, which is
+       * code-only by explicit decision, and with the per-finding evidence
+       * sentence ("reached by X of Y known route(s)"), which counts the same
+       * code routes.
+       */
+      routes_total: codeRoutes.length,
+      /**
+       * Deduplicated root FILES — what `reachFrom` is actually rooted at.
+       * Deduplicated through the SAME `toRelativeIfPossible` the provider
+       * groups by, not on `route.file` verbatim: the raw value is absolute
+       * and native-separator, and two spellings of one file would count as
+       * two roots where the provider sees one.
+       */
+      root_files: new Set(
+        codeRoutes.map((r) => toRelativeIfPossible(r.file, persisted.project_path)),
+      ).size,
+      /** Reported, never silently dropped: the difference is the point. */
+      spec_routes_excluded: persisted.snapshot.routes.length - codeRoutes.length,
       import_records: persisted.snapshot.imports.length,
     },
+    findings_from_scan: describeSourceScan(input),
     working_tree_hash: input.workingTreeHash,
     snapshot_stale: stale,
     graph: { files: graph.files.size, edges: edgeCount(graph), truncated: graph.truncated },
@@ -75,6 +114,32 @@ export function buildSummary(input: SummaryInput): Record<string, unknown> {
       scans_searched: dast.scansSearched,
     },
     providers_run: ['static'],
+  };
+}
+
+/**
+ * Which scan the validated findings came from — design §9's "a verdict count
+ * without its `coverage_gaps` beside it is not an answer", applied to the
+ * batch's INPUT rather than its coverage.
+ *
+ * `null` rather than an omitted key when no scan could be identified: an
+ * absent field reads as "not measured", the same distinction
+ * `countByVerdict` seeds itself with zeros for.
+ *
+ * `matches_snapshot_tree` is the one derived fact, and it is the one a reader
+ * would otherwise have to compute by eye: findings from a different tree than
+ * the snapshot's are being placed on a map of a different codebase. It is
+ * stated, never acted on — nothing here suppresses or downgrades a verdict.
+ */
+function describeSourceScan(input: SummaryInput): Record<string, unknown> | null {
+  const scan = input.sourceScan;
+  if (scan === null) return null;
+  return {
+    scan_id: scan.scan_id,
+    scan_type: scan.scan_type,
+    tree_hash: scan.tree_hash,
+    finished_at: scan.finished_at,
+    matches_snapshot_tree: scan.tree_hash === input.persisted.tree_hash,
   };
 }
 

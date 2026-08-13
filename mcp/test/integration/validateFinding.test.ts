@@ -175,7 +175,22 @@ interface Summary {
   findings_selected: number;
   counts_by_verdict: Record<string, number>;
   coverage_gaps: string[];
-  snapshot: { id: number; tree_hash: string; captured_at: string; routes_total: number; import_records: number };
+  snapshot: {
+    id: number;
+    tree_hash: string;
+    captured_at: string;
+    routes_total: number;
+    root_files: number;
+    spec_routes_excluded: number;
+    import_records: number;
+  };
+  findings_from_scan: {
+    scan_id: string;
+    scan_type: string;
+    tree_hash: string;
+    finished_at: string | null;
+    matches_snapshot_tree: boolean;
+  } | null;
   working_tree_hash: string;
   snapshot_stale: boolean;
   graph: { files: number; edges: number; truncated: boolean };
@@ -289,6 +304,47 @@ describe('validate_finding refusals', () => {
     expect(r.error.code).toBe('no_surface_snapshot');
     expect(r.error.message).toMatch(/map_attack_surface/);
     expect(rawRows('finding_validations')).toHaveLength(0);
+  });
+
+  it('refuses when the only snapshot belongs to a DIFFERENT project', async () => {
+    // The snapshot read used to be "newest row in the database", from any
+    // project, while everything downstream is keyed to THIS project_path:
+    // routes and findings relativized against it, verdicts persisted under
+    // it, the DAST search filtered by it. A snapshot of another tree
+    // relativizes into a foreign key space, so no root matches any graph
+    // node — and because the graph is non-empty, gate 1 passes and every
+    // finding comes back `unreachable`. Silent, universal, and in the
+    // direction that hides real findings. The wrong implementation returns
+    // `ok` here with a batch of confident negatives.
+    ctx.storage.surface.insert({
+      project_path: join(projectPath, 'some-other-project'),
+      tree_hash: 'other-tree',
+      snapshot: snapshotOf(),
+    });
+    seedScan([finding()]);
+
+    const r = expectErr(await run());
+    expect(r.error.code).toBe('no_surface_snapshot');
+    expect(rawRows('finding_validations')).toHaveLength(0);
+  });
+
+  it('reads THIS project’s snapshot even when another project was mapped more recently', async () => {
+    // The other half of the same defect, and the one a "just take the newest
+    // row" implementation fails on while still passing the refusal test
+    // above: a correct snapshot EXISTS for this project, but a newer row for
+    // another project shadows it.
+    const mine = seedSnapshot();
+    ctx.storage.surface.insert({
+      project_path: join(projectPath, 'some-other-project'),
+      tree_hash: 'other-tree',
+      snapshot: snapshotOf({ routes: [], imports: [] }),
+    });
+    seedScan([finding()]);
+
+    const r = expectOk(await run());
+    expect(r.summary.snapshot.id).toBe(mine);
+    // And the verdict is the real one, computed against this project's graph.
+    expect(only(r).verdict).toBe('reachable');
   });
 
   it('errors on an unknown fingerprint rather than returning an empty batch', async () => {
@@ -618,6 +674,65 @@ describe('validate_finding summary', () => {
     expect(only(r).coverage_gaps.join(' | ')).toMatch(/holds no import edges at all/);
     expect(r.summary.graph).toEqual({ files: 0, edges: 0, truncated: false });
     expect(r.summary.coverage_gaps.join(' | ')).toMatch(/0 resolved import edge/i);
+  });
+
+  it('counts only the routes that were roots, and names the spec routes it excluded', async () => {
+    // A spec-provenance route's `file` is the OpenAPI document, which the
+    // provider never roots at. Counting it in `routes_total` put a number
+    // beside verdicts nothing in it produced — a spec-only project read
+    // `routes_total: N` next to `unreachable` verdicts computed from zero
+    // roots — and disagreed with map_attack_surface's own code-only
+    // `routes_total`.
+    seedSnapshot({
+      routes: [
+        route(),
+        route({ provenance: 'spec', file: join(projectPath, 'openapi.yaml'), path_resolved: '/documented' }),
+      ],
+    });
+    seedScan([finding()]);
+
+    const r = expectOk(await run());
+
+    expect(r.summary.snapshot.routes_total).toBe(1);
+    expect(r.summary.snapshot.root_files).toBe(1);
+    expect(r.summary.snapshot.spec_routes_excluded).toBe(1);
+    // The per-finding evidence quotes the same population, so the two must
+    // agree — "1 of 1", never "1 of 2".
+    expect(only(r).evidence.map((e) => e.detail).join(' | ')).toMatch(/reached by 1 of 1 known route/);
+  });
+
+  it('names the scan its findings came from, and whether it describes the snapshot’s tree', async () => {
+    // The documented hazard made detectable: this tool validates whatever the
+    // LATEST COMPLETED scan left open, so running it right after scan_dast
+    // validates the DAST findings. Nothing here changes that behaviour — it
+    // reports which scan was used, so a caller can see it happened.
+    seedSnapshot({}, 'snapshot-tree');
+    const scanId = seedScan([finding()]);
+
+    const r = expectOk(await run());
+
+    expect(r.summary.findings_from_scan).toEqual({
+      scan_id: scanId,
+      scan_type: 'sast',
+      tree_hash: 'scan-tree',
+      finished_at: expect.any(String),
+      // 'scan-tree' !== 'snapshot-tree' — the findings and the map describe
+      // different trees, and that must be visible rather than inferred.
+      matches_snapshot_tree: false,
+    });
+  });
+
+  it('names the DAST scan when that is the one whose findings got validated', async () => {
+    // The exact confusion the field exists for: a scan_dast run finishing
+    // last makes ITS findings the open list, so these verdicts are about DAST
+    // findings even though the caller may have meant the SAST ones.
+    seedSnapshot();
+    const dastScan = seedScan([finding({ fingerprint: 'dast-fp' })], 'dast');
+
+    const r = expectOk(await run());
+
+    expect(r.summary.findings_from_scan?.scan_id).toBe(dastScan);
+    expect(r.summary.findings_from_scan?.scan_type).toBe('dast');
   });
 
   it('names the providers that ran and the ones this version cannot offer', async () => {

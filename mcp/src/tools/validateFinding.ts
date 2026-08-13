@@ -3,7 +3,7 @@
  * finding lives in?
  *
  * This module is WIRING ONLY. Every rule that decides a verdict lives in
- * `../validate/staticProvider.ts` (the four gates on the negative verdict) and
+ * `../validate/staticProvider.ts` (the six gates on the negative verdict) and
  * `../validate/importGraph.ts` (hop counting). Nothing here inspects a
  * language, a hop count, a coverage status or a gate; if such a conditional
  * ever appears in this file, it is in the wrong file. What lives here is the
@@ -46,7 +46,7 @@ import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { languageFromPath } from '../surface/extract.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
-import type { DomainErrorCode, ToolResult } from '../types.js';
+import type { DomainErrorCode, ScanRecord, ToolResult } from '../types.js';
 import { buildImportGraph } from '../validate/importGraph.js';
 import { validateStatically } from '../validate/staticProvider.js';
 import { buildSummary, type DastCrossReference } from '../validate/summary.js';
@@ -173,14 +173,26 @@ async function handler(
     return fail('not_a_git_repo', (e as Error).message);
   }
 
-  const persisted = ctx.storage.surface.getLatest();
+  // PROJECT-SCOPED, deliberately. Everything downstream is keyed to
+  // `projectPath`: routes and findings are relativized against it, verdicts
+  // are persisted under it, and the DAST cross-reference below filters on it.
+  // Reading "the newest snapshot in the database" instead would hand this run
+  // a map of a DIFFERENT tree whenever another project was mapped more
+  // recently — every route file would relativize into a foreign key space,
+  // match no graph node, and, because the graph is non-empty, produce
+  // `unreachable` for every finding rather than an error. Same failure the
+  // path-convention gaps in this feature produced twice: silent, universal,
+  // and in the direction that hides real findings.
+  const persisted = ctx.storage.surface.getLatestForProject(projectPath);
   if (persisted === null) {
     return fail(
       'no_surface_snapshot',
       'No attack-surface snapshot exists for this project, so there are no route files to root a ' +
         'reachability graph at. Run map_attack_surface first, then re-run validate_finding. This ' +
         'is a refusal and not a batch of "unknown" verdicts on purpose: a verdict nobody computed ' +
-        'must not occupy the same slot as one that was.',
+        'must not occupy the same slot as one that was. A snapshot mapped under a DIFFERENT ' +
+        'project_path does not count: it describes another tree, and every verdict computed ' +
+        'against it would be silently wrong rather than absent.',
       { run_first: 'map_attack_surface', project_path: projectPath },
     );
   }
@@ -222,7 +234,16 @@ async function handler(
   return {
     ok: true,
     validations: validations.map((v) => ({ ...v, stale: v.tree_hash !== workingTreeHash })),
-    summary: buildSummary({ persisted, graph, validations, dast, workingTreeHash, now: Date.now() }),
+    summary: buildSummary({
+      persisted,
+      graph,
+      validations,
+      dast,
+      // The scan `listOpen()` drew from — see `sourceScanOf`.
+      sourceScan: sourceScanOf(ctx),
+      workingTreeHash,
+      now: Date.now(),
+    }),
     ...(selected.length === 0 ? { note: NO_OPEN_FINDINGS_NOTE } : {}),
   };
 }
@@ -252,6 +273,29 @@ async function handler(
 function languageOfPath(filePath: string): string | null {
   const language = languageFromPath(filePath);
   return language === 'unknown' ? null : language;
+}
+
+/**
+ * The scan whose findings this batch validated.
+ *
+ * `findings.listOpen()` selects from the latest COMPLETED scan
+ * (`listOpenLatestScanStmt`), and `scans.getLatest()` returns that same row —
+ * identical predicate, identical `ORDER BY started_at DESC, rowid DESC LIMIT
+ * 1`. The two must stay in lockstep: if one ever changes its ordering, this
+ * summary starts naming a scan the findings did not come from, which is worse
+ * than naming none. Kept as a lookup rather than derived from the selected
+ * findings because a finding carries no scan id in its domain type, and
+ * because the answer must exist even when zero findings were selected — the
+ * case where a reader most needs to know WHICH scan came back empty.
+ *
+ * This is what makes the documented hazard detectable: `validate_finding`
+ * validates whatever the latest completed scan left open, so running it
+ * immediately after `scan_dast` validates the DAST findings rather than the
+ * SAST ones. The tool cannot know which the caller meant — it can, and now
+ * does, say which it used.
+ */
+function sourceScanOf(ctx: PluginContext): ScanRecord | null {
+  return ctx.storage.scans.getLatest();
 }
 
 /**
