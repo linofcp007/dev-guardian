@@ -494,6 +494,163 @@ git commit -m "feat(surface): import rules for all eight stacks, and named impor
 
 ---
 
+## Task 3b: Give the graph a data source
+
+**Added after Task 3's review found the plan assumed one that does not exist.**
+`AttackSurfaceSnapshot` has no `imports` field; `buildSnapshot()` computes
+`ImportRecord[]` only to feed `resolveNodeMounts` and then discards them. So
+`buildImportGraph` currently has nothing to read, in any language. Two further
+gates would leave only JS/TS usable even once wired:
+
+- `extractImports()` (`mapAttackSurface.ts`) requires **both** a symbol and a
+  module. That filter is correct for its own consumer — `buildPrefixIndex`
+  matches an imported symbol against a mount's router variable — but the graph
+  never reads `symbol`. The requirement drops **all** Java and Ruby forms, every
+  unaliased Go import, plain C# `using`, and bare Python `import x`.
+- `resolveModuleFile` resolves only JS/TS relative specifiers.
+
+**Files:**
+
+- Create: `mcp/src/surface/moduleEdges.ts` (**pure**)
+- Modify: `mcp/src/types.ts` (`AttackSurfaceSnapshot` gains `imports`)
+- Modify: `mcp/src/storage/surfaceRepo.ts` (`EMPTY_SNAPSHOT` gains the field)
+- Modify: `mcp/src/tools/mapAttackSurface.ts` (persist the edges)
+- Test: `mcp/test/unit/surface/moduleEdges.test.ts`
+
+**Interfaces:**
+
+- Consumes: Semgrep result rows as `extract.ts` already shapes them.
+- Produces:
+
+```ts
+/** An import edge with no symbol requirement — the graph never reads one. */
+export interface ModuleEdge {
+  /** Project-relative POSIX path of the file containing the import. */
+  file: string;
+  /** The raw specifier as written: './x', 'os', 'crate::a::b', 'net/http'. */
+  specifier: string;
+  language: string;
+}
+export interface ResolvedEdge { file: string; module_file: string }
+export const RESOLVABLE_LANGUAGES: ReadonlySet<string>;
+export function extractModuleEdges(results: readonly unknown[]): ModuleEdge[];
+export function resolveModuleEdges(
+  edges: readonly ModuleEdge[],
+  projectFiles: ReadonlySet<string>,
+): { resolved: ResolvedEdge[]; unresolved: ModuleEdge[] };
+```
+
+**Why only five languages resolve.** Module-to-file resolution is deterministic
+where the specifier encodes a path: JS/TS relative specifiers, Python dotted
+modules, Go package paths, Rust `crate::`/`self::` paths. It is not, for Java
+and C# (namespace, not path), Ruby (autoload by convention) or PHP (PSR-4 via
+composer config). Those four are **exactly** the four where design §5.3 already
+makes `unreachable` unavailable, so an unresolvable edge there costs nothing
+that was ever promised — it must simply be **reported** as unresolved rather
+than silently dropped.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+import { describe, expect, it } from 'vitest';
+import {
+  extractModuleEdges,
+  resolveModuleEdges,
+  RESOLVABLE_LANGUAGES,
+} from '../../../src/surface/moduleEdges.js';
+
+const FILES = new Set([
+  'src/app.ts', 'src/routes/users.ts', 'src/util.ts',
+  'pkg/handler.go', 'app/models.py', 'src/settings.rs',
+]);
+
+function edge(file: string, specifier: string, language: string) {
+  return { file, specifier, language };
+}
+
+describe('resolveModuleEdges', () => {
+  it('resolves a JS/TS relative specifier, trying the extension candidates', () => {
+    const { resolved } = resolveModuleEdges(
+      [edge('src/app.ts', './routes/users', 'typescript')], FILES,
+    );
+    expect(resolved).toEqual([{ file: 'src/app.ts', module_file: 'src/routes/users.ts' }]);
+  });
+
+  it('resolves a Python dotted module to a path', () => {
+    const { resolved } = resolveModuleEdges([edge('app/urls.py', 'app.models', 'python')], FILES);
+    expect(resolved).toEqual([{ file: 'app/urls.py', module_file: 'app/models.py' }]);
+  });
+
+  it('resolves a Rust crate path', () => {
+    const { resolved } = resolveModuleEdges([edge('src/main.rs', 'crate::settings', 'rust')], FILES);
+    expect(resolved).toEqual([{ file: 'src/main.rs', module_file: 'src/settings.rs' }]);
+  });
+
+  it('reports an unresolvable specifier instead of dropping it', () => {
+    // The wrong implementation silently discards what it cannot resolve, and a
+    // later task then reads a thinner graph as "nothing imports this file".
+    const { resolved, unresolved } = resolveModuleEdges(
+      [edge('Order.java', 'com.example.Service', 'java')], FILES,
+    );
+    expect(resolved).toEqual([]);
+    expect(unresolved).toHaveLength(1);
+  });
+
+  it('reports a third-party specifier as unresolved, not as an edge to nothing', () => {
+    const { resolved, unresolved } = resolveModuleEdges(
+      [edge('src/app.ts', 'express', 'typescript')], FILES,
+    );
+    expect(resolved).toEqual([]);
+    expect(unresolved).toHaveLength(1);
+  });
+
+  it('never invents a module_file that is not a known project file', () => {
+    const { resolved } = resolveModuleEdges(
+      [edge('src/app.ts', './does-not-exist', 'typescript')], FILES,
+    );
+    expect(resolved).toEqual([]);
+  });
+
+  it('lists exactly the five languages whose specifiers encode a path', () => {
+    expect([...RESOLVABLE_LANGUAGES].sort()).toEqual(
+      ['go', 'javascript', 'python', 'rust', 'typescript'],
+    );
+  });
+});
+```
+
+- [ ] **Step 2: Run to verify it fails.** Expected: module not found.
+
+- [ ] **Step 3: Implement `moduleEdges.ts`**
+
+`extractModuleEdges` reads `guardian_kind: import` matches and emits one edge
+per match with **no symbol requirement**. `resolveModuleEdges` resolves per
+language against the known project-file set, and **never returns a
+`module_file` that is not in that set** — an edge to a path that does not exist
+is worse than no edge, because a later task counts it as reachability.
+
+- [ ] **Step 4: Persist the edges**
+
+Add `imports: ResolvedEdge[]` to `AttackSurfaceSnapshot`, to `EMPTY_SNAPSHOT`
+in `surfaceRepo.ts`, and populate it in `buildSnapshot()`. Report the
+unresolved count in the snapshot's existing reporting surface so a later task
+can name it as a coverage gap — an unresolved edge is a hole in the graph and
+the negative verdict depends on knowing about it.
+
+**Do not change `extractImports()` or `resolveNodeMounts`.** Mount resolution
+keeps its own symbol-requiring path; this is a second, wider extraction beside
+it, not a replacement.
+
+- [ ] **Step 5: Run to verify it passes**, then the suite, build, commit
+
+```bash
+cd mcp && npm test && npm run build
+git add mcp/src mcp/test mcp/dist
+git commit -m "feat(surface): persist resolved import edges in the surface snapshot"
+```
+
+---
+
 ## Task 4: The static provider and its four gates
 
 **Files:**
