@@ -77,6 +77,17 @@
  * `file_path` — through the identical `toRelativeIfPossible` helper Task 3b
  * already uses for `imports`, so the two sides agree by construction rather
  * than by two implementations happening to concur today.
+ *
+ * `anonymouslyExposedRouteFiles` carries the SAME disease as `route.file`,
+ * one field narrower, and it is not hypothetical: `dast/analyze.ts` builds a
+ * `scan_dast` finding's `file_path` as `route.file` verbatim (no
+ * `toRelativeIfPossible` anywhere in that path), so a real
+ * `anonymouslyExposedRouteFiles` set — built from persisted findings whose
+ * `file_path` traces back to a route — is absolute, native-separator, the
+ * same convention `route.file` has and NOT the "established convention"
+ * every `scan_sast` parser follows for an ordinary `Finding.file_path`. This
+ * module relativizes it too, for the same reason and with the same
+ * `projectPath`, before ever comparing it against `reachingRoots`.
  */
 import { toRelativeIfPossible } from '../runners/scannerParsers/index.js';
 import { reachFrom } from './importGraph.js';
@@ -97,8 +108,20 @@ export const RUNTIME_RESOLUTION_LANGUAGES = new Set([
 export function validateStatically(input) {
     const routesByFile = groupRoutesByRelFile(input.snapshot.routes, input.projectPath);
     const roots = [...routesByFile.keys()];
+    const exposedFiles = relativizeSet(input.anonymouslyExposedRouteFiles, input.projectPath);
     const reachCache = new Map();
-    return input.findings.map((finding) => validateOne(finding, input, roots, routesByFile, reachCache));
+    return input.findings.map((finding) => validateOne(finding, input, roots, routesByFile, exposedFiles, reachCache));
+}
+/**
+ * `anonymouslyExposedRouteFiles` carries the same absolute, native-separator
+ * convention `route.file` does (see `StaticProviderInput`'s doc comment) —
+ * relativized HERE, once per call, rather than per finding, and with the
+ * identical `toRelativeIfPossible`/`projectPath` pair `groupRoutesByRelFile`
+ * uses for routes, so a route's file and its exposure record agree on the
+ * same key by construction.
+ */
+function relativizeSet(files, projectPath) {
+    return new Set([...files].map((file) => toRelativeIfPossible(file, projectPath)));
 }
 /**
  * Groups CODE-provenance routes by their project-relative POSIX file — the
@@ -135,7 +158,7 @@ function makeEnvelope(finding, input) {
         computed_at: input.computedAt,
     };
 }
-function validateOne(finding, input, roots, routesByFile, reachCache) {
+function validateOne(finding, input, roots, routesByFile, exposedFiles, reachCache) {
     const envelope = makeEnvelope(finding, input);
     if (finding.file_path === undefined) {
         return unknownVerdict(envelope, ['finding has no file_path; nothing to evaluate']);
@@ -144,7 +167,7 @@ function validateOne(finding, input, roots, routesByFile, reachCache) {
     const { language, entry, gaps } = resolveLanguageContext(relFile, input);
     const reach = cachedReachFrom(input.graph, roots, relFile, reachCache);
     if (reach.hops !== null) {
-        return reachableVerdict(envelope, reach.hops, reach.reachingRoots, routesByFile, input.anonymouslyExposedRouteFiles, gaps);
+        return reachableVerdict(envelope, reach.hops, reach.reachingRoots, routesByFile, exposedFiles, gaps);
     }
     if (language === null) {
         return unknownVerdict(envelope, [`could not determine the language of '${relFile}'`, ...gaps]);
@@ -222,7 +245,7 @@ function unreachableVerdict(envelope, relFile, gaps) {
 function unknownVerdict(envelope, gaps) {
     return { ...envelope, verdict: 'unknown', confidence: 'low', evidence: [], coverage_gaps: gaps };
 }
-function reachableVerdict(envelope, hops, reachingRoots, routesByFile, anonymouslyExposedRouteFiles, gaps) {
+function reachableVerdict(envelope, hops, reachingRoots, routesByFile, exposedFiles, gaps) {
     const nearestFile = reachingRoots[0];
     if (nearestFile === undefined) {
         // reachFrom only returns a non-null hop count alongside a non-empty
@@ -234,7 +257,7 @@ function reachableVerdict(envelope, hops, reachingRoots, routesByFile, anonymous
         ...envelope,
         verdict: 'reachable',
         confidence: hops === 0 ? 'high' : 'medium',
-        evidence: buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, anonymouslyExposedRouteFiles),
+        evidence: buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, exposedFiles),
         coverage_gaps: [...gaps],
     };
 }
@@ -242,7 +265,7 @@ function reachableVerdict(envelope, hops, reachingRoots, routesByFile, anonymous
  *  hop count; how many routes reach the file in total; and — only when the
  *  input actually supplied one — a confirmed anonymous exposure. Concrete
  *  facts, never a score. */
-function buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, anonymouslyExposedRouteFiles) {
+function buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, exposedFiles) {
     const evidence = [];
     const nearestRoute = routesByFile.get(nearestFile)?.[0];
     if (nearestRoute !== undefined) {
@@ -253,7 +276,7 @@ function buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, 
     const totalReaching = reachingRoots.reduce((sum, root) => sum + (routesByFile.get(root)?.length ?? 0), 0);
     const totalRoutes = [...routesByFile.values()].reduce((sum, rs) => sum + rs.length, 0);
     evidence.push({ detail: `reached by ${totalReaching} of ${totalRoutes} known route(s)` });
-    const exposed = exposedEvidence(reachingRoots, routesByFile, anonymouslyExposedRouteFiles);
+    const exposed = exposedEvidence(reachingRoots, routesByFile, exposedFiles);
     if (exposed !== null)
         evidence.push(exposed);
     return evidence;
@@ -263,8 +286,8 @@ function buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, 
  * inverse of "the input did not say". Absent a match, this contributes
  * nothing to the evidence list at all.
  */
-function exposedEvidence(reachingRoots, routesByFile, anonymouslyExposedRouteFiles) {
-    const exposedFile = reachingRoots.find((root) => anonymouslyExposedRouteFiles.has(root));
+function exposedEvidence(reachingRoots, routesByFile, exposedFiles) {
+    const exposedFile = reachingRoots.find((root) => exposedFiles.has(root));
     if (exposedFile === undefined)
         return null;
     const route = routesByFile.get(exposedFile)?.[0];

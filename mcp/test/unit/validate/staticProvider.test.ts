@@ -75,8 +75,22 @@ describe('validateStatically — the positive direction', () => {
   });
 
   it('names an anonymously exposed reaching route when one is known', () => {
+    // Realistic data, not a convenience shortcut: dast/analyze.ts sets a
+    // route-derived finding's file_path to `route.file` verbatim (no
+    // relativization anywhere in that path), so a real
+    // anonymouslyExposedRouteFiles set is absolute, native-separator — the
+    // SAME string route.file would be, not pre-relativized POSIX. A wrong
+    // implementation that compares this set against relativized
+    // reachingRoots without relativizing the set itself never matches.
+    const projectPath = 'C:\\Users\\dev\\app';
     const v = validateStatically(input({
-      anonymouslyExposedRouteFiles: new Set(['src/routes.ts']),
+      projectPath,
+      snapshot: {
+        ...input().snapshot,
+        routes: [route({ file: 'C:\\Users\\dev\\app\\src\\routes.ts' })],
+      },
+      graph: buildImportGraph([imp('src/routes.ts', 'src/db.ts')]),
+      anonymouslyExposedRouteFiles: new Set(['C:\\Users\\dev\\app\\src\\routes.ts']),
     }))[0];
     expect(v?.evidence.some((e) => /anonymous/i.test(e.detail))).toBe(true);
   });

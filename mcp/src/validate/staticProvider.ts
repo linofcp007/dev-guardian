@@ -77,6 +77,17 @@
  * `file_path` — through the identical `toRelativeIfPossible` helper Task 3b
  * already uses for `imports`, so the two sides agree by construction rather
  * than by two implementations happening to concur today.
+ *
+ * `anonymouslyExposedRouteFiles` carries the SAME disease as `route.file`,
+ * one field narrower, and it is not hypothetical: `dast/analyze.ts` builds a
+ * `scan_dast` finding's `file_path` as `route.file` verbatim (no
+ * `toRelativeIfPossible` anywhere in that path), so a real
+ * `anonymouslyExposedRouteFiles` set — built from persisted findings whose
+ * `file_path` traces back to a route — is absolute, native-separator, the
+ * same convention `route.file` has and NOT the "established convention"
+ * every `scan_sast` parser follows for an ordinary `Finding.file_path`. This
+ * module relativizes it too, for the same reason and with the same
+ * `projectPath`, before ever comparing it against `reachingRoots`.
  */
 
 import { toRelativeIfPossible } from '../runners/scannerParsers/index.js';
@@ -105,7 +116,18 @@ export interface StaticProviderInput {
   treeHash: string;
   graph: ImportGraph;
   findings: readonly Finding[];
-  /** file_path of every persisted scan_dast anonymous_exposure finding. */
+  /**
+   * file_path of every persisted scan_dast anonymous_exposure finding.
+   * Absolute, native-separator — `dast/analyze.ts` sets a route-derived
+   * finding's `file_path` to `route.file` verbatim, so this carries the same
+   * convention `route.file` has, not the relative one an ordinary
+   * `Finding.file_path` from a `scan_sast` parser would. `validateStatically`
+   * relativizes this set internally against `projectPath` (see the module
+   * doc comment's "Path conventions" section) — pass the raw, un-relativized
+   * paths the persisted findings actually carry; `toRelativeIfPossible` is a
+   * no-op on an already-relative path, so pre-relativizing would not corrupt
+   * anything, only be redundant.
+   */
   anonymouslyExposedRouteFiles: ReadonlySet<string>;
   computedAt: string; // injected, never Date.now() — keeps this module pure
   /** Files whose language could not be determined. */
@@ -125,9 +147,22 @@ type Envelope = Pick<FindingValidation, 'fingerprint' | 'provider' | 'snapshot_i
 export function validateStatically(input: StaticProviderInput): FindingValidation[] {
   const routesByFile = groupRoutesByRelFile(input.snapshot.routes, input.projectPath);
   const roots = [...routesByFile.keys()];
+  const exposedFiles = relativizeSet(input.anonymouslyExposedRouteFiles, input.projectPath);
   const reachCache = new Map<string, ReachResult>();
 
-  return input.findings.map((finding) => validateOne(finding, input, roots, routesByFile, reachCache));
+  return input.findings.map((finding) => validateOne(finding, input, roots, routesByFile, exposedFiles, reachCache));
+}
+
+/**
+ * `anonymouslyExposedRouteFiles` carries the same absolute, native-separator
+ * convention `route.file` does (see `StaticProviderInput`'s doc comment) —
+ * relativized HERE, once per call, rather than per finding, and with the
+ * identical `toRelativeIfPossible`/`projectPath` pair `groupRoutesByRelFile`
+ * uses for routes, so a route's file and its exposure record agree on the
+ * same key by construction.
+ */
+function relativizeSet(files: ReadonlySet<string>, projectPath: string): ReadonlySet<string> {
+  return new Set([...files].map((file) => toRelativeIfPossible(file, projectPath)));
 }
 
 /**
@@ -172,6 +207,7 @@ function validateOne(
   input: StaticProviderInput,
   roots: readonly string[],
   routesByFile: ReadonlyMap<string, RouteRecord[]>,
+  exposedFiles: ReadonlySet<string>,
   reachCache: Map<string, ReachResult>,
 ): FindingValidation {
   const envelope = makeEnvelope(finding, input);
@@ -184,7 +220,7 @@ function validateOne(
   const reach = cachedReachFrom(input.graph, roots, relFile, reachCache);
 
   if (reach.hops !== null) {
-    return reachableVerdict(envelope, reach.hops, reach.reachingRoots, routesByFile, input.anonymouslyExposedRouteFiles, gaps);
+    return reachableVerdict(envelope, reach.hops, reach.reachingRoots, routesByFile, exposedFiles, gaps);
   }
   if (language === null) {
     return unknownVerdict(envelope, [`could not determine the language of '${relFile}'`, ...gaps]);
@@ -287,7 +323,7 @@ function reachableVerdict(
   hops: number,
   reachingRoots: readonly string[],
   routesByFile: ReadonlyMap<string, RouteRecord[]>,
-  anonymouslyExposedRouteFiles: ReadonlySet<string>,
+  exposedFiles: ReadonlySet<string>,
   gaps: readonly string[],
 ): FindingValidation {
   const nearestFile = reachingRoots[0];
@@ -302,7 +338,7 @@ function reachableVerdict(
     ...envelope,
     verdict: 'reachable',
     confidence: hops === 0 ? 'high' : 'medium',
-    evidence: buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, anonymouslyExposedRouteFiles),
+    evidence: buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, exposedFiles),
     coverage_gaps: [...gaps],
   };
 }
@@ -316,7 +352,7 @@ function buildReachableEvidence(
   nearestFile: string,
   reachingRoots: readonly string[],
   routesByFile: ReadonlyMap<string, RouteRecord[]>,
-  anonymouslyExposedRouteFiles: ReadonlySet<string>,
+  exposedFiles: ReadonlySet<string>,
 ): ValidationEvidence[] {
   const evidence: ValidationEvidence[] = [];
   const nearestRoute = routesByFile.get(nearestFile)?.[0];
@@ -330,7 +366,7 @@ function buildReachableEvidence(
   const totalRoutes = [...routesByFile.values()].reduce((sum, rs) => sum + rs.length, 0);
   evidence.push({ detail: `reached by ${totalReaching} of ${totalRoutes} known route(s)` });
 
-  const exposed = exposedEvidence(reachingRoots, routesByFile, anonymouslyExposedRouteFiles);
+  const exposed = exposedEvidence(reachingRoots, routesByFile, exposedFiles);
   if (exposed !== null) evidence.push(exposed);
   return evidence;
 }
@@ -343,9 +379,9 @@ function buildReachableEvidence(
 function exposedEvidence(
   reachingRoots: readonly string[],
   routesByFile: ReadonlyMap<string, RouteRecord[]>,
-  anonymouslyExposedRouteFiles: ReadonlySet<string>,
+  exposedFiles: ReadonlySet<string>,
 ): ValidationEvidence | null {
-  const exposedFile = reachingRoots.find((root) => anonymouslyExposedRouteFiles.has(root));
+  const exposedFile = reachingRoots.find((root) => exposedFiles.has(root));
   if (exposedFile === undefined) return null;
   const route = routesByFile.get(exposedFile)?.[0];
   const label = route === undefined ? exposedFile : `${route.method} ${route.path_resolved} (${exposedFile})`;
