@@ -156,7 +156,13 @@ async function handler(
   input: Record<string, unknown>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string; fingerprint?: string; providers?: 'static'[] };
+  // `providers` is validated by the schema and deliberately not read here.
+  // `z.enum(['static'])` makes `['static']` the only value that can arrive,
+  // so reading it could not change what runs; and `summary.providers_run`
+  // reports what actually ran rather than what was asked for, so echoing the
+  // argument would start lying the moment the enum widens and a caller asks
+  // for a provider this version cannot execute.
+  const inp = input as { project_path?: string; fingerprint?: string };
 
   let projectPath: string;
   try {

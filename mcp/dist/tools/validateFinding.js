@@ -124,6 +124,12 @@ const NO_OPEN_FINDINGS_NOTE = 'No open findings to validate, so nothing was comp
     'unsuppressed findings. Run security_scan_full (or scan_sast) first, then re-run ' +
     'validate_finding.';
 async function handler(input, ctx) {
+    // `providers` is validated by the schema and deliberately not read here.
+    // `z.enum(['static'])` makes `['static']` the only value that can arrive,
+    // so reading it could not change what runs; and `summary.providers_run`
+    // reports what actually ran rather than what was asked for, so echoing the
+    // argument would start lying the moment the enum widens and a caller asks
+    // for a provider this version cannot execute.
     const inp = input;
     let projectPath;
     try {
