@@ -220,6 +220,80 @@ version bump.
       `tools_run`, never a silent skip.
   - Discoverable via the `map_attack_surface` → `scan_dast` two-step, now documented in
     `host-rules/AGENTS.md` and in both tools' own descriptions.
+- **`validate_finding` — reachability qualification for findings, the follow-up to
+  `map_attack_surface`.** New tool that answers, per finding, whether anything outside
+  the process can reach the file it lives in: builds a file-level import graph from the
+  same Semgrep rule pack `map_attack_surface` already runs, roots it at the
+  route-declaring files in the latest surface snapshot, and returns one verdict per
+  finding — `reachable` / `unreachable` / `unknown` — with concrete evidence (the
+  nearest reaching route, its hop count, how many routes reach the file in total, and
+  any live-confirmed anonymous exposure cross-referenced against a persisted
+  `scan_dast` run) plus the coverage gaps behind it. **`unknown` is the default and
+  every path must earn its way out of it** — absence of evidence is never
+  `unreachable`. **Report only**: no auto-suppression, no severity mutation, no flag to
+  enable either — closing a finding stays a human decision. Validates every open
+  finding by default (batch is the point); pass `fingerprint` for one, and an unknown
+  fingerprint is a refusal, never a silently empty batch — the same applies to a
+  missing surface snapshot (`no_surface_snapshot`, naming `map_attack_surface`) and to
+  a project with no open findings (its own `note`, never a bare empty array standing in
+  for "nothing to worry about"). Verdicts persist to a new `finding_validations` table
+  keyed by `(project_path, fingerprint, provider)`, stamped with the snapshot id and
+  tree hash they were computed against; a `stale` flag is derived at read time by
+  comparing that stored tree hash to the current working tree, so a verdict for code
+  that has since moved is never served as current.
+  - **`configs/semgrep/routes.yml` gains import rules for all eight stacks** (JS/TS,
+    Python, Go, Rust, Ruby, Java, C#, PHP), and closes a real gap in the existing ESM
+    rule: `guardian-import-esm` previously matched only a default import or
+    `require(...)` and missed `import { foo } from "./bar"` — the dominant form in
+    modern TypeScript — which was also silently weakening `map_attack_surface`'s own
+    mount resolution.
+  - **The negative verdict is the tool's strongest claim and its most dangerous, so
+    `unreachable` is gated on five independent conditions, checked in order, ALL of
+    which must hold, or the answer is `unknown` with the blocking reason named in
+    `coverage_gaps`:** the import graph holds at least one edge at all (an empty graph
+    is missing DATA, not missing reachability — a pre-existing snapshot backfills
+    `imports: []`, and without this gate every file in it would read `unreachable` on
+    zero evidence); the finding's file path and language are determinable; the
+    snapshot's per-language coverage is `ok` or `no_matches` (never `no_rules` or
+    `unreadable`, where the route list for that language is known to be incomplete);
+    the language does not resolve code at runtime (see below); and the import graph was
+    not truncated at its edge cap. None of this gates the *positive* direction — any
+    discovered import path is reported as `reachable` regardless, down to a finding in
+    a route file itself, which reads `reachable` at 0 hops with `high` confidence, the
+    only case that earns it.
+  - **Known limits — read before trusting a clean `unreachable`:**
+    - **`unreachable` is never emitted for Ruby, Java, C#, or PHP.** All four resolve
+      code at runtime — autoload convention, annotation-driven injection, a DI
+      container, a service container — not by static import, so "nothing imports this
+      file" is true of nearly every file in them and proves nothing. The positive
+      direction is unaffected: a discovered import edge is still evidence in all eight
+      stacks.
+    - **Nothing here detects a dynamic import.** `import(expr)`, `require(variable)`,
+      reflection, and plugin registries are invisible to any import graph, in every
+      stack — including the four above. **In a codebase using them, `unreachable` can
+      be wrong, and this tool cannot tell you when.** This is not a gate — there is no
+      signal to gate on — it is a limitation, stated in the tool description and here,
+      in the same breath as the feature rather than as a weaker or separate account of
+      it.
+    - **Reachability is computed from HTTP route entry points only.** A file reached
+      solely by a CLI entry point, a cron job, or a queue consumer reads as
+      unreachable-by-route. That is what it is, and what the evidence says — it is
+      **not** a claim that the code never runs.
+    - **Granularity is the file, not the function.** A finding inside an uncalled
+      helper in an otherwise-imported file reads `reachable`. Correct for what an
+      import graph knows; an over-report in the safe direction, not the dangerous one.
+    - **The anonymous-exposure cross-reference is only as fresh as the last `scan_dast`
+      run for the project**, and that age is reported alongside it — absent a DAST scan
+      for the project, the clause is simply absent from the evidence, never assumed in
+      either direction.
+    - **The batch is whichever scan completed most recently, of any type — not new
+      here, but newly relevant.** `validate_finding` reads open findings the same way
+      `triage_findings` and `prioritize_findings` already do (`listOpen()`, which is
+      not project- or scan-type-scoped): run it right after `scan_dast` and it
+      validates the DAST findings, not your last SAST run.
+  - Discoverable via the `map_attack_surface` → `validate_finding` two-step, now
+    documented in `host-rules/AGENTS.md` (and its paired host-context files) and in
+    both tools' own descriptions.
 
 ### Fixed
 

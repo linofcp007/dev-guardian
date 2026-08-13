@@ -1,7 +1,7 @@
 # dev-guardian — context for Gemini CLI
 
 This repository has the **dev-guardian MCP server** registered (see
-`~/.gemini/settings.json` or `.gemini/settings.json`). It exposes 52 tools and
+`~/.gemini/settings.json` or `.gemini/settings.json`). It exposes 53 tools and
 18 resources for security, quality, bugfix, deps, compliance, observability,
 performance, plus first-class WordPress and .NET (C#/F#) support. All scanners
 run locally, no telemetry; results persist in `.guardian/guardian.db`.
@@ -26,6 +26,12 @@ to confirm this file is loaded, `/memory refresh` after editing it.
   route inventory, then `scan_dast` against the already-running app (loopback
   only unless `authorized_target: true` is set; a clean result is not evidence
   of injection safety — see its tool description)
+- "is this finding actually reachable / exploitable?" → `map_attack_surface`
+  (if no recent snapshot) then `validate_finding` — reachable / unreachable /
+  unknown per finding with evidence, report-only, never suppresses or touches
+  severity; `unreachable` is never available for Ruby, Java, C#, PHP, or a file
+  reached only by a CLI/cron/queue entry point — see its tool description for
+  the full limits
 
 **Quality**
 - "review before PR" → `review_pr`
@@ -108,6 +114,10 @@ to confirm this file is loaded, `/memory refresh` after editing it.
   + `scan_sast` + `dotnet_efcore_audit` → `dotnet_describe_setup`
 - **Active DAST**: `map_attack_surface` → `scan_dast` (the target app must
   already be running; `scan_dast` never starts, builds or stops it)
+- **Reachability**: `map_attack_surface` → `validate_finding` — requires a
+  prior surface snapshot; validates the open findings from whichever scan
+  completed most recently, so run it right after a SAST scan, not right after
+  `scan_dast`
 
 ## Anti-patterns
 
@@ -123,3 +133,7 @@ to confirm this file is loaded, `/memory refresh` after editing it.
   the own engine sends no injection payloads at all; that class is delegated
   to an opt-in nuclei pass whose default templates test the origin, not this
   project's specific routes.
+- Don't treat `validate_finding`'s `unreachable` as proof nothing can call the
+  code, or suppress a finding on the strength of it alone — it is a
+  reachability signal from an over-approximating import graph, unavailable for
+  four stacks and blind to dynamic imports.

@@ -8,7 +8,7 @@
 
 All-in-one **100% open-source** plugin for Claude Code / Cowork. Handles security, bug detection and fixing, code quality, dependency management, observability, performance and compliance for any dev project. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), trilingual triggers (EN + PT + ES) — responds in the user's language.
 
-Under the hood it ships a Claude Code plugin (13 skills + 48 slash commands) **and** an MCP server with **52 tools and 18 resources**, with persistent SQLite state for baselines, deltas and suppressions. It also vets **third-party AI skills / MCP servers / agents before you install them** — the supply-chain check for the agent ecosystem.
+Under the hood it ships a Claude Code plugin (13 skills + 48 slash commands) **and** an MCP server with **53 tools and 18 resources**, with persistent SQLite state for baselines, deltas and suppressions. It also vets **third-party AI skills / MCP servers / agents before you install them** — the supply-chain check for the agent ecosystem.
 
 ### Skills (Claude Code front-end)
 
@@ -31,7 +31,7 @@ Under the hood it ships a Claude Code plugin (13 skills + 48 slash commands) **a
 
 You can also trigger everything via **natural language** (EN, PT or ES). Skills fire on descriptions — *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*, *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*.
 
-### MCP server (52 tools, 18 resources)
+### MCP server (53 tools, 18 resources)
 
 The plugin registers an MCP server on stdio that Claude Code launches automatically. The tools group into:
 
@@ -45,11 +45,12 @@ The plugin registers an MCP server on stdio that Claude Code launches automatica
 - **AI-agent supply chain** (1) — `scan_skill`: vet a third-party **skill / MCP server / agent before you install it**. Accepts a directory, file, `.zip`, or git/HTTP(S) URL and runs 16 threat categories (prompt injection, data exfiltration, privilege escalation, supply chain, excessive agency, output handling, system-prompt leakage, memory poisoning, tool misuse, rogue agent, trigger abuse, dangerous code, taint, signatures, MCP least-privilege, MCP tool poisoning), a **YARA-style signature engine**, taint-light source→sink, hidden-Unicode detection, and **OSV.dev** CVE lookups — rolled up into a **0-100 risk score** and a **SAFE → DO NOT INSTALL** verdict
 - **Attack surface** (1) — `map_attack_surface`: static inventory of routes, env vars and declared ports across all 8 stacks, with per-language coverage reporting. Also discovers and imports OpenAPI 3.x and Swagger 2.0 documents (JSON or YAML — **Postman collections are not supported**), tags every route with its provenance (`code` or `spec`), and diffs the two: **shadow endpoints** (in the code, undocumented), **dead documentation** (documented, no code implements it) and matched routes. No spec found means no diff — `spec_diff: null`, never a diff that reports every route as undocumented — and a route whose full path cannot be resolved is never reported as a shadow endpoint or as dead documentation; how many findings were withheld for that reason is reported alongside the diff
 - **Active DAST** (1) — `scan_dast`: the follow-up to `map_attack_surface` — sends real HTTP requests to an **already-running** application (never starts, builds or stops it) and checks the route inventory for reachability, anonymous access to auth-required routes, differential authorization, CORS, security headers, information disclosure, undocumented HTTP methods and off-origin redirects, plus an opt-in rate-limit burst and an optional **nuclei** pass. Safety envelope: **loopback-only** unless the caller attests `authorized_target: true`; **read-only** methods (GET/HEAD/OPTIONS) unless `allow_write_methods` is set, and even then with empty bodies, plus the opt-in `probe_rate_limit` burst — the one exception — which sends POST to exactly one route; no injection payloads, no credential guessing. The own engine does **not** test for injection — that's delegated to nuclei's `-dast` fuzzing mode, excluded by default — so **a clean result is not evidence of injection safety**, and nuclei's default template set exercises the origin, not this project's specific routes
+- **Reachability** (1) — `validate_finding`: the other follow-up to `map_attack_surface` — answers, per finding, whether anything outside the process can reach the file it lives in, from a file-level import graph rooted at the route-declaring files. Returns `reachable` / `unreachable` / `unknown` per finding with concrete evidence (nearest reaching route, hop count, how many routes reach the file, any live-confirmed anonymous exposure) plus the coverage gaps behind it. **Report-only**: never suppresses a finding and never touches severity. `unreachable` is never emitted for Ruby, Java, C#, or PHP (all four resolve code at runtime, not by import), for a file reached only by a CLI/cron/queue entry point, or wherever a dynamic import — `import(expr)`, `require(variable)`, reflection, a plugin registry — cannot be resolved
 - **Meta / host** (3) — `detect_stack`, `check_toolchain`, `install_toolchain`
 
 **Resources** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`, `guardian://surface/latest`, `guardian://surface/{id}`.
 
-**Storage** — SQLite at `.guardian/guardian.db`. Tables: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`, `surface_snapshots`. Enables baseline tracking, scan-to-scan deltas, time-bounded suppressions, regression alerts.
+**Storage** — SQLite at `.guardian/guardian.db`. Tables: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`, `surface_snapshots`, `finding_validations`. Enables baseline tracking, scan-to-scan deltas, time-bounded suppressions, regression alerts.
 
 ### Guardrail hooks (auto-active)
 
@@ -202,7 +203,7 @@ Carlos Pereira · prodigitalkey.com
 
 Plugin all-in-one **100% open-source** para Claude Code / Cowork. Faz segurança, deteção e correção de bugs, qualidade de código, gestão de dependências, observability, performance e compliance em qualquer projeto de desenvolvimento. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), triggers trilingues (EN + PT + ES) — responde no idioma do utilizador.
 
-Por baixo do capot fornece um plugin Claude Code (13 skills + 48 slash commands) **e** um servidor MCP com **52 tools e 18 resources**, com estado persistente em SQLite para baselines, deltas e supressões. Também faz **vet de skills / MCP servers / agentes de terceiros antes de os instalares** — a verificação de supply-chain do ecossistema de agentes.
+Por baixo do capot fornece um plugin Claude Code (13 skills + 48 slash commands) **e** um servidor MCP com **53 tools e 18 resources**, com estado persistente em SQLite para baselines, deltas e supressões. Também faz **vet de skills / MCP servers / agentes de terceiros antes de os instalares** — a verificação de supply-chain do ecossistema de agentes.
 
 ### Skills (front-end Claude Code)
 
@@ -225,7 +226,7 @@ Por baixo do capot fornece um plugin Claude Code (13 skills + 48 slash commands)
 
 Também podes invocar tudo em **linguagem natural** (PT, EN ou ES). As skills disparam por descrição — *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*, *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*.
 
-### Servidor MCP (52 tools, 18 resources)
+### Servidor MCP (53 tools, 18 resources)
 
 O plugin regista um servidor MCP em stdio que o Claude Code arranca automaticamente. As tools agrupam-se em:
 
@@ -239,11 +240,12 @@ O plugin regista um servidor MCP em stdio que o Claude Code arranca automaticame
 - **AI-agent supply chain** (1) — `scan_skill`: vet a third-party **skill / MCP server / agent before you install it**. Accepts a directory, file, `.zip`, or git/HTTP(S) URL and runs 16 threat categories (prompt injection, data exfiltration, privilege escalation, supply chain, excessive agency, output handling, system-prompt leakage, memory poisoning, tool misuse, rogue agent, trigger abuse, dangerous code, taint, signatures, MCP least-privilege, MCP tool poisoning), a **YARA-style signature engine**, taint-light source→sink, hidden-Unicode detection, and **OSV.dev** CVE lookups — rolled up into a **0-100 risk score** and a **SAFE → DO NOT INSTALL** verdict
 - **Superfície de ataque** (1) — `map_attack_surface`: inventário estático de rotas, variáveis de ambiente e portas declaradas nas 8 stacks suportadas, com relatório de cobertura por linguagem. Também descobre e importa documentos OpenAPI 3.x e Swagger 2.0 (JSON ou YAML — **coleções Postman não são suportadas**), marca cada rota com a sua proveniência (`code` ou `spec`) e compara as duas: **endpoints shadow** (existem no código, não documentados), **documentação morta** (documentada, sem código que a implemente) e rotas correspondidas. Sem spec encontrada não há diff — `spec_diff: null`, nunca um diff que reporta todas as rotas como não documentadas — e uma rota cujo caminho completo não pode ser resolvido nunca é reportada como endpoint shadow nem como documentação morta; quantos resultados foram retidos por esse motivo é reportado junto do diff
 - **DAST ativo** (1) — `scan_dast`: o passo seguinte ao `map_attack_surface` — envia pedidos HTTP reais a uma aplicação **já em execução** (nunca a arranca, constrói ou pára) e verifica o inventário de rotas quanto a acessibilidade, acesso anónimo a rotas que exigem autenticação, autorização diferencial, CORS, cabeçalhos de segurança, divulgação de informação, métodos HTTP não documentados e redirecionamentos fora da origem, mais um burst opcional de rate-limit e uma passagem opcional de **nuclei**. Envelope de segurança: **apenas loopback** salvo se quem chama atestar `authorized_target: true`; métodos **só de leitura** (GET/HEAD/OPTIONS) salvo se `allow_write_methods` estiver ativo, e mesmo assim com corpo vazio, mais o burst opcional `probe_rate_limit` — a única exceção — que envia POST a exatamente uma rota; sem payloads de injeção, sem adivinhar credenciais. O motor próprio **não** testa injeção — isso fica a cargo do modo `-dast` do nuclei, excluído por defeito — pelo que **um resultado limpo não é prova de segurança contra injeção**, e o conjunto de templates por defeito do nuclei testa a origem, não as rotas específicas deste projeto
+- **Alcançabilidade** (1) — `validate_finding`: o outro passo seguinte ao `map_attack_surface` — responde, por finding, se algo fora do processo consegue alcançar o ficheiro onde este vive, a partir de um grafo de imports ao nível do ficheiro, com raiz nos ficheiros que declaram rotas. Devolve `reachable` / `unreachable` / `unknown` por finding com evidência concreta (rota mais próxima, número de saltos, quantas rotas alcançam o ficheiro, exposição anónima confirmada em live) e os coverage gaps por trás dela. **Apenas relatório**: nunca suprime um finding nem altera a severidade. `unreachable` nunca é emitido para Ruby, Java, C# ou PHP (os quatro resolvem código em runtime, não por import), para um ficheiro alcançado apenas por um CLI/cron/queue, ou sempre que um import dinâmico — `import(expr)`, `require(variable)`, reflection, um registo de plugins — não possa ser resolvido
 - **Meta / host** (3) — `detect_stack`, `check_toolchain`, `install_toolchain`
 
 **Resources** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`, `guardian://surface/latest`, `guardian://surface/{id}`.
 
-**Storage** — SQLite em `.guardian/guardian.db`. Tabelas: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`, `surface_snapshots`. Permite tracking de baseline, deltas scan-a-scan, supressões com expiração, alertas de regressão.
+**Storage** — SQLite em `.guardian/guardian.db`. Tabelas: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`, `surface_snapshots`, `finding_validations`. Permite tracking de baseline, deltas scan-a-scan, supressões com expiração, alertas de regressão.
 
 ### Hooks de proteção (auto-ativos)
 
@@ -396,7 +398,7 @@ Carlos Pereira · prodigitalkey.com
 
 Plugin todo-en-uno **100% open-source** para Claude Code / Cowork. Cubre seguridad, detección y corrección de bugs, calidad de código, gestión de dependencias, observabilidad, rendimiento y cumplimiento para cualquier proyecto de desarrollo. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), triggers trilingües (EN + PT + ES) — responde en el idioma del usuario.
 
-Bajo el capó incluye un plugin Claude Code (13 skills + 48 slash commands) **y** un servidor MCP con **52 herramientas y 18 recursos**, con estado persistente en SQLite para baselines, deltas y supresiones. También hace **vet de skills / MCP servers / agentes de terceros antes de instalarlos** — la verificación de supply-chain del ecosistema de agentes.
+Bajo el capó incluye un plugin Claude Code (13 skills + 48 slash commands) **y** un servidor MCP con **53 herramientas y 18 recursos**, con estado persistente en SQLite para baselines, deltas y supresiones. También hace **vet de skills / MCP servers / agentes de terceros antes de instalarlos** — la verificación de supply-chain del ecosistema de agentes.
 
 ### Skills (front-end de Claude Code)
 
@@ -419,7 +421,7 @@ Bajo el capó incluye un plugin Claude Code (13 skills + 48 slash commands) **y*
 
 También puedes invocarlo todo en **lenguaje natural** (ES, EN o PT). Las skills se disparan por descripción — *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*, *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*.
 
-### Servidor MCP (52 herramientas, 18 recursos)
+### Servidor MCP (53 herramientas, 18 recursos)
 
 El plugin registra un servidor MCP en stdio que Claude Code arranca automáticamente. Las herramientas se agrupan en:
 
@@ -433,11 +435,12 @@ El plugin registra un servidor MCP en stdio que Claude Code arranca automáticam
 - **Cadena de suministro de agentes IA** (1) — `scan_skill`: audita una **skill / servidor MCP / agente de terceros antes de instalarlo**. Acepta un directorio, archivo, `.zip` o URL git/HTTP(S) y corre 16 categorías de amenaza (prompt injection, exfiltración de datos, escalada de privilegios, supply chain, agencia excesiva, manejo de salida, fuga del system-prompt, envenenamiento de memoria, mal uso de tools, agente rogue, abuso de triggers, código peligroso, taint, firmas, MCP least-privilege, MCP tool poisoning), un motor de **firmas estilo YARA**, taint-light source→sink, detección de Unicode oculto y lookups de CVE en **OSV.dev** — todo agregado en una **puntuación de riesgo 0-100** y un veredicto **SAFE → DO NOT INSTALL**
 - **Superficie de ataque** (1) — `map_attack_surface`: inventario estático de rutas, variables de entorno y puertos declarados en las 8 stacks soportadas, con informe de cobertura por lenguaje. También descubre e importa documentos OpenAPI 3.x y Swagger 2.0 (JSON o YAML — **las colecciones de Postman no son compatibles**), etiqueta cada ruta con su procedencia (`code` o `spec`) y compara ambas: **endpoints shadow** (existen en el código, no documentados), **documentación muerta** (documentada, sin código que la implemente) y rutas coincidentes. Sin spec encontrada no hay diff — `spec_diff: null`, nunca un diff que reporte todas las rutas como no documentadas — y una ruta cuyo camino completo no se puede resolver nunca se reporta como endpoint shadow ni como documentación muerta; cuántos resultados se retuvieron por ese motivo se reporta junto al diff
 - **DAST activo** (1) — `scan_dast`: el paso siguiente a `map_attack_surface` — envía peticiones HTTP reales a una aplicación **ya en ejecución** (nunca la arranca, construye ni detiene) y comprueba el inventario de rutas en cuanto a accesibilidad, acceso anónimo a rutas que exigen autenticación, autorización diferencial, CORS, cabeceras de seguridad, divulgación de información, métodos HTTP no documentados y redirecciones fuera del origen, más un burst opcional de rate-limit y una pasada opcional de **nuclei**. Envolvente de seguridad: **solo loopback** salvo que quien llama certifique `authorized_target: true`; métodos **de solo lectura** (GET/HEAD/OPTIONS) salvo que `allow_write_methods` esté activo, y aun así con cuerpo vacío, más el burst opcional `probe_rate_limit` — la única excepción — que envía POST a exactamente una ruta; sin payloads de inyección, sin adivinar credenciales. El motor propio **no** prueba inyección — eso queda delegado al modo `-dast` de nuclei, excluido por defecto — así que **un resultado limpio no es evidencia de seguridad frente a inyección**, y el conjunto de plantillas por defecto de nuclei prueba el origen, no las rutas específicas de este proyecto
+- **Alcanzabilidad** (1) — `validate_finding`: el otro paso siguiente a `map_attack_surface` — responde, por finding, si algo fuera del proceso puede alcanzar el archivo donde vive, a partir de un grafo de imports a nivel de archivo, con raíz en los archivos que declaran rutas. Devuelve `reachable` / `unreachable` / `unknown` por finding con evidencia concreta (ruta más cercana, número de saltos, cuántas rutas alcanzan el archivo, exposición anónima confirmada en vivo) y los coverage gaps detrás de ella. **Solo informe**: nunca suprime un finding ni cambia la severidad. `unreachable` nunca se emite para Ruby, Java, C# o PHP (los cuatro resuelven código en runtime, no por import), para un archivo alcanzado solo por un CLI/cron/queue, o siempre que un import dinámico — `import(expr)`, `require(variable)`, reflection, un registro de plugins — no se pueda resolver
 - **Meta / host** (3) — `detect_stack`, `check_toolchain`, `install_toolchain`
 
 **Recursos** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`, `guardian://surface/latest`, `guardian://surface/{id}`.
 
-**Almacenamiento** — SQLite en `.guardian/guardian.db`. Tablas: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`, `surface_snapshots`. Permite tracking de baseline, deltas scan-a-scan, supresiones con caducidad, alertas de regresión.
+**Almacenamiento** — SQLite en `.guardian/guardian.db`. Tablas: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`, `surface_snapshots`, `finding_validations`. Permite tracking de baseline, deltas scan-a-scan, supresiones con caducidad, alertas de regresión.
 
 ### Hooks de protección (auto-activos)
 

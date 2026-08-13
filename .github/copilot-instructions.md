@@ -1,6 +1,6 @@
 # Copilot instructions — dev-guardian
 
-This project uses the **dev-guardian MCP server** — 52 tools and 18
+This project uses the **dev-guardian MCP server** — 53 tools and 18
 resources for security, quality, bugfix, deps, compliance, observability,
 performance, WordPress, and .NET. All scanners run locally; results
 persist in `.guardian/guardian.db` for diffing and baselines.
@@ -32,9 +32,12 @@ bundler/dotnet).
 `dotnet_efcore_audit`, `dotnet_describe_setup`.
 
 **Attack surface**: `map_attack_surface` (static route/env-var/port
-inventory) then `scan_dast` (active DAST against the app once it is
+inventory), then either `scan_dast` (active DAST against the app once it is
 already running — loopback-only unless `authorized_target: true`; a clean
-result is not evidence of injection safety).
+result is not evidence of injection safety) or `validate_finding`
+(per-finding reachability verdict — reachable / unreachable / unknown,
+report-only; `unreachable` unavailable for Ruby/Java/C#/PHP or a file reached
+only by a CLI/cron/queue entry point).
 
 **Meta**: `audit_executive` (stack-aware — includes WP/.NET tools when
 detected), `risk_score`, `diff_scans`, `set_baseline`, `triage_findings`,
@@ -77,6 +80,10 @@ detected), `risk_score`, `diff_scans`, `set_baseline`, `triage_findings`,
 **Active DAST**: `map_attack_surface` → `scan_dast` (target app must
 already be running; `scan_dast` never starts, builds or stops it).
 
+**Reachability**: `map_attack_surface` → `validate_finding` (requires a
+prior surface snapshot; validates whichever scan completed most recently —
+run it right after a SAST scan, not right after `scan_dast`).
+
 ## Anti-patterns
 
 - Don't run `security_scan_full` for tiny changes — use `review_pr`.
@@ -90,3 +97,6 @@ already be running; `scan_dast` never starts, builds or stops it).
 - Don't read a clean `scan_dast` result as "no injection vulnerabilities" —
   the own engine sends none; that class is delegated to an opt-in nuclei
   pass whose default templates test the origin, not this project's routes.
+- Don't treat `validate_finding`'s `unreachable` as proof the code can never
+  run, or suppress a finding on it alone — it's a reachability signal from an
+  import graph, unavailable for Ruby/Java/C#/PHP and blind to dynamic imports.
