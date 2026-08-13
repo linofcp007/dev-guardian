@@ -131,4 +131,40 @@ describe('ScansRepo', () => {
     // Descending order — s-4, s-3, s-2 (newest first).
     expect(history.map((s) => s.scan_id)).toEqual(['s-4', 's-3', 's-2']);
   });
+
+  it('getLatestForProject ignores a newer completed scan belonging to another project', () => {
+    // getLatest() picks the latest completed scan across the WHOLE database,
+    // no project filter — correct for a caller with no project in scope,
+    // wrong for one that resolved a specific projectPath and must not read
+    // another project's scan just because that project's scan happened to
+    // complete more recently. Mirrors surfaceRepo.ts's getLatestForProject
+    // and findingsRepo.ts's listOpenForProject siblings.
+    const { repo } = freshRepo();
+    repo.insert({ scan_id: 'a1', scan_type: 'sast', project_path: '/project-a', tree_hash: 'ha' });
+    repo.finalize({ scan_id: 'a1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    // Inserted second, so it wins the unscoped `started_at DESC, rowid DESC`
+    // ordering even if both rows land in the same millisecond: `id` is a TEXT
+    // PRIMARY KEY (001_initial.sql), not `INTEGER PRIMARY KEY`, so it is not
+    // a rowid alias — SQLite still assigns this table its own implicit,
+    // strictly-increasing rowid, and `rowid DESC` is the statement's explicit
+    // tiebreaker. Insertion order, not wall-clock resolution, decides ties.
+    repo.insert({ scan_id: 'b1', scan_type: 'sast', project_path: '/project-b', tree_hash: 'hb' });
+    repo.finalize({ scan_id: 'b1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    // getLatest() answers with the OTHER project's scan — kept, and
+    // asserted, because callers with no project in scope still depend on it.
+    expect(repo.getLatest()?.scan_id).toBe('b1');
+
+    expect(repo.getLatestForProject('/project-a')?.scan_id).toBe('a1');
+    expect(repo.getLatestForProject('/project-b')?.scan_id).toBe('b1');
+  });
+
+  it('getLatestForProject returns null for a project with no scan of its own', () => {
+    const { repo } = freshRepo();
+    repo.insert({ scan_id: 's1', scan_type: 'sast', project_path: '/project-a', tree_hash: 'h' });
+    repo.finalize({ scan_id: 's1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    expect(repo.getLatestForProject('/project-c')).toBeNull();
+  });
 });
