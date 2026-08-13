@@ -31,6 +31,16 @@ describe('buildImportGraph', () => {
     expect(buildImportGraph(many).truncated).toBe(true);
     expect(buildImportGraph([imp('a.ts', 'b.ts')]).truncated).toBe(false);
   });
+
+  it('counts distinct edges, not records, so duplicates cannot exhaust the cap', () => {
+    // The same edge repeated past the cap. An implementation that charges the
+    // cap per record scanned rather than per distinct edge accepted reports
+    // truncated: true here.
+    const same = Array.from({ length: MAX_GRAPH_EDGES + 1 }, () => imp('a.ts', 'b.ts'));
+    const g = buildImportGraph(same);
+    expect(g.truncated).toBe(false);
+    expect([...(g.edges.get('a.ts') ?? [])]).toEqual(['b.ts']);
+  });
 });
 
 describe('reachFrom', () => {
@@ -71,6 +81,17 @@ describe('reachFrom', () => {
     const r = reachFrom(g, ['far.ts', 'near.ts'], 'target.ts');
     expect(r.hops).toBe(1);
     expect(r.reachingRoots).toEqual(['near.ts', 'far.ts']);
+  });
+
+  it('breaks an equal-hop tie by name, so the order is stable across runs', () => {
+    // Both roots are 1 hop away, so the primary sort cannot decide this —
+    // only the tie-break can. Insertion order is deliberately the reverse of
+    // alphabetical, so an implementation that drops the tie-break returns
+    // ['zebra.ts', 'apple.ts'] and fails here.
+    const g = buildImportGraph([imp('zebra.ts', 'target.ts'), imp('apple.ts', 'target.ts')]);
+    const r = reachFrom(g, ['zebra.ts', 'apple.ts'], 'target.ts');
+    expect(r.hops).toBe(1);
+    expect(r.reachingRoots).toEqual(['apple.ts', 'zebra.ts']);
   });
 
   it('terminates on a cycle instead of looping forever', () => {
