@@ -152,7 +152,7 @@ fi
 
 # nuclei (opcional, scanner ativo usado por scan_dast)
 y "=== nuclei (DAST) — não instalado por defeito ==="
-echo "  Se precisares: usa a tool MCP install_toolchain (nuclei é opt-in) ou ver https://docs.projectdiscovery.io/opensource/nuclei/install"
+echo "  Sem instalação automática no Linux — ver https://docs.projectdiscovery.io/opensource/nuclei/install (install_toolchain confirma o mesmo)"
 
 # k6 (load testing — opcional)
 y "=== k6 (load testing) — não instalado por defeito ==="

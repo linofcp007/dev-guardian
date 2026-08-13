@@ -52,7 +52,7 @@ has bandit && g "✓ bandit"
 has jscpd || npm install -g jscpd >/dev/null 2>&1
 has jscpd && g "✓ jscpd"
 
-# nuclei (DAST, opcional) — active scanner used by scan_dast, not installed by default
+# nuclei (DAST, opcional) — scanner ativo usado por scan_dast, não instalado por defeito
 y "=== nuclei (DAST) — não instalado por defeito ==="
 echo "  Se precisares: brew install nuclei (ou usa a tool MCP install_toolchain)"
 

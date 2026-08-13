@@ -487,12 +487,14 @@ version bump.
   install it, so the banner advertised a capability the plugin does not have. Meanwhile
   nuclei, which *is* in `TOOL_CATALOG` (`required_by: ['scan_dast']`, `default: false`)
   and is what `scan_dast`'s `use_nuclei` actually drives, appeared in neither installer.
-  Both scripts now carry an honest nuclei banner instead: `install-linux.sh` points at the
-  `install_toolchain` MCP tool (nuclei is opt-in, so a bare default install does not fetch
-  it) and ProjectDiscovery's own install docs; `install-macos.sh` gained the equivalent
-  banner naming the real `brew install nuclei` formula `TOOL_CATALOG` already verifies for
-  that platform. Neither banner reproduces `TOOL_CATALOG`'s linux `curl` fallback, which
-  resolves to a GitHub releases HTML page rather than a raw install script.
+  Both scripts now carry an honest nuclei banner instead: `install-linux.sh` states plainly
+  that Linux has no automatic install path (`TOOL_CATALOG`'s linux bucket for nuclei is
+  empty) and points at ProjectDiscovery's own install docs — `install_toolchain` is named
+  only as confirming the same gap, not as a working alternative. `install-macos.sh` gained
+  the equivalent banner naming the real `brew install nuclei` formula `TOOL_CATALOG` already
+  verifies for that platform, where `install_toolchain` genuinely installs it. Neither
+  banner reproduces `TOOL_CATALOG`'s linux `curl` fallback, which resolves to a GitHub
+  releases HTML page rather than a raw install script.
 - **`TOOL_CATALOG`'s linux install command for gitleaks and nuclei piped an HTML page into
   `sh`.** `curlInstaller`'s contract is a raw install script, but the `gitleaks` and
   `nuclei` linux entries pointed it at `.../releases/latest`, which redirects to the
