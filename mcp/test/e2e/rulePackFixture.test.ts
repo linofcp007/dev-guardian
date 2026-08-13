@@ -124,6 +124,19 @@ const BASE_ROUTES = [
   'express GET /health',
   'express POST /api/users/create',
   'express POST /login',
+  // node-mount-forms/: pins the measured truth behind guardian-import-esm's
+  // comment. A router bound by a NAMED import and mounted directly resolves
+  // cleanly — the gap that rule closed. A router reached through a
+  // NAMESPACE import via member access (`ns.router`) ALSO resolves here,
+  // but not because buildPrefixIndex understands member access: it is
+  // recoverMetavars.ts's synthesizeMount truncating `$ROUTER` at the first
+  // non-identifier character, so "ns.router" recovers as bare "ns" and
+  // coincidentally matches the import's own $SYMBOL. See both rule
+  // comments for the full mechanism; this line pins the observed value on
+  // THIS project's actual (redacting-Semgrep) pipeline, not a claim that
+  // member access is genuinely resolved.
+  'express GET /named/status',
+  'express GET /ns/ns-status',
   'fastapi DELETE /fastapi/items/{item_id}',
   'fastapi GET /fastapi/items',
   'fastapi POST /fastapi/items',
@@ -298,6 +311,9 @@ const EXPECTED_SHADOW = [
   'GET /laravel/orders',
   'GET /list',
   'GET /minimal/health',
+  // node-mount-forms/ — see BASE_ROUTES's comment on the same two routes.
+  'GET /named/status',
+  'GET /ns/ns-status',
   'GET /rails/orders',
   'GET /rails/orders/{}',
   'GET /rust/documented',

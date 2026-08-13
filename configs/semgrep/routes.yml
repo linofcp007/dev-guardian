@@ -213,10 +213,40 @@ rules:
   # CORRECTION, not only an addition: this rule used to match only the default
   # import and `require` forms, missing `import { foo } from "./bar"` and
   # `import * as ns from "./bar"` — the dominant forms in modern TypeScript.
-  # That gap silently weakened resolveNodeMounts (resolvers/node.ts): any
-  # router bound via a named or namespace import was invisible to mount
-  # resolution, so its routes stayed unresolved prefixes with no diagnostic
-  # pointing at the cause. The two new alternatives close it.
+  # That gap silently weakened resolveNodeMounts (resolvers/node.ts) for a
+  # router bound by NAME: `import { usersRouter } from "./x"` produced no
+  # $SYMBOL before this rule existed to capture it, so
+  # `app.use(prefix, usersRouter)` could never resolve. Measured end to end
+  # against test/fixtures/surface/apps/node-mount-forms/ (see
+  # rulePackFixture.test.ts): a named-imported router mounted directly now
+  # resolves — path_partial: false, the mount's own prefix applied.
+  #
+  # The NAMESPACE half of that claim does not hold the same way, and is
+  # measured rather than assumed to hold. Realistic code reaches a namespace
+  # import's export by member access (`app.use(prefix, ns.router)`), and
+  # buildPrefixIndex (resolvers/node.ts) requires EXACT string equality
+  # between the mount's $ROUTER and an import's $SYMBOL — the namespace
+  # alias alone ("ns"), never "ns.router". On a Semgrep that reports real
+  # metavariables, $ROUTER for that call IS the whole member-access
+  # expression, the lookup fails, and the route stays path_partial: true —
+  # the correct outcome for a link this resolver cannot honestly follow.
+  #
+  # Measured on THIS project's actual pipeline (a redacting Semgrep,
+  # recovered by recoverMetavars.ts) the observed result is different, for a
+  # reason outside this rule's control: `synthesizeMount` there (a separate,
+  # pre-existing function, untouched by this change) recovers $ROUTER as a
+  # single identifier and stops at the first non-identifier character, so
+  # "ns.router" recovers as bare "ns" — which then coincidentally equals the
+  # import's own $SYMBOL, and the route resolves anyway (path_partial:
+  # false). That is two pieces of already-merged code lining up, not a
+  # genuine reading of member access: the same truncation would apply
+  # whatever prefix is in scope to EVERY route in a namespace-imported
+  # module, regardless of which of several exports a mount statement
+  # actually named, because resolution happens per FILE, not per property.
+  # Whether that should instead read path_partial on every Semgrep version,
+  # the way the non-redacted path already does, is a decision for
+  # resolvers/node.ts and recoverMetavars.ts — flagged here, not fixed here;
+  # this diff does not touch either file.
   #
   # Measured against Semgrep 1.86.0 (ground truth) and 1.164.0 (redacting):
   # `import { $SYMBOL, ... } from "$MODULE"` ALSO matches a bare default
