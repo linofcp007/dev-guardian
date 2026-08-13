@@ -473,6 +473,19 @@ version bump.
   the persisted `HttpMethod` union) was rejected to avoid touching a type serialized into
   every stored snapshot for the sake of an operation this feature does not otherwise need
   to represent.
+- **The installers advertised a scanner this plugin has never integrated, and omitted the
+  one it can install.** `scripts/install/install-linux.sh` carried an OWASP ZAP banner
+  (`docker pull zaproxy/zap-stable`) held over from before `scan_dast` existed — `ZAP`
+  appears nowhere in `mcp/src`, is not in `TOOL_CATALOG`, and `install_toolchain` cannot
+  install it, so the banner advertised a capability the plugin does not have. Meanwhile
+  nuclei, which *is* in `TOOL_CATALOG` (`required_by: ['scan_dast']`, `default: false`)
+  and is what `scan_dast`'s `use_nuclei` actually drives, appeared in neither installer.
+  Both scripts now carry an honest nuclei banner instead: `install-linux.sh` points at the
+  `install_toolchain` MCP tool (nuclei is opt-in, so a bare default install does not fetch
+  it) and ProjectDiscovery's own install docs; `install-macos.sh` gained the equivalent
+  banner naming the real `brew install nuclei` formula `TOOL_CATALOG` already verifies for
+  that platform. Neither banner reproduces `TOOL_CATALOG`'s linux `curl` fallback, which
+  resolves to a GitHub releases HTML page rather than a raw install script.
 
 ## [1.2.1] — 2026-08-10
 

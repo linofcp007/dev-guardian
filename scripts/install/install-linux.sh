@@ -150,9 +150,9 @@ if has npm; then
   has jscpd && g "✓ jscpd"
 fi
 
-# OWASP ZAP (opcional, grande)
-y "=== OWASP ZAP (DAST) — não instalado por defeito ==="
-echo "  Se precisares: docker pull zaproxy/zap-stable"
+# nuclei (opcional, scanner ativo usado por scan_dast)
+y "=== nuclei (DAST) — não instalado por defeito ==="
+echo "  Se precisares: usa a tool MCP install_toolchain (nuclei é opt-in) ou ver https://docs.projectdiscovery.io/opensource/nuclei/install"
 
 # k6 (load testing — opcional)
 y "=== k6 (load testing) — não instalado por defeito ==="
