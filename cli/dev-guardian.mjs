@@ -161,12 +161,15 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          Start <cmd> (argv, never a shell) for the DAST pass
                          and stop it — whole process tree — when the scan
                          ends, however it ends. Requires --base-url. CLI
-                         ARGV ONLY — never honoured from a repository file
-                         (see the module header comment for why).
+                         ARGV ONLY — never honoured from a repository file:
+                         a fork's pull request could otherwise edit
+                         .guardian/ci.json and run arbitrary code on the
+                         runner the moment this CLI read the key from there.
   Never writes .guardian/baseline.json — see \`baseline update\`.
   Leaves .guardian/reports/ in the scanned project either way (security_scan_full
   and map_attack_surface write there, same as interactively) — add \`.guardian/\`
-  to .gitignore if this repo never ran init_project interactively.
+  to .gitignore by hand. The MCP server does this automatically every time it
+  starts against a project; this CLI never starts that server.
   --sarif records coverage as a single pass/fail bit (SARIF's own
   invocation.executionSuccessful) — enough to tell an incomplete run from a clean
   one without cross-referencing anything else, but not WHICH scanner was missing

@@ -79,8 +79,8 @@ error. Install via `git clone --depth 1` + `npm ci` in mcp/, not npx — see the
 README's "Run scans in CI" for a copy-pasteable job. `--start-command` (DAST pass)
 is argv-only — refused outright if `.guardian/ci.json` declares it (pwn-request
 guard: a fork's PR must never get code execution on the runner). Leaves
-`.guardian/reports/` in the workspace — add `.guardian/` to .gitignore if this repo
-never ran init_project interactively.
+`.guardian/reports/` in the workspace — add `.guardian/` to .gitignore by hand; the
+MCP server does this on its own startup, this CLI never does.
 
 ## Don't
 

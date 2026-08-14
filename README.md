@@ -156,11 +156,11 @@ node cli/dev-guardian.mjs baseline update --project .      # adopt current findi
 node cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
 ```
 
-Exit codes: `0` pass, `1` gate failed (a finding new to the baseline, at or above `--fail-on`), `2` **incomplete scan** (an expected scanner did not run — never read this as a pass), `3` usage/configuration error. Run the CLI with no arguments for the full flag reference, including `--base-url`/`--start-command` for the DAST pass.
+Exit codes: `0` pass, `1` gate failed (a finding new to the baseline, at or above `--fail-on`), `2` **incomplete scan** (an expected scanner did not run — never read this as a pass), `3` usage/configuration error. For the DAST pass, `--start-command <cmd>` starts the app under test — it requires `--base-url` alongside it (the same URL is both the health-check target and the `scan_dast` origin) — and it is accepted **only on the command line, never from `.guardian/ci.json`**: a pull request from a fork could otherwise edit that file and run arbitrary code on the runner. Run the CLI with no arguments for the full flag reference.
 
-> **Distribution is `git clone`, not `npx`.** This ships as a Claude Code plugin repository, not an npm package, so there is no one-line installer yet (a publishable form is being investigated separately, gated on it actually passing the Claude Desktop plugin validator). Clone at a pinned tag with `--depth 1`, then run `npm ci` once inside `mcp/` — `mcp/dist/` is committed so nothing needs *building*, but `mcp/node_modules` is gitignored like everywhere else in this repo, and `scan`/`baseline update` still import a couple of runtime packages (`execa`, `yaml`) the committed build does not bundle.
+> **Distribution is `git clone`, not `npx`.** This ships as a Claude Code plugin repository, not an npm package, so there is no one-line installer yet (a publishable form is being investigated separately, gated on it actually passing the Claude Desktop plugin validator). Clone at a pinned tag with `--depth 1` — `v1.3.0` here, or whichever release you want to track — then run `npm ci` once inside `mcp/`: `mcp/dist/` is committed so nothing needs *building*, but `mcp/node_modules` is gitignored like everywhere else in this repo, and `scan`/`baseline update` still import a couple of runtime packages (`execa`, `yaml`) the committed build does not bundle.
 
-A copy-pasteable job — findings land as annotations on the pull request diff, not buried in a log:
+A copy-pasteable job — findings land as annotations on the pull request diff, not buried in a log. **`ubuntu-latest` ships none of Semgrep, gitleaks or Trivy**, so the job installs them itself; skip that step (or let it fail) and every run reports `coverage: none` / exit `2` — not a malfunction, that is the designed response to a scan that did not actually scan anything:
 
 ```yaml
 name: dev-guardian
@@ -179,12 +179,32 @@ jobs:
           node-version: 22
 
       # Cloned OUTSIDE the checkout so dev-guardian's own source is never
-      # itself part of the scan. Replace v1.3.0 with the tag you want.
+      # itself part of the scan.
       - name: Clone dev-guardian
         run: |
           git clone --depth 1 --branch v1.3.0 \
             https://github.com/linofcp007/dev-guardian.git "$RUNNER_TEMP/dev-guardian"
           cd "$RUNNER_TEMP/dev-guardian/mcp" && npm ci
+
+      # None of these ship on ubuntu-latest. Semgrep alone has a Docker
+      # fallback inside dev-guardian's own scanners, but gitleaks and Trivy
+      # do not, so skipping this step still caps every run below coverage:
+      # full. pipx is preinstalled on ubuntu-latest; sudo is passwordless
+      # for the runner user.
+      - name: Install scanners (Semgrep, gitleaks, Trivy)
+        run: |
+          pipx install semgrep
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          GL_TAG=$(curl -sL -o /dev/null -w '%{url_effective}' https://github.com/gitleaks/gitleaks/releases/latest)
+          GL_TAG=$(basename "$GL_TAG")
+          curl -sL "https://github.com/gitleaks/gitleaks/releases/download/${GL_TAG}/gitleaks_${GL_TAG#v}_linux_x64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" \
+            | sudo tee /etc/apt/sources.list.d/trivy.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y trivy
 
       - name: Scan
         id: scan
@@ -197,6 +217,8 @@ jobs:
       # gate failure and an incomplete scan both still produce a report.
       # SARIF's own executionSuccessful flag says WHETHER coverage was full;
       # it can't say WHICH scanner was missing — that's exit 2 and the log above.
+      # Requires the repository to be public, or GitHub Code Security on a
+      # private one — otherwise drop this step and use --format json instead.
       - uses: github/codeql-action/upload-sarif@v3
         if: always() && hashFiles('results.sarif') != ''
         with:
@@ -211,15 +233,17 @@ jobs:
         run: echo "::warning::dev-guardian scan was incomplete — see the step log above for which scanner did not run"
 ```
 
-Two things this snippet cannot hide from you:
+Three things this snippet cannot hide from you:
 
-- **A CI run leaves `.guardian/` in the workspace.** `security_scan_full` and `map_attack_surface` write their raw scanner output under `.guardian/reports/` in the project being scanned, exactly as they do interactively — only the SQLite database is ephemeral. `init_project`'s interactive setup adds `.guardian/` to `.gitignore` for you; that hook never runs from the CLI, so a repository that only ever scans through CI must add the line by hand, or a later pipeline step that asserts a clean working tree will fail for a reason that looks like nothing:
+- **A CI run leaves `.guardian/` in the workspace.** `security_scan_full` and `map_attack_surface` write their raw scanner output under `.guardian/reports/` in the project being scanned, exactly as they do interactively — only the SQLite database is ephemeral. The MCP server adds `.guardian/` to `.gitignore` automatically every time it starts against a project (an interactive session, any host) — that never happens from the CLI, so a repository that only ever scans through CI must add the line by hand, or a later pipeline step that asserts a clean working tree will fail for a reason that looks like nothing:
 
   ```text
   .guardian/
   ```
 
-- **SARIF alone cannot tell you *which* scanner is missing.** Its `invocation.executionSuccessful` flag flips to `false` whenever coverage isn't full — so a consumer reading only the upload can already tell an incomplete run from a clean one — but SARIF has no field for prose, so the scanner name and reason live only in exit code `2` and the step's own human/JSON output. Treat an uploaded SARIF with zero results as inconclusive, not clean, until you've checked the exit code.
+- **SARIF alone cannot tell you *which* scanner is missing.** Its `invocation.executionSuccessful` flag flips to `false` whenever coverage isn't full — so a consumer reading only the upload can already tell an incomplete run from a clean one — but SARIF has no *general-purpose* field for this prose, so the scanner name and reason live only in exit code `2` and the step's own human/JSON output. Treat an uploaded SARIF with zero results as inconclusive, not clean, until you've checked the exit code.
+
+- **Code-scanning upload needs a public repository, or GitHub Code Security on a private one.** Without either, the `upload-sarif` step fails the job for a reason that has nothing to do with findings. On a private repository without that licence, drop the upload step and use `--format json` plus the exit code instead.
 
 ### Philosophy
 
@@ -250,7 +274,7 @@ dev-guardian/
 ├── cli/                         # dev-guardian.mjs CLI (mcp-config, check, scan, baseline)
 ├── mcp/                         # MCP server (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/, hooks/
-│   ├── test/                    # 280 unit + integration tests
+│   ├── test/                    # 1094 unit + integration + e2e tests
 │   ├── scripts/                 # smoke.mjs, smoke-wp-dotnet.mjs
 │   └── dist/                    # built artifact (node dist/server.js)
 ├── scripts/
@@ -425,11 +449,11 @@ node cli/dev-guardian.mjs baseline update --project .      # adota os findings a
 node cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
 ```
 
-Exit codes: `0` passou, `1` gate falhou (finding novo na baseline, severidade >= `--fail-on`), `2` **scan incompleto** (um scanner esperado não correu — nunca leias isto como um passe), `3` erro de uso/configuração. Corre a CLI sem argumentos para veres a referência completa de flags, incluindo `--base-url`/`--start-command` para o passo DAST.
+Exit codes: `0` passou, `1` gate falhou (finding novo na baseline, severidade >= `--fail-on`), `2` **scan incompleto** (um scanner esperado não correu — nunca leias isto como um passe), `3` erro de uso/configuração. Para o passo DAST, `--start-command <cmd>` arranca a app a testar — exige `--base-url` ao lado (o mesmo URL é o alvo do health-check e a origem do `scan_dast`) — e só é aceite **na linha de comandos, nunca a partir de `.guardian/ci.json`**: um pull request de um fork podia editar esse ficheiro e correr código arbitrário no runner. Corre a CLI sem argumentos para veres a referência completa de flags.
 
-> **A distribuição é `git clone`, não `npx`.** Isto é distribuído como um repositório de plugin Claude Code, não como um pacote npm, por isso ainda não há instalador de uma linha (uma forma publicável está a ser investigada à parte, condicionada a passar de facto no validador de plugins do Claude Desktop). Faz clone a um tag fixo com `--depth 1`, depois corre `npm ci` uma vez dentro de `mcp/` — o `mcp/dist/` vem committed, por isso não há nada para *compilar*, mas `mcp/node_modules` está no gitignore como o resto deste repo, e `scan`/`baseline update` continuam a importar alguns pacotes de runtime (`execa`, `yaml`) que o build committed não empacota.
+> **A distribuição é `git clone`, não `npx`.** Isto é distribuído como um repositório de plugin Claude Code, não como um pacote npm, por isso ainda não há instalador de uma linha (uma forma publicável está a ser investigada à parte, condicionada a passar de facto no validador de plugins do Claude Desktop). Faz clone a um tag fixo com `--depth 1` — `v1.3.0` aqui, ou o release que quiseres seguir — depois corre `npm ci` uma vez dentro de `mcp/`: o `mcp/dist/` vem committed, por isso não há nada para *compilar*, mas `mcp/node_modules` está no gitignore como o resto deste repo, e `scan`/`baseline update` continuam a importar alguns pacotes de runtime (`execa`, `yaml`) que o build committed não empacota.
 
-Um job pronto a colar — os findings aparecem como anotações no diff do pull request, não perdidos num log:
+Um job pronto a colar — os findings aparecem como anotações no diff do pull request, não perdidos num log. **O `ubuntu-latest` não traz Semgrep, gitleaks nem Trivy**, por isso o job instala-os ele próprio; salta esse passo (ou deixa-o falhar) e todos os runs reportam `coverage: none` / exit `2` — não é uma avaria, é a resposta desenhada para um scan que não scaneou nada:
 
 ```yaml
 name: dev-guardian
@@ -448,12 +472,32 @@ jobs:
           node-version: 22
 
       # Clonado FORA do checkout para o próprio código do dev-guardian nunca
-      # entrar no scan. Substitui v1.3.0 pelo tag que quiseres.
+      # entrar no scan.
       - name: Clone dev-guardian
         run: |
           git clone --depth 1 --branch v1.3.0 \
             https://github.com/linofcp007/dev-guardian.git "$RUNNER_TEMP/dev-guardian"
           cd "$RUNNER_TEMP/dev-guardian/mcp" && npm ci
+
+      # Nenhum destes vem no ubuntu-latest. O Semgrep sozinho tem fallback
+      # via Docker dentro dos scanners do próprio dev-guardian, mas gitleaks
+      # e Trivy não têm, por isso saltar este passo continua a limitar todos
+      # os runs abaixo de coverage: full. O pipx já vem instalado no
+      # ubuntu-latest; o sudo é sem password para o utilizador runner.
+      - name: Install scanners (Semgrep, gitleaks, Trivy)
+        run: |
+          pipx install semgrep
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          GL_TAG=$(curl -sL -o /dev/null -w '%{url_effective}' https://github.com/gitleaks/gitleaks/releases/latest)
+          GL_TAG=$(basename "$GL_TAG")
+          curl -sL "https://github.com/gitleaks/gitleaks/releases/download/${GL_TAG}/gitleaks_${GL_TAG#v}_linux_x64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" \
+            | sudo tee /etc/apt/sources.list.d/trivy.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y trivy
 
       - name: Scan
         id: scan
@@ -466,6 +510,8 @@ jobs:
       # um gate falhado e um scan incompleto continuam a produzir relatório.
       # O executionSuccessful do SARIF diz SE a cobertura foi total; não diz
       # QUAL scanner faltou — isso é o exit 2 e o log acima.
+      # Exige que o repositório seja público, ou GitHub Code Security num
+      # privado — caso contrário tira este passo e usa --format json.
       - uses: github/codeql-action/upload-sarif@v3
         if: always() && hashFiles('results.sarif') != ''
         with:
@@ -480,15 +526,17 @@ jobs:
         run: echo "::warning::dev-guardian scan incompleto — vê o log do passo acima para saber qual scanner faltou"
 ```
 
-Duas coisas que este snippet não te consegue esconder:
+Três coisas que este snippet não te consegue esconder:
 
-- **Um scan em CI deixa `.guardian/` na working tree.** `security_scan_full` e `map_attack_surface` escrevem a saída bruta dos scanners em `.guardian/reports/` dentro do projeto scaneado, exatamente como fazem numa sessão interativa — só a base de dados SQLite é efémera. O setup interativo do `init_project` adiciona `.guardian/` ao `.gitignore` por ti; esse hook nunca corre a partir da CLI, por isso um repositório que só corre a CLI em CI tem de adicionar a linha à mão, ou um passo posterior da pipeline que verifica uma working tree limpa vai falhar por um motivo que parece nada:
+- **Um scan em CI deixa `.guardian/` na working tree.** `security_scan_full` e `map_attack_surface` escrevem a saída bruta dos scanners em `.guardian/reports/` dentro do projeto scaneado, exatamente como fazem numa sessão interativa — só a base de dados SQLite é efémera. O servidor MCP adiciona `.guardian/` ao `.gitignore` automaticamente sempre que arranca contra um projeto (uma sessão interativa, qualquer host) — isso nunca acontece a partir da CLI, por isso um repositório que só corre a CLI em CI tem de adicionar a linha à mão, ou um passo posterior da pipeline que verifica uma working tree limpa vai falhar por um motivo que parece nada:
 
   ```text
   .guardian/
   ```
 
-- **O SARIF sozinho não te diz *qual* scanner falta.** A flag `invocation.executionSuccessful` muda para `false` sempre que a cobertura não é total — por isso quem lê só o upload já consegue distinguir um run incompleto de um limpo — mas o SARIF não tem campo para texto livre, por isso o nome do scanner e o motivo só vivem no exit code `2` e na saída humana/JSON do próprio passo. Trata um SARIF carregado com zero resultados como inconclusivo, não como limpo, até verificares o exit code.
+- **O SARIF sozinho não te diz *qual* scanner falta.** A flag `invocation.executionSuccessful` muda para `false` sempre que a cobertura não é total — por isso quem lê só o upload já consegue distinguir um run incompleto de um limpo — mas o SARIF não tem campo de *uso geral* para este texto, por isso o nome do scanner e o motivo só vivem no exit code `2` e na saída humana/JSON do próprio passo. Trata um SARIF carregado com zero resultados como inconclusivo, não como limpo, até verificares o exit code.
+
+- **O upload de code-scanning exige um repositório público, ou GitHub Code Security num privado.** Sem um dos dois, o passo `upload-sarif` falha o job por um motivo que nada tem a ver com findings. Num repositório privado sem essa licença, tira o passo de upload e usa `--format json` mais o exit code.
 
 ### Filosofia
 
@@ -519,7 +567,7 @@ dev-guardian/
 ├── cli/                         # CLI dev-guardian.mjs (mcp-config, check, scan, baseline)
 ├── mcp/                         # Servidor MCP (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/
-│   ├── test/                    # 280 testes unit + integration
+│   ├── test/                    # 1094 testes unit + integration + e2e
 │   ├── scripts/                 # smoke.mjs, smoke-wp-dotnet.mjs
 │   └── dist/                    # artefacto compilado (node dist/server.js)
 ├── scripts/
@@ -694,11 +742,11 @@ node cli/dev-guardian.mjs baseline update --project .      # adopta los findings
 node cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
 ```
 
-Códigos de salida: `0` pasó, `1` el gate falló (finding nuevo en la baseline, severidad >= `--fail-on`), `2` **escaneo incompleto** (un scanner esperado no corrió — nunca leas esto como un pase), `3` error de uso/configuración. Ejecuta la CLI sin argumentos para ver la referencia completa de flags, incluyendo `--base-url`/`--start-command` para el paso DAST.
+Códigos de salida: `0` pasó, `1` el gate falló (finding nuevo en la baseline, severidad >= `--fail-on`), `2` **escaneo incompleto** (un scanner esperado no corrió — nunca leas esto como un pase), `3` error de uso/configuración. Para el paso DAST, `--start-command <cmd>` arranca la app a probar — exige `--base-url` junto a él (la misma URL es el objetivo del health-check y el origen de `scan_dast`) — y solo se acepta **en la línea de comandos, nunca desde `.guardian/ci.json`**: un pull request de un fork podría editar ese archivo y ejecutar código arbitrario en el runner. Ejecuta la CLI sin argumentos para ver la referencia completa de flags.
 
-> **La distribución es `git clone`, no `npx`.** Esto se distribuye como un repositorio de plugin de Claude Code, no como un paquete npm, así que todavía no hay instalador de una línea (una forma publicable se está investigando aparte, condicionada a pasar de verdad el validador de plugins de Claude Desktop). Clona a un tag fijo con `--depth 1`, luego ejecuta `npm ci` una vez dentro de `mcp/` — `mcp/dist/` viene committeado, así que no hay nada que *compilar*, pero `mcp/node_modules` está en el gitignore como el resto de este repo, y `scan`/`baseline update` siguen importando un par de paquetes de runtime (`execa`, `yaml`) que el build committeado no empaqueta.
+> **La distribución es `git clone`, no `npx`.** Esto se distribuye como un repositorio de plugin de Claude Code, no como un paquete npm, así que todavía no hay instalador de una línea (una forma publicable se está investigando aparte, condicionada a pasar de verdad el validador de plugins de Claude Desktop). Clona a un tag fijo con `--depth 1` — `v1.3.0` aquí, o el release que quieras seguir — luego ejecuta `npm ci` una vez dentro de `mcp/`: `mcp/dist/` viene committeado, así que no hay nada que *compilar*, pero `mcp/node_modules` está en el gitignore como el resto de este repo, y `scan`/`baseline update` siguen importando un par de paquetes de runtime (`execa`, `yaml`) que el build committeado no empaqueta.
 
-Un job listo para copiar y pegar — los findings aparecen como anotaciones en el diff del pull request, no perdidos en un log:
+Un job listo para copiar y pegar — los findings aparecen como anotaciones en el diff del pull request, no perdidos en un log. **`ubuntu-latest` no trae Semgrep, gitleaks ni Trivy**, así que el job los instala él mismo; sáltate ese paso (o deja que falle) y cada run reporta `coverage: none` / exit `2` — no es una avería, es la respuesta diseñada para un escaneo que no escaneó nada:
 
 ```yaml
 name: dev-guardian
@@ -717,12 +765,32 @@ jobs:
           node-version: 22
 
       # Clonado FUERA del checkout para que el propio código de dev-guardian
-      # nunca entre en el escaneo. Sustituye v1.3.0 por el tag que quieras.
+      # nunca entre en el escaneo.
       - name: Clone dev-guardian
         run: |
           git clone --depth 1 --branch v1.3.0 \
             https://github.com/linofcp007/dev-guardian.git "$RUNNER_TEMP/dev-guardian"
           cd "$RUNNER_TEMP/dev-guardian/mcp" && npm ci
+
+      # Ninguno de estos viene en ubuntu-latest. Semgrep solo tiene fallback
+      # vía Docker dentro de los propios scanners de dev-guardian, pero
+      # gitleaks y Trivy no, así que saltarse este paso igual limita cada
+      # run por debajo de coverage: full. pipx ya viene instalado en
+      # ubuntu-latest; sudo es sin contraseña para el usuario runner.
+      - name: Install scanners (Semgrep, gitleaks, Trivy)
+        run: |
+          pipx install semgrep
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          GL_TAG=$(curl -sL -o /dev/null -w '%{url_effective}' https://github.com/gitleaks/gitleaks/releases/latest)
+          GL_TAG=$(basename "$GL_TAG")
+          curl -sL "https://github.com/gitleaks/gitleaks/releases/download/${GL_TAG}/gitleaks_${GL_TAG#v}_linux_x64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" \
+            | sudo tee /etc/apt/sources.list.d/trivy.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y trivy
 
       - name: Scan
         id: scan
@@ -735,6 +803,8 @@ jobs:
       # gate fallido y un escaneo incompleto igual producen informe. El
       # executionSuccessful del SARIF dice SI la cobertura fue completa; no
       # dice QUÉ scanner faltó — eso es el exit 2 y el log de arriba.
+      # Exige que el repositorio sea público, o GitHub Code Security en uno
+      # privado — si no, quita este paso y usa --format json.
       - uses: github/codeql-action/upload-sarif@v3
         if: always() && hashFiles('results.sarif') != ''
         with:
@@ -749,15 +819,17 @@ jobs:
         run: echo "::warning::dev-guardian scan incompleto — mira el log del paso de arriba para saber qué scanner faltó"
 ```
 
-Dos cosas que este snippet no te puede esconder:
+Tres cosas que este snippet no te puede esconder:
 
-- **Un escaneo en CI deja `.guardian/` en el workspace.** `security_scan_full` y `map_attack_surface` escriben la salida cruda de los scanners en `.guardian/reports/` dentro del proyecto escaneado, igual que hacen en una sesión interactiva — solo la base de datos SQLite es efímera. El setup interactivo de `init_project` añade `.guardian/` al `.gitignore` por ti; ese hook nunca corre desde la CLI, así que un repositorio que solo escanea vía CI tiene que añadir la línea a mano, o un paso posterior del pipeline que comprueba un working tree limpio fallará por un motivo que no parece nada:
+- **Un escaneo en CI deja `.guardian/` en el workspace.** `security_scan_full` y `map_attack_surface` escriben la salida cruda de los scanners en `.guardian/reports/` dentro del proyecto escaneado, igual que hacen en una sesión interactiva — solo la base de datos SQLite es efímera. El servidor MCP añade `.guardian/` al `.gitignore` automáticamente cada vez que arranca contra un proyecto (una sesión interactiva, cualquier host) — eso nunca pasa desde la CLI, así que un repositorio que solo escanea vía CI tiene que añadir la línea a mano, o un paso posterior del pipeline que comprueba un working tree limpio fallará por un motivo que no parece nada:
 
   ```text
   .guardian/
   ```
 
-- **El SARIF por sí solo no te dice *qué* scanner falta.** Su flag `invocation.executionSuccessful` pasa a `false` siempre que la cobertura no sea completa — así que quien lea solo el upload ya puede distinguir un run incompleto de uno limpio — pero el SARIF no tiene campo para texto libre, así que el nombre del scanner y el motivo solo viven en el exit code `2` y en la salida humana/JSON del propio paso. Trata un SARIF subido con cero resultados como inconcluso, no como limpio, hasta que compruebes el exit code.
+- **El SARIF por sí solo no te dice *qué* scanner falta.** Su flag `invocation.executionSuccessful` pasa a `false` siempre que la cobertura no sea completa — así que quien lea solo el upload ya puede distinguir un run incompleto de uno limpio — pero el SARIF no tiene campo de *uso general* para este texto, así que el nombre del scanner y el motivo solo viven en el exit code `2` y en la salida humana/JSON del propio paso. Trata un SARIF subido con cero resultados como inconcluso, no como limpio, hasta que compruebes el exit code.
+
+- **La subida de code-scanning exige un repositorio público, o GitHub Code Security en uno privado.** Sin ninguno de los dos, el paso `upload-sarif` falla el job por un motivo que no tiene nada que ver con los findings. En un repositorio privado sin esa licencia, quita el paso de subida y usa `--format json` más el exit code.
 
 ### Filosofía
 
@@ -788,7 +860,7 @@ dev-guardian/
 ├── cli/                         # CLI dev-guardian.mjs (mcp-config, check, scan, baseline)
 ├── mcp/                         # Servidor MCP (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/
-│   ├── test/                    # 280 tests unit + integration
+│   ├── test/                    # 1094 tests unit + integration + e2e
 │   ├── scripts/                 # smoke.mjs, smoke-wp-dotnet.mjs
 │   └── dist/                    # artefacto compilado (node dist/server.js)
 ├── scripts/

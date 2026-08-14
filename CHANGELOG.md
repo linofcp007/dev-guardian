@@ -8,6 +8,8 @@ version bump.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-08-14
+
 ### Added
 
 - **`map_attack_surface` — static route/env-var/port inventory across all 8 stacks.**
@@ -356,11 +358,13 @@ version bump.
   - **A CI run leaves `.guardian/` in the workspace.** `security_scan_full`,
     `map_attack_surface` and `scan_dast` write their raw scanner output under
     `.guardian/reports/` in the project being scanned, exactly as they do interactively
-    — only the SQLite database is ephemeral. `init_project`'s interactive setup
-    gitignores `.guardian/` automatically; that hook never fires from the CLI, so a
-    repository that only ever scans through CI does not get the entry for free, and a
-    later pipeline step asserting a clean working tree fails for a reason that looks
-    like nothing. Add `.guardian/` to `.gitignore` by hand.
+    — only the SQLite database is ephemeral. The MCP server gitignores `.guardian/`
+    automatically every time it starts against a project — not `init_project`
+    specifically, the bootstrap itself (`server.ts`'s own boot sequence) — so that
+    never fires from the CLI, and a repository that only ever scans through CI does
+    not get the entry for free. A later pipeline step asserting a clean working tree
+    fails for a reason that looks like nothing. Add `.guardian/` to `.gitignore` by
+    hand.
   - **Known limits.** Distribution is `git clone --depth 1` of this plugin repository
     against a pinned tag, not an `npx` one-liner — heavier, but there is no TypeScript
     build step: `mcp/dist/` ships committed. `mcp/node_modules` does **not** ship
@@ -369,10 +373,16 @@ version bump.
     at the top level, unbundled, so `scan`/`baseline update` fail on a bare clone until
     `npm ci` has run once — a publishable package is being investigated separately,
     gated on a real pass through the Claude Desktop plugin validator rather than
-    promised ahead of one. The scan database is ephemeral by design, so CI carries no
-    trend history of its own — the baseline is the only state meant to survive a run,
-    deliberately. `scan_dast` in CI reaches only what the runner itself can reach; an
-    application behind a private network is out of scope, same as it is interactively.
+    promised ahead of one. Nor does a stock CI runner carry Semgrep, gitleaks or Trivy
+    — `ubuntu-latest` ships none of them — so the pipeline must install them itself
+    (the README's CI job does; the scanners are not part of this repository or the
+    npm dependency tree). Skipping that leaves every step reporting a missing scanner:
+    `coverage` never reaches `full`, exit `2` on every run, correctly, because nothing
+    was actually scanned — not a defect in the gate, the absence of the gate's own
+    inputs. The scan database is ephemeral by design, so CI carries no trend history
+    of its own — the baseline is the only state meant to survive a run, deliberately.
+    `scan_dast` in CI reaches only what the runner itself can reach; an application
+    behind a private network is out of scope, same as it is interactively.
 
 ### Fixed
 

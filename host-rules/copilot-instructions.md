@@ -97,8 +97,9 @@ copy-pasteable GitHub Actions job. `--start-command` (starts the app for the DAS
 pass) is accepted **only on argv, never from `.guardian/ci.json`** — a repository
 file declaring it is refused outright, because a fork's pull request could otherwise
 run arbitrary code on the runner. A CI run leaves `.guardian/reports/` in the working
-tree (only the SQLite database is ephemeral) — add `.guardian/` to `.gitignore` if
-this repository has never run `init_project` interactively.
+tree (only the SQLite database is ephemeral) — add `.guardian/` to `.gitignore` by
+hand; the MCP server does this automatically every time it starts against a
+project, but the CLI never starts that server.
 
 ## Anti-patterns
 
