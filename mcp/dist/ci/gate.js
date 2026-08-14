@@ -75,6 +75,13 @@ export function evaluateGate(input) {
     else {
         exitCode = CI_EXIT.PASS;
     }
-    return { exitCode, newFindings: newlyFound, blocking, coverage, coverageGaps };
+    return {
+        exitCode,
+        newFindings: newlyFound,
+        blocking,
+        coverage,
+        coverageGaps,
+        baselineAbsent: baseline === null,
+    };
 }
 //# sourceMappingURL=gate.js.map

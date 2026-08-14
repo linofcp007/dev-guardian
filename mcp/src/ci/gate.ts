@@ -57,6 +57,20 @@ export interface GateVerdict {
   coverage: ScanCoverage;
   /** One line per gap, naming the scanner and why. Empty only when none. */
   coverageGaps: string[];
+  /**
+   * True exactly when `GateInput.baseline` was `null` — no baseline file
+   * could be read at all (absent, unparseable, or the wrong shape at the
+   * document level; see `parseBaseline`'s module doc in `./baseline.ts`),
+   * as distinct from a baseline that WAS read and simply lists nothing.
+   * `newFindings` treats those two cases identically (nothing is known
+   * either way, so everything is new) — which is exactly why this can't be
+   * inferred from `newFindings`/`blocking`/`coverage` after the fact, and
+   * has to be carried forward from `baseline` directly. Visibility only:
+   * it must never feed `exitCode` or `coverage` — historical debt on a
+   * repository's first scan is still historical debt once a baseline is
+   * adopted, not a reason to fail or flag THIS build.
+   */
+  baselineAbsent: boolean;
 }
 
 export function evaluateGate(input: GateInput): GateVerdict {
@@ -123,5 +137,12 @@ export function evaluateGate(input: GateInput): GateVerdict {
     exitCode = CI_EXIT.PASS;
   }
 
-  return { exitCode, newFindings: newlyFound, blocking, coverage, coverageGaps };
+  return {
+    exitCode,
+    newFindings: newlyFound,
+    blocking,
+    coverage,
+    coverageGaps,
+    baselineAbsent: baseline === null,
+  };
 }

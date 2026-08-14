@@ -198,3 +198,51 @@ describe('evaluateGate — droppedBaselineEntries (carried forward from Task 1 r
     expect(v.exitCode).toBe(CI_EXIT.GATE_FAILED);
   });
 });
+
+describe('evaluateGate — baselineAbsent (carried forward from Task 3 review)', () => {
+  // Task 3's `renderHuman` needs to tell a reader "no baseline file was
+  // found yet, run `baseline update`" — a fact design doc §4 says the CLI
+  // must state on a first run. That fact lives one layer up from here:
+  // `GateInput.baseline` is `null` precisely when Task 1's `parseBaseline`
+  // could not read a file at all (see baseline.ts's module doc, the three
+  // return states). It was reaching `evaluateGate` and being discarded
+  // rather than carried into `GateVerdict` — this field carries it forward
+  // instead of re-deriving it from something else.
+  it('is true when the baseline was null (no file could be read)', () => {
+    const v = evaluateGate(input({ findings: [finding()], baseline: null }));
+    expect(v.baselineAbsent).toBe(true);
+  });
+
+  it('is false when the baseline was present but simply empty', () => {
+    // The whole reason this field has to be its own thing rather than
+    // derived: `newFindings(findings, null)` and
+    // `newFindings(findings, { entries: [] })` produce the identical
+    // result — nothing is known either way, so every existing GateVerdict
+    // field (newFindings, blocking, coverage, coverageGaps) looks the same
+    // in both cases. An implementation that infers "absent" from any of
+    // those (e.g. "newFindings.length === findings.length") cannot tell
+    // this case apart from the one above — same `findings` in both tests,
+    // only `baseline` differs, and only `baselineAbsent` may differ with it.
+    const emptyBaseline = buildBaseline([], null, 'x');
+    const v = evaluateGate(input({ findings: [finding()], baseline: emptyBaseline }));
+    expect(v.baselineAbsent).toBe(false);
+  });
+
+  it('does not affect exitCode, coverage, or blocking — visibility only', () => {
+    // Guards an implementation that piggybacks extra logic onto this field
+    // (e.g. treating an absent baseline as its own coverage gap). It must
+    // only ever ADD a fact for the renderers to surface, exactly like
+    // droppedBaselineEntries before it — never a second, independent reason
+    // to fail or flag the build.
+    const f = finding({ severity: 'critical' });
+    const withNullBaseline = evaluateGate(input({ findings: [f], baseline: null }));
+    const withEmptyBaseline = evaluateGate(
+      input({ findings: [f], baseline: buildBaseline([], null, 'x') }),
+    );
+    expect(withNullBaseline.exitCode).toBe(withEmptyBaseline.exitCode);
+    expect(withNullBaseline.coverage).toBe(withEmptyBaseline.coverage);
+    expect(withNullBaseline.blocking.map((x) => x.fingerprint)).toEqual(
+      withEmptyBaseline.blocking.map((x) => x.fingerprint),
+    );
+  });
+});

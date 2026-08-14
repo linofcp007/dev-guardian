@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import Ajv from 'ajv-draft-04';
 import { renderHuman, renderJson, renderSarif } from '../../../src/ci/report.js';
 import { evaluateGate } from '../../../src/ci/gate.js';
+import { buildBaseline } from '../../../src/ci/baseline.js';
 import { CI_EXIT } from '../../../src/ci/types.js';
 import { SEVERITIES, type Finding, type Severity } from '../../../src/types.js';
 import type { ScanStepResult } from '../../../src/ci/types.js';
@@ -224,30 +225,58 @@ describe('renderSarif', () => {
   it('surfaces a dropped-baseline-entries gap as a run-level notification (carried from Task 2)', () => {
     const v = evaluateGate(input({ droppedBaselineEntries: 2 }));
     expect(v.coverageGaps.some((g) => g.startsWith('baseline: '))).toBe(true); // sanity on the fixture
+    expect(v.coverage).toBe('full'); // sanity: dropped entries alone never downgrade coverage
     const doc = JSON.parse(renderSarif(v, PROJECT));
     const notifications: { message: { text: string } }[] =
       doc.runs[0].invocations?.[0]?.toolExecutionNotifications ?? [];
     expect(
       notifications.some((n) => /baseline/.test(n.message.text) && /2/.test(n.message.text)),
     ).toBe(true);
+    // Coverage is full here (see sanity above) even though there is a
+    // notification to carry — executionSuccessful tracks `coverage`, not
+    // "does this invocation have anything else attached to it".
+    expect(doc.runs[0].invocations[0].executionSuccessful).toBe(true);
     expectValidSarif(doc);
   });
 
-  it('attaches no run-level notification when there is nothing to report', () => {
-    // Guards an implementation that unconditionally adds an `invocations`
-    // entry regardless of whether there is a dropped-baseline gap — legal
-    // per the schema, but noise on every ordinary green run.
+  it('reports executionSuccessful: true and no notifications on a fully clean run', () => {
     const v = evaluateGate(input());
+    expect(v.coverage).toBe('full'); // sanity
     const doc = JSON.parse(renderSarif(v, PROJECT));
-    expect(doc.runs[0].invocations ?? []).toEqual([]);
+    expect(doc.runs[0].invocations).toHaveLength(1);
+    expect(doc.runs[0].invocations[0].executionSuccessful).toBe(true);
+    expect(doc.runs[0].invocations[0].toolExecutionNotifications ?? []).toEqual([]);
+    expectValidSarif(doc);
   });
 
-  it('does not leak a generic scanner-coverage gap into SARIF (design doc §9)', () => {
-    // design doc §9: "SARIF carries findings, not the coverage signal...
-    // that lives in the exit code and the human/JSON output." The
-    // dropped-baseline-entries line is the one carried-forward exception
-    // (see the notification test above); an ordinary "semgrep not
-    // installed" gap must stay out of the SARIF document entirely.
+  it('sets executionSuccessful: false when coverage is not full, even with no baseline gap', () => {
+    // The SARIF-native way to say "this run was incomplete" (design doc §9,
+    // as amended): a consumer reading only the SARIF upload can now tell a
+    // clean scan from an incomplete one from `executionSuccessful` alone,
+    // without cross-referencing the exit code. Guards an implementation
+    // that only sets this when there happens to be a baseline notification
+    // to attach it to — an ordinary missing-scanner gap, with no baseline
+    // involved at all, must still flip it to false.
+    const v = evaluateGate(input({ steps: [step({ tools_run: [], missing_tools: ['semgrep'] })] }));
+    expect(v.coverage).not.toBe('full'); // sanity on the fixture
+    const doc = JSON.parse(renderSarif(v, PROJECT));
+    expect(doc.runs[0].invocations).toHaveLength(1);
+    expect(doc.runs[0].invocations[0].executionSuccessful).toBe(false);
+    expectValidSarif(doc);
+  });
+
+  it('does not leak a generic scanner-coverage gap\'s text into SARIF (design doc §9, as amended)', () => {
+    // design doc §9 (original): "SARIF carries findings, not the coverage
+    // signal." As amended per review: the coarse *boolean* signal
+    // (executionSuccessful — see the test above) is now deliberately part
+    // of SARIF, closing the "a SARIF-only consumer can't tell" gap §9
+    // itself named. What stays out is the general coverage gaps' free
+    // TEXT — tool names, "not installed" reasons — which have no home in
+    // SARIF's findings-shaped `results` and would be noise if dumped into
+    // `properties` or a notification. Only the dropped-baseline-entries
+    // line is the carried-forward exception for text specifically (see the
+    // notification test above), because it is about the trustworthiness of
+    // THIS document's results, not scan completeness in general.
     const v = evaluateGate(input({ steps: [step({ tools_run: [], missing_tools: ['semgrep'] })] }));
     expect(v.coverageGaps.some((g) => g.includes('semgrep'))).toBe(true); // sanity on the fixture
     const doc = JSON.parse(renderSarif(v, PROJECT));
@@ -268,21 +297,28 @@ describe('renderHuman', () => {
     expect(text).toMatch(/3/);
   });
 
-  // NOTE on the brief's `verdictNoBaseline` example ("says plainly when the
-  // baseline file was absent", matching /baseline update/): not implemented
-  // here. `GateVerdict` (Task 2, not modified by this task) does not
-  // preserve whether the `baseline` GateInput was `null` (absent file) or a
-  // present-but-empty `BaselineFile` — `newFindings(findings, null)` and
-  // `newFindings(findings, { entries: [] })` are the same function producing
-  // the same output either way, so no field on the returned GateVerdict can
-  // distinguish the two cases, and `renderHuman(v: GateVerdict)` is given
-  // nothing else to work from. Per resolution #5 ("if a brief test fails
-  // against a faithful implementation, stop and report it rather than
-  // adjusting either side"), this is reported in the task report rather than
-  // faked here with a heuristic `renderHuman` cannot actually support. Design
-  // doc §4 ("on the first run the CLI says so") is consistent with this
-  // living in the CLI/runScans layer, which does see the raw file-read
-  // result, rather than in this pure formatter.
+  // Follow-up to the task-3 report's discrepancy #1: `GateVerdict` did not
+  // preserve whether `baseline` was `null` (absent file) or present-but-empty,
+  // so `renderHuman` had nothing to consult. Fixed by adding
+  // `GateVerdict.baselineAbsent` (see gate.ts and its own new tests in
+  // gate.test.ts) — carried forward from `baseline === null` rather than
+  // inferred, since `newFindings` behaves identically for both cases.
+
+  it('says plainly when the baseline file was absent, and how to fix it', () => {
+    const v = evaluateGate(input({ baseline: null }));
+    expect(v.baselineAbsent).toBe(true); // sanity on the fixture
+    expect(renderHuman(v)).toMatch(/baseline update/);
+  });
+
+  it('says nothing about an absent baseline when one was present, even if empty', () => {
+    // Guards an implementation that infers "absent" from something else
+    // (e.g. "every finding is new") rather than reading `baselineAbsent`
+    // directly — a present-but-empty baseline also makes every finding
+    // "new", but must not trigger the absent-baseline message.
+    const v = evaluateGate(input({ baseline: buildBaseline([], null, 'x') }));
+    expect(v.baselineAbsent).toBe(false); // sanity on the fixture
+    expect(renderHuman(v)).not.toMatch(/baseline update/);
+  });
 
   it('distinguishes an incomplete scan with zero findings from a clean pass', () => {
     // Self-review question 2. A renderer that only prints "0 new findings"
@@ -373,5 +409,12 @@ describe('renderJson', () => {
     expect(o.coverage).toBe('full');
     expect(o.exit_code).toBe(CI_EXIT.PASS);
     expect(o.coverage_gaps).toEqual([]);
+  });
+
+  it('carries baseline_absent, distinctly from an empty baseline', () => {
+    const absent = JSON.parse(renderJson(evaluateGate(input({ baseline: null }))));
+    const empty = JSON.parse(renderJson(evaluateGate(input({ baseline: buildBaseline([], null, 'x') }))));
+    expect(absent.baseline_absent).toBe(true);
+    expect(empty.baseline_absent).toBe(false);
   });
 });

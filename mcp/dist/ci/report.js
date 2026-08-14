@@ -17,10 +17,16 @@
  * project's existing SARIF producer (already used by the `report_export`
  * and `scan_skill` tools), rather than a second one. This module's own job
  * is limited to what CI specifically needs on top of that: relativised
- * URIs, and — for the one requirement carried forward from Task 2 (see
- * `renderSarif` below) — a place for the dropped-baseline-entries gap to
- * surface without smuggling the general `coverage` signal into SARIF, which
- * design doc §9 deliberately keeps out of it.
+ * URIs; `invocation.executionSuccessful` tied to `coverage`, so a consumer
+ * reading only the SARIF upload can tell an incomplete scan from a clean one
+ * without cross-referencing the exit code; and, for the one requirement
+ * carried forward from Task 2 (see `renderSarif` below), a place for the
+ * dropped-baseline-entries gap to surface via SARIF's own
+ * `toolExecutionNotifications` mechanism. Design doc §9 originally read as
+ * keeping ALL of `coverage` out of SARIF; it is being amended (see the task
+ * report) to describe this — the coarse boolean signal in SARIF natively,
+ * general coverage-gap prose (tool names, "not installed" reasons) still
+ * out of it entirely.
  */
 import { toSarif } from '../report/sarif.js';
 import { CI_EXIT } from './types.js';
@@ -45,13 +51,25 @@ const EXIT_LABEL = {
  * reaches human output: it is just another entry in `coverageGaps`, so it
  * needs no special case here — contrast `renderSarif`, which does need one,
  * because SARIF has no general-purpose home for free text.
+ *
+ * `baselineAbsent` (added on review of this task) gets its own line, printed
+ * plainly rather than folded into `coverageGaps`: design doc §4 requires the
+ * CLI to say so on a first run and to name `baseline update` as the fix, and
+ * that is a one-time onboarding fact about the whole run, not a per-scanner
+ * gap. It cannot be inferred from `newFindings`/`coverageGaps` — an absent
+ * baseline and a present-but-empty one make every finding "new" identically
+ * — which is exactly why `GateVerdict` carries it as its own field (see
+ * `gate.ts`) rather than this function trying to derive it.
  */
 export function renderHuman(v) {
     const lines = [
         `dev-guardian CI: ${EXIT_LABEL[v.exitCode]} (exit code ${v.exitCode})`,
         `coverage: ${v.coverage}`,
-        `new findings: ${v.newFindings.length} (${v.blocking.length} at or above the fail-on threshold)`,
     ];
+    if (v.baselineAbsent) {
+        lines.push('no baseline found — run `dev-guardian baseline update` to adopt these findings as the baseline');
+    }
+    lines.push(`new findings: ${v.newFindings.length} (${v.blocking.length} at or above the fail-on threshold)`);
     if (v.coverageGaps.length > 0) {
         lines.push('coverage gaps:');
         for (const gap of v.coverageGaps)
@@ -84,6 +102,7 @@ export function renderJson(v) {
         coverage_gaps: v.coverageGaps,
         new_findings: v.newFindings,
         blocking_findings: v.blocking,
+        baseline_absent: v.baselineAbsent,
     };
     return JSON.stringify(payload, null, 2);
 }
@@ -100,29 +119,40 @@ export function renderJson(v) {
  */
 const BASELINE_GAP_PREFIX = 'baseline: ';
 /**
- * SARIF carries findings, not the `coverage` signal (design doc §9): the
- * general "semgrep did not run" gaps stay exit-code-and-human/JSON-only, by
- * design, so a SARIF consumer never mistakes an incomplete scan for a clean
- * one just because the upload happens to look complete.
+ * SARIF carries findings, plus two narrow, deliberate exceptions for facts
+ * about the *run* that change how those findings should be read — not the
+ * general coverage-gap prose (tool names, "semgrep not installed" reasons),
+ * which has no home in a findings-shaped format and stays
+ * exit-code-and-human/JSON-only.
  *
- * The one exception, carried forward from Task 2's review, is narrower than
- * "coverage" in general: a dropped baseline entry changes how a *result in
- * this very document* should be read — a "new" finding that only resurfaced
- * because its suppression entry could not be parsed, not because anyone
- * reintroduced it. That is about the trustworthiness of `results`, not scan
- * completeness, so it is attached to the run as a
- * `toolExecutionNotifications` entry — SARIF's own mechanism for run-level
- * messages that are not themselves findings — rather than folded into
- * `results`, or omitted, or (the design-doc-violating option) used to carry
- * the general coverage gaps too. See the task report for why this reading of
- * §9 was chosen over leaving SARIF silent on it entirely: the brief (written
- * before Task 2 existed) does not mention this case, and the two sources
- * pull in different directions if §9 is read at the widest possible scope.
+ * 1. `invocation.executionSuccessful` is set to `v.coverage === 'full'`.
+ *    This is the SARIF-native way to say "this run was incomplete" — a
+ *    consumer reading only the SARIF upload can now tell a clean scan from
+ *    an incomplete one from this one boolean, without cross-referencing the
+ *    exit code, closing the gap design doc §9 itself named as the reason
+ *    exit code 2 has to exist as a separate channel. It is always present
+ *    (every call attaches exactly one `invocations` entry), not only when
+ *    there is a baseline gap to report alongside it — a fully clean run
+ *    still gets an explicit `executionSuccessful: true`, so absence of
+ *    `invocations` is never load-bearing for telling the two states apart.
  *
- * SARIF's `invocation.executionSuccessful` is always `true` here rather than
- * derived from `coverage`, for the same reason: tying it to coverage would
- * be exactly the leak this function exists to avoid. It reports that
- * *rendering* completed, nothing about scan completeness.
+ * 2. A dropped baseline entry (carried forward from Task 2's review) is
+ *    attached as a `toolExecutionNotifications` entry on that same
+ *    invocation — SARIF's own mechanism for run-level messages that are not
+ *    themselves findings. This one stays narrow (only the
+ *    dropped-baseline-entries line, matched by prefix, never the general
+ *    coverage gaps): it changes how a *result in this very document* should
+ *    be read — a "new" finding that only resurfaced because its suppression
+ *    entry could not be parsed, not because anyone reintroduced it — which
+ *    is a fact about result trustworthiness, not scan completeness, so it
+ *    does not piggyback on `executionSuccessful` (a dropped baseline entry
+ *    alone must never flip that to `false` — `gate.ts` deliberately keeps
+ *    `droppedBaselineEntries` out of `coverage` for the same reason; see the
+ *    "surfaces a dropped-baseline-entries gap" test, which pins
+ *    `executionSuccessful: true` in exactly this combination).
+ *
+ * (Design doc §9 originally read as excluding all of `coverage` from SARIF;
+ * it is being amended to describe the above, so the doc and this code agree.)
  */
 export function renderSarif(v, projectPath) {
     // A `file_path` that IS the project root relativises to `''`
@@ -139,16 +169,13 @@ export function renderSarif(v, projectPath) {
     // belongs in the schema-validation test, not here.
     const doc = parsed;
     const baselineGaps = v.coverageGaps.filter((gap) => gap.startsWith(BASELINE_GAP_PREFIX));
-    if (baselineGaps.length > 0) {
-        const run = doc.runs[0];
-        if (run !== undefined) {
-            run.invocations = [
-                {
-                    executionSuccessful: true,
-                    toolExecutionNotifications: baselineGaps.map((gap) => ({ message: { text: gap } })),
-                },
-            ];
+    const run = doc.runs[0];
+    if (run !== undefined) {
+        const invocation = { executionSuccessful: v.coverage === 'full' };
+        if (baselineGaps.length > 0) {
+            invocation.toolExecutionNotifications = baselineGaps.map((gap) => ({ message: { text: gap } }));
         }
+        run.invocations = [invocation];
     }
     return JSON.stringify(doc, null, 2);
 }
