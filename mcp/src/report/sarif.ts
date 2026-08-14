@@ -93,19 +93,26 @@ export function toSarif(findings: Finding[], opts: SarifOptions = {}): string {
   return JSON.stringify(sarif, null, 2);
 }
 
+/**
+ * Every `Severity` mapped explicitly, as a `Record` rather than a switch
+ * with a `default` fallback. A switch's default would let a `Severity`
+ * added later compile silently into 'warning' — hiding a critical the same
+ * way an unrecognised finding severity would. `Record<Severity, SarifLevel>`
+ * makes that a compile-time error instead: TypeScript rejects this object
+ * literal itself the day `SEVERITIES` (`../types.ts`) grows a case this file
+ * has not been told how to map. Behaviour for today's five severities is
+ * unchanged from the switch it replaces.
+ */
+const SARIF_LEVEL_BY_SEVERITY: Record<Severity, SarifLevel> = {
+  critical: 'error',
+  high: 'error',
+  medium: 'warning',
+  low: 'note',
+  info: 'note',
+};
+
 function levelFor(sev: Severity): SarifLevel {
-  switch (sev) {
-    case 'critical':
-    case 'high':
-      return 'error';
-    case 'medium':
-      return 'warning';
-    case 'low':
-    case 'info':
-      return 'note';
-    default:
-      return 'warning';
-  }
+  return SARIF_LEVEL_BY_SEVERITY[sev];
 }
 
 function toUri(p: string): string {

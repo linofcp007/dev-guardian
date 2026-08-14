@@ -44800,19 +44800,15 @@ function toSarif(findings, opts = {}) {
   };
   return JSON.stringify(sarif, null, 2);
 }
+var SARIF_LEVEL_BY_SEVERITY = {
+  critical: "error",
+  high: "error",
+  medium: "warning",
+  low: "note",
+  info: "note"
+};
 function levelFor(sev) {
-  switch (sev) {
-    case "critical":
-    case "high":
-      return "error";
-    case "medium":
-      return "warning";
-    case "low":
-    case "info":
-      return "note";
-    default:
-      return "warning";
-  }
+  return SARIF_LEVEL_BY_SEVERITY[sev];
 }
 function toUri(p) {
   return p.replace(/\\/g, "/");
