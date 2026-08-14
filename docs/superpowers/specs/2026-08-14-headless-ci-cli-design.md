@@ -237,10 +237,14 @@ it.
   what must persist; anything else is out of scope by design.
 - `scan_dast` in CI reaches only what the pipeline can reach. An application
   behind a private network the runner cannot see is out of scope.
-- SARIF carries findings, not the `coverage` signal — that lives in the exit
-  code and the human/JSON output. A consumer reading only the SARIF upload
-  cannot tell a clean scan from an incomplete one, which is why exit code `2`
-  exists and why the documentation must say so.
+- SARIF carries findings plus two run-level facts, and nothing more. **Amended
+  after implementation**, because the original wording was blunter than the
+  format allows: SARIF has `invocation.executionSuccessful`, which is set
+  `false` whenever coverage is not `full`, and `toolExecutionNotifications`,
+  which carries the unreadable-baseline line. So a consumer reading only the
+  upload can tell an incomplete run from a clean one — it just cannot see
+  *which* scanner was missing or why. That detail lives in the exit code and
+  the human/JSON output, and the documentation must say so.
 
 ## 10. Definition of done
 
