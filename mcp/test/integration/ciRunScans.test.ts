@@ -6,14 +6,51 @@
  * handling, exception handling, where findings come from, temp-dir hygiene
  * — never scanning itself, so none of it needs Semgrep installed.
  */
-import { existsSync, mkdtempSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runScans, SCAN_SEQUENCE } from '../../src/ci/runScans.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { ToolModule } from '../../src/tools/index.js';
 import type { Finding, ToolResult } from '../../src/types.js';
+
+/**
+ * `runScans.ts`'s ephemeral directory lives under the SAME shared OS
+ * `tmpdir()` every other process on the machine uses — including, in this
+ * project's own suite, a real (unmocked) CLI subprocess invocation from
+ * `test/e2e/ciCliFixture.test.ts` (headless-ci-cli, Task 5), which vitest
+ * can legitimately schedule concurrently with THIS file: file-level
+ * parallelism is vitest's default, so two different test files' real
+ * `runScans()` calls can overlap in wall-clock time. A before/after diff of
+ * the whole `dev-guardian-ci-*` namespace (this test's original approach)
+ * is therefore not a reliable leak signal on its own: a directory belonging
+ * to that OTHER, unrelated run can legitimately exist at this test's own
+ * "after" snapshot purely by timing, and a set-equality assertion has no
+ * way to tell "an entry we personally created is still here" apart from
+ * "an unrelated concurrent process's entry happens to exist right now" —
+ * confirmed as a real, reproducible flake (not a hypothetical) when Task 5
+ * added that second real caller.
+ *
+ * The fix spies on `mkdtemp` itself — still calling through to the real
+ * implementation, so `runScans`'s own behaviour is completely unchanged —
+ * to record the EXACT path(s) THIS file's own calls create, and checks only
+ * those. `vi.hoisted` is required because `vi.mock` factories run in an
+ * isolated, hoisted scope that cannot close over a plain outer `let`.
+ */
+const { createdCiTempDirs } = vi.hoisted(() => ({ createdCiTempDirs: [] as string[] }));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    mkdtemp: vi.fn(async (...args: Parameters<typeof actual.mkdtemp>) => {
+      const dir = await actual.mkdtemp(...args);
+      createdCiTempDirs.push(dir);
+      return dir;
+    }),
+  };
+});
 
 /** Every name `runScans` can invoke, in the order `SCAN_SEQUENCE` documents. */
 const ALL_NAMES = [
@@ -65,15 +102,6 @@ function mockTool(name: string, impl: ToolModule['handler']): void {
   if (!tool) throw new Error(`fixture error: '${name}' is not a registered tool`);
   if (!originalHandlers.has(name)) originalHandlers.set(name, tool.handler);
   tool.handler = impl;
-}
-
-function listCiTempDirs(): string[] {
-  // Coupled to `TEMP_DIR_PREFIX` in runScans.ts on purpose: a plain snapshot
-  // of the whole OS tmpdir() is too noisy (other processes write there) to
-  // be a reliable leak signal, but a snapshot scoped to dev-guardian's own
-  // prefix is a direct check of what THIS module is responsible for cleaning
-  // up, before/after diffed so a stray pre-existing dir never fails the test.
-  return readdirSync(tmpdir()).filter((name) => name.startsWith('dev-guardian-ci-'));
 }
 
 beforeEach(() => {
@@ -252,16 +280,18 @@ describe('runScans', () => {
 
   it('removes its ephemeral temp directory on exit, on both a clean run and a thrown step', async () => {
     const projectPath = makeProjectDir();
+    createdCiTempDirs.length = 0;
 
-    const before = listCiTempDirs();
     await runScans({ projectPath });
-    expect(listCiTempDirs()).toEqual(before);
+    expect(createdCiTempDirs).toHaveLength(1);
+    expect(existsSync(createdCiTempDirs[0] ?? '')).toBe(false);
 
     mockTool('detect_stack', async () => {
       throw new Error('boom');
     });
     await runScans({ projectPath });
-    expect(listCiTempDirs()).toEqual(before);
+    expect(createdCiTempDirs).toHaveLength(2);
+    expect(existsSync(createdCiTempDirs[1] ?? '')).toBe(false);
   });
 
   it('collects findings from every step that produced them', async () => {
