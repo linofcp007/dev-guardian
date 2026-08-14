@@ -25,6 +25,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PluginContext } from './context.js';
 import { ensureGuardianIgnored } from './gitignoreGuard.js';
+import { resolveScriptsDir } from './platform/scriptsDir.js';
 import { probeShell } from './platform/shellProbe.js';
 import type { ProgressNotifier, ProgressPayload } from './progress/progressEmitter.js';
 import { openDatabase, Storage } from './storage/index.js';
@@ -120,14 +121,6 @@ async function main(): Promise<void> {
 
   await mcp.connect(new StdioServerTransport());
   logErr('listening on stdio');
-}
-
-function resolveScriptsDir(): string {
-  // server.js (built) lives at  <plugin>/mcp/dist/server.js
-  // server.ts (dev)    lives at  <plugin>/mcp/src/server.ts
-  // From either, `../../scripts` resolves to <plugin>/scripts.
-  const here = dirname(fileURLToPath(import.meta.url));
-  return resolve(here, '..', '..', 'scripts');
 }
 
 function installShutdownHooks(mcp: McpServer, storage: Storage): void {

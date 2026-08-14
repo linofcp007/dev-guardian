@@ -31,8 +31,8 @@
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { resolveScriptsDir } from '../platform/scriptsDir.js';
 import { probeShell } from '../platform/shellProbe.js';
 import { GuardianDatabase } from '../storage/db.js';
 import { runMigrations } from '../storage/migrations/runner.js';
@@ -182,15 +182,5 @@ function collectFindings(storage) {
         }
     }
     return [...byFingerprint.values()];
-}
-/**
- * Mirrors `server.ts`'s own `resolveScriptsDir`, adjusted for this file
- * living one directory deeper (`src/ci/` vs `src/`, `dist/ci/` vs `dist/`):
- * three `..` segments reach the plugin root from here, where server.ts's
- * version needs only two.
- */
-function resolveScriptsDir() {
-    const here = dirname(fileURLToPath(import.meta.url));
-    return resolve(here, '..', '..', '..', 'scripts');
 }
 //# sourceMappingURL=runScans.js.map
