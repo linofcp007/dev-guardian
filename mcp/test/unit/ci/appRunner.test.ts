@@ -136,6 +136,39 @@ process.stderr.write(['FATAL', 'port 9999 already in use'].join(': ') + '\\n');
 process.exitCode = 1;
 `;
 
+/**
+ * Writes ~110 MB to stdout — comfortably past execa's own default
+ * `maxBuffer` (100 MB) — respecting backpressure (`'drain'`), then a
+ * marker, then exits with its own chosen code. For the "output larger than
+ * the tail can hold does not kill the app" test (coordinator review,
+ * Finding 7 follow-up).
+ *
+ * The marker is assembled at runtime (`.join('-')`), not written as one
+ * literal, for the identical reason `CRASHES_WITH_MESSAGE_SCRIPT`'s own
+ * comment gives: a literal would also appear in the echoed `-e` command
+ * text every `startApp` error already includes, making a bare
+ * `.includes(marker)` check pass even if nothing was genuinely captured.
+ * Caught here the same way — by mutating and watching a wrong assertion
+ * stay green — before this test was finalised; see the task report.
+ */
+const HUGE_OUTPUT_THEN_EXIT_SCRIPT = `
+const { writeFileSync } = require('node:fs');
+writeFileSync(process.argv[1], String(process.pid));
+const chunk = 'x'.repeat(1024 * 1024);
+const targetBytes = 110 * 1024 * 1024;
+let written = 0;
+function pump() {
+  while (written < targetBytes) {
+    const ok = process.stdout.write(chunk);
+    written += chunk.length;
+    if (!ok) { process.stdout.once('drain', pump); return; }
+  }
+  process.stdout.write(['MARKER', 'END', 'OF', 'OUTPUT', '7f3a9c'].join('-') + '\\n');
+  process.exitCode = 1;
+}
+pump();
+`;
+
 /** Listens immediately, but delays every response by `argv[2]`ms — for the
  *  "a slow-but-healthy app is not wrongly declared unreachable" test
  *  (coordinator review, Finding 2). No grandchild: irrelevant to what that
@@ -417,6 +450,66 @@ describe('startApp', () => {
       }),
     ).rejects.toThrow(/FATAL: port 9999 already in use/);
   });
+
+  it('output larger than the tail can hold does not kill the app, and the tail is still correct', async () => {
+    // Coordinator review, Finding 7 follow-up: the diagnosability fix
+    // itself introduced a regression. `stdio: ['ignore','pipe','pipe']`
+    // was added without also setting `buffer: false`, so execa's OWN
+    // default (`buffer: true`, `maxBuffer: 100_000_000`) kept a SECOND,
+    // genuinely unbounded copy of the stream behind `attachOutputTail`'s
+    // back — and once that second copy passed 100 MB, execa KILLED the
+    // subprocess to enforce the limit. Measured directly: a healthy,
+    // merely chatty app was killed mid-scan (RSS 184 MB -> 491 MB in one
+    // second, then the app gone) and the resulting error read as the APP
+    // dying, not as this module having killed it.
+    //
+    // This fixture writes ~110 MB — comfortably past that 100 MB default —
+    // then a marker, then exits with its own chosen code (1). Guards
+    // exactly the wrong implementation named above: with `buffer: true`
+    // restored, execa kills the child before it ever reaches the marker
+    // write (confirmed directly: the child crashes with an uncaught EPIPE
+    // when its own `stdout.write()` fails against a pipe execa has already
+    // torn down), so the marker is absent from the captured tail and an
+    // EPIPE stack trace is present in its place instead — the assertions
+    // below check both directions, not just one.
+    //
+    // A bare `expect(execaCall).toHaveBeenCalledWith({ buffer: false })`
+    // would test the call, not the behaviour (the same distinction the
+    // no-shell test's own comment makes) — this asserts the OBSERVABLE
+    // outcome: the app reaches ITS OWN intended exit rather than being cut
+    // off by this module's own dependency, and the tail this module
+    // captured independently is still exactly right despite the stream
+    // being ~28,000x larger than what the tail retains.
+    const pidfile = join(workDir, 'pids.json');
+    const error = await startApp({
+      command: ['node', '-e', HUGE_OUTPUT_THEN_EXIT_SCRIPT, pidfile],
+      cwd: workDir,
+      healthUrl: 'http://127.0.0.1:1/',
+      timeoutMs: 30_000,
+    }).then(
+      () => {
+        throw new Error('expected startApp to reject');
+      },
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    // The fixture's own pidfile write happens before any of the 110 MB is
+    // written, so its presence alone already proves the process was real
+    // and started — the assertions below are about what happened to it
+    // AFTERWARDS, while the flood of output was in flight.
+    expect(existsSync(pidfile)).toBe(true);
+    expect(message).toMatch(/exit code 1\)/);
+    expect(message).not.toMatch(/EPIPE/);
+    // The load-bearing assertion: the marker was the LAST thing the
+    // fixture ever wrote, after all 110 MB — its presence in the captured
+    // tail is only possible if the process ran to ITS OWN completion
+    // rather than being killed by this module's own dependency partway
+    // through, AND proves the 4 KB tail correctly kept the actual last
+    // bytes of a vastly larger stream, not a stale or corrupted fragment.
+    expect(message).toMatch(/MARKER-END-OF-OUTPUT-7f3a9c/);
+  }, 20_000);
 
   it('stop() leaves nothing running, and is safe to call twice', async () => {
     const port = await getFreePort();

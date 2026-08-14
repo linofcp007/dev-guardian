@@ -95,13 +95,34 @@ export async function startApp(opts) {
         shell: false,
         // Piped, not ignored — `attachOutputTail` below drains both streams
         // continuously for the process's whole lifetime (the listener is
-        // attached once, immediately, and never removed) and keeps only a
-        // small rolling tail, so this can never grow without bound or block the
-        // child on a full pipe. The app's full output is still never forwarded
-        // to THIS process's own stdout/stderr — only the bounded tail is ever
-        // surfaced, and only inside a thrown error — so a `--format json`/
-        // `--sarif` consumer parsing this CLI's own stdout is unaffected.
+        // attached once, immediately, and never removed), so the child can
+        // never block on a full OS pipe no matter how chatty or long-lived it
+        // is. What is actually bounded, and by what: `attachOutputTail`'s OWN
+        // rolling buffer is capped at `OUTPUT_TAIL_BYTES` — that claim is true
+        // in isolation, but was stated here as if it covered this whole option
+        // block, which it did not. The app's full output is still never
+        // forwarded to THIS process's own stdout/stderr — only the bounded
+        // tail is ever surfaced, and only inside a thrown error — so a
+        // `--format json`/`--sarif` consumer parsing this CLI's own stdout is
+        // unaffected.
         stdio: ['ignore', 'pipe', 'pipe'],
+        // `buffer: false` — load-bearing, not a micro-optimisation. execa's
+        // OWN default (`buffer: true`) accumulates a SECOND, SEPARATE, and
+        // genuinely unbounded copy of both streams behind `attachOutputTail`'s
+        // back, purely so `result.stdout`/`result.stderr` can be populated —
+        // properties this module never reads (`reject: false` below means the
+        // settled result is only ever inspected for `exitCode`/`signal`).
+        // Worse than idle memory growth: once that copy passes execa's own
+        // `maxBuffer` (100 MB, its default), execa KILLS the subprocess to
+        // enforce the limit — a real, measured regression from the fix for
+        // Finding 7 (bounded diagnosis output), confirmed directly: a healthy,
+        // merely chatty application (RSS 184 MB -> 491 MB in one second) was
+        // killed mid-scan, and the resulting error read as the APP dying, not
+        // as this module having killed it. `buffer: false` stops execa from
+        // keeping that second copy at all; `attachOutputTail`'s own listeners
+        // already read everything this module ever needs from the stream, so
+        // nothing downstream loses information.
+        buffer: false,
         // Never throw for a nonzero exit or a spawn failure (e.g. the binary
         // does not exist) — `waitForHealthy` below reads the settled result
         // itself, turning either case into a specific "exited before healthy"
