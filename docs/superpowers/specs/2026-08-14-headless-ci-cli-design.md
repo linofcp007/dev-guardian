@@ -206,7 +206,7 @@ point. The capability was deferred to here, on the reasoning that **the filler
 is a human writing a pipeline file.**
 
 That reasoning stops being true if the command can come from a file *inside the
-repository*. A pull request from a fork that edits `.guardian/ci.yml` would
+repository*. A pull request from a fork that edits `.guardian/ci.json` would
 then execute arbitrary code in CI — the classic *pwn request*, which has
 compromised real projects.
 
@@ -215,6 +215,13 @@ Therefore:
 - **`--start-command` may come only from argv. Never from a file in the
   repository.** If a repository config file declares one, the CLI **refuses**
   and says why. Other configuration may live in the repo; this key may not.
+
+  The file is `.guardian/ci.json`, not YAML — **corrected during
+  implementation**. The CLI reaches its dependencies through `mcp/dist/` and
+  has no YAML parser it can import without a runtime dependency the design
+  forbids, and `.guardian/` is JSON by existing convention. The original
+  wording borrowed a habit from pipeline files without checking what this CLI
+  can actually read.
 - **No shell.** argv as an array, `shell: false`. No string interpolation.
 - **Health-check polling with a timeout**, so a failed start is a clear error
   rather than a hang.
