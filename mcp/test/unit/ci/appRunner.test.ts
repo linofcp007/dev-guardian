@@ -215,6 +215,30 @@ async function getFreePort(): Promise<number> {
   return addr.port;
 }
 
+/**
+ * Asserts `elapsedMs` is well under `timeoutMs` — the property the two
+ * "rejects/cancels promptly" tests below actually guard (coordinator
+ * review, test-stability round): that a fast-path rejection (a detected
+ * crash, an aborted wait) genuinely short-circuits the health-check
+ * deadline, rather than silently regressing into waiting it out. Coverage
+ * instrumentation is not free — `npm run test:coverage` measured a real
+ * ~2046ms for the crash-detection test's own fast path, comfortably past a
+ * literal `2_000` budget those two tests originally used, reproduced
+ * independently by two reviewers (6 of 7 runs, then 1 of 2). A bigger
+ * literal (`3_000`, `5_000`, …) would still eventually fail the same way on
+ * a slower or more heavily loaded machine — a CI runner under load being
+ * exactly where it would next go off — so the budget is derived from each
+ * test's OWN configured `timeoutMs` instead: HALF of it. Half is
+ * comfortably above any realistic fast-path completion time (even the
+ * measured 2046ms, against a 5s deadline, is ~41% of it) while staying
+ * sharply distinguishable from the regression being guarded against, which
+ * would land at essentially 100% of `timeoutMs`, not 50% — so this remains
+ * a discriminating assertion, not a loosened one.
+ */
+function expectWellUnderDeadline(elapsedMs: number, timeoutMs: number): void {
+  expect(elapsedMs).toBeLessThan(timeoutMs / 2);
+}
+
 /** `process.kill(pid, 0)` sends no signal — it is a pure existence check,
  *  and Node implements it consistently on Windows and POSIX alike (verified
  *  directly against a real spawned/killed process on this machine before
@@ -417,20 +441,22 @@ describe('startApp', () => {
     // underneath it already died, so a crash-on-boot (missing dependency,
     // syntax error) would look exactly like a hang for the FULL timeout
     // instead of failing fast with a specific reason.
+    const timeoutMs = 5_000;
     const started = Date.now();
     await expect(
       startApp({
         command: ['node', '-e', CRASHES_IMMEDIATELY_SCRIPT],
         cwd: workDir,
         healthUrl: 'http://127.0.0.1:1/',
-        timeoutMs: 5_000,
+        timeoutMs,
       }),
     ).rejects.toThrow(/exit(ed)? code 7/i);
     // "Immediately" pinned as a real number, not just inferred from the
-    // message: a generous ceiling well under the 5s timeoutMs above — if
-    // this ever regresses to waiting out the full timeout, this assertion
-    // fails even though the rejection message alone would still look right.
-    expect(Date.now() - started).toBeLessThan(2_000);
+    // message — if this ever regresses to waiting out the full timeout,
+    // this assertion fails even though the rejection message alone would
+    // still look right. See expectWellUnderDeadline's own comment for why
+    // the budget is derived from `timeoutMs` rather than a literal.
+    expectWellUnderDeadline(Date.now() - started, timeoutMs);
   });
 
   it('a startup failure surfaces the app’s own output for diagnosis', async () => {
@@ -574,12 +600,13 @@ describe('startApp', () => {
     // version would ignore the abort below and only stop waiting once the
     // full (deliberately generous) `timeoutMs` elapsed.
     const pidfile = join(workDir, 'pids.json');
+    const timeoutMs = 30_000;
     const controller = new AbortController();
     const pending = startApp({
       command: ['node', '-e', NEVER_ANSWERS_SCRIPT, pidfile],
       cwd: workDir,
       healthUrl: 'http://127.0.0.1:1/',
-      timeoutMs: 30_000,
+      timeoutMs,
       signal: controller.signal,
     });
     const settled = pending.then(
@@ -597,8 +624,10 @@ describe('startApp', () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(/cancelled/i);
     // The ABORT, not the 30s timeoutMs, must be what ended this — pinned as
-    // a real elapsed-time number, not just inferred from the message.
-    expect(Date.now() - abortedAt).toBeLessThan(2_000);
+    // a real elapsed-time number, not just inferred from the message. See
+    // expectWellUnderDeadline's own comment for why the budget is derived
+    // from `timeoutMs` rather than a literal.
+    expectWellUnderDeadline(Date.now() - abortedAt, timeoutMs);
 
     // Same load-bearing shape as the timeout test: an abort must kill what
     // was already spawned, including the grandchild, not merely reject.
