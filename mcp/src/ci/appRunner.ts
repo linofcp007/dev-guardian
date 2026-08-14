@@ -22,6 +22,21 @@
  * child as inert data, not as a command separator — the whole safety
  * argument for letting a CLI flag start a process collapses the moment a
  * shell is in the path.
+ *
+ * ---- The POSIX group kill's one honest limit -------------------------------
+ *
+ * `killTree`'s POSIX branch signals the NEGATIVE pid of the process group
+ * `detached: true` put the direct child in — this reaches every descendant
+ * that stayed in that group, which is what an ordinary `npm start` grandchild
+ * does (confirmed against a real Linux container: a plain, non-detached
+ * grandchild shares the parent's pgid and dies with it). A grandchild that
+ * ITSELF calls `setsid()` (or spawns with its own `detached: true`) leaves
+ * that group and forms its own — `-pid` cannot reach it, by construction, on
+ * any platform; this is inherent to signal-based POSIX process-group kills,
+ * not a gap specific to this implementation. `mcp/test/unit/ci/appRunner.ts`
+ * mirrors this: its POSIX fixtures spawn a plain (non-detached) grandchild,
+ * which is both the realistic case and the one this module can actually
+ * reach.
  */
 
 import { execa, type ResultPromise } from 'execa';
@@ -34,20 +49,52 @@ export interface StartAppOptions {
    *  status — see `answers` below) or `timeoutMs` expires. */
   healthUrl: string;
   timeoutMs: number;
+  /** Aborting cancels an in-progress health-check wait — whatever was
+   *  already spawned is killed before the rejection — and is otherwise
+   *  inert: `startApp` never reads it again once resolved. The caller stays
+   *  responsible for a RUNNING application after that point via the
+   *  returned `stop()` (see `cli/dev-guardian.mjs`'s SIGINT/SIGTERM
+   *  handling, which does both — abort a still-starting app, stop an
+   *  already-started one). */
+  signal?: AbortSignal;
 }
 
 export interface RunningApp {
   /** Kills the process tree. Idempotent — safe to call more than once,
-   *  including after `startApp` itself already called it on a failed
-   *  health check, and the CLI calls it again in a `finally`. */
+   *  including CONCURRENTLY, including after `startApp` itself already
+   *  called it on a failed health check, and the CLI calls it again in a
+   *  `finally`. Every caller's promise settles only once the tree is
+   *  actually gone, regardless of which call is the one that started the
+   *  teardown. */
   stop: () => Promise<void>;
 }
 
 /** Gap between failed health-check attempts. Short enough that a
  *  fast-booting app is detected almost immediately; long enough that
  *  polling a refused connection — which fails near-instantly, not on its
- *  own timeout — does not spin the event loop. */
+ *  own timeout — does not spin the event loop. Distinct from
+ *  `REQUEST_TIMEOUT_MS` below — conflating the two was a real defect, see
+ *  its comment. */
 const POLL_INTERVAL_MS = 100;
+
+/**
+ * Ceiling for ONE health-check request — independent of `POLL_INTERVAL_MS`,
+ * which is the GAP between attempts, not how long any single attempt gets to
+ * answer. This module's own first version reused `POLL_INTERVAL_MS` for
+ * both (`Math.min(POLL_INTERVAL_MS, remaining)` as the per-request
+ * deadline), so every request was aborted 100ms after it started — a
+ * genuinely healthy app whose first byte takes longer than that (a
+ * server-rendered route, a health check that touches a database, a
+ * framework compiling on first hit) was wrongly declared unreachable, timed
+ * out, and killed after burning the FULL `timeoutMs` budget on 100ms-capped
+ * attempts that never had a chance to succeed (coordinator review,
+ * reproduced: a fixture with a 300ms response delay failed with "timed out
+ * after 4000ms" despite answering on every single attempt). A few seconds
+ * is enough for a slow-but-real response and still short enough that a
+ * request against a genuinely dead port fails fast; always capped by
+ * whatever is left of the overall `timeoutMs` budget.
+ */
+const REQUEST_TIMEOUT_MS = 5_000;
 
 /** How long a POSIX process group gets to exit cleanly after SIGTERM before
  *  this module escalates to SIGKILL. Windows has no equivalent grace phase
@@ -57,7 +104,22 @@ const POLL_INTERVAL_MS = 100;
  *  private. */
 const KILL_GRACE_MS = 5_000;
 
+/**
+ * Bounded tail of the app's own stdout+stderr, surfaced only inside the
+ * thrown error when it never becomes healthy. For a CI tool the diagnosis
+ * IS the product: without this, a failed start reports only "exited (exit
+ * code 1)" or "timed out after 60000ms" and discards the stack trace,
+ * the "port already in use", the missing env var that would have made the
+ * fix five minutes instead of an hour. Small on purpose — a diagnosis aid,
+ * not a second copy of the app's own logs.
+ */
+const OUTPUT_TAIL_BYTES = 4 * 1024;
+
 export async function startApp(opts: StartAppOptions): Promise<RunningApp> {
+  if (opts.signal?.aborted === true) {
+    throw new Error('startApp: aborted before the application was started');
+  }
+
   const [file, ...args] = opts.command;
   if (file === undefined) {
     throw new Error('startApp: command must not be empty');
@@ -67,13 +129,15 @@ export async function startApp(opts: StartAppOptions): Promise<RunningApp> {
   const child = execa(file, args, {
     cwd: opts.cwd,
     shell: false,
-    // The started app's own console output is not this module's concern —
-    // `RunningApp` exposes no log surface (deliberately: the brief's
-    // interface is `{ stop }` only), and forwarding it to this process's
-    // own stdout/stderr would interleave with the scan report a `--format
-    // json`/`--sarif` consumer expects to parse cleanly. `ignore` also
-    // means the child can never block on a full, undrained pipe buffer.
-    stdio: 'ignore',
+    // Piped, not ignored — `attachOutputTail` below drains both streams
+    // continuously for the process's whole lifetime (the listener is
+    // attached once, immediately, and never removed) and keeps only a
+    // small rolling tail, so this can never grow without bound or block the
+    // child on a full pipe. The app's full output is still never forwarded
+    // to THIS process's own stdout/stderr — only the bounded tail is ever
+    // surfaced, and only inside a thrown error — so a `--format json`/
+    // `--sarif` consumer parsing this CLI's own stdout is unaffected.
+    stdio: ['ignore', 'pipe', 'pipe'],
     // Never throw for a nonzero exit or a spawn failure (e.g. the binary
     // does not exist) — `waitForHealthy` below reads the settled result
     // itself, turning either case into a specific "exited before healthy"
@@ -84,7 +148,11 @@ export async function startApp(opts: StartAppOptions): Promise<RunningApp> {
     // stops applying the moment `detached` is true (execa's own
     // `cleanupOnExit` short-circuits on `detached` — confirmed by reading
     // its source, see the task report) — stated here so that fact is not
-    // silently lost if the POSIX branch below ever changes.
+    // silently lost if the POSIX branch below ever changes. This is NOT a
+    // substitute for the CLI's own SIGINT/SIGTERM handling: `cleanup` only
+    // fires on THIS process's own natural exit paths, never on a delivered
+    // signal, and is inert under `detached` regardless (POSIX) — the CLI
+    // owns interrupt-driven teardown itself.
     cleanup: true,
     // POSIX only: makes `child` the leader of a new process group so
     // `killTree` can signal the WHOLE group (direct child + any grandchild
@@ -96,15 +164,18 @@ export async function startApp(opts: StartAppOptions): Promise<RunningApp> {
     detached: process.platform !== 'win32',
   });
 
-  let stopped = false;
-  const stop = async (): Promise<void> => {
-    if (stopped) return;
-    stopped = true;
-    await killTree(child);
-  };
+  const getOutputTail = attachOutputTail(child);
+  const stop = makeStop(child);
 
   try {
-    await waitForHealthy(opts.healthUrl, opts.timeoutMs, child, commandLabel);
+    await waitForHealthy(
+      opts.healthUrl,
+      opts.timeoutMs,
+      child,
+      commandLabel,
+      getOutputTail,
+      opts.signal,
+    );
   } catch (e) {
     await stop();
     throw e;
@@ -114,16 +185,40 @@ export async function startApp(opts: StartAppOptions): Promise<RunningApp> {
 }
 
 /**
+ * One shared teardown per `startApp` call, no matter how many times or how
+ * concurrently `stop()` is invoked. The obvious shape — `if (stopped)
+ * return; stopped = true; await killTree(...)` (this module's own first
+ * version) — sets a boolean BEFORE the `await`, so a second call that
+ * overlaps the first sees the flag already true and resolves immediately
+ * while the tree is still alive (coordinator review, reproduced: "after the
+ * 2nd stop() resolved, app alive = true") — a real break of both this
+ * function's own doc comment and `RunningApp.stop`'s. Sharing the IN-FLIGHT
+ * PROMISE instead means every caller, sequential or concurrent, awaits the
+ * SAME teardown and only settles once it has actually finished.
+ */
+function makeStop(child: ResultPromise): () => Promise<void> {
+  let stopPromise: Promise<void> | null = null;
+  return () => {
+    stopPromise ??= killTree(child);
+    return stopPromise;
+  };
+}
+
+/**
  * Resolves once `healthUrl` answers (any HTTP response), or throws once
  * `timeoutMs` elapses, or throws immediately if the process exits first —
  * turning a crash-on-boot into a specific, immediate failure instead of a
- * hang that only reveals itself once the whole timeout budget is spent.
+ * hang that only reveals itself once the whole timeout budget is spent — or
+ * once `signal` aborts, for a caller (the CLI, on SIGINT/SIGTERM) that wants
+ * to give up on a still-starting app without waiting for either.
  */
 async function waitForHealthy(
   healthUrl: string,
   timeoutMs: number,
   child: ResultPromise,
   commandLabel: string,
+  getOutputTail: () => string,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
   const exitState: { info: { exitCode: number | null; signal: string | null } | null } = {
     info: null,
@@ -144,28 +239,40 @@ async function waitForHealthy(
 
   const deadline = Date.now() + timeoutMs;
   for (;;) {
+    if (signal?.aborted === true) {
+      throw new Error(
+        `startApp: cancelled while waiting for ${healthUrl} to respond (started: ${commandLabel})`,
+      );
+    }
+
     if (exitState.info !== null) {
-      const { exitCode, signal } = exitState.info;
+      const { exitCode, signal: exitSignal } = exitState.info;
       throw new Error(
         `${commandLabel} exited before ${healthUrl} ever responded ` +
           `(exit code ${exitCode === null ? 'null' : String(exitCode)}` +
-          `${signal !== null ? `, signal ${signal}` : ''})`,
+          `${exitSignal !== null ? `, signal ${exitSignal}` : ''})` +
+          formatTail(getOutputTail()),
       );
     }
 
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
       throw new Error(
-        `timed out after ${timeoutMs}ms waiting for ${healthUrl} to respond (started: ${commandLabel})`,
+        `timed out after ${timeoutMs}ms waiting for ${healthUrl} to respond (started: ${commandLabel})` +
+          formatTail(getOutputTail()),
       );
     }
 
-    if (await answers(healthUrl, Math.min(POLL_INTERVAL_MS, remaining))) {
+    if (await answers(healthUrl, Math.min(REQUEST_TIMEOUT_MS, remaining), signal)) {
       return;
     }
 
     await sleep(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
   }
+}
+
+function formatTail(tail: string): string {
+  return tail === '' ? '' : `\n--- output tail (last ${OUTPUT_TAIL_BYTES / 1024}KB) ---\n${tail}`;
 }
 
 /**
@@ -176,6 +283,10 @@ async function waitForHealthy(
  * root route time out for a reason that has nothing to do with whether it
  * started — and `scan_dast` itself does not require 2xx either, see
  * `dast/probe.ts`.
+ *
+ * `timeoutMs` here is `REQUEST_TIMEOUT_MS` (capped by whatever remains of
+ * the overall budget) — a genuinely separate quantity from the GAP between
+ * attempts; see that constant's own comment for the defect this fixes.
  *
  * This timer is deliberately NOT `unref()`'d, unlike `dast/deadline.ts`'s
  * — that one guards a background CEILING that should never keep the process
@@ -191,9 +302,23 @@ async function waitForHealthy(
  * real subprocess CLI invocation with nothing else in flight exposed it —
  * see the task report.
  */
-async function answers(url: string, timeoutMs: number): Promise<boolean> {
+async function answers(
+  url: string,
+  timeoutMs: number,
+  outerSignal: AbortSignal | undefined,
+): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onOuterAbort = (): void => controller.abort();
+  if (outerSignal?.aborted === true) {
+    // Same trap `dast/probe.ts` documents: adding an 'abort' listener to a
+    // signal that has already aborted never fires it (the event already
+    // happened), so react to the stale signal directly instead of silently
+    // running this one attempt to completion.
+    controller.abort();
+  } else {
+    outerSignal?.addEventListener('abort', onOuterAbort);
+  }
   try {
     await fetch(url, { signal: controller.signal, redirect: 'manual' });
     return true;
@@ -201,6 +326,7 @@ async function answers(url: string, timeoutMs: number): Promise<boolean> {
     return false;
   } finally {
     clearTimeout(timer);
+    outerSignal?.removeEventListener('abort', onOuterAbort);
   }
 }
 
@@ -231,6 +357,9 @@ async function killTree(child: ResultPromise): Promise<void> {
       // itself detach (e.g. the `node` process `npm start` launches).
       // Signalling the bare (positive) pid would reach only the direct
       // child and orphan exactly the process this module exists to catch.
+      // A grandchild that itself detaches (its own `setsid`/`detached`)
+      // leaves this group and forms its own — `-pid` cannot reach it, by
+      // construction; see the module doc comment's "one honest limit".
       trySignal(-pid, 'SIGTERM');
       await Promise.race([child.catch(() => undefined), sleep(KILL_GRACE_MS)]);
       trySignal(-pid, 'SIGKILL');
@@ -247,6 +376,27 @@ function trySignal(pid: number, signal: NodeJS.Signals): void {
   } catch {
     /* ESRCH: already dead. Nothing left to signal. */
   }
+}
+
+/**
+ * Attaches once, for the process's whole lifetime, and keeps only the last
+ * `OUTPUT_TAIL_BYTES` of combined stdout+stderr — draining continuously (a
+ * `'data'` listener puts a stream in flowing mode) so the child can never
+ * block on a full pipe no matter how long it stays alive after `startApp`
+ * resolves. Returns a getter rather than the buffer itself so a caller
+ * always reads the CURRENT tail, not a snapshot taken at attach time.
+ */
+function attachOutputTail(child: ResultPromise): () => string {
+  let tail = '';
+  const onData = (chunk: Buffer): void => {
+    tail += chunk.toString('utf8');
+    if (tail.length > OUTPUT_TAIL_BYTES) {
+      tail = tail.slice(tail.length - OUTPUT_TAIL_BYTES);
+    }
+  };
+  child.stdout?.on('data', onData);
+  child.stderr?.on('data', onData);
+  return () => tail;
 }
 
 /**

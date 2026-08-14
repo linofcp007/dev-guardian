@@ -567,6 +567,96 @@ function enforceStartCommandRules(projectPath, opts) {
   }
 }
 
+/**
+ * Registers SIGINT/SIGTERM handlers for the lifetime of an app-lifecycle
+ * block (coordinator review, Finding 3): interrupting the CLI — a cancelled
+ * CI job (SIGTERM) or a developer's Ctrl-C (SIGINT) — must not orphan the
+ * application `--start-command` started. Neither `appRunner.ts`'s own
+ * safety nets reach this on POSIX: execa's `cleanup` option is inert once
+ * `detached: true` is set (confirmed by reading execa's source — see the
+ * task report), and `detached` puts the child outside the terminal's own
+ * foreground process group, so it does not even receive the terminal's own
+ * Ctrl-C. Nothing but an explicit handler here closes that gap. Verified
+ * directly in a Linux container: without this, SIGINT/SIGTERM to the CLI
+ * left the started application running; with it, gone.
+ *
+ * `signal` is threaded into `startApp` so an interrupt arriving WHILE the
+ * app is still starting (before `getApp()` has anything to return yet)
+ * cancels that wait too, instead of leaving the just-spawned process to be
+ * found only once `startApp`'s own timeout eventually elapses. That case
+ * needs its OWN handling, not just `getApp()`: `getStartingApp()` exposes
+ * the in-flight `startApp()` promise itself, and the handler AWAITS it
+ * (swallowing its now-expected rejection) rather than calling
+ * `process.exit()` right after requesting the abort. This is not a
+ * refinement — it was a real, caught bug: `controller.abort()` only
+ * *requests* that `startApp` clean up after itself; the clean-up
+ * (`waitForHealthy` noticing the abort, then `stop()`ing whatever it
+ * spawned, INSIDE `startApp`'s own catch block, all before its promise
+ * settles) still takes a moment to actually run. Calling `process.exit()`
+ * immediately after the abort — this module's own first version — tore
+ * the whole CLI process down before that in-flight cleanup got to finish,
+ * leaving the just-started application running. Caught in a Linux
+ * container, not by inspection: `SIGTERM: started app is GONE ... FAIL —
+ * pid N still alive`, sent while the app was still mid-health-check.
+ * Awaiting the SAME promise `cmdScan`/`cmdBaseline`'s own try block is
+ * already awaiting guarantees this handler cannot outrun it.
+ *
+ * The returned `isInterrupted()` exists because this handler calls
+ * `process.exit()` itself, with the conventional 128+signum shell code —
+ * the caller's own normal exit-code logic (a gate verdict, a usage error)
+ * must not ALSO run afterwards for a scan the user explicitly cancelled;
+ * checking this flag after the try/finally block is how the caller yields
+ * to whichever exit path actually applies.
+ */
+function armInterruptTeardown(getApp, getStartingApp) {
+  const controller = new AbortController();
+  let interrupted = false;
+  const onSignal = (exitCode) => () => {
+    interrupted = true;
+    void (async () => {
+      controller.abort();
+      const app = getApp();
+      if (app) {
+        // Already running: this handler owns the only handle to it, so it
+        // stops it directly rather than waiting on anything else.
+        try {
+          await app.stop();
+        } catch {
+          /* the process is exiting regardless; best-effort */
+        }
+      } else {
+        // Not yet running: `controller.abort()` above is what makes the
+        // IN-FLIGHT `startApp()` call clean up after itself — awaiting
+        // that same call (not a fresh `app.stop()`, there is no `app` yet)
+        // is how this handler waits for that real cleanup instead of
+        // outrunning it. Its rejection here is the expected, ordinary
+        // shape of a cancelled start, not a new failure to report.
+        const pending = getStartingApp();
+        if (pending) {
+          try {
+            await pending;
+          } catch {
+            /* expected: this is what an aborted startApp() looks like */
+          }
+        }
+      }
+      process.exit(exitCode);
+    })();
+  };
+  const onSigint = onSignal(130); // 128 + SIGINT(2) — the conventional shell code
+  const onSigterm = onSignal(143); // 128 + SIGTERM(15)
+  process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
+  return {
+    signal: controller.signal,
+    isInterrupted: () => interrupted,
+    dispose: () => {
+      process.off('SIGINT', onSigint);
+      process.off('SIGTERM', onSigterm);
+    },
+  };
+}
+
 async function cmdScan(argv) {
   const parsed = parseScanArgs(argv);
   if (parsed.error) return usageError(`Unknown flag: ${parsed.error}`);
@@ -607,16 +697,20 @@ async function cmdScan(argv) {
   // would skip `app.stop()` below on exactly the path this exists to cover
   // ("a scan that throws must not leave the user's application running").
   let app = null;
+  let startingApp = null;
+  const interrupt = armInterruptTeardown(() => app, () => startingApp);
   let pipelineError = null;
   let result;
   try {
     if (opts.startCommand !== undefined) {
-      app = await startApp({
+      startingApp = startApp({
         command: opts.startCommand,
         cwd: projectPath,
         healthUrl: opts.baseUrl,
         timeoutMs: APP_START_TIMEOUT_MS,
+        signal: interrupt.signal,
       });
+      app = await startingApp;
     }
     result = await runScans({
       projectPath,
@@ -626,7 +720,15 @@ async function cmdScan(argv) {
   } catch (e) {
     pipelineError = e;
   } finally {
+    interrupt.dispose();
     if (app) await app.stop();
+  }
+  if (interrupt.isInterrupted()) {
+    // The SIGINT/SIGTERM handler is already tearing down and will call
+    // process.exit() itself with the conventional 128+signum code — don't
+    // also report a usage error for the cancellation-shaped rejection its
+    // own abort caused.
+    return;
   }
   if (pipelineError) {
     return usageError(`scan failed to run: ${pipelineError instanceof Error ? pipelineError.message : String(pipelineError)}`);
@@ -704,22 +806,27 @@ async function cmdBaseline(argv) {
   enforceStartCommandRules(projectPath, opts);
 
   // Same reasoning, and the same required shape, as cmdScan's own — see the
-  // comment there. `baseline update` accepts --start-command/--base-url for
-  // the identical reason: scan_dast is part of the same pipeline this
-  // command runs, so an app it started must be stopped before this function
+  // comments there (including `armInterruptTeardown`). `baseline update`
+  // accepts --start-command/--base-url for the identical reason: scan_dast
+  // is part of the same pipeline this command runs, so an app it started
+  // must be stopped — including on SIGINT/SIGTERM — before this function
   // can exit, on every path, and `usageError` below must never be reached
   // from inside a catch nested in this try.
   let app = null;
+  let startingApp = null;
+  const interrupt = armInterruptTeardown(() => app, () => startingApp);
   let pipelineError = null;
   let result;
   try {
     if (opts.startCommand !== undefined) {
-      app = await startApp({
+      startingApp = startApp({
         command: opts.startCommand,
         cwd: projectPath,
         healthUrl: opts.baseUrl,
         timeoutMs: APP_START_TIMEOUT_MS,
+        signal: interrupt.signal,
       });
+      app = await startingApp;
     }
     result = await runScans({
       projectPath,
@@ -729,7 +836,11 @@ async function cmdBaseline(argv) {
   } catch (e) {
     pipelineError = e;
   } finally {
+    interrupt.dispose();
     if (app) await app.stop();
+  }
+  if (interrupt.isInterrupted()) {
+    return;
   }
   if (pipelineError) {
     return usageError(`scan failed to run: ${pipelineError instanceof Error ? pipelineError.message : String(pipelineError)}`);

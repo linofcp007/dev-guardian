@@ -19,9 +19,11 @@
  * internally on `process.platform`: Windows kills the tree via
  * `taskkill /T /F`; POSIX signals a negative pid (the process group made by
  * `detached: true` at spawn). On THIS machine (Windows), every test below
- * exercises the `taskkill` branch. The POSIX branch is implemented against
- * the standard, documented technique but is NOT exercised by any run in this
- * environment — only a Linux runner executing this same file would prove it.
+ * exercises the `taskkill` branch. A prior round of this task ran the
+ * identical fixtures inside a real `node:22` Linux container to exercise the
+ * POSIX branch directly (see the task report) — that run is what caught a
+ * real defect in the FIXTURES below, not the runtime: see the grandchild's
+ * `detached` comment.
  */
 import { createServer, type Server } from 'node:http';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -42,17 +44,32 @@ import { startApp } from '../../../src/ci/appRunner.js';
  * genuinely WAITS for the health check rather than resolving the instant
  * the process is spawned.
  *
- * The grandchild is spawned `detached: true` — DELIBERATELY, not
- * incidentally. Verified directly (see the task report) that on Windows,
- * Node's OWN default (non-detached) child spawning already wraps every
- * descendant in a cascading Job Object, so killing only a direct child
- * ALSO kills a plain, non-detached grandchild automatically — a fixture
- * built that way would pass even against a wrong, non-tree-aware kill and
- * prove nothing. A `detached` grandchild breaks that incidental cascade
- * (confirmed empirically) and is itself a realistic stand-in for a process
- * manager that intentionally detaches what it launches — which is exactly
- * the case `killTree`'s Windows `/T` flag (a PPID-table walk, independent
- * of Job Object membership) exists to still reach.
+ * The grandchild's OWN `detached` flag is platform-conditional —
+ * `process.platform === 'win32'` — and this is corrective, not
+ * decorative: a prior round shipped it unconditionally `true`, reasoned
+ * to be "the harder case everywhere". A real `node:22` Linux container
+ * proved that reasoning wrong (coordinator review, Finding 1): on POSIX,
+ * `detached: true` calls `setsid()`, which puts the grandchild in *its
+ * own* new process group — `killTree`'s negative-pid signal targets the
+ * PARENT's group and can never reach a process that left it, by
+ * construction. The container's own process table showed it plainly:
+ * grandchild PGID 23 vs parent PGID 15. Making the grandchild
+ * `detached: true` on POSIX does not model `npm start` harder; it models
+ * something `killTree` was never able to reach, on any platform, and
+ * asserts that it does. On WINDOWS specifically, `detached: true` for the
+ * grandchild is still exactly right and still necessary: Node's own
+ * default (non-detached) child spawning already wraps every descendant in
+ * a cascading Job Object there, so a PLAIN grandchild would be killed
+ * incidentally by the OS regardless of whether `killTree`'s `/T` flag
+ * does anything at all — confirmed empirically (three levels of plain
+ * Node-spawns-Node, killing only the top pid, still killed all three) —
+ * so only a `detached` grandchild defeats that incidental cascade and
+ * makes the Windows assertion mean anything. Each platform's fixture
+ * therefore has to defeat THAT platform's own incidental cleanup, which is
+ * a different flag on each: `win32` needs `detached: true` to escape the
+ * Job Object; POSIX needs `detached: false` (default) to STAY in the
+ * parent's process group, because that is the one `killTree` can reach and
+ * the one a real `npm start` grandchild is actually in.
  */
 const GOOD_APP_SCRIPT = `
 const { createServer } = require('node:http');
@@ -61,7 +78,7 @@ const { writeFileSync } = require('node:fs');
 const port = Number(process.argv[1]);
 const pidfile = process.argv[2];
 const delayMs = Number(process.argv[3] || '0');
-const gc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000);'], { stdio: 'ignore', detached: true });
+const gc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
 gc.unref();
 gc.on('spawn', () => {
   writeFileSync(pidfile, JSON.stringify({ parent: process.pid, grandchild: gc.pid }));
@@ -72,15 +89,15 @@ gc.on('spawn', () => {
 `;
 
 /**
- * Spawns a `detached` grandchild immediately (see GOOD_APP_SCRIPT's comment
- * on why), reports pids to `argv[1]`, then never listens anywhere and never
- * exits on its own — for the timeout tests.
+ * Spawns a grandchild immediately (platform-conditional `detached` — see
+ * GOOD_APP_SCRIPT's comment on why), reports pids to `argv[1]`, then never
+ * listens anywhere and never exits on its own — for the timeout tests.
  */
 const NEVER_ANSWERS_SCRIPT = `
 const { spawn } = require('node:child_process');
 const { writeFileSync } = require('node:fs');
 const pidfile = process.argv[1];
-const gc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000);'], { stdio: 'ignore', detached: true });
+const gc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
 gc.unref();
 gc.on('spawn', () => {
   writeFileSync(pidfile, JSON.stringify({ parent: process.pid, grandchild: gc.pid }));
@@ -92,6 +109,45 @@ setInterval(() => {}, 60000);
  *  "detects a crash before it wastes the full timeout" test. No grandchild:
  *  irrelevant to what that test checks. */
 const CRASHES_IMMEDIATELY_SCRIPT = `process.exit(7);`;
+
+/**
+ * Writes a distinctive line to stderr, then exits nonzero — for the
+ * output-tail test (coordinator review, Finding 7). Sets `exitCode` rather
+ * than calling `process.exit()` directly so the write is never racing its
+ * own exit — the same truncation risk this task's own `unref()` finding is
+ * a cousin of; a test fixture is not exempt from it.
+ *
+ * The marker string is assembled with `.join(': ')` rather than written as
+ * one literal — DELIBERATELY: `startApp`'s error messages always echo the
+ * command itself (`opts.command.join(' ')`, which for a `-e` command
+ * includes this very script's source text), so a literal
+ * `'FATAL: port 9999 already in use'` in the source would make the
+ * test's regex match the ECHOED COMMAND even with NO output captured at
+ * all — a vacuous assertion that would have shipped were it not for the
+ * mutation check in the task report: reverting the capture to
+ * `stdio: 'ignore'` did NOT turn this test red on the first attempt, for
+ * exactly that reason. Assembled at runtime, the joined phrase exists only
+ * in the child's actual stderr output, never in its own source text, so
+ * the assertion can only be satisfied by output this module genuinely
+ * captured.
+ */
+const CRASHES_WITH_MESSAGE_SCRIPT = `
+process.stderr.write(['FATAL', 'port 9999 already in use'].join(': ') + '\\n');
+process.exitCode = 1;
+`;
+
+/** Listens immediately, but delays every response by `argv[2]`ms — for the
+ *  "a slow-but-healthy app is not wrongly declared unreachable" test
+ *  (coordinator review, Finding 2). No grandchild: irrelevant to what that
+ *  test checks. */
+const SLOW_RESPONSE_SCRIPT = `
+const { createServer } = require('node:http');
+const port = Number(process.argv[1]);
+const delayMs = Number(process.argv[2] || '0');
+createServer((req, res) => {
+  setTimeout(() => { res.writeHead(200); res.end('ok'); }, delayMs);
+}).listen(port, '127.0.0.1');
+`;
 
 /**
  * Writes `argv[3]` (a caller-supplied value, verbatim) to `argv[2]`, then
@@ -181,6 +237,23 @@ async function waitForPidfile(path: string, timeoutMs = 5_000): Promise<PidPair>
   }
 }
 
+/** `JSON.parse` returns `any` — reading its result straight into a typed
+ *  `const` (this file's own earlier shape, at two call sites) asserts a
+ *  shape nothing checked, which is exactly what `noUncheckedIndexedAccess`'s
+ *  `unknown` + guard discipline elsewhere in this file exists to prevent
+ *  (coordinator review, Finding 8: "the no-`any` constraint binds tests
+ *  too"). Used once the pidfile is already known to exist (the caller has
+ *  already awaited `startApp`, which cannot resolve before the fixture's
+ *  own write completes), so this throws — deliberately, there is nothing
+ *  sensible to retry — rather than looping like `waitForPidfile` above. */
+function readPidPair(path: string): PidPair {
+  const data: unknown = JSON.parse(readFileSync(path, 'utf8'));
+  if (!isPidPair(data)) {
+    throw new Error(`${path} did not contain a { parent, grandchild } pid pair: ${readFileSync(path, 'utf8')}`);
+  }
+  return data;
+}
+
 /* ------------------------------------------------------------------ */
 
 describe('startApp', () => {
@@ -222,12 +295,32 @@ describe('startApp', () => {
       // anything real. Prove the process this command names is genuinely
       // running: the pidfile only exists once the fixture's own
       // spawn-then-listen sequence has completed.
-      const pids: PidPair = JSON.parse(readFileSync(pidfile, 'utf8'));
+      const pids = readPidPair(pidfile);
       expect(typeof pids.parent).toBe('number');
       expect(isAlive(pids.parent)).toBe(true);
     } finally {
       await app.stop();
     }
+  });
+
+  it('a healthy app that answers slower than the poll interval is not wrongly declared unreachable', async () => {
+    // Coordinator review, Finding 2: this module's own first version reused
+    // the 100ms poll INTERVAL (the gap between attempts) as each attempt's
+    // own abort deadline, so every request against this fixture — up and
+    // answering the whole time — was aborted 100ms after it started and
+    // never had a chance to complete. Reproduced there with exactly this
+    // shape: "response delay 300ms -> FAILED after 4709ms: timed out after
+    // 4000ms". 300ms is comfortably past the old 100ms bug and comfortably
+    // under the real per-request budget, so this fails against the old
+    // conflated-timeout implementation and passes against the fix.
+    const port = await getFreePort();
+    const app = await startApp({
+      command: ['node', '-e', SLOW_RESPONSE_SCRIPT, String(port), '300'],
+      cwd: workDir,
+      healthUrl: `http://127.0.0.1:${port}/`,
+      timeoutMs: 5_000,
+    });
+    await app.stop();
   });
 
   it('rejects with a clear error when the health url never answers', async () => {
@@ -307,6 +400,24 @@ describe('startApp', () => {
     expect(Date.now() - started).toBeLessThan(2_000);
   });
 
+  it('a startup failure surfaces the app’s own output for diagnosis', async () => {
+    // Coordinator review, Finding 7: `stdio: 'ignore'` (this module's own
+    // first version) discarded exactly the information a CI user needs to
+    // fix a failed start — the stack trace, "port already in use", the
+    // missing env var — for a tool whose whole product IS the diagnosis.
+    // Guards a wrong implementation that still discards the app's output:
+    // the fixture writes a distinctive line to stderr before exiting, and
+    // the thrown error must contain it, not just the exit code.
+    await expect(
+      startApp({
+        command: ['node', '-e', CRASHES_WITH_MESSAGE_SCRIPT],
+        cwd: workDir,
+        healthUrl: 'http://127.0.0.1:1/',
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow(/FATAL: port 9999 already in use/);
+  });
+
   it('stop() leaves nothing running, and is safe to call twice', async () => {
     const port = await getFreePort();
     const pidfile = join(workDir, 'pids.json');
@@ -316,7 +427,7 @@ describe('startApp', () => {
       healthUrl: `http://127.0.0.1:${port}/`,
       timeoutMs: 5_000,
     });
-    const pids: PidPair = JSON.parse(readFileSync(pidfile, 'utf8'));
+    const pids = readPidPair(pidfile);
 
     await app.stop();
     await waitUntilDead(pids.parent);
@@ -326,6 +437,80 @@ describe('startApp', () => {
     // have run once on a timeout path. Must not throw, hang, or attempt to
     // re-signal an already-dead pid in a way that surfaces as a rejection.
     await expect(app.stop()).resolves.toBeUndefined();
+  });
+
+  it('a concurrent second stop() does not resolve before the tree is actually gone', async () => {
+    // Guards the wrong implementation this module shipped with initially: a
+    // boolean `stopped` flag set BEFORE the `await killTree(...)` call, so a
+    // second call that overlaps the first sees the flag already true and
+    // returns immediately — while the tree is still alive (coordinator
+    // review, Finding 6, reproduced: "after the 2nd stop() resolved, app
+    // alive = true"). The sequential test above cannot catch this: by the
+    // time it makes its SECOND call, the first has already been fully
+    // awaited, so there is nothing left in flight to race.
+    const port = await getFreePort();
+    const pidfile = join(workDir, 'pids.json');
+    const app = await startApp({
+      command: ['node', '-e', GOOD_APP_SCRIPT, String(port), pidfile],
+      cwd: workDir,
+      healthUrl: `http://127.0.0.1:${port}/`,
+      timeoutMs: 5_000,
+    });
+    const pids = readPidPair(pidfile);
+
+    const first = app.stop();
+    const second = app.stop();
+    // Await ONLY the second call — the one a wrong implementation resolves
+    // early. Awaiting `Promise.all([first, second])` instead would still
+    // wait for the real teardown `first` kicked off and hide the bug; the
+    // whole point is to check the instant `second` itself settles.
+    await second;
+    expect(isAlive(pids.parent)).toBe(false);
+    expect(isAlive(pids.grandchild)).toBe(false);
+    // Let the real teardown finish before this test (and its `afterEach`)
+    // ends, rather than leaving a dangling handle.
+    await first;
+  });
+
+  it('an aborted signal cancels an in-progress health-check wait and kills whatever was already spawned', async () => {
+    // The CLI's SIGINT/SIGTERM handling (coordinator review, Finding 3)
+    // needs to be able to give up on a still-starting app without waiting
+    // for its own timeout — this is the mechanism that makes that possible,
+    // tested directly rather than only through the CLI. Guards a wrong
+    // implementation that accepts `signal` but never checks it: that
+    // version would ignore the abort below and only stop waiting once the
+    // full (deliberately generous) `timeoutMs` elapsed.
+    const pidfile = join(workDir, 'pids.json');
+    const controller = new AbortController();
+    const pending = startApp({
+      command: ['node', '-e', NEVER_ANSWERS_SCRIPT, pidfile],
+      cwd: workDir,
+      healthUrl: 'http://127.0.0.1:1/',
+      timeoutMs: 30_000,
+      signal: controller.signal,
+    });
+    const settled = pending.then(
+      () => {
+        throw new Error('expected startApp to reject');
+      },
+      (e: unknown) => e,
+    );
+
+    const pids = await waitForPidfile(pidfile);
+    const abortedAt = Date.now();
+    controller.abort();
+
+    const error = await settled;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/cancelled/i);
+    // The ABORT, not the 30s timeoutMs, must be what ended this — pinned as
+    // a real elapsed-time number, not just inferred from the message.
+    expect(Date.now() - abortedAt).toBeLessThan(2_000);
+
+    // Same load-bearing shape as the timeout test: an abort must kill what
+    // was already spawned, including the grandchild, not merely reject.
+    await waitUntilDead(pids.parent);
+    await waitUntilDead(pids.grandchild);
   });
 
   it('never uses a shell — a metacharacter in an argument is passed literally', async () => {

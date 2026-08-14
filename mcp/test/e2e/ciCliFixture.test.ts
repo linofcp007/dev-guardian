@@ -408,6 +408,60 @@ createServer((req, res) => { res.writeHead(200); res.end('ok'); }).listen(port, 
  *  `--start-command` that is simply wrong (typo, missing dependency). */
 const CRASHES_IMMEDIATELY_SCRIPT = `process.exit(9);`;
 
+/**
+ * Spawns a grandchild, reports `{ parent, grandchild }` pids to `argv[2]`,
+ * then listens on `argv[1]` — for the "scan throws while the app is
+ * healthy" test below, where proving the started TREE (not just the
+ * direct process) is torn down is the whole point, same reasoning as
+ * `appRunner.test.ts`'s own fixtures.
+ */
+const FIXTURE_APP_WITH_GRANDCHILD_SCRIPT = `
+const { createServer } = require('node:http');
+const { spawn } = require('node:child_process');
+const { writeFileSync } = require('node:fs');
+const port = Number(process.argv[1]);
+const pidfile = process.argv[2];
+const gc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
+gc.unref();
+gc.on('spawn', () => {
+  writeFileSync(pidfile, JSON.stringify({ parent: process.pid, grandchild: gc.pid }));
+  createServer((req, res) => { res.writeHead(200); res.end('ok'); }).listen(port, '127.0.0.1');
+});
+`;
+
+interface PidPair {
+  parent: number;
+  grandchild: number;
+}
+
+function isPidPair(x: unknown): x is PidPair {
+  if (typeof x !== 'object' || x === null) return false;
+  const rec = x as Record<string, unknown>;
+  return typeof rec['parent'] === 'number' && typeof rec['grandchild'] === 'number';
+}
+
+function readPidPair(path: string): PidPair {
+  const data: unknown = JSON.parse(readFileSync(path, 'utf8'));
+  if (!isPidPair(data)) {
+    throw new Error(`${path} did not contain a { parent, grandchild } pid pair`);
+  }
+  return data;
+}
+
+/**
+ * `process.env` with every OS-recognised temp-directory variable pointed at
+ * a path that does not exist — forces `runScans()`'s own `mkdtemp()` call
+ * to fail for REAL, no code mutation needed (confirmed directly: the
+ * resulting error is a genuine `ENOENT`, not a simulated one). `os.tmpdir()`
+ * reads `TMPDIR` on POSIX and `TEMP`/`TMP` on Windows; overriding all three
+ * keeps this meaningful on whichever platform runs it, matching this file's
+ * own `PATH`/`Path` cross-platform-casing precedent above.
+ */
+function envWithBrokenTmpdir(): NodeJS.ProcessEnv {
+  const bogus = join(tmpdir(), 'guardian-ci-cli-tmpdir-does-not-exist-xyz', 'nested');
+  return { ...process.env, TMPDIR: bogus, TEMP: bogus, TMP: bogus };
+}
+
 describe('dev-guardian scan — starting the application (--start-command)', () => {
   it('starts the application for the DAST pass, then stops it once the scan ends', async () => {
     const dir = await makeScannableFixture('guardian-ci-cli-startapp-');
@@ -497,6 +551,70 @@ describe('dev-guardian scan — starting the application (--start-command)', () 
       rmDir(dir);
     }
   });
+
+  it('stops the started application — including a grandchild — when the scan throws AFTER the app is already healthy', async () => {
+    // Coordinator review, Finding 4: §7's teardown clause reads "a scan
+    // that CRASHES must not leave the user's application running", and the
+    // shipped code handles it with a deliberately unusual stash-then-
+    // check-after shape in cmdScan (see its own comment) — but no test
+    // exercised that shape until now. The reviewer reverted cmdScan to the
+    // obvious `catch { return usageError(...) } finally { app.stop() } `
+    // shape and found the started application's grandchild orphaned while
+    // the ENTIRE suite, including the other two tests in this block, still
+    // passed — because neither of them has an app that is both ALREADY
+    // healthy AND still running at the moment runScans() itself throws.
+    // This test is built specifically to occupy that gap.
+    //
+    // Forces a REAL throw with no code mutation: every OS-recognised
+    // temp-dir env var is pointed at a path that does not exist, so
+    // runScans()'s own `mkdtemp()` fails for real (confirmed directly —
+    // the resulting error is a genuine ENOENT) — the failure lands squarely
+    // inside `cmdScan`'s try block, after `startApp()` has already
+    // resolved.
+    const dir = makeBareDir('guardian-ci-cli-throws-mid-scan-');
+    const pidfile = join(dir, 'app.pid');
+    try {
+      const port = await getFreePort();
+      const r = runCli(
+        [
+          'scan',
+          '--project',
+          dir,
+          '--base-url',
+          `http://127.0.0.1:${port}/`,
+          '--start-command',
+          'node',
+          '-e',
+          FIXTURE_APP_WITH_GRANDCHILD_SCRIPT,
+          String(port),
+          pidfile,
+        ],
+        SCAN_TIMEOUT_MS,
+        envWithBrokenTmpdir(),
+      );
+
+      // Confirms the failure happened where this test means it to — inside
+      // runScans(), via mkdtemp — not somewhere earlier that would prove
+      // nothing about teardown-on-throw specifically.
+      expect(r.status).toBe(3);
+      expect(r.stderr).toMatch(/scan failed to run/i);
+      expect(r.stderr).toMatch(/mkdtemp/i);
+
+      // The assertion that matters, same shape as appRunner.test.ts's own:
+      // the pidfile (written from inside the fixture, proving it genuinely
+      // ran and was genuinely healthy — the CLI only reaches runScans()
+      // after startApp() resolves) names both a direct process and a
+      // grandchild, and BOTH must be gone. A wrong implementation that
+      // orphans the grandchild specifically — the exact regression the
+      // reviewer demonstrated — passes a check that only inspects the
+      // direct process; this is why both are asserted.
+      const pids = readPidPair(pidfile);
+      await waitUntilDead(pids.parent);
+      await waitUntilDead(pids.grandchild);
+    } finally {
+      rmDir(dir);
+    }
+  }, SCAN_TIMEOUT_MS + 10_000);
 });
 
 /* ------------------------------------------------------------------ */
