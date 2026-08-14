@@ -21,7 +21,8 @@ describe('parseBaseline', () => {
   it('returns an empty baseline for a file that genuinely holds none', () => {
     const parsed = parseBaseline('{"version":1,"generated_at":"x","entries":[]}');
     expect(parsed).not.toBeNull();
-    expect(parsed?.entries).toEqual([]);
+    expect(parsed?.file.entries).toEqual([]);
+    expect(parsed?.dropped).toBe(0);
   });
 
   it('returns null for unparseable content rather than throwing', () => {
@@ -29,8 +30,51 @@ describe('parseBaseline', () => {
   });
 
   it('returns null for a JSON document of the wrong shape', () => {
+    // A wrong-shaped DOCUMENT (bad version, not an object at all) is not the
+    // same failure as a wrong-shaped ENTRY inside an otherwise-good document
+    // — see the two tests below. There is no file to salvage here, so this
+    // stays `null`.
     expect(parseBaseline('{"version":99}')).toBeNull();
     expect(parseBaseline('[]')).toBeNull();
+  });
+
+  it('drops an entry with an unrecognised severity but keeps its valid siblings, and reports the count', () => {
+    // A baseline written by a FUTURE version of this tool may carry a
+    // severity this build's SEVERITIES does not know about yet. Rejecting
+    // the whole document over that one entry would make parseBaseline
+    // return null — indistinguishable from "no baseline exists" — and
+    // un-baseline every OTHER, perfectly valid entry in the same file.
+    const text = JSON.stringify({
+      version: 1,
+      generated_at: 'x',
+      entries: [
+        { fingerprint: 'a', severity: 'high', title: 'A', added: 'd' },
+        { fingerprint: 'b', severity: 'urgent', title: 'B', added: 'd' },
+        { fingerprint: 'c', severity: 'low', title: 'C', added: 'd' },
+      ],
+    });
+    const parsed = parseBaseline(text);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.file.entries.map((e) => e.fingerprint)).toEqual(['a', 'c']);
+    expect(parsed?.dropped).toBe(1);
+  });
+
+  it('returns a present file with zero entries, not null, when every entry is invalid', () => {
+    // Distinct from an absent file: the document exists and parses, so the
+    // caller must be able to tell that apart, even though nothing inside it
+    // could be trusted.
+    const text = JSON.stringify({
+      version: 1,
+      generated_at: 'x',
+      entries: [
+        { fingerprint: 'a', severity: 'urgent', title: 'A', added: 'd' },
+        { fingerprint: 'b', severity: 'extreme', title: 'B', added: 'd' },
+      ],
+    });
+    const parsed = parseBaseline(text);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.file.entries).toEqual([]);
+    expect(parsed?.dropped).toBe(2);
   });
 });
 
@@ -95,7 +139,7 @@ describe('buildBaseline', () => {
 describe('serialiseBaseline', () => {
   it('round-trips through parseBaseline', () => {
     const b = buildBaseline([finding()], null, '2026-08-14');
-    expect(parseBaseline(serialiseBaseline(b))).toEqual(b);
+    expect(parseBaseline(serialiseBaseline(b))).toEqual({ file: b, dropped: 0 });
   });
 
   it('ends with a newline so the file is POSIX-clean in a diff', () => {

@@ -32,6 +32,22 @@ export interface BaselineFile {
   entries: BaselineEntry[];
 }
 
+/**
+ * Result of `baseline.ts#parseBaseline` for a document that DID exist and had
+ * the right top-level shape. `dropped` counts entries the parser could not
+ * validate — most likely a `severity` newer than this build's `SEVERITIES` —
+ * and therefore excluded from `file.entries` rather than failing the whole
+ * document over one unrecognised token. A non-zero `dropped` must be
+ * surfaced (the gate's coverage gaps, the report) rather than absorbed
+ * silently: a finding that resurfaces because its entry was dropped is a
+ * different fact from one that resurfaced because someone reintroduced the
+ * underlying bug, and a reader must be able to tell them apart.
+ */
+export interface BaselineParseResult {
+  file: BaselineFile;
+  dropped: number;
+}
+
 export interface ScanStepResult {
   tool: string;
   ran: boolean;

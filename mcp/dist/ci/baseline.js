@@ -7,18 +7,41 @@
  * it can be tested from fixtures with no I/O.
  *
  * The rule this module exists to enforce: an ABSENT baseline file is not an
- * EMPTY one. `parseBaseline(null)` returns `null`; a file that parses but
- * lists no entries returns `{ version: 1, generated_at, entries: [] }`.
- * Collapsing the two would fail the first build of every repository that
- * adopts this tool — with no file yet, every historical finding would read
- * as new, and the gate would block a pull request for debt the author did
- * not introduce.
+ * EMPTY one, and neither of those is the same failure as a well-shaped
+ * DOCUMENT that contains one malformed ENTRY. `parseBaseline` therefore
+ * returns one of three states, not two:
  *
- * `null` is also what unparseable JSON and a document of the wrong shape
- * return: a corrupted or absent baseline is the CALLER's decision to make
- * (report it to the user, or proceed as though nothing is known yet) — this
- * module throwing instead would crash a CI run over a single bad commit to a
- * file humans hand-edit to suppress findings.
+ *   - `null` — no file, unparseable JSON, or a document whose top-level
+ *     shape is wrong (bad `version`, missing `generated_at`, `entries` not
+ *     an array). There is nothing here to salvage.
+ *   - `{ file: { entries: [], ... }, dropped: 0 }` — a file that parses
+ *     cleanly and genuinely lists nothing.
+ *   - `{ file, dropped: N }` — a file that parsed, whose `entries` array
+ *     contained N item(s) this build could not validate — typically a
+ *     `severity` value newer than this build's `SEVERITIES` (see
+ *     `isSeverity`). Those N are excluded from `file.entries`; every other
+ *     entry survives.
+ *
+ * The third state exists because the naive fix for "one bad entry" —
+ * rejecting the whole array, exactly like a wrong-shaped document — silently
+ * reintroduces the very failure this module exists to prevent, through a
+ * different door: a baseline written by a NEWER version of this tool and
+ * read by an OLDER one would contain exactly one entry the older build
+ * doesn't recognise, `parseBaseline` would return `null` for the entire
+ * file, and `null` is indistinguishable from "no baseline exists" to every
+ * caller — un-baselining a repository's whole suppression history over one
+ * unrecognised token. Filtering keeps the blast radius to the one entry that
+ * could not be read, and `dropped` makes that loss visible rather than
+ * silent: a finding that resurfaces because its entry was dropped is a
+ * different fact from one that resurfaced because someone reintroduced the
+ * underlying bug, and a caller must be able to tell them apart (`gate.ts`
+ * folding it into coverage gaps, the report naming it).
+ *
+ * An absent/unparseable/wrong-shaped-document baseline stays `null` rather
+ * than thrown, and a corrupted-but-present one stays a present result rather
+ * than `null`: either would crash a CI run, or misreport a corrupted commit
+ * as if nothing had ever been baselined, over a file humans hand-edit to
+ * suppress findings.
  */
 import { SEVERITIES } from '../types.js';
 /** Where the committed baseline lives, relative to the project root. */
@@ -45,13 +68,13 @@ function isBaselineEntry(value) {
     return true;
 }
 /**
- * `null` means "no usable baseline": the file was absent (see module doc
- * above), `text` was not valid JSON, or it parsed to a document of the wrong
- * shape (wrong `version`, missing fields, an entry with the wrong types). All
- * three collapse to `null` rather than a thrown error, so a corrupted or
- * missing baseline never crashes a CI run — the caller decides what "no
- * usable baseline" means for it, which today means treating every finding as
- * new.
+ * See the module doc for the three return states in full. In short: `null`
+ * means there is no file to salvage (absent, unparseable, or the wrong shape
+ * at the DOCUMENT level — bad `version`, missing `generated_at`, `entries`
+ * not an array). Otherwise every entry that fails validation is dropped
+ * individually rather than failing the whole document, and `dropped` reports
+ * how many were — a wrong-shaped ENTRY must never read as either a
+ * wrong-shaped document or as "no baseline exists".
  */
 export function parseBaseline(text) {
     if (text === null)
@@ -72,9 +95,9 @@ export function parseBaseline(text) {
         return null;
     if (!Array.isArray(entries))
         return null;
-    if (!entries.every(isBaselineEntry))
-        return null;
-    return { version: 1, generated_at, entries };
+    const validEntries = entries.filter(isBaselineEntry);
+    const dropped = entries.length - validEntries.length;
+    return { file: { version: 1, generated_at, entries: validEntries }, dropped };
 }
 /** Pretty-printed so the committed file is reviewable in a pull-request diff. */
 export function serialiseBaseline(file) {
