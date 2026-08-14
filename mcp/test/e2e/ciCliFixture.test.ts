@@ -44,6 +44,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
@@ -262,30 +263,26 @@ describe('dev-guardian scan — usage and safety (no real scanner reached)', () 
     }
   });
 
-  it('exits 3 when --start-command is given on argv, with a message distinct from the repo-config refusal', () => {
-    // Scope boundary with the (separate) app-runner task: --start-command is
-    // parsed and its argv-only rule is enforced here, but nothing in this
-    // build may actually start a process — Task 6 owns that. This must be a
-    // clearly different message from the repo-config refusal above, or a
-    // reader (and a test) cannot tell "you tried a real feature that isn't
-    // built yet" apart from "a fork tried to smuggle a command in".
+  it('exits 3 when --start-command is given without --base-url, with a message distinct from the repo-config refusal', () => {
+    // --start-command and --base-url are the same origin (the task report's
+    // resolution): the health URL startApp polls and the scan_dast target
+    // are one flag, so --start-command alone is a genuine usage mistake, not
+    // a missing capability. This must still read as a clearly DIFFERENT
+    // message from the repo-config refusal above, or a reader (and a test)
+    // cannot tell "you forgot a flag" apart from "a fork tried to smuggle a
+    // command in".
     const dir = makeBareDir('guardian-ci-cli-startcmd-argv-');
     try {
       const r = runCli(['scan', '--project', dir, '--start-command', 'node', 'server.js']);
       expect(r.status).toBe(3);
       expect(r.stderr).toMatch(/start.command/i);
-      expect(r.stderr).toMatch(/not.*(implement|support)/i);
+      expect(r.stderr).toMatch(/--base-url/);
       // Must NOT be the repo-config message — different problem, different words.
       expect(r.stderr).not.toMatch(/fork|pull request/i);
       expect(r.stderr).not.toMatch(/\.guardian[\\/]ci\.json/);
-      // Coordinator review: the caller typed this correctly — it must read
-      // as "this isn't built yet", not as "you made a usage mistake". Every
-      // OTHER exit-3 path in this file (unknown flag, bad --fail-on, missing
-      // --project, the repo-config refusal) shares the generic "error: "
-      // prefix; this is deliberately the one exception, so it must not share
-      // that prefix and must lead with the words themselves.
-      expect(r.stderr).not.toMatch(/^error:/i);
-      expect(r.stderr).toMatch(/^not yet implemented:/i);
+      // And it must never have reached the pipeline (no reports directory) —
+      // proof this is caught by validation, before any process is started.
+      expect(existsSync(join(dir, '.guardian', 'reports'))).toBe(false);
     } finally {
       rmDir(dir);
     }
@@ -297,17 +294,17 @@ describe('dev-guardian scan — usage and safety (no real scanner reached)', () 
     // command's own argv. If it mis-parses, "--project" would be consumed as
     // part of the (rejected) command instead of being read as the flag, and
     // this dir would never be resolved/used at all — either way the test
-    // below still expects exit 3 for "not yet implemented", so this is
-    // really pinned by the companion test above; this one additionally
-    // proves passing extra "--looking" tokens after --start-command does not
-    // itself produce an "unknown flag" error.
+    // below still expects exit 3 (no --base-url given), so this is really
+    // pinned by the companion test above; this one additionally proves
+    // passing extra "--looking" tokens after --start-command does not itself
+    // produce an "unknown flag" error.
     const dir = makeBareDir('guardian-ci-cli-startcmd-argv2-');
     try {
       const r = runCli(['scan', '--start-command', 'node', 'server.js', '--port', '4000', '--project', dir]);
       expect(r.status).toBe(3);
       // If "--project" had been parsed as a real flag (wrong: it's supposed
       // to be part of the start-command's own argv here), we would still hit
-      // the same not-yet-implemented refusal — so the discriminator is that
+      // the same --base-url-required refusal — so the discriminator is that
       // this must NOT be an "Unknown flag" usage error naming --port.
       expect(r.stderr).not.toMatch(/unknown flag/i);
     } finally {
@@ -346,6 +343,159 @@ describe('dev-guardian scan — usage and safety (no real scanner reached)', () 
     const r = runCli(['baseline', 'update', '--nope']);
     expect(r.status).toBe(3);
     expect(r.stderr).toMatch(/--nope/);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* dev-guardian scan — starting the application (--start-command)      */
+/* ------------------------------------------------------------------ */
+//
+// The `appRunner.ts` unit suite (`test/unit/ci/appRunner.test.ts`) already
+// proves process lifecycle in depth — timeouts, tree-kills, no-shell — real
+// child processes, mutation-tested. What THAT suite cannot prove is that
+// `cli/dev-guardian.mjs` actually WIRES it in correctly: does the real
+// subprocess CLI start the app, does it stop the app on every exit path
+// (including a failure), does it require --base-url. That is what these two
+// tests are for — the same "argument dispatch" gap this whole file exists to
+// close (see the module doc comment) applied to Task 6's own wiring.
+
+async function getFreePort(): Promise<number> {
+  const probe: Server = createServer();
+  await new Promise<void>((resolvePort, reject) => {
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => resolvePort());
+  });
+  const addr = probe.address();
+  await new Promise<void>((resolveClose) => probe.close(() => resolveClose()));
+  if (addr === null || typeof addr === 'string') {
+    throw new Error('getFreePort: no address');
+  }
+  return addr.port;
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitUntilDead(pid: number, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (isAlive(pid)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`pid ${pid} is still alive ${timeoutMs}ms after the CLI exited`);
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+/** Reports its own pid to `argv[2]`, then listens on `argv[1]` and answers
+ *  200 to anything — the target `--start-command` starts and `--base-url`
+ *  points at. */
+const FIXTURE_APP_SCRIPT = `
+const { createServer } = require('node:http');
+const { writeFileSync } = require('node:fs');
+const port = Number(process.argv[1]);
+const pidfile = process.argv[2];
+writeFileSync(pidfile, String(process.pid));
+createServer((req, res) => { res.writeHead(200); res.end('ok'); }).listen(port, '127.0.0.1');
+`;
+
+/** Exits immediately with a nonzero code, never listening — simulates a
+ *  `--start-command` that is simply wrong (typo, missing dependency). */
+const CRASHES_IMMEDIATELY_SCRIPT = `process.exit(9);`;
+
+describe('dev-guardian scan — starting the application (--start-command)', () => {
+  it('starts the application for the DAST pass, then stops it once the scan ends', async () => {
+    const dir = await makeScannableFixture('guardian-ci-cli-startapp-');
+    const pidfile = join(dir, 'app.pid');
+    try {
+      const port = await getFreePort();
+      const r = runCli(
+        [
+          'scan',
+          '--project',
+          dir,
+          '--base-url',
+          `http://127.0.0.1:${port}/`,
+          '--authorized-target',
+          '--start-command',
+          'node',
+          '-e',
+          FIXTURE_APP_SCRIPT,
+          String(port),
+          pidfile,
+        ],
+        SCAN_TIMEOUT_MS,
+      );
+
+      // Reached the real pipeline and came back with a genuine CI verdict —
+      // not a usage error. A wrong implementation that never actually wires
+      // --start-command through (silently ignoring it, or mis-validating a
+      // correctly-formed command) would most plausibly show up as exit 3.
+      expect(
+        r.status,
+        `expected a CI verdict (0/1/2), got ${String(r.status)}. stdout:\n${r.stdout}\nstderr:\n${r.stderr}`,
+      ).not.toBe(3);
+
+      // The load-bearing assertion: the fixture app genuinely ran (its own
+      // pidfile — written from inside that process — proves it started for
+      // real, not merely that --start-command was accepted) AND is gone by
+      // the time this CLI subprocess has exited. A wrong implementation that
+      // starts the app but never stops it would leave this pid alive
+      // indefinitely; this is the property design doc §7 and the brief both
+      // call the one that matters most.
+      const pid = Number(readFileSync(pidfile, 'utf8').trim());
+      expect(Number.isInteger(pid)).toBe(true);
+      await waitUntilDead(pid);
+    } finally {
+      rmDir(dir);
+    }
+  }, SCAN_TIMEOUT_MS + 10_000);
+
+  it('exits 3 — fast, not hanging — when the started application fails before the health check ever passes', () => {
+    // Guards the exact bug the task report's own self-review traced: if
+    // `usageError` (which calls `process.exit()`) were ever reached from
+    // inside a catch still nested in the try/finally that owns `app.stop()`,
+    // JS control flow skips that finally entirely — verified directly with
+    // a minimal reproduction (see the report) — so a scan whose app fails to
+    // start would exit 3 correctly EVEN IF teardown were silently skipped.
+    // This test cannot observe that internal skip directly (there is
+    // nothing left running for this particular fixture to prove leaked —
+    // process.exit(9) has already exited on its own before the health check
+    // even notices), so what it pins is the outward, user-visible contract:
+    // a clear, fast exit 3 naming the failure, never a hang and never an
+    // unhandled-rejection-shaped crash.
+    const dir = makeBareDir('guardian-ci-cli-startapp-crash-');
+    try {
+      const started = Date.now();
+      const r = runCli(
+        [
+          'scan',
+          '--project',
+          dir,
+          '--base-url',
+          'http://127.0.0.1:1/',
+          '--start-command',
+          'node',
+          '-e',
+          CRASHES_IMMEDIATELY_SCRIPT,
+        ],
+        FAST_TIMEOUT_MS,
+      );
+      expect(r.status).toBe(3);
+      expect(r.stderr).toMatch(/exit(ed)? code 9/i);
+      // "Fast" pinned as a real number: this must fail in roughly the time a
+      // process takes to spawn and exit, nowhere near the 60s default health
+      // timeout — see appRunner.test.ts's equivalent unit-level assertion
+      // for the same property at the module boundary.
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      rmDir(dir);
+    }
   });
 });
 

@@ -46,11 +46,14 @@
  *   there — the classic "pwn request". So `--start-command` is accepted on
  *   argv only; if `.guardian/ci.json` (or any other repository file) ever
  *   declares `start_command`, this CLI refuses outright, regardless of what
- *   argv says. Actually starting the application for the flag is not yet
- *   implemented in this build (a separate, later capability) — passing
- *   `--start-command` on argv today is refused too, loudly, rather than
- *   silently ignored; point `--base-url` at an already-running instance
- *   instead until it lands.
+ *   argv says.
+ *   Starting the process is done with argv as an array (`shell: false`,
+ *   never a joined string) and the whole tree is killed on every exit path
+ *   — normal completion, a thrown scan, or the health check itself timing
+ *   out — see `mcp/src/ci/appRunner.ts`. `--start-command` requires
+ *   `--base-url` alongside it: the URL polled for the health check and the
+ *   `scan_dast` target are the same origin, so there is nothing else for
+ *   `--base-url` to name once the app starts on its own.
  *
  * Requires a built server (`cd mcp && npm install && npm run build`).
  */
@@ -150,12 +153,16 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
   --fail-on <severity>  info|low|medium|high|critical (default: high)
   --format human|json   Report format on stdout (default: human)
   --sarif <path>        Also write a SARIF 2.1.0 report to this path
-  --base-url <url>      Include scan_dast against this already-running target
+  --base-url <url>      Include scan_dast against this target. Also the
+                         health-check URL when --start-command is given —
+                         they are the same origin, so one flag names both.
   --authorized-target   Confirm you are authorized to DAST-test that target
   --start-command <cmd> [args…]
-                         CLI ARGV ONLY — never honoured from a repository
-                         file (see the module header comment for why); not
-                         yet implemented (refused loudly, not ignored)
+                         Start <cmd> (argv, never a shell) for the DAST pass
+                         and stop it — whole process tree — when the scan
+                         ends, however it ends. Requires --base-url. CLI
+                         ARGV ONLY — never honoured from a repository file
+                         (see the module header comment for why).
   Never writes .guardian/baseline.json — see \`baseline update\`.
   Exit codes: 0 pass, 1 gate failed (new finding >= --fail-on),
               2 incomplete scan (an expected scanner did not run),
@@ -163,8 +170,9 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
 
 baseline update — regenerate .guardian/baseline.json from the current scan
   Same pipeline flags as scan: --project, --base-url, --authorized-target,
-  --start-command (same argv-only rule and refusal). No --fail-on/--format/
-  --sarif — this command does not gate or render a report, it writes a file.
+  --start-command (same argv-only rule, --base-url requirement, and
+  teardown). No --fail-on/--format/--sarif — this command does not gate or
+  render a report, it writes a file.
   The ONLY dev-guardian command that writes the baseline; scan never does.
   Exit codes: 0 written with full coverage, 2 written but an expected
               scanner did not run (baseline may under-represent findings),
@@ -348,33 +356,14 @@ function cmdCheck(argv) {
 /**
  * Print a one-line error to stderr and exit 3 (USAGE_ERROR_EXIT). Every
  * usage/configuration problem `cmdScan`/`cmdBaseline` can detect — an
- * unrecognised flag, a bad flag value, a missing project directory, the
- * pwn-request guard, the not-yet-implemented refusal — goes through this one
- * function, so there is exactly one place that decides the wording ("error:
- * " prefix) and the exit code for all of them.
+ * unrecognised flag, a bad flag value, a missing project directory,
+ * `--start-command` without `--base-url`, the pwn-request guard, a failure
+ * anywhere in the pipeline (including starting the application) — goes
+ * through this one function, so there is exactly one place that decides the
+ * wording ("error: " prefix) and the exit code for all of them.
  */
 function usageError(message) {
   process.stderr.write(`error: ${message}\n`);
-  process.exit(USAGE_ERROR_EXIT);
-}
-
-/**
- * `--start-command`'s not-yet-implemented refusal is deliberately NOT routed
- * through `usageError`: it is the one exit-3 case that is not the caller's
- * mistake — they typed the flag correctly and it does exactly what the
- * design intends today (argv-only, no shell). Printing it with the same
- * "error: " prefix as an unknown flag or a bad `--fail-on` value would read
- * as "you did something wrong", sending someone to re-check a command line
- * that was already right. There is still no fifth exit code to give this its
- * own number — design doc §5 stops at four, and this is closer to "the CLI
- * cannot honour what you configured" than to a genuine gate result — so exit
- * 3 stays, but the FIRST WORDS on the line have to disambiguate what four
- * other exit-3 causes in this file cannot: unknown flag, bad --fail-on/
- * --format, missing --project, and the pwn-request refusal are all real
- * mistakes; this one is not.
- */
-function notYetImplemented(message) {
-  process.stderr.write(`not yet implemented: ${message}\n`);
   process.exit(USAGE_ERROR_EXIT);
 }
 
@@ -398,12 +387,13 @@ async function loadCiModules() {
     );
     process.exit(USAGE_ERROR_EXIT);
   }
-  const [ciTypes, baseline, gate, report, runScansMod, types] = await Promise.all([
+  const [ciTypes, baseline, gate, report, runScansMod, appRunner, types] = await Promise.all([
     import('../mcp/dist/ci/types.js'),
     import('../mcp/dist/ci/baseline.js'),
     import('../mcp/dist/ci/gate.js'),
     import('../mcp/dist/ci/report.js'),
     import('../mcp/dist/ci/runScans.js'),
+    import('../mcp/dist/ci/appRunner.js'),
     import('../mcp/dist/types.js'),
   ]);
   return {
@@ -418,9 +408,22 @@ async function loadCiModules() {
     renderJson: report.renderJson,
     renderSarif: report.renderSarif,
     runScans: runScansMod.runScans,
+    startApp: appRunner.startApp,
     SEVERITIES: types.SEVERITIES,
   };
 }
+
+/**
+ * Default budget for `--start-command` to become healthy — generous for a
+ * typical `npm start`/build-then-serve boot (which can genuinely take tens
+ * of seconds under a cold cache) while still bounded: design doc §7 and the
+ * app-runner module both exist because "a hang is the worst failure mode in
+ * CI" (a job that never finishes burns its whole budget and the log says
+ * nothing). Not exposed as a flag — the brief scopes `--start-command` to
+ * argv + `--base-url` only, and a fixed, documented default is simpler than
+ * a knob nobody asked for; revisit if a real pipeline needs a slower boot.
+ */
+const APP_START_TIMEOUT_MS = 60_000;
 
 /**
  * The pwn-request guard (design doc §7). `--start-command` may be supplied
@@ -462,14 +465,6 @@ function startCommandRefusalMessage(configPath) {
     '--start-command as a command-line argument instead.'
   );
 }
-
-// Printed after the `notYetImplemented` prefix — deliberately does not
-// repeat "not implemented" itself (the prefix already said it); this is the
-// explanation, not a second headline.
-const START_COMMAND_NOT_IMPLEMENTED =
-  "--start-command: this build parses it and enforces the argv-only rule (see the module header " +
-  'comment for why), but nothing here actually starts a process — that is a separate, later ' +
-  'capability. Start the application yourself and point --base-url at it instead.';
 
 /** Shared by `parseScanArgs`/`parseBaselineUpdateArgs`: `--start-command`
  *  consumes the REST of argv as the command's own argv (never a shell
@@ -537,10 +532,10 @@ function parseBaselineUpdateArgs(argv) {
 /**
  * Steps shared by `cmdScan` and `cmdBaseline` before either one runs the
  * pipeline: resolve+validate `--project`, then the pwn-request guard, then
- * the not-yet-implemented refusal. Order matters — the repo-config guard
- * runs unconditionally (regardless of what argv says) and BEFORE the argv
- * refusal, so a malicious repository file can never be shadowed by "well
- * argv didn't ask for it anyway".
+ * `--start-command`'s own usage rules. Order matters — the repo-config guard
+ * runs unconditionally (regardless of what argv says) and BEFORE anything
+ * argv-specific, so a malicious repository file can never be shadowed by
+ * "well argv didn't ask for it anyway".
  */
 function resolveProjectOrExit(rawProject) {
   const projectPath = resolve(rawProject);
@@ -556,13 +551,19 @@ function enforceStartCommandRules(projectPath, opts) {
 
   if (opts.startCommand !== undefined) {
     if (opts.startCommand.length === 0) {
-      // A genuine usage error, independent of implementation status: even a
-      // finished launcher could not run an empty command. Stays on
-      // `usageError`, not `notYetImplemented` — the caller DID make a
-      // mistake here.
       return usageError('--start-command requires a command (e.g. --start-command node server.js)');
     }
-    return notYetImplemented(START_COMMAND_NOT_IMPLEMENTED);
+    if (!opts.baseUrl) {
+      // The health URL `startApp` polls and the `scan_dast` target are the
+      // same origin (resolution recorded in the task report) — there is
+      // nothing else for --base-url to name once the app is started for
+      // you, so this is a real usage mistake, not a missing capability.
+      return usageError(
+        '--start-command requires --base-url: it is used both as the health-check URL that ' +
+          'confirms the app came up and as the scan_dast target once it has. Pass --base-url ' +
+          'pointing at the origin --start-command will make the app listen on.',
+      );
+    }
   }
 }
 
@@ -579,6 +580,7 @@ async function cmdScan(argv) {
     renderJson,
     renderSarif,
     runScans,
+    startApp,
     BASELINE_RELATIVE_PATH,
     SEVERITIES,
   } = ci;
@@ -593,15 +595,41 @@ async function cmdScan(argv) {
   const projectPath = resolveProjectOrExit(opts.project);
   enforceStartCommandRules(projectPath, opts);
 
+  // `app` (when --start-command was given) must be stopped as soon as
+  // runScans() is done with it, success or failure — runScans() (via
+  // scan_dast inside it) is the ONLY consumer of the running application, so
+  // nothing after this point needs it alive, and scoping teardown this
+  // tightly keeps it correct with no wider changes needed. This has to be a
+  // stash-then-check-after pattern, NOT `catch (e) { return usageError(...) }`
+  // inside the same try: `usageError` calls `process.exit()`, which — verified
+  // directly, see the task report — skips every `finally` still owed further
+  // up the call stack. Putting the exit-inducing call inside a nested catch
+  // would skip `app.stop()` below on exactly the path this exists to cover
+  // ("a scan that throws must not leave the user's application running").
+  let app = null;
+  let pipelineError = null;
   let result;
   try {
+    if (opts.startCommand !== undefined) {
+      app = await startApp({
+        command: opts.startCommand,
+        cwd: projectPath,
+        healthUrl: opts.baseUrl,
+        timeoutMs: APP_START_TIMEOUT_MS,
+      });
+    }
     result = await runScans({
       projectPath,
       baseUrl: opts.baseUrl,
       authorizedTarget: opts.authorizedTarget ? true : undefined,
     });
   } catch (e) {
-    return usageError(`scan failed to run: ${e instanceof Error ? e.message : String(e)}`);
+    pipelineError = e;
+  } finally {
+    if (app) await app.stop();
+  }
+  if (pipelineError) {
+    return usageError(`scan failed to run: ${pipelineError instanceof Error ? pipelineError.message : String(pipelineError)}`);
   }
 
   const baselinePath = resolve(projectPath, BASELINE_RELATIVE_PATH);
@@ -668,21 +696,43 @@ async function cmdBaseline(argv) {
     evaluateGate,
     exitCodeForCoverage,
     runScans,
+    startApp,
     BASELINE_RELATIVE_PATH,
   } = ci;
 
   const projectPath = resolveProjectOrExit(opts.project);
   enforceStartCommandRules(projectPath, opts);
 
+  // Same reasoning, and the same required shape, as cmdScan's own — see the
+  // comment there. `baseline update` accepts --start-command/--base-url for
+  // the identical reason: scan_dast is part of the same pipeline this
+  // command runs, so an app it started must be stopped before this function
+  // can exit, on every path, and `usageError` below must never be reached
+  // from inside a catch nested in this try.
+  let app = null;
+  let pipelineError = null;
   let result;
   try {
+    if (opts.startCommand !== undefined) {
+      app = await startApp({
+        command: opts.startCommand,
+        cwd: projectPath,
+        healthUrl: opts.baseUrl,
+        timeoutMs: APP_START_TIMEOUT_MS,
+      });
+    }
     result = await runScans({
       projectPath,
       baseUrl: opts.baseUrl,
       authorizedTarget: opts.authorizedTarget ? true : undefined,
     });
   } catch (e) {
-    return usageError(`scan failed to run: ${e instanceof Error ? e.message : String(e)}`);
+    pipelineError = e;
+  } finally {
+    if (app) await app.stop();
+  }
+  if (pipelineError) {
+    return usageError(`scan failed to run: ${pipelineError instanceof Error ? pipelineError.message : String(pipelineError)}`);
   }
 
   const baselinePath = resolve(projectPath, BASELINE_RELATIVE_PATH);
