@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateGate } from '../../../src/ci/gate.js';
+import { evaluateGate, exitCodeForCoverage } from '../../../src/ci/gate.js';
 import { buildBaseline } from '../../../src/ci/baseline.js';
 import { CI_EXIT } from '../../../src/ci/types.js';
 import type { Finding, Severity } from '../../../src/types.js';
@@ -244,5 +244,57 @@ describe('evaluateGate — baselineAbsent (carried forward from Task 3 review)',
     expect(withNullBaseline.blocking.map((x) => x.fingerprint)).toEqual(
       withEmptyBaseline.blocking.map((x) => x.fingerprint),
     );
+  });
+});
+
+describe('exitCodeForCoverage (carried forward from Task 5 coordinator review)', () => {
+  // `dev-guardian baseline update` has no `blocking`-findings concept of its
+  // own (it writes unconditionally and never gates), so it cannot reuse
+  // `evaluateGate` wholesale the way `scan` does — it needs exactly this
+  // narrower coverage-only half of the rule. This was previously
+  // re-implemented as a second ternary directly in cli/dev-guardian.mjs,
+  // untested on its own and undiscriminated by any e2e assertion (every e2e
+  // check accepted 0 OR 2) — an implementation that deleted the ternary and
+  // always returned INCOMPLETE_SCAN would have passed every test in the
+  // suite, on every machine, unconditionally. Extracted here so the mapping
+  // gets the same fixture coverage every other rule in this module does, and
+  // reused BY `evaluateGate` itself (see the "both branches" test below) so
+  // there is exactly one definition, not two that could drift apart.
+
+  it('maps full coverage to PASS', () => {
+    expect(exitCodeForCoverage('full')).toBe(CI_EXIT.PASS);
+  });
+
+  it('maps partial coverage to INCOMPLETE_SCAN', () => {
+    expect(exitCodeForCoverage('partial')).toBe(CI_EXIT.INCOMPLETE_SCAN);
+  });
+
+  it('maps no coverage to INCOMPLETE_SCAN', () => {
+    // Guards a wrong implementation that only special-cases 'partial' (e.g.
+    // `coverage === 'partial' ? INCOMPLETE_SCAN : PASS`), which would
+    // silently mis-map 'none' — the worst coverage state — back to PASS.
+    expect(exitCodeForCoverage('none')).toBe(CI_EXIT.INCOMPLETE_SCAN);
+  });
+
+  it("evaluateGate's own coverage-only branch agrees with exitCodeForCoverage, for every coverage value", () => {
+    // Proves the "one definition, not two" claim directly rather than by
+    // reading both call sites: with zero findings (so `blocking` is always
+    // empty and can never override the comparison), evaluateGate's exitCode
+    // must equal exitCodeForCoverage(coverage) for every coverage value a
+    // step combination can produce.
+    const full = evaluateGate(input({ steps: [step()] }));
+    expect(full.exitCode).toBe(exitCodeForCoverage('full'));
+
+    const partial = evaluateGate(
+      input({ steps: [step({ tools_run: [{ name: 'semgrep', status: 'ok' }], missing_tools: ['gitleaks'] })] }),
+    );
+    expect(partial.coverage).toBe('partial');
+    expect(partial.exitCode).toBe(exitCodeForCoverage('partial'));
+
+    const none = evaluateGate(
+      input({ steps: [step({ ran: false, reason: 'no surface snapshot', tools_run: [] })] }),
+    );
+    expect(none.coverage).toBe('none');
+    expect(none.exitCode).toBe(exitCodeForCoverage('none'));
   });
 });

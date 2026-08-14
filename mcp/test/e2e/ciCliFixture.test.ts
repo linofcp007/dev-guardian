@@ -439,9 +439,28 @@ describe('dev-guardian baseline update — against a real, clean fixture', () =>
     if (fixture) rmDir(fixture);
   });
 
+  /**
+   * `TOOLCHAIN_AVAILABLE` (semgrep+gitleaks+trivy all on PATH) is exactly
+   * this describe block's own precondition for `fixture` being genuinely
+   * clean, so it is also the precondition for pinning `.toBe(0)` here rather
+   * than the looser `0 || 2` this project accepts in less controlled
+   * environments. Coordinator review: without this, every check in this file
+   * accepted `0` OR `2`, and no assertion anywhere required `0` — an
+   * implementation that deleted `exitCodeForCoverage`'s ternary and always
+   * returned `INCOMPLETE_SCAN` would have passed every test in this suite,
+   * on every machine, unconditionally.
+   */
+  function expectCleanBaselineExit(status: number | null, stderr: string): void {
+    if (TOOLCHAIN_AVAILABLE) {
+      expect(status, `expected exit 0 on a clean fixture, got ${String(status)}: ${stderr}`).toBe(0);
+    } else {
+      expect(status === 0 || status === 2, `unexpected exit ${String(status)}: ${stderr}`).toBe(true);
+    }
+  }
+
   it('writes .guardian/baseline.json, valid and versioned', () => {
     const r = runCli(['baseline', 'update', '--project', fixture], SCAN_TIMEOUT_MS);
-    expect(r.status === 0 || r.status === 2, `unexpected exit ${String(r.status)}: ${r.stderr}`).toBe(true);
+    expectCleanBaselineExit(r.status, r.stderr);
     expect(existsSync(baselinePath)).toBe(true);
     const doc = JSON.parse(readFileSync(baselinePath, 'utf8')) as { version?: number; entries?: unknown[] };
     expect(doc.version).toBe(1);
@@ -459,7 +478,7 @@ describe('dev-guardian baseline update — against a real, clean fixture', () =>
         entries: { fingerprint: string; added: string }[];
       };
       const r = runCli(['baseline', 'update', '--project', fixture], SCAN_TIMEOUT_MS);
-      expect(r.status === 0 || r.status === 2, `unexpected exit ${String(r.status)}: ${r.stderr}`).toBe(true);
+      expectCleanBaselineExit(r.status, r.stderr);
       const after = JSON.parse(readFileSync(baselinePath, 'utf8')) as {
         entries: { fingerprint: string; added: string }[];
       };

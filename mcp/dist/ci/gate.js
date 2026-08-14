@@ -23,6 +23,20 @@ import { SEVERITY_ORDER } from '../types.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { newFindings } from './baseline.js';
 import { CI_EXIT } from './types.js';
+/**
+ * Coverage in, exit code out — the half of the gate's exit-code rule that
+ * does not depend on findings at all. Exported so a caller that has no
+ * `blocking` concept of its own (`dev-guardian baseline update`: it writes
+ * the baseline unconditionally and has no pass/fail gate, but still has to
+ * say whether the write it just made reflects every scanner running) can
+ * reuse this exact mapping instead of re-encoding it as a second ternary
+ * outside this module. `evaluateGate` below calls this too, so there is
+ * only ever one definition of "what does an incomplete scan's coverage
+ * value mean for an exit code", not two that could drift apart.
+ */
+export function exitCodeForCoverage(coverage) {
+    return coverage === 'full' ? CI_EXIT.PASS : CI_EXIT.INCOMPLETE_SCAN;
+}
 export function evaluateGate(input) {
     const { findings, baseline, failOn, steps, droppedBaselineEntries } = input;
     // Coverage comes from a single call to computeCoverage over the union of
@@ -65,16 +79,11 @@ export function evaluateGate(input) {
     // anything the baseline recognises by fingerprint, however severe.
     const newlyFound = newFindings(findings, baseline);
     const blocking = newlyFound.filter((finding) => SEVERITY_ORDER[finding.severity] >= SEVERITY_ORDER[failOn]);
-    let exitCode;
-    if (blocking.length > 0) {
-        exitCode = CI_EXIT.GATE_FAILED;
-    }
-    else if (coverage !== 'full') {
-        exitCode = CI_EXIT.INCOMPLETE_SCAN;
-    }
-    else {
-        exitCode = CI_EXIT.PASS;
-    }
+    // GATE_FAILED outranks whatever exitCodeForCoverage would say on its own:
+    // a real regression is the actionable failure a pipeline must see, ahead
+    // of an incomplete-scan signal that is still reported (via coverageGaps)
+    // but does not get to hide a blocking finding behind it.
+    const exitCode = blocking.length > 0 ? CI_EXIT.GATE_FAILED : exitCodeForCoverage(coverage);
     return {
         exitCode,
         newFindings: newlyFound,

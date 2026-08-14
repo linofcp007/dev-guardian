@@ -413,6 +413,7 @@ async function loadCiModules() {
     buildBaseline: baseline.buildBaseline,
     serialiseBaseline: baseline.serialiseBaseline,
     evaluateGate: gate.evaluateGate,
+    exitCodeForCoverage: gate.exitCodeForCoverage,
     renderHuman: report.renderHuman,
     renderJson: report.renderJson,
     renderSarif: report.renderSarif,
@@ -630,7 +631,23 @@ async function cmdScan(argv) {
 
   // Faithfully returned, never re-derived: evaluateGate already decided
   // whether this is a pass, a gate failure, or an incomplete scan.
-  process.exit(verdict.exitCode);
+  //
+  // `process.exitCode = ...; return;`, NEVER `process.exit(...)`, here.
+  // `process.stdout`/`.stderr` to a PIPE are synchronous on Windows but
+  // ASYNCHRONOUS on POSIX (Node's own documented platform difference);
+  // `process.exit()` tears the process down without waiting for pending
+  // async I/O to flush, so a large write — and `renderHuman`/`renderJson`
+  // are UNBOUNDED, scaling with finding count, worst case on exactly the
+  // "first scan of an existing codebase, baseline absent, everything new"
+  // case design doc §4 names — can be truncated mid-write on a real Linux CI
+  // runner (invisible in this project's own tests, all of which run on
+  // Windows, where stdout-to-pipe is synchronous). Setting `exitCode` and
+  // returning lets Node exit on its own once the event loop drains AND the
+  // write flushes; nothing here holds the loop open past that; `runScans`
+  // has already closed its ephemeral database and removed its temp
+  // directory in its own `finally` blocks by this point.
+  process.exitCode = verdict.exitCode;
+  return;
 }
 
 async function cmdBaseline(argv) {
@@ -645,11 +662,11 @@ async function cmdBaseline(argv) {
 
   const ci = await loadCiModules();
   const {
-    CI_EXIT,
     parseBaseline,
     buildBaseline,
     serialiseBaseline,
     evaluateGate,
+    exitCodeForCoverage,
     runScans,
     BASELINE_RELATIVE_PATH,
   } = ci;
@@ -725,7 +742,25 @@ async function cmdBaseline(argv) {
   // asked for this), but reported as incomplete (2) rather than a silent
   // 0 — the same reasoning `scan` applies, aimed at the write instead of a
   // gate verdict.
-  process.exit(verdict.coverage === 'full' ? CI_EXIT.PASS : CI_EXIT.INCOMPLETE_SCAN);
+  //
+  // `exitCodeForCoverage` (mcp/src/ci/gate.ts, coordinator review): this
+  // command has no `blocking`-findings concept of its own, so it cannot
+  // reuse `evaluateGate`'s full exit-code decision the way `scan` does —
+  // but the coverage-only half of that decision is exactly what it needs,
+  // and re-encoding it here as a second, CLI-local ternary would have been
+  // a duplicate, untested definition of "what does an incomplete scan mean
+  // for an exit code" that could silently drift from gate.ts's own. Reused,
+  // not re-derived — same rule this file already follows for `coverage`/
+  // `coverageGaps` themselves.
+  //
+  // `process.exitCode = ...; return;`, not `process.exit(...)` — see the
+  // matching comment at the end of `cmdScan` for why: stdout to a pipe is
+  // asynchronous on POSIX, and this function's own writes above (the
+  // baseline-updated line, and the WARNING paragraph, which can list one
+  // line per coverage gap) are not bounded to a size guaranteed to fit
+  // inside a single synchronous flush.
+  process.exitCode = exitCodeForCoverage(verdict.coverage);
+  return;
 }
 
 /**
