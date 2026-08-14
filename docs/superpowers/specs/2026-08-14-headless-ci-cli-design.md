@@ -101,7 +101,12 @@ result:
 3. `license_compatibility`.
 4. `map_attack_surface` — **must precede** the next two; both refuse without a
    surface snapshot.
-5. `scan_dast` — only when `--base-url` or `--start-command` is given.
+5. `scan_dast` — only when `--base-url` is given. `--start-command` does not
+   imply it: nothing in the command line tells us which port the application
+   will bind, and guessing one would either probe the wrong service or report a
+   silent no-op as a scan. So `--start-command` **requires** `--base-url`, and
+   the CLI refuses the pair when the second is missing. The same URL is both the
+   health-check target the runner polls and the origin DAST probes.
 6. `validate_finding` — last, because it qualifies findings the earlier steps
    produced, and reads the DAST results for its anonymous-exposure evidence.
 
