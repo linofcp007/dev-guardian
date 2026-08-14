@@ -76,6 +76,27 @@ async function isInstalled(bin: string): Promise<boolean> {
   }
 }
 
+/**
+ * The directory holding `bin`'s executable, or `null` if it can't be
+ * resolved. Used to build a PATH that excludes exactly one tool for the
+ * missing-scanner coverage test below — a real, black-box way to force
+ * `security_scan_full` to report a tool as not installed, without mocking
+ * anything (this is a subprocess e2e; there is nothing in-process to mock).
+ */
+async function resolveBinDir(bin: string): Promise<string | null> {
+  try {
+    const r = await execa(detectOs() === 'win32' ? 'where' : 'which', [bin], {
+      reject: false,
+      timeout: 2_000,
+    });
+    if (r.exitCode !== 0) return null;
+    const first = r.stdout.split(/\r?\n/)[0]?.trim();
+    return first ? dirname(first) : null;
+  } catch {
+    return null;
+  }
+}
+
 // security_scan_full unconditionally expects semgrep, gitleaks and trivy
 // (deps) on a project with no Dockerfile/Python — see securityScanFull.ts's
 // ROUTES table, where only 'trivy-dockerfile' and 'bandit' are conditional.
@@ -84,18 +105,44 @@ const SEMGREP_INSTALLED = await isInstalled('semgrep');
 const GITLEAKS_INSTALLED = await isInstalled('gitleaks');
 const TRIVY_INSTALLED = await isInstalled('trivy');
 const TOOLCHAIN_AVAILABLE = SEMGREP_INSTALLED && GITLEAKS_INSTALLED && TRIVY_INSTALLED;
+const SEMGREP_DIR = SEMGREP_INSTALLED ? await resolveBinDir('semgrep') : null;
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-function runCli(args: string[], timeout = FAST_TIMEOUT_MS): SpawnSyncReturns<string> {
+function runCli(
+  args: string[],
+  timeout = FAST_TIMEOUT_MS,
+  env: NodeJS.ProcessEnv = process.env,
+): SpawnSyncReturns<string> {
   return spawnSync(process.execPath, [CLI, ...args], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
     timeout,
+    env,
   });
+}
+
+/**
+ * `process.env` with `SEMGREP_DIR` filtered out of PATH — everything else
+ * (gitleaks, Trivy, node itself) stays reachable, so the resulting run has a
+ * genuine, targeted gap (semgrep specifically), not a wholesale broken
+ * environment. `PATH`/`Path` casing: Node normalises env var name lookups
+ * case-insensitively on Windows, so `process.env.PATH` is reliable on both
+ * platforms without special-casing.
+ */
+function envWithoutSemgrep(): NodeJS.ProcessEnv {
+  if (!SEMGREP_DIR) return process.env;
+  const sep = detectOs() === 'win32' ? ';' : ':';
+  const target = resolve(SEMGREP_DIR);
+  const currentPath = process.env['PATH'] ?? '';
+  const filtered = currentPath
+    .split(sep)
+    .filter((segment) => segment.length === 0 || resolve(segment) !== target)
+    .join(sep);
+  return { ...process.env, PATH: filtered };
 }
 
 /**
@@ -231,6 +278,14 @@ describe('dev-guardian scan — usage and safety (no real scanner reached)', () 
       // Must NOT be the repo-config message — different problem, different words.
       expect(r.stderr).not.toMatch(/fork|pull request/i);
       expect(r.stderr).not.toMatch(/\.guardian[\\/]ci\.json/);
+      // Coordinator review: the caller typed this correctly — it must read
+      // as "this isn't built yet", not as "you made a usage mistake". Every
+      // OTHER exit-3 path in this file (unknown flag, bad --fail-on, missing
+      // --project, the repo-config refusal) shares the generic "error: "
+      // prefix; this is deliberately the one exception, so it must not share
+      // that prefix and must lead with the words themselves.
+      expect(r.stderr).not.toMatch(/^error:/i);
+      expect(r.stderr).toMatch(/^not yet implemented:/i);
     } finally {
       rmDir(dir);
     }
@@ -412,6 +467,62 @@ describe('dev-guardian baseline update — against a real, clean fixture', () =>
       for (const entry of after.entries) {
         const priorDate = beforeDates.get(entry.fingerprint);
         if (priorDate !== undefined) expect(entry.added).toBe(priorDate);
+      }
+    },
+    SCAN_TIMEOUT_MS,
+  );
+
+  it.skipIf(!TOOLCHAIN_AVAILABLE || !SEMGREP_DIR)(
+    'writes the baseline, warns by name, and exits 2 when a scanner is missing',
+    async () => {
+      // Coordinator review, resolution #4: a baseline written from an
+      // incomplete scan is missing findings a complete scan would have
+      // found, and nothing about the file itself says so — the next
+      // complete run surfaces those as "new", and whoever's pull request
+      // triggers that run gets blamed for debt the baseline never captured.
+      // The gate must still WRITE (a user without Semgrep must still be
+      // able to adopt a baseline at all), but the exit code has to say
+      // "this is not the baseline you think you have" — a CI job that
+      // regenerates baselines can choose to tolerate 2; it cannot choose to
+      // notice something the tool never told it.
+      //
+      // Forces a real, targeted gap via PATH (semgrep specifically
+      // unreachable, gitleaks/Trivy untouched) rather than a mock — this is
+      // a subprocess e2e, there is nothing in-process to mock, and this
+      // technique is exactly how `TOOLCHAIN_AVAILABLE` itself is measured
+      // two names up.
+      const dir = await makeScannableFixture('guardian-ci-cli-baseline-gap-');
+      try {
+        const gapBaselinePath = join(dir, '.guardian', 'baseline.json');
+        const r = runCli(
+          ['baseline', 'update', '--project', dir],
+          SCAN_TIMEOUT_MS,
+          envWithoutSemgrep(),
+        );
+
+        // Written despite the gap — the wrong implementation this guards
+        // against is refusing to write anything when coverage is short.
+        expect(existsSync(gapBaselinePath)).toBe(true);
+        const doc = JSON.parse(readFileSync(gapBaselinePath, 'utf8')) as { version?: number };
+        expect(doc.version).toBe(1);
+
+        // Names what was missing, on stdout — not just a bare "partial".
+        expect(r.stdout).toMatch(/semgrep/i);
+
+        // The specific fact the coordinator asked this report to confirm:
+        // the human output must read as "written, despite a gap" — a
+        // success verb, never language a reader could mistake for "wrote
+        // nothing" or "this failed".
+        expect(r.stdout).toMatch(/updated/i);
+        expect(r.stdout).not.toMatch(/fail(ed)?|refus(ed|ing)|abort(ed)?/i);
+
+        // The fact a CI job actually branches on.
+        expect(
+          r.status,
+          `expected exit 2, got ${String(r.status)}. stdout:\n${r.stdout}\nstderr:\n${r.stderr}`,
+        ).toBe(2);
+      } finally {
+        rmDir(dir);
       }
     },
     SCAN_TIMEOUT_MS,

@@ -359,6 +359,26 @@ function usageError(message) {
 }
 
 /**
+ * `--start-command`'s not-yet-implemented refusal is deliberately NOT routed
+ * through `usageError`: it is the one exit-3 case that is not the caller's
+ * mistake — they typed the flag correctly and it does exactly what the
+ * design intends today (argv-only, no shell). Printing it with the same
+ * "error: " prefix as an unknown flag or a bad `--fail-on` value would read
+ * as "you did something wrong", sending someone to re-check a command line
+ * that was already right. There is still no fifth exit code to give this its
+ * own number — design doc §5 stops at four, and this is closer to "the CLI
+ * cannot honour what you configured" than to a genuine gate result — so exit
+ * 3 stays, but the FIRST WORDS on the line have to disambiguate what four
+ * other exit-3 causes in this file cannot: unknown flag, bad --fail-on/
+ * --format, missing --project, and the pwn-request refusal are all real
+ * mistakes; this one is not.
+ */
+function notYetImplemented(message) {
+  process.stderr.write(`not yet implemented: ${message}\n`);
+  process.exit(USAGE_ERROR_EXIT);
+}
+
+/**
  * `mcp/dist/ci/*.js` (and the pre-existing `mcp/dist/types.js`) are loaded
  * lazily with dynamic `import()`, never a static top-of-file `import` like
  * this file's other dependencies. A static import that fails aborts the
@@ -442,10 +462,13 @@ function startCommandRefusalMessage(configPath) {
   );
 }
 
+// Printed after the `notYetImplemented` prefix — deliberately does not
+// repeat "not implemented" itself (the prefix already said it); this is the
+// explanation, not a second headline.
 const START_COMMAND_NOT_IMPLEMENTED =
-  '--start-command is not implemented in this build yet — argv-only handling and the ' +
-  'repository-config refusal are in place, but nothing here starts a process (a separate, later ' +
-  'capability). Start the application yourself and point --base-url at it instead.';
+  "--start-command: this build parses it and enforces the argv-only rule (see the module header " +
+  'comment for why), but nothing here actually starts a process — that is a separate, later ' +
+  'capability. Start the application yourself and point --base-url at it instead.';
 
 /** Shared by `parseScanArgs`/`parseBaselineUpdateArgs`: `--start-command`
  *  consumes the REST of argv as the command's own argv (never a shell
@@ -532,9 +555,13 @@ function enforceStartCommandRules(projectPath, opts) {
 
   if (opts.startCommand !== undefined) {
     if (opts.startCommand.length === 0) {
+      // A genuine usage error, independent of implementation status: even a
+      // finished launcher could not run an empty command. Stays on
+      // `usageError`, not `notYetImplemented` — the caller DID make a
+      // mistake here.
       return usageError('--start-command requires a command (e.g. --start-command node server.js)');
     }
-    return usageError(START_COMMAND_NOT_IMPLEMENTED);
+    return notYetImplemented(START_COMMAND_NOT_IMPLEMENTED);
   }
 }
 
@@ -668,6 +695,16 @@ async function cmdBaseline(argv) {
     droppedBaselineEntries: parsedBaseline ? parsedBaseline.dropped : 0,
   });
 
+  // The write always happens first and is always reported as a completed
+  // fact ("updated", past tense) — a user without Semgrep installed must
+  // still be able to adopt a baseline at all, so this can never read as a
+  // refusal. The coverage-gap warning that can follow is a SEPARATE
+  // sentence about trustworthiness, not a qualifier on whether the write
+  // happened (coordinator review, resolution #4): a reader must come away
+  // knowing BOTH "the file now exists" AND, distinctly, "do not trust it
+  // completely yet" — collapsing those into one ambiguous sentence would
+  // risk exactly the misreading ("this failed, nothing was written") the
+  // review specifically asked this report to rule out.
   const entryWord = updated.entries.length === 1 ? 'entry' : 'entries';
   process.stdout.write(
     `baseline updated: ${updated.entries.length} ${entryWord} -> ${baselinePath}\n` +
@@ -675,7 +712,10 @@ async function cmdBaseline(argv) {
   );
   if (verdict.coverageGaps.length > 0) {
     process.stdout.write(
-      'coverage gaps (this baseline may under-represent scanners that did not run):\n',
+      '\nWARNING: the baseline above was written from an INCOMPLETE scan. It may be missing ' +
+        'findings a full scan would have found — a later, complete run may report those as new, ' +
+        "and whoever's change triggers that run will look responsible for debt this baseline " +
+        'never actually captured. Gaps:\n',
     );
     for (const gap of verdict.coverageGaps) process.stdout.write(`  - ${gap}\n`);
   }
