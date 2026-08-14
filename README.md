@@ -147,6 +147,80 @@ enabled = true
 
 > Claude Desktop has no rules-file mechanism — paste the contents of `host-rules/AGENTS.md` (or `GEMINI.md`) into a **Project's custom instructions**. Claude Code / Cowork need none of this: the plugin registers the server automatically.
 
+### Run scans in CI (headless, no MCP host needed)
+
+`node cli/dev-guardian.mjs scan` runs the same scan pipeline as an interactive session — no Claude Code, no MCP connection — and gates the result against a **committed baseline**. `dev-guardian baseline update` is the only command that writes that baseline, and only on request:
+
+```text
+node cli/dev-guardian.mjs baseline update --project .      # adopt current findings once
+node cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
+```
+
+Exit codes: `0` pass, `1` gate failed (a finding new to the baseline, at or above `--fail-on`), `2` **incomplete scan** (an expected scanner did not run — never read this as a pass), `3` usage/configuration error. Run the CLI with no arguments for the full flag reference, including `--base-url`/`--start-command` for the DAST pass.
+
+> **Distribution is `git clone`, not `npx`.** This ships as a Claude Code plugin repository, not an npm package, so there is no one-line installer yet (a publishable form is being investigated separately, gated on it actually passing the Claude Desktop plugin validator). Clone at a pinned tag with `--depth 1`, then run `npm ci` once inside `mcp/` — `mcp/dist/` is committed so nothing needs *building*, but `mcp/node_modules` is gitignored like everywhere else in this repo, and `scan`/`baseline update` still import a couple of runtime packages (`execa`, `yaml`) the committed build does not bundle.
+
+A copy-pasteable job — findings land as annotations on the pull request diff, not buried in a log:
+
+```yaml
+name: dev-guardian
+
+on:
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Cloned OUTSIDE the checkout so dev-guardian's own source is never
+      # itself part of the scan. Replace v1.3.0 with the tag you want.
+      - name: Clone dev-guardian
+        run: |
+          git clone --depth 1 --branch v1.3.0 \
+            https://github.com/linofcp007/dev-guardian.git "$RUNNER_TEMP/dev-guardian"
+          cd "$RUNNER_TEMP/dev-guardian/mcp" && npm ci
+
+      - name: Scan
+        id: scan
+        run: |
+          set +e
+          node "$RUNNER_TEMP/dev-guardian/cli/dev-guardian.mjs" scan --project . --sarif results.sarif
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      # Upload whatever SARIF exists even when the step above "failed" — a
+      # gate failure and an incomplete scan both still produce a report.
+      # SARIF's own executionSuccessful flag says WHETHER coverage was full;
+      # it can't say WHICH scanner was missing — that's exit 2 and the log above.
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('results.sarif') != ''
+        with:
+          sarif_file: results.sarif
+
+      - name: Fail the build on a real gate failure or a usage error
+        if: steps.scan.outputs.exit_code == '1' || steps.scan.outputs.exit_code == '3'
+        run: exit 1
+
+      - name: Warn (don't fail) on incomplete coverage
+        if: steps.scan.outputs.exit_code == '2'
+        run: echo "::warning::dev-guardian scan was incomplete — see the step log above for which scanner did not run"
+```
+
+Two things this snippet cannot hide from you:
+
+- **A CI run leaves `.guardian/` in the workspace.** `security_scan_full` and `map_attack_surface` write their raw scanner output under `.guardian/reports/` in the project being scanned, exactly as they do interactively — only the SQLite database is ephemeral. `init_project`'s interactive setup adds `.guardian/` to `.gitignore` for you; that hook never runs from the CLI, so a repository that only ever scans through CI must add the line by hand, or a later pipeline step that asserts a clean working tree will fail for a reason that looks like nothing:
+
+  ```text
+  .guardian/
+  ```
+
+- **SARIF alone cannot tell you *which* scanner is missing.** Its `invocation.executionSuccessful` flag flips to `false` whenever coverage isn't full — so a consumer reading only the upload can already tell an incomplete run from a clean one — but SARIF has no field for prose, so the scanner name and reason live only in exit code `2` and the step's own human/JSON output. Treat an uploaded SARIF with zero results as inconclusive, not clean, until you've checked the exit code.
+
 ### Philosophy
 
 - **Pragmatic by default** — doesn't block work over cosmetics
@@ -173,7 +247,7 @@ dev-guardian/
 ├── commands/                    # 48 slash commands
 ├── skills/                      # 13 skills (one per router target)
 ├── hooks/                       # hooks.json + guardian-hook.mjs (auto-active guardrails)
-├── cli/                         # dev-guardian.mjs CLI (mcp-config, check)
+├── cli/                         # dev-guardian.mjs CLI (mcp-config, check, scan, baseline)
 ├── mcp/                         # MCP server (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/, hooks/
 │   ├── test/                    # 280 unit + integration tests
@@ -342,6 +416,80 @@ enabled = true
 
 > O Claude Desktop não tem mecanismo de ficheiro de regras — cola o conteúdo de `host-rules/AGENTS.md` (ou `GEMINI.md`) nas **instruções personalizadas de um Project**. O Claude Code / Cowork não precisam disto: o plugin regista o servidor automaticamente.
 
+### Corre scans em CI (headless, sem host MCP)
+
+`node cli/dev-guardian.mjs scan` corre o mesmo pipeline de scan de uma sessão interativa — sem Claude Code, sem ligação MCP — e faz gate do resultado contra uma **baseline committed**. `dev-guardian baseline update` é o único comando que escreve essa baseline, e só quando pedido:
+
+```text
+node cli/dev-guardian.mjs baseline update --project .      # adota os findings atuais uma vez
+node cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
+```
+
+Exit codes: `0` passou, `1` gate falhou (finding novo na baseline, severidade >= `--fail-on`), `2` **scan incompleto** (um scanner esperado não correu — nunca leias isto como um passe), `3` erro de uso/configuração. Corre a CLI sem argumentos para veres a referência completa de flags, incluindo `--base-url`/`--start-command` para o passo DAST.
+
+> **A distribuição é `git clone`, não `npx`.** Isto é distribuído como um repositório de plugin Claude Code, não como um pacote npm, por isso ainda não há instalador de uma linha (uma forma publicável está a ser investigada à parte, condicionada a passar de facto no validador de plugins do Claude Desktop). Faz clone a um tag fixo com `--depth 1`, depois corre `npm ci` uma vez dentro de `mcp/` — o `mcp/dist/` vem committed, por isso não há nada para *compilar*, mas `mcp/node_modules` está no gitignore como o resto deste repo, e `scan`/`baseline update` continuam a importar alguns pacotes de runtime (`execa`, `yaml`) que o build committed não empacota.
+
+Um job pronto a colar — os findings aparecem como anotações no diff do pull request, não perdidos num log:
+
+```yaml
+name: dev-guardian
+
+on:
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Clonado FORA do checkout para o próprio código do dev-guardian nunca
+      # entrar no scan. Substitui v1.3.0 pelo tag que quiseres.
+      - name: Clone dev-guardian
+        run: |
+          git clone --depth 1 --branch v1.3.0 \
+            https://github.com/linofcp007/dev-guardian.git "$RUNNER_TEMP/dev-guardian"
+          cd "$RUNNER_TEMP/dev-guardian/mcp" && npm ci
+
+      - name: Scan
+        id: scan
+        run: |
+          set +e
+          node "$RUNNER_TEMP/dev-guardian/cli/dev-guardian.mjs" scan --project . --sarif results.sarif
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      # Faz upload do SARIF que existir mesmo quando o passo acima "falhou" —
+      # um gate falhado e um scan incompleto continuam a produzir relatório.
+      # O executionSuccessful do SARIF diz SE a cobertura foi total; não diz
+      # QUAL scanner faltou — isso é o exit 2 e o log acima.
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('results.sarif') != ''
+        with:
+          sarif_file: results.sarif
+
+      - name: Falha o build num gate falhado ou erro de uso real
+        if: steps.scan.outputs.exit_code == '1' || steps.scan.outputs.exit_code == '3'
+        run: exit 1
+
+      - name: Avisa (sem falhar) numa cobertura incompleta
+        if: steps.scan.outputs.exit_code == '2'
+        run: echo "::warning::dev-guardian scan incompleto — vê o log do passo acima para saber qual scanner faltou"
+```
+
+Duas coisas que este snippet não te consegue esconder:
+
+- **Um scan em CI deixa `.guardian/` na working tree.** `security_scan_full` e `map_attack_surface` escrevem a saída bruta dos scanners em `.guardian/reports/` dentro do projeto scaneado, exatamente como fazem numa sessão interativa — só a base de dados SQLite é efémera. O setup interativo do `init_project` adiciona `.guardian/` ao `.gitignore` por ti; esse hook nunca corre a partir da CLI, por isso um repositório que só corre a CLI em CI tem de adicionar a linha à mão, ou um passo posterior da pipeline que verifica uma working tree limpa vai falhar por um motivo que parece nada:
+
+  ```text
+  .guardian/
+  ```
+
+- **O SARIF sozinho não te diz *qual* scanner falta.** A flag `invocation.executionSuccessful` muda para `false` sempre que a cobertura não é total — por isso quem lê só o upload já consegue distinguir um run incompleto de um limpo — mas o SARIF não tem campo para texto livre, por isso o nome do scanner e o motivo só vivem no exit code `2` e na saída humana/JSON do próprio passo. Trata um SARIF carregado com zero resultados como inconclusivo, não como limpo, até verificares o exit code.
+
 ### Filosofia
 
 - **Pragmático por defeito** — não bloqueia trabalho por nada cosmético
@@ -368,7 +516,7 @@ dev-guardian/
 ├── commands/                    # 48 slash commands
 ├── skills/                      # 13 skills (uma por destino do router)
 ├── hooks/                       # hooks.json + guardian-hook.mjs (guardrails auto-ativos)
-├── cli/                         # CLI dev-guardian.mjs (mcp-config, check)
+├── cli/                         # CLI dev-guardian.mjs (mcp-config, check, scan, baseline)
 ├── mcp/                         # Servidor MCP (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/
 │   ├── test/                    # 280 testes unit + integration
@@ -537,6 +685,80 @@ enabled = true
 
 > Claude Desktop no tiene mecanismo de archivo de reglas — pega el contenido de `host-rules/AGENTS.md` (o `GEMINI.md`) en las **instrucciones personalizadas de un Project**. Claude Code / Cowork no necesitan nada de esto: el plugin registra el servidor automáticamente.
 
+### Ejecuta escaneos en CI (headless, sin host MCP)
+
+`node cli/dev-guardian.mjs scan` corre el mismo pipeline de escaneo que una sesión interactiva — sin Claude Code, sin conexión MCP — y hace gate del resultado contra una **baseline committeada**. `dev-guardian baseline update` es el único comando que escribe esa baseline, y solo cuando se pide:
+
+```text
+node cli/dev-guardian.mjs baseline update --project .      # adopta los findings actuales una vez
+node cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
+```
+
+Códigos de salida: `0` pasó, `1` el gate falló (finding nuevo en la baseline, severidad >= `--fail-on`), `2` **escaneo incompleto** (un scanner esperado no corrió — nunca leas esto como un pase), `3` error de uso/configuración. Ejecuta la CLI sin argumentos para ver la referencia completa de flags, incluyendo `--base-url`/`--start-command` para el paso DAST.
+
+> **La distribución es `git clone`, no `npx`.** Esto se distribuye como un repositorio de plugin de Claude Code, no como un paquete npm, así que todavía no hay instalador de una línea (una forma publicable se está investigando aparte, condicionada a pasar de verdad el validador de plugins de Claude Desktop). Clona a un tag fijo con `--depth 1`, luego ejecuta `npm ci` una vez dentro de `mcp/` — `mcp/dist/` viene committeado, así que no hay nada que *compilar*, pero `mcp/node_modules` está en el gitignore como el resto de este repo, y `scan`/`baseline update` siguen importando un par de paquetes de runtime (`execa`, `yaml`) que el build committeado no empaqueta.
+
+Un job listo para copiar y pegar — los findings aparecen como anotaciones en el diff del pull request, no perdidos en un log:
+
+```yaml
+name: dev-guardian
+
+on:
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Clonado FUERA del checkout para que el propio código de dev-guardian
+      # nunca entre en el escaneo. Sustituye v1.3.0 por el tag que quieras.
+      - name: Clone dev-guardian
+        run: |
+          git clone --depth 1 --branch v1.3.0 \
+            https://github.com/linofcp007/dev-guardian.git "$RUNNER_TEMP/dev-guardian"
+          cd "$RUNNER_TEMP/dev-guardian/mcp" && npm ci
+
+      - name: Scan
+        id: scan
+        run: |
+          set +e
+          node "$RUNNER_TEMP/dev-guardian/cli/dev-guardian.mjs" scan --project . --sarif results.sarif
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      # Sube el SARIF que exista aunque el paso de arriba haya "fallado" — un
+      # gate fallido y un escaneo incompleto igual producen informe. El
+      # executionSuccessful del SARIF dice SI la cobertura fue completa; no
+      # dice QUÉ scanner faltó — eso es el exit 2 y el log de arriba.
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('results.sarif') != ''
+        with:
+          sarif_file: results.sarif
+
+      - name: Falla el build en un gate fallido o error de uso real
+        if: steps.scan.outputs.exit_code == '1' || steps.scan.outputs.exit_code == '3'
+        run: exit 1
+
+      - name: Avisa (sin fallar) en cobertura incompleta
+        if: steps.scan.outputs.exit_code == '2'
+        run: echo "::warning::dev-guardian scan incompleto — mira el log del paso de arriba para saber qué scanner faltó"
+```
+
+Dos cosas que este snippet no te puede esconder:
+
+- **Un escaneo en CI deja `.guardian/` en el workspace.** `security_scan_full` y `map_attack_surface` escriben la salida cruda de los scanners en `.guardian/reports/` dentro del proyecto escaneado, igual que hacen en una sesión interactiva — solo la base de datos SQLite es efímera. El setup interactivo de `init_project` añade `.guardian/` al `.gitignore` por ti; ese hook nunca corre desde la CLI, así que un repositorio que solo escanea vía CI tiene que añadir la línea a mano, o un paso posterior del pipeline que comprueba un working tree limpio fallará por un motivo que no parece nada:
+
+  ```text
+  .guardian/
+  ```
+
+- **El SARIF por sí solo no te dice *qué* scanner falta.** Su flag `invocation.executionSuccessful` pasa a `false` siempre que la cobertura no sea completa — así que quien lea solo el upload ya puede distinguir un run incompleto de uno limpio — pero el SARIF no tiene campo para texto libre, así que el nombre del scanner y el motivo solo viven en el exit code `2` y en la salida humana/JSON del propio paso. Trata un SARIF subido con cero resultados como inconcluso, no como limpio, hasta que compruebes el exit code.
+
 ### Filosofía
 
 - **Pragmático por defecto** — no bloquea el trabajo por cuestiones cosméticas
@@ -563,7 +785,7 @@ dev-guardian/
 ├── commands/                    # 48 slash commands
 ├── skills/                      # 13 skills (una por destino del router)
 ├── hooks/                       # hooks.json + guardian-hook.mjs (guardrails auto-activos)
-├── cli/                         # CLI dev-guardian.mjs (mcp-config, check)
+├── cli/                         # CLI dev-guardian.mjs (mcp-config, check, scan, baseline)
 ├── mcp/                         # Servidor MCP (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/
 │   ├── test/                    # 280 tests unit + integration

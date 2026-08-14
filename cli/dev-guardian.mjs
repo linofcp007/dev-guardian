@@ -164,6 +164,15 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          ARGV ONLY — never honoured from a repository file
                          (see the module header comment for why).
   Never writes .guardian/baseline.json — see \`baseline update\`.
+  Leaves .guardian/reports/ in the scanned project either way (security_scan_full
+  and map_attack_surface write there, same as interactively) — add \`.guardian/\`
+  to .gitignore if this repo never ran init_project interactively.
+  --sarif records coverage as a single pass/fail bit (SARIF's own
+  invocation.executionSuccessful) — enough to tell an incomplete run from a clean
+  one without cross-referencing anything else, but not WHICH scanner was missing
+  or why. That detail lives only in this command's own exit code and its
+  human/JSON output — check them before trusting a SARIF upload that shows
+  nothing.
   Exit codes: 0 pass, 1 gate failed (new finding >= --fail-on),
               2 incomplete scan (an expected scanner did not run),
               3 usage or configuration error.

@@ -301,6 +301,78 @@ version bump.
   - Discoverable via the `map_attack_surface` → `validate_finding` two-step, now
     documented in `host-rules/AGENTS.md` (and its paired host-context files) and in
     both tools' own descriptions.
+- **`dev-guardian scan` / `dev-guardian baseline update` — headless CI entry point, no
+  MCP host required.** New `cli/dev-guardian.mjs` commands run the exact scan pipeline
+  the MCP tools run — `detect_stack` → `security_scan_full` → `license_compatibility` →
+  `map_attack_surface` → `scan_dast` (only when `--base-url` is given) →
+  `validate_finding` — in that fixed order, because `map_attack_surface` persists the
+  route inventory the last two refuse to run without. There is no second implementation
+  of any scan: `runScans.ts` calls the very tool handlers `server.ts` registers for an
+  interactive session, against an ephemeral SQLite database (a fresh temp directory,
+  discarded at exit) — the portable state is the baseline file, not the database. A step
+  that refuses (a missing prerequisite, an uninstalled scanner) is recorded, not fatal:
+  the rest of the pipeline still runs, and the gap feeds the coverage signal below.
+  - **The baseline**, `.guardian/baseline.json`, is committed to the user's repository —
+    reviewable in a pull request, no cache needed. `scan` only ever reads it; `baseline
+    update` is the one command that writes it, and only on request. An **absent**
+    baseline is not an **empty** one: on a repository's first run, `scan` says so, names
+    `baseline update` as the fix, and reports every finding as new rather than quietly
+    treating the current state as clean.
+  - **The gate fails on regressions, never on historical debt.** A finding already in
+    the baseline never blocks, however severe; a finding **absent** from it at or above
+    `--fail-on` (default `high`) does. Four exit codes carry the verdict: `0` pass, `1`
+    gate failed, `2` **incomplete scan** — an expected scanner did not run, reusing
+    `computeCoverage`'s existing `full` / `partial` / `none` signal rather than
+    re-deriving a second one that could disagree with what the tools themselves already
+    report — `3` usage or configuration error. `2` exists because a missing scanner and a
+    genuinely clean scan both say "zero new findings" unless something tells them apart,
+    and a pipeline must be able to, whether it then treats `2` as a warning or a failure.
+  - **Three report formats — human (default), JSON, SARIF** — SARIF being why this
+    exists at all: GitHub, GitLab and Azure DevOps code-scanning render it **on the
+    lines of the pull request diff**, not in a log nobody opens. SARIF's
+    `invocation.executionSuccessful` is set to `false` whenever coverage isn't `full` —
+    the two states (`partial`, `none`) where a "0 new findings" result is least
+    trustworthy — so a consumer reading only the uploaded SARIF can already tell an
+    incomplete run from a clean one, without cross-referencing the exit code. What SARIF
+    still cannot say is **which** scanner was missing or why: it has no general-purpose
+    home for that prose, so a dropped, unreadable baseline entry is the one exception
+    (carried as a `toolExecutionNotifications` line), and everything else — the scanner
+    names, the reasons — stays exit-code-and-human/JSON-only. Read the exit code (or
+    `coverage` in `--format json`) before trusting an uploaded SARIF that shows nothing:
+    a clean pass and an unrun scanner can produce the identical empty results list.
+  - **`--start-command` starts the target application for the DAST pass — from argv
+    only, never from a repository file.** `scan_dast`'s own MCP tool deliberately has no
+    way to start an app, because that parameter could be filled by a model reading the
+    very repository under scan, and an injected comment would have somewhere to point.
+    That reasoning holds only because a *human* types a CLI flag — a config file inside
+    the repository has no such property, so if `.guardian/ci.json` ever declares
+    `start_command`, the CLI **refuses outright, regardless of what argv says**: a pull
+    request from a fork editing that file must never buy code execution on the CI
+    runner (the classic "pwn request"). No shell (`shell: false`, argv stays an array
+    end to end); the whole process tree is torn down on every exit path — normal
+    completion, a thrown scan, SIGINT, SIGTERM. `--start-command` requires `--base-url`:
+    nothing on the command line says which port the app will bind, so the same URL
+    serves as both the health-check target and the `scan_dast` origin once it is up.
+  - **A CI run leaves `.guardian/` in the workspace.** `security_scan_full`,
+    `map_attack_surface` and `scan_dast` write their raw scanner output under
+    `.guardian/reports/` in the project being scanned, exactly as they do interactively
+    — only the SQLite database is ephemeral. `init_project`'s interactive setup
+    gitignores `.guardian/` automatically; that hook never fires from the CLI, so a
+    repository that only ever scans through CI does not get the entry for free, and a
+    later pipeline step asserting a clean working tree fails for a reason that looks
+    like nothing. Add `.guardian/` to `.gitignore` by hand.
+  - **Known limits.** Distribution is `git clone --depth 1` of this plugin repository
+    against a pinned tag, not an `npx` one-liner — heavier, but there is no TypeScript
+    build step: `mcp/dist/` ships committed. `mcp/node_modules` does **not** ship
+    (gitignored, same as everywhere else in this repo) and is still required — the
+    committed `dist/ci/*` and `dist/tools/mapAttackSurface.js` import `execa` and `yaml`
+    at the top level, unbundled, so `scan`/`baseline update` fail on a bare clone until
+    `npm ci` has run once — a publishable package is being investigated separately,
+    gated on a real pass through the Claude Desktop plugin validator rather than
+    promised ahead of one. The scan database is ephemeral by design, so CI carries no
+    trend history of its own — the baseline is the only state meant to survive a run,
+    deliberately. `scan_dast` in CI reaches only what the runner itself can reach; an
+    application behind a private network is out of scope, same as it is interactively.
 
 ### Fixed
 

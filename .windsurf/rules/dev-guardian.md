@@ -70,6 +70,18 @@ check_toolchain · suppress_finding
   surface snapshot; validates whichever scan completed most recently — run
   right after a SAST scan, not scan_dast).
 
+## CI (headless)
+
+`node cli/dev-guardian.mjs scan` — same pipeline, no MCP, gated on a committed
+`.guardian/baseline.json` (`baseline update` writes it, `scan` never does). Exit
+codes: 0 pass, 1 gate failed, 2 incomplete scan (never read as a pass), 3 usage
+error. Install via `git clone --depth 1` + `npm ci` in mcp/, not npx — see the
+README's "Run scans in CI" for a copy-pasteable job. `--start-command` (DAST pass)
+is argv-only — refused outright if `.guardian/ci.json` declares it (pwn-request
+guard: a fork's PR must never get code execution on the runner). Leaves
+`.guardian/reports/` in the workspace — add `.guardian/` to .gitignore if this repo
+never ran init_project interactively.
+
 ## Don't
 
 - Don't `security_scan_full` for tiny changes — use review_pr.
