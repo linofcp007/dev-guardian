@@ -27,8 +27,23 @@ Two consequences drive this design:
   pipelines, not its own. Distribution is `git clone` (§2).
 - **No second implementation of any scan.** The CLI calls the same MCP tool
   handlers the server does. A parallel scan path would drift.
-- **No mutation of the user's repository** beyond the baseline file, and only
-  when explicitly asked (`baseline update`).
+- **No mutation of the user's repository by the CI layer itself** beyond the
+  baseline file, and only when explicitly asked (`baseline update`).
+
+  **Amended after implementation**, because the original wording claimed more
+  than is true. `security_scan_full` and `map_attack_surface` write
+  `.guardian/reports/` under the scanned project — they always have, and the
+  CI layer calls them unmodified, which is the whole point of having no second
+  scan implementation. Diverting their output would mean either changing
+  merged tool behaviour or building a second path convention beside the one
+  those tools own; both are worse than describing what happens.
+
+  So: **a CI run leaves `.guardian/` in the workspace.** That matters because
+  `ensureGuardianIgnored` is called only from the MCP server's interactive
+  startup — a user who only ever runs the CLI in a pipeline never gets
+  `.guardian/` into their `.gitignore`. A pipeline that asserts a clean
+  working tree after the scan would fail for a reason that looks like nothing.
+  The documentation must say so in the snippet itself, not in a footnote.
 
 ## 2. Decisions taken during design
 
