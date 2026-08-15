@@ -163,6 +163,45 @@ describe('dev-guardian status / dashboard — usage errors at each new call site
 });
 
 /* ------------------------------------------------------------------ */
+/* fix-round-1, Important 2: the --flag=value spelling                 */
+/* ------------------------------------------------------------------ */
+
+describe('dev-guardian status / dashboard — accept --flag=value, the same way every sibling command does', () => {
+  // Before this fix, `--project=.` / `--out=x.html` were rejected outright
+  // as "Unknown flag" (exit 3) on both commands, even though `scan`,
+  // `baseline update` and `mcp-config` all accept exactly this spelling for
+  // `--project` already. A user's outcome should not depend on which of two
+  // equivalent spellings they happened to type.
+
+  it('status --project=<path> is equivalent to --project <path>, not "Unknown flag"', () => {
+    const r = runCli(['status', `--project=${project}`]);
+    expect(r.status).toBe(0);
+    // The load-bearing half of this assertion: the VALUE after "=" must
+    // actually be used, not merely tolerated while silently keeping the
+    // default cwd. A wrong implementation that recognises the "--project="
+    // prefix but never slices/stores what follows it would still exit 0
+    // here (a bare status render always does) but would show the WRONG
+    // project path — renderStatus's own first line is
+    // `dev-guardian · <project_path>`, so the resolved path is always on
+    // stdout when the render succeeds.
+    expect(r.stdout).toContain(project);
+  });
+
+  it('dashboard --project=<path> --out=<path> both work, and --out=... genuinely controls the destination', () => {
+    const out = join(project, 'equals-form.html');
+    const r = runCli(['dashboard', `--project=${project}`, `--out=${out}`, '--no-open']);
+    expect(r.status).toBe(0);
+    // Discriminates "the flag is merely accepted" from "the flag's value is
+    // used": if --out= were recognised but its value discarded, this would
+    // still exit 0 but write to the DEFAULT location
+    // (<project>/.guardian/dashboard.html) instead of `out`, and `out`
+    // would not exist.
+    expect(existsSync(out)).toBe(true);
+    expect(r.stdout).toContain(out);
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* Beyond the brief: a write failure must never claim success first    */
 /* ------------------------------------------------------------------ */
 

@@ -80,7 +80,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 
 import { ALL_HOSTS } from '../mcp/dist/hostsetup/hostSpecs.js';
@@ -1113,31 +1113,50 @@ async function cmdBaseline(argv) {
 /**
  * `openDatabase({ projectPath })` + `runMigrations(db)` + `new Storage(db)`
  * + `buildSnapshot(...)`, with the database closed in a `finally` on EVERY
- * path — a throw inside `runMigrations` OR `buildSnapshot` propagates
- * straight through this `finally` (storage still closes) to the caller,
- * same as a normal return. `runMigrations(db)` is called INSIDE the try,
- * not before it, even though `openDatabase` already runs migrations
- * internally (so this second call is normally a proven no-op — nothing
- * pending, nothing executed, see `migrations/runner.ts`): defence in depth
- * costs nothing here, and leaving it outside the try for a call that merely
- * LOOKS like it can't fail is exactly the kind of gap that stops being true
- * the moment something upstream changes. Closing here, before returning, is
- * also deliberate for a second reason: rendering (`renderStatus`/
- * `renderDashboard`) and writing (`--out`) are pure/filesystem operations
- * over the already-built snapshot and touch storage not at all, so the
- * SQLite handle has no reason to stay open one moment past the one query
- * pass that needed it — and it means a LATER failure (e.g. `--out` pointing
- * at an unwritable path) always happens with the database already closed,
- * never the other way around.
+ * path — a throw inside `runMigrations`, `new Storage(db)` itself, OR
+ * `buildSnapshot` all propagate straight through this `finally` (the
+ * database still closes) to the caller, same as a normal return.
+ *
+ * Both `runMigrations(db)` AND `new Storage(db)` are inside the try, not
+ * before it — a fix-round-1 correction (both were previously in front of
+ * it). `runMigrations(db)` is normally a proven no-op here (`openDatabase`
+ * already runs migrations internally; nothing pending, nothing executed —
+ * see `migrations/runner.ts`), but a DATABASE FILE can be in a state its
+ * own recorded schema version does not describe (hand-edited, corrupted,
+ * partially migrated by a crashed prior process) — `runMigrations` alone
+ * would not notice that (it trusts the recorded version and does nothing),
+ * but `new Storage(db)`'s constructor WOULD: every repo class prepares its
+ * statements immediately, and `db.prepare()` validates against the actual
+ * current schema, so a genuinely missing table surfaces right there, not
+ * inside `runMigrations`. That is precisely why `new Storage(db)` itself
+ * has to be inside the guarded region, not just the calls that look more
+ * dangerous.
+ *
+ * The `finally` closes the raw `db` handle directly — `storage.close()`
+ * would not be reachable/safe here, because the one call this most needs to
+ * guard is `new Storage(db)` throwing, at which point the `storage` local
+ * was never assigned. `db`, in contrast, is guaranteed to exist for the
+ * entire try (obtained from `openDatabase` before the try even starts), and
+ * `Storage.close()` is itself nothing more than `this.db.close()` — closing
+ * `db` directly is equivalent on every path where `storage` DOES exist, and
+ * is the only option on the one path where it does not.
+ *
+ * Closing here, before returning, is also deliberate for a second reason:
+ * rendering (`renderStatus`/`renderDashboard`) and writing (`--out`) are
+ * pure/filesystem operations over the already-built snapshot and touch
+ * storage not at all, so the SQLite handle has no reason to stay open one
+ * moment past the one query pass that needed it — and it means a LATER
+ * failure (e.g. `--out` pointing at an unwritable path) always happens with
+ * the database already closed, never the other way around.
  */
 function buildProjectSnapshot(projectPath) {
   const { db } = openDatabase({ projectPath });
-  const storage = new Storage(db);
   try {
     runMigrations(db);
+    const storage = new Storage(db);
     return buildSnapshot(storage, projectPath, Date.now());
   } finally {
-    storage.close();
+    db.close();
   }
 }
 
@@ -1150,7 +1169,8 @@ function parseStatusArgs(argv) {
       if (r.error) return r;
       out.project = r.value;
       i = r.nextIndex;
-    } else return { error: `Unknown flag: ${a}` };
+    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
+    else return { error: `Unknown flag: ${a}` };
   }
   return { value: out };
 }
@@ -1164,12 +1184,14 @@ function parseDashboardArgs(argv) {
       if (r.error) return r;
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a === '--out') {
+    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
+    else if (a === '--out') {
       const r = takeOperand(argv, i, a);
       if (r.error) return r;
       out.out = r.value;
       i = r.nextIndex;
-    } else if (a === '--no-open') out.noOpen = true;
+    } else if (a.startsWith('--out=')) out.out = a.slice('--out='.length);
+    else if (a === '--no-open') out.noOpen = true;
     else return { error: `Unknown flag: ${a}` };
   }
   return { value: out };
@@ -1200,6 +1222,39 @@ async function cmdStatus(argv) {
 }
 
 /**
+ * Computes the `{ command, args }` this process spawns to open `target` in
+ * the OS default browser — pure, no I/O, and exported so a test can assert
+ * on the exact argv shape without ever launching anything.
+ *
+ * **win32 — fix-round-1 correction.** `start` is a `cmd.exe` BUILT-IN, not a
+ * standalone executable: spawning the bare string `'start'` with
+ * `shell: false` fails ENOENT (confirmed directly on Windows — there is no
+ * `start.exe` on PATH, so `dashboard` never opened a browser on the very
+ * platform this feature targets). `cmd.exe` itself IS a real, spawnable
+ * executable, so IT is what gets spawned, with `/c start` as its own
+ * arguments — that is what actually invokes the builtin. `target` still
+ * reaches `spawn` as its own, discrete array element, exactly as on the
+ * other two platforms below: nothing here is ever concatenated into a
+ * command STRING, so `shell: false`'s security property — no shell
+ * metacharacter interpretation of `target` (spaces, `&`, `|`, …) — holds
+ * exactly as before; only the EXECUTABLE being spawned changed, not the
+ * "argv stays an array" contract. The `'""'` immediately after `start` is
+ * `start`'s OWN empty window-title argument: `start`'s argument grammar
+ * treats the first quoted token after it as a title whenever what follows
+ * is itself quoted or contains spaces, so an explicit empty title has to be
+ * supplied, or `start` would treat `target` itself as the title and open
+ * nothing.
+ *
+ * **darwin/other — unchanged.** `open`/`xdg-open` ARE standalone
+ * executables, spawned directly with `target` as their one argument.
+ */
+export function resolveOpenerCommand(platform, target) {
+  if (platform === 'win32') return { command: 'cmd.exe', args: ['/c', 'start', '""', target] };
+  if (platform === 'darwin') return { command: 'open', args: [target] };
+  return { command: 'xdg-open', args: [target] };
+}
+
+/**
  * Best-effort only: opens `target` in the OS default browser and ignores
  * whatever happens. By the time this runs, `dashboard` has ALREADY written
  * its file and printed its path — a missing `xdg-open` in a headless
@@ -1209,18 +1264,18 @@ async function cmdStatus(argv) {
  * `spawn`'s failure to find the executable (ENOENT) surfaces asynchronously
  * as an `'error'` event, not a thrown exception — an EventEmitter `'error'`
  * with no listener attached throws on its own, so the listener below is not
- * decorative, it is what "ignored" actually requires. `shell: false` matches
- * this project's own house style for spawning anything with a dynamic
- * argument (see `--start-command` in the module doc comment above);
+ * decorative, it is what "ignored" actually requires. `shell: false` (see
+ * `resolveOpenerCommand` for exactly what this still guarantees on win32)
+ * matches this project's own house style for spawning anything with a
+ * dynamic argument (see `--start-command` in the module doc comment above);
  * `detached: true` + `unref()` so this process exiting neither waits on, nor
  * attempts to tear down, the browser it started; `stdio: 'ignore'` keeps the
  * browser process from holding this CLI's own stdout/stderr pipes open.
  */
 function openInBrowser(target) {
-  const opener =
-    process.platform === 'win32' ? 'start' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  const { command, args } = resolveOpenerCommand(process.platform, target);
   try {
-    const child = spawn(opener, [target], { shell: false, detached: true, stdio: 'ignore' });
+    const child = spawn(command, args, { shell: false, detached: true, stdio: 'ignore' });
     child.on('error', () => {
       /* best-effort — see the doc comment above */
     });
@@ -1330,4 +1385,21 @@ function main() {
   process.exit(1);
 }
 
-main();
+// Entry-point guard (fix-round-1 addition): `main()` runs when this file is
+// executed directly (`node cli/dev-guardian.mjs ...` — every real user
+// invocation, and every existing e2e test, which spawns exactly that as a
+// subprocess) but NOT when it is `import`ed, e.g. by
+// `test/unit/cli/browserOpener.test.ts` to reach `resolveOpenerCommand` as a
+// plain function. Without this, that import alone would run the full CLI
+// against the TEST RUNNER's own argv/exit lifecycle — `main()` calls
+// `process.exit()` on more than one path — which would tear down the whole
+// vitest worker rather than merely fail one test. `pathToFileURL` (not a
+// raw string comparison against `process.argv[1]`) is what this project's
+// own test files already use for the equivalent path<->URL conversion (see
+// `ciCliFixture.test.ts`'s `fileURLToPath`) — required on Windows, where a
+// bare `import.meta.url === process.argv[1]` string compare would never
+// match (`file:///C:/...` vs `C:\...`).
+const isEntryPoint = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isEntryPoint) {
+  main();
+}
