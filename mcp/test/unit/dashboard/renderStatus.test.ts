@@ -19,6 +19,28 @@ describe('renderStatus', () => {
     expect(out).toMatch(/NOT in these numbers/i);
   });
 
+  // Not in the task brief's literal test file — added because coverage data
+  // showed design §2's corollary ("a score computed over a partial scan is
+  // presented WITH its coverage caveat attached, never as a bare number") had
+  // no test at all: nothing in the brief's suite sets coverage_caveat: true.
+  // The regex spans one line on purpose (`.` does not match `\n`), so a
+  // renderer that prints the caveat on a separate line — attached to the
+  // screen, but not to the score — fails this test too.
+  it('flags the risk score itself when it was computed over partial coverage', () => {
+    const out = renderStatus(snap({
+      coverage: { level: 'partial', tools_run: ['semgrep'],
+        missing_tools: ['gitleaks', 'trivy'],
+        omitted_categories: ['secrets', 'container and dependency'] },
+      risk: { score: 62, band: 'high',
+        components: { findings: { score: 40, open_findings: 104 },
+          cves: { score: 14, active_cves: 5 },
+          compliance: { score: 0, policies_missing: 0 },
+          baseline: { score: 8, has_active_baseline: true } },
+        next_action: 'Fix the 3 critical findings first.', coverage_caveat: true },
+    }), { color: false });
+    expect(out).toMatch(/RISK.*partial coverage — 2 scanners missing/);
+  });
+
   it('omits the missing-tools line entirely when coverage is full', () => {
     const out = renderStatus(snap(), { color: false });
     expect(out).not.toMatch(/MISSING/);
@@ -73,6 +95,32 @@ describe('renderStatus', () => {
     }), { color: false });
     expect(out).toMatch(/dev-guardian scan/);
     expect(out).not.toMatch(/undefined|NaN/);
+  });
+
+  // Not in the task brief's literal test file — added because coverage data
+  // showed the >=60s branch of the header's duration formatting was never
+  // exercised (the fixture's default scan runs 47s). A renderer that always
+  // prints raw seconds, or that divides but drops the remainder, both fail
+  // this: the assertion requires "2m" AND "5s" together.
+  it('formats a scan duration of a minute or more as minutes and seconds', () => {
+    const out = renderStatus(snap({
+      scan: { scan_id: 's1', scan_type: 'security_full', status: 'completed',
+        started_at: '2026-08-15T10:00:00.000Z', finished_at: '2026-08-15T10:02:05.000Z',
+        duration_seconds: 125, age_seconds: 7200 },
+    }), { color: false });
+    expect(out).toMatch(/2m 5s/);
+  });
+
+  // Not in the task brief's literal test file — added because coverage data
+  // showed the header's "days ago" tier (a scan >= 24h old) was never
+  // exercised; every other fixture uses the 2h-old default.
+  it('formats a scan more than a day old in days, not hours', () => {
+    const out = renderStatus(snap({
+      scan: { scan_id: 's1', scan_type: 'security_full', status: 'completed',
+        started_at: '2026-08-12T10:00:00.000Z', finished_at: '2026-08-12T10:00:47.000Z',
+        duration_seconds: 47, age_seconds: 259_200 }, // 3 days
+    }), { color: false });
+    expect(out).toMatch(/3d ago/);
   });
 
   it('emits no ANSI escapes when color is off', () => {
