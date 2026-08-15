@@ -11,6 +11,7 @@ import { nowIso } from './repoUtil.js';
 export class SuppressionsRepo {
     insertStmt;
     listActiveStmt;
+    listAllStmt;
     isSuppressedStmt;
     listForFingerprintStmt;
     constructor(db) {
@@ -23,6 +24,16 @@ export class SuppressionsRepo {
         this.listActiveStmt = db.prepare(`
       SELECT * FROM suppressions
       WHERE expires_at IS NULL OR expires_at > ?
+      ORDER BY created_at DESC
+    `);
+        // Same rows as listActiveStmt, with NO expires_at filter at all — so no
+        // dependency on the real wall clock. listActive() filters against
+        // nowIso() deliberately, for its own live callers (compliance_evidence,
+        // among others, reporting "what's suppressed right now"); a caller
+        // working from an injected clock needs the unfiltered set so it can
+        // apply its own "active as of `now`" test instead of the ambient one.
+        this.listAllStmt = db.prepare(`
+      SELECT * FROM suppressions
       ORDER BY created_at DESC
     `);
         this.isSuppressedStmt = db.prepare(`
@@ -41,6 +52,11 @@ export class SuppressionsRepo {
     }
     listActive() {
         return this.listActiveStmt.all(nowIso()).map(rowToSuppression);
+    }
+    /** Every suppression row, active or not, unfiltered by expiry. See
+     *  listAllStmt's own comment for why this exists beside listActive(). */
+    listAll() {
+        return this.listAllStmt.all().map(rowToSuppression);
     }
     isSuppressed(fingerprint) {
         const row = this.isSuppressedStmt.get(fingerprint, nowIso());

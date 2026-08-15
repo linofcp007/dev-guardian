@@ -29,7 +29,10 @@ let scanSeq = 0;
 function completedScan(
   storage: Storage,
   projectPath: string,
-  opts: { tools_run?: ToolRun[]; missing_tools?: string[]; scan_type?: ScanType } = {},
+  opts: {
+    tools_run?: ToolRun[]; missing_tools?: string[]; scan_type?: ScanType;
+    meta?: Record<string, unknown>;
+  } = {},
 ) {
   // `scans.insert` does NOT generate an id — the caller supplies one, and the
   // record's field is `scan_id`, not `id`.
@@ -46,6 +49,7 @@ function completedScan(
     // is not assignable to `string | undefined`.
     tools_run: opts.tools_run ?? [{ name: 'semgrep', status: 'ok' }],
     missing_tools: opts.missing_tools ?? [],
+    ...(opts.meta !== undefined ? { meta: opts.meta } : {}),
   });
   return scanId;
 }
@@ -340,6 +344,148 @@ describe('buildSnapshot', () => {
       { fingerprint: 'soonest', reason: 'about to expire', expires_at: '2026-08-16T00:00:00.000Z' },
       { fingerprint: 'soon', reason: 'triage in progress', expires_at: '2026-08-18T00:00:00.000Z' },
     ]);
+    db.close();
+  });
+
+  // --- Task 3 review, round 1: findings 1, 3 and 4 (task-3-review.md) ---
+
+  it('sources compliance and dependency-bot signals from THIS project\'s own scans, matching risk_score\'s arithmetic', () => {
+    // Review finding 1: policies_missing/dependency_bot_configured were
+    // hardcoded to 0/true, so the same single-project DB scored differently
+    // through dev-guardian status than through risk_score. Ported
+    // tools/riskScore.ts's own compliance-signal gathering, scoped via
+    // listHistoryForProject instead of the unscoped listHistory.
+    const { storage, db } = fresh();
+    completedScan(storage, '/p', {
+      scan_type: 'compliance',
+      meta: { policy_documents_found: {
+        privacy_policy: false, terms_of_service: false, security_policy: true,
+      } },
+    });
+    completedScan(storage, '/p', {
+      scan_type: 'deps',
+      meta: { bot_configured: { renovate: false, dependabot: false } },
+    });
+    completedScan(storage, '/p', { scan_type: 'security_full' });
+
+    const snap = buildSnapshot(storage, '/p', NOW);
+    // 2 policies missing * 3 = 6, + 6 (no bot configured) = 12 — the exact
+    // arithmetic risk.ts's compliance component applies, ported unchanged.
+    expect(snap.risk.components.compliance).toEqual({ score: 12, policies_missing: 2 });
+    db.close();
+  });
+
+  it('leaves compliance signals at "no penalty" when this project has no compliance/deps scan at all', () => {
+    // The other half of finding 1: an absent signal must stay "not
+    // measured, no penalty" (risk_score's own accepted fallback), never a
+    // fabricated missing-policy count.
+    const { storage, db } = fresh();
+    completedScan(storage, '/p', { scan_type: 'security_full' });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.risk.components.compliance).toEqual({ score: 0, policies_missing: 0 });
+    db.close();
+  });
+
+  it('sources CVEs from the latest deps-flavoured scan in history, not just whatever scan is current', () => {
+    // Review finding 4, positive path: a deps scan recorded CVEs; a later
+    // secrets-only scan becomes the project's current scan. CVEs must still
+    // be found by searching back through history for the deps-flavoured
+    // scan, mirroring risk_score's findLatestOfType(['deps','security_full']).
+    const { storage, db } = fresh();
+    const depsScan = completedScan(storage, '/p', { scan_type: 'deps' });
+    storage.cves.upsert({
+      cve_id: 'CVE-2026-1', package_name: 'left-pad', severity: 'critical', scan_id: depsScan,
+    });
+    completedScan(storage, '/p', {
+      scan_type: 'secrets', tools_run: [{ name: 'gitleaks', status: 'ok' }],
+    });
+
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.cves.total).toBe(1);
+    expect(snap.cves.items[0]?.cve_id).toBe('CVE-2026-1');
+    // The current (secrets) scan itself is fully covered on its own terms —
+    // this is the sourcing fix, not the gap-disclosure case below.
+    expect(snap.coverage.level).toBe('full');
+    db.close();
+  });
+
+  it('flags CVE data as unmeasured, not zero, when no deps-flavoured scan has ever run for this project', () => {
+    // Review finding 4, the gap-disclosure requirement: a secrets-only scan
+    // with empty missing_tools used to read coverage.level: 'full' and
+    // cves.total: 0 — indistinguishable from "checked, found nothing" even
+    // though no CVE scanner has ever run for this project. The gap must
+    // reach `coverage` (design §6: the MISSING line is absent entirely once
+    // coverage is 'full', so a gap that does not flip the level never
+    // reaches the reader at all).
+    const { storage, db } = fresh();
+    completedScan(storage, '/p', {
+      scan_type: 'secrets', tools_run: [{ name: 'gitleaks', status: 'ok' }],
+    });
+
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.cves.total).toBe(0);
+    expect(snap.coverage.level).toBe('partial');
+    expect(snap.coverage.missing_tools).toEqual([]); // nothing genuinely missing from THIS scan
+    expect(snap.coverage.omitted_categories).toContain('container and dependency');
+    expect(snap.risk.coverage_caveat).toBe(true);
+    db.close();
+  });
+
+  it('does not double up the CVE gap when trivy is already listed as a missing tool', () => {
+    // omitted_categories de-dupes on the OUTPUT category — a scan that is
+    // both missing trivy AND has no deps-flavoured scan in history must
+    // still contribute 'container and dependency' exactly once.
+    const { storage, db } = fresh();
+    completedScan(storage, '/p', {
+      scan_type: 'security_full',
+      tools_run: [{ name: 'semgrep', status: 'ok' }],
+      missing_tools: ['trivy'],
+    });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.coverage.omitted_categories.filter((c) => c === 'container and dependency')).toHaveLength(1);
+    db.close();
+  });
+
+  it('finds this project\'s own baseline even when another project set one more recently', () => {
+    // Review finding 3: getActive() alone only ever sees the single
+    // globally-newest baseline row. The cross-project check correctly
+    // rejects it when it belongs to another project, but never looks past
+    // it — so this project's own (older) baseline was invisible whenever
+    // another project's baseline was set later. resolveBaseline now walks
+    // baselines.listAll() for the newest one whose scan matches.
+    const { storage, db } = fresh();
+    const mineBaselineScan = completedScan(storage, '/mine');
+    storage.baselines.set({ scan_id: mineBaselineScan, note: 'my real baseline' });
+    const theirsScan = completedScan(storage, '/theirs');
+    storage.baselines.set({ scan_id: theirsScan }); // set LATER — the global "active" row
+    completedScan(storage, '/mine'); // '/mine' scans again, after both baselines exist
+
+    const snap = buildSnapshot(storage, '/mine', NOW);
+    expect(snap.baseline.active?.scan_id).toBe(mineBaselineScan);
+    expect(snap.baseline.active?.note).toBe('my real baseline');
+    expect(snap.baseline.age_days).not.toBeNull();
+    expect(snap.risk.components.baseline.has_active_baseline).toBe(true);
+    db.close();
+  });
+
+  it('determines suppression activity from the injected now, never the ambient clock', () => {
+    // Review finding 2: buildSnapshot mixed clocks — the injected `now` for
+    // generated_at/age_seconds/age_days/the expiring-soon cutoff, but the
+    // real wall clock (via suppressions.listActive()'s own nowIso()) for
+    // "which suppressions are active at all". A fixed `now` far from real
+    // time proves the two are no longer coupled: real wall-clock time,
+    // whenever this test actually executes, is certainly past 2020-01-05 —
+    // code that still consulted it anywhere in this path would see this
+    // suppression as already expired and report active_count: 0.
+    const { storage, db } = fresh();
+    completedScan(storage, '/p');
+    storage.suppressions.insert({
+      finding_fingerprint: 'a', reason: 'active relative to an old injected now',
+      created_by: 'test', expires_at: '2020-01-05T00:00:00.000Z',
+    });
+    const OLD_NOW = Date.parse('2020-01-01T00:00:00.000Z');
+    const snap = buildSnapshot(storage, '/p', OLD_NOW);
+    expect(snap.suppressions.active_count).toBe(1);
     db.close();
   });
 });

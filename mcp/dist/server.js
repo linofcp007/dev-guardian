@@ -37775,6 +37775,7 @@ function rowToSnapshot(row) {
 var SuppressionsRepo = class {
   insertStmt;
   listActiveStmt;
+  listAllStmt;
   isSuppressedStmt;
   listForFingerprintStmt;
   constructor(db) {
@@ -37787,6 +37788,10 @@ var SuppressionsRepo = class {
     this.listActiveStmt = db.prepare(`
       SELECT * FROM suppressions
       WHERE expires_at IS NULL OR expires_at > ?
+      ORDER BY created_at DESC
+    `);
+    this.listAllStmt = db.prepare(`
+      SELECT * FROM suppressions
       ORDER BY created_at DESC
     `);
     this.isSuppressedStmt = db.prepare(`
@@ -37811,6 +37816,11 @@ var SuppressionsRepo = class {
   }
   listActive() {
     return this.listActiveStmt.all(nowIso()).map(rowToSuppression);
+  }
+  /** Every suppression row, active or not, unfiltered by expiry. See
+   *  listAllStmt's own comment for why this exists beside listActive(). */
+  listAll() {
+    return this.listAllStmt.all().map(rowToSuppression);
   }
   isSuppressed(fingerprint) {
     const row = this.isSuppressedStmt.get(fingerprint, nowIso());
