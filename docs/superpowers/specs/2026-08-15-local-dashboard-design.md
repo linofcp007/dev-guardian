@@ -153,9 +153,17 @@ export interface ScanSummary {
 
 export interface RiskAssessment {
   score: number; band: 'low' | 'medium' | 'high' | 'critical';
-  components: { findings: number; cves: number; compliance: number; baseline: number };
-  next_action: string;
-  /** True when computed over a partial scan. Both views must show this. */
+  /** Shaped to match `risk_score`'s existing wire output exactly, so the tool
+   *  can map this to its response without inventing or dropping a field. */
+  components: {
+    findings: { score: number; open_findings: number };
+    cves: { score: number; active_cves: number };
+    compliance: { score: number; policies_missing: number };
+    baseline: { score: number; has_active_baseline: boolean };
+  };
+  next_action: string;                // → the tool's `recommended_next_action`
+  /** True when computed over a partial scan. Both views must show this.
+   *  Not part of `risk_score`'s output; the tool drops it. */
   coverage_caveat: boolean;
 }
 
