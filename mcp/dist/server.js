@@ -37539,6 +37539,7 @@ var ScansRepo = class {
   getLatestStmt;
   getLatestForProjectStmt;
   listHistoryStmt;
+  listHistoryForProjectStmt;
   findCacheStmt;
   attachCacheStmt;
   constructor(db) {
@@ -37581,6 +37582,12 @@ var ScansRepo = class {
     `);
     this.listHistoryStmt = db.prepare(`
       SELECT * FROM scans
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT ?
+    `);
+    this.listHistoryForProjectStmt = db.prepare(`
+      SELECT * FROM scans
+      WHERE project_path = ?
       ORDER BY started_at DESC, rowid DESC
       LIMIT ?
     `);
@@ -37672,6 +37679,16 @@ var ScansRepo = class {
   }
   listHistory(limit = 50) {
     return this.listHistoryStmt.all(limit).map(rowToRecord);
+  }
+  /**
+   * `listHistory`, scoped to one project — never all scans filtered in JS,
+   * which would silently truncate at whatever `limit` the caller used before
+   * the JS-side filter even ran. Mirrors `getLatestForProject`'s relationship
+   * to `getLatest`: same "this project" vs. "any project" split, for a
+   * history list instead of a single latest row.
+   */
+  listHistoryForProject(projectPath, limit = 50) {
+    return this.listHistoryForProjectStmt.all(projectPath, limit).map(rowToRecord);
   }
   /**
    * Returns the most recent completed scan of the given type whose tree_hash

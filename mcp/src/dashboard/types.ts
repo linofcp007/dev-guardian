@@ -8,7 +8,7 @@
  * `DashboardSnapshot` and its other parts.
  */
 
-import type { Cve, Finding } from '../types.js';
+import type { Cve, Finding, Severity } from '../types.js';
 
 /**
  * Already-scoped inputs `scoreRisk` needs to compute a risk assessment.
@@ -101,4 +101,69 @@ export interface TruncationNotice {
   shown: number;
   total: number;
   reason: string;
+}
+
+/**
+ * `buildSnapshot`'s (`snapshot.ts`) return value — the one query pass both
+ * dashboard views render, and the only place in this feature that touches
+ * storage. See the design of record §5, and §5.1 for what every field holds
+ * when `scan` is null (a project with no completed scan).
+ */
+export interface DashboardSnapshot {
+  project_path: string;
+  generated_at: string; // ISO
+  scan: ScanSummary | null; // null ⇒ nothing scanned yet
+  coverage: CoverageState;
+  risk: RiskAssessment;
+  findings: FindingsSummary;
+  cves: CveSummary;
+  deltas: { since_previous: FindingDelta | null; since_baseline: FindingDelta | null };
+  baseline: BaselineState;
+  suppressions: SuppressionState;
+  truncation: TruncationNotice[]; // empty when nothing was capped
+}
+
+export interface CoverageState {
+  level: 'full' | 'partial' | 'none';
+  tools_run: string[];
+  missing_tools: string[];
+  /** Rendered verbatim by both views. Empty iff level === 'full'. */
+  omitted_categories: string[]; // e.g. ['container and dependency', 'secrets']
+}
+
+export interface ScanSummary {
+  scan_id: string;
+  scan_type: string;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+  duration_seconds: number | null; // null while running or on a crash
+  age_seconds: number;
+}
+
+export interface FindingsSummary {
+  total: number;
+  by_severity: Record<Severity, number>;
+  by_category: Record<string, number>;
+  by_tool: Record<string, number>;
+  hotspots: Hotspot[]; // file + count, descending
+  items: Finding[]; // possibly capped — see §8
+}
+
+export interface CveSummary {
+  total: number;
+  by_severity: Record<Severity, number>;
+  items: Cve[]; // as cvesRepo already returns them
+}
+
+export interface BaselineState {
+  /** null ⇒ no baseline has ever been set for this project. */
+  active: { baseline_id: number; scan_id: string; set_at: string; note?: string } | null;
+  age_days: number | null; // null iff active is null
+}
+
+export interface SuppressionState {
+  active_count: number;
+  /** Active suppressions expiring within 7 days, soonest first. */
+  expiring_soon: { fingerprint: string; reason: string; expires_at: string }[];
 }

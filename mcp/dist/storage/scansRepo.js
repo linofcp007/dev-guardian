@@ -16,6 +16,7 @@ export class ScansRepo {
     getLatestStmt;
     getLatestForProjectStmt;
     listHistoryStmt;
+    listHistoryForProjectStmt;
     findCacheStmt;
     attachCacheStmt;
     constructor(db) {
@@ -64,6 +65,19 @@ export class ScansRepo {
     `);
         this.listHistoryStmt = db.prepare(`
       SELECT * FROM scans
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT ?
+    `);
+        // Identical predicate to listHistoryStmt above, plus `project_path = ?` on
+        // the WHERE clause — same relationship as getLatestForProjectStmt's own
+        // pairing with getLatestStmt above. No `status` filter, matching
+        // listHistory's own "any status" contract exactly: callers that need only
+        // completed scans (e.g. the dashboard snapshot's "previous scan of the
+        // same type") filter that in JS, the same way listHistory's own callers
+        // already do.
+        this.listHistoryForProjectStmt = db.prepare(`
+      SELECT * FROM scans
+      WHERE project_path = ?
       ORDER BY started_at DESC, rowid DESC
       LIMIT ?
     `);
@@ -135,6 +149,16 @@ export class ScansRepo {
     }
     listHistory(limit = 50) {
         return this.listHistoryStmt.all(limit).map(rowToRecord);
+    }
+    /**
+     * `listHistory`, scoped to one project — never all scans filtered in JS,
+     * which would silently truncate at whatever `limit` the caller used before
+     * the JS-side filter even ran. Mirrors `getLatestForProject`'s relationship
+     * to `getLatest`: same "this project" vs. "any project" split, for a
+     * history list instead of a single latest row.
+     */
+    listHistoryForProject(projectPath, limit = 50) {
+        return this.listHistoryForProjectStmt.all(projectPath, limit).map(rowToRecord);
     }
     /**
      * Returns the most recent completed scan of the given type whose tree_hash

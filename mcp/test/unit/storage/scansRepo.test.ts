@@ -167,4 +167,53 @@ describe('ScansRepo', () => {
 
     expect(repo.getLatestForProject('/project-c')).toBeNull();
   });
+
+  it('listHistoryForProject returns scans in start-time descending order, capped by limit', () => {
+    const { repo } = freshRepo();
+    for (let i = 0; i < 5; i++) {
+      repo.insert({
+        scan_id: `s-${i}`,
+        scan_type: 'sast',
+        project_path: '/p',
+        tree_hash: `h-${i}`,
+      });
+    }
+    const history = repo.listHistoryForProject('/p', 3);
+    expect(history).toHaveLength(3);
+    // Descending order — s-4, s-3, s-2 (newest first) — same ordering as
+    // the equivalent listHistory test above, over the scoped variant.
+    expect(history.map((s) => s.scan_id)).toEqual(['s-4', 's-3', 's-2']);
+  });
+
+  it('listHistoryForProject excludes another project entirely, even a scan inserted later', () => {
+    // The listHistory hazard for a history LIST rather than a single latest
+    // row: a naive implementation that fetches listHistory(N) and filters by
+    // project_path in JS would silently drop this project's older entries
+    // whenever another project's scans push them past N. Scoping in SQL, as
+    // implemented, cannot do that — a match is either in the WHERE clause's
+    // result set or it isn't, regardless of how much other-project traffic
+    // exists.
+    const { repo } = freshRepo();
+    repo.insert({ scan_id: 'a1', scan_type: 'sast', project_path: '/project-a', tree_hash: 'ha' });
+    repo.finalize({ scan_id: 'a1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    // Inserted second — later start time and higher rowid — so it would sort
+    // first in an unscoped history list.
+    repo.insert({ scan_id: 'b1', scan_type: 'sast', project_path: '/project-b', tree_hash: 'hb' });
+    repo.finalize({ scan_id: 'b1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    expect(repo.listHistory(50).map((s) => s.scan_id)).toEqual(['b1', 'a1']);
+    expect(repo.listHistoryForProject('/project-a', 50).map((s) => s.scan_id)).toEqual(['a1']);
+    expect(repo.listHistoryForProject('/project-b', 50).map((s) => s.scan_id)).toEqual(['b1']);
+  });
+
+  it('listHistoryForProject includes non-completed scans, matching listHistory\'s own contract', () => {
+    const { repo } = freshRepo();
+    repo.insert({ scan_id: 'running-1', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
+    // Left running — never finalized.
+
+    const history = repo.listHistoryForProject('/p');
+    expect(history).toHaveLength(1);
+    expect(history[0]?.status).toBe('running');
+  });
 });
