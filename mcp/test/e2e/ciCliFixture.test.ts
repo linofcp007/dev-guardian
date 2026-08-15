@@ -207,6 +207,35 @@ describe('dev-guardian scan — usage and safety (no real scanner reached)', () 
     expect(r.stderr).toMatch(/--nope/);
   });
 
+  it.each([
+    ['scan', '-h'],
+    ['scan', '--help'],
+    ['scan', 'help'],
+    ['baseline', '--help'],
+  ])('answers `%s %s` with the help text, not a usage error', (cmd, flag) => {
+    // Found by cloning the published v1.3.0 tag and typing the first thing
+    // anyone types. Every one of these used to hit the flag parser and come
+    // back `error: Unknown flag: --help` at exit 3, with no pointer to where
+    // help actually lived (only the bare `dev-guardian --help` worked).
+    const r = runCli([cmd, flag]);
+    expect(r.status).toBe(0);
+    // Discriminates against "exits 0 having silently done nothing": the help
+    // text must actually be the thing on stdout.
+    expect(r.stdout).toMatch(/--fail-on/);
+    expect(r.stdout).toMatch(/--sarif/);
+  });
+
+  it('does NOT treat --help as ours once --start-command has claimed the rest', () => {
+    // `--start-command npm start --help` asks npm for help, not us. Printing
+    // our usage and exiting 0 would report a scan that never ran as a success
+    // — the exact shape this CLI exists to avoid. Exit 3 here is the real
+    // refusal (--start-command requires --base-url), which proves the tokens
+    // reached the scan parser rather than the help short-circuit.
+    const r = runCli(['scan', '--start-command', 'node', '--help']);
+    expect(r.status).toBe(3);
+    expect(r.stdout).not.toMatch(/--fail-on/);
+  });
+
   it('exits 3, naming the flag, when --sarif is the last token (no value)', () => {
     // Important 1 (final-review.md). Before this fix, `argv[++i]` past the
     // end of argv silently evaluated to `undefined`, `out.sarif` ended up

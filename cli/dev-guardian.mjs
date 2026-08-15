@@ -1070,12 +1070,35 @@ function fatal(e) {
   process.exit(USAGE_ERROR_EXIT);
 }
 
+const HELP_FLAGS = new Set(['-h', '--help', 'help']);
+
+/**
+ * True when the user asked for help *of this CLI* somewhere after the command.
+ *
+ * Stops at `--start-command`, because everything after that belongs to the
+ * user's application: `scan --start-command npm start --help` is asking npm
+ * for help, not us, and swallowing it would silently skip the scan.
+ */
+function asksForHelp(rest) {
+  for (const a of rest) {
+    if (a === '--start-command') return false;
+    if (HELP_FLAGS.has(a)) return true;
+  }
+  return false;
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
-  if (!cmd || cmd === '-h' || cmd === '--help' || cmd === 'help') {
+  if (!cmd || HELP_FLAGS.has(cmd)) {
     usage();
     process.exit(cmd ? 0 : 1);
+  }
+  // `scan --help` is the first thing anyone types. Answer it rather than
+  // rejecting it as an unknown flag.
+  if (asksForHelp(argv.slice(1))) {
+    usage();
+    process.exit(0);
   }
   if (cmd === 'mcp-config') return cmdMcpConfig(argv.slice(1));
   if (cmd === 'check') return cmdCheck(argv.slice(1));
