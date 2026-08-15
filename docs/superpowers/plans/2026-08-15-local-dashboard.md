@@ -773,6 +773,7 @@ git commit -m "feat(dashboard): the single project-scoped query pass"
 **Files:**
 
 - Create: `mcp/src/dashboard/renderStatus.ts`
+- Create: `mcp/test/unit/dashboard/snapshotFixture.ts` (the shared `snap()` factory, imported by Task 5 too)
 - Test: `mcp/test/unit/dashboard/renderStatus.test.ts`
 
 **Interfaces:**
@@ -792,8 +793,27 @@ positions are not load-bearing, the content rules are.
 
 - [ ] **Step 1: Write the failing test**
 
-`mcp/test/unit/dashboard/renderStatus.test.ts`. Build snapshots with a local
-factory rather than a database — this module is pure.
+Put the `snap()` factory in `mcp/test/unit/dashboard/snapshotFixture.ts` and
+export it — Task 5 imports the same factory, and two copies would drift.
+Build snapshots from it rather than from a database; this module is pure.
+
+`snapshotFixture.ts`:
+
+```ts
+import type { DashboardSnapshot } from '../../../src/dashboard/types.js';
+
+export function snap(over: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
+  // …the object literal below, returned with `...over` spread last.
+}
+```
+
+Then `renderStatus.test.ts` opens with:
+
+```ts
+import { describe, expect, it } from 'vitest';
+import { renderStatus } from '../../../src/dashboard/renderStatus.js';
+import { snap } from './snapshotFixture.js';
+```
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -904,9 +924,10 @@ describe('renderStatus', () => {
   it('emits no ANSI escapes when color is off', () => {
     const withColor = renderStatus(snap(), { color: true });
     const without = renderStatus(snap(), { color: false });
-    // eslint-disable-next-line no-control-regex
-    expect(without).not.toMatch(/\[/);
-    expect(withColor.replace(/\[[0-9;]*m/g, '')).toBe(without);
+    // \u001b is the ESC byte, written as an escape rather than a raw
+    // control character so a copy-paste cannot silently lose it.
+    expect(without).not.toMatch(/\u001b\[/);
+    expect(withColor.replace(/\u001b\[[0-9;]*m/g, '')).toBe(without);
   });
 
   it('renders every truncation notice it is given', () => {
