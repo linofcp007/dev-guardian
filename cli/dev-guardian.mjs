@@ -216,6 +216,10 @@ status — one-screen terminal summary of the latest scan for this project
   Read-only: never runs a scan, never mutates the database. Reports; does
   not gate — exits 0 even on a project full of findings, or one that has
   never been scanned (it then names the scan command to run instead).
+  A snapshot of the latest scan, not live — it will not update when a later
+  scan runs; re-run this command to see one. The window is that scan plus
+  two deltas (since the previous scan of the same type, since the active
+  baseline) — no multi-week trend.
   Exit codes: 0 always, except 3 on a usage error.
 
 dashboard — writes a self-contained HTML report and prints its path
@@ -224,7 +228,9 @@ dashboard — writes a self-contained HTML report and prints its path
   --no-open               Never launch a browser
   Opens the report in your default browser only when stdout is a TTY (never
   inside a pipeline/CI) and --no-open was not given. Same read-only, no-gate
-  contract as status.
+  contract as status — including the same snapshot: the page will not update
+  when a later scan runs, and its window is that scan plus two deltas, never
+  a multi-week trend. Regenerate it (re-run this command) to see a new scan.
   Exit codes: 0 always, except 3 on a usage error.
 
 Examples:
