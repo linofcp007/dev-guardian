@@ -3,8 +3,9 @@
  * `dev-guardian dashboard`) — see
  * `docs/superpowers/specs/2026-08-15-local-dashboard-design.md`.
  *
- * This file currently carries only the risk-score slice (§3.1 of the design).
- * Later tasks extend it with `DashboardSnapshot` and its other parts.
+ * This file currently carries the risk-score slice (§3.1) and the
+ * delta/hotspot slice (§7, §8 of the design). Later tasks extend it with
+ * `DashboardSnapshot` and its other parts.
  */
 
 import type { Cve, Finding } from '../types.js';
@@ -58,3 +59,46 @@ export const TOOL_CATEGORIES: Readonly<Record<string, string>> = {
   trivy: 'container and dependency',
   nuclei: 'dynamic',
 };
+
+/**
+ * The fingerprint delta between two scans — produced by
+ * `delta.ts#compareFindings`. `new` = in `to` not `from`, `resolved` = in
+ * `from` not `to`, `unchanged` = in both, computed over fingerprint sets
+ * (design §7).
+ */
+export interface FindingDelta {
+  from_scan_id: string;
+  to_scan_id: string;
+  /** The TRUE count of new findings. Never the length of `new_findings`
+   *  below — that list may be capped; this number never is. See §2 and §8
+   *  of the design: a capped list that also caps its own count is the exact
+   *  lie this dashboard exists to refuse to tell. */
+  new_count: number;
+  resolved_count: number;
+  unchanged_count: number;
+  /** Possibly capped for display — see `TruncationNotice`. */
+  new_findings: Finding[];
+}
+
+/**
+ * One file's finding count — produced by `hotspots.ts#rankFiles`. A plain
+ * count, not severity-weighted (design §12): a file with 11 low findings
+ * outranks one with 2 criticals by design.
+ */
+export interface Hotspot {
+  file_path: string;
+  count: number;
+}
+
+/**
+ * Discloses that a list shown to the user is shorter than its true total,
+ * and why — design §8's rule that no cap is ever silent. Present only when
+ * a cap actually cut something; both views render it when it is not null.
+ */
+export interface TruncationNotice {
+  /** Which field was capped, e.g. 'new_findings'. */
+  what: string;
+  shown: number;
+  total: number;
+  reason: string;
+}
