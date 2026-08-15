@@ -79,7 +79,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, parse, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 
@@ -698,6 +698,28 @@ function parseBaselineUpdateArgs(argv) {
 }
 
 /**
+ * Mirrors `mcp/src/platform/projectPath.ts`'s own `isRootOrHome` exactly
+ * (coordinator review, Minor): every MCP tool resolves its `project_path`
+ * through `resolveProjectPath`, which refuses a filesystem root or the
+ * user's home directory outright — mass scans starting there are almost
+ * always a mistake and can take hours. This CLI's own `resolveProjectOrExit`
+ * (below) checked existence/directory-ness only, so `--project /` (or
+ * `--project ~`) proceeded here where the identical input refuses through an
+ * MCP host. Deliberately NOT the same function as `resolveProjectPath` (that
+ * one throws `InvalidProjectPathError` for a caller that turns it into a
+ * tool response; this CLI turns every usage problem into `usageError`/exit
+ * 3) — but the RULE itself must be identical, so it is ported rather than
+ * re-invented.
+ */
+function isRootOrHome(p) {
+  // Filesystem root (e.g. "C:\\" or "/").
+  if (parse(p).root === p) return true;
+  // User home root (e.g. "/home/foo" or "C:\\Users\\foo").
+  const home = resolve(homedir());
+  return p === home;
+}
+
+/**
  * Steps shared by `cmdScan` and `cmdBaseline` before either one runs the
  * pipeline: resolve+validate `--project`, then the pwn-request guard, then
  * `--start-command`'s own usage rules. Order matters — the repo-config guard
@@ -709,6 +731,11 @@ function resolveProjectOrExit(rawProject) {
   const projectPath = resolve(rawProject);
   if (!existsSync(projectPath) || !statSync(projectPath).isDirectory()) {
     return usageError(`--project does not exist or is not a directory: ${projectPath}`);
+  }
+  if (isRootOrHome(projectPath)) {
+    return usageError(
+      `--project must not be a filesystem root or the user's home directory: ${projectPath}`,
+    );
   }
   return projectPath;
 }
@@ -1154,9 +1181,42 @@ async function cmdBaseline(argv) {
  * moment past the one query pass that needed it — and it means a LATER
  * failure (e.g. `--out` pointing at an unwritable path) always happens with
  * the database already closed, never the other way around.
+ *
+ * **Genuinely read-only (coordinator review, Important).** `openDatabase`
+ * always calls `ensureDir` + `runMigrations` for a file-backed database —
+ * correct for the MCP server, which persists scans, but wrong here: on a
+ * directory that has no `.guardian/guardian.db` yet, it CREATES one (an
+ * empty, freshly-migrated 143 KB file), which contradicts this command's own
+ * documented promise (design doc §1: "Nothing here runs a scan, mutates the
+ * database, opens a socket, or reaches the network") the moment a user points
+ * `status`/`dashboard` at a project it has never touched. Detected cleanly by
+ * checking for the one file `openDatabase` itself would otherwise create at
+ * — `<project>/.guardian/guardian.db`, the documented, primary location (see
+ * `storage/db.ts`'s own module doc) — BEFORE opening anything: when it does
+ * not exist, this opens an IN-MEMORY database instead (`inMemory: true`,
+ * never touches disk) rather than the real project path. `buildSnapshot`
+ * only ever queries `storage`; a freshly-migrated empty in-memory database
+ * and a freshly-migrated empty file-backed one are indistinguishable to every
+ * query it runs, so this reuses the exact "never scanned" path already
+ * proven by the unit suite (`dashboard/snapshot.test.ts`), rather than
+ * hand-rolling a second copy of that empty state here. `projectPath` itself
+ * is passed through unchanged either way, so `snapshot.project_path` — and
+ * everything rendered from it — still names the real project, never
+ * `:memory:`.
+ *
+ * Narrower than `openDatabase`'s own writability fallback (which also covers
+ * a project directory that exists but is not writable, by redirecting to a
+ * temp-dir database): this checks only the documented primary path. A
+ * project that is unwritable AND already has scan history sitting in that
+ * temp fallback is not specially detected here and would read as "never
+ * scanned" — an accepted, narrow gap (unwritable project directories are
+ * already an edge case `status`/`dashboard` do not otherwise treat
+ * specially), not a claim that this covers every path `openDatabase` can
+ * choose.
  */
 function buildProjectSnapshot(projectPath) {
-  const { db } = openDatabase({ projectPath });
+  const hasExistingDb = existsSync(join(projectPath, '.guardian', 'guardian.db'));
+  const { db } = openDatabase(hasExistingDb ? { projectPath } : { projectPath, inMemory: true });
   try {
     runMigrations(db);
     const storage = new Storage(db);

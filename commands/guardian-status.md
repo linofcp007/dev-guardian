@@ -4,7 +4,7 @@ description: Project health dashboard — latest scans, deltas, baseline, expiri
 
 Show the **current health** of the project in one screen. Read-only — no scan runs, no mutation.
 
-Run `node cli/dev-guardian.mjs status --project .` and show its output **verbatim** — that one screen is the deterministic source of truth (a single query pass over `.guardian/guardian.db`), not improvised here. It already covers:
+Run `node "${CLAUDE_PLUGIN_ROOT}/cli/dev-guardian.mjs" status --project .` and show its output **verbatim** — that one screen is the deterministic source of truth (a single query pass over `.guardian/guardian.db`), not improvised here. It already covers:
 
 1. **Latest scan** — when, what type, how long it took.
 2. **Risk score and band**, carrying a coverage caveat whenever the scan behind it was partial.

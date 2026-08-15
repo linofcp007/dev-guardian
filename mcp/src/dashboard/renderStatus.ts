@@ -57,11 +57,12 @@ const BAND_CODE: Record<'low' | 'medium' | 'high' | 'critical', string> = {
   critical: '1;31', // bold red
 };
 
-const SEVERITY_CODE: Record<'critical' | 'high' | 'medium' | 'low', string> = {
+const SEVERITY_CODE: Record<'critical' | 'high' | 'medium' | 'low' | 'info', string> = {
   critical: '1;31',
   high: '31',
   medium: '33',
   low: '34',
+  info: '90',
 };
 
 export function renderStatus(snapshot: DashboardSnapshot, opts: { color: boolean }): string {
@@ -162,6 +163,19 @@ function formatDuration(durationSeconds: number | null, status: string): string 
  * snapshot (`snapshot.ts` derives both from the same `coverage.level`), but
  * each renderer here honours the contract of the field it was given, rather
  * than cross-deriving from a sibling.
+ *
+ * **The "N scanners missing" clause only when N > 0** (coordinator review,
+ * Important). `snapshot.ts`'s `cveGap` can put coverage into `'partial'`
+ * with `missing_tools` genuinely empty — no scanner failed to run, there is
+ * simply no `deps`/`security_full` scan anywhere in this project's history to
+ * source CVE data from. Counting tools unconditionally then printed the
+ * self-contradicting "⚠ partial coverage — 0 scanners missing", which reads
+ * as "this warning is noise" — the opposite of what a real coverage gap
+ * should say. When there is nothing to count, this names the gap instead,
+ * from `coverage.omitted_categories` — the same field `missingLine` already
+ * uses for its own "what these numbers do not contain" clause — so the two
+ * lines never disagree about what's missing, only about whether a tool is to
+ * blame for it.
  */
 function renderRiskLine(
   risk: DashboardSnapshot['risk'],
@@ -172,8 +186,10 @@ function renderRiskLine(
   let caveat = '';
   if (risk.coverage_caveat) {
     const n = coverage.missing_tools.length;
-    const noun = n === 1 ? 'scanner' : 'scanners';
-    caveat = `   ${paint(`⚠ partial coverage — ${n} ${noun} missing`, '33', color)}`;
+    const text = n > 0
+      ? `⚠ partial coverage — ${n} ${n === 1 ? 'scanner' : 'scanners'} missing`
+      : `⚠ partial coverage — ${coverage.omitted_categories.join(', ')} findings are NOT in these numbers`;
+    caveat = `   ${paint(text, '33', color)}`;
   }
   return `  RISK  ${cluster}${caveat}`;
 }
@@ -183,11 +199,19 @@ function renderRiskLine(
 // ---------------------------------------------------------------------------
 
 /**
- * Unlike CVES below, OPEN always prints all four severity columns, even at
+ * Unlike CVES below, OPEN always prints every severity column, even at
  * zero — design §6's explicit exception: "OPEN with a zero total prints,
- * because 'zero open findings' is the answer the user came for." `info`
- * findings are still counted in `total`; they are just never their own
- * column, matching the design mock in §6.
+ * because 'zero open findings' is the answer the user came for."
+ *
+ * **`info` has its own column too** (coordinator review, Minor). It used to
+ * be counted in `findings.total` but never shown, so a reader could see
+ * "2 crit 2 high 1 med 2 low" beside a total of 8 with the arithmetic
+ * visibly one short — the HTML view never had this gap, since `severityBar`
+ * (`report/htmlTheme.ts`) always includes `info`. Showing it here, rather
+ * than excluding it from the total, keeps `findings.total` meaning the same
+ * count everywhere it is used (including `risk.components.findings.
+ * open_findings`) instead of inventing a terminal-only subset total that
+ * would then disagree with the very field it is computed from.
  */
 function renderOpenLine(findings: FindingsSummary, color: boolean): string {
   const s = findings.by_severity;
@@ -196,6 +220,7 @@ function renderOpenLine(findings: FindingsSummary, color: boolean): string {
     paint(`${s.high} high`, SEVERITY_CODE.high, color),
     paint(`${s.medium} med`, SEVERITY_CODE.medium, color),
     paint(`${s.low} low`, SEVERITY_CODE.low, color),
+    paint(`${s.info} info`, SEVERITY_CODE.info, color),
   ];
   return `  OPEN         ${parts.join('   ')}          ${findings.total}`;
 }

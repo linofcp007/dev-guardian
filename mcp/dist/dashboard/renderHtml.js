@@ -116,13 +116,29 @@ function riskSection(snapshot) {
 // (not a footnote): present only when coverage is partial, naming both the
 // missing tools and what the numbers therefore do not contain.
 // ---------------------------------------------------------------------------
+/**
+ * **The "<tools> did not run this scan" clause only when there ARE missing
+ * tools** (coordinator review, Important). `snapshot.ts`'s `cveGap` can put
+ * coverage into `'partial'` with `missing_tools` genuinely empty — no
+ * scanner failed to run; there is simply no `deps`/`security_full` scan
+ * anywhere in this project's history to source CVE data from. Rendering the
+ * "did not run this scan" clause unconditionally left an empty subject
+ * ("` did not run this scan —`") that also misattributed the cause. When
+ * there is nothing to name, this states only the consequence — from
+ * `coverage.omitted_categories`, exactly as the non-empty branch already
+ * does for its own second half — rather than claiming something failed to
+ * run when nothing did.
+ */
 function coverageBanner(coverage) {
     if (coverage.level !== 'partial')
         return null;
-    const tools = coverage.missing_tools.map((t) => escapeHtml(t)).join(', ');
     const categories = coverage.omitted_categories.map((c) => escapeHtml(c)).join(', ');
+    const message = coverage.missing_tools.length > 0
+        ? `${coverage.missing_tools.map((t) => escapeHtml(t)).join(', ')} did not run this scan — ` +
+            `${categories} findings are NOT in these numbers.`
+        : `${categories} findings are NOT in these numbers.`;
     return `<div class="guardian-coverage-banner" role="alert" style="border:1px solid #FFD700;background:rgba(255,215,0,0.12);border-radius:8px;padding:12px 16px;margin:1em 0;">
-  <strong>⚠ Partial coverage.</strong> ${tools} did not run this scan — ${categories} findings are NOT in these numbers.
+  <strong>⚠ Partial coverage.</strong> ${message}
 </div>`;
 }
 // ---------------------------------------------------------------------------

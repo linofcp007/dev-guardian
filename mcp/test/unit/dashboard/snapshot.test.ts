@@ -375,6 +375,26 @@ describe('buildSnapshot', () => {
     db.close();
   });
 
+  // fix-round-3, Minor 5 (coordinator review): mutating `||` to `??` on this
+  // exact line leaves the full suite green, because every existing
+  // bot_configured fixture uses {false, false} (both falsy — `??` and `||`
+  // agree) or omits the field entirely. `??` only falls through on
+  // null/undefined, never on `false`, so {renovate: false, dependabot: true}
+  // is the one shape where the two operators diverge: `false || true` is
+  // `true` (correctly configured, no penalty); `false ?? true` is `false`
+  // (WRONGLY unconfigured — `false` is not nullish — a false 6-point
+  // penalty). The code is already correct; this closes the coverage gap.
+  it('treats ANY one bot configured as configured — {renovate:false, dependabot:true} must not be penalised', () => {
+    const { storage, db } = fresh();
+    completedScan(storage, '/p', {
+      scan_type: 'deps',
+      meta: { bot_configured: { renovate: false, dependabot: true } },
+    });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.risk.components.compliance).toEqual({ score: 0, policies_missing: 0 });
+    db.close();
+  });
+
   it('leaves compliance signals at "no penalty" when this project has no compliance/deps scan at all', () => {
     // The other half of finding 1: an absent signal must stay "not
     // measured, no penalty" (risk_score's own accepted fallback), never a

@@ -18,9 +18,11 @@
 
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import {
+  mkdtempSync, mkdirSync, rmSync, existsSync, readdirSync, readFileSync, renameSync, writeFileSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Seeding-only imports, straight from src (TypeScript), exactly like
@@ -406,8 +408,20 @@ describe('dev-guardian dashboard — repeated runs leave no locked database behi
     // "A user actually hits this" — regenerating the dashboard after a new
     // scan, or checking `status` right after `dashboard`, all against the
     // SAME project's database within moments of each other.
+    //
+    // Seeded with a real completed scan FIRST (fix-round-3, Important 3: a
+    // genuinely read-only open): once `status`/`dashboard` stopped creating
+    // `.guardian/guardian.db` for a project that does not already have one
+    // (see "genuinely read-only" below), running them against a still-empty
+    // `dir` would never produce a database file at all, and this test's own
+    // rename-based lock check would have nothing to open. Seeding first makes
+    // this test's premise — a database that already exists and is repeatedly
+    // reopened — match what it is actually checking (no locked handle left
+    // behind), and is the realistic shape anyway: nobody regenerates a
+    // dashboard for a project with no data.
     const dir = mkdtempSync(join(tmpdir(), 'guardian-dash-lock-'));
     try {
+      seedCompletedScan(dir);
       const out1 = join(dir, 'd1.html');
       const r1 = runCli(['dashboard', '--project', dir, '--out', out1, '--no-open']);
       expect(r1.status).toBe(0);
@@ -494,6 +508,136 @@ describe('dev-guardian status — a migrated-but-missing-table database is refus
       renameSync(moved, dbPath);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* fix-round-3, Important 3: genuinely read-only — no db file created */
+/* ------------------------------------------------------------------ */
+
+describe('dev-guardian status / dashboard — genuinely read-only: no database is created for a project that has none', () => {
+  // Before this fix, `buildProjectSnapshot` called `openDatabase({
+  // projectPath })` unconditionally, which — on a directory with no
+  // `.guardian/guardian.db` yet — creates one (`ensureDir` + `runMigrations`,
+  // an empty ~143 KB file). That contradicted the documented promise in
+  // three places at once: `commands/guardian-status.md` ("Read-only — no
+  // scan runs, no mutation"), `README.md`, and this CLI's own --help text
+  // ("Read-only: never runs a scan, never mutates the database"). Reproduced
+  // directly before this fix: `before: [] / after: ['.guardian']`.
+
+  it('status creates nothing on a fresh, empty directory — not even .guardian/', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'guardian-dash-readonly-status-'));
+    try {
+      expect(readdirSync(dir)).toEqual([]);
+
+      const r = runCli(['status', '--project', dir]);
+
+      expect(r.status).toBe(0);
+      expect(r.stderr).toBe('');
+      expect(r.stdout).toMatch(/dev-guardian scan/);
+      // The load-bearing assertion: the directory is EXACTLY as empty as it
+      // started. Not just "no guardian.db" — nothing at all, so a wrong
+      // implementation that creates `.guardian/` but defers the db file
+      // itself (e.g. only `ensureDir`, no `runMigrations`) still fails this.
+      expect(readdirSync(dir)).toEqual([]);
+      expect(existsSync(join(dir, '.guardian'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('dashboard creates nothing but the report it was explicitly told to write — no .guardian/guardian.db', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'guardian-dash-readonly-dashboard-'));
+    try {
+      const out = join(dir, 'dash.html');
+      const r = runCli(['dashboard', '--project', dir, '--out', out, '--no-open']);
+
+      expect(r.status).toBe(0);
+      expect(r.stderr).toBe('');
+      // The report itself is the one file the user explicitly asked this
+      // command to write via --out — that is not a violation of read-only
+      // (design doc §1 is about the DATABASE never being mutated), and this
+      // assertion is what discriminates the two: the requested output exists,
+      // the database it was never told to create does not.
+      expect(existsSync(out)).toBe(true);
+      expect(existsSync(join(dir, '.guardian'))).toBe(false);
+      expect(readdirSync(dir).sort()).toEqual(['dash.html']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still opens the real, existing database (not an in-memory stand-in) once one is already there', () => {
+    // The other half of the same fix: the in-memory fallback must trigger
+    // ONLY when there is genuinely no database yet — a project that HAS
+    // scan history must keep reading it, not silently show "never scanned"
+    // because an in-memory database is always empty. Reuses this file's own
+    // `seedCompletedScan` (real findings, via `openDatabase` directly) so a
+    // regression here — the detection check inverted, or always taking the
+    // in-memory branch — would show up as the wrong output, not just a
+    // missing file.
+    const dir = mkdtempSync(join(tmpdir(), 'guardian-dash-readonly-realdb-'));
+    try {
+      seedCompletedScan(dir);
+      const dbSizeBefore = readFileSync(join(dir, '.guardian', 'guardian.db')).length;
+
+      const r = runCli(['status', '--project', dir]);
+
+      expect(r.status).toBe(0);
+      expect(r.stdout).not.toMatch(/No scan yet/);
+      expect(r.stdout).toMatch(/1 crit/);
+      // The database that was already there is untouched, not replaced —
+      // still present, same non-trivial size (a fresh in-memory swap-in
+      // would have to have ignored it entirely to show real findings, but
+      // this also guards against a subtler bug: opening the real file AND
+      // somehow truncating/re-migrating over it).
+      const dbSizeAfter = readFileSync(join(dir, '.guardian', 'guardian.db')).length;
+      expect(dbSizeAfter).toBeGreaterThan(0);
+      expect(dbSizeAfter).toBe(dbSizeBefore);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* fix-round-3, Minor 6: the root/home guard the MCP tools already have */
+/* ------------------------------------------------------------------ */
+
+describe('dev-guardian status / dashboard — the root/home guard every MCP tool already has', () => {
+  // mcp/src/platform/projectPath.ts's own resolveProjectPath (every MCP
+  // tool's project-path resolver) refuses a filesystem root or the user's
+  // home directory outright. cli/dev-guardian.mjs's own resolveProjectOrExit
+  // — shared by scan/baseline/status/dashboard — checked existence and
+  // directory-ness only, so the identical input that refuses through an MCP
+  // host proceeded here (and, before the fix above, could have created
+  // `.guardian/` at the filesystem root or straight in $HOME). Same fixture
+  // technique as `platform/projectPath.test.ts`'s own "rejects the
+  // filesystem root" / "rejects the user-home root" tests, so the two guards
+  // are proven to agree, not just independently plausible.
+
+  it('exits 3 naming --project when it is the filesystem root', () => {
+    const root = parse(process.cwd()).root;
+    const r = runCli(['status', '--project', root]);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/--project/);
+  });
+
+  it('exits 3 naming --project when it is the user home directory', () => {
+    const r = runCli(['status', '--project', homedir()]);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/--project/);
+  });
+
+  it('still accepts a real subdirectory of home — the guard is not over-broad', () => {
+    const sub = mkdtempSync(join(homedir(), 'guardian-dash-homesub-'));
+    try {
+      const r = runCli(['status', '--project', sub]);
+      expect(r.status).toBe(0);
+      expect(r.stderr).toBe('');
+    } finally {
+      rmSync(sub, { recursive: true, force: true });
     }
   });
 });

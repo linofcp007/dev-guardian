@@ -65,3 +65,53 @@ describe('risk_score — public behaviour is unchanged by the extraction', () =>
     db.close();
   });
 });
+
+/**
+ * fix-round-3, Minor 5 (coordinator review): `dependencyBotConfigured =
+ * Boolean(bot.renovate || bot.dependabot)` (riskScore.ts:66) had no test
+ * that distinguishes `||` from `??`. Mutating it leaves the whole suite
+ * green, because every existing bot_configured fixture anywhere in the repo
+ * uses {false, false} (both falsy — the two operators agree) or omits the
+ * field entirely. `??` only falls through on null/undefined, never on
+ * `false`, so {renovate: false, dependabot: true} is the one input shape
+ * where `false || true` (true, correctly configured) and `false ?? true`
+ * (false, WRONGLY unconfigured, since `false` is not nullish) diverge. The
+ * code is already correct — this closes the coverage gap, not a live defect.
+ */
+function seedDepsOnly(botConfigured: { renovate: boolean; dependabot: boolean }) {
+  const db = new Database(':memory:');
+  runMigrations(db);
+  const storage = new Storage(db);
+  const scanId = 'char-scan-bot-1';
+  storage.scans.insert({
+    scan_id: scanId, scan_type: 'deps', project_path: '/p', tree_hash: 'h',
+  });
+  storage.scans.finalize({
+    scan_id: scanId, status: 'completed', tools_run: [], missing_tools: [],
+    meta: { bot_configured: botConfigured },
+  });
+  return { storage, db };
+}
+
+describe('risk_score — dependency-bot `||` regression coverage', () => {
+  it('treats ANY one bot configured as configured — {renovate:false, dependabot:true} must not be penalised', async () => {
+    const { storage, db } = seedDepsOnly({ renovate: false, dependabot: true });
+    const mod = TOOLS.find((t) => t.name === 'risk_score');
+    expect(mod).toBeTruthy();
+    const res = await mod?.handler({}, { storage } as never);
+    expect(res).toEqual({
+      ok: true,
+      score: 8,                       // 0 findings + 0 cves + 0 compliance + 8 no-baseline
+      band: 'low',
+      components: {
+        findings: { score: 0, open_findings: 0 },
+        cves: { score: 0, active_cves: 0 },
+        compliance: { score: 0, policies_missing: 0 },
+        baseline: { score: 8, has_active_baseline: false },
+      },
+      recommended_next_action:
+        'Set a baseline with set_baseline so diff_scans can track regressions.',
+    });
+    db.close();
+  });
+});

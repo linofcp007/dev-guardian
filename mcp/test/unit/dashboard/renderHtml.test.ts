@@ -92,6 +92,28 @@ describe('renderDashboard', () => {
     expect(visible).toMatch(/secrets/);
   });
 
+  // fix-round-3, Important 2 (coordinator review): Task 3 folded the
+  // CVE-source gap into coverage.level/omitted_categories, so a project can
+  // be 'partial' with missing_tools genuinely EMPTY — no scanner failed to
+  // run; there is simply no deps/security_full scan in this project's
+  // history to source CVE data from. Before this fix, the banner's subject
+  // was ALWAYS `${tools} did not run this scan`, so an empty missing_tools
+  // rendered "⚠ Partial coverage.  did not run this scan — …" — an empty
+  // subject that also claimed something failed to run when nothing did. No
+  // fixture anywhere paired empty missing_tools with a non-empty
+  // omitted_categories, which is why nothing caught it.
+  it('names the omitted categories, without an empty "did not run this scan" subject, when the coverage gap has no missing tool', () => {
+    const html = renderDashboard(snap({
+      coverage: { level: 'partial', tools_run: ['gitleaks'],
+        missing_tools: [], omitted_categories: ['container and dependency'] },
+    }));
+    const visible = html.replace(/<script type="application\/json"[\s\S]*?<\/script>/g, '');
+    expect(visible).toMatch(/guardian-coverage-banner/);
+    expect(visible).toMatch(/container and dependency/);
+    expect(visible).toMatch(/NOT in these numbers/);
+    expect(visible).not.toMatch(/did not run this scan/);
+  });
+
   it('has no coverage banner when coverage is full', () => {
     // Stripped for the same reason and to match the pair above, though this
     // specific assertion was never hollow: 'guardian-coverage-banner' is a

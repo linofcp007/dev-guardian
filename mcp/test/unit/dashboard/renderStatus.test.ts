@@ -41,6 +41,33 @@ describe('renderStatus', () => {
     expect(out).toMatch(/RISK.*partial coverage — 2 scanners missing/);
   });
 
+  // fix-round-3, Important 2 (coordinator review): Task 3 folded the
+  // CVE-source gap into coverage.level/omitted_categories, so a project can
+  // be 'partial' with missing_tools genuinely EMPTY (a secrets-only or
+  // SAST-only project, or a new project whose first scan wasn't
+  // deps-flavoured — no scanner failed, there is simply no deps/security_full
+  // scan in this project's history to source CVE data from). Before this
+  // fix, the RISK line's caveat unconditionally counted missing_tools,
+  // producing the self-contradicting "⚠ partial coverage — 0 scanners
+  // missing" — a warning that denies itself. No fixture anywhere paired
+  // empty missing_tools with a non-empty omitted_categories, which is why
+  // nothing caught it.
+  it('names the omitted categories, not a self-contradicting "0 scanners missing", when the coverage gap has no missing tool', () => {
+    const out = renderStatus(snap({
+      coverage: { level: 'partial', tools_run: ['gitleaks'],
+        missing_tools: [], omitted_categories: ['container and dependency'] },
+      risk: { score: 13, band: 'low',
+        components: { findings: { score: 5, open_findings: 2 },
+          cves: { score: 0, active_cves: 0 },
+          compliance: { score: 0, policies_missing: 0 },
+          baseline: { score: 8, has_active_baseline: false } },
+        next_action: 'Run a deps scan to measure CVE exposure.', coverage_caveat: true },
+    }), { color: false });
+    expect(out).not.toMatch(/0 scanners? missing/);
+    expect(out).toMatch(/RISK.*partial coverage.*container and dependency/);
+    expect(out).toMatch(/NOT in these numbers/i);
+  });
+
   it('omits the missing-tools line entirely when coverage is full', () => {
     const out = renderStatus(snap(), { color: false });
     expect(out).not.toMatch(/MISSING/);
@@ -81,6 +108,37 @@ describe('renderStatus', () => {
     }), { color: false });
     expect(out).toMatch(/OPEN/);
     expect(out).toMatch(/\b0\b/);
+  });
+
+  // fix-round-3, Minor 4 (coordinator review): OPEN's four severity columns
+  // used to omit `info` while `findings.total` counted it — a reader seeing
+  // "2 crit 2 high 1 med 2 low" beside a total of 8 could not reconcile the
+  // arithmetic (2+2+1+2 = 7, not 8). The HTML view never had this gap, since
+  // severityBar always shows info. This is the OPEN line's own arithmetic
+  // check: every column, plus info, must sum to the printed total.
+  it("OPEN's severity columns sum to its own printed total, including info", () => {
+    const out = renderStatus(snap({
+      findings: { total: 8,
+        by_severity: { critical: 2, high: 2, medium: 1, low: 2, info: 1 },
+        by_category: {}, by_tool: {}, hotspots: [], items: [] },
+    }), { color: false });
+    const line = out.split('\n').find((l) => l.includes('OPEN'));
+    expect(line).toBeTruthy();
+    const text = line ?? '';
+    // Each column read individually by its own label, not by position — this
+    // is what proves the five displayed severities really do add up to the
+    // trailing total, not just that all six numbers appear somewhere on the
+    // line in some order.
+    const crit = Number(/(\d+) crit/.exec(text)?.[1] ?? NaN);
+    const high = Number(/(\d+) high/.exec(text)?.[1] ?? NaN);
+    const med = Number(/(\d+) med/.exec(text)?.[1] ?? NaN);
+    const low = Number(/(\d+) low/.exec(text)?.[1] ?? NaN);
+    const info = Number(/(\d+) info/.exec(text)?.[1] ?? NaN);
+    const trailingTotal = Number(/(\d+)\s*$/.exec(text.trimEnd())?.[1] ?? NaN);
+    expect({ crit, high, med, low, info, trailingTotal }).toEqual(
+      { crit: 2, high: 2, med: 1, low: 2, info: 1, trailingTotal: 8 },
+    );
+    expect(crit + high + med + low + info).toBe(trailingTotal);
   });
 
   it('omits sections that have nothing to say', () => {
