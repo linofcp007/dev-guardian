@@ -515,6 +515,41 @@ describe('renderDashboard — the interaction script itself', () => {
     expect(() => run(doc)).not.toThrow();
   });
 
+  it('a corrupted data payload does not throw, and the already-rendered rows are untouched', () => {
+    // The more realistic failure than a missing table: the table renders
+    // fine, but JSON.parse on the payload throws (a future edit breaks the
+    // payload's shape, a browser extension mangles the page, anything). This
+    // is the direct test of the self-review's central claim: on ANY failure
+    // in this script, the user sees the already-rendered DATA, not an empty
+    // table — because the table was never the script's to build in the
+    // first place. Snapshot BEFORE running the script and compare after: if
+    // the rows were ever cleared or rebuilt, this would catch it even though
+    // "does not throw" alone would not.
+    const html = fixtureHtml();
+    const rowsBefore = extractRows(html).map((r) => ({
+      fp: r.getAttribute('data-fp'),
+      severity: r.getAttribute('data-severity'),
+    }));
+
+    const doc = new FakeDocument();
+    const tbody = new FakeElement('tbody');
+    for (const row of extractRows(html)) tbody.appendChild(row);
+    doc.register('pdk-findings-body', tbody);
+    const dataEl = new FakeElement('script');
+    dataEl.textContent = '{not valid json'; // JSON.parse throws on this
+    doc.register('guardian-data', dataEl);
+    const script = extractScript(html, 'guardian-interactions');
+    const run = new Function('document', script) as (d: FakeDocument) => void;
+
+    expect(() => run(doc)).not.toThrow();
+
+    const rowsAfter = tbody.children.map((r) => ({
+      fp: r.getAttribute('data-fp'),
+      severity: r.getAttribute('data-severity'),
+    }));
+    expect(rowsAfter).toEqual(rowsBefore);
+  });
+
   it('filtering by severity hides non-matching rows and updates the visible count', () => {
     const { doc, tbody, severitySelect } = mount(fixtureHtml());
     expect(tbody.children).toHaveLength(3);
