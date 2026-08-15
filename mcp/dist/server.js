@@ -43818,19 +43818,10 @@ function failDomain13(code, message) {
   return { ok: false, error: { code, message } };
 }
 
-// src/tools/riskScore.ts
-var tool14 = {
-  name: "risk_score",
-  title: "Risk score (0-100)",
-  description: "Compute a single 0-100 risk score from the project's persisted scans/findings/CVEs/baseline. Returns the score, a band (low/medium/high/critical), per-component breakdown, and the next action the model should recommend. Pure read.",
-  inputSchema: {},
-  handler: async (_input, ctx) => handler14(ctx)
-};
-registerToolModule(tool14);
-async function handler14(ctx) {
-  const open = ctx.storage.findings.listOpen();
+// src/dashboard/risk.ts
+function scoreRisk(input) {
   const findingsScore = clamp(
-    open.reduce((acc, f) => {
+    input.findings.reduce((acc, f) => {
       switch (f.severity) {
         case "critical":
           return acc + 10;
@@ -43847,70 +43838,48 @@ async function handler14(ctx) {
     0,
     40
   );
-  let cveScore = 0;
-  let cveCount = 0;
-  const latestDeps = findLatestOfType(ctx, ["deps", "security_full"]);
-  if (latestDeps) {
-    const cves = ctx.storage.cves.listActive(latestDeps.scan_id);
-    cveCount = cves.length;
-    cveScore = clamp(
-      cves.reduce((acc, c3) => {
-        switch (c3.severity) {
-          case "critical":
-            return acc + 8;
-          case "high":
-            return acc + 4;
-          case "medium":
-            return acc + 1.5;
-          default:
-            return acc + 0.5;
-        }
-      }, 0),
-      0,
-      30
-    );
-  }
-  let complianceScore = 0;
-  const latestCompliance = findLatestOfType(ctx, ["compliance"]);
-  let policiesMissing = 0;
-  if (latestCompliance?.meta) {
-    const m = latestCompliance.meta;
-    const docs = m.policy_documents_found ?? {};
-    for (const key of ["privacy_policy", "terms_of_service", "security_policy"]) {
-      if (docs[key] === false) policiesMissing += 1;
-    }
-    complianceScore += policiesMissing * 3;
-  }
-  const latestDepsAudit = findLatestOfType(ctx, ["deps"]);
-  if (latestDepsAudit?.meta) {
-    const m = latestDepsAudit.meta;
-    const bot = m.bot_configured ?? {};
-    if (!bot.renovate && !bot.dependabot) complianceScore += 6;
-  }
+  const cveScore = clamp(
+    input.cves.reduce((acc, c3) => {
+      switch (c3.severity) {
+        case "critical":
+          return acc + 8;
+        case "high":
+          return acc + 4;
+        case "medium":
+          return acc + 1.5;
+        default:
+          return acc + 0.5;
+      }
+    }, 0),
+    0,
+    30
+  );
+  let complianceScore = input.policies_missing * 3;
+  if (!input.dependency_bot_configured) complianceScore += 6;
   complianceScore = clamp(complianceScore, 0, 15);
   let baselineScore = 0;
-  const baseline = ctx.storage.baselines.getActive();
-  if (!baseline) {
+  if (input.baseline_set_at === null) {
     baselineScore = 8;
   } else {
-    const ageMs = Date.now() - new Date(baseline.set_at).getTime();
+    const ageMs = input.now - new Date(input.baseline_set_at).getTime();
     const days = ageMs / (24 * 60 * 60 * 1e3);
     if (days > 90) baselineScore = 15;
     else if (days > 30) baselineScore = 8;
   }
   const score = clamp(findingsScore + cveScore + complianceScore + baselineScore, 0, 100);
   const band = bandFor(score);
+  const hasActiveBaseline = input.baseline_set_at !== null;
   return {
-    ok: true,
     score: Math.round(score),
     band,
     components: {
-      findings: { score: Math.round(findingsScore), open_findings: open.length },
-      cves: { score: Math.round(cveScore), active_cves: cveCount },
-      compliance: { score: Math.round(complianceScore), policies_missing: policiesMissing },
-      baseline: { score: Math.round(baselineScore), has_active_baseline: baseline !== null }
+      findings: { score: Math.round(findingsScore), open_findings: input.findings.length },
+      cves: { score: Math.round(cveScore), active_cves: input.cves.length },
+      compliance: { score: Math.round(complianceScore), policies_missing: input.policies_missing },
+      baseline: { score: Math.round(baselineScore), has_active_baseline: hasActiveBaseline }
     },
-    recommended_next_action: recommendation(score, open.length, cveCount, baseline !== null)
+    next_action: recommendation(score, input.findings.length, input.cves.length, hasActiveBaseline),
+    coverage_caveat: input.coverage_partial
   };
 }
 function clamp(n2, min, max) {
@@ -43928,6 +43897,54 @@ function recommendation(score, open, cves, hasBaseline) {
   if (!hasBaseline) return "Set a baseline with set_baseline so diff_scans can track regressions.";
   if (open > 50) return "Run triage_findings to identify likely false positives, then suppress.";
   return "Posture is stable. Consider a periodic audit_executive to confirm.";
+}
+
+// src/tools/riskScore.ts
+var tool14 = {
+  name: "risk_score",
+  title: "Risk score (0-100)",
+  description: "Compute a single 0-100 risk score from the project's persisted scans/findings/CVEs/baseline. Returns the score, a band (low/medium/high/critical), per-component breakdown, and the next action the model should recommend. Pure read.",
+  inputSchema: {},
+  handler: async (_input, ctx) => handler14(ctx)
+};
+registerToolModule(tool14);
+async function handler14(ctx) {
+  const open = ctx.storage.findings.listOpen();
+  const latestDeps = findLatestOfType(ctx, ["deps", "security_full"]);
+  const cves = latestDeps ? ctx.storage.cves.listActive(latestDeps.scan_id) : [];
+  const latestCompliance = findLatestOfType(ctx, ["compliance"]);
+  let policiesMissing = 0;
+  if (latestCompliance?.meta) {
+    const m = latestCompliance.meta;
+    const docs = m.policy_documents_found ?? {};
+    for (const key of ["privacy_policy", "terms_of_service", "security_policy"]) {
+      if (docs[key] === false) policiesMissing += 1;
+    }
+  }
+  let dependencyBotConfigured = true;
+  const latestDepsAudit = findLatestOfType(ctx, ["deps"]);
+  if (latestDepsAudit?.meta) {
+    const m = latestDepsAudit.meta;
+    const bot = m.bot_configured ?? {};
+    dependencyBotConfigured = Boolean(bot.renovate || bot.dependabot);
+  }
+  const baseline = ctx.storage.baselines.getActive();
+  const result = scoreRisk({
+    findings: open,
+    cves,
+    policies_missing: policiesMissing,
+    dependency_bot_configured: dependencyBotConfigured,
+    baseline_set_at: baseline ? baseline.set_at : null,
+    coverage_partial: false,
+    now: Date.now()
+  });
+  return {
+    ok: true,
+    score: result.score,
+    band: result.band,
+    components: result.components,
+    recommended_next_action: result.next_action
+  };
 }
 function findLatestOfType(ctx, types) {
   const history = ctx.storage.scans.listHistory(50);
