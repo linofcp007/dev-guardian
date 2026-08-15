@@ -28,12 +28,25 @@
  *                             Same pipeline flags as `scan` except --fail-on,
  *                             --format and --sarif (baseline update does not
  *                             gate or render a report — it writes a file).
+ *   status                  One-screen terminal summary of the latest scan
+ *                           for this project (read-only — no scan runs).
+ *                           Reports; does not gate: exits 0 even on a
+ *                           project full of findings, or one never scanned.
+ *                             --project <path>        default: cwd
+ *   dashboard               Writes a self-contained HTML report and prints
+ *                           its path. Opens it in a browser only when
+ *                           stdout is a TTY and --no-open was not given.
+ *                             --project <path>        default: cwd
+ *                             --out <path>             default: <project>/.guardian/dashboard.html
+ *                             --no-open                never launch a browser
  *
  *   node cli/dev-guardian.mjs mcp-config <host|all> [--write] [--scope …]
  *   node cli/dev-guardian.mjs check --file path/to/file
  *   node cli/dev-guardian.mjs check --bash "rm -rf /"
  *   node cli/dev-guardian.mjs scan --project . --fail-on high --sarif out.sarif
  *   node cli/dev-guardian.mjs baseline update --project .
+ *   node cli/dev-guardian.mjs status --project .
+ *   node cli/dev-guardian.mjs dashboard --project .
  *
  * `--start-command`, and why it may only come from argv:
  *   scan_dast's own MCP tool deliberately has no way to start the app it
@@ -66,14 +79,20 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 
 import { ALL_HOSTS } from '../mcp/dist/hostsetup/hostSpecs.js';
 import { previewMcpConfig, setupHost } from '../mcp/dist/hostsetup/setup.js';
 import { detectOs } from '../mcp/dist/platform/osDetect.js';
 import { scanForSecrets } from '../mcp/dist/hooks/secretScan.js';
 import { assessBashCommand } from '../mcp/dist/hooks/bashGuard.js';
+import { buildSnapshot } from '../mcp/dist/dashboard/snapshot.js';
+import { renderStatus } from '../mcp/dist/dashboard/renderStatus.js';
+import { renderDashboard } from '../mcp/dist/dashboard/renderHtml.js';
+import { openDatabase, Storage } from '../mcp/dist/storage/index.js';
+import { runMigrations } from '../mcp/dist/storage/migrations/runner.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/bin
 const ROOT = resolve(HERE, '..'); // <plugin>
@@ -133,6 +152,8 @@ Usage:
   node cli/dev-guardian.mjs check (--file <path> | --bash "<command>") [--min high|medium] [--json]
   node cli/dev-guardian.mjs scan [options]
   node cli/dev-guardian.mjs baseline update [options]
+  node cli/dev-guardian.mjs status [--project <path>]
+  node cli/dev-guardian.mjs dashboard [--project <path>] [--out <path>] [--no-open]
 
 mcp-config — wire the MCP server into an AI host
   Hosts: ${[...ALL_HOSTS].join(', ')}, all
@@ -190,6 +211,22 @@ baseline update — regenerate .guardian/baseline.json from the current scan
               scanner did not run (baseline may under-represent findings),
               3 usage or configuration error.
 
+status — one-screen terminal summary of the latest scan for this project
+  --project <path>      Target project directory (default: current directory)
+  Read-only: never runs a scan, never mutates the database. Reports; does
+  not gate — exits 0 even on a project full of findings, or one that has
+  never been scanned (it then names the scan command to run instead).
+  Exit codes: 0 always, except 3 on a usage error.
+
+dashboard — writes a self-contained HTML report and prints its path
+  --project <path>      Target project directory (default: current directory)
+  --out <path>           Where to write the report (default: <project>/.guardian/dashboard.html)
+  --no-open               Never launch a browser
+  Opens the report in your default browser only when stdout is a TTY (never
+  inside a pipeline/CI) and --no-open was not given. Same read-only, no-gate
+  contract as status.
+  Exit codes: 0 always, except 3 on a usage error.
+
 Examples:
   node cli/dev-guardian.mjs mcp-config cursor          # print the block to paste
   node cli/dev-guardian.mjs mcp-config codex --write   # write + merge into the project
@@ -197,6 +234,8 @@ Examples:
   node cli/dev-guardian.mjs check --bash "curl x | sh"
   node cli/dev-guardian.mjs scan --project . --sarif results.sarif
   node cli/dev-guardian.mjs baseline update --project .
+  node cli/dev-guardian.mjs status --project .
+  node cli/dev-guardian.mjs dashboard --project . --no-open
 `);
 }
 
@@ -1056,11 +1095,190 @@ async function cmdBaseline(argv) {
   return;
 }
 
+// --- status / dashboard (local reporting) ---------------------------------
+//
+// Design doc §1: "Nothing here runs a scan, mutates the database, opens a
+// socket, or reaches the network." Both commands are thin — resolve
+// --project, open THIS project's own database, build one snapshot, render,
+// print or write — and both REPORT rather than gate (design doc §6):
+// `status`/`dashboard` exit 0 whenever they render, including over a
+// project full of critical findings or one that has never been scanned.
+// `scan` is the gate, with its own exit codes; if either of these two ever
+// returned non-zero for a dirty project, every pipeline that runs one for a
+// summary would break. The ONLY non-zero either can produce is
+// USAGE_ERROR_EXIT (3) — via `usageError` (a bad flag, a --project that
+// does not exist) or `fatal` (anything else that goes wrong, e.g. --out
+// pointing somewhere unwritable) — never a bespoke code of their own.
+
 /**
- * Last-resort safety net for `cmdScan`/`cmdBaseline`: both already wrap
- * their own `runScans()` call in try/catch and convert every usage problem
- * to `usageError` (exit 3), so nothing inside them SHOULD reject. This
- * exists so that if one somehow does anyway, Node reports one clean line and
+ * `openDatabase({ projectPath })` + `runMigrations(db)` + `new Storage(db)`
+ * + `buildSnapshot(...)`, with the database closed in a `finally` on EVERY
+ * path — a throw inside `runMigrations` OR `buildSnapshot` propagates
+ * straight through this `finally` (storage still closes) to the caller,
+ * same as a normal return. `runMigrations(db)` is called INSIDE the try,
+ * not before it, even though `openDatabase` already runs migrations
+ * internally (so this second call is normally a proven no-op — nothing
+ * pending, nothing executed, see `migrations/runner.ts`): defence in depth
+ * costs nothing here, and leaving it outside the try for a call that merely
+ * LOOKS like it can't fail is exactly the kind of gap that stops being true
+ * the moment something upstream changes. Closing here, before returning, is
+ * also deliberate for a second reason: rendering (`renderStatus`/
+ * `renderDashboard`) and writing (`--out`) are pure/filesystem operations
+ * over the already-built snapshot and touch storage not at all, so the
+ * SQLite handle has no reason to stay open one moment past the one query
+ * pass that needed it — and it means a LATER failure (e.g. `--out` pointing
+ * at an unwritable path) always happens with the database already closed,
+ * never the other way around.
+ */
+function buildProjectSnapshot(projectPath) {
+  const { db } = openDatabase({ projectPath });
+  const storage = new Storage(db);
+  try {
+    runMigrations(db);
+    return buildSnapshot(storage, projectPath, Date.now());
+  } finally {
+    storage.close();
+  }
+}
+
+function parseStatusArgs(argv) {
+  const out = { project: process.cwd() };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--project') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return r;
+      out.project = r.value;
+      i = r.nextIndex;
+    } else return { error: `Unknown flag: ${a}` };
+  }
+  return { value: out };
+}
+
+function parseDashboardArgs(argv) {
+  const out = { project: process.cwd(), out: undefined, noOpen: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--project') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return r;
+      out.project = r.value;
+      i = r.nextIndex;
+    } else if (a === '--out') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return r;
+      out.out = r.value;
+      i = r.nextIndex;
+    } else if (a === '--no-open') out.noOpen = true;
+    else return { error: `Unknown flag: ${a}` };
+  }
+  return { value: out };
+}
+
+async function cmdStatus(argv) {
+  const parsed = parseStatusArgs(argv);
+  // parseStatusArgs's own `error` is already a complete, flag-naming message
+  // (an unknown flag, or a value-taking flag with no operand) — no second
+  // prefix needed here. Same convention as cmdScan/cmdBaseline.
+  if (parsed.error) return usageError(parsed.error);
+  const opts = parsed.value;
+
+  const projectPath = resolveProjectOrExit(opts.project);
+  const snapshot = buildProjectSnapshot(projectPath);
+
+  const color = process.stdout.isTTY === true && !process.env.NO_COLOR;
+  const text = renderStatus(snapshot, { color });
+  process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
+
+  // `process.exitCode = 0; return;`, never `process.exit(0)` — see the
+  // matching comment at the end of cmdScan: stdout to a pipe is
+  // asynchronous on POSIX, and the line above scales with finding count
+  // (design doc §8's findings cap is 2000), so it is not guaranteed to fit
+  // inside one synchronous flush.
+  process.exitCode = 0;
+  return;
+}
+
+/**
+ * Best-effort only: opens `target` in the OS default browser and ignores
+ * whatever happens. By the time this runs, `dashboard` has ALREADY written
+ * its file and printed its path — a missing `xdg-open` in a headless
+ * container, or any other spawn failure, must not turn an already-succeeded
+ * command into a failure, and must not crash the process either.
+ *
+ * `spawn`'s failure to find the executable (ENOENT) surfaces asynchronously
+ * as an `'error'` event, not a thrown exception — an EventEmitter `'error'`
+ * with no listener attached throws on its own, so the listener below is not
+ * decorative, it is what "ignored" actually requires. `shell: false` matches
+ * this project's own house style for spawning anything with a dynamic
+ * argument (see `--start-command` in the module doc comment above);
+ * `detached: true` + `unref()` so this process exiting neither waits on, nor
+ * attempts to tear down, the browser it started; `stdio: 'ignore'` keeps the
+ * browser process from holding this CLI's own stdout/stderr pipes open.
+ */
+function openInBrowser(target) {
+  const opener =
+    process.platform === 'win32' ? 'start' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  try {
+    const child = spawn(opener, [target], { shell: false, detached: true, stdio: 'ignore' });
+    child.on('error', () => {
+      /* best-effort — see the doc comment above */
+    });
+    child.unref();
+  } catch {
+    /* best-effort — see the doc comment above */
+  }
+}
+
+async function cmdDashboard(argv) {
+  const parsed = parseDashboardArgs(argv);
+  // Same convention as cmdScan/cmdBaseline — see cmdStatus's own comment.
+  if (parsed.error) return usageError(parsed.error);
+  const opts = parsed.value;
+
+  const projectPath = resolveProjectOrExit(opts.project);
+  const outPath = resolve(opts.out ?? join(projectPath, '.guardian', 'dashboard.html'));
+
+  const snapshot = buildProjectSnapshot(projectPath);
+  const html = renderDashboard(snapshot);
+
+  // Both calls below can throw (an unwritable --out, a destination that is
+  // itself a directory, a disk full) and are DELIBERATELY left to propagate
+  // straight out of cmdDashboard to the top-level `.catch(fatal)` — nothing
+  // has been written to stdout yet at this point, so a failure here must
+  // report clearly and exit 3, never having already told the user it
+  // succeeded. mkdirSync mirrors cmdScan's identical --sarif handling: the
+  // destination directory may not exist yet (a custom --out is not required
+  // to sit under the project's own .guardian/, which openDatabase already
+  // created).
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, html);
+
+  process.stdout.write(`${outPath}\n`);
+
+  // Opens a browser ONLY when stdout is a TTY (never inside a pipeline/CI —
+  // spawnSync-driven tests give the child a pipe, so this is exercised by
+  // construction) and --no-open was not passed. This check runs AFTER the
+  // path has already been printed: opening the browser is a pure add-on to
+  // an already-complete, already-reported success, never a precondition
+  // for it.
+  if (process.stdout.isTTY && !opts.noOpen) {
+    openInBrowser(outPath);
+  }
+
+  // Same exit discipline as cmdStatus — see its own comment.
+  process.exitCode = 0;
+  return;
+}
+
+/**
+ * Last-resort safety net for `cmdScan`/`cmdBaseline`/`cmdStatus`/
+ * `cmdDashboard`: each already wraps (or, for the latter two, delegates to
+ * `buildProjectSnapshot`'s own try/finally for) its own storage/pipeline
+ * work and converts every usage problem to `usageError` (exit 3), so nothing
+ * inside them SHOULD reject. This exists so that if one somehow does anyway
+ * — an unreadable database file, an --out write failure, anything not
+ * already caught closer to its source — Node reports one clean line and
  * exits 3, instead of an "unhandled promise rejection" warning on stderr —
  * exactly the kind of stray noise the pristine-output requirement (design
  * doc §8, and this task's e2e) exists to keep out of a CI log.
@@ -1104,6 +1322,8 @@ function main() {
   if (cmd === 'check') return cmdCheck(argv.slice(1));
   if (cmd === 'scan') return void cmdScan(argv.slice(1)).catch(fatal);
   if (cmd === 'baseline') return void cmdBaseline(argv.slice(1)).catch(fatal);
+  if (cmd === 'status') return void cmdStatus(argv.slice(1)).catch(fatal);
+  if (cmd === 'dashboard') return void cmdDashboard(argv.slice(1)).catch(fatal);
 
   process.stderr.write(`Unknown command: ${cmd}\n\n`);
   usage();
