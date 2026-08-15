@@ -202,6 +202,48 @@ describe('dev-guardian status / dashboard — accept --flag=value, the same way 
 });
 
 /* ------------------------------------------------------------------ */
+/* fix-round-2: an EMPTY --out is a clean usage error, not a crash     */
+/* ------------------------------------------------------------------ */
+
+describe('dev-guardian dashboard — an empty --out is refused clearly, not left to crash downstream', () => {
+  // A regression fix-round-1 itself introduced: `opts.out ?? defaultPath`
+  // does not catch `''` (only `null`/`undefined`), so an empty --out used
+  // to sail past that check, resolve to `resolve('')` (the CURRENT WORKING
+  // DIRECTORY), and only fail much later when writeFileSync tried to open
+  // that directory as a file — "EISDIR: ... open '<cwd>'", naming an
+  // unrelated directory instead of the flag the user actually got wrong.
+  // Confirmed directly before this fix (both spellings): exit 3 either way,
+  // but the message pointed at a directory path, never at "--out".
+  //
+  // Both the equals form (--out=) AND the two-token form (--out '') are
+  // covered — the ORIGINAL report from fix-round-1 only reasoned about the
+  // equals form; the two-token form had the identical gap for the identical
+  // reason (takeOperand's own requireNonEmpty was not passed for --out's
+  // space form either) and was found by re-auditing every --out call site,
+  // not just the one named in review.
+
+  it('exits 3 naming --out, not a filesystem path, when --out= is empty', () => {
+    const r = runCli(['dashboard', '--project', project, '--out=', '--no-open']);
+    expect(r.status).toBe(3);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toMatch(/--out/);
+    expect(r.stderr).toMatch(/requires a value/i);
+    // The specific wrong-implementation this guards against: a message that
+    // mentions a filesystem error/path instead of the flag.
+    expect(r.stderr).not.toMatch(/EISDIR|ENOENT|cannot find/i);
+  });
+
+  it('exits 3 naming --out, not a filesystem path, when --out is given an explicit empty value (space form)', () => {
+    const r = runCli(['dashboard', '--project', project, '--out', '', '--no-open']);
+    expect(r.status).toBe(3);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toMatch(/--out/);
+    expect(r.stderr).toMatch(/requires a value/i);
+    expect(r.stderr).not.toMatch(/EISDIR|ENOENT|cannot find/i);
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* Beyond the brief: a write failure must never claim success first    */
 /* ------------------------------------------------------------------ */
 
@@ -389,6 +431,62 @@ describe('dev-guardian dashboard — repeated runs leave no locked database behi
       // keeps a subprocess from exiting promptly) holding the file open past
       // when this test expects the CLI to be done with it — that shows up
       // here as EBUSY/EPERM renaming the file on Windows, immediately.
+      const dbPath = join(dir, '.guardian', 'guardian.db');
+      expect(existsSync(dbPath)).toBe(true);
+      const moved = `${dbPath}.moved`;
+      renameSync(dbPath, moved);
+      renameSync(moved, dbPath);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* fix-round-2: regression test for the Minor fix (Storage inside try) */
+/* ------------------------------------------------------------------ */
+
+describe('dev-guardian status — a migrated-but-missing-table database is refused cleanly', () => {
+  it('exits 3 with a clear message (not a hang, not exit 0) when a required table is missing, and leaves the database file free afterward', () => {
+    // Regression test for the fix-round-1 Minor: `new Storage(db)` used to
+    // sit OUTSIDE buildProjectSnapshot's try/finally. This reproduces the
+    // exact class of database state that fix was written for: schema_meta
+    // says "fully migrated" (so runMigrations() itself sees nothing pending
+    // and does nothing — it trusts the recorded version), but a table is
+    // actually gone (hand-edited, corrupted, or a prior process crashed
+    // mid-migration). That is NOT caught by runMigrations(); it is `new
+    // Storage(db)`'s own constructor — which prepares every repo's
+    // statements immediately — that surfaces it, confirmed directly against
+    // the real dist build: `new Storage(db)` throws
+    // `Error: no such table: scans` the moment ScansRepo (the first repo
+    // Storage constructs) tries to prepare a statement against it.
+    //
+    // Built the way the coordinator's own review reproduced it: seed a
+    // normally-migrated database via `openDatabase` (same helper this file's
+    // `seedCompletedScan` already uses), drop a table directly through the
+    // storage layer's own `db.exec()` (a thin wrapper over node:sqlite's
+    // `exec`), then invoke the CLI as a real subprocess and apply the same
+    // rename-lock check "repeated runs leave no locked database behind"
+    // above already uses. That check has the identical, already-documented
+    // limitation noted there (a separate subprocess's OS handles are
+    // reclaimed on exit regardless of an explicit close() call, so it alone
+    // cannot PROVE this specific ordering fix from outside a process
+    // boundary) — it is included anyway because it is cheap, it is the
+    // exact recipe requested, and it still catches a DIFFERENT real
+    // regression class: anything that keeps this specific failure path from
+    // exiting promptly and cleanly (a hang, an orphaned descendant).
+    const dir = mkdtempSync(join(tmpdir(), 'guardian-dash-missingtable-'));
+    try {
+      const { db } = openDatabase({ projectPath: dir });
+      db.exec('DROP TABLE scans');
+      db.close();
+
+      const r = runCli(['status', '--project', dir]);
+
+      expect(r.status).toBe(3);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toMatch(/no such table/i);
+
       const dbPath = join(dir, '.guardian', 'guardian.db');
       expect(existsSync(dbPath)).toBe(true);
       const moved = `${dbPath}.moved`;

@@ -1186,12 +1186,25 @@ function parseDashboardArgs(argv) {
       i = r.nextIndex;
     } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
     else if (a === '--out') {
-      const r = takeOperand(argv, i, a);
+      // requireNonEmpty: true — fix-round-2 correction, mirroring --sarif's
+      // OWN existing treatment in parseScanArgs exactly (both call sites,
+      // not just this one). An empty --out is never a real destination
+      // (unlike --base-url's empty string, which scan_dast reads and
+      // meaningfully refuses): `resolve('')` is the cwd, and cmdDashboard
+      // would then try to writeFileSync a DIRECTORY, throwing
+      // "EISDIR: ... open '<cwd>'" — a real, non-silent exit 3, but one that
+      // names an unrelated directory instead of the flag the user actually
+      // got wrong. Refusing right here, the same way --sarif already does,
+      // gives --out the same clean, flag-naming usage error instead.
+      const r = takeOperand(argv, i, a, true);
       if (r.error) return r;
       out.out = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--out=')) out.out = a.slice('--out='.length);
-    else if (a === '--no-open') out.noOpen = true;
+    } else if (a.startsWith('--out=')) {
+      const value = a.slice('--out='.length);
+      if (isMissingOperand(value, true)) return { error: '--out requires a value' };
+      out.out = value;
+    } else if (a === '--no-open') out.noOpen = true;
     else return { error: `Unknown flag: ${a}` };
   }
   return { value: out };
