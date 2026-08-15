@@ -265,6 +265,29 @@ describe('renderSarif', () => {
     expectValidSarif(doc);
   });
 
+  it('keeps executionSuccessful: true on a GATE_FAILED verdict when coverage is still full', () => {
+    // Mutation-proven gap (task report): rewiring the implementation to
+    // `v.exitCode === 0` instead of `v.coverage === 'full'` left every other
+    // test in this suite green, because none of them exercises the
+    // combination that actually tells the two apart. GATE_FAILED with full
+    // coverage is not an edge case — it is the COMMON shape of a red build:
+    // every scanner ran, and the user's code has a real, new, blocking
+    // finding. executionSuccessful describes whether the SCAN executed
+    // successfully, not whether the gate passed; a mutant (or a future
+    // change) that conflates the two would tell GitHub Code Scanning the
+    // scan itself failed on most red builds, when what actually failed is
+    // the code under scan.
+    const v = evaluateGate(
+      input({ findings: [finding({ severity: 'critical' })], failOn: 'high' }),
+    );
+    expect(v.exitCode).toBe(CI_EXIT.GATE_FAILED); // sanity: a blocking finding, not a coverage gap
+    expect(v.coverage).toBe('full'); // sanity: every step in the default fixture ran
+    const doc = JSON.parse(renderSarif(v, PROJECT));
+    expect(doc.runs[0].invocations).toHaveLength(1);
+    expect(doc.runs[0].invocations[0].executionSuccessful).toBe(true);
+    expectValidSarif(doc);
+  });
+
   it('does not leak a generic scanner-coverage gap\'s text into SARIF (design doc §9, as amended)', () => {
     // design doc §9 (original): "SARIF carries findings, not the coverage
     // signal." As amended per review: the coarse *boolean* signal

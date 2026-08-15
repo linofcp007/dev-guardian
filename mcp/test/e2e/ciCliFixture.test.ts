@@ -207,6 +207,57 @@ describe('dev-guardian scan — usage and safety (no real scanner reached)', () 
     expect(r.stderr).toMatch(/--nope/);
   });
 
+  it('exits 3, naming the flag, when --sarif is the last token (no value)', () => {
+    // Important 1 (final-review.md). Before this fix, `argv[++i]` past the
+    // end of argv silently evaluated to `undefined`, `out.sarif` ended up
+    // `undefined`, `if (opts.sarif)` read exactly like "the flag was never
+    // passed", and the run wrote no SARIF file and exited 0 (PASS) — with
+    // nothing anywhere saying so. This is precisely what a pipeline hits
+    // parameterising the README's own `--sarif $SARIF_PATH` snippet the
+    // moment SARIF_PATH is unset: the shell drops the empty expansion
+    // entirely, leaving `--sarif` as the literal last argv token.
+    const r = runCli(['scan', '--sarif']);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/--sarif/);
+    expect(r.stderr).toMatch(/requires a value/i);
+  });
+
+  it('exits 3, not a false coverage: full, when --base-url is the last token (no value)', () => {
+    // Important 2 (final-review.md). Before this fix, the same silent
+    // `undefined` reached `runScans.ts#buildSequence`'s
+    // `opts.baseUrl !== undefined` check, dropping scan_dast from the
+    // pipeline — and because the step never ran at all, it contributed no
+    // coverage gap either, so the run reported `coverage: full` and exited
+    // 0 despite never DAST-testing anything the caller asked it to.
+    const r = runCli(['scan', '--base-url']);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/--base-url/);
+    expect(r.stderr).toMatch(/requires a value/i);
+  });
+
+  it('applies the same --base-url guard to `baseline update`, the second call site', () => {
+    // The identical bug lived at a second, independent call site
+    // (parseBaselineUpdateArgs, cli/dev-guardian.mjs:533) — guards a fix
+    // that patches parseScanArgs alone and leaves baseline update's own
+    // copy of the same mistake in place.
+    const r = runCli(['baseline', 'update', '--base-url']);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/--base-url/);
+    expect(r.stderr).toMatch(/requires a value/i);
+  });
+
+  it('gives --project the same clean, flag-naming usage error when it is the last token', () => {
+    // Bonus proof the shared helper closes this for EVERY value-taking
+    // flag, not only the two that used to fail silently: --project used to
+    // reach exit 3 only via `resolve(undefined)` throwing into the generic
+    // `fatal()` catch-all ("ugly-but-correct exit 3", per final-review.md) —
+    // a message that never named --project at all.
+    const r = runCli(['scan', '--project']);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/--project/);
+    expect(r.stderr).not.toMatch(/unexpected error/i);
+  });
+
   it('exits 3 and refuses when --start-command comes from a repo config file, naming the file and the reason', () => {
     // The pwn-request guard. A fork's pull request can edit a repository
     // file; it must never gain code execution on the runner that way. Write

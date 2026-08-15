@@ -6,8 +6,20 @@
  * This is the interchange format that lets dev-guardian findings show up as
  * inline annotations in a PR or squiggles in an editor without bespoke glue.
  *
- * Pure function: Findings + metadata in, JSON string out. No I/O.
+ * Pure function: Findings + metadata in, JSON string out. `toSarif` itself
+ * performs no I/O and is deterministic in every argument it's given. The one
+ * exception is `opts.toolVersion`'s own default, which is resolved from disk
+ * ONCE at module load (see `DEFAULT_TOOL_VERSION` below) rather than derived
+ * from any argument — fixed for the life of the process, and overridable
+ * per call via `opts.toolVersion` for a caller (e.g. a test) that needs to.
  */
+import { resolveVersion } from '../platform/version.js';
+// Resolved once per process, at module load — same "read once, reuse many
+// times" shape `server.ts` already applies to its own `SERVER_VERSION`, and
+// cheaper than re-reading two small JSON files on every `toSarif` call (the
+// interactive `report_export`/`scan_skill` tools can call this repeatedly in
+// one long-lived MCP server session).
+const DEFAULT_TOOL_VERSION = resolveVersion();
 export function toSarif(findings, opts = {}) {
     const rulesById = new Map();
     for (const f of findings) {
@@ -64,7 +76,7 @@ export function toSarif(findings, opts = {}) {
                     driver: {
                         name: opts.toolName ?? 'dev-guardian',
                         informationUri: opts.informationUri ?? 'https://github.com/linofcp007/dev-guardian',
-                        version: opts.toolVersion ?? '0.1.0',
+                        version: opts.toolVersion ?? DEFAULT_TOOL_VERSION,
                         rules: [...rulesById.values()],
                     },
                 },

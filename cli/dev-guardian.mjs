@@ -488,6 +488,49 @@ function consumeStartCommand(argv, i) {
   return argv.slice(i + 1);
 }
 
+/**
+ * The one operand-taking helper `parseScanArgs`/`parseBaselineUpdateArgs`
+ * both call for EVERY value-taking flag (`--project`, `--fail-on`,
+ * `--format`, `--sarif`, `--base-url`) — not two independent copies of the
+ * same check, one per parser, which is exactly how this bug happened in the
+ * first place: `--sarif` and `--base-url` each had their own bare
+ * `argv[++i]`, with nothing guarding the case where there is no next token.
+ *
+ * `argv[i]` is the flag itself (already matched by the caller as `a`);
+ * `argv[i + 1]` is where its value must live for the two-token form (`--x
+ * value`, as opposed to the same-token `--x=value` form, which can never hit
+ * this — its value is embedded in `a` itself, so there is nothing to look
+ * ahead for). When `--x` is the LAST token on the command line — or, for
+ * `baseUrl` specifically, an unset/mistyped CI env var expanded to nothing
+ * (`--base-url $STAGING_URL` with `STAGING_URL` empty in the shell's own
+ * eyes, so the shell drops the token entirely rather than passing an empty
+ * string) — `argv[i + 1]` is `undefined`. Every call site used to assign
+ * that `undefined` straight into `out`, indistinguishable downstream from
+ * "this flag was never passed at all": `if (opts.sarif)` is falsy either
+ * way, and `runScans.ts#buildSequence`'s `opts.baseUrl !== undefined` check
+ * drops `scan_dast` either way — both SILENT, both still `coverage: full`,
+ * exit 0. `--fail-on`/`--format` happened to escape only because something
+ * ELSE, downstream, separately rejects `undefined` too
+ * (`SEVERITIES.includes`, the `human`/`json` check) — an accident of
+ * validation order, not a guarantee, and `--project` escaped only via the
+ * ugly path of `resolve(undefined)` throwing and landing in the generic
+ * `fatal()` catch-all. Refusing right here, once, makes it a guarantee for
+ * every flag instead of a coincidence for some of them, and gives
+ * `--project` the same clean, flag-naming usage error as the rest.
+ *
+ * Returns `{ error }` — a complete message, ready for `usageError` with no
+ * second prefix needed — or `{ value, nextIndex }`, where `nextIndex` is the
+ * loop index to resume from (the consumed value token), matching the
+ * pre-increment `argv[++i]` this replaces.
+ */
+function takeOperand(argv, i, flagName) {
+  const nextIndex = i + 1;
+  if (nextIndex >= argv.length) {
+    return { error: `${flagName} requires a value` };
+  }
+  return { value: argv[nextIndex], nextIndex };
+}
+
 function parseScanArgs(argv) {
   const out = {
     project: process.cwd(),
@@ -500,21 +543,41 @@ function parseScanArgs(argv) {
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--project') out.project = argv[++i];
-    else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else if (a === '--fail-on') out.failOn = argv[++i];
-    else if (a.startsWith('--fail-on=')) out.failOn = a.slice('--fail-on='.length);
-    else if (a === '--format') out.format = argv[++i];
-    else if (a.startsWith('--format=')) out.format = a.slice('--format='.length);
-    else if (a === '--sarif') out.sarif = argv[++i];
-    else if (a.startsWith('--sarif=')) out.sarif = a.slice('--sarif='.length);
-    else if (a === '--base-url') out.baseUrl = argv[++i];
-    else if (a.startsWith('--base-url=')) out.baseUrl = a.slice('--base-url='.length);
+    if (a === '--project') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return r;
+      out.project = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
+    else if (a === '--fail-on') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return r;
+      out.failOn = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--fail-on=')) out.failOn = a.slice('--fail-on='.length);
+    else if (a === '--format') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return r;
+      out.format = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--format=')) out.format = a.slice('--format='.length);
+    else if (a === '--sarif') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return r;
+      out.sarif = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--sarif=')) out.sarif = a.slice('--sarif='.length);
+    else if (a === '--base-url') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return r;
+      out.baseUrl = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--base-url=')) out.baseUrl = a.slice('--base-url='.length);
     else if (a === '--authorized-target') out.authorizedTarget = true;
     else if (a === '--start-command') {
       out.startCommand = consumeStartCommand(argv, i);
       break;
-    } else return { error: a };
+    } else return { error: `Unknown flag: ${a}` };
   }
   return { value: out };
 }
@@ -528,15 +591,23 @@ function parseBaselineUpdateArgs(argv) {
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--project') out.project = argv[++i];
-    else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else if (a === '--base-url') out.baseUrl = argv[++i];
-    else if (a.startsWith('--base-url=')) out.baseUrl = a.slice('--base-url='.length);
+    if (a === '--project') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return r;
+      out.project = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
+    else if (a === '--base-url') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return r;
+      out.baseUrl = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--base-url=')) out.baseUrl = a.slice('--base-url='.length);
     else if (a === '--authorized-target') out.authorizedTarget = true;
     else if (a === '--start-command') {
       out.startCommand = consumeStartCommand(argv, i);
       break;
-    } else return { error: a };
+    } else return { error: `Unknown flag: ${a}` };
   }
   return { value: out };
 }
@@ -671,7 +742,10 @@ function armInterruptTeardown(getApp, getStartingApp) {
 
 async function cmdScan(argv) {
   const parsed = parseScanArgs(argv);
-  if (parsed.error) return usageError(`Unknown flag: ${parsed.error}`);
+  // parseScanArgs's own `error` is already a complete, flag-naming message
+  // (an unknown flag, or a value-taking flag with no operand) — no second
+  // prefix needed here.
+  if (parsed.error) return usageError(parsed.error);
   const opts = parsed.value;
 
   const ci = await loadCiModules();
@@ -799,7 +873,8 @@ async function cmdBaseline(argv) {
   }
 
   const parsed = parseBaselineUpdateArgs(argv.slice(1));
-  if (parsed.error) return usageError(`Unknown flag: ${parsed.error}`);
+  // Same reasoning as cmdScan's own — see the comment there.
+  if (parsed.error) return usageError(parsed.error);
   const opts = parsed.value;
 
   const ci = await loadCiModules();
@@ -865,8 +940,13 @@ async function cmdBaseline(argv) {
 
   const updated = buildBaseline(result.findings, previousFile, new Date().toISOString());
 
-  // The only write path in this whole CLI that touches the user's
-  // repository — see the module doc and the task report's self-review.
+  // The only command that writes .guardian/baseline.json — `scan` never
+  // does (see the module doc). NOT "the only write path in this whole CLI"
+  // (this comment's own stale claim, per review): `scan --sarif <path>`
+  // also writes, to a caller-chosen path that may well sit inside the
+  // repository too. What is actually true of this write, and not of
+  // --sarif's, is that it is IMPLICIT — always `.guardian/baseline.json`,
+  // never a path the caller names — where --sarif's is explicit and opt-in.
   mkdirSync(dirname(baselinePath), { recursive: true });
   writeFileSync(baselinePath, serialiseBaseline(updated));
 

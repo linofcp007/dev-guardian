@@ -2990,7 +2990,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve8.call(this, root, ref);
+      let _sch = resolve9.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3017,7 +3017,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve8(root, ref) {
+    function resolve9(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3648,7 +3648,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve8(baseURI, relativeURI, options) {
+    function resolve9(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse5(baseURI, schemelessOptions), parse5(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -3906,7 +3906,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve8,
+      resolve: resolve9,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -7946,12 +7946,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve8, reject) {
+        return new Promise(function(resolve9, reject) {
           isexe(path6, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve8(is);
+              resolve9(is);
             }
           });
         });
@@ -8017,27 +8017,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve8, reject) => {
+      const step = (i2) => new Promise((resolve9, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve8(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve9(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path6.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve8(subStep(p, i2, 0));
+        resolve9(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve8, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve9, reject) => {
         if (ii === pathExt.length)
-          return resolve8(step(i2 + 1));
+          return resolve9(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve8(p + ext);
+              return resolve9(p + ext);
           }
-          return resolve8(subStep(p, i2, ii + 1));
+          return resolve9(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -9117,8 +9117,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve8, reject) => {
-        Object.assign(methods, { resolve: resolve8, reject });
+      const promise = new Promise((resolve9, reject) => {
+        Object.assign(methods, { resolve: resolve9, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -14415,11 +14415,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve8 = promise.resolve.bind(promise);
-      return { resolve: resolve8, promises };
+      const resolve9 = promise.resolve.bind(promise);
+      return { resolve: resolve9, promises };
     };
-    waitForConcurrentStreams = async ({ resolve: resolve8, promises }, subprocess) => {
-      resolve8();
+    waitForConcurrentStreams = async ({ resolve: resolve9, promises }, subprocess) => {
+      resolve9();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -34561,7 +34561,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve8) => setTimeout(resolve8, pollInterval));
+        await new Promise((resolve9) => setTimeout(resolve9, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -34578,7 +34578,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve9, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -34656,7 +34656,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve8(parseResult.data);
+            resolve9(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -34917,12 +34917,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve9, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve8, interval);
+      const timeoutId = setTimeout(resolve9, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -36244,7 +36244,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve8) => setTimeout(resolve8, pollInterval));
+      await new Promise((resolve9) => setTimeout(resolve9, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -36917,21 +36917,19 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve8) => {
+    return new Promise((resolve9) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve8();
+        resolve9();
       } else {
-        this._stdout.once("drain", resolve8);
+        this._stdout.once("drain", resolve9);
       }
     });
   }
 };
 
 // src/server.ts
-import { readFileSync as readFileSync20 } from "node:fs";
-import { dirname as dirname6, resolve as resolve7 } from "node:path";
-import { fileURLToPath as fileURLToPath5 } from "node:url";
+import { resolve as resolve8 } from "node:path";
 
 // src/gitignoreGuard.ts
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -37081,6 +37079,41 @@ function defaultDeps() {
       }
     }
   };
+}
+
+// src/platform/version.ts
+import { readFileSync as readFileSync4 } from "node:fs";
+import { dirname as dirname2, resolve } from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
+var FALLBACK_VERSION = "0.0.0";
+function readVersion(path6) {
+  try {
+    const parsed = JSON.parse(readFileSync4(path6, "utf8"));
+    return parsed.version;
+  } catch {
+    return void 0;
+  }
+}
+function resolveVersion() {
+  const here = dirname2(fileURLToPath4(import.meta.url));
+  const candidates = [
+    // .claude-plugin/plugin.json — the real release version — tried at both
+    // depths before falling back to mcp/package.json at either depth, same
+    // preference order the pre-lift server.ts-local version used.
+    resolve(here, "..", "..", ".claude-plugin", "plugin.json"),
+    // bundled (dist/server.js) / tsx dev
+    resolve(here, "..", "..", "..", ".claude-plugin", "plugin.json"),
+    // unbundled (this module's own file)
+    resolve(here, "..", "package.json"),
+    // bundled / tsx dev — mcp/package.json (standalone npm use)
+    resolve(here, "..", "..", "package.json")
+    // unbundled — mcp/package.json
+  ];
+  for (const candidate of candidates) {
+    const version2 = readVersion(candidate);
+    if (version2) return version2;
+  }
+  return FALLBACK_VERSION;
 }
 
 // src/storage/repoUtil.ts
@@ -38040,14 +38073,14 @@ import { createHash } from "node:crypto";
 import { existsSync as existsSync4, mkdirSync, accessSync, constants as constants4 } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join as join4, resolve } from "node:path";
+import { join as join4, resolve as resolve2 } from "node:path";
 
 // src/storage/migrations/runner.ts
-import { existsSync as existsSync3, readdirSync, readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname2, join as join3 } from "node:path";
-import { fileURLToPath as fileURLToPath4 } from "node:url";
+import { existsSync as existsSync3, readdirSync, readFileSync as readFileSync5 } from "node:fs";
+import { dirname as dirname3, join as join3 } from "node:path";
+import { fileURLToPath as fileURLToPath5 } from "node:url";
 function resolveMigrationsDir() {
-  const here = dirname2(fileURLToPath4(import.meta.url));
+  const here = dirname3(fileURLToPath5(import.meta.url));
   const candidates = [here, join3(here, "storage", "migrations"), join3(here, "migrations")];
   for (const dir of candidates) {
     try {
@@ -38104,7 +38137,7 @@ function listMigrations() {
   }).sort((a2, b) => a2.version - b.version);
 }
 function applyMigration(db, migration) {
-  const sql = readFileSync4(migration.filePath, "utf8");
+  const sql = readFileSync5(migration.filePath, "utf8");
   const tx = db.transaction(() => {
     db.exec(sql);
     setVersion(db, migration.version);
@@ -38198,7 +38231,7 @@ function openDatabase(options) {
     runMigrations(db2);
     return { db: db2, path: ":memory:" };
   }
-  const projectPath = resolve(options.projectPath);
+  const projectPath = resolve2(options.projectPath);
   const preferredDir = join4(projectPath, ".guardian");
   const preferredPath = join4(preferredDir, "guardian.db");
   let chosenPath;
@@ -39005,7 +39038,7 @@ var BaseScanWithFixInput = BaseScanInput.extend({
 });
 
 // src/tools/scanHelpers.ts
-import { existsSync as existsSync5, mkdirSync as mkdirSync2, readFileSync as readFileSync5, readdirSync as readdirSync2, statSync as statSync2 } from "node:fs";
+import { existsSync as existsSync5, mkdirSync as mkdirSync2, readFileSync as readFileSync6, readdirSync as readdirSync2, statSync as statSync2 } from "node:fs";
 import { join as join5 } from "node:path";
 
 // src/platform/pkgManagerDetect.ts
@@ -39054,7 +39087,7 @@ function ensureReportDir(projectPath, scanId, prefix) {
 function readJsonSafe(path6) {
   try {
     if (!existsSync5(path6)) return null;
-    return readFileSync5(path6, "utf8");
+    return readFileSync6(path6, "utf8");
   } catch {
     return null;
   }
@@ -39139,7 +39172,7 @@ var Semaphore = class {
       this.active += 1;
       return;
     }
-    await new Promise((resolve8) => this.waiting.push(resolve8));
+    await new Promise((resolve9) => this.waiting.push(resolve9));
     this.active += 1;
   }
   release() {
@@ -39178,7 +39211,7 @@ function filterFindings(items, min) {
 init_execa();
 import { createHash as createHash3 } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
-import { join as join6, relative, resolve as resolve2, sep } from "node:path";
+import { join as join6, relative, resolve as resolve3, sep } from "node:path";
 var FS_EXCLUDE = /* @__PURE__ */ new Set([
   ".git",
   ".guardian",
@@ -39199,7 +39232,7 @@ var FS_EXCLUDE = /* @__PURE__ */ new Set([
   ".tox"
 ]);
 async function computeTreeHash(projectPath, options = {}) {
-  const root = resolve2(projectPath);
+  const root = resolve3(projectPath);
   const files = options.forceFilesystemWalk ? await walkFiles(root) : await tryGitListFiles(root) ?? await walkFiles(root);
   files.sort();
   const hash = createHash3("sha256");
@@ -39262,7 +39295,7 @@ async function walk(root, dir, out) {
 // src/platform/projectPath.ts
 import { existsSync as existsSync6, statSync as statSync3 } from "node:fs";
 import { homedir } from "node:os";
-import { parse as parse3, resolve as resolve3 } from "node:path";
+import { parse as parse3, resolve as resolve4 } from "node:path";
 var InvalidProjectPathError = class extends Error {
   constructor(reason, path6) {
     super(`Invalid project_path (${reason}): ${path6}`);
@@ -39274,7 +39307,7 @@ var InvalidProjectPathError = class extends Error {
   path;
 };
 function resolveProjectPath(input) {
-  const candidate = resolve3(input && input.length > 0 ? input : process.cwd());
+  const candidate = resolve4(input && input.length > 0 ? input : process.cwd());
   if (!existsSync6(candidate)) {
     throw new InvalidProjectPathError("not_found", candidate);
   }
@@ -39288,7 +39321,7 @@ function resolveProjectPath(input) {
 }
 function isRootOrHome(p) {
   if (parse3(p).root === p) return true;
-  const home = resolve3(homedir());
+  const home = resolve4(homedir());
   if (p === home) return true;
   return false;
 }
@@ -39638,7 +39671,7 @@ registerToolModule(
 );
 
 // src/tools/scanSast.ts
-import { existsSync as existsSync7, readdirSync as readdirSync3, readFileSync as readFileSync6 } from "node:fs";
+import { existsSync as existsSync7, readdirSync as readdirSync3, readFileSync as readFileSync7 } from "node:fs";
 import { join as join8 } from "node:path";
 
 // src/runners/scannerParsers/securityCodeScan.ts
@@ -39905,7 +39938,7 @@ function csprojReferencesScs(projectPath) {
   }
   for (const file of csprojs) {
     try {
-      const xml = readFileSync6(join8(projectPath, file), "utf8");
+      const xml = readFileSync7(join8(projectPath, file), "utf8");
       if (/security[-_]?code[-_]?scan/i.test(xml)) return true;
     } catch {
     }
@@ -39913,7 +39946,7 @@ function csprojReferencesScs(projectPath) {
   const dbProps = join8(projectPath, "Directory.Build.props");
   if (existsSync7(dbProps)) {
     try {
-      const xml = readFileSync6(dbProps, "utf8");
+      const xml = readFileSync7(dbProps, "utf8");
       if (/security[-_]?code[-_]?scan/i.test(xml)) return true;
     } catch {
     }
@@ -41497,7 +41530,7 @@ registerToolModule(
 );
 
 // src/tools/generateSbom.ts
-import { existsSync as existsSync12, readFileSync as readFileSync7, statSync as statSync5 } from "node:fs";
+import { existsSync as existsSync12, readFileSync as readFileSync8, statSync as statSync5 } from "node:fs";
 import { join as join19 } from "node:path";
 import { randomUUID as randomUUID2 } from "node:crypto";
 
@@ -41616,7 +41649,7 @@ async function handler2(input, ctx) {
     };
   }
   const stat2 = statSync5(outFile);
-  const raw = readFileSync7(outFile, "utf8");
+  const raw = readFileSync8(outFile, "utf8");
   const summary = summarize2(raw);
   ctx.storage.scans.insert({
     scan_id: scanId,
@@ -41796,9 +41829,9 @@ import {
   copyFileSync,
   existsSync as existsSync14,
   mkdirSync as mkdirSync3,
-  readFileSync as readFileSync8
+  readFileSync as readFileSync9
 } from "node:fs";
-import { dirname as dirname3, join as join21 } from "node:path";
+import { dirname as dirname4, join as join21 } from "node:path";
 var PROFILE_FILES = {
   minimal: [
     { source: "gitleaks/gitleaks.toml", target: ".gitleaks.toml", reason: "baseline secret scan rules" },
@@ -41865,7 +41898,7 @@ async function handler4(input, ctx) {
     }
     if (!apply) continue;
     try {
-      mkdirSync3(dirname3(dst), { recursive: true });
+      mkdirSync3(dirname4(dst), { recursive: true });
       copyFileSync(src, dst);
       written.push(p);
     } catch (e) {
@@ -41910,7 +41943,7 @@ function failDomain5(code, message) {
 
 // src/tools/observabilitySetup.ts
 import { existsSync as existsSync15, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname4, join as join22 } from "node:path";
+import { dirname as dirname5, join as join22 } from "node:path";
 var tool5 = {
   name: "observability_setup",
   title: "Configure logging + metrics scaffolding",
@@ -41944,7 +41977,7 @@ async function handler5(input, ctx) {
         continue;
       }
       try {
-        mkdirSync4(dirname4(abs), { recursive: true });
+        mkdirSync4(dirname5(abs), { recursive: true });
         writeFileSync3(abs, p.contents, "utf8");
         written.push(p);
       } catch (e) {
@@ -42274,7 +42307,7 @@ function failDomain6(code, message) {
 }
 
 // src/tools/perfCheck.ts
-import { existsSync as existsSync16, readFileSync as readFileSync9, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync16, readFileSync as readFileSync10, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join23 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 var inputSchema3 = {
@@ -42352,7 +42385,7 @@ async function runLighthouse(opts) {
       `Lighthouse did not produce a report. stderr: ${result.stderr.split(/\r?\n/)[0] ?? ""}`
     );
   }
-  const raw = readFileSync9(outFile, "utf8");
+  const raw = readFileSync10(outFile, "utf8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -42416,7 +42449,7 @@ async function runK6(opts) {
   if (!existsSync16(summaryFile)) {
     writeFileSync4(summaryFile, result.stdout || "{}", "utf8");
   }
-  const raw = readFileSync9(summaryFile, "utf8");
+  const raw = readFileSync10(summaryFile, "utf8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -43628,7 +43661,7 @@ async function runCheckToolchain(ctx) {
 }
 
 // src/tools/licenseCompatibility.ts
-import { existsSync as existsSync17, readFileSync as readFileSync10 } from "node:fs";
+import { existsSync as existsSync17, readFileSync as readFileSync11 } from "node:fs";
 import { join as join26 } from "node:path";
 var tool13 = {
   name: "license_compatibility",
@@ -43681,7 +43714,7 @@ function detectProjectLicense(projectPath) {
   try {
     const pkgPath = join26(projectPath, "package.json");
     if (existsSync17(pkgPath)) {
-      const pkg = JSON.parse(readFileSync10(pkgPath, "utf8"));
+      const pkg = JSON.parse(readFileSync11(pkgPath, "utf8"));
       if (typeof pkg.license === "string") return pkg.license;
     }
   } catch {
@@ -43689,7 +43722,7 @@ function detectProjectLicense(projectPath) {
   try {
     const pyProject = join26(projectPath, "pyproject.toml");
     if (existsSync17(pyProject)) {
-      const raw = readFileSync10(pyProject, "utf8");
+      const raw = readFileSync11(pyProject, "utf8");
       const m = /license\s*=\s*["']([^"']+)["']/i.exec(raw) ?? /license-expression\s*=\s*["']([^"']+)["']/i.exec(raw);
       if (m && m[1]) return m[1];
     }
@@ -43698,7 +43731,7 @@ function detectProjectLicense(projectPath) {
   try {
     const composer = join26(projectPath, "composer.json");
     if (existsSync17(composer)) {
-      const cjson = JSON.parse(readFileSync10(composer, "utf8"));
+      const cjson = JSON.parse(readFileSync11(composer, "utf8"));
       if (typeof cjson.license === "string") return cjson.license;
       if (Array.isArray(cjson.license) && typeof cjson.license[0] === "string")
         return cjson.license[0];
@@ -43709,7 +43742,7 @@ function detectProjectLicense(projectPath) {
     const p = join26(projectPath, name);
     if (!existsSync17(p)) continue;
     try {
-      const head = readFileSync10(p, "utf8").slice(0, 500);
+      const head = readFileSync11(p, "utf8").slice(0, 500);
       if (/MIT License/i.test(head)) return "MIT";
       if (/Apache License,?\s*Version\s*2/i.test(head)) return "Apache-2.0";
       if (/BSD 3-Clause/i.test(head)) return "BSD-3-Clause";
@@ -43903,7 +43936,7 @@ function findLatestOfType(ctx, types) {
 }
 
 // src/tools/sbomDiff.ts
-import { existsSync as existsSync18, readFileSync as readFileSync11 } from "node:fs";
+import { existsSync as existsSync18, readFileSync as readFileSync12 } from "node:fs";
 var inputSchema8 = {
   from_scan_id: external_exports.string().uuid().optional(),
   to_scan_id: external_exports.string().uuid().optional(),
@@ -43984,7 +44017,7 @@ async function loadComponents(ctx, scanId, useFullFile) {
     const filePath = rec.meta?.file_path;
     if (filePath && existsSync18(filePath)) {
       try {
-        const raw = readFileSync11(filePath, "utf8");
+        const raw = readFileSync12(filePath, "utf8");
         return extractFromSbomJson(raw);
       } catch {
       }
@@ -44106,7 +44139,7 @@ function countBySeverity3(findings) {
 }
 
 // src/tools/suggestFix.ts
-import { existsSync as existsSync19, readFileSync as readFileSync12 } from "node:fs";
+import { existsSync as existsSync19, readFileSync as readFileSync13 } from "node:fs";
 import { join as join27 } from "node:path";
 var inputSchema10 = {
   project_path: ProjectPath,
@@ -44142,7 +44175,7 @@ async function handler17(input, ctx) {
     const abs = join27(projectPath, finding2.file_path);
     if (existsSync19(abs)) {
       try {
-        const raw = readFileSync12(abs, "utf8");
+        const raw = readFileSync13(abs, "utf8");
         const lines = raw.split(/\r?\n/);
         const start = Math.max(0, (finding2.line_start ?? 1) - 1 - contextLines);
         const end = Math.min(lines.length, (finding2.line_end ?? finding2.line_start ?? 1) + contextLines);
@@ -44338,7 +44371,7 @@ function failDomain16(code, message) {
 
 // src/tools/registerCustomRules.ts
 import { existsSync as existsSync21, readdirSync as readdirSync7 } from "node:fs";
-import { join as join29, resolve as resolve4 } from "node:path";
+import { join as join29, resolve as resolve5 } from "node:path";
 var inputSchema11 = {
   project_path: ProjectPath,
   paths: external_exports.array(external_exports.string()).optional().describe("Explicit paths or globs to register. When omitted, auto-discovers .semgrep/ etc."),
@@ -44365,7 +44398,7 @@ async function handler20(input, ctx) {
     ctx.storage.runtimeMeta.delete(META_KEY);
     return { ok: true, cleared: true };
   }
-  const discovered = inp.paths && inp.paths.length > 0 ? inp.paths.map((p) => resolve4(projectPath, p)) : autoDiscover(projectPath);
+  const discovered = inp.paths && inp.paths.length > 0 ? inp.paths.map((p) => resolve5(projectPath, p)) : autoDiscover(projectPath);
   if (discovered.length === 0) {
     return {
       ok: true,
@@ -44751,6 +44784,7 @@ function markdownToSafeHtml(md) {
 }
 
 // src/report/sarif.ts
+var DEFAULT_TOOL_VERSION = resolveVersion();
 function toSarif(findings, opts = {}) {
   const rulesById = /* @__PURE__ */ new Map();
   for (const f of findings) {
@@ -44804,7 +44838,7 @@ function toSarif(findings, opts = {}) {
           driver: {
             name: opts.toolName ?? "dev-guardian",
             informationUri: opts.informationUri ?? "https://github.com/linofcp007/dev-guardian",
-            version: opts.toolVersion ?? "0.1.0",
+            version: opts.toolVersion ?? DEFAULT_TOOL_VERSION,
             rules: [...rulesById.values()]
           }
         },
@@ -46694,7 +46728,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID10 } from "node:crypto";
-import { existsSync as existsSync27, readFileSync as readFileSync13, readdirSync as readdirSync8, statSync as statSync7 } from "node:fs";
+import { existsSync as existsSync27, readFileSync as readFileSync14, readdirSync as readdirSync8, statSync as statSync7 } from "node:fs";
 import { join as join35, relative as relative2 } from "node:path";
 var PATTERNS = [
   {
@@ -46805,7 +46839,7 @@ async function handler33(input, ctx) {
   for (const file of files) {
     let content;
     try {
-      content = readFileSync13(file, "utf8");
+      content = readFileSync14(file, "utf8");
     } catch {
       continue;
     }
@@ -46892,7 +46926,7 @@ function collectConfigFiles(root, maxDepth) {
 
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID11 } from "node:crypto";
-import { readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync8 } from "node:fs";
+import { readFileSync as readFileSync15, readdirSync as readdirSync9, statSync as statSync8 } from "node:fs";
 import { join as join36, relative as relative3 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
@@ -46933,7 +46967,7 @@ async function handler34(input, ctx) {
   for (const file of projects) {
     let xml;
     try {
-      xml = readFileSync14(file, "utf8");
+      xml = readFileSync15(file, "utf8");
     } catch {
       continue;
     }
@@ -47033,7 +47067,7 @@ function failDomain24(code, message) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
-import { existsSync as existsSync28, readFileSync as readFileSync15, readdirSync as readdirSync10, statSync as statSync9 } from "node:fs";
+import { existsSync as existsSync28, readFileSync as readFileSync16, readdirSync as readdirSync10, statSync as statSync9 } from "node:fs";
 import { join as join37, relative as relative4 } from "node:path";
 var RULES = [
   {
@@ -47100,7 +47134,7 @@ async function handler35(input, ctx) {
       const abs = join37(dir, fname);
       let content;
       try {
-        content = readFileSync15(abs, "utf8");
+        content = readFileSync16(abs, "utf8");
       } catch {
         continue;
       }
@@ -48436,7 +48470,7 @@ init_execa();
 import {
   existsSync as existsSync29,
   mkdtempSync,
-  readFileSync as readFileSync16,
+  readFileSync as readFileSync17,
   readdirSync as readdirSync11,
   rmSync,
   statSync as statSync10,
@@ -48771,7 +48805,7 @@ function rel(root, abs) {
 function readOne(abs, relPath) {
   let raw;
   try {
-    raw = readFileSync16(abs);
+    raw = readFileSync17(abs);
   } catch {
     return null;
   }
@@ -48982,8 +49016,8 @@ function hashFiles(parts) {
 }
 
 // src/tools/mapAttackSurface.ts
-import { readFileSync as readFileSync19 } from "node:fs";
-import { isAbsolute, join as join43, resolve as resolve6 } from "node:path";
+import { readFileSync as readFileSync20 } from "node:fs";
+import { isAbsolute, join as join43, resolve as resolve7 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -49019,7 +49053,7 @@ function numProp(value, key) {
 }
 
 // src/surface/collectors/ports.ts
-import { existsSync as existsSync30, readFileSync as readFileSync17, realpathSync } from "node:fs";
+import { existsSync as existsSync30, readFileSync as readFileSync18, realpathSync } from "node:fs";
 import { basename as basename2, join as join40 } from "node:path";
 var DOCKERFILES = ["Dockerfile", "dockerfile"];
 var COMPOSE_FILES = [
@@ -49076,7 +49110,7 @@ function collectPorts(projectPath) {
 function readLines(path6) {
   if (!existsSync30(path6)) return [];
   try {
-    return readFileSync17(path6, "utf8").split(/\r?\n/);
+    return readFileSync18(path6, "utf8").split(/\r?\n/);
   } catch {
     return [];
   }
@@ -49963,14 +49997,14 @@ function buildToolRun(run, via) {
 }
 
 // src/surface/specDiscover.ts
-import { readFileSync as readFileSync18, readdirSync as readdirSync12, statSync as statSync11 } from "node:fs";
-import { join as join42, relative as relative5, resolve as resolve5, sep as sep2 } from "node:path";
+import { readFileSync as readFileSync19, readdirSync as readdirSync12, statSync as statSync11 } from "node:fs";
+import { join as join42, relative as relative5, resolve as resolve6, sep as sep2 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
 var SPEC_BASENAMES = /* @__PURE__ */ new Set(["openapi", "swagger", "api-docs"]);
 var SPEC_EXTENSIONS = /* @__PURE__ */ new Set([".json", ".yaml", ".yml"]);
 function discoverSpecs(projectPath, explicit) {
-  const root = resolve5(projectPath);
+  const root = resolve6(projectPath);
   const candidates = explicit && explicit.length > 0 ? dedupeResolved(explicit) : walk3(root, root).sort();
   const truncated = candidates.length > MAX_SPEC_FILES;
   const selected = candidates.slice(0, MAX_SPEC_FILES);
@@ -49982,7 +50016,7 @@ function dedupeResolved(paths) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
   for (const path6 of paths) {
-    const resolved = resolve5(path6);
+    const resolved = resolve6(path6);
     if (seen.has(resolved)) continue;
     seen.add(resolved);
     out.push(resolved);
@@ -50004,7 +50038,7 @@ function readCandidates(paths) {
       continue;
     }
     try {
-      const text = readFileSync18(path6, "utf8");
+      const text = readFileSync19(path6, "utf8");
       specs.push({ file: path6, text });
     } catch {
       continue;
@@ -50512,7 +50546,7 @@ function readSources(parsed, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path6 of collectAllFiles(parsed)) {
     try {
-      const buffer = readFileSync19(isAbsolute(path6) ? path6 : join43(projectPath, path6));
+      const buffer = readFileSync20(isAbsolute(path6) ? path6 : join43(projectPath, path6));
       const text = buffer.toString("utf8");
       if (Buffer.byteLength(text, "utf8") !== buffer.length) continue;
       sources.set(path6, text);
@@ -50650,7 +50684,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path6) {
-  return resolve6(isAbsolute(path6) ? path6 : join43(projectPath, path6));
+  return resolve7(isAbsolute(path6) ? path6 : join43(projectPath, path6));
 }
 function resultsArrayOf(parsed) {
   const results = parsed.results;
@@ -51503,7 +51537,7 @@ function livenessMessage(target, liveness, timeoutMs) {
 import { join as join45 } from "node:path";
 
 // src/dast/nuclei.ts
-import { dirname as dirname5 } from "node:path";
+import { dirname as dirname6 } from "node:path";
 var DEFAULT_NUCLEI_RATE_LIMIT = 10;
 var ALWAYS_EXCLUDED_TAGS = ["dos", "fuzz"];
 function excludedTags(allowIntrusive) {
@@ -51578,7 +51612,7 @@ async function invokeNuclei(opts) {
     // has no bearing on what gets scanned; `outputPath`'s own directory is
     // used only because it is a real, already-relevant path handed to us,
     // rather than reaching for ambient process state.
-    cwd: dirname5(opts.outputPath),
+    cwd: dirname6(opts.outputPath),
     // An allowlisted environment, and `extendEnv: false` so it REPLACES the
     // parent's rather than being merged over it. Without the second half the
     // first is decorative: execa extends `process.env` by default, and the
@@ -53403,24 +53437,9 @@ registerResourceModule({
 
 // src/server.ts
 var SERVER_NAME = "dev-guardian";
-function resolveServerVersion() {
-  const here = dirname6(fileURLToPath5(import.meta.url));
-  const candidates = [
-    resolve7(here, "..", "..", ".claude-plugin", "plugin.json"),
-    resolve7(here, "..", "package.json")
-  ];
-  for (const path6 of candidates) {
-    try {
-      const parsed = JSON.parse(readFileSync20(path6, "utf8"));
-      if (parsed.version) return parsed.version;
-    } catch {
-    }
-  }
-  return "0.0.0";
-}
-var SERVER_VERSION = resolveServerVersion();
+var SERVER_VERSION = resolveVersion();
 async function main() {
-  const projectPath = resolve7(process.cwd());
+  const projectPath = resolve8(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
