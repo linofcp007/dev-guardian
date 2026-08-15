@@ -44433,6 +44433,7 @@ function failDomain17(code, message) {
 // src/tools/healthStatus.ts
 import { existsSync as existsSync22, statSync as statSync6 } from "node:fs";
 var startedAt = Date.now();
+var SERVER_VERSION = resolveVersion();
 var tool21 = {
   name: "health_status",
   title: "Server health",
@@ -44456,7 +44457,7 @@ async function handler21(ctx) {
     ok: true,
     server: {
       name: "dev-guardian",
-      version: "0.1.0",
+      version: SERVER_VERSION,
       uptime_seconds: Math.floor((Date.now() - startedAt) / 1e3),
       node_version: process.version,
       platform: process.platform
@@ -53437,7 +53438,7 @@ registerResourceModule({
 
 // src/server.ts
 var SERVER_NAME = "dev-guardian";
-var SERVER_VERSION = resolveVersion();
+var SERVER_VERSION2 = resolveVersion();
 async function main() {
   const projectPath = resolve8(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
@@ -53456,7 +53457,7 @@ async function main() {
   }
   const guard = ensureGuardianIgnored(projectPath);
   if (guard.updated) logErr(`.gitignore ${guard.reason} for .guardian/`);
-  const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+  const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION2 });
   const progressNotifier = {
     send: (payload) => {
       void mcp.server.notification({

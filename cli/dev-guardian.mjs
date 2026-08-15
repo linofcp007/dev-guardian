@@ -489,6 +489,30 @@ function consumeStartCommand(argv, i) {
 }
 
 /**
+ * Whether `value` counts as "no operand at all" for a flag that requires
+ * one. Always true for `undefined` (the flag was the last token — see
+ * `takeOperand` below). Also true for the empty string, but ONLY when the
+ * caller opts in via `requireNonEmpty` — empty is not automatically
+ * "missing" for every flag: `--base-url ""` / `--base-url=` is a real,
+ * meaningful value (`scan_dast` reads it, refuses with `unsupported_target:
+ * \`\` is not a valid URL`, and that refusal becomes a genuine, correctly
+ * exit-2 coverage gap — confirmed by running it), and turning that into a
+ * blanket usage error here would silently change a working, tested exit
+ * code. `--sarif`, by contrast, has no such reading: there is no such thing
+ * as writing a SARIF report to an empty path on purpose, so an empty value
+ * is exactly as much "not given" as an absent one. Shared by BOTH of
+ * `--sarif`'s spellings — the two-token form (`--sarif ""`, via
+ * `takeOperand`) and the same-token form (`--sarif=`, checked inline where
+ * that branch slices the value out) — because an unset CI variable collapses
+ * `--sarif $SARIF_PATH` and `--sarif=$SARIF_PATH` to these two shapes
+ * respectively, and a user must get the same refusal regardless of which one
+ * their pipeline happened to write.
+ */
+function isMissingOperand(value, requireNonEmpty) {
+  return value === undefined || (requireNonEmpty === true && value === '');
+}
+
+/**
  * The one operand-taking helper `parseScanArgs`/`parseBaselineUpdateArgs`
  * both call for EVERY value-taking flag (`--project`, `--fail-on`,
  * `--format`, `--sarif`, `--base-url`) — not two independent copies of the
@@ -499,36 +523,45 @@ function consumeStartCommand(argv, i) {
  * `argv[i]` is the flag itself (already matched by the caller as `a`);
  * `argv[i + 1]` is where its value must live for the two-token form (`--x
  * value`, as opposed to the same-token `--x=value` form, which can never hit
- * this — its value is embedded in `a` itself, so there is nothing to look
- * ahead for). When `--x` is the LAST token on the command line — or, for
- * `baseUrl` specifically, an unset/mistyped CI env var expanded to nothing
- * (`--base-url $STAGING_URL` with `STAGING_URL` empty in the shell's own
- * eyes, so the shell drops the token entirely rather than passing an empty
- * string) — `argv[i + 1]` is `undefined`. Every call site used to assign
- * that `undefined` straight into `out`, indistinguishable downstream from
- * "this flag was never passed at all": `if (opts.sarif)` is falsy either
- * way, and `runScans.ts#buildSequence`'s `opts.baseUrl !== undefined` check
- * drops `scan_dast` either way — both SILENT, both still `coverage: full`,
- * exit 0. `--fail-on`/`--format` happened to escape only because something
- * ELSE, downstream, separately rejects `undefined` too
- * (`SEVERITIES.includes`, the `human`/`json` check) — an accident of
- * validation order, not a guarantee, and `--project` escaped only via the
- * ugly path of `resolve(undefined)` throwing and landing in the generic
- * `fatal()` catch-all. Refusing right here, once, makes it a guarantee for
- * every flag instead of a coincidence for some of them, and gives
- * `--project` the same clean, flag-naming usage error as the rest.
+ * the UNDEFINED case this guards — its value is embedded in `a` itself, so
+ * there is nothing to look ahead for; it can still be EMPTY, handled by its
+ * own branch calling `isMissingOperand` directly — see `--sarif=` in
+ * `parseScanArgs`). When `--x` is the LAST token on the command line — or,
+ * for `baseUrl` specifically, an unset/mistyped CI env var expanded to
+ * nothing (`--base-url $STAGING_URL` with `STAGING_URL` empty in the
+ * shell's own eyes, so the shell drops the token entirely rather than
+ * passing an empty string) — `argv[i + 1]` is `undefined`. Every call site
+ * used to assign that `undefined` straight into `out`, indistinguishable
+ * downstream from "this flag was never passed at all": `if (opts.sarif)` is
+ * falsy either way, and `runScans.ts#buildSequence`'s
+ * `opts.baseUrl !== undefined` check drops `scan_dast` either way — both
+ * SILENT, both still `coverage: full`, exit 0. `--fail-on`/`--format`
+ * happened to escape only because something ELSE, downstream, separately
+ * rejects `undefined` too (`SEVERITIES.includes`, the `human`/`json`
+ * check) — an accident of validation order, not a guarantee, and
+ * `--project` escaped only via the ugly path of `resolve(undefined)`
+ * throwing and landing in the generic `fatal()` catch-all. Refusing right
+ * here, once, makes it a guarantee for every flag instead of a coincidence
+ * for some of them, and gives `--project` the same clean, flag-naming usage
+ * error as the rest.
+ *
+ * `requireNonEmpty` (default false): passed through to `isMissingOperand`
+ * so a caller can additionally refuse an EXPLICIT empty value (`--sarif
+ * ""`), not just an absent one — see that function's own doc for which
+ * flags this is (and, just as deliberately, is not) appropriate for.
  *
  * Returns `{ error }` — a complete message, ready for `usageError` with no
  * second prefix needed — or `{ value, nextIndex }`, where `nextIndex` is the
  * loop index to resume from (the consumed value token), matching the
  * pre-increment `argv[++i]` this replaces.
  */
-function takeOperand(argv, i, flagName) {
+function takeOperand(argv, i, flagName, requireNonEmpty = false) {
   const nextIndex = i + 1;
-  if (nextIndex >= argv.length) {
+  const value = argv[nextIndex];
+  if (isMissingOperand(value, requireNonEmpty)) {
     return { error: `${flagName} requires a value` };
   }
-  return { value: argv[nextIndex], nextIndex };
+  return { value, nextIndex };
 }
 
 function parseScanArgs(argv) {
@@ -562,12 +595,19 @@ function parseScanArgs(argv) {
       i = r.nextIndex;
     } else if (a.startsWith('--format=')) out.format = a.slice('--format='.length);
     else if (a === '--sarif') {
-      const r = takeOperand(argv, i, a);
+      // requireNonEmpty: true — an empty path is never a real destination
+      // (unlike --base-url's empty string, which scan_dast reads and
+      // meaningfully refuses), so --sarif "" is refused exactly like a
+      // missing --sarif, not silently accepted as "write to ''".
+      const r = takeOperand(argv, i, a, true);
       if (r.error) return r;
       out.sarif = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--sarif=')) out.sarif = a.slice('--sarif='.length);
-    else if (a === '--base-url') {
+    } else if (a.startsWith('--sarif=')) {
+      const value = a.slice('--sarif='.length);
+      if (isMissingOperand(value, true)) return { error: '--sarif requires a value' };
+      out.sarif = value;
+    } else if (a === '--base-url') {
       const r = takeOperand(argv, i, a);
       if (r.error) return r;
       out.baseUrl = r.value;

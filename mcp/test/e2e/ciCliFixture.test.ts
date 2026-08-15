@@ -222,6 +222,58 @@ describe('dev-guardian scan — usage and safety (no real scanner reached)', () 
     expect(r.stderr).toMatch(/requires a value/i);
   });
 
+  it('exits 3, naming the flag, when --sarif is given an explicit empty value (space form: --sarif "")', () => {
+    // Coordinator follow-up to Important 1: an unset CI variable in
+    // `--sarif $SARIF_PATH` can ALSO expand to an explicit empty argument
+    // rather than dropping the token entirely, depending on how the
+    // variable is referenced — argv[i + 1] then EXISTS (it's `''`), so the
+    // missing-operand guard alone did not catch this: `if (opts.sarif)` was
+    // falsy for `''` exactly as it was for `undefined`, so this used to
+    // silently write no SARIF and exit whatever the gate said, never a
+    // usage error. Confirmed by direct execution before this test was
+    // written: exit 0 / PASS / no file, on both Windows and Linux.
+    const r = runCli(['scan', '--sarif', '']);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/--sarif/);
+    expect(r.stderr).toMatch(/requires a value/i);
+  });
+
+  it('exits 3, naming the flag, when --sarif is given an explicit empty value (equals form: --sarif=)', () => {
+    // The other spelling of the identical trigger: `--sarif=$SARIF_PATH`
+    // with SARIF_PATH unset expands to exactly this token, the same way
+    // `--sarif $SARIF_PATH` expands to the last-token case above. Both
+    // spellings must be refused identically, or a user's outcome depends on
+    // which one their pipeline happened to write.
+    const r = runCli(['scan', '--sarif=']);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/--sarif/);
+    expect(r.stderr).toMatch(/requires a value/i);
+  });
+
+  it('does NOT extend the empty-operand refusal to --base-url — an empty target is a real, meaningful value', () => {
+    // Guards a future "fix" that over-generalises the --sarif change above:
+    // --base-url "" / --base-url= must keep flowing through to scan_dast,
+    // which reads it and refuses with a real `unsupported_target` coverage
+    // gap (exit 2 in a full run) — a working, tested behaviour the
+    // coordinator explicitly measured and flagged as NOT to regress.
+    // Paired with a deliberately invalid --fail-on so the run fails FAST on
+    // that (before ever reaching runScans, still inside the "no real
+    // scanner reached" tier) rather than needing a real scan to prove
+    // --base-url's own value was accepted: if the empty --base-url were
+    // wrongly treated as a missing operand, parsing would fail on
+    // *--base-url*, before --fail-on is ever even checked, and the message
+    // would name --base-url instead.
+    const spaceForm = runCli(['scan', '--base-url', '', '--fail-on', 'totally-bogus']);
+    expect(spaceForm.status).toBe(3);
+    expect(spaceForm.stderr).toMatch(/--fail-on/);
+    expect(spaceForm.stderr).not.toMatch(/--base-url/);
+
+    const equalsForm = runCli(['scan', '--base-url=', '--fail-on', 'totally-bogus']);
+    expect(equalsForm.status).toBe(3);
+    expect(equalsForm.stderr).toMatch(/--fail-on/);
+    expect(equalsForm.stderr).not.toMatch(/--base-url/);
+  });
+
   it('exits 3, not a false coverage: full, when --base-url is the last token (no value)', () => {
     // Important 2 (final-review.md). Before this fix, the same silent
     // `undefined` reached `runScans.ts#buildSequence`'s

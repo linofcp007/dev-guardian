@@ -27,6 +27,7 @@ import { runProcess } from '../../src/runners/processRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 
 import type { PluginContext } from '../../src/context.js';
+import { resolveVersion } from '../../src/platform/version.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
@@ -286,6 +287,24 @@ describe('health_status', () => {
     expect(r.ok).toBe(true);
     expect(r.server.uptime_seconds).toBeGreaterThanOrEqual(0);
     expect(r.registry.tools).toBeGreaterThan(20);
+  });
+
+  it('reports the real release version, not a hardcoded literal', async () => {
+    // Regression guard: this field used to be a hardcoded '0.1.0',
+    // independent of (and just as stale as) the one report/sarif.ts carried
+    // before both were pointed at the shared resolveVersion()
+    // (platform/version.ts, itself pinned against plugin.json directly in
+    // platform/version.test.ts). Reusing the resolver here — rather than a
+    // second independent plugin.json read — tests the WIRING: that this
+    // handler actually calls the shared source of truth rather than a fresh
+    // hardcoded string that could just as easily go stale again.
+    const plugin = makePlugin();
+    const r = (await getTool('health_status').handler({}, plugin)) as {
+      ok: true;
+      server: { version: string };
+    };
+    expect(r.server.version).toBe(resolveVersion());
+    expect(r.server.version).not.toBe('0.1.0');
   });
 });
 
