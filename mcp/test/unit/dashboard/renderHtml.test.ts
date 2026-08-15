@@ -11,6 +11,40 @@ function inlinedData(html: string): unknown {
   return JSON.parse(m[1]);
 }
 
+/**
+ * Every way this page could reach outside itself. Named and shared between
+ * the main "reaches for nothing outside the file" test below (checked
+ * against the real, unmodified page) and the injection tests further down
+ * (each pattern individually proven to catch a synthetic example of the
+ * thing it names) — one list, not two copies that could silently drift.
+ *
+ * Fix round 1 (Important finding): the original four checks caught
+ * `<script src>`/`<link href>` regardless of URL form, and a scheme'd
+ * (`https?://`) asset URL or `@import url(...)` — but missed a
+ * PROTOCOL-RELATIVE reference (`src="//host/x.js"`, no scheme at all) in
+ * ANY position, including tags never checked at all (`<img>` and its
+ * auto-loading siblings), and the bare-string form of `@import`
+ * (`@import "//host/x.css"`, no `url(...)` wrapper). Both reach the network
+ * exactly like their scheme'd/wrapped siblings. Widened to close both, and
+ * to the auto-loading tags most likely to gain a `src`/`data` attribute
+ * before anyone thinks to add `<img>` here specifically.
+ *
+ * Deliberately does NOT flag a plain `<a href="https://...">` — the one
+ * legitimate outbound reference this page has (a CVE's NVD link) is exactly
+ * that: a user has to click it, it is never auto-loaded, and `<a>` is not in
+ * this list. See "still allows the one legitimate outbound link" below.
+ */
+const OFFLINE_GUARD = {
+  scriptSrc: /<script[^>]+\bsrc=/i,
+  linkHref: /<link[^>]+\bhref=/i,
+  autoLoadingTag: /<(?:img|iframe|video|audio|source|embed|object|track)[^>]+\b(?:src|data)=/i,
+  schemedAssetUrl: /https?:\/\/[^"'\s]+\.(?:js|css|woff2?|png|svg)/i,
+  protocolRelativeRef: /\b(?:src|href)=["']\/\/[^"'\s]+/i,
+  // Either CSS @import form — `@import url(...)` or the bare quoted-string
+  // form — targeting anything off-disk, scheme'd or protocol-relative.
+  importOffDisk: /@import\s+(?:url\(\s*)?["']?(?:https?:)?\/\//i,
+} as const;
+
 describe('renderDashboard', () => {
   it('inlines data that is valid JSON and round-trips the findings', () => {
     const html = renderDashboard(snap({
@@ -28,26 +62,44 @@ describe('renderDashboard', () => {
   it('reaches for nothing outside the file', () => {
     // The offline guarantee. A CDN <script src> added later would render
     // perfectly in a browser with network and break silently without one, and
-    // no visual check would catch it.
+    // no visual check would catch it. See OFFLINE_GUARD's own comment for
+    // what fix round 1 widened this to, and why.
     const html = renderDashboard(snap());
-    expect(html).not.toMatch(/<script[^>]+\bsrc=/i);
-    expect(html).not.toMatch(/<link[^>]+\bhref=/i);
-    expect(html).not.toMatch(/https?:\/\/[^"'\s]+\.(?:js|css|woff2?|png|svg)/i);
-    expect(html).not.toMatch(/@import\s+url/i);
+    expect(html).not.toMatch(OFFLINE_GUARD.scriptSrc);
+    expect(html).not.toMatch(OFFLINE_GUARD.linkHref);
+    expect(html).not.toMatch(OFFLINE_GUARD.autoLoadingTag);
+    expect(html).not.toMatch(OFFLINE_GUARD.schemedAssetUrl);
+    expect(html).not.toMatch(OFFLINE_GUARD.protocolRelativeRef);
+    expect(html).not.toMatch(OFFLINE_GUARD.importOffDisk);
   });
 
   it('carries a coverage banner, not a footnote, when coverage is partial', () => {
+    // Fix round 1: this test originally asserted against the UN-STRIPPED
+    // html string. `missing_tools`/`omitted_categories` are always present
+    // verbatim in the inlined JSON payload regardless of what the banner
+    // itself renders, so 'gitleaks' and 'secrets' were always found —
+    // reviewer-confirmed hollow by mutation (a [0]-only banner still left
+    // this green). Stripped, matching every other content-bearing test in
+    // this file — see the brief's own "escapes finding text" test, which
+    // already does this and was the model this test should have followed.
     const html = renderDashboard(snap({
       coverage: { level: 'partial', tools_run: ['semgrep'],
         missing_tools: ['gitleaks'], omitted_categories: ['secrets'] },
     }));
-    expect(html).toMatch(/guardian-coverage-banner/);
-    expect(html).toMatch(/gitleaks/);
-    expect(html).toMatch(/secrets/);
+    const visible = html.replace(/<script type="application\/json"[\s\S]*?<\/script>/g, '');
+    expect(visible).toMatch(/guardian-coverage-banner/);
+    expect(visible).toMatch(/gitleaks/);
+    expect(visible).toMatch(/secrets/);
   });
 
   it('has no coverage banner when coverage is full', () => {
-    expect(renderDashboard(snap())).not.toMatch(/guardian-coverage-banner/);
+    // Stripped for the same reason and to match the pair above, though this
+    // specific assertion was never hollow: 'guardian-coverage-banner' is a
+    // CSS class name, never a snapshot field name or value, so it cannot
+    // appear in the JSON payload regardless of stripping.
+    const html = renderDashboard(snap());
+    const visible = html.replace(/<script type="application\/json"[\s\S]*?<\/script>/g, '');
+    expect(visible).not.toMatch(/guardian-coverage-banner/);
   });
 
   it('states what it cut, in the visible document and not only in the data', () => {
@@ -169,6 +221,22 @@ describe('renderDashboard — escaping breadth beyond the brief', () => {
     expect(visible).toMatch(/&lt;i&gt;pwn/);
   });
 
+  it('renders a CVE missing fields the type marks required, without crashing', () => {
+    // Minor from fix round 1's review: cveRow's `?? fallback` branches
+    // (mirroring findingRow's own, tested via the brief's `as never`
+    // fixtures) had no test of their own. Cheap to close while already in
+    // this file: a Cve object missing severity/cve_id, the same landmine
+    // shape as the brief's own finding fixtures.
+    const html = renderDashboard(snap({
+      cves: { total: 1, by_severity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
+        items: [{ package_name: 'p', installed_version: '1', fixed_version: '2',
+          first_seen_scan_id: 's1', last_seen_scan_id: 's1' } as never] },
+    }));
+    const visible = visibleOf(html);
+    expect(visible).not.toMatch(/undefined|NaN/);
+    expect(visible).toMatch(/\bp\b/); // package_name still renders
+  });
+
   it('escapes an expiring suppression reason', () => {
     const html = renderDashboard(snap({
       suppressions: { active_count: 1,
@@ -207,24 +275,44 @@ describe('renderDashboard — escaping breadth beyond the brief', () => {
 // ---------------------------------------------------------------------------
 describe('renderDashboard — coverage banner completeness', () => {
   it('names every missing tool and every omitted category, not only the first', () => {
+    // Fix round 1 (Important finding): this test checked UN-STRIPPED html.
+    // missing_tools/omitted_categories are always present verbatim in the
+    // inlined JSON regardless of what the banner renders, so this test
+    // passed unconditionally — reviewer-confirmed by mutation: restricting
+    // the banner to [0] left the full suite green. Stripped.
     const html = renderDashboard(snap({
       coverage: { level: 'partial', tools_run: ['semgrep'],
         missing_tools: ['gitleaks', 'trivy'],
         omitted_categories: ['secrets', 'container and dependency'] },
     }));
-    expect(html).toMatch(/gitleaks/);
-    expect(html).toMatch(/trivy/);
-    expect(html).toMatch(/secrets/);
-    expect(html).toMatch(/container and dependency/);
+    const visible = html.replace(/<script type="application\/json"[\s\S]*?<\/script>/g, '');
+    expect(visible).toMatch(/gitleaks/);
+    expect(visible).toMatch(/trivy/);
+    expect(visible).toMatch(/secrets/);
+    expect(visible).toMatch(/container and dependency/);
   });
 
-  it("shows the risk score's coverage caveat, not a bare number, over partial coverage", () => {
-    // Design §2's corollary. A render that shows the banner but leaves the
-    // risk score looking unconditional passes the banner test above and
-    // fails this one.
+  it("shows the risk section's own coverage caveat, isolated from the banner elsewhere on the page", () => {
+    // Design §2's corollary. Fix round 1 (Important finding): the ORIGINAL
+    // version of this test stripped the JSON (already correct) but set
+    // coverage.level: 'partial' — which also renders the coverage banner,
+    // whose own text is "Partial coverage.". `expect(visible).toMatch(/partial/i)`
+    // was therefore satisfied by the BANNER even with the risk section's own
+    // caveat paragraph removed entirely — reviewer-confirmed by mutation:
+    // disabling the caveat left the full suite green.
+    //
+    // Fixed by isolating the two: coverage FULL (banner genuinely absent,
+    // checked directly below) but risk.coverage_caveat TRUE regardless — an
+    // inconsistent combination `buildSnapshot` never actually produces
+    // (real snapshots derive both from the same underlying condition), used
+    // here deliberately so this assertion can only be satisfied by
+    // `riskSection`'s own rendering, matching the design comment in
+    // `renderHtml.ts` that these two fields are read independently by
+    // construction. Also matches on the caveat's own CSS marker
+    // (`pdk-risk-caveat`), the same technique the brief's own banner test
+    // uses for the banner.
     const html = renderDashboard(snap({
-      coverage: { level: 'partial', tools_run: ['semgrep'],
-        missing_tools: ['gitleaks'], omitted_categories: ['secrets'] },
+      coverage: { level: 'full', tools_run: ['semgrep'], missing_tools: [], omitted_categories: [] },
       risk: { score: 62, band: 'high',
         components: { findings: { score: 40, open_findings: 104 },
           cves: { score: 14, active_cves: 5 },
@@ -233,8 +321,91 @@ describe('renderDashboard — coverage banner completeness', () => {
         next_action: 'Fix the 3 critical findings first.', coverage_caveat: true },
     }));
     const visible = html.replace(/<script type="application\/json"[\s\S]*?<\/script>/g, '');
+    expect(visible).not.toMatch(/guardian-coverage-banner/); // sanity: banner truly absent here
+    expect(visible).toMatch(/pdk-risk-caveat/);
     expect(visible).toMatch(/62/);
-    expect(visible).toMatch(/partial/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 1 (Important finding): the original "reaches for nothing
+// outside the file" test caught a scheme'd absolute URL and the
+// `url(...)`-wrapped form of @import, but missed two forms that reach the
+// network exactly the same way: a PROTOCOL-RELATIVE reference
+// (`src="//host/x"`, no `http(s):` at all) in any position — including
+// `<img>` and its auto-loading siblings, none of which the original test
+// checked at all — and the bare-string form of @import
+// (`@import "//host/x.css"`, no `url()` wrapper).
+//
+// No such reference exists in the page today; these tests do not call
+// renderDashboard with attacker-controlled data. They inject each missed
+// form directly into a real rendered page and prove OFFLINE_GUARD's new
+// patterns catch it — the guard's whole job is to catch what a FUTURE edit
+// adds, and a wide-looking regex that quietly doesn't match the thing it
+// claims to is exactly as useless as the original narrower one. Each
+// injection targets one pattern; a passing "sanity" test first confirms the
+// unmodified page trips none of them, so a failing injection test really
+// means "this specific form is caught," not "everything always fails."
+// ---------------------------------------------------------------------------
+describe('renderDashboard — the offline guard catches forms the original four checks missed', () => {
+  function anyGuardMatch(html: string): string[] {
+    return Object.entries(OFFLINE_GUARD)
+      .filter(([, pattern]) => pattern.test(html))
+      .map(([name]) => name);
+  }
+
+  it('sanity: the real, unmodified page trips none of the guard patterns', () => {
+    expect(anyGuardMatch(renderDashboard(snap()))).toEqual([]);
+  });
+
+  it('still allows the one legitimate outbound link — a user-clicked, fully-qualified CVE href', () => {
+    // The guard must not be so broad it flags tools/reportExport.ts's own
+    // established convention, reused here for CVE rows: <a href="https://
+    // nvd.nist.gov/…">, a link the user has to click, never auto-loaded.
+    const html = renderDashboard(snap({
+      cves: { total: 1, by_severity: { critical: 1, high: 0, medium: 0, low: 0, info: 0 },
+        items: [{ cve_id: 'CVE-2026-0001', package_name: 'p', installed_version: '1',
+          fixed_version: '2', severity: 'critical', first_seen_scan_id: 's1', last_seen_scan_id: 's1' }] },
+    }));
+    expect(html).toMatch(/nvd\.nist\.gov/); // sanity: the link is really there
+    expect(anyGuardMatch(html)).toEqual([]);
+  });
+
+  it('catches an <img src> with a protocol-relative URL — a tag the original test never checked', () => {
+    const injected = renderDashboard(snap()).replace(
+      '<body>', '<body><img src="//cdn.example/track.png">',
+    );
+    expect(OFFLINE_GUARD.autoLoadingTag.test(injected)).toBe(true);
+    expect(OFFLINE_GUARD.protocolRelativeRef.test(injected)).toBe(true);
+  });
+
+  it('catches a protocol-relative <script src>, with no scheme at all', () => {
+    const injected = renderDashboard(snap()).replace(
+      '<body>', '<body><script src="//cdn.example/x.js"></script>',
+    );
+    expect(OFFLINE_GUARD.scriptSrc.test(injected)).toBe(true);
+    expect(OFFLINE_GUARD.protocolRelativeRef.test(injected)).toBe(true);
+  });
+
+  it('catches a bare-string @import with a protocol-relative URL — no url() wrapper', () => {
+    const injected = renderDashboard(snap()).replace(
+      '</style>', '@import "//cdn.example/x.css";\n</style>',
+    );
+    expect(OFFLINE_GUARD.importOffDisk.test(injected)).toBe(true);
+  });
+
+  it('catches a bare-string @import with a fully-qualified https URL', () => {
+    const injected = renderDashboard(snap()).replace(
+      '</style>', '@import "https://cdn.example/x.css";\n</style>',
+    );
+    expect(OFFLINE_GUARD.importOffDisk.test(injected)).toBe(true);
+  });
+
+  it('still catches the original url()-wrapped @import form — the widening did not narrow it', () => {
+    const injected = renderDashboard(snap()).replace(
+      '</style>', '@import url(https://cdn.example/x.css);\n</style>',
+    );
+    expect(OFFLINE_GUARD.importOffDisk.test(injected)).toBe(true);
   });
 });
 
@@ -314,6 +485,24 @@ describe('renderDashboard — numeric edges on a populated snapshot', () => {
     expect(visible).not.toMatch(/<b>new<\/b>/);
     expect(visible).toMatch(/&lt;b&gt;new/);
     expect(visible).toMatch(/new\.ts:9/);
+  });
+
+  it('renders a delta finding missing fields the type marks required, without crashing', () => {
+    // Minor from fix round 1's review: deltaRow's `?? fallback` branches
+    // had no test of their own, unlike findingRow's identical-shaped ones
+    // (exercised by the brief's own `as never` fixtures). Cheap to close
+    // while already in this file.
+    const html = renderDashboard(snap({
+      deltas: {
+        since_previous: { from_scan_id: 'a', to_scan_id: 'b', new_count: 1,
+          resolved_count: 0, unchanged_count: 0,
+          new_findings: [{ fingerprint: 'nd2', tool: 'semgrep', rule_id: 'r',
+            category: 'security' } as never] },
+        since_baseline: null,
+      },
+    }));
+    const visible = html.replace(/<script type="application\/json"[\s\S]*?<\/script>/g, '');
+    expect(visible).not.toMatch(/undefined|NaN/);
   });
 
   it('shows active suppressions with none currently expiring soon, without an empty expiring-soon table', () => {
