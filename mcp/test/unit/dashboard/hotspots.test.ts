@@ -42,6 +42,40 @@ describe('rankFiles', () => {
     expect(r.hotspots).toEqual([{ file_path: '(no file)', count: 2 }]);
   });
 
+  it('folds an empty-string file path into the same (no file) bucket', () => {
+    // Not hypothetical: toRelativeIfPossible (runners/scannerParsers/index.ts)
+    // returns '' for a finding whose file_path IS the project root, and it
+    // feeds semgrep, trivy, gitleaks and every other path-normalising
+    // parser. report/sarif.ts already treats this exact case as known and
+    // real. `??` would miss it — only `||` falls through on ''.
+    const wholeProject = { ...f('x'), file_path: '' } as unknown as Finding;
+    const r = rankFiles([wholeProject, wholeProject], 10);
+    expect(r.hotspots).toEqual([{ file_path: '(no file)', count: 2 }]);
+  });
+
+  it('collapses null, undefined and empty-string file paths into ONE bucket together', () => {
+    // Guards against a fix that handles '' correctly in isolation but
+    // routes it to a different sentinel than null/undefined — three
+    // "no file" findings must count as 3 in one row, not spread across
+    // look-alike buckets.
+    const nullPath = { ...f('x'), file_path: null } as unknown as Finding;
+    const undefinedPath = { ...f('x'), file_path: undefined } as unknown as Finding;
+    const emptyPath = { ...f('x'), file_path: '' } as unknown as Finding;
+    const r = rankFiles([nullPath, undefinedPath, emptyPath], 10);
+    expect(r.hotspots).toEqual([{ file_path: '(no file)', count: 3 }]);
+  });
+
+  it('does NOT fold a whitespace-only file path into (no file)', () => {
+    // Decision, not an oversight: unlike '', nothing in this codebase
+    // produces a whitespace-only file_path today, so there is no evidence
+    // it means "absent". Folding it in on spec would also hide a genuine
+    // anomaly (e.g. a future parser bug) behind the same label as the
+    // well-understood "whole project" case above, instead of surfacing it.
+    const whitespace = { ...f('x'), file_path: '   ' } as unknown as Finding;
+    const r = rankFiles([whitespace], 10);
+    expect(r.hotspots).toEqual([{ file_path: '   ', count: 1 }]);
+  });
+
   it('is empty-safe', () => {
     expect(rankFiles([], 5)).toEqual({ hotspots: [], remaining_files: 0 });
   });

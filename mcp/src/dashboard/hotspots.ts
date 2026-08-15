@@ -1,11 +1,30 @@
 /**
  * `rankFiles` — ranks findings by file, descending, pure.
  *
- * Findings with no `file_path` (null or undefined — the type says the
- * latter, but a row read back from SQLite can surface the former) are
- * grouped under one explicit `'(no file)'` bucket rather than dropped or
- * scattered under a falsy key, so they are never silently missing from the
- * ranking.
+ * Findings with no meaningful `file_path` are grouped under one explicit
+ * `'(no file)'` bucket rather than dropped or scattered under a falsy key,
+ * so they are never silently missing from the ranking. Three distinct
+ * values land here, and `||` (not `??`) is what catches all three:
+ *   - `undefined` — what the `Finding` type declares for "absent".
+ *   - `null` — what a row read back from SQLite can surface at runtime
+ *     even though the static type doesn't say so.
+ *   - `''` — not hypothetical: `toRelativeIfPossible`
+ *     (`runners/scannerParsers/index.ts`) returns exactly `''` when a
+ *     finding's `file_path` IS the project root (a finding about the
+ *     project as a whole, not one file inside it), and it feeds semgrep,
+ *     trivy, gitleaks and every other parser that normalises paths.
+ *     `report/sarif.ts` already treats this exact case as known and real
+ *     (see its test "omits the location... when file_path IS the project
+ *     root") — `??` would miss it here, the same class of bug Task 1 had
+ *     in the other direction (`??` not falling through on `false`).
+ *
+ * A whitespace-only path (e.g. `'   '`) is deliberately NOT folded in here.
+ * Unlike `''`, no code path in this repo produces one today, so there is no
+ * evidence it means "absent" rather than a genuine (if odd) value; folding
+ * it in on spec would also hide a real anomaly — if a parser bug ever did
+ * emit one, showing it as its own odd-looking bucket surfaces that bug,
+ * where merging it into `'(no file)'` would bury it under the
+ * well-understood "whole project" case above.
  *
  * Ties break on `file_path` ascending, not on iteration or insertion order.
  * Every entry going into the sort already has a distinct `file_path` (they
@@ -31,7 +50,9 @@ export function rankFiles(
 ): { hotspots: Hotspot[]; remaining_files: number } {
   const counts = new Map<string, number>();
   for (const finding of findings) {
-    const key = finding.file_path ?? NO_FILE;
+    // `||`, not `??` — see the module doc comment above: `''` must fall
+    // through to NO_FILE too, and `??` only catches null/undefined.
+    const key = finding.file_path || NO_FILE;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
 
