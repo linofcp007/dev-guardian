@@ -320,8 +320,15 @@ the path.
   a footnote, stating the missing tools and the omitted categories.
 - **Opens the browser only when stdout is a TTY**, so it never tries inside a
   pipeline. `--no-open` suppresses it; `--out <path>` overrides the location.
-  The platform open command is `start` / `open` / `xdg-open`, chosen by
-  `process.platform`, spawned with `shell: false`.
+  The platform open command is chosen by `process.platform` and spawned with
+  `shell: false` in every case: `open` on darwin, `xdg-open` elsewhere, and on
+  win32 `cmd.exe` with `['/c', 'start', '""', target]`. **Not bare `start`** —
+  `start` is a `cmd.exe` builtin rather than an executable, so spawning it
+  without a shell fails `ENOENT` and the page never opens on the one platform
+  this feature was scoped for. Going through `cmd.exe` keeps the security
+  property intact: argv is still an array and nothing is interpolated into a
+  command string. The `'""'` is `start`'s title argument, which it requires
+  before a quoted path.
 
 ## 10. `/guardian-status`
 
