@@ -11,10 +11,16 @@
  *   - count of registered tools / resources
  */
 import { existsSync, statSync } from 'node:fs';
+import { resolveVersion } from '../platform/version.js';
 import { getScanLimiter } from '../runners/concurrencyLimiter.js';
 import { RESOURCES } from '../resources/index.js';
 import { registerToolModule, TOOLS } from './index.js';
 const startedAt = Date.now();
+// Same shared resolver server.ts and report/sarif.ts already use — was a
+// second hardcoded '0.1.0' here, independent of (and just as stale as) the
+// one report/sarif.ts carried; resolved once, not per call, same "read
+// once, reuse many times" shape as those two.
+const SERVER_VERSION = resolveVersion();
 const tool = {
     name: 'health_status',
     title: 'Server health',
@@ -43,7 +49,7 @@ async function handler(ctx) {
         ok: true,
         server: {
             name: 'dev-guardian',
-            version: '0.1.0',
+            version: SERVER_VERSION,
             uptime_seconds: Math.floor((Date.now() - startedAt) / 1000),
             node_version: process.version,
             platform: process.platform,

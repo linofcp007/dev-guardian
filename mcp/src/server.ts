@@ -20,12 +20,12 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import type { PluginContext } from './context.js';
 import { ensureGuardianIgnored } from './gitignoreGuard.js';
+import { resolveScriptsDir } from './platform/scriptsDir.js';
 import { probeShell } from './platform/shellProbe.js';
+import { resolveVersion } from './platform/version.js';
 import type { ProgressNotifier, ProgressPayload } from './progress/progressEmitter.js';
 import { openDatabase, Storage } from './storage/index.js';
 import { attachAllResources } from './resources/index.js';
@@ -37,30 +37,11 @@ import './registerAll.js';
 
 const SERVER_NAME = 'dev-guardian';
 
-/**
- * Single source of truth for the version we report to the host. Reading it at
- * runtime keeps the MCP server's identity in lock-step with the plugin release
- * instead of drifting behind a hard-coded constant. Falls back to the MCP
- * package.json (standalone npm use), then '0.0.0'.
- */
-function resolveServerVersion(): string {
-  const here = dirname(fileURLToPath(import.meta.url)); // mcp/dist (built) | mcp/src (dev)
-  const candidates = [
-    resolve(here, '..', '..', '.claude-plugin', 'plugin.json'),
-    resolve(here, '..', 'package.json'),
-  ];
-  for (const path of candidates) {
-    try {
-      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { version?: string };
-      if (parsed.version) return parsed.version;
-    } catch {
-      /* try the next candidate */
-    }
-  }
-  return '0.0.0';
-}
-
-const SERVER_VERSION = resolveServerVersion();
+// Single source of truth for the version we report to the host, shared with
+// every SARIF `tool.driver.version` this project emits — see
+// `platform/version.ts`'s own doc comment for why resolving it needs to try
+// two candidate depths, not one.
+const SERVER_VERSION = resolveVersion();
 
 async function main(): Promise<void> {
   const projectPath = resolve(process.cwd());
@@ -120,14 +101,6 @@ async function main(): Promise<void> {
 
   await mcp.connect(new StdioServerTransport());
   logErr('listening on stdio');
-}
-
-function resolveScriptsDir(): string {
-  // server.js (built) lives at  <plugin>/mcp/dist/server.js
-  // server.ts (dev)    lives at  <plugin>/mcp/src/server.ts
-  // From either, `../../scripts` resolves to <plugin>/scripts.
-  const here = dirname(fileURLToPath(import.meta.url));
-  return resolve(here, '..', '..', 'scripts');
 }
 
 function installShutdownHooks(mcp: McpServer, storage: Storage): void {

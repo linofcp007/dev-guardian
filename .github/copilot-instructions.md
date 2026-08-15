@@ -85,6 +85,22 @@ already be running; `scan_dast` never starts, builds or stops it).
 prior surface snapshot; validates whichever scan completed most recently —
 run it right after a SAST scan, not right after `scan_dast`).
 
+## CI (headless, no MCP connection)
+
+For a pipeline, not a conversation: `node cli/dev-guardian.mjs scan` runs the same
+scan pipeline as the MCP tools, gated against a committed `.guardian/baseline.json`;
+`dev-guardian baseline update` is the only command that writes it. Exit codes: `0`
+pass, `1` gate failed, `2` incomplete scan (a scanner didn't run — never read as a
+pass), `3` usage error. Distribution is `git clone --depth 1` at a pinned tag (not
+`npx`) plus `npm ci` in `mcp/` — see the README's "Run scans in CI" section for a
+copy-pasteable GitHub Actions job. `--start-command` (starts the app for the DAST
+pass) is accepted **only on argv, never from `.guardian/ci.json`** — a repository
+file declaring it is refused outright, because a fork's pull request could otherwise
+run arbitrary code on the runner. A CI run leaves `.guardian/reports/` in the working
+tree (only the SQLite database is ephemeral) — add `.guardian/` to `.gitignore` by
+hand; the MCP server does this automatically every time it starts against a
+project, but the CLI never starts that server.
+
 ## Anti-patterns
 
 - Don't run `security_scan_full` for tiny changes — use `review_pr`.
