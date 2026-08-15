@@ -277,6 +277,58 @@ describe('renderDashboard — numeric edges on a populated snapshot', () => {
     expect(visible).not.toMatch(/undefined|NaN/);
     expect(visible).toMatch(/no baseline set/i);
   });
+
+  it('says so, plainly, for a clean scan (zero findings, not a missing one)', () => {
+    // scan !== null but findings.total === 0 — a real, common state (the
+    // project WAS scanned and nothing is open) that is different from
+    // "never scanned" (which short-circuits to renderNoScan entirely,
+    // before this section is ever reached). Coverage flagged this branch
+    // as untested: every other test in this file uses a nonzero total.
+    const html = renderDashboard(snap({
+      findings: { total: 0,
+        by_severity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
+        by_category: {}, by_tool: {}, hotspots: [], items: [] },
+    }));
+    const visible = html.replace(/<script type="application\/json"[\s\S]*?<\/script>/g, '');
+    expect(visible).not.toMatch(/undefined|NaN/);
+    expect(visible).toMatch(/No open findings/);
+  });
+
+  it('renders a populated delta findings table, escaping each row exactly like the main table', () => {
+    // Every delta test elsewhere in this file uses new_findings: [] — the
+    // branch that actually builds a table row from a delta's own findings
+    // (deltaRow) had ZERO coverage, including its own escapeHtml calls.
+    // A regression here (e.g. deltaRow forgetting to escape title) would
+    // have passed the whole suite silently.
+    const html = renderDashboard(snap({
+      deltas: {
+        since_previous: { from_scan_id: 'a', to_scan_id: 'b', new_count: 1,
+          resolved_count: 0, unchanged_count: 0,
+          new_findings: [{ fingerprint: 'nd1', severity: 'critical',
+            title: '<b>new</b> injection', tool: 'semgrep', rule_id: 'r',
+            category: 'security', file_path: 'new.ts', line_start: 9 } as never] },
+        since_baseline: null,
+      },
+    }));
+    const visible = html.replace(/<script type="application\/json"[\s\S]*?<\/script>/g, '');
+    expect(visible).not.toMatch(/<b>new<\/b>/);
+    expect(visible).toMatch(/&lt;b&gt;new/);
+    expect(visible).toMatch(/new\.ts:9/);
+  });
+
+  it('shows active suppressions with none currently expiring soon, without an empty expiring-soon table', () => {
+    // active_count counts ALL active suppressions; expiring_soon is the
+    // subset due within 7 days — active_count > 0 with expiring_soon: []
+    // is a normal, common state, untested elsewhere in this file (the
+    // dedicated suppression-reason test always populates expiring_soon).
+    const html = renderDashboard(snap({
+      suppressions: { active_count: 5, expiring_soon: [] },
+    }));
+    const visible = html.replace(/<script type="application\/json"[\s\S]*?<\/script>/g, '');
+    expect(visible).not.toMatch(/undefined|NaN/);
+    expect(visible).toMatch(/5 active/);
+    expect(visible).not.toMatch(/Expiring within 7 days/);
+  });
 });
 
 // ---------------------------------------------------------------------------
