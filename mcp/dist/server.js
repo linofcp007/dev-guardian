@@ -13364,16 +13364,16 @@ var init_mjs = __esm({
     };
     SignalExitBase = class {
     };
-    signalExitWrap = (handler42) => {
+    signalExitWrap = (handler43) => {
       return {
         onExit(cb, opts) {
-          return handler42.onExit(cb, opts);
+          return handler43.onExit(cb, opts);
         },
         load() {
-          return handler42.load();
+          return handler43.load();
         },
         unload() {
-          return handler42.unload();
+          return handler43.unload();
         }
       };
     };
@@ -22961,15 +22961,15 @@ var makeIssue = (params) => {
       message: issueData.message
     };
   }
-  let errorMessage = "";
+  let errorMessage4 = "";
   const maps = errorMaps.filter((m) => !!m).slice().reverse();
   for (const map of maps) {
-    errorMessage = map(fullIssue, { data, defaultError: errorMessage }).message;
+    errorMessage4 = map(fullIssue, { data, defaultError: errorMessage4 }).message;
   }
   return {
     ...issueData,
     path: fullPath,
-    message: errorMessage
+    message: errorMessage4
   };
 };
 var EMPTY_PATH = [];
@@ -32791,19 +32791,19 @@ var getRefs = (options) => {
 };
 
 // node_modules/zod-to-json-schema/dist/esm/errorMessages.js
-function addErrorMessage(res, key, errorMessage, refs) {
+function addErrorMessage(res, key, errorMessage4, refs) {
   if (!refs?.errorMessages)
     return;
-  if (errorMessage) {
+  if (errorMessage4) {
     res.errorMessage = {
       ...res.errorMessage,
-      [key]: errorMessage
+      [key]: errorMessage4
     };
   }
 }
-function setResponseValueAndErrors(res, key, value, errorMessage, refs) {
+function setResponseValueAndErrors(res, key, value, errorMessage4, refs) {
   res[key] = value;
-  addErrorMessage(res, key, errorMessage, refs);
+  addErrorMessage(res, key, errorMessage4, refs);
 }
 
 // node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
@@ -34114,8 +34114,8 @@ var Protocol = class {
                   if (queuedMessage.type === "response") {
                     resolver(message);
                   } else {
-                    const errorMessage = message;
-                    const error2 = new McpError(errorMessage.error.code, errorMessage.error.message, errorMessage.error.data);
+                    const errorMessage4 = message;
+                    const error2 = new McpError(errorMessage4.error.code, errorMessage4.error.message, errorMessage4.error.data);
                     resolver(error2);
                   }
                 } else {
@@ -34284,25 +34284,25 @@ var Protocol = class {
     const error2 = McpError.fromError(ErrorCode.ConnectionClosed, "Connection closed");
     this._transport = void 0;
     this.onclose?.();
-    for (const handler42 of responseHandlers.values()) {
-      handler42(error2);
+    for (const handler43 of responseHandlers.values()) {
+      handler43(error2);
     }
   }
   _onerror(error2) {
     this.onerror?.(error2);
   }
   _onnotification(notification) {
-    const handler42 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
-    if (handler42 === void 0) {
+    const handler43 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
+    if (handler43 === void 0) {
       return;
     }
-    Promise.resolve().then(() => handler42(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
+    Promise.resolve().then(() => handler43(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
   }
   _onrequest(request, extra) {
-    const handler42 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
+    const handler43 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
     const capturedTransport = this._transport;
     const relatedTaskId = request.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
-    if (handler42 === void 0) {
+    if (handler43 === void 0) {
       const errorResponse = {
         jsonrpc: "2.0",
         id: request.id,
@@ -34366,7 +34366,7 @@ var Protocol = class {
       if (taskCreationParams) {
         this.assertTaskHandlerCapability(request.method);
       }
-    }).then(() => handler42(request, fullExtra)).then(async (result) => {
+    }).then(() => handler43(request, fullExtra)).then(async (result) => {
       if (abortController.signal.aborted) {
         return;
       }
@@ -34415,8 +34415,8 @@ var Protocol = class {
   _onprogress(notification) {
     const { progressToken, ...params } = notification.params;
     const messageId = Number(progressToken);
-    const handler42 = this._progressHandlers.get(messageId);
-    if (!handler42) {
+    const handler43 = this._progressHandlers.get(messageId);
+    if (!handler43) {
       this._onerror(new Error(`Received a progress notification for an unknown token: ${JSON.stringify(notification)}`));
       return;
     }
@@ -34433,7 +34433,7 @@ var Protocol = class {
         return;
       }
     }
-    handler42(params);
+    handler43(params);
   }
   _onresponse(response) {
     const messageId = Number(response.id);
@@ -34448,8 +34448,8 @@ var Protocol = class {
       }
       return;
     }
-    const handler42 = this._responseHandlers.get(messageId);
-    if (handler42 === void 0) {
+    const handler43 = this._responseHandlers.get(messageId);
+    if (handler43 === void 0) {
       this._onerror(new Error(`Received a response for an unknown message ID: ${JSON.stringify(response)}`));
       return;
     }
@@ -34470,10 +34470,10 @@ var Protocol = class {
       this._progressHandlers.delete(messageId);
     }
     if (isJSONRPCResultResponse(response)) {
-      handler42(response);
+      handler43(response);
     } else {
       const error2 = McpError.fromError(response.error.code, response.error.message, response.error.data);
-      handler42(error2);
+      handler43(error2);
     }
   }
   get transport() {
@@ -34671,9 +34671,9 @@ var Protocol = class {
       const relatedTaskId = relatedTask?.taskId;
       if (relatedTaskId) {
         const responseResolver = (response) => {
-          const handler42 = this._responseHandlers.get(messageId);
-          if (handler42) {
-            handler42(response);
+          const handler43 = this._responseHandlers.get(messageId);
+          if (handler43) {
+            handler43(response);
           } else {
             this._onerror(new Error(`Response handler missing for side-channeled request ${messageId}`));
           }
@@ -34810,12 +34810,12 @@ var Protocol = class {
    *
    * Note that this will replace any previous request handler for the same method.
    */
-  setRequestHandler(requestSchema, handler42) {
+  setRequestHandler(requestSchema, handler43) {
     const method = getMethodLiteral(requestSchema);
     this.assertRequestHandlerCapability(method);
     this._requestHandlers.set(method, (request, extra) => {
       const parsed = parseWithCompat(requestSchema, request);
-      return Promise.resolve(handler42(parsed, extra));
+      return Promise.resolve(handler43(parsed, extra));
     });
   }
   /**
@@ -34837,11 +34837,11 @@ var Protocol = class {
    *
    * Note that this will replace any previous notification handler for the same method.
    */
-  setNotificationHandler(notificationSchema, handler42) {
+  setNotificationHandler(notificationSchema, handler43) {
     const method = getMethodLiteral(notificationSchema);
     this._notificationHandlers.set(method, (notification) => {
       const parsed = parseWithCompat(notificationSchema, notification);
-      return Promise.resolve(handler42(parsed));
+      return Promise.resolve(handler43(parsed));
     });
   }
   /**
@@ -35391,7 +35391,7 @@ var Server = class extends Protocol {
   /**
    * Override request handler registration to enforce server-side validation for tools/call.
    */
-  setRequestHandler(requestSchema, handler42) {
+  setRequestHandler(requestSchema, handler43) {
     const shape = getObjectShape(requestSchema);
     const methodSchema = shape?.method;
     if (!methodSchema) {
@@ -35415,29 +35415,29 @@ var Server = class extends Protocol {
       const wrappedHandler = async (request, extra) => {
         const validatedRequest = safeParse2(CallToolRequestSchema, request);
         if (!validatedRequest.success) {
-          const errorMessage = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage}`);
+          const errorMessage4 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage4}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler42(request, extra));
+        const result = await Promise.resolve(handler43(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
-            const errorMessage = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
-            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage}`);
+            const errorMessage4 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
+            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage4}`);
           }
           return taskValidationResult.data;
         }
         const validationResult = safeParse2(CallToolResultSchema, result);
         if (!validationResult.success) {
-          const errorMessage = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage}`);
+          const errorMessage4 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage4}`);
         }
         return validationResult.data;
       };
       return super.setRequestHandler(requestSchema, wrappedHandler);
     }
-    return super.setRequestHandler(requestSchema, handler42);
+    return super.setRequestHandler(requestSchema, handler43);
   }
   assertCapabilityForMethod(method) {
     switch (method) {
@@ -36010,13 +36010,13 @@ var ExperimentalMcpServerTasks = class {
   constructor(_mcpServer) {
     this._mcpServer = _mcpServer;
   }
-  registerToolTask(name, config2, handler42) {
+  registerToolTask(name, config2, handler43) {
     const execution = { taskSupport: "required", ...config2.execution };
     if (execution.taskSupport === "forbidden") {
       throw new Error(`Cannot register task-based tool '${name}' with taskSupport 'forbidden'. Use registerTool() instead.`);
     }
     const mcpServerInternal = this._mcpServer;
-    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler42);
+    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler43);
   }
 };
 
@@ -36074,24 +36074,24 @@ var McpServer = class {
       }
     });
     this.server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: Object.entries(this._registeredTools).filter(([, tool42]) => tool42.enabled).map(([name, tool42]) => {
+      tools: Object.entries(this._registeredTools).filter(([, tool43]) => tool43.enabled).map(([name, tool43]) => {
         const toolDefinition = {
           name,
-          title: tool42.title,
-          description: tool42.description,
+          title: tool43.title,
+          description: tool43.description,
           inputSchema: (() => {
-            const obj = normalizeObjectSchema(tool42.inputSchema);
+            const obj = normalizeObjectSchema(tool43.inputSchema);
             return obj ? toJsonSchemaCompat(obj, {
               strictUnions: true,
               pipeStrategy: "input"
             }) : EMPTY_OBJECT_JSON_SCHEMA;
           })(),
-          annotations: tool42.annotations,
-          execution: tool42.execution,
-          _meta: tool42._meta
+          annotations: tool43.annotations,
+          execution: tool43.execution,
+          _meta: tool43._meta
         };
-        if (tool42.outputSchema) {
-          const obj = normalizeObjectSchema(tool42.outputSchema);
+        if (tool43.outputSchema) {
+          const obj = normalizeObjectSchema(tool43.outputSchema);
           if (obj) {
             toolDefinition.outputSchema = toJsonSchemaCompat(obj, {
               strictUnions: true,
@@ -36104,16 +36104,16 @@ var McpServer = class {
     }));
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       try {
-        const tool42 = this._registeredTools[request.params.name];
-        if (!tool42) {
+        const tool43 = this._registeredTools[request.params.name];
+        if (!tool43) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
         }
-        if (!tool42.enabled) {
+        if (!tool43.enabled) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} disabled`);
         }
         const isTaskRequest = !!request.params.task;
-        const taskSupport = tool42.execution?.taskSupport;
-        const isTaskHandler = "createTask" in tool42.handler;
+        const taskSupport = tool43.execution?.taskSupport;
+        const isTaskHandler = "createTask" in tool43.handler;
         if ((taskSupport === "required" || taskSupport === "optional") && !isTaskHandler) {
           throw new McpError(ErrorCode.InternalError, `Tool ${request.params.name} has taskSupport '${taskSupport}' but was not registered with registerToolTask`);
         }
@@ -36121,14 +36121,14 @@ var McpServer = class {
           throw new McpError(ErrorCode.MethodNotFound, `Tool ${request.params.name} requires task augmentation (taskSupport: 'required')`);
         }
         if (taskSupport === "optional" && !isTaskRequest && isTaskHandler) {
-          return await this.handleAutomaticTaskPolling(tool42, request, extra);
+          return await this.handleAutomaticTaskPolling(tool43, request, extra);
         }
-        const args = await this.validateToolInput(tool42, request.params.arguments, request.params.name);
-        const result = await this.executeToolHandler(tool42, args, extra);
+        const args = await this.validateToolInput(tool43, request.params.arguments, request.params.name);
+        const result = await this.executeToolHandler(tool43, args, extra);
         if (isTaskRequest) {
           return result;
         }
-        await this.validateToolOutput(tool42, result, request.params.name);
+        await this.validateToolOutput(tool43, result, request.params.name);
         return result;
       } catch (error2) {
         if (error2 instanceof McpError) {
@@ -36147,12 +36147,12 @@ var McpServer = class {
    * @param errorMessage - The error message.
    * @returns The tool error result.
    */
-  createToolError(errorMessage) {
+  createToolError(errorMessage4) {
     return {
       content: [
         {
           type: "text",
-          text: errorMessage
+          text: errorMessage4
         }
       ],
       isError: true
@@ -36161,25 +36161,25 @@ var McpServer = class {
   /**
    * Validates tool input arguments against the tool's input schema.
    */
-  async validateToolInput(tool42, args, toolName) {
-    if (!tool42.inputSchema) {
+  async validateToolInput(tool43, args, toolName) {
+    if (!tool43.inputSchema) {
       return void 0;
     }
-    const inputObj = normalizeObjectSchema(tool42.inputSchema);
-    const schemaToParse = inputObj ?? tool42.inputSchema;
+    const inputObj = normalizeObjectSchema(tool43.inputSchema);
+    const schemaToParse = inputObj ?? tool43.inputSchema;
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage}`);
+      const errorMessage4 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage4}`);
     }
     return parseResult.data;
   }
   /**
    * Validates tool output against the tool's output schema.
    */
-  async validateToolOutput(tool42, result, toolName) {
-    if (!tool42.outputSchema) {
+  async validateToolOutput(tool43, result, toolName) {
+    if (!tool43.outputSchema) {
       return;
     }
     if (!("content" in result)) {
@@ -36191,54 +36191,54 @@ var McpServer = class {
     if (!result.structuredContent) {
       throw new McpError(ErrorCode.InvalidParams, `Output validation error: Tool ${toolName} has an output schema but no structured content was provided`);
     }
-    const outputObj = normalizeObjectSchema(tool42.outputSchema);
+    const outputObj = normalizeObjectSchema(tool43.outputSchema);
     const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage}`);
+      const errorMessage4 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage4}`);
     }
   }
   /**
    * Executes a tool handler (either regular or task-based).
    */
-  async executeToolHandler(tool42, args, extra) {
-    const handler42 = tool42.handler;
-    const isTaskHandler = "createTask" in handler42;
+  async executeToolHandler(tool43, args, extra) {
+    const handler43 = tool43.handler;
+    const isTaskHandler = "createTask" in handler43;
     if (isTaskHandler) {
       if (!extra.taskStore) {
         throw new Error("No task store provided.");
       }
       const taskExtra = { ...extra, taskStore: extra.taskStore };
-      if (tool42.inputSchema) {
-        const typedHandler = handler42;
+      if (tool43.inputSchema) {
+        const typedHandler = handler43;
         return await Promise.resolve(typedHandler.createTask(args, taskExtra));
       } else {
-        const typedHandler = handler42;
+        const typedHandler = handler43;
         return await Promise.resolve(typedHandler.createTask(taskExtra));
       }
     }
-    if (tool42.inputSchema) {
-      const typedHandler = handler42;
+    if (tool43.inputSchema) {
+      const typedHandler = handler43;
       return await Promise.resolve(typedHandler(args, extra));
     } else {
-      const typedHandler = handler42;
+      const typedHandler = handler43;
       return await Promise.resolve(typedHandler(extra));
     }
   }
   /**
    * Handles automatic task polling for tools with taskSupport 'optional'.
    */
-  async handleAutomaticTaskPolling(tool42, request, extra) {
+  async handleAutomaticTaskPolling(tool43, request, extra) {
     if (!extra.taskStore) {
       throw new Error("No task store provided for task-capable tool.");
     }
-    const args = await this.validateToolInput(tool42, request.params.arguments, request.params.name);
-    const handler42 = tool42.handler;
+    const args = await this.validateToolInput(tool43, request.params.arguments, request.params.name);
+    const handler43 = tool43.handler;
     const taskExtra = { ...extra, taskStore: extra.taskStore };
-    const createTaskResult = args ? await Promise.resolve(handler42.createTask(args, taskExtra)) : (
+    const createTaskResult = args ? await Promise.resolve(handler43.createTask(args, taskExtra)) : (
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await Promise.resolve(handler42.createTask(taskExtra))
+      await Promise.resolve(handler43.createTask(taskExtra))
     );
     const taskId = createTaskResult.task.taskId;
     let task = createTaskResult.task;
@@ -36408,8 +36408,8 @@ var McpServer = class {
         const parseResult = await safeParseAsync2(argsObj, request.params.arguments);
         if (!parseResult.success) {
           const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-          const errorMessage = getParseErrorMessage(error2);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage}`);
+          const errorMessage4 = getParseErrorMessage(error2);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage4}`);
         }
         const args = parseResult.data;
         const cb = prompt.callback;
@@ -36574,7 +36574,7 @@ var McpServer = class {
     }
     return registeredPrompt;
   }
-  _createRegisteredTool(name, title, description, inputSchema27, outputSchema, annotations, execution, _meta, handler42) {
+  _createRegisteredTool(name, title, description, inputSchema27, outputSchema, annotations, execution, _meta, handler43) {
     validateAndWarnToolName(name);
     const registeredTool = {
       title,
@@ -36584,7 +36584,7 @@ var McpServer = class {
       annotations,
       execution,
       _meta,
-      handler: handler42,
+      handler: handler43,
       enabled: true,
       disable: () => registeredTool.update({ enabled: false }),
       enable: () => registeredTool.update({ enabled: true }),
@@ -38392,20 +38392,20 @@ function normalizeParams2(params) {
 
 // src/tools/index.ts
 var TOOLS = [];
-function registerToolModule(tool42) {
-  if (TOOLS.some((t) => t.name === tool42.name)) {
-    throw new Error(`Tool '${tool42.name}' is already registered`);
+function registerToolModule(tool43) {
+  if (TOOLS.some((t) => t.name === tool43.name)) {
+    throw new Error(`Tool '${tool43.name}' is already registered`);
   }
-  TOOLS.push(tool42);
+  TOOLS.push(tool43);
 }
 function attachAllTools(server, ctx) {
-  for (const tool42 of TOOLS) {
+  for (const tool43 of TOOLS) {
     server.registerTool(
-      tool42.name,
+      tool43.name,
       {
-        ...tool42.title ? { title: tool42.title } : {},
-        description: tool42.description,
-        inputSchema: tool42.inputSchema
+        ...tool43.title ? { title: tool43.title } : {},
+        description: tool43.description,
+        inputSchema: tool43.inputSchema
       },
       async (input, extra) => {
         const callMeta = {};
@@ -38417,7 +38417,7 @@ function attachAllTools(server, ctx) {
         if (typedExtra?.signal instanceof AbortSignal) {
           callMeta.signal = typedExtra.signal;
         }
-        const result = await tool42.handler(input, ctx, callMeta);
+        const result = await tool43.handler(input, ctx, callMeta);
         return toCallToolResult(result);
       }
     );
@@ -39368,6 +39368,17 @@ async function isWorkingTreeClean(projectPath) {
     return result.stdout.trim().length === 0;
   } catch {
     return true;
+  }
+}
+async function isGitRepo(projectPath) {
+  try {
+    const result = await execa("git", ["-C", projectPath, "rev-parse", "--is-inside-work-tree"], {
+      reject: false,
+      timeout: 5e3
+    });
+    return result.exitCode === 0 && result.stdout.trim() === "true";
+  } catch {
+    return false;
   }
 }
 
@@ -53082,6 +53093,873 @@ function collectAnonymousExposures(ctx, projectPath) {
     files.add(f.file_path);
   }
   return { scan, files, scansSearched: history.length };
+}
+
+// src/tools/createFixPr.ts
+import { existsSync as existsSync32, readFileSync as readFileSync21 } from "node:fs";
+import { join as join48 } from "node:path";
+
+// src/fixpr/apply.ts
+async function applyGroup(opts) {
+  const run = opts.run ?? runProcess;
+  return opts.group.source === "semgrep" ? applySemgrepPass(run, opts.worktreePath, opts.timeoutMs) : applyDepsCandidates(
+    run,
+    opts.worktreePath,
+    opts.timeoutMs,
+    opts.lockfileOnly,
+    opts.group.candidates
+  );
+}
+async function applySemgrepPass(run, worktreePath, timeoutMs) {
+  const { invoked, result } = await runOne(run, worktreePath, timeoutMs, {
+    command: "semgrep",
+    args: ["--config", "auto", "--autofix", "--quiet"]
+  });
+  if (result.outcome !== "completed") {
+    return { applied: false, commands: [invoked], failure: buildFailure(invoked, result) };
+  }
+  return { applied: true, commands: [invoked], failure: null };
+}
+async function applyDepsCandidates(run, worktreePath, timeoutMs, lockfileOnly, candidates) {
+  const commands = [];
+  for (const candidate of candidates) {
+    const argv = candidate.command === null ? null : toArgv(candidate.command);
+    if (argv === null) {
+      return {
+        applied: false,
+        commands,
+        failure: {
+          // `||`, not `??`: a present-but-empty command string is exactly as
+          // unrunnable as a missing one, and only `||` treats both as
+          // "nothing useful here" — this project's own recurring `??` trap.
+          command: candidate.command || candidate.label,
+          outcome: "failed",
+          exit_code: null,
+          stderr_head: `no runnable command for '${candidate.label}'`
+        }
+      };
+    }
+    if (lockfileOnly && argv.command === "npm" && argv.args[0] === "install") {
+      argv.args.push("--package-lock-only");
+    }
+    const { invoked, result } = await runOne(run, worktreePath, timeoutMs, argv);
+    commands.push(invoked);
+    if (result.outcome !== "completed") {
+      return { applied: false, commands, failure: buildFailure(invoked, result) };
+    }
+  }
+  return { applied: true, commands, failure: null };
+}
+function toArgv(commandLine) {
+  const tokens = commandLine.trim().split(/\s+/).filter((token) => token.length > 0);
+  const [command, ...args] = tokens;
+  if (command === void 0) return null;
+  return { command, args };
+}
+async function runOne(run, worktreePath, timeoutMs, argv) {
+  const result = await run({ command: argv.command, args: argv.args, cwd: worktreePath, timeoutMs });
+  return { invoked: [argv.command, ...argv.args].join(" "), result };
+}
+function buildFailure(invoked, result) {
+  return {
+    command: invoked,
+    outcome: result.outcome,
+    exit_code: result.exitCode,
+    stderr_head: firstStderrLine(result.stderr)
+  };
+}
+function firstStderrLine(stderr) {
+  for (const line of stderr.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return "(no stderr output)";
+}
+
+// src/fixpr/candidates.ts
+import { createHash as createHash6 } from "node:crypto";
+var DEP_SCANNER_TOOLS = ["trivy", "npm-audit", "wpscan"];
+function buildGroups(input) {
+  const eligible = input.findings.filter(
+    (finding2) => finding2.fix_available && passes(finding2.severity, input.severityMin)
+  );
+  const groups = [];
+  if (input.sources.includes("deps")) {
+    groups.push(...buildDepsGroups(eligible, input.upgradeSteps));
+  }
+  if (input.sources.includes("semgrep")) {
+    const semgrepGroup = buildSemgrepGroup(eligible);
+    if (semgrepGroup !== null) groups.push(semgrepGroup);
+  }
+  return groups.sort((a2, b) => a2.key < b.key ? -1 : a2.key > b.key ? 1 : 0);
+}
+function selectGroups(groups, maxPrs) {
+  const ordered = [...groups].sort(
+    (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity]
+  );
+  const selected = ordered.slice(0, maxPrs);
+  const excluded = ordered.slice(maxPrs);
+  const deferred = excluded.map((group) => ({
+    key: group.key,
+    source: group.source,
+    severity: group.severity,
+    finding_count: countFingerprints(group)
+  }));
+  const deferred_reason = deferred.length === 0 ? null : `max_prs is ${maxPrs}; ${deferred.length} group(s) deferred: ` + deferred.map((group) => group.key).join(", ");
+  return { selected, deferred, deferred_reason };
+}
+function buildDepsGroups(findings, upgradeSteps) {
+  const buckets = /* @__PURE__ */ new Map();
+  for (const finding2 of findings) {
+    if (!DEP_SCANNER_TOOLS.includes(finding2.tool)) continue;
+    const step = upgradeSteps.find((candidate) => mentionsPackage(finding2, candidate.package_name));
+    if (step === void 0) continue;
+    const bucketKey = `${step.ecosystem}::${step.package_name}`;
+    const bucket = buckets.get(bucketKey);
+    if (bucket === void 0) {
+      buckets.set(bucketKey, { step, fingerprints: [finding2.fingerprint], severity: finding2.severity });
+    } else {
+      bucket.fingerprints.push(finding2.fingerprint);
+      if (SEVERITY_ORDER[finding2.severity] > SEVERITY_ORDER[bucket.severity]) {
+        bucket.severity = finding2.severity;
+      }
+    }
+  }
+  const byEcosystem = /* @__PURE__ */ new Map();
+  for (const bucket of buckets.values()) {
+    const candidate = {
+      source: "deps",
+      fingerprints: bucket.fingerprints,
+      severity: bucket.severity,
+      command: bucket.step.upgrade_command,
+      label: `${bucket.step.package_name} ${bucket.step.installed_version} -> ${bucket.step.latest_version}`
+    };
+    const list = byEcosystem.get(bucket.step.ecosystem);
+    if (list === void 0) byEcosystem.set(bucket.step.ecosystem, [candidate]);
+    else list.push(candidate);
+  }
+  return [...byEcosystem.entries()].map(
+    ([ecosystem, candidates]) => makeGroup("deps", ecosystem, candidates)
+  );
+}
+function mentionsPackage(finding2, packageName) {
+  return containsWholePackageName(finding2.title, packageName) || containsWholePackageName(finding2.message ?? "", packageName);
+}
+function containsWholePackageName(text, packageName) {
+  if (packageName.length === 0) return false;
+  let from = 0;
+  for (; ; ) {
+    const index = text.indexOf(packageName, from);
+    if (index === -1) return false;
+    const before = text[index - 1];
+    const after = text[index + packageName.length];
+    if (!isPackageNameChar(before) && !isPackageNameChar(after)) return true;
+    from = index + 1;
+  }
+}
+function isPackageNameChar(ch) {
+  return ch !== void 0 && /[A-Za-z0-9_.@/-]/.test(ch);
+}
+function buildSemgrepGroup(findings) {
+  const candidates = findings.filter((finding2) => finding2.tool === "semgrep").map((finding2) => ({
+    source: "semgrep",
+    fingerprints: [finding2.fingerprint],
+    severity: finding2.severity,
+    command: null,
+    // `||`, not `??`: an empty-string rule_id is exactly as unusable a
+    // label as a missing one, and `??` would let '' straight through.
+    label: finding2.rule_id || finding2.title
+  }));
+  return candidates.length === 0 ? null : makeGroup("semgrep", "semgrep", candidates);
+}
+function makeGroup(source, key, candidates) {
+  let severity = "info";
+  for (const candidate of candidates) {
+    if (SEVERITY_ORDER[candidate.severity] > SEVERITY_ORDER[severity]) severity = candidate.severity;
+  }
+  const fingerprints = candidates.flatMap((candidate) => candidate.fingerprints);
+  const hash = createHash6("sha256").update([...fingerprints].sort().join("\n")).digest("hex").slice(0, 12);
+  return { source, key, candidates, severity, hash };
+}
+function countFingerprints(group) {
+  return group.candidates.reduce((total, candidate) => total + candidate.fingerprints.length, 0);
+}
+
+// src/fixpr/pr.ts
+var BRANCH_PREFIX = "dev-guardian/fix-";
+function branchName(_source, key, hash) {
+  return `${BRANCH_PREFIX}${key}-${hash}`;
+}
+async function prExists(opts) {
+  const run = opts.run ?? runProcess;
+  const { projectPath, branch } = opts;
+  const result = await run({
+    command: "gh",
+    // `--state all`: the defect this must not repeat (module comment, point
+    // 2) is a search that defaults to open-only and re-files something that
+    // already exists in another state.
+    args: ["pr", "list", "--head", branch, "--state", "all", "--json", "number", "--limit", "5"],
+    cwd: projectPath
+  });
+  if (hasFailed(result)) {
+    return { known: false, reason: describeFailure(result, "gh pr list") };
+  }
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout || "[]");
+  } catch (e) {
+    return {
+      known: false,
+      reason: `'gh pr list' printed output that could not be parsed as JSON: ${errorMessage(e)}`
+    };
+  }
+  if (!Array.isArray(rows)) {
+    return { known: false, reason: "'gh pr list' returned JSON that was not an array" };
+  }
+  return { known: true, exists: rows.length > 0 };
+}
+async function openPr(opts) {
+  const run = opts.run ?? runProcess;
+  const { projectPath, worktreePath, branch, title, body } = opts;
+  const check2 = await prExists({ projectPath, branch, run });
+  if (!check2.known) {
+    return {
+      status: "refused",
+      url: null,
+      detail: `Could not determine whether a pull request already exists for branch '${branch}': ${check2.reason}. Refusing to push, to avoid risking a duplicate.`
+    };
+  }
+  if (check2.exists) {
+    return {
+      status: "exists",
+      url: null,
+      detail: `A pull request already exists for branch '${branch}'; nothing to do.`
+    };
+  }
+  const add = await run({ command: "git", args: ["add", "-A"], cwd: worktreePath });
+  if (hasFailed(add)) {
+    return {
+      status: "push_failed",
+      url: null,
+      detail: `Could not stage the fix on branch '${branch}': ${describeFailure(add, "git add")}`
+    };
+  }
+  const commit = await run({ command: "git", args: ["commit", "-m", title], cwd: worktreePath });
+  if (hasFailed(commit)) {
+    return {
+      status: "push_failed",
+      url: null,
+      detail: `Could not commit the fix on branch '${branch}': ${describeFailure(commit, "git commit")}`
+    };
+  }
+  const push = await run({ command: "git", args: ["push", "-u", "origin", branch], cwd: worktreePath });
+  if (hasFailed(push)) {
+    return {
+      status: "push_failed",
+      url: null,
+      detail: `Push to origin failed for branch '${branch}': ${describeFailure(push, "git push")}. The commit exists locally on that branch; it was not pushed.`
+    };
+  }
+  const create = await run({
+    command: "gh",
+    args: ["pr", "create", "--head", branch, "--title", title, "--body", body],
+    cwd: projectPath
+  });
+  if (hasFailed(create)) {
+    return {
+      status: "create_failed",
+      url: null,
+      detail: `Branch '${branch}' was pushed to origin, but 'gh pr create' failed: ${describeFailure(create, "gh pr create")}. Open the pull request by hand from that branch.`
+    };
+  }
+  return { status: "created", url: firstUrlLine(create.stdout), detail: null };
+}
+function hasFailed(result) {
+  return result.outcome !== "completed" || result.exitCode !== 0;
+}
+function describeFailure(result, label) {
+  return preferredErrorLine(result.stderr) ?? firstNonEmptyLine(result.stderr) ?? firstNonEmptyLine(result.stdout) ?? `${label}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ""}`;
+}
+function preferredErrorLine(text) {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("fatal:") || trimmed.startsWith("error:")) return trimmed;
+  }
+  return null;
+}
+function firstNonEmptyLine(text) {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return null;
+}
+function firstUrlLine(stdout) {
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("https://")) return trimmed;
+  }
+  return null;
+}
+function errorMessage(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+
+// src/fixpr/testCommand.ts
+var NPM_PLACEHOLDER_TEST_SCRIPT = 'echo "Error: no test specified" && exit 1';
+var PYTEST_SECTION = /^[ \t]*\[tool\.pytest(?:\.|\])/m;
+var CHECKERS = [
+  ["package.json", fromPackageJson2],
+  ["Cargo.toml", fromCargoToml2],
+  ["go.mod", fromGoMod2],
+  ["pyproject.toml", fromPyprojectToml]
+];
+var TEST_MANIFESTS = CHECKERS.map(([name]) => name);
+function deriveTestCommand(files) {
+  for (const [name, check2] of CHECKERS) {
+    const content = files[name];
+    if (content === void 0) continue;
+    const derived = check2(content);
+    if (derived !== null) return derived;
+  }
+  return null;
+}
+function fromPackageJson2(content) {
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  const scripts = asRecord(asRecord(parsed)?.["scripts"]);
+  const test = scripts?.["test"];
+  if (typeof test !== "string") return null;
+  const trimmed = test.trim();
+  if (trimmed.length === 0 || trimmed === NPM_PLACEHOLDER_TEST_SCRIPT) return null;
+  return { command: "npm", args: ["test", "--silent"], origin: "package.json scripts.test" };
+}
+function asRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+function fromCargoToml2() {
+  return { command: "cargo", args: ["test"], origin: "Cargo.toml" };
+}
+function fromGoMod2() {
+  return { command: "go", args: ["test", "./..."], origin: "go.mod" };
+}
+function fromPyprojectToml(content) {
+  if (!PYTEST_SECTION.test(content)) return null;
+  return { command: "pytest", args: [], origin: "pyproject.toml [tool.pytest]" };
+}
+
+// src/dashboard/delta.ts
+function compareFindings(from, to, cap) {
+  const fromFingerprints = new Set(from.findings.map((finding2) => finding2.fingerprint));
+  const toFingerprints = new Set(to.findings.map((finding2) => finding2.fingerprint));
+  let unchangedCount = 0;
+  let resolvedCount = 0;
+  for (const fingerprint of fromFingerprints) {
+    if (toFingerprints.has(fingerprint)) unchangedCount += 1;
+    else resolvedCount += 1;
+  }
+  const seenNew = /* @__PURE__ */ new Set();
+  const newFindings = [];
+  for (const finding2 of to.findings) {
+    if (fromFingerprints.has(finding2.fingerprint)) continue;
+    if (seenNew.has(finding2.fingerprint)) continue;
+    seenNew.add(finding2.fingerprint);
+    newFindings.push(finding2);
+  }
+  const shownNewFindings = newFindings.slice(0, cap);
+  const truncation = shownNewFindings.length < newFindings.length ? {
+    what: "new_findings",
+    shown: shownNewFindings.length,
+    total: newFindings.length,
+    reason: `new_findings exceeds the cap of ${cap}; showing the first ${shownNewFindings.length} of ${newFindings.length}`
+  } : null;
+  return {
+    delta: {
+      from_scan_id: from.scan_id,
+      to_scan_id: to.scan_id,
+      new_count: newFindings.length,
+      resolved_count: resolvedCount,
+      unchanged_count: unchangedCount,
+      new_findings: shownNewFindings
+    },
+    truncation
+  };
+}
+
+// src/fixpr/verify.ts
+var UNCAPPED = Number.MAX_SAFE_INTEGER;
+var OUTPUT_HEAD_LINES = 20;
+function judgeScan(targets, before, after) {
+  const { delta } = compareFindings(before, after, UNCAPPED);
+  const afterFingerprints = new Set(after.findings.map((finding2) => finding2.fingerprint));
+  const resolved = [];
+  const still_present = [];
+  for (const target of targets) {
+    if (afterFingerprints.has(target)) still_present.push(target);
+    else resolved.push(target);
+  }
+  const new_findings = delta.new_findings.map((finding2) => ({
+    fingerprint: finding2.fingerprint,
+    severity: finding2.severity,
+    title: finding2.title
+  }));
+  return {
+    // delta.new_count, the TRUE count — never new_findings.length, which
+    // would silently agree with a truncated list were one ever introduced
+    // upstream. With UNCAPPED the two are always equal in practice; using
+    // new_count anyway is the same discipline the dashboard itself follows.
+    passed: still_present.length === 0 && delta.new_count === 0,
+    resolved,
+    still_present,
+    new_findings
+  };
+}
+async function judgeTests(opts) {
+  const { derived, worktreePath, projectPath, timeoutMs } = opts;
+  if (derived === null) {
+    return { outcome: "not_run", command: null, origin: null, output_head: null };
+  }
+  const run = opts.run ?? runProcess;
+  const command = [derived.command, ...derived.args].join(" ");
+  const worktreeResult = await run({
+    command: derived.command,
+    args: derived.args,
+    cwd: worktreePath,
+    timeoutMs
+  });
+  if (!hasFailed2(worktreeResult)) {
+    return { outcome: "passed", command, origin: derived.origin, output_head: null };
+  }
+  const baseResult = await run({
+    command: derived.command,
+    args: derived.args,
+    cwd: projectPath,
+    timeoutMs
+  });
+  return {
+    outcome: hasFailed2(baseResult) ? "already_failing" : "broken_by_fix",
+    command,
+    origin: derived.origin,
+    // The worktree run's output, not the base commit's — it is the failure
+    // that needs explaining; the base run only exists to assign blame for it.
+    output_head: headOf(worktreeResult.stdout, worktreeResult.stderr)
+  };
+}
+function mayOpenPr(scan, tests) {
+  return scan.passed && tests.outcome !== "broken_by_fix";
+}
+function hasFailed2(result) {
+  return result.outcome !== "completed" || result.exitCode !== 0;
+}
+function headOf(stdout, stderr) {
+  const text = stdout.trim().length > 0 ? stdout : stderr;
+  if (text.trim().length === 0) return null;
+  return text.split(/\r?\n/).slice(0, OUTPUT_HEAD_LINES).join("\n");
+}
+
+// src/fixpr/worktree.ts
+import { existsSync as existsSync31, mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "node:fs";
+import { tmpdir as tmpdir3 } from "node:os";
+import { join as join47 } from "node:path";
+var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
+async function createWorktree(opts) {
+  let dir;
+  try {
+    dir = mkdtempSync2(join47(tmpdir3(), WORKTREE_DIR_PREFIX));
+  } catch (e) {
+    return { ok: false, reason: `could not create a temp directory: ${errorMessage2(e)}` };
+  }
+  const add = await runProcess({
+    command: "git",
+    args: ["-C", opts.projectPath, "worktree", "add", "-b", opts.branch, dir, "HEAD"],
+    cwd: opts.projectPath,
+    timeoutMs: opts.timeoutMs
+  });
+  if (add.outcome !== "completed") {
+    safeRmDir(dir);
+    await runProcess({
+      command: "git",
+      args: ["-C", opts.projectPath, "worktree", "prune"],
+      cwd: opts.projectPath,
+      timeoutMs: opts.timeoutMs
+    });
+    return { ok: false, reason: describeFailure2(add, "git worktree add") };
+  }
+  const canonicalPath2 = await resolveRegisteredPath(opts.projectPath, opts.branch, opts.timeoutMs) ?? dir;
+  return {
+    ok: true,
+    worktree: makeWorktree(opts.projectPath, canonicalPath2, opts.branch, opts.timeoutMs)
+  };
+}
+function makeWorktree(projectPath, path6, branch, timeoutMs) {
+  let removePromise = null;
+  return {
+    path: path6,
+    branch,
+    remove: () => {
+      removePromise ??= removeWorktree(projectPath, path6, timeoutMs);
+      return removePromise;
+    }
+  };
+}
+async function removeWorktree(projectPath, path6, timeoutMs) {
+  const removeResult = await runProcess({
+    command: "git",
+    args: ["-C", projectPath, "worktree", "remove", "--force", path6],
+    cwd: projectPath,
+    timeoutMs
+  });
+  await runProcess({
+    command: "git",
+    args: ["-C", projectPath, "worktree", "prune"],
+    cwd: projectPath,
+    timeoutMs
+  });
+  if (!existsSync31(path6)) {
+    return { removed: true, warning: null };
+  }
+  const detail = removeResult.outcome !== "completed" ? `: ${describeFailure2(removeResult, "git worktree remove")}` : "";
+  return {
+    removed: false,
+    warning: `'${path6}' still exists after 'git worktree remove --force' and 'git worktree prune'${detail}`
+  };
+}
+async function resolveRegisteredPath(projectPath, branch, timeoutMs) {
+  const list = await runProcess({
+    command: "git",
+    args: ["-C", projectPath, "worktree", "list", "--porcelain"],
+    cwd: projectPath,
+    timeoutMs
+  });
+  if (list.outcome !== "completed") return null;
+  for (const entry of parseWorktreeList(list.stdout)) {
+    if (entry.branch === branch) return entry.path;
+  }
+  return null;
+}
+function parseWorktreeList(porcelain) {
+  const entries = [];
+  let path6 = null;
+  let branch = null;
+  const flush = () => {
+    if (path6 !== null) entries.push({ path: path6, branch });
+    path6 = null;
+    branch = null;
+  };
+  for (const line of porcelain.split("\n")) {
+    if (line === "") {
+      flush();
+      continue;
+    }
+    if (line.startsWith("worktree ")) {
+      path6 = line.slice("worktree ".length);
+    } else if (line.startsWith("branch ")) {
+      const ref = line.slice("branch ".length);
+      branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+    }
+  }
+  flush();
+  return entries;
+}
+function describeFailure2(result, label) {
+  return preferredErrorLine2(result.stderr) ?? firstNonEmptyLine2(result.stderr) ?? firstNonEmptyLine2(result.stdout) ?? `${label}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ""}`;
+}
+function preferredErrorLine2(text) {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("fatal:") || trimmed.startsWith("error:")) return trimmed;
+  }
+  return null;
+}
+function firstNonEmptyLine2(text) {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return null;
+}
+function safeRmDir(dir) {
+  try {
+    rmSync2(dir, { recursive: true, force: true });
+  } catch {
+  }
+}
+function errorMessage2(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+
+// src/tools/createFixPr.ts
+var DEFAULT_SOURCES = ["deps", "semgrep"];
+var DEFAULT_SEVERITY_MIN = "high";
+var DEFAULT_MAX_PRS = 3;
+var tool42 = {
+  name: "create_fix_pr",
+  title: "Apply scanner-produced fixes and open a pull request",
+  description: "Apply fixes the scanners themselves already produced \u2014 deps_update_plan pinned upgrade commands and Semgrep --autofix \u2014 inside an isolated git worktree, prove them with a scan differential and a (lazy) test differential, and open one pull request per ecosystem or scanner. apply defaults to false: candidates, the worktree, the fix, and both differentials always run; only commit/push/gh pr create sit behind apply=true.",
+  inputSchema: {
+    project_path: ProjectPath,
+    severity_min: SeverityMin,
+    sources: external_exports.array(external_exports.enum(["deps", "semgrep"])).optional().describe("Which fix sources to consider. Default: both ('deps' and 'semgrep')."),
+    max_prs: external_exports.number().int().min(1).max(10).optional().describe(
+      "Maximum number of groups (pull requests) to act on in one run, highest severity first. Groups beyond the cap are reported in `deferred`, never dropped silently. Default: 3."
+    ),
+    apply: external_exports.boolean().optional().describe(
+      "When true, commit, push and open a pull request for every group that verifies. Default: false \u2014 a dry run that still computes candidates, applies the fix in a worktree, and runs both differentials, but never leaves the machine."
+    )
+  },
+  handler: async (input, ctx) => handler42(input, ctx)
+};
+registerToolModule(tool42);
+async function handler42(input, ctx) {
+  const inp = input;
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return failDomain25("not_a_git_repo", e.message);
+  }
+  if (!await isGitRepo(projectPath)) {
+    return failDomain25("not_a_git_repo", `'${projectPath}' is not inside a git working tree.`);
+  }
+  const severityMin = inp.severity_min ?? DEFAULT_SEVERITY_MIN;
+  const sources = inp.sources ?? DEFAULT_SOURCES;
+  const maxPrs = inp.max_prs ?? DEFAULT_MAX_PRS;
+  const apply = inp.apply === true;
+  const allFindings = ctx.storage.findings.listOpenForProject(projectPath);
+  const upgradeSteps = sources.includes("deps") ? await fetchUpgradeSteps(projectPath, ctx) : [];
+  const groups = buildGroups({ findings: allFindings, upgradeSteps, sources, severityMin });
+  const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
+  const results = [];
+  for (const group of selected) {
+    try {
+      results.push(await processGroup({ group, allFindings, projectPath, apply, ctx }));
+    } catch (e) {
+      results.push({
+        key: group.key,
+        source: group.source,
+        severity: group.severity,
+        branch: branchName(group.source, group.key, group.hash),
+        findings: findingsForGroup(allFindings, group),
+        commands: [],
+        scan: null,
+        tests: null,
+        pr: null,
+        note: `internal_error: unexpected failure while processing this group \u2014 ${errorMessage3(e)}`
+      });
+    }
+  }
+  return {
+    ok: true,
+    applied: apply,
+    project_path: projectPath,
+    severity_min: severityMin,
+    sources,
+    groups: results,
+    deferred,
+    deferred_reason
+  };
+}
+async function fetchUpgradeSteps(projectPath, ctx) {
+  const depsPlanTool = TOOLS.find((t) => t.name === "deps_update_plan");
+  if (depsPlanTool === void 0) return [];
+  const result = await depsPlanTool.handler({ project_path: projectPath }, ctx);
+  if (!result.ok) return [];
+  const r = result;
+  return Array.isArray(r.plan) ? r.plan : [];
+}
+async function processGroup(opts) {
+  const { group, allFindings, projectPath, apply, ctx } = opts;
+  const branch = branchName(group.source, group.key, group.hash);
+  const targets = group.candidates.flatMap((c3) => c3.fingerprints);
+  const findings = findingsForGroup(allFindings, group);
+  const base = { key: group.key, source: group.source, severity: group.severity, branch, findings };
+  const created = await createWorktree({ projectPath, branch });
+  if (!created.ok) {
+    return {
+      ...base,
+      commands: [],
+      scan: null,
+      tests: null,
+      pr: null,
+      note: `worktree_failed: could not create an isolated worktree for branch '${branch}': ${created.reason}`
+    };
+  }
+  const { worktree } = created;
+  try {
+    const derivedTest = deriveTestCommand(readManifests(worktree.path));
+    const applied = await applyGroup({
+      group,
+      worktreePath: worktree.path,
+      lockfileOnly: derivedTest === null
+    });
+    if (!applied.applied) {
+      return {
+        ...base,
+        commands: applied.commands,
+        scan: null,
+        tests: null,
+        pr: null,
+        note: `apply_failed: the fix could not be applied \u2014 ${describeApplyFailure(applied.failure)}`
+      };
+    }
+    const rescan = await rescanAfterFix(group, worktree.path, ctx);
+    if (!rescan.ok) {
+      return {
+        ...base,
+        commands: applied.commands,
+        scan: null,
+        tests: null,
+        pr: null,
+        note: `verification_failed: could not verify the fix \u2014 ${rescan.reason}`
+      };
+    }
+    const beforeScanId = ctx.storage.scans.getLatestForProject(projectPath)?.scan_id ?? "unknown";
+    const scanVerdict = judgeScan(
+      targets,
+      { scan_id: beforeScanId, findings: allFindings },
+      { scan_id: rescan.scanId, findings: rescan.findings }
+    );
+    const testVerdict = await judgeTests({
+      derived: derivedTest,
+      worktreePath: worktree.path,
+      projectPath
+    });
+    if (!mayOpenPr(scanVerdict, testVerdict)) {
+      const why = !scanVerdict.passed ? `the scan differential did not pass (${scanVerdict.still_present.length} target(s) still present, ${scanVerdict.new_findings.length} new finding(s))` : "the fix broke the test suite";
+      return {
+        ...base,
+        commands: applied.commands,
+        scan: scanVerdict,
+        tests: testVerdict,
+        pr: null,
+        note: `not_verified: ${why} \u2014 no pull request opened`
+      };
+    }
+    if (!apply) {
+      return {
+        ...base,
+        commands: applied.commands,
+        scan: scanVerdict,
+        tests: testVerdict,
+        pr: null,
+        note: "verified: dry run (apply=false) \u2014 re-run with apply=true to open a pull request"
+      };
+    }
+    const title = buildPrTitle(group, targets.length);
+    const body = buildPrBody({ group, findings, commands: applied.commands, scan: scanVerdict, tests: testVerdict });
+    const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body });
+    const note = pr.status === "created" ? `pull request opened: ${pr.url ?? "(gh reported no URL)"}` : `pull request not opened (${pr.status}): ${pr.detail ?? "no further detail"}`;
+    return { ...base, commands: applied.commands, scan: scanVerdict, tests: testVerdict, pr, note };
+  } finally {
+    await worktree.remove();
+  }
+}
+function readManifests(worktreePath) {
+  const files = {};
+  for (const name of TEST_MANIFESTS) {
+    const path6 = join48(worktreePath, name);
+    if (!existsSync32(path6)) continue;
+    try {
+      files[name] = readFileSync21(path6, "utf8");
+    } catch {
+    }
+  }
+  return files;
+}
+function describeApplyFailure(failure) {
+  if (failure === null) return "unknown failure";
+  const exit = failure.exit_code !== null ? ` (exit ${failure.exit_code})` : "";
+  return `'${failure.command}' ${failure.outcome}${exit}: ${failure.stderr_head}`;
+}
+async function rescanAfterFix(group, worktreePath, ctx) {
+  const toolName = group.source === "semgrep" ? "scan_sast" : "deps_audit";
+  const primaryScanner = group.source === "semgrep" ? "semgrep" : "trivy";
+  const subTool = TOOLS.find((t) => t.name === toolName);
+  if (subTool === void 0) {
+    return { ok: false, reason: `the '${toolName}' tool is not registered` };
+  }
+  const result = await subTool.handler({ project_path: worktreePath }, ctx);
+  if (!result.ok) {
+    return { ok: false, reason: `${toolName} failed: ${result.error.message}` };
+  }
+  const r = result;
+  if (typeof r.scan_id !== "string") {
+    return { ok: false, reason: `${toolName} returned no scan_id` };
+  }
+  const missingTools = Array.isArray(r.missing_tools) ? r.missing_tools : [];
+  if (missingTools.includes(primaryScanner)) {
+    return {
+      ok: false,
+      reason: `${primaryScanner} did not run inside the worktree (reported as missing) \u2014 cannot verify`
+    };
+  }
+  return { ok: true, scanId: r.scan_id, findings: ctx.storage.findings.listByScan(r.scan_id) };
+}
+function buildPrTitle(group, findingCount) {
+  const noun = group.source === "deps" ? `${group.key} dependency` : "Semgrep";
+  const plural = findingCount === 1 ? "" : "s";
+  return `dev-guardian: automated ${noun} fix (${findingCount} finding${plural})`;
+}
+function buildPrBody(opts) {
+  const { group, findings, commands, scan, tests } = opts;
+  const lines = [];
+  lines.push(
+    `Automated fix opened by dev-guardian's \`create_fix_pr\` for the **${group.key}** (${group.source}) group.`
+  );
+  lines.push("", "## Findings covered");
+  for (const f of findings) {
+    const loc = f.file_path ? ` (\`${f.file_path}${f.line_start ? `:${f.line_start}` : ""}\`)` : "";
+    lines.push(`- \`${f.fingerprint.slice(0, 12)}\` [${f.severity}] ${f.title}${loc}`);
+  }
+  lines.push("", "## Commands run");
+  for (const c3 of commands) lines.push(`- \`${c3}\``);
+  lines.push(
+    "",
+    "## Scan differential",
+    `- Resolved: ${scan.resolved.length}`,
+    `- Still present: ${scan.still_present.length}`,
+    `- New findings introduced: ${scan.new_findings.length}`
+  );
+  for (const nf of scan.new_findings) {
+    lines.push(`  - \`${nf.fingerprint.slice(0, 12)}\` [${nf.severity}] ${nf.title}`);
+  }
+  lines.push("", "## Test verdict");
+  switch (tests.outcome) {
+    case "not_run":
+      lines.push("behaviour was not verified: this project declares no test command");
+      break;
+    case "passed":
+      lines.push(`Passed: \`${tests.command ?? ""}\` (${tests.origin ?? "unknown origin"}).`);
+      break;
+    case "already_failing":
+      lines.push(
+        `The test suite was already failing on the base commit BEFORE this change (not caused by this fix): \`${tests.command ?? ""}\` (${tests.origin ?? "unknown origin"}).`
+      );
+      if (tests.output_head) lines.push("", "```", tests.output_head, "```");
+      break;
+    case "broken_by_fix":
+      lines.push("the fix broke the test suite; this pull request should not exist.");
+      break;
+  }
+  lines.push(
+    "",
+    "_Generated by dev-guardian's `create_fix_pr`. This tool verifies that the target findings resolved, that no new finding appeared, and that the test suite still passes \u2014 it does not review the change itself. Verify before merging._"
+  );
+  return lines.join("\n");
+}
+function findingsForGroup(allFindings, group) {
+  const targetSet = new Set(group.candidates.flatMap((c3) => c3.fingerprints));
+  return allFindings.filter((f) => targetSet.has(f.fingerprint));
+}
+function errorMessage3(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+function failDomain25(code, message) {
+  return { ok: false, error: { code, message } };
 }
 
 // src/resources/scans.ts

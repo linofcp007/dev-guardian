@@ -22,6 +22,27 @@ import { createWorktree, WORKTREE_DIR_PREFIX } from '../../src/fixpr/worktree.js
 
 let repo: string;
 
+/**
+ * Every `guardian-fixpr-wt-*` / `fixpr-notrepo-*` path THIS FILE'S OWN tests
+ * create, so the final `afterAll` below can check precisely those rather
+ * than sweeping the whole OS temp directory for the prefix. The prefix
+ * itself is not unique to this file: `createFixPr.test.ts` (Task 7) drives
+ * real `createWorktree` calls of its own — using this exact same
+ * `WORKTREE_DIR_PREFIX`, since it is `worktree.ts`'s own constant, not
+ * something either test file controls — and holds one open for up to ~20s
+ * at a time, far longer than this whole file typically takes to run.
+ * Vitest runs test FILES concurrently by default, so a global "nothing with
+ * this prefix exists anywhere" sweep at the end of THIS file can catch that
+ * sibling's directory mid-use — legitimate, not leaked, just not this
+ * file's to judge. Tracking exactly what this file itself created keeps the
+ * check just as independent of `.remove()`'s own return value (still a raw
+ * filesystem read, still not trusting the code under test to grade itself)
+ * while making it immune to what a concurrently-running sibling is doing
+ * with the same shared prefix.
+ */
+const ownWorktreePaths: string[] = [];
+const ownNotRepoPaths: string[] = [];
+
 function git(...args: string[]) {
   return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
 }
@@ -51,6 +72,7 @@ describe('createWorktree', () => {
     const r = await createWorktree({ projectPath: repo, branch: 'dev-guardian/fix-npm-abc' });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
+    ownWorktreePaths.push(r.worktree.path);
     expect(existsSync(join(r.worktree.path, 'a.txt'))).toBe(true);
     expect(git('worktree', 'list')).toContain(r.worktree.path);
     await r.worktree.remove();
@@ -63,6 +85,7 @@ describe('createWorktree', () => {
     const r = await createWorktree({ projectPath: repo, branch: 'dev-guardian/fix-npm-abc' });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
+    ownWorktreePaths.push(r.worktree.path);
     expect(existsSync(join(r.worktree.path, 'untracked.txt'))).toBe(false);
     // and the user's tree is unchanged
     expect(git('status', '--porcelain')).toContain('a.txt');
@@ -73,6 +96,7 @@ describe('createWorktree', () => {
     const r = await createWorktree({ projectPath: repo, branch: 'dev-guardian/fix-npm-abc' });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
+    ownWorktreePaths.push(r.worktree.path);
     const p = r.worktree.path;
     const out = await r.worktree.remove();
     expect(out.removed).toBe(true);
@@ -87,6 +111,7 @@ describe('createWorktree', () => {
     const r = await createWorktree({ projectPath: repo, branch: 'dev-guardian/fix-npm-abc' });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
+    ownWorktreePaths.push(r.worktree.path);
     writeFileSync(join(r.worktree.path, 'a.txt'), 'changed by a half-applied fix\n');
     const out = await r.worktree.remove();
     expect(out.removed).toBe(true);
@@ -98,6 +123,7 @@ describe('createWorktree', () => {
     const r = await createWorktree({ projectPath: repo, branch: 'dev-guardian/fix-npm-abc' });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
+    ownWorktreePaths.push(r.worktree.path);
     await r.worktree.remove();
     await expect(r.worktree.remove()).resolves.toEqual(
       expect.objectContaining({ removed: true }),
@@ -106,6 +132,7 @@ describe('createWorktree', () => {
 
   it('refuses cleanly when the path is not a git repository', async () => {
     const notRepo = mkdtempSync(join(tmpdir(), 'fixpr-notrepo-'));
+    ownNotRepoPaths.push(notRepo);
     const r = await createWorktree({ projectPath: notRepo, branch: 'x' });
     expect(r.ok).toBe(false);
     rmSync(notRepo, { recursive: true, force: true });
@@ -140,6 +167,7 @@ describe('createWorktree — additional coverage beyond the brief', () => {
     const r = await createWorktree({ projectPath: repo, branch: 'dev-guardian/fix-npm-concurrent' });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
+    ownWorktreePaths.push(r.worktree.path);
     const p = r.worktree.path;
     const [a, b] = await Promise.all([r.worktree.remove(), r.worktree.remove()]);
     expect(a).toEqual({ removed: true, warning: null });
@@ -178,12 +206,22 @@ describe('createWorktree — additional coverage beyond the brief', () => {
 });
 
 afterAll(() => {
-  // Final safety net across the whole file: whatever ran above, the OS temp
-  // directory carries no trace of it left over — this module's own worktree
-  // directories, or a repo/non-repo fixture a test forgot to clean up.
-  expect(tempDirsWithPrefix(WORKTREE_DIR_PREFIX)).toEqual([]);
+  // Final safety net across the whole file: whatever ran above, none of
+  // THIS FILE's own worktree or non-repo fixture directories is still on
+  // disk. Checked against the exact paths this file's own tests created
+  // (see `ownWorktreePaths` / `ownNotRepoPaths` above) rather than a sweep
+  // for every directory bearing the shared `WORKTREE_DIR_PREFIX` /
+  // `fixpr-notrepo-` prefix anywhere in the OS temp directory: `createWorktree`
+  // is not private to this file (`createFixPr.test.ts` drives real calls of
+  // its own, holding a directory under this same prefix open for up to ~20s
+  // at a time), and vitest runs test files concurrently by default, so a
+  // whole-temp-dir sweep can catch a sibling file's legitimate, still-in-use
+  // directory and misreport it as a leak. `fixpr-repo-` has no such sibling
+  // — only this file's own `beforeEach` ever creates one — so it is still
+  // safe to sweep for directly.
+  expect(ownWorktreePaths.filter(existsSync)).toEqual([]);
+  expect(ownNotRepoPaths.filter(existsSync)).toEqual([]);
   expect(tempDirsWithPrefix('fixpr-repo-')).toEqual([]);
-  expect(tempDirsWithPrefix('fixpr-notrepo-')).toEqual([]);
 });
 
 function tempDirsWithPrefix(prefix: string): string[] {

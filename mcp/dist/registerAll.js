@@ -68,6 +68,8 @@ import './tools/scanSkill.js';
 import './tools/mapAttackSurface.js';
 import './tools/scanDast.js';
 import './tools/validateFinding.js';
+// Fix PR (Phase 19):
+import './tools/createFixPr.js';
 // Resources:
 import './resources/scans.js';
 import './resources/findings.js';

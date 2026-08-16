@@ -22,6 +22,7 @@ const EXPECTED_TOOLS = [
   'check_toolchain',
   'compliance_check',
   'compliance_evidence',
+  'create_fix_pr',
   'create_github_issues',
   'deps_audit',
   'deps_update_plan',
@@ -101,8 +102,8 @@ describe('MCP surface — stability snapshot', () => {
     expect(RESOURCES.map((r) => r.name).sort()).toEqual(EXPECTED_RESOURCES);
   });
 
-  it('matches the counts documented in the README (53 tools, 18 resources)', () => {
-    expect(TOOLS).toHaveLength(53);
+  it('matches the counts documented in the README (54 tools, 18 resources)', () => {
+    expect(TOOLS).toHaveLength(54);
     expect(RESOURCES).toHaveLength(18);
   });
 });
