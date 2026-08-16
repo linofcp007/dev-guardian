@@ -38100,7 +38100,7 @@ import { createHash } from "node:crypto";
 import { existsSync as existsSync4, mkdirSync, accessSync, constants as constants4 } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join as join4, resolve as resolve2 } from "node:path";
+import { dirname as dirname4, join as join4, resolve as resolve2 } from "node:path";
 
 // src/storage/migrations/runner.ts
 import { existsSync as existsSync3, readdirSync, readFileSync as readFileSync5 } from "node:fs";
@@ -38267,9 +38267,8 @@ function openDatabase(options) {
     ensureDir(preferredDir);
     chosenPath = preferredPath;
   } else {
-    const fallbackDir = join4(tmpdir(), "dev-guardian", shortHash(projectPath));
-    ensureDir(fallbackDir);
-    chosenPath = join4(fallbackDir, "guardian.db");
+    chosenPath = resolveFallbackDbPath(projectPath);
+    ensureDir(dirname4(chosenPath));
     warning = `Project path '${projectPath}' is not writable; dev-guardian DB persisted to '${chosenPath}' instead. Scans will not be visible alongside the project.`;
   }
   const db = new GuardianDatabase(chosenPath);
@@ -38280,6 +38279,9 @@ function openDatabase(options) {
     result.warning = warning;
   }
   return result;
+}
+function resolveFallbackDbPath(projectPath) {
+  return join4(tmpdir(), "dev-guardian", shortHash(resolve2(projectPath)), "guardian.db");
 }
 function applyPragmas(db) {
   db.pragma("journal_mode = WAL");
@@ -41858,7 +41860,7 @@ import {
   mkdirSync as mkdirSync3,
   readFileSync as readFileSync9
 } from "node:fs";
-import { dirname as dirname4, join as join21 } from "node:path";
+import { dirname as dirname5, join as join21 } from "node:path";
 var PROFILE_FILES = {
   minimal: [
     { source: "gitleaks/gitleaks.toml", target: ".gitleaks.toml", reason: "baseline secret scan rules" },
@@ -41925,7 +41927,7 @@ async function handler4(input, ctx) {
     }
     if (!apply) continue;
     try {
-      mkdirSync3(dirname4(dst), { recursive: true });
+      mkdirSync3(dirname5(dst), { recursive: true });
       copyFileSync(src, dst);
       written.push(p);
     } catch (e) {
@@ -41970,7 +41972,7 @@ function failDomain5(code, message) {
 
 // src/tools/observabilitySetup.ts
 import { existsSync as existsSync15, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname5, join as join22 } from "node:path";
+import { dirname as dirname6, join as join22 } from "node:path";
 var tool5 = {
   name: "observability_setup",
   title: "Configure logging + metrics scaffolding",
@@ -42004,7 +42006,7 @@ async function handler5(input, ctx) {
         continue;
       }
       try {
-        mkdirSync4(dirname5(abs), { recursive: true });
+        mkdirSync4(dirname6(abs), { recursive: true });
         writeFileSync3(abs, p.contents, "utf8");
         written.push(p);
       } catch (e) {
@@ -51582,7 +51584,7 @@ function livenessMessage(target, liveness, timeoutMs) {
 import { join as join45 } from "node:path";
 
 // src/dast/nuclei.ts
-import { dirname as dirname6 } from "node:path";
+import { dirname as dirname7 } from "node:path";
 var DEFAULT_NUCLEI_RATE_LIMIT = 10;
 var ALWAYS_EXCLUDED_TAGS = ["dos", "fuzz"];
 function excludedTags(allowIntrusive) {
@@ -51657,7 +51659,7 @@ async function invokeNuclei(opts) {
     // has no bearing on what gets scanned; `outputPath`'s own directory is
     // used only because it is a real, already-relevant path handed to us,
     // rather than reaching for ambient process state.
-    cwd: dirname6(opts.outputPath),
+    cwd: dirname7(opts.outputPath),
     // An allowlisted environment, and `extendEnv: false` so it REPLACES the
     // parent's rather than being merged over it. Without the second half the
     // first is decorative: execa extends `process.env` by default, and the

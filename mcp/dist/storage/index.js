@@ -44,5 +44,5 @@ export class Storage {
         return this.db;
     }
 }
-export { openDatabase } from './db.js';
+export { openDatabase, openDatabaseAtPath, resolveFallbackDbPath } from './db.js';
 //# sourceMappingURL=index.js.map

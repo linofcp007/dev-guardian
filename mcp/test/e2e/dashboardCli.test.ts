@@ -22,7 +22,7 @@ import {
   mkdtempSync, mkdirSync, rmSync, existsSync, readdirSync, readFileSync, renameSync, writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, parse, resolve } from 'node:path';
+import { dirname, join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Seeding-only imports, straight from src (TypeScript), exactly like
@@ -30,8 +30,14 @@ import { fileURLToPath } from 'node:url';
 // ONLY to populate a fixture database directly through the storage layer
 // before the CLI-under-test is invoked as its own subprocess against
 // mcp/dist/. This is what lets "status on a project with real findings" be
-// tested without semgrep/gitleaks/trivy installed.
-import { openDatabase, Storage } from '../../src/storage/index.js';
+// tested without semgrep/gitleaks/trivy installed. `openDatabaseAtPath` /
+// `resolveFallbackDbPath` are the same two exports `cli/dev-guardian.mjs`'s
+// own `resolveDbHandle` uses to find and read a scan sitting in the
+// writability-fallback location — see the "writability fallback location"
+// describe block below.
+import {
+  openDatabase, openDatabaseAtPath, resolveFallbackDbPath, Storage,
+} from '../../src/storage/index.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
@@ -317,8 +323,19 @@ describe('dev-guardian dashboard — a write failure on --out fails clearly, not
  * helpers (field names/optionality cross-checked against
  * `storage/scansRepo.ts` and `storage/findingsRepo.ts` directly).
  */
-function seedCompletedScan(projectPath: string): void {
-  const { db } = openDatabase({ projectPath });
+/**
+ * The actual row-insertion logic, factored out of {@link seedCompletedScan}
+ * so the "writability fallback location" tests below can seed the identical
+ * shape of scan into a `db` handle they opened themselves (via
+ * `openDatabaseAtPath`, at the fallback path — not the primary one
+ * `openDatabase({ projectPath })` would pick for an ordinary, writable
+ * `projectPath`). `projectPath` is still taken explicitly, separate from
+ * however `db` was opened: it is stored verbatim as the scan row's own
+ * `project_path` column, which is what `buildSnapshot`/`storage.scans`
+ * filter latest-scan lookups by — it must match the value the CLI is told
+ * via `--project`, regardless of which physical file the data lives in.
+ */
+function seedCompletedScanInto(db: ReturnType<typeof openDatabaseAtPath>, projectPath: string): void {
   const storage = new Storage(db);
   try {
     const scanId = 'seed-scan-1';
@@ -357,6 +374,11 @@ function seedCompletedScan(projectPath: string): void {
   } finally {
     storage.close();
   }
+}
+
+function seedCompletedScan(projectPath: string): void {
+  const { db } = openDatabase({ projectPath });
+  seedCompletedScanInto(db, projectPath);
 }
 
 describe('dev-guardian status — against a project with real, seeded findings', () => {
@@ -597,6 +619,112 @@ describe('dev-guardian status / dashboard — genuinely read-only: no database i
       expect(dbSizeAfter).toBe(dbSizeBefore);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Deferred followup: the writability-fallback database location       */
+/* ------------------------------------------------------------------ */
+
+describe('dev-guardian status / dashboard — a scan sitting only in the writability fallback location', () => {
+  // storage/db.ts's own `openDatabase` redirects a project's database to
+  // `os.tmpdir()/dev-guardian/<sha1(project)>/guardian.db` when
+  // `<project>/.guardian` is not writable (read-only CI mounts, restrictive
+  // ACLs, read-only shares) — supported with a warning, not refused, and
+  // every scan run against that same unwritable project directory lands
+  // there. Before this fix, `buildProjectSnapshot` only ever checked the
+  // PRIMARY path for "does a database already exist" and fell back to the
+  // empty in-memory render otherwise — so a project scanned entirely through
+  // the fallback showed "No scan yet" here despite a complete, fully
+  // queryable scan sitting one directory away: a false assertion, not a
+  // crash or data loss, which is exactly the failure shape this project
+  // treats as worst.
+  //
+  // Reproducing a genuinely unwritable directory is not portable (chmod-based
+  // permission tricks do not reliably deny directory writes on Windows), so
+  // this seeds directly at the exact path `openDatabase` would have chosen —
+  // computed via the same `resolveFallbackDbPath` this fix exported from
+  // `storage/db.ts` rather than a re-derived hash — which is byte-for-byte
+  // what a real scan against an unwritable `dir` would have produced.
+
+  it('status reports the scan, not "No scan yet", when only the fallback database has it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'guardian-dash-fallback-'));
+    const fallbackPath = resolveFallbackDbPath(dir);
+    try {
+      expect(existsSync(join(dir, '.guardian'))).toBe(false);
+
+      mkdirSync(dirname(fallbackPath), { recursive: true });
+      seedCompletedScanInto(openDatabaseAtPath(fallbackPath), dir);
+
+      // The scan really does exist ONLY at the fallback location — no
+      // primary database was ever created for `dir`.
+      expect(existsSync(join(dir, '.guardian', 'guardian.db'))).toBe(false);
+
+      const r = runCli(['status', '--project', dir]);
+
+      expect(r.status).toBe(0);
+      expect(r.stderr).toBe('');
+      expect(r.stdout).not.toMatch(/No scan yet/);
+      expect(r.stdout).toMatch(/1 crit/);
+      expect(r.stdout).toMatch(/1 high/);
+      expect(r.stdout).toMatch(/security_full/);
+      expect(r.stdout).not.toMatch(/undefined|NaN/);
+
+      // Still genuinely read-only: reading the fallback must not create a
+      // primary database of its own.
+      expect(existsSync(join(dir, '.guardian'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dirname(fallbackPath), { recursive: true, force: true });
+    }
+  });
+
+  it('dashboard renders the same fallback scan, inlined as parseable JSON', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'guardian-dash-fallback-html-'));
+    const fallbackPath = resolveFallbackDbPath(dir);
+    try {
+      mkdirSync(dirname(fallbackPath), { recursive: true });
+      seedCompletedScanInto(openDatabaseAtPath(fallbackPath), dir);
+
+      const out = join(dir, 'dash.html');
+      const r = runCli(['dashboard', '--project', dir, '--out', out, '--no-open']);
+
+      expect(r.status).toBe(0);
+      expect(r.stderr).toBe('');
+      const html = readFileSync(out, 'utf8');
+      const m = html.match(
+        /<script type="application\/json" id="guardian-data">([\s\S]*?)<\/script>/);
+      expect(m).toBeTruthy();
+      const payload = JSON.parse(m?.[1] ?? 'null') as { findings?: { total?: number } };
+      expect(payload.findings?.total).toBe(3);
+      expect(existsSync(join(dir, '.guardian', 'guardian.db'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dirname(fallbackPath), { recursive: true, force: true });
+    }
+  });
+
+  it('a project WITH a primary database keeps using it, never the fallback path', () => {
+    // The other half of "both locations": when the primary already exists,
+    // detection must still prefer it — not this task's own addition, but
+    // confirms the new fallback branch did not accidentally invert the
+    // check or shadow the existing, already-proven primary path.
+    const dir = mkdtempSync(join(tmpdir(), 'guardian-dash-fallback-precedence-'));
+    const fallbackPath = resolveFallbackDbPath(dir);
+    try {
+      seedCompletedScan(dir); // primary — writable temp dir, ordinary path
+
+      const r = runCli(['status', '--project', dir]);
+
+      expect(r.status).toBe(0);
+      expect(r.stdout).not.toMatch(/No scan yet/);
+      expect(r.stdout).toMatch(/1 crit/);
+      expect(existsSync(join(dir, '.guardian', 'guardian.db'))).toBe(true);
+      expect(existsSync(fallbackPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dirname(fallbackPath), { recursive: true, force: true });
     }
   });
 });
