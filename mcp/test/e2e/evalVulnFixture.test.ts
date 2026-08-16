@@ -17,7 +17,7 @@
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { execa } from 'execa';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -126,6 +126,23 @@ describe('E2E — eval-vuln fixture', () => {
     'security_scan_full runs end-to-end without crashing (orchestration smoke)',
     async () => {
 
+    // A COPY, not the in-repo FIXTURE itself: security_scan_full shells out to
+    // scripts/scan/full-security-scan.sh, which `cd`s into whatever
+    // project_path it is given and writes real `.guardian/reports/
+    // security-<TS>/` output there — correct behaviour for a real project,
+    // but pointed straight at the in-repo fixture it left a fresh, real
+    // report directory in THIS repo's own working tree on every test run.
+    // `.guardian/` is gitignored, so `git status` never flagged the growth;
+    // caught only by noticing the fixture tree itself had reached 385
+    // directories / 2.8 MB. Same mkdtemp+cpSync pattern
+    // rulePackFixture.test.ts / validateFindingFixture.test.ts already use
+    // (for the unrelated reason that Semgrep's default ignore skips `test/`
+    // paths) — mirrored here, via the CI pipeline's own equivalent
+    // (ci/runScans.ts's `mkdtemp`), so this scan's output lands in the OS
+    // temp directory and never in the repo.
+    const work = mkdtempSync(join(tmpdir(), 'guardian-evalvuln-'));
+    cpSync(FIXTURE, work, { recursive: true });
+
     const db = new Database(':memory:');
     runMigrations(db);
     const storage = new Storage(db);
@@ -143,7 +160,7 @@ describe('E2E — eval-vuln fixture', () => {
 
     const tool = TOOLS.find((t) => t.name === 'security_scan_full');
     expect(tool).toBeDefined();
-    const result = (await tool!.handler({ project_path: FIXTURE, force: true }, plugin)) as {
+    const result = (await tool!.handler({ project_path: work, force: true }, plugin)) as {
       ok: boolean;
     };
     expect(result.ok).toBe(true);
