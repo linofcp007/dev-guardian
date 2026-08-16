@@ -21,7 +21,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, accessSync, constants } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { runMigrations } from './migrations/runner.js';
 // `node:sqlite` is pulled in via createRequire rather than a static value
 // import on purpose: the production bundler (esbuild) and the test runner
@@ -144,9 +144,8 @@ export function openDatabase(options) {
         chosenPath = preferredPath;
     }
     else {
-        const fallbackDir = join(tmpdir(), 'dev-guardian', shortHash(projectPath));
-        ensureDir(fallbackDir);
-        chosenPath = join(fallbackDir, 'guardian.db');
+        chosenPath = resolveFallbackDbPath(projectPath);
+        ensureDir(dirname(chosenPath));
         warning =
             `Project path '${projectPath}' is not writable; ` +
                 `dev-guardian DB persisted to '${chosenPath}' instead. ` +
@@ -160,6 +159,53 @@ export function openDatabase(options) {
         result.warning = warning;
     }
     return result;
+}
+/**
+ * Where {@link openDatabase} redirects a project's database when
+ * `<projectPath>/.guardian` is not writable: `os.tmpdir()/dev-guardian/
+ * <sha1(project)>/guardian.db`, keyed by {@link shortHash} of the RESOLVED
+ * project path — mirrors `openDatabase`'s own internal `resolve()` exactly,
+ * so a caller that passes a relative path still lands on the same file
+ * `openDatabase` itself would open for it. Pure path arithmetic, no I/O.
+ *
+ * Exported so a caller that needs to know WHERE a fallback database would
+ * live — without wanting `openDatabase`'s own writability probe or its
+ * side effect of creating one — does not reimplement the hash and directory
+ * layout itself, which would silently drift the moment either changed here.
+ * `status`/`dashboard`'s own read-only detection is the motivating caller:
+ * see `resolveDbHandle` in `cli/dev-guardian.mjs`.
+ */
+export function resolveFallbackDbPath(projectPath) {
+    return join(tmpdir(), 'dev-guardian', shortHash(resolve(projectPath)), 'guardian.db');
+}
+/**
+ * Open a database at an EXACT, already-known path — no writability probe, no
+ * primary/fallback decision, and (unlike {@link openDatabase}'s own
+ * non-memory branch) no directory creation: the caller has already
+ * established, by checking the filesystem itself, that `path` exists and is
+ * the one to read.
+ *
+ * Exists for `status`/`dashboard`'s own read-only detection: once it has
+ * found a database sitting at the FALLBACK location (see
+ * `resolveFallbackDbPath`) rather than the primary one, re-running
+ * `openDatabase`'s own writability probe would be pointless at best (the
+ * answer is already known from the filesystem) and WRONG at worst — if the
+ * project directory happens to be writable again by the time `status` runs
+ * (permissions fixed, a different mount, …), `openDatabase({ projectPath })`
+ * would pick the PRIMARY path instead (writable wins), silently ignoring the
+ * very fallback database this function was called to read and, worse,
+ * creating a fresh EMPTY primary file in its place. Opening the exact path
+ * already located sidesteps that re-derivation entirely.
+ *
+ * Still applies the same pragmas and runs migrations `openDatabase` would
+ * have, so a database that predates a later migration is brought current
+ * before use — this is a genuine open, not a bypass of either.
+ */
+export function openDatabaseAtPath(path) {
+    const db = new GuardianDatabase(path);
+    applyPragmas(db);
+    runMigrations(db);
+    return db;
 }
 function applyPragmas(db) {
     // WAL gives concurrent readers + one writer without the classic SQLITE_BUSY

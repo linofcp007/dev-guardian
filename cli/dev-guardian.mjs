@@ -91,7 +91,7 @@ import { assessBashCommand } from '../mcp/dist/hooks/bashGuard.js';
 import { buildSnapshot } from '../mcp/dist/dashboard/snapshot.js';
 import { renderStatus } from '../mcp/dist/dashboard/renderStatus.js';
 import { renderDashboard } from '../mcp/dist/dashboard/renderHtml.js';
-import { openDatabase, Storage } from '../mcp/dist/storage/index.js';
+import { openDatabase, openDatabaseAtPath, resolveFallbackDbPath, Storage } from '../mcp/dist/storage/index.js';
 import { runMigrations } from '../mcp/dist/storage/migrations/runner.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/bin
@@ -1152,27 +1152,27 @@ async function cmdBaseline(argv) {
  *
  * Both `runMigrations(db)` AND `new Storage(db)` are inside the try, not
  * before it — a fix-round-1 correction (both were previously in front of
- * it). `runMigrations(db)` is normally a proven no-op here (`openDatabase`
- * already runs migrations internally; nothing pending, nothing executed —
- * see `migrations/runner.ts`), but a DATABASE FILE can be in a state its
- * own recorded schema version does not describe (hand-edited, corrupted,
- * partially migrated by a crashed prior process) — `runMigrations` alone
- * would not notice that (it trusts the recorded version and does nothing),
- * but `new Storage(db)`'s constructor WOULD: every repo class prepares its
- * statements immediately, and `db.prepare()` validates against the actual
- * current schema, so a genuinely missing table surfaces right there, not
- * inside `runMigrations`. That is precisely why `new Storage(db)` itself
- * has to be inside the guarded region, not just the calls that look more
- * dangerous.
+ * it). `runMigrations(db)` is normally a proven no-op here (`openDatabase`/
+ * `openDatabaseAtPath` already run migrations internally; nothing pending,
+ * nothing executed — see `migrations/runner.ts`), but a DATABASE FILE can be
+ * in a state its own recorded schema version does not describe (hand-edited,
+ * corrupted, partially migrated by a crashed prior process) — `runMigrations`
+ * alone would not notice that (it trusts the recorded version and does
+ * nothing), but `new Storage(db)`'s constructor WOULD: every repo class
+ * prepares its statements immediately, and `db.prepare()` validates against
+ * the actual current schema, so a genuinely missing table surfaces right
+ * there, not inside `runMigrations`. That is precisely why `new Storage(db)`
+ * itself has to be inside the guarded region, not just the calls that look
+ * more dangerous.
  *
  * The `finally` closes the raw `db` handle directly — `storage.close()`
  * would not be reachable/safe here, because the one call this most needs to
  * guard is `new Storage(db)` throwing, at which point the `storage` local
  * was never assigned. `db`, in contrast, is guaranteed to exist for the
- * entire try (obtained from `openDatabase` before the try even starts), and
- * `Storage.close()` is itself nothing more than `this.db.close()` — closing
- * `db` directly is equivalent on every path where `storage` DOES exist, and
- * is the only option on the one path where it does not.
+ * entire try (obtained from `resolveDbHandle` before the try even starts),
+ * and `Storage.close()` is itself nothing more than `this.db.close()` —
+ * closing `db` directly is equivalent on every path where `storage` DOES
+ * exist, and is the only option on the one path where it does not.
  *
  * Closing here, before returning, is also deliberate for a second reason:
  * rendering (`renderStatus`/`renderDashboard`) and writing (`--out`) are
@@ -1185,38 +1185,57 @@ async function cmdBaseline(argv) {
  * **Genuinely read-only (coordinator review, Important).** `openDatabase`
  * always calls `ensureDir` + `runMigrations` for a file-backed database —
  * correct for the MCP server, which persists scans, but wrong here: on a
- * directory that has no `.guardian/guardian.db` yet, it CREATES one (an
- * empty, freshly-migrated 143 KB file), which contradicts this command's own
- * documented promise (design doc §1: "Nothing here runs a scan, mutates the
- * database, opens a socket, or reaches the network") the moment a user points
- * `status`/`dashboard` at a project it has never touched. Detected cleanly by
- * checking for the one file `openDatabase` itself would otherwise create at
- * — `<project>/.guardian/guardian.db`, the documented, primary location (see
- * `storage/db.ts`'s own module doc) — BEFORE opening anything: when it does
- * not exist, this opens an IN-MEMORY database instead (`inMemory: true`,
- * never touches disk) rather than the real project path. `buildSnapshot`
- * only ever queries `storage`; a freshly-migrated empty in-memory database
- * and a freshly-migrated empty file-backed one are indistinguishable to every
- * query it runs, so this reuses the exact "never scanned" path already
- * proven by the unit suite (`dashboard/snapshot.test.ts`), rather than
- * hand-rolling a second copy of that empty state here. `projectPath` itself
- * is passed through unchanged either way, so `snapshot.project_path` — and
- * everything rendered from it — still names the real project, never
- * `:memory:`.
+ * directory that has no database yet ANYWHERE `openDatabase` would look, it
+ * CREATES one (an empty, freshly-migrated 143 KB file), which contradicts
+ * this command's own documented promise (design doc §1: "Nothing here runs a
+ * scan, mutates the database, opens a socket, or reaches the network") the
+ * moment a user points `status`/`dashboard` at a project it has never
+ * touched. Detected by `resolveDbHandle` (below) checking BOTH locations
+ * `openDatabase` can produce — the documented primary path AND its
+ * writability fallback (see `storage/db.ts`'s own module doc) — before
+ * opening anything: only when NEITHER exists does this open an IN-MEMORY
+ * database instead (`inMemory: true`, never touches disk) rather than the
+ * real project path. `buildSnapshot` only ever queries `storage`; a
+ * freshly-migrated empty in-memory database and a freshly-migrated empty
+ * file-backed one are indistinguishable to every query it runs, so this
+ * reuses the exact "never scanned" path already proven by the unit suite
+ * (`dashboard/snapshot.test.ts`), rather than hand-rolling a second copy of
+ * that empty state here. `projectPath` itself is passed through unchanged
+ * either way, so `snapshot.project_path` — and everything rendered from it —
+ * still names the real project, never `:memory:`.
  *
- * Narrower than `openDatabase`'s own writability fallback (which also covers
- * a project directory that exists but is not writable, by redirecting to a
- * temp-dir database): this checks only the documented primary path. A
- * project that is unwritable AND already has scan history sitting in that
- * temp fallback is not specially detected here and would read as "never
- * scanned" — an accepted, narrow gap (unwritable project directories are
- * already an edge case `status`/`dashboard` do not otherwise treat
- * specially), not a claim that this covers every path `openDatabase` can
- * choose.
+ * **Both locations, not just the primary one.** `openDatabase` has a
+ * documented fallback (`storage/db.ts`): when `<project>/.guardian` is not
+ * writable — read-only CI mounts, restrictive ACLs, read-only shares, all of
+ * which `scan`/the MCP server explicitly support, with a warning, rather
+ * than refusing — it persists to `os.tmpdir()/dev-guardian/<hash>/
+ * guardian.db` instead, and every scan run against that same unwritable
+ * project directory lands there. The ORIGINAL version of this function only
+ * ever checked the primary path, so a project scanned entirely through that
+ * fallback rendered as "never scanned" here even though a complete scan was
+ * sitting in the fallback, fully queryable: a false negative about the one
+ * thing this project cares most about not getting wrong — asserting
+ * something that is not true. `resolveDbHandle` closes that gap by checking
+ * the fallback location too (`resolveFallbackDbPath`, reused rather than
+ * re-derived — the sha1 and directory layout live in exactly one place). When
+ * only the fallback exists, it is opened DIRECTLY via `openDatabaseAtPath`,
+ * not through another `openDatabase({ projectPath })` call — see that
+ * function's own doc comment in `storage/db.ts` for why re-running the
+ * writability probe at this point would risk creating a fresh, empty PRIMARY
+ * database instead of reading the fallback that was just found.
  */
+function resolveDbHandle(projectPath) {
+  const primaryPath = join(projectPath, '.guardian', 'guardian.db');
+  if (existsSync(primaryPath)) return openDatabase({ projectPath }).db;
+
+  const fallbackPath = resolveFallbackDbPath(projectPath);
+  if (existsSync(fallbackPath)) return openDatabaseAtPath(fallbackPath);
+
+  return openDatabase({ projectPath, inMemory: true }).db;
+}
+
 function buildProjectSnapshot(projectPath) {
-  const hasExistingDb = existsSync(join(projectPath, '.guardian', 'guardian.db'));
-  const { db } = openDatabase(hasExistingDb ? { projectPath } : { projectPath, inMemory: true });
+  const db = resolveDbHandle(projectPath);
   try {
     runMigrations(db);
     const storage = new Storage(db);

@@ -49,5 +49,5 @@ export class Storage {
   }
 }
 
-export { openDatabase } from './db.js';
+export { openDatabase, openDatabaseAtPath, resolveFallbackDbPath } from './db.js';
 export type { OpenedDatabase, OpenOptions } from './db.js';
