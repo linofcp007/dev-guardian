@@ -128,7 +128,49 @@ function buildDepsGroups(
 }
 
 function mentionsPackage(finding: Finding, packageName: string): boolean {
-  return finding.title.includes(packageName) || (finding.message ?? '').includes(packageName);
+  return (
+    containsWholePackageName(finding.title, packageName) ||
+    containsWholePackageName(finding.message ?? '', packageName)
+  );
+}
+
+/**
+ * Whether `packageName` appears in `text` as a whole token, not merely as a
+ * substring. Plain `.includes()` treats "requests vulnerable" as mentioning
+ * "request", "lodash.merge vulnerable" as mentioning "lodash", and
+ * "axios-retry vulnerable" as mentioning "axios" — three different, real
+ * packages, each of which would get the WRONG package's upgrade command
+ * applied, not merely a missed pairing.
+ *
+ * A plain `\b` regex boundary does not fix this either: `-`, `.`, `@` and
+ * `/` are all non-word characters, so `\b` sits on both sides of "axios"
+ * inside "axios-retry" too. Instead this treats the characters that can
+ * occur inside a real package identifier — across npm (including scoped
+ * `@scope/pkg`), pip, composer, cargo, go, rubygems and dotnet names — as
+ * NOT boundaries, and requires a true separator (whitespace, punctuation,
+ * or the start/end of the string) on both sides of the match.
+ */
+function containsWholePackageName(text: string, packageName: string): boolean {
+  if (packageName.length === 0) return false;
+  let from = 0;
+  for (;;) {
+    const index = text.indexOf(packageName, from);
+    if (index === -1) return false;
+    const before = text[index - 1];
+    const after = text[index + packageName.length];
+    if (!isPackageNameChar(before) && !isPackageNameChar(after)) return true;
+    from = index + 1;
+  }
+}
+
+/**
+ * Characters that continue a package-identifier token rather than ending
+ * one: letters, digits, `_`, `-`, `.`, `@`, `/`. `undefined` — off the start
+ * or end of the string — is never one of these, so it always counts as a
+ * boundary.
+ */
+function isPackageNameChar(ch: string | undefined): boolean {
+  return ch !== undefined && /[A-Za-z0-9_.@/-]/.test(ch);
 }
 
 // --------------------------------------------------------------- semgrep

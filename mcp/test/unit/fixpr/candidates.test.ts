@@ -77,6 +77,84 @@ describe('buildGroups', () => {
     expect(groups.map((g) => g.key).sort()).toEqual(['npm', 'pip']);
   });
 
+  // --- Word-boundary pairing: a substring match would apply the WRONG
+  // package's fix, not just miss a pairing — e.g. "npm install request@x"
+  // for a vulnerability that is actually in "requests". Each case below is
+  // confusable under plain `.includes()` but must not pair.
+
+  it('does not pair "request" with a finding about the different package "requests"', () => {
+    const groups = buildGroups({
+      findings: [finding({ title: 'requests vulnerable', fingerprint: 'a'.repeat(64) })],
+      upgradeSteps: [step({ package_name: 'request', ecosystem: 'npm',
+        upgrade_command: 'npm install request@2.88.2' })],
+      sources: ['deps'], severityMin: 'high',
+    });
+    expect(groups).toEqual([]);
+  });
+
+  it('does not pair "lodash" with a finding about the different package "lodash.merge"', () => {
+    const groups = buildGroups({
+      findings: [finding({ title: 'lodash.merge vulnerable', fingerprint: 'a'.repeat(64) })],
+      upgradeSteps: [step()], // package_name: 'lodash'
+      sources: ['deps'], severityMin: 'high',
+    });
+    expect(groups).toEqual([]);
+  });
+
+  it('does not pair "axios" with a finding about the different package "axios-retry"', () => {
+    const groups = buildGroups({
+      findings: [finding({ title: 'axios-retry vulnerable', fingerprint: 'a'.repeat(64) })],
+      upgradeSteps: [step({ package_name: 'axios', ecosystem: 'npm',
+        upgrade_command: 'npm install axios@1.7.0' })],
+      sources: ['deps'], severityMin: 'high',
+    });
+    expect(groups).toEqual([]);
+  });
+
+  it('matches a scoped npm package name as one whole token', () => {
+    // '@' and '/' are non-word characters, so a naive \b boundary would
+    // already treat "@babel/core" as containing a boundary-delimited
+    // "core" — this must still match the FULL scoped name exactly.
+    const groups = buildGroups({
+      findings: [finding({ title: '@babel/core vulnerable', fingerprint: 'a'.repeat(64) })],
+      upgradeSteps: [step({ package_name: '@babel/core', ecosystem: 'npm',
+        upgrade_command: 'npm install @babel/core@7.24.0' })],
+      sources: ['deps'], severityMin: 'high',
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.candidates[0]?.command).toBe('npm install @babel/core@7.24.0');
+  });
+
+  it('does not pair the unscoped "core" with a finding naming the scoped "@babel/core"', () => {
+    // The mirror image of the scoped-match test: '/' must count as
+    // continuing the token, not as a boundary that exposes "core" on its own.
+    const groups = buildGroups({
+      findings: [finding({ title: '@babel/core vulnerable', fingerprint: 'a'.repeat(64) })],
+      upgradeSteps: [step({ package_name: 'core', ecosystem: 'npm',
+        upgrade_command: 'npm install core@1.0.0' })],
+      sources: ['deps'], severityMin: 'high',
+    });
+    expect(groups).toEqual([]);
+  });
+
+  it('builds deps and semgrep groups together — the tool\'s actual default sources', () => {
+    // No test above exercises sources: ['deps', 'semgrep'] together, which is
+    // exactly what create_fix_pr passes when the caller does not override it.
+    const groups = buildGroups({
+      findings: [
+        finding({ fingerprint: 'a'.repeat(64), title: 'lodash vulnerable' }),
+        finding({ fingerprint: 'd'.repeat(64), tool: 'semgrep', rule_id: 'rule.one' }),
+      ],
+      upgradeSteps: [step()],
+      sources: ['deps', 'semgrep'], severityMin: 'high',
+    });
+    expect(groups.map((g) => g.key).sort()).toEqual(['npm', 'semgrep']);
+    const npmGroup = groups.find((g) => g.key === 'npm');
+    const semgrepGroup = groups.find((g) => g.key === 'semgrep');
+    expect(npmGroup?.candidates).toHaveLength(1);
+    expect(semgrepGroup?.candidates).toHaveLength(1);
+  });
+
   it('gives the same findings the same hash across runs, and different findings a different one', () => {
     // The branch name is derived from this. An unstable hash means a repeat run
     // cannot recognise its own earlier branch, and idempotency is gone.
