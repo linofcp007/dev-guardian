@@ -169,12 +169,19 @@ flag. With `apply: false` the worktree is still removed at the end, so a dry run
 leaves nothing behind at all — not a branch, not a commit, not a worktree.
 
 **`max_prs` caps how many groups are opened, and the cap is never silent.** When
-more groups qualify than the cap allows, the groups beyond it are still reported
-— named, with their findings — and the result says how many were left unopened
-and why. A bounded output that does not say it is bounded reads as "this is
-everything", which is the same class of defect as the rest of this design.
-Groups are ordered by highest severity covered, so the cap drops the least urgent
-work rather than an arbitrary slice.
+more groups qualify than the cap allows, each group beyond it is still reported —
+its key, its source, the highest severity it covers, and how many findings it
+carries — together with a reason saying the cap is why. A bounded output that
+does not say it is bounded reads as "this is everything", which is the same class
+of defect as the rest of this design. Groups are ordered by highest severity
+covered, so the cap drops the least urgent work rather than an arbitrary slice.
+
+The deferral carries counts rather than the findings themselves, deliberately. A
+deferred group is one nothing was done to, so what a reader needs is that it
+exists, what it covers, how urgent it is, and how to reach it — by re-running
+with a higher `max_prs`. The findings are already addressable through
+`guardian://findings/open`, and duplicating them here would bloat every result
+for no decision it helps anyone make.
 
 The return carries, per group: the findings covered, the fix commands run, the
 scan differential (resolved, new), the test verdict, and either the PR URL or the
