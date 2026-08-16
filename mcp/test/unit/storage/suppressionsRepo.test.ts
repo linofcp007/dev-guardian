@@ -49,4 +49,18 @@ describe('SuppressionsRepo', () => {
     expect(active).toContain('forever');
     expect(active).not.toContain('gone');
   });
+
+  it('listAll returns every row regardless of expiry, unlike listActive', () => {
+    const repo = freshRepo();
+    repo.insert({ finding_fingerprint: 'forever', reason: 'fp' });
+    repo.insert({
+      finding_fingerprint: 'gone',
+      reason: 'old',
+      expires_at: '2000-01-01T00:00:00.000Z',
+    });
+    const all = repo.listAll().map((s) => s.finding_fingerprint);
+    expect(all).toContain('forever');
+    expect(all).toContain('gone'); // the whole point: listActive() would drop this
+    expect(repo.listActive().map((s) => s.finding_fingerprint)).not.toContain('gone');
+  });
 });

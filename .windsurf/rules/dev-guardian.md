@@ -82,6 +82,18 @@ guard: a fork's PR must never get code execution on the runner). Leaves
 `.guardian/reports/` in the workspace — add `.guardian/` to .gitignore by hand; the
 MCP server does this on its own startup, this CLI never does.
 
+## Local dashboard (offline, read-only)
+
+`node cli/dev-guardian.mjs status` — one-screen summary (risk, open
+findings/CVEs, both deltas, top-3 hotspots by count, missing-scanner
+consequences, suppressions); `dashboard` — same snapshot as a
+self-contained `.guardian/dashboard.html`, opened automatically only on a
+TTY (`--no-open` / `--out <path>`). Read-only — no scan, no mutation, no
+socket — and always exits 0 once rendered (report, not gate; 3 is the only
+other code, on a usage error). The page is a snapshot, not live — it won't
+update on a later scan, regenerate it. Window is the latest scan + two
+deltas only, no multi-week trend.
+
 ## Don't
 
 - Don't `security_scan_full` for tiny changes — use review_pr.

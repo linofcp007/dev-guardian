@@ -8,6 +8,48 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- **`dev-guardian status` and `dev-guardian dashboard` — two read-only views over a
+  project's own scan history, for a developer at their own laptop.** `status` prints
+  a one-screen terminal summary (risk score and band, open findings and CVEs by
+  severity, both deltas, up to 3 finding hotspots, missing-scanner consequences,
+  active suppressions); `dashboard` writes a self-contained `.guardian/dashboard.html`
+  — no CDN, no font fetch, no network call of any kind — with the same data, filterable
+  and sortable client-side, opened automatically only when stdout is a TTY (`--no-open`
+  suppresses that, `--out <path>` relocates the file). Both are computed by a single
+  query pass (`mcp/src/dashboard/snapshot.ts#buildSnapshot`) so the two views cannot
+  disagree, and neither runs a scan, mutates the database, or opens a socket. New CLI
+  subcommands `node cli/dev-guardian.mjs status [--project <path>]` and
+  `dashboard [--project <path>] [--out <path>] [--no-open]` — no MCP connection
+  needed, matching `scan`/`baseline update`'s existing shape. `/guardian-status` now
+  shows this deterministic output and adds interpretation on top, instead of
+  improvising the numbers itself.
+  - **The page is a snapshot, not live.** It is accurate as of the moment it was
+    generated and does not change when a later scan runs — regenerate it. This is the
+    cost of shipping with no server, the trade that keeps the feature dependency-free
+    and fully offline.
+  - **The window is the latest scan plus two deltas — still no multi-week trend.**
+    `/guardian-trend` continues to ask for chronic-finding history and a debt
+    half-life nothing in this project computes; this feature does not change that.
+  - **The risk score is the existing `risk_score` heuristic**, extracted into a pure
+    function (`risk.ts`) with its wire output kept byte-for-byte identical (a
+    characterisation test pins it) — a prioritisation aid, not a measurement, and
+    unchanged by this work.
+  - **Coverage is only as honest as `missing_tools`.** Both views refuse an all-clear
+    verdict whenever a scanner the scan intended to run did not run, and name what the
+    numbers therefore don't contain. What neither view — nor the scan that fed them —
+    can detect is a scanner that ran and silently produced nothing (a broken rule pack,
+    an unreadable path): that is indistinguishable from a genuinely clean result at
+    this layer.
+  - **Hotspots rank by finding count, not severity.** A file with 11 low-severity
+    findings outranks one with 2 criticals; the severity breakdown sits alongside for
+    context, but the ranking itself stays deliberately simple.
+  - Both commands exit `0` whenever they render — including over a project full of
+    criticals, or one that has never been scanned (they name the scan command to run
+    instead of showing empty numbers) — because they report; `scan` is what gates. The
+    only non-zero exit either produces is `3`, on a usage error.
+
 ## [1.3.0] — 2026-08-14
 
 ### Added

@@ -245,6 +245,19 @@ Three things this snippet cannot hide from you:
 
 - **Code-scanning upload needs a public repository, or GitHub Code Security on a private one.** Without either, the `upload-sarif` step fails the job for a reason that has nothing to do with findings. On a private repository without that licence, drop the upload step and use `--format json` plus the exit code instead.
 
+### Local dashboard (`status`, `dashboard`)
+
+Two read-only views over the same `.guardian/guardian.db`, for a developer at their own laptop — not a CI artifact (that's the SARIF above) and not a client deliverable (that's `report_export`'s branded HTML):
+
+```text
+node cli/dev-guardian.mjs status --project .        # one terminal screen
+node cli/dev-guardian.mjs dashboard --project .      # self-contained HTML, opens in a browser
+```
+
+`status` prints the risk score and band, open findings and CVEs by severity, both deltas (since the previous scan of the same type, since the active baseline), up to 3 finding hotspots (ranked by count, not severity), which scanners are missing and what that leaves out of the numbers, and active suppressions — one screen, no more. `dashboard` renders the identical snapshot as `.guardian/dashboard.html` — no CDN, no font fetch, no network call of any kind — with client-side filtering and column sorting; it opens automatically only when stdout is a TTY (`--no-open` suppresses that, `--out <path>` relocates the file). Neither command runs a scan, mutates the database, or opens a socket, and **both always exit `0` once they render** — including over a project full of criticals, or one that's never been scanned (`3` on a usage error only). They report; `scan` is what gates.
+
+Worth knowing before trusting what's on screen: **the page is a snapshot, not live** — it reflects the scan that had completed when you ran the command and does not update when a later scan runs, so regenerate it to see one — and the window itself is just as bounded: the latest scan plus two deltas, never a multi-week trend (`/guardian-trend` still asks for history nothing here computes). A clean screen is also only as clean as `missing_tools` says: a scanner that ran and silently produced nothing looks identical, at this layer, to one that found nothing wrong.
+
 ### Philosophy
 
 - **Pragmatic by default** — doesn't block work over cosmetics
@@ -538,6 +551,19 @@ Três coisas que este snippet não te consegue esconder:
 
 - **O upload de code-scanning exige um repositório público, ou GitHub Code Security num privado.** Sem um dos dois, o passo `upload-sarif` falha o job por um motivo que nada tem a ver com findings. Num repositório privado sem essa licença, tira o passo de upload e usa `--format json` mais o exit code.
 
+### Dashboard local (`status`, `dashboard`)
+
+Duas vistas read-only sobre o mesmo `.guardian/guardian.db`, para quem desenvolve no seu próprio portátil — não é um artefacto de CI (isso é o SARIF acima) nem um entregável para cliente (isso é o HTML branded do `report_export`):
+
+```text
+node cli/dev-guardian.mjs status --project .        # um ecrã de terminal
+node cli/dev-guardian.mjs dashboard --project .      # HTML autocontido, abre no browser
+```
+
+O `status` imprime o risk score e a banda, os findings abertos e os CVEs por severidade, os dois deltas (desde o scan anterior do mesmo tipo, desde a baseline ativa), até 3 hotspots de findings (ordenados por contagem, não por severidade), quais scanners faltam e o que isso deixa de fora dos números, e as supressões ativas — um ecrã, nada mais. O `dashboard` renderiza o mesmo snapshot como `.guardian/dashboard.html` — sem CDN, sem fetch de fontes, sem nenhuma chamada de rede — com filtragem e ordenação de colunas no client-side; abre automaticamente só quando o stdout é um TTY (`--no-open` suprime isso, `--out <path>` muda o destino do ficheiro). Nenhum dos dois comandos corre um scan, altera a base de dados ou abre um socket, e **ambos terminam sempre com exit `0` assim que renderizam** — mesmo num projeto cheio de críticos, ou nunca scaneado (`3` só num erro de uso). Eles reportam; quem faz gate é o `scan`.
+
+Vale a pena saber antes de confiar no que está no ecrã: **a página é um snapshot, não é ao vivo** — reflete o scan que tinha terminado quando correste o comando, e não atualiza quando um scan posterior corre, por isso volta a gerá-la para veres um novo — e a janela em si é igualmente limitada: o último scan mais dois deltas, nunca uma tendência de várias semanas (`/guardian-trend` continua a pedir um histórico que nada aqui calcula). Um ecrã limpo também só é tão fiável quanto o `missing_tools` que o acompanha: um scanner que correu e não produziu nada em silêncio parece, a este nível, idêntico a um que não encontrou nada de errado.
+
 ### Filosofia
 
 - **Pragmático por defeito** — não bloqueia trabalho por nada cosmético
@@ -830,6 +856,19 @@ Tres cosas que este snippet no te puede esconder:
 - **El SARIF por sí solo no te dice *qué* scanner falta.** Su flag `invocation.executionSuccessful` pasa a `false` siempre que la cobertura no sea completa — así que quien lea solo el upload ya puede distinguir un run incompleto de uno limpio — pero el SARIF no tiene campo de *uso general* para este texto, así que el nombre del scanner y el motivo solo viven en el exit code `2` y en la salida humana/JSON del propio paso. Trata un SARIF subido con cero resultados como inconcluso, no como limpio, hasta que compruebes el exit code.
 
 - **La subida de code-scanning exige un repositorio público, o GitHub Code Security en uno privado.** Sin ninguno de los dos, el paso `upload-sarif` falla el job por un motivo que no tiene nada que ver con los findings. En un repositorio privado sin esa licencia, quita el paso de subida y usa `--format json` más el exit code.
+
+### Panel local (`status`, `dashboard`)
+
+Dos vistas de solo lectura sobre el mismo `.guardian/guardian.db`, para quien desarrolla en su propio portátil — no es un artefacto de CI (eso es el SARIF de arriba) ni un entregable para cliente (eso es el HTML de marca de `report_export`):
+
+```text
+node cli/dev-guardian.mjs status --project .        # una pantalla de terminal
+node cli/dev-guardian.mjs dashboard --project .      # HTML autocontenido, se abre en el navegador
+```
+
+`status` imprime la puntuación de riesgo y su banda, los findings abiertos y los CVEs por severidad, ambos deltas (desde el escaneo anterior del mismo tipo, desde la baseline activa), hasta 3 hotspots de findings (ordenados por recuento, no por severidad), qué escáneres faltan y qué deja eso fuera de los números, y las supresiones activas — una pantalla, nada más. `dashboard` renderiza el mismo snapshot como `.guardian/dashboard.html` — sin CDN, sin fetch de fuentes, sin ninguna llamada de red — con filtrado y ordenación de columnas en el cliente; se abre automáticamente solo cuando stdout es un TTY (`--no-open` lo suprime, `--out <path>` reubica el archivo). Ninguno de los dos comandos ejecuta un escaneo, modifica la base de datos ni abre un socket, y **ambos siempre terminan con exit `0` en cuanto renderizan** — incluso en un proyecto lleno de críticos, o uno nunca escaneado (`3` solo ante un error de uso). Informan; quien hace de gate es `scan`.
+
+Vale la pena saber antes de confiar en lo que hay en pantalla: **la página es un snapshot, no algo en vivo** — refleja el escaneo que había terminado cuando ejecutaste el comando, y no se actualiza cuando corre un escaneo posterior, así que vuelve a generarla para ver uno nuevo — y la ventana en sí está igual de acotada: el último escaneo más dos deltas, nunca una tendencia de varias semanas (`/guardian-trend` sigue pidiendo un historial que nada aquí calcula). Una pantalla limpia también es solo tan fiable como el `missing_tools` que la acompaña: un escáner que corrió y no produjo nada en silencio se ve, a este nivel, idéntico a uno que no encontró nada erróneo.
 
 ### Filosofía
 

@@ -101,6 +101,24 @@ tree (only the SQLite database is ephemeral) — add `.guardian/` to `.gitignore
 hand; the MCP server does this automatically every time it starts against a
 project, but the CLI never starts that server.
 
+## Local dashboard (offline, read-only)
+
+For a developer at their own laptop, not a CI artifact and not a client
+deliverable: `node cli/dev-guardian.mjs status` prints a one-screen summary
+(risk score and band, open findings/CVEs by severity, both deltas, up to 3
+hotspots ranked by finding count, missing-scanner consequences, active
+suppressions); `dev-guardian dashboard` writes the same snapshot as a
+self-contained `.guardian/dashboard.html` (no CDN, no network call of any
+kind), opened automatically only when stdout is a TTY — `--no-open`
+suppresses that, `--out <path>` relocates the file. Neither runs a scan,
+mutates the database, or opens a socket, and both always exit `0` once they
+render — including over a project full of criticals, or one never scanned —
+because they report; `scan` is what gates. `3` is the only other exit code,
+on a usage error. The page is a **snapshot, not live**: it does not update
+when a later scan runs, so regenerate it to see one. The window itself is
+bounded too — the latest scan plus two deltas, no multi-week trend
+(`/guardian-trend` still asks for history nothing here computes).
+
 ## Anti-patterns
 
 - Don't run `security_scan_full` for tiny changes — use `review_pr`.
