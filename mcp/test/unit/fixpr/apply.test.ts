@@ -12,10 +12,13 @@ function group(over: Partial<FixGroup> = {}): FixGroup {
 }
 
 function fakeRun(script: { outcome: string; exitCode: number | null; stderr?: string }[]) {
-  const calls: { command: string; args: string[] }[] = [];
+  // `cwd` is captured alongside `command`/`args` — it is the entire isolation
+  // mechanism (worktreePath, never the real project directory), not
+  // incidental plumbing, so every call site's test can assert it.
+  const calls: { command: string; args: string[]; cwd: string }[] = [];
   let i = 0;
-  const run = async (opts: { command: string; args?: string[] }) => {
-    calls.push({ command: opts.command, args: opts.args ?? [] });
+  const run = async (opts: { command: string; args?: string[]; cwd: string }) => {
+    calls.push({ command: opts.command, args: opts.args ?? [], cwd: opts.cwd });
     const next = script[i++] ?? { outcome: 'completed', exitCode: 0 };
     return { outcome: next.outcome, exitCode: next.exitCode,
       stdout: '', stderr: next.stderr ?? '', truncated: false };
@@ -34,6 +37,10 @@ describe('applyGroup', () => {
         expect(r.applied).toBe(true);
         expect(calls[0]?.command).toBe('npm');
         expect(calls[0]?.args).toEqual(['install', 'lodash@4.17.21']);
+        // The isolation property, not incidental plumbing: this MUST run in
+        // the worktree, never in the caller's real project directory. Nothing
+        // else in this file asserted it before now.
+        expect(calls[0]?.cwd).toBe('/w');
       });
   });
 
@@ -63,6 +70,10 @@ describe('applyGroup', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.command).toBe('semgrep');
     expect(calls[0]?.args).toContain('--autofix');
+    // Same isolation property as the deps call site, asserted independently:
+    // `--autofix` rewrites files in place, so running it anywhere but the
+    // worktree would rewrite the user's real project.
+    expect(calls[0]?.cwd).toBe('/w');
   });
 
   it('reports the failing command, not just "failed"', async () => {
