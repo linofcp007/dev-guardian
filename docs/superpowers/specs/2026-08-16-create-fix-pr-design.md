@@ -79,8 +79,27 @@ acquiring the appearance of having happened.
 
 The comparison reuses `compareFindings(from, to, cap)` from
 `mcp/src/dashboard/delta.ts`, which already returns `new` / `resolved` /
-`unchanged` over fingerprint sets. The success predicate is
-`target ∈ resolved && new_count === 0`. **No second comparator is written.**
+`unchanged` over fingerprint sets. **No second comparator is written.**
+
+**The two halves compare on different keys, and they have to.** A fingerprint
+hashes the line and the snippet, so a fix that shifts lines changes the
+fingerprint of every other finding in the file. Measured: one inserted line
+changed four of four. Comparing the "no new finding" half by fingerprint would
+therefore mark every untouched finding as new after any Semgrep autofix,
+withholding every pull request it could produce and naming pre-existing findings
+as introduced.
+
+So:
+
+- **target resolved** — compared by **fingerprint**, because there we are asking
+  about one specific finding we set out to fix;
+- **no new finding** — compared by **`(rule_id, file_path)`**, which survives a
+  line shift.
+
+The cost is stated rather than hidden: a genuine *second* instance of the same
+rule in the same file does not register as new. That is a real weakening, and it
+is the right trade, because the alternative is a check that fires on every line
+shift and therefore carries no information at all.
 
 ### 4.2 The test differential
 
@@ -260,6 +279,14 @@ gives timeouts, output caps, `shell: false`, and a process-tree kill on win32.
 - **Semgrep's autofix quality is Semgrep's.** We verify the outcome; we do not
   review the rewrite. A rule with a careless `fix:` produces a careless patch,
   and the scan differential will happily call it resolved.
+- **A second instance of the same rule in the same file is not seen as new.**
+  §4.1 explains why: fingerprints move when lines move, so the "no new finding"
+  half compares by `(rule_id, file_path)`. A fix that shifts lines therefore
+  cannot be distinguished from one that introduced another hit of a rule already
+  firing in that file.
+- **A dry run still runs the verification scan**, and that scan is scoped so it
+  does not become the project’s latest scan. Nothing the tool does in dry-run
+  mode may change what `guardian://findings/open` or `risk_score` report.
 - **The test differential is only as good as the project's tests.** A green suite
   with no coverage of the changed code proves very little, and the tool cannot
   tell the difference.
