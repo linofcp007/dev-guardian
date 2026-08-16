@@ -105,10 +105,22 @@ gc.on('spawn', () => {
 setInterval(() => {}, 60000);
 `;
 
-/** Exits immediately with a nonzero code, never listening — for the
- *  "detects a crash before it wastes the full timeout" test. No grandchild:
- *  irrelevant to what that test checks. */
-const CRASHES_IMMEDIATELY_SCRIPT = `process.exit(7);`;
+/**
+ * Exits immediately with a nonzero code, never listening — for the
+ * "detects a crash before it wastes the full timeout" test. No grandchild:
+ * irrelevant to what that test checks.
+ *
+ * Reports ITS OWN exit timestamp to `argv[1]` first, written just before
+ * `process.exit` — that test's own comment explains why: measuring
+ * "promptness" from this timestamp, rather than from when the test called
+ * `startApp`, is what keeps that assertion from also counting OS/Node
+ * child-process spawn time, which this script has no control over.
+ */
+const CRASHES_IMMEDIATELY_SCRIPT = `
+const { writeFileSync } = require('node:fs');
+writeFileSync(process.argv[1], String(Date.now()));
+process.exit(7);
+`;
 
 /**
  * Writes a distinctive line to stderr, then exits nonzero — for the
@@ -441,22 +453,52 @@ describe('startApp', () => {
     // underneath it already died, so a crash-on-boot (missing dependency,
     // syntax error) would look exactly like a hang for the FULL timeout
     // instead of failing fast with a specific reason.
+    //
+    // The rejection MESSAGE alone (asserted below) already proves the right
+    // code path fired: waitForHealthy only ever produces an "exited ...
+    // (exit code N)" message from the exit-detection branch, and only ever
+    // produces "timed out after ...ms" from the deadline branch — the two
+    // are mutually exclusive, so matching this regex is already a
+    // load-independent, state-transition-level proof that the crash was
+    // noticed rather than waited out. What it does NOT prove on its own is
+    // PROMPTNESS: an implementation that checks the exit state only once,
+    // right before giving up on the deadline, would produce this exact
+    // message too, just after nearly the whole `timeoutMs` budget — that
+    // wrong shape is what the timing assertion below exists to catch.
+    const exitedAtFile = join(workDir, 'exited-at.txt');
     const timeoutMs = 5_000;
-    const started = Date.now();
     await expect(
       startApp({
-        command: ['node', '-e', CRASHES_IMMEDIATELY_SCRIPT],
+        command: ['node', '-e', CRASHES_IMMEDIATELY_SCRIPT, exitedAtFile],
         cwd: workDir,
         healthUrl: 'http://127.0.0.1:1/',
         timeoutMs,
       }),
     ).rejects.toThrow(/exit(ed)? code 7/i);
-    // "Immediately" pinned as a real number, not just inferred from the
-    // message — if this ever regresses to waiting out the full timeout,
-    // this assertion fails even though the rejection message alone would
-    // still look right. See expectWellUnderDeadline's own comment for why
-    // the budget is derived from `timeoutMs` rather than a literal.
-    expectWellUnderDeadline(Date.now() - started, timeoutMs);
+    const rejectedAt = Date.now();
+    // Measured from the CHILD's OWN reported exit time (see
+    // CRASHES_IMMEDIATELY_SCRIPT), NOT from `started`/`Date.now()` before
+    // `startApp` was even called — that was this assertion's ORIGINAL
+    // shape, and it is the reason this test flaked under parallel suite
+    // load despite already using expectWellUnderDeadline (task report:
+    // failures observed from 2562ms up to 4449ms against this same 2500ms
+    // budget). "Since started" necessarily includes OS/Node child-process
+    // SPAWN time — starting a whole new `node -e ...` interpreter, before a
+    // single byte of it has run — and that quantity has no relationship to
+    // `timeoutMs` at all: confirmed directly (task report) that spawn-to-exit
+    // alone climbs from a ~45ms solo baseline to a low-hundreds-of-ms median
+    // (and occasional 700ms+ outliers) under the same multi-suite load that
+    // produced the failures above, while the interval measured HERE — from
+    // the child's actual exit to startApp's rejection, i.e. everything
+    // `waitForHealthy`'s own polling loop is actually responsible for —
+    // stayed under ~220ms across dozens of samples under that identical
+    // load. The sibling "aborted signal" test below already uses
+    // `expectWellUnderDeadline` safely for exactly this reason: its own
+    // measurement window starts AFTER the process is already confirmed
+    // running (`waitForPidfile`), so it was never polluted by spawn time
+    // either — the pattern itself was never the problem, only which
+    // interval this ONE call site fed it.
+    expectWellUnderDeadline(rejectedAt - Number(readFileSync(exitedAtFile, 'utf8')), timeoutMs);
   });
 
   it('a startup failure surfaces the app’s own output for diagnosis', async () => {
