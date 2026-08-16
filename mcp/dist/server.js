@@ -37285,7 +37285,8 @@ var DOMAIN_ERROR_CODES = [
   "target_not_found",
   "unsupported_target",
   "target_not_authorized",
-  "no_surface_snapshot"
+  "no_surface_snapshot",
+  "worktree_failed"
 ];
 
 // src/storage/findingsRepo.ts
