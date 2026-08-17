@@ -49,3 +49,6 @@ build/
 
 # dev-guardian MCP runtime artefacts (DB + scan reports)
 .guardian/
+
+# superpowers process scratch (briefs, reports, review packages)
+.superpowers/
