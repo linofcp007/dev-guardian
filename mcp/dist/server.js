@@ -40301,6 +40301,38 @@ registerToolModule(
 
 // src/tools/bugHunt.ts
 import { join as join13 } from "node:path";
+
+// src/tools/semgrepConfigFailure.ts
+var DOWNLOAD_FAILURE_RE = /Failed to download configuration from (\S+)/;
+var REGISTRY_URL_PREFIX_RE = /^https?:\/\/semgrep\.dev\/c\//;
+function findConfigDownloadFailures(raw) {
+  if (raw === null) return [];
+  const root = parseInputAsJson(raw);
+  const errors = asArray(getProp(root, "errors"));
+  const failures = [];
+  for (const entry of errors) {
+    const message = getString(entry, "message");
+    if (message === void 0) continue;
+    const match = DOWNLOAD_FAILURE_RE.exec(message);
+    if (!match) continue;
+    const url = match[1];
+    const pack = url !== void 0 ? url.replace(REGISTRY_URL_PREFIX_RE, "") : null;
+    failures.push({ pack, message });
+  }
+  return failures;
+}
+function survivingPacks(configured, failures) {
+  const failedNames = new Set(
+    failures.map((f) => f.pack).filter((p) => p !== null)
+  );
+  return configured.filter((p) => !failedNames.has(p));
+}
+function describeConfigFailures(failures) {
+  return failures.map((f) => `${f.pack ?? "unknown config"} (${f.message})`).join("; ");
+}
+
+// src/tools/bugHunt.ts
+var BUG_HUNT_PACKS = ["p/r2c-bug-scan", "p/security-audit"];
 var BUG_SUBCATEGORIES = /* @__PURE__ */ new Set([
   "race_condition",
   "null_safety",
@@ -40342,8 +40374,8 @@ function mapSubcategory2(ruleId, existing) {
 registerToolModule(
   makeScanTool({
     name: "bug_hunt",
-    title: "Bug hunt (Semgrep p/bugs + p/security-audit)",
-    description: "Semgrep with curated bug-finding rule packs (p/bugs, p/security-audit). Findings are categorised as `bug` with subcategories like race_condition, null_safety, edge_case, error_handling, memory_leak, off_by_one. Optional `categories` filter restricts the returned subcategories.",
+    title: "Bug hunt (Semgrep p/r2c-bug-scan + p/security-audit)",
+    description: "Semgrep with curated bug-finding rule packs (p/r2c-bug-scan, p/security-audit). Findings are categorised as `bug` with subcategories like race_condition, null_safety, edge_case, error_handling, memory_leak, off_by_one. Optional `categories` filter restricts the returned subcategories. If a pack is retired from the Semgrep registry, the scan re-runs with the packs that still resolve and reports the gap in `missing_tools` rather than silently scanning nothing.",
     scan_type: "bugs",
     category: "bug",
     inputSchema: {
@@ -40372,30 +40404,70 @@ registerToolModule(
         };
       }
       const outFile = join13(reportDir, "bugs.json");
-      const args = [
-        "--config=p/bugs",
-        "--config=p/security-audit",
-        "--json",
-        "--quiet",
-        "--output",
-        outFile
-      ];
-      if (input.auto_fix === true) args.push("--autofix");
-      args.push(ctx.projectPath);
-      const result = await runProcess({
-        command: "semgrep",
-        args,
-        cwd: ctx.projectPath,
-        env: ctx.scriptEnv,
-        signal: ctx.signal,
-        onLog: ctx.onLog
-      });
+      const runWithPacks = (packs) => {
+        const args = packs.map((pack) => `--config=${pack}`);
+        args.push("--json", "--quiet", "--output", outFile);
+        if (input.auto_fix === true) args.push("--autofix");
+        args.push(ctx.projectPath);
+        return runProcess({
+          command: "semgrep",
+          args,
+          cwd: ctx.projectPath,
+          env: ctx.scriptEnv,
+          signal: ctx.signal,
+          onLog: ctx.onLog
+        });
+      };
+      const reportGap = (failures2) => {
+        tools_run.push({
+          name: "semgrep",
+          status: "failed",
+          reason: `no configured pack could be scanned (${describeConfigFailures(failures2)})`
+        });
+        for (const f of failures2) missing_tools.push(`semgrep:${f.pack ?? "unknown-config"}`);
+        return {
+          outcome: "completed",
+          tools_run,
+          missing_tools,
+          parser_inputs,
+          report_paths: [reportDir]
+        };
+      };
+      const result = await runWithPacks(BUG_HUNT_PACKS);
       const raw = readJsonSafe(outFile);
-      if (raw) parser_inputs.push({ parser: bugCategoryParser, input: raw });
-      const ok = result.outcome === "completed" || result.exitCode === 1;
-      tools_run.push({ name: "semgrep", status: ok ? "ok" : "failed" });
+      const failures = findConfigDownloadFailures(raw);
+      if (failures.length === 0) {
+        if (raw) parser_inputs.push({ parser: bugCategoryParser, input: raw });
+        const ok = result.outcome === "completed" || result.exitCode === 1;
+        tools_run.push({ name: "semgrep", status: ok ? "ok" : "failed" });
+        return {
+          outcome: ok ? "completed" : result.outcome,
+          tools_run,
+          missing_tools,
+          parser_inputs,
+          report_paths: [reportDir]
+        };
+      }
+      const survivors = survivingPacks(BUG_HUNT_PACKS, failures);
+      if (survivors.length === 0 || survivors.length === BUG_HUNT_PACKS.length) {
+        return reportGap(failures);
+      }
+      const retry2 = await runWithPacks(survivors);
+      const retryRaw = readJsonSafe(outFile);
+      const retryFailures = findConfigDownloadFailures(retryRaw);
+      const retryOk = retryFailures.length === 0 && (retry2.outcome === "completed" || retry2.exitCode === 1);
+      if (!retryOk) {
+        return reportGap([...failures, ...retryFailures]);
+      }
+      if (retryRaw) parser_inputs.push({ parser: bugCategoryParser, input: retryRaw });
+      tools_run.push({
+        name: "semgrep",
+        status: "ok",
+        reason: `ran with ${survivors.join(", ")} only \u2014 ${describeConfigFailures(failures)}`
+      });
+      for (const f of failures) missing_tools.push(`semgrep:${f.pack ?? "unknown-config"}`);
       return {
-        outcome: ok ? "completed" : result.outcome,
+        outcome: "completed",
         tools_run,
         missing_tools,
         parser_inputs,

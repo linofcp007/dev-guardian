@@ -49,6 +49,7 @@ import type { PluginContext } from '../../src/context.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
+import { BUG_HUNT_PACKS } from '../../src/tools/bugHunt.js';
 
 beforeAll(async () => {
   await import('../../src/tools/securityScanFull.js');
@@ -111,16 +112,51 @@ afterEach(() => {
 });
 
 describe('bug_hunt', () => {
-  it('runs semgrep with p/bugs + p/security-audit and tags findings as bug', async () => {
+  // Read from the tool's own export rather than hardcoded literals, so
+  // these tests keep pinning real behaviour if the pack list ever changes
+  // again (as it already has once — see the fix report for `p/bugs`).
+  function requirePack(index: number): string {
+    const pack = BUG_HUNT_PACKS[index];
+    if (pack === undefined) {
+      throw new Error(`bug_hunt: expected a configured pack at index ${index}`);
+    }
+    return pack;
+  }
+  const PRIMARY_PACK = requirePack(0);
+  const SECONDARY_PACK = requirePack(1);
+
+  /** Shape of a real Semgrep JSON report where every named pack 404'd:
+   *  `results`/`paths.scanned` empty, one `errors[]` entry per pack — the
+   *  exact output captured from `semgrep --config=<dead> --json` (1.164.0),
+   *  see semgrepConfigFailure.ts's header comment. */
+  function configFailureJson(...failedPacks: string[]): string {
+    return JSON.stringify({
+      version: '1.164.0',
+      results: [],
+      errors: failedPacks.map((pack) => ({
+        code: 2,
+        level: 'error',
+        type: 'SemgrepError',
+        message: `Failed to download configuration from https://semgrep.dev/c/${pack} HTTP 404.`,
+      })),
+      paths: { scanned: [] },
+    });
+  }
+
+  function writeOutput(opts: { args?: string[] }, content: string): void {
+    const outIdx = opts.args?.findIndex((a) => a === '--output');
+    const path = outIdx !== undefined && outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
+    if (path) writeFileSync(path, content, 'utf8');
+  }
+
+  it(`runs semgrep with ${PRIMARY_PACK} + ${SECONDARY_PACK} and tags findings as bug`, async () => {
     const project = tempProject();
     const plugin = makePlugin(project);
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockImplementation(async (opts) => {
-      expect(opts.args).toContain('--config=p/bugs');
-      expect(opts.args).toContain('--config=p/security-audit');
-      const outIdx = opts.args?.findIndex((a) => a === '--output');
-      const path = outIdx !== undefined && outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
-      if (path) writeFileSync(path, semgrepFx(), 'utf8');
+      expect(opts.args).toContain(`--config=${PRIMARY_PACK}`);
+      expect(opts.args).toContain(`--config=${SECONDARY_PACK}`);
+      writeOutput(opts, semgrepFx());
       return {
         outcome: 'completed' as const,
         exitCode: 1,
@@ -135,10 +171,155 @@ describe('bug_hunt', () => {
       ok: true;
       top_findings: { category: string; subcategory?: string }[];
       findings_count_by_severity: Record<string, number>;
+      coverage?: string;
     };
     expect(r.ok).toBe(true);
     // All findings recategorised as `bug`, regardless of source metadata.
     expect(r.top_findings.every((f) => f.category === 'bug')).toBe(true);
+    // The clean-scan case must still read as clean — this test is also the
+    // control for the gap-reporting tests below.
+    expect(r.coverage).toBe('full');
+  });
+
+  it('re-runs with the surviving pack when one config fails to download, and still reports its findings', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+
+    let calls = 0;
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      calls += 1;
+      if (calls === 1) {
+        expect(opts.args).toContain(`--config=${PRIMARY_PACK}`);
+        expect(opts.args).toContain(`--config=${SECONDARY_PACK}`);
+        // Semgrep's real behaviour: one dead config aborts the WHOLE run —
+        // nothing scanned, not even by the pack that is still alive.
+        writeOutput(opts, configFailureJson(PRIMARY_PACK));
+        return { outcome: 'failed' as const, exitCode: 7, stdout: '', stderr: '', truncated: false };
+      }
+      // The retry must drop the dead pack and keep the live one.
+      expect(opts.args).not.toContain(`--config=${PRIMARY_PACK}`);
+      expect(opts.args).toContain(`--config=${SECONDARY_PACK}`);
+      writeOutput(opts, semgrepFx());
+      return { outcome: 'completed' as const, exitCode: 1, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('bug_hunt');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      top_findings: { category: string }[];
+      findings_count_by_severity: Record<string, number>;
+      missing_tools: string[];
+      warnings: string[];
+      coverage?: string;
+    };
+    expect(calls).toBe(2);
+    expect(r.ok).toBe(true);
+    // The surviving pack's findings still reach the caller — a retirement
+    // must not waste the packs that still resolve.
+    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+    expect(total).toBeGreaterThan(0);
+    expect(r.top_findings.every((f) => f.category === 'bug')).toBe(true);
+    // But the gap is not hidden: this is a partial result, not a clean one.
+    expect(r.coverage).toBe('partial');
+    expect(r.missing_tools.some((t) => t.includes(PRIMARY_PACK))).toBe(true);
+    expect(r.warnings.join(' ')).toContain(PRIMARY_PACK);
+  });
+
+  it('reports both failures when the retry itself also fails (registry outage mid-scan)', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+
+    let calls = 0;
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      calls += 1;
+      if (calls === 1) {
+        // Only the primary pack is reported dead on the first attempt.
+        writeOutput(opts, configFailureJson(PRIMARY_PACK));
+        return { outcome: 'failed' as const, exitCode: 7, stdout: '', stderr: '', truncated: false };
+      }
+      // The retry (secondary pack only) fails too — e.g. a registry outage
+      // that started between the two calls. Must not be swallowed: the
+      // survivor's own failure has to be reported, not silently dropped in
+      // favour of the first attempt's already-known failure. Exit code is
+      // deliberately 0/'completed' here (not 7, like the first call) so
+      // this only passes when the retry's own errors[] is actually
+      // consulted — a check that only re-inspects outcome/exitCode for the
+      // retry would read this as a second clean scan.
+      expect(opts.args).toContain(`--config=${SECONDARY_PACK}`);
+      writeOutput(opts, configFailureJson(SECONDARY_PACK));
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('bug_hunt');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      findings_count_by_severity: Record<string, number>;
+      missing_tools: string[];
+      coverage?: string;
+    };
+    expect(calls).toBe(2);
+    expect(r.ok).toBe(true);
+    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+    expect(total).toBe(0);
+    expect(r.coverage).toBe('none');
+    // Both packs must be named, not just the one caught on the first try.
+    expect(r.missing_tools.some((t) => t.includes(PRIMARY_PACK))).toBe(true);
+    expect(r.missing_tools.some((t) => t.includes(SECONDARY_PACK))).toBe(true);
+  });
+
+  it('never reports a clean result when every configured pack fails to download', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      writeOutput(opts, configFailureJson(PRIMARY_PACK, SECONDARY_PACK));
+      return { outcome: 'failed' as const, exitCode: 7, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('bug_hunt');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      findings_count_by_severity: Record<string, number>;
+      missing_tools: string[];
+      warnings: string[];
+      coverage?: string;
+    };
+    expect(r.ok).toBe(true);
+    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+    expect(total).toBe(0);
+    // The load-bearing assertion: zero findings from a run where nothing
+    // could be scanned must NOT be indistinguishable from a clean bug hunt.
+    expect(r.coverage).toBe('none');
+    expect(r.missing_tools.length).toBeGreaterThan(0);
+    expect(r.warnings.join(' ')).toMatch(/not a clean bill of health/i);
+  });
+
+  it('does not trust a clean exit code alone — errors[] naming every pack as failed is still a gap even at exit 0', async () => {
+    // Guards against a future Semgrep that exits 0 with an empty result when
+    // every --config failed, instead of today's non-zero exit. Nothing here
+    // may depend on outcome/exitCode signalling failure.
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      writeOutput(opts, configFailureJson(PRIMARY_PACK, SECONDARY_PACK));
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('bug_hunt');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      findings_count_by_severity: Record<string, number>;
+      missing_tools: string[];
+      coverage?: string;
+    };
+    expect(r.ok).toBe(true);
+    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+    expect(total).toBe(0);
+    expect(r.coverage).toBe('none');
+    expect(r.missing_tools.length).toBeGreaterThan(0);
   });
 });
 

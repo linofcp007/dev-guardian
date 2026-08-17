@@ -1,17 +1,27 @@
 /**
  * `bug_hunt` — bug-focused Semgrep scan using curated rule packs.
  *
- * Same shell-out pattern as `scan_sast` but with `--config=p/bugs` and
- * `--config=p/security-audit` instead of `--config=auto`. The post-processing
- * step re-tags findings so they land in the `bug` category (instead of
- * whatever the semgrep metadata says), so the model can ask for
+ * Same shell-out pattern as `scan_sast` but with `--config=p/r2c-bug-scan`
+ * and `--config=p/security-audit` instead of `--config=auto`. The
+ * post-processing step re-tags findings so they land in the `bug` category
+ * (instead of whatever the semgrep metadata says), so the model can ask for
  * "bug-category findings" via resources and get the right slice.
+ *
+ * `p/r2c-bug-scan` replaces the original `p/bugs`, which was retired from
+ * Semgrep's registry (`https://semgrep.dev/c/p/bugs` now 404s) — see the
+ * bug_hunt fix report. Registry packs can go away at any time, and a dead
+ * `--config=` does not fail gracefully on its own: Semgrep aborts the WHOLE
+ * invocation, including any *other* pack passed alongside it, and reports
+ * the failure only inside the JSON's `errors[]` array. This file reads that
+ * array (`semgrepConfigFailure.ts`) and re-runs with whatever packs still
+ * resolve, so one retirement degrades coverage instead of erasing it — and
+ * never lets a run that scanned nothing get reported as a clean bug report.
  */
 
 import { join } from 'node:path';
 import { z } from 'zod';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
-import { runProcess } from '../runners/processRunner.js';
+import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import {
   AllowDirty,
   AutoFix,
@@ -36,9 +46,22 @@ import {
   scannerAvailable,
 } from './scanHelpers.js';
 import {
+  describeConfigFailures,
+  findConfigDownloadFailures,
+  survivingPacks,
+  type ConfigDownloadFailure,
+} from './semgrepConfigFailure.js';
+import {
   makeScanTool,
   type ScannerInvocation,
 } from './scanToolFactory.js';
+
+/**
+ * The rule packs `bug_hunt` runs, in the order passed to `--config=`.
+ * Exported so tests can assert against the real, current list instead of
+ * duplicating the literal pack names.
+ */
+export const BUG_HUNT_PACKS: readonly string[] = ['p/r2c-bug-scan', 'p/security-audit'];
 
 const BUG_SUBCATEGORIES = new Set([
   'race_condition',
@@ -95,12 +118,14 @@ function mapSubcategory(ruleId: string, existing: string | undefined): string | 
 registerToolModule(
   makeScanTool({
     name: 'bug_hunt',
-    title: 'Bug hunt (Semgrep p/bugs + p/security-audit)',
+    title: 'Bug hunt (Semgrep p/r2c-bug-scan + p/security-audit)',
     description:
-      'Semgrep with curated bug-finding rule packs (p/bugs, p/security-audit). ' +
+      'Semgrep with curated bug-finding rule packs (p/r2c-bug-scan, p/security-audit). ' +
       'Findings are categorised as `bug` with subcategories like race_condition, null_safety, ' +
       'edge_case, error_handling, memory_leak, off_by_one. Optional `categories` filter ' +
-      'restricts the returned subcategories.',
+      'restricts the returned subcategories. If a pack is retired from the Semgrep registry, ' +
+      'the scan re-runs with the packs that still resolve and reports the gap in `missing_tools` ' +
+      'rather than silently scanning nothing.',
     scan_type: 'bugs',
     category: 'bug',
     inputSchema: {
@@ -134,32 +159,96 @@ registerToolModule(
       }
 
       const outFile = join(reportDir, 'bugs.json');
-      const args = [
-        '--config=p/bugs',
-        '--config=p/security-audit',
-        '--json',
-        '--quiet',
-        '--output',
-        outFile,
-      ];
-      if (input.auto_fix === true) args.push('--autofix');
-      args.push(ctx.projectPath);
+      const runWithPacks = (packs: readonly string[]): Promise<ProcessRunResult> => {
+        const args = packs.map((pack) => `--config=${pack}`);
+        args.push('--json', '--quiet', '--output', outFile);
+        if (input.auto_fix === true) args.push('--autofix');
+        args.push(ctx.projectPath);
+        return runProcess({
+          command: 'semgrep',
+          args,
+          cwd: ctx.projectPath,
+          env: ctx.scriptEnv,
+          signal: ctx.signal,
+          onLog: ctx.onLog,
+        });
+      };
+      // A gap that survives every retry attempt: nothing scanned, and that
+      // must never be reported as a clean bug report. `outcome: 'completed'`
+      // matches scan_sast's convention for an expected, named gap — the
+      // signal lives in `missing_tools` / `coverage`, not in `outcome`.
+      const reportGap = (failures: readonly ConfigDownloadFailure[]): ScannerInvocation => {
+        tools_run.push({
+          name: 'semgrep',
+          status: 'failed',
+          reason: `no configured pack could be scanned (${describeConfigFailures(failures)})`,
+        });
+        for (const f of failures) missing_tools.push(`semgrep:${f.pack ?? 'unknown-config'}`);
+        return {
+          outcome: 'completed',
+          tools_run,
+          missing_tools,
+          parser_inputs,
+          report_paths: [reportDir],
+        };
+      };
 
-      const result = await runProcess({
-        command: 'semgrep',
-        args,
-        cwd: ctx.projectPath,
-        env: ctx.scriptEnv,
-        signal: ctx.signal,
-        onLog: ctx.onLog,
-      });
+      const result = await runWithPacks(BUG_HUNT_PACKS);
       const raw = readJsonSafe(outFile);
-      if (raw) parser_inputs.push({ parser: bugCategoryParser, input: raw });
-      const ok = result.outcome === 'completed' || result.exitCode === 1;
-      tools_run.push({ name: 'semgrep', status: ok ? 'ok' : 'failed' });
+      const failures = findConfigDownloadFailures(raw);
 
+      if (failures.length === 0) {
+        // The ordinary case: every configured pack resolved. Exit code /
+        // outcome alone decide ok-ness here, same as before — there is
+        // nothing in errors[] casting doubt on the result.
+        if (raw) parser_inputs.push({ parser: bugCategoryParser, input: raw });
+        const ok = result.outcome === 'completed' || result.exitCode === 1;
+        tools_run.push({ name: 'semgrep', status: ok ? 'ok' : 'failed' });
+        return {
+          outcome: ok ? 'completed' : result.outcome,
+          tools_run,
+          missing_tools,
+          parser_inputs,
+          report_paths: [reportDir],
+        };
+      }
+
+      // At least one configured pack failed to download (registry
+      // retirement, outage, typo). A single bad `--config=` aborts the
+      // WHOLE invocation — `raw` above has empty results/paths.scanned even
+      // for packs that resolved fine — so it cannot be reused as-is. Re-run
+      // with whatever survives rather than reporting a scan that covered
+      // nothing.
+      const survivors = survivingPacks(BUG_HUNT_PACKS, failures);
+      if (survivors.length === 0 || survivors.length === BUG_HUNT_PACKS.length) {
+        // Nothing to retry with (every pack failed), or the failure(s)
+        // could not be attributed to a specific configured pack (so a retry
+        // would just reproduce the same result).
+        return reportGap(failures);
+      }
+
+      const retry = await runWithPacks(survivors);
+      const retryRaw = readJsonSafe(outFile);
+      const retryFailures = findConfigDownloadFailures(retryRaw);
+      const retryOk =
+        retryFailures.length === 0 && (retry.outcome === 'completed' || retry.exitCode === 1);
+
+      if (!retryOk) {
+        // The retry didn't help either (network flake, or the "survivor"
+        // just got retired too) — combine every failure we saw and refuse
+        // to trust either attempt's output.
+        return reportGap([...failures, ...retryFailures]);
+      }
+
+      if (retryRaw) parser_inputs.push({ parser: bugCategoryParser, input: retryRaw });
+      tools_run.push({
+        name: 'semgrep',
+        status: 'ok',
+        reason: `ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`,
+      });
+      for (const f of failures) missing_tools.push(`semgrep:${f.pack ?? 'unknown-config'}`);
       return {
-        outcome: ok ? 'completed' : result.outcome,
+        outcome: 'completed',
         tools_run,
         missing_tools,
         parser_inputs,
