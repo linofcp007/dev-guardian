@@ -150,3 +150,8 @@ deltas only, no multi-week trend.
 - Don't expect create_fix_pr to fix findings with no fix_available
   (gitleaks/bandit/jscpd/DAST/.NET, or a Semgrep rule with no fix:) or to
   open a PR without apply=true
+- Also: maven/gradle bumps are out of reach (inherited from
+  deps_update_plan); a second hit of the same rule in a file it already
+  fixed is not seen as new ("no new finding" compares rule_id+file_path,
+  not fingerprint, since a fingerprint moves when the fix shifts a line);
+  fix_applied never flips to 1 — dead column, the opened PR is the record

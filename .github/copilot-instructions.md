@@ -146,3 +146,10 @@ bounded too — the latest scan plus two deltas, no multi-week trend
 - Don't expect `create_fix_pr` to fix findings with no `fix_available` set
   (gitleaks, bandit, jscpd, DAST, .NET tools, or a Semgrep rule with no
   `fix:`) or to open a PR without `apply: true`.
+- Also: maven/gradle bumps are out of reach (inherited from
+  `deps_update_plan`'s own ecosystem gap); a second hit of the same rule in
+  a file it already fixed is not seen as a new finding, because the
+  "no new finding" check compares `(rule_id, file_path)` rather than
+  fingerprint (a fingerprint moves whenever the fix shifts a line); and
+  `fix_applied` never flips to `1` — dead column, the opened pull request
+  is the record.
