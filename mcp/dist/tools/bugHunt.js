@@ -24,8 +24,9 @@
  * rather than only in this comment.
  *
  * `configuredPacks` grows by whatever `detectLanguagePacks` finds — one
- * Semgrep per-language pack (`p/javascript`, `p/typescript`, `p/python`,
- * `p/java`, `p/golang`) for each language the project's stack uses, sourced
+ * Semgrep per-language pack (`p/javascript` OR `p/typescript` for a JS/TS
+ * project, never both — see `languagePacksFor` — plus `p/python`, `p/java`,
+ * `p/golang`) for each language family the project's stack uses, sourced
  * from `detect_stack`'s persisted snapshot when one exists, or a cheap
  * filesystem check otherwise — same shape as `scanSast.ts`'s own conditional
  * `p/csharp` pack, BUT ONLY when the caller passes `include_language_packs:
@@ -42,11 +43,12 @@
  * per-language security bundle, ~100% `category: security`, with ZERO rules
  * in any of the six canonical bug subcategories — confirmed by inspecting
  * their rules (401 entries, 327 distinct — `p/javascript` and `p/typescript`
- * are byte-identical, so a JS/TS project's combined 148 entries are only 74
- * unique), by running all seven configured packs against a fixture built to
- * trigger every canonical subcategory (zero matches), and by sweeping
- * `mapSubcategory` across every distinct rule id bug_hunt can run (516
- * total; 13 land in a canonical bucket, none from these five packs). They
+ * carry the identical 74 rule ids, which is why `languagePacksFor` now
+ * configures only one of them for a JS/TS project instead of both), by
+ * running every configured pack against a fixture built to trigger every
+ * canonical subcategory (zero matches), and by sweeping `mapSubcategory`
+ * across every distinct rule id bug_hunt can run (516 total; 13 land in a
+ * canonical bucket, none from these five packs). They
  * widen security coverage per language; they do not close the bug-class gap
  * `p/r2c-bug-scan` leaves in JS/TS or any other language. Overlap with the
  * always-on `p/security-audit` is real but partial (measured: 22% exact
@@ -91,17 +93,21 @@ export const BUG_HUNT_BASE_PACKS = ['p/r2c-bug-scan', 'p/security-audit'];
 /**
  * `StackSnapshot.languages` entry -> the Semgrep registry pack it selects.
  *
- * IMPORTANT, verified (fix report, round 2): every one of these five is
- * Semgrep's per-language DEFAULT bundle, and every one of them is ~100%
- * `category: security` (XSS, SQL injection, crypto, auth, SSRF, hard-coded
- * secrets, …) — confirmed by fetching and inspecting their rules (401
- * entries, 327 distinct: `p/javascript` and `p/typescript` are
- * byte-identical rule sets), and again by running all seven configured
- * packs (these five plus
- * BUG_HUNT_BASE_PACKS) against a fixture containing real instances of every
- * canonical bug subcategory: zero matches. Adding these widens SECURITY
- * coverage per language; it does not add race-condition, null-safety,
- * off-by-one, memory-leak or error-handling coverage for that language. See
+ * IMPORTANT, verified (fix report, round 2; re-verified independently by
+ * fetching both packs' raw YAML from the registry directly, not by trusting
+ * that report's claim): every one of these five is Semgrep's per-language
+ * DEFAULT bundle, and every one of them is ~100% `category: security` (XSS,
+ * SQL injection, crypto, auth, SSRF, hard-coded secrets, …) — confirmed by
+ * fetching and inspecting their rules (401 entries, 327 distinct: `p/javascript`
+ * and `p/typescript` are the same 74 rule ids, sorted-and-diffed to confirm —
+ * the two files differ only in rule ORDER, and every rule in both already
+ * declares `languages: [javascript, typescript, ...]`, so either pack name
+ * scans both languages' files with the identical rule set), and again by
+ * running all seven configured packs (these five plus BUG_HUNT_BASE_PACKS)
+ * against a fixture containing real instances of every canonical bug
+ * subcategory: zero matches. Adding these widens SECURITY coverage per
+ * language; it does not add race-condition, null-safety, off-by-one,
+ * memory-leak or error-handling coverage for that language. See
  * `title`/`description` below, which say this to the model reading them
  * rather than only in this comment.
  */
@@ -116,10 +122,23 @@ const LANGUAGE_PACKS = new Map([
  * Pure: which of `LANGUAGE_PACKS` a set of detected languages selects.
  * Exported so the mapping itself is unit-testable without storage or the
  * filesystem.
+ *
+ * `javascript` and `typescript` collapse to ONE pack, never both: since
+ * `p/javascript` and `p/typescript` are the identical 74 rules under two
+ * registry names (see `LANGUAGE_PACKS`'s doc comment), running both against
+ * a TypeScript project — which is the common case, since `detect-stack.sh`
+ * (mirrored by `fallbackLanguages` below) only ever sets `typescript`
+ * alongside `javascript`, never in place of it — used to pay for two
+ * registry fetches and configure the same rule set twice for zero extra
+ * coverage. Prefer `p/typescript` when TypeScript is detected (the more
+ * specific signal); a plain JS project with no `typescript` entry still gets
+ * `p/javascript`.
  */
 export function languagePacksFor(languages) {
     const packs = [];
     for (const [language, pack] of LANGUAGE_PACKS) {
+        if (language === 'javascript' && languages.includes('typescript'))
+            continue; // p/typescript covers it — see doc comment
         if (languages.includes(language))
             packs.push(pack);
     }
@@ -275,14 +294,15 @@ registerToolModule(makeScanTool({
     title: 'Bug hunt (Semgrep r2c-bug-scan + security-audit; optional language packs, off by ' +
         'default; bug classes Python-strong, JS/TS-thin)',
     description: 'Semgrep with p/r2c-bug-scan + p/security-audit always on. Optional ' +
-        '`include_language_packs` (off by default) also runs a per-language pack for each ' +
-        'language `detect_stack` finds in the project (or, absent a snapshot, a quick ' +
-        'package.json/tsconfig.json/pyproject.toml/pom.xml/go.mod check): p/javascript, ' +
-        'p/typescript, p/python, p/java, p/golang. Read this before turning it on: every one of ' +
-        "those five is Semgrep's per-language SECURITY bundle (XSS, SQL/command injection, " +
-        'crypto, auth, SSRF, hard-coded secrets, …) — verified against their 327 distinct rules ' +
-        '(p/javascript and p/typescript are the same 74 rules) and a live scan of a fixture ' +
-        'built to trigger every canonical subcategory below: zero ' +
+        '`include_language_packs` (off by default) also runs one per-language pack for each ' +
+        'language family `detect_stack` finds in the project (or, absent a snapshot, a quick ' +
+        'package.json/tsconfig.json/pyproject.toml/pom.xml/go.mod check): p/javascript OR ' +
+        'p/typescript for a JS/TS project — never both, they are the identical 74 rules under ' +
+        'two registry names, so only p/typescript runs once TypeScript is detected — plus ' +
+        "p/python, p/java, p/golang. Read this before turning it on: every one of those is " +
+        "Semgrep's per-language SECURITY bundle (XSS, SQL/command injection, crypto, auth, " +
+        'SSRF, hard-coded secrets, …) — verified against their 327 distinct rules and a live ' +
+        'scan of a fixture built to trigger every canonical subcategory below: zero ' +
         'matches, in any language. They widen security coverage per language; they add no ' +
         'race-condition, null/undefined-safety, off-by-one, memory-leak or swallowed-error ' +
         'coverage. Overlap with the always-on p/security-audit is real but partial, not "largely ' +
@@ -318,11 +338,12 @@ registerToolModule(makeScanTool({
             .boolean()
             .optional()
             .default(false)
-            .describe('Off by default. When true, also run the per-language Semgrep pack for each ' +
-            'language detect_stack finds in the project (or a filesystem fallback): ' +
-            'p/javascript, p/typescript, p/python, p/java, p/golang. These are per-language ' +
-            'SECURITY bundles (XSS, injection, crypto, auth, SSRF, hard-coded secrets, ...), ' +
-            'not bug-class rules — they add no race-condition/null-safety/off-by-one/' +
+            .describe('Off by default. When true, also run one per-language Semgrep pack for each ' +
+            'language family detect_stack finds in the project (or a filesystem fallback): ' +
+            'p/javascript OR p/typescript for a JS/TS project (never both — identical 74-rule ' +
+            'packs under two registry names), plus p/python, p/java, p/golang. These are ' +
+            'per-language SECURITY bundles (XSS, injection, crypto, auth, SSRF, hard-coded ' +
+            'secrets, ...), not bug-class rules — they add no race-condition/null-safety/off-by-one/' +
             'memory-leak/error-handling coverage. Independent of `categories`: this decides ' +
             'which scanners run (input); `categories` decides which findings come back ' +
             '(output). Turn on when you specifically want broader per-language security ' +
