@@ -38,6 +38,31 @@
  * (Task 6) already refuses cleanly when it cannot determine PR existence —
  * exactly what happens when `gh` is not on PATH — and that refusal surfaces
  * as this group's own `pr.status === 'refused'`.
+ *
+ * **`GroupResult.outcome` is structural, not prose (task-7-review.md I6).**
+ * `note` is still always populated, for a human, but nothing that decides
+ * "did this group's infrastructure break, or did we choose not to publish"
+ * should have to string-match it — `outcome` names exactly which of those
+ * happened. `'worktree_failed'` was reserved as a top-level `DomainErrorCode`
+ * by Task 1 for this feature and was never emitted there; deleted from
+ * `DOMAIN_ERROR_CODES` (`../types.js`) rather than left dead, since the
+ * per-group shape this whole file settled on (confirmed correct on review)
+ * has no top-level use for it, and the string now names a `GroupOutcome`
+ * instead — the same failure, reported where it actually happens.
+ *
+ * **The local branch is deleted whenever nothing keeps it meaningful
+ * (task-7-review.md C2).** `git worktree remove` never deletes the branch a
+ * worktree was checked out on (confirmed by `pr.ts`'s own `push_failed`/
+ * `create_failed` messages, which rely on exactly that). Left alone, EVERY
+ * run that does not end in a created PR — not just a dry run — leaves a
+ * stray branch behind: design §6's "not a branch" violated literally, and a
+ * later call for the SAME group collides on that branch name in
+ * `createWorktree`, before `prExists`'s own idempotency check is ever
+ * reached. `deleteLocalBranch` (`../fixpr/pr.js`) runs in the same `finally`
+ * as the worktree teardown, for every outcome except the three where
+ * `pr.ts`'s own module comment already documents the branch surviving on
+ * purpose: `created` (now the PR's branch), `push_failed` and `create_failed`
+ * (a human may need to find it by hand).
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -46,7 +71,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { applyGroup } from '../fixpr/apply.js';
 import { buildGroups, selectGroups } from '../fixpr/candidates.js';
-import { branchName, openPr, type PrOutcome } from '../fixpr/pr.js';
+import { branchName, deleteLocalBranch, openPr, type PrOutcome } from '../fixpr/pr.js';
 import { deriveTestCommand, TEST_MANIFESTS } from '../fixpr/testCommand.js';
 import type { FixGroup, FixSource, ScanVerdict, TestVerdict, UpgradeStep } from '../fixpr/types.js';
 import { judgeScan, judgeTests, mayOpenPr } from '../fixpr/verify.js';
@@ -61,11 +86,52 @@ const DEFAULT_SOURCES: readonly FixSource[] = ['deps', 'semgrep'];
 const DEFAULT_SEVERITY_MIN: Severity = 'high';
 const DEFAULT_MAX_PRS = 3;
 
+/**
+ * Structural counterpart to `note` (task-7-review.md I6) — every return
+ * path in `processGroup` sets exactly one of these, and each one maps
+ * 1:1 to a specific stage/result rather than being inferred from which of
+ * `scan`/`tests`/`pr` happen to be null.
+ */
+type GroupOutcome =
+  | 'worktree_failed'
+  | 'apply_failed'
+  | 'verification_failed'
+  | 'not_verified'
+  | 'verified_dry_run'
+  | 'pr_created'
+  | 'pr_exists'
+  | 'pr_refused'
+  | 'pr_no_changes'
+  | 'pr_push_failed'
+  | 'pr_create_failed'
+  | 'internal_error';
+
+/** `PrOutcome.status` → `GroupOutcome`, once `openPr` has actually been
+ *  called. A plain `Record`, not a switch: exhaustiveness is enforced by
+ *  `PrOutcome['status']` being a closed union, so a status this map does not
+ *  cover is a compile error here, not a silent `undefined` at runtime. */
+const PR_STATUS_OUTCOME: Record<PrOutcome['status'], GroupOutcome> = {
+  created: 'pr_created',
+  exists: 'pr_exists',
+  refused: 'pr_refused',
+  no_changes: 'pr_no_changes',
+  push_failed: 'pr_push_failed',
+  create_failed: 'pr_create_failed',
+};
+
+/** The three `PrOutcome.status` values `pr.ts` documents the local branch
+ *  surviving for on purpose — see this module's own comment (C2). Every
+ *  other outcome (including never reaching `openPr` at all) deletes it. */
+const KEEPS_BRANCH: ReadonlySet<PrOutcome['status']> = new Set([
+  'created', 'push_failed', 'create_failed',
+]);
+
 /** The per-group outcome. `scan`/`tests`/`pr` are null exactly when that
  *  stage never ran — a failure upstream, or (for `pr`) a verification that
  *  did not pass, or `apply: false`. `note` is always populated: a one-line,
- *  human-readable account of what happened, never left to be inferred from
- *  which fields are null. */
+ *  human-readable account of what happened. `outcome` is its structural
+ *  counterpart — see the module comment (I6) — never left to be inferred
+ *  from which fields are null or by string-matching `note`. */
 interface GroupResult {
   key: string;
   source: FixSource;
@@ -76,6 +142,7 @@ interface GroupResult {
   branch: string;
   findings: Finding[];
   commands: string[];
+  outcome: GroupOutcome;
   scan: ScanVerdict | null;
   tests: TestVerdict | null;
   pr: PrOutcome | null;
@@ -93,7 +160,17 @@ const tool: ToolModule = {
     'always run; only commit/push/gh pr create sit behind apply=true.',
   inputSchema: {
     project_path: ProjectPath,
-    severity_min: SeverityMin,
+    // .describe() override, not the shared SeverityMin as-is (M8): that
+    // schema's own description says "Default: include all", correct for
+    // every OTHER tool that uses it (no zod .default(), so the description
+    // is the only place the default is stated) but wrong for this tool,
+    // whose actual default is 'high' (DEFAULT_SEVERITY_MIN below). Reusing
+    // the shared schema is still right — .describe() returns a new instance
+    // rather than mutating the shared one, so every other caller keeps
+    // seeing "include all".
+    severity_min: SeverityMin.describe(
+      'Minimum severity a finding must have to be considered a fix candidate. Default: high.',
+    ),
     sources: z
       .array(z.enum(['deps', 'semgrep']))
       .optional()
@@ -179,6 +256,7 @@ async function handler(
         branch: branchName(group.source, group.key, group.hash),
         findings: findingsForGroup(allFindings, group),
         commands: [],
+        outcome: 'internal_error',
         scan: null,
         tests: null,
         pr: null,
@@ -234,9 +312,12 @@ async function processGroup(opts: {
 
   const created = await createWorktree({ projectPath, branch });
   if (!created.ok) {
+    // No branch to clean up here: `git worktree add -b` failed before ever
+    // creating one (worktree.ts's own module comment) — nothing was made.
     return {
       ...base,
       commands: [],
+      outcome: 'worktree_failed',
       scan: null,
       tests: null,
       pr: null,
@@ -244,6 +325,12 @@ async function processGroup(opts: {
     };
   }
   const { worktree } = created;
+
+  // Set true only at the one point below where openPr's own status says the
+  // branch should survive — see the module comment (C2) and KEEPS_BRANCH.
+  // Everything else, including every early return above this point never
+  // being reached at all, deletes it in the `finally`.
+  let keepBranch = false;
 
   try {
     // The test command must be known BEFORE applyGroup runs — it decides
@@ -262,6 +349,7 @@ async function processGroup(opts: {
       return {
         ...base,
         commands: applied.commands,
+        outcome: 'apply_failed',
         scan: null,
         tests: null,
         pr: null,
@@ -269,11 +357,12 @@ async function processGroup(opts: {
       };
     }
 
-    const rescan = await rescanAfterFix(group, worktree.path, ctx);
+    const rescan = await rescanAfterFix(group, findings, worktree.path, ctx);
     if (!rescan.ok) {
       return {
         ...base,
         commands: applied.commands,
+        outcome: 'verification_failed',
         scan: null,
         tests: null,
         pr: null,
@@ -301,6 +390,7 @@ async function processGroup(opts: {
       return {
         ...base,
         commands: applied.commands,
+        outcome: 'not_verified',
         scan: scanVerdict,
         tests: testVerdict,
         pr: null,
@@ -312,6 +402,7 @@ async function processGroup(opts: {
       return {
         ...base,
         commands: applied.commands,
+        outcome: 'verified_dry_run',
         scan: scanVerdict,
         tests: testVerdict,
         pr: null,
@@ -322,11 +413,20 @@ async function processGroup(opts: {
     const title = buildPrTitle(group, targets.length);
     const body = buildPrBody({ group, findings, commands: applied.commands, scan: scanVerdict, tests: testVerdict });
     const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body });
+    keepBranch = KEEPS_BRANCH.has(pr.status);
     const note =
       pr.status === 'created'
         ? `pull request opened: ${pr.url ?? '(gh reported no URL)'}`
         : `pull request not opened (${pr.status}): ${pr.detail ?? 'no further detail'}`;
-    return { ...base, commands: applied.commands, scan: scanVerdict, tests: testVerdict, pr, note };
+    return {
+      ...base,
+      commands: applied.commands,
+      outcome: PR_STATUS_OUTCOME[pr.status],
+      scan: scanVerdict,
+      tests: testVerdict,
+      pr,
+      note,
+    };
   } finally {
     // Per group, on every path above — success, every early return, and any
     // throw. `await`ed so the worktree is actually gone (or reported unable
@@ -334,6 +434,17 @@ async function processGroup(opts: {
     // "teardown verified by observing the world" discipline rather than
     // trusting a fire-and-forget call.
     await worktree.remove();
+    // C2: best-effort, like worktree.remove() above and unlike the rest of
+    // this function — deleteLocalBranch's own {deleted, warning} is not
+    // threaded back into GroupResult. Doing so would mean restructuring
+    // every `return` above into an intermediate variable so this `finally`
+    // could still enrich it, which risks the control-flow bug this project
+    // has been bitten by before (a safety property that looks like
+    // plumbing) for a warning message, not a correctness property: a branch
+    // that fails to delete is a stray local ref, not a lie the tool tells.
+    if (!keepBranch) {
+      await deleteLocalBranch({ projectPath, branch });
+    }
   }
 }
 
@@ -360,28 +471,58 @@ function describeApplyFailure(failure: { command: string; outcome: string; exit_
 }
 
 /**
- * Re-runs the group's originating scanner inside the already-fixed worktree
- * (design §4.1) via the same MCP tool that would have produced this group's
- * findings in the first place: `scan_sast` for `semgrep`, `deps_audit` for
- * `deps` (Trivy + npm audit — the two `DEP_SCANNER_TOOLS` entries
- * `candidates.ts` actually pairs against; `wpscan` is out of reach here the
- * same way it is for `deps_update_plan` itself).
+ * `Finding.tool` → the name `deps_audit`'s OWN `missing_tools` array uses
+ * for it, when `deps_audit` is even capable of re-checking that tool at all
+ * (task-7-review.md I5). `'trivy'` matches directly. `'npm-audit'`
+ * (`NPM_AUDIT_TOOL_NAME`, scannerParsers/npmAudit.ts) does NOT: `deps_audit`
+ * names the COMMAND it ran ('npm') in `missing_tools`, a different string
+ * for the same scanner — a literal `.includes('npm-audit')` would never
+ * match even when npm audit genuinely did not run. `'wpscan'` maps to
+ * `null`: `deps_audit` never attempts wpscan at all (design §10's own
+ * documented gap), so it can never report it as either present or missing —
+ * `missing_tools` simply never mentions it either way, and treating "never
+ * mentioned" as "ran fine" would be the exact false positive this map
+ * exists to close, for a scanner `deps_audit` does not even know exists.
+ */
+const DEPS_AUDIT_MISSING_TOOLS_NAME: Readonly<Record<string, string | null>> = {
+  trivy: 'trivy',
+  'npm-audit': 'npm',
+  wpscan: null,
+};
+
+/**
+ * Re-runs the group's originating scanner(s) inside the already-fixed
+ * worktree (design §4.1) via the same MCP tool that would have produced
+ * this group's findings in the first place: `scan_sast` for `semgrep`,
+ * `deps_audit` for `deps`.
  *
- * A missing primary scanner is treated as a verification failure, not as "0
- * findings": `scan_sast`/`deps_audit` both report `ok: true` with an EMPTY
- * finding set when their primary scanner could not run at all (consistent
- * with every other scan tool in this repo — a coverage gap, not a clean
- * bill of health). Trusting that empty set at face value here would read
- * "the scanner didn't run" as "nothing is wrong any more" — exactly the
- * false positive the scan differential exists to prevent, in a new costume.
+ * **Which scanner(s) must have run is derived from the group's OWN target
+ * findings' `tool` values, never a single hardcoded guess
+ * (task-7-review.md I5).** A `deps` group's targets can come from trivy,
+ * npm-audit OR wpscan (`DEP_SCANNER_TOOLS`, `../fixpr/candidates.ts`) — a
+ * group covering an npm-audit-sourced CVE re-verified only by checking
+ * whether TRIVY ran would trust an empty after-set even when the specific
+ * scanner that found that CVE never ran at all, and a wpscan-sourced target
+ * would be judged resolved on literally every run, since `deps_audit` never
+ * attempts wpscan in the first place. `targetFindings` is this group's own
+ * `findingsForGroup` result, not `group` itself, which carries no `Finding`
+ * objects (only fingerprints).
+ *
+ * A required scanner that did not run is treated as a verification failure,
+ * not as "0 findings": `scan_sast`/`deps_audit` both report `ok: true` with
+ * an EMPTY finding set when a scanner could not run at all (consistent with
+ * every other scan tool in this repo — a coverage gap, not a clean bill of
+ * health). Trusting that empty set at face value here would read "the
+ * scanner didn't run" as "nothing is wrong any more" — exactly the false
+ * positive the scan differential exists to prevent, in a new costume.
  */
 async function rescanAfterFix(
   group: FixGroup,
+  targetFindings: readonly Finding[],
   worktreePath: string,
   ctx: PluginContext,
 ): Promise<{ ok: true; scanId: string; findings: Finding[] } | { ok: false; reason: string }> {
   const toolName = group.source === 'semgrep' ? 'scan_sast' : 'deps_audit';
-  const primaryScanner = group.source === 'semgrep' ? 'semgrep' : 'trivy';
 
   const subTool = TOOLS.find((t) => t.name === toolName);
   if (subTool === undefined) {
@@ -398,14 +539,42 @@ async function rescanAfterFix(
     return { ok: false, reason: `${toolName} returned no scan_id` };
   }
   const missingTools = Array.isArray(r.missing_tools) ? r.missing_tools : [];
-  if (missingTools.includes(primaryScanner)) {
+
+  const requiredTools = new Set(targetFindings.map((f) => f.tool));
+  const uncheckable = [...requiredTools].filter((tool) =>
+    scannerCouldNotBeVerified(group.source, tool, missingTools),
+  );
+  if (uncheckable.length > 0) {
     return {
       ok: false,
-      reason: `${primaryScanner} did not run inside the worktree (reported as missing) — cannot verify`,
+      reason:
+        `${uncheckable.join(', ')} did not run inside the worktree (reported missing, or ${toolName} ` +
+        `does not cover it at all) — cannot verify`,
     };
   }
 
   return { ok: true, scanId: r.scan_id, findings: ctx.storage.findings.listByScan(r.scan_id) };
+}
+
+function scannerCouldNotBeVerified(
+  source: FixSource,
+  tool: string,
+  missingTools: readonly unknown[],
+): boolean {
+  if (source === 'semgrep') {
+    // buildSemgrepGroup (../fixpr/candidates.js) only ever pairs
+    // tool === 'semgrep' findings, so `tool` here is always 'semgrep' in
+    // practice — checked by name anyway rather than assumed.
+    return tool === 'semgrep' && missingTools.includes('semgrep');
+  }
+  const missingToolsName = DEPS_AUDIT_MISSING_TOOLS_NAME[tool];
+  // Not one of DEP_SCANNER_TOOLS (../fixpr/candidates.js) — unreachable
+  // today, since buildGroups only ever pairs those three tools into a
+  // `deps` group, but permissive rather than blocking on a tool this
+  // module has no more precise information about.
+  if (missingToolsName === undefined) return false;
+  if (missingToolsName === null) return true; // deps_audit can never check this one (wpscan)
+  return missingTools.includes(missingToolsName);
 }
 
 function buildPrTitle(group: FixGroup, findingCount: number): string {
@@ -419,8 +588,19 @@ function buildPrTitle(group: FixGroup, findingCount: number): string {
  * commands run, the scan differential, and the test verdict — including,
  * VERBATIM when the outcome is `not_run`, "behaviour was not verified: this
  * project declares no test command".
+ *
+ * Exported (task-7-review.md M7), unlike every other helper in this file:
+ * it is pure (typed inputs in, a string out, no I/O), the same reason
+ * `fixpr/*.ts`'s own pure modules export their logic for direct unit
+ * testing rather than only through a real tool call. No test in this
+ * feature reached a genuinely created PR through `gh` alone — the stub
+ * `gh.cmd`'s own `echo %*` truncates a multi-line `--body` argument at its
+ * first embedded newline, a real limitation of that capture mechanism, not
+ * something a differently-shaped integration test could route around —
+ * so the verbatim phrase this function's own doc comment promises had zero
+ * regression protection until this export made a direct test possible.
  */
-function buildPrBody(opts: {
+export function buildPrBody(opts: {
   group: FixGroup;
   findings: Finding[];
   commands: string[];

@@ -6,24 +6,36 @@
  * and either proof failing means no pull request.
  *
  * **The scan differential (`judgeScan`).** Re-runs of the originating
- * scanner, before vs. after, compared by fingerprint. Success requires BOTH
- * that every target finding is gone AND that no new finding appeared — the
- * second half is not decoration. A version bump that trades CVE-A for CVE-B
- * is not a fix, and reporting it as one is exactly the "something that did
- * not happen acquiring the appearance of having happened" this whole project
- * exists to eliminate (design §4.1).
+ * scanner, before vs. after. Success requires BOTH that every target finding
+ * is gone AND that no new finding appeared — the second half is not
+ * decoration. A version bump that trades CVE-A for CVE-B is not a fix, and
+ * reporting it as one is exactly the "something that did not happen
+ * acquiring the appearance of having happened" this whole project exists to
+ * eliminate (design §4.1).
  *
- * The "no new finding" half is answered by `compareFindings`
- * (`../dashboard/delta.ts`), which already computes a correct, tested
- * fingerprint-set diff — including de-duplication and stable ordering. It is
- * called with an effectively uncapped `cap` (`Number.MAX_SAFE_INTEGER`)
- * because this differential's whole point is to never understate what
- * appeared; the dashboard's own display cap (500, for a UI) has no place
- * here. **No second comparator is written**: the "every target resolved"
- * half is a different question `compareFindings` was never built to
- * answer — it returns aggregate counts, not which specific fingerprints
- * resolved — so that half is plain set membership against `targets`, not a
- * reimplementation of the diff itself.
+ * **The two halves compare by different keys, on purpose, per an amendment
+ * to design §4.1 and §10 (2026-08-17, after task-7-review.md's I4).**
+ * "Every target resolved" compares by fingerprint — plain set membership
+ * against `targets`, since there we are asking about SPECIFIC findings we
+ * set out to fix. "No new finding" compares by `(rule_id, file_path)`
+ * instead. Fingerprints hash `line_start`/`line_end`/the snippet
+ * (`../fingerprint/findingFingerprint.ts`), so ANY autofix pass that shifts a
+ * line — or rewrites the matched line, changing the snippet — gives every
+ * OTHER finding in that file a fresh fingerprint, measured at 4 of 4 on a
+ * real repo. Comparing "no new finding" by fingerprint therefore means a
+ * `semgrep --autofix` pass on a file with more than one finding
+ * systematically fails its own differential and blames pre-existing,
+ * untouched findings for it — the false accusation this amendment exists to
+ * stop. Comparing by which `(rule_id, file_path)` pairs are newly present
+ * survives that churn: a rule that already fired on a file, just at a
+ * different line, is not new; a rule that never fired on that file before is.
+ * The accepted cost: a genuine SECOND instance of the same rule newly
+ * appearing in a file that already had one instance does not register as
+ * new. That is a real weakening, and it is the right trade — the
+ * alternative is a check that fires on every line shift a fix causes and
+ * therefore tells us nothing. `compareFindings` (`../dashboard/delta.ts`) is
+ * no longer used here: its diff is fingerprint-keyed end to end, which is
+ * exactly the half of this differential fingerprints are wrong for.
  *
  * **The test differential (`judgeTests`) is lazy, and the laziness is a
  * correctness property, not an optimisation.** A project whose tests already
@@ -40,15 +52,10 @@
  * hit that exact shape of bug five times before.
  */
 
-import { compareFindings } from '../dashboard/delta.js';
 import { runProcess } from '../runners/processRunner.js';
 import type { Finding } from '../types.js';
 import type { DerivedTestCommand } from './testCommand.js';
 import type { ScanVerdict, TestVerdict } from './types.js';
-
-/** Passed to `compareFindings` so the new-findings side of the differential
- *  is never truncated — see the module comment. */
-const UNCAPPED = Number.MAX_SAFE_INTEGER;
 
 /** How many lines of a failing run's output ride along in the verdict —
  *  enough for a reader to recognise which tests broke, not the whole log. */
@@ -59,13 +66,11 @@ export function judgeScan(
   before: { scan_id: string; findings: readonly Finding[] },
   after: { scan_id: string; findings: readonly Finding[] },
 ): ScanVerdict {
-  const { delta } = compareFindings(before, after, UNCAPPED);
-
-  // Set membership against `targets` — not compareFindings's own
-  // resolved_count/unchanged_count, which answer "how many" over ALL of
-  // `before`, not "which of MY targets". A fingerprint that disappeared but
-  // was never a target is neither resolved nor still_present here; it is
-  // simply not this differential's business.
+  // Set membership against `targets` — never "everything that disappeared",
+  // which would answer "how many" over ALL of `before`, not "which of MY
+  // targets". A fingerprint that disappeared but was never a target is
+  // neither resolved nor still_present here; it is simply not this
+  // differential's business.
   const afterFingerprints = new Set(after.findings.map((finding) => finding.fingerprint));
   const resolved: string[] = [];
   const still_present: string[] = [];
@@ -74,22 +79,57 @@ export function judgeScan(
     else resolved.push(target);
   }
 
-  const new_findings = delta.new_findings.map((finding) => ({
+  // (rule_id, file_path)-keyed, not fingerprint-keyed — see the module
+  // comment for why. Never truncated: this differential's whole point is to
+  // never understate what appeared.
+  const newFindings = newByRuleAndFile(before.findings, after.findings);
+  const new_findings = newFindings.map((finding) => ({
     fingerprint: finding.fingerprint,
     severity: finding.severity,
     title: finding.title,
   }));
 
   return {
-    // delta.new_count, the TRUE count — never new_findings.length, which
-    // would silently agree with a truncated list were one ever introduced
-    // upstream. With UNCAPPED the two are always equal in practice; using
-    // new_count anyway is the same discipline the dashboard itself follows.
-    passed: still_present.length === 0 && delta.new_count === 0,
+    passed: still_present.length === 0 && newFindings.length === 0,
     resolved,
     still_present,
     new_findings,
   };
+}
+
+/**
+ * Findings in `after` whose `(rule_id, file_path)` pair does not occur
+ * anywhere in `before` — see the module comment for why this key, not the
+ * fingerprint, answers "did something new appear". One representative
+ * `Finding` per new key, in `after`'s own order, mirroring
+ * `compareFindings`'s own de-duplication discipline (a repeated key within
+ * `after` contributes exactly one row, the same as it contributes exactly
+ * one member of the underlying key set).
+ */
+function newByRuleAndFile(before: readonly Finding[], after: readonly Finding[]): Finding[] {
+  const beforeKeys = new Set(before.map(ruleFileKey));
+  const seenNew = new Set<string>();
+  const result: Finding[] = [];
+  for (const finding of after) {
+    const key = ruleFileKey(finding);
+    if (beforeKeys.has(key)) continue;
+    if (seenNew.has(key)) continue;
+    seenNew.add(key);
+    result.push(finding);
+  }
+  return result;
+}
+
+/**
+ * `JSON.stringify` of the pair, not a delimited string: `rule_id`/`file_path`
+ * can themselves contain any character (a Windows path's `:`, for instance),
+ * so a hand-picked delimiter risks two genuinely different pairs colliding
+ * onto the same key. `?? null` normalises the optional fields so a missing
+ * `rule_id` or `file_path` is a stable, distinct key of its own rather than
+ * silently coinciding with a present-but-empty string.
+ */
+function ruleFileKey(finding: Finding): string {
+  return JSON.stringify([finding.rule_id ?? null, finding.file_path ?? null]);
 }
 
 export async function judgeTests(opts: {

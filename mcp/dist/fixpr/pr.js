@@ -53,8 +53,36 @@
  * Transport is the local `gh` CLI only — no tokens, no REST, no Octokit, the
  * same as `create_github_issues`. This repository has never handled a GitHub
  * credential and does not begin here.
+ *
+ * **`.guardian/**` never becomes part of the commit (task-7-review.md C1).**
+ * `createFixPr.ts` re-runs the group's originating scanner INSIDE the
+ * worktree to verify the fix, and that scanner writes its own JSON report to
+ * `<worktree>/.guardian/reports/**` (`ensureReportDir`,
+ * `../tools/scanHelpers.ts`). `git add -A` would stage that report file
+ * alongside — or, when the fix itself changed nothing real, INSTEAD OF —
+ * whatever the fix actually touched, and `git commit` would then happily
+ * commit it: a tree that contains dev-guardian's own scan output is never
+ * empty, even when the fix was a no-op. Measured: a commit titled "automated
+ * Semgrep fix" whose entire diff was `sast.json`. Both `git add` and the
+ * real-change check below use the pathspec `-- ':!.guardian'`, so neither
+ * ever sees that directory.
+ *
+ * **An empty diff is an explicit outcome (`no_changes`), not inferred from
+ * `git commit` refusing an empty tree.** Checked directly — `git status
+ * --porcelain -- ':!.guardian'` on the worktree — after the existence check
+ * and before `git add`, so a fix that genuinely changed nothing never
+ * reaches `git commit`, `git push` or `gh pr create` at all. Relying on
+ * `git commit`'s own refusal instead would still work (it does refuse an
+ * empty tree), but its message — "nothing to commit, working tree clean" —
+ * sits several lines past `describeFailure`'s own "first non-blank line"
+ * convention (`On branch <name>`), so the caller sees the wrong line and the
+ * outcome is bucketed under `push_failed`, indistinguishable from a real
+ * failure.
  */
 import { runProcess } from '../runners/processRunner.js';
+/** Excludes dev-guardian's own scan-report artifacts from both staging and
+ *  the "did anything real change" check — see the module comment (C1). */
+const EXCLUDE_GUARDIAN_DIR = ':!.guardian';
 const BRANCH_PREFIX = 'dev-guardian/fix-';
 /**
  * Deterministic and namespaced (design §5): the same set of findings always
@@ -134,7 +162,37 @@ export async function openPr(opts) {
             detail: `A pull request already exists for branch '${branch}'; nothing to do.`,
         };
     }
-    const add = await run({ command: 'git', args: ['add', '-A'], cwd: worktreePath });
+    // Explicit empty-diff check — see the module comment (C1). Excludes
+    // .guardian the same way the `git add` below does, so the re-scan's own
+    // report is never what makes an otherwise-unchanged tree look non-empty.
+    // `git status --porcelain` needs no `--quiet`/exit-code interpretation:
+    // empty stdout IS "nothing staged, nothing unstaged, nothing untracked".
+    const status = await run({
+        command: 'git',
+        args: ['status', '--porcelain', '--', EXCLUDE_GUARDIAN_DIR],
+        cwd: worktreePath,
+    });
+    if (hasFailed(status)) {
+        return {
+            status: 'push_failed',
+            url: null,
+            detail: `Could not determine whether branch '${branch}' has real changes to commit: ` +
+                `${describeFailure(status, 'git status')}`,
+        };
+    }
+    if (status.stdout.trim().length === 0) {
+        return {
+            status: 'no_changes',
+            url: null,
+            detail: `The fix produced no changes to commit on branch '${branch}' (dev-guardian's own scan ` +
+                `report is excluded from this check, so it cannot mask a no-op fix). No pull request was opened.`,
+        };
+    }
+    const add = await run({
+        command: 'git',
+        args: ['add', '-A', '--', EXCLUDE_GUARDIAN_DIR],
+        cwd: worktreePath,
+    });
     if (hasFailed(add)) {
         return {
             status: 'push_failed',
@@ -174,6 +232,46 @@ export async function openPr(opts) {
         };
     }
     return { status: 'created', url: firstUrlLine(create.stdout), detail: null };
+}
+/**
+ * Deletes the local branch `createWorktree` made (task-7-review.md C2).
+ * `git worktree remove` deliberately never deletes the branch a worktree was
+ * checked out on — confirmed by this module's own `push_failed`/
+ * `create_failed` messages, which rely on exactly that so a user can find
+ * the branch by hand — so once a group's outcome is one where nothing keeps
+ * that branch meaningful (verification never reached `openPr`; `openPr`
+ * itself refused, found a PR already `exists`ing, or found `no_changes` to
+ * commit), the branch is still sitting in the project's own refs after the
+ * worktree is gone. Left alone, design §6's "a dry run leaves nothing behind
+ * at all — not a branch" is violated on every dry run, AND a later call for
+ * the exact same group collides on that stray branch name in `createWorktree`
+ * itself, before `prExists`'s own `--state all` idempotency check is ever
+ * reached — design §5's whole idempotency mechanism, made unreachable.
+ *
+ * Callers decide WHEN this is safe to call (never after `created`,
+ * `push_failed` or `create_failed` — see `createFixPr.ts`'s own `keepBranch`
+ * logic); this function only performs the deletion, unconditionally, once
+ * asked. `-D` (force), not `-d`: every case this is called for has made no
+ * commit beyond HEAD on that branch (verification/apply never got as far as
+ * `openPr`'s own `git add`/`commit`, or `openPr` returned before making one),
+ * so there is nothing `-d`'s "is this merged" safety check could ever
+ * usefully refuse, and a refusal here would just leave the exact stray branch
+ * this function exists to remove.
+ */
+export async function deleteLocalBranch(opts) {
+    const run = opts.run ?? runProcess;
+    const result = await run({
+        command: 'git',
+        args: ['branch', '-D', opts.branch],
+        cwd: opts.projectPath,
+    });
+    if (hasFailed(result)) {
+        return {
+            deleted: false,
+            warning: `could not delete local branch '${opts.branch}': ${describeFailure(result, 'git branch -D')}`,
+        };
+    }
+    return { deleted: true, warning: null };
 }
 // --------------------------------------------------------------- internal
 /**

@@ -1,6 +1,6 @@
 # Copilot instructions — dev-guardian
 
-This project uses the **dev-guardian MCP server** — 53 tools and 18
+This project uses the **dev-guardian MCP server** — 54 tools and 18
 resources for security, quality, bugfix, deps, compliance, observability,
 performance, WordPress, and .NET. All scanners run locally; results
 persist in `.guardian/guardian.db` for diffing and baselines.

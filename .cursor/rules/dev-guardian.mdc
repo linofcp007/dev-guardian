@@ -7,7 +7,7 @@ alwaysApply: true
 
 # dev-guardian
 
-This project has the **dev-guardian MCP server** registered. 53 tools and
+This project has the **dev-guardian MCP server** registered. 54 tools and
 18 resources for security, quality, bugfix, deps, compliance,
 observability, performance, plus first-class WordPress and .NET support.
 All scanners run **locally**, no telemetry.

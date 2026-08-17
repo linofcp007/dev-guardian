@@ -9,12 +9,41 @@
  *
  * The `open` list is the canonical "what's wrong right now" view: it joins
  * the latest completed scan with the suppressions table.
+ *
+ * **The UNSCOPED "latest scan" queries (`listOpen`, `listBySeverity`)
+ * exclude `create_fix_pr`'s own verification re-scans (task-7-review.md
+ * I3).** `create_fix_pr` re-runs a scanner inside a disposable worktree to
+ * prove a fix, with `project_path` set to that worktree — a real, if
+ * short-lived, row in `scans`. Measured without this exclusion: one
+ * `create_fix_pr` call (even a dry run — the re-scan is not gated by
+ * `apply`) repoints `listOpen()`/`getLatest()` at that worktree, so
+ * `guardian://findings/open`, `triage_findings`, `prioritize_findings`,
+ * `risk_score` and `dotnet_describe_setup` all report a false all-clear for
+ * a directory that no longer exists, while the real project's own findings
+ * sit untouched under the project-SCOPED queries (`listOpenForProject`,
+ * `getLatestForProject`), which never needed this — they filter on an exact
+ * `project_path`, which a worktree's path can never equal.
+ *
+ * `WORKTREE_PATH_EXCLUSION` wraps `fixpr/worktree.ts`'s own
+ * `WORKTREE_DIR_PREFIX` ('guardian-fixpr-wt-') in `%` on BOTH sides for
+ * `LIKE`: `createWorktree` builds the path via `mkdtempSync(join(tmpdir(),
+ * WORKTREE_DIR_PREFIX))`, so the prefix names the LAST path segment
+ * (`/tmp/guardian-fixpr-wt-Ab12Cd`, `C:\…\Temp\guardian-fixpr-wt-Ab12Cd`) —
+ * never the start of the whole path string, which a leading-wildcard-only
+ * pattern would require. Inlined as a literal, not imported: this is core
+ * storage, several layers below any single feature, and importing a
+ * feature-specific constant here would invert that. If `WORKTREE_DIR_PREFIX`
+ * ever changes, this must change with it — there is no compiler check tying
+ * the two together.
  */
 
 import type { DB, Statement } from './db.js';
 import type { Category, Finding, Severity } from '../types.js';
 import { SEVERITIES, SEVERITY_ORDER } from '../types.js';
 import { boolToInt, intToBool } from './repoUtil.js';
+
+/** See the module comment. Wraps `fixpr/worktree.ts`'s `WORKTREE_DIR_PREFIX`. */
+const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
 
 interface FindingRow {
   fingerprint: string;
@@ -72,10 +101,14 @@ export class FindingsRepo {
     `);
 
     // "Open" = findings in the latest completed scan, with suppressions
-    // (that are not expired) filtered out.
+    // (that are not expired) filtered out. `project_path NOT LIKE
+    // 'guardian-fixpr-wt-%'` excludes create_fix_pr's own verification
+    // re-scans (task-7-review.md I3) — see this file's own module comment
+    // for why this lives here as a literal rather than an import.
     this.listOpenLatestScanStmt = db.prepare<[], FindingRow>(`
       WITH latest AS (
-        SELECT id FROM scans WHERE status = 'completed'
+        SELECT id FROM scans
+        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -114,9 +147,12 @@ export class FindingsRepo {
         f.fingerprint ASC
     `);
 
+    // Same exclusion as listOpenLatestScanStmt above, and for the same
+    // reason — this is ALSO an unscoped "latest scan" query.
     this.listBySeverityLatestStmt = db.prepare<[string], FindingRow>(`
       WITH latest AS (
-        SELECT id FROM scans WHERE status = 'completed'
+        SELECT id FROM scans
+        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f

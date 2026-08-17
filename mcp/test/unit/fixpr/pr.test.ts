@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { branchName, prExists, openPr } from '../../../src/fixpr/pr.js';
+import { branchName, deleteLocalBranch, prExists, openPr } from '../../../src/fixpr/pr.js';
+
+/**
+ * `openPr` now checks `git status --porcelain -- ':!.guardian'` before
+ * staging anything (C1/no_changes — see pr.ts's own module comment). Every
+ * test below that means to reach past that check into add/commit/push/create
+ * scripts a non-empty `git status` response so it is exercising what it says
+ * it is, not silently short-circuiting into `no_changes`.
+ */
+const REAL_CHANGES = { outcome: 'completed', exitCode: 0, stdout: ' M file.txt\n' };
 
 function fakeRun(script: Record<string, { outcome: string; exitCode: number | null;
   stdout?: string; stderr?: string }>) {
@@ -78,6 +87,7 @@ describe('openPr', () => {
     // branch leaves the user with an unexplained branch on their remote.
     const { run } = fakeRun({
       'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
       'gh pr create': { outcome: 'failed', exitCode: 1, stderr: 'no upstream repo\n' },
     });
     const r = await openPr({ ...base, run });
@@ -88,6 +98,7 @@ describe('openPr', () => {
   it('reports push_failed without attempting to create a PR', async () => {
     const { run, calls } = fakeRun({
       'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
       'git push': { outcome: 'failed', exitCode: 1, stderr: 'permission denied\n' },
     });
     const r = await openPr({ ...base, run });
@@ -98,12 +109,75 @@ describe('openPr', () => {
   it('returns the URL on success', async () => {
     const { run } = fakeRun({
       'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
       'gh pr create': { outcome: 'completed', exitCode: 0,
         stdout: 'https://github.com/o/r/pull/12\n' },
     });
     const r = await openPr({ ...base, run });
     expect(r).toEqual({ status: 'created', url: 'https://github.com/o/r/pull/12',
       detail: null });
+  });
+
+  it('reports no_changes, and never touches git add/commit/push or gh pr create, when the fix produced nothing', async () => {
+    // C1: an autofix pass that completes successfully but changes nothing
+    // must not silently commit dev-guardian's own scan report as if it were
+    // the fix. `git status --porcelain -- ':!.guardian'` returning empty
+    // (the default `fakeRun` fallback, no script entry needed) is exactly
+    // that case.
+    const { run, calls } = fakeRun({
+      'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+    });
+    const r = await openPr({ ...base, run });
+    expect(r.status).toBe('no_changes');
+    expect(r.url).toBeNull();
+    expect(calls.some((c) => c.includes('add'))).toBe(false);
+    expect(calls.some((c) => c.includes('commit'))).toBe(false);
+    expect(calls.some((c) => c.includes('push'))).toBe(false);
+    expect(calls.some((c) => c.join(' ').includes('pr create'))).toBe(false);
+  });
+
+  it('excludes .guardian from what git add stages, so the re-scan report can never ride along with a real fix', async () => {
+    const { run, calls } = fakeRun({
+      'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
+      'gh pr create': { outcome: 'completed', exitCode: 0,
+        stdout: 'https://github.com/o/r/pull/1\n' },
+    });
+    await openPr({ ...base, run });
+    const addCall = calls.find((c) => c[0] === 'git' && c[1] === 'add');
+    expect(addCall).toEqual(['git', 'add', '-A', '--', ':!.guardian']);
+  });
+
+  it('checks for real changes with the SAME .guardian exclusion git add uses, not a bare git status', async () => {
+    const { run, calls } = fakeRun({
+      'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
+      'gh pr create': { outcome: 'completed', exitCode: 0,
+        stdout: 'https://github.com/o/r/pull/1\n' },
+    });
+    await openPr({ ...base, run });
+    const statusCall = calls.find((c) => c[0] === 'git' && c[1] === 'status');
+    expect(statusCall).toEqual(['git', 'status', '--porcelain', '--', ':!.guardian']);
+  });
+});
+
+describe('deleteLocalBranch', () => {
+  it('deletes with git branch -D (force), not -d', async () => {
+    const { run, calls } = fakeRun({
+      'git branch': { outcome: 'completed', exitCode: 0 },
+    });
+    const r = await deleteLocalBranch({ projectPath: '/proj', branch: 'dev-guardian/fix-npm-abc', run });
+    expect(r).toEqual({ deleted: true, warning: null });
+    expect(calls).toEqual([['git', 'branch', '-D', 'dev-guardian/fix-npm-abc']]);
+  });
+
+  it('reports a warning, not a throw, when the delete fails — best-effort, like worktree.remove()', async () => {
+    const { run } = fakeRun({
+      'git branch': { outcome: 'failed', exitCode: 1, stderr: 'error: branch not found\n' },
+    });
+    const r = await deleteLocalBranch({ projectPath: '/proj', branch: 'dev-guardian/fix-npm-abc', run });
+    expect(r.deleted).toBe(false);
+    expect(r.warning).toContain('dev-guardian/fix-npm-abc');
   });
 });
 
@@ -206,7 +280,7 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
   const base = { projectPath: '/proj', worktreePath: '/wt', branch: 'dev-guardian/fix-npm-abc',
     title: 'T', body: 'B' };
 
-  it('performs the full sequence in order: existence check, add, commit, push, then pr create', async () => {
+  it('performs the full sequence in order: existence check, status, add, commit, push, then pr create', async () => {
     // The safety property named in the task: nothing is pushed before the
     // existence check resolves. A wrong implementation might fire the push
     // and the existence check concurrently (both would still individually
@@ -214,12 +288,14 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
     // down the actual sequence, not just which calls eventually happen.
     const { run, calls } = fakeRunWithCwd({
       'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
       'gh pr create': { outcome: 'completed', exitCode: 0,
         stdout: 'https://github.com/o/r/pull/9\n' },
     });
     await openPr({ ...base, run });
     expect(calls.map((c) => [c.command, c.args[0], c.args[1]])).toEqual([
       ['gh', 'pr', 'list'],
+      ['git', 'status', '--porcelain'],
       ['git', 'add', '-A'],
       ['git', 'commit', '-m'],
       ['git', 'push', '-u'],
@@ -227,13 +303,14 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
     ]);
   });
 
-  it('runs the existence check and pr create in projectPath, and add/commit/push in the worktree', async () => {
+  it('runs the existence check and pr create in projectPath, and status/add/commit/push in the worktree', async () => {
     // cwd is the isolation boundary (the same property apply.test.ts asserts
     // for applyGroup): git writes must land in the worktree, and gh's repo
     // resolution must use the project checkout the user's own remote and
     // auth are configured against.
     const { run, calls } = fakeRunWithCwd({
       'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
       'gh pr create': { outcome: 'completed', exitCode: 0,
         stdout: 'https://github.com/o/r/pull/9\n' },
     });
@@ -241,6 +318,7 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
     const byCommand = (cmd: string, first: string) =>
       calls.find((c) => c.command === cmd && c.args[0] === first);
     expect(byCommand('gh', 'pr')?.cwd).toBe('/proj');
+    expect(byCommand('git', 'status')?.cwd).toBe('/wt');
     expect(byCommand('git', 'add')?.cwd).toBe('/wt');
     expect(byCommand('git', 'commit')?.cwd).toBe('/wt');
     expect(byCommand('git', 'push')?.cwd).toBe('/wt');
@@ -281,6 +359,7 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
     // branch on ONE of the two paths and forgets the other.
     const { run } = fakeRun({
       'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
       'git push': { outcome: 'failed', exitCode: 1, stderr: 'permission denied\n' },
     });
     const r = await openPr({ ...base, run });
@@ -291,6 +370,7 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
   it('commits with the PR title as the message, and passes head/title/body through to gh pr create', async () => {
     const { run, calls } = fakeRunWithCwd({
       'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
       'gh pr create': { outcome: 'completed', exitCode: 0,
         stdout: 'https://github.com/o/r/pull/1\n' },
     });
@@ -308,6 +388,7 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
     // hard failure would be inventing a failure gh itself did not report.
     const { run } = fakeRun({
       'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
       'gh pr create': { outcome: 'completed', exitCode: 0, stdout: 'no url here\n' },
     });
     const r = await openPr({ ...base, run });
@@ -321,11 +402,25 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
     // the closest existing status: the branch never reached origin.
     const { run, calls } = fakeRun({
       'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
       'git add': { outcome: 'failed', exitCode: 1, stderr: 'fatal: not a git repository\n' },
     });
     const r = await openPr({ ...base, run });
     expect(r.status).toBe('push_failed');
     expect(calls.some((c) => c.join(' ').includes('commit'))).toBe(false);
     expect(calls.some((c) => c.join(' ').includes('push'))).toBe(false);
+  });
+
+  it('checks for real changes only after the existence check, never before', async () => {
+    // Order matters here too, for the same reason it matters for
+    // add/commit/push: `git status` reads the worktree, which is cheap, but
+    // resolving existence first is the documented safety property, and nothing
+    // — not even a read-only check — should run ahead of it.
+    const { run, calls } = fakeRunWithCwd({
+      'gh pr list': { outcome: 'failed', exitCode: 1, stderr: 'boom\n' },
+    });
+    const r = await openPr({ ...base, run });
+    expect(r.status).toBe('refused');
+    expect(calls.some((c) => c.args[0] === 'status')).toBe(false);
   });
 });

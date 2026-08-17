@@ -5,8 +5,20 @@
  * maps directly to a SQL operation. Cache lookup, transition logic, and the
  * tree-hash freshness window all belong to the scan-tool factory upstream
  * (see [.specs/dev-guardian-mcp/design.md] → "Tool invocation flow").
+ *
+ * **`getLatestStmt` (the UNSCOPED "latest scan in the whole database" query)
+ * excludes `create_fix_pr`'s own verification re-scans** — see
+ * `findingsRepo.ts`'s own module comment (task-7-review.md I3) for the full
+ * reasoning; the same contamination, the same fix, the same reason
+ * `WORKTREE_PATH_EXCLUSION` is inlined here as a literal rather than
+ * imported from `fixpr/worktree.ts` — see `findingsRepo.ts`'s own module
+ * comment for why it is wrapped in `%` on both sides, not just trailing.
+ * `getLatestForProject` needs no such exclusion: it is already scoped to an
+ * exact `project_path`, which a worktree's path can never equal.
  */
 import { nowIso, parseJsonArray } from './repoUtil.js';
+/** See the module comment. Wraps `fixpr/worktree.ts`'s `WORKTREE_DIR_PREFIX`. */
+const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
 export class ScansRepo {
     insertStmt;
     finalizeStmt;
@@ -47,10 +59,11 @@ export class ScansRepo {
         this.getByIdStmt = db.prepare(`SELECT * FROM scans WHERE id = ?`);
         // rowid DESC is a tiebreaker for scans inserted in the same millisecond
         // (real risk on fast CI). It also guarantees "later insert wins" even if
-        // a future migration drops millisecond resolution.
+        // a future migration drops millisecond resolution. `project_path NOT
+        // LIKE …`: see this file's own module comment (task-7-review.md I3).
         this.getLatestStmt = db.prepare(`
       SELECT * FROM scans
-      WHERE status = 'completed'
+      WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);

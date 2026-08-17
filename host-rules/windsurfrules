@@ -1,6 +1,6 @@
 # dev-guardian (MCP)
 
-This project has the dev-guardian MCP server registered. 53 tools and 18
+This project has the dev-guardian MCP server registered. 54 tools and 18
 resources for security, quality, bugfix, deps, compliance, observability,
 performance, WordPress, .NET. All scanners run locally, no telemetry,
 results persisted in `.guardian/guardian.db`.

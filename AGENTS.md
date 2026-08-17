@@ -1,7 +1,7 @@
 # Agent rules — dev-guardian
 
 This repository has the **dev-guardian MCP server** registered. It exposes
-53 tools and 18 resources for security, quality, bugfix, deps,
+54 tools and 18 resources for security, quality, bugfix, deps,
 compliance, observability, performance, plus first-class WordPress and
 .NET (C#/F#) support. All scanners run locally, no telemetry, results
 persisted in `.guardian/guardian.db`.

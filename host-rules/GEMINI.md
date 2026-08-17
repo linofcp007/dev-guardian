@@ -1,7 +1,7 @@
 # dev-guardian — context for Gemini CLI
 
 This repository has the **dev-guardian MCP server** registered (see
-`~/.gemini/settings.json` or `.gemini/settings.json`). It exposes 53 tools and
+`~/.gemini/settings.json` or `.gemini/settings.json`). It exposes 54 tools and
 18 resources for security, quality, bugfix, deps, compliance, observability,
 performance, plus first-class WordPress and .NET (C#/F#) support. All scanners
 run locally, no telemetry; results persist in `.guardian/guardian.db`.

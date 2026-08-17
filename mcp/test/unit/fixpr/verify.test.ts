@@ -26,9 +26,15 @@ describe('judgeScan', () => {
   it('FAILS when the target went away but something new arrived', () => {
     // The heart of the design. A bump that trades CVE-A for CVE-B is not a fix,
     // and the wrong implementation only checks that the target is resolved.
+    // A genuinely different problem — a different rule, in a different file
+    // — so this is distinguishable from the shifted-line case I4 exists for
+    // (same rule_id + file_path, different fingerprint; see "does not count a
+    // shifted line as new" below).
     const v = judgeScan([A],
-      { scan_id: 'before', findings: [f(A)] },
-      { scan_id: 'after', findings: [f(C, { title: 'new CVE' })] });
+      { scan_id: 'before', findings: [f(A, { rule_id: 'CVE-A', file_path: 'a.js' })] },
+      { scan_id: 'after', findings: [
+        f(C, { rule_id: 'CVE-B', file_path: 'b.js', title: 'new CVE' }),
+      ] });
     expect(v.passed).toBe(false);
     expect(v.new_findings).toEqual([
       { fingerprint: C, severity: 'high', title: 'new CVE' },
@@ -71,24 +77,75 @@ describe('judgeScan', () => {
   });
 
   it('never truncates new_findings, however many appear', () => {
-    // compareFindings supports a cap (the dashboard caps at 500); the brief's
-    // own "something new arrived" test uses exactly one new finding, which
-    // cannot tell an uncapped call apart from one accidentally capped at 1.
-    // judgeScan must call compareFindings with an effectively infinite cap —
-    // the scan differential's whole point is to never understate new findings.
+    // The dashboard's own display cap (500) has no place here; a wrong
+    // implementation might reuse it and silently understate a larger burst.
+    // Each entry carries its own rule_id/file_path (not the shared default)
+    // so all four are genuinely distinct (rule_id, file_path) pairs — under
+    // I4's keying, four findings sharing one pair would collapse to one.
     const news = [
-      f('1'.repeat(64), { title: 'n1' }),
-      f('2'.repeat(64), { title: 'n2' }),
-      f('3'.repeat(64), { title: 'n3' }),
-      f('4'.repeat(64), { title: 'n4' }),
+      f('1'.repeat(64), { rule_id: 'rule.1', file_path: 'a.js', title: 'n1' }),
+      f('2'.repeat(64), { rule_id: 'rule.2', file_path: 'b.js', title: 'n2' }),
+      f('3'.repeat(64), { rule_id: 'rule.3', file_path: 'c.js', title: 'n3' }),
+      f('4'.repeat(64), { rule_id: 'rule.4', file_path: 'd.js', title: 'n4' }),
     ];
     const v = judgeScan([A],
-      { scan_id: 'before', findings: [f(A)] },
+      { scan_id: 'before', findings: [f(A, { rule_id: 'target-rule', file_path: 'target.js' })] },
       { scan_id: 'after', findings: news });
     expect(v.new_findings.map((n) => n.fingerprint)).toEqual([
       '1'.repeat(64), '2'.repeat(64), '3'.repeat(64), '4'.repeat(64),
     ]);
     expect(v.passed).toBe(false);
+  });
+
+  // --- I4: (rule_id, file_path) keying, not fingerprint (task-7-review.md) ---
+  //
+  // Design §4.1/§10 amendment: fingerprints hash line_start/line_end/the
+  // snippet, so a single inserted or rewritten line changes the fingerprint
+  // of every OTHER finding in the same file — measured at 4 of 4 on a real
+  // repo. The "no new finding" half of the differential must survive that
+  // churn without also hiding a genuinely new rule.
+
+  it('does NOT count a shifted line as new — same rule, same file, different fingerprint', () => {
+    // Simulates exactly what --autofix does to the REST of a file it
+    // touches: the finding is still "the same" finding, just at a line one
+    // lower, which is a different fingerprint end to end but the identical
+    // (rule_id, file_path) pair. The wrong (pre-amendment) implementation
+    // reports this as new and blames a pre-existing finding for the fix.
+    const before = [f(A, { rule_id: 'javascript.lang.security.eval', file_path: 'app.js',
+      line_start: 10, line_end: 10 })];
+    const after = [f(B, { rule_id: 'javascript.lang.security.eval', file_path: 'app.js',
+      line_start: 11, line_end: 11, snippet: 'shifted down one line' })];
+    const v = judgeScan([], { scan_id: 'before', findings: before }, { scan_id: 'after', findings: after });
+    expect(v.new_findings).toEqual([]);
+    expect(v.passed).toBe(true);
+  });
+
+  it('DOES count a genuinely new rule firing, even in a file that already had a finding', () => {
+    // The other direction of the same trade: a rule that never fired on this
+    // file before is new, regardless of what else is already there. A wrong
+    // implementation that stopped comparing by file_path alone (dropping
+    // rule_id from the key) would miss this.
+    const before = [f(A, { rule_id: 'javascript.lang.security.eval', file_path: 'app.js' })];
+    const after = [
+      f(A, { rule_id: 'javascript.lang.security.eval', file_path: 'app.js' }),
+      f(C, { rule_id: 'javascript.lang.security.sql-injection', file_path: 'app.js', title: 'new rule' }),
+    ];
+    const v = judgeScan([], { scan_id: 'before', findings: before }, { scan_id: 'after', findings: after });
+    expect(v.new_findings).toEqual([
+      { fingerprint: C, severity: 'high', title: 'new rule' },
+    ]);
+    expect(v.passed).toBe(false);
+  });
+
+  it('treats a missing rule_id or file_path as its own stable key, not a wildcard match', () => {
+    // ?? null must not let two findings that both happen to lack a field
+    // silently collide with each other OR with a present-but-empty string.
+    const before = [f(A, { rule_id: undefined, file_path: 'app.js' })];
+    const after = [f(B, { rule_id: undefined, file_path: 'other.js', title: 'no rule_id, different file' })];
+    const v = judgeScan([], { scan_id: 'before', findings: before }, { scan_id: 'after', findings: after });
+    expect(v.new_findings).toEqual([
+      { fingerprint: B, severity: 'high', title: 'no rule_id, different file' },
+    ]);
   });
 });
 

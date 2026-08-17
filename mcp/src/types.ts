@@ -427,7 +427,6 @@ export const DOMAIN_ERROR_CODES = [
   'unsupported_target',
   'target_not_authorized',
   'no_surface_snapshot',
-  'worktree_failed',
 ] as const;
 export type DomainErrorCode = (typeof DOMAIN_ERROR_CODES)[number];
 

@@ -37285,11 +37285,11 @@ var DOMAIN_ERROR_CODES = [
   "target_not_found",
   "unsupported_target",
   "target_not_authorized",
-  "no_surface_snapshot",
-  "worktree_failed"
+  "no_surface_snapshot"
 ];
 
 // src/storage/findingsRepo.ts
+var WORKTREE_PATH_EXCLUSION = "%guardian-fixpr-wt-%";
 var FindingsRepo = class {
   constructor(db) {
     this.db = db;
@@ -37311,7 +37311,8 @@ var FindingsRepo = class {
     `);
     this.listOpenLatestScanStmt = db.prepare(`
       WITH latest AS (
-        SELECT id FROM scans WHERE status = 'completed'
+        SELECT id FROM scans
+        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -37347,7 +37348,8 @@ var FindingsRepo = class {
     `);
     this.listBySeverityLatestStmt = db.prepare(`
       WITH latest AS (
-        SELECT id FROM scans WHERE status = 'completed'
+        SELECT id FROM scans
+        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -37531,6 +37533,7 @@ var RuntimeMetaRepo = class {
 };
 
 // src/storage/scansRepo.ts
+var WORKTREE_PATH_EXCLUSION2 = "%guardian-fixpr-wt-%";
 var ScansRepo = class {
   insertStmt;
   finalizeStmt;
@@ -37571,7 +37574,7 @@ var ScansRepo = class {
     this.getByIdStmt = db.prepare(`SELECT * FROM scans WHERE id = ?`);
     this.getLatestStmt = db.prepare(`
       SELECT * FROM scans
-      WHERE status = 'completed'
+      WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION2}'
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);
@@ -53286,6 +53289,7 @@ function countFingerprints(group) {
 }
 
 // src/fixpr/pr.ts
+var EXCLUDE_GUARDIAN_DIR = ":!.guardian";
 var BRANCH_PREFIX = "dev-guardian/fix-";
 function branchName(_source, key, hash) {
   return `${BRANCH_PREFIX}${key}-${hash}`;
@@ -53336,7 +53340,30 @@ async function openPr(opts) {
       detail: `A pull request already exists for branch '${branch}'; nothing to do.`
     };
   }
-  const add = await run({ command: "git", args: ["add", "-A"], cwd: worktreePath });
+  const status = await run({
+    command: "git",
+    args: ["status", "--porcelain", "--", EXCLUDE_GUARDIAN_DIR],
+    cwd: worktreePath
+  });
+  if (hasFailed(status)) {
+    return {
+      status: "push_failed",
+      url: null,
+      detail: `Could not determine whether branch '${branch}' has real changes to commit: ${describeFailure(status, "git status")}`
+    };
+  }
+  if (status.stdout.trim().length === 0) {
+    return {
+      status: "no_changes",
+      url: null,
+      detail: `The fix produced no changes to commit on branch '${branch}' (dev-guardian's own scan report is excluded from this check, so it cannot mask a no-op fix). No pull request was opened.`
+    };
+  }
+  const add = await run({
+    command: "git",
+    args: ["add", "-A", "--", EXCLUDE_GUARDIAN_DIR],
+    cwd: worktreePath
+  });
   if (hasFailed(add)) {
     return {
       status: "push_failed",
@@ -53373,6 +53400,21 @@ async function openPr(opts) {
     };
   }
   return { status: "created", url: firstUrlLine(create.stdout), detail: null };
+}
+async function deleteLocalBranch(opts) {
+  const run = opts.run ?? runProcess;
+  const result = await run({
+    command: "git",
+    args: ["branch", "-D", opts.branch],
+    cwd: opts.projectPath
+  });
+  if (hasFailed(result)) {
+    return {
+      deleted: false,
+      warning: `could not delete local branch '${opts.branch}': ${describeFailure(result, "git branch -D")}`
+    };
+  }
+  return { deleted: true, warning: null };
 }
 function hasFailed(result) {
   return result.outcome !== "completed" || result.exitCode !== 0;
@@ -53452,49 +53494,9 @@ function fromPyprojectToml(content) {
   return { command: "pytest", args: [], origin: "pyproject.toml [tool.pytest]" };
 }
 
-// src/dashboard/delta.ts
-function compareFindings(from, to, cap) {
-  const fromFingerprints = new Set(from.findings.map((finding2) => finding2.fingerprint));
-  const toFingerprints = new Set(to.findings.map((finding2) => finding2.fingerprint));
-  let unchangedCount = 0;
-  let resolvedCount = 0;
-  for (const fingerprint of fromFingerprints) {
-    if (toFingerprints.has(fingerprint)) unchangedCount += 1;
-    else resolvedCount += 1;
-  }
-  const seenNew = /* @__PURE__ */ new Set();
-  const newFindings = [];
-  for (const finding2 of to.findings) {
-    if (fromFingerprints.has(finding2.fingerprint)) continue;
-    if (seenNew.has(finding2.fingerprint)) continue;
-    seenNew.add(finding2.fingerprint);
-    newFindings.push(finding2);
-  }
-  const shownNewFindings = newFindings.slice(0, cap);
-  const truncation = shownNewFindings.length < newFindings.length ? {
-    what: "new_findings",
-    shown: shownNewFindings.length,
-    total: newFindings.length,
-    reason: `new_findings exceeds the cap of ${cap}; showing the first ${shownNewFindings.length} of ${newFindings.length}`
-  } : null;
-  return {
-    delta: {
-      from_scan_id: from.scan_id,
-      to_scan_id: to.scan_id,
-      new_count: newFindings.length,
-      resolved_count: resolvedCount,
-      unchanged_count: unchangedCount,
-      new_findings: shownNewFindings
-    },
-    truncation
-  };
-}
-
 // src/fixpr/verify.ts
-var UNCAPPED = Number.MAX_SAFE_INTEGER;
 var OUTPUT_HEAD_LINES = 20;
 function judgeScan(targets, before, after) {
-  const { delta } = compareFindings(before, after, UNCAPPED);
   const afterFingerprints = new Set(after.findings.map((finding2) => finding2.fingerprint));
   const resolved = [];
   const still_present = [];
@@ -53502,21 +53504,34 @@ function judgeScan(targets, before, after) {
     if (afterFingerprints.has(target)) still_present.push(target);
     else resolved.push(target);
   }
-  const new_findings = delta.new_findings.map((finding2) => ({
+  const newFindings = newByRuleAndFile(before.findings, after.findings);
+  const new_findings = newFindings.map((finding2) => ({
     fingerprint: finding2.fingerprint,
     severity: finding2.severity,
     title: finding2.title
   }));
   return {
-    // delta.new_count, the TRUE count — never new_findings.length, which
-    // would silently agree with a truncated list were one ever introduced
-    // upstream. With UNCAPPED the two are always equal in practice; using
-    // new_count anyway is the same discipline the dashboard itself follows.
-    passed: still_present.length === 0 && delta.new_count === 0,
+    passed: still_present.length === 0 && newFindings.length === 0,
     resolved,
     still_present,
     new_findings
   };
+}
+function newByRuleAndFile(before, after) {
+  const beforeKeys = new Set(before.map(ruleFileKey));
+  const seenNew = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const finding2 of after) {
+    const key = ruleFileKey(finding2);
+    if (beforeKeys.has(key)) continue;
+    if (seenNew.has(key)) continue;
+    seenNew.add(key);
+    result.push(finding2);
+  }
+  return result;
+}
+function ruleFileKey(finding2) {
+  return JSON.stringify([finding2.rule_id ?? null, finding2.file_path ?? null]);
 }
 async function judgeTests(opts) {
   const { derived, worktreePath, projectPath, timeoutMs } = opts;
@@ -53696,13 +53711,36 @@ function errorMessage2(e) {
 var DEFAULT_SOURCES = ["deps", "semgrep"];
 var DEFAULT_SEVERITY_MIN = "high";
 var DEFAULT_MAX_PRS = 3;
+var PR_STATUS_OUTCOME = {
+  created: "pr_created",
+  exists: "pr_exists",
+  refused: "pr_refused",
+  no_changes: "pr_no_changes",
+  push_failed: "pr_push_failed",
+  create_failed: "pr_create_failed"
+};
+var KEEPS_BRANCH = /* @__PURE__ */ new Set([
+  "created",
+  "push_failed",
+  "create_failed"
+]);
 var tool42 = {
   name: "create_fix_pr",
   title: "Apply scanner-produced fixes and open a pull request",
   description: "Apply fixes the scanners themselves already produced \u2014 deps_update_plan pinned upgrade commands and Semgrep --autofix \u2014 inside an isolated git worktree, prove them with a scan differential and a (lazy) test differential, and open one pull request per ecosystem or scanner. apply defaults to false: candidates, the worktree, the fix, and both differentials always run; only commit/push/gh pr create sit behind apply=true.",
   inputSchema: {
     project_path: ProjectPath,
-    severity_min: SeverityMin,
+    // .describe() override, not the shared SeverityMin as-is (M8): that
+    // schema's own description says "Default: include all", correct for
+    // every OTHER tool that uses it (no zod .default(), so the description
+    // is the only place the default is stated) but wrong for this tool,
+    // whose actual default is 'high' (DEFAULT_SEVERITY_MIN below). Reusing
+    // the shared schema is still right — .describe() returns a new instance
+    // rather than mutating the shared one, so every other caller keeps
+    // seeing "include all".
+    severity_min: SeverityMin.describe(
+      "Minimum severity a finding must have to be considered a fix candidate. Default: high."
+    ),
     sources: external_exports.array(external_exports.enum(["deps", "semgrep"])).optional().describe("Which fix sources to consider. Default: both ('deps' and 'semgrep')."),
     max_prs: external_exports.number().int().min(1).max(10).optional().describe(
       "Maximum number of groups (pull requests) to act on in one run, highest severity first. Groups beyond the cap are reported in `deferred`, never dropped silently. Default: 3."
@@ -53745,6 +53783,7 @@ async function handler42(input, ctx) {
         branch: branchName(group.source, group.key, group.hash),
         findings: findingsForGroup(allFindings, group),
         commands: [],
+        outcome: "internal_error",
         scan: null,
         tests: null,
         pr: null,
@@ -53782,6 +53821,7 @@ async function processGroup(opts) {
     return {
       ...base,
       commands: [],
+      outcome: "worktree_failed",
       scan: null,
       tests: null,
       pr: null,
@@ -53789,6 +53829,7 @@ async function processGroup(opts) {
     };
   }
   const { worktree } = created;
+  let keepBranch = false;
   try {
     const derivedTest = deriveTestCommand(readManifests(worktree.path));
     const applied = await applyGroup({
@@ -53800,17 +53841,19 @@ async function processGroup(opts) {
       return {
         ...base,
         commands: applied.commands,
+        outcome: "apply_failed",
         scan: null,
         tests: null,
         pr: null,
         note: `apply_failed: the fix could not be applied \u2014 ${describeApplyFailure(applied.failure)}`
       };
     }
-    const rescan = await rescanAfterFix(group, worktree.path, ctx);
+    const rescan = await rescanAfterFix(group, findings, worktree.path, ctx);
     if (!rescan.ok) {
       return {
         ...base,
         commands: applied.commands,
+        outcome: "verification_failed",
         scan: null,
         tests: null,
         pr: null,
@@ -53833,6 +53876,7 @@ async function processGroup(opts) {
       return {
         ...base,
         commands: applied.commands,
+        outcome: "not_verified",
         scan: scanVerdict,
         tests: testVerdict,
         pr: null,
@@ -53843,6 +53887,7 @@ async function processGroup(opts) {
       return {
         ...base,
         commands: applied.commands,
+        outcome: "verified_dry_run",
         scan: scanVerdict,
         tests: testVerdict,
         pr: null,
@@ -53852,10 +53897,22 @@ async function processGroup(opts) {
     const title = buildPrTitle(group, targets.length);
     const body = buildPrBody({ group, findings, commands: applied.commands, scan: scanVerdict, tests: testVerdict });
     const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body });
+    keepBranch = KEEPS_BRANCH.has(pr.status);
     const note = pr.status === "created" ? `pull request opened: ${pr.url ?? "(gh reported no URL)"}` : `pull request not opened (${pr.status}): ${pr.detail ?? "no further detail"}`;
-    return { ...base, commands: applied.commands, scan: scanVerdict, tests: testVerdict, pr, note };
+    return {
+      ...base,
+      commands: applied.commands,
+      outcome: PR_STATUS_OUTCOME[pr.status],
+      scan: scanVerdict,
+      tests: testVerdict,
+      pr,
+      note
+    };
   } finally {
     await worktree.remove();
+    if (!keepBranch) {
+      await deleteLocalBranch({ projectPath, branch });
+    }
   }
 }
 function readManifests(worktreePath) {
@@ -53875,9 +53932,13 @@ function describeApplyFailure(failure) {
   const exit = failure.exit_code !== null ? ` (exit ${failure.exit_code})` : "";
   return `'${failure.command}' ${failure.outcome}${exit}: ${failure.stderr_head}`;
 }
-async function rescanAfterFix(group, worktreePath, ctx) {
+var DEPS_AUDIT_MISSING_TOOLS_NAME = {
+  trivy: "trivy",
+  "npm-audit": "npm",
+  wpscan: null
+};
+async function rescanAfterFix(group, targetFindings, worktreePath, ctx) {
   const toolName = group.source === "semgrep" ? "scan_sast" : "deps_audit";
-  const primaryScanner = group.source === "semgrep" ? "semgrep" : "trivy";
   const subTool = TOOLS.find((t) => t.name === toolName);
   if (subTool === void 0) {
     return { ok: false, reason: `the '${toolName}' tool is not registered` };
@@ -53891,13 +53952,26 @@ async function rescanAfterFix(group, worktreePath, ctx) {
     return { ok: false, reason: `${toolName} returned no scan_id` };
   }
   const missingTools = Array.isArray(r.missing_tools) ? r.missing_tools : [];
-  if (missingTools.includes(primaryScanner)) {
+  const requiredTools = new Set(targetFindings.map((f) => f.tool));
+  const uncheckable = [...requiredTools].filter(
+    (tool43) => scannerCouldNotBeVerified(group.source, tool43, missingTools)
+  );
+  if (uncheckable.length > 0) {
     return {
       ok: false,
-      reason: `${primaryScanner} did not run inside the worktree (reported as missing) \u2014 cannot verify`
+      reason: `${uncheckable.join(", ")} did not run inside the worktree (reported missing, or ${toolName} does not cover it at all) \u2014 cannot verify`
     };
   }
   return { ok: true, scanId: r.scan_id, findings: ctx.storage.findings.listByScan(r.scan_id) };
+}
+function scannerCouldNotBeVerified(source, tool43, missingTools) {
+  if (source === "semgrep") {
+    return tool43 === "semgrep" && missingTools.includes("semgrep");
+  }
+  const missingToolsName = DEPS_AUDIT_MISSING_TOOLS_NAME[tool43];
+  if (missingToolsName === void 0) return false;
+  if (missingToolsName === null) return true;
+  return missingTools.includes(missingToolsName);
 }
 function buildPrTitle(group, findingCount) {
   const noun = group.source === "deps" ? `${group.key} dependency` : "Semgrep";
