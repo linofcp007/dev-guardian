@@ -23,24 +23,40 @@
  * `title`/`description` below, which say this to the model reading them
  * rather than only in this comment.
  *
- * `configuredPacks` also grows by whatever `detectLanguagePacks` finds:
- * one Semgrep per-language pack (`p/javascript`, `p/typescript`, `p/python`,
+ * `configuredPacks` grows by whatever `detectLanguagePacks` finds — one
+ * Semgrep per-language pack (`p/javascript`, `p/typescript`, `p/python`,
  * `p/java`, `p/golang`) for each language the project's stack uses, sourced
  * from `detect_stack`'s persisted snapshot when one exists, or a cheap
  * filesystem check otherwise — same shape as `scanSast.ts`'s own conditional
- * `p/csharp` pack. VERIFIED (not assumed): every one of those five packs is
- * Semgrep's per-language security bundle, ~100% `category: security`, with
- * ZERO rules in any of the six canonical bug subcategories — confirmed both
- * by inspecting all 401 of their rules and by running all seven configured
- * packs against a fixture built to trigger every canonical subcategory (zero
- * matches). They widen security coverage per language; they do not close the
- * bug-class gap `p/r2c-bug-scan` leaves in JS/TS or any other language. See
- * `title`/`description`, which say this plainly to the model reading them.
+ * `p/csharp` pack, BUT ONLY when the caller passes `include_language_packs:
+ * true`. Off by default: the user this fix was for approved adding these
+ * packs but asked for them "available and silent by default; whoever wants
+ * them asks." Deliberately a separate input from `categories`, not a value
+ * inside it — `categories` filters OUTPUT (which findings come back),
+ * `include_language_packs` decides INPUT (which scanners run); folding pack
+ * selection into `categories` would mean requesting a finding category
+ * silently changed which scanners ran, coupling two axes that need to stay
+ * independent (see `BugHuntInput`'s own doc comment).
+ *
+ * VERIFIED (not assumed): every one of those five packs is Semgrep's
+ * per-language security bundle, ~100% `category: security`, with ZERO rules
+ * in any of the six canonical bug subcategories — confirmed by inspecting
+ * all 401 of their rules, by running all seven configured packs against a
+ * fixture built to trigger every canonical subcategory (zero matches), and
+ * by sweeping `mapSubcategory` across all 670 rules bug_hunt can run
+ * (13 land in a canonical bucket, none from these five packs). They widen
+ * security coverage per language; they do not close the bug-class gap
+ * `p/r2c-bug-scan` leaves in JS/TS or any other language. Overlap with the
+ * always-on `p/security-audit` is real but partial (measured: 22% exact
+ * rule-id duplication overall, ~9% for JS/TS specifically, up to 40-43% for
+ * Java/Go) — not "largely redundant". See `title`/`description`, which say
+ * all of this plainly to the model reading them.
  *
  * `mapSubcategory`'s classification and the `categories` input (which
  * filters findings to specific subcategories) are exercised together: a
  * caller can use `categories` to keep only the canonical bug-class findings
- * and drop the language packs' security volume, or vice versa.
+ * and drop the language packs' security volume, or vice versa — independent
+ * of whether `include_language_packs` was also set.
  *
  * `missing_tools` entries stay bare (`'semgrep'`), never pack-qualified
  * (`'semgrep:p/r2c-bug-scan'`): the dashboard's `TOOL_CATEGORIES` map
@@ -100,9 +116,21 @@ import {
  * `categories`, unlike the base fields, is `bug_hunt`-specific (its six-name
  * subcategory vocabulary), which is why it lives here and not on
  * `ScanToolBaseInput` — every other scan tool has no use for it.
+ *
+ * `include_language_packs` is deliberately a SEPARATE input from
+ * `categories`, not a value inside it, even though the user who requested
+ * this asked for it "behind the categories parameter": `categories` filters
+ * OUTPUT (which findings come back), while pack selection is INPUT (which
+ * scanners run). Folding pack selection into `categories` would mean asking
+ * for a finding category silently changed which scanners ran — coupling two
+ * independent axes that need to be reasoned about separately (a caller
+ * might want `categories: ['null_safety']` with or without the language
+ * packs enabled, and `include_language_packs: true` with or without a
+ * `categories` filter).
  */
 interface BugHuntInput extends ScanToolBaseInput {
   categories?: string[];
+  include_language_packs?: boolean;
 }
 
 /**
@@ -312,33 +340,37 @@ registerToolModule(
   makeScanTool({
     name: 'bug_hunt',
     title:
-      'Bug hunt (Semgrep r2c-bug-scan + security-audit + stack-detected language packs; ' +
-      'bug classes still Python-strong, JS/TS-thin)',
+      'Bug hunt (Semgrep r2c-bug-scan + security-audit; optional language packs, off by ' +
+      'default; bug classes Python-strong, JS/TS-thin)',
     description:
-      'Semgrep with p/r2c-bug-scan + p/security-audit, plus a per-language pack added ' +
-      'automatically for each language `detect_stack` found in the project (or, absent a ' +
-      'snapshot, a quick package.json/tsconfig.json/pyproject.toml/pom.xml/go.mod check): ' +
-      'p/javascript, p/typescript, p/python, p/java, p/golang. ' +
-      'Read this before trusting a quiet result: every one of those five language packs is ' +
-      "Semgrep's per-language SECURITY bundle (XSS, SQL/command injection, crypto, auth, " +
-      'SSRF, hard-coded secrets, …) — verified against all 401 of their rules and against a ' +
-      'live scan of a fixture built to trigger every canonical subcategory below: zero ' +
-      'matches, in any language. They widen SECURITY coverage per language; they do not add ' +
+      'Semgrep with p/r2c-bug-scan + p/security-audit always on. Optional ' +
+      '`include_language_packs` (off by default) also runs a per-language pack for each ' +
+      'language `detect_stack` finds in the project (or, absent a snapshot, a quick ' +
+      'package.json/tsconfig.json/pyproject.toml/pom.xml/go.mod check): p/javascript, ' +
+      'p/typescript, p/python, p/java, p/golang. Read this before turning it on: every one of ' +
+      "those five is Semgrep's per-language SECURITY bundle (XSS, SQL/command injection, " +
+      'crypto, auth, SSRF, hard-coded secrets, …) — verified against all 401 of their rules ' +
+      'and a live scan of a fixture built to trigger every canonical subcategory below: zero ' +
+      'matches, in any language. They widen security coverage per language; they add no ' +
       'race-condition, null/undefined-safety, off-by-one, memory-leak or swallowed-error ' +
-      'coverage for that language. Only p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, ' +
-      '3 JS/TS) covers those classes today, and thinly outside Python — on a JS/TS project, ' +
-      'an empty or security-only result is not evidence of a bug-free project; pair with ' +
-      '`scan_sast` or a manual review for JS/TS logic bugs. ' +
+      'coverage. Overlap with the always-on p/security-audit is real but partial, not "largely ' +
+      'redundant" — measured (exact rule-id duplication): 22% overall, but only ~9% for the ' +
+      'JS/TS packs specifically (up to 40-43% for Java/Go) — most of what they add, especially ' +
+      'for JS/TS, is net-new security scanning, not duplicate coverage. Only p/r2c-bug-scan ' +
+      '(44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) covers the six bug classes today, and ' +
+      'thinly outside Python — on a JS/TS project, a quiet or security-only result (with or ' +
+      'without the language packs) is not evidence of a bug-free project; pair with ' +
+      '`scan_sast` or the guardian-bugfix skill\'s manual review for JS/TS logic bugs. ' +
       'Findings are categorised as `bug`, with subcategories (race_condition, null_safety, ' +
       'edge_case, error_handling, memory_leak, off_by_one) attached where the matching rule\'s ' +
-      'own id says so — everything else (most findings from the five language packs, and ' +
-      'from p/security-audit) keeps its own raw, tool-specific tag instead of being forced ' +
-      'into one of those six. The optional `categories` input filters the findings actually ' +
-      'returned down to exactly the subcategories listed (canonical or raw) — use it to strip ' +
-      'the language packs\' security volume back out, e.g. ' +
-      '`categories: ["null_safety", "edge_case"]`. If a configured pack is retired from the ' +
-      'Semgrep registry, the scan re-runs with whichever packs still resolve and reports the ' +
-      'gap via `missing_tools` instead of silently scanning nothing.',
+      'own id says so — everything else keeps its own raw, tool-specific tag instead of being ' +
+      'forced into one of those six. `categories` and `include_language_packs` are ' +
+      'independent inputs on purpose: `include_language_packs` decides which scanners RUN, ' +
+      '`categories` decides which findings already found are RETURNED — use ' +
+      '`categories: ["null_safety", "edge_case"]` to narrow to the six bug classes regardless ' +
+      'of which packs ran. If a configured pack is retired from the Semgrep registry, the ' +
+      'scan re-runs with whichever packs still resolve and reports the gap via `missing_tools` ' +
+      'instead of silently scanning nothing.',
     scan_type: 'bugs',
     category: 'bug',
     inputSchema: {
@@ -350,6 +382,21 @@ registerToolModule(
         .array(z.string())
         .optional()
         .describe('Restrict to these bug subcategories (e.g. race_condition, null_safety).'),
+      include_language_packs: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe(
+          'Off by default. When true, also run the per-language Semgrep pack for each ' +
+            'language detect_stack finds in the project (or a filesystem fallback): ' +
+            'p/javascript, p/typescript, p/python, p/java, p/golang. These are per-language ' +
+            'SECURITY bundles (XSS, injection, crypto, auth, SSRF, hard-coded secrets, ...), ' +
+            'not bug-class rules — they add no race-condition/null-safety/off-by-one/' +
+            'memory-leak/error-handling coverage. Independent of `categories`: this decides ' +
+            'which scanners run (input); `categories` decides which findings come back ' +
+            '(output). Turn on when you specifically want broader per-language security ' +
+            'scanning alongside the bug hunt.',
+        ),
       force: Force,
     },
     invoke: async (input: BugHuntInput, ctx): Promise<ScannerInvocation> => {
@@ -371,9 +418,14 @@ registerToolModule(
         };
       }
 
+      // Off by default (§ BugHuntInput above: this is deliberately not part
+      // of `categories`, which filters output, not input). Detection only
+      // runs when asked — a project with a persisted JS/TS stack snapshot
+      // does NOT get p/javascript/p/typescript added unless the caller
+      // opts in.
       const configuredPacks: readonly string[] = [
         ...BUG_HUNT_BASE_PACKS,
-        ...detectLanguagePacks(ctx),
+        ...(input.include_language_packs === true ? detectLanguagePacks(ctx) : []),
       ];
       const categoryParser = makeBugCategoryParser(input.categories);
 

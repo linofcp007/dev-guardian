@@ -59,7 +59,7 @@ rules:
     languages: [javascript, typescript]
 ```
 
-Análogo para Python (`AttributeError`), Go (`nil pointer`), etc. Regras prontas em `${CLAUDE_PLUGIN_ROOT}/configs/semgrep/bugfix-*.yml`.
+Análogo para Python (`AttributeError`), Go (`nil pointer`), etc. Não existe (ainda) um pack de regras Semgrep pronto para estas classes de bug — nem nesta skill nem no registo público do Semgrep: a tool `bug_hunt` já verificou isso (ver o seu relatório de correção) e não encontrou, no registo, nenhum pack live que cubra null-safety, off-by-one, race conditions, memory leaks ou error handling engolido, em nenhuma linguagem. Para estes casos, o caminho fiável hoje é o raciocínio guiado por modelo desta própria skill — ficheiro a ficheiro pelas zonas críticas (secção 1) e os padrões e fixes da secção 4 abaixo — não uma automação Semgrep que ainda não existe.
 
 #### Dynamically (correr)
 

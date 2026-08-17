@@ -442,7 +442,14 @@ describe('bug_hunt', () => {
     return { getArgs: () => captured };
   }
 
-  it('adds the language pack for a stack-detected language (persisted detect_stack snapshot)', async () => {
+  // fix round 3 (coordinator + user): the language packs are off by
+  // default — "available and silent by default; whoever wants them asks"
+  // — so every test below that wants them now passes
+  // `include_language_packs: true` explicitly. This first test is the one
+  // that matters most for that requirement: a project whose PERSISTED
+  // snapshot says javascript+typescript must NOT get those packs without
+  // being asked.
+  it('does not add any language pack by default, even with a matching stack snapshot present', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);
     plugin.storage.stack.insert({
@@ -453,7 +460,35 @@ describe('bug_hunt', () => {
     const { getArgs } = captureArgs(semgrepFx());
 
     const tool = getTool('bug_hunt');
+    // No include_language_packs at all — the default.
     const r = (await tool.handler({ project_path: project, force: true }, plugin)) as { ok: true };
+    expect(r.ok).toBe(true);
+    for (const base of BUG_HUNT_BASE_PACKS) expect(getArgs()).toContain(`--config=${base}`);
+    expect(getArgs()).not.toContain('--config=p/javascript');
+    expect(getArgs()).not.toContain('--config=p/typescript');
+    expect(getArgs()).toEqual(
+      expect.arrayContaining(BUG_HUNT_BASE_PACKS.map((p) => `--config=${p}`)),
+    );
+    expect(getArgs().filter((a) => a.startsWith('--config='))).toHaveLength(
+      BUG_HUNT_BASE_PACKS.length,
+    );
+  });
+
+  it('adds the language pack for a stack-detected language when explicitly requested', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    plugin.storage.stack.insert({
+      project_path: project,
+      snapshot: fakeStackSnapshot(['javascript', 'typescript']),
+    });
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const { getArgs } = captureArgs(semgrepFx());
+
+    const tool = getTool('bug_hunt');
+    const r = (await tool.handler(
+      { project_path: project, force: true, include_language_packs: true },
+      plugin,
+    )) as { ok: true };
     expect(r.ok).toBe(true);
     for (const base of BUG_HUNT_BASE_PACKS) expect(getArgs()).toContain(`--config=${base}`);
     expect(getArgs()).toContain('--config=p/javascript');
@@ -473,7 +508,10 @@ describe('bug_hunt', () => {
     const { getArgs } = captureArgs(semgrepFx());
 
     const tool = getTool('bug_hunt');
-    const r = (await tool.handler({ project_path: project, force: true }, plugin)) as { ok: true };
+    const r = (await tool.handler(
+      { project_path: project, force: true, include_language_packs: true },
+      plugin,
+    )) as { ok: true };
     expect(r.ok).toBe(true);
     expect(getArgs()).toContain('--config=p/javascript');
     expect(getArgs()).toContain('--config=p/typescript');
@@ -487,7 +525,10 @@ describe('bug_hunt', () => {
     const { getArgs } = captureArgs(semgrepFx());
 
     const tool = getTool('bug_hunt');
-    await tool.handler({ project_path: project, force: true }, plugin);
+    await tool.handler(
+      { project_path: project, force: true, include_language_packs: true },
+      plugin,
+    );
     expect(getArgs()).toContain('--config=p/javascript');
     expect(getArgs()).not.toContain('--config=p/typescript');
   });
@@ -504,7 +545,10 @@ describe('bug_hunt', () => {
     const { getArgs } = captureArgs(semgrepFx());
 
     const tool = getTool('bug_hunt');
-    await tool.handler({ project_path: project, force: true }, plugin);
+    await tool.handler(
+      { project_path: project, force: true, include_language_packs: true },
+      plugin,
+    );
     expect(getArgs()).toContain('--config=p/python');
     expect(getArgs()).not.toContain('--config=p/javascript');
     expect(getArgs()).not.toContain('--config=p/typescript');
@@ -690,7 +734,16 @@ describe('bug_hunt', () => {
       );
 
       const tool = getTool('bug_hunt');
-      const r = (await tool.handler({ project_path: project, force: true }, plugin)) as {
+      // include_language_packs: true — this test's whole point is that even
+      // WITH the language packs turned on (the maximal-coverage case), a
+      // JS/TS project still gets nothing in the four target classes. Without
+      // this flag the test would still pass, but for the wrong reason (the
+      // packs never even ran), which is exactly the kind of hollow test this
+      // whole fix exists to avoid.
+      const r = (await tool.handler(
+        { project_path: project, force: true, include_language_packs: true },
+        plugin,
+      )) as {
         ok: true;
         findings_count_by_severity: Record<string, number>;
         coverage?: string;
