@@ -30,14 +30,22 @@ rules:
   # Task 1 grouped this with empty-catch via pattern-either, to keep that
   # first test small. Split out here so its id is distinct and its
   # classification (error_handling) is independently asserted. Behaviour is
-  # unchanged from what Task 1 shipped: an arrow with literally ZERO
-  # parameters and an empty block (`() => {}`), or a function expression with
-  # exactly ONE parameter and an empty block (`function ($E) {}` — `$E` binds
-  # to exactly one param, not zero, not many). Both shapes proven with their
-  # own fixture pair here (never exercised standalone before this task):
-  # fires on `p.catch(() => {})` / `p.catch(function (err) {})`, silent on a
-  # catch that logs or rethrows — a non-empty block is a structurally
-  # different AST shape than `{}`, so no exclusion clause is needed.
+  # unchanged from what Task 1 shipped — but stated correctly here after a
+  # review round corrected a wrong claim about it (see git history and
+  # task-2-report.md): BOTH branches match a call with EITHER zero OR one
+  # parameter, not "zero only" for the arrow and "exactly one" for the
+  # function expression as an earlier version of this comment claimed.
+  # Empirically, Semgrep treats `() => {}` and a one-parameter arrow as the
+  # same arity for this match, and likewise `function ($E) {}` also matches
+  # a zero-parameter `function () {}` — confirmed directly (not assumed) by
+  # probing `() => {}`, `(err) => {}`, `(err, extra) => {}` and
+  # `function () {}` against this exact rule: the two-parameter case is the
+  # only one that does NOT fire. So the rule already covers the arguably
+  # more common real-world shape (`.catch((err) => {})`, error parameter
+  # present but unused) — it was never as narrow as previously documented
+  # here. A non-empty block remains a structurally different AST shape than
+  # `{}` regardless of arity, so a catch that logs or rethrows still stays
+  # silent with no exclusion clause needed.
   - id: bugfix-js-error-handling-empty-promise-catch
     patterns:
       - pattern-either:
@@ -180,17 +188,71 @@ rules:
   # member access — `$A.find(...).$PROP` does NOT match `?.name` (see
   # unchecked-find above and misses/unchecked-find.ts, which stays silent
   # with no exclusion clause at all) — so the gap is specific to computed
-  # access. Falls back to `pattern-not-regex` over the matched snippet's own
-  # source text, which — unlike the AST match itself — does still contain
-  # the literal `?.[` for the optional form. Proven against both near-miss
-  # shapes (misses/unchecked-match.ts): the optional-chained read and the
-  # guarded-variable read (the latter needs no special exclusion — it is a
-  # structurally different shape, indexing a separately-declared variable
-  # rather than the direct `.match(...)` result).
+  # access.
+  #
+  # ROUND 1 (superseded, kept here as a record of what NOT to do): fell back
+  # to `pattern-not-regex: '\?\.\['` over the matched snippet's own text.
+  # That is not scoped to the OUTER `[$I]`/`?.[$I]` — it is a substring
+  # search over the WHOLE match, including $S.match(...)'s own ARGUMENT. A
+  # real bug slipped through it: `s.match(pickPattern()?.[0])[1]` has a
+  # genuinely unguarded outer index, but its argument happens to contain its
+  # own, unrelated `?.[` (from `pickPattern()?.[0]`) — the regex found that
+  # one and wrongly suppressed the whole finding. Caught by code review, not
+  # by this rule set's own fixtures — neither near-miss fixture at the time
+  # exercised "optional chaining inside the argument, plain access outside."
+  #
+  # The obvious repair — anchor the regex to the END of the match
+  # (`\?\.\[[^\]]*\]$`) — does NOT work here, and is worth recording as its
+  # own general fact: `^`/`$` do not behave as ordinary string-boundary
+  # anchors in `pattern-regex` / `pattern-not-regex` / `metavariable-regex`
+  # in this Semgrep version (1.164.0), when combined with an AST `pattern`.
+  # Verified exhaustively, in isolation, with no rule-parse errors: `^`
+  # alone, `$` alone, `^s`, `\]$` all match ZERO matches against text that
+  # trivially starts with "s" or ends with "]" — while the SAME text without
+  # anchors (`s`, `\]`) matches correctly. This holds at the top level and
+  # for `metavariable-regex` alike (the latter needs a leading `.*` to
+  # search past position 0 at all — confirmed `.*unknown` finds "unknown"
+  # inside a metavariable's own text where bare `unknown` finds nothing).
+  # Do not spend time re-trying `^`/`$` in a future rule in this file;
+  # confirm this is still true first if the Semgrep version changes.
+  #
+  # ROUND 2 (shipped): decompose match()'s argument into its OWN
+  # metavariable ($ARG, instead of `...`), then exclude only when the whole
+  # match contains `?.[` (unanchored `pattern-regex`, which DOES work — see
+  # above, this is a plain substring search, no anchor involved) AND $ARG's
+  # OWN text does not (`metavariable-comparison`'s Python `in`/`not in`
+  # operator on `str($ARG)`, which — unlike every regex-negation attempt
+  # above, including `pattern-not-regex` nested inside `metavariable-pattern`
+  # — was verified to evaluate correctly and independently for each
+  # candidate). If `?.[` is present overall but absent from the argument, it
+  # can only be the outer connector, so it is genuinely guarded. Proven
+  # against: the plain hit, the true near-miss (optional outer access), the
+  # guarded-variable near-miss (no change — still structurally excluded, no
+  # clause here even applies to it), AND the counter-example above (now
+  # fires) AND a case where the INDEX (not the argument) carries a stray
+  # `?.` (dot-optional, not bracket — `[obj?.b]` — also still fires,
+  # correctly, since `?.[` specifically does not appear there).
+  #
+  # Residual, stated plainly rather than hidden: if BOTH the argument AND
+  # the outer access are independently optional-bracket-chained in the same
+  # expression (e.g. `s.match(weird?.[x])?.[1]`), `$ARG` DOES contain `?.[`,
+  # so this rule no longer attributes the outer `?.[` to the connector by
+  # elimination — it fires anyway. That is a false positive on a
+  # doubly-optional-chained expression nobody has written in this codebase's
+  # fixtures or (as far as this investigation went) in the wild; it is
+  # accepted rather than chased further, and it fails in the safer direction
+  # for an ERROR-tier rule (over-flagging rare correct code) rather than the
+  # direction this whole fix exists to close (silently missing a real bug).
   - id: bugfix-js-null-safety-unchecked-match
     patterns:
-      - pattern: $S.match(...)[$I]
-      - pattern-not-regex: '\?\.\['
+      - pattern: $S.match($ARG)[$I]
+      - pattern-not:
+          patterns:
+            - pattern: $S.match($ARG)[$I]
+            - pattern-regex: '\?\.\['
+            - metavariable-comparison:
+                metavariable: $ARG
+                comparison: "'?.[' not in str($ARG)"
     message: >-
       .match() devolve null quando não há correspondência, e o resultado é
       indexado sem verificar. Usa ?.[$I] ou verifica o resultado antes.
