@@ -48,7 +48,9 @@ detected), `risk_score`, `diff_scans`, `set_baseline`, `triage_findings`,
 produced, never a synthesised patch — in an isolated worktree, verifies with
 a scan + test differential, and opens one PR per ecosystem/scanner via the
 local `gh` CLI; **`apply` defaults to `false`**, so a dry run proves the fix
-and leaves nothing behind — no branch, no commit, no worktree, no PR),
+and leaves nothing behind — no branch, no commit, no worktree, no PR — and
+its own verification scan never becomes the project's latest scan, so
+previewing can't repoint `guardian://findings/open` or `risk_score` either),
 `precommit_install`,
 `register_custom_rules`, `health_status`, `regression_alert`,
 `sbom_diff`, `check_toolchain`,

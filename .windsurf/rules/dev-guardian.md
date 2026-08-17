@@ -42,7 +42,9 @@ import)
 set_baseline · triage_findings · prioritize_findings · suggest_fix ·
 report_export · create_github_issues · create_fix_pr (deps_update_plan
 bumps + Semgrep --autofix only, applied+verified in an isolated worktree;
-apply=false by default — dry run proves it, doesn't open a PR) ·
+apply=false by default — a dry run proves it but leaves no branch, no
+commit, no worktree behind, opens no PR, and its own verification re-scan
+can't repoint guardian://findings/open or risk_score either) ·
 precommit_install · register_custom_rules · health_status ·
 regression_alert · sbom_diff · check_toolchain · suppress_finding
 

@@ -76,7 +76,9 @@ diff_scans, baselines, suppressions, and the regression history.
 - "apply scanner-produced fixes + open a PR" → `create_fix_pr` (deps bumps +
   Semgrep --autofix only, in an isolated worktree, verified with a scan +
   test differential before a PR opens; `apply` defaults to `false` — dry
-  run proves it, doesn't open a PR or leave anything behind)
+  run proves it, doesn't open a PR or leave anything behind, and its
+  verification re-scan can't repoint guardian://findings/open or
+  risk_score either since it never becomes the project's latest scan)
 - "export report" → `report_export`
 - "GitHub issues" → `create_github_issues`
 - "pre-commit hooks" → `precommit_install`

@@ -85,7 +85,10 @@ cache that avoids re-running unchanged scans.
   one pull request per ecosystem/scanner via the local `gh` CLI. **`apply`
   defaults to `false`**: a dry run still creates the worktree, applies the
   fix and runs both differentials, but leaves nothing behind — not a
-  branch, not a commit, not a worktree — and opens no PR until `apply: true`
+  branch, not a commit, not a worktree — and opens no PR until `apply: true`.
+  Its own verification re-scan never becomes the project's latest scan
+  either, so previewing can't repoint `guardian://findings/open` or
+  `risk_score`
 - "export report" → `report_export`
 - "create GitHub issues" → `create_github_issues` (local `gh` CLI)
 - "pre-commit hooks" → `precommit_install`
