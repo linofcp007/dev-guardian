@@ -78,12 +78,48 @@ describe('renderStatus', () => {
   // sentence that names nothing real. bug_hunt now reports the bare tool
   // name; this is what that renders as.
   it("renders a sane MISSING line for bug_hunt's config-pack gap (semgrep, not semgrep:<pack>)", () => {
+    // No partial_tools set — this fixture represents bug_hunt's total-
+    // failure case (every configured pack unavailable, tools_run status
+    // 'failed'), which is genuinely "did not run", unlike the retry-success
+    // case covered separately below.
     const out = renderStatus(snap({
       coverage: { level: 'partial', tools_run: ['semgrep'],
         missing_tools: ['semgrep'], omitted_categories: ['static-analysis'] },
     }), { color: false });
-    expect(out).toContain('semgrep — static-analysis findings are NOT in these numbers');
+    expect(out).toContain('semgrep did not run this scan — static-analysis findings are NOT in these numbers');
     expect(out).not.toMatch(/semgrep:p\//);
+  });
+
+  // fix-round-4 (coordinator review, Important 2): bug_hunt's retry-success
+  // path (bugHunt.ts) puts `semgrep` in BOTH missing_tools (one pack was
+  // unavailable — a real gap) AND tools_run with status 'ok' (the tool
+  // itself ran, with real findings already counted elsewhere on this same
+  // screen). Before this fix, that combination still rendered "semgrep did
+  // not run this scan" — false for a scan whose `by_tool` count for semgrep
+  // is non-zero. `partial_tools` names exactly this case; pins the accurate
+  // sentence, not the false one.
+  it('renders a PARTIAL line, never "did not run", for a tool that ran ok but flagged a narrower gap', () => {
+    const out = renderStatus(snap({
+      coverage: { level: 'partial', tools_run: ['semgrep'],
+        missing_tools: ['semgrep'], partial_tools: ['semgrep'],
+        omitted_categories: ['static-analysis'] },
+    }), { color: false });
+    expect(out).not.toMatch(/semgrep did not run this scan/);
+    expect(out).not.toMatch(/MISSING\s+semgrep\b/);
+    expect(out).toContain('PARTIAL      semgrep ran with reduced coverage — some static-analysis findings may be missing');
+  });
+
+  it('names a fully-missing tool and a partially-ok tool on separate lines when both occur together', () => {
+    const out = renderStatus(snap({
+      coverage: { level: 'partial', tools_run: ['semgrep', 'trivy'],
+        missing_tools: ['semgrep', 'trivy'], partial_tools: ['semgrep'],
+        omitted_categories: ['static-analysis', 'container and dependency'] },
+    }), { color: false });
+    // semgrep: ran, partial — never "did not run".
+    expect(out).toMatch(/PARTIAL\s+semgrep ran with reduced coverage/);
+    expect(out).not.toMatch(/semgrep did not run/);
+    // trivy: genuinely absent — still says so.
+    expect(out).toMatch(/MISSING\s+trivy did not run this scan/);
   });
 
   it('omits the missing-tools line entirely when coverage is full', () => {

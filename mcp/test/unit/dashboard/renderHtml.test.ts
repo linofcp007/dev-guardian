@@ -111,6 +111,26 @@ describe('renderDashboard', () => {
     expect(visible).not.toMatch(/semgrep:p\//);
   });
 
+  // fix-round-4 (coordinator review, Important 2): bugHunt.ts's retry-
+  // success path puts `semgrep` in BOTH missing_tools (one pack genuinely
+  // unavailable) AND tools_run with status 'ok' (real findings from the
+  // surviving pack are already in `by_tool` on this same page). Before this
+  // fix, the banner still said "semgrep did not run this scan" — false for
+  // a scan with findings attributed to semgrep. `partial_tools` names this
+  // case; pins the accurate sentence.
+  it('renders a "ran with reduced coverage" sentence, never "did not run", for a tool that ran ok but flagged a narrower gap', () => {
+    const html = renderDashboard(snap({
+      coverage: { level: 'partial', tools_run: ['semgrep'],
+        missing_tools: ['semgrep'], partial_tools: ['semgrep'],
+        omitted_categories: ['static-analysis'] },
+    }));
+    const visible = html.replace(/<script type="application\/json"[\s\S]*?<\/script>/g, '');
+    expect(visible).not.toMatch(/semgrep did not run this scan/);
+    expect(visible).toContain(
+      'semgrep ran with reduced coverage — some static-analysis findings may be missing.',
+    );
+  });
+
   // fix-round-3, Important 2 (coordinator review): Task 3 folded the
   // CVE-source gap into coverage.level/omitted_categories, so a project can
   // be 'partial' with missing_tools genuinely EMPTY — no scanner failed to

@@ -41,11 +41,13 @@
  * VERIFIED (not assumed): every one of those five packs is Semgrep's
  * per-language security bundle, ~100% `category: security`, with ZERO rules
  * in any of the six canonical bug subcategories — confirmed by inspecting
- * all 401 of their rules, by running all seven configured packs against a
- * fixture built to trigger every canonical subcategory (zero matches), and
- * by sweeping `mapSubcategory` across all 670 rules bug_hunt can run
- * (13 land in a canonical bucket, none from these five packs). They widen
- * security coverage per language; they do not close the bug-class gap
+ * their rules (401 entries, 327 distinct — `p/javascript` and `p/typescript`
+ * are byte-identical, so a JS/TS project's combined 148 entries are only 74
+ * unique), by running all seven configured packs against a fixture built to
+ * trigger every canonical subcategory (zero matches), and by sweeping
+ * `mapSubcategory` across every distinct rule id bug_hunt can run (516
+ * total; 13 land in a canonical bucket, none from these five packs). They
+ * widen security coverage per language; they do not close the bug-class gap
  * `p/r2c-bug-scan` leaves in JS/TS or any other language. Overlap with the
  * always-on `p/security-audit` is real but partial (measured: 22% exact
  * rule-id duplication overall, ~9% for JS/TS specifically, up to 40-43% for
@@ -146,8 +148,10 @@ export const BUG_HUNT_BASE_PACKS: readonly string[] = ['p/r2c-bug-scan', 'p/secu
  * IMPORTANT, verified (fix report, round 2): every one of these five is
  * Semgrep's per-language DEFAULT bundle, and every one of them is ~100%
  * `category: security` (XSS, SQL injection, crypto, auth, SSRF, hard-coded
- * secrets, …) — confirmed by fetching and inspecting all 401 of their rules,
- * and again by running all seven configured packs (these five plus
+ * secrets, …) — confirmed by fetching and inspecting their rules (401
+ * entries, 327 distinct: `p/javascript` and `p/typescript` are
+ * byte-identical rule sets), and again by running all seven configured
+ * packs (these five plus
  * BUG_HUNT_BASE_PACKS) against a fixture containing real instances of every
  * canonical bug subcategory: zero matches. Adding these widens SECURITY
  * coverage per language; it does not add race-condition, null-safety,
@@ -271,11 +275,13 @@ function recategoriseAsBug(f: Finding): Finding {
 /**
  * Rule-id keyword classifier into the six canonical bug subcategories.
  *
- * Widened and validated (fix report, round 2) against every rule id in every
- * pack `bug_hunt` can now run (r2c-bug-scan, security-audit, and the five
- * language packs — 670 rules total): 13 correctly land in a canonical
- * bucket, 657 correctly fall through untouched. Two near-misses shaped the
- * exact wording below — `java...crypto.no-null-cipher` (an insecure-cipher
+ * Widened and validated (fix report, round 2) against every DISTINCT rule id
+ * in every pack `bug_hunt` can now run (r2c-bug-scan, security-audit, and
+ * the five language packs — 516 distinct ids; the packs' own file entries
+ * sum to 670, but `p/javascript`/`p/typescript` are byte-identical rule
+ * sets, so counting both double-counts 74): 13 correctly land in a
+ * canonical bucket, 503 correctly fall through untouched. Two near-misses
+ * shaped the exact wording below — `java...crypto.no-null-cipher` (an insecure-cipher
  * *name*, not a null-safety bug) and `python...logger-credential-leak` (a
  * secret-disclosure finding, not a memory leak) — both matched a bare
  * `null`/`leak` keyword and had to be excluded by requiring a
@@ -349,8 +355,9 @@ registerToolModule(
       'package.json/tsconfig.json/pyproject.toml/pom.xml/go.mod check): p/javascript, ' +
       'p/typescript, p/python, p/java, p/golang. Read this before turning it on: every one of ' +
       "those five is Semgrep's per-language SECURITY bundle (XSS, SQL/command injection, " +
-      'crypto, auth, SSRF, hard-coded secrets, …) — verified against all 401 of their rules ' +
-      'and a live scan of a fixture built to trigger every canonical subcategory below: zero ' +
+      'crypto, auth, SSRF, hard-coded secrets, …) — verified against their 327 distinct rules ' +
+      '(p/javascript and p/typescript are the same 74 rules) and a live scan of a fixture ' +
+      'built to trigger every canonical subcategory below: zero ' +
       'matches, in any language. They widen security coverage per language; they add no ' +
       'race-condition, null/undefined-safety, off-by-one, memory-leak or swallowed-error ' +
       'coverage. Overlap with the always-on p/security-audit is real but partial, not "largely ' +

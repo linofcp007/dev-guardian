@@ -306,13 +306,40 @@ function renderHottest(hotspots: readonly Hotspot[]): string[] {
  * merge the category strings themselves. Absent (returns null) exactly when
  * `omitted_categories` is empty, which `types.ts` documents as happening iff
  * coverage is full — never printed as "MISSING: none".
+ *
+ * **"did not run this scan" only for tools that actually didn't run**
+ * (coordinator review, Important). `coverage.missing_tools` can name a tool
+ * that DID run — `coverage.partial_tools` (a subset of `missing_tools`)
+ * flags exactly that: `bug_hunt` retrying with a surviving Semgrep pack
+ * lands `semgrep` in both `missing_tools` (a real gap: one pack never ran)
+ * and `partial_tools` (the tool itself is 'ok', with real findings already
+ * on screen). Printing "semgrep did not run this scan" there would be false
+ * — a scan with `by_tool: {semgrep: 1}` did run it. Split into two lines,
+ * each naming only the tools its own claim is true for; either half is
+ * omitted when it has nothing to name, matching design §6.
  */
 function renderMissingLine(coverage: CoverageState, color: boolean): string | null {
   if (coverage.omitted_categories.length === 0) return null;
-  const tools = coverage.missing_tools.join(', ');
   const categories = coverage.omitted_categories.join(', ');
-  const text = `MISSING      ${tools} — ${categories} findings are NOT in these numbers`;
-  return `  ${paint(text, '33', color)}`;
+  const partial = coverage.partial_tools ?? [];
+  const fullyMissing = coverage.missing_tools.filter((t) => !partial.includes(t));
+  if (fullyMissing.length === 0 && partial.length === 0) {
+    // No tool to name at all (e.g. the CVE-source gap alone: missing_tools
+    // is genuinely empty, only omitted_categories carries the gap) —
+    // unchanged from before this fix.
+    const text = `MISSING      ${coverage.missing_tools.join(', ')} — ${categories} findings are NOT in these numbers`;
+    return `  ${paint(text, '33', color)}`;
+  }
+  const lines: string[] = [];
+  if (fullyMissing.length > 0) {
+    const tools = fullyMissing.join(', ');
+    lines.push(`MISSING      ${tools} did not run this scan — ${categories} findings are NOT in these numbers`);
+  }
+  if (partial.length > 0) {
+    const tools = partial.join(', ');
+    lines.push(`PARTIAL      ${tools} ran with reduced coverage — some ${categories} findings may be missing`);
+  }
+  return lines.map((text) => `  ${paint(text, '33', color)}`).join('\n');
 }
 
 // ---------------------------------------------------------------------------

@@ -170,13 +170,23 @@ function toScanSummary(scan, now) {
 }
 function buildCoverage(currentScan, cveGap) {
     const missingTools = currentScan?.missing_tools ?? [];
-    const toolsRun = (currentScan?.tools_run ?? []).map((t) => t.name);
+    const toolsRunRecords = currentScan?.tools_run ?? [];
+    const toolsRun = toolsRunRecords.map((t) => t.name);
+    // A name can appear in BOTH missing_tools and tools_run at once (see
+    // bugHunt.ts's retry-success path): the tool itself ran ('ok'), but named
+    // a real, narrower gap anyway. That combination — not "tool absent
+    // entirely" — is what partial_tools flags, so the renderers can tell the
+    // two apart instead of reporting every missing_tools entry as "did not
+    // run this scan".
+    const okToolNames = new Set(toolsRunRecords.filter((t) => t.status === 'ok').map((t) => t.name));
+    const partialTools = missingTools.filter((t) => okToolNames.has(t));
     const omittedCategories = omittedCategoriesFor(missingTools, cveGap);
     const level = currentScan === null ? 'none' : omittedCategories.length > 0 ? 'partial' : 'full';
     return {
         level,
         tools_run: toolsRun,
         missing_tools: missingTools,
+        partial_tools: partialTools,
         omitted_categories: omittedCategories,
     };
 }

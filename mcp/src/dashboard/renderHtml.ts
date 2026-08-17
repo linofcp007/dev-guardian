@@ -147,14 +147,38 @@ function riskSection(snapshot: DashboardSnapshot): string {
  * `coverage.omitted_categories`, exactly as the non-empty branch already
  * does for its own second half — rather than claiming something failed to
  * run when nothing did.
+ *
+ * **"did not run this scan" only for tools that actually didn't run**
+ * (coordinator review, fix round 4, Important 2). A `missing_tools` entry
+ * can name a tool that DID run: `coverage.partial_tools` (a subset of
+ * `missing_tools`) flags exactly that — `bug_hunt` retrying with a
+ * surviving Semgrep pack lands `semgrep` in both `missing_tools` (a real
+ * gap: one pack never ran) and `partial_tools` (the tool itself is 'ok',
+ * with real findings already counted in `by_tool` on this same page).
+ * "semgrep did not run this scan" would be false there. Fully-missing and
+ * partially-ok tools get their own sentence each, so neither claim is made
+ * about a tool it isn't true for.
  */
 function coverageBanner(coverage: CoverageState): string | null {
   if (coverage.level !== 'partial') return null;
   const categories = coverage.omitted_categories.map((c) => escapeHtml(c)).join(', ');
-  const message = coverage.missing_tools.length > 0
-    ? `${coverage.missing_tools.map((t) => escapeHtml(t)).join(', ')} did not run this scan — ` +
-      `${categories} findings are NOT in these numbers.`
-    : `${categories} findings are NOT in these numbers.`;
+  const partial = coverage.partial_tools ?? [];
+  const fullyMissing = coverage.missing_tools.filter((t) => !partial.includes(t));
+  const sentences: string[] = [];
+  if (fullyMissing.length > 0) {
+    sentences.push(
+      `${fullyMissing.map((t) => escapeHtml(t)).join(', ')} did not run this scan — ` +
+        `${categories} findings are NOT in these numbers.`,
+    );
+  }
+  if (partial.length > 0) {
+    sentences.push(
+      `${partial.map((t) => escapeHtml(t)).join(', ')} ran with reduced coverage — ` +
+        `some ${categories} findings may be missing.`,
+    );
+  }
+  const message =
+    sentences.length > 0 ? sentences.join(' ') : `${categories} findings are NOT in these numbers.`;
   return `<div class="guardian-coverage-banner" role="alert" style="border:1px solid #FFD700;background:rgba(255,215,0,0.12);border-radius:8px;padding:12px 16px;margin:1em 0;">
   <strong>⚠ Partial coverage.</strong> ${message}
 </div>`;

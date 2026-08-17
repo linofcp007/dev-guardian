@@ -712,10 +712,16 @@ describe('bug_hunt', () => {
       // safety), an off-by-one loop bound, an array mutated while being
       // iterated (edge case), an empty catch block and an unhandled promise
       // rejection (swallowed error handling) — exit 0, zero results, zero
-      // errors. None of the seven packs contain a rule for any of these four
-      // classes, in any language — this is the "most important thing" fix
-      // round 2 was asked to report if true. Reproduced here as the exact
-      // mocked shape real semgrep produced, not an invented empty response.
+      // errors. The gap is JS/TS specifically, not every language: the
+      // always-on p/r2c-bug-scan DOES have rules in all four of these
+      // classes (see bugHuntClassify.test.ts's true-positive cases —
+      // Python/Go rule ids that classify into null_safety/off_by_one/
+      // edge_case/error_handling) — none of them match JS/TS source, and
+      // the five language packs added nothing in these classes for ANY
+      // language (bugHuntClassify.test.ts's 516-distinct-rule sweep: zero
+      // from those five). This is the "most important thing" the coordinator's review
+      // was asked to report if true. Reproduced here as the exact mocked
+      // shape real semgrep produced, not an invented empty response.
       const project = tempProject();
       const plugin = makePlugin(project);
       plugin.storage.stack.insert({
