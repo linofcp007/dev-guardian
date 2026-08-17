@@ -137,7 +137,17 @@ with nothing failing. §6 requires every rule id to be asserted against
 
 - **floating-mutation** — inside an `async` function, a call to a method whose
   name is a mutating verb (`save`, `update`, `delete`, `create`, `insert`,
-  `write`, `commit`, `send`) that is neither awaited nor returned. Both a race
+  `commit`, `send`) that is neither awaited nor returned.
+
+  **`write` is deliberately NOT in that list**, and the omission is the rule’s
+  own near-miss: `logger.write()` is the canonical legitimate fire-and-forget.
+  An earlier draft of this design listed `write` as a mutating verb *and* used
+  `logger.write()` as the example of correct code — a contradiction inside one
+  section, caught only when the rule fired on its own near-miss fixture.
+
+  Note also that `pattern-not: await .(...)` does **not** work here: a call
+  and the `await` enclosing it never share a span, so the exclusion is a
+  structural no-op. It needs `pattern-not-inside`. Both a race
   and a broken happy path: the caller proceeds as though the write happened.
 
   This is the noisiest rule here and the most valuable. It is `WARNING`
