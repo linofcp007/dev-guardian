@@ -20,14 +20,48 @@
 # legítimos (heurística).
 rules:
   - id: bugfix-js-error-handling-empty-catch
-    patterns:
-      - pattern-either:
-          - pattern: try { ... } catch ($E) { }
-          - pattern: $P.catch(() => {})
-          - pattern: $P.catch(function ($E) {})
+    pattern: try { ... } catch ($E) { }
     message: >-
       Erro engolido em silêncio. O bloco catch está vazio, por isso a falha
       desaparece sem log, sem rethrow e sem tratamento.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  # Task 1 grouped this with empty-catch via pattern-either, to keep that
+  # first test small. Split out here so its id is distinct and its
+  # classification (error_handling) is independently asserted. Behaviour is
+  # unchanged from what Task 1 shipped: an arrow with literally ZERO
+  # parameters and an empty block (`() => {}`), or a function expression with
+  # exactly ONE parameter and an empty block (`function ($E) {}` — `$E` binds
+  # to exactly one param, not zero, not many). Both shapes proven with their
+  # own fixture pair here (never exercised standalone before this task):
+  # fires on `p.catch(() => {})` / `p.catch(function (err) {})`, silent on a
+  # catch that logs or rethrows — a non-empty block is a structurally
+  # different AST shape than `{}`, so no exclusion clause is needed.
+  - id: bugfix-js-error-handling-empty-promise-catch
+    patterns:
+      - pattern-either:
+          - pattern: $P.catch(() => {})
+          - pattern: $P.catch(function ($E) {})
+    message: >-
+      Promise .catch() vazio. A rejeição é silenciada sem log, sem rethrow e
+      sem tratamento.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  - id: bugfix-js-error-handling-catch-returns-null
+    patterns:
+      - pattern-either:
+          - pattern: |
+              try { ... } catch ($E) { return null; }
+          - pattern: |
+              try { ... } catch ($E) { return undefined; }
+          - pattern: |
+              try { ... } catch ($E) { return []; }
+    message: >-
+      O catch converte uma falha num valor vazio (null/undefined/[]) que
+      quem chama não consegue distinguir de um resultado legítimo. Loga
+      e/ou relança, ou devolve um resultado tipado que marque o erro.
     severity: ERROR
     languages: [javascript, typescript]
 
@@ -36,6 +70,27 @@ rules:
     message: >-
       Provável off-by-one: a condição usa <= com .length, por isso a última
       iteração lê $A[$A.length], que é sempre undefined.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  # Turns on read vs write: `items[items.length]` alone is a naive `pattern`
+  # match — it also matches the LHS of `items[items.length] = 4`, because
+  # that assignment's target IS the same subscript-expression node. The
+  # write is contained WITHIN the larger assignment-expression span, so
+  # (per Task 1's established lesson: pattern-not needs a same-span match,
+  # pattern-not-inside excludes by containment) pattern-not-inside is what
+  # excludes it here too. Confirmed empirically before shipping: the naive
+  # single-clause pattern fires on both the read (misses/index-at-length.ts
+  # readLastValid uses `.length - 1`, a different AST shape, already safe)
+  # and Task 1's own append case (misses/off-by-one.ts writesToLength) — the
+  # pattern-not-inside clause below is what makes the append case go silent.
+  - id: bugfix-js-off-by-one-index-at-length
+    patterns:
+      - pattern: $A[$A.length]
+      - pattern-not-inside: $A[$A.length] = ...
+    message: >-
+      $A[$A.length] é sempre undefined — o último índice válido é
+      $A.length - 1.
     severity: ERROR
     languages: [javascript, typescript]
 
@@ -75,5 +130,180 @@ rules:
       Chamada que altera estado sem await. Quem chama continua como se a
       escrita tivesse terminado — é ao mesmo tempo uma race e um happy path
       partido. Se for intencional, torne-o explícito com void.
+    severity: WARNING
+    languages: [javascript, typescript]
+
+  # edge_case, two rules. A single named metavariable in an argument-list
+  # position (`$F`, `$S`) requires EXACTLY one argument, neither zero nor
+  # two — so `.reduce($F)` naturally excludes the two-argument
+  # (with-initial) call, and `parseInt($S)` naturally excludes the
+  # two-argument (with-radix) call, with no exclusion clause needed. Proven
+  # against both near-miss fixtures.
+  - id: bugfix-js-edge-case-reduce-without-initial
+    pattern: $A.reduce($F)
+    message: >-
+      reduce() sem valor inicial rebenta com TypeError num array vazio.
+      Passa um segundo argumento como valor inicial.
+    severity: WARNING
+    languages: [javascript, typescript]
+
+  - id: bugfix-js-edge-case-parseint-without-radix
+    pattern: parseInt($S)
+    message: >-
+      parseInt sem radix pode interpretar o número na base errada (ex.:
+      prefixo 0x). Passa sempre o segundo argumento, normalmente 10.
+    severity: INFO
+    languages: [javascript, typescript]
+
+  # null_safety, three rules. Note the id collision recorded in the design
+  # doc (§4): all three ids contain the bare word "unchecked", which
+  # mapSubcategory's error_handling regex also matches. They classify as
+  # null_safety only because that branch runs earlier in the if-chain — see
+  # the dedicated classification test in bugfixRulesJs.test.ts.
+  - id: bugfix-js-null-safety-unchecked-find
+    pattern: $A.find(...).$PROP
+    message: >-
+      .find() devolve undefined quando nada corresponde, e a propriedade é
+      acedida sem verificar. Usa ?. ou verifica o resultado antes de aceder.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  # `[$I]` (plain, non-optional computed member access) and `?.[$I]`
+  # (optional computed member access) are DIFFERENT AST node shapes in
+  # principle, but empirically this Semgrep version's generic matcher does
+  # NOT distinguish them for computed/bracket access — `pattern:
+  # $S.match(...)[$I]` matches `s.match(/x/)?.[1]` too, and the reverse
+  # (`pattern: $S.match(...)?.[$I]`) matches the plain form right back.
+  # Confirmed by isolated probe: neither `pattern-not` (same-span) nor
+  # `pattern-not-inside` (containment) can separate them, because the
+  # matcher treats both forms as the same match. This is UNLIKE plain (dot)
+  # member access — `$A.find(...).$PROP` does NOT match `?.name` (see
+  # unchecked-find above and misses/unchecked-find.ts, which stays silent
+  # with no exclusion clause at all) — so the gap is specific to computed
+  # access. Falls back to `pattern-not-regex` over the matched snippet's own
+  # source text, which — unlike the AST match itself — does still contain
+  # the literal `?.[` for the optional form. Proven against both near-miss
+  # shapes (misses/unchecked-match.ts): the optional-chained read and the
+  # guarded-variable read (the latter needs no special exclusion — it is a
+  # structurally different shape, indexing a separately-declared variable
+  # rather than the direct `.match(...)` result).
+  - id: bugfix-js-null-safety-unchecked-match
+    patterns:
+      - pattern: $S.match(...)[$I]
+      - pattern-not-regex: '\?\.\['
+    message: >-
+      .match() devolve null quando não há correspondência, e o resultado é
+      indexado sem verificar. Usa ?.[$I] ou verifica o resultado antes.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  - id: bugfix-js-null-safety-unchecked-env
+    pattern: process.env.$X.$M(...)
+    message: >-
+      Variável de ambiente pode ser undefined; chamar um método diretamente
+      nela rebenta em runtime se não estiver definida. Usa ?. ou um
+      fallback (?? '').
+    severity: WARNING
+    languages: [javascript, typescript]
+
+  # memory_leak, three rules — all "X inside useEffect without Y" shapes.
+  #
+  # A SECOND general Semgrep gotcha, beyond Task 1's pattern-not vs
+  # pattern-not-inside, found while authoring these: a block-sequence
+  # ellipsis written on ONE LINE with the semicolon touching it —
+  # `{ ...; return $CLEANUP; ... }` — is a SILENT NO-OP. It does not throw,
+  # does not warn, and does not exclude anything: a rule built that way
+  # fired on BOTH the no-cleanup hit AND the with-cleanup near-miss,
+  # identically to how it would have fired with no pattern-not-inside
+  # clause at all. Reformatting the exact same clause across multiple YAML
+  # lines, each `...` on its own line, fixed it — confirmed by an isolated
+  # probe (two-function fixture, only the pattern-not-inside formatting
+  # changed): one-line-with-semicolons → 2 false fires (both the hit AND
+  # the near-miss); multi-line → 0 false fires, 1 correct fire (the hit
+  # only). Every "somewhere in this block" exclusion below uses the
+  # multi-line form for exactly this reason. This will bite any later rule
+  # in this file that needs the same "X without Y in the same block" shape.
+  - id: bugfix-js-memory-leak-listener-without-cleanup
+    patterns:
+      - pattern: $EL.addEventListener($EVT, $HANDLER)
+      - pattern-inside: |
+          useEffect(() => { ... }, ...)
+      - pattern-not-inside: |
+          useEffect(() => {
+            ...
+            return $CLEANUP;
+            ...
+          }, ...)
+    message: >-
+      addEventListener dentro de useEffect sem função de cleanup. O
+      listener fica preso depois do componente desmontar — memory leak.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  # "Same scope" = same enclosing function, taken literally: the handle
+  # variable must be passed to clearInterval somewhere within the SAME
+  # function body that created it (including nested closures within that
+  # body, such as a useEffect's returned cleanup) — not merely anywhere
+  # later in the file. Two independent shapes are excluded, each proven by
+  # its own near-miss function in misses/interval-without-clear.ts: a plain
+  # function calling clearInterval directly, and a useEffect returning a
+  # cleanup — tested in BOTH its expression-bodied (`return () =>
+  # clearInterval(t)`) and block-bodied (`return () => { clearInterval(t);
+  # }`) forms, since nothing here may be shipped without its own fixture
+  # proving it, and the two arrow-body shapes are different AST shapes that
+  # do not both match a single template (same lesson as the listener rule
+  # above, applied to a concrete call rather than a generic `return
+  # $CLEANUP`, so the generic trick does not apply here).
+  - id: bugfix-js-memory-leak-interval-without-clear
+    patterns:
+      - pattern: const $T = setInterval(...)
+      - pattern-not-inside: |
+          function $F(...) {
+            ...
+            const $T = setInterval(...);
+            ...
+            clearInterval($T);
+            ...
+          }
+      - pattern-not-inside: |
+          useEffect(() => {
+            ...
+            const $T = setInterval(...);
+            ...
+            return () => clearInterval($T);
+            ...
+          }, ...)
+      - pattern-not-inside: |
+          useEffect(() => {
+            ...
+            const $T = setInterval(...);
+            ...
+            return () => {
+              ...
+              clearInterval($T);
+              ...
+            };
+            ...
+          }, ...)
+    message: >-
+      setInterval cujo handle nunca é passado a clearInterval na mesma
+      função. O temporizador continua a correr para sempre — memory leak.
+    severity: WARNING
+    languages: [javascript, typescript]
+
+  - id: bugfix-js-memory-leak-subscribe-without-unsubscribe
+    patterns:
+      - pattern: $O.subscribe(...)
+      - pattern-inside: |
+          useEffect(() => { ... }, ...)
+      - pattern-not-inside: |
+          useEffect(() => {
+            ...
+            return $CLEANUP;
+            ...
+          }, ...)
+    message: >-
+      subscribe() dentro de useEffect sem função de cleanup. A subscrição
+      fica presa depois do componente desmontar — memory leak.
     severity: WARNING
     languages: [javascript, typescript]

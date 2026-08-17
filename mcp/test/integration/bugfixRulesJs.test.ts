@@ -35,6 +35,7 @@ import { cpSync, existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mapSubcategory } from '../../src/tools/bugHunt.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const RULES = resolve(REPO_ROOT, 'configs', 'semgrep', 'bugfix-js.yml');
@@ -83,7 +84,18 @@ describe('bugfix-js rules', () => {
     // EXACT set, not "at least". A rule that widens to catch something it was
     // not written for fails here rather than reaching a user as noise.
     expect(ids(run(resolve(FIXTURES, 'hits')))).toEqual([
+      'bugfix-js-edge-case-parseint-without-radix',
+      'bugfix-js-edge-case-reduce-without-initial',
+      'bugfix-js-error-handling-catch-returns-null',
       'bugfix-js-error-handling-empty-catch',
+      'bugfix-js-error-handling-empty-promise-catch',
+      'bugfix-js-memory-leak-interval-without-clear',
+      'bugfix-js-memory-leak-listener-without-cleanup',
+      'bugfix-js-memory-leak-subscribe-without-unsubscribe',
+      'bugfix-js-null-safety-unchecked-env',
+      'bugfix-js-null-safety-unchecked-find',
+      'bugfix-js-null-safety-unchecked-match',
+      'bugfix-js-off-by-one-index-at-length',
       'bugfix-js-off-by-one-loop-lte-length',
       'bugfix-js-race-condition-floating-mutation',
     ]);
@@ -94,5 +106,50 @@ describe('bugfix-js rules', () => {
     // A rethrowing catch, an append at index length, an awaited save and a
     // deliberate fire-and-forget log are all correct code that looks like a bug.
     expect(ids(run(resolve(FIXTURES, 'misses')))).toEqual([]);
+  });
+});
+
+/**
+ * Rule ids carry the class token because `mapSubcategory` classifies by
+ * running regexes over the lowercased id, not by lookup table (design of
+ * record §4). This runs unconditionally — it calls the pure classifier
+ * directly, no Semgrep involved — so it is never skipped for lack of the
+ * toolchain.
+ */
+const EXPECTED_CLASS: Readonly<Record<string, string>> = {
+  'bugfix-js-error-handling-empty-catch': 'error_handling',
+  'bugfix-js-error-handling-empty-promise-catch': 'error_handling',
+  'bugfix-js-error-handling-catch-returns-null': 'error_handling',
+  'bugfix-js-off-by-one-loop-lte-length': 'off_by_one',
+  'bugfix-js-off-by-one-index-at-length': 'off_by_one',
+  'bugfix-js-null-safety-unchecked-find': 'null_safety',
+  'bugfix-js-null-safety-unchecked-match': 'null_safety',
+  'bugfix-js-null-safety-unchecked-env': 'null_safety',
+  'bugfix-js-memory-leak-listener-without-cleanup': 'memory_leak',
+  'bugfix-js-memory-leak-interval-without-clear': 'memory_leak',
+  'bugfix-js-memory-leak-subscribe-without-unsubscribe': 'memory_leak',
+  'bugfix-js-race-condition-floating-mutation': 'race_condition',
+  'bugfix-js-edge-case-reduce-without-initial': 'edge_case',
+  'bugfix-js-edge-case-parseint-without-radix': 'edge_case',
+};
+
+describe('every rule id classifies as its own class', () => {
+  it('maps all fourteen', () => {
+    for (const [id, cls] of Object.entries(EXPECTED_CLASS)) {
+      expect(mapSubcategory(id, undefined)).toBe(cls);
+    }
+  });
+
+  it('the three "unchecked" ids classify as null_safety, not error_handling', () => {
+    // mapSubcategory's error_handling regex matches the bare word `unchecked`.
+    // These three win only because null_safety is tested earlier in the chain.
+    // If that order ever changes, this fails instead of silently reclassifying.
+    for (const id of [
+      'bugfix-js-null-safety-unchecked-find',
+      'bugfix-js-null-safety-unchecked-match',
+      'bugfix-js-null-safety-unchecked-env',
+    ]) {
+      expect(mapSubcategory(id, undefined)).toBe('null_safety');
+    }
   });
 });
