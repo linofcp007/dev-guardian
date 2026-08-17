@@ -33,7 +33,6 @@ Vou configurar:
   ✓ gitleaks (secrets, com pre-commit hook)
   ✓ Renovate (atualização de deps)
   ✓ pre-commit framework (orquestra hooks locais)
-  ✓ Workflow CI: .github/workflows/dev-guardian.yml
   ✓ ESLint + ruff configurados para correrem em CI
 Não vou tocar em: README, código aplicacional, configs existentes.
 OK avançar?
@@ -55,14 +54,26 @@ O instalador é idempotente — verifica antes de instalar, não duplica.
 
 Copia templates apropriados para o projeto:
 
-| Ficheiro                             | Origem                                          | Notas                                  |
-| ------------------------------------ | ----------------------------------------------- | -------------------------------------- |
-| `.gitleaks.toml`                     | `configs/gitleaks/gitleaks.toml`                | Sempre                                 |
-| `.semgrep.yml`                       | `configs/semgrep/<linguagem>.yml`               | Combina vários se polyglot             |
-| `renovate.json`                      | `configs/renovate/renovate.json`                | Sempre (substitui Dependabot)          |
-| `.pre-commit-config.yaml`            | `configs/pre-commit/<linguagem>.yaml`           | Combina hooks para todas as linguagens |
-| `.github/workflows/dev-guardian.yml` | `workflows/github-actions/dev-guardian.yml`     | Workflow principal                     |
-| `.github/workflows/e2e.yml`          | `workflows/github-actions/e2e.yml`              | Só se for webapp                       |
+| Ficheiro                  | Origem                                      | Notas                            |
+| ------------------------- | ------------------------------------------- | -------------------------------- |
+| `.gitleaks.toml`          | `configs/gitleaks/gitleaks.toml`            | Sempre                           |
+| `.semgrep.yml`            | `configs/semgrep/base.yml`                  | Regras próprias, multi-linguagem |
+| `renovate.json`           | `configs/renovate/renovate.json`            | Sempre (substitui Dependabot)    |
+| `.pre-commit-config.yaml` | `configs/pre-commit/pre-commit-config.yaml` | Cobre todas as linguagens        |
+
+`base.yml` e `pre-commit-config.yaml` já vêm combinados para todas as
+linguagens que este repositório suporta — não existe um ficheiro por
+linguagem (`configs/semgrep/<linguagem>.yml`,
+`configs/pre-commit/<linguagem>.yaml`) apesar do nome sugerir isso.
+
+Não existe um template de workflow CI para copiar — este repositório não gera
+ficheiros `.github/workflows/` (decisão de projeto: local-first, sem CI
+recorrente a pagar; ver `CHANGELOG.md`, "Dropped the GitHub Actions CI
+workflow"). A proteção equivalente é local: os hooks de pre-commit instalados
+no passo 5, a tool `review_pr` (scan do diff antes de merge) e a tool
+`create_github_issues` (findings viram issues sem precisar de Actions). Se o
+utilizador pedir explicitamente um workflow CI, é preciso escrevê-lo de raiz —
+não copiar de um template, porque não existe nenhum neste repositório.
 
 Antes de copiar qualquer ficheiro, verifica se já existe. Se sim, perguntar:
 
@@ -105,7 +116,7 @@ Próximos passos sugeridos:
   1. Corre `guardian deps` para atualizar dependências vulneráveis
   2. Liga Renovate no GitHub: github.com/apps/renovate (1 clique)
   3. Faz commit dos ficheiros gerados:
-     git add .pre-commit-config.yaml .gitleaks.toml renovate.json .github/workflows/
+     git add .pre-commit-config.yaml .gitleaks.toml renovate.json .semgrep.yml
      git commit -m "chore: setup dev-guardian"
 ```
 
