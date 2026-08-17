@@ -68,6 +68,24 @@ describe('renderStatus', () => {
     expect(out).toMatch(/NOT in these numbers/i);
   });
 
+  // fix-round-1 (coordinator review, Important 2): pins the RENDERED
+  // sentence, not just missing_tools' array contents — a test on the array
+  // alone would stay green even if the line above it renders nonsense. Before
+  // the source-side fix, bug_hunt could report missing_tools: ['semgrep:p/
+  // r2c-bug-scan'], which has no TOOL_CATEGORIES entry and falls back to
+  // naming itself, producing "MISSING semgrep:p/r2c-bug-scan — semgrep:p/
+  // r2c-bug-scan findings are NOT in these numbers" — a self-referential
+  // sentence that names nothing real. bug_hunt now reports the bare tool
+  // name; this is what that renders as.
+  it("renders a sane MISSING line for bug_hunt's config-pack gap (semgrep, not semgrep:<pack>)", () => {
+    const out = renderStatus(snap({
+      coverage: { level: 'partial', tools_run: ['semgrep'],
+        missing_tools: ['semgrep'], omitted_categories: ['static-analysis'] },
+    }), { color: false });
+    expect(out).toContain('semgrep — static-analysis findings are NOT in these numbers');
+    expect(out).not.toMatch(/semgrep:p\//);
+  });
+
   it('omits the missing-tools line entirely when coverage is full', () => {
     const out = renderStatus(snap(), { color: false });
     expect(out).not.toMatch(/MISSING/);

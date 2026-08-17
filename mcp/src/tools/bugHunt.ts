@@ -16,6 +16,23 @@
  * array (`semgrepConfigFailure.ts`) and re-runs with whatever packs still
  * resolve, so one retirement degrades coverage instead of erasing it — and
  * never lets a run that scanned nothing get reported as a clean bug report.
+ *
+ * `p/r2c-bug-scan`'s own content is Python-heavy (32 of 44 rules) and thin
+ * for JS/TypeScript (3 rules, none of which are the race/null/off-by-one/
+ * leak/error-handling classes the tool's category vocabulary names) — see
+ * `title`/`description` below, which say this to the model reading them
+ * rather than only in this comment.
+ *
+ * `missing_tools` entries stay bare (`'semgrep'`), never pack-qualified
+ * (`'semgrep:p/r2c-bug-scan'`): the dashboard's `TOOL_CATEGORIES` map
+ * (`dashboard/types.ts`) and every other reader of `missing_tools` key off
+ * literal, installable tool names, and a colon-qualified name has no entry
+ * there — it falls back to rendering itself as its own "category", producing
+ * `MISSING semgrep:p/r2c-bug-scan — semgrep:p/r2c-bug-scan findings are NOT
+ * in these numbers`. Which pack failed and why is real, useful detail, but
+ * it belongs on the `semgrep` `tools_run` entry's `reason` (free text, meant
+ * for exactly this) rather than smuggled through a field every consumer
+ * assumes is a bare tool name.
  */
 
 import { join } from 'node:path';
@@ -118,14 +135,22 @@ function mapSubcategory(ruleId: string, existing: string | undefined): string | 
 registerToolModule(
   makeScanTool({
     name: 'bug_hunt',
-    title: 'Bug hunt (Semgrep p/r2c-bug-scan + p/security-audit)',
+    title: 'Bug hunt (Semgrep p/r2c-bug-scan + p/security-audit; Python-strong, JS/TS-thin)',
     description:
-      'Semgrep with curated bug-finding rule packs (p/r2c-bug-scan, p/security-audit). ' +
-      'Findings are categorised as `bug` with subcategories like race_condition, null_safety, ' +
-      'edge_case, error_handling, memory_leak, off_by_one. Optional `categories` filter ' +
-      'restricts the returned subcategories. If a pack is retired from the Semgrep registry, ' +
-      'the scan re-runs with the packs that still resolve and reports the gap in `missing_tools` ' +
-      'rather than silently scanning nothing.',
+      'Semgrep with p/r2c-bug-scan (44 correctness rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) ' +
+      'plus p/security-audit. Coverage is uneven by language: strong for Python (mutating a ' +
+      'collection while iterating it, unchecked subprocess results, mutable default arguments, ' +
+      'and more); thin for JavaScript/TypeScript, where the only 3 rules are a dead-store check, ' +
+      '`.replaceAll` browser-compatibility, and literal `x==x` — none of them race conditions, ' +
+      'null/undefined safety, off-by-one, memory leaks, or swallowed error handling. On a JS/TS ' +
+      'project, expect few or no findings from this tool specifically; an empty result here is ' +
+      'not evidence the project has no bugs, only that this pack does not look for most bug ' +
+      'shapes in this language — pair with `scan_sast` or a manual review for JS/TS logic bugs. ' +
+      'Findings are categorised as `bug`, with subcategories (race_condition, null_safety, ' +
+      'edge_case, error_handling, memory_leak, off_by_one) attached where the matching rule\'s ' +
+      'own id says so. If a configured pack is retired from the Semgrep registry, the scan ' +
+      're-runs with whichever packs still resolve and reports the gap via `missing_tools` ' +
+      'instead of silently scanning nothing.',
     scan_type: 'bugs',
     category: 'bug',
     inputSchema: {
@@ -177,13 +202,16 @@ registerToolModule(
       // must never be reported as a clean bug report. `outcome: 'completed'`
       // matches scan_sast's convention for an expected, named gap — the
       // signal lives in `missing_tools` / `coverage`, not in `outcome`.
+      // `missing_tools` gets the bare tool name only (never
+      // `semgrep:<pack>`) — see the header comment for why; the pack-level
+      // detail lives in the `reason` string below instead.
       const reportGap = (failures: readonly ConfigDownloadFailure[]): ScannerInvocation => {
         tools_run.push({
           name: 'semgrep',
           status: 'failed',
           reason: `no configured pack could be scanned (${describeConfigFailures(failures)})`,
         });
-        for (const f of failures) missing_tools.push(`semgrep:${f.pack ?? 'unknown-config'}`);
+        missing_tools.push('semgrep');
         return {
           outcome: 'completed',
           tools_run,
@@ -228,15 +256,44 @@ registerToolModule(
       }
 
       const retry = await runWithPacks(survivors);
+
+      // A cancelled/timed-out/oversized retry never produced a genuine
+      // second attempt — the child was killed before (or while) writing
+      // `--output`, so `outFile` may still hold attempt one's STALE content,
+      // or nothing at all. Reading that as "the retry also hit a download
+      // failure" would duplicate attempt one's own failure, and forcing
+      // `outcome: 'completed'` below would misreport a cancelled/timed-out
+      // run as having finished normally — the same family of untruth this
+      // whole fix exists to close. Propagate the retry's real outcome
+      // instead, and report only what attempt one actually found (never
+      // touching `outFile` in this branch at all).
+      if (retry.outcome !== 'completed' && retry.outcome !== 'failed') {
+        tools_run.push({
+          name: 'semgrep',
+          status: 'failed',
+          reason:
+            `retry with ${survivors.join(', ')} did not finish (${retry.outcome}) — ` +
+            `original gap: ${describeConfigFailures(failures)}`,
+        });
+        missing_tools.push('semgrep');
+        return {
+          outcome: retry.outcome,
+          tools_run,
+          missing_tools,
+          parser_inputs,
+          report_paths: [reportDir],
+        };
+      }
+
       const retryRaw = readJsonSafe(outFile);
       const retryFailures = findConfigDownloadFailures(retryRaw);
       const retryOk =
         retryFailures.length === 0 && (retry.outcome === 'completed' || retry.exitCode === 1);
 
       if (!retryOk) {
-        // The retry didn't help either (network flake, or the "survivor"
-        // just got retired too) — combine every failure we saw and refuse
-        // to trust either attempt's output.
+        // The retry ran to a real exit but didn't help either (network
+        // flake, or the "survivor" just got retired too) — combine every
+        // failure we saw and refuse to trust either attempt's output.
         return reportGap([...failures, ...retryFailures]);
       }
 
@@ -246,7 +303,7 @@ registerToolModule(
         status: 'ok',
         reason: `ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`,
       });
-      for (const f of failures) missing_tools.push(`semgrep:${f.pack ?? 'unknown-config'}`);
+      missing_tools.push('semgrep');
       return {
         outcome: 'completed',
         tools_run,

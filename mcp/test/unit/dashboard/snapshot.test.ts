@@ -113,6 +113,27 @@ describe('buildSnapshot', () => {
     db.close();
   });
 
+  // fix-round-1 (coordinator review, Important 2): bug_hunt (bugHunt.ts) used
+  // to push a pack-qualified name ('semgrep:p/r2c-bug-scan') into
+  // missing_tools when one of its two Semgrep configs failed to resolve. That
+  // string has no entry in TOOL_CATEGORIES (dashboard/types.ts), so it fell
+  // through the SAME "name an unknown tool rather than dropping it" path
+  // exercised above — which is exactly the bug: the fallback is correct for a
+  // genuinely unknown scanner, but 'semgrep' is not unknown, and rendering the
+  // qualified string as its own "category" produces a self-referential
+  // sentence downstream ("MISSING semgrep:p/r2c-bug-scan — semgrep:p/r2c-bug-
+  // scan findings are NOT in these numbers"). Fixed at the source: bug_hunt
+  // now reports the bare tool name only. This pins that the bare name takes
+  // the REAL TOOL_CATEGORIES branch, not the unknown-tool fallback.
+  it("maps bug_hunt's config-pack gap through TOOL_CATEGORIES like any other semgrep gap, not as an unknown tool", () => {
+    const { storage, db } = fresh();
+    completedScan(storage, '/p', { missing_tools: ['semgrep'] });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.coverage.missing_tools).toEqual(['semgrep']);
+    expect(snap.coverage.omitted_categories).toEqual(['static-analysis']);
+    db.close();
+  });
+
   it('compares against the previous scan OF THE SAME TYPE', () => {
     // Comparing security_full against a secrets-only run would report every
     // SAST finding as "new".

@@ -40374,8 +40374,8 @@ function mapSubcategory2(ruleId, existing) {
 registerToolModule(
   makeScanTool({
     name: "bug_hunt",
-    title: "Bug hunt (Semgrep p/r2c-bug-scan + p/security-audit)",
-    description: "Semgrep with curated bug-finding rule packs (p/r2c-bug-scan, p/security-audit). Findings are categorised as `bug` with subcategories like race_condition, null_safety, edge_case, error_handling, memory_leak, off_by_one. Optional `categories` filter restricts the returned subcategories. If a pack is retired from the Semgrep registry, the scan re-runs with the packs that still resolve and reports the gap in `missing_tools` rather than silently scanning nothing.",
+    title: "Bug hunt (Semgrep p/r2c-bug-scan + p/security-audit; Python-strong, JS/TS-thin)",
+    description: "Semgrep with p/r2c-bug-scan (44 correctness rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) plus p/security-audit. Coverage is uneven by language: strong for Python (mutating a collection while iterating it, unchecked subprocess results, mutable default arguments, and more); thin for JavaScript/TypeScript, where the only 3 rules are a dead-store check, `.replaceAll` browser-compatibility, and literal `x==x` \u2014 none of them race conditions, null/undefined safety, off-by-one, memory leaks, or swallowed error handling. On a JS/TS project, expect few or no findings from this tool specifically; an empty result here is not evidence the project has no bugs, only that this pack does not look for most bug shapes in this language \u2014 pair with `scan_sast` or a manual review for JS/TS logic bugs. Findings are categorised as `bug`, with subcategories (race_condition, null_safety, edge_case, error_handling, memory_leak, off_by_one) attached where the matching rule's own id says so. If a configured pack is retired from the Semgrep registry, the scan re-runs with whichever packs still resolve and reports the gap via `missing_tools` instead of silently scanning nothing.",
     scan_type: "bugs",
     category: "bug",
     inputSchema: {
@@ -40424,7 +40424,7 @@ registerToolModule(
           status: "failed",
           reason: `no configured pack could be scanned (${describeConfigFailures(failures2)})`
         });
-        for (const f of failures2) missing_tools.push(`semgrep:${f.pack ?? "unknown-config"}`);
+        missing_tools.push("semgrep");
         return {
           outcome: "completed",
           tools_run,
@@ -40453,6 +40453,21 @@ registerToolModule(
         return reportGap(failures);
       }
       const retry2 = await runWithPacks(survivors);
+      if (retry2.outcome !== "completed" && retry2.outcome !== "failed") {
+        tools_run.push({
+          name: "semgrep",
+          status: "failed",
+          reason: `retry with ${survivors.join(", ")} did not finish (${retry2.outcome}) \u2014 original gap: ${describeConfigFailures(failures)}`
+        });
+        missing_tools.push("semgrep");
+        return {
+          outcome: retry2.outcome,
+          tools_run,
+          missing_tools,
+          parser_inputs,
+          report_paths: [reportDir]
+        };
+      }
       const retryRaw = readJsonSafe(outFile);
       const retryFailures = findConfigDownloadFailures(retryRaw);
       const retryOk = retryFailures.length === 0 && (retry2.outcome === "completed" || retry2.exitCode === 1);
@@ -40465,7 +40480,7 @@ registerToolModule(
         status: "ok",
         reason: `ran with ${survivors.join(", ")} only \u2014 ${describeConfigFailures(failures)}`
       });
-      for (const f of failures) missing_tools.push(`semgrep:${f.pack ?? "unknown-config"}`);
+      missing_tools.push("semgrep");
       return {
         outcome: "completed",
         tools_run,

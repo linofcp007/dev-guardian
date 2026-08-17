@@ -210,6 +210,7 @@ describe('bug_hunt', () => {
       top_findings: { category: string }[];
       findings_count_by_severity: Record<string, number>;
       missing_tools: string[];
+      tools_run: { name: string; status: string; reason?: string }[];
       warnings: string[];
       coverage?: string;
     };
@@ -222,8 +223,16 @@ describe('bug_hunt', () => {
     expect(r.top_findings.every((f) => f.category === 'bug')).toBe(true);
     // But the gap is not hidden: this is a partial result, not a clean one.
     expect(r.coverage).toBe('partial');
-    expect(r.missing_tools.some((t) => t.includes(PRIMARY_PACK))).toBe(true);
-    expect(r.warnings.join(' ')).toContain(PRIMARY_PACK);
+    // Bare tool name only — never pack-qualified. A qualified name has no
+    // entry in the dashboard's TOOL_CATEGORIES map (dashboard/types.ts) and
+    // falls back to rendering itself as its own "category", producing
+    // "MISSING semgrep:p/r2c-bug-scan — semgrep:p/r2c-bug-scan findings are
+    // NOT in these numbers". See test/unit/dashboard/{snapshot,renderStatus,
+    // renderHtml}.test.ts for the rendered sentence this shape keeps sane.
+    expect(r.missing_tools).toEqual(['semgrep']);
+    // The pack-level detail (which pack, and why) lives on tools_run's
+    // reason instead — the field actually meant for free-text diagnostics.
+    expect(r.tools_run.find((t) => t.name === 'semgrep')?.reason).toContain(PRIMARY_PACK);
   });
 
   it('reports both failures when the retry itself also fails (registry outage mid-scan)', async () => {
@@ -257,6 +266,7 @@ describe('bug_hunt', () => {
       ok: true;
       findings_count_by_severity: Record<string, number>;
       missing_tools: string[];
+      tools_run: { name: string; status: string; reason?: string }[];
       coverage?: string;
     };
     expect(calls).toBe(2);
@@ -264,9 +274,13 @@ describe('bug_hunt', () => {
     const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
     expect(total).toBe(0);
     expect(r.coverage).toBe('none');
-    // Both packs must be named, not just the one caught on the first try.
-    expect(r.missing_tools.some((t) => t.includes(PRIMARY_PACK))).toBe(true);
-    expect(r.missing_tools.some((t) => t.includes(SECONDARY_PACK))).toBe(true);
+    // missing_tools stays the bare tool name, once — not one entry per pack.
+    expect(r.missing_tools).toEqual(['semgrep']);
+    // Both packs must still be named in the diagnostic text, not just the
+    // one caught on the first try.
+    const reason = r.tools_run.find((t) => t.name === 'semgrep')?.reason ?? '';
+    expect(reason).toContain(PRIMARY_PACK);
+    expect(reason).toContain(SECONDARY_PACK);
   });
 
   it('never reports a clean result when every configured pack fails to download', async () => {
@@ -292,7 +306,7 @@ describe('bug_hunt', () => {
     // The load-bearing assertion: zero findings from a run where nothing
     // could be scanned must NOT be indistinguishable from a clean bug hunt.
     expect(r.coverage).toBe('none');
-    expect(r.missing_tools.length).toBeGreaterThan(0);
+    expect(r.missing_tools).toEqual(['semgrep']);
     expect(r.warnings.join(' ')).toMatch(/not a clean bill of health/i);
   });
 
@@ -319,7 +333,88 @@ describe('bug_hunt', () => {
     const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
     expect(total).toBe(0);
     expect(r.coverage).toBe('none');
-    expect(r.missing_tools.length).toBeGreaterThan(0);
+    expect(r.missing_tools).toEqual(['semgrep']);
+  });
+
+  it('propagates a cancelled retry as cancelled, not as a completed clean scan', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+
+    let calls = 0;
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      calls += 1;
+      if (calls === 1) {
+        writeOutput(opts, configFailureJson(PRIMARY_PACK));
+        return { outcome: 'failed' as const, exitCode: 7, stdout: '', stderr: '', truncated: false };
+      }
+      // The retry is cancelled before it ever writes a fresh --output —
+      // outFile still holds attempt one's stale config-failure JSON. A fix
+      // that re-reads it here would report the SAME pack's failure twice
+      // and would also force outcome: 'completed' on a run that was
+      // actually cancelled.
+      return { outcome: 'cancelled' as const, exitCode: null, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('bug_hunt');
+    const r = (await tool.handler({ project_path: project }, plugin)) as
+      | { ok: true; missing_tools: string[]; tools_run: { reason?: string }[] }
+      | { ok: false; error: { code: string; message: string } };
+    expect(calls).toBe(2);
+    // scanToolFactory.ts special-cases a cancelled outcome as a domain
+    // error, the same way any other cancelled scan is reported — not as a
+    // completed ScanResult.
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('cancelled');
+    }
+  });
+
+  it('propagates a timed-out retry as failed, without duplicating the first attempt\'s failure', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+
+    let calls = 0;
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      calls += 1;
+      if (calls === 1) {
+        writeOutput(opts, configFailureJson(PRIMARY_PACK));
+        return { outcome: 'failed' as const, exitCode: 7, stdout: '', stderr: '', truncated: false };
+      }
+      // Timed out — again, deliberately does NOT touch outFile, so it still
+      // holds attempt one's stale content if the fix reads it regardless.
+      return { outcome: 'timed_out' as const, exitCode: null, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('bug_hunt');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      status: string;
+      findings_count_by_severity: Record<string, number>;
+      missing_tools: string[];
+      tools_run: { name: string; status: string; reason?: string }[];
+      coverage?: string;
+    };
+    expect(calls).toBe(2);
+    expect(r.ok).toBe(true);
+    // 'failed', never 'completed' — a timed-out retry did not finish.
+    expect(r.status).toBe('failed');
+    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+    expect(total).toBe(0);
+    expect(r.coverage).toBe('none');
+    expect(r.missing_tools).toEqual(['semgrep']);
+    // The original (attempt-one) failure is named once — not duplicated by
+    // a re-read of the stale report file. Counting "Failed to download..."
+    // occurrences (one per distinct ConfigDownloadFailure), not PRIMARY_PACK
+    // occurrences: describeConfigFailures already mentions a pack's name
+    // twice for a SINGLE failure (once as the label, once inside its own
+    // message's URL), so a substring count of the pack name is not the
+    // right signal for "how many failures got concatenated in".
+    const reason = r.tools_run.find((t) => t.name === 'semgrep')?.reason ?? '';
+    const failureMessageCount = reason.split('Failed to download configuration from').length - 1;
+    expect(failureMessageCount).toBe(1);
+    expect(reason).toContain(PRIMARY_PACK);
   });
 });
 

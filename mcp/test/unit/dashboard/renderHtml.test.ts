@@ -92,6 +92,25 @@ describe('renderDashboard', () => {
     expect(visible).toMatch(/secrets/);
   });
 
+  // fix-round-1 (coordinator review, Important 2): same regression as
+  // renderStatus.test.ts's equivalent case, for the HTML banner
+  // (coverageBanner in renderHtml.ts). Stripped of the inlined JSON payload
+  // like every other content-bearing test in this file (see this describe
+  // block's first test's own comment on why an un-stripped assertion is
+  // hollow) — this pins the VISIBLE banner text, not the data island that
+  // happens to carry the same strings regardless of what the banner renders.
+  it("renders a sane coverage banner for bug_hunt's config-pack gap (semgrep, not semgrep:<pack>)", () => {
+    const html = renderDashboard(snap({
+      coverage: { level: 'partial', tools_run: ['semgrep'],
+        missing_tools: ['semgrep'], omitted_categories: ['static-analysis'] },
+    }));
+    const visible = html.replace(/<script type="application\/json"[\s\S]*?<\/script>/g, '');
+    expect(visible).toContain(
+      'semgrep did not run this scan — static-analysis findings are NOT in these numbers.',
+    );
+    expect(visible).not.toMatch(/semgrep:p\//);
+  });
+
   // fix-round-3, Important 2 (coordinator review): Task 3 folded the
   // CVE-source gap into coverage.level/omitted_categories, so a project can
   // be 'partial' with missing_tools genuinely EMPTY — no scanner failed to
