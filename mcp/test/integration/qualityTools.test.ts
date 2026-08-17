@@ -49,7 +49,7 @@ import type { PluginContext } from '../../src/context.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
-import { BUG_HUNT_PACKS } from '../../src/tools/bugHunt.js';
+import { BUG_HUNT_BASE_PACKS } from '../../src/tools/bugHunt.js';
 
 beforeAll(async () => {
   await import('../../src/tools/securityScanFull.js');
@@ -116,7 +116,7 @@ describe('bug_hunt', () => {
   // these tests keep pinning real behaviour if the pack list ever changes
   // again (as it already has once — see the fix report for `p/bugs`).
   function requirePack(index: number): string {
-    const pack = BUG_HUNT_PACKS[index];
+    const pack = BUG_HUNT_BASE_PACKS[index];
     if (pack === undefined) {
       throw new Error(`bug_hunt: expected a configured pack at index ${index}`);
     }
@@ -416,6 +416,298 @@ describe('bug_hunt', () => {
     expect(failureMessageCount).toBe(1);
     expect(reason).toContain(PRIMARY_PACK);
   });
+
+  // --- fix round 2: stack-detected language packs -------------------------
+
+  function fakeStackSnapshot(languages: string[]): {
+    os: 'linux'; arch: string; languages: string[]; package_managers: string[];
+    frameworks: string[]; existing_tools: string[]; has_docker: boolean;
+    has_compose: boolean; has_terraform: boolean; has_kubernetes: boolean;
+    has_ansible: boolean; has_github_actions: boolean; has_gitlab_ci: boolean;
+  } {
+    return {
+      os: 'linux', arch: 'x64', languages, package_managers: [], frameworks: [],
+      existing_tools: [], has_docker: false, has_compose: false, has_terraform: false,
+      has_kubernetes: false, has_ansible: false, has_github_actions: false, has_gitlab_ci: false,
+    };
+  }
+
+  function captureArgs(json: string, exitCode = 1): { getArgs: () => string[] } {
+    let captured: string[] = [];
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      captured = opts.args ?? [];
+      writeOutput(opts, json);
+      return { outcome: 'completed' as const, exitCode, stdout: '', stderr: '', truncated: false };
+    });
+    return { getArgs: () => captured };
+  }
+
+  it('adds the language pack for a stack-detected language (persisted detect_stack snapshot)', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    plugin.storage.stack.insert({
+      project_path: project,
+      snapshot: fakeStackSnapshot(['javascript', 'typescript']),
+    });
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const { getArgs } = captureArgs(semgrepFx());
+
+    const tool = getTool('bug_hunt');
+    const r = (await tool.handler({ project_path: project, force: true }, plugin)) as { ok: true };
+    expect(r.ok).toBe(true);
+    for (const base of BUG_HUNT_BASE_PACKS) expect(getArgs()).toContain(`--config=${base}`);
+    expect(getArgs()).toContain('--config=p/javascript');
+    expect(getArgs()).toContain('--config=p/typescript');
+    // A language NOT in the snapshot must not get its pack added.
+    expect(getArgs()).not.toContain('--config=p/python');
+    expect(getArgs()).not.toContain('--config=p/java');
+    expect(getArgs()).not.toContain('--config=p/golang');
+  });
+
+  it('falls back to filesystem markers when detect_stack has never run for this project', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project); // no stack snapshot inserted at all
+    writeFileSync(join(project, 'package.json'), '{}', 'utf8');
+    writeFileSync(join(project, 'tsconfig.json'), '{}', 'utf8');
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const { getArgs } = captureArgs(semgrepFx());
+
+    const tool = getTool('bug_hunt');
+    const r = (await tool.handler({ project_path: project, force: true }, plugin)) as { ok: true };
+    expect(r.ok).toBe(true);
+    expect(getArgs()).toContain('--config=p/javascript');
+    expect(getArgs()).toContain('--config=p/typescript');
+  });
+
+  it('a bare package.json without tsconfig.json selects only p/javascript, not p/typescript', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    writeFileSync(join(project, 'package.json'), '{}', 'utf8');
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const { getArgs } = captureArgs(semgrepFx());
+
+    const tool = getTool('bug_hunt');
+    await tool.handler({ project_path: project, force: true }, plugin);
+    expect(getArgs()).toContain('--config=p/javascript');
+    expect(getArgs()).not.toContain('--config=p/typescript');
+  });
+
+  it('prefers the persisted stack snapshot over filesystem markers when both exist and disagree', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    // Filesystem says JS/TS...
+    writeFileSync(join(project, 'package.json'), '{}', 'utf8');
+    writeFileSync(join(project, 'tsconfig.json'), '{}', 'utf8');
+    // ...but the persisted snapshot says Python only. The snapshot wins.
+    plugin.storage.stack.insert({ project_path: project, snapshot: fakeStackSnapshot(['python']) });
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const { getArgs } = captureArgs(semgrepFx());
+
+    const tool = getTool('bug_hunt');
+    await tool.handler({ project_path: project, force: true }, plugin);
+    expect(getArgs()).toContain('--config=p/python');
+    expect(getArgs()).not.toContain('--config=p/javascript');
+    expect(getArgs()).not.toContain('--config=p/typescript');
+  });
+
+  // --- fix round 2: categories filtering -----------------------------------
+
+  /** Real rule ids and shapes, spanning two canonical subcategories plus one
+   *  non-canonical (security) finding that must never be mistaken for one. */
+  function multiSubcategorySemgrepJson(): string {
+    return JSON.stringify({
+      version: '1.164.0',
+      results: [
+        {
+          check_id: 'python.lang.correctness.list-modify-iterating.list-modify-while-iterate',
+          path: 'app.py', start: { line: 5 }, end: { line: 5 },
+          extra: { severity: 'WARNING', message: 'mutated while iterating', lines: 'x' },
+        },
+        {
+          check_id: 'python.django.correctness.string-field-null-checks.no-null-string-field',
+          path: 'models.py', start: { line: 10 }, end: { line: 10 },
+          extra: { severity: 'WARNING', message: 'null=True missing', lines: 'y' },
+        },
+        {
+          check_id: 'javascript.express.security.audit.express-xss.express-xss',
+          path: 'app.js', start: { line: 3 }, end: { line: 3 },
+          extra: {
+            severity: 'ERROR', message: 'reflected xss', lines: 'z',
+            metadata: { category: 'security' },
+          },
+        },
+      ],
+      errors: [],
+    });
+  }
+
+  it('categories filters the returned findings to exactly the requested subcategories', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      writeOutput(opts, multiSubcategorySemgrepJson());
+      return { outcome: 'completed' as const, exitCode: 1, stdout: '', stderr: '', truncated: false };
+    });
+    const tool = getTool('bug_hunt');
+
+    const unfiltered = (await tool.handler({ project_path: project, force: true }, plugin)) as {
+      ok: true;
+      top_findings: { subcategory?: string }[];
+    };
+    expect(unfiltered.top_findings).toHaveLength(3);
+
+    const filtered = (await tool.handler(
+      { project_path: project, categories: ['null_safety'], force: true },
+      plugin,
+    )) as { ok: true; top_findings: { subcategory?: string }[] };
+    expect(filtered.top_findings).toHaveLength(1);
+    expect(filtered.top_findings[0]?.subcategory).toBe('null_safety');
+  });
+
+  it('categories accepts more than one subcategory and drops everything else', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      writeOutput(opts, multiSubcategorySemgrepJson());
+      return { outcome: 'completed' as const, exitCode: 1, stdout: '', stderr: '', truncated: false };
+    });
+    const tool = getTool('bug_hunt');
+    const r = (await tool.handler(
+      { project_path: project, categories: ['null_safety', 'edge_case'], force: true },
+      plugin,
+    )) as { ok: true; top_findings: { subcategory?: string }[] };
+    expect(r.top_findings.map((f) => f.subcategory).sort()).toEqual(['edge_case', 'null_safety']);
+  });
+
+  // --- fix round 2: the assertion that matters most ------------------------
+
+  it('classifies real bug-class rule ids into their canonical subcategory, end to end', async () => {
+    // Real rule ids captured from the live packs (fix report) — not
+    // invented — covering five of the six canonical classes (the sixth,
+    // race_condition, is pinned in bugHuntClassify.test.ts's unit tests).
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      writeOutput(
+        opts,
+        JSON.stringify({
+          version: '1.164.0',
+          results: [
+            {
+              check_id: 'python.lang.correctness.list-modify-iterating.list-modify-while-iterate',
+              path: 'a.py', start: { line: 1 }, end: { line: 1 },
+              extra: { severity: 'WARNING', message: 'm', lines: 'l' },
+            },
+            {
+              check_id: 'python.django.correctness.string-field-null-checks.no-null-string-field',
+              path: 'b.py', start: { line: 2 }, end: { line: 2 },
+              extra: { severity: 'WARNING', message: 'm', lines: 'l' },
+            },
+            {
+              check_id: 'go.lang.correctness.overflow.overflow.integer-overflow-int16',
+              path: 'c.go', start: { line: 3 }, end: { line: 3 },
+              extra: { severity: 'WARNING', message: 'm', lines: 'l' },
+            },
+            {
+              check_id:
+                'python.lang.correctness.file-object-redefined-before-close.file-object-redefined-before-close',
+              path: 'd.py', start: { line: 4 }, end: { line: 4 },
+              extra: { severity: 'WARNING', message: 'm', lines: 'l' },
+            },
+            {
+              check_id: 'python.lang.correctness.unchecked-returns.unchecked-subprocess-call',
+              path: 'e.py', start: { line: 5 }, end: { line: 5 },
+              extra: { severity: 'WARNING', message: 'm', lines: 'l' },
+            },
+          ],
+          errors: [],
+        }),
+      );
+      return { outcome: 'completed' as const, exitCode: 1, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('bug_hunt');
+    const r = (await tool.handler({ project_path: project, force: true }, plugin)) as {
+      ok: true;
+      top_findings: { rule_id?: string; subcategory?: string; category: string }[];
+    };
+    expect(r.ok).toBe(true);
+    expect(r.top_findings.every((f) => f.category === 'bug')).toBe(true);
+    const bySubcat = new Map(r.top_findings.map((f) => [f.rule_id, f.subcategory]));
+    expect(bySubcat.get('python.lang.correctness.list-modify-iterating.list-modify-while-iterate')).toBe(
+      'edge_case',
+    );
+    expect(
+      bySubcat.get('python.django.correctness.string-field-null-checks.no-null-string-field'),
+    ).toBe('null_safety');
+    expect(bySubcat.get('go.lang.correctness.overflow.overflow.integer-overflow-int16')).toBe(
+      'off_by_one',
+    );
+    expect(
+      bySubcat.get(
+        'python.lang.correctness.file-object-redefined-before-close.file-object-redefined-before-close',
+      ),
+    ).toBe('memory_leak');
+    expect(bySubcat.get('python.lang.correctness.unchecked-returns.unchecked-subprocess-call')).toBe(
+      'error_handling',
+    );
+  });
+
+  it(
+    'a JS/TS project scanned with every configured pack (base + detected language packs) finds ' +
+      'none of the four target bug classes — empirically verified, not assumed',
+    async () => {
+      // The honest result of actually running semgrep. Captured live (fix
+      // report, round 2): `semgrep --config=p/r2c-bug-scan
+      // --config=p/security-audit --config=p/javascript --config=p/typescript
+      // --config=p/python --config=p/java --config=p/golang` against a real
+      // TypeScript fixture containing an unguarded `.find()` result (null
+      // safety), an off-by-one loop bound, an array mutated while being
+      // iterated (edge case), an empty catch block and an unhandled promise
+      // rejection (swallowed error handling) — exit 0, zero results, zero
+      // errors. None of the seven packs contain a rule for any of these four
+      // classes, in any language — this is the "most important thing" fix
+      // round 2 was asked to report if true. Reproduced here as the exact
+      // mocked shape real semgrep produced, not an invented empty response.
+      const project = tempProject();
+      const plugin = makePlugin(project);
+      plugin.storage.stack.insert({
+        project_path: project,
+        snapshot: fakeStackSnapshot(['javascript', 'typescript']),
+      });
+      vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+      // The real captured shape: exit 0 (semgrep's own "ran cleanly, no
+      // findings" code — real semgrep did NOT exit 1 here, because there
+      // was nothing to report), paths.scanned non-empty (semgrep DID scan
+      // the file), results/errors both empty. A genuine "ran, found
+      // nothing" outcome, not a config-download failure.
+      const { getArgs } = captureArgs(
+        JSON.stringify({ version: '1.164.0', results: [], errors: [], paths: { scanned: ['app.ts'] } }),
+        0,
+      );
+
+      const tool = getTool('bug_hunt');
+      const r = (await tool.handler({ project_path: project, force: true }, plugin)) as {
+        ok: true;
+        findings_count_by_severity: Record<string, number>;
+        coverage?: string;
+      };
+      expect(r.ok).toBe(true);
+      // coverage: 'full', not a gap — every pack RAN. Round 1's fix protects
+      // "didn't run but looks clean"; this is the different, equally real
+      // case of "ran fine, found nothing" — a content gap in the packs, not
+      // a mechanism failure, and the tool's own description says so.
+      expect(r.coverage).toBe('full');
+      const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+      expect(total).toBe(0);
+      for (const pack of [...BUG_HUNT_BASE_PACKS, 'p/javascript', 'p/typescript']) {
+        expect(getArgs()).toContain(`--config=${pack}`);
+      }
+    },
+  );
 });
 
 describe('quality_check', () => {
