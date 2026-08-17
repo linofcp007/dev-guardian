@@ -491,8 +491,11 @@ describe('bug_hunt', () => {
     )) as { ok: true };
     expect(r.ok).toBe(true);
     for (const base of BUG_HUNT_BASE_PACKS) expect(getArgs()).toContain(`--config=${base}`);
-    expect(getArgs()).toContain('--config=p/javascript');
+    // javascript+typescript collapse to p/typescript alone — identical 74
+    // rules under two registry names, so p/javascript never runs alongside
+    // it (see languagePacksFor's doc comment).
     expect(getArgs()).toContain('--config=p/typescript');
+    expect(getArgs()).not.toContain('--config=p/javascript');
     // A language NOT in the snapshot must not get its pack added.
     expect(getArgs()).not.toContain('--config=p/python');
     expect(getArgs()).not.toContain('--config=p/java');
@@ -513,8 +516,8 @@ describe('bug_hunt', () => {
       plugin,
     )) as { ok: true };
     expect(r.ok).toBe(true);
-    expect(getArgs()).toContain('--config=p/javascript');
     expect(getArgs()).toContain('--config=p/typescript');
+    expect(getArgs()).not.toContain('--config=p/javascript');
   });
 
   it('a bare package.json without tsconfig.json selects only p/javascript, not p/typescript', async () => {
@@ -762,9 +765,17 @@ describe('bug_hunt', () => {
       expect(r.coverage).toBe('full');
       const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
       expect(total).toBe(0);
-      for (const pack of [...BUG_HUNT_BASE_PACKS, 'p/javascript', 'p/typescript']) {
+      // p/javascript and p/typescript are the identical 74 rules under two
+      // registry names (bugHuntClassify.test.ts verifies the id sets match),
+      // so only p/typescript is configured for this JS+TS snapshot — see
+      // languagePacksFor's doc comment. The captured fixture above still
+      // reproduces the real semgrep output faithfully: running one of two
+      // byte-for-byte-equivalent-content packs finds the same zero matches
+      // running both would have.
+      for (const pack of [...BUG_HUNT_BASE_PACKS, 'p/typescript']) {
         expect(getArgs()).toContain(`--config=${pack}`);
       }
+      expect(getArgs()).not.toContain('--config=p/javascript');
     },
   );
 });

@@ -191,3 +191,11 @@ bounded too — the latest scan plus two deltas, no multi-week trend
   `deps_update_plan` bumps and Semgrep `--autofix` are in reach. And it
   won't open a PR unless you pass `apply: true` — the default run is a
   dry run that proves the fix and reports it, nothing more.
+- Three more `create_fix_pr` limits worth knowing before you rely on it:
+  maven and gradle bumps are out of reach (inherited from
+  `deps_update_plan`'s own ecosystem gap); a second hit of the same rule
+  landing in a file it already fixed is not seen as a NEW finding, because
+  the "no new finding" check compares `(rule_id, file_path)` rather than
+  fingerprint (a fingerprint moves whenever the fix shifts a line); and
+  `fix_applied` never flips to `1` — it is a dead column on `findings`, and
+  the opened pull request is the record instead.

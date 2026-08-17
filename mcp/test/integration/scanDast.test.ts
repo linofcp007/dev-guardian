@@ -786,6 +786,45 @@ describe('scan_dast persistence', () => {
 /* ------------------------------------------------------------------ */
 
 describe('scan_dast rate-limit probe', () => {
+  // A request one of this block's own bursts sent, but whose CLIENT gave up
+  // on (the wall-clock ceiling in 'reports a ceiling that fires DURING the
+  // burst', or a per-request timeout in any of the others), can still be
+  // sitting between the OS socket and this fixture's 'request' handler when
+  // the test that sent it returns: `received.push` runs at ARRIVAL time
+  // (dast/probe.ts's fetch() call has already handed the bytes to the
+  // kernel well before it settles waiting for a reply), independent of
+  // whatever outcome the client eventually records. `runRateLimitBurst`
+  // itself is fully sequential and awaits every request before the next,
+  // so nothing is left pending from THIS process's point of view by the
+  // time a test's own `await run(...)` resolves — but under sustained
+  // parallel-suite load, an event-loop chain that never yields to a real
+  // timer/I/O tick between this test's teardown and the next test's
+  // `beforeEach` can starve the poll phase that would otherwise deliver an
+  // already-arrived-at-the-kernel request to this handler, so the
+  // `received.push` for it lands AFTER `beforeEach` has reset `received`
+  // for the next test — not before.
+  //
+  // Reproduced live, repeatedly (not merely traced): 'never bursts an
+  // arbitrary endpoint when nothing looks like an auth route' — the test
+  // directly after 'reports a ceiling that fires DURING the burst' below —
+  // saw `received` contain a POST it structurally cannot have sent itself
+  // (its own scan reports `checks.rate_limit: 'no_candidate'`, which only
+  // happens when `runRateLimitBurst` returns before `buildBurst` is ever
+  // called — see rateLimit.ts:104-105). Polling `received.length` for two
+  // consecutive stable reads, rather than a fixed sleep, because the actual
+  // delay is a function of how starved this process's event loop is under
+  // whatever else is running concurrently, not a constant; capped so a
+  // genuinely stuck straggler cannot hang the suite.
+  afterEach(async () => {
+    let previous = -1;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const current = received.length;
+      if (current === previous) return;
+      previous = current;
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+  });
+
   function loginRoutes(): RouteRecord[] {
     return [route('/users'), route('/login', { method: 'POST', file: 'src/auth.ts', line: 42 })];
   }
