@@ -49,6 +49,66 @@ version bump.
     criticals, or one that has never been scanned (they name the scan command to run
     instead of showing empty numbers) — because they report; `scan` is what gates. The
     only non-zero exit either produces is `3`, on a usage error.
+- **`create_fix_pr` — applies fixes the scanners themselves already produced, proves
+  them, and opens a pull request.** New tool, and the first code in this repository
+  that writes through git (branch, commit, push) rather than only reading it. It takes
+  `deps_update_plan`'s pinned upgrade commands and Semgrep `--autofix`, applies them
+  inside an isolated git worktree branched from committed `HEAD` — the user's working
+  tree is never read or required to be clean — and verifies the result twice before
+  anything leaves the machine: a **scan differential** re-runs the originating scanner
+  inside the worktree and requires both that every target finding is gone and that no
+  new finding appeared, and a (lazy) **test differential** runs the project's own
+  derived test command — never accepted as a parameter, the same reasoning that keeps
+  `scan_dast` from accepting a start command from repository-controlled config — and
+  only re-runs it against the base commit, to tell a pre-existing failure from a
+  regression, when the post-fix run fails. Fixes are grouped one pull request per
+  ecosystem or scanner (all npm bumps together, all Semgrep rewrites together), branch
+  names are deterministic (`dev-guardian/fix-<ecosystem-or-scanner>-<hash>`) so a
+  repeat run is recognisable, and a pull-request-existence check that cannot be
+  resolved (a failed `gh` call, unparsable output) makes the tool **refuse**, never
+  assume no PR exists. Transport is the local `gh` CLI, as `create_github_issues`
+  already uses — no tokens, no REST, no Octokit. The worktree is removed on every path,
+  including every failure path, verified by observing `git worktree list` afterwards
+  rather than by trusting a `finally` block to have run; the local branch follows it
+  unless a human may need to find it by hand — a created PR, a push that failed, or a
+  `gh pr create` that failed after a successful push.
+  - **`apply` defaults to `false`, and that is the whole safety story.** Everything
+    expensive and everything verifiable still runs on every call — candidates are
+    computed, the worktree is created, the fix is applied, both differentials execute —
+    but a dry run **leaves nothing behind: not a branch, not a commit, not a
+    worktree**. Only `apply: true` commits, pushes and opens the pull request. The dry
+    run's own verification re-scan is excluded from the server's unscoped "latest scan"
+    queries, so it can never become the project's latest scan: nothing a dry run does
+    can change what `guardian://findings/open`, `risk_score` or any other tool reading
+    those queries report.
+  - **Only what a scanner already produces.** Semgrep rules with no `fix:` field, and
+    findings from gitleaks, bandit, jscpd, the DAST passes and the .NET tools — none of
+    which set `fix_available` — are out of reach. This tool is not a patch author
+    (`suggest_fix` remains the way to gather context for a model- or human-written
+    patch) and does not become one here.
+  - **`deps_update_plan`'s ecosystem gaps are inherited: maven and gradle are
+    unsupported.**
+  - **Semgrep's autofix quality is Semgrep's.** The scan differential verifies the
+    outcome — the target finding gone, nothing new introduced — it does not review the
+    rewrite itself. A rule with a careless `fix:` produces a careless patch, and the
+    differential will call it resolved.
+  - **A second instance of the same rule in the same file is not seen as new.** The scan
+    differential's two halves compare on different keys on purpose (an amendment to
+    design §4.1/§10 made during implementation): the target finding by fingerprint,
+    "no new finding" by `(rule_id, file_path)`. A fingerprint hashes the line and the
+    snippet, so any fix that shifts a line gives every other finding in that file a
+    fresh fingerprint — measured at one inserted line changing four other findings'
+    fingerprints on a real repo — and comparing "no new finding" by fingerprint would
+    therefore fail the differential on every multi-finding file and blame pre-existing,
+    untouched findings for it. The accepted cost of the fix: a genuine second instance
+    of the same rule newly appearing in a file that already had one does not register
+    as new.
+  - **The test differential is only as good as the project's tests.** A green suite
+    with no coverage of the changed code proves very little, and the tool cannot tell
+    the difference.
+  - **`fix_applied` remains a dead column.** It is `NOT NULL DEFAULT 0` on `findings`,
+    nothing has ever written `1` to it, and this feature adds no `UPDATE` and no new
+    table — the pull request is the record.
 
 ## [1.3.0] — 2026-08-14
 

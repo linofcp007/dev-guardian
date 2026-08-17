@@ -160,6 +160,62 @@ describe('ScansRepo', () => {
     expect(repo.getLatestForProject('/project-b')?.scan_id).toBe('b1');
   });
 
+  it('getLatest ignores a create_fix_pr worktree re-scan, even though it completed more recently (task-7-review.md I3)', () => {
+    // create_fix_pr re-runs a scanner inside a disposable worktree
+    // (project_path starting with 'guardian-fixpr-wt-') to verify a fix. A
+    // wrong implementation lets that real, completed scan win getLatest()'s
+    // unscoped ordering the moment it finishes — every unscoped consumer
+    // (guardian://findings/open, risk_score, triage_findings, …) then reports
+    // on a directory that no longer exists instead of the real project.
+    const { repo } = freshRepo();
+    repo.insert({ scan_id: 'real', scan_type: 'sast', project_path: '/real-project', tree_hash: 'h1' });
+    repo.finalize({ scan_id: 'real', status: 'completed', tools_run: [], missing_tools: [] });
+
+    // Inserted (and completed) SECOND, so it would win the unscoped
+    // `started_at DESC, rowid DESC` ordering if not excluded by name.
+    repo.insert({
+      scan_id: 'verify',
+      scan_type: 'sast',
+      project_path: '/tmp/guardian-fixpr-wt-AbC123',
+      tree_hash: 'h2',
+    });
+    repo.finalize({ scan_id: 'verify', status: 'completed', tools_run: [], missing_tools: [] });
+
+    expect(repo.getLatest()?.scan_id).toBe('real');
+    // The worktree scan is still readable by id — this excludes it only
+    // from the UNSCOPED "latest" surface, not from storage entirely.
+    expect(repo.getById('verify')?.scan_id).toBe('verify');
+  });
+
+  it('listHistory ignores a create_fix_pr worktree re-scan too, even though it completed more recently (final-review.md C1, 2026-08-16-create-fix-pr)', () => {
+    // getLatest() was fixed for this by task-7-review.md I3; listHistory()
+    // was not — it shipped with no WHERE clause at all. risk_score does not
+    // read getLatest() for its CVE source: it reads
+    // listHistory(50).find(scan_type in ['deps','security_full']), so the
+    // worktree row could still win THIS unscoped search even after I3,
+    // silently repointing risk_score's CVE count at a directory that no
+    // longer exists. Measured, on a real project: score 44 (high) read as 31
+    // (medium), active_cves 5 read as 0.
+    const { repo } = freshRepo();
+    repo.insert({ scan_id: 'real', scan_type: 'deps', project_path: '/real-project', tree_hash: 'h1' });
+    repo.finalize({ scan_id: 'real', status: 'completed', tools_run: [], missing_tools: [] });
+
+    // Inserted (and completed) SECOND, so it would win the unscoped
+    // `started_at DESC, rowid DESC` ordering if not excluded by name.
+    repo.insert({
+      scan_id: 'verify',
+      scan_type: 'deps',
+      project_path: '/tmp/guardian-fixpr-wt-AbC123',
+      tree_hash: 'h2',
+    });
+    repo.finalize({ scan_id: 'verify', status: 'completed', tools_run: [], missing_tools: [] });
+
+    expect(repo.listHistory(50).map((s) => s.scan_id)).toEqual(['real']);
+    // The worktree scan is still readable by id — this excludes it only
+    // from the UNSCOPED "history" surface, not from storage entirely.
+    expect(repo.getById('verify')?.scan_id).toBe('verify');
+  });
+
   it('getLatestForProject returns null for a project with no scan of its own', () => {
     const { repo } = freshRepo();
     repo.insert({ scan_id: 's1', scan_type: 'sast', project_path: '/project-a', tree_hash: 'h' });

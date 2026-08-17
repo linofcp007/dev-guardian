@@ -1,6 +1,6 @@
 # dev-guardian (MCP)
 
-This project has the dev-guardian MCP server registered. 53 tools and 18
+This project has the dev-guardian MCP server registered. 54 tools and 18
 resources for security, quality, bugfix, deps, compliance, observability,
 performance, WordPress, .NET. All scanners run locally, no telemetry,
 results persisted in `.guardian/guardian.db`.
@@ -40,9 +40,13 @@ import)
 
 **Meta**: audit_executive (stack-aware) · risk_score · diff_scans ·
 set_baseline · triage_findings · prioritize_findings · suggest_fix ·
-report_export · create_github_issues · precommit_install ·
-register_custom_rules · health_status · regression_alert · sbom_diff ·
-check_toolchain · suppress_finding
+report_export · create_github_issues · create_fix_pr (deps_update_plan
+bumps + Semgrep --autofix only, applied+verified in an isolated worktree;
+apply=false by default — a dry run proves it but leaves no branch, no
+commit, no worktree behind, opens no PR, and its own verification re-scan
+can't repoint guardian://findings/open or risk_score either) ·
+precommit_install · register_custom_rules · health_status ·
+regression_alert · sbom_diff · check_toolchain · suppress_finding
 
 ## Resources
 
@@ -109,3 +113,6 @@ deltas only, no multi-week trend.
 - Don't treat validate_finding's unreachable as safety proof — reachability
   signal from an import graph, unavailable for Ruby/Java/C#/PHP, blind to
   dynamic imports.
+- Don't expect create_fix_pr to fix findings with no fix_available
+  (gitleaks/bandit/jscpd/DAST/.NET, or a Semgrep rule with no fix:) or to
+  open a PR without apply=true.

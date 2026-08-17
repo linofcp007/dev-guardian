@@ -148,4 +148,63 @@ describe('FindingsRepo', () => {
     expect(crits).toEqual(['new-crit']);
     expect(crits).not.toContain('old-crit');
   });
+
+  // --- task-7-review.md I3 ---------------------------------------------
+  //
+  // create_fix_pr re-runs a scanner inside a disposable worktree
+  // (project_path starting with 'guardian-fixpr-wt-') to verify a fix. That
+  // scan is real and completed, so without this exclusion it would win
+  // listOpen()/listBySeverity()'s unscoped "latest" ordering the moment it
+  // finishes — reporting a false all-clear for a directory that no longer
+  // exists, while the real project's findings sit untouched and unreported.
+
+  it('listOpen ignores a create_fix_pr worktree re-scan, even though it completed more recently', () => {
+    const { scans, findings } = setup();
+    scans.insert({ scan_id: 'real', scan_type: 'sast', project_path: '/real-project', tree_hash: 'h1' });
+    findings.bulkInsert([
+      { ...makeFinding({ fingerprint: 'real-finding' }), scan_id: 'real' },
+    ]);
+    scans.finalize({ scan_id: 'real', status: 'completed', tools_run: [], missing_tools: [] });
+
+    // Inserted (and completed) SECOND, so it would win the unscoped
+    // `started_at DESC, rowid DESC` ordering if not excluded by name.
+    scans.insert({
+      scan_id: 'verify',
+      scan_type: 'sast',
+      project_path: '/tmp/guardian-fixpr-wt-AbC123',
+      tree_hash: 'h2',
+    });
+    findings.bulkInsert([
+      { ...makeFinding({ fingerprint: 'worktree-finding' }), scan_id: 'verify' },
+    ]);
+    scans.finalize({ scan_id: 'verify', status: 'completed', tools_run: [], missing_tools: [] });
+
+    const open = findings.listOpen().map((f) => f.fingerprint);
+    expect(open).toEqual(['real-finding']);
+    expect(open).not.toContain('worktree-finding');
+  });
+
+  it('listBySeverity ignores a create_fix_pr worktree re-scan the same way', () => {
+    const { scans, findings } = setup();
+    scans.insert({ scan_id: 'real', scan_type: 'sast', project_path: '/real-project', tree_hash: 'h1' });
+    findings.bulkInsert([
+      { ...makeFinding({ fingerprint: 'real-crit', severity: 'critical' }), scan_id: 'real' },
+    ]);
+    scans.finalize({ scan_id: 'real', status: 'completed', tools_run: [], missing_tools: [] });
+
+    scans.insert({
+      scan_id: 'verify',
+      scan_type: 'deps',
+      project_path: '/tmp/guardian-fixpr-wt-XyZ789',
+      tree_hash: 'h2',
+    });
+    findings.bulkInsert([
+      { ...makeFinding({ fingerprint: 'worktree-crit', severity: 'critical' }), scan_id: 'verify' },
+    ]);
+    scans.finalize({ scan_id: 'verify', status: 'completed', tools_run: [], missing_tools: [] });
+
+    const crits = findings.listBySeverity('critical').map((f) => f.fingerprint);
+    expect(crits).toEqual(['real-crit']);
+    expect(crits).not.toContain('worktree-crit');
+  });
 });

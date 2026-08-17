@@ -5,8 +5,33 @@
  * maps directly to a SQL operation. Cache lookup, transition logic, and the
  * tree-hash freshness window all belong to the scan-tool factory upstream
  * (see [.specs/dev-guardian-mcp/design.md] → "Tool invocation flow").
+ *
+ * **`getLatestStmt` and `listHistoryStmt` (the UNSCOPED "any project" queries)
+ * exclude `create_fix_pr`'s own verification re-scans** — see
+ * `findingsRepo.ts`'s own module comment (task-7-review.md I3) for the full
+ * reasoning; the same contamination, the same fix, the same reason
+ * `WORKTREE_PATH_EXCLUSION` is inlined here as a literal rather than
+ * imported from `fixpr/worktree.ts` — see `findingsRepo.ts`'s own module
+ * comment for why it is wrapped in `%` on both sides, not just trailing.
+ * **`listHistoryStmt` missed this exclusion when I3 first landed** — only
+ * `getLatestStmt` here was covered, and `listHistoryStmt` shipped with no
+ * `WHERE` clause at all. `risk_score` does not read `getLatest()`; it finds
+ * its CVE source via `listHistory(50).find(...)`
+ * (`tools/riskScore.ts#findLatestOfType`), so a dry run's own verification
+ * re-scan could still win that unscoped search and silently zero out the
+ * project's real CVE count — measured: a real score of 44 (high) read as 31
+ * (medium), `active_cves` 5 read as 0, and it did not self-correct, because
+ * the contaminating row is never deleted. `diff_scans` (`previous` scan
+ * lookup) and `regression_alert` (fallback baseline) reach the exact same
+ * unscoped list through this same method and are fixed by this same
+ * statement — see the final review, 2026-08-16-create-fix-pr, finding C1.
+ * `getLatestForProject` / `listHistoryForProject` need no such exclusion:
+ * they are already scoped to an exact `project_path`, which a worktree's
+ * path can never equal.
  */
 import { nowIso, parseJsonArray } from './repoUtil.js';
+/** See the module comment. Wraps `fixpr/worktree.ts`'s `WORKTREE_DIR_PREFIX`. */
+const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
 export class ScansRepo {
     insertStmt;
     finalizeStmt;
@@ -47,10 +72,11 @@ export class ScansRepo {
         this.getByIdStmt = db.prepare(`SELECT * FROM scans WHERE id = ?`);
         // rowid DESC is a tiebreaker for scans inserted in the same millisecond
         // (real risk on fast CI). It also guarantees "later insert wins" even if
-        // a future migration drops millisecond resolution.
+        // a future migration drops millisecond resolution. `project_path NOT
+        // LIKE …`: see this file's own module comment (task-7-review.md I3).
         this.getLatestStmt = db.prepare(`
       SELECT * FROM scans
-      WHERE status = 'completed'
+      WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);
@@ -63,18 +89,27 @@ export class ScansRepo {
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);
+        // No `status` filter — listHistory's contract is "any status" (a caller
+        // that needs only completed scans filters that in JS; see
+        // listHistoryForProjectStmt's own comment below). `project_path NOT
+        // LIKE …` excludes create_fix_pr's own verification re-scans, the same
+        // exclusion and the same reason as getLatestStmt above — see this file's
+        // own module comment (task-7-review.md I3; this statement's own gap was
+        // finding C1 of the final review, 2026-08-16-create-fix-pr).
         this.listHistoryStmt = db.prepare(`
       SELECT * FROM scans
+      WHERE project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
       ORDER BY started_at DESC, rowid DESC
       LIMIT ?
     `);
-        // Identical predicate to listHistoryStmt above, plus `project_path = ?` on
-        // the WHERE clause — same relationship as getLatestForProjectStmt's own
-        // pairing with getLatestStmt above. No `status` filter, matching
-        // listHistory's own "any status" contract exactly: callers that need only
-        // completed scans (e.g. the dashboard snapshot's "previous scan of the
-        // same type") filter that in JS, the same way listHistory's own callers
-        // already do.
+        // Scoped to one project via `project_path = ?` — no `NOT LIKE` exclusion
+        // needed, same reasoning as getLatestForProjectStmt's own relationship to
+        // getLatestStmt above: an exact `project_path` match can never equal a
+        // worktree's path, so the exclusion would be redundant. No `status`
+        // filter either, matching listHistory's own "any status" contract
+        // exactly: callers that need only completed scans (e.g. the dashboard
+        // snapshot's "previous scan of the same type") filter that in JS, the
+        // same way listHistory's own callers already do.
         this.listHistoryForProjectStmt = db.prepare(`
       SELECT * FROM scans
       WHERE project_path = ?
@@ -147,6 +182,15 @@ export class ScansRepo {
         const row = this.getLatestForProjectStmt.get(projectPath);
         return row ? rowToRecord(row) : null;
     }
+    /**
+     * Scan history across the WHOLE database, from ANY project — no
+     * `project_path` filter and no `status` filter (unlike `getLatest`, every
+     * status is included; see `listHistoryStmt`'s own comment). Excludes
+     * `create_fix_pr`'s own verification re-scans, the same as `getLatest` —
+     * see this file's own module comment. A caller that DID resolve a
+     * `project_path` must use `listHistoryForProject` instead, for the same
+     * reason `getLatest`'s own doc comment gives.
+     */
     listHistory(limit = 50) {
         return this.listHistoryStmt.all(limit).map(rowToRecord);
     }
