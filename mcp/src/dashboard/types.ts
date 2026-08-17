@@ -127,6 +127,21 @@ export interface CoverageState {
   level: 'full' | 'partial' | 'none';
   tools_run: string[];
   missing_tools: string[];
+  /**
+   * Subset of `missing_tools` whose scanner actually ran (its `tools_run`
+   * entry has `status: 'ok'`) — a narrower gap than "this tool did not run
+   * this scan". `bug_hunt` is the motivating case: when one Semgrep pack
+   * failed to download but another still produced real findings, `semgrep`
+   * lands in both `missing_tools` (the pack-level gap is real —
+   * `coverage.level` must not read 'full') AND here (the tool itself ran
+   * fine — findings from it ARE on screen). Both views render this with a
+   * distinct, accurate sentence instead of "X did not run this scan",
+   * which would be false for an 'ok' tool with `by_tool` findings already
+   * showing. Optional so hand-built fixtures that predate this field
+   * default to "nothing partial" (the old, fully-missing-only behaviour)
+   * rather than crashing on a missing property.
+   */
+  partial_tools?: string[];
   /** Rendered verbatim by both views. Empty iff level === 'full'. */
   omitted_categories: string[]; // e.g. ['container and dependency', 'secrets']
 }

@@ -113,6 +113,65 @@ describe('buildSnapshot', () => {
     db.close();
   });
 
+  // fix-round-1 (coordinator review, Important 2): bug_hunt (bugHunt.ts) used
+  // to push a pack-qualified name ('semgrep:p/r2c-bug-scan') into
+  // missing_tools when one of its two Semgrep configs failed to resolve. That
+  // string has no entry in TOOL_CATEGORIES (dashboard/types.ts), so it fell
+  // through the SAME "name an unknown tool rather than dropping it" path
+  // exercised above — which is exactly the bug: the fallback is correct for a
+  // genuinely unknown scanner, but 'semgrep' is not unknown, and rendering the
+  // qualified string as its own "category" produces a self-referential
+  // sentence downstream ("MISSING semgrep:p/r2c-bug-scan — semgrep:p/r2c-bug-
+  // scan findings are NOT in these numbers"). Fixed at the source: bug_hunt
+  // now reports the bare tool name only. This pins that the bare name takes
+  // the REAL TOOL_CATEGORIES branch, not the unknown-tool fallback.
+  it("maps bug_hunt's config-pack gap through TOOL_CATEGORIES like any other semgrep gap, not as an unknown tool", () => {
+    const { storage, db } = fresh();
+    completedScan(storage, '/p', { missing_tools: ['semgrep'] });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.coverage.missing_tools).toEqual(['semgrep']);
+    expect(snap.coverage.omitted_categories).toEqual(['static-analysis']);
+    db.close();
+  });
+
+  // fix-round-4 (coordinator review, Important 2): bug_hunt's retry-success
+  // path (bugHunt.ts) pushes 'semgrep' into missing_tools (one pack was
+  // genuinely unavailable) while ALSO recording a tools_run entry for
+  // 'semgrep' with status 'ok' (the tool ran; real findings from the
+  // surviving pack exist). Before this fix, buildCoverage had no way to
+  // tell that apart from a tool that never ran at all — both looked like a
+  // bare name in missing_tools — so the dashboard rendered "semgrep did not
+  // run this scan", false for a scan with semgrep findings on screen.
+  // partial_tools is exactly this distinction, computed here from the real,
+  // persisted ToolRun objects (which DO carry status; CoverageState.tools_run
+  // does not, by design — see buildCoverage's own comment).
+  it("flags a tool that ran ok but named a real gap as partial, not as fully missing (bug_hunt's retry-success shape)", () => {
+    const { storage, db } = fresh();
+    completedScan(storage, '/p', {
+      tools_run: [{ name: 'semgrep', status: 'ok' }],
+      missing_tools: ['semgrep'],
+    });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.coverage.missing_tools).toEqual(['semgrep']);
+    expect(snap.coverage.partial_tools).toEqual(['semgrep']);
+    // Still a real gap — coverage must not read 'full' just because the
+    // tool itself succeeded.
+    expect(snap.coverage.level).toBe('partial');
+    db.close();
+  });
+
+  it('does not flag a genuinely-absent tool as partial (status failed/skipped, not ok)', () => {
+    const { storage, db } = fresh();
+    completedScan(storage, '/p', {
+      tools_run: [{ name: 'semgrep', status: 'failed' }],
+      missing_tools: ['semgrep'],
+    });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.coverage.missing_tools).toEqual(['semgrep']);
+    expect(snap.coverage.partial_tools).toEqual([]);
+    db.close();
+  });
+
   it('compares against the previous scan OF THE SAME TYPE', () => {
     // Comparing security_full against a secrets-only run would report every
     // SAST finding as "new".

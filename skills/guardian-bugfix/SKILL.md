@@ -59,7 +59,7 @@ rules:
     languages: [javascript, typescript]
 ```
 
-Análogo para Python (`AttributeError`), Go (`nil pointer`), etc. Regras prontas em `${CLAUDE_PLUGIN_ROOT}/configs/semgrep/bugfix-*.yml`.
+Análogo para Python (`AttributeError`), Go (`nil pointer`), etc. Não existe (ainda) um pack de regras Semgrep pronto para JS/TS especificamente nestas classes de bug. A ferramenta `bug_hunt` já verificou isto: o pack que corre por default (`p/r2c-bug-scan`) tem regras de null-safety, off-by-one, race conditions, memory leaks e error handling engolido — mas quase todas para Python e Go, nenhuma para JS/TS; os packs de linguagem opcionais (`p/javascript`, `p/typescript`, etc., ligados via `include_language_packs`) são packs de segurança e não acrescentam nenhuma. Para JS/TS, o caminho fiável hoje é o raciocínio guiado por modelo desta própria skill — ficheiro a ficheiro pelas zonas críticas (secção 1) e os padrões e fixes da secção 4 abaixo — não uma automação Semgrep que ainda não cobre esta linguagem.
 
 #### Dynamically (correr)
 
