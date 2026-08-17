@@ -8,6 +8,42 @@ version bump.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-17
+
+### Fixed
+
+- **`bug_hunt` was failing outright: Semgrep retired the `p/bugs` pack.** A dead
+  `--config` makes Semgrep exit 7 and scan *nothing* -- including with
+  `p/security-audit`, which was still valid -- so the whole tool died. Replaced
+  with `p/r2c-bug-scan`, and the failure mode underneath is fixed: a config that
+  fails to download is detected from Semgrep's structured `errors[]`, the
+  surviving packs are re-run, and the gap is reported as coverage. **A scan that
+  did not run can no longer read as clean.**
+- **`mapSubcategory`'s fallback was a no-op**, so findings rarely landed in a
+  canonical bug class. Fixed and validated against real rule ids.
+- **The `categories` input was dead code** -- declared, never read. It now filters.
+- **`skills/guardian-bugfix` pointed the model at `configs/semgrep/bugfix-*.yml`**,
+  which does not exist. Corrected to describe what is actually there.
+
+### Added
+
+- **`include_language_packs`** (default `false`) on `bug_hunt`: adds
+  `p/javascript`, `p/typescript`, `p/python`, `p/java` or `p/golang` by detected
+  stack. **Measured rather than assumed:** 401 rules across the five packs (327
+  distinct), 100% `category: security`, and a purpose-built TypeScript fixture
+  returns zero findings. They add per-language *security* coverage -- overlap
+  with `p/security-audit` is 9% for JS/TS, 20% Python, 43% Java, 40% Go -- and
+  **do not** address the bug classes. Off by default for that reason.
+- **`CoverageState.partial_tools`**: the dashboard now distinguishes "ran with
+  reduced coverage" from "did not run this scan", which it previously could not.
+
+### Known gap
+
+- **No live Semgrep registry pack covers JS/TS logic bugs** -- null-safety,
+  off-by-one, race conditions, memory leaks, swallowed error handling.
+  `p/r2c-bug-scan` covers them for Python and Go only. For JS/TS the
+  model-driven `/guardian-fix` path is what finds these today.
+
 ## [1.4.0] - 2026-08-17
 
 ### Added
