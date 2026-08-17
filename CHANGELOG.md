@@ -8,6 +8,8 @@ version bump.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-17
+
 ### Added
 
 - **`dev-guardian status` and `dev-guardian dashboard` — two read-only views over a
