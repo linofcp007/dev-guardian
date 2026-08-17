@@ -85,6 +85,12 @@ regression tracking.
 - "noise reduction" → `triage_findings`
 - "prioritise findings" → `prioritize_findings`
 - "how do I fix this?" → `suggest_fix`
+- "apply the fixes a scanner already has + open a PR" → `create_fix_pr`
+  (`deps_update_plan` bumps + Semgrep `--autofix` only — not a patch author;
+  applied in an isolated worktree, verified with a scan + test differential
+  before a PR opens). **`apply` defaults to `false`** — a dry run still
+  applies and verifies the fix but leaves nothing behind (no branch, no
+  commit, no worktree) and opens no PR
 - "export report" → `report_export`
 - "GitHub issues from findings" → `create_github_issues` (local `gh`)
 - "pre-commit hooks" → `precommit_install`
@@ -182,3 +188,6 @@ bounded too — the latest scan plus two deltas, no multi-week trend
 - Don't treat `validate_finding`'s `unreachable` as safety proof or use it to
   auto-suppress — it's an over-approximating import-graph signal, unavailable
   for Ruby/Java/C#/PHP, blind to dynamic imports.
+- Don't expect `create_fix_pr` to fix findings with no `fix_available` —
+  gitleaks/bandit/jscpd/DAST/.NET findings and Semgrep rules with no `fix:`
+  are out of reach — or to open a PR without `apply: true`.

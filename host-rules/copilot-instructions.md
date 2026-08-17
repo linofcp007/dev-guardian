@@ -43,7 +43,13 @@ import).
 **Meta**: `audit_executive` (stack-aware — includes WP/.NET tools when
 detected), `risk_score`, `diff_scans`, `set_baseline`, `triage_findings`,
 `prioritize_findings`, `suggest_fix`, `report_export`,
-`create_github_issues` (local `gh` CLI), `precommit_install`,
+`create_github_issues` (local `gh` CLI), `create_fix_pr` (applies
+`deps_update_plan` bumps + Semgrep `--autofix` — only what a scanner already
+produced, never a synthesised patch — in an isolated worktree, verifies with
+a scan + test differential, and opens one PR per ecosystem/scanner via the
+local `gh` CLI; **`apply` defaults to `false`**, so a dry run proves the fix
+and leaves nothing behind — no branch, no commit, no worktree, no PR),
+`precommit_install`,
 `register_custom_rules`, `health_status`, `regression_alert`,
 `sbom_diff`, `check_toolchain`,
 `suppress_finding`.
@@ -135,3 +141,6 @@ bounded too — the latest scan plus two deltas, no multi-week trend
 - Don't treat `validate_finding`'s `unreachable` as proof the code can never
   run, or suppress a finding on it alone — it's a reachability signal from an
   import graph, unavailable for Ruby/Java/C#/PHP and blind to dynamic imports.
+- Don't expect `create_fix_pr` to fix findings with no `fix_available` set
+  (gitleaks, bandit, jscpd, DAST, .NET tools, or a Semgrep rule with no
+  `fix:`) or to open a PR without `apply: true`.

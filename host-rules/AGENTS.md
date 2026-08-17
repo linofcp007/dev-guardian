@@ -78,6 +78,14 @@ cache that avoids re-running unchanged scans.
 - "noise reduction" → `triage_findings`
 - "prioritise" → `prioritize_findings`
 - "how do I fix X?" → `suggest_fix` (returns context; you write the patch)
+- "apply the fixes a scanner already has and open a PR" → `create_fix_pr` —
+  applies `deps_update_plan`'s pinned version bumps and Semgrep `--autofix`
+  (only those two — it is not a patch author) inside an isolated git
+  worktree, proves each with a scan differential and a test run, and opens
+  one pull request per ecosystem/scanner via the local `gh` CLI. **`apply`
+  defaults to `false`**: a dry run still creates the worktree, applies the
+  fix and runs both differentials, but leaves nothing behind — not a
+  branch, not a commit, not a worktree — and opens no PR until `apply: true`
 - "export report" → `report_export`
 - "create GitHub issues" → `create_github_issues` (local `gh` CLI)
 - "pre-commit hooks" → `precommit_install`
@@ -174,3 +182,9 @@ bounded too — the latest scan plus two deltas, no multi-week trend
   code, or suppress a finding on the strength of it alone — it is a
   reachability signal from an over-approximating import graph, unavailable for
   four stacks and blind to dynamic imports.
+- Don't expect `create_fix_pr` to fix a finding with no `fix_available` —
+  gitleaks, bandit, jscpd, the DAST checks and the .NET tools never set it,
+  and a Semgrep rule with no `fix:` field can't be autofixed either; only
+  `deps_update_plan` bumps and Semgrep `--autofix` are in reach. And it
+  won't open a PR unless you pass `apply: true` — the default run is a
+  dry run that proves the fix and reports it, nothing more.

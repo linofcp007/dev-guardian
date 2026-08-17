@@ -103,7 +103,7 @@ Single SQLite file at `<project_root>/.guardian/guardian.db`:
 | `runtime_meta`        | Server-level KV (chosen shell, etc.).                              |
 | `schema_meta`         | Migration version.                                                 |
 
-## Tools (53)
+## Tools (54)
 
 This grouping covers a subset, kept for illustration; it is not exhaustive. The root
 [`README.md`](../README.md) carries the complete, current tool table.
