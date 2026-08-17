@@ -27,6 +27,23 @@
  * speculatively and rolls back; the existence check gates every write that
  * follows it.
  *
+ * **`prExists` has a SECOND caller besides `openPr` (final review,
+ * 2026-08-16-create-fix-pr, finding I1).** `branchName` is deterministic
+ * (§5, below) so that a repeat run for the same findings lands on the same
+ * branch — but `created`, `push_failed` and `create_failed` all deliberately
+ * keep that branch (`createFixPr.ts`'s own `KEEPS_BRANCH`), which means the
+ * NEXT run's `git worktree add -b <branch>` collides before `openPr` is ever
+ * reached at all. Left alone, that makes `prExists` — the entire mechanism
+ * this section exists to describe — unreachable for the one case it was
+ * built for: recognising a pull request this tool itself already opened.
+ * `createFixPr.ts` now calls `prExists` directly when `createWorktree`
+ * reports a branch collision, and maps a genuine hit to `existsOutcome`
+ * below — the exact same outcome `openPr`'s own check would have produced
+ * had it been reachable. A collision `prExists` cannot resolve (no `gh`, a
+ * transient failure, or a branch kept by `push_failed`/`create_failed` with
+ * no PR to find) falls back to reporting the worktree failure honestly,
+ * unchanged from before this fix.
+ *
  * **Of the eight failure paths in design §7, one leaves remote state**: `gh
  * pr create` failing after a successful push. That is the one case where a
  * `detail` that just says "creating the PR failed" is not good enough — the
@@ -113,6 +130,23 @@ export function branchName(_source: FixSource, key: string, hash: string): strin
 }
 
 /**
+ * The `PrOutcome` for a branch that already has a pull request — shared
+ * between `openPr`'s own existence check below and `createFixPr.ts`'s
+ * handling of a worktree that could not be created because the branch
+ * already exists locally (final review, 2026-08-16-create-fix-pr, finding
+ * I1): both learn the same fact ("this branch already has a PR") through the
+ * same `prExists` call and must report it identically, so this is the one
+ * place that formats it.
+ */
+export function existsOutcome(branch: string): PrOutcome {
+  return {
+    status: 'exists',
+    url: null,
+    detail: `A pull request already exists for branch '${branch}'; nothing to do.`,
+  };
+}
+
+/**
  * `known: false` whenever the search could not be trusted — a failed `gh`
  * call, output that did not parse as JSON, or JSON that was not the array
  * `gh pr list --json number` promises. `openPr` treats every one of those
@@ -185,11 +219,7 @@ export async function openPr(opts: {
     };
   }
   if (check.exists) {
-    return {
-      status: 'exists',
-      url: null,
-      detail: `A pull request already exists for branch '${branch}'; nothing to do.`,
-    };
+    return existsOutcome(branch);
   }
 
   // Explicit empty-diff check — see the module comment (C1). Excludes

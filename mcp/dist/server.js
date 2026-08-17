@@ -37586,6 +37586,7 @@ var ScansRepo = class {
     `);
     this.listHistoryStmt = db.prepare(`
       SELECT * FROM scans
+      WHERE project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION2}'
       ORDER BY started_at DESC, rowid DESC
       LIMIT ?
     `);
@@ -37681,6 +37682,15 @@ var ScansRepo = class {
     const row = this.getLatestForProjectStmt.get(projectPath);
     return row ? rowToRecord(row) : null;
   }
+  /**
+   * Scan history across the WHOLE database, from ANY project — no
+   * `project_path` filter and no `status` filter (unlike `getLatest`, every
+   * status is included; see `listHistoryStmt`'s own comment). Excludes
+   * `create_fix_pr`'s own verification re-scans, the same as `getLatest` —
+   * see this file's own module comment. A caller that DID resolve a
+   * `project_path` must use `listHistoryForProject` instead, for the same
+   * reason `getLatest`'s own doc comment gives.
+   */
   listHistory(limit = 50) {
     return this.listHistoryStmt.all(limit).map(rowToRecord);
   }
@@ -53294,6 +53304,13 @@ var BRANCH_PREFIX = "dev-guardian/fix-";
 function branchName(_source, key, hash) {
   return `${BRANCH_PREFIX}${key}-${hash}`;
 }
+function existsOutcome(branch) {
+  return {
+    status: "exists",
+    url: null,
+    detail: `A pull request already exists for branch '${branch}'; nothing to do.`
+  };
+}
 async function prExists(opts) {
   const run = opts.run ?? runProcess;
   const { projectPath, branch } = opts;
@@ -53334,11 +53351,7 @@ async function openPr(opts) {
     };
   }
   if (check2.exists) {
-    return {
-      status: "exists",
-      url: null,
-      detail: `A pull request already exists for branch '${branch}'; nothing to do.`
-    };
+    return existsOutcome(branch);
   }
   const status = await run({
     command: "git",
@@ -53818,6 +53831,19 @@ async function processGroup(opts) {
   const base = { key: group.key, source: group.source, severity: group.severity, branch, findings };
   const created = await createWorktree({ projectPath, branch });
   if (!created.ok) {
+    const existing = await prExists({ projectPath, branch });
+    if (existing.known && existing.exists) {
+      const pr = existsOutcome(branch);
+      return {
+        ...base,
+        commands: [],
+        outcome: PR_STATUS_OUTCOME[pr.status],
+        scan: null,
+        tests: null,
+        pr,
+        note: prNote(pr)
+      };
+    }
     return {
       ...base,
       commands: [],
@@ -53898,7 +53924,6 @@ async function processGroup(opts) {
     const body = buildPrBody({ group, findings, commands: applied.commands, scan: scanVerdict, tests: testVerdict });
     const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body });
     keepBranch = KEEPS_BRANCH.has(pr.status);
-    const note = pr.status === "created" ? `pull request opened: ${pr.url ?? "(gh reported no URL)"}` : `pull request not opened (${pr.status}): ${pr.detail ?? "no further detail"}`;
     return {
       ...base,
       commands: applied.commands,
@@ -53906,7 +53931,7 @@ async function processGroup(opts) {
       scan: scanVerdict,
       tests: testVerdict,
       pr,
-      note
+      note: prNote(pr)
     };
   } finally {
     await worktree.remove();
@@ -53914,6 +53939,9 @@ async function processGroup(opts) {
       await deleteLocalBranch({ projectPath, branch });
     }
   }
+}
+function prNote(pr) {
+  return pr.status === "created" ? `pull request opened: ${pr.url ?? "(gh reported no URL)"}` : `pull request not opened (${pr.status}): ${pr.detail ?? "no further detail"}`;
 }
 function readManifests(worktreePath) {
   const files = {};

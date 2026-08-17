@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { branchName, deleteLocalBranch, prExists, openPr } from '../../../src/fixpr/pr.js';
+import { branchName, deleteLocalBranch, existsOutcome, prExists, openPr } from '../../../src/fixpr/pr.js';
 
 /**
  * `openPr` now checks `git status --porcelain -- ':!.guardian'` before
@@ -35,6 +35,21 @@ describe('branchName', () => {
   it('is deterministic and namespaced', () => {
     expect(branchName('deps', 'npm', 'abc123def456'))
       .toBe('dev-guardian/fix-npm-abc123def456');
+  });
+});
+
+describe('existsOutcome (final review, 2026-08-16-create-fix-pr, finding I1)', () => {
+  it('names the branch and carries no URL — the same shape openPr\'s own existence check returns', () => {
+    // Shared by two callers now: openPr's own `check.exists` branch below,
+    // and createFixPr.ts's handling of a worktree that could not be created
+    // because the branch already exists. Both must report the identical
+    // outcome for the identical fact, which is the whole point of factoring
+    // this out rather than formatting it twice.
+    expect(existsOutcome('dev-guardian/fix-npm-abc123')).toEqual({
+      status: 'exists',
+      url: null,
+      detail: "A pull request already exists for branch 'dev-guardian/fix-npm-abc123'; nothing to do.",
+    });
   });
 });
 

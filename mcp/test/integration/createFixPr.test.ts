@@ -169,6 +169,56 @@ function worktreeCount(): number {
     .split('\n').length;
 }
 
+/**
+ * Overwrites the stub `gh` this file's own `beforeEach` already put on
+ * PATH — same path, new behaviour. Used only by the I1 test below. The
+ * `beforeEach` stub is stateless: every invocation, of any subcommand,
+ * unconditionally logs and returns success with EMPTY stdout — enough for
+ * every other test in this file, which only cares whether `pr create` /
+ * `push` were reached at all, but not enough to simulate "a PR now exists
+ * for this branch", which is what a repeat run past this point needs `gh pr
+ * list` to actually report. `pr create` fails loudly here rather than
+ * quietly "succeeding": if a wrong implementation still reaches `openPr`
+ * after this point, the test sees that failure instead of a second
+ * indistinguishable `pr_created`.
+ *
+ * Node-backed, not raw batch/shell `if %1==...` parsing: confirmed directly
+ * that on Windows, `%1` arrives as the literal 4-character text `"pr"` —
+ * quotes included, because cross-spawn (which `runProcess` goes through for
+ * a `.cmd` target, same as this file's own top comment already notes for
+ * `npm.cmd`) quotes each argv token when it builds the command line, and raw
+ * batch `%1` substitution does not strip that the way real argv parsing
+ * does — so a bare `"%1"=="pr"` comparison (adding a SECOND pair of quotes)
+ * never matches. Node's own `process.argv` has no such quirk, so the actual
+ * branch logic lives in a tiny Node script; the platform-specific `.cmd`/
+ * shell file only forwards argv to it.
+ */
+function installGhStubThatReportsAnExistingPr(): void {
+  const ghPath = join(binDir, process.platform === 'win32' ? 'gh.cmd' : 'gh');
+  const stubScriptPath = join(binDir, 'gh-stub.mjs');
+  writeFileSync(stubScriptPath, [
+    "import { appendFileSync } from 'node:fs';",
+    'const args = process.argv.slice(2);',
+    `appendFileSync(${JSON.stringify(ghLog)}, args.map((a) => '"' + a + '"').join(' ') + '\\n');`,
+    "if (args[0] === 'pr' && args[1] === 'list') {",
+    "  process.stdout.write('[{\"number\":1}]');",
+    '  process.exit(0);',
+    '}',
+    "if (args[0] === 'pr' && args[1] === 'create') {",
+    "  process.stderr.write('already exists — this stub should never be asked to create a second PR');",
+    '  process.exit(1);',
+    '}',
+    'process.exit(0);',
+    '',
+  ].join('\n'));
+
+  const script = process.platform === 'win32'
+    ? `@echo off\r\n"${process.execPath}" "${stubScriptPath}" %*\r\n`
+    : `#!/bin/sh\nexec "${process.execPath}" "${stubScriptPath}" "$@"\n`;
+  writeFileSync(ghPath, script);
+  if (process.platform !== 'win32') chmodSync(ghPath, 0o755);
+}
+
 describe('create_fix_pr', () => {
   it('is registered', () => {
     expect(TOOLS.find((t) => t.name === 'create_fix_pr')).toBeTruthy();
@@ -277,8 +327,12 @@ describe('create_fix_pr', () => {
     expect((groups[0] as { note: string }).note.length).toBeGreaterThan(0);
 
     expect(worktreeCount()).toBe(1);
-    // apply is false, so `gh` is never touched at all — not even the
-    // existence check `openPr` would otherwise start with.
+    // apply is false AND this branch is brand new (first-ever run, no
+    // collision), so `gh` is never touched at all — not even the existence
+    // check `openPr` would otherwise start with. (`prExists` CAN run on a
+    // dry run too, but only when `createWorktree` collides on an
+    // already-kept branch — see createFixPr.ts's own module comment, I1 —
+    // which cannot happen here.)
     expect(ghLogContents()).toBe('');
   }, 45_000);
 
@@ -386,6 +440,84 @@ describe('create_fix_pr', () => {
     expect(changed.some((f) => f.startsWith('.guardian'))).toBe(false);
   }, 30_000);
 
+  it('final review I1: a repeat run after a PR was created reports pr_exists, not worktree_failed', async () => {
+    // Same fixture as C1/I5 above, continued past `pr_created`: KEEPS_BRANCH
+    // deliberately leaves the branch behind once a PR exists — correctly, it
+    // is what the PR points at — so a repeat run's `createWorktree` collides
+    // on that same deterministic branch name. Before this fix, that collision
+    // was reported verbatim as `worktree_failed` (a raw git-internals
+    // message) because `prExists` was never consulted; `pr.ts`'s own
+    // `--state all` idempotency search — built for exactly this moment —
+    // was unreachable for the entire life of the open PR.
+    const c = ctx();
+    setupLodashRepo();
+    addOriginRemote();
+    await seedRealDepsBefore(c);
+    const mod = TOOLS.find((t) => t.name === 'create_fix_pr');
+    type Result = { ok: true; groups: Array<{
+      outcome: string; branch: string; note: string;
+      pr: { status: string; url: string | null } | null;
+    }> };
+
+    // RUN 1 — apply:true, genuinely reaches a created PR.
+    const first = await mod?.handler(
+      { project_path: repo, sources: ['deps'], apply: true },
+      c as never,
+    ) as Result;
+    expect(first.groups[0]).toMatchObject({ outcome: 'pr_created', pr: { status: 'created' } });
+    const branch = first.groups[0]?.branch as string;
+    expect(
+      execFileSync('git', ['-C', repo, 'branch', '--list'], { encoding: 'utf8' }),
+    ).toContain(branch);
+
+    // From here on `gh pr list` must report a hit — what a real GitHub
+    // remote would now genuinely show, which the beforeEach's own stateless
+    // stub (always empty stdout) cannot simulate.
+    installGhStubThatReportsAnExistingPr();
+
+    // RUN 2 — apply:true again, same findings, therefore the SAME
+    // deterministic branch (design §5).
+    const second = await mod?.handler(
+      { project_path: repo, sources: ['deps'], apply: true },
+      c as never,
+    ) as Result;
+    expect(second.groups[0]).toMatchObject({
+      outcome: 'pr_exists', branch, pr: { status: 'exists', url: null },
+    });
+    expect(second.groups[0]?.note.toLowerCase()).toContain('already exists');
+
+    // RUN 3 — the SAFE DEFAULT, apply:false. Design §6's `apply` boundary is
+    // stated in terms of what leaves the machine (commit/push/`gh pr
+    // create`), not in terms of `gh` being touched at all, so a cautious
+    // preview must be told the truth too, not just an `apply:true` retry.
+    const third = await mod?.handler(
+      { project_path: repo, sources: ['deps'], apply: false },
+      c as never,
+    ) as Result;
+    expect(third.groups[0]).toMatchObject({
+      outcome: 'pr_exists', branch, pr: { status: 'exists', url: null },
+    });
+
+    // Exactly one PR was ever created (run 1) — runs 2 and 3 both recognised
+    // the existing one instead of attempting a duplicate (the stub fails
+    // loudly on a second `pr create`, so a wrong implementation would show up
+    // here as a thrown/rejected outcome, not a silent pass).
+    expect(ghLogContents().match(/"pr"\s+"create"/g) ?? []).toHaveLength(1);
+    // ...and `prExists` really was reached on both repeat runs — run 1's own
+    // `openPr` existence check, plus one per repeat run: the review's own
+    // gh.log evidence, inverted.
+    expect(ghLogContents().match(/"pr"\s+"list"/g) ?? []).toHaveLength(3);
+
+    // No worktree survives any of the three runs, and the PR's own branch is
+    // still exactly where it was — neither repeat run touched it (nothing
+    // KEEPS_BRANCH would want deleted, and this code path never reaches the
+    // `finally` that deletes it — no worktree was ever created on it).
+    expect(worktreeCount()).toBe(1);
+    expect(
+      execFileSync('git', ['-C', repo, 'branch', '--list'], { encoding: 'utf8' }),
+    ).toContain(branch);
+  }, 45_000);
+
   it('I3: does not repoint the server\'s global "latest scan" view at the verification worktree', async () => {
     const c = ctx();
     setupLodashRepo();
@@ -408,6 +540,45 @@ describe('create_fix_pr', () => {
     expect(afterLatest?.scan_id).toBe(beforeLatest?.scan_id);
     expect(afterLatest?.project_path).toBe(repo);
     expect(afterOpenCount).toBe(beforeOpenCount);
+  }, 30_000);
+
+  it('final-review.md C1: a dry run does not change what risk_score reports either — not just getLatest/listOpen', async () => {
+    // task-7-review.md I3 (the test directly above) fixed getLatest() and
+    // listOpen(), both queried by scans.getLatestStmt / findings.listOpen*
+    // Stmt. risk_score does NOT read getLatest() for its CVE source, though:
+    // it reads listHistory(50).find(s => ['deps','security_full'].includes
+    // (s.scan_type)) (riskScore.ts#findLatestOfType), and listHistoryStmt
+    // shipped with no WHERE clause at all — I3's fix never touched it. So the
+    // exact same worktree re-scan I3 already proves does not leak into
+    // getLatest()/listOpen() could still win risk_score's OWN CVE lookup.
+    // Measured, before this fix, on a real project: risk_score's score fell
+    // from 44 (high) to 31 (medium) and active_cves from 5 to 0, after
+    // nothing but a dry run — and it did not self-correct, because the
+    // contaminating row is never deleted.
+    //
+    // Asserted the way design §10 actually states the guarantee — "Nothing
+    // the tool does in dry-run mode may change what … risk_score report[s]"
+    // names risk_score itself, so this calls the real tool and diffs its
+    // whole output, rather than re-checking the two repo methods I3 already
+    // covers (which would stay green even with listHistoryStmt still broken —
+    // that is exactly how the original gap shipped unnoticed).
+    const c = ctx();
+    setupLodashRepo();
+    await seedRealDepsBefore(c);
+
+    const riskScoreTool = TOOLS.find((t) => t.name === 'risk_score');
+    const before = await riskScoreTool?.handler({}, c as never) as {
+      components: { cves: { active_cves: number } };
+    };
+    // Not vacuous: there must be a real, non-zero signal at risk of being
+    // silently zeroed before asserting that nothing zeroes it.
+    expect(before.components.cves.active_cves).toBeGreaterThan(0);
+
+    const mod = TOOLS.find((t) => t.name === 'create_fix_pr');
+    await mod?.handler({ project_path: repo, sources: ['deps'], apply: false }, c as never);
+
+    const after = await riskScoreTool?.handler({}, c as never);
+    expect(after).toEqual(before);
   }, 30_000);
 
   it('I5: a deps target whose scanner deps_audit never covers at all (wpscan) is never judged resolved just because trivy ran fine', async () => {

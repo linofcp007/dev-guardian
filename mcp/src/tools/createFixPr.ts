@@ -63,6 +63,26 @@
  * `pr.ts`'s own module comment already documents the branch surviving on
  * purpose: `created` (now the PR's branch), `push_failed` and `create_failed`
  * (a human may need to find it by hand).
+ *
+ * **That collision is unavoidable, by design, for those same three outcomes
+ * (final review, 2026-08-16-create-fix-pr, finding I1).** C2 only deletes the
+ * branch when nothing keeps it meaningful — `created`, `push_failed` and
+ * `create_failed` keep it ON PURPOSE, so a repeat run for the SAME group
+ * always hits exactly the collision the paragraph above describes: for the
+ * entire life of an open pull request, every re-run's `createWorktree` fails
+ * before `prExists` is ever reached, and — unfixed — reported that as
+ * `worktree_failed`, structurally indistinguishable from a genuine
+ * infrastructure break. `processGroup` below now calls `prExists` itself the
+ * moment `createWorktree` fails, and reports a genuine hit as `pr_exists`
+ * (`pr.ts#existsOutcome`) — the outcome `openPr`'s own check would have
+ * produced had the collision not kept it from running at all. This runs
+ * whether or not `apply` is true: the branch collision, and hence whether a
+ * PR already exists for it, does not depend on this run's own `apply` value,
+ * and `prExists` performs only the same read `openPr` would eventually have
+ * made anyway on an `apply: true` repeat — never a write, so it does not
+ * compromise design §6's actual boundary, which is stated in terms of what
+ * "leaves the machine" (commit, push, `gh pr create`), not in terms of `gh`
+ * being touched at all.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -71,7 +91,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { applyGroup } from '../fixpr/apply.js';
 import { buildGroups, selectGroups } from '../fixpr/candidates.js';
-import { branchName, deleteLocalBranch, openPr, type PrOutcome } from '../fixpr/pr.js';
+import { branchName, deleteLocalBranch, existsOutcome, openPr, prExists, type PrOutcome } from '../fixpr/pr.js';
 import { deriveTestCommand, TEST_MANIFESTS } from '../fixpr/testCommand.js';
 import type { FixGroup, FixSource, ScanVerdict, TestVerdict, UpgradeStep } from '../fixpr/types.js';
 import { judgeScan, judgeTests, mayOpenPr } from '../fixpr/verify.js';
@@ -312,8 +332,26 @@ async function processGroup(opts: {
 
   const created = await createWorktree({ projectPath, branch });
   if (!created.ok) {
-    // No branch to clean up here: `git worktree add -b` failed before ever
-    // creating one (worktree.ts's own module comment) — nothing was made.
+    // The module comment (I1) explains why this is reachable at all: a
+    // branch collision here can only mean a PREVIOUS run reached `openPr`
+    // and kept this exact branch (KEEPS_BRANCH). Ask `prExists` before
+    // reporting an infrastructure failure — if a pull request genuinely
+    // exists, that is the honest report, not `worktree_failed`. No worktree
+    // was ever created on this path, so there is nothing to clean up and
+    // nothing that could make deleting the branch here safe (see below).
+    const existing = await prExists({ projectPath, branch });
+    if (existing.known && existing.exists) {
+      const pr = existsOutcome(branch);
+      return {
+        ...base,
+        commands: [],
+        outcome: PR_STATUS_OUTCOME[pr.status],
+        scan: null,
+        tests: null,
+        pr,
+        note: prNote(pr),
+      };
+    }
     return {
       ...base,
       commands: [],
@@ -414,10 +452,6 @@ async function processGroup(opts: {
     const body = buildPrBody({ group, findings, commands: applied.commands, scan: scanVerdict, tests: testVerdict });
     const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body });
     keepBranch = KEEPS_BRANCH.has(pr.status);
-    const note =
-      pr.status === 'created'
-        ? `pull request opened: ${pr.url ?? '(gh reported no URL)'}`
-        : `pull request not opened (${pr.status}): ${pr.detail ?? 'no further detail'}`;
     return {
       ...base,
       commands: applied.commands,
@@ -425,7 +459,7 @@ async function processGroup(opts: {
       scan: scanVerdict,
       tests: testVerdict,
       pr,
-      note,
+      note: prNote(pr),
     };
   } finally {
     // Per group, on every path above — success, every early return, and any
@@ -446,6 +480,19 @@ async function processGroup(opts: {
       await deleteLocalBranch({ projectPath, branch });
     }
   }
+}
+
+/**
+ * The human-readable half of a `PrOutcome` (`GroupResult.note` is always
+ * populated — see the module comment, I6). Shared by both places
+ * `processGroup` learns a `PrOutcome`: the normal path, where `openPr` itself
+ * just ran, and the `createWorktree`-collision path (I1), where `prExists`
+ * alone determined it — same shape, same wording, either way.
+ */
+function prNote(pr: PrOutcome): string {
+  return pr.status === 'created'
+    ? `pull request opened: ${pr.url ?? '(gh reported no URL)'}`
+    : `pull request not opened (${pr.status}): ${pr.detail ?? 'no further detail'}`;
 }
 
 function readManifests(worktreePath: string): Record<string, string> {
