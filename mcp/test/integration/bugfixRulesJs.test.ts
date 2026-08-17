@@ -1,0 +1,98 @@
+/**
+ * Runs the local `bugfix-js.yml` Semgrep rules against the hand-built
+ * fixture pairs in `mcp/test/fixtures/bugfix-js/{hits,misses}/` and asserts
+ * the EXACT set of rule ids that fired — never "at least one". A rule that
+ * starts matching its own near-miss must fail the suite rather than quietly
+ * widening (design of record, §2 and §6:
+ * docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md).
+ *
+ * ---- Why the fixtures are copied to a temp dir before scanning -----------
+ *
+ * Semgrep's built-in default ignore list skips any path containing a `test/`
+ * directory — confirmed here the same way `rulePackFixture.test.ts` /
+ * `evalVulnFixture.test.ts` / `validateFindingFixture.test.ts` already
+ * documented it: pointed straight at the in-repo fixture
+ * (`mcp/test/fixtures/bugfix-js/...`), Semgrep reports `paths.scanned: []`
+ * and zero results, REGARDLESS of the rules. That would not just fail the
+ * "hits" assertion, it would make the "misses" assertion — the half of this
+ * feature that decides whether it helps or hurts — pass for the wrong
+ * reason: zero results because nothing was scanned, not because the rules
+ * are precise. So each fixture directory is copied to a fresh temp dir
+ * outside any `test/`-named path first, mirroring the same workaround this
+ * repo already uses in three other places.
+ *
+ * ---- Skip discipline -------------------------------------------------
+ *
+ * Same shape as every other Semgrep-dependent test here
+ * (`mcp/test/e2e/ciCliFixture.test.ts`, `rulePackFixture.test.ts`): SKIPPED,
+ * not silently passed, when Semgrep is not on PATH; `GUARDIAN_REQUIRE_
+ * SEMGREP=1` turns that absence into a hard failure instead of a quiet skip.
+ */
+
+import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { cpSync, existsSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
+const RULES = resolve(REPO_ROOT, 'configs', 'semgrep', 'bugfix-js.yml');
+const FIXTURES = resolve(REPO_ROOT, 'mcp', 'test', 'fixtures', 'bugfix-js');
+const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
+
+function semgrepAvailable(): boolean {
+  try { execFileSync('semgrep', ['--version'], { stdio: 'ignore' }); return true; }
+  catch { return false; }
+}
+const AVAILABLE = semgrepAvailable();
+
+interface SemgrepResult { check_id: string; path: string }
+
+function run(dir: string): SemgrepResult[] {
+  // Outside any `test/`-named path — see the module comment. `dir` itself
+  // (e.g. `.../mcp/test/fixtures/bugfix-js/hits`) is never passed to
+  // Semgrep directly.
+  const work = mkdtempSync(join(tmpdir(), 'guardian-bugfix-js-'));
+  cpSync(dir, work, { recursive: true });
+  const out = execFileSync(
+    'semgrep',
+    ['--config', RULES, '--json', '--quiet', '--no-git-ignore', work],
+    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
+  );
+  const parsed: unknown = JSON.parse(out);
+  const results = (parsed as { results?: unknown[] }).results ?? [];
+  return results as SemgrepResult[];
+}
+
+/** Last dot-separated segment — semgrep prefixes the config path onto ids. */
+function ids(rows: readonly SemgrepResult[]): string[] {
+  return [...new Set(rows.map((r) => r.check_id.split('.').pop() ?? r.check_id))].sort();
+}
+
+describe('bugfix-js rules', () => {
+  it.runIf(REQUIRE_SEMGREP)('the toolchain must be usable when the flag is set', () => {
+    expect(AVAILABLE).toBe(true);
+  });
+
+  it('the rule file exists where bug_hunt will look for it', () => {
+    expect(existsSync(RULES)).toBe(true);
+  });
+
+  it.skipIf(!AVAILABLE)('fires exactly the expected rules on the hit fixtures', () => {
+    // EXACT set, not "at least". A rule that widens to catch something it was
+    // not written for fails here rather than reaching a user as noise.
+    expect(ids(run(resolve(FIXTURES, 'hits')))).toEqual([
+      'bugfix-js-error-handling-empty-catch',
+      'bugfix-js-off-by-one-loop-lte-length',
+      'bugfix-js-race-condition-floating-mutation',
+    ]);
+  });
+
+  it.skipIf(!AVAILABLE)('fires NOTHING on the near-miss fixtures', () => {
+    // The half of the proof that decides whether this feature helps or hurts.
+    // A rethrowing catch, an append at index length, an awaited save and a
+    // deliberate fire-and-forget log are all correct code that looks like a bug.
+    expect(ids(run(resolve(FIXTURES, 'misses')))).toEqual([]);
+  });
+});

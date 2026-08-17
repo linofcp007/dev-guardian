@@ -1,0 +1,79 @@
+# dev-guardian Semgrep config bugfix-js.
+# Bugs de implementação em JS/TS — a classe de findings que os packs do
+# registo Semgrep não cobrem: p/r2c-bug-scan só cobre race/null/off-by-one/
+# leak/error-handling para Python e Go; os packs por linguagem (p/javascript,
+# p/typescript) são ~100% security, zero nestas classes. Detalhe e medições em
+# docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md.
+#
+# Cada regra tem um par de fixtures em
+# mcp/test/fixtures/bugfix-js/{hits,misses}/: um ficheiro que tem de disparar
+# a regra, outro parecido que NÃO pode. O ficheiro misses/ é a especificação
+# do que é código correto — se ele disparar, a regra é que está errada.
+#
+# Os ids seguem o formato bugfix-js-<classe>-<nome>, em que <classe> tem de
+# ser um dos seis tokens que mapSubcategory (mcp/src/tools/bugHunt.ts:317)
+# reconhece por regex sobre o id em minúsculas: race-condition, null-safety,
+# off-by-one, memory-leak, error-handling, edge-case.
+#
+# Duas severidades: ERROR quando o padrão é sempre um bug, independentemente
+# da intenção; WARNING/INFO quando é normalmente um bug mas tem usos
+# legítimos (heurística).
+rules:
+  - id: bugfix-js-error-handling-empty-catch
+    patterns:
+      - pattern-either:
+          - pattern: try { ... } catch ($E) { }
+          - pattern: $P.catch(() => {})
+          - pattern: $P.catch(function ($E) {})
+    message: >-
+      Erro engolido em silêncio. O bloco catch está vazio, por isso a falha
+      desaparece sem log, sem rethrow e sem tratamento.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  - id: bugfix-js-off-by-one-loop-lte-length
+    pattern: for (...; $I <= $A.length; ...) { ... }
+    message: >-
+      Provável off-by-one: a condição usa <= com .length, por isso a última
+      iteração lê $A[$A.length], que é sempre undefined.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  - id: bugfix-js-race-condition-floating-mutation
+    # Two corrections versus the first draft of this pattern, both found by
+    # the near-miss fixture (mcp/test/fixtures/bugfix-js/misses/
+    # race-condition.ts) firing when it must not — per this rule set's own
+    # governing principle, the rule was narrowed, the fixture was not:
+    #
+    # 1. `pattern-not: await $O.$M(...)` / `pattern-not: return $O.$M(...)`
+    #    are no-ops. `pattern-not` suppresses a match only when the EXACT
+    #    SAME span also matches the negated pattern, but `$O.$M(...)` matches
+    #    just the call, while `await $O.$M(...)` / `return $O.$M(...)` match
+    #    a strictly larger, ENCLOSING span — the two spans never coincide, so
+    #    the exclusion never fired and `await repo.save(...)` /
+    #    `return repo.save(...)` matched anyway. `pattern-not-inside` is the
+    #    right primitive: it excludes a match whose span is CONTAINED IN the
+    #    negated pattern's span, which is what "awaited"/"returned" means
+    #    here. Confirmed with an isolated probe against each near-miss
+    #    function individually before and after.
+    # 2. "write" is deliberately NOT in the verb list, even though it reads
+    #    like a mutating verb: the same fixture's
+    #    `logger.write('fire and forget')` is the canonical near-miss this
+    #    rule must stay silent on (an unawaited log write is a decision, not
+    #    a bug), and "write" is exactly as common a method name on a
+    #    non-mutating logger/stream as on a mutating repository.
+    patterns:
+      - pattern: $O.$M(...)
+      - pattern-inside: |
+          async function $F(...) { ... }
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(save|update|delete|create|insert|commit|send)$
+      - pattern-not-inside: await $O.$M(...)
+      - pattern-not-inside: return $O.$M(...)
+    message: >-
+      Chamada que altera estado sem await. Quem chama continua como se a
+      escrita tivesse terminado — é ao mesmo tempo uma race e um happy path
+      partido. Se for intencional, torne-o explícito com void.
+    severity: WARNING
+    languages: [javascript, typescript]
