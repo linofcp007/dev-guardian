@@ -24,3 +24,10 @@ def d(conn):
         conn.commit()
     except ValueError:
         ...
+
+
+def e(conn):
+    try:
+        conn.commit()
+    except:
+        pass

@@ -87,7 +87,15 @@ interface FileExpectation {
 
 const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'bare_except.py': { ids: ['bugfix-py-error-handling-bare-except'], count: 1 },
-  'except_pass.py': { ids: ['bugfix-py-error-handling-except-pass'], count: 4 },
+  'except_pass.py': {
+    // A bare `except:` whose body is `pass` is genuinely BOTH bugs, so this
+    // file legitimately produces two ids. Measured, not assumed.
+    ids: [
+      'bugfix-py-error-handling-bare-except',
+      'bugfix-py-error-handling-except-pass',
+    ],
+    count: 6,
+  },
   'get_without_doesnotexist.py': {
     ids: ['bugfix-py-error-handling-get-without-doesnotexist'],
     count: 1,
