@@ -94,6 +94,8 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'empty_err_block.go': { ids: ['bugfix-go-error-handling-empty-err-block'], count: 1 },
   'err_blank_assign.go': { ids: ['bugfix-go-error-handling-err-blank-assign'], count: 1 },
   'err_discarded.go': { ids: ['bugfix-go-error-handling-err-discarded'], count: 1 },
+  'loop_lte_len.go': { ids: ['bugfix-go-off-by-one-loop-lte-len'], count: 1 },
+  'type_assert_no_ok.go': { ids: ['bugfix-go-null-safety-type-assert-no-ok'], count: 1 },
 };
 
 describe('bugfix-go rules', () => {
@@ -146,6 +148,8 @@ const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-go-error-handling-err-discarded': 'error_handling',
   'bugfix-go-error-handling-err-blank-assign': 'error_handling',
   'bugfix-go-error-handling-empty-err-block': 'error_handling',
+  'bugfix-go-null-safety-type-assert-no-ok': 'null_safety',
+  'bugfix-go-off-by-one-loop-lte-len': 'off_by_one',
 };
 
 describe('every rule id classifies as its own class', () => {

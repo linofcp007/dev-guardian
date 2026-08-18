@@ -53,3 +53,33 @@ rules:
       pior do que não o testar: o código diz que trata a falha e não trata.
     severity: ERROR
     languages: [go]
+
+  # Duas cláusulas, e mais nenhuma. A exclusão do type switch parece
+  # obrigatória e não é: `v.(type)` dentro de um `switch` nunca casa
+  # `$V.($T)`. As tentativas de a escrever nem sequer compilavam — em Go o
+  # type switch é `switch v := x.(type)`, não `switch x.(T)`. Medido: com e
+  # sem a exclusão o resultado é o mesmo, e as fixtures de near-miss cobrem
+  # as duas formas.
+  - id: bugfix-go-null-safety-type-assert-no-ok
+    patterns:
+      - pattern: $V.($T)
+      - pattern-not-inside: $X, $OK := $V.($T)
+      - pattern-not-inside: $X, $OK = $V.($T)
+    message: >-
+      Type assertion sem a forma `, ok`. Se o valor não for do tipo esperado
+      isto entra em panic; `v, ok := x.(T)` devolve o zero-value e um booleano
+      em vez de rebentar.
+    severity: ERROR
+    languages: [go]
+
+  - id: bugfix-go-off-by-one-loop-lte-len
+    pattern: |
+      for $I := 0; $I <= len($XS); $I++ {
+        ...
+      }
+    message: >-
+      Off-by-one. `i <= len(xs)` corre uma posição para lá do fim e o índice
+      `len(xs)` está sempre fora dos limites — é um panic de index out of
+      range. Queria provavelmente `i < len(xs)`.
+    severity: ERROR
+    languages: [go]
