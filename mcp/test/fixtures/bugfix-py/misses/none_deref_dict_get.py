@@ -21,6 +21,18 @@ def http_client(self):
     return self.client.get("/x").json()
 
 
+def http_httpx(httpx):
+    return httpx.get("/x").json()
+
+
+def http_aiohttp(aiohttp):
+    return aiohttp.get("/x").json()
+
+
+def http_urllib(urllib):
+    return urllib.get("/x").json()
+
+
 def guarded(payload):
     value = payload.get("name")
     if value is None:

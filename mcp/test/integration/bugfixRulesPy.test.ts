@@ -101,7 +101,7 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     count: 1,
   },
   'none_deref_dict_get.py': { ids: ['bugfix-py-null-safety-none-deref-dict-get'], count: 2 },
-  'none_deref_match.py': { ids: ['bugfix-py-null-safety-none-deref-match'], count: 2 },
+  'none_deref_match.py': { ids: ['bugfix-py-null-safety-none-deref-match'], count: 3 },
   'range_len_plus_one.py': { ids: ['bugfix-py-off-by-one-range-len-plus-one'], count: 2 },
 };
 

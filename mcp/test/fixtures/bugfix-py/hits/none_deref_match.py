@@ -7,3 +7,7 @@ def version(text):
 
 def build(text):
     return re.search(r"b(\d+)", text).group(0)
+
+
+def exact(text):
+    return re.fullmatch(r"x(\d+)", text).group(1)
