@@ -1,0 +1,50 @@
+{
+  // Type-checks the test suite, which `tsconfig.json` deliberately excludes.
+  //
+  // Why this file exists: `tsconfig.json` builds `src/` and lists `test` and
+  // `**/*.test.ts` in `exclude`, and vitest transpiles through esbuild, which
+  // strips types without checking them. The consequence was that NO type
+  // checker anywhere in this repo's pipeline ever looked at a test file, so
+  // the "no `!`, no `any`" discipline was enforced by review alone.
+  //
+  // Turning it on found 66 real errors, including two places where a test and
+  // the type it exercises had genuinely drifted apart (a stale snapshot helper
+  // missing three required fields, and a fixture setting `null` where the
+  // production code never produces anything but an absent key).
+  //
+  // One thing it does NOT catch, recorded because the first version of this
+  // comment claimed the opposite. The 1.7.0 near-miss — ten call sites
+  // interpolating a newly-plural `string[]` into `--config=${bugfixRules}`,
+  // which silently stringifies to "/a.yml,/b.yml" — is invisible to `tsc`
+  // at any strictness. Template-literal interpolation of a non-string is
+  // always typed `string`; verified directly against `tsc --strict`, not
+  // assumed. Catching that class needs the ESLint rule
+  // `@typescript-eslint/restrict-template-expressions`, and this repo has no
+  // ESLint setup. So that bug is still only caught by a human reading the
+  // diff, and this config should not be credited with preventing it.
+  //
+  // Inherits every strictness flag from tsconfig.json rather than restating
+  // them, so the two can never drift apart.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Type-check only: this config never emits. `noEmit` also makes `outDir`
+    // and `rootDir` irrelevant, but `rootDir` is narrowed to `src` in the base
+    // config and would reject `test/` files outright, so it is cleared here.
+    "noEmit": true,
+    "rootDir": ".",
+    // `vitest/globals` is not used — this suite imports `describe`/`it`/`expect`
+    // explicitly from 'vitest' — so no `types` entry is needed for them.
+    // `node` is required for `node:*` builtins used throughout the fixtures.
+    "types": ["node"]
+  },
+  "include": ["src/**/*", "test/**/*"],
+  // `test/fixtures/` is DATA, not code. Those files are deliberately-broken
+  // sample programs fed to Semgrep and the surface scanners as input — an
+  // unchecked `.find(...)` deref, a listener with no cleanup, an unawaited
+  // mutation. Type-checking them is a category error: making them compile
+  // would remove the very defects they exist to carry, and several are not
+  // even self-contained modules (they reference framework globals that are
+  // never imported, on purpose). They are excluded here for the same reason
+  // `.py` fixtures are not run through a Python type checker.
+  "exclude": ["node_modules", "dist", "test/fixtures"]
+}

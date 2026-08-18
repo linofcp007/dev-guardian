@@ -28,14 +28,13 @@ vi.mock('../../src/tools/scanHelpers.js', async (importOriginal) => {
 });
 vi.mock('../../src/dast/nuclei.js', () => ({ invokeNuclei: vi.fn() }));
 
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import {
   createServer,
   type IncomingMessage,
   type Server,
   type ServerResponse,
 } from 'node:http';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PluginContext } from '../../src/context.js';
 import { invokeNuclei } from '../../src/dast/nuclei.js';
@@ -47,6 +46,9 @@ import { TOOLS } from '../../src/tools/index.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 import type { AttackSurfaceSnapshot, RouteRecord, SpecDiff } from '../../src/types.js';
 import '../../src/tools/scanDast.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 /* ------------------------------------------------------------------ */
 /* Fixture target                                                      */
@@ -201,6 +203,7 @@ function seedSnapshot(routes: RouteRecord[], specDiff: SpecDiff | null = null): 
     missing_tools: [],
     spec_files: [],
     spec_diff: specDiff,
+    imports: [],
   };
   ctx.storage.surface.insert({ project_path: projectPath, tree_hash: 'seeded', snapshot });
 }
@@ -289,7 +292,7 @@ function statusInEvidence(r: DastOk, path: string): number | null | undefined {
 
 beforeEach(() => {
   ctx = makeCtx();
-  projectPath = mkdtempSync(join(tmpdir(), 'guardian-dast-'));
+  projectPath = makeTempDir('guardian-dast-');
   received = [];
   loginHits = 0;
   loginLimitAfter = Number.POSITIVE_INFINITY;
@@ -372,7 +375,7 @@ describe('scan_dast refusals', () => {
     // refusing, which contradicts the refusal message eleven lines above
     // ("No attack-surface snapshot exists for this project") and would emit
     // findings whose file_path points at another project's tree entirely.
-    const otherProject = mkdtempSync(join(tmpdir(), 'guardian-dast-other-'));
+    const otherProject = makeTempDir('guardian-dast-other-');
     const foreignSnapshot: AttackSurfaceSnapshot = {
       routes: [route('/other-projects-route')],
       env_vars: [],
@@ -383,6 +386,7 @@ describe('scan_dast refusals', () => {
       missing_tools: [],
       spec_files: [],
       spec_diff: null,
+      imports: [],
     };
     ctx.storage.surface.insert({
       project_path: otherProject,

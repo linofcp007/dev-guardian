@@ -1,8 +1,5 @@
 import { GuardianDatabase as Database } from '../../../src/storage/db.js';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import type { PluginContext } from '../../../src/context.js';
 import {
@@ -16,9 +13,13 @@ import {
   makeFinding,
   type ScannerParser,
 } from '../../../src/runners/scannerParsers/index.js';
+import { okResult } from '../../helpers/toolResult.js';
+import { makeTempDir, cleanupTempDirs } from '../../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 function tempProject(): string {
-  return mkdtempSync(join(tmpdir(), 'factory-test-'));
+  return makeTempDir('factory-test-');
 }
 
 function buildPlugin(projectPath: string): PluginContext {
@@ -101,9 +102,9 @@ describe('makeScanTool', () => {
       },
     });
 
-    const r = (await tool.handler({ project_path: projectPath }, plugin)) as {
-      ok: true;
-    } & ToolOkPayload;
+    const r = okResult<ToolOkPayload>(
+      await tool.handler({ project_path: projectPath }, plugin),
+    );
     expect(r.ok).toBe(true);
     expect(r.findings_count_by_severity.high).toBe(1);
     expect(r.top_findings[0]?.fingerprint).toBe(finding.fingerprint);
@@ -137,12 +138,12 @@ describe('makeScanTool', () => {
       },
     });
 
-    const first = (await tool.handler({ project_path: projectPath }, plugin)) as {
-      ok: true;
-    } & ToolOkPayload;
-    const second = (await tool.handler({ project_path: projectPath }, plugin)) as {
-      ok: true;
-    } & ToolOkPayload;
+    const first = okResult<ToolOkPayload>(
+      await tool.handler({ project_path: projectPath }, plugin),
+    );
+    const second = okResult<ToolOkPayload>(
+      await tool.handler({ project_path: projectPath }, plugin),
+    );
 
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
@@ -280,10 +281,9 @@ describe('makeScanTool', () => {
         report_paths: [],
       }),
     });
-    const r = (await tool.handler(
-      { project_path: projectPath, severity_min: 'medium' },
-      plugin,
-    )) as { ok: true } & ToolOkPayload;
+    const r = okResult<ToolOkPayload>(
+      await tool.handler({ project_path: projectPath, severity_min: 'medium' }, plugin),
+    );
     expect(r.ok).toBe(true);
     expect(r.findings_count_by_severity.low).toBe(0);
     expect(r.findings_count_by_severity.high).toBe(1);

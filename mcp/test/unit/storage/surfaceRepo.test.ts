@@ -31,6 +31,16 @@ function makeSnapshot(overrides: Partial<AttackSurfaceSnapshot> = {}): AttackSur
     coverage: [],
     tools_run: [{ name: 'semgrep', status: 'ok' }],
     missing_tools: [],
+    // `spec_files`/`spec_diff`/`imports` were added to `AttackSurfaceSnapshot`
+    // after this helper was written; `...overrides` spreading a `Partial<T>`
+    // made every field "present" (as possibly `undefined`) to the type
+    // checker, so the gap never surfaced as a hard error until tsconfig.test
+    // json started checking this file. `AttackSurfaceSnapshot` genuinely
+    // requires all three at runtime — this fixture was just stale — so the
+    // fix is defaults here, not relaxing the production type.
+    spec_files: [],
+    spec_diff: null,
+    imports: [],
     ...overrides,
   };
 }

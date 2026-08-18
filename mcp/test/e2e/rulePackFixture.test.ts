@@ -51,11 +51,10 @@
  */
 
 import { execa } from 'execa';
-import { cpSync, existsSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';
 import { detectOs } from '../../src/platform/osDetect.js';
@@ -68,6 +67,10 @@ import { ensureReportDir, readJsonSafe } from '../../src/tools/scanHelpers.js';
 import { TOOLS } from '../../src/tools/index.js';
 import '../../src/tools/mapAttackSurface.js';
 import type { AttackSurfaceSnapshot, RouteRecord, SpecDiffEntry } from '../../src/types.js';
+import { okResult } from '../helpers/toolResult.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(here, '..', '..', '..');
@@ -407,7 +410,7 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
 
   it.skipIf(!SEMGREP_AVAILABLE)('maps every route the fixture declares, and nothing else', async () => {
     // Outside any `test/` path — see the module comment.
-    const work = mkdtempSync(join(tmpdir(), 'guardian-rulepack-'));
+    const work = makeTempDir('guardian-rulepack-');
     cpSync(FIXTURE, work, { recursive: true });
 
     const ctx = makeContext();
@@ -415,7 +418,9 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     expect(tool).toBeDefined();
     if (!tool) return;
 
-    const result = (await tool.handler({ project_path: work, force: true }, ctx)) as SurfaceResult;
+    const result = okResult<SurfaceResult>(
+      await tool.handler({ project_path: work, force: true }, ctx),
+    );
 
     // A degraded run persists nothing and returns snapshot_id: null. Fail here
     // rather than on an empty route set, whose message would not say why.
@@ -512,7 +517,7 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
       // 'reports env vars, ports and per-language coverage from the same
       // run' below, which exercises extraction, resolution and persistence
       // together through the real map_attack_surface tool.
-      const work = mkdtempSync(join(tmpdir(), 'guardian-rulepack-import-'));
+      const work = makeTempDir('guardian-rulepack-import-');
       cpSync(FIXTURE, work, { recursive: true });
       const reportDir = ensureReportDir(work, 'import-rule-check', 'surface');
       const outFile = join(reportDir, 'surface.json');
@@ -557,14 +562,16 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
   );
 
   it.skipIf(!SEMGREP_AVAILABLE)('reports env vars, ports and per-language coverage from the same run', async () => {
-    const work = mkdtempSync(join(tmpdir(), 'guardian-rulepack-'));
+    const work = makeTempDir('guardian-rulepack-');
     cpSync(FIXTURE, work, { recursive: true });
 
     const ctx = makeContext();
     const tool = TOOLS.find((t) => t.name === 'map_attack_surface');
     if (!tool) throw new Error('map_attack_surface is not registered');
 
-    const result = (await tool.handler({ project_path: work, force: true }, ctx)) as SurfaceResult;
+    const result = okResult<SurfaceResult>(
+      await tool.handler({ project_path: work, force: true }, ctx),
+    );
     const snapshotId = result.snapshot_id;
     expect(snapshotId).not.toBeNull();
     if (snapshotId === null) return;
@@ -703,14 +710,16 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
   }, 6 * 60_000);
 
   it.skipIf(!SEMGREP_AVAILABLE)('recovers the captures Semgrep redacts, or says so in tools_run', async () => {
-    const work = mkdtempSync(join(tmpdir(), 'guardian-rulepack-'));
+    const work = makeTempDir('guardian-rulepack-');
     cpSync(FIXTURE, work, { recursive: true });
 
     const ctx = makeContext();
     const tool = TOOLS.find((t) => t.name === 'map_attack_surface');
     if (!tool) throw new Error('map_attack_surface is not registered');
 
-    const result = (await tool.handler({ project_path: work, force: true }, ctx)) as SurfaceResult;
+    const result = okResult<SurfaceResult>(
+      await tool.handler({ project_path: work, force: true }, ctx),
+    );
 
     // Either Semgrep emitted metavariables (older / logged-in) and there is no
     // recovery entry at all, or it redacted them — in which case every family
@@ -740,14 +749,16 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
   it.skipIf(!SEMGREP_AVAILABLE)('reports shadow endpoints and dead documentation', async () => {
     // Outside any `test/` path — see the module comment. `openapi.yaml`
     // ships alongside the rest of the fixture tree and is copied with it.
-    const work = mkdtempSync(join(tmpdir(), 'guardian-rulepack-'));
+    const work = makeTempDir('guardian-rulepack-');
     cpSync(FIXTURE, work, { recursive: true });
 
     const ctx = makeContext();
     const tool = TOOLS.find((t) => t.name === 'map_attack_surface');
     if (!tool) throw new Error('map_attack_surface is not registered');
 
-    const result = (await tool.handler({ project_path: work, force: true }, ctx)) as SurfaceResult;
+    const result = okResult<SurfaceResult>(
+      await tool.handler({ project_path: work, force: true }, ctx),
+    );
     const snapshotId = result.snapshot_id;
     expect(snapshotId).not.toBeNull();
     if (snapshotId === null) return;

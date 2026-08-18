@@ -45,11 +45,10 @@
  */
 
 import { execa } from 'execa';
-import { cpSync, existsSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { cpSync, existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';
 import { detectOs } from '../../src/platform/osDetect.js';
@@ -61,6 +60,10 @@ import '../../src/tools/mapAttackSurface.js';
 import '../../src/tools/validateFinding.js';
 import type { Finding } from '../../src/types.js';
 import type { FindingValidation } from '../../src/validate/types.js';
+import { okResult } from '../helpers/toolResult.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(here, '..', '..', '..');
@@ -225,7 +228,7 @@ describe('E2E — the real chain: map_attack_surface then validate_finding', () 
     async () => {
       // Outside any `test/` path — Semgrep's default ignore list skips those
       // (see rulePackFixture.test.ts's header for the full explanation).
-      const work = mkdtempSync(join(tmpdir(), 'guardian-validate-e2e-'));
+      const work = makeTempDir('guardian-validate-e2e-');
       cpSync(FIXTURE, work, { recursive: true });
 
       const ctx = makeContext();
@@ -233,10 +236,9 @@ describe('E2E — the real chain: map_attack_surface then validate_finding', () 
       // Step 1 of the real chain: a real Semgrep run persists a real
       // snapshot, with real absolute-native routes[].file and real
       // relative-POSIX imports[].
-      const surface = (await tool('map_attack_surface').handler(
-        { project_path: work, force: true },
-        ctx,
-      )) as SurfaceResult;
+      const surface = okResult<SurfaceResult>(
+        await tool('map_attack_surface').handler({ project_path: work, force: true }, ctx),
+      );
 
       // A degraded run persists nothing and every finding below would come
       // back `no_surface_snapshot` — fail here, with a reason, rather than on
@@ -326,14 +328,13 @@ describe('E2E — the real chain: map_attack_surface then validate_finding', () 
   it.skipIf(!SEMGREP_AVAILABLE)(
     'answers reachable in Python, Go and Rust — not only in JS/TS',
     async () => {
-      const work = mkdtempSync(join(tmpdir(), 'guardian-validate-lang-'));
+      const work = makeTempDir('guardian-validate-lang-');
       cpSync(FIXTURE, work, { recursive: true });
 
       const ctx = makeContext();
-      const surface = (await tool('map_attack_surface').handler(
-        { project_path: work, force: true },
-        ctx,
-      )) as SurfaceResult;
+      const surface = okResult<SurfaceResult>(
+        await tool('map_attack_surface').handler({ project_path: work, force: true }, ctx),
+      );
       expect(surface.tools_run.map((t) => `${t.name}:${t.status}`)).toContain('semgrep:ok');
       expect(surface.snapshot_id).not.toBeNull();
       if (surface.snapshot_id === null) return;
