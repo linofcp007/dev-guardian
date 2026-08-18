@@ -52,9 +52,12 @@ it, especially §8, which records what measurement changed and which two
   reappearance is a regression. See CLAUDE.md's "TypeScript conventions".
 - **`npm run lint` runs both `tsconfig.json` and `tsconfig.test.json`** and must
   stay clean.
-- Build and test from `mcp/`. **This plan touches no `mcp/src/`**, so no `dist/`
-  rebuild is needed — confirm that is still true of your actual changes before
-  committing.
+- Build and test from `mcp/`. **Tasks 1-4 touch no `mcp/src/`**, so they need no
+  `dist/` rebuild — confirm that is still true of your actual changes before
+  committing. **Task 5 is the exception**: it edits `mcp/src/tools/bugHunt.ts`,
+  so it MUST run `npm run build` and stage `mcp/dist/` in the same commit. The
+  repo is the distribution and Claude Code runs `mcp/dist/server.js` directly, so
+  a stale `dist/` silently desyncs from `src/`.
 
 ---
 
