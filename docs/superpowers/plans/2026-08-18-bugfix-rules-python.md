@@ -116,6 +116,13 @@ def d(conn):
         conn.commit()
     except ValueError:
         ...
+
+
+def e(conn):
+    try:
+        conn.commit()
+    except:
+        pass
 ```
 
 `mcp/test/fixtures/bugfix-py/hits/get_without_doesnotexist.py`:
@@ -295,7 +302,15 @@ interface FileExpectation {
 
 const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'bare_except.py': { ids: ['bugfix-py-error-handling-bare-except'], count: 1 },
-  'except_pass.py': { ids: ['bugfix-py-error-handling-except-pass'], count: 4 },
+  'except_pass.py': {
+    // A bare `except:` whose body is `pass` is genuinely BOTH bugs, so this
+    // file legitimately produces two ids. Measured, not assumed.
+    ids: [
+      'bugfix-py-error-handling-bare-except',
+      'bugfix-py-error-handling-except-pass',
+    ],
+    count: 6,
+  },
   'get_without_doesnotexist.py': {
     ids: ['bugfix-py-error-handling-get-without-doesnotexist'],
     count: 1,
@@ -1239,7 +1254,7 @@ cd mcp
 npx vitest run test/integration/bugfixRulesPy.test.ts
 ```
 
-Expected: PASS, no skips. Ten hit files totalling **18 findings**, ten near-miss
+Expected: PASS, no skips. Ten hit files totalling **20 findings**, ten near-miss
 files with zero, and `p/r2c-bug-scan` silent on every hit fixture.
 
 - [ ] **Step 8: Run the whole suite**
@@ -1761,7 +1776,7 @@ this plan carries:
 
 | Check | Expected |
 | --- | --- |
-| Hit fixtures | 10 files, **18 findings**, each file firing exactly its own rule |
+| Hit fixtures | 10 files, **20 findings** — each firing its own rule, plus `except_pass.py`, whose bare `except: pass` is genuinely both bugs |
 | Near-miss fixtures | 10 files, **0 findings** |
 | `p/r2c-bug-scan` on the hit fixtures | **0 findings** — every rule is additive |
 | `mapSubcategory` | all 10 ids land in their own class; none contains `unchecked` |
