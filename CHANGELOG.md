@@ -6,6 +6,30 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
+## [Unreleased]
+
+### Fixed
+
+- **`register_custom_rules` never actually did anything.** It discovered a
+  project's own Semgrep rules and persisted them, and its description promised
+  "scan_sast / bug_hunt will then pick them up" — but nothing in the codebase
+  ever read the key back. `scan_sast` passed `--config=auto` only; `bug_hunt`
+  built its own pack list. The single other reference to the key anywhere was a
+  test asserting it had been *written*, so the write half was covered and the
+  read half had never been built, while the product surface claimed the feature
+  worked. Both scanners now run the registered rules as extra `--config` packs,
+  and a registered path that has since been deleted is skipped rather than
+  aborting the whole scan — Semgrep fails the entire run on one bad `--config`,
+  so a stale registration would otherwise break every later scan in the project.
+
+### Added
+
+- `scan_skill` and `check_toolchain` to the intent→tool maps in all nine host
+  config files, and `scan_sast` to `clinerules`. `scan_skill` — which vets an AI
+  skill, MCP server or agent before installation — was absent from every one of
+  them, so no AI host had any way to know it exists. All 54 tools are now
+  present in all nine.
+
 ## [1.7.0] - 2026-08-18
 
 ### Added

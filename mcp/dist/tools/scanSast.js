@@ -14,6 +14,7 @@ import { securityCodeScanParser } from '../runners/scannerParsers/securityCodeSc
 import { runProcess } from '../runners/processRunner.js';
 import { buildSemgrepDockerArgs, DEFAULT_SEMGREP_IMAGE, } from '../runners/dockerScanner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
+import { resolveCustomSemgrepConfigs } from '../platform/customRules.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.js';
 import { makeScanTool, } from './scanToolFactory.js';
@@ -47,6 +48,12 @@ registerToolModule(makeScanTool({
             const args = ['--config=auto'];
             if (hasCsproj)
                 args.push('--config=p/csharp');
+            // The project's own registered rules (register_custom_rules). Vanished
+            // paths are dropped by the resolver, because a --config that fails to
+            // resolve aborts the WHOLE semgrep run, not just that pack.
+            for (const cfg of resolveCustomSemgrepConfigs(ctx.plugin)) {
+                args.push(`--config=${cfg}`);
+            }
             args.push('--json', '--quiet', '--output', outFile);
             if (autoFix)
                 args.push('--autofix');

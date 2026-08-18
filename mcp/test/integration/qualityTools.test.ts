@@ -64,6 +64,7 @@ beforeAll(async () => {
   await import('../../src/tools/bugHunt.js');
   await import('../../src/tools/qualityCheck.js');
   await import('../../src/tools/reviewPr.js');
+  await import('../../src/tools/registerCustomRules.js');
 });
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -812,6 +813,57 @@ describe('bug_hunt', () => {
     expect(r.ok).toBe(true);
     expect(getArgs()).toContain('--config=p/typescript');
     expect(getArgs()).not.toContain('--config=p/javascript');
+  });
+
+  it("runs the project's registered custom Semgrep rules", async () => {
+    // The reading side of register_custom_rules did not exist until
+    // 2026-08-18: the tool persisted paths and its description promised
+    // "scan_sast / bug_hunt will then pick them up", but nothing anywhere read
+    // the key back. The only other reference to it in the repo was a test
+    // asserting it had been WRITTEN, which is why a green suite never noticed
+    // the feature did nothing. This asserts the whole path -- registration
+    // through to the actual --config argv.
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    const ruleDir = join(project, '.semgrep');
+    mkdirSync(ruleDir, { recursive: true });
+    writeFileSync(join(ruleDir, 'house-rules.yml'), 'rules: []\n', 'utf8');
+
+    const reg = (await getTool('register_custom_rules').handler(
+      { project_path: project },
+      plugin,
+    )) as { ok: true; registered: string[] };
+    expect(reg.ok).toBe(true);
+    expect(reg.registered).toEqual([ruleDir]);
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const { getArgs } = captureArgs(semgrepFx());
+    const r = (await getTool('bug_hunt').handler(
+      { project_path: project, force: true },
+      plugin,
+    )) as { ok: true };
+    expect(r.ok).toBe(true);
+    expect(getArgs()).toContain(`--config=${ruleDir}`);
+  });
+
+  it('skips a registered rule path that has since been deleted', async () => {
+    // Not tidiness: semgrep aborts the WHOLE run when any --config fails to
+    // resolve, so a stale registration would break every later scan in the
+    // project -- including scans nothing to do with custom rules.
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    const gone = join(project, '.semgrep-deleted');
+    plugin.storage.runtimeMeta.setJson('custom_semgrep_configs', [gone]);
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const { getArgs } = captureArgs(semgrepFx());
+    const r = (await getTool('bug_hunt').handler(
+      { project_path: project, force: true },
+      plugin,
+    )) as { ok: true };
+    expect(r.ok).toBe(true);
+    expect(getArgs()).not.toContain(`--config=${gone}`);
+    for (const base of BUG_HUNT_BASE_PACKS) expect(getArgs()).toContain(`--config=${base}`);
   });
 
   it('a bare package.json without tsconfig.json selects only p/javascript, not p/typescript', async () => {
