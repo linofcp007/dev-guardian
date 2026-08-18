@@ -24,18 +24,20 @@
  * rather than only in this comment.
  *
  * `buildPackList` (below) is where every `--config=` value gets assembled,
- * and it always appends `configs/semgrep/bugfix-js.yml` — fourteen local,
- * hand-authored rules covering the six bug classes for JS/TS specifically
- * (design of record: docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-
- * design.md) — resolved to an absolute path via `resolveBugfixRules`
+ * and it always appends every local `configs/semgrep/bugfix-*.yml` pack —
+ * one hand-authored file per language, each covering the same six bug
+ * classes for its language (fourteen rules for JS/TS, design of record:
+ * docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md; ten for
+ * Python, docs/superpowers/specs/2026-08-18-bugfix-rules-python-design.md)
+ * — resolved to absolute paths via `resolveBugfixRules`
  * (`../platform/configsDir.js`). Unlike `include_language_packs` below, this
  * is ON BY DEFAULT: a local file cannot 404, so it is also what keeps
  * `bug_hunt` reporting something true even when the registry is entirely
  * unreachable and both registry packs fail to resolve. `resolveBugfixRules`
- * returns `null` when the file is missing from the checkout, and
- * `buildPackList` omits the pack rather than pass Semgrep a `--config` path
- * that does not exist — which would reproduce, locally, the exact
- * whole-scan-aborts failure the paragraph above describes for a 404.
+ * returns `[]` when the directory cannot be read, and `buildPackList` omits
+ * the packs rather than pass Semgrep a `--config` path that does not exist
+ * — which would reproduce, locally, the exact whole-scan-aborts failure the
+ * paragraph above describes for a 404.
  *
  * `configuredPacks` also grows by whatever `detectLanguages` finds — one
  * Semgrep per-language pack (`p/javascript` OR `p/typescript` for a JS/TS
@@ -260,14 +262,15 @@ export interface BuildPackListOptions {
    *  `includeLanguagePacks` is true — see `detectLanguages`. */
   readonly languages: readonly string[];
   /**
-   * Absolute path to `configs/semgrep/bugfix-js.yml`, or `null` to omit it.
-   * Defaults to `resolveBugfixRules()`'s real, on-disk answer whenever the
-   * caller does not pass this field at all (production code, in `invoke`
-   * below, always takes that default). Passing it explicitly — including
-   * explicit `null` — is how tests exercise both the inclusion and the
-   * omission path without touching the filesystem or Semgrep.
+   * Absolute paths to the local `configs/semgrep/bugfix-*.yml` rule files,
+   * or `[]` to omit them. Defaults to `resolveBugfixRules()`'s real, on-disk
+   * answer whenever the caller does not pass this field at all (production
+   * code, in `invoke` below, always takes that default). Passing it
+   * explicitly — including an explicit empty array — is how tests exercise
+   * both the inclusion and the omission path without touching the
+   * filesystem or Semgrep.
    */
-  readonly bugfixRulesPath?: string | null;
+  readonly bugfixRulesPaths?: readonly string[];
 }
 
 /**
@@ -280,11 +283,10 @@ export interface BuildPackListOptions {
  * description of what is always-on vs. opt-in.
  */
 export function buildPackList(opts: BuildPackListOptions): string[] {
-  const bugfixRulesPath =
-    opts.bugfixRulesPath !== undefined ? opts.bugfixRulesPath : resolveBugfixRules();
+  const bugfixRulesPaths = opts.bugfixRulesPaths ?? resolveBugfixRules();
   return [
     ...BUG_HUNT_BASE_PACKS,
-    ...(bugfixRulesPath !== null ? [bugfixRulesPath] : []),
+    ...bugfixRulesPaths,
     ...(opts.includeLanguagePacks ? languagePacksFor(opts.languages) : []),
   ];
 }
@@ -421,13 +423,14 @@ registerToolModule(
   makeScanTool({
     name: 'bug_hunt',
     title:
-      'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS bug rules; ' +
-      'optional language packs, off by default; other languages still registry-only)',
+      'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS and Python ' +
+      'bug rules; optional language packs, off by default; other languages still registry-only)',
     description:
-      'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus a local, always-on ' +
-      'JS/TS rule pack: `configs/semgrep/bugfix-js.yml`, fourteen hand-authored rules ' +
-      'covering all six subcategories below for JS/TS — race_condition, null_safety, ' +
-      'off_by_one, memory_leak, error_handling, edge_case. `commands/guardian-fix.md` also ' +
+      'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus local, always-on ' +
+      'JS/TS and Python rule packs: `configs/semgrep/bugfix-js.yml` (fourteen rules) and ' +
+      '`configs/semgrep/bugfix-py.yml` (ten rules), each covering all six subcategories ' +
+      'below for its language — race_condition, null_safety, off_by_one, memory_leak, ' +
+      'error_handling, edge_case. `commands/guardian-fix.md` also ' +
       'names "broken happy paths" as a bug-hunting focus; that is not a syntactic pattern, ' +
       'so only its commonest concrete form is covered (an un-awaited mutating call inside ' +
       'an async function — rule `floating-mutation`, the race_condition entry, covering async ' +
@@ -441,12 +444,12 @@ registerToolModule(
       "`repo.save()` from an unrelated call that just shares the name, like `ctx.save()` " +
       "(Canvas 2D's synchronous state-stack push, nothing to do with persistence) — both " +
       "fire identically. That's why it isn't ERROR and why `severity_min` exists to " +
-      'filter it out. JS/TS only: no other language has ' +
-      'a local rule pack yet, so Python, Go, Java, C#, PHP, Ruby and Rust get only the ' +
-      'registry coverage described below, same as before this pack existed. The local pack ' +
-      'degrades rather than failing the whole scan if it is ever hand-edited into a bad ' +
-      'state — a YAML syntax error drops it and retries with the registry packs, a single ' +
-      'bad rule pattern inside an otherwise-valid file is dropped alone and every other ' +
+      'filter it out. JS/TS and Python only: no other language has ' +
+      'a local rule pack yet, so Go, Java, C#, PHP, Ruby and Rust get only the ' +
+      'registry coverage described below, same as before these packs existed. The local ' +
+      'packs degrade rather than failing the whole scan if one is ever hand-edited into a bad ' +
+      'state — a YAML syntax error drops just that file and retries with everything else, a ' +
+      'single bad rule pattern inside an otherwise-valid file is dropped alone and every other ' +
       "rule's findings still return — verified against the real built server, not assumed. " +
       "These rules do not make bug_hunt a substitute for the model-driven guardian-fix " +
       'path: they catch shapes, reading the code catches reasons. Optional ' +
@@ -465,7 +468,7 @@ registerToolModule(
       'redundant" — measured (exact rule-id duplication): 22% overall, but only ~9% for the ' +
       'JS/TS packs specifically (up to 40-43% for Java/Go) — most of what they add, especially ' +
       'for JS/TS, is net-new security scanning, not duplicate coverage. Beyond the local ' +
-      'JS/TS pack, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
+      'JS/TS and Python packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
       'registry pack reaching these six classes, and only for Python and Go — Java, C#, ' +
       'PHP, Ruby and Rust get none of them from the registry, and none yet from a local ' +
       'pack either. On any of those languages, a quiet or security-only result (with or ' +
@@ -533,10 +536,10 @@ registerToolModule(
       // deliberately not part of `categories`, which filters output, not
       // input). Detection only runs when asked — a project with a
       // persisted JS/TS stack snapshot does NOT get p/javascript/p/typescript
-      // added unless the caller opts in. The local bugfix-js.yml rules, by
+      // added unless the caller opts in. The local bugfix-*.yml rules, by
       // contrast, are NOT gated behind a flag — `buildPackList` appends
-      // them by default (omitting them only if resolveBugfixRules() finds
-      // the file missing); see this file's header comment.
+      // all of them by default (omitting them only if resolveBugfixRules()
+      // finds none); see this file's header comment.
       const configuredPacks: readonly string[] = buildPackList({
         includeLanguagePacks: input.include_language_packs === true,
         languages: input.include_language_packs === true ? detectLanguages(ctx) : [],

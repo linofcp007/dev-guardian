@@ -74,6 +74,31 @@ paths" fica de fora como padrão: é uma categoria de consequência, não uma
 forma sintática — `floating-mutation` cobre a sua forma concreta mais comum
 e mais nada a cobre.
 
+Para Python, o `bug_hunt` corre também por default
+`configs/semgrep/bugfix-py.yml` — dez regras hand-authored, cada uma com o seu
+par de fixtures — cobrindo as mesmas seis classes: `bare except:` e `except:
+pass`, `.objects.get()` sem guardar o `DoesNotExist`, dereference de `None`
+vindo de `re.match(...)` e de `dict.get(...)`, `range(len(x) + 1)`, ficheiros
+abertos sem context manager, corotinas `asyncio` criadas e descartadas, TOCTOU
+entre `os.path.exists()` e `open()`, e N+1 de querysets Django. Estas regras
+somam-se às 32 regras Python que o `p/r2c-bug-scan` já corre — nenhuma duplica
+nenhuma delas, medido contra as fixtures.
+
+Não cobrem um `await` esquecido numa `async def` do próprio projeto: essa regra
+geral não é exprimível em Semgrep OSS, e só os primitivos `asyncio` nomeados são
+apanhados. Para essa classe, leia o código.
+
+A N+1 de querysets Django exige o queryset dentro do próprio cabeçalho do
+`for` — `qs = Book.objects.all()` seguido de `for book in qs:` fica
+silencioso, e essa forma ligada a variável é provavelmente a mais comum na
+prática. O TOCTOU só reage a `os.path.exists`: `os.path.isfile`,
+`os.path.isdir` e `pathlib.Path(p).exists()` ficam todos silenciosos. E o
+dereference de `dict.get(...)` exclui clientes HTTP pela SUBSTRING do nome
+do receiver, não pelo nome — qualquer receiver cujo nome CONTENHA `requests`,
+`session`, `client`, `httpx`, `aiohttp` ou `urllib` é ignorado, por isso
+`session_data`, `clients` e `urllib_cache` também são falsos negativos, não
+só um dicionário chamado exatamente `client`.
+
 Duas ressalvas a levar a sério antes de confiar num resultado limpo: isto é
 Semgrep OSS, que casa sintaxe, não faz dataflow — um null deref a duas
 funções de distância do guard continua invisível a estas regras, que
@@ -85,8 +110,8 @@ síncrono de estado do Canvas 2D) produz falsos positivos por construção,
 por isso não é `ERROR` e o `severity_min` de `bug_hunt` existe precisamente
 para os filtrar.
 
-**Isto é só para JS/TS.** Para as restantes linguagens desta secção —
-Python, Go, Java, C#, PHP, Ruby, Rust — a situação anterior mantém-se: o
+**Isto é só para JS/TS e Python.** Para as restantes linguagens desta secção —
+Go, Java, C#, PHP, Ruby, Rust — a situação anterior mantém-se: o
 pack que corre por default (`p/r2c-bug-scan`) só cobre estas classes para
 Python e Go, os packs de linguagem opcionais (`p/javascript`, `p/typescript`,
 etc., ligados via `include_language_packs`) são packs de segurança e não

@@ -1,6 +1,6 @@
 /**
  * Resolve the plugin's `configs/` directory — where `bug_hunt` finds its
- * always-on local Semgrep rules (`configs/semgrep/bugfix-js.yml`).
+ * always-on local Semgrep rules (`configs/semgrep/bugfix-*.yml`).
  *
  * Mirrors `resolveScriptsDir` (`./scriptsDir.ts`) exactly, for the identical
  * reason documented there: this file lives at the same depth
@@ -36,7 +36,7 @@
  * rule file regardless of what a test (or an unusual host) sets `ctx` to.
  * That is exactly what an independent, `import.meta.url`-based probe gives.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 /**
@@ -64,24 +64,39 @@ export function resolveConfigsDir() {
     // rather than `undefined` — same fallback discipline as resolveScriptsDir.
     return unbundled;
 }
-const BUGFIX_JS_RULES = ['semgrep', 'bugfix-js.yml'];
+const BUGFIX_PREFIX = 'bugfix-';
+const BUGFIX_SUFFIX = '.yml';
 /**
- * Absolute path to `configs/semgrep/bugfix-js.yml`, or `null` when it is
- * missing.
+ * Absolute paths to every `configs/semgrep/bugfix-*.yml` on disk, sorted by
+ * filename so the `--config=` order is deterministic across platforms.
  *
- * That only happens on a damaged or unusually pruned checkout — this repo
- * ships the file — but `bug_hunt` must never pass a `--config` that does not
+ * Plural rather than a single path because the rule files are per-language
+ * (`bugfix-js.yml`, `bugfix-py.yml`, and one per language after that). A
+ * prefix match means a new language ships by adding its file — no wiring,
+ * no constant to update, nothing that can be forgotten. It also means
+ * `base.yml` and `routes.yml`, which live in the same directory and are
+ * NOT bug_hunt rule packs, are never picked up.
+ *
+ * Returns `[]` when the directory cannot be read — a damaged or unusually
+ * pruned checkout. `bug_hunt` must never pass a `--config` that does not
  * resolve: Semgrep aborts the WHOLE scan when any `--config` fails to load,
- * which is exactly the failure mode that took `bug_hunt` down once already
- * when the `p/bugs` registry pack was retired (see `bugHunt.ts`'s header
- * comment and `semgrepConfigFailure.ts`). A local `--config` pointing at a
- * path that does not exist reproduces that same failure without even
- * needing the network. Returning `null` here lets the caller
- * (`buildPackList` in `bugHunt.ts`) omit the pack instead of passing a bad
- * path.
+ * which is exactly the failure mode that took `bug_hunt` down when the
+ * `p/bugs` registry pack was retired (see `bugHunt.ts`'s header comment and
+ * `semgrepConfigFailure.ts`). An empty list lets `buildPackList` omit them
+ * rather than pass a bad path.
  */
 export function resolveBugfixRules() {
-    const path = join(resolveConfigsDir(), ...BUGFIX_JS_RULES);
-    return existsSync(path) ? path : null;
+    const dir = join(resolveConfigsDir(), 'semgrep');
+    let entries;
+    try {
+        entries = readdirSync(dir);
+    }
+    catch {
+        return [];
+    }
+    return entries
+        .filter((name) => name.startsWith(BUGFIX_PREFIX) && name.endsWith(BUGFIX_SUFFIX))
+        .sort()
+        .map((name) => join(dir, name));
 }
 //# sourceMappingURL=configsDir.js.map

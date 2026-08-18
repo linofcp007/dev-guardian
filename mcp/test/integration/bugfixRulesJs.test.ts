@@ -104,7 +104,20 @@ const AVAILABLE = semgrepAvailable();
 
 interface SemgrepResult { check_id: string; path: string }
 
-function run(dir: string): SemgrepResult[] {
+interface SemgrepRun {
+  readonly rows: SemgrepResult[];
+  /**
+   * How many files Semgrep actually scanned. Asserted by every caller, not
+   * merely carried: pointed at the in-repo fixture path (which contains a
+   * `test/` segment, skipped by Semgrep's default ignore list), Semgrep
+   * reports `paths.scanned: []` with zero results and exit 0 — identical in
+   * every observable way to "scanned everything, found nothing". Measured
+   * directly against this rule file, not inferred.
+   */
+  readonly scanned: number;
+}
+
+function run(dir: string): SemgrepRun {
   // Outside any `test/`-named path — see the module comment. `dir` itself
   // (e.g. `.../mcp/test/fixtures/bugfix-js/hits`) is never passed to
   // Semgrep directly.
@@ -117,7 +130,8 @@ function run(dir: string): SemgrepResult[] {
   );
   const parsed: unknown = JSON.parse(out);
   const results = (parsed as { results?: unknown[] }).results ?? [];
-  return results as SemgrepResult[];
+  const scanned = (parsed as { paths?: { scanned?: unknown[] } }).paths?.scanned ?? [];
+  return { rows: results as SemgrepResult[], scanned: scanned.length };
 }
 
 /** Last dot-separated segment — semgrep prefixes the config path onto ids. */
@@ -235,11 +249,17 @@ describe('bugfix-js rules', () => {
       // different one — keeps the id present. Count closes the same-file
       // case; grouping by file (rather than the old directory-wide pool)
       // closes the different-file case.
-      const grouped = rowsByFile(run(resolve(FIXTURES, 'hits')));
+      const dir = resolve(FIXTURES, 'hits');
+      const { rows, scanned } = run(dir);
+      // Guards against the temp-copy step silently scanning zero files —
+      // see SemgrepRun.scanned. Without this, an empty scan and a genuine
+      // clean-of-findings scan are indistinguishable.
+      expect(scanned).toBe(fixtureFiles(dir).length);
+      const grouped = rowsByFile(rows);
       for (const [file, expected] of Object.entries(EXPECTED_HITS_BY_FILE)) {
-        const rows = grouped[file] ?? [];
-        expect(ids(rows)).toEqual(expected.ids);
-        expect(rows.length).toBe(expected.count);
+        const fileRows = grouped[file] ?? [];
+        expect(ids(fileRows)).toEqual(expected.ids);
+        expect(fileRows.length).toBe(expected.count);
       }
     },
   );
@@ -252,8 +272,14 @@ describe('bugfix-js rules', () => {
     // same fact for an empty set. A rethrowing catch, an append at index
     // length, an awaited save and a deliberate fire-and-forget log are all
     // correct code that looks like a bug.
-    const grouped = rowsByFile(run(resolve(FIXTURES, 'misses')));
-    for (const file of fixtureFiles(resolve(FIXTURES, 'misses'))) {
+    const dir = resolve(FIXTURES, 'misses');
+    const { rows, scanned } = run(dir);
+    // This is the half of the proof most exposed to a silent zero-file
+    // scan: a broken temp copy would make every near-miss fixture read as
+    // "correctly silent" for the wrong reason. Ruled out directly.
+    expect(scanned).toBe(fixtureFiles(dir).length);
+    const grouped = rowsByFile(rows);
+    for (const file of fixtureFiles(dir)) {
       expect(grouped[file] ?? []).toEqual([]);
     }
   });
