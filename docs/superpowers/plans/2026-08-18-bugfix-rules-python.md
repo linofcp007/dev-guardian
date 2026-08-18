@@ -857,6 +857,16 @@ async def throttle():
 async def fan_out(items):
     asyncio.gather(*[work(i) for i in items])
     return "done"
+
+
+async def join_all(tasks):
+    asyncio.wait(tasks)
+    return "done"
+
+
+async def bounded(task):
+    asyncio.wait_for(task, timeout=5)
+    return "done"
 ```
 
 `mcp/test/fixtures/bugfix-py/hits/toctou_exists_open.py`:
@@ -917,6 +927,15 @@ async def fan_out(items):
     return "done"
 
 
+async def join_all(tasks):
+    await asyncio.wait(tasks)
+    return "done"
+
+
+async def bounded(task):
+    return await asyncio.wait_for(task, timeout=5)
+
+
 async def scheduled():
     asyncio.create_task(work(1))
     return "done"
@@ -955,7 +974,12 @@ def check_only(path):
 Add to `EXPECTED_HITS_BY_FILE`:
 
 ```typescript
-  'asyncio_not_awaited.py': { ids: ['bugfix-py-race-condition-asyncio-not-awaited'], count: 2 },
+  'asyncio_not_awaited.py': {
+    // All FOUR pattern-either branches (sleep, gather, wait, wait_for) are
+    // exercised, so a branch that silently stops matching drops the count.
+    ids: ['bugfix-py-race-condition-asyncio-not-awaited'],
+    count: 4,
+  },
   'open_without_context.py': { ids: ['bugfix-py-memory-leak-open-without-context'], count: 1 },
   'toctou_exists_open.py': { ids: ['bugfix-py-race-condition-toctou-exists-open'], count: 1 },
 ```
@@ -1259,7 +1283,7 @@ cd mcp
 npx vitest run test/integration/bugfixRulesPy.test.ts
 ```
 
-Expected: PASS, no skips. Ten hit files totalling **20 findings**, ten near-miss
+Expected: PASS, no skips. Ten hit files totalling **22 findings**, ten near-miss
 files with zero, and `p/r2c-bug-scan` silent on every hit fixture.
 
 - [ ] **Step 8: Run the whole suite**
@@ -1781,7 +1805,7 @@ this plan carries:
 
 | Check | Expected |
 | --- | --- |
-| Hit fixtures | 10 files, **20 findings** — each firing its own rule, plus `except_pass.py`, whose bare `except: pass` is genuinely both bugs |
+| Hit fixtures | 10 files, **22 findings** — each firing its own rule, plus `except_pass.py`, whose bare `except: pass` is genuinely both bugs |
 | Near-miss fixtures | 10 files, **0 findings** |
 | `p/r2c-bug-scan` on the hit fixtures | **0 findings** — every rule is additive |
 | `mapSubcategory` | all 10 ids land in their own class; none contains `unchecked` |
