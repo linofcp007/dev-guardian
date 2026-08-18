@@ -13,11 +13,13 @@ diff_scans, baselines, suppressions, and the regression history.
 
 ### Security
 - "is this safe?" → `security_scan_full`
+- "SAST / static analysis of my code" → `scan_sast`
 - "secrets?" → `scan_secrets`
 - "CVEs?" → `scan_deps` / `deps_audit`
 - "Dockerfile / container" → `scan_containers`
 - "IaC" → `scan_iac`
 - "deep bug hunt" → `bug_hunt`
+- "is this AI skill / MCP server safe to install?" → `scan_skill`
 - "what routes does this app expose?" → `map_attack_surface`
 - "active DAST / pen-test the running app" → `map_attack_surface` then
   `scan_dast` (target app must already be running; loopback-only unless
@@ -44,6 +46,7 @@ diff_scans, baselines, suppressions, and the regression history.
 ### Ops
 - "bootstrap" → `init_project`
 - "install scanners" → `install_toolchain`
+- "which scanners are installed?" → `check_toolchain`
 - "detect stack" → `detect_stack`
 - "logging / metrics" → `observability_setup`
 - "performance" → `perf_check`

@@ -83,3 +83,47 @@ describe('bug_hunt config list', () => {
     expect(packs).toContain('p/python');
   });
 });
+
+describe('bug_hunt runs the project\'s registered custom rules', () => {
+  // The reading side of register_custom_rules did not exist until 2026-08-18:
+  // the tool persisted paths and promised "scan_sast / bug_hunt will then pick
+  // them up", and nothing read the key back. These pin the splice so that
+  // cannot silently regress to a no-op again.
+  it('splices registered configs into the pack list', () => {
+    const custom = ['/tmp/proj/.semgrep', '/tmp/proj/rules'];
+    const packs = buildPackList({
+      includeLanguagePacks: false,
+      languages: [],
+      bugfixRulesPaths: [],
+      customConfigs: custom,
+    });
+    expect(packs).toEqual([...BUG_HUNT_BASE_PACKS, ...custom]);
+  });
+
+  it('places them after the local bugfix packs and before the language packs', () => {
+    // Order is asserted, not incidental: a --config later in the list wins on
+    // rule-id collisions, so a project's own rules must be able to sit
+    // alongside ours rather than being shadowed by an opt-in language pack.
+    const packs = buildPackList({
+      includeLanguagePacks: true,
+      languages: ['python'],
+      bugfixRulesPaths: ['/plugin/configs/semgrep/bugfix-py.yml'],
+      customConfigs: ['/tmp/proj/.semgrep'],
+    });
+    expect(packs).toEqual([
+      ...BUG_HUNT_BASE_PACKS,
+      '/plugin/configs/semgrep/bugfix-py.yml',
+      '/tmp/proj/.semgrep',
+      'p/python',
+    ]);
+  });
+
+  it('adds nothing when the project has registered no custom rules', () => {
+    const withNone = buildPackList({ includeLanguagePacks: false, languages: [], bugfixRulesPaths: [] });
+    const withEmpty = buildPackList({
+      includeLanguagePacks: false, languages: [], bugfixRulesPaths: [], customConfigs: [],
+    });
+    expect(withNone).toEqual([...BUG_HUNT_BASE_PACKS]);
+    expect(withEmpty).toEqual([...BUG_HUNT_BASE_PACKS]);
+  });
+});

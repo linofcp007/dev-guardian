@@ -94,6 +94,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { resolveBugfixRules } from '../platform/configsDir.js';
+import { resolveCustomSemgrepConfigs } from '../platform/customRules.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import {
@@ -271,6 +272,13 @@ export interface BuildPackListOptions {
    * filesystem or Semgrep.
    */
   readonly bugfixRulesPaths?: readonly string[];
+  /**
+   * The project's own Semgrep rules, registered via `register_custom_rules`
+   * and read back by `resolveCustomSemgrepConfigs`. Defaults to none, because
+   * this assembly is pure: `invoke` passes the real answer, and tests pass
+   * whatever they are exercising.
+   */
+  readonly customConfigs?: readonly string[];
 }
 
 /**
@@ -287,6 +295,7 @@ export function buildPackList(opts: BuildPackListOptions): string[] {
   return [
     ...BUG_HUNT_BASE_PACKS,
     ...bugfixRulesPaths,
+    ...(opts.customConfigs ?? []),
     ...(opts.includeLanguagePacks ? languagePacksFor(opts.languages) : []),
   ];
 }
@@ -543,6 +552,7 @@ registerToolModule(
       const configuredPacks: readonly string[] = buildPackList({
         includeLanguagePacks: input.include_language_packs === true,
         languages: input.include_language_packs === true ? detectLanguages(ctx) : [],
+        customConfigs: resolveCustomSemgrepConfigs(ctx.plugin),
       });
       const categoryParser = makeBugCategoryParser(input.categories);
 

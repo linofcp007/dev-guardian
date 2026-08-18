@@ -25,6 +25,7 @@ import {
   SeverityMin,
 } from '../schemas.js';
 import type { ToolRun } from '../types.js';
+import { resolveCustomSemgrepConfigs } from '../platform/customRules.js';
 import { registerToolModule } from './index.js';
 import {
   ensureReportDir,
@@ -68,6 +69,12 @@ registerToolModule(
       if (semgrepBin) {
         const args = ['--config=auto'];
         if (hasCsproj) args.push('--config=p/csharp');
+        // The project's own registered rules (register_custom_rules). Vanished
+        // paths are dropped by the resolver, because a --config that fails to
+        // resolve aborts the WHOLE semgrep run, not just that pack.
+        for (const cfg of resolveCustomSemgrepConfigs(ctx.plugin)) {
+          args.push(`--config=${cfg}`);
+        }
         args.push('--json', '--quiet', '--output', outFile);
         if (autoFix) args.push('--autofix');
         args.push(ctx.projectPath);

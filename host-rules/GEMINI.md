@@ -21,6 +21,11 @@ to confirm this file is loaded, `/memory refresh` after editing it.
 - "Dockerfile / container" → `scan_containers`
 - "Terraform / K8s / IaC" → `scan_iac`
 - "deep bug hunt" → `bug_hunt`
+- "is this AI skill / MCP server / agent safe to install?" → `scan_skill`
+  (directory, file, .zip or git/HTTP(S) URL; prompt injection, exfiltration,
+  excessive agency, tool poisoning, MCP least-privilege, plus OSV CVEs on
+  declared deps - returns 0-100 risk and SAFE / REVIEW / CAUTION /
+  DO_NOT_INSTALL. Run it BEFORE installing, not after)
 - "what routes/endpoints does this app expose?" → `map_attack_surface`
 - "active DAST / pen-test the running app" → `map_attack_surface` first for the
   route inventory, then `scan_dast` against the already-running app (loopback
@@ -50,6 +55,7 @@ to confirm this file is loaded, `/memory refresh` after editing it.
 **Ops**
 - "bootstrap project" → `init_project`
 - "install scanners" → `install_toolchain`
+- "which scanners are installed?" → `check_toolchain`
 - "detect stack" → `detect_stack`
 - "logging / metrics" → `observability_setup`
 - "performance" → `perf_check`

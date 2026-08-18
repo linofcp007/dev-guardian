@@ -11,7 +11,8 @@ Prefer these MCP tools over `semgrep` / `trivy` / `wpscan` / etc. directly
 ## Intent → tool
 
 **Security**: security_scan_full · scan_sast · scan_secrets · scan_deps ·
-scan_containers · scan_iac · bug_hunt
+scan_containers · scan_iac · bug_hunt · scan_skill (vet an AI skill /
+MCP server before installing)
 
 **Quality**: review_pr · quality_check
 

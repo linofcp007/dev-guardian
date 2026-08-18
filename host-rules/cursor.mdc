@@ -25,6 +25,7 @@ regression tracking.
 - "Dockerfile / container security" → `scan_containers`
 - "Terraform / K8s / IaC" → `scan_iac`
 - "deep bug hunt" → `bug_hunt`
+- "is this AI skill / MCP server safe to install?" → `scan_skill`
 
 ### Quality / review
 - "review before PR" → `review_pr`
@@ -42,6 +43,7 @@ regression tracking.
 ### Ops
 - "bootstrap" → `init_project`
 - "install scanners" → `install_toolchain`
+- "which scanners are installed?" → `check_toolchain`
 - "detect stack" → `detect_stack`
 - "logging / metrics" → `observability_setup`
 - "performance / Lighthouse / k6" → `perf_check`

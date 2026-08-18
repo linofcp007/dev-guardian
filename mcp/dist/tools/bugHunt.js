@@ -93,6 +93,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { resolveBugfixRules } from '../platform/configsDir.js';
+import { resolveCustomSemgrepConfigs } from '../platform/customRules.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { runProcess } from '../runners/processRunner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
@@ -213,6 +214,7 @@ export function buildPackList(opts) {
     return [
         ...BUG_HUNT_BASE_PACKS,
         ...bugfixRulesPaths,
+        ...(opts.customConfigs ?? []),
         ...(opts.includeLanguagePacks ? languagePacksFor(opts.languages) : []),
     ];
 }
@@ -443,6 +445,7 @@ registerToolModule(makeScanTool({
         const configuredPacks = buildPackList({
             includeLanguagePacks: input.include_language_packs === true,
             languages: input.include_language_packs === true ? detectLanguages(ctx) : [],
+            customConfigs: resolveCustomSemgrepConfigs(ctx.plugin),
         });
         const categoryParser = makeBugCategoryParser(input.categories);
         const outFile = join(reportDir, 'bugs.json');
