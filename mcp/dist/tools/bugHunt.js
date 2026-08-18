@@ -97,7 +97,7 @@ import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schema
 import { computeFingerprint } from '../fingerprint/findingFingerprint.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.js';
-import { describeConfigFailures, findConfigDownloadFailures, survivingPacks, } from './semgrepConfigFailure.js';
+import { describeConfigFailures, describeRawErrors, findConfigDownloadFailures, survivingPacks, wasAnythingScanned, } from './semgrepConfigFailure.js';
 import { makeScanTool, } from './scanToolFactory.js';
 /**
  * Packs `bug_hunt` always runs, regardless of detected stack.
@@ -457,13 +457,33 @@ registerToolModule(makeScanTool({
         const raw = readJsonSafe(outFile);
         const failures = findConfigDownloadFailures(raw);
         if (failures.length === 0) {
-            // The ordinary case: every configured pack resolved. Exit code /
-            // outcome alone decide ok-ness here, same as before — there is
-            // nothing in errors[] casting doubt on the result.
+            // The ordinary case: no WHOLE `--config=` failed to load —
+            // findConfigDownloadFailures found nothing whole-config-fatal. That
+            // does NOT mean the exit code is clean: a single bad RULE inside an
+            // otherwise-valid local file (e.g. a typo'd bugfix-js.yml pattern)
+            // also exits non-zero/non-one, but Semgrep still scans with
+            // everything else that loaded — verified live, not assumed (see
+            // semgrepConfigFailure.ts's header comment). wasAnythingScanned is
+            // what tells the two apart; exit code/outcome alone cannot (same
+            // file, same comment).
             if (raw)
                 parser_inputs.push({ parser: categoryParser, input: raw });
-            const ok = result.outcome === 'completed' || result.exitCode === 1;
-            tools_run.push({ name: 'semgrep', status: ok ? 'ok' : 'failed' });
+            const okByExit = result.outcome === 'completed' || result.exitCode === 1;
+            const ok = okByExit || wasAnythingScanned(raw);
+            const toolRun = { name: 'semgrep', status: ok ? 'ok' : 'failed' };
+            if (!okByExit) {
+                // Either genuinely failed, or "ok" only because something was
+                // scanned anyway despite a non-clean exit — both need the
+                // human-readable reason attached. Before this, a malformed local
+                // rule file reported status:'failed' with NO reason at all,
+                // alongside assessCoverage's "install semgrep" warning — which
+                // sends a user chasing their toolchain instead of their own rule
+                // file (bugfix-rules-jsts task-3 fix round).
+                const reason = describeRawErrors(raw);
+                if (reason !== null)
+                    toolRun.reason = reason;
+            }
+            tools_run.push(toolRun);
             return {
                 outcome: ok ? 'completed' : result.outcome,
                 tools_run,

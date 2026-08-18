@@ -40325,6 +40325,7 @@ function resolveBugfixRules() {
 // src/tools/semgrepConfigFailure.ts
 var DOWNLOAD_FAILURE_RE = /Failed to download configuration from (\S+)/;
 var REGISTRY_URL_PREFIX_RE = /^https?:\/\/semgrep\.dev\/c\//;
+var LOCAL_YAML_FAILURE_RE = /^Invalid YAML file (.+):\r?\n/;
 function findConfigDownloadFailures(raw) {
   if (raw === null) return [];
   const root = parseInputAsJson(raw);
@@ -40333,11 +40334,18 @@ function findConfigDownloadFailures(raw) {
   for (const entry of errors) {
     const message = getString(entry, "message");
     if (message === void 0) continue;
-    const match = DOWNLOAD_FAILURE_RE.exec(message);
-    if (!match) continue;
-    const url = match[1];
-    const pack = url !== void 0 ? url.replace(REGISTRY_URL_PREFIX_RE, "") : null;
-    failures.push({ pack, message });
+    const downloadMatch = DOWNLOAD_FAILURE_RE.exec(message);
+    if (downloadMatch) {
+      const url = downloadMatch[1];
+      const pack = url !== void 0 ? url.replace(REGISTRY_URL_PREFIX_RE, "") : null;
+      failures.push({ pack, message });
+      continue;
+    }
+    const localMatch = LOCAL_YAML_FAILURE_RE.exec(message);
+    if (localMatch) {
+      failures.push({ pack: localMatch[1] ?? null, message });
+      continue;
+    }
   }
   return failures;
 }
@@ -40349,6 +40357,26 @@ function survivingPacks(configured, failures) {
 }
 function describeConfigFailures(failures) {
   return failures.map((f) => `${f.pack ?? "unknown config"} (${f.message})`).join("; ");
+}
+function wasAnythingScanned(raw) {
+  if (raw === null) return false;
+  const root = parseInputAsJson(raw);
+  const paths = getProp(root, "paths");
+  const scanned = asArray(getProp(paths, "scanned"));
+  return scanned.length > 0;
+}
+function describeRawErrors(raw) {
+  if (raw === null) return null;
+  const root = parseInputAsJson(raw);
+  const errors = asArray(getProp(root, "errors"));
+  const parts = [];
+  for (const entry of errors) {
+    const message = getString(entry, "message");
+    if (message === void 0) continue;
+    const ruleId = getString(entry, "rule_id");
+    parts.push(ruleId !== void 0 ? `${ruleId}: ${message}` : message);
+  }
+  return parts.length > 0 ? parts.join("; ") : null;
 }
 
 // src/tools/bugHunt.ts
@@ -40524,8 +40552,14 @@ registerToolModule(
       const failures = findConfigDownloadFailures(raw);
       if (failures.length === 0) {
         if (raw) parser_inputs.push({ parser: categoryParser, input: raw });
-        const ok = result.outcome === "completed" || result.exitCode === 1;
-        tools_run.push({ name: "semgrep", status: ok ? "ok" : "failed" });
+        const okByExit = result.outcome === "completed" || result.exitCode === 1;
+        const ok = okByExit || wasAnythingScanned(raw);
+        const toolRun = { name: "semgrep", status: ok ? "ok" : "failed" };
+        if (!okByExit) {
+          const reason = describeRawErrors(raw);
+          if (reason !== null) toolRun.reason = reason;
+        }
+        tools_run.push(toolRun);
         return {
           outcome: ok ? "completed" : result.outcome,
           tools_run,

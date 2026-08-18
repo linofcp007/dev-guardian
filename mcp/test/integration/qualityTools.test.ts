@@ -345,6 +345,221 @@ describe('bug_hunt', () => {
     expect(reason).toContain(SECONDARY_PACK);
   });
 
+  // --- fix round (task-3 review): malformed (not missing) bugfix-js.yml ---
+
+  it('a whole-file-broken local rule config is dropped and retried, exactly like a dead registry pack', async () => {
+    // The "broaden failure detection" route the coordinator/reviewer named:
+    // a local --config= that fails to load (hand-edited YAML syntax error)
+    // gets the SAME retry-survivor treatment a dead registry pack already
+    // gets, rather than a separate mechanism.
+    const bugfixRules = resolveBugfixRules();
+    if (bugfixRules === null) {
+      throw new Error('configs/semgrep/bugfix-js.yml is missing from this checkout');
+    }
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+
+    let calls = 0;
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      calls += 1;
+      if (calls === 1) {
+        expect(opts.args).toContain(`--config=${bugfixRules}`);
+        // Real Semgrep 1.164.0 shape (live-captured against a deliberately
+        // corrupted copy of bugfix-js.yml — see semgrepConfigFailure.ts's
+        // header comment): whole invocation aborts, "Invalid YAML file
+        // <path>" names the local file directly (no URL, unlike a registry
+        // 404).
+        writeOutput(
+          opts,
+          JSON.stringify({
+            version: '1.164.0',
+            results: [],
+            errors: [
+              {
+                code: 5,
+                level: 'error',
+                type: 'SemgrepError',
+                message:
+                  `Invalid YAML file ${bugfixRules}:\n\twhile parsing a flow sequence\n` +
+                  `\t  in "<file>", line 28, column 16\n\texpected ',' or ']', but got '-'`,
+              },
+              {
+                code: 7,
+                level: 'error',
+                type: 'SemgrepError',
+                message: 'invalid configuration file found (1 configs were invalid)',
+              },
+            ],
+            paths: { scanned: [] },
+          }),
+        );
+        return { outcome: 'failed' as const, exitCode: 7, stdout: '', stderr: '', truncated: false };
+      }
+      // The retry must drop the broken local file and keep the two base
+      // registry packs — the OTHER thirteen rules never even get a chance
+      // in THIS retry (the whole file was unparsable), but nothing wider
+      // than that is lost.
+      expect(opts.args).not.toContain(`--config=${bugfixRules}`);
+      expect(opts.args).toContain(`--config=${PRIMARY_PACK}`);
+      expect(opts.args).toContain(`--config=${SECONDARY_PACK}`);
+      writeOutput(opts, semgrepFx());
+      return { outcome: 'completed' as const, exitCode: 1, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('bug_hunt');
+    const r = (await tool.handler({ project_path: project, force: true }, plugin)) as {
+      ok: true;
+      findings_count_by_severity: Record<string, number>;
+      tools_run: { name: string; status: string; reason?: string }[];
+      warnings: string[];
+      coverage?: string;
+    };
+    expect(calls).toBe(2);
+    expect(r.ok).toBe(true);
+    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+    expect(total).toBeGreaterThan(0);
+    expect(r.coverage).toBe('partial');
+    // The reason names the actual broken FILE, not a generic "semgrep
+    // failed" — a maintainer reading this knows exactly what to fix.
+    const reason = r.tools_run.find((t) => t.name === 'semgrep')?.reason ?? '';
+    expect(reason).toContain(bugfixRules);
+    // 'partial' coverage's own warning text never says "install" — that
+    // wording is reserved for coverage:'none' (a genuine toolchain gap).
+    expect(r.warnings.join(' ')).not.toMatch(/install semgrep/i);
+  });
+
+  it(
+    'a single broken RULE inside the local file does not fail the whole scan — real findings still ' +
+      'come back, with an accurate reason instead of the misleading "install semgrep" warning',
+    async () => {
+      // This is the case the coordinator's own reproduction and the two
+      // suggested routes did not cover, found while reproducing the
+      // described bug: a typo'd Semgrep PATTERN (not broken YAML) inside
+      // ONE of the fourteen rules. Semgrep does not abort the whole
+      // invocation for this — see semgrepConfigFailure.ts's header comment
+      // for the live, three-`--config=` proof — so broadening
+      // findConfigDownloadFailures alone would not fix it: this case never
+      // reaches that function's failures.length > 0 branch at all.
+      const project = tempProject();
+      const plugin = makePlugin(project);
+      vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+
+      vi.mocked(runProcess).mockImplementation(async (opts) => {
+        // Real Semgrep 1.164.0 shape, live-captured with the exact
+        // three-config invocation bug_hunt actually runs.
+        writeOutput(
+          opts,
+          JSON.stringify({
+            version: '1.164.0',
+            results: [
+              {
+                check_id: 'bugfix-js-off-by-one-loop-lte-length',
+                path: 'app.ts',
+                start: { line: 2 },
+                end: { line: 2 },
+                extra: { severity: 'ERROR', message: 'Provável off-by-one.', metadata: {} },
+              },
+            ],
+            errors: [
+              {
+                code: 2,
+                level: 'error',
+                type: 'Rule parse error',
+                rule_id: 'bugfix-js-error-handling-empty-catch',
+                message:
+                  'Rule parse error in rule bugfix-js-error-handling-empty-catch:\n ' +
+                  'Invalid pattern for JavaScript: Failure: no pattern found',
+              },
+            ],
+            paths: { scanned: ['app.ts'] },
+          }),
+        );
+        return { outcome: 'failed' as const, exitCode: 2, stdout: '', stderr: '', truncated: false };
+      });
+
+      const tool = getTool('bug_hunt');
+      const r = (await tool.handler({ project_path: project, force: true }, plugin)) as {
+        ok: true;
+        findings_count_by_severity: Record<string, number>;
+        tools_run: { name: string; status: string; reason?: string }[];
+        warnings: string[];
+        coverage?: string;
+        top_findings: { rule_id?: string }[];
+      };
+      expect(r.ok).toBe(true);
+      // Before this fix: status:'failed', no reason, coverage:'none' --
+      // even though a real scan happened. Must now read as 'ok'.
+      expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+      const reason = r.tools_run.find((t) => t.name === 'semgrep')?.reason ?? '';
+      expect(reason).toContain('bugfix-js-error-handling-empty-catch');
+      expect(reason).toContain('Invalid pattern for JavaScript');
+      // The real finding from the OTHER, still-valid rule must still reach
+      // the caller — not be silently dropped just because a sibling rule
+      // in the same file failed to parse.
+      const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+      expect(total).toBeGreaterThan(0);
+      expect(r.top_findings.some((f) => (f.rule_id ?? '').includes('off-by-one'))).toBe(true);
+      expect(r.coverage).toBe('full');
+      // The misleading warning has to be gone for this case specifically.
+      expect(r.warnings.join(' ')).not.toMatch(/install semgrep/i);
+    },
+  );
+
+  it(
+    'a genuine failure with no recognisable errors[] shape still reports failed — the broadening ' +
+      'does not turn every non-clean exit into "ok"',
+    async () => {
+      // Guards the mutation this fix could plausibly introduce: treating
+      // EVERY non-1/non-completed exit as ok regardless of whether
+      // anything was actually scanned. Nothing here matches
+      // findConfigDownloadFailures' two known whole-config shapes, and
+      // paths.scanned is empty — wasAnythingScanned must stay false, and
+      // the "install semgrep" warning must still fire, because this really
+      // is the kind of gap it exists to name.
+      const project = tempProject();
+      const plugin = makePlugin(project);
+      vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+
+      vi.mocked(runProcess).mockImplementation(async (opts) => {
+        writeOutput(
+          opts,
+          JSON.stringify({
+            version: '1.164.0',
+            results: [],
+            errors: [
+              {
+                code: 99,
+                level: 'error',
+                type: 'SomeOtherError',
+                message: 'semgrep crashed unexpectedly',
+              },
+            ],
+            paths: { scanned: [] },
+          }),
+        );
+        return { outcome: 'failed' as const, exitCode: 3, stdout: '', stderr: '', truncated: false };
+      });
+
+      const tool = getTool('bug_hunt');
+      const r = (await tool.handler({ project_path: project, force: true }, plugin)) as {
+        ok: true;
+        tools_run: { name: string; status: string; reason?: string }[];
+        coverage?: string;
+        warnings: string[];
+      };
+      expect(r.ok).toBe(true); // the TOOL CALL succeeds; the SCAN is reported as failed
+      expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('failed');
+      // The OTHER half of "no reason given": even a shape neither known
+      // pattern recognises is now surfaced, generically, instead of silence.
+      expect(r.tools_run.find((t) => t.name === 'semgrep')?.reason).toContain(
+        'semgrep crashed unexpectedly',
+      );
+      expect(r.coverage).toBe('none');
+      expect(r.warnings.join(' ')).toMatch(/install semgrep/i);
+    },
+  );
+
   it('never reports a clean result when every configured pack fails to download', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);
