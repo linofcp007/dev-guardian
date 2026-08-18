@@ -755,15 +755,20 @@ rules do not exist yet, so `ids(rows)` is `[]` against the expected id, and
     severity: ERROR
     languages: [python]
 
-  # Sem a exigência de que o índice seja usado no corpo, ao contrário do que
-  # o rascunho do design dizia: a forma solta não produziu um único falso
-  # positivo contra as fixtures de near-miss, e exigir o índice perderia as
-  # formas `values[i - 1]`, que são a mesma família de bug.
+  # O índice TEM de subscrever a mesma sequência de onde veio o len(). Uma
+  # versão anterior desta regra dispensava essa exigência, alegando zero
+  # falsos positivos contra as near-miss — alegação vazia, porque nenhuma
+  # near-miss continha sequer `range(len(x) + 1)`. Medido depois: a forma
+  # solta dispara em `for i in range(len(a) + 1): dp[i] = i`, o idioma
+  # normal de semear um array de DP com n+1 posições, onde o índice
+  # subscreve OUTRO array, do tamanho certo. Isso é código correto, e a
+  # severidade deste ficheiro define ERROR como "sempre um bug,
+  # independentemente da intenção".
   - id: bugfix-py-off-by-one-range-len-plus-one
     pattern-either:
       - pattern: |
           for $I in range(len($X) + 1):
-              ...
+              <... $X[$I] ...>
       - pattern: $X[len($X)]
     message: >-
       Off-by-one. `range(len(x) + 1)` itera uma posição a mais do que a

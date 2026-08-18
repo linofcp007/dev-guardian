@@ -101,8 +101,8 @@ their own class.
 
 ### `off_by_one` — 1 rule, ERROR
 
-- **range-len-plus-one** — `for … in range(len($X) + 1):`, and `$X[len($X)]`.
-  Zero coverage today.
+- **range-len-plus-one** — `for … in range(len($X) + 1):` **where the index
+  subscripts that same sequence**, and `$X[len($X)]`. Zero coverage today.
 
 ### `memory_leak` — 1 rule, WARNING
 
@@ -231,7 +231,7 @@ fired:**
 | `queryset-n-plus-one` | `.all()` | `.filter(…)` as well, which is the commoner form |
 | `none-deref-dict-get` | `$D.get($K).$M(…)` | a receiver-name exclusion — `requests.get(url).json()` fired |
 | `open-without-context` | not closed in scope | exclude attribute targets — `self.handle = open(…)` fired, and its `close()` is unreachable to a syntactic rule |
-| `range-len-plus-one` | `range(len($X) + 1)` **used to index** `$X` | ships without the indexing requirement: the loose form produced zero false positives across the near-miss set, and requiring the index would miss the `$X[i - 1]` shapes |
+| `range-len-plus-one` | `range(len($X) + 1)` **used to index** `$X` | **the design was right and my correction was wrong** — I dropped the indexing requirement citing zero false positives, but no near-miss fixture contained `range(len(x) + 1)` at all, so the measurement was vacuous. The loose form fires on `for i in range(len(a) + 1): dp[i] = i`, the ordinary DP-seeding idiom. Restored, and a near-miss now covers it. |
 
 **Final state, measured on the ten-rule set:** 18 findings across 10 hit
 fixtures, each firing exactly its own rule and nothing else; **zero** findings
