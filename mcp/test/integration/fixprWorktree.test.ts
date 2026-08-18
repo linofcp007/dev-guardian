@@ -13,13 +13,60 @@
  * own footprint rather than assuming its calls to `remove()` were enough.
  */
 
-import { describe, expect, it, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, expect, it, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorktree, WORKTREE_DIR_PREFIX } from '../../src/fixpr/worktree.js';
-import { rmDir } from '../helpers/tempDir.js';
+import { cleanupTempDirs, makeTempDir, rmDir } from '../helpers/tempDir.js';
+
+/**
+ * ---- The flake, its actual cause, and why this sandbox fixes it ---------
+ *
+ * This file's `afterAll` (bottom) explains at length why it checks exact
+ * paths instead of sweeping the OS temp directory for `WORKTREE_DIR_PREFIX`:
+ * the prefix is `worktree.ts`'s own constant, `createFixPr.test.ts` drives
+ * real `createWorktree` calls using it and holds one open for up to ~20s, and
+ * vitest runs test FILES concurrently.
+ *
+ * That reasoning was correct and was never applied to the two IN-TEST sweeps
+ * — `tempDirsWithPrefix(WORKTREE_DIR_PREFIX)` taken before and after a call
+ * and compared with `toEqual`. A sibling creating or removing its own
+ * worktree between those two snapshots changes the set and fails the
+ * assertion on code that did nothing wrong. That is the flake: seven
+ * misfires under full-suite parallelism, never one in isolation, and the
+ * `rmDir` retry hardening added in 1.7.2 could not have helped — nothing here
+ * was failing to delete, the set was being changed by another process.
+ *
+ * `createWorktree` builds its directory with `mkdtempSync(join(tmpdir(), …))`
+ * and `os.tmpdir()` re-reads TMPDIR/TEMP/TMP on every call, so pointing those
+ * at a per-file sandbox confines BOTH the worktrees this file creates and the
+ * sweeps that look for them to a directory no sibling can reach. Vitest 2.x
+ * runs each test file in its own forked process, so the mutation cannot leak
+ * sideways; it is restored at the end of `afterAll` regardless.
+ *
+ * The sandbox itself is created BEFORE the redirect, so it lives in the real
+ * temp directory and `cleanupTempDirs` can remove it afterwards.
+ */
+const TMP_VARS = ['TMPDIR', 'TEMP', 'TMP'] as const;
+const savedTmpVars = new Map<string, string | undefined>();
+
+beforeAll(() => {
+  const sandbox = makeTempDir('fixpr-tmproot-');
+  for (const name of TMP_VARS) {
+    savedTmpVars.set(name, process.env[name]);
+    process.env[name] = sandbox;
+  }
+});
+
+function restoreTmpVars(): void {
+  for (const name of TMP_VARS) {
+    const previous = savedTmpVars.get(name);
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  }
+}
 
 let repo: string;
 
@@ -223,6 +270,10 @@ afterAll(() => {
   expect(ownWorktreePaths.filter(existsSync)).toEqual([]);
   expect(ownNotRepoPaths.filter(existsSync)).toEqual([]);
   expect(tempDirsWithPrefix('fixpr-repo-')).toEqual([]);
+
+  // Last, so every assertion above still reads the sandbox.
+  restoreTmpVars();
+  cleanupTempDirs();
 });
 
 function tempDirsWithPrefix(prefix: string): string[] {
