@@ -8,6 +8,49 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- **`bug_hunt` now runs fourteen local, hand-authored Semgrep rules for JS/TS by default** —
+  `configs/semgrep/bugfix-js.yml`, alongside the always-on `p/r2c-bug-scan` +
+  `p/security-audit`. They cover six bug classes: race conditions (`floating-mutation`, one
+  rule), null/undefined safety (three), off-by-one (two), memory/resource leaks (three),
+  swallowed error handling (three), and two edge cases (`reduce` without an initial value,
+  `parseInt` without a radix). Unlike `include_language_packs`, a local file cannot 404, so
+  this also keeps `bug_hunt` reporting something true even when the Semgrep registry is
+  entirely unreachable. Every rule ships with a fixture pair under
+  `mcp/test/fixtures/bugfix-js/` — one file that must fire, one near-miss that must not —
+  asserted by exact rule-id set *and* raw finding count per file, so a rule that starts
+  matching its own near-miss fails the suite instead of quietly widening. Design of record:
+  `docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md`.
+  - **Six named classes — "broken happy paths" isn't one of them as a pattern.** It's a
+    category of consequence, not a syntactic shape; `floating-mutation` covers its commonest
+    concrete form — an un-awaited mutating call inside an `async` function — and nothing
+    covers the rest of it.
+  - **Semgrep OSS matches syntax, not dataflow.** These rules find the shapes bugs take, not
+    bugs proven by analysis — a null dereference two functions from its guard is invisible to
+    them.
+  - **The heuristic tier produces false positives by construction.** `floating-mutation`
+    cannot tell `repo.save()` from `logger.write()`; that's why it's `WARNING`, not `ERROR`,
+    and why `severity_min` exists.
+  - **JS/TS only.** Python, Go, Java, C#, PHP, Ruby and Rust are unchanged: `p/r2c-bug-scan`
+    still covers these classes only for Python and Go, and none of those languages has a
+    local rule pack yet.
+  - **Not a substitute for the model-driven `/guardian-fix` path.** These rules catch shapes;
+    reading the code catches reasons.
+
+### Fixed
+
+- **A malformed `configs/semgrep/bugfix-js.yml` degrades instead of failing the whole
+  `bug_hunt` scan.** Two distinct ways a hand-edited local rule file can break, both handled:
+  invalid YAML is now recognised the same way a dead registry pack is and dropped from a
+  retry; a single bad rule *pattern* inside an otherwise-valid file is dropped alone, with
+  every other rule's findings still returned, instead of the whole run reporting `failed`
+  with no reason and a misleading "install semgrep" warning. Verified live against the real
+  built `dist/server.js`, not only unit-tested.
+- **`skills/guardian-bugfix/SKILL.md` and `bug_hunt`'s own `title`/`description` stated the
+  JS/TS bug-class gap as a permanent fact.** Both now describe the local rules above instead
+  of the gap they close.
+
 ## [1.5.0] - 2026-08-17
 
 ### Fixed

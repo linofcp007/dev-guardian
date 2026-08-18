@@ -326,9 +326,29 @@ export function mapSubcategory(ruleId, existing) {
 }
 registerToolModule(makeScanTool({
     name: 'bug_hunt',
-    title: 'Bug hunt (Semgrep r2c-bug-scan + security-audit; optional language packs, off by ' +
-        'default; bug classes Python-strong, JS/TS-thin)',
-    description: 'Semgrep with p/r2c-bug-scan + p/security-audit always on. Optional ' +
+    title: 'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS bug rules; ' +
+        'optional language packs, off by default; other languages still registry-only)',
+    description: 'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus a local, always-on ' +
+        'JS/TS rule pack: `configs/semgrep/bugfix-js.yml`, fourteen hand-authored rules ' +
+        'covering all six subcategories below for JS/TS — race_condition, null_safety, ' +
+        'off_by_one, memory_leak, error_handling, edge_case. `commands/guardian-fix.md` also ' +
+        'names "broken happy paths" as a bug-hunting focus; that is not a syntactic pattern, ' +
+        'so only its commonest concrete form is covered (an un-awaited mutating call inside ' +
+        'an async function — rule `floating-mutation`, the race_condition entry) and nothing ' +
+        "covers the rest of it. These are Semgrep OSS pattern rules: they match syntax, not " +
+        'dataflow, so this finds the shapes bugs take, not bugs proven by analysis — a null ' +
+        'dereference two functions from its guard is invisible to them. The heuristic-tier ' +
+        'rules (WARNING/INFO) produce false positives by construction — `floating-mutation` ' +
+        "cannot tell `repo.save()` from `logger.write()` — which is why they aren't ERROR " +
+        'and why `severity_min` exists to filter them out. JS/TS only: no other language has ' +
+        'a local rule pack yet, so Python, Go, Java, C#, PHP, Ruby and Rust get only the ' +
+        'registry coverage described below, same as before this pack existed. The local pack ' +
+        'degrades rather than failing the whole scan if it is ever hand-edited into a bad ' +
+        'state — a YAML syntax error drops it and retries with the registry packs, a single ' +
+        'bad rule pattern inside an otherwise-valid file is dropped alone and every other ' +
+        "rule's findings still return — verified against the real built server, not assumed. " +
+        "These rules do not make bug_hunt a substitute for the model-driven guardian-fix " +
+        'path: they catch shapes, reading the code catches reasons. Optional ' +
         '`include_language_packs` (off by default) also runs one per-language pack for each ' +
         'language family `detect_stack` finds in the project (or, absent a snapshot, a quick ' +
         'package.json/tsconfig.json/pyproject.toml/pom.xml/go.mod check): p/javascript OR ' +
@@ -343,11 +363,13 @@ registerToolModule(makeScanTool({
         'coverage. Overlap with the always-on p/security-audit is real but partial, not "largely ' +
         'redundant" — measured (exact rule-id duplication): 22% overall, but only ~9% for the ' +
         'JS/TS packs specifically (up to 40-43% for Java/Go) — most of what they add, especially ' +
-        'for JS/TS, is net-new security scanning, not duplicate coverage. Only p/r2c-bug-scan ' +
-        '(44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) covers the six bug classes today, and ' +
-        'thinly outside Python — on a JS/TS project, a quiet or security-only result (with or ' +
+        'for JS/TS, is net-new security scanning, not duplicate coverage. Beyond the local ' +
+        'JS/TS pack, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
+        'registry pack reaching these six classes, and only for Python and Go — Java, C#, ' +
+        'PHP, Ruby and Rust get none of them from the registry, and none yet from a local ' +
+        'pack either. On any of those languages, a quiet or security-only result (with or ' +
         'without the language packs) is not evidence of a bug-free project; pair with ' +
-        '`scan_sast` or the guardian-bugfix skill\'s manual review for JS/TS logic bugs. ' +
+        "`scan_sast` or the guardian-bugfix skill's manual review. " +
         'Findings are categorised as `bug`, with subcategories (race_condition, null_safety, ' +
         'edge_case, error_handling, memory_leak, off_by_one) attached where the matching rule\'s ' +
         'own id says so — everything else keeps its own raw, tool-specific tag instead of being ' +
