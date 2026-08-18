@@ -113,3 +113,53 @@ rules:
       tratado. Envolva num try/except DoesNotExist, ou use `.filter().first()`.
     severity: WARNING
     languages: [python]
+
+  - id: bugfix-py-null-safety-none-deref-match
+    pattern-either:
+      - pattern: re.match(...).group(...)
+      - pattern: re.search(...).group(...)
+      - pattern: re.fullmatch(...).group(...)
+    message: >-
+      `.group()` direto no resultado de re.match/search/fullmatch. Quando o
+      padrão não casa, o retorno é None e isto é um AttributeError em
+      produção. Guarde o match numa variável e teste-a antes.
+    severity: ERROR
+    languages: [python]
+
+  # A exclusão por nome do receiver não é cosmética: `requests.get(url).json()`
+  # é sintaticamente idêntico a um lookup de dicionário e NÃO devolve None.
+  # Sem ela a regra dispara em todo o código que fala HTTP — medido, não
+  # suposto. O custo é conhecido e está nas limitações do design: um cliente
+  # HTTP com outro nome é falso positivo, um dicionário chamado `client` é
+  # falso negativo.
+  - id: bugfix-py-null-safety-none-deref-dict-get
+    patterns:
+      - pattern: $D.get($K).$M(...)
+      - pattern-not: $D.get($K, $DEF).$M(...)
+      - metavariable-regex:
+          metavariable: $D
+          regex: ^(?!.*(requests|session|client|httpx|aiohttp|urllib)).*$
+    message: >-
+      Método chamado diretamente sobre `.get()` de um dicionário. `.get()`
+      devolve None quando a chave não existe, por isso isto é um
+      AttributeError na primeira chave em falta. Passe um default
+      (`.get(k, ...)`) ou teste o resultado.
+    severity: ERROR
+    languages: [python]
+
+  # Sem a exigência de que o índice seja usado no corpo, ao contrário do que
+  # o rascunho do design dizia: a forma solta não produziu um único falso
+  # positivo contra as fixtures de near-miss, e exigir o índice perderia as
+  # formas `values[i - 1]`, que são a mesma família de bug.
+  - id: bugfix-py-off-by-one-range-len-plus-one
+    pattern-either:
+      - pattern: |
+          for $I in range(len($X) + 1):
+              ...
+      - pattern: $X[len($X)]
+    message: >-
+      Off-by-one. `range(len(x) + 1)` itera uma posição a mais do que a
+      sequência tem, e `x[len(x)]` está sempre fora dos limites — ambos são
+      IndexError. Queria provavelmente `range(len(x))` e `x[len(x) - 1]`.
+    severity: ERROR
+    languages: [python]

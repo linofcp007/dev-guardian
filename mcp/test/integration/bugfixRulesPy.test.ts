@@ -100,6 +100,9 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     ids: ['bugfix-py-error-handling-get-without-doesnotexist'],
     count: 1,
   },
+  'none_deref_dict_get.py': { ids: ['bugfix-py-null-safety-none-deref-dict-get'], count: 2 },
+  'none_deref_match.py': { ids: ['bugfix-py-null-safety-none-deref-match'], count: 2 },
+  'range_len_plus_one.py': { ids: ['bugfix-py-off-by-one-range-len-plus-one'], count: 2 },
 };
 
 describe('bugfix-py rules', () => {
@@ -147,6 +150,9 @@ const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-py-error-handling-bare-except': 'error_handling',
   'bugfix-py-error-handling-except-pass': 'error_handling',
   'bugfix-py-error-handling-get-without-doesnotexist': 'error_handling',
+  'bugfix-py-null-safety-none-deref-match': 'null_safety',
+  'bugfix-py-null-safety-none-deref-dict-get': 'null_safety',
+  'bugfix-py-off-by-one-range-len-plus-one': 'off_by_one',
 };
 
 describe('every rule id classifies as its own class', () => {
