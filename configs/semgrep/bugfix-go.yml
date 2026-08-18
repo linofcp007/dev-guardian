@@ -1,0 +1,55 @@
+# dev-guardian Semgrep config bugfix-go.
+# Bugs de implementação em Go. É a linguagem com o maior buraco de toda a
+# sequência: o p/r2c-bug-scan traz 5 regras Go e só 2 caem numa classe de bug,
+# ambas de integer overflow. error_handling está vazia — na linguagem em que
+# `if err != nil` É o modelo de erros — e o mesmo vale para race_condition,
+# null_safety, memory_leak e edge_case. Medições em
+# docs/superpowers/specs/2026-08-18-bugfix-rules-go-design.md.
+#
+# Cada regra tem um par de fixtures em
+# mcp/test/fixtures/bugfix-go/{hits,misses}/: um ficheiro que tem de disparar
+# a regra, outro parecido que NÃO pode. O ficheiro misses/ é a especificação
+# do que é código correto — se ele disparar, a regra é que está errada.
+#
+# Os ids seguem bugfix-go-<classe>-<nome>, em que <classe> tem de ser um dos
+# seis tokens que o mapSubcategory reconhece por regex sobre o id em
+# minúsculas. Nenhum id usa a palavra `unchecked`.
+#
+# NÃO acrescentar cláusulas de exclusão "defensivas" sem medir primeiro: duas
+# que pareciam obrigatórias foram medidas e não faziam nada (§8 do design).
+rules:
+  # Sem exclusões para mapa/canal/type-assertion, e isso é deliberado:
+  # `$F(...)` exige uma CHAMADA de função, e `v, _ := m["k"]`, `v, _ := <-ch`
+  # e `s, _ := x.(string)` não são chamadas, por isso as formas idiomáticas
+  # com ok-bool nunca casaram. Medido com uma variante larga e outra estreita
+  # lado a lado contra Go idiomático: resultado idêntico.
+  - id: bugfix-go-error-handling-err-discarded
+    pattern-either:
+      - pattern: $X, _ := $F(...)
+      - pattern: $X, _ = $F(...)
+    message: >-
+      Erro descartado com `_`. O segundo valor de retorno é o erro e está a ser
+      deitado fora, por isso a falha segue silenciosa e o valor devolvido pode
+      ser o zero-value em vez de dados reais.
+    severity: ERROR
+    languages: [go]
+
+  # WARNING e não ERROR: `_ = os.Remove(tmp)` num caminho de limpeza é
+  # deliberado e vai disparar. É o preço de apanhar os casos em que não é.
+  - id: bugfix-go-error-handling-err-blank-assign
+    pattern: _ = $F(...)
+    message: >-
+      Retorno atribuído a `_`. Se for um erro, foi descartado de propósito —
+      confirme que é mesmo essa a intenção e não um `if err != nil` esquecido.
+    severity: WARNING
+    languages: [go]
+
+  - id: bugfix-go-error-handling-empty-err-block
+    pattern: |
+      if $ERR != nil {
+      }
+    message: >-
+      Ramo de erro vazio. O erro foi testado e depois deitado fora, o que é
+      pior do que não o testar: o código diz que trata a falha e não trata.
+    severity: ERROR
+    languages: [go]
