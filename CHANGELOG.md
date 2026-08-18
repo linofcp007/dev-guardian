@@ -6,6 +6,47 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
+## [Unreleased]
+
+### Added
+
+- **Go bug rules** — `configs/semgrep/bugfix-go.yml`, ten hand-authored Semgrep
+  rules covering all six `bug_hunt` subcategories for Go: error discarded with
+  `_`, return assigned to `_`, empty `if err != nil` branch, type assertion
+  without `, ok`, `for i := 0; i <= len(xs)`, HTTP response body never closed,
+  ticker never stopped, `Lock()` without `defer Unlock()`, discarded `append`
+  result, and writing to a nil map. Go is where the registry pack leaves the
+  biggest hole: `p/r2c-bug-scan` ships 5 Go rules and only 2 land in a bug
+  class, both integer-overflow. Each rule ships a hit fixture and a near-miss
+  that must stay silent, and the no-duplication test carries a positive
+  control — a file that trips the pack's own Go rule — so "the pack found
+  nothing" cannot be confused with "the pack never ran".
+
+### Known gaps
+
+- No goroutine-leak rule.
+- **No loop-variable-capture rule, deliberately.** It was built and verified
+  working, then excluded: Go 1.22 made loop variables per-iteration, and
+  Semgrep cannot read `go.mod`, so on any module declaring `go 1.22` or later
+  it would fire on correct code.
+- `body-not-closed` only recognises `http.Get`; `http.Post` and `client.Do`
+  leak identically and are not covered.
+- `body-not-closed` and `ticker-not-stopped` match only the `:=` declaration
+  form; `var resp *http.Response; resp, err = http.Get(url)` and
+  `var t *time.Ticker; t = time.NewTicker(...)` are silent. `err-discarded`
+  covers both forms, so this is an inconsistency rather than a stated
+  policy.
+- `lock-without-defer` accepts any `defer mu.Unlock()` in the block. It also
+  does not cover `sync.RWMutex` read locks: the pattern matches the literal
+  `Lock()`/`Unlock()` method names, not `RLock()`/`RUnlock()`, so a read-lock
+  without `defer` — a common Go idiom — is entirely outside its reach. The
+  write lock (`Lock()`/`Unlock()`) on a `*sync.RWMutex` is covered.
+- `nil-map-write` only catches a locally `var`-declared map. A nil map
+  arriving as a function parameter, a struct field, or a return value panics
+  identically on write and is not covered — arguably the commoner
+  real-world shape.
+- `err-blank-assign` fires on deliberate discards, which is why it is `WARNING`.
+
 ## [1.7.2] - 2026-08-18
 
 ### Fixed
