@@ -9,7 +9,7 @@
     {
       "name": "dev-guardian",
       "source": "./",
-      "version": "1.7.0",
+      "version": "1.7.1",
       "description": "All-in-one open-source security, bugfix, quality, observability and compliance plugin. Stack-aware (Node/Python/PHP-WordPress/Go/Rust/Ruby/Java/C#-.NET). Trilingual EN/PT/ES.",
       "category": "security",
       "tags": [

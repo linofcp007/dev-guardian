@@ -6,7 +6,7 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
-## [Unreleased]
+## [1.7.1] - 2026-08-18
 
 ### Fixed
 
@@ -22,13 +22,13 @@ version bump.
   aborting the whole scan — Semgrep fails the entire run on one bad `--config`,
   so a stale registration would otherwise break every later scan in the project.
 
-### Added
-
-- `scan_skill` and `check_toolchain` to the intent→tool maps in all nine host
-  config files, and `scan_sast` to `clinerules`. `scan_skill` — which vets an AI
-  skill, MCP server or agent before installation — was absent from every one of
-  them, so no AI host had any way to know it exists. All 54 tools are now
-  present in all nine.
+- **Three tools were missing from the intent→tool maps** that tell an AI host
+  which tool to reach for. `scan_skill` — which vets a third-party AI skill,
+  MCP server or agent *before* installation and returns SAFE / REVIEW /
+  CAUTION / DO_NOT_INSTALL — was absent from all nine host-config files, so no
+  host had any way to learn it exists, despite it having its own command and
+  skill. `check_toolchain` was missing from six, `scan_sast` from one. All 54
+  registered tools are now present in all nine files, checked programmatically.
 
 ## [1.7.0] - 2026-08-18
 
