@@ -23,7 +23,21 @@
  * `title`/`description` below, which say this to the model reading them
  * rather than only in this comment.
  *
- * `configuredPacks` grows by whatever `detectLanguagePacks` finds — one
+ * `buildPackList` (below) is where every `--config=` value gets assembled,
+ * and it always appends `configs/semgrep/bugfix-js.yml` — fourteen local,
+ * hand-authored rules covering the six bug classes for JS/TS specifically
+ * (design of record: docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-
+ * design.md) — resolved to an absolute path via `resolveBugfixRules`
+ * (`../platform/configsDir.js`). Unlike `include_language_packs` below, this
+ * is ON BY DEFAULT: a local file cannot 404, so it is also what keeps
+ * `bug_hunt` reporting something true even when the registry is entirely
+ * unreachable and both registry packs fail to resolve. `resolveBugfixRules`
+ * returns `null` when the file is missing from the checkout, and
+ * `buildPackList` omits the pack rather than pass Semgrep a `--config` path
+ * that does not exist — which would reproduce, locally, the exact
+ * whole-scan-aborts failure the paragraph above describes for a 404.
+ *
+ * `configuredPacks` also grows by whatever `detectLanguages` finds — one
  * Semgrep per-language pack (`p/javascript` OR `p/typescript` for a JS/TS
  * project, never both — see `languagePacksFor` — plus `p/python`, `p/java`,
  * `p/golang`) for each language family the project's stack uses, sourced
@@ -77,6 +91,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { resolveBugfixRules } from '../platform/configsDir.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import {
@@ -104,8 +119,10 @@ import {
 } from './scanHelpers.js';
 import {
   describeConfigFailures,
+  describeRawErrors,
   findConfigDownloadFailures,
   survivingPacks,
+  wasAnythingScanned,
   type ConfigDownloadFailure,
 } from './semgrepConfigFailure.js';
 import {
@@ -221,15 +238,55 @@ function fallbackLanguages(projectPath: string): string[] {
 }
 
 /**
- * Which language packs to add, preferring the persisted `detect_stack`
- * snapshot (same two-tier lookup as `observabilitySetup.ts`'s `inferStack`:
- * prefer the snapshot, fall back to filesystem markers) so `bug_hunt` still
- * gets stack-aware coverage the very first time it runs against a project.
+ * Which languages `bug_hunt` should treat the project as using, preferring
+ * the persisted `detect_stack` snapshot (same two-tier lookup as
+ * `observabilitySetup.ts`'s `inferStack`: prefer the snapshot, fall back to
+ * filesystem markers) so `bug_hunt` still gets stack-aware coverage the very
+ * first time it runs against a project. Returns raw language names (e.g.
+ * `typescript`), not pack names — `buildPackList` does that mapping itself,
+ * via `languagePacksFor`, so the mapping step stays testable in isolation
+ * from storage/filesystem access.
  */
-function detectLanguagePacks(ctx: InvokeContext): string[] {
+function detectLanguages(ctx: InvokeContext): string[] {
   const snapshotLanguages = ctx.plugin.storage.stack.getLatest()?.snapshot.languages;
-  const languages = snapshotLanguages ?? fallbackLanguages(ctx.projectPath);
-  return languagePacksFor(languages);
+  return snapshotLanguages ?? fallbackLanguages(ctx.projectPath);
+}
+
+/** Options for {@link buildPackList}. */
+export interface BuildPackListOptions {
+  /** Mirrors `BugHuntInput.include_language_packs`. */
+  readonly includeLanguagePacks: boolean;
+  /** Raw language names (e.g. `typescript`), consulted only when
+   *  `includeLanguagePacks` is true — see `detectLanguages`. */
+  readonly languages: readonly string[];
+  /**
+   * Absolute path to `configs/semgrep/bugfix-js.yml`, or `null` to omit it.
+   * Defaults to `resolveBugfixRules()`'s real, on-disk answer whenever the
+   * caller does not pass this field at all (production code, in `invoke`
+   * below, always takes that default). Passing it explicitly — including
+   * explicit `null` — is how tests exercise both the inclusion and the
+   * omission path without touching the filesystem or Semgrep.
+   */
+  readonly bugfixRulesPath?: string | null;
+}
+
+/**
+ * Assembles the full `--config=` pack list `bug_hunt` runs with. Extracted
+ * from `invoke` (rather than inlined) so the assembly itself is
+ * unit-testable without spawning Semgrep — see `bugHuntConfigs.test.ts`.
+ *
+ * Order: base packs, then the local bugfix rules (both on by default), then
+ * the optional per-language packs — mirroring the header comment's own
+ * description of what is always-on vs. opt-in.
+ */
+export function buildPackList(opts: BuildPackListOptions): string[] {
+  const bugfixRulesPath =
+    opts.bugfixRulesPath !== undefined ? opts.bugfixRulesPath : resolveBugfixRules();
+  return [
+    ...BUG_HUNT_BASE_PACKS,
+    ...(bugfixRulesPath !== null ? [bugfixRulesPath] : []),
+    ...(opts.includeLanguagePacks ? languagePacksFor(opts.languages) : []),
+  ];
 }
 
 /** The six canonical bug subcategories `mapSubcategory` classifies into.
@@ -364,10 +421,35 @@ registerToolModule(
   makeScanTool({
     name: 'bug_hunt',
     title:
-      'Bug hunt (Semgrep r2c-bug-scan + security-audit; optional language packs, off by ' +
-      'default; bug classes Python-strong, JS/TS-thin)',
+      'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS bug rules; ' +
+      'optional language packs, off by default; other languages still registry-only)',
     description:
-      'Semgrep with p/r2c-bug-scan + p/security-audit always on. Optional ' +
+      'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus a local, always-on ' +
+      'JS/TS rule pack: `configs/semgrep/bugfix-js.yml`, fourteen hand-authored rules ' +
+      'covering all six subcategories below for JS/TS — race_condition, null_safety, ' +
+      'off_by_one, memory_leak, error_handling, edge_case. `commands/guardian-fix.md` also ' +
+      'names "broken happy paths" as a bug-hunting focus; that is not a syntactic pattern, ' +
+      'so only its commonest concrete form is covered (an un-awaited mutating call inside ' +
+      'an async function — rule `floating-mutation`, the race_condition entry, covering async ' +
+      'declarations, arrow functions, and class/object methods, but NOT async function expressions ' +
+      '— a Semgrep engine limitation, not an oversight) and nothing covers the rest of it. ' +
+      "These are Semgrep OSS pattern rules: they match syntax, not " +
+      'dataflow, so this finds the shapes bugs take, not bugs proven by analysis — a null ' +
+      'dereference two functions from its guard is invisible to them. The heuristic-tier ' +
+      'rules (WARNING/INFO) produce false positives by construction — `floating-mutation` ' +
+      "matches on the method name alone, so it can't tell a real mutation like " +
+      "`repo.save()` from an unrelated call that just shares the name, like `ctx.save()` " +
+      "(Canvas 2D's synchronous state-stack push, nothing to do with persistence) — both " +
+      "fire identically. That's why it isn't ERROR and why `severity_min` exists to " +
+      'filter it out. JS/TS only: no other language has ' +
+      'a local rule pack yet, so Python, Go, Java, C#, PHP, Ruby and Rust get only the ' +
+      'registry coverage described below, same as before this pack existed. The local pack ' +
+      'degrades rather than failing the whole scan if it is ever hand-edited into a bad ' +
+      'state — a YAML syntax error drops it and retries with the registry packs, a single ' +
+      'bad rule pattern inside an otherwise-valid file is dropped alone and every other ' +
+      "rule's findings still return — verified against the real built server, not assumed. " +
+      "These rules do not make bug_hunt a substitute for the model-driven guardian-fix " +
+      'path: they catch shapes, reading the code catches reasons. Optional ' +
       '`include_language_packs` (off by default) also runs one per-language pack for each ' +
       'language family `detect_stack` finds in the project (or, absent a snapshot, a quick ' +
       'package.json/tsconfig.json/pyproject.toml/pom.xml/go.mod check): p/javascript OR ' +
@@ -382,11 +464,13 @@ registerToolModule(
       'coverage. Overlap with the always-on p/security-audit is real but partial, not "largely ' +
       'redundant" — measured (exact rule-id duplication): 22% overall, but only ~9% for the ' +
       'JS/TS packs specifically (up to 40-43% for Java/Go) — most of what they add, especially ' +
-      'for JS/TS, is net-new security scanning, not duplicate coverage. Only p/r2c-bug-scan ' +
-      '(44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) covers the six bug classes today, and ' +
-      'thinly outside Python — on a JS/TS project, a quiet or security-only result (with or ' +
+      'for JS/TS, is net-new security scanning, not duplicate coverage. Beyond the local ' +
+      'JS/TS pack, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
+      'registry pack reaching these six classes, and only for Python and Go — Java, C#, ' +
+      'PHP, Ruby and Rust get none of them from the registry, and none yet from a local ' +
+      'pack either. On any of those languages, a quiet or security-only result (with or ' +
       'without the language packs) is not evidence of a bug-free project; pair with ' +
-      '`scan_sast` or the guardian-bugfix skill\'s manual review for JS/TS logic bugs. ' +
+      "`scan_sast` or the guardian-bugfix skill's manual review. " +
       'Findings are categorised as `bug`, with subcategories (race_condition, null_safety, ' +
       'edge_case, error_handling, memory_leak, off_by_one) attached where the matching rule\'s ' +
       'own id says so — everything else keeps its own raw, tool-specific tag instead of being ' +
@@ -445,15 +529,18 @@ registerToolModule(
         };
       }
 
-      // Off by default (§ BugHuntInput above: this is deliberately not part
-      // of `categories`, which filters output, not input). Detection only
-      // runs when asked — a project with a persisted JS/TS stack snapshot
-      // does NOT get p/javascript/p/typescript added unless the caller
-      // opts in.
-      const configuredPacks: readonly string[] = [
-        ...BUG_HUNT_BASE_PACKS,
-        ...(input.include_language_packs === true ? detectLanguagePacks(ctx) : []),
-      ];
+      // Language packs are off by default (§ BugHuntInput above: this is
+      // deliberately not part of `categories`, which filters output, not
+      // input). Detection only runs when asked — a project with a
+      // persisted JS/TS stack snapshot does NOT get p/javascript/p/typescript
+      // added unless the caller opts in. The local bugfix-js.yml rules, by
+      // contrast, are NOT gated behind a flag — `buildPackList` appends
+      // them by default (omitting them only if resolveBugfixRules() finds
+      // the file missing); see this file's header comment.
+      const configuredPacks: readonly string[] = buildPackList({
+        includeLanguagePacks: input.include_language_packs === true,
+        languages: input.include_language_packs === true ? detectLanguages(ctx) : [],
+      });
       const categoryParser = makeBugCategoryParser(input.categories);
 
       const outFile = join(reportDir, 'bugs.json');
@@ -499,12 +586,31 @@ registerToolModule(
       const failures = findConfigDownloadFailures(raw);
 
       if (failures.length === 0) {
-        // The ordinary case: every configured pack resolved. Exit code /
-        // outcome alone decide ok-ness here, same as before — there is
-        // nothing in errors[] casting doubt on the result.
+        // The ordinary case: no WHOLE `--config=` failed to load —
+        // findConfigDownloadFailures found nothing whole-config-fatal. That
+        // does NOT mean the exit code is clean: a single bad RULE inside an
+        // otherwise-valid local file (e.g. a typo'd bugfix-js.yml pattern)
+        // also exits non-zero/non-one, but Semgrep still scans with
+        // everything else that loaded — verified live, not assumed (see
+        // semgrepConfigFailure.ts's header comment). wasAnythingScanned is
+        // what tells the two apart; exit code/outcome alone cannot (same
+        // file, same comment).
         if (raw) parser_inputs.push({ parser: categoryParser, input: raw });
-        const ok = result.outcome === 'completed' || result.exitCode === 1;
-        tools_run.push({ name: 'semgrep', status: ok ? 'ok' : 'failed' });
+        const okByExit = result.outcome === 'completed' || result.exitCode === 1;
+        const ok = okByExit || wasAnythingScanned(raw);
+        const toolRun: ToolRun = { name: 'semgrep', status: ok ? 'ok' : 'failed' };
+        if (!okByExit) {
+          // Either genuinely failed, or "ok" only because something was
+          // scanned anyway despite a non-clean exit — both need the
+          // human-readable reason attached. Before this, a malformed local
+          // rule file reported status:'failed' with NO reason at all,
+          // alongside assessCoverage's "install semgrep" warning — which
+          // sends a user chasing their toolchain instead of their own rule
+          // file (bugfix-rules-jsts task-3 fix round).
+          const reason = describeRawErrors(raw);
+          if (reason !== null) toolRun.reason = reason;
+        }
+        tools_run.push(toolRun);
         return {
           outcome: ok ? 'completed' : result.outcome,
           tools_run,

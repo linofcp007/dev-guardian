@@ -1,0 +1,489 @@
+# dev-guardian Semgrep config bugfix-js.
+# Bugs de implementação em JS/TS — a classe de findings que os packs do
+# registo Semgrep não cobrem: p/r2c-bug-scan só cobre race/null/off-by-one/
+# leak/error-handling para Python e Go; os packs por linguagem (p/javascript,
+# p/typescript) são ~100% security, zero nestas classes. Detalhe e medições em
+# docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md.
+#
+# Cada regra tem um par de fixtures em
+# mcp/test/fixtures/bugfix-js/{hits,misses}/: um ficheiro que tem de disparar
+# a regra, outro parecido que NÃO pode. O ficheiro misses/ é a especificação
+# do que é código correto — se ele disparar, a regra é que está errada.
+#
+# Os ids seguem o formato bugfix-js-<classe>-<nome>, em que <classe> tem de
+# ser um dos seis tokens que mapSubcategory (mcp/src/tools/bugHunt.ts:317)
+# reconhece por regex sobre o id em minúsculas: race-condition, null-safety,
+# off-by-one, memory-leak, error-handling, edge-case.
+#
+# Duas severidades: ERROR quando o padrão é sempre um bug, independentemente
+# da intenção; WARNING/INFO quando é normalmente um bug mas tem usos
+# legítimos (heurística).
+rules:
+  - id: bugfix-js-error-handling-empty-catch
+    pattern: try { ... } catch ($E) { }
+    message: >-
+      Erro engolido em silêncio. O bloco catch está vazio, por isso a falha
+      desaparece sem log, sem rethrow e sem tratamento.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  # Task 1 grouped this with empty-catch via pattern-either, to keep that
+  # first test small. Split out here so its id is distinct and its
+  # classification (error_handling) is independently asserted. Behaviour is
+  # unchanged from what Task 1 shipped — but stated correctly here after a
+  # review round corrected a wrong claim about it (see git history and
+  # task-2-report.md): BOTH branches match a call with EITHER zero OR one
+  # parameter, not "zero only" for the arrow and "exactly one" for the
+  # function expression as an earlier version of this comment claimed.
+  # Empirically, Semgrep treats `() => {}` and a one-parameter arrow as the
+  # same arity for this match, and likewise `function ($E) {}` also matches
+  # a zero-parameter `function () {}` — confirmed directly (not assumed) by
+  # probing `() => {}`, `(err) => {}`, `(err, extra) => {}` and
+  # `function () {}` against this exact rule: the two-parameter case is the
+  # only one that does NOT fire. So the rule already covers the arguably
+  # more common real-world shape (`.catch((err) => {})`, error parameter
+  # present but unused) — it was never as narrow as previously documented
+  # here. A non-empty block remains a structurally different AST shape than
+  # `{}` regardless of arity, so a catch that logs or rethrows still stays
+  # silent with no exclusion clause needed.
+  - id: bugfix-js-error-handling-empty-promise-catch
+    patterns:
+      - pattern-either:
+          - pattern: $P.catch(() => {})
+          - pattern: $P.catch(function ($E) {})
+    message: >-
+      Promise .catch() vazio. A rejeição é silenciada sem log, sem rethrow e
+      sem tratamento.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  - id: bugfix-js-error-handling-catch-returns-null
+    patterns:
+      - pattern-either:
+          - pattern: |
+              try { ... } catch ($E) { return null; }
+          - pattern: |
+              try { ... } catch ($E) { return undefined; }
+          - pattern: |
+              try { ... } catch ($E) { return []; }
+    message: >-
+      O catch converte uma falha num valor vazio (null/undefined/[]) que
+      quem chama não consegue distinguir de um resultado legítimo. Loga
+      e/ou relança, ou devolve um resultado tipado que marque o erro.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  - id: bugfix-js-off-by-one-loop-lte-length
+    pattern: for (...; $I <= $A.length; ...) { ... }
+    message: >-
+      Provável off-by-one: a condição usa <= com .length, por isso a última
+      iteração lê $A[$A.length], que é sempre undefined.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  # Turns on read vs write: `items[items.length]` alone is a naive `pattern`
+  # match — it also matches the LHS of `items[items.length] = 4`, because
+  # that assignment's target IS the same subscript-expression node. The
+  # write is contained WITHIN the larger assignment-expression span, so
+  # (per Task 1's established lesson: pattern-not needs a same-span match,
+  # pattern-not-inside excludes by containment) pattern-not-inside is what
+  # excludes it here too. Confirmed empirically before shipping: the naive
+  # single-clause pattern fires on both the read (misses/index-at-length.ts
+  # readLastValid uses `.length - 1`, a different AST shape, already safe)
+  # and Task 1's own append case (misses/off-by-one.ts writesToLength) — the
+  # pattern-not-inside clause below is what makes the append case go silent.
+  - id: bugfix-js-off-by-one-index-at-length
+    patterns:
+      - pattern: $A[$A.length]
+      - pattern-not-inside: $A[$A.length] = ...
+    message: >-
+      $A[$A.length] é sempre undefined — o último índice válido é
+      $A.length - 1.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  - id: bugfix-js-race-condition-floating-mutation
+    # Two corrections versus the first draft of this pattern, both found by
+    # the near-miss fixture (mcp/test/fixtures/bugfix-js/misses/
+    # race-condition.ts) firing when it must not — per this rule set's own
+    # governing principle, the rule was narrowed, the fixture was not:
+    #
+    # 1. `pattern-not: await $O.$M(...)` / `pattern-not: return $O.$M(...)`
+    #    are no-ops. `pattern-not` suppresses a match only when the EXACT
+    #    SAME span also matches the negated pattern, but `$O.$M(...)` matches
+    #    just the call, while `await $O.$M(...)` / `return $O.$M(...)` match
+    #    a strictly larger, ENCLOSING span — the two spans never coincide, so
+    #    the exclusion never fired and `await repo.save(...)` /
+    #    `return repo.save(...)` matched anyway. `pattern-not-inside` is the
+    #    right primitive: it excludes a match whose span is CONTAINED IN the
+    #    negated pattern's span, which is what "awaited"/"returned" means
+    #    here. Confirmed with an isolated probe against each near-miss
+    #    function individually before and after.
+    # 2. "write" is deliberately NOT in the verb list, even though it reads
+    #    like a mutating verb: the same fixture's
+    #    `logger.write('fire and forget')` is the canonical near-miss this
+    #    rule must stay silent on (an unawaited log write is a decision, not
+    #    a bug), and "write" is exactly as common a method name on a
+    #    non-mutating logger/stream as on a mutating repository.
+    #
+    # 3. (bugfix-rules-jsts fix wave) The first `pattern-either` alternative
+    #    below, `async function $F(...) { ... }`, only ever matched a
+    #    function DECLARATION. Empirically (Semgrep 1.164.0) that same text
+    #    also matches an async class method and an async object-literal
+    #    method — both declaration-shaped enough for the generic JS/TS
+    #    matcher — but silently excluded an async ARROW function and an
+    #    async function EXPRESSION (`const x = async function () {...}`).
+    #    Arrow functions are the dominant modern shape (`async (req, res) =>
+    #    {...}` in Express/NestJS route handlers, React handlers, `.then()`
+    #    callbacks), so the original clause missed the single most common
+    #    real container for exactly the bug this rule exists to catch.
+    #    The obvious repair, `pattern-inside: async (...) => { ... }`, is a
+    #    TRAP: verified directly that Semgrep's generic matcher does not
+    #    check the `async` keyword AT ALL when matching an arrow-function
+    #    pattern fragment — `pattern: async (...) => { ... }` matches a
+    #    plain, non-async arrow identically (confirmed as a bare top-level
+    #    `pattern` and as `pattern-inside`, with ellipsis/single-named/
+    #    single-bare parameter forms, with and without a wrapping
+    #    `const $V = ...`). Shipping that one-liner would have turned a
+    #    WARNING about un-awaited state mutation inside ASYNC code into one
+    #    that also fires on every SYNCHRONOUS arrow function calling
+    #    `.save()`/`.update()`/etc — a bigger false-positive surface than
+    #    the gap it closes, and silently so: nothing in this file's own
+    #    fixtures used a sync arrow before this fix wave, so the suite would
+    #    have stayed green.
+    #    The second and third alternatives below instead bind the WHOLE
+    #    candidate container to a metavariable and check the metavariable's
+    #    OWN SOURCE TEXT starts with `async` via `metavariable-regex` — a
+    #    text check on the captured span, sidestepping the broken AST-level
+    #    modifier comparison entirely (same family of technique as the
+    #    text-anchored `metavariable-regex` checks elsewhere in this file).
+    #    `$ANY = $ASYNCVAL` catches the assignment form
+    #    (`const handler = async (...) => {...}`); `$FN(..., $ASYNCARG)`
+    #    catches the call-argument form (`app.post(path, async (...) =>
+    #    {...})`, `el.addEventListener(evt, async (...) => {...})`) — both
+    #    verified to fire correctly and to stay silent on their synchronous
+    #    counterparts, and both still respect the verb-list filter and the
+    #    await/return exclusions below. Also verified, and left as-is since
+    #    it is this rule's pre-existing behaviour for the declaration branch
+    #    (not something newly introduced here): containment reaches through
+    #    a nested SYNCHRONOUS callback inside an async container (e.g. an
+    #    unawaited `repo.save` inside a `.forEach` callback that itself sits
+    #    inside an async arrow or async function) — both the declaration and
+    #    the new arrow branches fire there, consistently with each other.
+    #
+    #    RESIDUAL, stated plainly rather than hidden (same discipline as the
+    #    unchecked-match rule's own residual, below): async FUNCTION
+    #    EXPRESSIONS (`const x = async function () { ... }`, named or
+    #    anonymous) remain uncovered. The container-shaped `pattern-inside`
+    #    for a function expression DOES match in isolation — but verified,
+    #    repeatedly and from several angles (metavariable renamed, clause
+    #    order swapped, exclusion reworded, TS types removed), that adding
+    #    the required `pattern-not-inside: return $O.$M(...)` clause
+    #    ALONGSIDE it makes the match silently vanish, with zero
+    #    `errors[]` — a Semgrep engine asymmetry between how it scopes
+    #    `pattern-not-inside` for a FunctionExpression container versus an
+    #    ArrowFunctionExpression or FunctionDeclaration container (neither
+    #    of which is affected). Dropping the `return`-exclusion for that
+    #    shape would reintroduce the exact no-op class fixed in point 1
+    #    above (`return repo.save(...)` inside a function expression would
+    #    then wrongly fire). Neither option is correct, so function
+    #    expressions are left as a documented gap rather than shipped
+    #    half-working. Not chased further here; re-probe if a future
+    #    Semgrep version changes this.
+    patterns:
+      - pattern: $O.$M(...)
+      - pattern-either:
+          - pattern-inside: |
+              async function $F(...) { ... }
+          - patterns:
+              - pattern-inside: |
+                  $ANY = $ASYNCVAL
+              - metavariable-regex:
+                  metavariable: $ASYNCVAL
+                  regex: ^async\b
+          - patterns:
+              - pattern-inside: |
+                  $FN(..., $ASYNCARG)
+              - metavariable-regex:
+                  metavariable: $ASYNCARG
+                  regex: ^async\b
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(save|update|delete|create|insert|commit|send)$
+      - pattern-not-inside: await $O.$M(...)
+      - pattern-not-inside: return $O.$M(...)
+    message: >-
+      Chamada que altera estado sem await. Quem chama continua como se a
+      escrita tivesse terminado — é ao mesmo tempo uma race e um happy path
+      partido. Se for intencional, torne-o explícito com void.
+    severity: WARNING
+    languages: [javascript, typescript]
+
+  # edge_case, two rules. A single named metavariable in an argument-list
+  # position (`$F`, `$S`) requires EXACTLY one argument, neither zero nor
+  # two — so `.reduce($F)` naturally excludes the two-argument
+  # (with-initial) call, and `parseInt($S)` naturally excludes the
+  # two-argument (with-radix) call, with no exclusion clause needed. Proven
+  # against both near-miss fixtures.
+  - id: bugfix-js-edge-case-reduce-without-initial
+    pattern: $A.reduce($F)
+    message: >-
+      reduce() sem valor inicial rebenta com TypeError num array vazio.
+      Passa um segundo argumento como valor inicial.
+    severity: WARNING
+    languages: [javascript, typescript]
+
+  - id: bugfix-js-edge-case-parseint-without-radix
+    pattern: parseInt($S)
+    message: >-
+      parseInt sem radix pode interpretar o número na base errada (ex.:
+      prefixo 0x). Passa sempre o segundo argumento, normalmente 10.
+    severity: INFO
+    languages: [javascript, typescript]
+
+  # null_safety, three rules. Note the id collision recorded in the design
+  # doc (§4): all three ids contain the bare word "unchecked", which
+  # mapSubcategory's error_handling regex also matches. They classify as
+  # null_safety only because that branch runs earlier in the if-chain — see
+  # the dedicated classification test in bugfixRulesJs.test.ts.
+  - id: bugfix-js-null-safety-unchecked-find
+    pattern: $A.find(...).$PROP
+    message: >-
+      .find() devolve undefined quando nada corresponde, e a propriedade é
+      acedida sem verificar. Usa ?. ou verifica o resultado antes de aceder.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  # `[$I]` (plain, non-optional computed member access) and `?.[$I]`
+  # (optional computed member access) are DIFFERENT AST node shapes in
+  # principle, but empirically this Semgrep version's generic matcher does
+  # NOT distinguish them for computed/bracket access — `pattern:
+  # $S.match(...)[$I]` matches `s.match(/x/)?.[1]` too, and the reverse
+  # (`pattern: $S.match(...)?.[$I]`) matches the plain form right back.
+  # Confirmed by isolated probe: neither `pattern-not` (same-span) nor
+  # `pattern-not-inside` (containment) can separate them, because the
+  # matcher treats both forms as the same match. This is UNLIKE plain (dot)
+  # member access — `$A.find(...).$PROP` does NOT match `?.name` (see
+  # unchecked-find above and misses/unchecked-find.ts, which stays silent
+  # with no exclusion clause at all) — so the gap is specific to computed
+  # access.
+  #
+  # ROUND 1 (superseded, kept here as a record of what NOT to do): fell back
+  # to `pattern-not-regex: '\?\.\['` over the matched snippet's own text.
+  # That is not scoped to the OUTER `[$I]`/`?.[$I]` — it is a substring
+  # search over the WHOLE match, including $S.match(...)'s own ARGUMENT. A
+  # real bug slipped through it: `s.match(pickPattern()?.[0])[1]` has a
+  # genuinely unguarded outer index, but its argument happens to contain its
+  # own, unrelated `?.[` (from `pickPattern()?.[0]`) — the regex found that
+  # one and wrongly suppressed the whole finding. Caught by code review, not
+  # by this rule set's own fixtures — neither near-miss fixture at the time
+  # exercised "optional chaining inside the argument, plain access outside."
+  #
+  # The obvious repair — anchor the regex to the END of the match
+  # (`\?\.\[[^\]]*\]$`) — does NOT work here, and is worth recording as its
+  # own general fact: `^`/`$` do not behave as ordinary string-boundary
+  # anchors in a TOP-LEVEL `pattern-regex` / `pattern-not-regex` combined
+  # with an AST `pattern`, in this Semgrep version (1.164.0). Verified
+  # exhaustively, in isolation, with no rule-parse errors: `^` alone, `$`
+  # alone, `^s`, `\]$` all match ZERO matches against text that trivially
+  # starts with "s" or ends with "]" at the top level — while the SAME text
+  # without anchors (`s`, `\]`) matches correctly there.
+  #
+  # (bugfix-rules-jsts fix wave) That is where the verified fact stops. An
+  # earlier version of this comment generalised it to `metavariable-regex`
+  # too ("this holds ... for metavariable-regex alike") and told future
+  # authors not to bother re-trying anchors here at all — that
+  # generalisation is FALSE, caught only because line 134's own verb-list
+  # regex (`^(save|update|delete|create|insert|commit|send)$`) depends on
+  # the trailing `$` working. Measured directly, same Semgrep version, four
+  # `metavariable-regex` rules over one file containing `a.save()`,
+  # `a.saveAll()`, `a.autosave()`: `save` matches `save` AND `saveAll`
+  # (prefix-anchored, not full-match); `save$` matches `save` ONLY; `^save`
+  # matches both; `^save$` matches `save` ONLY. `$` anchors correctly in
+  # `metavariable-regex` and is fully load-bearing there — dropping it from
+  # line 134 would make `document.createElement()`, `res.sendStatus()`,
+  # `crypto.createHash()` and any `saveAll`/`updateMany`-style method fire
+  # as false positives (see misses/race-condition.ts's `bulkSave`, added to
+  # prove exactly this). Do not spend time re-trying `^`/`$` in a future
+  # TOP-LEVEL `pattern-regex` in this file without re-confirming that case
+  # first — but do not assume `metavariable-regex` shares the limitation:
+  # it does not, and this file's own verb-list rule already depends on
+  # that.
+  #
+  # ROUND 2 (shipped): decompose match()'s argument into its OWN
+  # metavariable ($ARG, instead of `...`), then exclude only when the whole
+  # match contains `?.[` (unanchored `pattern-regex`, which DOES work — see
+  # above, this is a plain substring search, no anchor involved) AND $ARG's
+  # OWN text does not (`metavariable-comparison`'s Python `in`/`not in`
+  # operator on `str($ARG)`, which — unlike every regex-negation attempt
+  # above, including `pattern-not-regex` nested inside `metavariable-pattern`
+  # — was verified to evaluate correctly and independently for each
+  # candidate). If `?.[` is present overall but absent from the argument, it
+  # can only be the outer connector, so it is genuinely guarded. Proven
+  # against: the plain hit, the true near-miss (optional outer access), the
+  # guarded-variable near-miss (no change — still structurally excluded, no
+  # clause here even applies to it), AND the counter-example above (now
+  # fires) AND a case where the INDEX (not the argument) carries a stray
+  # `?.` (dot-optional, not bracket — `[obj?.b]` — also still fires,
+  # correctly, since `?.[` specifically does not appear there).
+  #
+  # Residual, stated plainly rather than hidden: if BOTH the argument AND
+  # the outer access are independently optional-bracket-chained in the same
+  # expression (e.g. `s.match(weird?.[x])?.[1]`), `$ARG` DOES contain `?.[`,
+  # so this rule no longer attributes the outer `?.[` to the connector by
+  # elimination — it fires anyway. That is a false positive on a
+  # doubly-optional-chained expression nobody has written in this codebase's
+  # fixtures or (as far as this investigation went) in the wild; it is
+  # accepted rather than chased further, and it fails in the safer direction
+  # for an ERROR-tier rule (over-flagging rare correct code) rather than the
+  # direction this whole fix exists to close (silently missing a real bug).
+  - id: bugfix-js-null-safety-unchecked-match
+    patterns:
+      - pattern: $S.match($ARG)[$I]
+      - pattern-not:
+          patterns:
+            - pattern: $S.match($ARG)[$I]
+            - pattern-regex: '\?\.\['
+            - metavariable-comparison:
+                metavariable: $ARG
+                comparison: "'?.[' not in str($ARG)"
+    message: >-
+      .match() devolve null quando não há correspondência, e o resultado é
+      indexado sem verificar. Usa ?.[$I] ou verifica o resultado antes.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  - id: bugfix-js-null-safety-unchecked-env
+    pattern: process.env.$X.$M(...)
+    message: >-
+      Variável de ambiente pode ser undefined; chamar um método diretamente
+      nela rebenta em runtime se não estiver definida. Usa ?. ou um
+      fallback (?? '').
+    severity: WARNING
+    languages: [javascript, typescript]
+
+  # memory_leak, three rules — all "X inside useEffect without Y" shapes.
+  #
+  # A SECOND general Semgrep gotcha, beyond Task 1's pattern-not vs
+  # pattern-not-inside, found while authoring these: a block-sequence
+  # ellipsis written on ONE LINE with the semicolon touching it —
+  # `{ ...; return $CLEANUP; ... }` — is a SILENT NO-OP. It does not throw,
+  # does not warn, and does not exclude anything: a rule built that way
+  # fired on BOTH the no-cleanup hit AND the with-cleanup near-miss,
+  # identically to how it would have fired with no pattern-not-inside
+  # clause at all. Reformatting the exact same clause across multiple YAML
+  # lines, each `...` on its own line, fixed it — confirmed by an isolated
+  # probe (two-function fixture, only the pattern-not-inside formatting
+  # changed): one-line-with-semicolons → 2 false fires (both the hit AND
+  # the near-miss); multi-line → 0 false fires, 1 correct fire (the hit
+  # only). Every "somewhere in this block" exclusion below uses the
+  # multi-line form for exactly this reason. This will bite any later rule
+  # in this file that needs the same "X without Y in the same block" shape.
+  #
+  # (bugfix-rules-jsts fix wave) `pattern-inside: useEffect(...)` below, and
+  # the identical clause on subscribe-without-unsubscribe further down, were
+  # unproven in the OTHER direction: no near-miss fixture put an
+  # `addEventListener`/`.subscribe()` OUTSIDE a `useEffect` at all, so
+  # deleting either clause left the suite green — without it, both rules
+  # would fire on every listener registration or subscription anywhere in a
+  # codebase, useEffect or not. misses/listener-without-cleanup.ts and
+  # misses/subscribe-without-unsubscribe.ts each gained a module-scope call
+  # with no enclosing useEffect to close this.
+  - id: bugfix-js-memory-leak-listener-without-cleanup
+    patterns:
+      - pattern: $EL.addEventListener($EVT, $HANDLER)
+      - pattern-inside: |
+          useEffect(() => { ... }, ...)
+      - pattern-not-inside: |
+          useEffect(() => {
+            ...
+            return $CLEANUP;
+            ...
+          }, ...)
+    message: >-
+      addEventListener dentro de useEffect sem função de cleanup. O
+      listener fica preso depois do componente desmontar — memory leak.
+    severity: ERROR
+    languages: [javascript, typescript]
+
+  # "Same scope" = same enclosing function, taken literally: the handle
+  # variable must be passed to clearInterval somewhere within the SAME
+  # function body that created it (including nested closures within that
+  # body, such as a useEffect's returned cleanup) — not merely anywhere
+  # later in the file. Two independent shapes are excluded: a plain function
+  # calling clearInterval directly (first clause below), and a useEffect
+  # returning a cleanup (second clause below) — proven by
+  # misses/interval-without-clear.ts's near-miss functions, which the
+  # bugfix-rules-jsts fix wave rewrote as ARROW COMPONENTS specifically so
+  # the first (function-declaration-shaped) clause cannot silently take
+  # credit for excluding them; see below for why that mattered.
+  #
+  # (bugfix-rules-jsts fix wave) A THIRD pattern-not-inside used to sit here,
+  # written for the useEffect cleanup's EXPRESSION-bodied arrow form only
+  # (`return () => clearInterval($T);`, no braces), on the stated belief
+  # that the remaining, BLOCK-bodied clause below (`return () => { ...;
+  # clearInterval($T); ... };`) could not also match it — same lesson as the
+  # listener/subscribe rules' generic `return $CLEANUP` trick not applying
+  # to a concrete call, or so the reasoning went. That belief was never
+  # checked against a fixture that could tell the two clauses apart: both
+  # near-miss functions were `export function ...(...) { ... }`
+  # declarations, already fully excluded by the first clause above
+  # regardless of what either useEffect clause did — proven by mutation:
+  # deleting BOTH useEffect clauses at once still left the near-miss file
+  # silent. Measured directly on an isolated arrow-component probe (both
+  # cleanup shapes, each clause deleted independently): the block-bodied
+  # clause ALONE silences BOTH the expression-bodied and block-bodied safe
+  # cases; deleting the expression-bodied clause while keeping the
+  # block-bodied one changes nothing on any shape tested. So the
+  # expression-bodied clause was redundant, not merely unproven, and is
+  # removed here rather than given a fixture that could never make it
+  # independently load-bearing while the block-bodied clause remains. One
+  # pattern-not-inside now does both jobs; the near-miss functions were
+  # rewritten as arrow components (not `function` declarations) so THIS
+  # clause, not the first one, is what the suite actually exercises —
+  # confirmed by deleting it and watching both near-misses fire.
+  - id: bugfix-js-memory-leak-interval-without-clear
+    patterns:
+      - pattern: const $T = setInterval(...)
+      - pattern-not-inside: |
+          function $F(...) {
+            ...
+            const $T = setInterval(...);
+            ...
+            clearInterval($T);
+            ...
+          }
+      - pattern-not-inside: |
+          useEffect(() => {
+            ...
+            const $T = setInterval(...);
+            ...
+            return () => {
+              ...
+              clearInterval($T);
+              ...
+            };
+            ...
+          }, ...)
+    message: >-
+      setInterval cujo handle nunca é passado a clearInterval na mesma
+      função. O temporizador continua a correr para sempre — memory leak.
+    severity: WARNING
+    languages: [javascript, typescript]
+
+  - id: bugfix-js-memory-leak-subscribe-without-unsubscribe
+    patterns:
+      - pattern: $O.subscribe(...)
+      - pattern-inside: |
+          useEffect(() => { ... }, ...)
+      - pattern-not-inside: |
+          useEffect(() => {
+            ...
+            return $CLEANUP;
+            ...
+          }, ...)
+    message: >-
+      subscribe() dentro de useEffect sem função de cleanup. A subscrição
+      fica presa depois do componente desmontar — memory leak.
+    severity: WARNING
+    languages: [javascript, typescript]

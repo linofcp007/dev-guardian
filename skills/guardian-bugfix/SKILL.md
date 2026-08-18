@@ -59,7 +59,45 @@ rules:
     languages: [javascript, typescript]
 ```
 
-Análogo para Python (`AttributeError`), Go (`nil pointer`), etc. Não existe (ainda) um pack de regras Semgrep pronto para JS/TS especificamente nestas classes de bug. A ferramenta `bug_hunt` já verificou isto: o pack que corre por default (`p/r2c-bug-scan`) tem regras de null-safety, off-by-one, race conditions, memory leaks e error handling engolido — mas quase todas para Python e Go, nenhuma para JS/TS; os packs de linguagem opcionais (`p/javascript`, `p/typescript`, etc., ligados via `include_language_packs`) são packs de segurança e não acrescentam nenhuma. Para JS/TS, o caminho fiável hoje é o raciocínio guiado por modelo desta própria skill — ficheiro a ficheiro pelas zonas críticas (secção 1) e os padrões e fixes da secção 4 abaixo — não uma automação Semgrep que ainda não cobre esta linguagem.
+Análogo para Python (`AttributeError`), Go (`nil pointer`), etc.
+
+Para JS/TS, a ferramenta `bug_hunt` já corre por default um pack próprio,
+`configs/semgrep/bugfix-js.yml` — catorze regras hand-authored, cada uma com
+um par de fixtures (uma que tem de disparar, uma parecida que não pode) —
+cobrindo seis classes: race conditions (`floating-mutation`, uma chamada que
+muta estado sem `await` dentro de função `async` — declarações, arrow
+functions, métodos de classe/objeto; NÃO cobre function expressions async,
+uma limitação do motor do Semgrep), null/undefined safety,
+off-by-one, memory/resource leaks, error handling engolido, e dois edge
+cases (`reduce` sem valor inicial, `parseInt` sem radix). "Broken happy
+paths" fica de fora como padrão: é uma categoria de consequência, não uma
+forma sintática — `floating-mutation` cobre a sua forma concreta mais comum
+e mais nada a cobre.
+
+Duas ressalvas a levar a sério antes de confiar num resultado limpo: isto é
+Semgrep OSS, que casa sintaxe, não faz dataflow — um null deref a duas
+funções de distância do guard continua invisível a estas regras, que
+encontram a forma que o bug toma, não uma prova de análise; e a camada
+heurística (`WARNING`/`INFO` — ex. `floating-mutation`, que casa pelo nome
+do método e por isso não distingue uma mutação real como `repo.save()` de
+uma chamada sem relação que só partilha o nome, como `ctx.save()`, o push
+síncrono de estado do Canvas 2D) produz falsos positivos por construção,
+por isso não é `ERROR` e o `severity_min` de `bug_hunt` existe precisamente
+para os filtrar.
+
+**Isto é só para JS/TS.** Para as restantes linguagens desta secção —
+Python, Go, Java, C#, PHP, Ruby, Rust — a situação anterior mantém-se: o
+pack que corre por default (`p/r2c-bug-scan`) só cobre estas classes para
+Python e Go, os packs de linguagem opcionais (`p/javascript`, `p/typescript`,
+etc., ligados via `include_language_packs`) são packs de segurança e não
+acrescentam nenhuma, e nenhuma tem ainda um pack local próprio. O caminho
+fiável para elas continua a ser o raciocínio guiado por modelo desta própria
+skill — ficheiro a ficheiro pelas zonas críticas (secção 1) e os padrões e
+fixes da secção 4 abaixo.
+
+Mesmo em JS/TS, estas catorze regras não substituem esse raciocínio: apanham
+formas sintáticas, não motivos. Usa-as como primeira passada — não como
+veredicto final.
 
 #### Dynamically (correr)
 
