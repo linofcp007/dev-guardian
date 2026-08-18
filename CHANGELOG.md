@@ -6,7 +6,7 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
-## [Unreleased]
+## [1.7.0] - 2026-08-18
 
 ### Added
 
@@ -27,12 +27,21 @@ version bump.
 
 ### Known gaps
 
+Measured against the shipped rules, not inferred:
+
 - No general "coroutine not awaited" rule: it is not expressible in Semgrep OSS.
   Only `asyncio.sleep/gather/wait/wait_for` are covered, so a forgotten `await`
   on a project's own `async def` is not caught.
-- The Django N+1 rule matches `for` statements, not list comprehensions, and is
-  Django-specific.
-- `none-deref-dict-get` excludes HTTP clients by receiver name.
+- The Django N+1 rule matches `for` statements, not list comprehensions; is
+  Django-specific (never SQLAlchemy or Peewee); and needs the queryset **inline
+  in the `for` header** — `qs = Book.objects.all()` followed by `for book in qs:`
+  is silent, which is arguably the commoner shape.
+- `toctou-exists-open` keys only on `os.path.exists`. `os.path.isfile`,
+  `os.path.isdir` and `pathlib.Path(p).exists()` are all silent.
+- `none-deref-dict-get` excludes HTTP clients by receiver-name **substring**, so
+  any receiver containing `requests`, `session`, `client`, `httpx`, `aiohttp` or
+  `urllib` is skipped — `session_data`, `clients` and `urllib_cache` are false
+  negatives too, not only a dict named exactly `client`.
 
 ## [1.6.0] - 2026-08-18
 
