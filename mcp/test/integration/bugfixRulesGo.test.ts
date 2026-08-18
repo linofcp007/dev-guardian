@@ -208,6 +208,7 @@ const R2C_ON_CONTROL = r2cRunOrNull(R2C_PACK, resolve(FIXTURES, 'control'));
 describe('no local Go rule duplicates p/r2c-bug-scan', () => {
   it.runIf(REQUIRE_SEMGREP)('the registry pack must be reachable when the flag is set', () => {
     expect(R2C_ON_HITS).not.toBeNull();
+    expect(R2C_ON_CONTROL).not.toBeNull();
   });
 
   it.skipIf(R2C_ON_CONTROL === null)('positive control: the pack IS live for Go', () => {

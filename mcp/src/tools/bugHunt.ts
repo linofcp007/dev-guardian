@@ -467,9 +467,12 @@ registerToolModule(
       'fire on correct code); `body-not-closed` only recognises http.Get, so http.Post and ' +
       'client.Do(req) leak identically and are not covered; `lock-without-defer` accepts any ' +
       'defer mu.Unlock() in the block, so it cannot tell a correctly scoped unlock from one ' +
-      'deferred in the wrong branch, and it does not cover sync.RWMutex at all — the pattern ' +
+      'deferred in the wrong branch, and it does not cover sync.RWMutex read locks — the pattern ' +
       'matches the literal Lock()/Unlock() method names, not RLock()/RUnlock(), so a read-lock ' +
-      'without defer, a common Go idiom, is entirely outside its reach; `nil-map-write` only ' +
+      'without defer, a common Go idiom, is entirely outside its reach (the write lock, ' +
+      'Lock()/Unlock(), on a *sync.RWMutex IS covered); `body-not-closed` and ' +
+      '`ticker-not-stopped` match only the := declaration form, so the var-then-assign form is ' +
+      'silent for both; `nil-map-write` only ' +
       'catches a locally var-declared map — a nil map arriving as a function parameter, a ' +
       'struct field, or a return value panics identically on write and is not covered, ' +
       'arguably the commoner real-world shape; and `err-blank-assign` fires on deliberate ' +

@@ -17,3 +17,19 @@ func growReturning(xs []int) []int {
 func growPassing(xs []int) {
 	println(len(append(xs, 1)))
 }
+
+func growReturningMultiFirst(xs []int) ([]int, error) {
+	return append(xs, 1), nil
+}
+
+func growReturningMultiSecond(xs []int) (int, []int) {
+	return 0, append(xs, 1)
+}
+
+func growInSliceLiteral(xs []int) [][]int {
+	return [][]int{append(xs, 1)}
+}
+
+func growInMapLiteral(xs []int) map[string][]int {
+	return map[string][]int{"k": append(xs, 1)}
+}

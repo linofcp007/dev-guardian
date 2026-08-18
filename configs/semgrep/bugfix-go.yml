@@ -132,18 +132,29 @@ rules:
     severity: WARNING
     languages: [go]
 
-  # Três exclusões, e cada uma foi medida à parte. A quarta que aqui esteve —
+  # Cinco cláusulas, e cada uma foi medida à parte. A sexta que aqui esteve —
   # `pattern-not-inside: $X := append($XS, ...)` — era morta: o Semgrep trata
   # `$X = append(...)` como cobrindo também a forma `:=`, por isso a cláusula
   # `=` sozinha já exclui `ys := append(xs, 1)`. Removê-la não muda um único
-  # resultado. Sem estas três, a regra casa `xs = append(xs, 1)`, que é a
-  # forma correta.
+  # resultado. Multi-value return e composite literal (slice ou mapa) não
+  # eram cobertos pelas três exclusões originais — medido: `return append(xs,
+  # 1), nil`, `return 0, append(xs, 1)`, `return [][]int{append(xs, 1)}` e
+  # `return map[string][]int{"k": append(xs, 1)}` disparavam ERRO em código
+  # correto. As aspas na última cláusula são obrigatórias: sem elas o segundo
+  # `:` de um literal de mapa faz o parser YAML ler uma mapping e o ficheiro
+  # inteiro falha a carregar — isso é um erro de YAML, não de padrão Semgrep.
+  # A forma `<... ... ...>` (deep expression) é a que funciona: enumerar as
+  # formas (`$T{..., append(...), ...}` e a variante com `$KEY:`) deixa o caso
+  # de literal de mapa a disparar na mesma. Medido: zero falsos positivos nas
+  # quatro formas, e `append(xs, 1)` isolado continua a disparar.
   - id: bugfix-go-edge-case-append-discarded
     patterns:
       - pattern: append($XS, ...)
       - pattern-not-inside: $X = append($XS, ...)
       - pattern-not-inside: return append($XS, ...)
       - pattern-not-inside: $F(..., append($XS, ...), ...)
+      - pattern-not-inside: return ..., append($XS, ...), ...
+      - pattern-not-inside: "$T{<... append($XS, ...) ...>}"
     message: >-
       Resultado de `append` descartado. O `append` pode realocar o array de
       suporte, por isso o valor devolvido é a única referência fiável aos
@@ -151,6 +162,11 @@ rules:
     severity: ERROR
     languages: [go]
 
+  # A exclusão original só reconhecia `make(...)` literal, por isso qualquer
+  # outra inicialização correta — `cfg = defaults()`, `m = src` — disparava
+  # ERRO. Medido: excluir QUALQUER reatribuição a `$M`, não só `make(...)`,
+  # silencia construtor, aliasing e composite literal, e mantém o disparo em
+  # `neverInitialised` (nunca reatribuído antes da escrita).
   - id: bugfix-go-edge-case-nil-map-write
     patterns:
       - pattern: |
@@ -160,7 +176,7 @@ rules:
       - pattern-not-inside: |
           var $M map[$K]$V
           ...
-          $M = make(...)
+          $M = $ANY
           ...
     message: >-
       Escrita num mapa nil. Um `var m map[K]V` sem `make` é nil: ler dele é

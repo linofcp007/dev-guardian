@@ -31,10 +31,16 @@ version bump.
   it would fire on correct code.
 - `body-not-closed` only recognises `http.Get`; `http.Post` and `client.Do`
   leak identically and are not covered.
+- `body-not-closed` and `ticker-not-stopped` match only the `:=` declaration
+  form; `var resp *http.Response; resp, err = http.Get(url)` and
+  `var t *time.Ticker; t = time.NewTicker(...)` are silent. `err-discarded`
+  covers both forms, so this is an inconsistency rather than a stated
+  policy.
 - `lock-without-defer` accepts any `defer mu.Unlock()` in the block. It also
-  does not cover `sync.RWMutex` at all: the pattern matches the literal
+  does not cover `sync.RWMutex` read locks: the pattern matches the literal
   `Lock()`/`Unlock()` method names, not `RLock()`/`RUnlock()`, so a read-lock
-  without `defer` — a common Go idiom — is entirely outside its reach.
+  without `defer` — a common Go idiom — is entirely outside its reach. The
+  write lock (`Lock()`/`Unlock()`) on a `*sync.RWMutex` is covered.
 - `nil-map-write` only catches a locally `var`-declared map. A nil map
   arriving as a function parameter, a struct field, or a return value panics
   identically on write and is not covered — arguably the commoner

@@ -156,11 +156,19 @@ The harness from the Python round, unchanged in shape:
 - **`lock-without-defer` accepts any `defer mu.Unlock()` in the block**, so it
   cannot tell a correctly scoped unlock from one deferred in the wrong branch.
   It is `WARNING` for that reason.
-- **`lock-without-defer` does not cover `sync.RWMutex` at all.** The pattern
-  is the literal `$MU.Lock()` / `defer $MU.Unlock()`, not a metavariable over
-  the method name, so `RLock()`/`RUnlock()` — a common Go idiom for read
-  access — is entirely outside the rule's reach. Measured against the shipped
-  rule, not assumed.
+- **`lock-without-defer` does not cover `sync.RWMutex` read locks.** The
+  pattern is the literal `$MU.Lock()` / `defer $MU.Unlock()`, not a
+  metavariable over the method name, so `RLock()`/`RUnlock()` — a common Go
+  idiom for read access — is entirely outside the rule's reach. The write
+  lock is covered: a `*sync.RWMutex` with `mu.Lock()` and no defer fires
+  correctly. Measured against the shipped rule, not assumed.
+- **`body-not-closed` and `ticker-not-stopped` match only the `:=` form.**
+  Both patterns anchor on `$RESP, $ERR := http.Get(...)` and
+  `$T := time.NewTicker(...)`; the `var`-then-assign form —
+  `var resp *http.Response; resp, err = http.Get(url)` and
+  `var t *time.Ticker; t = time.NewTicker(...)` — is silent for both rules.
+  `err-discarded` covers both forms via `pattern-either`, so this is an
+  undocumented internal inconsistency rather than a stated policy.
 - **`nil-map-write` only catches a locally `var`-declared map.** The pattern
   requires `var $M map[$K]$V` followed by an indexed write; a nil map
   arriving as a function parameter, a struct field, or a return value panics
