@@ -1,0 +1,115 @@
+# dev-guardian Semgrep config bugfix-py.
+# Bugs de implementação em Python. Ao contrário do JS/TS, aqui já correm 32
+# regras Python do p/r2c-bug-scan — mas só 10 caem numa classe de bug, e
+# nenhuma cobre bare except, dereference de None, ou off-by-one. Cada regra
+# abaixo foi medida contra o pack existente: nenhuma duplica o que ele já
+# encontra. Detalhe e medições em
+# docs/superpowers/specs/2026-08-18-bugfix-rules-python-design.md.
+#
+# Cada regra tem um par de fixtures em
+# mcp/test/fixtures/bugfix-py/{hits,misses}/: um ficheiro que tem de disparar
+# a regra, outro parecido que NÃO pode. O ficheiro misses/ é a especificação
+# do que é código correto — se ele disparar, a regra é que está errada.
+#
+# Os ids seguem o formato bugfix-py-<classe>-<nome>, em que <classe> tem de
+# ser um dos seis tokens que mapSubcategory (mcp/src/tools/bugHunt.ts)
+# reconhece por regex sobre o id em minúsculas: race-condition, null-safety,
+# off-by-one, memory-leak, error-handling, edge-case. Nenhum id usa a palavra
+# `unchecked`: a regex de error_handling casa-a, e depender da ordem do
+# if-chain para desempatar é uma dependência que esta linguagem não precisa
+# de assumir.
+#
+# Duas severidades: ERROR quando o padrão é sempre um bug, independentemente
+# da intenção; WARNING quando é normalmente um bug mas tem usos legítimos.
+rules:
+  - id: bugfix-py-error-handling-bare-except
+    pattern: |
+      try:
+          ...
+      except:
+          ...
+    message: >-
+      `except:` sem tipo apanha tudo, incluindo SystemExit e
+      KeyboardInterrupt, por isso engole sinais de paragem além de erros
+      reais. Apanhe a exceção concreta, ou pelo menos `except Exception:`.
+    severity: ERROR
+    languages: [python]
+
+  # Cinco branches, e cada uma é necessária: `except $E:` NÃO casa
+  # `except $E as $V:`, e um corpo que é literalmente `...` não é
+  # exprimível como padrão AST — `...` em posição de padrão é sempre o
+  # operador de elipse do Semgrep, nunca o literal Ellipsis. A única forma
+  # de o apanhar é ligar o corpo a um metavariable e testar o TEXTO com
+  # metavariable-regex. Ambas as coisas foram medidas, não assumidas.
+  #
+  # Um corpo com mais do que uma instrução (`pass` seguido de outra coisa)
+  # não casa nenhuma branch, e é isso que se quer: já não é um handler
+  # vazio. Confirmado com fixture própria em misses/except_pass.py.
+  - id: bugfix-py-error-handling-except-pass
+    pattern-either:
+      - pattern: |
+          try:
+              ...
+          except $E:
+              pass
+      - pattern: |
+          try:
+              ...
+          except $E as $V:
+              pass
+      - pattern: |
+          try:
+              ...
+          except:
+              pass
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  try:
+                      ...
+                  except $E:
+                      $BODY
+              - pattern: |
+                  try:
+                      ...
+                  except $E as $V:
+                      $BODY
+          - metavariable-regex:
+              metavariable: $BODY
+              regex: ^\.\.\.$
+    message: >-
+      Erro engolido em silêncio. O corpo do `except` é apenas `pass` (ou
+      `...`), por isso a falha desaparece sem log, sem re-raise e sem
+      tratamento.
+    severity: ERROR
+    languages: [python]
+
+  # Três exclusões, não uma. As três formas de guardar são código correto e
+  # as três dispararam com a versão de uma exclusão só:
+  #   - except User.DoesNotExist       (a forma do modelo)
+  #   - except ObjectDoesNotExist      (import de django.core.exceptions)
+  #   - except Exception               (largo, mas apanha o miss na mesma)
+  - id: bugfix-py-error-handling-get-without-doesnotexist
+    patterns:
+      - pattern: $M.objects.get(...)
+      - pattern-not-inside: |
+          try:
+              ...
+          except $X.DoesNotExist:
+              ...
+      - pattern-not-inside: |
+          try:
+              ...
+          except ObjectDoesNotExist:
+              ...
+      - pattern-not-inside: |
+          try:
+              ...
+          except Exception:
+              ...
+    message: >-
+      `.objects.get()` sem guardar o miss. O Django levanta DoesNotExist em
+      vez de devolver None, por isso a primeira linha em falta é um 500 não
+      tratado. Envolva num try/except DoesNotExist, ou use `.filter().first()`.
+    severity: WARNING
+    languages: [python]
