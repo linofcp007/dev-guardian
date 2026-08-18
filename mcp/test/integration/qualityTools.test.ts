@@ -46,6 +46,7 @@ import { runShellScript } from '../../src/runners/shellRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 
 import type { PluginContext } from '../../src/context.js';
+import { resolveBugfixRules } from '../../src/platform/configsDir.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
@@ -233,6 +234,67 @@ describe('bug_hunt', () => {
     // The pack-level detail (which pack, and why) lives on tools_run's
     // reason instead — the field actually meant for free-text diagnostics.
     expect(r.tools_run.find((t) => t.name === 'semgrep')?.reason).toContain(PRIMARY_PACK);
+  });
+
+  it('the local bugfix-js.yml rules survive and still report findings when BOTH base registry packs fail to download', async () => {
+    // This is the design of record's actual reason the local rules are on
+    // by default (docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-
+    // design.md §5): "a local file cannot 404 ... even with the registry
+    // unreachable, the local rules still run and the tool still reports
+    // something true." Provable here with no special-casing: buildPackList
+    // puts the local path in the SAME configuredPacks array the existing
+    // retry-survivor mechanism above already treats generically, so it
+    // survives a total registry outage the identical way SECONDARY_PACK
+    // survives a single dead pack in the test above.
+    const bugfixRules = resolveBugfixRules();
+    if (bugfixRules === null) {
+      throw new Error('configs/semgrep/bugfix-js.yml is missing from this checkout');
+    }
+
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+
+    let calls = 0;
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      calls += 1;
+      if (calls === 1) {
+        expect(opts.args).toContain(`--config=${PRIMARY_PACK}`);
+        expect(opts.args).toContain(`--config=${SECONDARY_PACK}`);
+        expect(opts.args).toContain(`--config=${bugfixRules}`);
+        // Registry entirely unreachable: BOTH base packs fail to download.
+        // Semgrep aborts the whole run, same as a single dead config would.
+        writeOutput(opts, configFailureJson(PRIMARY_PACK, SECONDARY_PACK));
+        return { outcome: 'failed' as const, exitCode: 7, stdout: '', stderr: '', truncated: false };
+      }
+      // The retry must drop BOTH dead registry packs and keep only the
+      // local file — the one config that cannot 404.
+      expect(opts.args).not.toContain(`--config=${PRIMARY_PACK}`);
+      expect(opts.args).not.toContain(`--config=${SECONDARY_PACK}`);
+      expect(opts.args).toContain(`--config=${bugfixRules}`);
+      writeOutput(opts, semgrepFx());
+      return { outcome: 'completed' as const, exitCode: 1, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('bug_hunt');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      findings_count_by_severity: Record<string, number>;
+      missing_tools: string[];
+      tools_run: { name: string; status: string; reason?: string }[];
+      coverage?: string;
+    };
+    expect(calls).toBe(2);
+    expect(r.ok).toBe(true);
+    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+    // The whole point: a totally unreachable registry does not zero out
+    // the result — the local rules still ran and still reported.
+    expect(total).toBeGreaterThan(0);
+    expect(r.coverage).toBe('partial');
+    expect(r.missing_tools).toEqual(['semgrep']);
+    const reason = r.tools_run.find((t) => t.name === 'semgrep')?.reason ?? '';
+    expect(reason).toContain(PRIMARY_PACK);
+    expect(reason).toContain(SECONDARY_PACK);
   });
 
   it('reports both failures when the retry itself also fails (registry outage mid-scan)', async () => {
@@ -469,8 +531,20 @@ describe('bug_hunt', () => {
     expect(getArgs()).toEqual(
       expect.arrayContaining(BUG_HUNT_BASE_PACKS.map((p) => `--config=${p}`)),
     );
+    // Unlike the language packs, the local bugfix-js.yml rules are NOT
+    // gated behind include_language_packs — bugHunt.ts's buildPackList
+    // appends them by default (bugfix-rules-jsts design of record, §5).
+    // This repo ships the file, so resolveBugfixRules() must find it; a
+    // missing/misresolved file would silently drop this --config instead
+    // of failing loudly, which is exactly the behaviour bugHuntConfigs.test.ts
+    // pins directly, without depending on the full tool handler or a real
+    // Semgrep binary.
+    const bugfixRules = resolveBugfixRules();
+    expect(bugfixRules).not.toBeNull();
+    expect(getArgs()).toContain(`--config=${bugfixRules}`);
+    // Exact count: base packs + the local bugfix-js.yml rules, nothing else.
     expect(getArgs().filter((a) => a.startsWith('--config='))).toHaveLength(
-      BUG_HUNT_BASE_PACKS.length,
+      BUG_HUNT_BASE_PACKS.length + 1,
     );
   });
 

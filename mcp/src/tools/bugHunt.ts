@@ -23,7 +23,21 @@
  * `title`/`description` below, which say this to the model reading them
  * rather than only in this comment.
  *
- * `configuredPacks` grows by whatever `detectLanguagePacks` finds — one
+ * `buildPackList` (below) is where every `--config=` value gets assembled,
+ * and it always appends `configs/semgrep/bugfix-js.yml` — fourteen local,
+ * hand-authored rules covering the six bug classes for JS/TS specifically
+ * (design of record: docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-
+ * design.md) — resolved to an absolute path via `resolveBugfixRules`
+ * (`../platform/configsDir.js`). Unlike `include_language_packs` below, this
+ * is ON BY DEFAULT: a local file cannot 404, so it is also what keeps
+ * `bug_hunt` reporting something true even when the registry is entirely
+ * unreachable and both registry packs fail to resolve. `resolveBugfixRules`
+ * returns `null` when the file is missing from the checkout, and
+ * `buildPackList` omits the pack rather than pass Semgrep a `--config` path
+ * that does not exist — which would reproduce, locally, the exact
+ * whole-scan-aborts failure the paragraph above describes for a 404.
+ *
+ * `configuredPacks` also grows by whatever `detectLanguages` finds — one
  * Semgrep per-language pack (`p/javascript` OR `p/typescript` for a JS/TS
  * project, never both — see `languagePacksFor` — plus `p/python`, `p/java`,
  * `p/golang`) for each language family the project's stack uses, sourced
@@ -77,6 +91,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { resolveBugfixRules } from '../platform/configsDir.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import {
@@ -221,15 +236,55 @@ function fallbackLanguages(projectPath: string): string[] {
 }
 
 /**
- * Which language packs to add, preferring the persisted `detect_stack`
- * snapshot (same two-tier lookup as `observabilitySetup.ts`'s `inferStack`:
- * prefer the snapshot, fall back to filesystem markers) so `bug_hunt` still
- * gets stack-aware coverage the very first time it runs against a project.
+ * Which languages `bug_hunt` should treat the project as using, preferring
+ * the persisted `detect_stack` snapshot (same two-tier lookup as
+ * `observabilitySetup.ts`'s `inferStack`: prefer the snapshot, fall back to
+ * filesystem markers) so `bug_hunt` still gets stack-aware coverage the very
+ * first time it runs against a project. Returns raw language names (e.g.
+ * `typescript`), not pack names — `buildPackList` does that mapping itself,
+ * via `languagePacksFor`, so the mapping step stays testable in isolation
+ * from storage/filesystem access.
  */
-function detectLanguagePacks(ctx: InvokeContext): string[] {
+function detectLanguages(ctx: InvokeContext): string[] {
   const snapshotLanguages = ctx.plugin.storage.stack.getLatest()?.snapshot.languages;
-  const languages = snapshotLanguages ?? fallbackLanguages(ctx.projectPath);
-  return languagePacksFor(languages);
+  return snapshotLanguages ?? fallbackLanguages(ctx.projectPath);
+}
+
+/** Options for {@link buildPackList}. */
+export interface BuildPackListOptions {
+  /** Mirrors `BugHuntInput.include_language_packs`. */
+  readonly includeLanguagePacks: boolean;
+  /** Raw language names (e.g. `typescript`), consulted only when
+   *  `includeLanguagePacks` is true — see `detectLanguages`. */
+  readonly languages: readonly string[];
+  /**
+   * Absolute path to `configs/semgrep/bugfix-js.yml`, or `null` to omit it.
+   * Defaults to `resolveBugfixRules()`'s real, on-disk answer whenever the
+   * caller does not pass this field at all (production code, in `invoke`
+   * below, always takes that default). Passing it explicitly — including
+   * explicit `null` — is how tests exercise both the inclusion and the
+   * omission path without touching the filesystem or Semgrep.
+   */
+  readonly bugfixRulesPath?: string | null;
+}
+
+/**
+ * Assembles the full `--config=` pack list `bug_hunt` runs with. Extracted
+ * from `invoke` (rather than inlined) so the assembly itself is
+ * unit-testable without spawning Semgrep — see `bugHuntConfigs.test.ts`.
+ *
+ * Order: base packs, then the local bugfix rules (both on by default), then
+ * the optional per-language packs — mirroring the header comment's own
+ * description of what is always-on vs. opt-in.
+ */
+export function buildPackList(opts: BuildPackListOptions): string[] {
+  const bugfixRulesPath =
+    opts.bugfixRulesPath !== undefined ? opts.bugfixRulesPath : resolveBugfixRules();
+  return [
+    ...BUG_HUNT_BASE_PACKS,
+    ...(bugfixRulesPath !== null ? [bugfixRulesPath] : []),
+    ...(opts.includeLanguagePacks ? languagePacksFor(opts.languages) : []),
+  ];
 }
 
 /** The six canonical bug subcategories `mapSubcategory` classifies into.
@@ -445,15 +500,18 @@ registerToolModule(
         };
       }
 
-      // Off by default (§ BugHuntInput above: this is deliberately not part
-      // of `categories`, which filters output, not input). Detection only
-      // runs when asked — a project with a persisted JS/TS stack snapshot
-      // does NOT get p/javascript/p/typescript added unless the caller
-      // opts in.
-      const configuredPacks: readonly string[] = [
-        ...BUG_HUNT_BASE_PACKS,
-        ...(input.include_language_packs === true ? detectLanguagePacks(ctx) : []),
-      ];
+      // Language packs are off by default (§ BugHuntInput above: this is
+      // deliberately not part of `categories`, which filters output, not
+      // input). Detection only runs when asked — a project with a
+      // persisted JS/TS stack snapshot does NOT get p/javascript/p/typescript
+      // added unless the caller opts in. The local bugfix-js.yml rules, by
+      // contrast, are NOT gated behind a flag — `buildPackList` appends
+      // them by default (omitting them only if resolveBugfixRules() finds
+      // the file missing); see this file's header comment.
+      const configuredPacks: readonly string[] = buildPackList({
+        includeLanguagePacks: input.include_language_packs === true,
+        languages: input.include_language_packs === true ? detectLanguages(ctx) : [],
+      });
       const categoryParser = makeBugCategoryParser(input.categories);
 
       const outFile = join(reportDir, 'bugs.json');
