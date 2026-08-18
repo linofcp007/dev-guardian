@@ -1,11 +1,13 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { computeTreeHash } from '../../../src/treeHash/computeTreeHash.js';
+import { makeTempDir, cleanupTempDirs } from '../../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 function fixture(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'dev-guardian-treehash-'));
+  const dir = makeTempDir('dev-guardian-treehash-');
   return dir;
 }
 

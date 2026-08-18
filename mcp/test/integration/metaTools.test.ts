@@ -11,14 +11,13 @@
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import {
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  afterAll,
   afterEach,
   beforeAll,
   beforeEach,
@@ -53,6 +52,9 @@ import { TOOLS } from '../../src/tools/index.js';
 import {
   makeFinding,
 } from '../../src/runners/scannerParsers/index.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 beforeAll(async () => {
   await import('../../src/tools/securityScanFull.js');
@@ -82,7 +84,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const FIX = resolve(here, '..', 'fixtures', 'scanners');
 
 function tempProject(): string {
-  return mkdtempSync(join(tmpdir(), 'meta-tools-'));
+  return makeTempDir('meta-tools-');
 }
 
 function getTool(name: string) {

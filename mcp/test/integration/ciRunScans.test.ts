@@ -6,14 +6,16 @@
  * handling, exception handling, where findings come from, temp-dir hygiene
  * — never scanning itself, so none of it needs Semgrep installed.
  */
-import { existsSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runScans, SCAN_SEQUENCE } from '../../src/ci/runScans.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { ToolModule } from '../../src/tools/index.js';
 import type { Finding, ToolResult } from '../../src/types.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 /**
  * `runScans.ts`'s ephemeral directory lives under the SAME shared OS
@@ -119,7 +121,7 @@ afterEach(() => {
 });
 
 function makeProjectDir(): string {
-  return mkdtempSync(join(tmpdir(), 'guardian-ci-project-'));
+  return makeTempDir('guardian-ci-project-');
 }
 
 describe('runScans', () => {

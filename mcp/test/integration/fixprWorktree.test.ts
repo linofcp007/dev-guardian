@@ -15,10 +15,11 @@
 
 import { describe, expect, it, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorktree, WORKTREE_DIR_PREFIX } from '../../src/fixpr/worktree.js';
+import { rmDir } from '../helpers/tempDir.js';
 
 let repo: string;
 
@@ -65,7 +66,7 @@ beforeEach(() => {
   git('commit', '-q', '-m', 'first');
 });
 
-afterEach(() => { rmSync(repo, { recursive: true, force: true }); });
+afterEach(() => { rmDir(repo); });
 
 describe('createWorktree', () => {
   it('creates a worktree on a new branch from committed HEAD', async () => {
@@ -135,7 +136,7 @@ describe('createWorktree', () => {
     ownNotRepoPaths.push(notRepo);
     const r = await createWorktree({ projectPath: notRepo, branch: 'x' });
     expect(r.ok).toBe(false);
-    rmSync(notRepo, { recursive: true, force: true });
+    rmDir(notRepo);
   });
 
   it('refuses when the branch already exists, rather than reusing it', async () => {

@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { afterAll, describe, expect, it } from 'vitest';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { discoverSpecs, MAX_SPEC_FILES } from '../../../src/surface/specDiscover.js';
+import { makeTempDir, cleanupTempDirs } from '../../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 function project(files: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'guardian-spec-'));
+  const dir = makeTempDir('guardian-spec-');
   for (const [rel, content] of Object.entries(files)) {
     const abs = join(dir, rel);
     mkdirSync(join(abs, '..'), { recursive: true });
@@ -70,7 +72,7 @@ describe('discoverSpecs', () => {
     // directory *inside* the project is named openapi. A file under an
     // unrelated subdirectory must not be swept in just because some
     // ancestor of the project root happens to be called "openapi".
-    const outer = mkdtempSync(join(tmpdir(), 'guardian-outer-'));
+    const outer = makeTempDir('guardian-outer-');
     const projectRoot = join(outer, 'openapi', 'my-service');
     mkdirSync(join(projectRoot, 'config'), { recursive: true });
     writeFileSync(join(projectRoot, 'config', 'random-unrelated.yml'), 'not: a spec');

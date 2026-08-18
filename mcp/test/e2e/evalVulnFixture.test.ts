@@ -17,11 +17,10 @@
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { execa } from 'execa';
-import { cpSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpSync, existsSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';
 import { detectOs } from '../../src/platform/osDetect.js';
@@ -29,6 +28,9 @@ import { probeShell } from '../../src/platform/shellProbe.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(here, '..', '..', '..');
@@ -88,7 +90,7 @@ describe('E2E — eval-vuln fixture', () => {
     // Write rule AND target into a temp dir OUTSIDE any `test/` path. Semgrep's
     // built-in default ignore skips `test/` directories, so scanning the in-repo
     // fixture (mcp/test/e2e/...) returned zero targets (paths.scanned: []).
-    const work = mkdtempSync(join(tmpdir(), 'sg-e2e-'));
+    const work = makeTempDir('sg-e2e-');
     const ruleFile = join(work, 'eval.yml');
     const targetFile = join(work, 'vuln.js');
     writeFileSync(ruleFile, EVAL_RULE, 'utf8');
@@ -140,7 +142,7 @@ describe('E2E — eval-vuln fixture', () => {
     // paths) — mirrored here, via the CI pipeline's own equivalent
     // (ci/runScans.ts's `mkdtemp`), so this scan's output lands in the OS
     // temp directory and never in the repo.
-    const work = mkdtempSync(join(tmpdir(), 'guardian-evalvuln-'));
+    const work = makeTempDir('guardian-evalvuln-');
     cpSync(FIXTURE, work, { recursive: true });
 
     const db = new Database(':memory:');
