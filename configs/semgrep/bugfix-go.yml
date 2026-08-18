@@ -83,3 +83,36 @@ rules:
       range. Queria provavelmente `i < len(xs)`.
     severity: ERROR
     languages: [go]
+
+  # Ambas ancoram na chamada isolada e excluem com pattern-not-inside sobre a
+  # sequência de statements. A alternativa óbvia — um `pattern` positivo a
+  # terminar em `...` emparelhado com `pattern-not` — foi medida e dispara no
+  # seu próprio near-miss: o `...` final gera muitos spans sobrepostos e o
+  # `pattern-not` só cancela um deles.
+  - id: bugfix-go-memory-leak-body-not-closed
+    patterns:
+      - pattern: $RESP, $ERR := http.Get(...)
+      - pattern-not-inside: |
+          $RESP, $ERR := http.Get(...)
+          ...
+          defer $RESP.Body.Close()
+    message: >-
+      Corpo da resposta HTTP nunca fechado. Sem `defer resp.Body.Close()` a
+      ligação não volta ao pool e o ficheiro fica aberto — em código que corre
+      em ciclo, esgota os descritores.
+    severity: ERROR
+    languages: [go]
+
+  - id: bugfix-go-memory-leak-ticker-not-stopped
+    patterns:
+      - pattern: $T := time.NewTicker(...)
+      - pattern-not-inside: |
+          $T := time.NewTicker(...)
+          ...
+          defer $T.Stop()
+    message: >-
+      Ticker nunca parado. O runtime continua a disparar o canal depois de a
+      função sair, e nem o ticker nem a goroutine associada são libertados.
+      Acrescente `defer t.Stop()`.
+    severity: WARNING
+    languages: [go]
