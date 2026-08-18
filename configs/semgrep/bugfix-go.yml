@@ -132,13 +132,16 @@ rules:
     severity: WARNING
     languages: [go]
 
-  # As quatro exclusões são todas necessárias: sem elas a regra casava também
-  # `xs = append(xs, 1)`, que é a forma correta. Medido.
+  # Três exclusões, e cada uma foi medida à parte. A quarta que aqui esteve —
+  # `pattern-not-inside: $X := append($XS, ...)` — era morta: o Semgrep trata
+  # `$X = append(...)` como cobrindo também a forma `:=`, por isso a cláusula
+  # `=` sozinha já exclui `ys := append(xs, 1)`. Removê-la não muda um único
+  # resultado. Sem estas três, a regra casa `xs = append(xs, 1)`, que é a
+  # forma correta.
   - id: bugfix-go-edge-case-append-discarded
     patterns:
       - pattern: append($XS, ...)
       - pattern-not-inside: $X = append($XS, ...)
-      - pattern-not-inside: $X := append($XS, ...)
       - pattern-not-inside: return append($XS, ...)
       - pattern-not-inside: $F(..., append($XS, ...), ...)
     message: >-
