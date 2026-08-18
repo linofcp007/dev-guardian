@@ -6,6 +6,34 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
+## [1.7.2] - 2026-08-18
+
+### Fixed
+
+- **`wp_vuln_check` could run `wpscan --url undefined`.** When only
+  `wp_install_path` was given, the target URL is read from WP-CLI — which can
+  exit successfully and print nothing. Two call sites asserted the URL was
+  present rather than checking it. It is now resolved once and, if still
+  empty, the tool returns `scanner_failed` instead of invoking the scanner
+  with a bad target.
+
+### Changed
+
+- **No non-null assertions anywhere.** 31 `!` assertions across 22 files
+  removed; `mcp/src` and `mcp/test` are both at zero, as is explicit `any`, so
+  a reappearance is a regression rather than the status quo. Most restated
+  something the code had just established — a `push` before re-indexing the
+  array's tail, a `filter` before a `map`, a length check before an index —
+  and narrowing costs nothing there. Two others were hiding couplings worth
+  making explicit: three tools asserted a shell whose non-null-ness is
+  guaranteed by a check in a *different* file, and `perf_check` asserted a URL
+  because its guard set a boolean that told the reader everything and the
+  compiler nothing.
+- `CLAUDE.md` now documents the TypeScript conventions this repo actually
+  applies, including what `tsc` does **not** catch: interpolating a non-string
+  into a template types as `string` at any strictness, so that class is still
+  only caught by a human reading the diff.
+
 ## [1.7.1] - 2026-08-18
 
 ### Fixed
