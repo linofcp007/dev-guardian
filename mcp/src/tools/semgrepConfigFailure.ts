@@ -16,7 +16,7 @@
  * discover every dead one from a single invocation rather than one at a
  * time.
  *
- * A LOCAL `--config=` (`configs/semgrep/bugfix-js.yml`, wired in by
+ * A LOCAL `--config=` (`configs/semgrep/bugfix-*.yml`, wired in by
  * bugfix-rules-jsts Task 3) can't 404, but a hand-edited file can have
  * broken YAML — and empirically (live, 1.164.0, against a deliberately
  * corrupted copy with an unclosed `languages: [...]` bracket) that failure
@@ -66,7 +66,7 @@ export interface ConfigDownloadFailure {
    * The `--config=` value that failed to resolve — a registry pack, e.g.
    * `p/r2c-bug-scan` (recovered from the registry URL in Semgrep's error
    * message), or a local file's absolute path, e.g.
-   * `.../configs/semgrep/bugfix-js.yml` (recovered from an "Invalid YAML
+   * `.../configs/semgrep/bugfix-*.yml` (recovered from an "Invalid YAML
    * file" message). `null` when the message didn't match either known
    * shape — still a real failure, just not attributable to one specific
    * `--config=` value.

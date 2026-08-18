@@ -8,6 +8,32 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- **Python bug rules** — `configs/semgrep/bugfix-py.yml`, ten hand-authored
+  Semgrep rules covering all six `bug_hunt` subcategories for Python: bare
+  `except:`, `except: pass`, unguarded `.objects.get()`, `None` dereference from
+  `re.match()` and `dict.get()`, `range(len(x) + 1)`, files opened without a
+  context manager, discarded `asyncio` coroutines, TOCTOU between
+  `os.path.exists()` and `open()`, and Django queryset N+1. Each ships a hit
+  fixture and a near-miss fixture that must stay silent, and each was measured
+  against the 32 Python rules `p/r2c-bug-scan` already runs: none duplicates one
+  of them.
+
+### Changed
+
+- `resolveBugfixRules()` returns every `configs/semgrep/bugfix-*.yml` instead of
+  just the JS one, so a new language ships by adding its rule file — no wiring.
+
+### Known gaps
+
+- No general "coroutine not awaited" rule: it is not expressible in Semgrep OSS.
+  Only `asyncio.sleep/gather/wait/wait_for` are covered, so a forgotten `await`
+  on a project's own `async def` is not caught.
+- The Django N+1 rule matches `for` statements, not list comprehensions, and is
+  Django-specific.
+- `none-deref-dict-get` excludes HTTP clients by receiver name.
+
 ## [1.6.0] - 2026-08-18
 
 ### Added
