@@ -8,6 +8,50 @@ version bump.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-18
+
+### Added
+
+- **Fourteen locally-authored Semgrep rules that find JS/TS implementation
+  bugs**, at `configs/semgrep/bugfix-js.yml` — the path
+  `skills/guardian-bugfix` had been promising to a file that never existed.
+  `bug_hunt` loads them **by default**, and unlike a registry pack a local file
+  cannot 404.
+
+  They cover **six** of the seven classes `/guardian-fix` names: swallowed error
+  handling, off-by-one, null safety, memory leaks, race conditions and edge
+  cases. **"Broken happy paths" is not covered** — it is a category of
+  consequence, not a syntactic shape; `floating-mutation` covers its commonest
+  concrete form and nothing covers the rest.
+
+  Why they exist, measured rather than assumed: Semgrep retired `p/bugs`, its
+  replacement covers those classes only for Python and Go, and a purpose-built
+  TypeScript fixture returned **zero** findings with all seven registry packs
+  enabled.
+
+### Fixed
+
+- **A malformed local rule file now degrades instead of taking the scan down**,
+  in both shapes — broken YAML, and a single rule with a broken pattern, which
+  is valid YAML and needs different handling so the other rules’ findings
+  survive. Verified against the built server, not the source tree.
+- A coverage warning no longer says a scanner "did not run" when the same
+  result reports it ran.
+
+### Known limitations
+
+- **JS/TS only.** Python, Go, Java, C#, PHP, Ruby and Rust have no local rules
+  yet; each gets its own design.
+- **Semgrep OSS matches syntax, not dataflow.** These rules find the shapes bugs
+  take. A null dereference two functions from its guard is invisible to them.
+- **The heuristic tier produces false positives by construction.** That is why
+  it is `WARNING` and why `severity_min` exists.
+- **`floating-mutation` does not cover async function expressions** — a Semgrep
+  engine limitation, not an oversight. Declarations, arrow functions, class
+  methods and object methods are covered.
+- **They do not replace the model-driven `/guardian-fix` path.** Rules catch
+  shapes; reading the code catches reasons.
+
 ### Added
 
 - **`bug_hunt` now runs fourteen local, hand-authored Semgrep rules for JS/TS by default** —
