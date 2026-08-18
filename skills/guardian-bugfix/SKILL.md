@@ -65,7 +65,9 @@ Para JS/TS, a ferramenta `bug_hunt` já corre por default um pack próprio,
 `configs/semgrep/bugfix-js.yml` — catorze regras hand-authored, cada uma com
 um par de fixtures (uma que tem de disparar, uma parecida que não pode) —
 cobrindo seis classes: race conditions (`floating-mutation`, uma chamada que
-muta estado sem `await` dentro de função `async`), null/undefined safety,
+muta estado sem `await` dentro de função `async` — declarações, arrow
+functions, métodos de classe/objeto; NÃO cobre function expressions async,
+uma limitação do motor do Semgrep), null/undefined safety,
 off-by-one, memory/resource leaks, error handling engolido, e dois edge
 cases (`reduce` sem valor inicial, `parseInt` sem radix). "Broken happy
 paths" fica de fora como padrão: é uma categoria de consequência, não uma

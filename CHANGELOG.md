@@ -24,8 +24,9 @@ version bump.
   `docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md`.
   - **Six named classes — "broken happy paths" isn't one of them as a pattern.** It's a
     category of consequence, not a syntactic shape; `floating-mutation` covers its commonest
-    concrete form — an un-awaited mutating call inside an `async` function — and nothing
-    covers the rest of it.
+    concrete form — an un-awaited mutating call inside an `async` function (declarations,
+    arrow functions, class/object methods — NOT async function expressions, a Semgrep engine
+    limitation) — and nothing covers the rest of it.
   - **Semgrep OSS matches syntax, not dataflow.** These rules find the shapes bugs take, not
     bugs proven by analysis — a null dereference two functions from its guard is invisible to
     them.

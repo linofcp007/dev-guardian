@@ -430,8 +430,10 @@ registerToolModule(
       'off_by_one, memory_leak, error_handling, edge_case. `commands/guardian-fix.md` also ' +
       'names "broken happy paths" as a bug-hunting focus; that is not a syntactic pattern, ' +
       'so only its commonest concrete form is covered (an un-awaited mutating call inside ' +
-      'an async function — rule `floating-mutation`, the race_condition entry) and nothing ' +
-      "covers the rest of it. These are Semgrep OSS pattern rules: they match syntax, not " +
+      'an async function — rule `floating-mutation`, the race_condition entry, covering async ' +
+      'declarations, arrow functions, and class/object methods, but NOT async function expressions ' +
+      '— a Semgrep engine limitation, not an oversight) and nothing covers the rest of it. ' +
+      "These are Semgrep OSS pattern rules: they match syntax, not " +
       'dataflow, so this finds the shapes bugs take, not bugs proven by analysis — a null ' +
       'dereference two functions from its guard is invisible to them. The heuristic-tier ' +
       'rules (WARNING/INFO) produce false positives by construction — `floating-mutation` ' +
