@@ -167,7 +167,7 @@ function findHiddenUnicode(content) {
         const line = lines[i] ?? '';
         for (const ch of line) {
             const code = ch.codePointAt(0);
-            if (isInvisible(code))
+            if (code !== undefined && isInvisible(code))
                 return { code, line: i + 1 };
         }
     }

@@ -119,7 +119,8 @@ async function handler(
       }
       const lines = content.split(/\r?\n/);
       for (let i = 0; i < lines.length; i += 1) {
-        const line = lines[i]!;
+        const line = lines[i];
+        if (line === undefined) continue;
         for (const rule of RULES) {
           if (rule.test(line)) {
             findings.push(

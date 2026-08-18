@@ -39700,8 +39700,10 @@ registerToolModule(
     invoke: async (_input, ctx) => {
       const startedAt2 = Date.now() - 1e3;
       const scriptPath = join7(ctx.plugin.scriptsDir, ...SCRIPT_REL_PATH);
+      const shell = ctx.plugin.shell;
+      if (shell === null) throw new Error("no usable bash shell");
       const shellResult = await runShellScript({
-        shell: ctx.plugin.shell,
+        shell,
         scriptPath,
         args: [ctx.projectPath],
         cwd: ctx.projectPath,
@@ -39762,11 +39764,13 @@ var securityCodeScanParser = {
       if (line.length === 0) continue;
       const m = LINE_RE.exec(line);
       if (!m) continue;
-      const file = m[1];
-      const lineNo = Number(m[2]);
-      const ruleId = m[5];
-      const message = m[6].trim();
-      const type = m[4].toLowerCase();
+      const [, file, lineNoRaw, , typeRaw, ruleId, messageRaw] = m;
+      if (file === void 0 || lineNoRaw === void 0 || typeRaw === void 0 || ruleId === void 0 || messageRaw === void 0) {
+        continue;
+      }
+      const lineNo = Number(lineNoRaw);
+      const message = messageRaw.trim();
+      const type = typeRaw.toLowerCase();
       const severity = type === "error" ? "critical" : LOWER_SEVERITY.has(ruleId) ? "medium" : "high";
       const category = "security";
       const fpInput = {
@@ -39900,11 +39904,11 @@ registerToolModule(
           parser_inputs.push({ parser: semgrepParser, input: raw });
         }
         const ok = result.outcome === "completed" || result.exitCode === 1;
-        tools_run.push({ name: "semgrep", status: ok ? "ok" : "failed" });
+        const semgrepRun = { name: "semgrep", status: ok ? "ok" : "failed" };
         if (!ok && result.stderr) {
-          const reason = result.stderr.split(/\r?\n/)[0] ?? "unknown";
-          tools_run[tools_run.length - 1].reason = reason;
+          semgrepRun.reason = result.stderr.split(/\r?\n/)[0] ?? "unknown";
         }
+        tools_run.push(semgrepRun);
       } else {
         const dockerBin = await scannerAvailable("docker");
         if (dockerBin) {
@@ -40777,8 +40781,10 @@ registerToolModule(
     invoke: async (_input, ctx) => {
       const startedAt2 = Date.now() - 1e3;
       const scriptPath = join15(ctx.plugin.scriptsDir, ...SCRIPT_REL_PATH2);
+      const shell = ctx.plugin.shell;
+      if (shell === null) throw new Error("no usable bash shell");
       const shellResult = await runShellScript({
-        shell: ctx.plugin.shell,
+        shell,
         scriptPath,
         args: [ctx.projectPath],
         cwd: ctx.projectPath,
@@ -40874,8 +40880,10 @@ registerToolModule(
           report_paths: []
         };
       }
+      const shell = ctx.plugin.shell;
+      if (shell === null) throw new Error("no usable bash shell");
       const shellResult = await runShellScript({
-        shell: ctx.plugin.shell,
+        shell,
         scriptPath,
         args: [files.join(" ")],
         cwd: ctx.projectPath,
@@ -41736,8 +41744,12 @@ function summariseLicenses(raw) {
       const name = getString(lic, "Name");
       const pkg = getString(lic, "PkgName") ?? "(unknown)";
       if (!name) continue;
-      if (!byLicense.has(name)) byLicense.set(name, /* @__PURE__ */ new Set());
-      byLicense.get(name).add(pkg);
+      let pkgs = byLicense.get(name);
+      if (!pkgs) {
+        pkgs = /* @__PURE__ */ new Set();
+        byLicense.set(name, pkgs);
+      }
+      pkgs.add(pkg);
     }
   }
   const licenses_summary = [];
@@ -42636,9 +42648,9 @@ async function handler6(input, ctx) {
   } catch (e) {
     return failDomain7("not_a_git_repo", e.message);
   }
-  const hasUrl = inp.target_url !== void 0 && inp.target_url.length > 0;
-  const hasScript = inp.k6_script_path !== void 0 && inp.k6_script_path.length > 0;
-  if (hasUrl === hasScript) {
+  const targetUrl = inp.target_url !== void 0 && inp.target_url.length > 0 ? inp.target_url : void 0;
+  const k6Script = inp.k6_script_path !== void 0 && inp.k6_script_path.length > 0 ? inp.k6_script_path : void 0;
+  if (targetUrl === void 0 === (k6Script === void 0)) {
     return failDomain7(
       "scanner_failed",
       "Provide exactly one of target_url (Lighthouse) or k6_script_path (k6)."
@@ -42646,16 +42658,19 @@ async function handler6(input, ctx) {
   }
   const scanId = randomUUID3();
   const reportDir = ensureReportDir(projectPath, scanId, "perf");
-  if (hasUrl) {
+  if (targetUrl !== void 0) {
     return runLighthouse({
-      url: inp.target_url,
+      url: targetUrl,
       categories: inp.lighthouse_categories,
       reportDir,
       projectPath,
       ctx
     });
   }
-  return runK6({ scriptPath: inp.k6_script_path, reportDir, projectPath, ctx });
+  if (k6Script === void 0) {
+    return failDomain7("scanner_failed", "Provide exactly one of target_url or k6_script_path.");
+  }
+  return runK6({ scriptPath: k6Script, reportDir, projectPath, ctx });
 }
 async function runLighthouse(opts) {
   const bin = await scannerAvailable("lighthouse");
@@ -43127,11 +43142,15 @@ async function handler10(input, ctx) {
   ctx.storage.scans.finalize({
     scan_id: auditScanId,
     status: "completed",
-    tools_run: subTools.map((name) => ({
-      name,
-      status: subResults[name]?.ok ? "ok" : "failed",
-      ...subResults[name]?.error ? { reason: subResults[name].error.code } : {}
-    })),
+    tools_run: subTools.map((name) => {
+      const sub = subResults[name];
+      const reason = sub?.error?.code;
+      return {
+        name,
+        status: sub?.ok ? "ok" : "failed",
+        ...reason !== void 0 ? { reason } : {}
+      };
+    }),
     missing_tools: [...aggregateMissing]
   });
   return {
@@ -44356,18 +44375,20 @@ function extractFromSbomJson(raw) {
   }
   const cdx = root?.components;
   if (Array.isArray(cdx)) {
-    return cdx.filter((c3) => typeof c3?.name === "string").map((c3) => {
+    return cdx.flatMap((c3) => {
+      if (typeof c3?.name !== "string") return [];
       const out = { name: c3.name };
       if (typeof c3.version === "string") out.version = c3.version;
-      return out;
+      return [out];
     });
   }
   const spdx = root?.packages;
   if (Array.isArray(spdx)) {
-    return spdx.filter((p) => typeof p?.name === "string").map((p) => {
+    return spdx.flatMap((p) => {
+      if (typeof p?.name !== "string") return [];
       const out = { name: p.name };
       if (typeof p.versionInfo === "string") out.version = p.versionInfo;
-      return out;
+      return [out];
     });
   }
   return [];
@@ -46148,8 +46169,12 @@ function groupByComponent(r) {
         file: row["file"] ?? "(unknown)",
         status: normaliseStatus(row["status"] ?? row["message"])
       };
-      if (!out[slug]) out[slug] = [];
-      out[slug].push(f);
+      let bucket = out[slug];
+      if (!bucket) {
+        bucket = [];
+        out[slug] = bucket;
+      }
+      bucket.push(f);
     }
     return out;
   } catch {
@@ -46316,6 +46341,9 @@ async function handler26(input, ctx) {
         `wp option get home failed: ${r2.stderr.split(/\r?\n/)[0] ?? r2.outcome}`
       );
     }
+  }
+  if (!url) {
+    return failDomain21("scanner_failed", "Could not resolve a target URL for WPScan.");
   }
   const token = inp.api_token ?? process.env["WPSCAN_API_TOKEN"] ?? "";
   if (!token) warnings.push("No WPSCAN_API_TOKEN \u2014 public-no-token rate limit applies.");
@@ -47169,6 +47197,7 @@ async function handler33(input, ctx) {
     const lines = content.split(/\r?\n/);
     for (let i2 = 0; i2 < lines.length; i2 += 1) {
       const line = lines[i2];
+      if (line === void 0) continue;
       for (const rule of PATTERNS) {
         if (rule.regex.test(line)) {
           findings.push(
@@ -47463,6 +47492,7 @@ async function handler35(input, ctx) {
       const lines = content.split(/\r?\n/);
       for (let i2 = 0; i2 < lines.length; i2 += 1) {
         const line = lines[i2];
+        if (line === void 0) continue;
         for (const rule of RULES) {
           if (rule.test(line)) {
             findings.push(
@@ -47651,10 +47681,7 @@ async function handler37(input, ctx) {
   const summary = {
     total_open: open.length,
     returned: top.length,
-    score_range: top.length > 0 ? {
-      max: top[0].priority_score,
-      min: top[top.length - 1].priority_score
-    } : null
+    score_range: scoreRange(top)
   };
   return {
     ok: true,
@@ -47665,6 +47692,12 @@ async function handler37(input, ctx) {
     // future maintainers who add age-weighting.
     _recent_scan_ts: recentScanTs
   };
+}
+function scoreRange(top) {
+  const first = top[0];
+  const last = top[top.length - 1];
+  if (first === void 0 || last === void 0) return null;
+  return { max: first.priority_score, min: last.priority_score };
 }
 
 // src/tools/scanSkill.ts
@@ -47804,8 +47837,9 @@ function fromGoMod(content) {
   const re = /^\s*([\w./-]+)\s+v(\d+\.\d+\.\d+[\w.-]*)/gm;
   let m;
   while ((m = re.exec(content)) !== null) {
-    if (m[1] === "module" || m[1] === "go") continue;
-    const q = { ecosystem: "Go", name: m[1] };
+    const name = m[1];
+    if (name === void 0 || name === "module" || name === "go") continue;
+    const q = { ecosystem: "Go", name };
     if (m[2]) q.version = m[2];
     out.push(q);
   }
@@ -47856,7 +47890,9 @@ function fromGemfileLock(content) {
   const re = /^\s{4}([A-Za-z0-9._-]+)\s+\((\d+\.\d+[\w.]*)\)/gm;
   let m;
   while ((m = re.exec(content)) !== null) {
-    const q = { ecosystem: "RubyGems", name: m[1] };
+    const name = m[1];
+    if (name === void 0) continue;
+    const q = { ecosystem: "RubyGems", name };
     if (m[2]) q.version = m[2];
     out.push(q);
   }
@@ -48701,7 +48737,7 @@ function findHiddenUnicode(content) {
     const line = lines[i2] ?? "";
     for (const ch of line) {
       const code = ch.codePointAt(0);
-      if (isInvisible(code)) return { code, line: i2 + 1 };
+      if (code !== void 0 && isInvisible(code)) return { code, line: i2 + 1 };
     }
   }
   return null;
@@ -49070,6 +49106,7 @@ function collectDir(root) {
   const stack = [root];
   while (stack.length > 0) {
     const dir = stack.pop();
+    if (dir === void 0) break;
     let entries;
     try {
       entries = readdirSync12(dir);

@@ -335,9 +335,11 @@ describe('prioritize_findings', () => {
       ok: true;
       ranked: Array<{ finding: { severity: string; title: string }; priority_score: number }>;
     };
-    expect(r.ranked[0]?.finding.title).toBe('sqli');
-    expect(r.ranked[1]?.finding.title).toBe('cosmetic');
-    expect(r.ranked[0]!.priority_score).toBeGreaterThan(r.ranked[1]!.priority_score);
+    const [first, second] = r.ranked;
+    if (!first || !second) throw new Error(`expected 2+ ranked findings, got ${r.ranked.length}`);
+    expect(first.finding.title).toBe('sqli');
+    expect(second.finding.title).toBe('cosmetic');
+    expect(first.priority_score).toBeGreaterThan(second.priority_score);
   });
 });
 

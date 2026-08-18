@@ -102,6 +102,12 @@ async function handler(
     }
   }
 
+  // WP-CLI can succeed and still print nothing, which left `url` undefined
+  // while two later call sites asserted it was not. Checked once, here.
+  if (!url) {
+    return failDomain('scanner_failed', 'Could not resolve a target URL for WPScan.');
+  }
+
   const token = inp.api_token ?? process.env['WPSCAN_API_TOKEN'] ?? '';
   if (!token) warnings.push('No WPSCAN_API_TOKEN — public-no-token rate limit applies.');
 
@@ -119,7 +125,7 @@ async function handler(
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: 'wp_vuln_check',
-    project_path: inp.wp_install_path ?? url!,
+    project_path: inp.wp_install_path ?? url,
     tree_hash: '',
     report_dir: reportDir,
   });
@@ -134,7 +140,7 @@ async function handler(
     '--enumerate',
     'vp,vt',
     '--url',
-    url!,
+    url,
   ];
   if (token) args.push('--api-token', token);
 

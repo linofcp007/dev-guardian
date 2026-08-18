@@ -117,7 +117,9 @@ describe('scan_skill', () => {
     expect(r.recommendation).toBe('DO_NOT_INSTALL');
     expect(r.risk_score).toBeGreaterThan(50);
     expect(r.findings_count).toBeGreaterThan(3);
-    expect(r.findings_by_severity.critical! + r.findings_by_severity.high!).toBeGreaterThan(0);
+    const critical = r.findings_by_severity.critical ?? 0;
+    const high = r.findings_by_severity.high ?? 0;
+    expect(critical + high).toBeGreaterThan(0);
     const cats = r.category_breakdown.map((c) => c.category);
     expect(cats).toContain('data_exfiltration');
     expect(cats).toContain('supply_chain');

@@ -117,24 +117,27 @@ function extractFromSbomJson(raw) {
     }
     const cdx = root?.components;
     if (Array.isArray(cdx)) {
-        return cdx
-            .filter((c) => typeof c?.name === 'string')
-            .map((c) => {
+        // flatMap rather than filter+map: the filter narrowed nothing for the
+        // compiler, so the map needed an assertion to re-state what the filter
+        // had already checked.
+        return cdx.flatMap((c) => {
+            if (typeof c?.name !== 'string')
+                return [];
             const out = { name: c.name };
             if (typeof c.version === 'string')
                 out.version = c.version;
-            return out;
+            return [out];
         });
     }
     const spdx = root?.packages;
     if (Array.isArray(spdx)) {
-        return spdx
-            .filter((p) => typeof p?.name === 'string')
-            .map((p) => {
+        return spdx.flatMap((p) => {
+            if (typeof p?.name !== 'string')
+                return [];
             const out = { name: p.name };
             if (typeof p.versionInfo === 'string')
                 out.version = p.versionInfo;
-            return out;
+            return [out];
         });
     }
     return [];
