@@ -4,7 +4,7 @@
  * Same motive as `languagePacksFor` (see `bugHuntClassify.test.ts`) being
  * its own function rather than inlined.
  *
- * The local `bugfix-js.yml` rules must be in the pack list BY DEFAULT: a
+ * The local `bugfix-*.yml` rules must be in the pack list BY DEFAULT: a
  * registry pack (`p/bugs`) 404'd once and took `bug_hunt` down entirely,
  * because Semgrep aborts the WHOLE scan when any `--config` fails to load
  * (see `bugHunt.ts`'s header comment and `semgrepConfigFailure.ts`). A local
@@ -24,9 +24,9 @@ describe('bug_hunt config list', () => {
     // Registry packs can 404 -- one did, and it took the whole tool down. A
     // local file cannot, so these rules must be in the DEFAULT set.
     const packs = buildPackList({ includeLanguagePacks: false, languages: ['typescript'] });
-    const local = packs.find((p) => p.includes('bugfix-js.yml'));
-    expect(local).toBeTruthy();
-    expect(isAbsolute(local ?? '')).toBe(true);
+    const local = packs.filter((p) => p.includes('bugfix-'));
+    expect(local.length).toBeGreaterThan(1);
+    for (const p of local) expect(isAbsolute(p)).toBe(true);
   });
 
   it('the default local-rules entry is resolveBugfixRules()\'s real result, not a look-alike literal', () => {
@@ -35,9 +35,10 @@ describe('bug_hunt config list', () => {
     // real resolver (or the real file). Pin it to the actual value AND to a
     // path that genuinely exists on disk, closing that gap.
     const packs = buildPackList({ includeLanguagePacks: false, languages: [] });
-    const local = packs.find((p) => p.includes('bugfix-js.yml'));
-    expect(local).toBe(resolveBugfixRules());
-    expect(existsSync(local ?? '')).toBe(true);
+    const local = packs.filter((p) => p.includes('bugfix-'));
+    expect(local).toEqual(resolveBugfixRules());
+    expect(local.length).toBeGreaterThan(1);
+    for (const p of local) expect(existsSync(p)).toBe(true);
   });
 
   it('still lists the base registry packs alongside it', () => {
@@ -51,9 +52,9 @@ describe('bug_hunt config list', () => {
     const packs = buildPackList({
       includeLanguagePacks: false,
       languages: ['typescript'],
-      bugfixRulesPath: null,
+      bugfixRulesPaths: [],
     });
-    expect(packs.some((p) => p.includes('bugfix-js.yml'))).toBe(false);
+    expect(packs.some((p) => p.includes('bugfix-'))).toBe(false);
   });
 
   it('passes an explicit override path through verbatim, without re-resolving it', () => {
@@ -64,7 +65,7 @@ describe('bug_hunt config list', () => {
     const packs = buildPackList({
       includeLanguagePacks: false,
       languages: [],
-      bugfixRulesPath: fake,
+      bugfixRulesPaths: [fake],
     });
     expect(packs).toContain(fake);
   });

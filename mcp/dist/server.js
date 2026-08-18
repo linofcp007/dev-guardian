@@ -40321,7 +40321,7 @@ import { existsSync as existsSync10 } from "node:fs";
 import { join as join14 } from "node:path";
 
 // src/platform/configsDir.ts
-import { existsSync as existsSync9 } from "node:fs";
+import { existsSync as existsSync9, readdirSync as readdirSync4 } from "node:fs";
 import { dirname as dirname5, join as join13 } from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 var MARKER_RULES = ["semgrep", "base.yml"];
@@ -40333,10 +40333,17 @@ function resolveConfigsDir() {
   if (existsSync9(join13(unbundled, ...MARKER_RULES))) return unbundled;
   return unbundled;
 }
-var BUGFIX_JS_RULES = ["semgrep", "bugfix-js.yml"];
+var BUGFIX_PREFIX = "bugfix-";
+var BUGFIX_SUFFIX = ".yml";
 function resolveBugfixRules() {
-  const path6 = join13(resolveConfigsDir(), ...BUGFIX_JS_RULES);
-  return existsSync9(path6) ? path6 : null;
+  const dir = join13(resolveConfigsDir(), "semgrep");
+  let entries;
+  try {
+    entries = readdirSync4(dir);
+  } catch {
+    return [];
+  }
+  return entries.filter((name) => name.startsWith(BUGFIX_PREFIX) && name.endsWith(BUGFIX_SUFFIX)).sort().map((name) => join13(dir, name));
 }
 
 // src/tools/semgrepConfigFailure.ts
@@ -40432,10 +40439,10 @@ function detectLanguages(ctx) {
   return snapshotLanguages ?? fallbackLanguages(ctx.projectPath);
 }
 function buildPackList(opts) {
-  const bugfixRulesPath = opts.bugfixRulesPath !== void 0 ? opts.bugfixRulesPath : resolveBugfixRules();
+  const bugfixRulesPaths = opts.bugfixRulesPaths ?? resolveBugfixRules();
   return [
     ...BUG_HUNT_BASE_PACKS,
-    ...bugfixRulesPath !== null ? [bugfixRulesPath] : [],
+    ...bugfixRulesPaths,
     ...opts.includeLanguagePacks ? languagePacksFor(opts.languages) : []
   ];
 }
@@ -40497,8 +40504,8 @@ function mapSubcategory2(ruleId, existing) {
 registerToolModule(
   makeScanTool({
     name: "bug_hunt",
-    title: "Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS bug rules; optional language packs, off by default; other languages still registry-only)",
-    description: "Semgrep with p/r2c-bug-scan + p/security-audit always on, plus a local, always-on JS/TS rule pack: `configs/semgrep/bugfix-js.yml`, fourteen hand-authored rules covering all six subcategories below for JS/TS \u2014 race_condition, null_safety, off_by_one, memory_leak, error_handling, edge_case. `commands/guardian-fix.md` also names \"broken happy paths\" as a bug-hunting focus; that is not a syntactic pattern, so only its commonest concrete form is covered (an un-awaited mutating call inside an async function \u2014 rule `floating-mutation`, the race_condition entry, covering async declarations, arrow functions, and class/object methods, but NOT async function expressions \u2014 a Semgrep engine limitation, not an oversight) and nothing covers the rest of it. These are Semgrep OSS pattern rules: they match syntax, not dataflow, so this finds the shapes bugs take, not bugs proven by analysis \u2014 a null dereference two functions from its guard is invisible to them. The heuristic-tier rules (WARNING/INFO) produce false positives by construction \u2014 `floating-mutation` matches on the method name alone, so it can't tell a real mutation like `repo.save()` from an unrelated call that just shares the name, like `ctx.save()` (Canvas 2D's synchronous state-stack push, nothing to do with persistence) \u2014 both fire identically. That's why it isn't ERROR and why `severity_min` exists to filter it out. JS/TS only: no other language has a local rule pack yet, so Python, Go, Java, C#, PHP, Ruby and Rust get only the registry coverage described below, same as before this pack existed. The local pack degrades rather than failing the whole scan if it is ever hand-edited into a bad state \u2014 a YAML syntax error drops it and retries with the registry packs, a single bad rule pattern inside an otherwise-valid file is dropped alone and every other rule's findings still return \u2014 verified against the real built server, not assumed. These rules do not make bug_hunt a substitute for the model-driven guardian-fix path: they catch shapes, reading the code catches reasons. Optional `include_language_packs` (off by default) also runs one per-language pack for each language family `detect_stack` finds in the project (or, absent a snapshot, a quick package.json/tsconfig.json/pyproject.toml/pom.xml/go.mod check): p/javascript OR p/typescript for a JS/TS project \u2014 never both, they are the identical 74 rules under two registry names, so only p/typescript runs once TypeScript is detected \u2014 plus p/python, p/java, p/golang. Read this before turning it on: every one of those is Semgrep's per-language SECURITY bundle (XSS, SQL/command injection, crypto, auth, SSRF, hard-coded secrets, \u2026) \u2014 verified against their 327 distinct rules and a live scan of a fixture built to trigger every canonical subcategory below: zero matches, in any language. They widen security coverage per language; they add no race-condition, null/undefined-safety, off-by-one, memory-leak or swallowed-error coverage. Overlap with the always-on p/security-audit is real but partial, not \"largely redundant\" \u2014 measured (exact rule-id duplication): 22% overall, but only ~9% for the JS/TS packs specifically (up to 40-43% for Java/Go) \u2014 most of what they add, especially for JS/TS, is net-new security scanning, not duplicate coverage. Beyond the local JS/TS pack, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only registry pack reaching these six classes, and only for Python and Go \u2014 Java, C#, PHP, Ruby and Rust get none of them from the registry, and none yet from a local pack either. On any of those languages, a quiet or security-only result (with or without the language packs) is not evidence of a bug-free project; pair with `scan_sast` or the guardian-bugfix skill's manual review. Findings are categorised as `bug`, with subcategories (race_condition, null_safety, edge_case, error_handling, memory_leak, off_by_one) attached where the matching rule's own id says so \u2014 everything else keeps its own raw, tool-specific tag instead of being forced into one of those six. `categories` and `include_language_packs` are independent inputs on purpose: `include_language_packs` decides which scanners RUN, `categories` decides which findings already found are RETURNED \u2014 use `categories: [\"null_safety\", \"edge_case\"]` to narrow to the six bug classes regardless of which packs ran. If a configured pack is retired from the Semgrep registry, the scan re-runs with whichever packs still resolve and reports the gap via `missing_tools` instead of silently scanning nothing.",
+    title: "Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS and Python bug rules; optional language packs, off by default; other languages still registry-only)",
+    description: "Semgrep with p/r2c-bug-scan + p/security-audit always on, plus local, always-on JS/TS and Python rule packs: `configs/semgrep/bugfix-js.yml` (fourteen rules) and `configs/semgrep/bugfix-py.yml` (ten rules), each covering all six subcategories below for its language \u2014 race_condition, null_safety, off_by_one, memory_leak, error_handling, edge_case. `commands/guardian-fix.md` also names \"broken happy paths\" as a bug-hunting focus; that is not a syntactic pattern, so only its commonest concrete form is covered (an un-awaited mutating call inside an async function \u2014 rule `floating-mutation`, the race_condition entry, covering async declarations, arrow functions, and class/object methods, but NOT async function expressions \u2014 a Semgrep engine limitation, not an oversight) and nothing covers the rest of it. These are Semgrep OSS pattern rules: they match syntax, not dataflow, so this finds the shapes bugs take, not bugs proven by analysis \u2014 a null dereference two functions from its guard is invisible to them. The heuristic-tier rules (WARNING/INFO) produce false positives by construction \u2014 `floating-mutation` matches on the method name alone, so it can't tell a real mutation like `repo.save()` from an unrelated call that just shares the name, like `ctx.save()` (Canvas 2D's synchronous state-stack push, nothing to do with persistence) \u2014 both fire identically. That's why it isn't ERROR and why `severity_min` exists to filter it out. JS/TS and Python only: no other language has a local rule pack yet, so Go, Java, C#, PHP, Ruby and Rust get only the registry coverage described below, same as before these packs existed. The local packs degrade rather than failing the whole scan if one is ever hand-edited into a bad state \u2014 a YAML syntax error drops just that file and retries with everything else, a single bad rule pattern inside an otherwise-valid file is dropped alone and every other rule's findings still return \u2014 verified against the real built server, not assumed. These rules do not make bug_hunt a substitute for the model-driven guardian-fix path: they catch shapes, reading the code catches reasons. Optional `include_language_packs` (off by default) also runs one per-language pack for each language family `detect_stack` finds in the project (or, absent a snapshot, a quick package.json/tsconfig.json/pyproject.toml/pom.xml/go.mod check): p/javascript OR p/typescript for a JS/TS project \u2014 never both, they are the identical 74 rules under two registry names, so only p/typescript runs once TypeScript is detected \u2014 plus p/python, p/java, p/golang. Read this before turning it on: every one of those is Semgrep's per-language SECURITY bundle (XSS, SQL/command injection, crypto, auth, SSRF, hard-coded secrets, \u2026) \u2014 verified against their 327 distinct rules and a live scan of a fixture built to trigger every canonical subcategory below: zero matches, in any language. They widen security coverage per language; they add no race-condition, null/undefined-safety, off-by-one, memory-leak or swallowed-error coverage. Overlap with the always-on p/security-audit is real but partial, not \"largely redundant\" \u2014 measured (exact rule-id duplication): 22% overall, but only ~9% for the JS/TS packs specifically (up to 40-43% for Java/Go) \u2014 most of what they add, especially for JS/TS, is net-new security scanning, not duplicate coverage. Beyond the local JS/TS and Python packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only registry pack reaching these six classes, and only for Python and Go \u2014 Java, C#, PHP, Ruby and Rust get none of them from the registry, and none yet from a local pack either. On any of those languages, a quiet or security-only result (with or without the language packs) is not evidence of a bug-free project; pair with `scan_sast` or the guardian-bugfix skill's manual review. Findings are categorised as `bug`, with subcategories (race_condition, null_safety, edge_case, error_handling, memory_leak, off_by_one) attached where the matching rule's own id says so \u2014 everything else keeps its own raw, tool-specific tag instead of being forced into one of those six. `categories` and `include_language_packs` are independent inputs on purpose: `include_language_packs` decides which scanners RUN, `categories` decides which findings already found are RETURNED \u2014 use `categories: [\"null_safety\", \"edge_case\"]` to narrow to the six bug classes regardless of which packs ran. If a configured pack is retired from the Semgrep registry, the scan re-runs with whichever packs still resolve and reports the gap via `missing_tools` instead of silently scanning nothing.",
     scan_type: "bugs",
     category: "bug",
     inputSchema: {
@@ -40630,7 +40637,7 @@ registerToolModule(
 );
 
 // src/tools/qualityCheck.ts
-import { existsSync as existsSync11, readdirSync as readdirSync4 } from "node:fs";
+import { existsSync as existsSync11, readdirSync as readdirSync5 } from "node:fs";
 import { join as join15 } from "node:path";
 
 // src/runners/scannerParsers/jscpd.ts
@@ -40768,7 +40775,7 @@ registerToolModule(
       if (reportDir) {
         const dupDir = join15(reportDir, "dup");
         if (existsSync11(dupDir)) {
-          const candidate = readdirSync4(dupDir).find((n2) => /jscpd.*\.json$/.test(n2));
+          const candidate = readdirSync5(dupDir).find((n2) => /jscpd.*\.json$/.test(n2));
           const path6 = candidate ? join15(dupDir, candidate) : null;
           const raw = path6 ? readJsonSafe(path6) : null;
           if (raw) {
@@ -41628,7 +41635,7 @@ function failDomain2(code, message) {
 }
 
 // src/tools/complianceCheck.ts
-import { readdirSync as readdirSync5, statSync as statSync4 } from "node:fs";
+import { readdirSync as readdirSync6, statSync as statSync4 } from "node:fs";
 import { join as join19 } from "node:path";
 var RISKY_LICENSE_PATTERNS = [
   { pattern: /^AGPL/i, severity: "high" },
@@ -41677,7 +41684,7 @@ function walk2(root, dir, depth, maxDepth, out) {
   if (depth > maxDepth) return;
   let entries;
   try {
-    entries = readdirSync5(dir);
+    entries = readdirSync6(dir);
   } catch {
     return;
   }
@@ -41974,7 +41981,7 @@ function failDomain3(code, message) {
 }
 
 // src/tools/detectStack.ts
-import { existsSync as existsSync15, readdirSync as readdirSync6 } from "node:fs";
+import { existsSync as existsSync15, readdirSync as readdirSync7 } from "node:fs";
 import { join as join21 } from "node:path";
 var SCRIPT_REL_PATH4 = ["detect", "detect-stack.sh"];
 var tool3 = {
@@ -42043,7 +42050,7 @@ function enrichDotnet(snap, projectPath) {
     try {
       const target = rel2 === "" ? projectPath : join21(projectPath, rel2);
       if (!existsSync15(target)) return false;
-      return readdirSync6(target).some((name) => name.endsWith(suffix));
+      return readdirSync7(target).some((name) => name.endsWith(suffix));
     } catch {
       return false;
     }
@@ -42084,7 +42091,7 @@ function anyDeepMatching(root, suffix, maxDepth) {
     if (depth > maxDepth) return false;
     let entries;
     try {
-      entries = readdirSync6(dir);
+      entries = readdirSync7(dir);
     } catch {
       return false;
     }
@@ -42093,7 +42100,7 @@ function anyDeepMatching(root, suffix, maxDepth) {
       const abs = join21(dir, name);
       if (name.endsWith(suffix)) return true;
       try {
-        if (readdirSync6(abs).length >= 0 && walk4(abs, depth + 1)) return true;
+        if (readdirSync7(abs).length >= 0 && walk4(abs, depth + 1)) return true;
       } catch {
       }
     }
@@ -44665,7 +44672,7 @@ function failDomain16(code, message) {
 }
 
 // src/tools/registerCustomRules.ts
-import { existsSync as existsSync23, readdirSync as readdirSync7 } from "node:fs";
+import { existsSync as existsSync23, readdirSync as readdirSync8 } from "node:fs";
 import { join as join30, resolve as resolve5 } from "node:path";
 var inputSchema11 = {
   project_path: ProjectPath,
@@ -44714,7 +44721,7 @@ function autoDiscover(projectPath) {
     const abs = join30(projectPath, dir);
     if (!existsSync23(abs)) continue;
     try {
-      const hasYaml = readdirSync7(abs).some((f) => /\.ya?ml$/.test(f));
+      const hasYaml = readdirSync8(abs).some((f) => /\.ya?ml$/.test(f));
       if (hasYaml) out.push(abs);
     } catch {
     }
@@ -47024,7 +47031,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID10 } from "node:crypto";
-import { existsSync as existsSync29, readFileSync as readFileSync14, readdirSync as readdirSync8, statSync as statSync7 } from "node:fs";
+import { existsSync as existsSync29, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync7 } from "node:fs";
 import { join as join36, relative as relative2 } from "node:path";
 var PATTERNS = [
   {
@@ -47196,7 +47203,7 @@ function collectConfigFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     let entries;
     try {
-      entries = readdirSync8(dir);
+      entries = readdirSync9(dir);
     } catch {
       return;
     }
@@ -47222,7 +47229,7 @@ function collectConfigFiles(root, maxDepth) {
 
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID11 } from "node:crypto";
-import { readFileSync as readFileSync15, readdirSync as readdirSync9, statSync as statSync8 } from "node:fs";
+import { readFileSync as readFileSync15, readdirSync as readdirSync10, statSync as statSync8 } from "node:fs";
 import { join as join37, relative as relative3 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
@@ -47339,7 +47346,7 @@ function collectCsprojFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     let entries;
     try {
-      entries = readdirSync9(dir);
+      entries = readdirSync10(dir);
     } catch {
       return;
     }
@@ -47363,7 +47370,7 @@ function failDomain24(code, message) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
-import { existsSync as existsSync30, readFileSync as readFileSync16, readdirSync as readdirSync10, statSync as statSync9 } from "node:fs";
+import { existsSync as existsSync30, readFileSync as readFileSync16, readdirSync as readdirSync11, statSync as statSync9 } from "node:fs";
 import { join as join38, relative as relative4 } from "node:path";
 var RULES = [
   {
@@ -47422,7 +47429,7 @@ async function handler35(input, ctx) {
   for (const dir of migrationDirs) {
     let files;
     try {
-      files = readdirSync10(dir).filter((n2) => n2.endsWith(".cs"));
+      files = readdirSync11(dir).filter((n2) => n2.endsWith(".cs"));
     } catch {
       continue;
     }
@@ -47492,7 +47499,7 @@ function findMigrationsDirs(root) {
     if (depth > 6) return;
     let entries;
     try {
-      entries = readdirSync10(dir);
+      entries = readdirSync11(dir);
     } catch {
       return;
     }
@@ -48767,7 +48774,7 @@ import {
   existsSync as existsSync31,
   mkdtempSync,
   readFileSync as readFileSync17,
-  readdirSync as readdirSync11,
+  readdirSync as readdirSync12,
   rmSync,
   statSync as statSync10,
   writeFileSync as writeFileSync7
@@ -49046,7 +49053,7 @@ function collectDir(root) {
     const dir = stack.pop();
     let entries;
     try {
-      entries = readdirSync11(dir);
+      entries = readdirSync12(dir);
     } catch {
       continue;
     }
@@ -50293,7 +50300,7 @@ function buildToolRun(run, via) {
 }
 
 // src/surface/specDiscover.ts
-import { readFileSync as readFileSync19, readdirSync as readdirSync12, statSync as statSync11 } from "node:fs";
+import { readFileSync as readFileSync19, readdirSync as readdirSync13, statSync as statSync11 } from "node:fs";
 import { join as join43, relative as relative5, resolve as resolve6, sep as sep2 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
@@ -50345,7 +50352,7 @@ function readCandidates(paths) {
 function walk3(root, dir) {
   let entries;
   try {
-    entries = readdirSync12(dir, { withFileTypes: true });
+    entries = readdirSync13(dir, { withFileTypes: true });
   } catch {
     return [];
   }

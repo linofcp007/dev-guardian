@@ -1,8 +1,8 @@
 /**
  * Pins `resolveConfigsDir()` / `resolveBugfixRules()` to the REAL `configs/`
- * directory and the REAL `configs/semgrep/bugfix-js.yml` file — not just
+ * directory and the REAL `configs/semgrep/bugfix-*.yml` files — not just
  * "some path exists", which a wrong `..` count, or a copy-paste bug that
- * resolves `base.yml` instead of `bugfix-js.yml` (both real, both present in
+ * resolves `base.yml` or `routes.yml` instead (both real, both present in
  * this repo), would also satisfy. Mirrors `scriptsDir.test.ts`'s own
  * discipline:
  *
@@ -12,11 +12,11 @@
  *     the same mistake.
  *  2. It contains `semgrep/base.yml`, the exact marker `resolveConfigsDir`
  *     itself probes for.
- *  3. `resolveBugfixRules()`'s result is pinned to end in
- *     `semgrep/bugfix-js.yml` SPECIFICALLY, and to equal the independently
- *     computed path — a bare `existsSync` check alone would also pass for
- *     an implementation that (wrongly) returned `.../semgrep/base.yml`,
- *     since that file is real too.
+ *  3. `resolveBugfixRules()`'s result is pinned to the EXACT array of
+ *     `semgrep/bugfix-*.yml` paths, independently computed — a bare
+ *     `existsSync` check, or a bare `*.yml` glob, alone would also pass for
+ *     an implementation that (wrongly) also returned `.../semgrep/base.yml`
+ *     or `.../semgrep/routes.yml`, since both files are real too.
  *
  * Only the UNBUNDLED code path is exercised here (this file, like every
  * other unit test, imports the plain compiled module — vitest never runs
@@ -29,7 +29,7 @@
  * from inside vitest.
  */
 import { existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { resolveBugfixRules, resolveConfigsDir } from '../../../src/platform/configsDir.js';
@@ -59,20 +59,34 @@ describe('resolveConfigsDir', () => {
 });
 
 describe('resolveBugfixRules', () => {
-  it('returns the bugfix rule path when the file is there', () => {
-    const p = resolveBugfixRules();
-    expect(p).not.toBeNull();
-    expect(existsSync(p ?? '')).toBe(true);
+  it('returns every bugfix-*.yml in configs/semgrep, sorted, as absolute paths', () => {
+    const dir = join(resolveConfigsDir(), 'semgrep');
+    expect(resolveBugfixRules()).toEqual([
+      join(dir, 'bugfix-js.yml'),
+      join(dir, 'bugfix-py.yml'),
+    ]);
   });
 
-  it('is specifically bugfix-js.yml, not merely SOME existing config file (e.g. base.yml)', () => {
-    // A copy-paste that resolved base.yml instead of bugfix-js.yml would
-    // also satisfy a bare existsSync check above, since base.yml is real too.
-    const p = resolveBugfixRules() ?? '';
-    expect(p.endsWith(join('semgrep', 'bugfix-js.yml'))).toBe(true);
+  it('every returned path exists on disk', () => {
+    for (const p of resolveBugfixRules()) {
+      expect(existsSync(p)).toBe(true);
+    }
   });
 
-  it('equals configs-dir + semgrep/bugfix-js.yml, independently computed', () => {
-    expect(resolveBugfixRules()).toBe(join(resolveConfigsDir(), 'semgrep', 'bugfix-js.yml'));
+  it('returns ONLY bugfix-*.yml — never base.yml or routes.yml, which are real too', () => {
+    // A glob over `*.yml` would also return these and would satisfy any
+    // "contains bugfix-py.yml" assertion. They must not be passed as
+    // bug_hunt --config values.
+    const names = resolveBugfixRules().map((p) => basename(p));
+    expect(names).not.toContain('base.yml');
+    expect(names).not.toContain('routes.yml');
+    for (const name of names) {
+      expect(name.startsWith('bugfix-')).toBe(true);
+      expect(name.endsWith('.yml')).toBe(true);
+    }
+  });
+
+  it('is stable across repeated calls', () => {
+    expect(resolveBugfixRules()).toEqual(resolveBugfixRules());
   });
 });
