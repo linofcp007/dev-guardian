@@ -99,6 +99,18 @@ do receiver, não pelo nome — qualquer receiver cujo nome CONTENHA `requests`,
 `session_data`, `clients` e `urllib_cache` também são falsos negativos, não
 só um dicionário chamado exatamente `client`.
 
+Mais duas exclusões que produzem falsos negativos, e que interessam sobretudo
+a si enquanto leitor do código: o `.objects.get()` só é marcado quando não
+está guardado, e um `except Exception:` largo conta como guarda — por isso um
+`get()` dentro de `except Exception: pass` fica silencioso aqui, embora seja
+pior do que um `get()` sem guarda nenhuma (o engolir do erro é apanhado à
+parte pela regra `except-pass`, mas nada liga as duas observações). E os
+ficheiros abertos sem context manager nunca são marcados quando o destino é
+um atributo: `self.handle = open(path)` é ignorado de propósito, porque o
+`close()` costuma viver noutro método, fora do alcance de uma regra
+sintática. Uma classe que nunca fecha mesmo o handle passa despercebida — e é
+essa a forma mais comum de um leak de ficheiro de longa duração.
+
 Duas ressalvas a levar a sério antes de confiar num resultado limpo: isto é
 Semgrep OSS, que casa sintaxe, não faz dataflow — um null deref a duas
 funções de distância do guard continua invisível a estas regras, que
