@@ -339,8 +339,11 @@ registerToolModule(makeScanTool({
         'dataflow, so this finds the shapes bugs take, not bugs proven by analysis — a null ' +
         'dereference two functions from its guard is invisible to them. The heuristic-tier ' +
         'rules (WARNING/INFO) produce false positives by construction — `floating-mutation` ' +
-        "cannot tell `repo.save()` from `logger.write()` — which is why they aren't ERROR " +
-        'and why `severity_min` exists to filter them out. JS/TS only: no other language has ' +
+        "matches on the method name alone, so it can't tell a real mutation like " +
+        "`repo.save()` from an unrelated call that just shares the name, like `ctx.save()` " +
+        "(Canvas 2D's synchronous state-stack push, nothing to do with persistence) — both " +
+        "fire identically. That's why it isn't ERROR and why `severity_min` exists to " +
+        'filter it out. JS/TS only: no other language has ' +
         'a local rule pack yet, so Python, Go, Java, C#, PHP, Ruby and Rust get only the ' +
         'registry coverage described below, same as before this pack existed. The local pack ' +
         'degrades rather than failing the whole scan if it is ever hand-edited into a bad ' +

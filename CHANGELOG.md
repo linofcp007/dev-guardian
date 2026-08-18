@@ -30,8 +30,10 @@ version bump.
     bugs proven by analysis — a null dereference two functions from its guard is invisible to
     them.
   - **The heuristic tier produces false positives by construction.** `floating-mutation`
-    cannot tell `repo.save()` from `logger.write()`; that's why it's `WARNING`, not `ERROR`,
-    and why `severity_min` exists.
+    matches on the method name alone, so it can't tell a real mutation like `repo.save()`
+    from an unrelated call that just shares the name, like `ctx.save()` (Canvas 2D's
+    synchronous state-stack push) — both fire identically; that's why it's `WARNING`, not
+    `ERROR`, and why `severity_min` exists.
   - **JS/TS only.** Python, Go, Java, C#, PHP, Ruby and Rust are unchanged: `p/r2c-bug-scan`
     still covers these classes only for Python and Go, and none of those languages has a
     local rule pack yet.

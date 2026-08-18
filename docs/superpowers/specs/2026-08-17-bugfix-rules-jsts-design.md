@@ -207,8 +207,10 @@ run and the tool still reports something true.
   bugs take, not bugs proven by analysis. A null dereference two functions away
   from its guard is invisible to them.
 - **The heuristic tier will produce false positives by construction** —
-  `floating-mutation` cannot distinguish `repo.save()` from `logger.write()`.
-  That is why it is `WARNING` and why `severity_min` exists.
+  `floating-mutation` matches on the method name alone, so it cannot distinguish a
+  real mutation like `repo.save()` from an unrelated call that shares the name,
+  like `ctx.save()` (Canvas 2D's synchronous state-stack push) — both fire
+  identically. That is why it is `WARNING` and why `severity_min` exists.
 - **JS/TS only.** Python, Go, Java, C#, PHP, Ruby and Rust each get their own
   design; a rule set is only as good as the idioms its author knows, and one
   file covering eight languages would be eight shallow rule sets.

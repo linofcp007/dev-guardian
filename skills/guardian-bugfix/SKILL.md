@@ -76,8 +76,10 @@ Duas ressalvas a levar a sério antes de confiar num resultado limpo: isto é
 Semgrep OSS, que casa sintaxe, não faz dataflow — um null deref a duas
 funções de distância do guard continua invisível a estas regras, que
 encontram a forma que o bug toma, não uma prova de análise; e a camada
-heurística (`WARNING`/`INFO` — ex. `floating-mutation`, que não distingue
-`repo.save()` de `logger.write()`) produz falsos positivos por construção,
+heurística (`WARNING`/`INFO` — ex. `floating-mutation`, que casa pelo nome
+do método e por isso não distingue uma mutação real como `repo.save()` de
+uma chamada sem relação que só partilha o nome, como `ctx.save()`, o push
+síncrono de estado do Canvas 2D) produz falsos positivos por construção,
 por isso não é `ERROR` e o `severity_min` de `bug_hunt` existe precisamente
 para os filtrar.
 
