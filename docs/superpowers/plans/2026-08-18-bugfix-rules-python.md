@@ -1318,7 +1318,7 @@ cd mcp
 npx vitest run test/integration/bugfixRulesPy.test.ts
 ```
 
-Expected: PASS, no skips. Ten hit files totalling **23 findings**, ten near-miss
+Expected: PASS, no skips. Ten hit files totalling **24 findings**, ten near-miss
 files with zero, and `p/r2c-bug-scan` silent on every hit fixture.
 
 - [ ] **Step 8: Run the whole suite**
@@ -1840,7 +1840,7 @@ this plan carries:
 
 | Check | Expected |
 | --- | --- |
-| Hit fixtures | 10 files, **23 findings** — each firing its own rule, plus `except_pass.py`, whose bare `except: pass` is genuinely both bugs |
+| Hit fixtures | 10 files, **24 findings** — each firing its own rule, plus `except_pass.py`, whose bare `except: pass` is genuinely both bugs |
 | Near-miss fixtures | 10 files, **0 findings** |
 | `p/r2c-bug-scan` on the hit fixtures | **0 findings** — every rule is additive |
 | `mapSubcategory` | all 10 ids land in their own class; none contains `unchecked` |
