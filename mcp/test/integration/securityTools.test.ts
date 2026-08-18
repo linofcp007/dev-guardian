@@ -19,14 +19,12 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/runners/processRunner.js', () => ({
   runProcess: vi.fn(),
@@ -55,6 +53,9 @@ import type { PluginContext } from '../../src/context.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 // Side-effect imports populate the TOOLS registry — once per file.
 beforeAll(async () => {
@@ -93,7 +94,7 @@ function makePlugin(projectPath: string): PluginContext {
 }
 
 function tempProject(): string {
-  return mkdtempSync(join(tmpdir(), 'sec-tools-'));
+  return makeTempDir('sec-tools-');
 }
 
 const semgrepFixture = () => readFileSync(join(FIX, 'semgrep.json'), 'utf8');
@@ -137,7 +138,7 @@ describe('scan_sast (Semgrep)', () => {
 
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockImplementation(async (opts) => {
-      const out = opts.args?.find((a, i) => opts.args?.[i - 1] === '--output');
+      const out = opts.args?.find((_a, i) => opts.args?.[i - 1] === '--output');
       if (out) writeFileSync(out, semgrepFixture(), 'utf8');
       return fakeRunSuccess();
     });

@@ -2,7 +2,7 @@
  * Mocks `scannerAvailable` and `runProcess` so the whole tool runs without
  * Semgrep installed, following the pattern in securityTools.test.ts.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/tools/scanHelpers.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/tools/scanHelpers.js')>();
@@ -10,7 +10,7 @@ vi.mock('../../src/tools/scanHelpers.js', async (importOriginal) => {
 });
 vi.mock('../../src/runners/processRunner.js', () => ({ runProcess: vi.fn() }));
 
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
@@ -24,6 +24,10 @@ import '../../src/tools/mapAttackSurface.js';
 import { RESOURCES } from '../../src/resources/index.js';
 import '../../src/resources/surface.js';
 import { MAX_SPEC_FILES } from '../../src/surface/specDiscover.js';
+import { okResult } from '../helpers/toolResult.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 const SEMGREP_OUTPUT = JSON.stringify({
   results: [
@@ -343,14 +347,14 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
       ok: boolean;
       routes_total: number;
       snapshot_id: number;
       sample: { path_resolved: string }[];
       webhooks_total: number;
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(result.ok).toBe(true);
     expect(result.routes_total).toBe(1);
@@ -363,13 +367,13 @@ describe('map_attack_surface', () => {
     vi.mocked(scannerAvailable).mockResolvedValue(null);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
       ok: boolean;
       missing_tools: string[];
       snapshot_id: number | null;
       webhooks_total: number;
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(result.missing_tools).toContain('semgrep');
     expect(result.snapshot_id).toBeNull();
@@ -387,11 +391,11 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
       snapshot_id: number | null;
       tools_run: { name: string; status: string; reason?: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(result.snapshot_id).not.toBeNull();
     expect(result.tools_run[0]?.status).toBe('ok');
@@ -417,11 +421,11 @@ describe('map_attack_surface', () => {
       },
     });
 
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
       coverage: { language: string; status: string }[];
       stack_detected: boolean;
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(result.coverage.find((c) => c.language === 'elixir')?.status).toBe('no_rules');
     expect(result.stack_detected).toBe(true);
@@ -433,11 +437,11 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
       stack_detected: boolean;
       note?: string;
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(result.stack_detected).toBe(false);
     expect(result.note).toMatch(/detect_stack/);
@@ -449,15 +453,15 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
 
-    const first = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const first = okResult<{
       snapshot_id: number;
-    };
-    const second = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    }>(await tool().handler({ project_path: projectPath }, ctx));
+    const second = okResult<{
       snapshot_id: number;
       tools_run: { name: string; status: string; reason?: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(second.snapshot_id).toBe(first.snapshot_id);
     expect(second.tools_run[0]?.reason).toBe('cached');
@@ -470,7 +474,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
 
     await tool().handler({ project_path: projectPath }, ctx);
     await tool().handler({ project_path: projectPath, force: true }, ctx);
@@ -492,11 +496,11 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
       snapshot_id: number | null;
       tools_run: { status: string; reason?: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     // Partial data is still useful — the failed tools_run entry carries the
     // warning. This is the one failure mode where we DO persist.
@@ -522,12 +526,12 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
       snapshot_id: number | null;
       routes_total: number;
       tools_run: { status: string; reason?: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(result.tools_run[0]?.status).toBe('ok');
     expect(result.routes_total).toBe(1);
@@ -550,13 +554,13 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
 
     await tool().handler({ project_path: projectPath }, ctx);
-    const second = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const second = okResult<{
       routes_total: number;
       tools_run: { name: string; status: string; reason?: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(1);
     expect(second.routes_total).toBe(0);
@@ -572,12 +576,12 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(null);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
       snapshot_id: number | null;
       tools_run: { status: string; reason?: string }[];
       webhooks_total: number;
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(result.snapshot_id).toBeNull();
     expect(result.tools_run[0]?.status).toBe('failed');
@@ -591,13 +595,13 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue('{ this is not json');
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
 
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const result = okResult<{
       ok: boolean;
       snapshot_id: number | null;
       tools_run: { status: string; reason?: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(result.ok).toBe(true);
     expect(result.snapshot_id).toBeNull();
@@ -612,7 +616,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     await tool().handler({ project_path: projectPath }, ctx);
 
     const call = vi.mocked(runProcess).mock.calls[0]?.[0];
@@ -646,11 +650,10 @@ describe('map_attack_surface', () => {
     );
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler(
-      { project_path: projectPath, include_env_vars: false },
-      ctx,
-    )) as { env_vars_total: number; snapshot_id: number };
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{ env_vars_total: number; snapshot_id: number }>(
+      await tool().handler({ project_path: projectPath, include_env_vars: false }, ctx),
+    );
 
     expect(result.env_vars_total).toBe(0);
     expect(ctx.storage.surface.getById(result.snapshot_id)?.snapshot.env_vars).toHaveLength(0);
@@ -662,10 +665,10 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(JS_MOUNT_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
       sample: { path_resolved: string; path_partial: boolean; file: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     const route = result.sample.find((r) => r.file === 'src/routes/users.js');
     expect(route?.path_resolved).toBe('/api/users');
@@ -678,10 +681,10 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(TS_NODENEXT_MOUNT_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
       sample: { path_resolved: string; path_partial: boolean; file: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     const route = result.sample.find((r) => r.file === 'src/routes/users.ts');
     expect(route?.path_resolved).toBe('/api/users');
@@ -699,10 +702,10 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(ROOT_LEVEL_MOUNT_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
       sample: { path_resolved: string; path_partial: boolean; file: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     const route = result.sample.find((r) => r.file === 'routes/users.js');
     expect(route?.path_resolved).toBe('/api/users');
@@ -719,10 +722,10 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(POSIX_ABSOLUTE_MOUNT_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
       sample: { path_resolved: string; path_partial: boolean; file: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     const route = result.sample.find((r) => r.file.endsWith('routes/users.js'));
     expect(route?.path_resolved).toBe('/api/users');
@@ -742,10 +745,10 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(WINDOWS_MOUNT_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
       sample: { path_resolved: string; path_partial: boolean; file: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     const route = result.sample.find((r) => r.file.endsWith('users.js'));
     expect(route?.path_resolved).toBe('/api/users');
@@ -830,7 +833,7 @@ describe('map_attack_surface', () => {
 
   /** Write REDACTED_FILES into a fresh project and return its path. */
   function projectWithSource(): string {
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     for (const [file, source] of REDACTED_FILES) {
       const absolute = join(projectPath, file);
       mkdirSync(join(absolute, '..'), { recursive: true });
@@ -847,12 +850,12 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(redactedOutput(REDACTED_SPANS));
 
     const ctx = makeCtx();
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const result = okResult<{
       routes_total: number;
       snapshot_id: number | null;
       sample: { method: string; path_resolved: string; path_partial: boolean; params: string[] }[];
       tools_run: { name: string; status: string; reason?: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(result.routes_total).toBe(3);
 
@@ -886,9 +889,9 @@ describe('map_attack_surface', () => {
     );
 
     const ctx = makeCtx();
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const result = okResult<{
       routes_total: number;
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
     expect(result.routes_total).toBe(3);
   });
 
@@ -901,14 +904,14 @@ describe('map_attack_surface', () => {
     );
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
       ok: boolean;
       routes_total: number;
       snapshot_id: number | null;
       note?: string;
       tools_run: { name: string; status: string; reason?: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     // Semgrep found matches; we could not read one of them. That is a broken
     // toolchain, not an application with no routes.
@@ -939,11 +942,11 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results }));
 
     const ctx = makeCtx();
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const result = okResult<{
       routes_total: number;
       snapshot_id: number | null;
       tools_run: { name: string; status: string; reason?: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     // The two app.ts routes survive; the unreadable one is reported, not hidden.
     expect(result.routes_total).toBe(2);
@@ -995,10 +998,10 @@ describe('map_attack_surface', () => {
     );
 
     const ctx = makeCtx();
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const result = okResult<{
       coverage: { language: string; status: string; unreadable_matches: number }[];
       tools_run: { name: string; status: string; reason?: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     const ts = result.coverage.find((c) => c.language === 'typescript');
     expect(ts?.status).toBe('unreadable');
@@ -1008,13 +1011,14 @@ describe('map_attack_surface', () => {
 
   it('returns a domain error for an unusable project_path', async () => {
     const ctx = makeCtx();
-    const result = (await tool().handler(
+    const result = await tool().handler(
       { project_path: join(tmpdir(), 'guardian-does-not-exist-xyz') },
       ctx,
-    )) as { ok: boolean; error?: { code: string } };
+    );
 
     expect(result.ok).toBe(false);
-    expect(result.error?.code).toBe('not_a_git_repo');
+    if (result.ok) throw new Error('expected failure');
+    expect(result.error.code).toBe('not_a_git_repo');
     expect(ctx.storage.surface.getLatest()).toBeNull();
   });
 
@@ -1032,7 +1036,7 @@ describe('map_attack_surface', () => {
    * real `projectPath`, so this test measures the production convention.
    */
   it('resolves Python, Go and Rust import edges when Semgrep reports absolute paths', async () => {
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     const abs = (rel: string): string => join(projectPath, rel);
     const importMatch = (rel: string, module: string, symbol?: string): unknown => ({
       check_id: 'guardian-import',
@@ -1083,9 +1087,9 @@ describe('map_attack_surface', () => {
     );
 
     const ctx = makeCtx();
-    const result = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const result = okResult<{
       snapshot_id: number;
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
     const snapshot = ctx.storage.surface.getById(result.snapshot_id)?.snapshot;
 
     // An exact set, not a count: a resolver that starts matching the wrong
@@ -1122,18 +1126,18 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT); // one route: GET /users
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     writeFileSync(join(projectPath, 'openapi.yaml'), SPEC);
     // A second code route the spec does not document.
     // SEMGREP_OUTPUT_WITH_SHADOW adds GET /internal/metrics.
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT_WITH_SHADOW);
 
-    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const r = okResult<{
       routes_total: number;
       spec_routes_total: number;
       spec_diff_summary: { matched: number; code_only: number; spec_only: number } | null;
       shadow_sample: { path: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(r.routes_total).toBe(2);        // code routes only
     expect(r.spec_routes_total).toBe(2);
@@ -1149,11 +1153,11 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
-    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const projectPath = makeTempDir('guardian-surface-');
+    const r = okResult<{
       spec_diff_summary: unknown;
       routes_total: number;
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     // The trap this guards: with no spec, every code route would otherwise
     // look undocumented.
@@ -1167,13 +1171,13 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     writeFileSync(join(projectPath, 'openapi.yaml'), SPEC);
 
-    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const r = okResult<{
       coverage: { language: string }[];
       by_language: { language: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
     expect(r.coverage.some((c) => c.language === 'spec')).toBe(false);
     // Same trap one layer up: by_language iterates snapshot.routes directly
     // and must filter to provenance === 'code' the same way buildCoverage
@@ -1187,14 +1191,14 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     writeFileSync(join(projectPath, 'openapi.yaml'), SPEC);
     writeFileSync(join(projectPath, 'swagger.yaml'), 'paths:\n  - [unclosed\n');
 
-    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const r = okResult<{
       spec_files: { status: string }[];
       spec_diff_summary: unknown;
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
     expect(r.spec_files.some((f) => f.status === 'parse_error')).toBe(true);
     expect(r.spec_diff_summary).not.toBeNull();
   });
@@ -1216,15 +1220,15 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT); // one code route: GET /users
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     writeFileSync(join(projectPath, 'openapi.yaml'), MANY_PATHS_SPEC);
 
-    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const r = okResult<{
       routes_total: number;
       spec_routes_total: number;
       sample: { path_resolved: string }[];
       spec_sample: { path_resolved: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(r.routes_total).toBe(1);
     expect(r.spec_routes_total).toBe(25);
@@ -1248,18 +1252,16 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     writeFileSync(join(projectPath, 'a.yaml'), SPEC);
     writeFileSync(join(projectPath, 'b.yaml'), MANY_PATHS_SPEC);
 
-    const first = (await tool().handler(
-      { project_path: projectPath, spec_paths: ['a.yaml'] },
-      ctx,
-    )) as { spec_files: { file: string }[]; spec_routes_total: number };
-    const second = (await tool().handler(
-      { project_path: projectPath, spec_paths: ['b.yaml'] },
-      ctx,
-    )) as { spec_files: { file: string }[]; spec_routes_total: number };
+    const first = okResult<{ spec_files: { file: string }[]; spec_routes_total: number }>(
+      await tool().handler({ project_path: projectPath, spec_paths: ['a.yaml'] }, ctx),
+    );
+    const second = okResult<{ spec_files: { file: string }[]; spec_routes_total: number }>(
+      await tool().handler({ project_path: projectPath, spec_paths: ['b.yaml'] }, ctx),
+    );
 
     expect(first.spec_routes_total).toBe(2); // SPEC declares /users + /documented-but-gone
     expect(second.spec_routes_total).toBe(25); // MANY_PATHS_SPEC
@@ -1281,20 +1283,17 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     // 'a.yaml' is not a conventional spec basename (openapi/swagger/api-docs)
     // and does not live under an openapi/ directory, so auto-discovery would
     // never find it on its own.
     writeFileSync(join(projectPath, 'a.yaml'), MANY_PATHS_SPEC);
 
-    const explicit = (await tool().handler(
-      { project_path: projectPath, spec_paths: ['a.yaml'] },
-      ctx,
-    )) as {
+    const explicit = okResult<{
       spec_routes_total: number;
       spec_files: { file: string }[];
       snapshot_id: number | null;
-    };
+    }>(await tool().handler({ project_path: projectPath, spec_paths: ['a.yaml'] }, ctx));
 
     expect(explicit.spec_routes_total).toBe(25);
     expect(explicit.spec_files.some((f) => f.file.endsWith('a.yaml'))).toBe(true);
@@ -1302,11 +1301,11 @@ describe('map_attack_surface — spec import and diff', () => {
     expect(explicit.snapshot_id).toBeNull();
     expect(ctx.storage.surface.getLatest()).toBeNull();
 
-    const plain = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const plain = okResult<{
       spec_routes_total: number;
       spec_files: { file: string }[];
       spec_diff_summary: unknown;
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     // The critical assertion: the plain call must NOT report a.yaml — it was
     // never auto-discoverable, so the plain call must see no spec at all.
@@ -1321,14 +1320,14 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     mkdirSync(join(projectPath, 'docs'), { recursive: true });
     writeFileSync(join(projectPath, 'docs', 'openapi.yaml'), SPEC);
 
-    const r = (await tool().handler(
-      { project_path: projectPath, spec_paths: ['docs/openapi.yaml'] },
-      ctx,
-    )) as { spec_routes_total: number; spec_files: { status: string; file: string }[] };
+    const r = okResult<{
+      spec_routes_total: number;
+      spec_files: { status: string; file: string }[];
+    }>(await tool().handler({ project_path: projectPath, spec_paths: ['docs/openapi.yaml'] }, ctx));
 
     expect(r.spec_routes_total).toBe(2);
     expect(r.spec_files[0]?.status).toBe('ok');
@@ -1343,12 +1342,11 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
 
-    const r = (await tool().handler(
-      { project_path: projectPath, spec_paths: ['does-not-exist.yaml'] },
-      ctx,
-    )) as { spec_files: { status: string; file: string; reason?: string }[] };
+    const r = okResult<{ spec_files: { status: string; file: string; reason?: string }[] }>(
+      await tool().handler({ project_path: projectPath, spec_paths: ['does-not-exist.yaml'] }, ctx),
+    );
 
     expect(r.spec_files).toHaveLength(1);
     expect(r.spec_files[0]?.status).toBe('parse_error');
@@ -1368,7 +1366,7 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     writeFileSync(join(projectPath, 'dup.yaml'), SPEC);
     const fillers: string[] = [];
     for (let i = 0; i < MAX_SPEC_FILES - 2; i += 1) {
@@ -1378,16 +1376,18 @@ describe('map_attack_surface — spec import and diff', () => {
 
     // Raw length MAX_SPEC_FILES + 1 (the duplicate pushes 'missing.yaml' past
     // the cap); deduped length exactly MAX_SPEC_FILES (nothing is dropped).
-    const r = (await tool().handler(
-      {
-        project_path: projectPath,
-        spec_paths: ['dup.yaml', 'dup.yaml', ...fillers, 'missing.yaml'],
-      },
-      ctx,
-    )) as {
+    const r = okResult<{
       spec_routes_total: number;
       spec_files: { status: string; file: string; reason?: string }[];
-    };
+    }>(
+      await tool().handler(
+        {
+          project_path: projectPath,
+          spec_paths: ['dup.yaml', 'dup.yaml', ...fillers, 'missing.yaml'],
+        },
+        ctx,
+      ),
+    );
 
     expect(
       r.spec_files.some((f) => f.file.endsWith('missing.yaml') && f.status === 'parse_error'),
@@ -1408,13 +1408,13 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     writeFileSync(join(projectPath, 'openapi.yaml'), 'openapi: "3.0.0"\npaths: {}\n');
 
-    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const r = okResult<{
       spec_files: { status: string }[];
       spec_diff_summary: unknown;
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(r.spec_files[0]?.status).toBe('no_paths');
     expect(r.spec_diff_summary).not.toBeNull();
@@ -1430,13 +1430,13 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     writeFileSync(join(projectPath, 'openapi.yaml'), 'paths:\n  - [unclosed\n');
 
-    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const r = okResult<{
       spec_files: { status: string }[];
       spec_diff_summary: unknown;
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(r.spec_files.some((f) => f.status === 'parse_error')).toBe(true);
     expect(r.spec_diff_summary).toBeNull();
@@ -1448,15 +1448,15 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     mkdirSync(join(projectPath, 'openapi'), { recursive: true });
     for (let i = 0; i < MAX_SPEC_FILES + 3; i += 1) {
       writeFileSync(join(projectPath, 'openapi', `s${i}.yaml`), 'openapi: "3.0.0"\npaths: {}\n');
     }
 
-    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const r = okResult<{
       spec_files: { status: string; reason?: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(r.spec_files).toHaveLength(MAX_SPEC_FILES + 1); // 20 read + 1 cap report
     expect(
@@ -1472,12 +1472,12 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
 
     const ctx = makeCtx();
-    const projectPath = mkdtempSync(join(tmpdir(), 'guardian-surface-'));
+    const projectPath = makeTempDir('guardian-surface-');
     writeFileSync(join(projectPath, 'openapi.yaml'), 'x'.repeat(6 * 1024 * 1024));
 
-    const r = (await tool().handler({ project_path: projectPath }, ctx)) as {
+    const r = okResult<{
       spec_files: { status: string; reason?: string }[];
-    };
+    }>(await tool().handler({ project_path: projectPath }, ctx));
 
     expect(
       r.spec_files.some((f) => f.status === 'parse_error' && f.reason?.includes('size cap')),
@@ -1529,6 +1529,7 @@ describe('guardian://surface resources', () => {
       snapshot: {
         routes: [], env_vars: [], ports: [], webhooks: [], coverage: [],
         tools_run: [], missing_tools: [], spec_files: [], spec_diff: null,
+        imports: [],
       },
     });
     const { json } = await resource('guardian-surface-latest').handler(
@@ -1548,6 +1549,7 @@ describe('guardian://surface resources', () => {
       snapshot: {
         routes: [], env_vars: [], ports: [], webhooks: [], coverage: [],
         tools_run: [], missing_tools: [], spec_files: [], spec_diff: null,
+        imports: [],
       },
     });
 

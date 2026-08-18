@@ -11,13 +11,12 @@ import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  afterAll,
   afterEach,
   beforeAll,
   beforeEach,
@@ -26,6 +25,9 @@ import {
   it,
   vi,
 } from 'vitest';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 vi.mock('../../src/runners/processRunner.js', () => ({
   runProcess: vi.fn(),
@@ -71,7 +73,7 @@ beforeAll(async () => {
 });
 
 function tempProject(): string {
-  return mkdtempSync(join(tmpdir(), 'ops-tools-'));
+  return makeTempDir('ops-tools-');
 }
 
 function getTool(name: string) {
@@ -175,7 +177,7 @@ describe('init_project', () => {
   it('copies profile configs into the project (idempotent)', async () => {
     const project = tempProject();
     // Build a fake "configs/" alongside scripts/ so initProject can resolve them.
-    const scriptsDir = mkdtempSync(join(tmpdir(), 'init-scripts-'));
+    const scriptsDir = makeTempDir('init-scripts-');
     const configsDir = join(scriptsDir, '..', 'configs');
     mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
     mkdirSync(join(configsDir, 'renovate'), { recursive: true });
@@ -238,7 +240,7 @@ describe('init_project', () => {
 
   it('respects apply=false (dry-run)', async () => {
     const project = tempProject();
-    const scriptsDir = mkdtempSync(join(tmpdir(), 'init-scripts-'));
+    const scriptsDir = makeTempDir('init-scripts-');
     const configsDir = join(scriptsDir, '..', 'configs');
     mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
     mkdirSync(join(configsDir, 'renovate'), { recursive: true });

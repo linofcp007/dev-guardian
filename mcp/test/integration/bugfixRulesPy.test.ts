@@ -30,6 +30,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mapSubcategory } from '../../src/tools/bugHunt.js';
+import { rmDir } from '../helpers/tempDir.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const RULES = resolve(REPO_ROOT, 'configs', 'semgrep', 'bugfix-py.yml');
@@ -59,6 +60,20 @@ interface SemgrepRun {
 
 function run(config: string, dir: string): SemgrepRun {
   const work = mkdtempSync(join(tmpdir(), 'guardian-bugfix-py-'));
+  try {
+    return scan(config, dir, work);
+  } finally {
+    // Removed in `finally`, so it goes even when Semgrep throws — a dead
+    // registry pack exits non-zero and `execFileSync` raises. Every call
+    // used to leak its directory: 402 of them had accumulated under the OS
+    // temp dir by the time this was noticed. `rmDir` rather than a bare
+    // `rmSync` because Semgrep can still hold the copy open on Windows —
+    // see `helpers/tempDir.ts`.
+    rmDir(work);
+  }
+}
+
+function scan(config: string, dir: string, work: string): SemgrepRun {
   cpSync(dir, work, { recursive: true });
   const out = execFileSync(
     'semgrep',

@@ -15,8 +15,18 @@ missing or swallowed error handling, and broken happy paths.
 It cannot, for JS/TS. Measured during the 1.5.0 work:
 
 - Semgrep retired `p/bugs`. Its replacement, `p/r2c-bug-scan`, has 44 rules, all
-  `category: correctness` — but only **8** land in those classes, and all 8 are
-  **Python and Go**. JS/TS: zero.
+  `category: correctness` — but only **12** land in those classes, and all 12 are
+  **Python and Go** (python=10, go=2). JS/TS: zero.
+
+  > **Corrected 2026-08-18.** This line originally said **8**. The figure moved
+  > because `mapSubcategory` was *widened* later in the same 1.5.0 fix round that
+  > produced this measurement, so the number was already stale by the time the
+  > branch merged — not because the pack changed. Re-measured by running all 44
+  > ids through the shipped classifier: 12 classify (off_by_one=2, edge_case=4,
+  > error_handling=2, null_safety=2, race_condition=1, memory_leak=1). **The
+  > conclusion this section rests on is unchanged: zero of them are JS/TS.**
+  > Recorded rather than quietly overwritten, because a design of record that
+  > silently edits its own measurements is not a record.
 - The five per-language packs add 401 rules (327 distinct), **100 %
   `category: security`**, zero in any bug class. A purpose-built TypeScript
   fixture containing null-safety, off-by-one, edge-case and swallowed-error bugs

@@ -25,6 +25,14 @@ async def scheduled():
     return "done"
 
 
+async def taskgroup_scheduled(tg):
+    tg.create_task(asyncio.sleep(1))
+
+
+def collected_for_later(acc):
+    acc.append(asyncio.sleep(1))
+
+
 async def deferred():
     return asyncio.sleep(1)
 

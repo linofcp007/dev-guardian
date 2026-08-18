@@ -5,15 +5,18 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 beforeAll(async () => {
   await import('../../src/tools/scanSkill.js');
@@ -39,7 +42,7 @@ function makePlugin(): PluginContext {
 }
 
 function maliciousSkill(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'evil-skill-'));
+  const dir = makeTempDir('evil-skill-');
   writeFileSync(
     join(dir, 'SKILL.md'),
     [
@@ -77,7 +80,7 @@ function maliciousSkill(): string {
 }
 
 function cleanSkill(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'good-skill-'));
+  const dir = makeTempDir('good-skill-');
   writeFileSync(
     join(dir, 'SKILL.md'),
     ['---', 'name: prettyjson', 'description: Formats JSON nicely.', '---', '', '# Pretty JSON', 'Formats a JSON object with two-space indentation.'].join('\n'),
@@ -172,7 +175,7 @@ describe('scan_skill', () => {
       plugin,
     )) as { ok: true; scan_id: string };
 
-    const project = mkdtempSync(join(tmpdir(), 'report-out-'));
+    const project = makeTempDir('report-out-');
     mkdirSync(join(project, '.guardian'), { recursive: true });
     const exported = (await getTool('report_export').handler(
       { project_path: project, scan_id: scan.scan_id, format: 'sarif' },

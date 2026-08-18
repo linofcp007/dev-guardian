@@ -1,14 +1,17 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, parse, resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import {
   InvalidProjectPathError,
   resolveProjectPath,
 } from '../../../src/platform/projectPath.js';
+import { makeTempDir, cleanupTempDirs } from '../../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 function tempProject(): string {
-  return mkdtempSync(join(tmpdir(), 'dev-guardian-test-'));
+  return makeTempDir('dev-guardian-test-');
 }
 
 describe('resolveProjectPath', () => {

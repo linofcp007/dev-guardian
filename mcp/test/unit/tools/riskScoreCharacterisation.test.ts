@@ -31,14 +31,20 @@ function seed() {
     scan_id: scanId, status: 'completed', tools_run: [], missing_tools: [],
   });
   storage.findings.bulkInsert([
+    // `Finding`'s optional fields are represented by key ABSENCE, never a
+    // present `null` (see `rowToFinding` in `findingsRepo.ts`, which reads a
+    // NULL DB column back by omitting the key, not by writing `null`) — so
+    // `subcategory`/`snippet` are left out here rather than set to `null`.
+    // `bulkInsert`'s `f.subcategory ?? null` is DB-bind-parameter plumbing,
+    // not a wider public contract for `Finding` itself.
     { scan_id: scanId, fingerprint: 'a', tool: 'semgrep', rule_id: 'r',
-      severity: 'critical', category: 'security', subcategory: null,
+      severity: 'critical', category: 'security',
       title: 't', message: 'm', file_path: 'a.ts', line_start: 1, line_end: 1,
-      snippet: null, fix_available: false, raw: {} },
+      fix_available: false, raw: {} },
     { scan_id: scanId, fingerprint: 'b', tool: 'semgrep', rule_id: 'r',
-      severity: 'high', category: 'security', subcategory: null,
+      severity: 'high', category: 'security',
       title: 't', message: 'm', file_path: 'b.ts', line_start: 1, line_end: 1,
-      snippet: null, fix_available: false, raw: {} },
+      fix_available: false, raw: {} },
   ]);
   return { storage, db };
 }

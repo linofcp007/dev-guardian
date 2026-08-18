@@ -210,6 +210,19 @@ Identical harness to JS/TS, extended:
   `clients.get("a").strip()` are both silently skipped, so `session_data`,
   `clients` and `urllib_cache` are false negatives too, not only a dict bound
   to the bare name `client`.
+- **`get-without-doesnotexist` treats a broad `except Exception:` as a guard.**
+  Its three exclusions are `except $X.DoesNotExist`, bare
+  `except ObjectDoesNotExist` and `except Exception`. The third is deliberate —
+  a broad handler really does catch the miss — but it means a `.objects.get()`
+  wrapped in `except Exception: pass` is silent here, even though that is worse
+  code than an unguarded `get`. `bugfix-py-error-handling-except-pass` catches
+  the swallowing separately; nothing joins the two observations up.
+- **`open-without-context` never flags attribute targets.**
+  `self.handle = open(path)` is excluded by design, because its `close()`
+  usually lives in another method and a syntactic rule cannot see across
+  methods. The cost is that a class which genuinely never closes its handle is
+  a false negative, and that is the commonest way a long-lived file leak
+  actually looks.
 - **These rules complement `p/r2c-bug-scan`, they do not replace it.** Both run.
 - **They do not replace the model-driven `/guardian-fix` path.**
 

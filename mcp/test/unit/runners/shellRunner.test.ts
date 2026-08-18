@@ -1,10 +1,12 @@
-import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, chmodSync } from 'node:fs';
 import { execPath } from 'node:process';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { runShellScript } from '../../../src/runners/shellRunner.js';
 import type { ShellChoice } from '../../../src/platform/shellProbe.js';
+import { makeTempDir, cleanupTempDirs } from '../../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 /**
  * These tests use Node itself (process.execPath) as the "shell". The
@@ -22,7 +24,7 @@ function fakeNodeShell(): ShellChoice {
 }
 
 function writeScript(body: string): { path: string; dir: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'shellrunner-'));
+  const dir = makeTempDir('shellrunner-');
   const path = join(dir, 'script.js');
   writeFileSync(path, body);
   try {

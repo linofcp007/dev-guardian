@@ -26,13 +26,15 @@
  *     makes a verdict derived from a stale snapshot read as fresh forever.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PluginContext } from '../../src/context.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { Storage } from '../../src/storage/index.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { computeTreeHash } from '../../src/treeHash/computeTreeHash.js';
@@ -247,7 +249,7 @@ function only(r: ValidateOk): FindingValidation & { stale: boolean } {
 
 beforeEach(() => {
   ctx = makeCtx();
-  projectPath = mkdtempSync(join(tmpdir(), 'guardian-validate-'));
+  projectPath = makeTempDir('guardian-validate-');
   scanSeq = 0;
 });
 
@@ -425,7 +427,7 @@ describe('validate_finding project scoping', () => {
     seedSnapshot();
     const mineScanId = seedScan([finding({ fingerprint: 'mine' })]);
 
-    const otherProject = mkdtempSync(join(tmpdir(), 'guardian-validate-other-'));
+    const otherProject = makeTempDir('guardian-validate-other-');
     ctx.storage.scans.insert({
       scan_id: 'scan-other-project',
       scan_type: 'sast',

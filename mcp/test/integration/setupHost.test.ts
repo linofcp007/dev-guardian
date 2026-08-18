@@ -7,17 +7,17 @@
  * those cases run with apply:false to avoid touching the dev machine.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { previewMcpConfig, setupHost, type SetupOptions } from '../../src/hostsetup/setup.js';
+import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 const SRV = '/plugins/dev-guardian/mcp/dist/server.js';
 
 function makeHostRules(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'hostrules-'));
+  const dir = makeTempDir('hostrules-');
   writeFileSync(join(dir, 'cursor.mdc'), '---\nfor: cursor\n---\nbody', 'utf8');
   writeFileSync(join(dir, 'windsurfrules'), '# windsurf', 'utf8');
   writeFileSync(join(dir, 'copilot-instructions.md'), '# copilot', 'utf8');
@@ -32,8 +32,10 @@ let project: string;
 
 beforeEach(() => {
   hostsDir = makeHostRules();
-  project = mkdtempSync(join(tmpdir(), 'proj-'));
+  project = makeTempDir('proj-');
 });
+
+afterAll(cleanupTempDirs);
 
 function run(over: Partial<SetupOptions> & Pick<SetupOptions, 'hosts'>) {
   return setupHost({

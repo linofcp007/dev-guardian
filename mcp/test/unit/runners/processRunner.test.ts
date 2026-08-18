@@ -1,9 +1,11 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execPath } from 'node:process';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runProcess } from '../../../src/runners/processRunner.js';
+import { makeTempDir, cleanupTempDirs } from '../../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 /**
  * `extendEnv` is the half of the environment-scrubbing contract that is easy
@@ -19,7 +21,7 @@ import { runProcess } from '../../../src/runners/processRunner.js';
  * question is what execa does with the options, not what it is handed.
  */
 function writeEnvPrinter(): { path: string; dir: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'processrunner-'));
+  const dir = makeTempDir('processrunner-');
   const path = join(dir, 'printenv.js');
   // JSON of the child's own environment, so the test reads exactly what the
   // child sees rather than a shell's rendering of it.

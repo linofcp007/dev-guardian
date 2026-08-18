@@ -9,10 +9,9 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/runners/processRunner.js', () => ({
   runProcess: vi.fn(),
@@ -33,6 +32,9 @@ import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { RESOURCES } from '../../src/resources/index.js';
 import { makeFinding } from '../../src/runners/scannerParsers/index.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 beforeAll(async () => {
   await import('../../src/tools/wpCronAudit.js');
@@ -51,7 +53,7 @@ beforeAll(async () => {
 });
 
 function tempProject(): string {
-  return mkdtempSync(join(tmpdir(), 'phase16-'));
+  return makeTempDir('phase16-');
 }
 
 function getTool(name: string) {

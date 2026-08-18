@@ -7,11 +7,10 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/runners/processRunner.js', () => ({
   runProcess: vi.fn(),
@@ -30,7 +29,7 @@ vi.mock('../../src/tools/scanHelpers.js', async () => {
 // review_pr also calls execa directly (to resolve refs + diff files), so
 // stub that module too.
 vi.mock('execa', () => ({
-  execa: vi.fn(async (cmd: string, args: string[]) => {
+  execa: vi.fn(async (_cmd: string, args: string[]) => {
     if (args.includes('symbolic-ref')) {
       return { exitCode: 0, stdout: 'refs/remotes/origin/main', stderr: '' };
     }
@@ -51,6 +50,9 @@ import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { BUG_HUNT_BASE_PACKS } from '../../src/tools/bugHunt.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 beforeAll(async () => {
   await import('../../src/tools/securityScanFull.js');
@@ -68,7 +70,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const FIX = resolve(here, '..', 'fixtures', 'scanners');
 
 function tempProject(): string {
-  return mkdtempSync(join(tmpdir(), 'qual-tools-'));
+  return makeTempDir('qual-tools-');
 }
 
 function getTool(name: string) {

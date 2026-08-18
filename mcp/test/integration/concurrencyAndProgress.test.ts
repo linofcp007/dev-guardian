@@ -17,11 +17,10 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/runners/processRunner.js', () => ({
   runProcess: vi.fn(),
@@ -45,6 +44,9 @@ import type { ProgressPayload } from '../../src/progress/progressEmitter.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 beforeAll(async () => {
   await import('../../src/tools/securityScanFull.js');
@@ -54,7 +56,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const FIX = resolve(here, '..', 'fixtures', 'scanners');
 
 function tempProject(): string {
-  return mkdtempSync(join(tmpdir(), 'concurrency-'));
+  return makeTempDir('concurrency-');
 }
 
 function makePlugin(projectPath: string, sent: ProgressPayload[]): PluginContext {

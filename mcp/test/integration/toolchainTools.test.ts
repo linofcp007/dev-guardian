@@ -12,10 +12,8 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
+  afterAll,
   afterEach,
   beforeAll,
   beforeEach,
@@ -54,6 +52,9 @@ import type { PluginContext } from '../../src/context.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 beforeAll(async () => {
   // Order matters: install_toolchain calls check_toolchain at the end so
@@ -101,7 +102,7 @@ function makePlugin(): PluginContext {
       needs_wsl_path_translate: false,
       label: 'fake',
     },
-    scriptsDir: mkdtempSync(join(tmpdir(), 'install-scripts-')),
+    scriptsDir: makeTempDir('install-scripts-'),
     progressNotifier: { send: () => {} },
   };
 }

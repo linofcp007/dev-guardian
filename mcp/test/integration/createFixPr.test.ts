@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync, chmodSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../../src/storage/db.js';
@@ -11,6 +11,8 @@ import { TOOLS } from '../../src/tools/index.js';
 import type { FixGroup } from '../../src/fixpr/types.js';
 import type { Finding } from '../../src/types.js';
 import '../../src/registerAll.js';
+import { okResult } from '../helpers/toolResult.js';
+import { rmDir } from '../helpers/tempDir.js';
 
 // execFileSync (unlike execa/runProcess, which shell out through
 // cross-spawn) does not resolve npm's Windows .cmd shim on its own — same
@@ -42,9 +44,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-  if (originDir) rmSync(originDir, { recursive: true, force: true });
+  rmDir(repo);
+  rmDir(binDir);
+  if (originDir) rmDir(originDir);
 });
 
 /**
@@ -122,7 +124,10 @@ function ctx() {
   // runMigrations(openDatabase(...)) and new Storage(openDatabase(...)),
   // passing the wrapper where a raw DB is expected on both counts. Fixed here
   // by unwrapping .db and dropping the now-redundant runMigrations call.
-  const { db } = openDatabase({ inMemory: true });
+  // `projectPath` is genuinely ignored when `inMemory: true` (see the doc
+  // comment on `OpenOptions`), but the type still requires it — pass a
+  // placeholder that is never read rather than relax the src/ type.
+  const { db } = openDatabase({ inMemory: true, projectPath: tmpdir() });
   return { storage: new Storage(db) };
 }
 
@@ -229,7 +234,7 @@ describe('create_fix_pr', () => {
     const mod = TOOLS.find((t) => t.name === 'create_fix_pr');
     const res = await mod?.handler({ project_path: notRepo }, ctx() as never);
     expect(res).toMatchObject({ ok: false, error: { code: 'not_a_git_repo' } });
-    rmSync(notRepo, { recursive: true, force: true });
+    rmDir(notRepo);
   });
 
   it('with no findings, reports nothing to do and creates no worktree', async () => {
@@ -316,7 +321,8 @@ describe('create_fix_pr', () => {
     const res = await mod?.handler({ project_path: repo, sources: ['semgrep'], apply: false }, c as never);
 
     expect(res).toMatchObject({ ok: true, applied: false });
-    const groups = (res as { groups: unknown[] }).groups;
+    if (!res) throw new Error('create_fix_pr tool not found');
+    const groups = okResult<{ groups: unknown[] }>(res).groups;
     expect(groups).toHaveLength(1);
     // pr stays null purely because apply is false — true whether or not the
     // fix itself verified, since the apply gate is checked unconditionally
@@ -351,7 +357,8 @@ describe('create_fix_pr', () => {
     const res = await mod?.handler({ project_path: repo, sources: ['semgrep'], apply: true }, c as never);
 
     expect(res).toMatchObject({ ok: true, applied: true });
-    const groups = (res as { groups: unknown[] }).groups;
+    if (!res) throw new Error('create_fix_pr tool not found');
+    const groups = okResult<{ groups: unknown[] }>(res).groups;
     expect(groups).toHaveLength(1);
 
     expect(worktreeCount()).toBe(1);
@@ -388,7 +395,8 @@ describe('create_fix_pr', () => {
       c as never,
     );
     expect(res).toMatchObject({ ok: true, applied: false });
-    const groups = (res as { groups: { branch: string }[] }).groups;
+    if (!res) throw new Error('create_fix_pr tool not found');
+    const groups = okResult<{ groups: { branch: string }[] }>(res).groups;
     expect(groups).toHaveLength(1);
 
     // Design §6, literally: "not a branch". Checked against the real repo's
@@ -567,9 +575,9 @@ describe('create_fix_pr', () => {
     await seedRealDepsBefore(c);
 
     const riskScoreTool = TOOLS.find((t) => t.name === 'risk_score');
-    const before = await riskScoreTool?.handler({}, c as never) as {
-      components: { cves: { active_cves: number } };
-    };
+    const beforeRaw = await riskScoreTool?.handler({}, c as never);
+    if (!beforeRaw) throw new Error('risk_score tool not found');
+    const before = okResult<{ components: { cves: { active_cves: number } } }>(beforeRaw);
     // Not vacuous: there must be a real, non-zero signal at risk of being
     // silently zeroed before asserting that nothing zeroes it.
     expect(before.components.cves.active_cves).toBeGreaterThan(0);

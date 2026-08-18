@@ -38,9 +38,7 @@
  * `WRITE_ROUTE_PATH` below.
  */
 
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -48,6 +46,9 @@ import type { PluginContext } from '../../src/context.js';
 import { RATE_LIMIT_BURST } from '../../src/dast/rateLimit.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { Storage } from '../../src/storage/index.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { TOOLS } from '../../src/tools/index.js';
 import '../../src/tools/scanDast.js';
@@ -177,7 +178,7 @@ describe('E2E — scan_dast against a deliberately vulnerable fixture', () => {
     fixture = (await start()) as DastFixture;
 
     ctx = makeCtx();
-    projectPath = mkdtempSync(join(tmpdir(), 'guardian-dast-e2e-'));
+    projectPath = makeTempDir('guardian-dast-e2e-');
     const snapshot: AttackSurfaceSnapshot = {
       routes: ROUTES,
       env_vars: [],
@@ -191,6 +192,7 @@ describe('E2E — scan_dast against a deliberately vulnerable fixture', () => {
       // at all (design doc §6 / `checkStatus.ts`), and its deliberate
       // absence from run A's expected set is part of this file's contract.
       spec_diff: null,
+      imports: [],
     };
     ctx.storage.surface.insert({ project_path: projectPath, tree_hash: 'seeded', snapshot });
 

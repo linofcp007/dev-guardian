@@ -90,6 +90,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mapSubcategory } from '../../src/tools/bugHunt.js';
+import { rmDir } from '../helpers/tempDir.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const RULES = resolve(REPO_ROOT, 'configs', 'semgrep', 'bugfix-js.yml');
@@ -122,10 +123,24 @@ function run(dir: string): SemgrepRun {
   // (e.g. `.../mcp/test/fixtures/bugfix-js/hits`) is never passed to
   // Semgrep directly.
   const work = mkdtempSync(join(tmpdir(), 'guardian-bugfix-js-'));
+  try {
+    return scan(RULES, dir, work);
+  } finally {
+    // Removed in `finally`, so it goes even when Semgrep throws — a dead
+    // registry pack exits non-zero and `execFileSync` raises. Every call
+    // used to leak its directory: 402 of them had accumulated under the OS
+    // temp dir by the time this was noticed. `rmDir` rather than a bare
+    // `rmSync` because Semgrep can still hold the copy open on Windows —
+    // see `helpers/tempDir.ts`.
+    rmDir(work);
+  }
+}
+
+function scan(config: string, dir: string, work: string): SemgrepRun {
   cpSync(dir, work, { recursive: true });
   const out = execFileSync(
     'semgrep',
-    ['--config', RULES, '--json', '--quiet', '--no-git-ignore', work],
+    ['--config', config, '--json', '--quiet', '--no-git-ignore', work],
     { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
   );
   const parsed: unknown = JSON.parse(out);

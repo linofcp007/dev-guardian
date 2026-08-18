@@ -7,10 +7,9 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/runners/processRunner.js', () => ({
   runProcess: vi.fn(),
@@ -32,6 +31,9 @@ import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { makeFinding } from '../../src/runners/scannerParsers/index.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 beforeAll(async () => {
   // Import everything once so TOOLS is populated.
@@ -74,7 +76,7 @@ beforeAll(async () => {
 });
 
 function tempProject(): string {
-  return mkdtempSync(join(tmpdir(), 'phase14-'));
+  return makeTempDir('phase14-');
 }
 
 function getTool(name: string) {

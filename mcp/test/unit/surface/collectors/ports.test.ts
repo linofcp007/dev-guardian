@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { afterAll, describe, expect, it } from 'vitest';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { collectPorts } from '../../../../src/surface/collectors/ports.js';
+import { makeTempDir, cleanupTempDirs } from '../../../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 function project(files: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'guardian-ports-'));
+  const dir = makeTempDir('guardian-ports-');
   for (const [name, content] of Object.entries(files)) {
     writeFileSync(join(dir, name), content);
   }

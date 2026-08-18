@@ -14,7 +14,7 @@
  * describe block below) is exactly as load-bearing as the inclusion path.
  */
 import { existsSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveBugfixRules } from '../../../src/platform/configsDir.js';
 import { BUG_HUNT_BASE_PACKS, buildPackList } from '../../../src/tools/bugHunt.js';

@@ -1,11 +1,13 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { ensureGuardianIgnored } from '../../src/gitignoreGuard.js';
+import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 function fixture(setup: 'no-git' | 'git-no-gitignore' | 'git-empty' | 'git-already'): string {
-  const dir = mkdtempSync(join(tmpdir(), 'guard-'));
+  const dir = makeTempDir('guard-');
   if (setup === 'no-git') return dir;
   mkdirSync(join(dir, '.git'));
   if (setup === 'git-no-gitignore') return dir;
