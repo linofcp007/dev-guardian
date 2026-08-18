@@ -168,3 +168,63 @@ rules:
       IndexError. Queria provavelmente `range(len(x))` e `x[len(x) - 1]`.
     severity: ERROR
     languages: [python]
+
+  # A exclusão de targets que são atributos (`self.handle = open(...)`) é
+  # deliberada: nesse caso o close() vive noutro método, fora do alcance de
+  # uma regra sintática, por isso disparar ali seria um palpite. Sem a
+  # exclusão a regra dispara na classe Writer da fixture de near-miss, que é
+  # código correto.
+  - id: bugfix-py-memory-leak-open-without-context
+    patterns:
+      - pattern: $F = open(...)
+      - pattern-not: $S.$A = open(...)
+      - pattern-not-inside: |
+          $F = open(...)
+          ...
+          $F.close()
+    message: >-
+      Ficheiro aberto sem context manager e sem close() no mesmo scope. O
+      descritor fica preso até o garbage collector o apanhar, o que em
+      CPython é cedo e noutras implementações não é. Use `with open(...) as
+      f:`.
+    severity: WARNING
+    languages: [python]
+
+  # Este é o análogo Python do floating-mutation do JS/TS — o `await`
+  # esquecido — mas fixado nos quatro primitivos do asyncio em vez de numa
+  # lista adivinhada de verbos, o que o torna preciso em vez de heurístico.
+  # A regra geral ("chamada a qualquer função definida com async def no
+  # mesmo ficheiro") não é exprimível em Semgrep OSS: ver §8 do design.
+  #
+  # As três exclusões são pattern-not-INSIDE, não pattern-not. Uma chamada e
+  # o `await`/`return`/atribuição que a envolve nunca partilham o mesmo span,
+  # por isso um pattern-not seria um no-op silencioso — a mesma armadilha
+  # que o design do JS/TS documenta.
+  - id: bugfix-py-race-condition-asyncio-not-awaited
+    patterns:
+      - pattern-either:
+          - pattern: asyncio.sleep(...)
+          - pattern: asyncio.gather(...)
+          - pattern: asyncio.wait(...)
+          - pattern: asyncio.wait_for(...)
+      - pattern-not-inside: await $ANY
+      - pattern-not-inside: return $ANY
+      - pattern-not-inside: $V = $ANY
+    message: >-
+      Corotina do asyncio criada e descartada: não é aguardada, nem
+      devolvida, nem atribuída. Não corre nada e o chamador segue como se
+      tivesse corrido. Falta um `await` (ou `asyncio.create_task(...)`, se a
+      intenção for mesmo não esperar).
+    severity: WARNING
+    languages: [python]
+
+  - id: bugfix-py-race-condition-toctou-exists-open
+    pattern: |
+      if os.path.exists($P):
+          <... open($P, ...) ...>
+    message: >-
+      Race entre o teste e o uso (TOCTOU): o ficheiro pode desaparecer entre
+      o `os.path.exists()` e o `open()`. Abra diretamente e apanhe
+      `FileNotFoundError` em vez de testar antes.
+    severity: WARNING
+    languages: [python]

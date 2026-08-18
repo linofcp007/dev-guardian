@@ -86,6 +86,12 @@ interface FileExpectation {
 }
 
 const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
+  'asyncio_not_awaited.py': {
+    // All FOUR pattern-either branches (sleep, gather, wait, wait_for) are
+    // exercised, so a branch that silently stops matching drops the count.
+    ids: ['bugfix-py-race-condition-asyncio-not-awaited'],
+    count: 4,
+  },
   'bare_except.py': { ids: ['bugfix-py-error-handling-bare-except'], count: 1 },
   'except_pass.py': {
     // A bare `except:` whose body is `pass` is genuinely BOTH bugs, so this
@@ -102,7 +108,9 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   },
   'none_deref_dict_get.py': { ids: ['bugfix-py-null-safety-none-deref-dict-get'], count: 2 },
   'none_deref_match.py': { ids: ['bugfix-py-null-safety-none-deref-match'], count: 3 },
+  'open_without_context.py': { ids: ['bugfix-py-memory-leak-open-without-context'], count: 1 },
   'range_len_plus_one.py': { ids: ['bugfix-py-off-by-one-range-len-plus-one'], count: 2 },
+  'toctou_exists_open.py': { ids: ['bugfix-py-race-condition-toctou-exists-open'], count: 1 },
 };
 
 describe('bugfix-py rules', () => {
@@ -153,6 +161,9 @@ const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-py-null-safety-none-deref-match': 'null_safety',
   'bugfix-py-null-safety-none-deref-dict-get': 'null_safety',
   'bugfix-py-off-by-one-range-len-plus-one': 'off_by_one',
+  'bugfix-py-memory-leak-open-without-context': 'memory_leak',
+  'bugfix-py-race-condition-asyncio-not-awaited': 'race_condition',
+  'bugfix-py-race-condition-toctou-exists-open': 'race_condition',
 };
 
 describe('every rule id classifies as its own class', () => {
