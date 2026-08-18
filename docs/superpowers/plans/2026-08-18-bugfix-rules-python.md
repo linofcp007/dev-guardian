@@ -879,6 +879,13 @@ def read_if_present(path):
     if os.path.exists(path):
         return open(path).read()
     return ""
+
+
+def read_after_logging(path):
+    if os.path.exists(path):
+        log("found")
+        return open(path).read()
+    return ""
 ```
 
 - [ ] **Step 2: Write the three near-miss fixtures**
@@ -967,6 +974,25 @@ def check_only(path):
     if os.path.exists(path):
         return True
     return False
+
+
+def open_after_block(path):
+    if os.path.exists(path):
+        log("found")
+    return open(path).read()
+
+
+def open_in_else(path):
+    if os.path.exists(path):
+        return ""
+    else:
+        return open(path).read()
+
+
+def open_other_path(a, b):
+    if os.path.exists(a):
+        return open(b).read()
+    return ""
 ```
 
 - [ ] **Step 3: Register the expectations in the test**
@@ -981,7 +1007,7 @@ Add to `EXPECTED_HITS_BY_FILE`:
     count: 4,
   },
   'open_without_context.py': { ids: ['bugfix-py-memory-leak-open-without-context'], count: 1 },
-  'toctou_exists_open.py': { ids: ['bugfix-py-race-condition-toctou-exists-open'], count: 1 },
+  'toctou_exists_open.py': { ids: ['bugfix-py-race-condition-toctou-exists-open'], count: 2 },
 ```
 
 Add to `EXPECTED_CLASS`:
@@ -1055,10 +1081,19 @@ Expected: FAIL — the three new hit fixtures produce no findings.
     severity: WARNING
     languages: [python]
 
+  # A forma em sequência (`...` antes e depois), não o operador de expressão
+  # profunda `<... ... ...>`. O `<...>` só desce dentro de UMA instrução, por
+  # isso apanhava `if exists(p): return open(p).read()` mas perdia
+  # `if exists(p): log(...); return open(p).read()` — e essa segunda forma é
+  # pelo menos tão comum como a primeira. Medido contra sete casos: a forma
+  # em sequência apanha as duas e continua silenciosa quando o open() está
+  # depois do bloco, no `else`, ou sobre outra variável.
   - id: bugfix-py-race-condition-toctou-exists-open
     pattern: |
       if os.path.exists($P):
-          <... open($P, ...) ...>
+          ...
+          open($P, ...)
+          ...
     message: >-
       Race entre o teste e o uso (TOCTOU): o ficheiro pode desaparecer entre
       o `os.path.exists()` e o `open()`. Abra diretamente e apanhe
@@ -1283,7 +1318,7 @@ cd mcp
 npx vitest run test/integration/bugfixRulesPy.test.ts
 ```
 
-Expected: PASS, no skips. Ten hit files totalling **22 findings**, ten near-miss
+Expected: PASS, no skips. Ten hit files totalling **23 findings**, ten near-miss
 files with zero, and `p/r2c-bug-scan` silent on every hit fixture.
 
 - [ ] **Step 8: Run the whole suite**
@@ -1805,7 +1840,7 @@ this plan carries:
 
 | Check | Expected |
 | --- | --- |
-| Hit fixtures | 10 files, **22 findings** — each firing its own rule, plus `except_pass.py`, whose bare `except: pass` is genuinely both bugs |
+| Hit fixtures | 10 files, **23 findings** — each firing its own rule, plus `except_pass.py`, whose bare `except: pass` is genuinely both bugs |
 | Near-miss fixtures | 10 files, **0 findings** |
 | `p/r2c-bug-scan` on the hit fixtures | **0 findings** — every rule is additive |
 | `mapSubcategory` | all 10 ids land in their own class; none contains `unchecked` |

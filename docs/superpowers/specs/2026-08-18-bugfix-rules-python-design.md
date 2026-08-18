@@ -118,9 +118,10 @@ their own class.
   `await` is Python's closest analogue to JS/TS's `floating-mutation`, and
   keying on these four names rather than on a guessed verb list makes it
   precise instead of heuristic.
-- **toctou-exists-open** — `if os.path.exists($P):` with `open($P, …)` inside
-  the branch. A textbook time-of-check/time-of-use race, and the reason the
-  correct idiom is to open and catch `FileNotFoundError`.
+- **toctou-exists-open** — `if os.path.exists($P):` with `open($P, …)`
+  anywhere inside the branch, whether or not other statements precede it. A
+  textbook time-of-check/time-of-use race, and the reason the correct idiom is
+  to open and catch `FileNotFoundError`.
 
   **These two replace a rule that could not be built** — see §8.
 
