@@ -88,6 +88,17 @@ Não cobrem um `await` esquecido numa `async def` do próprio projeto: essa regr
 geral não é exprimível em Semgrep OSS, e só os primitivos `asyncio` nomeados são
 apanhados. Para essa classe, leia o código.
 
+A N+1 de querysets Django exige o queryset dentro do próprio cabeçalho do
+`for` — `qs = Book.objects.all()` seguido de `for book in qs:` fica
+silencioso, e essa forma ligada a variável é provavelmente a mais comum na
+prática. O TOCTOU só reage a `os.path.exists`: `os.path.isfile`,
+`os.path.isdir` e `pathlib.Path(p).exists()` ficam todos silenciosos. E o
+dereference de `dict.get(...)` exclui clientes HTTP pela SUBSTRING do nome
+do receiver, não pelo nome — qualquer receiver cujo nome CONTENHA `requests`,
+`session`, `client`, `httpx`, `aiohttp` ou `urllib` é ignorado, por isso
+`session_data`, `clients` e `urllib_cache` também são falsos negativos, não
+só um dicionário chamado exatamente `client`.
+
 Duas ressalvas a levar a sério antes de confiar num resultado limpo: isto é
 Semgrep OSS, que casa sintaxe, não faz dataflow — um null deref a duas
 funções de distância do guard continua invisível a estas regras, que

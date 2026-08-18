@@ -21,7 +21,7 @@ async def bounded(task):
 
 
 async def scheduled():
-    asyncio.create_task(work(1))
+    asyncio.create_task(asyncio.sleep(1))
     return "done"
 
 

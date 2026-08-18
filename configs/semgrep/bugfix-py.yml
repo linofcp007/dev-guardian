@@ -135,7 +135,6 @@ rules:
   - id: bugfix-py-null-safety-none-deref-dict-get
     patterns:
       - pattern: $D.get($K).$M(...)
-      - pattern-not: $D.get($K, $DEF).$M(...)
       - metavariable-regex:
           metavariable: $D
           regex: ^(?!.*(requests|session|client|httpx|aiohttp|urllib)).*$
@@ -196,10 +195,18 @@ rules:
   # A regra geral ("chamada a qualquer função definida com async def no
   # mesmo ficheiro") não é exprimível em Semgrep OSS: ver §8 do design.
   #
-  # As três exclusões são pattern-not-INSIDE, não pattern-not. Uma chamada e
+  # As quatro exclusões são pattern-not-INSIDE, não pattern-not. Uma chamada e
   # o `await`/`return`/atribuição que a envolve nunca partilham o mesmo span,
   # por isso um pattern-not seria um no-op silencioso — a mesma armadilha
   # que o design do JS/TS documenta.
+  #
+  # A quarta exclusão, aninhamento noutra chamada, existe porque uma
+  # corotina passada como argumento a outra chamada está a ser entregue a
+  # algo que a vai agendar ou aguardar — `asyncio.create_task(asyncio.sleep(1))`
+  # é exatamente a forma que a mensagem desta regra recomenda escrever, e sem
+  # esta exclusão a regra disparava nela própria. Medido: leva os três falsos
+  # positivos (`tg.create_task(...)`, `acc.append(...)`,
+  # `asyncio.create_task(...)`) a zero, mantendo os quatro hits intactos.
   - id: bugfix-py-race-condition-asyncio-not-awaited
     patterns:
       - pattern-either:
@@ -210,6 +217,7 @@ rules:
       - pattern-not-inside: await $ANY
       - pattern-not-inside: return $ANY
       - pattern-not-inside: $V = $ANY
+      - pattern-not-inside: $F(..., asyncio.$P(...), ...)
     message: >-
       Corotina do asyncio criada e descartada: não é aguardada, nem
       devolvida, nem atribuída. Não corre nada e o chamador segue como se

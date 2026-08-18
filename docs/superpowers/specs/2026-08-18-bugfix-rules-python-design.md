@@ -191,14 +191,25 @@ Identical harness to JS/TS, extended:
 - **`queryset-n-plus-one` is Django-specific** and will not fire on SQLAlchemy,
   Peewee or raw DB-API code, where the same bug is just as common. It also
   **only matches `for` statements** — the same N+1 written as a list
-  comprehension is not caught, measured directly.
+  comprehension is not caught, measured directly. It also **requires the
+  queryset inline in the `for` header** — `qs = Book.objects.all()` followed
+  by `for book in qs:` is silent, and that variable-bound form is arguably
+  the commoner real-world shape.
+- **`toctou-exists-open` keys only on `os.path.exists`.**
+  `os.path.isfile(...)`, `os.path.isdir(...)` and `pathlib.Path(p).exists()`
+  are all silent, measured directly.
 - **No general "coroutine not awaited" rule exists**, only the four named
   `asyncio` primitives. A forgotten `await` on a project's own `async def` is
   the commonest form of this bug and is **not** covered — §8 explains why not.
-- **`none-deref-dict-get` excludes HTTP clients by receiver NAME**
-  (`requests`, `session`, `client`, `httpx`, `aiohttp`, `urllib`), so a client
-  bound to any other name is a false positive, and a dict named `client` is a
-  false negative.
+- **`none-deref-dict-get` excludes HTTP clients by receiver name SUBSTRING,
+  not name.** The `metavariable-regex` is
+  `^(?!.*(requests|session|client|httpx|aiohttp|urllib)).*$`, which matches
+  on substring, not identifier equality — so any receiver whose name
+  *contains* one of those six substrings is skipped, not only a receiver
+  named exactly one of them. Measured: `session_data.get("a").strip()` and
+  `clients.get("a").strip()` are both silently skipped, so `session_data`,
+  `clients` and `urllib_cache` are false negatives too, not only a dict bound
+  to the bare name `client`.
 - **These rules complement `p/r2c-bug-scan`, they do not replace it.** Both run.
 - **They do not replace the model-driven `/guardian-fix` path.**
 
