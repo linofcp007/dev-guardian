@@ -28,7 +28,11 @@
  * one hand-authored file per language, each covering the same six bug
  * classes for its language (fourteen rules for JS/TS, design of record:
  * docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md; ten for
- * Python, docs/superpowers/specs/2026-08-18-bugfix-rules-python-design.md)
+ * Python, docs/superpowers/specs/2026-08-18-bugfix-rules-python-design.md;
+ * ten for Go, docs/superpowers/specs/2026-08-18-bugfix-rules-go-design.md —
+ * Go is where the registry pack leaves the biggest hole, and the design
+ * doc's §8 records a fourth exclusion clause that shipped dead and was
+ * removed)
  * — resolved to absolute paths via `resolveBugfixRules`
  * (`../platform/configsDir.js`). Unlike `include_language_packs` below, this
  * is ON BY DEFAULT: a local file cannot 404, so it is also what keeps
@@ -432,12 +436,13 @@ registerToolModule(
   makeScanTool({
     name: 'bug_hunt',
     title:
-      'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS and Python ' +
+      'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python and Go ' +
       'bug rules; optional language packs, off by default; other languages still registry-only)',
     description:
       'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus local, always-on ' +
-      'JS/TS and Python rule packs: `configs/semgrep/bugfix-js.yml` (fourteen rules) and ' +
-      '`configs/semgrep/bugfix-py.yml` (ten rules), each covering all six subcategories ' +
+      'JS/TS, Python and Go rule packs: `configs/semgrep/bugfix-js.yml` (fourteen rules), ' +
+      '`configs/semgrep/bugfix-py.yml` (ten rules) and `configs/semgrep/bugfix-go.yml` (ten ' +
+      'rules), each covering all six subcategories ' +
       'below for its language — race_condition, null_safety, off_by_one, memory_leak, ' +
       'error_handling, edge_case. `commands/guardian-fix.md` also ' +
       'names "broken happy paths" as a bug-hunting focus; that is not a syntactic pattern, ' +
@@ -453,8 +458,19 @@ registerToolModule(
       "`repo.save()` from an unrelated call that just shares the name, like `ctx.save()` " +
       "(Canvas 2D's synchronous state-stack push, nothing to do with persistence) — both " +
       "fire identically. That's why it isn't ERROR and why `severity_min` exists to " +
-      'filter it out. JS/TS and Python only: no other language has ' +
-      'a local rule pack yet, so Go, Java, C#, PHP, Ruby and Rust get only the ' +
+      'filter it out. Go is where the registry pack leaves the biggest hole: p/r2c-bug-scan ' +
+      'ships 5 Go rules and only 2 land in a bug class, both integer-overflow, so ' +
+      'error_handling, race_condition, null_safety, memory_leak and edge_case were all empty ' +
+      'before this local pack. Its own gaps: no goroutine-leak rule; no loop-variable-capture ' +
+      'rule (built and verified working, then deliberately excluded — Go 1.22 made loop ' +
+      'variables per-iteration and Semgrep cannot read go.mod, so on a modern module it would ' +
+      'fire on correct code); `body-not-closed` only recognises http.Get, so http.Post and ' +
+      'client.Do(req) leak identically and are not covered; `lock-without-defer` accepts any ' +
+      'defer mu.Unlock() in the block, so it cannot tell a correctly scoped unlock from one ' +
+      'deferred in the wrong branch; and `err-blank-assign` fires on deliberate discards like ' +
+      '`_ = os.Remove(tmp)` in a cleanup path, which is why it is WARNING. JS/TS, Python and ' +
+      'Go only: no other language has ' +
+      'a local rule pack yet, so Java, C#, PHP, Ruby and Rust get only the ' +
       'registry coverage described below, same as before these packs existed. The local ' +
       'packs degrade rather than failing the whole scan if one is ever hand-edited into a bad ' +
       'state — a YAML syntax error drops just that file and retries with everything else, a ' +
@@ -477,7 +493,7 @@ registerToolModule(
       'redundant" — measured (exact rule-id duplication): 22% overall, but only ~9% for the ' +
       'JS/TS packs specifically (up to 40-43% for Java/Go) — most of what they add, especially ' +
       'for JS/TS, is net-new security scanning, not duplicate coverage. Beyond the local ' +
-      'JS/TS and Python packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
+      'JS/TS, Python and Go packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
       'registry pack reaching these six classes, and only for Python and Go — Java, C#, ' +
       'PHP, Ruby and Rust get none of them from the registry, and none yet from a local ' +
       'pack either. On any of those languages, a quiet or security-only result (with or ' +

@@ -172,7 +172,7 @@ and only four of the original nine survived the first one untouched.
 | --- | --- |
 | **Did not parse at all** — my Go was wrong, not Semgrep's limits. `switch $V.($T) { ... }` is not Go (the type switch is `switch v := x.(type)`), and `func($P ...)` is not a valid parameter list. | type-assert, goroutine-capture |
 | **Fired on their own near-miss.** `pattern` + trailing `...` generates many overlapping spans and the paired `pattern-not` cancels only one of them. Re-anchoring on the single call and excluding with `pattern-not-inside` over the sequence fixed all three. | body-not-closed, lock-without-defer, ticker-not-stopped |
-| **Matched the assigned form too.** `append($XS, ...)` also matched `xs = append(xs, 1)`; excluded the assigned, declared, returned and passed-as-argument forms. Same shape as Python's asyncio rule. | append-discarded |
+| **Matched the assigned form too.** `append($XS, ...)` also matched `xs = append(xs, 1)`; excluded the assigned (`=`), returned and passed-as-argument forms. Same shape as Python's asyncio rule. | append-discarded |
 
 **Twice, exclusions assumed necessary were measured to be no-ops**, and both are
 worth recording because a clause that reads as a guard and does nothing is this
@@ -190,3 +190,23 @@ project's signature defect:
 
 Both simple forms are therefore deliberate. **Do not "harden" them later**
 without first measuring that the added clause changes a result.
+
+**A third instance of the same defect surfaced after this document was
+written, in Task 4's review.** `append-discarded` shipped with four
+`pattern-not-inside` exclusions, the fourth being
+`$X := append($XS, ...)`. It was dead: Semgrep's Go matcher treats
+`$X = append($XS, ...)` as covering the `:=` form too, so the `=` clause
+alone already excluded `ys := append(xs, 1)` — the `:=` clause changed zero
+results and was removed. The rule now ships three clauses (assigned,
+returned, passed-as-argument), each proven load-bearing on its own.
+
+The comment this rule shipped with originally read "as quatro exclusões são
+todas necessárias … Medido" — "measured". What had actually been measured was
+that the *set* of four exclusions, together, produced the correct fixture
+result; no one had measured each clause individually, so a redundant one hid
+inside a comment that claimed the opposite. That is exactly the failure this
+section exists to name: a clause that reads as a guard and does nothing. The
+fix is the same discipline recorded above for `type-assert` and
+`err-discarded` — after this finding, verify each exclusion clause
+separately (remove it, re-run the fixtures, confirm a result changes) before
+a "Medido" comment may claim the whole set is necessary.

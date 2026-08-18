@@ -122,8 +122,24 @@ síncrono de estado do Canvas 2D) produz falsos positivos por construção,
 por isso não é `ERROR` e o `severity_min` de `bug_hunt` existe precisamente
 para os filtrar.
 
-**Isto é só para JS/TS e Python.** Para as restantes linguagens desta secção —
-Go, Java, C#, PHP, Ruby, Rust — a situação anterior mantém-se: o
+Para Go, o `bug_hunt` corre também por default
+`configs/semgrep/bugfix-go.yml` — dez regras hand-authored, cada uma com o seu
+par de fixtures — cobrindo as mesmas seis classes: erro descartado com `_`,
+retorno atribuído a `_`, ramo `if err != nil` vazio, type assertion sem a
+forma `, ok`, `for i := 0; i <= len(xs)`, corpo de resposta HTTP nunca
+fechado, ticker nunca parado, `Lock()` sem `defer Unlock()`, resultado de
+`append` descartado, e escrita em mapa nil. É a linguagem com o maior buraco
+no registo: o `p/r2c-bug-scan` só tem 5 regras Go e apenas 2 caem numa classe
+de bug.
+
+Não cobrem goroutines que ficam penduradas, nem a captura da variável do
+ciclo. A segunda foi construída e verificada a funcionar, e depois excluída de
+propósito: o Go 1.22 passou a dar a cada iteração a sua própria variável, e o
+Semgrep não lê o `go.mod` para saber que versão o módulo declara — em código
+moderno acusaria a forma correta. Para essas duas classes, leia o código.
+
+**Isto é só para JS/TS, Python e Go.** Para as restantes linguagens desta secção —
+Java, C#, PHP, Ruby, Rust — a situação anterior mantém-se: o
 pack que corre por default (`p/r2c-bug-scan`) só cobre estas classes para
 Python e Go, os packs de linguagem opcionais (`p/javascript`, `p/typescript`,
 etc., ligados via `include_language_packs`) são packs de segurança e não
