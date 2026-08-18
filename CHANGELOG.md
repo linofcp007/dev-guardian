@@ -6,7 +6,7 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
-## [Unreleased]
+## [1.8.0] - 2026-08-18
 
 ### Added
 
