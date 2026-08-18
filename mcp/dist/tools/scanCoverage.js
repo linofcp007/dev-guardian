@@ -34,9 +34,13 @@ export function computeCoverage(toolsRun, missingTools) {
 }
 /**
  * Compute coverage and, when it is not 'full', a loud warning naming the
- * scanners that did not run. The warning for 'none' explicitly states that a
- * zero-findings result is not a clean result — this is the anti-false-confidence
- * line that downstream summaries and the model must not paper over.
+ * scanner(s) responsible for the gap. The warning for 'none' explicitly
+ * states that a zero-findings result is not a clean result — this is the
+ * anti-false-confidence line that downstream summaries and the model must
+ * not paper over. The warning for 'partial' distinguishes a scanner that
+ * genuinely did not run from one that ran (its own `tools_run` entry says
+ * 'ok') but is still a named gap — the latter must not be worded as "did
+ * not run", which would contradict its own status in the same response.
  */
 export function assessCoverage(scanType, toolsRun, missingTools) {
     const coverage = computeCoverage(toolsRun, missingTools);
@@ -45,11 +49,37 @@ export function assessCoverage(scanType, toolsRun, missingTools) {
     const failedTools = toolsRun.filter((t) => t.status === 'failed').map((t) => t.name);
     const gaps = [...new Set([...missingTools, ...failedTools])];
     const list = gaps.length > 0 ? gaps.join(', ') : 'one or more scanners';
-    const warning = coverage === 'none'
-        ? `⚠️ ${scanType}: NO scanner ran (unavailable/failed: ${list}). ` +
-            `A "0 findings" result is NOT a clean bill of health — nothing was actually scanned. ` +
-            `Install ${list} (or use the Docker fallback) and re-run before trusting this scan.`
-        : `⚠️ ${scanType}: partial coverage — ${list} did not run; findings may be incomplete.`;
-    return { coverage, warning };
+    if (coverage === 'none') {
+        return {
+            coverage,
+            warning: `⚠️ ${scanType}: NO scanner ran (unavailable/failed: ${list}). ` +
+                `A "0 findings" result is NOT a clean bill of health — nothing was actually scanned. ` +
+                `Install ${list} (or use the Docker fallback) and re-run before trusting this scan.`,
+        };
+    }
+    // coverage === 'partial'. A name in `gaps` can mean two different things:
+    // it genuinely never ran (skipped/failed — "did not run" is accurate), or
+    // it DID run (its own `tools_run` entry says 'ok') but coverage is still
+    // short — e.g. bug_hunt retrying with surviving Semgrep packs after one
+    // local `--config` failed to load: semgrep's own tools_run entry is 'ok',
+    // with the detail in its `reason`, yet `missing_tools` still (correctly)
+    // carries 'semgrep' so this stays 'partial'. Saying "semgrep did not run"
+    // in that case contradicts the structured tools_run entry sitting right
+    // next to this warning in the same response — same family of bug as the
+    // misleading "install semgrep" text fixed elsewhere (bugfix-rules-jsts).
+    const ranOkNames = new Set(toolsRun.filter((t) => t.status === 'ok').map((t) => t.name));
+    const notRun = gaps.filter((name) => !ranOkNames.has(name));
+    const ranWithGaps = gaps.filter((name) => ranOkNames.has(name));
+    const clauses = [];
+    if (notRun.length > 0)
+        clauses.push(`${notRun.join(', ')} did not run`);
+    if (ranWithGaps.length > 0) {
+        clauses.push(`${ranWithGaps.join(', ')} ran with reduced coverage (see its tools_run reason)`);
+    }
+    const clause = clauses.length > 0 ? clauses.join('; ') : `${list} did not run`;
+    return {
+        coverage,
+        warning: `⚠️ ${scanType}: partial coverage — ${clause}; findings may be incomplete.`,
+    };
 }
 //# sourceMappingURL=scanCoverage.js.map

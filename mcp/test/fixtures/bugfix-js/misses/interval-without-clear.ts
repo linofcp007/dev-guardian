@@ -16,18 +16,25 @@ export function startAndStopPolling(tick: () => void): void {
   clearInterval(t);
 }
 
-export function PollingEffectExprCleanup(tick: () => void): void {
+// Arrow components, deliberately NOT `function` declarations (bugfix-rules-
+// jsts fix wave): the interval rule's first pattern-not-inside clause
+// excludes any `function $F(...) { ... clearInterval($T); ... }` on its
+// own, so a declaration-shaped near-miss here would be silenced by that
+// clause regardless of what the useEffect clause below does — proving
+// nothing about it. Writing these as arrow components forces both to rely
+// solely on the useEffect-cleanup clause, so deleting it makes both fire.
+export const PollingEffectExprCleanup = (tick: () => void): void => {
   useEffect(() => {
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
   }, []);
-}
+};
 
-export function PollingEffectBlockCleanup(tick: () => void): void {
+export const PollingEffectBlockCleanup = (tick: () => void): void => {
   useEffect(() => {
     const t = setInterval(tick, 1000);
     return () => {
       clearInterval(t);
     };
   }, []);
-}
+};

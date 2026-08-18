@@ -39409,8 +39409,25 @@ function assessCoverage(scanType, toolsRun, missingTools) {
   const failedTools = toolsRun.filter((t) => t.status === "failed").map((t) => t.name);
   const gaps = [.../* @__PURE__ */ new Set([...missingTools, ...failedTools])];
   const list = gaps.length > 0 ? gaps.join(", ") : "one or more scanners";
-  const warning = coverage === "none" ? `\u26A0\uFE0F ${scanType}: NO scanner ran (unavailable/failed: ${list}). A "0 findings" result is NOT a clean bill of health \u2014 nothing was actually scanned. Install ${list} (or use the Docker fallback) and re-run before trusting this scan.` : `\u26A0\uFE0F ${scanType}: partial coverage \u2014 ${list} did not run; findings may be incomplete.`;
-  return { coverage, warning };
+  if (coverage === "none") {
+    return {
+      coverage,
+      warning: `\u26A0\uFE0F ${scanType}: NO scanner ran (unavailable/failed: ${list}). A "0 findings" result is NOT a clean bill of health \u2014 nothing was actually scanned. Install ${list} (or use the Docker fallback) and re-run before trusting this scan.`
+    };
+  }
+  const ranOkNames = new Set(toolsRun.filter((t) => t.status === "ok").map((t) => t.name));
+  const notRun = gaps.filter((name) => !ranOkNames.has(name));
+  const ranWithGaps = gaps.filter((name) => ranOkNames.has(name));
+  const clauses = [];
+  if (notRun.length > 0) clauses.push(`${notRun.join(", ")} did not run`);
+  if (ranWithGaps.length > 0) {
+    clauses.push(`${ranWithGaps.join(", ")} ran with reduced coverage (see its tools_run reason)`);
+  }
+  const clause = clauses.length > 0 ? clauses.join("; ") : `${list} did not run`;
+  return {
+    coverage,
+    warning: `\u26A0\uFE0F ${scanType}: partial coverage \u2014 ${clause}; findings may be incomplete.`
+  };
 }
 
 // src/tools/scanToolFactory.ts

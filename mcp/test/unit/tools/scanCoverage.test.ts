@@ -55,5 +55,34 @@ describe('assessCoverage', () => {
     expect(coverage).toBe('partial');
     expect(warning).toContain('npm');
     expect(warning?.toLowerCase()).toContain('partial');
+    expect(warning).toMatch(/npm did not run/);
+  });
+
+  it('does not say a scanner "did not run" when its own tools_run entry is ok (bug_hunt reduced-coverage retry)', () => {
+    // The shape bug_hunt produces after one local `--config` pack fails to
+    // load and it retries with the surviving registry packs: semgrep's own
+    // tools_run entry is 'ok' (with the detail in `reason`), yet
+    // missing_tools still carries 'semgrep' so coverage stays 'partial'.
+    const { coverage, warning } = assessCoverage(
+      'bugs',
+      [{ name: 'semgrep', status: 'ok', reason: 'ran with p/r2c-bug-scan, p/security-audit only' }],
+      ['semgrep'],
+    );
+    expect(coverage).toBe('partial');
+    expect(warning).not.toMatch(/semgrep did not run/);
+    expect(warning).toMatch(/reduced coverage/);
+  });
+
+  it('splits the warning when some gap tools ran ok and others genuinely did not run', () => {
+    const { warning } = assessCoverage(
+      'bugs',
+      [
+        { name: 'semgrep', status: 'ok', reason: 'ran with survivors only' },
+        skipped('gitleaks'),
+      ],
+      ['semgrep', 'gitleaks'],
+    );
+    expect(warning).toMatch(/gitleaks did not run/);
+    expect(warning).toMatch(/semgrep ran with reduced coverage/);
   });
 });

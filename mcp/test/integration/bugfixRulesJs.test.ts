@@ -191,7 +191,10 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   },
   'off-by-one.ts': { ids: ['bugfix-js-off-by-one-loop-lte-length'], count: 1 },
   'parseint-without-radix.ts': { ids: ['bugfix-js-edge-case-parseint-without-radix'], count: 1 },
-  'race-condition.ts': { ids: ['bugfix-js-race-condition-floating-mutation'], count: 1 },
+  'race-condition.ts': {
+    ids: ['bugfix-js-race-condition-floating-mutation'],
+    count: 3, // handler (decl), arrowHandler (assignment-form arrow), app.post(...) callback (call-arg-form arrow)
+  },
   'reduce-without-initial.ts': { ids: ['bugfix-js-edge-case-reduce-without-initial'], count: 1 },
   'subscribe-without-unsubscribe.ts': {
     ids: ['bugfix-js-memory-leak-subscribe-without-unsubscribe'],

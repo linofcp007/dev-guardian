@@ -13,3 +13,13 @@ export function Watcher(source: Observable, onNext: () => void): void {
     return () => sub.unsubscribe();
   }, []);
 }
+
+// Module scope, no enclosing useEffect anywhere in the file — proves the
+// rule's `pattern-inside: useEffect(...)` clause is load-bearing (bugfix-
+// rules-jsts fix wave: it was previously untested in this direction).
+// Without it, this rule would fire on every .subscribe() in a codebase,
+// useEffect or not.
+declare const globalSource: Observable;
+globalSource.subscribe(() => {
+  console.log('tick');
+});
