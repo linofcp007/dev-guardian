@@ -156,6 +156,17 @@ The harness from the Python round, unchanged in shape:
 - **`lock-without-defer` accepts any `defer mu.Unlock()` in the block**, so it
   cannot tell a correctly scoped unlock from one deferred in the wrong branch.
   It is `WARNING` for that reason.
+- **`lock-without-defer` does not cover `sync.RWMutex` at all.** The pattern
+  is the literal `$MU.Lock()` / `defer $MU.Unlock()`, not a metavariable over
+  the method name, so `RLock()`/`RUnlock()` — a common Go idiom for read
+  access — is entirely outside the rule's reach. Measured against the shipped
+  rule, not assumed.
+- **`nil-map-write` only catches a locally `var`-declared map.** The pattern
+  requires `var $M map[$K]$V` followed by an indexed write; a nil map
+  arriving as a function parameter, a struct field, or a return value panics
+  identically on write and is not covered — arguably the commoner
+  real-world shape. Directly analogous to `open-without-context`'s
+  attribute-target gap in the Python round.
 - **`err-blank-assign` fires on deliberate discards.** `_ = os.Remove(tmp)` in
   a cleanup path is intentional and will be flagged; that is why it is
   `WARNING` and not `ERROR`.

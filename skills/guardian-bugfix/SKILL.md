@@ -138,6 +138,14 @@ propósito: o Go 1.22 passou a dar a cada iteração a sua própria variável, e
 Semgrep não lê o `go.mod` para saber que versão o módulo declara — em código
 moderno acusaria a forma correta. Para essas duas classes, leia o código.
 
+Mais duas lacunas medidas nas próprias regras: a `lock-without-defer` casa
+pelos nomes literais `Lock()`/`Unlock()`, não `RLock()`/`RUnlock()`, por isso
+um read-lock de `sync.RWMutex` sem `defer` — um idioma comum em Go — fica
+totalmente fora do seu alcance. E a `nil-map-write` só apanha um mapa
+declarado localmente com `var`: um mapa nil que chega como parâmetro de
+função, campo de struct, ou valor de retorno entra em panic da mesma forma ao
+escrever e não é coberto — provavelmente a forma mais comum na prática real.
+
 **Isto é só para JS/TS, Python e Go.** Para as restantes linguagens desta secção —
 Java, C#, PHP, Ruby, Rust — a situação anterior mantém-se: o
 pack que corre por default (`p/r2c-bug-scan`) só cobre estas classes para
