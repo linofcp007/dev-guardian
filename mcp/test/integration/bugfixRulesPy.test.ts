@@ -110,7 +110,7 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'none_deref_match.py': { ids: ['bugfix-py-null-safety-none-deref-match'], count: 3 },
   'open_without_context.py': { ids: ['bugfix-py-memory-leak-open-without-context'], count: 1 },
   'range_len_plus_one.py': { ids: ['bugfix-py-off-by-one-range-len-plus-one'], count: 2 },
-  'toctou_exists_open.py': { ids: ['bugfix-py-race-condition-toctou-exists-open'], count: 1 },
+  'toctou_exists_open.py': { ids: ['bugfix-py-race-condition-toctou-exists-open'], count: 2 },
 };
 
 describe('bugfix-py rules', () => {

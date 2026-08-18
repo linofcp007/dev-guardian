@@ -218,10 +218,19 @@ rules:
     severity: WARNING
     languages: [python]
 
+  # A forma em sequência (`...` antes e depois), não o operador de expressão
+  # profunda `<... ... ...>`. O `<...>` só desce dentro de UMA instrução, por
+  # isso apanhava `if exists(p): return open(p).read()` mas perdia
+  # `if exists(p): log(...); return open(p).read()` — e essa segunda forma é
+  # pelo menos tão comum como a primeira. Medido contra sete casos: a forma
+  # em sequência apanha as duas e continua silenciosa quando o open() está
+  # depois do bloco, no `else`, ou sobre outra variável.
   - id: bugfix-py-race-condition-toctou-exists-open
     pattern: |
       if os.path.exists($P):
-          <... open($P, ...) ...>
+          ...
+          open($P, ...)
+          ...
     message: >-
       Race entre o teste e o uso (TOCTOU): o ficheiro pode desaparecer entre
       o `os.path.exists()` e o `open()`. Abra diretamente e apanhe
