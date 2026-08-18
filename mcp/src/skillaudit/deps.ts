@@ -81,8 +81,9 @@ function fromGoMod(content: string): OsvPackageQuery[] {
   const re = /^\s*([\w./-]+)\s+v(\d+\.\d+\.\d+[\w.-]*)/gm;
   let m: RegExpExecArray | null;
   while ((m = re.exec(content)) !== null) {
-    if (m[1] === 'module' || m[1] === 'go') continue;
-    const q: OsvPackageQuery = { ecosystem: 'Go', name: m[1]! };
+    const name = m[1];
+    if (name === undefined || name === 'module' || name === 'go') continue;
+    const q: OsvPackageQuery = { ecosystem: 'Go', name };
     if (m[2]) q.version = m[2];
     out.push(q);
   }
@@ -137,7 +138,9 @@ function fromGemfileLock(content: string): OsvPackageQuery[] {
   const re = /^\s{4}([A-Za-z0-9._-]+)\s+\((\d+\.\d+[\w.]*)\)/gm;
   let m: RegExpExecArray | null;
   while ((m = re.exec(content)) !== null) {
-    const q: OsvPackageQuery = { ecosystem: 'RubyGems', name: m[1]! };
+    const name = m[1];
+    if (name === undefined) continue;
+    const q: OsvPackageQuery = { ecosystem: 'RubyGems', name };
     if (m[2]) q.version = m[2];
     out.push(q);
   }

@@ -224,11 +224,15 @@ async function handler(
   ctx.storage.scans.finalize({
     scan_id: auditScanId,
     status: 'completed',
-    tools_run: subTools.map((name) => ({
-      name,
-      status: subResults[name]?.ok ? 'ok' : 'failed',
-      ...(subResults[name]?.error ? { reason: subResults[name]!.error!.code } : {}),
-    })),
+    tools_run: subTools.map((name) => {
+      const sub = subResults[name];
+      const reason = sub?.error?.code;
+      return {
+        name,
+        status: sub?.ok ? 'ok' : 'failed',
+        ...(reason !== undefined ? { reason } : {}),
+      };
+    }),
     missing_tools: [...aggregateMissing],
   });
 

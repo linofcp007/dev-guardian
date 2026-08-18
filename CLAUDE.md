@@ -32,6 +32,34 @@ Semgrep-dependent e2e tests skip when Semgrep is absent. A skip is visible as a
 skip, and `GUARDIAN_REQUIRE_SEMGREP=1` turns absence into a hard failure — set it
 when you need to know the rule pack was actually exercised.
 
+## TypeScript conventions
+
+Enforced by the compiler where possible, by review where not:
+
+- **ESM `NodeNext`.** Every relative import ends in `.js`, including from
+  `.ts` sources. `isolatedModules` is on, so `import type` is required for
+  type-only imports.
+- **`noUncheckedIndexedAccess` is on.** `arr[i]` is `T | undefined`. Narrow it
+  (`const x = arr[i]; if (x === undefined) continue;`) rather than asserting.
+- **No `!` non-null assertions, and no `any`.** Both are currently at zero
+  across `mcp/src` and `mcp/test`, so any reappearance is a regression rather
+  than the status quo. An assertion does not check anything — it only silences
+  the compiler, and every one that was here restated something the code had
+  *just* established (a `push` before re-indexing the array, a `filter` before
+  a `map`, a length check before an index), which is exactly the case where
+  narrowing costs nothing. The three that were load-bearing were hiding real
+  gaps: a WP-CLI call that can succeed and print nothing, and a shell whose
+  non-null-ness came from a check in a *different* file.
+- **Type-check the tests too.** `npm run lint` runs `tsconfig.json` and
+  `tsconfig.test.json`. The second exists because nothing ever type-checked
+  `test/` — `tsconfig.json` excludes it and vitest's esbuild strips types
+  without checking them. It excludes `test/fixtures`, which is deliberately
+  broken sample code fed to scanners as input.
+- Note what `tsc` does **not** catch: interpolating a non-string into a
+  template (`` `--config=${someArray}` ``) types as `string` at any
+  strictness. That needs `@typescript-eslint/restrict-template-expressions`,
+  and this repo has no ESLint setup.
+
 ## Conventions that bite if ignored
 
 - **Commit the compiled `mcp/dist/`.** The repo *is* the distribution — Claude

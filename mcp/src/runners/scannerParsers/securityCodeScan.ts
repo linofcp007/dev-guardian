@@ -46,11 +46,22 @@ export const securityCodeScanParser: ScannerParser = {
       const m = LINE_RE.exec(line);
       if (!m) continue;
 
-      const file = m[1]!;
-      const lineNo = Number(m[2]!);
-      const ruleId = m[5]!;
-      const message = m[6]!.trim();
-      const type = m[4]!.toLowerCase(); // 'warning' | 'error'
+      // Destructured and guarded rather than asserted: `noUncheckedIndexedAccess`
+      // is on, and a regex whose groups are all mandatory today can gain an
+      // optional one tomorrow without any call site noticing.
+      const [, file, lineNoRaw, , typeRaw, ruleId, messageRaw] = m;
+      if (
+        file === undefined ||
+        lineNoRaw === undefined ||
+        typeRaw === undefined ||
+        ruleId === undefined ||
+        messageRaw === undefined
+      ) {
+        continue;
+      }
+      const lineNo = Number(lineNoRaw);
+      const message = messageRaw.trim();
+      const type = typeRaw.toLowerCase(); // 'warning' | 'error'
       const severity: Severity =
         type === 'error' ? 'critical' : LOWER_SEVERITY.has(ruleId) ? 'medium' : 'high';
       const category: Category = 'security';

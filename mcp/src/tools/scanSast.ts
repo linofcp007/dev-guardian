@@ -93,12 +93,14 @@ registerToolModule(
         }
         // exit 0 = no findings; exit 1 = findings present; both are OK.
         const ok = result.outcome === 'completed' || result.exitCode === 1;
-        tools_run.push({ name: 'semgrep', status: ok ? 'ok' : 'failed' });
+        const semgrepRun: ToolRun = { name: 'semgrep', status: ok ? 'ok' : 'failed' };
         if (!ok && result.stderr) {
-          // Surface the first stderr line for diagnostics.
-          const reason = result.stderr.split(/\r?\n/)[0] ?? 'unknown';
-          tools_run[tools_run.length - 1]!.reason = reason;
+          // Surface the first stderr line for diagnostics. Held as a local
+          // rather than re-indexed off the end of the array, which needed an
+          // assertion to restate what `push` had just guaranteed.
+          semgrepRun.reason = result.stderr.split(/\r?\n/)[0] ?? 'unknown';
         }
+        tools_run.push(semgrepRun);
       } else {
         // Semgrep not on PATH — fall back to the official Docker image when a
         // daemon is reachable. This is what makes a SAST scan actually run on

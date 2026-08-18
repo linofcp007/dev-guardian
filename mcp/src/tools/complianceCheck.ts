@@ -156,8 +156,12 @@ function summariseLicenses(raw: string): {
       const name = getString(lic, 'Name');
       const pkg = getString(lic, 'PkgName') ?? '(unknown)';
       if (!name) continue;
-      if (!byLicense.has(name)) byLicense.set(name, new Set());
-      byLicense.get(name)!.add(pkg);
+      let pkgs = byLicense.get(name);
+      if (!pkgs) {
+        pkgs = new Set();
+        byLicense.set(name, pkgs);
+      }
+      pkgs.add(pkg);
     }
   }
 

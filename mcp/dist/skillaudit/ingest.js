@@ -228,6 +228,10 @@ function collectDir(root) {
     const stack = [root];
     while (stack.length > 0) {
         const dir = stack.pop();
+        // `stack.length > 0` already guarantees this, but the compiler cannot see
+        // it and an assertion would hide a real change to the loop condition.
+        if (dir === undefined)
+            break;
         let entries;
         try {
             entries = readdirSync(dir);

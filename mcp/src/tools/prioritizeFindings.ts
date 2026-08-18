@@ -107,10 +107,7 @@ async function handler(
   const summary = {
     total_open: open.length,
     returned: top.length,
-    score_range: top.length > 0 ? {
-      max: top[0]!.priority_score,
-      min: top[top.length - 1]!.priority_score,
-    } : null,
+    score_range: scoreRange(top),
   };
 
   return {
@@ -125,4 +122,20 @@ async function handler(
     // future maintainers who add age-weighting.
     _recent_scan_ts: recentScanTs,
   };
+}
+
+/**
+ * Min/max of an already-sorted, possibly-empty ranked list.
+ *
+ * Extracted so the emptiness check narrows the element type once, in one
+ * place. The inline version tested `top.length > 0` and then indexed with
+ * non-null assertions, which `noUncheckedIndexedAccess` cannot follow.
+ */
+function scoreRange(
+  top: readonly { priority_score: number }[],
+): { max: number; min: number } | null {
+  const first = top[0];
+  const last = top[top.length - 1];
+  if (first === undefined || last === undefined) return null;
+  return { max: first.priority_score, min: last.priority_score };
 }

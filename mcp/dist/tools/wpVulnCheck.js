@@ -72,6 +72,11 @@ async function handler(input, ctx) {
             return failDomain('scanner_failed', `wp option get home failed: ${r.stderr.split(/\r?\n/)[0] ?? r.outcome}`);
         }
     }
+    // WP-CLI can succeed and still print nothing, which left `url` undefined
+    // while two later call sites asserted it was not. Checked once, here.
+    if (!url) {
+        return failDomain('scanner_failed', 'Could not resolve a target URL for WPScan.');
+    }
     const token = inp.api_token ?? process.env['WPSCAN_API_TOKEN'] ?? '';
     if (!token)
         warnings.push('No WPSCAN_API_TOKEN — public-no-token rate limit applies.');

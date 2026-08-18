@@ -41,8 +41,16 @@ registerToolModule(makeScanTool({
     invoke: async (_input, ctx) => {
         const startedAt = Date.now() - 1000;
         const scriptPath = join(ctx.plugin.scriptsDir, ...SCRIPT_REL_PATH);
+        // `scanToolFactory` already rejects a null shell with `no_bash_shell`
+        // before invoke runs, so this cannot fire — narrowed rather than
+        // asserted so the compiler keeps enforcing that guarantee if the
+        // factory's ordering ever changes. A throw here is a defined path:
+        // the factory finalises the scan as `scanner_failed`.
+        const shell = ctx.plugin.shell;
+        if (shell === null)
+            throw new Error('no usable bash shell');
         const shellResult = await runShellScript({
-            shell: ctx.plugin.shell,
+            shell,
             scriptPath,
             args: [ctx.projectPath],
             cwd: ctx.projectPath,

@@ -77,9 +77,16 @@ async function handler(
     return failDomain('not_a_git_repo', (e as Error).message);
   }
 
-  const hasUrl = inp.target_url !== undefined && inp.target_url.length > 0;
-  const hasScript = inp.k6_script_path !== undefined && inp.k6_script_path.length > 0;
-  if (hasUrl === hasScript) {
+  // Narrow the VALUES, not a boolean derived from them: `hasUrl` told the
+  // reader the url was present but told the compiler nothing, which is why
+  // both call sites below used to need a non-null assertion.
+  const targetUrl =
+    inp.target_url !== undefined && inp.target_url.length > 0 ? inp.target_url : undefined;
+  const k6Script =
+    inp.k6_script_path !== undefined && inp.k6_script_path.length > 0
+      ? inp.k6_script_path
+      : undefined;
+  if ((targetUrl === undefined) === (k6Script === undefined)) {
     return failDomain(
       'scanner_failed',
       'Provide exactly one of target_url (Lighthouse) or k6_script_path (k6).',
@@ -89,16 +96,19 @@ async function handler(
   const scanId = randomUUID();
   const reportDir = ensureReportDir(projectPath, scanId, 'perf');
 
-  if (hasUrl) {
+  if (targetUrl !== undefined) {
     return runLighthouse({
-      url: inp.target_url!,
+      url: targetUrl,
       categories: inp.lighthouse_categories,
       reportDir,
       projectPath,
       ctx,
     });
   }
-  return runK6({ scriptPath: inp.k6_script_path!, reportDir, projectPath, ctx });
+  if (k6Script === undefined) {
+    return failDomain('scanner_failed', 'Provide exactly one of target_url or k6_script_path.');
+  }
+  return runK6({ scriptPath: k6Script, reportDir, projectPath, ctx });
 }
 
 interface LighthouseOpts {

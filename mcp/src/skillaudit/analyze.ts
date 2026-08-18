@@ -216,8 +216,8 @@ function findHiddenUnicode(content: string): { code: number; line: number } | nu
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? '';
     for (const ch of line) {
-      const code = ch.codePointAt(0)!;
-      if (isInvisible(code)) return { code, line: i + 1 };
+      const code = ch.codePointAt(0);
+      if (code !== undefined && isInvisible(code)) return { code, line: i + 1 };
     }
   }
   return null;

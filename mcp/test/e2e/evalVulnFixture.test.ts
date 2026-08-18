@@ -161,8 +161,8 @@ describe('E2E — eval-vuln fixture', () => {
     };
 
     const tool = TOOLS.find((t) => t.name === 'security_scan_full');
-    expect(tool).toBeDefined();
-    const result = (await tool!.handler({ project_path: work, force: true }, plugin)) as {
+    if (!tool) throw new Error('security_scan_full is not registered');
+    const result = (await tool.handler({ project_path: work, force: true }, plugin)) as {
       ok: boolean;
     };
     expect(result.ok).toBe(true);

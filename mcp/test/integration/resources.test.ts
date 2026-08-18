@@ -143,15 +143,19 @@ describe('guardian://findings/* resources', () => {
   it('open hides suppressed fingerprints', async () => {
     seedScan(plugin, { id: 'A', type: 'sast', findings: 3 });
     const all = plugin.storage.findings.listByScan('A');
+    const suppressed = all[0];
+    if (!suppressed) throw new Error('seedScan produced no findings to suppress');
     plugin.storage.suppressions.insert({
-      finding_fingerprint: all[0]!.fingerprint,
+      finding_fingerprint: suppressed.fingerprint,
       reason: 'fp',
     });
 
     const r = await getResource('guardian-findings-open').handler(fakeUri, {}, plugin);
     const payload = r.json as { findings: Array<{ fingerprint: string }> };
     expect(payload.findings).toHaveLength(2);
-    expect(payload.findings.find((f) => f.fingerprint === all[0]!.fingerprint)).toBeUndefined();
+    expect(
+      payload.findings.find((f) => f.fingerprint === suppressed.fingerprint),
+    ).toBeUndefined();
   });
 
   it('critical returns only severity=critical findings', async () => {

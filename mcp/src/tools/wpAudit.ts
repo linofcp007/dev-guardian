@@ -346,8 +346,12 @@ function groupByComponent(r: WpResult): Record<string, ChecksumFile[]> {
         file: row['file'] ?? '(unknown)',
         status: normaliseStatus(row['status'] ?? row['message']),
       };
-      if (!out[slug]) out[slug] = [];
-      out[slug]!.push(f);
+      let bucket = out[slug];
+      if (!bucket) {
+        bucket = [];
+        out[slug] = bucket;
+      }
+      bucket.push(f);
     }
     return out;
   } catch {
