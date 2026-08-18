@@ -11,7 +11,8 @@ MCP tool rather than the underlying scanner directly.
 ## Intent → tool
 
 **Security**: `security_scan_full`, `scan_sast`, `scan_secrets`,
-`scan_deps`, `scan_containers`, `scan_iac`, `bug_hunt`.
+`scan_deps`, `scan_containers`, `scan_iac`, `bug_hunt`,
+`scan_skill` (vet an AI skill / MCP server / agent before installing).
 
 **Quality**: `review_pr`, `quality_check`.
 
