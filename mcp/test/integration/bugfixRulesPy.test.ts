@@ -44,7 +44,20 @@ const AVAILABLE = semgrepAvailable();
 
 interface SemgrepResult { check_id: string; path: string }
 
-function run(config: string, dir: string): SemgrepResult[] {
+interface SemgrepRun {
+  readonly rows: SemgrepResult[];
+  /**
+   * How many files Semgrep actually scanned. Asserted by every caller, not
+   * merely carried: pointed at the in-repo fixture path (which contains a
+   * `test/` segment, skipped by Semgrep's default ignore list), Semgrep
+   * reports `paths.scanned: []` with zero results and exit 0 — identical in
+   * every observable way to "scanned everything, found nothing". Measured
+   * directly against this rule file, not inferred.
+   */
+  readonly scanned: number;
+}
+
+function run(config: string, dir: string): SemgrepRun {
   const work = mkdtempSync(join(tmpdir(), 'guardian-bugfix-py-'));
   cpSync(dir, work, { recursive: true });
   const out = execFileSync(
@@ -54,7 +67,8 @@ function run(config: string, dir: string): SemgrepResult[] {
   );
   const parsed: unknown = JSON.parse(out);
   const results = (parsed as { results?: unknown[] }).results ?? [];
-  return results as SemgrepResult[];
+  const scanned = (parsed as { paths?: { scanned?: unknown[] } }).paths?.scanned ?? [];
+  return { rows: results as SemgrepResult[], scanned: scanned.length };
 }
 
 /** Last dot-separated segment — semgrep prefixes the config path onto ids. */
@@ -135,18 +149,30 @@ describe('bugfix-py rules', () => {
   it.skipIf(!AVAILABLE)(
     'fires exactly the expected rule, exactly the expected number of times, in EACH hit fixture file',
     () => {
-      const grouped = rowsByFile(run(RULES, resolve(FIXTURES, 'hits')));
+      const dir = resolve(FIXTURES, 'hits');
+      const { rows, scanned } = run(RULES, dir);
+      // Guards against the temp-copy step silently scanning zero files —
+      // see SemgrepRun.scanned. Without this, an empty scan and a genuine
+      // clean-of-findings scan are indistinguishable.
+      expect(scanned).toBe(fixtureFiles(dir).length);
+      const grouped = rowsByFile(rows);
       for (const [file, expected] of Object.entries(EXPECTED_HITS_BY_FILE)) {
-        const rows = grouped[file] ?? [];
-        expect(ids(rows)).toEqual(expected.ids);
-        expect(rows.length).toBe(expected.count);
+        const fileRows = grouped[file] ?? [];
+        expect(ids(fileRows)).toEqual(expected.ids);
+        expect(fileRows.length).toBe(expected.count);
       }
     },
   );
 
   it.skipIf(!AVAILABLE)('fires NOTHING in EACH near-miss fixture file', () => {
-    const grouped = rowsByFile(run(RULES, resolve(FIXTURES, 'misses')));
-    for (const file of fixtureFiles(resolve(FIXTURES, 'misses'))) {
+    const dir = resolve(FIXTURES, 'misses');
+    const { rows, scanned } = run(RULES, dir);
+    // This is the half of the proof most exposed to a silent zero-file
+    // scan: a broken temp copy would make every near-miss fixture read as
+    // "correctly silent" for the wrong reason. Ruled out directly.
+    expect(scanned).toBe(fixtureFiles(dir).length);
+    const grouped = rowsByFile(rows);
+    for (const file of fixtureFiles(dir)) {
       expect(grouped[file] ?? []).toEqual([]);
     }
   });
@@ -211,7 +237,7 @@ const R2C_PACK = 'p/r2c-bug-scan';
 /** Scanned once at module load and reused — this run downloads a registry
  *  pack, so doing it in both a reachability probe and the assertion would
  *  pay the network cost twice. `null` means the pack could not be fetched. */
-function r2cRowsOrNull(): SemgrepResult[] | null {
+function r2cRunOrNull(): SemgrepRun | null {
   if (!AVAILABLE) return null;
   try {
     return run(R2C_PACK, resolve(FIXTURES, 'hits'));
@@ -219,19 +245,23 @@ function r2cRowsOrNull(): SemgrepResult[] | null {
     return null;
   }
 }
-const R2C_ROWS = r2cRowsOrNull();
+const R2C_RUN = r2cRunOrNull();
 
 describe('no local rule duplicates p/r2c-bug-scan', () => {
   it.runIf(REQUIRE_SEMGREP)('the registry pack must be reachable when the flag is set', () => {
-    expect(R2C_ROWS).not.toBeNull();
+    expect(R2C_RUN).not.toBeNull();
   });
 
-  it.skipIf(R2C_ROWS === null)('the existing pack finds NOTHING in any hit fixture', () => {
+  it.skipIf(R2C_RUN === null)('the existing pack finds NOTHING in any hit fixture', () => {
     // Every one of our ten rules is therefore additive: it fires where the
     // pack does not. Asserted per file so a failure names the rule whose
-    // fixture overlaps, not merely that the directory does.
-    const grouped = rowsByFile(R2C_ROWS ?? []);
-    for (const file of fixtureFiles(resolve(FIXTURES, 'hits'))) {
+    // fixture overlaps, not merely that the directory does. `scanned` is
+    // asserted too — this test has no partner to fail loudly if the temp
+    // copy silently scanned zero files, since nothing else runs this pack.
+    const dir = resolve(FIXTURES, 'hits');
+    expect(R2C_RUN?.scanned).toBe(fixtureFiles(dir).length);
+    const grouped = rowsByFile(R2C_RUN?.rows ?? []);
+    for (const file of fixtureFiles(dir)) {
       expect(grouped[file] ?? []).toEqual([]);
     }
   });
