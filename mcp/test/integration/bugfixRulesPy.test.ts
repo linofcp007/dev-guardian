@@ -109,6 +109,7 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'none_deref_dict_get.py': { ids: ['bugfix-py-null-safety-none-deref-dict-get'], count: 2 },
   'none_deref_match.py': { ids: ['bugfix-py-null-safety-none-deref-match'], count: 3 },
   'open_without_context.py': { ids: ['bugfix-py-memory-leak-open-without-context'], count: 1 },
+  'queryset_n_plus_one.py': { ids: ['bugfix-py-edge-case-queryset-n-plus-one'], count: 2 },
   'range_len_plus_one.py': { ids: ['bugfix-py-off-by-one-range-len-plus-one'], count: 2 },
   'toctou_exists_open.py': { ids: ['bugfix-py-race-condition-toctou-exists-open'], count: 2 },
 };
@@ -164,6 +165,7 @@ const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-py-memory-leak-open-without-context': 'memory_leak',
   'bugfix-py-race-condition-asyncio-not-awaited': 'race_condition',
   'bugfix-py-race-condition-toctou-exists-open': 'race_condition',
+  'bugfix-py-edge-case-queryset-n-plus-one': 'edge_case',
 };
 
 describe('every rule id classifies as its own class', () => {
@@ -180,6 +182,57 @@ describe('every rule id classifies as its own class', () => {
     // branch-order dependency (design of record §4).
     for (const id of Object.keys(EXPECTED_CLASS)) {
       expect(id).not.toContain('unchecked');
+    }
+  });
+});
+
+/**
+ * Design of record §2, second governing rule: no local rule may re-report
+ * what `p/r2c-bug-scan` already finds. Python is the first language where
+ * this can happen at all — the pack ships 32 Python rules, and one rule was
+ * already dropped from the design for duplicating
+ * `avoid-accessing-request-in-wrong-handler`.
+ *
+ * A finding here means one of exactly two things, and which one it was must
+ * be stated in the task report rather than assumed:
+ *   - the pack reports the SAME bug on the SAME line -> our rule is
+ *     redundant; drop or narrow it.
+ *   - the pack reports a DIFFERENT rule elsewhere in the file -> the
+ *     fixture carries an incidental second bug; make the fixture minimal.
+ * "Adjust the fixture until the pack is quiet" is only legitimate in the
+ * second case.
+ *
+ * This test needs the Semgrep registry. It skips when the pack cannot be
+ * fetched, and `GUARDIAN_REQUIRE_SEMGREP=1` turns that into a hard failure
+ * like every other skip here.
+ */
+const R2C_PACK = 'p/r2c-bug-scan';
+
+/** Scanned once at module load and reused — this run downloads a registry
+ *  pack, so doing it in both a reachability probe and the assertion would
+ *  pay the network cost twice. `null` means the pack could not be fetched. */
+function r2cRowsOrNull(): SemgrepResult[] | null {
+  if (!AVAILABLE) return null;
+  try {
+    return run(R2C_PACK, resolve(FIXTURES, 'hits'));
+  } catch {
+    return null;
+  }
+}
+const R2C_ROWS = r2cRowsOrNull();
+
+describe('no local rule duplicates p/r2c-bug-scan', () => {
+  it.runIf(REQUIRE_SEMGREP)('the registry pack must be reachable when the flag is set', () => {
+    expect(R2C_ROWS).not.toBeNull();
+  });
+
+  it.skipIf(R2C_ROWS === null)('the existing pack finds NOTHING in any hit fixture', () => {
+    // Every one of our ten rules is therefore additive: it fires where the
+    // pack does not. Asserted per file so a failure names the rule whose
+    // fixture overlaps, not merely that the directory does.
+    const grouped = rowsByFile(R2C_ROWS ?? []);
+    for (const file of fixtureFiles(resolve(FIXTURES, 'hits'))) {
+      expect(grouped[file] ?? []).toEqual([]);
     }
   });
 });

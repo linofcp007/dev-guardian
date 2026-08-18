@@ -237,3 +237,31 @@ rules:
       `FileNotFoundError` em vez de testar antes.
     severity: WARNING
     languages: [python]
+
+  # Cobre `.all()` e `.filter(...)`: a versão só com `.all()` não apanhava a
+  # forma mais comum. O segundo pattern usa o operador de expressão profunda
+  # `<... ...>` para exigir que o corpo do ciclo atravesse uma relação —
+  # iterar um queryset só é N+1 se alguma coisa lá dentro for buscar o
+  # objeto relacionado.
+  #
+  # Limitação conhecida e medida: só casa ciclos `for`. A mesma N+1 escrita
+  # como list comprehension não é apanhada.
+  - id: bugfix-py-edge-case-queryset-n-plus-one
+    patterns:
+      - pattern-either:
+          - pattern: |
+              for $O in $M.objects.all():
+                  ...
+          - pattern: |
+              for $O in $M.objects.filter(...):
+                  ...
+      - pattern: |
+          for $O in $QS:
+              <... $O.$REL.$FIELD ...>
+    message: >-
+      Provável N+1: o queryset é iterado e o corpo do ciclo atravessa uma
+      relação, por isso cada volta faz a sua própria query. Acrescente
+      `.select_related("...")` (ForeignKey/OneToOne) ou
+      `.prefetch_related("...")` (ManyToMany/reverse) ao queryset.
+    severity: WARNING
+    languages: [python]
