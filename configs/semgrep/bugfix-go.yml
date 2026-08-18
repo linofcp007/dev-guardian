@@ -116,3 +116,51 @@ rules:
       Acrescente `defer t.Stop()`.
     severity: WARNING
     languages: [go]
+
+  - id: bugfix-go-race-condition-lock-without-defer
+    patterns:
+      - pattern: $MU.Lock()
+      - pattern-not-inside: |
+          $MU.Lock()
+          ...
+          defer $MU.Unlock()
+          ...
+    message: >-
+      `Lock()` sem `defer Unlock()`. Um unlock só no caminho feliz é um unlock
+      que qualquer `return` antecipado ou panic salta — e a partir daí todos os
+      outros acessos bloqueiam para sempre.
+    severity: WARNING
+    languages: [go]
+
+  # As quatro exclusões são todas necessárias: sem elas a regra casava também
+  # `xs = append(xs, 1)`, que é a forma correta. Medido.
+  - id: bugfix-go-edge-case-append-discarded
+    patterns:
+      - pattern: append($XS, ...)
+      - pattern-not-inside: $X = append($XS, ...)
+      - pattern-not-inside: $X := append($XS, ...)
+      - pattern-not-inside: return append($XS, ...)
+      - pattern-not-inside: $F(..., append($XS, ...), ...)
+    message: >-
+      Resultado de `append` descartado. O `append` pode realocar o array de
+      suporte, por isso o valor devolvido é a única referência fiável aos
+      dados — descartá-lo perde tudo o que foi acrescentado.
+    severity: ERROR
+    languages: [go]
+
+  - id: bugfix-go-edge-case-nil-map-write
+    patterns:
+      - pattern: |
+          var $M map[$K]$V
+          ...
+          $M[$IDX] = $X
+      - pattern-not-inside: |
+          var $M map[$K]$V
+          ...
+          $M = make(...)
+          ...
+    message: >-
+      Escrita num mapa nil. Um `var m map[K]V` sem `make` é nil: ler dele é
+      legal e devolve o zero-value, mas escrever entra em panic.
+    severity: ERROR
+    languages: [go]

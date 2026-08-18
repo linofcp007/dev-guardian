@@ -91,11 +91,14 @@ interface FileExpectation {
 }
 
 const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
+  'append_discarded.go': { ids: ['bugfix-go-edge-case-append-discarded'], count: 1 },
   'body_not_closed.go': { ids: ['bugfix-go-memory-leak-body-not-closed'], count: 1 },
   'empty_err_block.go': { ids: ['bugfix-go-error-handling-empty-err-block'], count: 1 },
   'err_blank_assign.go': { ids: ['bugfix-go-error-handling-err-blank-assign'], count: 1 },
   'err_discarded.go': { ids: ['bugfix-go-error-handling-err-discarded'], count: 1 },
+  'lock_without_defer.go': { ids: ['bugfix-go-race-condition-lock-without-defer'], count: 1 },
   'loop_lte_len.go': { ids: ['bugfix-go-off-by-one-loop-lte-len'], count: 1 },
+  'nil_map_write.go': { ids: ['bugfix-go-edge-case-nil-map-write'], count: 1 },
   'ticker_not_stopped.go': { ids: ['bugfix-go-memory-leak-ticker-not-stopped'], count: 1 },
   'type_assert_no_ok.go': { ids: ['bugfix-go-null-safety-type-assert-no-ok'], count: 1 },
 };
@@ -154,6 +157,9 @@ const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-go-memory-leak-ticker-not-stopped': 'memory_leak',
   'bugfix-go-null-safety-type-assert-no-ok': 'null_safety',
   'bugfix-go-off-by-one-loop-lte-len': 'off_by_one',
+  'bugfix-go-race-condition-lock-without-defer': 'race_condition',
+  'bugfix-go-edge-case-append-discarded': 'edge_case',
+  'bugfix-go-edge-case-nil-map-write': 'edge_case',
 };
 
 describe('every rule id classifies as its own class', () => {
@@ -169,6 +175,54 @@ describe('every rule id classifies as its own class', () => {
     // is tested earlier in the if-chain. Not taken on again here.
     for (const id of Object.keys(EXPECTED_CLASS)) {
       expect(id).not.toContain('unchecked');
+    }
+  });
+});
+
+/**
+ * Design of record §2: no local rule may re-report what `p/r2c-bug-scan`
+ * already finds. For Go the pack ships only 5 rules and just 2 land in a bug
+ * class, so overlap is unlikely — but "unlikely" is not "measured", and this
+ * is the test that measures it.
+ *
+ * It carries a POSITIVE CONTROL, which the Python version lacks. Asserting
+ * that a pack found nothing proves nothing on its own if the pack never ran
+ * for this language: a Go-specific rule failing to load would look identical
+ * to a clean result. So a second scan runs the same pack against a file
+ * written to trip one of its own Go rules, and asserts it fires. Only then
+ * does the zero above mean anything.
+ */
+const R2C_PACK = 'p/r2c-bug-scan';
+
+function r2cRunOrNull(config: string, dir: string): SemgrepRun | null {
+  if (!AVAILABLE) return null;
+  try {
+    return run(config, dir);
+  } catch {
+    return null;
+  }
+}
+const R2C_ON_HITS = r2cRunOrNull(R2C_PACK, resolve(FIXTURES, 'hits'));
+const R2C_ON_CONTROL = r2cRunOrNull(R2C_PACK, resolve(FIXTURES, 'control'));
+
+describe('no local Go rule duplicates p/r2c-bug-scan', () => {
+  it.runIf(REQUIRE_SEMGREP)('the registry pack must be reachable when the flag is set', () => {
+    expect(R2C_ON_HITS).not.toBeNull();
+  });
+
+  it.skipIf(R2C_ON_CONTROL === null)('positive control: the pack IS live for Go', () => {
+    // Without this, "the pack found nothing" is indistinguishable from "the
+    // pack never ran". The control file trips the pack's own
+    // `incorrect-default-permission` rule.
+    expect(R2C_ON_CONTROL?.scanned).toBe(1);
+    expect(R2C_ON_CONTROL?.rows.length).toBeGreaterThan(0);
+  });
+
+  it.skipIf(R2C_ON_HITS === null)('the existing pack finds NOTHING in any hit fixture', () => {
+    expect(R2C_ON_HITS?.scanned).toBe(fixtureFiles(resolve(FIXTURES, 'hits')).length);
+    const grouped = rowsByFile(R2C_ON_HITS?.rows ?? []);
+    for (const file of fixtureFiles(resolve(FIXTURES, 'hits'))) {
+      expect(grouped[file] ?? []).toEqual([]);
     }
   });
 });
