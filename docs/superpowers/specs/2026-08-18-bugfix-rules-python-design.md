@@ -1,7 +1,7 @@
 # Local bug-finding Semgrep rules — Python — design of record
 
 **Date:** 2026-08-18
-**Status:** approved
+**Status:** approved, then corrected by measurement (§8)
 **Second in the per-language sequence**, after JS/TS shipped in 1.6.0.
 
 ## 1. Why this exists, and why it is smaller than the JS/TS set
@@ -27,7 +27,7 @@ they are a **mix of Django, Flask and SQLAlchemy**, not "Django rules".
 `bad-operator-in-filter` is SQLAlchemy; `avoid-accessing-request-in-wrong-handler`
 is Flask.
 
-So Python does not need fourteen rules. It needs **nine, aimed at measured
+So Python does not need fourteen rules. It needs **ten, aimed at measured
 holes**.
 
 ## 2. The two rules that govern every rule
@@ -48,13 +48,16 @@ finds, doubling the noise while appearing to add coverage. The framework half of
 this scope is where that risk concentrates — one rule was already dropped from
 this design for it, below.
 
+**Both were discharged before this document was finalised**, not deferred to
+implementation — see §8.
+
 ## 3. Two severity tiers
 
 Unchanged from JS/TS. **`ERROR`** where the pattern is a bug regardless of
 intent; **`WARNING`/`INFO`** where it is usually a bug but has legitimate uses.
 `bug_hunt`'s `severity_min` already filters on this.
 
-## 4. The nine rules
+## 4. The ten rules
 
 Ids carry the class token, because `mapSubcategory`
 (`mcp/src/tools/bugHunt.ts`) classifies by regex over the lowercased id — not by
@@ -64,67 +67,84 @@ design.
 **Avoid the word `unchecked` in `null_safety` names.** The `error_handling`
 regex matches it, and the JS/TS set relied on `null_safety` being tested earlier
 in the if-chain to win. That is a real dependency on branch order and there is
-no reason to take it on again here.
+no reason to take it on again here. **Verified**: no id below contains
+`unchecked`, and all ten were run through the real `mapSubcategory` and land in
+their own class.
 
 ### `error_handling` — 3 rules
 
 - **bare-except** (ERROR) — `try: … except: …`. Catches `SystemExit` and
   `KeyboardInterrupt` along with everything else. The single highest-value
   Python pattern, and absent from the existing 32.
-- **except-pass** (ERROR) — `except …: pass`, and `except …: ...` (a literal
-  Ellipsis body). The error is discarded with no log, no re-raise, no handling.
+- **except-pass** (ERROR) — an `except` clause whose entire body is `pass`, or
+  is a literal `...`. Covers the bare, plain and `as`-bound clause forms —
+  **five pattern branches**, because `except $E:` does not match
+  `except $E as $V:` and the literal-Ellipsis body needs a different
+  construct entirely (§8).
 - **get-without-doesnotexist** (WARNING) — `.objects.get(…)` not inside a
-  `try` that catches `DoesNotExist`. Django raises rather than returning
-  `None`, so an unguarded `get` is an uncaught 500 on the first missing row.
-  Verified absent from the existing pack.
+  `try` that catches the miss. Django raises rather than returning `None`, so
+  an unguarded `get` is an uncaught 500 on the first missing row. **Three**
+  exclusion clauses, not one: `except $X.DoesNotExist`, bare
+  `except ObjectDoesNotExist` (the `django.core.exceptions` import form) and
+  `except Exception`. All three are correct code and all three must stay
+  silent.
 
 ### `null_safety` — 2 rules, ERROR
 
-- **none-deref-match** — `re.match(…).group(…)` / `re.search(…).group(…)`.
-  Returns `None` when nothing matches; this is how it becomes an
-  `AttributeError` in production.
-- **none-deref-dict-get** — a method or attribute accessed directly on
-  `$D.get($K)`, which returns `None` for a missing key.
+- **none-deref-match** — `re.match(…).group(…)`, `re.search(…).group(…)`,
+  `re.fullmatch(…).group(…)`. Returns `None` when nothing matches; this is how
+  it becomes an `AttributeError` in production.
+- **none-deref-dict-get** — a method called directly on `$D.get($K)`, which
+  returns `None` for a missing key. Excludes the two-argument (defaulted) form,
+  and excludes HTTP clients by receiver name — `requests.get(url).json()` is
+  the same syntax and is not a bug.
 
 ### `off_by_one` — 1 rule, ERROR
 
-- **range-len-plus-one** — `range(len($X) + 1)` used to index `$X`, and
-  `$X[len($X)]`. Zero coverage today.
+- **range-len-plus-one** — `for … in range(len($X) + 1):`, and `$X[len($X)]`.
+  Zero coverage today.
 
 ### `memory_leak` — 1 rule, WARNING
 
-- **open-without-context** — `open(…)` whose result is neither bound by a `with`
-  statement nor closed in the same scope.
+- **open-without-context** — a local variable bound to `open(…)` that is
+  neither inside a `with` nor closed in the same scope. Attribute targets
+  (`self.handle = open(…)`) are excluded: the close lives in another method,
+  which is out of a syntactic rule's reach, so firing there would be a guess.
 
-### `race_condition` — 1 rule, WARNING
+### `race_condition` — 2 rules, WARNING
 
-- **coroutine-not-awaited** — a call to a function defined `async def` in the
-  same file, appearing as a bare statement rather than awaited, returned, or
-  passed to `asyncio.create_task` / `gather` / `ensure_future`.
+- **asyncio-not-awaited** — `asyncio.sleep/gather/wait/wait_for` appearing as a
+  bare statement: not awaited, not returned, not assigned. The forgotten
+  `await` is Python's closest analogue to JS/TS's `floating-mutation`, and
+  keying on these four names rather than on a guessed verb list makes it
+  precise instead of heuristic.
+- **toctou-exists-open** — `if os.path.exists($P):` with `open($P, …)` inside
+  the branch. A textbook time-of-check/time-of-use race, and the reason the
+  correct idiom is to open and catch `FileNotFoundError`.
 
-  The direct analogue of JS/TS's `floating-mutation`, which was that set's most
-  valuable rule. Python makes it more tractable: `async def` is visible in the
-  source, so this does not need the verb-name heuristic that made the JS/TS
-  version noisy — which is why this one can key on the definition rather than on
-  a guessed list of mutating verbs.
+  **These two replace a rule that could not be built** — see §8.
 
 ### `edge_case` — 1 rule, WARNING
 
-- **queryset-n-plus-one** — a Django queryset iterated where the loop body
-  accesses a related field, without `select_related` or `prefetch_related` on
-  the queryset. Verified absent: the pack contains **zero** occurrences of
-  `DoesNotExist`, `select_related`, `prefetch_related` or N+1.
+- **queryset-n-plus-one** — a Django queryset iterated by a `for` statement
+  where the loop body reaches through a relation, without `select_related` or
+  `prefetch_related`. Covers both `.all()` and `.filter(…)`. Verified absent
+  from the pack: **zero** occurrences of `DoesNotExist`, `select_related`,
+  `prefetch_related` or N+1 anywhere in its 32 rules.
 
-### One rule dropped before implementation, which is what §2 is for
+### Two rules dropped before implementation, which is what §2 is for
 
 **`request` accessed outside its handler context** was in the draft and is
 **dropped**: `avoid-accessing-request-in-wrong-handler` already covers it,
 confirmed by id in the fetched pack.
 
-It is worth naming rather than quietly omitting, because it is the only reason
-§2's no-duplication rule exists as a *tested* requirement instead of an
-intention. One of ten draft rules was already redundant before a line was
-written; the nine that remain are the ones the measurement supports.
+**`coroutine-not-awaited` as originally specified is dropped too**, for a
+different reason — it is not expressible in Semgrep OSS (§8).
+
+Both are worth naming rather than quietly omitting. The first is the only
+reason §2's no-duplication rule exists as a *tested* requirement instead of an
+intention: one of ten draft rules was already redundant before a line was
+written. The second is the reason §8 exists at all.
 
 ## 5. Where the rules live and how they load
 
@@ -151,9 +171,11 @@ Identical harness to JS/TS, extended:
   The id set alone cannot prove a particular instance still matches while
   another instance of the same rule survives in the same file. That was found
   the hard way on JS/TS.
-- **A no-duplication test**, new for this language: for each rule, scan its hit
-  fixture with `p/r2c-bug-scan` alone and confirm it produces **no** finding
-  there. If it does, the rule is redundant and must be dropped or narrowed.
+- **A no-duplication test**, new for this language: scan the hit fixtures with
+  `p/r2c-bug-scan` alone and confirm it produces **no** finding on any of them.
+  A finding there means either the rule is redundant (drop or narrow it) or the
+  fixture carries an incidental second bug (make the fixture minimal). Which of
+  the two it was must be stated, not assumed.
 - **Rule ids asserted against `mapSubcategory`.**
 - Skips when Semgrep is absent; fails hard under `GUARDIAN_REQUIRE_SEMGREP=1`.
 
@@ -166,9 +188,53 @@ Identical harness to JS/TS, extended:
 - **The heuristic tier produces false positives by construction**, which is why
   it is `WARNING`.
 - **`queryset-n-plus-one` is Django-specific** and will not fire on SQLAlchemy,
-  Peewee or raw DB-API code, where the same bug is just as common.
-- **`coroutine-not-awaited` only sees `async def` in the same file.** A
-  coroutine imported from elsewhere is not recognised, because Semgrep OSS has
-  no cross-file resolution.
+  Peewee or raw DB-API code, where the same bug is just as common. It also
+  **only matches `for` statements** — the same N+1 written as a list
+  comprehension is not caught, measured directly.
+- **No general "coroutine not awaited" rule exists**, only the four named
+  `asyncio` primitives. A forgotten `await` on a project's own `async def` is
+  the commonest form of this bug and is **not** covered — §8 explains why not.
+- **`none-deref-dict-get` excludes HTTP clients by receiver NAME**
+  (`requests`, `session`, `client`, `httpx`, `aiohttp`, `urllib`), so a client
+  bound to any other name is a false positive, and a dict named `client` is a
+  false negative.
 - **These rules complement `p/r2c-bug-scan`, they do not replace it.** Both run.
 - **They do not replace the model-driven `/guardian-fix` path.**
+
+## 8. What measurement changed, before any of it was built
+
+Every rule above was written as a probe and run against a hit fixture and a
+near-miss fixture with Semgrep 1.164.0 **before this document was finalised**.
+Seven of the nine originally specified rules fired correctly first time. The
+other two did not, and one of those turned out to be impossible. The JS/TS round
+shipped six constructs that read as guards and did nothing; probing first is the
+answer to that, and it changed seven things here.
+
+**One rule is not expressible and was replaced.** `coroutine-not-awaited` —
+"a call to a function defined `async def` in the same file, appearing as a bare
+statement" — was to be the analogue of JS/TS's most valuable rule. Semgrep OSS
+cannot express it. The sequence pattern (`async def $F: …` / `…` / `$F(…)`)
+*does* match, which is exactly the trap: it reports at the **definition** line
+rather than the call, and no exclusion clause bites, so it fires identically on
+`await persist(r)`, `return persist(r)` and `asyncio.create_task(persist(r))`.
+A `focus-metavariable` + `metavariable-pattern` formulation fixes the span and
+still fires on all three. Both were measured, not reasoned about. The two
+`race_condition` rules in §4 are what replaced it — narrower, but real.
+
+**Six rules needed correcting, and each correction came from a near-miss that
+fired:**
+
+| Rule | As designed | What measurement forced |
+| --- | --- | --- |
+| `except-pass` | one pattern | five branches — `except $E:` does not match `except $E as $V:`, and a literal `...` body needs `metavariable-regex` on a `$BODY` metavariable (I had assumed it was inexpressible; it is not) |
+| `get-without-doesnotexist` | exclude `except $X.DoesNotExist` | exclude `ObjectDoesNotExist` and `except Exception` too — both fired, both are correct code |
+| `queryset-n-plus-one` | `.all()` | `.filter(…)` as well, which is the commoner form |
+| `none-deref-dict-get` | `$D.get($K).$M(…)` | a receiver-name exclusion — `requests.get(url).json()` fired |
+| `open-without-context` | not closed in scope | exclude attribute targets — `self.handle = open(…)` fired, and its `close()` is unreachable to a syntactic rule |
+| `range-len-plus-one` | `range(len($X) + 1)` **used to index** `$X` | ships without the indexing requirement: the loose form produced zero false positives across the near-miss set, and requiring the index would miss the `$X[i - 1]` shapes |
+
+**Final state, measured on the ten-rule set:** 18 findings across 10 hit
+fixtures, each firing exactly its own rule and nothing else; **zero** findings
+across all 10 near-miss fixtures; **zero** findings from `p/r2c-bug-scan` on any
+hit fixture, so every one of the ten is additive rather than duplicative; and
+all ten ids classify into their own class through the real `mapSubcategory`.
