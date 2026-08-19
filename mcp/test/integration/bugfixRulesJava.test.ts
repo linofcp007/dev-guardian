@@ -102,6 +102,16 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   },
   'LoopLteLength.java': { ids: ['bugfix-java-off-by-one-loop-lte-length'], count: 1 },
   'StreamNotClosed.java': { ids: ['bugfix-java-memory-leak-stream-not-closed'], count: 1 },
+  'ModifyDuringIteration.java': {
+    ids: ['bugfix-java-edge-case-modify-during-iteration'],
+    count: 1,
+  },
+  'StaticDateFormat.java': {
+    // Two: the rule covers `static final` and plain `static`, and this fixture
+    // carries one of each so neither branch can die unnoticed.
+    ids: ['bugfix-java-race-condition-static-dateformat'],
+    count: 2,
+  },
 };
 
 describe('bugfix-java rules', () => {
@@ -157,6 +167,8 @@ const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-java-null-safety-optional-get-no-ispresent': 'null_safety',
   'bugfix-java-off-by-one-loop-lte-length': 'off_by_one',
   'bugfix-java-memory-leak-stream-not-closed': 'memory_leak',
+  'bugfix-java-race-condition-static-dateformat': 'race_condition',
+  'bugfix-java-edge-case-modify-during-iteration': 'edge_case',
 };
 
 describe('every rule id classifies as its own class', () => {
@@ -174,6 +186,54 @@ describe('every rule id classifies as its own class', () => {
     for (const id of Object.keys(EXPECTED_CLASS)) {
       expect(id).not.toContain('unchecked');
       expect(id).not.toContain('concurren');
+    }
+  });
+});
+
+/**
+ * Design of record §2: no local rule may re-report what `p/r2c-bug-scan`
+ * already finds. For Java the pack ships 4 rules and NONE of them lands in a
+ * bug class, so overlap is very unlikely — but "unlikely" is not "measured".
+ *
+ * It carries a POSITIVE CONTROL. Asserting that a pack found nothing proves
+ * nothing on its own if the pack never ran for this language: a Java rule
+ * failing to load would look identical to a clean result. So a second scan
+ * runs the same pack against a file written to trip one of its own Java rules
+ * (`eqeq`), and asserts it fires. Only then does the zero above mean anything.
+ */
+const R2C_PACK = 'p/r2c-bug-scan';
+
+function r2cRunOrNull(config: string, dir: string): SemgrepRun | null {
+  if (!AVAILABLE) return null;
+  try {
+    return run(config, dir);
+  } catch {
+    return null;
+  }
+}
+const R2C_ON_HITS = r2cRunOrNull(R2C_PACK, resolve(FIXTURES, 'hits'));
+const R2C_ON_CONTROL = r2cRunOrNull(R2C_PACK, resolve(FIXTURES, 'control'));
+
+describe('no local Java rule duplicates p/r2c-bug-scan', () => {
+  it.runIf(REQUIRE_SEMGREP)('the registry pack must be reachable when the flag is set', () => {
+    expect(R2C_ON_HITS).not.toBeNull();
+    // Asserted too, and deliberately: without this the control fixture could
+    // be deleted and this whole describe block would go on passing, with the
+    // control test merely SKIPPING. That exact hole shipped in the Go round
+    // and was caught by renaming the directory away.
+    expect(R2C_ON_CONTROL).not.toBeNull();
+  });
+
+  it.skipIf(R2C_ON_CONTROL === null)('positive control: the pack IS live for Java', () => {
+    expect(R2C_ON_CONTROL?.scanned).toBe(1);
+    expect(R2C_ON_CONTROL?.rows.length).toBeGreaterThan(0);
+  });
+
+  it.skipIf(R2C_ON_HITS === null)('the existing pack finds NOTHING in any hit fixture', () => {
+    expect(R2C_ON_HITS?.scanned).toBe(fixtureFiles(resolve(FIXTURES, 'hits')).length);
+    const grouped = rowsByFile(R2C_ON_HITS?.rows ?? []);
+    for (const file of fixtureFiles(resolve(FIXTURES, 'hits'))) {
+      expect(grouped[file] ?? []).toEqual([]);
     }
   });
 });

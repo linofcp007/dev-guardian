@@ -88,3 +88,29 @@ rules:
       esgota os descritores do processo.
     severity: WARNING
     languages: [java]
+
+  # As duas formas, e ambas são necessárias: `static final` e `static` simples.
+  # As tentativas de as escrever com um metavariable nos modificadores
+  # (`static $MOD SimpleDateFormat …`, `static ... SimpleDateFormat …`) não
+  # compilam sequer — medido.
+  - id: bugfix-java-race-condition-static-dateformat
+    pattern-either:
+      - pattern: static final SimpleDateFormat $N = new SimpleDateFormat(...);
+      - pattern: static SimpleDateFormat $N = new SimpleDateFormat(...);
+    message: >-
+      `SimpleDateFormat` num campo estático. A classe não é thread-safe e um
+      campo estático é a definição de partilhado — sob concorrência devolve
+      datas trocadas ou lança. Use `DateTimeFormatter`, que é imutável, ou uma
+      instância por chamada.
+    severity: ERROR
+    languages: [java]
+
+  - id: bugfix-java-edge-case-modify-during-iteration
+    pattern: |
+      for ($T $X : $COLL) { ... $COLL.remove(...); ... }
+    message: >-
+      Remoção da coleção durante o for-each sobre ela própria. Lança
+      `ConcurrentModificationException` na iteração seguinte. Use
+      `Iterator.remove()` ou `removeIf(...)`.
+    severity: ERROR
+    languages: [java]
