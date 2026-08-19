@@ -144,8 +144,8 @@ version bump.
     (two clauses per shape — one reaching a multi-statement or nested body, one
     reaching the braceless form).
   - **A REAL-BUGS CORPUS, so this class of regression cannot recur silently.**
-    `mcp/test/fixtures/bugfix-java/hits/RealBugs.java` (12 defects) and
-    `hits/ElseArm.java` (8) were written by the reviewer, not by the rule
+    `mcp/test/fixtures/bugfix-java/hits/RealBugs.java` (14 defects at the
+    wave-7 count) and `hits/ElseArm.java` (8) were written by the reviewer, not by the rule
     author, and their counts are asserted per file plus a total. Every future
     exclusion now has to prove — while it is being ablated — that it does not
     eat a real bug, not merely that it silences the shape it was written for.
@@ -178,6 +178,82 @@ version bump.
     nine clauses deleted, since the braceless guard is real Java that fires
     without them. Final ablation: 34 exclusion clauses, all live, none moving
     the real-bugs count.
+- **A sixth review sweep closed the last false-positive class and made the
+  silent-rule-failure family self-enforcing.** The merge was approved with these
+  four follow-ups.
+  - **`map-get-deref` no longer fires on iteration over the map's own
+    `keySet()`.** `for (String k : m.keySet()) { … m.get(k).trim() … }` is the
+    commonest map-iteration idiom in Java: the loop header binds the key **from
+    the map itself**, so presence is guaranteed on every syntactic path reaching
+    the dereference — the same standard by which `containsKey` is accepted as a
+    guard — and it was not in the accepted-limitations table either. The clause
+    unifies **both** metavariables, the map iterated with the map dereferenced
+    and the loop variable with the key passed to `get`, and `b13` / `b14` in
+    `hits/RealBugs.java` break one unification each and must keep firing.
+    Measured over the five correct-code shapes the reviewer wrote: it closes the
+    plain loop, the `this.`-qualified loop and the loop whose dereference is
+    nested inside an `if`; the `entrySet()` form and the form that copies the
+    key set to a local first remain, and are now **accepted limitation (12)**
+    rather than an implication.
+
+    **One clause, not the braced/braceless pair every `if` guard carries**, and
+    that was measured in four forms first: the deref-requiring pair and the
+    plain `for (…) { … }` both close the braced shapes and leave the braceless
+    one firing, while writing the body as a bare statement ellipsis closes both
+    at once. A pair would have been half inert, which is the defect class this
+    series has now caught six times. Nor is it scoped to a branch: a for-each
+    has no `else` arm, the whole body runs with the key present, so excluding
+    the whole node is exactly right here — the arm-scoping lesson does not transfer.
+  - **The accepted-limitations table had nine rows and every one was a false
+    positive.** That asymmetry is the shape of the defect the previous two waves
+    were about: nobody was looking in the recall direction, so nothing was ever
+    written down there. Every row now states its direction, and three rows are
+    new — the **invalidated-guarantee** false-negative class (10), five measured
+    guaranteed throws where the guard's guarantee is destroyed *inside the
+    region the exclusion covers*, which is the fifth sweep's whole-node bug on the
+    **temporal** axis instead of the branch axis; the local-boolean guard (11),
+    agreed in review five waves ago and never written down; and the two
+    `keySet()` residue shapes (12).
+  - **The real-bugs corpus covered 4 of the 8 rules, and the gap was the
+    riskiest one.** Measured: `map-get-deref` 9, `optional-get` 6,
+    `loop-lte-length` 4, `static-dateformat` 1, and **nothing** for
+    `modify-during-iteration` — the rule carrying eight exclusion clauses over a
+    seven-branch receiver enumeration and the file's only nested re-inclusion, and the rule whose exclusion swallowed a real
+    `ConcurrentModificationException` in wave 4. Its real bugs lived only in
+    `hits/ModifyDuringIteration.java`, written by the rule's own author, which
+    is exactly the artefact the corpus exists to compensate for.
+    `hits/IterationBugs.java` adds six reviewer-written CMEs — a `switch` under
+    an `if`, a `switch` in an inner loop, a `switch` in a `try`, a braced `case`
+    block, two statements between removal and `break`, a removal in a nested
+    `if`. The integration test now **states** which rules the corpus covers and
+    which it does not: the three it does not (`empty-catch`,
+    `printstacktrace-only`, `stream-not-closed`) are the three that carry no
+    guard exclusions, so they are low-risk by construction — a decision now,
+    not an accident.
+  - **Three silent-failure modes are now caught by one enforced invariant.** A
+    `pattern-either` branch with no positive term (`RuleParseError`), an
+    unquoted `?` (`Invalid YAML file`) and `... <... e ...> ...` inside a block
+    have each shipped through this file, and all three print a successful scan.
+    They are one family: **fewer rules load than the file declares, exit 0.**
+    The total-hits assertion that came with the real-bugs corpus is already the
+    family-wide catch, but only
+    while every rule has a hit fixture, which nothing stated. Two assertions
+    close it: the set of rule ids the `hits/` fixtures exercise must equal the
+    `- id:` entries parsed out of the YAML itself, and
+    `semgrep --validate --quiet` must exit 0 with **both** streams empty — which
+    also catches a clause-level compile failure that happens not to change any
+    finding, the one thing no finding-count assertion can see. Measured against
+    all three traps: exit 2, 5 and 2.
+  - **Accepted false positive (9) was falsified by its own instance and is
+    rewritten.** Its justification — an extra last-but-one-operand clause
+    "removes one of two findings, the line still fires" — was measured on
+    `flag && a.isPresent() && b.isPresent() && a.get().equals(b.get())`, a line
+    carrying **two** `get()` calls. On the far commoner single-`get()` chain
+    that clause silences the line outright, and re-measuring with it applied
+    shows it also closes **four**-operand chains, since its `$X` matches the
+    whole left-nested subtree. The row now carries the measurement instead of
+    the generalisation; the clause is recorded as a taken decision deferred out
+    of this wave's scope, not as one that was rejected.
 
 ### Changed
 
@@ -303,15 +379,21 @@ version bump.
   expression-form guards. The rule is `WARNING` precisely because this class of
   miss has no end.
 
-### Accepted false positives
+### Accepted limitations
 
-Reproduced on correct code, and kept rather than fixed. Exhaustive against the
-review fixtures that exist today, not against all Java:
+Reproduced against the review fixtures that exist today, and kept rather than
+fixed. **Every row states its DIRECTION**, because for six waves this table had
+nine rows and all nine were false positives — the shape of the defect the last
+two waves were about. Nobody was looking in the recall direction, so nothing was
+ever written down there, and a wave could close a false positive, silently
+delete recall, and still go green. Rows (10) and (11) are the first entries on
+the other side; the real-bugs corpus in `hits/` is the machinery that keeps them
+honest.
 
-- **(1)** `memory-leak-stream-not-closed` on
+- **(1)** *False positive.* `memory-leak-stream-not-closed` on
   `open(); try { … } finally { close(); }` — already the rule's stated
   limitation, and already why it is `WARNING`.
-- **(2)** `race-condition-static-dateformat` on a `static final
+- **(2)** *False positive.* `race-condition-static-dateformat` on a `static final
   SimpleDateFormat` whose every access goes through a `synchronized` method —
   proving *all* accesses are synchronized is whole-program analysis, which
   Semgrep OSS does not do. This entry used to end "and a shared formatter
@@ -319,14 +401,14 @@ review fixtures that exist today, not against all Java:
   the tier criterion, and it is why the rule sat at `ERROR` for four rounds
   while carrying a documented un-fixable false positive. The finding stays; the
   tier is now `WARNING`.
-- **(3)** `off-by-one-loop-lte-length` on `i <= a.length` where the body guards
+- **(3)** *False positive.* `off-by-one-loop-lte-length` on `i <= a.length` where the body guards
   with `i < a.length`, or never indexes `a` — the obvious tightening was tried
   and rejected (it trades this false positive for a false negative on a real
   bug without fixing the main case), so the patterns stayed and the tier moved.
-- **(4)** `error-handling-printstacktrace-only` on `printStackTrace()` as the
+- **(4)** *False positive.* `error-handling-printstacktrace-only` on `printStackTrace()` as the
   fallback when the logger itself threw — the one place the call is right;
   already `WARNING`; too narrow to encode.
-- **(5)** `null-safety-map-get-deref`, `null-safety-optional-get-no-ispresent`
+- **(5)** *False positive.* `null-safety-map-get-deref`, `null-safety-optional-get-no-ispresent`
   and `edge-case-modify-during-iteration` where **two or more** statements sit
   between the guard (or the removal) and the exit —
   `if (!m.containsKey(k)) { log(); metric(); return ""; }`,
@@ -335,26 +417,100 @@ review fixtures that exist today, not against all Java:
   and would swallow `if (!m.containsKey(k)) { if (strict) { return ""; } }` and
   `items.remove(s); if (done) { break; }`, which are real bugs. A false
   negative that hides a bug is worse than this false positive.
-- **(6)** The same three rules on any guard reached **through a helper
+- **(6)** *False positive.* The same three rules on any guard reached **through a helper
   method** — `if (!present(o)) { return d; }` — which needs interprocedural
   analysis Semgrep OSS does not do. Already the stated reason
   `optional-get-no-ispresent` is `WARNING`.
-- **(7)** `null-safety-map-get-deref` on a key whose presence is established
+- **(7)** *False positive.* `null-safety-map-get-deref` on a key whose presence is established
   outside the shapes the rule enumerates: a map filled in a static initialiser,
   or a total enum mapping declared as a `Map`. Excluding "any map that ever
   received a `put`" anywhere in the file would erase the rule.
-- **(8)** `null-safety-map-get-deref` and `null-safety-optional-get-no-ispresent`
+- **(8)** *False positive.* `null-safety-map-get-deref` and `null-safety-optional-get-no-ispresent`
   on a guard held in a **local boolean** —
   `boolean present = m.containsKey(k); if (!present) { return ""; }` — which is
   dataflow rather than syntax, and outside Semgrep OSS.
-- **(9)** The same two on a conjunction **chain** of three or more operands,
-  `flag && a.isPresent() && b.isPresent() && a.get().equals(b.get())`. The
-  expression clause binds the conjunction's left operand to the guard test
-  itself, and a Java conjunction nests to the left, so in a chain that left
-  operand is another conjunction rather than the guard. Exactly two operands is
-  the shape excluded. An extra clause for the last-but-one operand was measured:
-  it removes one of the two findings on that line and the line still fires from
-  the other, so it changes nothing a caller sees. Not applied.
+- **(9)** *False positive.* The same two on a conjunction **chain** of three or
+  more operands, `flag && o.isPresent() && o.get().isEmpty()` and
+  `flag && m.containsKey(k) && m.get(k).isEmpty()`. The expression clause binds
+  the conjunction's left operand to the guard test itself, and a Java
+  conjunction nests to the left, so in a chain that left operand is another
+  conjunction rather than the guard. Exactly two operands is the shape excluded.
+
+  **This row's own justification was falsified in wave 7 and is replaced.** It
+  used to read: an extra clause for the last-but-one operand "removes one of the
+  two findings on that line and the line still fires from the other, so it
+  changes nothing a caller sees". That was measured on
+  `flag && a.isPresent() && b.isPresent() && a.get().equals(b.get())` — a line
+  carrying **two** `get()` calls, which is what made "one of two" true. It does
+  not generalise: on the single-`get()` lines above the same clause silences the
+  line outright, and the two lines above are far commoner Java than the
+  two-`get()` one the row was measured on.
+
+  Re-measured in wave 7 with the clause actually applied
+  (`"$X && $O.isPresent() && <... $O.get() ...>"` and its map twin): it silences
+  the three-operand single-`get()` chain, silences a **four**-operand
+  single-`get()` chain too — `$X` matches the whole left-nested subtree, so
+  chain length is not the discriminator the old row assumed — leaves exactly one
+  finding on the original two-`get()` instance, and keeps both real bugs firing
+  (`flag && a.isPresent() && b.get()`, `flag && m.containsKey(k1) && m.get(k2)`).
+  Hit and near-miss fixture counts do not move: 63 and 0 either way.
+
+  So the clause is a genuine, measured improvement and the old conclusion does
+  **not** stand. It is not applied here only because wave 7 was scoped to a
+  single rule-behaviour change and this is a second one, in two rules, on the
+  last wave before merge; it is recorded as a decision that is taken, not as one
+  that was rejected. What would still remain after it is the narrower shape the
+  row now describes: a chain where the guard is **not** the last-but-one operand
+  because the chain guards two different things at once.
+- **(10)** *False **negative** — the invalidated-guarantee class.* A guarantee
+  the guard establishes and the code then **destroys**, inside the very region
+  the exclusion covers. Five measured reproductions, every one a guaranteed
+  throw, every one silent:
+
+  ```java
+  if (m.containsKey(k)) { m.remove(k); return m.get(k).trim(); }
+  if (o.isPresent())    { o = Optional.empty(); return o.get(); }
+  if (m.containsKey(k)) { m.clear(); … m.get(k).trim() … }
+  m.put(k, "v"); m.remove(k); return m.get(k).trim();
+  while (m.containsKey(k)) { m.remove(k); … m.get(k).trim() … }
+  ```
+
+  Same root cause as the `else`-arm bug of the fifth sweep — **`pattern-not-inside` excludes
+  the whole node it matched** — but on the **temporal** axis instead of the
+  branch axis. That sweep scoped every guard exclusion to the arm the guard proves,
+  which fixed the branch axis; the sequence axis inside that arm was never
+  examined, and the guard shapes are exactly the ones that carry it: an
+  exclusion that covers a block covers every statement in the block, including
+  the ones that undo the guarantee. Not fixable in Semgrep OSS — knowing that
+  `m.remove(k)` invalidates `m.containsKey(k)` is dataflow — so this is a row
+  and not a clause. The `keySet()` exclusion added in wave 7 inherits it
+  unchanged: `for (String k : m.keySet()) { m.remove(k); m.get(k).trim(); }` is
+  silent for the same reason.
+- **(11)** *False **negative**.* `null-safety-map-get-deref` and
+  `null-safety-optional-get-no-ispresent` where the deref is guarded by a
+  **local boolean** holding the test —
+  `boolean present = m.containsKey(k); if (present) { m.get(k).trim(); }`. The
+  mirror of row (8), which records the same shape as an accepted false
+  positive when the boolean guards an early exit. Both directions are the same
+  missing capability (this is dataflow, not syntax), and having only the
+  false-positive half written down for six waves is precisely the asymmetry
+  this section's preamble is about. Agreed in review and undocumented until
+  wave 7.
+- **(12)** *False positive.* `null-safety-map-get-deref` on the two
+  `keySet()`-adjacent iteration idioms the wave-7 exclusion does **not** reach,
+  measured rather than assumed:
+  `for (Map.Entry<K,V> e : m.entrySet()) { … m.get(e.getKey()) … }`, where the
+  key is `e.getKey()` and not the loop variable, and the key set copied to a
+  local first — `Set<String> keys = m.keySet(); for (String k : keys) { …
+  m.get(k) … }` — where the loop header no longer mentions `keySet()` at all.
+  Both are correct Java and both still fire. The exclusion unifies the map
+  **and** the key on purpose; widening it to reach these two means giving up one
+  of those unifications, and the two neighbouring real bugs that would then be
+  swallowed are pinned as `b13` and `b14` in `hits/RealBugs.java`. Stated
+  explicitly rather than left implied: of the five correct-code shapes the
+  reviewer measured, the clause closes three — the plain `keySet()` loop, the
+  `this.`-qualified one, and the one with the dereference nested inside an `if`
+  — and these two remain.
 
 ## [1.8.0] - 2026-08-18
 

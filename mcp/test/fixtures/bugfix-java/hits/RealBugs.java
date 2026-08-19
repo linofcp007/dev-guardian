@@ -119,4 +119,25 @@ public class RealBugs {
         }
         return "";
     }
+
+    // B13: iterate ONE map's keys and dereference ANOTHER map with them. The
+    // near-miss for the wave-7 `keySet()` exclusion on its map metavariable:
+    // the loop proves nothing about `b`, so this is an NPE on the first key
+    // `a` has and `b` does not. Drop the `$M` unification from that clause —
+    // write it against a fresh metavariable — and this stops firing.
+    void b13(Map<String, String> a, Map<String, String> b) {
+        for (String k : a.keySet()) {
+            System.out.println(b.get(k).trim());
+        }
+    }
+
+    // B14: iterate the map's own keys and dereference a DIFFERENT key. The
+    // near-miss for the same clause on its KEY metavariable: `other` is not
+    // the loop variable and nothing proves it is in the map. Drop the `$K`
+    // unification and this stops firing.
+    void b14(Map<String, String> m, String other) {
+        for (String k : m.keySet()) {
+            System.out.println(k + "=" + m.get(other).trim());
+        }
+    }
 }

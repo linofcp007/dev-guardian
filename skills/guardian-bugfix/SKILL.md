@@ -202,7 +202,19 @@ Passou a excluir as formas medidas em que a chave fica provada presente:
 - um `return`/`throw`/`continue` antecipado sob `!containsKey` ou
   `get() == null`;
 - a população por `put`, `putIfAbsent`, `computeIfAbsent` ou
-  `if (!containsKey) { put(); }`.
+  `if (!containsKey) { put(); }`;
+- a **iteração sobre o próprio `keySet()`** —
+  `for (String k : m.keySet()) { … m.get(k).trim() … }` — em que o cabeçalho
+  do ciclo liga a chave a partir do próprio mapa, por isso a presença está
+  garantida em todo o caminho que chega ao deref. É o idioma de iteração de
+  mapas mais comum em Java e disparava. A exclusão exige que o mapa iterado
+  seja o mapa dereferenciado **e** que a variável do ciclo seja a chave lida:
+  iterar as chaves de um mapa e dereferenciar outro, ou dereferenciar uma
+  chave diferente da do ciclo, continuam a disparar, e são bugs. Duas formas
+  vizinhas continuam a disparar sobre código correto e são falsos positivos
+  aceites: `for (Map.Entry<K,V> e : m.entrySet()) { … m.get(e.getKey()) … }`,
+  em que a chave não é a variável do ciclo, e o keySet copiado para um local
+  antes do ciclo, em que o cabeçalho já não menciona `keySet()`.
 
 Cada uma está **limitada ao ramo que a guarda prova**, e essa limitação foi uma
 regressão publicada antes de ser uma funcionalidade. Sem ela,
@@ -396,21 +408,30 @@ formas de import: o padrão qualificado casa também as formas curtas sempre que
 um import deixa o Semgrep resolver o nome, o curto nunca casou a qualificada,
 por isso o ramo curto era inerte e foi apagado.
 
-Nove falsos positivos são **aceites em vez de corrigidos**, cada um
-reproduzido em código correto. A lista é exaustiva contra as fixtures de
-revisão que existem hoje — não contra todo o Java que existe:
+Doze limitações são **aceites em vez de corrigidas**, cada uma reproduzida
+contra as fixtures de revisão que existem hoje — a lista é exaustiva contra
+essas, não contra todo o Java que existe.
 
-| # | Regra | Código correto em que dispara | Porque fica |
-| --- | --- | --- | --- |
-| 1 | `memory-leak-stream-not-closed` | `open(); try { … } finally { close(); }` | Já é a limitação declarada da regra, e já é a razão de ser `WARNING`. |
-| 2 | `race-condition-static-dateformat` | `static final SimpleDateFormat` cujos acessos passam todos por métodos `synchronized` | Provar que *todos* os acessos estão sincronizados é análise do programa inteiro, que o Semgrep OSS não faz. Aqui dizia-se também que "um formatter partilhado serializa todos os chamadores, por isso marcá-lo é defensável" — isso é um argumento de **produto**, não o critério do §4, e foi o que manteve a regra em `ERROR` durante quatro rondas a carregar um falso positivo documentado e não corrigível. O critério ganha: o finding fica, o tier passou a `WARNING`. |
-| 3 | `off-by-one-loop-lte-length` | `i <= a.length` com o corpo protegido por `i < a.length`, ou que nunca indexa `a` | O aperto óbvio foi **tentado e rejeitado** (medição acima): troca este falso positivo por um falso negativo num bug real sem resolver o caso principal. Os patterns ficaram; o tier desceu. |
-| 4 | `error-handling-printstacktrace-only` | `printStackTrace()` como fallback quando foi o próprio logger que lançou | O único sítio onde a chamada está certa; já é `WARNING`; estreito demais para codificar. |
-| 5 | `map-get-deref`, `optional-get-no-ispresent`, `modify-during-iteration` | **Duas ou mais** instruções entre a guarda (ou a remoção) e a saída: `if (!m.containsKey(k)) { log(); metric(); return ""; }`, `items.remove(s); log(s); n++; break;` | Preço deliberado. A alternativa — uma reticência de statement — casa em profundidade e engole `if (!m.containsKey(k)) { if (strict) { return ""; } }` e `items.remove(s); if (done) { break; }`, que são bugs reais. Um falso negativo que esconde um bug é pior do que este falso positivo. |
-| 6 | as mesmas três | Guarda delegada a um método helper: `if (!present(o)) { return d; }` | Exige análise interprocedimental, que o Semgrep OSS não faz. É a razão declarada de as três estarem em `WARNING` — e, generalizada, a razão de sete das oito regras do pack estarem lá. |
-| 7 | `map-get-deref` | Chave garantida fora das formas enumeradas: mapa preenchido num inicializador estático, ou mapeamento total sobre um enum declarado como `Map` | A garantia não está no caminho sintático que chega ao `get`. Excluir "qualquer mapa que alguma vez recebeu um `put`" apagaria a regra. |
-| 8 | `map-get-deref`, `optional-get-no-ispresent` | Guarda guardada num **booleano local**: `boolean present = m.containsKey(k); if (!present) { return ""; }` | É dataflow, não sintaxe. O Semgrep OSS não liga o valor do local ao teste que o produziu. |
-| 9 | as mesmas duas | **Cadeia** de conjunção com três ou mais operandos: `flag && a.isPresent() && b.isPresent() && a.get().equals(b.get())` | A cláusula de expressão liga o operando esquerdo da conjunção ao próprio teste de guarda, e uma conjunção em Java aninha à esquerda — numa cadeia, esse operando esquerdo é outra conjunção e não a guarda. Exatamente dois operandos é a forma excluída; três ou mais não é. Uma cláusula extra para o penúltimo operando foi **medida** e fecha metade de um finding numa linha que continua a disparar pelo outro metade, ou seja não muda o que o utilizador vê — não foi aplicada. |
+**Cada linha diz a sua DIREÇÃO**, e isso não é formatação. Durante seis rondas
+esta tabela teve nove linhas e as nove eram falsos positivos: ninguém estava a
+olhar na direção do recall, por isso nunca lá se escreveu nada — e uma ronda
+podia fechar um falso positivo, apagar recall em silêncio, e continuar verde.
+As linhas 10 e 11 são as primeiras do outro lado.
+
+| # | Dir | Regra | Código em que erra | Porque fica |
+| --- | --- | --- | --- | --- |
+| 1 | FP | `memory-leak-stream-not-closed` | `open(); try { … } finally { close(); }` | Já é a limitação declarada da regra, e já é a razão de ser `WARNING`. |
+| 2 | FP | `race-condition-static-dateformat` | `static final SimpleDateFormat` cujos acessos passam todos por métodos `synchronized` | Provar que *todos* os acessos estão sincronizados é análise do programa inteiro, que o Semgrep OSS não faz. Aqui dizia-se também que "um formatter partilhado serializa todos os chamadores, por isso marcá-lo é defensável" — isso é um argumento de **produto**, não o critério do §4, e foi o que manteve a regra em `ERROR` durante quatro rondas a carregar um falso positivo documentado e não corrigível. O critério ganha: o finding fica, o tier passou a `WARNING`. |
+| 3 | FP | `off-by-one-loop-lte-length` | `i <= a.length` com o corpo protegido por `i < a.length`, ou que nunca indexa `a` | O aperto óbvio foi **tentado e rejeitado** (medição acima): troca este falso positivo por um falso negativo num bug real sem resolver o caso principal. Os patterns ficaram; o tier desceu. |
+| 4 | FP | `error-handling-printstacktrace-only` | `printStackTrace()` como fallback quando foi o próprio logger que lançou | O único sítio onde a chamada está certa; já é `WARNING`; estreito demais para codificar. |
+| 5 | FP | `map-get-deref`, `optional-get-no-ispresent`, `modify-during-iteration` | **Duas ou mais** instruções entre a guarda (ou a remoção) e a saída: `if (!m.containsKey(k)) { log(); metric(); return ""; }`, `items.remove(s); log(s); n++; break;` | Preço deliberado. A alternativa — uma reticência de statement — casa em profundidade e engole `if (!m.containsKey(k)) { if (strict) { return ""; } }` e `items.remove(s); if (done) { break; }`, que são bugs reais. Um falso negativo que esconde um bug é pior do que este falso positivo. |
+| 6 | FP | as mesmas três | Guarda delegada a um método helper: `if (!present(o)) { return d; }` | Exige análise interprocedimental, que o Semgrep OSS não faz. É a razão declarada de as três estarem em `WARNING` — e, generalizada, a razão de sete das oito regras do pack estarem lá. |
+| 7 | FP | `map-get-deref` | Chave garantida fora das formas enumeradas: mapa preenchido num inicializador estático, ou mapeamento total sobre um enum declarado como `Map` | A garantia não está no caminho sintático que chega ao `get`. Excluir "qualquer mapa que alguma vez recebeu um `put`" apagaria a regra. |
+| 8 | FP | `map-get-deref`, `optional-get-no-ispresent` | Guarda guardada num **booleano local**: `boolean present = m.containsKey(k); if (!present) { return ""; }` | É dataflow, não sintaxe. O Semgrep OSS não liga o valor do local ao teste que o produziu. |
+| 9 | FP | as mesmas duas | **Cadeia** de conjunção com três ou mais operandos: `flag && o.isPresent() && o.get().isEmpty()`, `flag && m.containsKey(k) && m.get(k).isEmpty()` | A cláusula de expressão liga o operando ESQUERDO da conjunção ao próprio teste de guarda, e uma conjunção em Java aninha à esquerda, por isso numa cadeia esse operando esquerdo é outra conjunção. Exatamente dois operandos é a forma excluída. **A justificação desta linha foi falsificada pela sua própria instância e substituída:** dizia que a cláusula extra para o penúltimo operando "remove um de dois findings e a linha continua a disparar" — medido sobre `flag && a.isPresent() && b.isPresent() && a.get().equals(b.get())`, uma linha com **dois** `get()`, que é a única razão por que "um de dois" era verdade. Com um só `get()` a cláusula cala a linha inteira. Remedido com a cláusula aplicada: fecha a cadeia de três operandos com um `get()`, fecha também uma de **quatro** (o `$X` casa toda a subárvore aninhada à esquerda), deixa um finding na instância original de dois `get()`, mantém os dois bugs reais a disparar, e não move nenhuma das contagens de fixtures. A cláusula é uma melhoria medida e a conclusão antiga não se aguenta: está adiada por âmbito, não rejeitada. |
+| 10 | **FN** | `map-get-deref`, `optional-get-no-ispresent` | Garantia **invalidada** depois da guarda, dentro da região que a exclusão cobre: `if (m.containsKey(k)) { m.remove(k); return m.get(k).trim(); }`, `if (o.isPresent()) { o = Optional.empty(); return o.get(); }`, `m.put(k,"v"); m.remove(k); m.get(k).trim();`, `while (m.containsKey(k)) { m.remove(k); … }` | Cinco reproduções medidas, todas exceções garantidas, todas em silêncio. Mesma causa que o bug do ramo `else` — **o `pattern-not-inside` exclui o nó inteiro que casou** — mas no eixo **temporal** em vez do eixo dos ramos. A limitação ao ramo guardado corrigiu o eixo dos ramos; o eixo da sequência dentro desse ramo nunca foi examinado. Saber que `m.remove(k)` invalida `m.containsKey(k)` é dataflow, por isso é linha e não cláusula. A exclusão do `keySet()` herda-a. |
+| 11 | **FN** | `map-get-deref`, `optional-get-no-ispresent` | Deref guardado por um **booleano local**: `boolean present = m.containsKey(k); if (present) { m.get(k).trim(); }` | O espelho da linha 8, que regista a mesma forma como falso positivo quando o booleano guarda uma saída antecipada. As duas direções são a mesma capacidade em falta (dataflow, não sintaxe), e ter só metade escrita durante seis rondas é a assimetria de que fala o preâmbulo. |
+| 12 | FP | `map-get-deref` | As duas formas vizinhas do `keySet()` que a exclusão não alcança: `for (Map.Entry<K,V> e : m.entrySet()) { … m.get(e.getKey()) … }` e o keySet copiado para um local antes do ciclo | Na primeira a chave é `e.getKey()` e não a variável do ciclo; na segunda o cabeçalho já não menciona `keySet()`. A cláusula unifica o mapa **e** a chave de propósito, e alargá-la exige desistir de uma das unificações — os dois bugs reais que ficariam engolidos estão fixados como `b13` e `b14`. Das cinco formas corretas medidas, a cláusula fecha três. |
 
 **Isto é só para JS/TS, Python, Go e Java.** Para as restantes linguagens desta secção —
 C#, PHP, Ruby, Rust — a situação anterior mantém-se: o

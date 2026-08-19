@@ -151,7 +151,7 @@ rules:
   # WARNING e não ERROR, e é o critério do §4 aplicado a frio — desta vez
   # contra esta regra, depois de ter sido aplicado contra a
   # `optional-get-no-ispresent`. Um `m.get(k).f()` só é bug SEM GUARDA, e as
-  # trinta e sete exclusões abaixo são a prova direta de que a regra não
+  # trinta e oito exclusões abaixo são a prova direta de que a regra não
   # consegue decidir isso: cada uma delas existe porque uma forma de guarda
   # perfeitamente correta estava a disparar em ERROR. A lista fecha as formas
   # que alguém já enumerou. Não fecha a próxima, e não fecha nenhuma guarda que
@@ -234,6 +234,43 @@ rules:
       # ronda e esta não tinha contrapartida, por isso o ciclo de esvaziamento
       # — correto, porque o corpo só corre enquanto a chave lá está — disparava.
       - pattern-not-inside: while ($M.containsKey($K)) { ... }
+      # --- iteração sobre o PRÓPRIO keySet -----------------------------------
+      #
+      # O cabeçalho do ciclo liga a chave A PARTIR DO PRÓPRIO MAPA, por isso a
+      # presença está garantida em todo o caminho sintático que chega ao deref
+      # — o mesmo critério pelo qual o `containsKey` é aceite como guarda. É o
+      # idioma de iteração de mapas mais comum em Java e não estava excluído.
+      #
+      # UMA cláusula e não um par, ao contrário de todas as guardas de `if`
+      # acima, e isso foi MEDIDO em quatro formas antes de ser escrito:
+      #   * `for ($T $K : $M.keySet()) { ... $M.get($K).$G(...); ... }` e
+      #     `for (...) { <... deref ...>; }` fecham a forma COM chavetas e
+      #     deixam a forma sem chavetas a disparar;
+      #   * `for ($T $K : $M.keySet()) { ... }` fecha as com chavetas e falha
+      #     a sem chavetas pela mesma razão;
+      #   * o corpo escrito como reticência de statement — a forma abaixo —
+      #     fecha as duas de uma vez.
+      # Um par seria portanto meio inerte, e uma cláusula inerte é a classe de
+      # defeito que esta série já apanhou seis vezes.
+      #
+      # Não é preciso limitar ao ramo guardado como no `if`: um for-each não
+      # tem ramo `else`, todo o corpo corre com a chave presente, por isso
+      # excluir o nó inteiro é exatamente o que se quer aqui.
+      #
+      # AS DUAS UNIFICAÇÕES são o que impede isto de ser uma exclusão cega:
+      # `$M` obriga a que o mapa iterado seja o mapa dereferenciado, e `$K` a
+      # que a variável do ciclo seja a chave passada ao `get`. `b13` e `b14`
+      # em hits/RealBugs.java quebram uma unificação cada e continuam a
+      # disparar — são a prova de que a cláusula não engole os dois bugs
+      # vizinhos mais óbvios.
+      #
+      # O QUE FICA DE FORA, medido e deliberado: `for (Map.Entry<K,V> e :
+      # m.entrySet()) { … m.get(e.getKey()) … }`, em que a chave é
+      # `e.getKey()` e não a variável do ciclo, e o keySet copiado para um
+      # local primeiro (`Set<String> keys = m.keySet(); for (String k : keys)`),
+      # em que o cabeçalho já não menciona `keySet()`. Os dois são falsos
+      # positivos aceites, não descuido.
+      - pattern-not-inside: "for ($T $K : $M.keySet()) ..."
       # --- guarda como EXPRESSÃO, não como condição de um `if` ---------------
       #
       # As seis cláusulas de cima são todas `if (...) { ... }` e a documentação

@@ -460,4 +460,52 @@ public class MapGetDeref {
         }
         return "";
     }
+    // ---- iteração sobre o próprio keySet ---------------------------------
+    //
+    // Added in wave 7. The loop header binds the key FROM THE MAP ITSELF, so
+    // presence is guaranteed on every syntactic path that reaches the
+    // dereference — the same standard by which `containsKey` is accepted as a
+    // guard. It is the commonest map-iteration idiom in Java and all three
+    // shapes below fired on correct code until the `keySet()` clause went in.
+    //
+    // The clause unifies BOTH metavariables: the map iterated has to be the
+    // map dereferenced, and the loop variable has to be the key passed to
+    // `get`. Its near-misses are `b13` and `b14` in hits/RealBugs.java, which
+    // break each unification in turn and must keep firing.
+
+    // keySetIteration: the body is four statements long and the dereference
+    // sits inside a builder call, so it is not the clause with its
+    // metavariables filled in.
+    String keySetIteration(Map<String, String> m) {
+        StringBuilder sb = new StringBuilder();
+        for (String k : m.keySet()) {
+            sb.append(k);
+            sb.append('=');
+            sb.append(m.get(k).trim());
+        }
+        return sb.toString();
+    }
+
+    // keySetIterationBraceless: no braces on the loop body, on a TreeMap
+    // receiver, with a chained call on the dereference. Measured: the braced
+    // form of the clause — `for (...) { ... }` — does NOT reach this, which is
+    // why the shipped clause writes the body as a bare statement ellipsis
+    // instead. Delete this function and the clause could be narrowed back to
+    // the braced form without a test moving.
+    void keySetIterationBraceless(TreeMap<String, String> m) {
+        for (String k : m.keySet()) System.out.println(m.get(k).trim().toLowerCase());
+    }
+
+    // keySetThisQualified: the receiver is `this.`-qualified on BOTH ends —
+    // the loop header and the dereference — and the dereference is nested one
+    // level deeper, inside an `if`. The qualified form is the one that could
+    // regress silently: `$M` has to bind the whole qualified expression in the
+    // exclusion exactly as it does in the positive pattern.
+    void keySetThisQualified(boolean verbose) {
+        for (String k : this.cache.keySet()) {
+            if (verbose) {
+                System.out.println(this.cache.get(k).trim());
+            }
+        }
+    }
 }

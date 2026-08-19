@@ -21,8 +21,8 @@
  */
 
 import { afterAll, describe, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, readdirSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { cpSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mapSubcategory } from '../../src/tools/bugHunt.js';
@@ -90,13 +90,27 @@ function fixtureFiles(dir: string): string[] {
   return readdirSync(dir).filter((name) => name.endsWith('.java')).sort();
 }
 
+/**
+ * Every `- id:` the rule file DECLARES, read out of the YAML text rather than
+ * out of a list maintained here. It is the left-hand side of the wave-7
+ * invariant below: what the file declares must equal what the fixtures exercise.
+ */
+function declaredRuleIds(): string[] {
+  const declared: string[] = [];
+  for (const line of readFileSync(RULES, 'utf8').split('\n')) {
+    const id = /^\s*-\s+id:\s*(\S+)\s*$/.exec(line)?.[1];
+    if (id !== undefined) declared.push(id);
+  }
+  return declared.sort();
+}
+
 interface FileExpectation {
   readonly ids: readonly string[];
   readonly count: number;
 }
 
 /**
- * THE REAL-BUGS CORPUS — the two entries written by the REVIEWER, and the
+ * THE REAL-BUGS CORPUS — the three entries written by the REVIEWER, and the
  * structural answer to how five waves of false-positive work opened a
  * false-negative hole with a green suite.
  *
@@ -109,12 +123,44 @@ interface FileExpectation {
  * still go green. Wave 4 did exactly that: `ElseArm.java` produced 6 findings
  * before it and 1 after.
  *
- * `RealBugs.java` and `ElseArm.java` close that. They are dense files of
- * defects chosen to sit next to the guard shapes the exclusions match — the
- * `else` arm of a guard, the false arm of a ternary, a disjunction that proves
- * nothing, a guard on a different key. Their counts are asserted like any
- * other, so every future exclusion has to prove it does not eat a real bug
- * before it can be merged.
+ * `RealBugs.java`, `ElseArm.java` and `IterationBugs.java` close that. They are
+ * dense files of defects chosen to sit next to the guard shapes the exclusions
+ * match — the `else` arm of a guard, the false arm of a ternary, a disjunction
+ * that proves nothing, a guard on a different key, a `switch` whose `break`
+ * leaves only the switch. Their counts are asserted like any other, so every
+ * future exclusion has to prove it does not eat a real bug before it can be
+ * merged.
+ *
+ * WHICH RULES THE CORPUS COVERS, stated rather than left to accident. Measured
+ * over the three corpus files at the wave-7 counts:
+ *
+ *   | rule                          | corpus defects |
+ *   | ----------------------------- | -------------- |
+ *   | `null-safety-map-get-deref`   | 11             |
+ *   | `null-safety-optional-get`    |  6             |
+ *   | `edge-case-modify-during-iteration` | 6        |
+ *   | `off-by-one-loop-lte-length`  |  4             |
+ *   | `race-condition-static-dateformat` | 1         |
+ *   | `error-handling-empty-catch`  |  0             |
+ *   | `error-handling-printstacktrace-only` | 0      |
+ *   | `memory-leak-stream-not-closed` | 0            |
+ *
+ * Five of eight, and the three at zero are a DECISION, not an oversight: they
+ * are the three rules that carry no guard exclusions worth speaking of —
+ * `empty-catch` has one metavariable-regex, `printstacktrace-only` has none at
+ * all, `stream-not-closed` has two, and none of the three has ever had a
+ * clause added to silence correct code. The corpus exists to catch an exclusion
+ * eating a real bug; a rule with nothing to eat with is low-risk by
+ * construction. Add a guard exclusion to any of the three and it needs corpus
+ * entries before that clause can be merged.
+ *
+ * `modify-during-iteration` was at zero until wave 7 and was the OPPOSITE of
+ * low-risk: eight exclusion clauses over a seven-branch receiver enumeration, the
+ * file's only nested re-inclusion, and the rule whose
+ * exclusion swallowed a real `ConcurrentModificationException` in wave 4. Its
+ * real bugs lived only in `hits/ModifyDuringIteration.java`, written by the
+ * rule's own author — precisely the artefact the corpus exists to compensate
+ * for. `IterationBugs.java` closes it.
  */
 const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'ElseArm.java': {
@@ -132,7 +178,7 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     count: 8,
   },
   'RealBugs.java': {
-    // Twelve, spread over four rules, each one chosen to be the defect that a
+    // Fourteen, spread over four rules, each one chosen to be the defect that a
     // specific tightening plausibly swallows: the short-form
     // `SimpleDateFormat` the qualified pattern has to resolve through the
     // import; four array shapes the `"$T[]"` restriction has to keep seeing;
@@ -140,13 +186,32 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     // wave-6 negative-first `||` exclusions must NOT reach; a guard on a
     // different key and a guard on a different Optional; and `ofNullable`,
     // which the `Optional.of` exclusion must not cover.
+    //
+    // `b13` and `b14`, added in wave 7, are the near-misses for the `keySet()`
+    // exclusion, one per metavariable it unifies: `b13` iterates one map's
+    // keys and dereferences ANOTHER map, `b14` iterates the map's own keys and
+    // dereferences a DIFFERENT key. Drop either unification from that clause
+    // and the matching function stops firing — which is the only thing that
+    // distinguishes a scoped exclusion from a blanket one.
     ids: [
       'bugfix-java-null-safety-map-get-deref',
       'bugfix-java-null-safety-optional-get-no-ispresent',
       'bugfix-java-off-by-one-loop-lte-length',
       'bugfix-java-race-condition-static-dateformat',
     ],
-    count: 12,
+    count: 14,
+  },
+  'IterationBugs.java': {
+    // Six, all `ConcurrentModificationException`, all in the rule that had
+    // ZERO corpus coverage until wave 7 while carrying eight exclusion clauses
+    // over a seven-branch receiver enumeration and the file's only nested
+    // re-inclusion. Each puts the `remove()` at a nesting
+    // depth or behind a statement shape a future tightening of the `break`
+    // exclusions plausibly swallows: a `switch` under an `if`, a `switch` in an
+    // inner loop, a `switch` in a `try`, a braced `case` block, two statements
+    // between the removal and the `break`, and a removal inside a nested `if`.
+    ids: ['bugfix-java-edge-case-modify-during-iteration'],
+    count: 6,
   },
   'EmptyCatch.java': { ids: ['bugfix-java-error-handling-empty-catch'], count: 1 },
   'PrintStackTraceOnly.java': {
@@ -268,13 +333,62 @@ describe('bugfix-java rules', () => {
       // The TOTAL, asserted on top of the per-file counts, and not redundant:
       // the loop above only visits files that have an expectation, so a finding
       // landing in a file nobody registered — or in no file at all — would not
-      // move any per-file number. 55 = 35 from the eight per-rule fixtures plus
-      // the 20 of the real-bugs corpus.
+      // move any per-file number. 63 = 35 from the eight per-rule fixtures plus
+      // the 28 of the real-bugs corpus.
       expect(rows.length).toBe(
         Object.values(EXPECTED_HITS_BY_FILE).reduce((n, e) => n + e.count, 0),
       );
     },
   );
+
+  /**
+   * THE TRAP FAMILY, and the two assertions that make catching it automatic
+   * instead of a matter of somebody noticing.
+   *
+   * Three separate silent-failure modes have now shipped through this rule
+   * file: a `pattern-either` branch with no positive term (`RuleParseError`),
+   * an unquoted `?` in a ternary exclusion (`Invalid YAML file`), and
+   * `... <... e ...> ...` written inside a block. They look nothing alike and
+   * were each found the hard way, but they are ONE family, because they share
+   * a signature: **fewer rules actually load than the file declares, and the
+   * run still exits 0 printing `Scan completed successfully`.** Semgrep's
+   * summary output cannot be trusted to tell a broken rule from a rule that
+   * found nothing — that is the whole trap.
+   *
+   * The total-hits assertion above is already the family-wide catch: a rule
+   * that fails to load loses its findings and the total moves. But it only
+   * works while EVERY rule has at least one hit fixture behind it, which
+   * nothing stated and nothing enforced. These two assertions close that:
+   *
+   *  - the first makes the "every rule has a fixture" precondition
+   *    self-enforcing, by comparing the ids the fixtures exercise against the
+   *    `- id:` entries parsed out of the YAML itself rather than against a list
+   *    maintained by hand next to it;
+   *  - the second catches what no finding-count assertion can see: a
+   *    clause-level compile failure that happens not to change any finding.
+   *    `--validate --quiet` is silent on success and non-zero on failure —
+   *    measured against all three traps above, which return 2, 5 and 2. The
+   *    empty-stream half of the assertion is what catches a rule that merely
+   *    WARNS while still exiting 0. `--disable-version-check` is there because
+   *    the upgrade notice is network state, and an empty-stderr assertion
+   *    hostage to network state is a flake waiting to happen.
+   */
+  it.skipIf(!AVAILABLE)(
+    'every rule the YAML declares is exercised by a hit fixture',
+    () => {
+      const { rows } = run(RULES, resolve(FIXTURES, 'hits'));
+      expect(ids(rows)).toEqual(declaredRuleIds());
+    },
+  );
+
+  it.skipIf(!AVAILABLE)('the rule file compiles clean, silently, and exits 0', () => {
+    const validated = spawnSync(
+      'semgrep',
+      ['--validate', '--quiet', '--disable-version-check', '--config', RULES],
+      { encoding: 'utf8' },
+    );
+    expect([validated.status, validated.stdout, validated.stderr]).toEqual([0, '', '']);
+  });
 
   it.skipIf(!AVAILABLE)('fires NOTHING in EACH near-miss fixture', () => {
     const missesDir = resolve(FIXTURES, 'misses');
