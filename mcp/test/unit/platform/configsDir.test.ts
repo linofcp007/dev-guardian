@@ -63,6 +63,7 @@ describe('resolveBugfixRules', () => {
     const dir = join(resolveConfigsDir(), 'semgrep');
     expect(resolveBugfixRules()).toEqual([
       join(dir, 'bugfix-go.yml'),
+      join(dir, 'bugfix-java.yml'),
       join(dir, 'bugfix-js.yml'),
       join(dir, 'bugfix-py.yml'),
     ]);

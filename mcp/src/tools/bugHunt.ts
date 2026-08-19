@@ -30,9 +30,13 @@
  * docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md; ten for
  * Python, docs/superpowers/specs/2026-08-18-bugfix-rules-python-design.md;
  * ten for Go, docs/superpowers/specs/2026-08-18-bugfix-rules-go-design.md —
- * Go is where the registry pack leaves the biggest hole, and the design
- * doc's §8 records a fourth exclusion clause that shipped dead and was
- * removed)
+ * Go is where the registry pack leaves the biggest hole among the languages
+ * it partially covers (5 Go rules, only 2 land in a bug class), and the
+ * design doc's §8 records a fourth exclusion clause that shipped dead and
+ * was removed; eight for Java,
+ * docs/superpowers/specs/2026-08-19-bugfix-rules-java-design.md — Java is
+ * the emptiest of the four: p/r2c-bug-scan ships 4 Java rules and NONE of
+ * them land in a bug class, all four being equality/comparison style)
  * — resolved to absolute paths via `resolveBugfixRules`
  * (`../platform/configsDir.js`). Unlike `include_language_packs` below, this
  * is ON BY DEFAULT: a local file cannot 404, so it is also what keeps
@@ -436,13 +440,14 @@ registerToolModule(
   makeScanTool({
     name: 'bug_hunt',
     title:
-      'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python and Go ' +
-      'bug rules; optional language packs, off by default; other languages still registry-only)',
+      'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python, Go and ' +
+      'Java bug rules; optional language packs, off by default; other languages still ' +
+      'registry-only)',
     description:
       'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus local, always-on ' +
-      'JS/TS, Python and Go rule packs: `configs/semgrep/bugfix-js.yml` (fourteen rules), ' +
-      '`configs/semgrep/bugfix-py.yml` (ten rules) and `configs/semgrep/bugfix-go.yml` (ten ' +
-      'rules), each covering all six subcategories ' +
+      'JS/TS, Python, Go and Java rule packs: `configs/semgrep/bugfix-js.yml` (fourteen rules), ' +
+      '`configs/semgrep/bugfix-py.yml` (ten rules), `configs/semgrep/bugfix-go.yml` (ten ' +
+      'rules) and `configs/semgrep/bugfix-java.yml` (eight rules), each covering all six subcategories ' +
       'below for its language — race_condition, null_safety, off_by_one, memory_leak, ' +
       'error_handling, edge_case. `commands/guardian-fix.md` also ' +
       'names "broken happy paths" as a bug-hunting focus; that is not a syntactic pattern, ' +
@@ -458,7 +463,8 @@ registerToolModule(
       "`repo.save()` from an unrelated call that just shares the name, like `ctx.save()` " +
       "(Canvas 2D's synchronous state-stack push, nothing to do with persistence) — both " +
       "fire identically. That's why it isn't ERROR and why `severity_min` exists to " +
-      'filter it out. Go is where the registry pack leaves the biggest hole: p/r2c-bug-scan ' +
+      'filter it out. Go is where the registry pack leaves the biggest hole among the ' +
+      'languages it partially covers: p/r2c-bug-scan ' +
       'ships 5 Go rules and only 2 land in a bug class, both integer-overflow, so ' +
       'error_handling, race_condition, null_safety, memory_leak and edge_case were all empty ' +
       'before this local pack. Its own gaps: no goroutine-leak rule; no loop-variable-capture ' +
@@ -477,9 +483,193 @@ registerToolModule(
       'struct field, or a return value panics identically on write and is not covered, ' +
       'arguably the commoner real-world shape; and `err-blank-assign` fires on deliberate ' +
       'discards like ' +
-      '`_ = os.Remove(tmp)` in a cleanup path, which is why it is WARNING. JS/TS, Python and ' +
-      'Go only: no other language has ' +
-      'a local rule pack yet, so Java, C#, PHP, Ruby and Rust get only the ' +
+      '`_ = os.Remove(tmp)` in a cleanup path, which is why it is WARNING. Java is the ' +
+      'emptiest language of the four: p/r2c-bug-scan ships 4 Java rules and NONE land in a ' +
+      'bug class — all four are equality and comparison style — so every subcategory was at ' +
+      'zero, in the language whose most famous defect is the NullPointerException. Its own ' +
+      'gaps: no `Integer ==` rule — expressing it needs type inference Semgrep OSS does not ' +
+      'have, and the attempt fired on `v == null` and on primitive comparison, so it was ' +
+      'dropped rather than shipped as a rule that would be uninstalled within a day; ' +
+      '`stream-not-closed` only recognises `new FileInputStream(...)`, and only by that ' +
+      'simple name, so `FileOutputStream`, `FileReader`, `Socket` and every other closeable ' +
+      'leak identically and are not covered — as does a fully-qualified ' +
+      '`new java.io.FileInputStream(...)`, which the pattern does not see (measured); ' +
+      '`static-dateformat` only recognises `SimpleDateFormat`, so a shared `Calendar` or ' +
+      '`Matcher` in a static field is not covered, but it ships a single FULLY-QUALIFIED ' +
+      'pattern, so a `static final java.text.SimpleDateFormat` field in a file with no import ' +
+      'IS seen — it was not before (measured across four import shapes: the qualified pattern ' +
+      'also matches the short forms whenever an import lets Semgrep resolve them, while the ' +
+      'short pattern never matched the qualified one, so the short branch was inert and was ' +
+      'deleted); `map-get-deref` cannot tell a nullable map from one whose keys are ' +
+      'guaranteed present by anything other than the guard and population shapes it ' +
+      'enumerates, so a map filled in a static initialiser or a total enum mapping declared ' +
+      'as a `Map` is still flagged; and `modify-during-iteration` only matches the ' +
+      'enhanced-for form, so an indexed loop removing from the list it indexes has the same ' +
+      'defect and is missed. Two Java rules restrict the receiver by DECLARED type, which buys precision ' +
+      'and costs recall: `metavariable-type` matches the exact declared type with no ' +
+      'subtyping (measured — `type: List` does NOT match a CopyOnWriteArrayList, which is ' +
+      'precisely what keeps the rule off it), so `map-get-deref`, enumerating Map, HashMap, ' +
+      'TreeMap, LinkedHashMap and ConcurrentHashMap, is silent on a map behind a project ' +
+      'interface or a generic type parameter (`<M extends Map<K,V>> ... m.get(k).f()`), ' +
+      'though a raw `Map` still fires (measured); and `modify-during-iteration`, enumerating ' +
+      'List, ArrayList, LinkedList, Set, HashSet, LinkedHashSet and Collection, is silent on ' +
+      'a Deque, a Queue, a SortedSet or a project collection type — an EnumMap is outside ' +
+      "map-get-deref's enumeration for the same reason. Both bind the receiver through a " +
+      '`metavariable-pattern` accepting a bare name OR a `this.`-qualified one; before that, ' +
+      '`cache.get(k).trim()` fired while `this.cache.get(k).trim()` was invisible — same ' +
+      'class, same field, same bug (measured). `map-get-deref` shipped with NO guard ' +
+      'exclusion at all, so the canonical Java guard `if (m.containsKey(k)) { ... ' +
+      'm.get(k).trim() ... }` fired at ERROR and advised `getOrDefault` on already-guarded ' +
+      'code; it now excludes the measured shapes that prove the key present, and every one of ' +
+      'them is SCOPED TO THE ARM THE GUARD ACTUALLY PROVES: the inline `containsKey` and ' +
+      '`get() != null` tests IN THE CONDITION OF AN `if` (alone or as either operand of a ' +
+      'conjunction) with the dereference in the THEN branch, braced or braceless; ' +
+      '`while (m.containsKey(k))`; the same two tests used as an EXPRESSION rather than as the ' +
+      'condition of anything — `return m.containsKey(k) && m.get(k).isEmpty();`, or assigned to ' +
+      'a local — together with their De Morgan duals `!m.containsKey(k) || ...` and ' +
+      '`m.get(k) == null || ...`, where `||` short-circuits so the right operand only runs when ' +
+      'the key IS present; all four ternary polarities, with the dereference in the guarded arm; ' +
+      'an early return/throw/continue under `!containsKey` or `get() == null`; population by ' +
+      '`put`, `putIfAbsent`, `computeIfAbsent` or `if (!containsKey) { put(); }`; and ITERATION ' +
+      "OVER THE MAP'S OWN keySet() — `for (String k : m.keySet()) { ... m.get(k).trim() ... }`, " +
+      'the commonest map-iteration idiom in Java, where the loop header binds the key FROM THE ' +
+      'MAP ITSELF so presence is guaranteed on every path reaching the dereference. That last ' +
+      'clause unifies the map AND the key, so iterating one map and dereferencing another, or ' +
+      'dereferencing a key other than the loop variable, both still fire and are real bugs; the ' +
+      '`entrySet()` form and a key set copied to a local before the loop are NOT reached and are ' +
+      'accepted false positive (11). Every expression-form guard above is ALSO honoured as a ' +
+      'CHAIN — `flag && m.containsKey(k) && m.get(k).isEmpty()` and the `||` duals — because ' +
+      'the chain clause binds `$X` to the whole LEFT-NESTED subtree, so one clause per guard ' +
+      'covers a conjunction of any length whose last-but-one operand is the guard. What still ' +
+      'fires, and is a real bug: a chain guarding a DIFFERENT key or Optional, a ' +
+      'positive-first disjunction (which proves nothing), and a NEGATED guard, where the value ' +
+      'is proven absent exactly where it is read. The ARM ' +
+      'SCOPING is the whole point and was a shipped regression before it: written unscoped, ' +
+      '`pattern-not-inside: if (m.containsKey(k)) { ... }` matches the entire IF-ELSE statement ' +
+      'and the ternary clauses matched the entire conditional expression, so BOTH arms were ' +
+      'excluded — including the branch the guard proves is a GUARANTEED NullPointerException. ' +
+      'Measured on a file of eight such bugs: six fired before the guard exclusions went in, ' +
+      'one after, eight now. `X || m.containsKey(k)` is still NOT treated as a guard and still ' +
+      'fires — `force` true with the key absent is an NPE — and it is structurally ' +
+      'distinguishable from the negative-first form, which is why excluding one does not ' +
+      'reintroduce the other. `modify-during-iteration` had ' +
+      'a false negative worth more than any of its false positives — a `remove()` inside a ' +
+      '`switch` followed by `break;` is a real ConcurrentModificationException, because that ' +
+      'break leaves the SWITCH and not the loop, and the paired `remove(); break;` exclusion ' +
+      'swallowed it whole; the plain-break exclusion now applies only when the removal sits in ' +
+      'a `switch` that is itself INSIDE the for-each over that collection. The nesting ORDER is ' +
+      'what the clause tests, and it used to test mere lexical containment — any removal ' +
+      'anywhere inside a `case` re-armed the rule, including one inside a LOOP written in that ' +
+      'case, where a plain `break` exits the loop and the code is correct; a switch dispatching ' +
+      'a command with a search-and-remove loop in one arm fired three times. return, throw and ' +
+      'a LABELLED break do leave the method or the loop from inside a switch and ' +
+      'stay excluded everywhere. `loop-lte-length` restricts its array metavariable to an ' +
+      'ARRAY TYPE, because `$A.length` otherwise matches any int field named `length` and ' +
+      "fired at ERROR on a domain object's deliberately inclusive loop; measured, that costs " +
+      'no recall — parameter, local, field, `this.`-qualified field and `var`-inferred local ' +
+      'arrays are all still matched. The exit-terminated exclusions across `map-get-deref`, ' +
+      '`optional-get-no-ispresent` and `modify-during-iteration` tolerate exactly ONE ' +
+      'statement between the guard (or the removal) and the exit rather than an arbitrary ' +
+      'ellipsis: measured, the ellipsis form matches DEEP, so ' +
+      '`if (!m.containsKey(k)) { if (strict) { return ""; } }` and ' +
+      '`items.remove(s); if (done) { break; }` both stop firing — and both are real bugs. ' +
+      '`empty-catch` honours the ' +
+      'Checkstyle/IntelliJ convention and never fires when the exception variable is named ' +
+      '`ignore`, `ignored` or `expected` — the flip side being that a genuinely swallowed ' +
+      'exception escapes the rule simply by being named `ignored`. The same trade has a second ' +
+      'edge worth stating outright, because `empty-catch` is now the ONLY rule left at ERROR ' +
+      'and the whole tier argument rests on it: the JUnit expected-exception idiom (call the ' +
+      'code, `throw new AssertionError` if it did not throw, empty `catch`) fires at ERROR when ' +
+      'the caught variable is named `e`, and is silent when it is named `expected` — the test ' +
+      'idiom has to use the conventional name. ' +
+      'READ THIS BEFORE WONDERING WHY A JAVA FIX PR CAME BACK EMPTY: seven of these eight ' +
+      'rules are WARNING, and create_fix_pr defaults severity_min to `high`, so the Java pack ' +
+      'contributes almost nothing to the DEFAULT fix-PR set — ask for it with ' +
+      '`severity_min: "medium"`. bug_hunt itself does not filter by default, so nothing ' +
+      'disappears from a SCAN; only the fix PR is affected. That default was deliberately NOT ' +
+      'changed here: it affects all four language packs and is a separate decision. The tier ' +
+      "split applies this pack's own criterion cold, stated as a question about the OUTPUT " +
+      'rather than the pattern — is what the rule EMITS always a bug? A rule whose ' +
+      'correctness depends on having recognised a GUARD emits a false positive every time it ' +
+      'meets a guard shape nobody enumerated, and no exclusion list closes that, because the ' +
+      'guard can always be one method away. Only `empty-catch` clears that bar, and it clears ' +
+      'it for the one reason available: its escape hatch is not a guard but a DECLARATION OF ' +
+      'INTENT the rule itself reads (the Checkstyle/IntelliJ ignore/ignored/expected ' +
+      'convention), so what it emits afterwards is an UNMARKED silent swallow — a bug ' +
+      'whatever the author meant. One rule in eight is the honest result for a syntactic ' +
+      'matcher with no dataflow, not a failure of the pack. `map-get-deref`, ' +
+      '`modify-during-iteration`, `static-dateformat` and `loop-lte-length` were demoted on ' +
+      'that criterion. `loop-lte-length` only after the obvious tightening was MEASURED and ' +
+      'rejected: requiring the body to index `a[i]` fixes the loop that never indexes `a`, ' +
+      'does NOT fix the sentinel loop that fills a longer array ' +
+      '(`b[i] = (i < a.length) ? a[i] : -1` is correct, and the guarded `a[i]` sits right ' +
+      'there inside the ternary), and LOSES a real bug where the out-of-bounds index is ' +
+      'passed to a helper (`sum += at(a, i)`) — a false positive traded for a false ' +
+      'negative, so the patterns were left alone and only the tier moved. ' +
+      '`optional-get-no-ispresent` is WARNING for the same reason, a round earlier: ERROR is ' +
+      'for a pattern that is a bug regardless of ' +
+      'intent, and `o.get()` is a bug only when UNGUARDED. It recognises exactly these guard ' +
+      'shapes, enumerated rather than summarised because the summary that stood here — ' +
+      '"inline against the same Optional variable" — was falsifiable and was falsified by a ' +
+      'compound condition, a multi-statement exit, a `while` and an `Optional.of`: ' +
+      '`if (o.isPresent())` alone OR as either operand of a conjunction, IN THE CONDITION OF AN ' +
+      '`if`, with the `get()` in the THEN branch, braced or braceless — the ELSE arm is a ' +
+      'guaranteed NoSuchElementException and still fires; `while (o.isPresent())`; the same ' +
+      'test used as an EXPRESSION rather than as the condition of anything, ' +
+      '`return o.isPresent() && o.get().isEmpty();`, plus the negative-first disjunctions ' +
+      '`!o.isPresent() || ...` and `o.isEmpty() || ...`, which short-circuit the same way; an ' +
+      'early return/throw/continue/break under `!isPresent()` or ' +
+      '`isEmpty()`, with or without one statement before the exit; the three ternary ' +
+      'forms, with the `get()` in the arm the condition PROVES safe (a ternary needs its own ' +
+      'clauses because it is a conditional EXPRESSION, a ' +
+      'different AST node from an `if` statement); `if (o.filter(p).isPresent())`; and an ' +
+      '`Optional<T> o = Optional.of(...)` construction, which cannot be empty — `ofNullable` ' +
+      'can, and still fires. It misses any guard that reaches the check through another ' +
+      'method, and it deliberately does not treat `a.isPresent() || b` as a guard — that ' +
+      'proves nothing about `a`, unlike the negative-first form above. ' +
+      'The concrete missed case is a guard delegated to a helper, ' +
+      '`if (!present(o)) { return d; }`, which needs interprocedural analysis Semgrep OSS ' +
+      'does not do; that shape is a false positive and always will be, which is why the rule ' +
+      'is WARNING instead of carrying an ever-longer exclusion list. ' +
+      'Eleven Java limitations are accepted rather than fixed, each reproduced against the ' +
+      'review fixtures, and EACH STATES ITS DIRECTION — for six waves this list had nine ' +
+      'entries and all nine were false positives, which is the asymmetry that let a wave close ' +
+      'a false positive, silently delete recall, and still go green. One entry LEFT the list ' +
+      'when it was re-measured: the conjunction-chain false positive was never a limitation, ' +
+      'only an unexamined metavariable. FALSE POSITIVES: (1) `stream-not-closed` on `open(); try {} finally { close(); }` (already ' +
+      'the stated reason it is WARNING); (2) `static-dateformat` on a static final ' +
+      'SimpleDateFormat whose every access goes through a synchronized method (proving ALL ' +
+      'accesses are synchronized is whole-program analysis, which Semgrep OSS does not do; ' +
+      'this used to add "and a shared formatter serialises every caller anyway", which is a ' +
+      'PRODUCT argument rather than the tier criterion, and is why the rule sat at ERROR for ' +
+      'four rounds carrying a documented un-fixable false positive); (3) `loop-lte-length` on ' +
+      '`i <= a.length` where the body guards with `i < a.length` or never indexes `a` (the ' +
+      'tightening was tried and rejected — see the tier note above); (4) ' +
+      '`printstacktrace-only` on the one place the call is right — the fallback when the ' +
+      'logger itself threw; (5) `map-get-deref`, `optional-get-no-ispresent` and ' +
+      '`modify-during-iteration` where TWO OR MORE statements sit between the guard (or the ' +
+      'removal) and the exit — `if (!m.containsKey(k)) { log(); metric(); return ""; }`, ' +
+      '`items.remove(s); log(s); n++; break;` — the deliberate price of not using a ' +
+      'deep-matching ellipsis, which would hide real bugs instead; (6) all three of those ' +
+      'rules on any guard reached THROUGH A HELPER METHOD, `if (!present(o)) { return d; }`, ' +
+      'which needs interprocedural analysis; (7) `map-get-deref` on a key whose presence ' +
+      'is established outside its enumerated shapes — a map filled in a static initialiser, ' +
+      'or a total enum mapping declared as a `Map`; (8) `map-get-deref` and ' +
+      '`optional-get-no-ispresent` on a guard held in a LOCAL BOOLEAN — ' +
+      '`boolean present = m.containsKey(k); if (!present) { return ""; }` — which is dataflow, ' +
+      'not syntax, and outside Semgrep OSS; and (11) `map-get-deref` on the two ' +
+      'keySet()-adjacent idioms the keySet() exclusion does not reach — `entrySet()`, where ' +
+      'the key is `e.getKey()` and not the loop variable, and a key set copied to a local ' +
+      'before the loop, where the header no longer mentions keySet(). FALSE NEGATIVES, the ' +
+      'direction nobody was writing down for six waves: (9) the INVALIDATED-GUARANTEE class ' +
+      '— a guarantee the guard establishes and the code then destroys INSIDE the region the ' +
+      'exclusion covers, `if (m.containsKey(k)) { m.remove(k); return m.get(k).trim(); }` and ' +
+      'four more measured shapes, all guaranteed throws, all silent. Same root cause as the ' +
+      'else-arm bug — pattern-not-inside excludes the whole node it matched — but on the ' +
+      'TEMPORAL axis rather than the branch axis, and not fixable without dataflow; and (10) ' +
+      'the same two rules on a guard held in a LOCAL BOOLEAN, the recall mirror of (8). ' +
+      'JS/TS, Python, Go and Java only: no other language has ' +
+      'a local rule pack yet, so C#, PHP, Ruby and Rust get only the ' +
       'registry coverage described below, same as before these packs existed. The local ' +
       'packs degrade rather than failing the whole scan if one is ever hand-edited into a bad ' +
       'state — a YAML syntax error drops just that file and retries with everything else, a ' +
@@ -502,10 +692,11 @@ registerToolModule(
       'redundant" — measured (exact rule-id duplication): 22% overall, but only ~9% for the ' +
       'JS/TS packs specifically (up to 40-43% for Java/Go) — most of what they add, especially ' +
       'for JS/TS, is net-new security scanning, not duplicate coverage. Beyond the local ' +
-      'JS/TS, Python and Go packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
+      'JS/TS, Python, Go and Java packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
       'registry pack reaching these six classes, and only for Python and Go — Java, C#, ' +
-      'PHP, Ruby and Rust get none of them from the registry, and none yet from a local ' +
-      'pack either. On any of those languages, a quiet or security-only result (with or ' +
+      'PHP, Ruby and Rust get none of them from the registry; C#, PHP, Ruby and Rust have ' +
+      'none yet from a local pack either (Java does — `configs/semgrep/bugfix-java.yml`, ' +
+      'described above). On any of those languages, a quiet or security-only result (with or ' +
       'without the language packs) is not evidence of a bug-free project; pair with ' +
       "`scan_sast` or the guardian-bugfix skill's manual review. " +
       'Findings are categorised as `bug`, with subcategories (race_condition, null_safety, ' +

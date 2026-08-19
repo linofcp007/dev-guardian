@@ -69,6 +69,23 @@ Enforced by the compiler where possible, by review where not:
   `src/`. Run `npm run build` and stage `mcp/dist/` in the *same* commit.
 - **Markdownlint stays clean** for `skills/`, `commands/` and `README.md`
   (config: [`.markdownlint.jsonc`](.markdownlint.jsonc)).
+- **Two characters are banned from `configs/semgrep/*.yml`, messages and
+  comments alike: `U+00C1` (A-acute) and `U+00CD` (I-acute)** — plus `U+00CF`,
+  `U+00D0`, `U+00DD` for languages that use them. Semgrep loads a rule file with
+  the **locale** codec, not UTF-8, and on a cp1252 locale the bytes `0x81`,
+  `0x8D`, `0x8F`, `0x90`, `0x9D` are undefined; each of those characters encodes
+  to one of them, so a single occurrence takes the whole pack down. Measured on
+  a broken file: the scan returns `results: 0`, `paths.scanned: 0` **and
+  `errors: 0`** — indistinguishable from a clean project. Rule messages in this
+  repo are written in Portuguese, which is what makes this a live hazard.
+
+  **Only those characters.** `Ã À Â É Ê Ó Ô Õ Ú Ç` are all fine and every
+  lowercase accented letter is fine — the broad version of this rule ("no
+  uppercase accented letters") is wrong for ten of the twelve accented capitals
+  Portuguese uses, so write the accented word in lower case rather than
+  mangling its spelling. Enforced for every pack by
+  `mcp/test/integration/semgrepPacks.test.ts`, which also runs
+  `semgrep --validate` over each one and carries a positive control.
 - **Releases** bump the version in
   [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json),
   [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) and
