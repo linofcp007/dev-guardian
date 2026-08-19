@@ -1,0 +1,39 @@
+# dev-guardian Semgrep config bugfix-java.
+# Bugs de implementação em Java. É a linguagem mais vazia de toda a sequência:
+# o p/r2c-bug-scan traz 4 regras Java e NENHUMA cai numa classe de bug — são
+# todas de igualdade e comparação. As seis subcategorias estavam todas a zero,
+# na linguagem cujo defeito mais famoso é o NullPointerException. Medições em
+# docs/superpowers/specs/2026-08-19-bugfix-rules-java-design.md.
+#
+# Cada regra tem um par de fixtures em
+# mcp/test/fixtures/bugfix-java/{hits,misses}/: um ficheiro que tem de disparar
+# a regra, outro parecido que NÃO pode. O ficheiro misses/ é a especificação
+# do que é código correto — se ele disparar, a regra é que está errada.
+#
+# Duas palavras são proibidas nos ids: `unchecked`, que a regex de
+# error_handling casa, e `concurren`, que a de race_condition casa e é testada
+# primeiro no if-chain. É por isso que a regra de edge_case se chama
+# modify-during-iteration e não concurrent-modification.
+rules:
+  - id: bugfix-java-error-handling-empty-catch
+    pattern: |
+      try { ... } catch ($E $V) { }
+    message: >-
+      Catch vazio. A exceção foi apanhada e deitada fora sem log, sem rethrow e
+      sem tratamento, por isso a falha desaparece e o código segue como se
+      nada fosse.
+    severity: ERROR
+    languages: [java]
+
+  # WARNING e não ERROR: num `main` descartável imprimir o stack trace e seguir
+  # é uma escolha legítima. Em serviço não é — vai para o stderr, não para o
+  # log, e a execução continua como se a exceção não tivesse acontecido.
+  - id: bugfix-java-error-handling-printstacktrace-only
+    pattern: |
+      try { ... } catch ($E $V) { $V.printStackTrace(); }
+    message: >-
+      O catch só faz `printStackTrace()`. Isso escreve no stderr em vez do log
+      e não trata nada — a execução continua como se a exceção não tivesse
+      acontecido. Registe no logger e trate ou relance.
+    severity: WARNING
+    languages: [java]
