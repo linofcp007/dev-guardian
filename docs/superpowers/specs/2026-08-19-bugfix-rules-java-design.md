@@ -106,9 +106,11 @@ running the classifier over the proposed ids before writing this document.
 ### `race_condition` — 1 rule, ERROR
 
 - **static-dateformat** — a `SimpleDateFormat` held in a `static` field.
-  It is not thread-safe, and a static field is the definition of shared. Covers
-  both the `static final` and plain `static` forms; a local instance and a
-  per-instance field are both correct and stay silent.
+  It is not thread-safe, and a static field is the definition of shared. A
+  **single** pattern covers both the `static final` and plain `static` forms,
+  because Semgrep matches Java modifiers as a subset — a `pattern-either` with
+  a branch for each was specified, shipped, and measured redundant (§9). A
+  local instance and a per-instance field are both correct and stay silent.
 
 ### `edge_case` — 1 rule, ERROR
 
@@ -186,6 +188,7 @@ with Semgrep 1.164.0 **before this document existed**.
 | **Did not parse.** `static $MOD SimpleDateFormat …` and `static ... SimpleDateFormat …` are both invalid; the working form spells the modifiers literally, in a `pattern-either` covering `static final` and plain `static`. | `static-dateformat` |
 | **Misclassified by its own name.** `concurrent-modification` → `race_condition`, because that regex matches `concurren` and runs first. Renamed. | `modify-during-iteration` |
 | **A specified exclusion was inert.** `pattern-not: $M.getOrDefault($K, ...).$METHOD(...)` excluded nothing — measured with and without it, zero findings both times, because Semgrep's Java matcher requires the literal identifier `get`. Found by Task 2's implementer, who measured instead of reporting the result the brief predicted. Third occurrence of this defect class in the rule-pack series, and the third time the origin was my own planning document. | `map-get-deref` |
+| **A specified `pattern-either` branch was redundant.** The `static final SimpleDateFormat …` branch changed nothing: Semgrep matches Java modifiers as a SUBSET, so the plain `static` branch alone produces the same two findings. Measured all three variants — both branches: 2; plain alone: 2; final alone: 1. Found by Task 4's reviewer. **Fourth** occurrence of this defect class in the series, and the fourth time the cause was identical: I measured the whole and one part, never each part alone. | `static-dateformat` |
 
 **One near-miss was measuring nothing, and only a second look found it.** The
 first `static-dateformat` near-miss used a fully-qualified

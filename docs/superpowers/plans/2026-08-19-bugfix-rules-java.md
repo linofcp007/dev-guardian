@@ -966,14 +966,14 @@ Expected: FAIL — the two new hit fixtures produce no findings yet.
 - [ ] **Step 6: Append the two rules**
 
 ```yaml
-  # As duas formas, e ambas são necessárias: `static final` e `static` simples.
-  # As tentativas de as escrever com um metavariable nos modificadores
-  # (`static $MOD SimpleDateFormat …`, `static ... SimpleDateFormat …`) não
-  # compilam sequer — medido.
+  # Um único pattern, e o `final` NÃO precisa de ramo próprio: o Semgrep casa
+  # os modificadores Java por subconjunto, por isso `static SimpleDateFormat`
+  # apanha também `static final SimpleDateFormat`. Um `pattern-either` com os
+  # dois esteve aqui e o segundo ramo não mudava um único resultado — medido.
+  # As tentativas de usar um metavariable nos modificadores
+  # (`static $MOD SimpleDateFormat …`) não compilam sequer.
   - id: bugfix-java-race-condition-static-dateformat
-    pattern-either:
-      - pattern: static final SimpleDateFormat $N = new SimpleDateFormat(...);
-      - pattern: static SimpleDateFormat $N = new SimpleDateFormat(...);
+    pattern: static SimpleDateFormat $N = new SimpleDateFormat(...);
     message: >-
       `SimpleDateFormat` num campo estático. A classe não é thread-safe e um
       campo estático é a definição de partilhado — sob concorrência devolve
@@ -1007,13 +1007,13 @@ Expected: PASS, no skips. **Eight hit fixtures totalling 9 findings**
 = 8 on both sides, and `p/r2c-bug-scan` silent on every hit fixture while firing
 on the control.
 
-- [ ] **Step 8: Prove the static-dateformat fixture pins both branches**
+- [ ] **Step 8: Prove the count assertion catches what the id set cannot**
 
-Remove the plain `static SimpleDateFormat …` alternative from the
-`pattern-either`, re-run, and show `StaticDateFormat.java`'s count dropping from
-2 to 1 — **caught by the count assertion, not by the id set**, which is exactly
-why the raw count is asserted alongside the ids. Restore, show GREEN, paste
-both.
+Narrow the rule to `pattern: static final SimpleDateFormat $N = new SimpleDateFormat(...);`,
+re-run, and show `StaticDateFormat.java`'s count dropping from 2 to 1 —
+**caught by the count assertion, not by the id set**, which stays identical.
+That is exactly why the raw count is asserted alongside the ids. Restore, show
+GREEN, paste both.
 
 - [ ] **Step 9: Run the full suite**
 

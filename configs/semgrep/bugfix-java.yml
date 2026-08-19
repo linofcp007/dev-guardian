@@ -89,14 +89,13 @@ rules:
     severity: WARNING
     languages: [java]
 
-  # As duas formas, e ambas são necessárias: `static final` e `static` simples.
-  # As tentativas de as escrever com um metavariable nos modificadores
-  # (`static $MOD SimpleDateFormat …`, `static ... SimpleDateFormat …`) não
-  # compilam sequer — medido.
+  # Um único pattern, e o `final` NÃO precisa de ramo próprio: o Semgrep casa
+  # os modificadores Java por subconjunto, por isso `static SimpleDateFormat`
+  # apanha também `static final SimpleDateFormat`. Um `pattern-either` com os
+  # dois esteve aqui e o segundo ramo não mudava um único resultado — medido:
+  # o ramo `static` sozinho dá as mesmas 2 ocorrências que os dois juntos.
   - id: bugfix-java-race-condition-static-dateformat
-    pattern-either:
-      - pattern: static final SimpleDateFormat $N = new SimpleDateFormat(...);
-      - pattern: static SimpleDateFormat $N = new SimpleDateFormat(...);
+    pattern: static SimpleDateFormat $N = new SimpleDateFormat(...);
     message: >-
       `SimpleDateFormat` num campo estático. A classe não é thread-safe e um
       campo estático é a definição de partilhado — sob concorrência devolve
