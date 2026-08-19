@@ -21,7 +21,7 @@
  */
 
 import { afterAll, describe, expect, it } from 'vitest';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -379,20 +379,20 @@ describe('bugfix-java rules', () => {
    * The total-hits assertion above is already the family-wide catch: a rule
    * that fails to load loses its findings and the total moves. But it only
    * works while EVERY rule has at least one hit fixture behind it, which
-   * nothing stated and nothing enforced. These two assertions close that:
+   * nothing stated and nothing enforced. The assertion below closes that, by
+   * comparing the ids the fixtures exercise against the `- id:` entries parsed
+   * out of the YAML itself rather than against a list maintained by hand next
+   * to it. It is Java-specific and stays here: no cross-pack test can know
+   * which fixtures are supposed to exercise which rules.
    *
-   *  - the first makes the "every rule has a fixture" precondition
-   *    self-enforcing, by comparing the ids the fixtures exercise against the
-   *    `- id:` entries parsed out of the YAML itself rather than against a list
-   *    maintained by hand next to it;
-   *  - the second catches what no finding-count assertion can see: a
-   *    clause-level compile failure that happens not to change any finding.
-   *    `--validate --quiet` is silent on success and non-zero on failure —
-   *    measured against all three traps above, which return 2, 5 and 2. The
-   *    empty-stream half of the assertion is what catches a rule that merely
-   *    WARNS while still exiting 0. `--disable-version-check` is there because
-   *    the upgrade notice is network state, and an empty-stderr assertion
-   *    hostage to network state is a flake waiting to happen.
+   * WHAT MOVED OUT, in wave 9. `semgrep --validate` and the locale-codec byte
+   * check used to live here, applied to this one file. They now run over EVERY
+   * pack in `configs/semgrep/`, discovered by directory listing, in
+   * `semgrepPacks.test.ts` — which also carries a positive control proving the
+   * checks can still fail. They were folded rather than duplicated: two
+   * mechanisms for one invariant is how they drift apart. What that file cannot
+   * do is the fixture-to-rule mapping above, which is why this one is not
+   * simply deleted.
    */
   it.skipIf(!AVAILABLE)(
     'every rule the YAML declares is exercised by a hit fixture',
@@ -401,15 +401,6 @@ describe('bugfix-java rules', () => {
       expect(ids(rows)).toEqual(declaredRuleIds());
     },
   );
-
-  it.skipIf(!AVAILABLE)('the rule file compiles clean, silently, and exits 0', () => {
-    const validated = spawnSync(
-      'semgrep',
-      ['--validate', '--quiet', '--disable-version-check', '--config', RULES],
-      { encoding: 'utf8' },
-    );
-    expect([validated.status, validated.stdout, validated.stderr]).toEqual([0, '', '']);
-  });
 
   it.skipIf(!AVAILABLE)('fires NOTHING in EACH near-miss fixture', () => {
     const missesDir = resolve(FIXTURES, 'misses');

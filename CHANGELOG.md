@@ -19,6 +19,28 @@ version bump.
   collection during a for-each over it. Java is the emptiest language in the
   registry: of `p/r2c-bug-scan`'s 4 Java rules, **none** lands in a bug class.
 
+- **Cross-pack invariants for every Semgrep rule file** —
+  `mcp/test/integration/semgrepPacks.test.ts`. The locale-codec byte check and
+  `semgrep --validate` now run over **every** pack in `configs/semgrep/`,
+  discovered by reading the directory rather than from a list, so the C#, PHP,
+  Ruby and Rust packs still to come are covered by existing on disk. Both checks
+  were moved out of the Java-specific test rather than duplicated; what stays
+  there is the one thing a cross-pack test cannot know — that the rule ids its
+  fixtures exercise equal the `- id:` entries in that YAML.
+
+  The banned set is **exactly** `U+00C1`, `U+00CD`, `U+00CF`, `U+00D0`,
+  `U+00DD`, the characters whose UTF-8 encoding contains a byte cp1252 leaves
+  undefined; in Portuguese only the first two occur. `Ã À Â É Ê Ó Ô Õ Ú Ç` and
+  every lowercase accented letter are fine, and the rule is recorded that way in
+  `CLAUDE.md` — the broad form, "no uppercase accented letters", is wrong for
+  ten of the twelve accented capitals Portuguese uses.
+
+  A **positive control** copies a real pack to a temp directory, injects one
+  A-acute, and asserts the byte scan names the character, that `--validate`
+  refuses it, and that a real scan then returns `results: 0`,
+  `paths.scanned: 0`, `errors: 0`. Asserting that every pack is clean proves
+  nothing if the check has quietly stopped working.
+
 ### Fixed
 
 - **The Java rules no longer fire on correct Java.** The first two review
@@ -308,6 +330,7 @@ version bump.
     the same defect this sweep set out to fix. All six packs in
     `configs/semgrep/` are clean of those bytes today.
 
+
 ### Changed
 
 - **BREAKING for `create_fix_pr` users: seven of the eight Java rules are now
@@ -436,6 +459,15 @@ version bump.
   operands is the shape excluded", was falsified by the chain clauses, since the
   count of operands was never what decided it. The rule is `WARNING` precisely
   because this class of miss has no end.
+
+- **`base.yml`'s `wp-unescaped-output` has never worked**, found by the new
+  cross-pack test on its first run. `pattern: echo $_GET[$X]` does not parse as
+  PHP (`Stdlib.Parsing.Parse_error`), so the WordPress XSS rule cannot match
+  anything — measured against a file containing a real `echo $_GET['name'];`:
+  `results: 0`, `errors: 1`, exit 2. It is **quarantined, not fixed**: the entry
+  pins the rule id, so the test fails if the pack starts validating cleanly (to
+  force deleting the entry) and fails if it breaks for a different reason.
+  Queued for the non-Java pack sweep.
 
 ### Accepted limitations
 
@@ -597,6 +629,7 @@ re-measured is exactly as trustworthy as the day someone wrote it, and no more.
   present rather than checking it. It is now resolved once and, if still
   empty, the tool returns `scanner_failed` instead of invoking the scanner
   with a bad target.
+
 
 ### Changed
 
