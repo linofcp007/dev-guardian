@@ -86,7 +86,10 @@ running the classifier over the proposed ids before writing this document.
 ### `null_safety` — 2 rules, ERROR
 
 - **map-get-deref** — a method called directly on `map.get(k)`, which returns
-  `null` for a missing key. Excludes the `getOrDefault` form.
+  `null` for a missing key. **No `getOrDefault` exclusion**, deliberately:
+  Semgrep requires the literal method identifier, so `getOrDefault` never
+  matches `$M.get($K)` in the first place. A clause excluding it was specified,
+  shipped into Task 2, and measured to be inert — see §9.
 - **optional-get-no-ispresent** — `optional.get()` outside an
   `if (o.isPresent())`. Throws `NoSuchElementException`; `orElse` does not.
 
@@ -182,6 +185,7 @@ with Semgrep 1.164.0 **before this document existed**.
 | **Did not parse.** `try (...) { ... }` is not a valid Java pattern; the try-with-resources exclusion had to name the resource. | `stream-not-closed` |
 | **Did not parse.** `static $MOD SimpleDateFormat …` and `static ... SimpleDateFormat …` are both invalid; the working form spells the modifiers literally, in a `pattern-either` covering `static final` and plain `static`. | `static-dateformat` |
 | **Misclassified by its own name.** `concurrent-modification` → `race_condition`, because that regex matches `concurren` and runs first. Renamed. | `modify-during-iteration` |
+| **A specified exclusion was inert.** `pattern-not: $M.getOrDefault($K, ...).$METHOD(...)` excluded nothing — measured with and without it, zero findings both times, because Semgrep's Java matcher requires the literal identifier `get`. Found by Task 2's implementer, who measured instead of reporting the result the brief predicted. Third occurrence of this defect class in the rule-pack series, and the third time the origin was my own planning document. | `map-get-deref` |
 
 **One near-miss was measuring nothing, and only a second look found it.** The
 first `static-dateformat` near-miss used a fully-qualified

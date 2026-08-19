@@ -38,10 +38,14 @@ rules:
     severity: WARNING
     languages: [java]
 
+  # Sem cláusula de exclusão para `getOrDefault`, e isso é deliberado: o
+  # Semgrep exige o identificador literal `get`, por isso
+  # `m.getOrDefault(k, d).intValue()` nunca casa este padrão. A cláusula que
+  # aqui esteve não excluía nada — medido com e sem ela, zero findings nos
+  # dois casos. O que a regra exige mesmo é o DEREFERENCE: `m.get(k)` sozinho,
+  # devolvido ao chamador, é código correto e não dispara.
   - id: bugfix-java-null-safety-map-get-deref
-    patterns:
-      - pattern: $M.get($K).$METHOD(...)
-      - pattern-not: $M.getOrDefault($K, ...).$METHOD(...)
+    pattern: $M.get($K).$METHOD(...)
     message: >-
       Método chamado diretamente sobre `map.get()`. O `get` devolve `null`
       quando a chave não existe, por isso isto é um NullPointerException na

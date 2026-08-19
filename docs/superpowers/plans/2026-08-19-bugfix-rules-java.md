@@ -531,10 +531,13 @@ Expected: FAIL — the two new hit fixtures produce no findings yet.
 - [ ] **Step 5: Append the two rules**
 
 ```yaml
+  # Sem cláusula de exclusão para `getOrDefault`, e isso é deliberado: o
+  # Semgrep exige o identificador literal `get`, por isso
+  # `m.getOrDefault(k, d).intValue()` nunca casa este padrão. Uma cláusula a
+  # excluí-lo foi especificada e medida: não excluía nada, zero findings com e
+  # sem ela. O que a regra exige mesmo é o DEREFERENCE.
   - id: bugfix-java-null-safety-map-get-deref
-    patterns:
-      - pattern: $M.get($K).$METHOD(...)
-      - pattern-not: $M.getOrDefault($K, ...).$METHOD(...)
+    pattern: $M.get($K).$METHOD(...)
     message: >-
       Método chamado diretamente sobre `map.get()`. O `get` devolve `null`
       quando a chave não existe, por isso isto é um NullPointerException na
@@ -566,11 +569,18 @@ npx vitest run test/integration/bugfixRulesJava.test.ts
 
 Expected: PASS, no skips. Four hit fixtures, four near-misses, `scanned` = 4.
 
-- [ ] **Step 7: Prove the `getOrDefault` exclusion is load-bearing**
+- [ ] **Step 7: Prove the near-miss discriminates**
 
-Remove the `pattern-not` from `map-get-deref`, re-run, and show the suite going
-**RED on `misses/MapGetDeref.java`** because `withDefault` starts firing.
-Restore and show GREEN. Paste both outputs.
+Mutate the rule to `pattern: $M.get($K)` — dropping the `.$METHOD(...)` deref
+requirement — re-run, and show the suite going **RED on
+`misses/MapGetDeref.java`**. Measured: `checked` and `justGet` both fire,
+`withDefault` does not. Restore and show GREEN. Paste both outputs.
+
+Mark the roles in the fixture while you are there. `checked` and `justGet` are
+DISCRIMINATING; `withDefault` is DOCUMENTARY and cannot fire under any mutation
+of this pattern, because `getOrDefault` is a different identifier. Say so in
+the file, the way `mcp/test/fixtures/bugfix-go/misses/loop_lte_len.go` does — a
+reader should not have to guess which near-misses carry weight.
 
 - [ ] **Step 8: Commit**
 
