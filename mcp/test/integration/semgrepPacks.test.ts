@@ -76,30 +76,24 @@ const AVAILABLE = semgrepAvailable();
 const UNDECODABLE_BYTES: ReadonlySet<number> = new Set([0x81, 0x8d, 0x8f, 0x90, 0x9d]);
 
 /**
- * Packs that do NOT currently pass `--validate`, each pinned to the EXACT rule
- * that breaks it. This is a quarantine, not an exemption, and it is written to
- * be uncomfortable to keep:
- *
- *  - if the pack starts validating cleanly, this test FAILS and tells you to
- *    delete the entry — a quarantine that outlives its defect is how a
- *    permanent exception gets born;
- *  - if the pack breaks for a DIFFERENT reason, this test fails too, because
- *    the entry pins the rule id rather than merely tolerating a non-zero exit.
+ * WHAT THIS TEST FOUND ON ITS FIRST RUN, kept because the defect is the reason
+ * the file exists and the shape of it is worth not forgetting.
  *
  * `base.yml` / `wp-unescaped-output`: `pattern: echo $_GET[$X]` does not parse
- * as PHP (`Stdlib.Parsing.Parse_error`), so **the WordPress XSS rule has never
- * been able to match anything.** Measured against a PHP file containing a real
- * `echo $_GET['name'];`: `results: 0`, `errors: 1`, exit 2 — the rule is dead,
- * and the one thing standing between that and total silence is the error entry.
- * Found by this test on its first run.
+ * as PHP (`Stdlib.Parsing.Parse_error`), so **the WordPress XSS rule had never
+ * been able to match anything** — in a plugin whose WordPress support is a
+ * headline feature. Measured against a PHP file containing a real
+ * `echo $_GET['name'];`: `results: 0`, `errors: 1`, exit 2.
  *
- * It is NOT fixed here on purpose: `base.yml` is outside the branch this test
- * arrived on, and the five non-Java packs are queued for a sweep of their own.
- * This wave adds the coverage; the sweep does the edits.
+ * It was carried for one wave as a QUARANTINE — a map from pack file to the
+ * exact rule id that broke it, written to fail both if the pack started
+ * validating cleanly and if it broke for a different reason — because
+ * `base.yml` was outside the branch this test arrived on. It has since been
+ * fixed and given fixture coverage in `baseRules.test.ts`, and the quarantine
+ * machinery went with the entry rather than staying behind as an empty map: an
+ * exception mechanism nothing exercises is one nobody notices rotting, and a
+ * future pack that needs one will re-add it with a live entry.
  */
-const KNOWN_INVALID: ReadonlyMap<string, string> = new Map([
-  ['base.yml', 'wp-unescaped-output'],
-]);
 
 /** Every rule pack on disk, in name order. Discovered, never listed. */
 function packFiles(): string[] {
@@ -199,7 +193,7 @@ describe('every Semgrep rule pack', () => {
     expect(AVAILABLE).toBe(true);
   });
 
-  it.skipIf(!AVAILABLE)('compiles clean, silently, and exits 0 — or is quarantined', () => {
+  it.skipIf(!AVAILABLE)('compiles clean, silently, and exits 0', () => {
     // `--quiet` is what makes "both streams empty" a usable assertion at all:
     // without it semgrep writes its `Configuration is valid …` banner to STDERR
     // on SUCCESS, so the empty-stderr half would fail on a healthy file. With
@@ -211,40 +205,20 @@ describe('every Semgrep rule pack', () => {
     const problems = packs
       .map((file) => {
         const config = resolve(PACK_DIR, file);
-        const quarantinedRule = KNOWN_INVALID.get(file);
-        if (quarantinedRule === undefined) {
-          const run = spawnSync(
-            'semgrep',
-            ['--validate', '--quiet', '--disable-version-check', '--config', config],
-            { encoding: 'utf8' },
-          );
-          if (run.status === 0 && run.stdout === '' && run.stderr === '') return '';
-          return [
-            `${file}: does not compile. exit=${String(run.status)}`,
-            `  stdout=${JSON.stringify(run.stdout)}`,
-            `  stderr=${JSON.stringify(run.stderr)}`,
-            '  A pack that fails to load does NOT fail the scan that uses it — it',
-            '  returns fewer findings, or none, and can report zero errors while',
-            '  doing so. Re-run without --quiet to see the reason.',
-          ].join('\n');
-        }
-        // Quarantined: run WITHOUT --quiet, because the reason has to be read
-        // off stderr to confirm it is still the same reason.
         const run = spawnSync(
           'semgrep',
-          ['--validate', '--disable-version-check', '--config', config],
+          ['--validate', '--quiet', '--disable-version-check', '--config', config],
           { encoding: 'utf8' },
         );
-        if (run.status === 0) {
-          return `${file}: now validates CLEAN — delete its KNOWN_INVALID entry (${quarantinedRule}).`;
-        }
-        if (!run.stderr.includes(quarantinedRule)) {
-          return [
-            `${file}: is quarantined for ${quarantinedRule}, but now fails for something else.`,
-            `  stderr=${JSON.stringify(run.stderr)}`,
-          ].join('\n');
-        }
-        return '';
+        if (run.status === 0 && run.stdout === '' && run.stderr === '') return '';
+        return [
+          `${file}: does not compile. exit=${String(run.status)}`,
+          `  stdout=${JSON.stringify(run.stdout)}`,
+          `  stderr=${JSON.stringify(run.stderr)}`,
+          '  A pack that fails to load does NOT fail the scan that uses it — it',
+          '  returns fewer findings, or none, and can report zero errors while',
+          '  doing so. Re-run without --quiet to see the reason.',
+        ].join('\n');
       })
       .filter((line) => line !== '');
     expect(problems).toEqual([]);

@@ -15,11 +15,16 @@ rules:
     languages: [generic]
 
   # ============== JS/TS ==============
+  # `new Function(...)`, não `new Function($X)`: a forma canónica do construtor
+  # nomeia os parâmetros primeiro e passa o corpo no último argumento
+  # (`new Function('a', 'b', body)`), pelo que a variante de um só argumento —
+  # a única que `$X` apanhava — é a rara. Medido: 0 findings na forma de três
+  # argumentos antes desta alteração.
   - id: js-eval-of-user-input
     pattern-either:
-      - pattern: eval($X)
-      - pattern: new Function($X)
-    message: Uso de eval/new Function. Evitar sempre que possível — risco de RCE se $X vier de input externo.
+      - pattern: eval(...)
+      - pattern: new Function(...)
+    message: Uso de eval/new Function. Evitar sempre que possível — risco de RCE se o argumento vier de input externo.
     severity: WARNING
     languages: [javascript, typescript]
 
@@ -30,8 +35,10 @@ rules:
     languages: [javascript, typescript]
 
   - id: js-document-write
-    pattern: document.write($X)
-    message: document.write é vetor de XSS quando $X contém input não-sanitizado.
+    pattern-either:
+      - pattern: document.write($X)
+      - pattern: document.writeln($X)
+    message: document.write/writeln é vetor de XSS quando $X contém input não-sanitizado.
     severity: WARNING
     languages: [javascript, typescript]
 
@@ -86,11 +93,46 @@ rules:
     severity: ERROR
     languages: [php]
 
+  # Esta regra esteve MORTA desde que foi escrita: `echo $_GET[$X]` não é PHP
+  # parsável (falta o terminador da instrução), pelo que falhava a compilar e
+  # nunca chegou a fazer match em nada. Medida contra um ficheiro com um
+  # `echo $_GET['name'];` real: results 0, errors 1, exit 2.
+  #
+  # A reescrita não tem lista de funções de escape, e isso é deliberado: o que
+  # a regra emite é um superglobal EM CRU no caminho de output, seja como
+  # argumento inteiro, operando literal de uma concatenação ou interpolação.
+  # Assim que o valor passa por uma chamada — esc_html(), wp_kses(), intval()
+  # ou um escapador da própria casa — deixa de haver match, sem que nenhuma
+  # lista tenha de o prever. O `pattern-inside: echo $A . $B;` é o que mantém
+  # a ramificação da concatenação fora de `echo esc_html($a . $_GET['b']);`.
+  #
+  # O `metavariable-regex` é carga estrutural, não cosmética: `$SUPER[...]`
+  # sozinho apanha QUALQUER acesso a array, e sem ele todo o
+  # `echo $row['title'];` de todos os templates WordPress do mundo passava a
+  # ser um finding ERROR. Há near-misses em fixtures precisamente para isso.
+  #
+  # FALSO POSITIVO CONHECIDO, medido e fixado em
+  # `mcp/test/fixtures/base/known-false-positives/output.php`: um superglobal
+  # concatenado DENTRO de uma chamada de escape que por sua vez é operando de
+  # outra concatenação — `echo esc_html($a . $_GET['b']) . "x";`. Não é
+  # corrigível na sintaxe do Semgrep OSS, porque `echo` é um nó de CHAMADA na
+  # AST de PHP e qualquer exclusão que apanhe o escapador apanha o echo também.
   - id: wp-unescaped-output
-    pattern-either:
-      - pattern: echo $_GET[$X]
-      - pattern: echo $_POST[$X]
-      - pattern: echo $_REQUEST[$X]
-    message: Output direto de input do utilizador — XSS. Usa esc_html(), esc_attr(), etc.
+    patterns:
+      - pattern-either:
+          - pattern: echo $SUPER[...];
+          - pattern: print $SUPER[...];
+          - pattern: 'echo "...{$SUPER[...]}...";'
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: echo $A . $B;
+                  - pattern-inside: print $A . $B;
+              - pattern-either:
+                  - pattern: $X . $SUPER[...]
+                  - pattern: $SUPER[...] . $X
+      - metavariable-regex:
+          metavariable: $SUPER
+          regex: '^\$_(GET|POST|REQUEST)$'
+    message: Output direto de input do utilizador ($SUPER) — XSS. Usa esc_html(), esc_attr(), esc_url() ou wp_kses().
     severity: ERROR
     languages: [php]

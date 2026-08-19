@@ -41,6 +41,20 @@ version bump.
   `paths.scanned: 0`, `errors: 0`. Asserting that every pack is clean proves
   nothing if the check has quietly stopped working.
 
+- **Fixture coverage for `base.yml`** — `mcp/test/integration/baseRules.test.ts`
+  and a hits/misses pair per rule under `mcp/test/fixtures/base/`, asserting the
+  exact rule-id set, the raw non-deduplicated finding count and `paths.scanned`
+  per file. Every line in `misses/` was checked against a *deliberately broken*
+  variant of the rule it is a near-miss for — a case-insensitive AWS regex, a
+  `Math.random` with no call, a `$O.write($X)` with an unconstrained receiver,
+  an `$X.eval(...)` that also matches PyTorch's `model.eval()`, a
+  `wp-unescaped-output` with its `metavariable-regex` deleted — so that each one
+  is silent for a reason belonging to the rule rather than by coincidence. The
+  scan is run through `spawnSync`, not `execFileSync`, because `--quiet` leaves
+  stderr **empty** for a rule that failed to compile and puts the id in the
+  JSON `errors` array instead: the old form reported the dead PHP rule as a bare
+  "Command failed: semgrep --config …" four times without naming it once.
+
 ### Fixed
 
 - **The Java rules no longer fire on correct Java.** The first two review
@@ -460,14 +474,59 @@ version bump.
   count of operands was never what decided it. The rule is `WARNING` precisely
   because this class of miss has no end.
 
-- **`base.yml`'s `wp-unescaped-output` has never worked**, found by the new
+- **`base.yml`'s `wp-unescaped-output` had never worked**, found by the
   cross-pack test on its first run. `pattern: echo $_GET[$X]` does not parse as
-  PHP (`Stdlib.Parsing.Parse_error`), so the WordPress XSS rule cannot match
+  PHP (`Stdlib.Parsing.Parse_error`), so the WordPress XSS rule could not match
   anything — measured against a file containing a real `echo $_GET['name'];`:
-  `results: 0`, `errors: 1`, exit 2. It is **quarantined, not fixed**: the entry
-  pins the rule id, so the test fails if the pack starts validating cleanly (to
-  force deleting the entry) and fails if it breaks for a different reason.
-  Queued for the non-Java pack sweep.
+  `results: 0`, `errors: 1`, exit 2. Quarantined for one wave, then **fixed**:
+  see the entry below. The quarantine machinery in `semgrepPacks.test.ts` went
+  with its last entry rather than staying behind as an empty map.
+
+- **`base.yml` audited rule by rule, and three of the thirteen were doing
+  nothing.** The pack `init_project` copies into a user's project as
+  `.semgrep.yml` is the only rule file here that ships to somebody else's
+  repository, and it had **no fixture coverage of any kind**. All thirteen rules
+  were run against hand-written vulnerable code and against the correct code
+  that most resembles it; the ten not listed here fire on the bug and are silent
+  on the near-miss, measured.
+  - `wp-unescaped-output` rewritten and fixture-backed. It now covers the whole
+    echoed/printed expression, string interpolation, and a superglobal as a
+    literal operand of a concatenation the statement emits — twelve shapes, one
+    fixture each. It carries **no list of escaping functions**: what it emits is
+    a superglobal in the raw on an output path, so anything that passes through
+    a call — `esc_html()`, `wp_kses()`, `intval()`, or a house escaper nobody
+    could have enumerated — stops matching without needing to be predicted.
+    `pattern-inside: echo $A . $B;` is what keeps the concatenation branch off
+    `echo esc_html($a . $_GET['b']);`, which is correct code the looser scope
+    flags. The `metavariable-regex` on `$SUPER` is load-bearing rather than
+    decorative: `$SUPER[...]` alone matches **any** array access, so without it
+    every `echo $row['title'];` in every WordPress template becomes an
+    ERROR-tier finding — pinned by near-miss fixtures that fire when it is
+    deleted.
+
+    It ships with **one known false positive**, pinned by line in
+    `mcp/test/fixtures/base/known-false-positives/` rather than described in a
+    comment: a superglobal concatenated *inside* an escaping call that is
+    itself an operand of a concatenation the echo emits
+    (`echo esc_html($a . $_GET['b']) . "x";`). It is not removable in Semgrep
+    OSS syntax — `echo` is a CALL node in the PHP AST, so
+    `pattern-not-inside: $F($C . $D)` excludes the echo along with the escaper
+    and takes the rule to zero on everything. The alternative is to anchor the
+    concatenation branch at a bounded set of depths, which trades this for a
+    silent recall cliff at the first echo with one more term than somebody
+    enumerated; in a security pack the missed XSS is the worse failure.
+  - `js-eval-of-user-input` matched `new Function($X)`, the **one-argument**
+    form. The canonical Function constructor names its parameters first and
+    passes the body last, so the shape the rule was written for is the shape
+    real code least often has: measured, 0 findings on
+    `new Function('a', 'b', body)`. Now `new Function(...)`.
+  - `js-document-write` saw `document.write` and not `document.writeln`.
+
+  Neither of the last two would have been caught by `--validate`: both compiled
+  perfectly and matched nothing. The assertion that catches the whole family is
+  the one comparing the rule ids the fixtures exercise against the `- id:`
+  entries parsed out of the YAML — a rule with no hit fixture behind it is a
+  rule nobody has measured.
 
 ### Accepted limitations
 
