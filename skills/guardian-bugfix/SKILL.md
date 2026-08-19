@@ -171,7 +171,64 @@ do próprio projeto ou de um parâmetro de tipo genérico
 a disparar, medido; e a `modify-during-iteration` enumera `List`, `ArrayList`,
 `LinkedList`, `Set`, `HashSet`, `LinkedHashSet` e `Collection`, por isso um
 `Deque`, uma `Queue`, um `SortedSet` ou uma coleção do próprio projeto ficam
-silenciosos.
+silenciosos — e um `EnumMap` fica de fora da enumeração da `map-get-deref` pela
+mesma razão.
+
+As duas ligam o recetor por um `metavariable-pattern` que aceita um nome
+simples **ou** um qualificado com `this.`. Antes disso, `cache.get(k).trim()`
+disparava e `this.cache.get(k).trim()` era invisível — mesma classe, mesmo
+campo, mesmo bug (medido).
+
+A `map-get-deref` vinha **sem uma única exclusão de guarda**, e o resultado é
+que a guarda canónica de Java disparava em ERROR a aconselhar `getOrDefault`
+sobre código já guardado:
+
+```java
+if (m.containsKey(k)) { return m.get(k).trim(); }   // disparava, e é correto
+```
+
+Passou a excluir as formas medidas em que a chave fica provada presente: os
+testes inline `containsKey` e `get() != null`, sozinhos ou como qualquer dos
+operandos de uma **conjunção**; as quatro polaridades do ternário; um
+`return`/`throw`/`continue` antecipado sob `!containsKey` ou `get() == null`;
+e a população por `put`, `putIfAbsent`, `computeIfAbsent` ou
+`if (!containsKey) { put(); }`. A **disjunção** não é excluída de propósito:
+`a || m.containsKey(k)` não prova nada dentro do corpo.
+
+A `modify-during-iteration` tinha um falso negativo que vale mais do que
+qualquer dos seus falsos positivos. Um `remove()` dentro de um `switch`
+seguido de `break;` é uma `ConcurrentModificationException` real — esse
+`break` sai do *switch* e não do ciclo — e a exclusão emparelhada
+`remove(); break;` engolia-a inteira:
+
+```java
+for (String s : items) {
+    switch (s) {
+        case "x": items.remove(s); break;   // CME real; não disparava
+        default: break;
+    }
+}
+```
+
+A exclusão do `break` simples passou a aplicar-se só fora de um `switch`.
+`return`, `throw` e um `break` **etiquetado** saem mesmo do método ou do
+ciclo a partir de dentro de um `switch`, por isso continuam excluídos em todo
+o lado.
+
+A `loop-lte-length` restringe a metavariável do array a um **tipo array**:
+`$A.length` casava qualquer campo `int` chamado `length` e disparava em ERROR
+sobre o ciclo deliberadamente inclusivo de um objeto de domínio. Medido, a
+restrição não custa recall — parâmetro, local, campo, campo qualificado com
+`this.` e local inferido com `var` continuam todos a ser vistos.
+
+As exclusões terminadas em saída, nas três regras `map-get-deref`,
+`optional-get-no-ispresent` e `modify-during-iteration`, toleram exatamente
+**uma** instrução entre a guarda (ou a remoção) e a saída, em vez de uma
+reticência arbitrária. Medido: a forma com reticências casa em PROFUNDIDADE,
+por isso `if (!m.containsKey(k)) { if (strict) { return ""; } }` e
+`items.remove(s); if (done) { break; }` deixavam os dois de disparar — e os
+dois são bugs reais. O preço é a linha (5) da tabela de falsos positivos
+aceites, mais abaixo.
 
 A `empty-catch` respeita a convenção do Checkstyle / IntelliJ: nunca dispara se
 a variável da exceção se chamar `ignore`, `ignored` ou `expected`. É a forma
@@ -182,12 +239,25 @@ nome.
 A `optional-get-no-ispresent` é **WARNING e não ERROR**, e isso aplica o
 critério de tiers do pack em vez de o dobrar: ERROR é para o padrão que é bug
 independentemente da intenção, e um `o.get()` só é bug quando está *sem
-guarda*. A regra reconhece guardas escritas **inline sobre a mesma variável
-`Optional`** — `if (isPresent())`, `return`/`throw`/`continue`/`break`
-antecipados sob `!isPresent()` ou `isEmpty()`, as três formas ternárias, e
-`if (o.filter(p).isPresent())` — e falha **qualquer guarda que chegue ao teste
-através de outro método ou de outra variável**. O exemplo concreto é a guarda
-delegada a um helper:
+guarda*. A regra reconhece exatamente estas formas de guarda — enumeradas em
+vez de resumidas, porque o resumo que aqui esteve ("inline sobre a mesma
+variável `Optional`") era falsificável e foi falsificado por uma condição
+composta, uma saída com mais do que uma instrução, um `while` e um
+`Optional.of`:
+
+- `if (o.isPresent())` sozinho **ou como qualquer dos operandos de uma
+  conjunção** (`a.isPresent() && b.isPresent()`);
+- `while (o.isPresent())`;
+- `return`/`throw`/`continue`/`break` antecipados sob `!isPresent()` ou
+  `isEmpty()`, com ou sem **uma** instrução antes da saída;
+- as três formas ternárias;
+- `if (o.filter(p).isPresent())`;
+- `Optional<T> o = Optional.of(…)`, que não pode estar vazio — `ofNullable`
+  pode, e continua a disparar.
+
+Falha **qualquer guarda que chegue ao teste através de outro método**, e
+deliberadamente não trata uma **disjunção** como guarda. O exemplo concreto é a
+guarda delegada a um helper:
 
 ```java
 if (!present(o)) { return "d"; }
@@ -204,17 +274,28 @@ severidade `medium` em vez de `high`, por isso continua a aparecer no
 A `stream-not-closed` só reconhece `new FileInputStream(...)` — e só por esse
 nome simples: um `new java.io.FileInputStream(...)` totalmente qualificado não
 é visto (medido), tal como não são vistos `FileOutputStream`, `FileReader`,
-`Socket` e os restantes closeables.
+`Socket` e os restantes closeables. É agora a única regra do pack com essa
+lacuna: a `static-dateformat` traz um único padrão **totalmente qualificado**,
+porque um campo `static final java.text.SimpleDateFormat` num ficheiro sem
+import era invisível enquanto o padrão curto foi o único — e é exatamente
+assim que se escreve a declaração quando não há import. Medido nas quatro
+formas de import: o padrão qualificado casa também as formas curtas sempre que
+um import deixa o Semgrep resolver o nome, o curto nunca casou a qualificada,
+por isso o ramo curto era inerte e foi apagado.
 
-Quatro falsos positivos são **aceites em vez de corrigidos**, cada um
-reproduzido em código correto:
+Sete falsos positivos são **aceites em vez de corrigidos**, cada um
+reproduzido em código correto. A lista é exaustiva contra as fixtures de
+revisão que existem hoje — não contra todo o Java que existe:
 
-| Regra | Código correto em que dispara | Porque fica |
-| --- | --- | --- |
-| `memory-leak-stream-not-closed` | `open(); try { … } finally { close(); }` | Já é a limitação declarada da regra, e já é a razão de ser `WARNING`. |
-| `race-condition-static-dateformat` | `static final SimpleDateFormat` cujos acessos passam todos por métodos `synchronized` | Provar que *todos* os acessos estão sincronizados é análise do programa inteiro, que o Semgrep OSS não faz. Um formatter partilhado também serializa todos os chamadores, por isso marcá-lo é defensável. |
-| `off-by-one-loop-lte-length` | `i <= a.length` com o corpo protegido por `i < a.length`, ou que nunca indexa `a` | Genuinamente raro, e o ciclo merece à mesma olhos humanos. |
-| `error-handling-printstacktrace-only` | `printStackTrace()` como fallback quando foi o próprio logger que lançou | O único sítio onde a chamada está certa; já é `WARNING`; estreito demais para codificar. |
+| # | Regra | Código correto em que dispara | Porque fica |
+| --- | --- | --- | --- |
+| 1 | `memory-leak-stream-not-closed` | `open(); try { … } finally { close(); }` | Já é a limitação declarada da regra, e já é a razão de ser `WARNING`. |
+| 2 | `race-condition-static-dateformat` | `static final SimpleDateFormat` cujos acessos passam todos por métodos `synchronized` | Provar que *todos* os acessos estão sincronizados é análise do programa inteiro, que o Semgrep OSS não faz. Um formatter partilhado também serializa todos os chamadores, por isso marcá-lo é defensável. |
+| 3 | `off-by-one-loop-lte-length` | `i <= a.length` com o corpo protegido por `i < a.length`, ou que nunca indexa `a` | Genuinamente raro, e o ciclo merece à mesma olhos humanos. |
+| 4 | `error-handling-printstacktrace-only` | `printStackTrace()` como fallback quando foi o próprio logger que lançou | O único sítio onde a chamada está certa; já é `WARNING`; estreito demais para codificar. |
+| 5 | `map-get-deref`, `optional-get-no-ispresent`, `modify-during-iteration` | **Duas ou mais** instruções entre a guarda (ou a remoção) e a saída: `if (!m.containsKey(k)) { log(); metric(); return ""; }`, `items.remove(s); log(s); n++; break;` | Preço deliberado. A alternativa — uma reticência de statement — casa em profundidade e engole `if (!m.containsKey(k)) { if (strict) { return ""; } }` e `items.remove(s); if (done) { break; }`, que são bugs reais. Um falso negativo que esconde um bug é pior do que este falso positivo. |
+| 6 | as mesmas três | Guarda delegada a um método helper: `if (!present(o)) { return d; }` | Exige análise interprocedimental, que o Semgrep OSS não faz. É a razão declarada de a `optional-get-no-ispresent` estar em `WARNING`. |
+| 7 | `map-get-deref` | Chave garantida fora das formas enumeradas: mapa preenchido num inicializador estático, ou mapeamento total sobre um enum declarado como `Map` | A garantia não está no caminho sintático que chega ao `get`. Excluir "qualquer mapa que alguma vez recebeu um `put`" apagaria a regra. |
 
 **Isto é só para JS/TS, Python, Go e Java.** Para as restantes linguagens desta secção —
 C#, PHP, Ruby, Rust — a situação anterior mantém-se: o

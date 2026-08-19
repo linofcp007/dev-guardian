@@ -1,6 +1,22 @@
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Correct Java. Every method here is safe and none may be flagged.
+ *
+ * The functions below are deliberately NOT minimal instantiations of the
+ * clause each one pins. A near-miss that is the exclusion pattern with its
+ * metavariables filled in proves only that the pattern matches itself; it
+ * says nothing about whether the clause survives contact with real code. So
+ * each carries at least one shape the clause does not mention — an extra
+ * statement, a loop, a chained call, a second dereference, a receiver of a
+ * different declared type, an interposed log line.
+ */
 public class MapGetDeref {
     // checked is DISCRIMINATING: mutate the shipped rule to `$M.get($K)` —
     // dropping the `.$METHOD(...)` deref requirement — and this fires,
@@ -44,5 +60,295 @@ public class MapGetDeref {
     // rule and this fires again.
     String listGet(List<String> xs) {
         return xs.get(0).trim();
+    }
+
+    // ---- guarda inline ---------------------------------------------------
+    //
+    // Each of the six below pins exactly one inline-guard clause. The rule
+    // shipped with NO guard exclusion at all, so `if (m.containsKey(k))` —
+    // the textbook Java guard — fired at ERROR and advised `getOrDefault` on
+    // already-guarded code.
+
+    // inlineContainsKey: not a bare `return m.get(k).trim();` inside the if.
+    // The guarded body is four statements long and the dereference happens
+    // inside a builder call, which is where a clause written against the
+    // one-liner would come apart.
+    String inlineContainsKey(Map<String, String> m, String k) {
+        if (m.containsKey(k)) {
+            System.out.println("hit " + k);
+            StringBuilder sb = new StringBuilder("v=");
+            sb.append(m.get(k).trim());
+            return sb.toString();
+        }
+        return "";
+    }
+
+    // compoundContainsKeyLeft: the guard is a CONJUNCTION whose second
+    // operand dereferences the same key, and the body is a loop that
+    // dereferences it again. Two derefs, both under one guard.
+    int compoundContainsKeyLeft(Map<String, Integer> m, String k) {
+        int total = 0;
+        if (m.containsKey(k) && !m.get(k).equals(0)) {
+            for (int i = 0; i < 3; i++) { total += m.get(k).intValue(); }
+        }
+        return total;
+    }
+
+    // compoundContainsKeyRight: the same conjunction with the operands the
+    // other way round, on a TreeMap receiver rather than a Map, so it also
+    // walks a different `pattern-either` branch than its twin above.
+    int compoundContainsKeyRight(TreeMap<String, Integer> m, String k, boolean enabled) {
+        if (enabled && m.containsKey(k)) {
+            int v = m.get(k).intValue();
+            return v * 2;
+        }
+        return -1;
+    }
+
+    // inlineNotNull: the `!= null` guard, on a LinkedHashMap, with the value
+    // read twice — once into a local that is printed, once dereferenced.
+    String inlineNotNull(LinkedHashMap<String, String> m, String k) {
+        if (m.get(k) != null) {
+            String raw = m.get(k);
+            System.out.println(raw);
+            return m.get(k).trim();
+        }
+        return "";
+    }
+
+    // compoundNotNullLeft: `!= null` first, and the second operand of the
+    // conjunction is itself a dereference — the guard covers it too.
+    int compoundNotNullLeft(Map<String, String> m, String k) {
+        if (m.get(k) != null && !m.get(k).isEmpty()) {
+            return m.get(k).length();
+        }
+        return 0;
+    }
+
+    // compoundNotNullRight: `!= null` second, on a ConcurrentHashMap.
+    int compoundNotNullRight(ConcurrentHashMap<String, String> m, String k, boolean on) {
+        if (on && m.get(k) != null) {
+            return m.get(k).length();
+        }
+        return 0;
+    }
+
+    // ---- ternário --------------------------------------------------------
+    //
+    // A ternary is a conditional EXPRESSION, a different AST node from an
+    // `if`, so none of the statement clauses above reach it and it needs its
+    // own. All four polarities are written the way they actually appear.
+
+    // ternaryContainsKey: the true branch CHAINS a second call onto the
+    // dereference, which a clause matched against `cond ? m.get(k).trim() :
+    // d` would not survive.
+    String ternaryContainsKey(HashMap<String, String> m, String k) {
+        return m.containsKey(k) ? m.get(k).trim().toUpperCase() : "none";
+    }
+
+    // ternaryNotContainsKey: the negated form, where the dereference is in
+    // the FALSE branch.
+    String ternaryNotContainsKey(Map<String, String> m, String k) {
+        return !m.containsKey(k) ? "none" : m.get(k).trim();
+    }
+
+    // ternaryNotNull: arithmetic on the dereferenced value rather than a bare
+    // return of it.
+    int ternaryNotNull(Map<String, Integer> m, String k) {
+        return m.get(k) != null ? m.get(k).intValue() + 1 : 0;
+    }
+
+    // ternaryNull: the commonest of the four in real code, and the mirror of
+    // ternaryNotNull — the dereference sits in the false branch.
+    String ternaryNull(Map<String, String> m, String k) {
+        return m.get(k) == null ? "" : m.get(k).trim();
+    }
+
+    // ---- saída antecipada sobre !containsKey -----------------------------
+    //
+    // Six clauses, three exits times two body shapes: the guard body is
+    // either the exit alone or one interposed statement and then the exit.
+    // The interposed-statement twins exist because the unbounded `{ ...
+    // return ...; }` form would also swallow a guard whose exit is CONDITIONAL
+    // — a guard that does not cover every path — and that is a real bug.
+
+    // exitReturnContainsKey: the dereference is four statements after the
+    // guard, not the next one, and it is nested inside an argument.
+    String exitReturnContainsKey(Map<String, String> m, String k) {
+        if (!m.containsKey(k)) { return ""; }
+        StringBuilder sb = new StringBuilder();
+        sb.append("v=");
+        sb.append(m.get(k).trim());
+        return sb.toString();
+    }
+
+    // exitReturnContainsKeyLogged: one statement before the return, and the
+    // dereference is chained.
+    String exitReturnContainsKeyLogged(Map<String, String> m, String k) {
+        if (!m.containsKey(k)) {
+            System.out.println("miss " + k);
+            return "";
+        }
+        return m.get(k).trim().toLowerCase();
+    }
+
+    // exitThrowContainsKey: throws instead of returning, on a HashMap.
+    String exitThrowContainsKey(HashMap<String, String> m, String k) {
+        if (!m.containsKey(k)) { throw new IllegalArgumentException(k); }
+        return m.get(k).trim();
+    }
+
+    // exitThrowContainsKeyLogged: a log line before the throw.
+    String exitThrowContainsKeyLogged(Map<String, String> m, String k) {
+        if (!m.containsKey(k)) {
+            System.err.println("missing " + k);
+            throw new IllegalArgumentException(k);
+        }
+        return m.get(k).trim();
+    }
+
+    // exitContinueContainsKey: the guard is inside a loop and the exit is a
+    // `continue`, so the dereference below runs only for present keys.
+    int exitContinueContainsKey(Map<String, Integer> m, List<String> keys) {
+        int total = 0;
+        for (String k : keys) {
+            if (!m.containsKey(k)) { continue; }
+            total += m.get(k).intValue();
+        }
+        return total;
+    }
+
+    // exitContinueContainsKeyLogged: same, with a log line before the
+    // `continue` and a second dereference after it.
+    int exitContinueContainsKeyLogged(Map<String, Integer> m, List<String> keys) {
+        int total = 0;
+        for (String k : keys) {
+            if (!m.containsKey(k)) {
+                System.out.println("skip " + k);
+                continue;
+            }
+            total += m.get(k).intValue() * m.get(k).intValue();
+        }
+        return total;
+    }
+
+    // ---- saída antecipada sobre get() == null ----------------------------
+    //
+    // The same six, written against the null of the value rather than the
+    // absence of the key. They are not interchangeable: `containsKey` is
+    // false for an absent key, while `get() == null` is also true for a key
+    // mapped to null, and the two conditions are different AST shapes.
+
+    // exitReturnNull: the guard's exit returns a computed value, not a
+    // literal, and the dereference below is chained.
+    String exitReturnNull(Map<String, String> m, String k) {
+        if (m.get(k) == null) { return k.trim(); }
+        return m.get(k).trim().intern();
+    }
+
+    // exitReturnNullLogged: one statement before the return.
+    String exitReturnNullLogged(TreeMap<String, String> m, String k) {
+        if (m.get(k) == null) {
+            System.out.println("absent " + k);
+            return "";
+        }
+        return m.get(k).trim();
+    }
+
+    // exitThrowNull: throws, and the dereference is two statements later.
+    int exitThrowNull(Map<String, Integer> m, String k) {
+        if (m.get(k) == null) { throw new IllegalStateException(k); }
+        int base = 10;
+        return base + m.get(k).intValue();
+    }
+
+    // exitThrowNullLogged: a log line before the throw, on a
+    // ConcurrentHashMap.
+    int exitThrowNullLogged(ConcurrentHashMap<String, Integer> m, String k) {
+        if (m.get(k) == null) {
+            System.err.println("absent " + k);
+            throw new IllegalStateException(k);
+        }
+        return m.get(k).intValue();
+    }
+
+    // exitContinueNull: `continue` inside a loop, with the dereference
+    // feeding a collection.
+    List<String> exitContinueNull(Map<String, String> m, List<String> keys) {
+        List<String> out = new ArrayList<>();
+        for (String k : keys) {
+            if (m.get(k) == null) { continue; }
+            out.add(m.get(k).trim());
+        }
+        return out;
+    }
+
+    // exitContinueNullLogged: a log line before the `continue`.
+    List<String> exitContinueNullLogged(LinkedHashMap<String, String> m, List<String> keys) {
+        List<String> out = new ArrayList<>();
+        for (String k : keys) {
+            if (m.get(k) == null) {
+                System.out.println("absent " + k);
+                continue;
+            }
+            out.add(m.get(k).trim());
+        }
+        return out;
+    }
+
+    // ---- população que garante a chave -----------------------------------
+
+    // populatePutIfAbsent: the write and the read are not adjacent — a log
+    // line sits between them — and the value is dereferenced twice.
+    String populatePutIfAbsent(HashMap<String, String> m, String k) {
+        m.putIfAbsent(k, "default");
+        System.out.println("ensured " + k + " len " + m.get(k).length());
+        return m.get(k).trim();
+    }
+
+    // populateComputeIfAbsent: the mapping function builds the value, and the
+    // first dereference MUTATES it before the second reads it back.
+    int populateComputeIfAbsent(Map<String, List<String>> m, String k) {
+        m.computeIfAbsent(k, x -> new ArrayList<>());
+        m.get(k).add("v");
+        return m.get(k).size();
+    }
+
+    // populatePut: a plain `put` of the same key, three statements above the
+    // read. This is the shape the docs used to list as an accepted false
+    // positive — "a map populated immediately above the read is still
+    // flagged" — and it is not immediately above the read here on purpose.
+    String populatePut(Map<String, String> m, String k, String v) {
+        m.put(k, v);
+        System.out.println("stored " + k);
+        int len = m.get(k).length();
+        return m.get(k).trim() + len;
+    }
+
+    // populateOnMiss: populate-on-miss, which is NOT an early exit — the
+    // guarded branch writes the key instead of leaving, so control falls
+    // through to the dereference either way, and either way the key is
+    // there. None of the exit clauses reach this shape.
+    String populateOnMiss(TreeMap<String, String> m, String k) {
+        if (!m.containsKey(k)) { m.put(k, "default"); }
+        return m.get(k).trim();
+    }
+
+    // ---- receptor `this.`-qualificado -------------------------------------
+    //
+    // thisQualifiedGuarded is DISCRIMINATING for the interaction between the
+    // new `this.$F` receiver form and the guard clauses, and it is the one
+    // that could regress silently: making the rule SEE `this.cache.get(k)`
+    // is only half the job, because a guard written `this.cache.containsKey(k)`
+    // has to bind the same receiver. It does — `$M` binds the whole qualified
+    // expression, so every exclusion above applies unchanged — and this
+    // function is the proof.
+    private final Map<String, String> cache = new HashMap<>();
+
+    String thisQualifiedGuarded(String k) {
+        if (this.cache.containsKey(k)) {
+            return this.cache.get(k).trim();
+        }
+        return "";
     }
 }

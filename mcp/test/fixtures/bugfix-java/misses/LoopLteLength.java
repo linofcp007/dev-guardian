@@ -38,4 +38,22 @@ public class LoopLteLength {
         for (int x : xs) { s += x; }
         return s;
     }
+
+    // domainLength is DISCRIMINATING for the `metavariable-type: "$T[]"`
+    // clause and for nothing else: delete that clause and this fires alone,
+    // at ERROR, on a loop that has no array in it. `$A.length` matches any
+    // field named `length`, and a domain object with an int field of that
+    // name is ordinary Java — here the loop is inclusive ON PURPOSE, because
+    // it is counting fence posts along a segment and not indexing anything.
+    //
+    // The type restriction costs no recall: measured, a parameter, a local, a
+    // field, a `this.`-qualified field and a `var`-inferred local that are
+    // arrays are all still matched.
+    static class Segment { int length; }
+
+    int domainLength(Segment seg) {
+        int total = 0;
+        for (int i = 0; i <= seg.length; i++) { total += i; }
+        return total;
+    }
 }

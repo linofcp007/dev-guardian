@@ -102,12 +102,16 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     count: 1,
   },
   'MapGetDeref.java': {
-    // Six: the rule restricts the receiver by DECLARED type, so it carries one
-    // function per `pattern-either` branch (Map, HashMap, TreeMap,
-    // LinkedHashMap, ConcurrentHashMap) plus a `var`-inferred receiver. A
-    // branch with no fixture behind it could be deleted without a test moving.
+    // Eleven: the rule restricts the receiver by DECLARED type, so it carries
+    // one function per `pattern-either` branch (Map, HashMap, TreeMap,
+    // LinkedHashMap, ConcurrentHashMap), one `this.`-qualified twin per
+    // branch — each branch binds its receiver through a
+    // `metavariable-pattern` that accepts a bare name or a qualified one, and
+    // before that wrapper went in the qualified form was invisible — plus a
+    // `var`-inferred receiver. A branch, or a receiver form, with no fixture
+    // behind it could be deleted without a test moving.
     ids: ['bugfix-java-null-safety-map-get-deref'],
-    count: 6,
+    count: 11,
   },
   'OptionalGet.java': {
     ids: ['bugfix-java-null-safety-optional-get-no-ispresent'],
@@ -116,18 +120,30 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'LoopLteLength.java': { ids: ['bugfix-java-off-by-one-loop-lte-length'], count: 1 },
   'StreamNotClosed.java': { ids: ['bugfix-java-memory-leak-stream-not-closed'], count: 1 },
   'ModifyDuringIteration.java': {
-    // Seven, for the same reason as MapGetDeref: one function per enumerated
-    // receiver type (List, ArrayList, LinkedList, Set, HashSet,
-    // LinkedHashSet, Collection). The enumeration is what keeps the rule off
+    // Sixteen, for the same reason as MapGetDeref: one function per
+    // enumerated receiver type (List, ArrayList, LinkedList, Set, HashSet,
+    // LinkedHashSet, Collection), one `this.`-qualified twin each, and two
+    // `switch` cases. The enumeration is what keeps the rule off
     // CopyOnWriteArrayList, so every branch has to stay measured.
+    //
+    // The two `switch` cases are HITS and are the point of the whole
+    // re-inclusion disjunct: inside a `switch`, `break` leaves the switch and
+    // not the loop, so `remove(); break;` in a `case` is a real
+    // ConcurrentModificationException that the paired exclusion used to
+    // swallow. A `switch` written with only `case` labels does not match the
+    // `default:` pattern and vice versa, so there is one of each.
     ids: ['bugfix-java-edge-case-modify-during-iteration'],
-    count: 7,
+    count: 16,
   },
   'StaticDateFormat.java': {
-    // Two: the rule covers `static final` and plain `static`, and this fixture
-    // carries one of each so neither branch can die unnoticed.
+    // Three: `static final`, plain `static`, and a fully-qualified
+    // `java.text.SimpleDateFormat`. The rule ships a single pattern written
+    // with the qualified name — measured, it matches the short forms too
+    // whenever an import lets Semgrep resolve them, while the short pattern
+    // never matched the qualified one, so the qualified field was invisible
+    // for as long as the short pattern was the only one.
     ids: ['bugfix-java-race-condition-static-dateformat'],
-    count: 2,
+    count: 3,
   },
 };
 
@@ -144,10 +160,14 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
  * nothing disappears from a scan.
  *
  * `optional-get-no-ispresent` is WARNING and that is the interesting one:
- * `o.get()` is a bug only when UNGUARDED, and the rule provably cannot tell —
- * it recognises guards written inline against the same variable and misses any
- * guard reached through another method. It failed §4's ERROR criterion, so it
- * was moved rather than given a longer exclusion list.
+ * `o.get()` is a bug only when UNGUARDED, and the rule provably cannot tell.
+ * It recognises the guard shapes enumerated in the rule's own comment — the
+ * inline `isPresent()` test alone or in conjunction, a `while`, the early
+ * exits over `!isPresent()`/`isEmpty()`, the three ternaries, a present
+ * `filter(...)` result and an `Optional.of` construction — and misses any
+ * guard reached through another method, which needs interprocedural analysis.
+ * It failed §4's ERROR criterion, and the length of that list is the evidence
+ * rather than the counter-argument.
  */
 const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
   'bugfix-java-error-handling-empty-catch': 'ERROR',

@@ -126,21 +126,49 @@ the round's central finding and it is written up in §10.
   method identifier, so `getOrDefault` never matches `$M.get($K)` in the first
   place. A clause excluding it was specified, shipped into Task 2, and measured
   inert — see §9.
+  Each receiver is bound through a `metavariable-pattern` whose inner
+  `pattern-either` accepts a bare name **or** `this.$F`, and only then typed:
+  without that, `metavariable-type` cannot resolve a qualified field, so
+  `cache.get(k).trim()` fired while `this.cache.get(k).trim()` was invisible on
+  the same field in the same class.
+  **Guard exclusions**, added in fix wave 4 after the rule shipped
+  with none at all and fired at ERROR on `if (m.containsKey(k)) { …
+  m.get(k).trim() … }` — the canonical Java guard — while advising
+  `getOrDefault`. They are: the inline `containsKey` and `get() != null` tests,
+  each alone and as either operand of a **conjunction** (6); the four ternary
+  polarities, quoted (4); an early `return` / `throw` / `continue` under
+  `!containsKey` or `get() == null`, each with and without one interposed
+  statement (12); and population by `putIfAbsent`, `computeIfAbsent`, a plain
+  `put`, or `if (!containsKey) { put(); }` (4). A **disjunction** is
+  deliberately *not* excluded: `a || m.containsKey(k)` proves nothing inside
+  the body, so excluding it would hide a real bug.
 - **optional-get-no-ispresent** (**WARNING**, demoted from ERROR — see §4) —
   `optional.get()` outside a guard. Throws `NoSuchElementException`; `orElse`
   does not. The receiver is constrained to `Optional`; untyped, `$O.get()`
   matched `AtomicInteger.get()`, `ThreadLocal.get()` and `Supplier.get()`.
-  Thirteen exclusions cover the guard shapes: the inline `if (o.isPresent())`,
-  the early-exit forms of both `!isPresent()` and `isEmpty()` (`return`,
-  `throw`, `continue`, `break`), the three ternaries, and
-  `filter(...).isPresent()`. The ternaries needed their own clauses because a
-  ternary is a conditional *expression* — a different AST node, which no
-  statement-shaped clause reaches — and they must be **quoted**, or YAML reads
-  the `?` as a complex-key indicator and the config silently fails to load.
+  The exclusions cover these guard shapes, and only these: the inline
+  `if (o.isPresent())` and the same test as either operand of a **conjunction**
+  (3); `while (o.isPresent())` (1); the early-exit forms of both
+  `!isPresent()` and `isEmpty()` — `return`, `throw`, `continue`, `break` —
+  each with and without one interposed statement (16); the three ternaries (3);
+  `filter(...).isPresent()` (1); and `Optional<T> o = Optional.of(...)` (1),
+  which cannot be empty, while `ofNullable` can and still fires. The ternaries
+  needed their own clauses because a ternary is a conditional *expression* — a
+  different AST node, which no statement-shaped clause reaches — and they must
+  be **quoted**, or YAML reads the `?` as a complex-key indicator and the
+  config silently fails to load. A **disjunction** is deliberately not
+  excluded, for the same reason as in `map-get-deref`.
 
 ### `off_by_one` — 1 rule, ERROR
 
-- **loop-lte-length** — `for (int i = 0; i <= a.length; i++)`.
+- **loop-lte-length** — `for (int i = 0; i <= a.length; i++)`, with `$A`
+  restricted to an **array type** by `metavariable-type: "$T[]"` (quoted, or
+  the `[` opens a YAML flow sequence and the file will not load). Without the
+  restriction `$A.length` matched any `int` field named `length`, so a domain
+  object's deliberately inclusive fence-post loop fired at ERROR on a loop with
+  no array in it. Measured, the restriction costs no recall: parameter, local,
+  field, `this.`-qualified field and `var`-inferred local arrays are all still
+  matched.
 
 ### `memory_leak` — 1 rule, WARNING
 
@@ -159,8 +187,16 @@ the round's central finding and it is written up in §10.
   It is not thread-safe, and a static field is the definition of shared. A
   **single** pattern covers both the `static final` and plain `static` forms,
   because Semgrep matches Java modifiers as a subset — a `pattern-either` with
-  a branch for each was specified, shipped, and measured redundant (§9). A
-  local instance and a per-instance field are both correct and stay silent.
+  a branch for each was specified, shipped, and measured redundant (§9). That
+  single pattern is now written with the **fully-qualified**
+  `java.text.SimpleDateFormat`, and the short-name branch was deleted as a
+  *second* inert clause: measured across four import shapes (explicit import,
+  wildcard import, `package` declaration, no import), the qualified pattern
+  matches the short forms whenever an import lets Semgrep resolve the name,
+  while the short pattern never matched the qualified form — so a
+  `static final java.text.SimpleDateFormat` field in a file with no import, the
+  exact shape you get when there is no import, was invisible. A local instance
+  and a per-instance field are both correct and stay silent.
 
 ### `edge_case` — 1 rule, ERROR
 
@@ -168,6 +204,24 @@ the round's central finding and it is written up in §10.
   over that same collection. Throws `ConcurrentModificationException`. The
   `Iterator.remove()` and `removeIf` forms are correct and stay silent, as does
   removing from a *different* collection.
+
+  Fix wave 4 corrected the exclusions in **both** directions. The
+  exit-terminated exclusions were adjacency-only, so `list.remove(s);
+  removed = 1; break;` — correct Java, and the first thing anyone writes when
+  the caller needs to know whether anything was removed — fired at ERROR; they
+  now cover `return`, `throw`, a **labelled** `break` and a plain `break`,
+  each with and without one interposed statement. And the plain-`break`
+  exclusion was **unsound**: inside a `switch`, `break` leaves the switch and
+  not the loop, so `case "x": items.remove(s); break;` is a real
+  `ConcurrentModificationException` that the exclusion swallowed whole. It now
+  sits behind a `pattern-either` re-inclusion that fires when the removal is
+  inside a `switch` — one disjunct for `case`-labelled and one for
+  `default`-labelled switches, because measured, neither pattern matches a
+  switch written only with the other, and both match Java 14 arrow switches.
+  `return`, `throw` and a labelled `break` leave the method or the loop from
+  inside a switch too, so those stay excluded everywhere. The receiver is bound
+  through the same `metavariable-pattern` as `map-get-deref`, so a
+  `this.`-qualified field is seen.
 
   Two corrections this round, both from false positives on correct Java. The
   rule now **anchors on the `remove` call** rather than on the whole `for` —
@@ -230,10 +284,14 @@ under `GUARDIAN_REQUIRE_SEMGREP=1`.
   closeable leak identically and are not covered.
 - **`static-dateformat` only recognises `SimpleDateFormat`.** A shared
   `Calendar`, a shared `Matcher`, or any other non-thread-safe object in a
-  static field is not covered.
+  static field is not covered. It is no longer blind to the fully-qualified
+  declaration; `stream-not-closed` is now the only rule in the pack that is.
 - **`map-get-deref` cannot tell a nullable map from one whose keys are
-  guaranteed present.** A `Map` populated immediately above the read will still
-  be flagged; that is the price of having no dataflow.
+  guaranteed present by anything outside the shapes it enumerates.** A map
+  populated by `put`, `putIfAbsent` or `computeIfAbsent` above the read is
+  excluded, but a map filled in a static initialiser, or a total mapping over
+  an enum declared as a `Map`, is still flagged; that is the price of having no
+  dataflow. An `EnumMap` receiver is outside the type enumeration entirely.
 - **`modify-during-iteration` only matches the enhanced-for form.** An indexed
   `for` loop removing from the list it indexes has the same defect and is not
   covered.
@@ -246,25 +304,41 @@ under `GUARDIAN_REQUIRE_SEMGREP=1`.
   list does not name, or a generic type parameter. Measured exception worth
   knowing: a **raw `Map` still fires**, and a `var m = new HashMap<>()` local
   fires too, because Semgrep reads the initialiser.
-- **`optional-get-no-ispresent` recognises guards written inline against the
-  same variable**, and misses any guard that reaches the check through another
-  method or another variable — `if (!present(o)) { return d; }` needs
-  interprocedural analysis and is not expressible in Semgrep OSS at all. This
-  is stated as a shape rather than a count deliberately: an earlier draft said
-  "any guard outside these twelve", which was true when written and stale one
-  round later.
+- **`optional-get-no-ispresent` recognises the guard shapes enumerated in §3
+  and no others**, and misses any guard that reaches the check through another
+  method — `if (!present(o)) { return d; }` needs interprocedural analysis and
+  is not expressible in Semgrep OSS at all. Two earlier attempts to state this
+  compactly were both falsified by measurement: "any guard outside these
+  twelve" was true when written and stale one round later, and "guards written
+  inline against the same variable" was simply wrong — a compound condition, a
+  multi-statement exit, a `while` and an `Optional.of` all fired. The shapes
+  are therefore listed rather than summarised, and the list lives next to the
+  clauses it describes.
+- **The exit-terminated exclusions tolerate exactly ONE interposed
+  statement**, in `map-get-deref`, `optional-get-no-ispresent` and
+  `modify-during-iteration` alike. A statement ellipsis would cover any number
+  — and was measured to match *deep*, silencing
+  `if (!m.containsKey(k)) { if (strict) { return ""; } }` and
+  `items.remove(s); if (done) { break; }`, both of which are real bugs. Two or
+  more interposed statements therefore still fire; that is accepted false
+  positive (5) below, and it is the deliberate side of the trade.
 - **`stream-not-closed` matches the simple constructor name only.** A
   fully-qualified `new java.io.FileInputStream(...)` is invisible to it.
 
-Four more shapes were reproduced on correct Java and **ruled not fixable**
-rather than left unstated. Each fires, each is correct code, and each stays:
+Seven more shapes were reproduced on correct Java and **ruled not fixable**
+rather than left unstated. Each fires, each is correct code, and each stays.
+The list is exhaustive against the review fixtures that exist today, not
+against all Java:
 
-| Rule | Correct code it flags | Why it stays |
-| --- | --- | --- |
-| `stream-not-closed` | `open(); try { … } finally { close(); }` | The pre-Java-7 idiom, and already the rule's stated reason for being `WARNING`. |
-| `race-condition-static-dateformat` | a `static final SimpleDateFormat` whose every access goes through a `synchronized` method | Proving *all* accesses are synchronized is whole-program analysis. A shared formatter also serialises every caller, so flagging it is defensible. |
-| `off-by-one-loop-lte-length` | `i <= a.length` where the body guards with `i < a.length`, or never indexes `a` | Genuinely rare, and the loop still deserves a human look. |
-| `printstacktrace-only` | `printStackTrace()` as the fallback when the logger itself threw | The one place the call is right; already `WARNING`; too narrow to encode. |
+| # | Rule | Correct code it flags | Why it stays |
+| --- | --- | --- | --- |
+| 1 | `stream-not-closed` | `open(); try { … } finally { close(); }` | The pre-Java-7 idiom, and already the rule's stated reason for being `WARNING`. |
+| 2 | `race-condition-static-dateformat` | a `static final SimpleDateFormat` whose every access goes through a `synchronized` method | Proving *all* accesses are synchronized is whole-program analysis. A shared formatter also serialises every caller, so flagging it is defensible. |
+| 3 | `off-by-one-loop-lte-length` | `i <= a.length` where the body guards with `i < a.length`, or never indexes `a` | Genuinely rare, and the loop still deserves a human look. |
+| 4 | `printstacktrace-only` | `printStackTrace()` as the fallback when the logger itself threw | The one place the call is right; already `WARNING`; too narrow to encode. |
+| 5 | `map-get-deref`, `optional-get-no-ispresent`, `modify-during-iteration` | **two or more** statements between the guard (or the removal) and the exit: `if (!m.containsKey(k)) { log(); metric(); return ""; }`, `items.remove(s); log(s); n++; break;` | The deliberate price of bounding the exclusions. A statement ellipsis matches deep and swallows guards that do not cover every path, which are real bugs; a false negative that hides a bug is worse than this. |
+| 6 | the same three | a guard reached **through a helper method**: `if (!present(o)) { return d; }` | Needs interprocedural analysis, which Semgrep OSS does not do. Already the stated reason `optional-get-no-ispresent` is `WARNING`. |
+| 7 | `map-get-deref` | a key guaranteed present outside the enumerated shapes: a map filled in a static initialiser, a total enum mapping declared as a `Map` | The guarantee is not on the syntactic path reaching the `get`. Excluding "any map that ever received a `put` anywhere in the file" would erase the rule. |
 
 Two more, for completeness:
 
@@ -280,10 +354,12 @@ with Semgrep 1.164.0 **before this document existed**.
 | --- | --- |
 | **Killed outright** — needs type inference Semgrep OSS does not have; fired on `v == null` and on primitive comparison. | `Integer ==` |
 | **Did not parse.** `try (...) { ... }` is not a valid Java pattern; the try-with-resources exclusion had to name the resource. | `stream-not-closed` |
-| **Did not parse.** `static $MOD SimpleDateFormat …` and `static ... SimpleDateFormat …` are both invalid; the working form spells the modifiers literally, in a `pattern-either` covering `static final` and plain `static`. | `static-dateformat` |
+| **Did not parse.** `static $MOD SimpleDateFormat …` and `static ... SimpleDateFormat …` are both invalid; the working form spells the modifiers literally. (It went into a `pattern-either` covering `static final` and plain `static`; both of those branches were later measured redundant — see the two rows below.) | `static-dateformat` |
 | **Misclassified by its own name.** `concurrent-modification` → `race_condition`, because that regex matches `concurren` and runs first. Renamed. | `modify-during-iteration` |
 | **A specified exclusion was inert.** `pattern-not: $M.getOrDefault($K, ...).$METHOD(...)` excluded nothing — measured with and without it, zero findings both times, because Semgrep's Java matcher requires the literal identifier `get`. Found by Task 2's implementer, who measured instead of reporting the result the brief predicted. Third occurrence of this defect class in the rule-pack series, and the third time the origin was my own planning document. | `map-get-deref` |
 | **A specified `pattern-either` branch was redundant.** The `static final SimpleDateFormat …` branch changed nothing: Semgrep matches Java modifiers as a SUBSET, so the plain `static` branch alone produces the same two findings. Measured all three variants — both branches: 2; plain alone: 2; final alone: 1. Found by Task 4's reviewer. **Fourth** occurrence of this defect class in the series, and the fourth time the cause was identical: I measured the whole and one part, never each part alone. | `static-dateformat` |
+| **The short-name branch was redundant too, and the whole rule was written the wrong way round.** Measured across four import shapes: the FULLY-QUALIFIED pattern matches the short forms whenever an import lets Semgrep resolve them, the short pattern never matches the qualified form. So the short branch was inert AND the rule was blind to `static final java.text.SimpleDateFormat` in a file with no import. **Fifth** occurrence. Found in fix wave 4, by scanning a probe file the reviewer wrote rather than one I wrote. | `static-dateformat` |
+| **Two positive terms inside a `pattern-either` were inert.** The two `switch` re-inclusion disjuncts each repeated `- pattern: $COLL.remove(...)` beside their `pattern-inside`, copied from the third disjunct where it IS load-bearing — `pattern-inside` is already a positive term, `pattern-not-inside` is not. **Sixth** occurrence, and the FIRST caught before shipping: by ablating all 164 clauses one at a time in fix wave 4 rather than waiting for the next reviewer. | `modify-during-iteration` |
 
 **One near-miss was measuring nothing, and only a second look found it.** The
 first `static-dateformat` near-miss used a fully-qualified

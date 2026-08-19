@@ -530,6 +530,32 @@ Expected: FAIL — the two new hit fixtures produce no findings yet.
 
 - [ ] **Step 5: Append the two rules**
 
+> **SUPERSEDED — the YAML block below is the ORIGINAL plan text and is no
+> longer what ships.** It is kept verbatim because a plan is a record of what
+> was intended, not a mirror of the tree; editing it in place would erase the
+> fact that both rules were specified far too loosely and were corrected four
+> review rounds later. Read
+> [`configs/semgrep/bugfix-java.yml`](../../../configs/semgrep/bugfix-java.yml)
+> for what actually ships, and
+> [`docs/superpowers/specs/2026-08-19-bugfix-rules-java-design.md`](../specs/2026-08-19-bugfix-rules-java-design.md)
+> for the design of record. What changed, and why:
+>
+> - `map-get-deref` was an untyped `$M.get($K).$METHOD(...)`. Untyped, it fired
+>   at ERROR on `list.get(0).trim()` — it was never a rule about maps. The
+>   receiver is now restricted by declared type, and the receiver expression is
+>   bound through a `metavariable-pattern` so a `this.`-qualified field
+>   resolves. It also shipped with **no guard exclusion at all**, so the
+>   canonical `if (m.containsKey(k)) { … m.get(k).trim() … }` fired at ERROR on
+>   correct code; it now carries the measured guard, ternary, early-exit and
+>   population exclusions.
+> - `optional-get-no-ispresent` was `$O.get()` with a single exclusion and
+>   `severity: ERROR`. Untyped, `$O.get()` matched `AtomicInteger.get()`,
+>   `ThreadLocal.get()` and `Supplier.get()`. It is now type-restricted, it
+>   carries the full guard-shape list, and it is **WARNING**, per §4 of the
+>   design.
+> - Step 6's "Four hit fixtures, four near-misses, `scanned` = 4" describes the
+>   two-rule increment this step added, not the finished pack.
+
 ```yaml
   # Sem cláusula de exclusão para `getOrDefault`, e isso é deliberado: o
   # Semgrep exige o identificador literal `get`, por isso

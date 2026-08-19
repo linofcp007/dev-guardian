@@ -14,6 +14,25 @@
 # error_handling casa, e `concurren`, que a de race_condition casa e é testada
 # primeiro no if-chain. É por isso que a regra de edge_case se chama
 # modify-during-iteration e não concurrent-modification.
+#
+# ---------------------------------------------------------------------------
+# DUAS FORMAS que aparecem em todo o ficheiro, ambas medidas, ambas com custo:
+#
+# 1. `{ $S1; return ...; }` em vez de `{ ... return ...; }`. O `...` de
+#    statement faz DEEP MATCHING: `if (!m.containsKey(k)) { if (strict) {
+#    return ""; } }` casa `{ ... return ...; }` e a guarda deixa de disparar —
+#    mas essa guarda não cobre todos os caminhos e o deref a seguir É um bug.
+#    Medido: com `...` o caso desaparece; com `$S1` continua a disparar. A
+#    exclusão limitada engole um statement interposto, não uma árvore. CUSTO:
+#    duas ou mais instruções entre a guarda e a saída voltam a disparar.
+#
+# 2. O recetor é ligado por `metavariable-pattern` com um `pattern-either`
+#    interno de `$F` e `this.$F`, e só DEPOIS tipado. Sem isso o
+#    `metavariable-type` não resolve um campo qualificado — `cache.get(k)`
+#    disparava e `this.cache.get(k)` era invisível, na mesma classe e no mesmo
+#    campo. Um ramo por tipo continua a ser um ramo por tipo; o `this.` sai de
+#    graça e tem a sua própria fixture para não morrer sem se dar por isso.
+# ---------------------------------------------------------------------------
 rules:
   # A exclusão é pelo NOME da variável, não por comentário, e a razão é que o
   # Semgrep casa a AST — os comentários não estão lá. Um catch documentado
@@ -68,83 +87,239 @@ rules:
   # continua a imprimir `Scan completed successfully` nesse erro, por isso uma
   # regra partida é indistinguível de uma regra que não encontrou nada.
   #
+  # AS GUARDAS. A regra esteve sem UMA ÚNICA exclusão, e o resultado é que a
+  # guarda canónica de Java — `if (m.containsKey(k)) { … m.get(k).trim() … }` —
+  # disparava em ERROR a aconselhar `getOrDefault` sobre código já guardado.
+  # As exclusões abaixo são as formas medidas em que a presença da chave fica
+  # provada no caminho que chega ao deref: guarda inline (simples e em
+  # conjunção), ternário (nas quatro polaridades), saída antecipada
+  # (`return`/`throw`/`continue`, sobre `!containsKey` e sobre `get() == null`,
+  # cada uma com e sem uma instrução interposta) e as duas formas de população
+  # que garantem a chave, `putIfAbsent` e `computeIfAbsent`.
+  #
+  # As aspas são obrigatórias em todo o ternário e em `!$M.containsKey(...)`:
+  # sem elas o YAML lê o `?` como indicador de chave complexa e o `!` como
+  # tag, e o ficheiro inteiro deixa de carregar — `Invalid YAML file`,
+  # `scanned=0`. É a mesma armadilha do RuleParseError: a corrida parece ter
+  # acontecido.
+  #
   # CUSTO, medido: o `metavariable-type` casa o tipo declarado EXATO, sem
   # subtipagem. Um mapa atrás de uma interface do próprio projeto, um `Map`
-  # cru, ou um parâmetro de tipo genérico deixam de ser vistos. É recall
-  # trocado por precisão, de propósito.
+  # cru, um `EnumMap` ou um parâmetro de tipo genérico deixam de ser vistos. É
+  # recall trocado por precisão, de propósito.
   - id: bugfix-java-null-safety-map-get-deref
-    pattern-either:
-      - patterns:
-          - pattern: $M.get($K).$METHOD(...)
-          - metavariable-type: {metavariable: $M, type: Map}
-      - patterns:
-          - pattern: $M.get($K).$METHOD(...)
-          - metavariable-type: {metavariable: $M, type: HashMap}
-      - patterns:
-          - pattern: $M.get($K).$METHOD(...)
-          - metavariable-type: {metavariable: $M, type: TreeMap}
-      - patterns:
-          - pattern: $M.get($K).$METHOD(...)
-          - metavariable-type: {metavariable: $M, type: LinkedHashMap}
-      - patterns:
-          - pattern: $M.get($K).$METHOD(...)
-          - metavariable-type: {metavariable: $M, type: ConcurrentHashMap}
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: $M.get($K).$METHOD(...)
+              - metavariable-pattern:
+                  metavariable: $M
+                  patterns:
+                    - pattern-either:
+                        - pattern: $F
+                        - pattern: this.$F
+                    - metavariable-type: {metavariable: $F, type: Map}
+          - patterns:
+              - pattern: $M.get($K).$METHOD(...)
+              - metavariable-pattern:
+                  metavariable: $M
+                  patterns:
+                    - pattern-either:
+                        - pattern: $F
+                        - pattern: this.$F
+                    - metavariable-type: {metavariable: $F, type: HashMap}
+          - patterns:
+              - pattern: $M.get($K).$METHOD(...)
+              - metavariable-pattern:
+                  metavariable: $M
+                  patterns:
+                    - pattern-either:
+                        - pattern: $F
+                        - pattern: this.$F
+                    - metavariable-type: {metavariable: $F, type: TreeMap}
+          - patterns:
+              - pattern: $M.get($K).$METHOD(...)
+              - metavariable-pattern:
+                  metavariable: $M
+                  patterns:
+                    - pattern-either:
+                        - pattern: $F
+                        - pattern: this.$F
+                    - metavariable-type: {metavariable: $F, type: LinkedHashMap}
+          - patterns:
+              - pattern: $M.get($K).$METHOD(...)
+              - metavariable-pattern:
+                  metavariable: $M
+                  patterns:
+                    - pattern-either:
+                        - pattern: $F
+                        - pattern: this.$F
+                    - metavariable-type: {metavariable: $F, type: ConcurrentHashMap}
+      # --- guarda inline -----------------------------------------------------
+      - pattern-not-inside: if ($M.containsKey($K)) { ... }
+      - pattern-not-inside: "if ($M.containsKey($K) && ...) { ... }"
+      - pattern-not-inside: "if (... && $M.containsKey($K)) { ... }"
+      - pattern-not-inside: if ($M.get($K) != null) { ... }
+      - pattern-not-inside: "if ($M.get($K) != null && ...) { ... }"
+      - pattern-not-inside: "if (... && $M.get($K) != null) { ... }"
+      # --- ternário (expressão condicional: nó de AST diferente do `if`) -----
+      - pattern-not-inside: "$M.containsKey($K) ? ... : ..."
+      - pattern-not-inside: "!$M.containsKey($K) ? ... : ..."
+      - pattern-not-inside: "$M.get($K) != null ? ... : ..."
+      - pattern-not-inside: "$M.get($K) == null ? ... : ..."
+      # --- saída antecipada sobre !containsKey -------------------------------
+      - pattern-not-inside: |
+          if (!$M.containsKey($K)) { return ...; }
+          ...
+      - pattern-not-inside: |
+          if (!$M.containsKey($K)) { $S1; return ...; }
+          ...
+      - pattern-not-inside: |
+          if (!$M.containsKey($K)) { throw ...; }
+          ...
+      - pattern-not-inside: |
+          if (!$M.containsKey($K)) { $S1; throw ...; }
+          ...
+      - pattern-not-inside: |
+          if (!$M.containsKey($K)) { continue; }
+          ...
+      - pattern-not-inside: |
+          if (!$M.containsKey($K)) { $S1; continue; }
+          ...
+      # --- saída antecipada sobre get() == null ------------------------------
+      - pattern-not-inside: |
+          if ($M.get($K) == null) { return ...; }
+          ...
+      - pattern-not-inside: |
+          if ($M.get($K) == null) { $S1; return ...; }
+          ...
+      - pattern-not-inside: |
+          if ($M.get($K) == null) { throw ...; }
+          ...
+      - pattern-not-inside: |
+          if ($M.get($K) == null) { $S1; throw ...; }
+          ...
+      - pattern-not-inside: |
+          if ($M.get($K) == null) { continue; }
+          ...
+      - pattern-not-inside: |
+          if ($M.get($K) == null) { $S1; continue; }
+          ...
+      # --- população que garante a chave -------------------------------------
+      #
+      # As quatro ligam o MESMO mapa e a MESMA chave que o deref lê, por isso
+      # a presença fica provada sem guarda nenhuma. O `put` direto é o que
+      # fecha a limitação que aqui esteve documentada — "um mapa populado
+      # imediatamente acima da leitura continua a ser assinalado" — e o
+      # `if (!containsKey) { put(); }` é o idioma de popular-em-falta, que não
+      # é uma saída antecipada e nenhuma das cláusulas de cima lhe chega.
+      - pattern-not-inside: |
+          $M.putIfAbsent($K, ...);
+          ...
+      - pattern-not-inside: |
+          $M.computeIfAbsent($K, ...);
+          ...
+      - pattern-not-inside: |
+          $M.put($K, ...);
+          ...
+      - pattern-not-inside: |
+          if (!$M.containsKey($K)) { $M.put($K, ...); }
+          ...
     message: >-
-      Método chamado diretamente sobre `map.get()`. O `get` devolve `null`
-      quando a chave não existe, por isso isto é um NullPointerException na
-      primeira chave em falta. Guarde o resultado e teste-o, ou use
-      `getOrDefault`.
+      Método chamado diretamente sobre `map.get()` sem guarda. O `get` devolve
+      `null` quando a chave não existe, por isso isto é um
+      NullPointerException na primeira chave em falta. Guarde o resultado e
+      teste-o, ou use `getOrDefault`.
     severity: ERROR
     languages: [java]
 
   # WARNING e não ERROR, e a razão é o critério do §4 do design aplicado a
   # frio: ERROR é para o padrão que é bug independentemente da intenção. Um
-  # `o.get()` não é isso — só é bug quando está SEM GUARDA, e treze cláusulas
-  # depois há prova direta de que a regra não consegue decidir isso de forma
-  # fiável. Ela reconhece guardas escritas inline sobre a mesma variável e
-  # falha qualquer guarda que chegue através de outro método, como
-  # `if (!present(o)) { return d; }` — que exige análise interprocedimental e
-  # não é exprimível em Semgrep OSS. Uma regra que precisa de uma lista de
-  # exclusões sem fim para se manter correta em ERROR nunca foi ERROR segundo
-  # esta definição. Descer de tier é aplicar o critério, não mudar o contrato.
+  # `o.get()` não é isso — só é bug quando está SEM GUARDA, e a lista de
+  # exclusões abaixo é a prova direta de que a regra não consegue decidir isso
+  # de forma fiável. Uma regra que precisa de uma lista de exclusões sem fim
+  # para se manter correta em ERROR nunca foi ERROR segundo esta definição.
+  # Descer de tier é aplicar o critério, não mudar o contrato.
   #
   # Sem o `metavariable-type`, `$O.get()` casa QUALQUER `get()` sem argumentos
   # — `AtomicInteger.get()`, `ThreadLocal.get()`, `Supplier.get()` — e a regra
-  # nunca foi sobre `Optional`. As exclusões cobrem as guardas de saída
-  # antecipada, que são tão corretas como o `if (isPresent())` mas não põem o
-  # `get()` dentro do `if`, mais as três formas ternárias — um ternário é uma
-  # EXPRESSÃO condicional, um nó da AST diferente de um `if`, por isso nenhuma
-  # das cláusulas de statement lhe chega e precisou das suas próprias. Cada uma
-  # tem a sua própria near-miss em misses/OptionalGet.java: apagar uma cláusula
-  # acende exatamente uma função.
+  # nunca foi sobre `Optional`.
+  #
+  # O QUE A REGRA RECONHECE, medido e enumerado (a frase que aqui esteve dizia
+  # "guardas escritas inline sobre a mesma variável" e era falsificável: uma
+  # condição composta, uma saída com mais do que uma instrução, um `while` e um
+  # `Optional.of` atribuído disparavam todos):
+  #   * `if ($O.isPresent()) { … }`, incluindo em conjunção (`&&`) com outra
+  #     condição de qualquer dos lados — a disjunção (`||`) NÃO é excluída, e
+  #     deliberadamente: `a.isPresent() || b` não prova nada sobre `a` no corpo;
+  #   * `while ($O.isPresent()) { … }`;
+  #   * saída antecipada por `return`/`throw`/`continue`/`break`, sobre
+  #     `!isPresent()` e sobre `isEmpty()`, com e sem uma instrução interposta;
+  #   * as três formas ternárias;
+  #   * `$O.filter(...).isPresent()`;
+  #   * `Optional<T> o = Optional.of(...)`, que não pode estar vazio —
+  #     `ofNullable` pode, e continua a disparar.
+  # O que a regra NÃO reconhece, e não é exprimível em Semgrep OSS: qualquer
+  # guarda que chegue através de outro método, como `if (!present(o)) { … }`,
+  # que exige análise interprocedimental.
   - id: bugfix-java-null-safety-optional-get-no-ispresent
     patterns:
       - pattern: $O.get()
       - metavariable-type: {metavariable: $O, type: Optional}
+      # --- guarda inline -----------------------------------------------------
       - pattern-not-inside: if ($O.isPresent()) { ... }
+      - pattern-not-inside: "if ($O.isPresent() && ...) { ... }"
+      - pattern-not-inside: "if (... && $O.isPresent()) { ... }"
+      - pattern-not-inside: while ($O.isPresent()) { ... }
+      # --- saída antecipada sobre !isPresent() -------------------------------
       - pattern-not-inside: |
           if (!$O.isPresent()) { return ...; }
+          ...
+      - pattern-not-inside: |
+          if (!$O.isPresent()) { $S1; return ...; }
           ...
       - pattern-not-inside: |
           if (!$O.isPresent()) { throw ...; }
           ...
       - pattern-not-inside: |
+          if (!$O.isPresent()) { $S1; throw ...; }
+          ...
+      - pattern-not-inside: |
           if (!$O.isPresent()) { continue; }
+          ...
+      - pattern-not-inside: |
+          if (!$O.isPresent()) { $S1; continue; }
           ...
       - pattern-not-inside: |
           if (!$O.isPresent()) { break; }
           ...
       - pattern-not-inside: |
+          if (!$O.isPresent()) { $S1; break; }
+          ...
+      # --- saída antecipada sobre isEmpty() ----------------------------------
+      - pattern-not-inside: |
           if ($O.isEmpty()) { return ...; }
+          ...
+      - pattern-not-inside: |
+          if ($O.isEmpty()) { $S1; return ...; }
           ...
       - pattern-not-inside: |
           if ($O.isEmpty()) { throw ...; }
           ...
       - pattern-not-inside: |
+          if ($O.isEmpty()) { $S1; throw ...; }
+          ...
+      - pattern-not-inside: |
           if ($O.isEmpty()) { continue; }
           ...
       - pattern-not-inside: |
+          if ($O.isEmpty()) { $S1; continue; }
+          ...
+      - pattern-not-inside: |
           if ($O.isEmpty()) { break; }
+          ...
+      - pattern-not-inside: |
+          if ($O.isEmpty()) { $S1; break; }
           ...
       # As aspas são obrigatórias nas três, e por duas razões. Sem elas o YAML
       # lê o `?` como indicador de chave complexa e o `:` como mapeamento, e o
@@ -159,6 +334,12 @@ rules:
       # recetor a exatamente `$O`, e aqui quem recebe o `isPresent()` é
       # `o.filter(p)`.
       - pattern-not-inside: if ($O.filter(...).isPresent()) { ... }
+      # `Optional.of` lança se o argumento for null, por isso um Optional
+      # construído assim está sempre presente. `ofNullable` NÃO está aqui —
+      # esse pode estar vazio e o `get()` a seguir é o bug que a regra procura.
+      - pattern-not-inside: |
+          Optional<$T> $O = Optional.of(...);
+          ...
     message: >-
       `Optional.get()` sem `isPresent()`. Lança `NoSuchElementException` quando
       está vazio — que é exatamente aquilo que o Optional existia para evitar.
@@ -166,9 +347,24 @@ rules:
     severity: WARNING
     languages: [java]
 
+  # O `$A` é restringido a um ARRAY, e sem isso a regra não era sobre arrays:
+  # `$A.length` casa qualquer campo `int` chamado `length`, e disparava em
+  # ERROR sobre `for (int i = 0; i <= seg.length; i++)` num objeto de domínio
+  # com um campo `length` — um ciclo inclusivo de propósito, sobre nada que
+  # tenha limites de array.
+  #
+  # O tipo é `"$T[]"`, com aspas obrigatórias: sem elas o `[` abre uma
+  # sequência de fluxo YAML e o ficheiro não carrega. Um array de qualquer
+  # elemento serve, e medido não custa recall nenhum: parâmetro, local,
+  # campo, campo com `this.` e local inferido com `var` continuam todos a ser
+  # vistos.
   - id: bugfix-java-off-by-one-loop-lte-length
-    pattern: |
-      for (int $I = 0; $I <= $A.length; $I++) { ... }
+    patterns:
+      - pattern: |
+          for (int $I = 0; $I <= $A.length; $I++) { ... }
+      - metavariable-type:
+          metavariable: $A
+          type: "$T[]"
     message: >-
       Off-by-one. `i <= a.length` corre uma posição para lá do fim, e o índice
       `a.length` está sempre fora dos limites — é um
@@ -204,11 +400,22 @@ rules:
 
   # Um único pattern, e o `final` NÃO precisa de ramo próprio: o Semgrep casa
   # os modificadores Java por subconjunto, por isso `static SimpleDateFormat`
-  # apanha também `static final SimpleDateFormat`. Um `pattern-either` com os
-  # dois esteve aqui e o segundo ramo não mudava um único resultado — medido:
-  # o ramo `static` sozinho dá as mesmas 2 ocorrências que os dois juntos.
+  # apanha também `static final SimpleDateFormat`.
+  #
+  # O nome está QUALIFICADO e a forma curta NÃO tem ramo, o que é o contrário
+  # do que parece. Medido nas quatro combinações: com `import
+  # java.text.SimpleDateFormat`, com `import java.text.*`, com declaração de
+  # `package`, e sem import nenhum — o pattern qualificado casa a forma curta
+  # em todas elas, porque o Semgrep resolve o nome pelo import. O pattern
+  # curto não casa a forma qualificada em nenhuma. Um `pattern-either` com os
+  # dois esteve aqui e o ramo curto era INERTE: as mesmas ocorrências, com e
+  # sem ele. Um campo `static final java.text.SimpleDateFormat` num ficheiro
+  # sem import — que é exatamente como se escreve quando não há import — era
+  # invisível enquanto o ramo curto sozinho lá esteve.
   - id: bugfix-java-race-condition-static-dateformat
-    pattern: static SimpleDateFormat $N = new SimpleDateFormat(...);
+    pattern: >-
+      static java.text.SimpleDateFormat $N =
+      new java.text.SimpleDateFormat(...);
     message: >-
       `SimpleDateFormat` num campo estático. A classe não é thread-safe e um
       campo estático é a definição de partilhado — sob concorrência devolve
@@ -224,11 +431,23 @@ rules:
   # sobrepostos que a exclusão só cancela a meio — ancorar na chamada única e
   # excluir sobre a sequência é a forma que funciona.
   #
-  # As duas exclusões cobrem o idioma mais comum de mutação de listas em Java:
-  # procurar, remover, sair. Não há `ConcurrentModificationException` possível
-  # porque o `next()` nunca mais é chamado. Um terceiro ramo com `return;` sem
-  # valor foi medido e é INERTE — o `return ...;` já casa o `return;` de um
-  # método `void` — por isso não está aqui.
+  # AS FORMAS DE SAIR. O idioma mais comum de mutação de listas em Java é
+  # procurar, remover, sair: não há `ConcurrentModificationException` possível
+  # porque o `next()` nunca mais é chamado. As exclusões cobrem as formas de
+  # sair — `return`, `throw`, `break` etiquetado e `break` simples — cada uma
+  # com e sem UMA instrução interposta. Um terceiro ramo com `return;` sem
+  # valor foi medido e é INERTE: o `return ...;` já casa o `return;` de um
+  # método `void`.
+  #
+  # O `break` SIMPLES é o caso perigoso e tem tratamento próprio. Dentro de um
+  # `switch`, `break` sai do `switch` e NÃO do ciclo — o `remove()` seguido de
+  # `break` num `case` é uma CME real, e a exclusão emparelhada engolia-a.
+  # A solução é o `pattern-either` de baixo: se o `remove` está dentro de um
+  # `switch` (com `case` ou com `default` — medido, cada forma só casa a sua,
+  # e as duas casam o `switch` de setas do Java 14), a exclusão do `break`
+  # simples não se aplica. O `break` ETIQUETADO sai mesmo do ciclo, `switch`
+  # ou não, por isso essa exclusão fica no nível de cima; e `return`/`throw`
+  # saem do método a partir de qualquer profundidade, por isso também.
   #
   # O tipo do recetor é enumerado em vez de negado: as coleções concorrentes
   # ficam de fora por omissão. A `CopyOnWriteArrayList` itera sobre um snapshot
@@ -246,32 +465,122 @@ rules:
       - pattern-either:
           - patterns:
               - pattern: $COLL.remove(...)
-              - metavariable-type: {metavariable: $COLL, type: List}
+              - metavariable-pattern:
+                  metavariable: $COLL
+                  patterns:
+                    - pattern-either:
+                        - pattern: $F
+                        - pattern: this.$F
+                    - metavariable-type: {metavariable: $F, type: List}
           - patterns:
               - pattern: $COLL.remove(...)
-              - metavariable-type: {metavariable: $COLL, type: ArrayList}
+              - metavariable-pattern:
+                  metavariable: $COLL
+                  patterns:
+                    - pattern-either:
+                        - pattern: $F
+                        - pattern: this.$F
+                    - metavariable-type: {metavariable: $F, type: ArrayList}
           - patterns:
               - pattern: $COLL.remove(...)
-              - metavariable-type: {metavariable: $COLL, type: LinkedList}
+              - metavariable-pattern:
+                  metavariable: $COLL
+                  patterns:
+                    - pattern-either:
+                        - pattern: $F
+                        - pattern: this.$F
+                    - metavariable-type: {metavariable: $F, type: LinkedList}
           - patterns:
               - pattern: $COLL.remove(...)
-              - metavariable-type: {metavariable: $COLL, type: Set}
+              - metavariable-pattern:
+                  metavariable: $COLL
+                  patterns:
+                    - pattern-either:
+                        - pattern: $F
+                        - pattern: this.$F
+                    - metavariable-type: {metavariable: $F, type: Set}
           - patterns:
               - pattern: $COLL.remove(...)
-              - metavariable-type: {metavariable: $COLL, type: HashSet}
+              - metavariable-pattern:
+                  metavariable: $COLL
+                  patterns:
+                    - pattern-either:
+                        - pattern: $F
+                        - pattern: this.$F
+                    - metavariable-type: {metavariable: $F, type: HashSet}
           - patterns:
               - pattern: $COLL.remove(...)
-              - metavariable-type: {metavariable: $COLL, type: LinkedHashSet}
+              - metavariable-pattern:
+                  metavariable: $COLL
+                  patterns:
+                    - pattern-either:
+                        - pattern: $F
+                        - pattern: this.$F
+                    - metavariable-type: {metavariable: $F, type: LinkedHashSet}
           - patterns:
               - pattern: $COLL.remove(...)
-              - metavariable-type: {metavariable: $COLL, type: Collection}
+              - metavariable-pattern:
+                  metavariable: $COLL
+                  patterns:
+                    - pattern-either:
+                        - pattern: $F
+                        - pattern: this.$F
+                    - metavariable-type: {metavariable: $F, type: Collection}
       - pattern-inside: "for ($T $X : $COLL) { ... }"
+      # --- saídas que deixam o MÉTODO, a qualquer profundidade ---------------
       - pattern-not-inside: |
           $COLL.remove(...);
           return ...;
       - pattern-not-inside: |
           $COLL.remove(...);
-          break;
+          $S1;
+          return ...;
+      - pattern-not-inside: |
+          $COLL.remove(...);
+          throw ...;
+      - pattern-not-inside: |
+          $COLL.remove(...);
+          $S1;
+          throw ...;
+      # --- `break` ETIQUETADO: sai do ciclo, esteja onde estiver -------------
+      - pattern-not-inside: |
+          $COLL.remove(...);
+          break $L;
+      - pattern-not-inside: |
+          $COLL.remove(...);
+          $S1;
+          break $L;
+      # --- `break` SIMPLES: só sai do ciclo fora de um `switch` --------------
+      - pattern-either:
+          # Os dois ramos do `switch` NÃO repetem o `pattern` positivo, e o
+          # terceiro TEM de o repetir. A diferença é que `pattern-inside` já é
+          # um termo positivo por si só, enquanto `pattern-not-inside` é só
+          # negativo — sem um positivo ao lado, o terceiro ramo é uma regra
+          # inválida. Medido: um `- pattern: $COLL.remove(...)` esteve aqui
+          # nos dois ramos do `switch` e era INERTE nos dois (mesmos findings
+          # com e sem ele, porque a conjunção de cima já ancora na chamada);
+          # tirá-lo do terceiro parte a regra. Sexta ocorrência desta classe
+          # de defeito na série, e a primeira apanhada pela ablação antes de
+          # sair.
+          - pattern-inside: |
+              switch ($S) {
+                case $C:
+                  ...
+              }
+          - pattern-inside: |
+              switch ($S) {
+                default:
+                  ...
+              }
+          - patterns:
+              - pattern: $COLL.remove(...)
+              - pattern-not-inside: |
+                  $COLL.remove(...);
+                  break;
+              - pattern-not-inside: |
+                  $COLL.remove(...);
+                  $S1;
+                  break;
     message: >-
       Remoção da coleção durante o for-each sobre ela própria. Lança
       `ConcurrentModificationException` na iteração seguinte. Use

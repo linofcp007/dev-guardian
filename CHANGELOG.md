@@ -21,13 +21,14 @@ version bump.
 
 ### Fixed
 
-- **The Java rules no longer fire on correct Java.** Two review sweeps found
-  19 findings on correct code across five of the eight rules; all 19 are gone,
-  and every one is pinned by a near-miss fixture.
+- **The Java rules no longer fire on correct Java.** The first two review
+  sweeps found 19 findings on correct code across five of the eight rules; all
+  19 are gone, and every one is pinned by a near-miss fixture. A third and a
+  fourth sweep are recorded below.
   - `null-safety-optional-get-no-ispresent` was never about `Optional`:
     `$O.get()` matched **any** zero-argument `get()`, so `AtomicInteger.get()`,
     `ThreadLocal.get()` and `Supplier.get()` all fired at ERROR. Restricted by
-    declared type, and eight early-exit guard shapes
+    declared type, and the early-exit guard shapes
     (`return`/`throw`/`continue`/`break` under `!isPresent()` or `isEmpty()`)
     are now recognised alongside `if (isPresent())`.
   - `null-safety-map-get-deref` was never about `Map`: `$M.get($K).$METHOD(...)`
@@ -59,6 +60,74 @@ version bump.
     `Optional` returns empty, so a present filter result proves the original is
     present; the `isPresent()` exclusion missed it only because it binds the
     receiver to exactly `$O`, and here the receiver is `o.filter(p)`.
+- **A fourth review sweep found 16 more findings on correct Java, plus one
+  false negative that hid a real bug.** All 17 are gone. The near-miss fixtures
+  behind them deliberately vary the *shape* — an extra statement, a compound
+  condition, a different exit, a label, a chained call, a different declared
+  receiver type — rather than instantiating each exclusion pattern minimally,
+  which is what made the previous round's "every clause is live" measurement
+  true and uninformative.
+  - **`edge-case-modify-during-iteration` was hiding a real
+    `ConcurrentModificationException`.** A `remove()` inside a `switch`
+    followed by `break;` was excluded by the paired `remove(); break;` clause —
+    but that `break` leaves the *switch*, not the loop, so the for-each calls
+    `next()` again on a mutated collection. The plain-`break` exclusion now
+    applies only outside a `switch`; `return`, `throw` and a **labelled**
+    `break` do leave the method or the loop from inside one and stay excluded
+    everywhere. Fixed regardless of the false positives below, because a false
+    negative that hides a real bug is worse than a false positive.
+  - `null-safety-map-get-deref` had **no guard exclusion at all**, so the
+    canonical Java guard `if (m.containsKey(k)) { … m.get(k).trim() … }` fired
+    at ERROR and advised `getOrDefault` on already-guarded code. It now
+    excludes the measured shapes that prove the key present: the inline
+    `containsKey` and `get() != null` tests, alone or as either operand of a
+    conjunction; all four ternary polarities; an early
+    `return`/`throw`/`continue` under `!containsKey` or `get() == null`; and
+    population by `put`, `putIfAbsent`, `computeIfAbsent` or
+    `if (!containsKey) { put(); }`. A **disjunction** is deliberately not
+    excluded — `a || m.containsKey(k)` proves nothing inside the body.
+  - `edge-case-modify-during-iteration` no longer fires when one statement sits
+    between the removal and its exit (`list.remove(s); removed = 1; break;`),
+    nor on a **labelled** `break`, nor on `remove(); throw …;`.
+  - `null-safety-optional-get-no-ispresent` no longer fires on a **compound**
+    guard (`if (a.isPresent() && b.isPresent())` fired twice, at the exact
+    point where both were proven present), on a `while (o.isPresent())` guard,
+    on an early exit with one statement before it
+    (`if (!o.isPresent()) { log(); return ""; }`), or on an
+    `Optional<T> o = Optional.of(…)` construction, which cannot be empty —
+    `ofNullable` can, and still fires.
+  - `off-by-one-loop-lte-length` restricts its array metavariable to an
+    **array type**. `$A.length` matched any `int` field named `length`, so a
+    domain object's deliberately inclusive `for (int i = 0; i <= seg.length;
+    i++)` fired at ERROR on a loop with no array in it. Measured, the
+    restriction costs no recall: parameter, local, field, `this.`-qualified
+    field and `var`-inferred local arrays are all still matched.
+  - **Two recall gaps closed.** `map-get-deref` and `modify-during-iteration`
+    now bind the receiver through a `metavariable-pattern` accepting a bare
+    name **or** a `this.`-qualified one, so `this.cache.get(k).trim()` is seen
+    where `cache.get(k).trim()` already was — same class, same field, same bug.
+    And `race-condition-static-dateformat` now ships a single **fully-qualified**
+    pattern, so a `static final java.text.SimpleDateFormat` field in a file
+    with no import is seen; measured across four import shapes, the qualified
+    pattern matches the short forms too whenever an import lets Semgrep resolve
+    them, while the short pattern never matched the qualified one — so the
+    short branch was inert and was deleted.
+  - **Two inert clauses deleted, found by ablating every clause alone.** The
+    two `switch` re-inclusion disjuncts each repeated
+    `- pattern: $COLL.remove(...)` next to their `pattern-inside`, copied from
+    the third disjunct where it *is* load-bearing. It is not load-bearing
+    there: `pattern-inside` is already a positive term and the enclosing
+    conjunction already anchors on the removal, so the repeat changed nothing —
+    measured, identical findings with and without it. Sixth occurrence of this
+    defect class in the rule-pack series, and the first caught before shipping.
+  - **The exit-terminated exclusions are bounded on purpose.** Across
+    `map-get-deref`, `optional-get-no-ispresent` and
+    `modify-during-iteration`, they tolerate exactly **one** statement between
+    the guard (or the removal) and the exit rather than a statement ellipsis.
+    Measured: the ellipsis matches *deep*, so
+    `if (!m.containsKey(k)) { if (strict) { return ""; } }` and
+    `items.remove(s); if (done) { break; }` both stop firing — and both are
+    real bugs. The price is accepted false positive (5) below.
 
 ### Changed
 
@@ -93,9 +162,17 @@ version bump.
   that simple name: `FileOutputStream`, `FileReader`, `Socket` and every other
   closeable leak identically and are not covered, and neither is a
   fully-qualified `new java.io.FileInputStream(...)` (measured).
-- `static-dateformat` only recognises `SimpleDateFormat`.
-- `map-get-deref` has no dataflow, so a map populated on the line above is
-  still flagged.
+- `static-dateformat` only recognises `SimpleDateFormat`, so a shared
+  `Calendar` or `Matcher` in a static field is not covered. It is no longer
+  blind to the fully-qualified declaration; `stream-not-closed` is now the only
+  rule in the pack with that gap.
+- `map-get-deref` has no dataflow, so a key whose presence is established
+  outside the guard and population shapes the rule enumerates is still flagged
+  — a map filled in a static initialiser, or a total enum mapping declared as a
+  `Map`. A map populated by `put` / `putIfAbsent` / `computeIfAbsent` above the
+  read is no longer flagged.
+- `map-get-deref` does not cover an `EnumMap`: the receiver enumeration is by
+  declared type, and `EnumMap` is not in it.
 - `modify-during-iteration` only matches the enhanced-for form.
 - **Declared-type restriction costs recall.** `metavariable-type` matches the
   exact declared type with **no subtyping** — measured: `type: List` does not
@@ -106,30 +183,58 @@ version bump.
   `Queue`, a `SortedSet` or a project collection type.
 - **The empty-catch naming escape hatch cuts both ways.** A genuinely swallowed
   exception escapes the rule simply by being named `ignored`.
-- `optional-get-no-ispresent` recognises guards written **inline against the
-  same `Optional` variable** and misses **any guard that reaches the check
-  through another method or another variable**. The concrete case is a guard
-  delegated to a helper — `if (!present(o)) { return d; }` — which needs
-  interprocedural analysis Semgrep OSS does not do. Stated as a shape rather
-  than a count, because the clause list is a moving target and a count goes
-  stale; the rule is `WARNING` precisely because this class of miss has no end.
+- `optional-get-no-ispresent` recognises exactly these guard shapes:
+  `if (o.isPresent())` alone or as either operand of a **conjunction**;
+  `while (o.isPresent())`; an early `return`/`throw`/`continue`/`break` under
+  `!isPresent()` or `isEmpty()`, with or without one statement before the exit;
+  the three ternary forms; `if (o.filter(p).isPresent())`; and an
+  `Optional<T> o = Optional.of(…)` construction. It misses **any guard that
+  reaches the check through another method** — the concrete case is a guard
+  delegated to a helper, `if (!present(o)) { return d; }`, which needs
+  interprocedural analysis Semgrep OSS does not do — and it deliberately does
+  not treat a **disjunction** as a guard, since `a || o.isPresent()` proves
+  nothing inside the body. Enumerated rather than summarised: the summary that
+  stood here ("inline against the same `Optional` variable") was falsifiable,
+  and was falsified by a compound condition, a multi-statement exit, a `while`
+  and an `Optional.of`. The rule is `WARNING` precisely because this class of
+  miss has no end.
 
 ### Accepted false positives
 
-Reproduced on correct code, and kept rather than fixed:
+Reproduced on correct code, and kept rather than fixed. Exhaustive against the
+review fixtures that exist today, not against all Java:
 
-- `memory-leak-stream-not-closed` on `open(); try { … } finally { close(); }` —
-  already the rule's stated limitation, and already why it is `WARNING`.
-- `race-condition-static-dateformat` on a `static final SimpleDateFormat` whose
-  every access goes through a `synchronized` method — proving *all* accesses
-  are synchronized is whole-program analysis, which Semgrep OSS does not do,
-  and a shared formatter serialises every caller anyway.
-- `off-by-one-loop-lte-length` on `i <= a.length` where the body guards with
-  `i < a.length`, or never indexes `a` — genuinely rare, and the loop still
-  deserves a human look.
-- `error-handling-printstacktrace-only` on `printStackTrace()` as the fallback
-  when the logger itself threw — the one place the call is right; already
-  `WARNING`; too narrow to encode.
+- **(1)** `memory-leak-stream-not-closed` on
+  `open(); try { … } finally { close(); }` — already the rule's stated
+  limitation, and already why it is `WARNING`.
+- **(2)** `race-condition-static-dateformat` on a `static final
+  SimpleDateFormat` whose every access goes through a `synchronized` method —
+  proving *all* accesses are synchronized is whole-program analysis, which
+  Semgrep OSS does not do, and a shared formatter serialises every caller
+  anyway.
+- **(3)** `off-by-one-loop-lte-length` on `i <= a.length` where the body guards
+  with `i < a.length`, or never indexes `a` — genuinely rare, and the loop
+  still deserves a human look.
+- **(4)** `error-handling-printstacktrace-only` on `printStackTrace()` as the
+  fallback when the logger itself threw — the one place the call is right;
+  already `WARNING`; too narrow to encode.
+- **(5)** `null-safety-map-get-deref`, `null-safety-optional-get-no-ispresent`
+  and `edge-case-modify-during-iteration` where **two or more** statements sit
+  between the guard (or the removal) and the exit —
+  `if (!m.containsKey(k)) { log(); metric(); return ""; }`,
+  `items.remove(s); log(s); n++; break;`. The deliberate price of bounding the
+  exclusions instead of using a statement ellipsis: the ellipsis matches deep
+  and would swallow `if (!m.containsKey(k)) { if (strict) { return ""; } }` and
+  `items.remove(s); if (done) { break; }`, which are real bugs. A false
+  negative that hides a bug is worse than this false positive.
+- **(6)** The same three rules on any guard reached **through a helper
+  method** — `if (!present(o)) { return d; }` — which needs interprocedural
+  analysis Semgrep OSS does not do. Already the stated reason
+  `optional-get-no-ispresent` is `WARNING`.
+- **(7)** `null-safety-map-get-deref` on a key whose presence is established
+  outside the shapes the rule enumerates: a map filled in a static initialiser,
+  or a total enum mapping declared as a `Map`. Excluding "any map that ever
+  received a `put`" anywhere in the file would erase the rule.
 
 ## [1.8.0] - 2026-08-18
 

@@ -392,11 +392,17 @@ registerToolModule(makeScanTool({
         'leak identically and are not covered — as does a fully-qualified ' +
         '`new java.io.FileInputStream(...)`, which the pattern does not see (measured); ' +
         '`static-dateformat` only recognises `SimpleDateFormat`, so a shared `Calendar` or ' +
-        '`Matcher` in a static field is not covered; `map-get-deref` cannot tell a nullable map ' +
-        'from one whose keys are guaranteed present, so a map populated immediately above the ' +
-        'read is still flagged; and `modify-during-iteration` only matches the enhanced-for ' +
-        'form, so an indexed loop removing from the list it indexes has the same defect and is ' +
-        'missed. Two Java rules restrict the receiver by DECLARED type, which buys precision ' +
+        '`Matcher` in a static field is not covered, but it ships a single FULLY-QUALIFIED ' +
+        'pattern, so a `static final java.text.SimpleDateFormat` field in a file with no import ' +
+        'IS seen — it was not before (measured across four import shapes: the qualified pattern ' +
+        'also matches the short forms whenever an import lets Semgrep resolve them, while the ' +
+        'short pattern never matched the qualified one, so the short branch was inert and was ' +
+        'deleted); `map-get-deref` cannot tell a nullable map from one whose keys are ' +
+        'guaranteed present by anything other than the guard and population shapes it ' +
+        'enumerates, so a map filled in a static initialiser or a total enum mapping declared ' +
+        'as a `Map` is still flagged; and `modify-during-iteration` only matches the ' +
+        'enhanced-for form, so an indexed loop removing from the list it indexes has the same ' +
+        'defect and is missed. Two Java rules restrict the receiver by DECLARED type, which buys precision ' +
         'and costs recall: `metavariable-type` matches the exact declared type with no ' +
         'subtyping (measured — `type: List` does NOT match a CopyOnWriteArrayList, which is ' +
         'precisely what keeps the rule off it), so `map-get-deref`, enumerating Map, HashMap, ' +
@@ -404,31 +410,73 @@ registerToolModule(makeScanTool({
         'interface or a generic type parameter (`<M extends Map<K,V>> ... m.get(k).f()`), ' +
         'though a raw `Map` still fires (measured); and `modify-during-iteration`, enumerating ' +
         'List, ArrayList, LinkedList, Set, HashSet, LinkedHashSet and Collection, is silent on ' +
-        'a Deque, a Queue, a SortedSet or a project collection type. `empty-catch` honours the ' +
+        'a Deque, a Queue, a SortedSet or a project collection type — an EnumMap is outside ' +
+        "map-get-deref's enumeration for the same reason. Both bind the receiver through a " +
+        '`metavariable-pattern` accepting a bare name OR a `this.`-qualified one; before that, ' +
+        '`cache.get(k).trim()` fired while `this.cache.get(k).trim()` was invisible — same ' +
+        'class, same field, same bug (measured). `map-get-deref` shipped with NO guard ' +
+        'exclusion at all, so the canonical Java guard `if (m.containsKey(k)) { ... ' +
+        'm.get(k).trim() ... }` fired at ERROR and advised `getOrDefault` on already-guarded ' +
+        'code; it now excludes the measured shapes that prove the key present — the inline ' +
+        '`containsKey` and `get() != null` tests, alone or as either operand of a CONJUNCTION; ' +
+        'all four ternary polarities; an early return/throw/continue under `!containsKey` or ' +
+        '`get() == null`; and population by `put`, `putIfAbsent`, `computeIfAbsent` or ' +
+        '`if (!containsKey) { put(); }`. A DISJUNCTION is deliberately not excluded: ' +
+        '`a || m.containsKey(k)` proves nothing inside the body. `modify-during-iteration` had ' +
+        'a false negative worth more than any of its false positives — a `remove()` inside a ' +
+        '`switch` followed by `break;` is a real ConcurrentModificationException, because that ' +
+        'break leaves the SWITCH and not the loop, and the paired `remove(); break;` exclusion ' +
+        'swallowed it whole; the plain-break exclusion now applies only outside a switch, while ' +
+        'return, throw and a LABELLED break do leave the method or the loop from inside one and ' +
+        'stay excluded everywhere. `loop-lte-length` restricts its array metavariable to an ' +
+        'ARRAY TYPE, because `$A.length` otherwise matches any int field named `length` and ' +
+        "fired at ERROR on a domain object's deliberately inclusive loop; measured, that costs " +
+        'no recall — parameter, local, field, `this.`-qualified field and `var`-inferred local ' +
+        'arrays are all still matched. The exit-terminated exclusions across `map-get-deref`, ' +
+        '`optional-get-no-ispresent` and `modify-during-iteration` tolerate exactly ONE ' +
+        'statement between the guard (or the removal) and the exit rather than an arbitrary ' +
+        'ellipsis: measured, the ellipsis form matches DEEP, so ' +
+        '`if (!m.containsKey(k)) { if (strict) { return ""; } }` and ' +
+        '`items.remove(s); if (done) { break; }` both stop firing — and both are real bugs. ' +
+        '`empty-catch` honours the ' +
         'Checkstyle/IntelliJ convention and never fires when the exception variable is named ' +
         '`ignore`, `ignored` or `expected` — the flip side being that a genuinely swallowed ' +
         'exception escapes the rule simply by being named `ignored`. ' +
         '`optional-get-no-ispresent` is WARNING rather than ERROR, applying this pack\'s own ' +
         'tier rule instead of bending it: ERROR is for a pattern that is a bug regardless of ' +
-        'intent, and `o.get()` is a bug only when UNGUARDED. It recognises guards written ' +
-        'inline against the same Optional variable — `if (isPresent())`, an early ' +
-        'return/throw/continue/break under `!isPresent()` or `isEmpty()`, the three ternary ' +
+        'intent, and `o.get()` is a bug only when UNGUARDED. It recognises exactly these guard ' +
+        'shapes, enumerated rather than summarised because the summary that stood here — ' +
+        '"inline against the same Optional variable" — was falsifiable and was falsified by a ' +
+        'compound condition, a multi-statement exit, a `while` and an `Optional.of`: ' +
+        '`if (o.isPresent())` alone OR as either operand of a conjunction; ' +
+        '`while (o.isPresent())`; an early return/throw/continue/break under `!isPresent()` or ' +
+        '`isEmpty()`, with or without one statement before the exit; the three ternary ' +
         'forms (a ternary needs its own clauses because it is a conditional EXPRESSION, a ' +
-        'different AST node from an `if` statement), and `if (o.filter(p).isPresent())` — and ' +
-        'it misses any guard that reaches the check through another method or another ' +
-        'variable. The concrete case is a guard delegated to a helper, ' +
+        'different AST node from an `if` statement); `if (o.filter(p).isPresent())`; and an ' +
+        '`Optional<T> o = Optional.of(...)` construction, which cannot be empty — `ofNullable` ' +
+        'can, and still fires. It misses any guard that reaches the check through another ' +
+        'method, and it deliberately does not treat a DISJUNCTION as a guard. ' +
+        'The concrete missed case is a guard delegated to a helper, ' +
         '`if (!present(o)) { return d; }`, which needs interprocedural analysis Semgrep OSS ' +
         'does not do; that shape is a false positive and always will be, which is why the rule ' +
         'is WARNING instead of carrying an ever-longer exclusion list. ' +
-        'Four Java false positives are accepted rather than fixed, each reproduced on ' +
-        'correct code: `stream-not-closed` on `open(); try {} finally { close(); }` (already ' +
-        'the stated reason it is WARNING); `static-dateformat` on a static final ' +
+        'Seven Java false positives are accepted rather than fixed, each reproduced on ' +
+        'correct code: (1) `stream-not-closed` on `open(); try {} finally { close(); }` (already ' +
+        'the stated reason it is WARNING); (2) `static-dateformat` on a static final ' +
         'SimpleDateFormat whose every access goes through a synchronized method (proving ALL ' +
         'accesses are synchronized is whole-program analysis, which Semgrep OSS does not do, ' +
-        'and a shared formatter serialises every caller anyway); `loop-lte-length` on ' +
-        '`i <= a.length` where the body guards with `i < a.length` or never indexes `a`; and ' +
+        'and a shared formatter serialises every caller anyway); (3) `loop-lte-length` on ' +
+        '`i <= a.length` where the body guards with `i < a.length` or never indexes `a`; (4) ' +
         '`printstacktrace-only` on the one place the call is right — the fallback when the ' +
-        'logger itself threw. JS/TS, Python, Go and Java only: no other language has ' +
+        'logger itself threw; (5) `map-get-deref`, `optional-get-no-ispresent` and ' +
+        '`modify-during-iteration` where TWO OR MORE statements sit between the guard (or the ' +
+        'removal) and the exit — `if (!m.containsKey(k)) { log(); metric(); return ""; }`, ' +
+        '`items.remove(s); log(s); n++; break;` — the deliberate price of not using a ' +
+        'deep-matching ellipsis, which would hide real bugs instead; (6) all three of those ' +
+        'rules on any guard reached THROUGH A HELPER METHOD, `if (!present(o)) { return d; }`, ' +
+        'which needs interprocedural analysis; and (7) `map-get-deref` on a key whose presence ' +
+        'is established outside its enumerated shapes — a map filled in a static initialiser, ' +
+        'or a total enum mapping declared as a `Map`. JS/TS, Python, Go and Java only: no other language has ' +
         'a local rule pack yet, so C#, PHP, Ruby and Rust get only the ' +
         'registry coverage described below, same as before these packs existed. The local ' +
         'packs degrade rather than failing the whole scan if one is ever hand-edited into a bad ' +
