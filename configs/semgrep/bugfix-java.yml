@@ -32,8 +32,37 @@
 #    disparava e `this.cache.get(k)` era invisível, na mesma classe e no mesmo
 #    campo. Um ramo por tipo continua a ser um ramo por tipo; o `this.` sai de
 #    graça e tem a sua própria fixture para não morrer sem se dar por isso.
+#
+# ---------------------------------------------------------------------------
+# OS TIERS, e a consequência prática que ninguém quer descobrir sozinho.
+#
+# Sete das oito regras estão em WARNING. Uma única, a `empty-catch`, está em
+# ERROR. Não é desleixo: é o critério do §4 do design aplicado a frio, na sua
+# forma geral — a pergunta não é "o que é que a regra procura?" mas "aquilo
+# que a regra EMITE é sempre um bug?". Uma regra cuja correção depende de ter
+# reconhecido uma GUARDA falha sempre que encontra uma guarda que ninguém
+# enumerou, e a guarda pode estar a um método de distância, fora do alcance de
+# qualquer matcher sintático. Num motor sem dataflow quase nada passa nesta
+# barra; uma em oito é o resultado honesto, não uma falha do pack.
+#
+# CONSEQUÊNCIA: o parser do Semgrep mapeia ERROR -> `high` e WARNING ->
+# `medium`, e o `create_fix_pr` tem `severity_min` a `high` por omissão. Com
+# sete das oito em WARNING, este pack praticamente NÃO CONTRIBUI para o
+# conjunto de fixes por omissão. Quem quiser bugs de Java corrigidos tem de
+# pedir: `severity_min: "medium"`. O `bug_hunt` não filtra por omissão, por
+# isso nada desaparece de um scan — o que muda é só o fix-PR.
 # ---------------------------------------------------------------------------
 rules:
+  # A única regra do pack que fica em ERROR, e o critério do §4 explica porquê.
+  # A pergunta é "aquilo que a regra emite é sempre um bug?", e aqui a resposta
+  # é sim, porque esta regra não depende de reconhecer guarda nenhuma. A sua
+  # válvula de escape não é uma guarda: é uma DECLARAÇÃO DE INTENÇÃO que a
+  # própria regra lê, escrita no nome da variável. Depois de a honrar, o que
+  # sobra e é emitido é um catch que engole a falha sem o declarar em lado
+  # nenhum — e isso é bug independentemente do que o autor tencionava. As
+  # outras sete regras não têm nada equivalente: todas dependem de ter visto
+  # uma guarda, e nenhuma consegue ver todas.
+  #
   # A exclusão é pelo NOME da variável, não por comentário, e a razão é que o
   # Semgrep casa a AST — os comentários não estão lá. Um catch documentado
   # como ignorado de propósito é byte a byte igual a um catch que engole a
@@ -107,6 +136,19 @@ rules:
   # subtipagem. Um mapa atrás de uma interface do próprio projeto, um `Map`
   # cru, um `EnumMap` ou um parâmetro de tipo genérico deixam de ser vistos. É
   # recall trocado por precisão, de propósito.
+  #
+  # WARNING e não ERROR, e é o critério do §4 aplicado a frio — desta vez
+  # contra esta regra, depois de ter sido aplicado contra a
+  # `optional-get-no-ispresent`. Um `m.get(k).f()` só é bug SEM GUARDA, e as
+  # vinte e seis exclusões abaixo são a prova direta de que a regra não
+  # consegue decidir isso: cada uma delas existe porque uma forma de guarda
+  # perfeitamente correta estava a disparar em ERROR. A lista fecha as formas
+  # que alguém já enumerou. Não fecha a próxima, e não fecha nenhuma guarda que
+  # chegue por outro método. Uma regra que precisa de uma lista de exclusões
+  # sem fim para se manter correta em ERROR nunca foi ERROR segundo esta
+  # definição — foi exatamente esse o argumento usado para descer o
+  # `optional-get-no-ispresent`, e aplicá-lo a uma regra e não à outra era a
+  # inconsistência.
   - id: bugfix-java-null-safety-map-get-deref
     patterns:
       - pattern-either:
@@ -230,7 +272,7 @@ rules:
       `null` quando a chave não existe, por isso isto é um
       NullPointerException na primeira chave em falta. Guarde o resultado e
       teste-o, ou use `getOrDefault`.
-    severity: ERROR
+    severity: WARNING
     languages: [java]
 
   # WARNING e não ERROR, e a razão é o critério do §4 do design aplicado a
@@ -358,6 +400,24 @@ rules:
   # elemento serve, e medido não custa recall nenhum: parâmetro, local,
   # campo, campo com `this.` e local inferido com `var` continuam todos a ser
   # vistos.
+  #
+  # WARNING e não ERROR, e a descida foi MEDIDA antes de ser decidida: se o
+  # aperto óbvio funcionasse, a regra podia ter ficado em ERROR honestamente.
+  # Não funciona. Exigir que o corpo indexe mesmo o array, com
+  # `"for (int $I = 0; $I <= $A.length; $I++) { <... $A[$I] ...> }"`:
+  #
+  #   * MATA o ciclo que nunca indexa `a` —
+  #     `for (int i = 0; i <= a.length; i++) { sum += i; }`, que é correto;
+  #   * NÃO mata o array-sentinela — `int[] b = new int[a.length + 1]; ...
+  #     b[i] = (i < a.length) ? a[i] : -1;` é correto, preenche um array MAIOR,
+  #     e continua a disparar, porque o `a[i]` já guardado está mesmo ali dentro
+  #     do ternário e a forma de expressão profunda encontra-o;
+  #   * PERDE um bug real — `sum += at(a, i)`, em que o índice fora dos limites
+  #     é passado a um helper, deixa de disparar.
+  #
+  # Ou seja: troca um falso positivo por um falso negativo e não resolve o caso
+  # principal. Não foi aplicado. Os patterns ficam exatamente como estão e só o
+  # tier muda — e muda porque o que a regra emite não é sempre um bug.
   - id: bugfix-java-off-by-one-loop-lte-length
     patterns:
       - pattern: |
@@ -369,7 +429,7 @@ rules:
       Off-by-one. `i <= a.length` corre uma posição para lá do fim, e o índice
       `a.length` está sempre fora dos limites — é um
       ArrayIndexOutOfBoundsException. Queria provavelmente `i < a.length`.
-    severity: ERROR
+    severity: WARNING
     languages: [java]
 
   # WARNING e não ERROR: um stream fechado num `finally` está correto e esta
@@ -412,6 +472,17 @@ rules:
   # sem ele. Um campo `static final java.text.SimpleDateFormat` num ficheiro
   # sem import — que é exatamente como se escreve quando não há import — era
   # invisível enquanto o ramo curto sozinho lá esteve.
+  #
+  # WARNING e não ERROR. O §8 do design argumentava que marcar um formatter
+  # partilhado é "defensável de qualquer maneira", porque um formatter
+  # partilhado serializa todos os chamadores mesmo quando o acesso está
+  # sincronizado. Isso é um argumento de PRODUTO, não o critério do §4, e o
+  # critério ganha. A correção desta regra depende de uma guarda que ela não
+  # vê: um `static final SimpleDateFormat` cujos acessos passam todos por
+  # métodos `synchronized` é código correto, e provar que TODOS os acessos
+  # estão sincronizados é análise do programa inteiro, que o Semgrep OSS não
+  # faz. Já estava documentado como falso positivo não corrigível; o tier passa
+  # agora a dizer a mesma coisa.
   - id: bugfix-java-race-condition-static-dateformat
     pattern: >-
       static java.text.SimpleDateFormat $N =
@@ -421,7 +492,7 @@ rules:
       campo estático é a definição de partilhado — sob concorrência devolve
       datas trocadas ou lança. Use `DateTimeFormatter`, que é imutável, ou uma
       instância por chamada.
-    severity: ERROR
+    severity: WARNING
     languages: [java]
 
   # Ancorada na CHAMADA `remove`, não no `for`. Duas razões, ambas medidas.
@@ -460,6 +531,15 @@ rules:
   # o que faz a regra ficar calada sobre qualquer coleção declarada com um tipo
   # que não esteja nesta lista (`Deque`, `Queue`, `SortedSet`, uma coleção do
   # próprio projeto).
+  #
+  # WARNING e não ERROR, pela mesma razão que a `map-get-deref`: aquilo que a
+  # regra emite não é sempre um bug. A correção depende inteiramente de ter
+  # reconhecido a FORMA DE SAIR que torna a remoção segura, e as exclusões abaixo
+  # cobrem as formas enumeradas — não a seguinte. Bastam DUAS instruções entre
+  # a remoção e a saída para a regra voltar a acusar código correto, e isso é
+  # o falso positivo aceite (5) da documentação, assumido de propósito porque
+  # a alternativa (uma reticência de statement) esconde bugs reais. Uma regra
+  # com um falso positivo conhecido, assumido e não corrigível não é ERROR.
   - id: bugfix-java-edge-case-modify-during-iteration
     patterns:
       - pattern-either:
@@ -585,5 +665,5 @@ rules:
       Remoção da coleção durante o for-each sobre ela própria. Lança
       `ConcurrentModificationException` na iteração seguinte. Use
       `Iterator.remove()` ou `removeIf(...)`.
-    severity: ERROR
+    severity: WARNING
     languages: [java]

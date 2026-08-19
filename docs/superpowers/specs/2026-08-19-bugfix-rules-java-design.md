@@ -59,27 +59,76 @@ spec existed rather than after the branch was built.
 
 ## 4. Two severity tiers
 
-Unchanged. **`ERROR`** where the pattern is a bug regardless of intent;
-**`WARNING`** where it is usually a bug but has legitimate uses.
-`bug_hunt`'s `severity_min` already filters on this.
+**`ERROR`** where the pattern is a bug regardless of intent; **`WARNING`**
+where it is usually a bug but has legitimate uses. `bug_hunt`'s `severity_min`
+already filters on this.
 
-**This round is the first to apply that criterion against a rule rather than
-merely alongside one**, and it cost `optional-get-no-ispresent` its tier — see
-§5. The useful generalisation: **an exclusion list that keeps growing is a
-severity signal, not a backlog.** Thirteen guard-shape exclusions in, with new
-shapes still arriving and one of them not expressible at all, the rule was
-demonstrably unable to separate bug from correct code. By the definition above
-it was never `ERROR`. Demoting it applies the criterion; it does not change it.
+### The criterion, generalised
 
-The tier split is now **pinned by a test**. It was decided here and asserted
-nowhere until this round, which made it documented and unfalsifiable — exactly
+The wording above is about the *pattern*, and that turned out to be the wrong
+place to look — it invites an argument about how good the pattern is, which is
+unfalsifiable and which this series lost four times. The criterion is now a
+question about the **output**:
+
+> **Is what the rule EMITS always a bug?**
+
+Not "is the shape it looks for usually wrong". A rule whose correctness depends
+on having recognised a **guard** emits a false positive every single time it
+meets a guard shape nobody enumerated — and no exclusion list ever closes that,
+because the guard can always be one method away, where a syntactic matcher
+cannot follow. Such a rule is `WARNING` by construction, however long its
+exclusion list gets. Indeed the length of the list is the evidence *for* the
+demotion, not against it: **an exclusion list that keeps growing is a severity
+signal, not a backlog.**
+
+### One rule in eight clears the bar, and that is the honest result
+
+Applied cold, the criterion leaves **`empty-catch` alone at `ERROR` and the
+other seven at `WARNING`.** That ratio looks alarming until you notice what it
+is measuring: Semgrep OSS matches syntax and has no dataflow, so *almost
+nothing* clears a bar that says "always a bug". One in eight is what this
+engine can honestly claim, not a failure of the pack.
+
+`empty-catch` clears it for a reason worth stating precisely, because it is the
+only reason available: **its escape hatch is not a guard.** It is a
+*declaration of intent* that the rule itself reads — the Checkstyle / IntelliJ
+convention of naming the variable `ignore`, `ignored` or `expected`. Having
+honoured that, what the rule emits is an *unmarked* silent swallow, and that is
+a bug whatever the author meant. Every other rule in the pack depends on having
+seen a guard, and none of them can see all guards.
+
+The four demotions this applies, each with its own reasoning in the rule's own
+comment: `map-get-deref`, `modify-during-iteration`, `static-dateformat` and
+`loop-lte-length`. `optional-get-no-ispresent` was demoted a round earlier by
+the same argument, and applying that argument to one rule and not its twin was
+the inconsistency this closes.
+
+**`loop-lte-length` was measured before it was demoted**, because if the
+obvious tightening worked the rule could have stayed at `ERROR` honestly. It
+does not work — the measurement is in §8 — and the patterns were left alone.
+Demoting without trying the fix first would have been giving up, not applying a
+criterion.
+
+### Pinned, and expensive to get wrong
+
+The tier split is **pinned by a test**. It was decided here and asserted
+nowhere until fix wave 1, which made it documented and unfalsifiable — exactly
 the shape of every other defect in this series. `EXPECTED_SEVERITY` in the Java
-integration test pins all eight rules, exhaustive in both directions.
+integration test pins all eight rules, exhaustive in both directions, and this
+round's change was made **RED first**: the four flips failed the test before the
+YAML was touched, which is the entire point of having pinned it.
 
-The tier is not cosmetic. The parser maps `ERROR → high` and `WARNING → medium`.
-`bug_hunt`'s `severity_min` is optional, so nothing vanishes from a scan — but
-`create_fix_pr` defaults to `high`, so a `WARNING` finding leaves the default
-fix-PR set and needs `severity_min: "medium"` to come back.
+The tier is not cosmetic, and with seven of eight at `WARNING` the consequence
+is now the headline rather than a footnote. The parser maps `ERROR → high` and
+`WARNING → medium`. `bug_hunt`'s `severity_min` is optional, so **nothing
+vanishes from a scan**. But `create_fix_pr` defaults `severity_min` to `high`,
+so the Java pack now contributes **almost nothing to the default fix-PR set** —
+one rule. A caller who wants Java bugs fixed has to ask for them:
+`severity_min: "medium"`.
+
+`create_fix_pr`'s default was deliberately **not** changed here. It affects all
+four language packs and is a separate decision, queued for the round that
+sweeps the shipped packs together.
 
 ## 5. The eight rules
 
@@ -94,10 +143,23 @@ if-chain, so `edge-case-concurrent-modification` classified as
 `race_condition`. The rule is named `modify-during-iteration` instead. Caught by
 running the classifier over the proposed ids before writing this document.
 
-### `error_handling` — 2 rules
+**Tiers at a glance**, after §4's criterion was applied cold to all eight:
 
-- **empty-catch** (ERROR) — `try { … } catch (E e) { }`. The exception was
-  caught and discarded with no log, no rethrow, no handling.
+| rule | tier | why |
+| --- | --- | --- |
+| `empty-catch` | **ERROR** | The only one that does not depend on recognising a guard. Its escape hatch is a *declaration of intent* the rule reads (`ignore`/`ignored`/`expected`); what it emits after that is an unmarked silent swallow, a bug whatever was meant. |
+| `printstacktrace-only` | WARNING | In a throwaway `main`, printing and continuing is a legitimate choice. |
+| `map-get-deref` | WARNING | Correctness depends on 26 guard exclusions. Each exists because correct code was firing; the list closes the shapes someone enumerated, never the next one. |
+| `optional-get-no-ispresent` | WARNING | Same, demoted a round earlier. Applying the argument to one of these two and not the other was the inconsistency §4 closes. |
+| `loop-lte-length` | WARNING | An inclusive loop that never indexes the array, or that fills a longer one, is correct. The tightening was tried and rejected — see §8. |
+| `stream-not-closed` | WARNING | A stream closed in a `finally` is correct and this rule cannot see it. |
+| `static-dateformat` | WARNING | A shared formatter behind `synchronized` access is correct, and proving *all* accesses are synchronized is whole-program analysis. |
+| `modify-during-iteration` | WARNING | Correctness depends entirely on having recognised the exit that makes the removal safe; two statements between removal and exit is enough to accuse correct code. |
+
+### `error_handling` — 2 rules, one ERROR and one WARNING
+
+- **empty-catch** (**ERROR**, and the only one) — `try { … } catch (E e) { }`.
+  The exception was caught and discarded with no log, no rethrow, no handling.
   **Except when the variable is named `ignore`, `ignored` or `expected`.**
   A deliberate, documented empty catch is a real idiom, but the comment that
   documents it is not in the AST — so a commented ignore and a silent swallow
@@ -115,7 +177,8 @@ running the classifier over the proposed ids before writing this document.
 Both shipped untyped, and **neither was about the type in its name.** That is
 the round's central finding and it is written up in §10.
 
-- **map-get-deref** (ERROR) — a method called directly on `map.get(k)`, which
+- **map-get-deref** (**WARNING**, demoted from ERROR — see §4) — a method
+  called directly on `map.get(k)`, which
   returns `null` for a missing key. The receiver is constrained by
   `metavariable-type` across a `pattern-either` enumerating `Map`, `HashMap`,
   `TreeMap`, `LinkedHashMap` and `ConcurrentHashMap`; **each branch repeats the
@@ -142,7 +205,8 @@ the round's central finding and it is written up in §10.
   `put`, or `if (!containsKey) { put(); }` (4). A **disjunction** is
   deliberately *not* excluded: `a || m.containsKey(k)` proves nothing inside
   the body, so excluding it would hide a real bug.
-- **optional-get-no-ispresent** (**WARNING**, demoted from ERROR — see §4) —
+- **optional-get-no-ispresent** (**WARNING**, demoted from ERROR a round
+  earlier than the rest — see §4) —
   `optional.get()` outside a guard. Throws `NoSuchElementException`; `orElse`
   does not. The receiver is constrained to `Optional`; untyped, `$O.get()`
   matched `AtomicInteger.get()`, `ThreadLocal.get()` and `Supplier.get()`.
@@ -159,7 +223,7 @@ the round's central finding and it is written up in §10.
   config silently fails to load. A **disjunction** is deliberately not
   excluded, for the same reason as in `map-get-deref`.
 
-### `off_by_one` — 1 rule, ERROR
+### `off_by_one` — 1 rule, WARNING
 
 - **loop-lte-length** — `for (int i = 0; i <= a.length; i++)`, with `$A`
   restricted to an **array type** by `metavariable-type: "$T[]"` (quoted, or
@@ -181,7 +245,7 @@ the round's central finding and it is written up in §10.
   `try` *sequence*, because the declaration sits outside the `try` body and a
   plain `pattern-not-inside` cannot reach it.
 
-### `race_condition` — 1 rule, ERROR
+### `race_condition` — 1 rule, WARNING
 
 - **static-dateformat** — a `SimpleDateFormat` held in a `static` field.
   It is not thread-safe, and a static field is the definition of shared. A
@@ -198,7 +262,7 @@ the round's central finding and it is written up in §10.
   exact shape you get when there is no import, was invisible. A local instance
   and a per-instance field are both correct and stay silent.
 
-### `edge_case` — 1 rule, ERROR
+### `edge_case` — 1 rule, WARNING
 
 - **modify-during-iteration** — `coll.remove(...)` inside a `for (T x : coll)`
   over that same collection. Throws `ConcurrentModificationException`. The
@@ -333,12 +397,50 @@ against all Java:
 | # | Rule | Correct code it flags | Why it stays |
 | --- | --- | --- | --- |
 | 1 | `stream-not-closed` | `open(); try { … } finally { close(); }` | The pre-Java-7 idiom, and already the rule's stated reason for being `WARNING`. |
-| 2 | `race-condition-static-dateformat` | a `static final SimpleDateFormat` whose every access goes through a `synchronized` method | Proving *all* accesses are synchronized is whole-program analysis. A shared formatter also serialises every caller, so flagging it is defensible. |
-| 3 | `off-by-one-loop-lte-length` | `i <= a.length` where the body guards with `i < a.length`, or never indexes `a` | Genuinely rare, and the loop still deserves a human look. |
+| 2 | `race-condition-static-dateformat` | a `static final SimpleDateFormat` whose every access goes through a `synchronized` method | Proving *all* accesses are synchronized is whole-program analysis, which Semgrep OSS does not do. This row used to end "a shared formatter also serialises every caller, so flagging it is defensible" — that is a **product** argument, not §4's criterion, and it is why the rule sat at `ERROR` for four rounds while carrying a documented, un-fixable false positive. The criterion wins: the finding stays, the tier is now `WARNING`. |
+| 3 | `off-by-one-loop-lte-length` | `i <= a.length` where the body guards with `i < a.length`, or never indexes `a` | The obvious tightening was **tried and rejected** — measurement immediately below the table. It trades this false positive for a false negative without fixing the main case, so the patterns were left alone and only the tier moved. |
 | 4 | `printstacktrace-only` | `printStackTrace()` as the fallback when the logger itself threw | The one place the call is right; already `WARNING`; too narrow to encode. |
 | 5 | `map-get-deref`, `optional-get-no-ispresent`, `modify-during-iteration` | **two or more** statements between the guard (or the removal) and the exit: `if (!m.containsKey(k)) { log(); metric(); return ""; }`, `items.remove(s); log(s); n++; break;` | The deliberate price of bounding the exclusions. A statement ellipsis matches deep and swallows guards that do not cover every path, which are real bugs; a false negative that hides a bug is worse than this. |
 | 6 | the same three | a guard reached **through a helper method**: `if (!present(o)) { return d; }` | Needs interprocedural analysis, which Semgrep OSS does not do. Already the stated reason `optional-get-no-ispresent` is `WARNING`. |
 | 7 | `map-get-deref` | a key guaranteed present outside the enumerated shapes: a map filled in a static initialiser, a total enum mapping declared as a `Map` | The guarantee is not on the syntactic path reaching the `get`. Excluding "any map that ever received a `put` anywhere in the file" would erase the rule. |
+
+### The `loop-lte-length` tightening: measured, then rejected
+
+Recorded here so nobody has to rediscover it. Before demoting the rule, the
+obvious fix was tried: require the loop body to actually index the array, with
+
+```yaml
+- pattern: "for (int $I = 0; $I <= $A.length; $I++) { <... $A[$I] ...> }"
+```
+
+Measured against three functions:
+
+```java
+int[] sentinel(int[] a) {                       // correct: fills a LONGER array
+    int[] b = new int[a.length + 1];
+    for (int i = 0; i <= a.length; i++) { b[i] = (i < a.length) ? a[i] : -1; }
+    return b;
+}
+int sumIdx(int[] a) {                           // correct: never indexes a
+    int sum = 0; for (int i = 0; i <= a.length; i++) { sum += i; } return sum;
+}
+int viaHelper(int[] a) {                        // BUG, via a helper
+    int sum = 0; for (int i = 0; i <= a.length; i++) { sum += at(a, i); } return sum;
+}
+```
+
+The result:
+
+| function | correct? | tightening's effect |
+| --- | --- | --- |
+| `sumIdx` | correct | **fixed** — stops firing |
+| `sentinel` | correct | **still fires** — the guarded `a[i]` sits inside the ternary, and the deep-expression form finds it |
+| `viaHelper` | **bug** | **lost** — the index never appears as `a[i]`, so the rule goes silent on a real out-of-bounds |
+
+So it fixes one false positive, leaves the other, and buys a **new false
+negative on a real bug**. Not worth shipping. The patterns are unchanged and
+the rule is `WARNING` because what it emits is not always a bug — which was
+true before the experiment and stayed true after it.
 
 Two more, for completeness:
 

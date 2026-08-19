@@ -545,8 +545,32 @@ registerToolModule(
       'Checkstyle/IntelliJ convention and never fires when the exception variable is named ' +
       '`ignore`, `ignored` or `expected` — the flip side being that a genuinely swallowed ' +
       'exception escapes the rule simply by being named `ignored`. ' +
-      '`optional-get-no-ispresent` is WARNING rather than ERROR, applying this pack\'s own ' +
-      'tier rule instead of bending it: ERROR is for a pattern that is a bug regardless of ' +
+      'READ THIS BEFORE WONDERING WHY A JAVA FIX PR CAME BACK EMPTY: seven of these eight ' +
+      'rules are WARNING, and create_fix_pr defaults severity_min to `high`, so the Java pack ' +
+      'contributes almost nothing to the DEFAULT fix-PR set — ask for it with ' +
+      '`severity_min: "medium"`. bug_hunt itself does not filter by default, so nothing ' +
+      'disappears from a SCAN; only the fix PR is affected. That default was deliberately NOT ' +
+      'changed here: it affects all four language packs and is a separate decision. The tier ' +
+      "split applies this pack's own criterion cold, stated as a question about the OUTPUT " +
+      'rather than the pattern — is what the rule EMITS always a bug? A rule whose ' +
+      'correctness depends on having recognised a GUARD emits a false positive every time it ' +
+      'meets a guard shape nobody enumerated, and no exclusion list closes that, because the ' +
+      'guard can always be one method away. Only `empty-catch` clears that bar, and it clears ' +
+      'it for the one reason available: its escape hatch is not a guard but a DECLARATION OF ' +
+      'INTENT the rule itself reads (the Checkstyle/IntelliJ ignore/ignored/expected ' +
+      'convention), so what it emits afterwards is an UNMARKED silent swallow — a bug ' +
+      'whatever the author meant. One rule in eight is the honest result for a syntactic ' +
+      'matcher with no dataflow, not a failure of the pack. `map-get-deref`, ' +
+      '`modify-during-iteration`, `static-dateformat` and `loop-lte-length` were demoted on ' +
+      'that criterion. `loop-lte-length` only after the obvious tightening was MEASURED and ' +
+      'rejected: requiring the body to index `a[i]` fixes the loop that never indexes `a`, ' +
+      'does NOT fix the sentinel loop that fills a longer array ' +
+      '(`b[i] = (i < a.length) ? a[i] : -1` is correct, and the guarded `a[i]` sits right ' +
+      'there inside the ternary), and LOSES a real bug where the out-of-bounds index is ' +
+      'passed to a helper (`sum += at(a, i)`) — a false positive traded for a false ' +
+      'negative, so the patterns were left alone and only the tier moved. ' +
+      '`optional-get-no-ispresent` is WARNING for the same reason, a round earlier: ERROR is ' +
+      'for a pattern that is a bug regardless of ' +
       'intent, and `o.get()` is a bug only when UNGUARDED. It recognises exactly these guard ' +
       'shapes, enumerated rather than summarised because the summary that stood here — ' +
       '"inline against the same Optional variable" — was falsifiable and was falsified by a ' +
@@ -567,9 +591,12 @@ registerToolModule(
       'correct code: (1) `stream-not-closed` on `open(); try {} finally { close(); }` (already ' +
       'the stated reason it is WARNING); (2) `static-dateformat` on a static final ' +
       'SimpleDateFormat whose every access goes through a synchronized method (proving ALL ' +
-      'accesses are synchronized is whole-program analysis, which Semgrep OSS does not do, ' +
-      'and a shared formatter serialises every caller anyway); (3) `loop-lte-length` on ' +
-      '`i <= a.length` where the body guards with `i < a.length` or never indexes `a`; (4) ' +
+      'accesses are synchronized is whole-program analysis, which Semgrep OSS does not do; ' +
+      'this used to add "and a shared formatter serialises every caller anyway", which is a ' +
+      'PRODUCT argument rather than the tier criterion, and is why the rule sat at ERROR for ' +
+      'four rounds carrying a documented un-fixable false positive); (3) `loop-lte-length` on ' +
+      '`i <= a.length` where the body guards with `i < a.length` or never indexes `a` (the ' +
+      'tightening was tried and rejected — see the tier note above); (4) ' +
       '`printstacktrace-only` on the one place the call is right — the fallback when the ' +
       'logger itself threw; (5) `map-get-deref`, `optional-get-no-ispresent` and ' +
       '`modify-during-iteration` where TWO OR MORE statements sit between the guard (or the ' +

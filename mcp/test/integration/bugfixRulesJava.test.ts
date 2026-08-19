@@ -149,35 +149,38 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
 
 /**
  * The severity tier each rule is DESIGNED to carry, per the design of record
- * §4: `ERROR` where the pattern is a bug regardless of intent, `WARNING` where
- * it is usually a bug but has legitimate uses.
+ * §4, whose criterion is now stated as a question about the OUTPUT rather than
+ * about the pattern: **is what the rule EMITS always a bug?** Not "is the
+ * shape it looks for usually wrong" — a rule whose correctness depends on
+ * having recognised a guard emits a false positive every time it meets a guard
+ * shape nobody enumerated, and no exclusion list closes that, because the
+ * guard can always be one method away.
+ *
+ * Seven of the eight are `WARNING` on that test, and only `empty-catch`
+ * survives at `ERROR`. That ratio is the honest result for a syntactic matcher
+ * with no dataflow, not a failure of the pack: almost nothing clears the bar.
+ * `empty-catch` clears it because its escape hatch is not a guard at all — it
+ * is a DECLARATION OF INTENT the rule itself reads, the Checkstyle / IntelliJ
+ * `ignore` / `ignored` / `expected` convention. What it emits after honouring
+ * that is an unmarked silent swallow, which is a bug whatever the author meant.
  *
  * Pinned here because nothing else pinned it. The tier is not cosmetic: the
  * Semgrep parser maps ERROR → `high` and WARNING → `medium`
  * (`src/runners/scannerParsers/semgrep.ts`), and `create_fix_pr` defaults
- * `severity_min` to `high` — so a tier change silently moves a rule in or out
- * of the default fix-PR set. `bug_hunt` itself defaults to no filter, so
- * nothing disappears from a scan.
- *
- * `optional-get-no-ispresent` is WARNING and that is the interesting one:
- * `o.get()` is a bug only when UNGUARDED, and the rule provably cannot tell.
- * It recognises the guard shapes enumerated in the rule's own comment — the
- * inline `isPresent()` test alone or in conjunction, a `while`, the early
- * exits over `!isPresent()`/`isEmpty()`, the three ternaries, a present
- * `filter(...)` result and an `Optional.of` construction — and misses any
- * guard reached through another method, which needs interprocedural analysis.
- * It failed §4's ERROR criterion, and the length of that list is the evidence
- * rather than the counter-argument.
+ * `severity_min` to `high`. With seven of eight at `WARNING`, the Java pack
+ * now contributes almost nothing to the DEFAULT fix-PR set, and a caller who
+ * wants Java bugs fixed has to ask: `severity_min: "medium"`. `bug_hunt` itself
+ * defaults to no filter, so nothing disappears from a scan.
  */
 const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
   'bugfix-java-error-handling-empty-catch': 'ERROR',
   'bugfix-java-error-handling-printstacktrace-only': 'WARNING',
-  'bugfix-java-null-safety-map-get-deref': 'ERROR',
+  'bugfix-java-null-safety-map-get-deref': 'WARNING',
   'bugfix-java-null-safety-optional-get-no-ispresent': 'WARNING',
-  'bugfix-java-off-by-one-loop-lte-length': 'ERROR',
+  'bugfix-java-off-by-one-loop-lte-length': 'WARNING',
   'bugfix-java-memory-leak-stream-not-closed': 'WARNING',
-  'bugfix-java-race-condition-static-dateformat': 'ERROR',
-  'bugfix-java-edge-case-modify-during-iteration': 'ERROR',
+  'bugfix-java-race-condition-static-dateformat': 'WARNING',
+  'bugfix-java-edge-case-modify-during-iteration': 'WARNING',
 };
 
 describe('bugfix-java rules', () => {

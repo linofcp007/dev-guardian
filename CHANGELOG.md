@@ -131,28 +131,68 @@ version bump.
 
 ### Changed
 
-- **`null-safety-optional-get-no-ispresent` drops from `ERROR` to `WARNING`.**
-  This applies the pack's own tier rule rather than changing it: `ERROR` is for
-  a pattern that is a bug regardless of intent, and `o.get()` is a bug only
-  when *unguarded*. Thirteen exclusion clauses in, there is direct evidence the
-  rule cannot reliably tell — it recognises guards written inline against the
-  same `Optional` variable and misses any guard reaching the check through
-  another method, such as `if (!present(o)) { return d; }`, which needs
-  interprocedural analysis Semgrep OSS does not do. A rule that needs an
-  unbounded exclusion list to stay correct at `ERROR` was never `ERROR` by that
-  definition.
+- **BREAKING for `create_fix_pr` users: seven of the eight Java rules are now
+  `WARNING`. Only `error-handling-empty-catch` remains `ERROR`.** Nothing
+  disappears from a **scan** — `bug_hunt` does not filter by default — but
+  `create_fix_pr` defaults `severity_min` to `high`, so **the Java pack now
+  contributes almost nothing to the default fix-PR set.** If a Java fix PR
+  comes back empty, this is why; ask for the findings explicitly with
+  `severity_min: "medium"`.
 
-  **Practical effect:** the Semgrep parser maps `ERROR` → `high` and `WARNING`
-  → `medium`, so these findings now arrive as `medium`. `bug_hunt` does not
-  filter by default, so nothing disappears from a scan; `create_fix_pr`
-  defaults `severity_min` to `high`, so they no longer enter the default fix-PR
-  set and must be asked for with `severity_min: "medium"`.
+  `create_fix_pr`'s own default was deliberately **not** changed. It affects
+  all four language packs and is a separate decision.
 
-  `map-get-deref` and `modify-during-iteration` stay at `ERROR`: both are
-  type-restricted and neither depends on an open-ended guard list.
+  **The criterion, restated as a question about the output.** The tier rule
+  used to be phrased about the *pattern* — "`ERROR` where the pattern is a bug
+  regardless of intent" — which invites an argument about how good the pattern
+  is, and this pack lost that argument four times. It is now:
 
-  The tier of every Java rule is now pinned by the integration test, which
-  previously asserted rule ids but not severities.
+  > **Is what the rule EMITS always a bug?**
+
+  A rule whose correctness depends on having recognised a **guard** emits a
+  false positive every single time it meets a guard shape nobody enumerated,
+  and no exclusion list ever closes that, because the guard can always be one
+  method away where a syntactic matcher cannot follow. The length of the
+  exclusion list is evidence *for* the demotion, not against it.
+
+  **`empty-catch` is the only rule that clears the bar**, for the one reason
+  available: its escape hatch is not a guard at all but a *declaration of
+  intent that the rule itself reads* — the Checkstyle / IntelliJ `ignore` /
+  `ignored` / `expected` convention. What it emits after honouring that is an
+  **unmarked** silent swallow, which is a bug whatever the author meant. One
+  rule in eight is the honest result for a syntactic matcher with no dataflow,
+  not a failure of the pack.
+
+  Demoted this round, each with its reasoning written into the rule's own
+  comment: `null-safety-map-get-deref` (26 guard exclusions, every one added
+  because correct code was firing at `ERROR`),
+  `edge-case-modify-during-iteration` (correctness depends entirely on having
+  recognised the exit; two statements between removal and exit is enough to
+  accuse correct code), `race-condition-static-dateformat` (a shared formatter
+  behind `synchronized` access is correct, and proving *all* accesses are
+  synchronized is whole-program analysis — the old "flagging it is defensible
+  anyway" was a **product** argument, not the criterion), and
+  `off-by-one-loop-lte-length`.
+
+  **`loop-lte-length` was measured before it was demoted**, because if the
+  obvious tightening had worked the rule could have stayed at `ERROR` honestly.
+  Requiring the body to actually index the array — `<... $A[$I] ...>` — fixes
+  the inclusive loop that never indexes `a`, does **not** fix the sentinel loop
+  that fills a longer array (`b[i] = (i < a.length) ? a[i] : -1` is correct, and
+  the already-guarded `a[i]` sits right there inside the ternary), and **loses**
+  a real bug where the out-of-bounds index is passed to a helper
+  (`sum += at(a, i)`). A false positive traded for a false negative without
+  fixing the main case, so the patterns were left exactly as they were and only
+  the tier moved. Recorded in the design of record §8 so it does not have to be
+  rediscovered.
+
+  `null-safety-optional-get-no-ispresent` was demoted a round earlier by
+  precisely this argument; applying it to that rule and not to its twin
+  `map-get-deref` was the inconsistency this closes.
+
+  The tier of every Java rule is pinned by the integration test, and this change
+  was made **RED first** — the four flips failed `EXPECTED_SEVERITY` before the
+  YAML was touched, which is the whole point of having pinned it.
 
 ### Known gaps
 
@@ -210,11 +250,15 @@ review fixtures that exist today, not against all Java:
 - **(2)** `race-condition-static-dateformat` on a `static final
   SimpleDateFormat` whose every access goes through a `synchronized` method —
   proving *all* accesses are synchronized is whole-program analysis, which
-  Semgrep OSS does not do, and a shared formatter serialises every caller
-  anyway.
+  Semgrep OSS does not do. This entry used to end "and a shared formatter
+  serialises every caller anyway"; that is a **product** argument rather than
+  the tier criterion, and it is why the rule sat at `ERROR` for four rounds
+  while carrying a documented un-fixable false positive. The finding stays; the
+  tier is now `WARNING`.
 - **(3)** `off-by-one-loop-lte-length` on `i <= a.length` where the body guards
-  with `i < a.length`, or never indexes `a` — genuinely rare, and the loop
-  still deserves a human look.
+  with `i < a.length`, or never indexes `a` — the obvious tightening was tried
+  and rejected (it trades this false positive for a false negative on a real
+  bug without fixing the main case), so the patterns stayed and the tier moved.
 - **(4)** `error-handling-printstacktrace-only` on `printStackTrace()` as the
   fallback when the logger itself threw — the one place the call is right;
   already `WARNING`; too narrow to encode.

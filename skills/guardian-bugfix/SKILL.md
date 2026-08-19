@@ -266,10 +266,55 @@ return o.get();                    // dispara, e é código correto
 
 Isso exige análise interprocedimental, que o Semgrep OSS não faz — a forma é
 falso positivo e vai continuar a ser. Preferir WARNING a uma lista de exclusões
-sem fim é a decisão que daí resulta. Consequência prática: a regra mapeia para
-severidade `medium` em vez de `high`, por isso continua a aparecer no
-`bug_hunt` (que por omissão não filtra) mas deixa de entrar por omissão no
-`create_fix_pr`, cujo `severity_min` é `high`.
+sem fim é a decisão que daí resulta, e essa decisão passou entretanto a
+aplicar-se a todo o pack.
+
+### Os tiers, e porque é que o teu fix PR de Java pode vir vazio
+
+**Sete das oito regras estão em `WARNING`. Só a `empty-catch` está em `ERROR`.**
+
+O critério é o do design (§4), aplicado a frio e enunciado como uma pergunta
+sobre o *output* em vez de sobre o padrão:
+
+> **Aquilo que a regra emite é sempre um bug?**
+
+Não "a forma que ela procura costuma estar errada". Uma regra cuja correção
+depende de ter reconhecido uma **guarda** emite um falso positivo sempre que
+encontra uma forma de guarda que ninguém enumerou — e nenhuma lista de
+exclusões fecha isso, porque a guarda pode estar sempre a um método de
+distância, onde um matcher sintático não chega. Num motor sem dataflow quase
+nada passa nesta barra: **uma em oito é o resultado honesto, não uma falha do
+pack.**
+
+A `empty-catch` passa por uma razão que vale a pena nomear, porque é a única
+disponível: a sua válvula de escape **não é uma guarda**. É uma *declaração de
+intenção que a própria regra lê* — a convenção `ignore` / `ignored` /
+`expected` do Checkstyle / IntelliJ. Depois de a honrar, o que ela emite é um
+engolir de exceção **não declarado**, e isso é bug independentemente do que o
+autor tencionava.
+
+A `loop-lte-length` desceu, mas só depois de o aperto óbvio ter sido **medido e
+rejeitado**. Exigir que o corpo indexe mesmo o array (`<... $A[$I] ...>`)
+corrige o ciclo que nunca indexa `a`, **não** corrige o ciclo-sentinela que
+preenche um array maior (`b[i] = (i < a.length) ? a[i] : -1`, correto, e o
+`a[i]` guardado está mesmo ali dentro do ternário), e **perde** um bug real em
+que o índice fora dos limites é passado a um helper (`sum += at(a, i)`). Troca
+um falso positivo por um falso negativo sem resolver o caso principal, por isso
+os patterns ficaram como estavam e só o tier mudou.
+
+**Consequência prática, e é a parte que morde.** O parser mapeia `ERROR` →
+`high` e `WARNING` → `medium`. O `bug_hunt` **não filtra por omissão**, por
+isso nada desaparece de um scan. Mas o `create_fix_pr` tem `severity_min` a
+`high` por omissão — portanto, com sete das oito em `WARNING`, **o pack de Java
+praticamente não contribui para o conjunto de fixes por omissão**. Se pediste
+um fix PR de Java e veio vazio, é isto. Pede explicitamente:
+
+```jsonc
+{ "severity_min": "medium" }   // create_fix_pr, para apanhar o pack de Java
+```
+
+Essa omissão do `create_fix_pr` **não foi alterada**: afeta os quatro packs de
+linguagem e é uma decisão à parte.
 
 A `stream-not-closed` só reconhece `new FileInputStream(...)` — e só por esse
 nome simples: um `new java.io.FileInputStream(...)` totalmente qualificado não
@@ -290,11 +335,11 @@ revisão que existem hoje — não contra todo o Java que existe:
 | # | Regra | Código correto em que dispara | Porque fica |
 | --- | --- | --- | --- |
 | 1 | `memory-leak-stream-not-closed` | `open(); try { … } finally { close(); }` | Já é a limitação declarada da regra, e já é a razão de ser `WARNING`. |
-| 2 | `race-condition-static-dateformat` | `static final SimpleDateFormat` cujos acessos passam todos por métodos `synchronized` | Provar que *todos* os acessos estão sincronizados é análise do programa inteiro, que o Semgrep OSS não faz. Um formatter partilhado também serializa todos os chamadores, por isso marcá-lo é defensável. |
-| 3 | `off-by-one-loop-lte-length` | `i <= a.length` com o corpo protegido por `i < a.length`, ou que nunca indexa `a` | Genuinamente raro, e o ciclo merece à mesma olhos humanos. |
+| 2 | `race-condition-static-dateformat` | `static final SimpleDateFormat` cujos acessos passam todos por métodos `synchronized` | Provar que *todos* os acessos estão sincronizados é análise do programa inteiro, que o Semgrep OSS não faz. Aqui dizia-se também que "um formatter partilhado serializa todos os chamadores, por isso marcá-lo é defensável" — isso é um argumento de **produto**, não o critério do §4, e foi o que manteve a regra em `ERROR` durante quatro rondas a carregar um falso positivo documentado e não corrigível. O critério ganha: o finding fica, o tier passou a `WARNING`. |
+| 3 | `off-by-one-loop-lte-length` | `i <= a.length` com o corpo protegido por `i < a.length`, ou que nunca indexa `a` | O aperto óbvio foi **tentado e rejeitado** (medição acima): troca este falso positivo por um falso negativo num bug real sem resolver o caso principal. Os patterns ficaram; o tier desceu. |
 | 4 | `error-handling-printstacktrace-only` | `printStackTrace()` como fallback quando foi o próprio logger que lançou | O único sítio onde a chamada está certa; já é `WARNING`; estreito demais para codificar. |
 | 5 | `map-get-deref`, `optional-get-no-ispresent`, `modify-during-iteration` | **Duas ou mais** instruções entre a guarda (ou a remoção) e a saída: `if (!m.containsKey(k)) { log(); metric(); return ""; }`, `items.remove(s); log(s); n++; break;` | Preço deliberado. A alternativa — uma reticência de statement — casa em profundidade e engole `if (!m.containsKey(k)) { if (strict) { return ""; } }` e `items.remove(s); if (done) { break; }`, que são bugs reais. Um falso negativo que esconde um bug é pior do que este falso positivo. |
-| 6 | as mesmas três | Guarda delegada a um método helper: `if (!present(o)) { return d; }` | Exige análise interprocedimental, que o Semgrep OSS não faz. É a razão declarada de a `optional-get-no-ispresent` estar em `WARNING`. |
+| 6 | as mesmas três | Guarda delegada a um método helper: `if (!present(o)) { return d; }` | Exige análise interprocedimental, que o Semgrep OSS não faz. É a razão declarada de as três estarem em `WARNING` — e, generalizada, a razão de sete das oito regras do pack estarem lá. |
 | 7 | `map-get-deref` | Chave garantida fora das formas enumeradas: mapa preenchido num inicializador estático, ou mapeamento total sobre um enum declarado como `Map` | A garantia não está no caminho sintático que chega ao `get`. Excluir "qualquer mapa que alguma vez recebeu um `put`" apagaria a regra. |
 
 **Isto é só para JS/TS, Python, Go e Java.** Para as restantes linguagens desta secção —
