@@ -57,6 +57,66 @@ version bump.
 
 ### Fixed
 
+- **`wp-unescaped-output` stops flagging `echo (int) $_GET['id'];`.** A cast is
+  not a call, and Semgrep sees straight through the cast node — `$SUPER[...]`
+  binds to the subscript inside it and `metavariable-regex` reads the text of
+  the subscript, not of the cast. So the standard safe way to emit a numeric
+  request parameter in WordPress was an ERROR-severity finding, in all eleven
+  PHP cast spellings and in every branch of the rule. The guard is one
+  `pattern-not-regex` over the matched text; the enumeration is legitimate here
+  because PHP's cast set is closed by the language and cannot grow with user
+  code, which a list of escaping functions cannot claim. Twenty-four structural
+  `pattern-not` clauses were measured first and reach fewer branches than the
+  one regex does.
+
+- **The pinned `wp-unescaped-output` false positive is gone, and both halves of
+  its recorded justification were wrong.** `echo esc_html($a . $_GET['b']) . "x";`
+  was recorded as unfixable because `echo` lowers to a call node, so any
+  exclusion naming the escaping call names the echo too. True of the AST, false
+  of the filter: `metavariable-regex` matches the **source text** of the
+  metavariable, which is `echo`/`print`/`<?=` for the language constructs and an
+  identifier for a real call. Requiring identifier shape of `$F` costs nothing —
+  12/12 true positives kept, both false positives gone, `errors: 0`. The
+  measurement in the old comment was wrong too: the two exclusions said to take
+  the rule "to zero findings, true positives included" actually took it from 12
+  to 8. `mcp/test/fixtures/base/known-false-positives/` is deleted.
+
+- **`wp-unescaped-output` sees eight more shapes of real XSS.** Measured against
+  a reviewer's probe of fourteen, six fired. Now thirteen do: comma-separated
+  `echo`, nested subscript (`$_GET['user']['name']`), a ternary operand,
+  `printf`, an interpolated string used as a concatenation operand, and
+  `$_SERVER` / `$_COOKIE` — `$_SERVER['PHP_SELF']` being the canonical reflected
+  XSS in PHP, which the old `GET|POST|REQUEST` regex could not reach. The
+  fourteenth needs data flow (a heredoc assigned to a variable, echoed later)
+  and is recorded as a limitation rather than guessed at.
+
+- **`py-yaml-load` caught one unsafe spelling in six.** The rule was
+  `pattern: yaml.load($X)`, a one-argument match — but what makes the call safe
+  is the **loader class**, not the arity. `Loader=yaml.Loader`,
+  `Loader=yaml.UnsafeLoader`, the positional `yaml.load(f, yaml.Loader)`,
+  `yaml.unsafe_load` and `yaml.full_load` all executed arbitrary code unseen.
+  All six now fire and the safe forms stay silent, excluded by loader name in
+  both the keyword and positional position and for both the pure-Python and
+  libyaml classes.
+
+- **`pattern-inside: print $A . $B;` was dead by fixture** — correct, live
+  against real code, and deletable with the suite still green, inside the very
+  branch of work that audits for clauses nobody measures. Pinned by a hit rather
+  than removed.
+
+- **The load-failure invariant is stated rather than accidental.** Ablating the
+  only `pattern:` of `py-yaml-load` produced `scanned=0` with **neither** a
+  `RuleParseError` **nor** an `Invalid YAML` — a fifth spelling of the silent
+  failure family, caught only because the id-set assertion pins the exact set of
+  ids the `hits/` fixtures produce. `baseRules.test.ts` now says so in a comment
+  and adds a count comparison beside the set comparison, which also catches a
+  `- id:` written twice.
+
+- **`php-sql-injection-direct`'s reach is written down.** It targets
+  `mysql_query`, removed in PHP 7, and `mysqli_query`; the canonical WordPress
+  form `$wpdb->query("..." . $id)` is a different API surface and is left to a
+  rule of its own rather than bolted onto this id.
+
 - **The Java rules no longer fire on correct Java.** The first two review
   sweeps found 19 findings on correct code across five of the eight rules; all
   19 are gone, and every one is pinned by a near-miss fixture. A third and a

@@ -47,25 +47,60 @@
  * round found several of those.
  *
  * ---------------------------------------------------------------------------
+ * THE LOAD-FAILURE INVARIANT — read this before deleting a hit fixture.
+ *
+ * A rule that stops loading finds nothing, and `--quiet` prints nothing to
+ * stderr when that happens. The only thing in this file that notices is the
+ * assertion comparing the ids the `hits/` fixtures produce against the `- id:`
+ * entries parsed out of the YAML — and it only works while EVERY declared rule
+ * has at least one hit fixture behind it. The moment a rule has none, its
+ * absence from the observed set is expected rather than alarming, and the
+ * assertion silently stops being a load-failure detector for that rule.
+ *
+ * So: **every rule in `base.yml` must have at least one fixture in `hits/`.**
+ * It is asserted two ways below — set equality, and a count comparison that
+ * also catches a duplicated `- id:` — because it was previously true only by
+ * accident. Measured: ablating the single `pattern:` of `py-yaml-load`
+ * produced `scanned=0` with NEITHER a `RuleParseError` NOR an `Invalid YAML`,
+ * a fifth spelling of the silent-failure family, and the id-set assertion was
+ * the only thing between it and a green suite.
+ *
+ * ---------------------------------------------------------------------------
  * WHAT THIS PACK DELIBERATELY DOES NOT SEE — measured, not assumed, and left
  * here so nobody re-derives it from an empty result:
  *
  *  - `php-sql-injection-direct` needs a concatenation NODE. A query built into
- *    a variable first (`$sql = "..." . $id; mysql_query($sql);`), an
- *    interpolated query (`"... WHERE id=$id"`), and `$wpdb->query(...)` — the
- *    only one of the three that modern WordPress actually uses — are all
- *    invisible to it.
- *  - `py-yaml-load` matches one-argument calls only. That is right for
- *    `Loader=yaml.SafeLoader` and wrong for `Loader=yaml.UnsafeLoader` and
- *    `Loader=yaml.Loader`, which are unsafe and pass unseen.
+ *    a variable first (`$sql = "..." . $id; mysql_query($sql);`) and an
+ *    interpolated query (`"... WHERE id=$id"`) are invisible to it. It also
+ *    targets `mysql_query`, REMOVED in PHP 7, and `mysqli_query`; the canonical
+ *    WordPress form `$wpdb->query("..." . $id)` is a different API surface and
+ *    is left to a rule of its own rather than bolted onto this id.
+ *  - `wp-unescaped-output` has no data flow. A heredoc assigned to a variable
+ *    and echoed afterwards — `$out = <<<HTML {$_GET['m']} HTML; echo $out;` —
+ *    is silent, because the superglobal is not in the node the echo emits.
+ *  - `wp-unescaped-output`'s cast guard is a regex over the MATCHED TEXT, so a
+ *    cast and a raw superglobal inside one match range take the whole match
+ *    with them: `echo (int) $_GET['a'] . $_GET['b'];` and
+ *    `echo "n=", (int) $_GET['a'], $_GET['b'];` are silent. That is the price
+ *    of the guard and it is the cheap one — the nested shape
+ *    `echo "<b>" . $_GET['x'] . (int) $_GET['y'];` still fires, because its
+ *    left operand is a concatenation node of its own. Measured, all three.
+ *  - `wp-unescaped-output` covers `echo`, `print` and `printf`. `_e()`,
+ *    `wp_die()`, `vprintf()` and the other WordPress output helpers are not.
  *  - `js-insecure-randomness` fires on EVERY `Math.random()`, including the
  *    ones used for jitter and animation. It is INFO for that reason.
- *  - `wp-unescaped-output` covers `echo`/`print`. `printf`, `_e()`,
- *    `wp_die()` and the other WordPress output helpers are not covered.
  *
- * And what it sees that it should not: ONE false-positive shape, measured and
- * pinned by line in `known-false-positives/`, with the reason it cannot be
- * removed and the trade that was refused written next to it.
+ * There is no `known-false-positives/` directory any more, and its deletion is
+ * the good outcome the block that read it was written to invite: the one shape
+ * it pinned — a raw superglobal concatenated inside an escaping call that is
+ * itself an operand of a concatenation the echo emits — is fixed. The recorded
+ * reason it could not be fixed was wrong twice over, and both halves were
+ * re-measured: the two exclusions said to "take the rule to zero findings"
+ * actually took it from 12 to 8, and the AST argument (`echo` is a call node,
+ * so no exclusion can name the escaping call without naming the echo) is true
+ * of the AST and false of the filter, because `metavariable-regex` matches the
+ * SOURCE TEXT of the metavariable. Requiring identifier shape of `$F` costs
+ * nothing: 12/12 true positives kept, both false positives gone.
  *
  * SKIPPED, not silently passed, when Semgrep is absent;
  * `GUARDIAN_REQUIRE_SEMGREP=1` turns that absence into a hard failure.
@@ -222,11 +257,22 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     count: 4,
   },
   'output.php': {
-    // Twelve, one per branch of the rewritten `wp-unescaped-output`, and this
-    // number is the whole reason the fixture directory exists. Measured against
-    // the shipped rule at be01f78: 0 of 12, with `errors: 1` and exit 2.
+    // Twenty-six, one per branch of `wp-unescaped-output`, and this number is
+    // the whole reason the fixture directory exists. Measured against the
+    // shipped rule at be01f78: 0 of 12, with `errors: 1` and exit 2; the
+    // fourteen after that were added when a reviewer's probe file found real
+    // XSS the twelve-branch version walked straight past — a comma-separated
+    // `echo`, a nested subscript, a ternary operand, `printf`, an interpolated
+    // string used as a concatenation operand, and $_SERVER / $_COOKIE, of which
+    // `$_SERVER['PHP_SELF']` is the canonical reflected XSS in PHP.
+    //
+    // Each of the twenty-six lines produces EXACTLY ONE finding, and each of
+    // the twenty branch clauses was ablated singly: every one takes its own
+    // fixture with it and moves nothing else. Line 48 exists because
+    // `pattern-inside: print $A . $B;` was dead BY FIXTURE — correct, live
+    // against real code, and deletable with the suite still green.
     ids: ['wp-unescaped-output'],
-    count: 12,
+    count: 26,
   },
   'secrets.txt': {
     // The two `generic` regex rules. A `.txt` file gives them a home no
@@ -236,13 +282,23 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     count: 2,
   },
   'service.py': {
-    // Eight: eval, exec, three `subprocess` shapes, `yaml.load`, and both
-    // `pickle` entry points. The three subprocess calls exercise the leading
-    // and trailing `...` of `subprocess.$F(..., shell=True, ...)` separately —
-    // a `...` that never had to match anything is a clause that could be
-    // deleted without a test moving.
+    // Thirteen: eval, exec, three `subprocess` shapes, both `pickle` entry
+    // points, and SIX unsafe `yaml` spellings. The three subprocess calls
+    // exercise the leading and trailing `...` of
+    // `subprocess.$F(..., shell=True, ...)` separately — a `...` that never had
+    // to match anything is a clause that could be deleted without a test
+    // moving.
+    //
+    // The yaml count went from one to six because the rule was
+    // `pattern: yaml.load($X)`, a one-argument match, and what makes the call
+    // safe is not the arity but the LOADER CLASS. Measured against a probe of
+    // six unsafe spellings, the shipped rule caught one:
+    // `Loader=yaml.Loader`, `Loader=yaml.UnsafeLoader`, the positional
+    // `yaml.load(f, yaml.Loader)`, `yaml.unsafe_load` and `yaml.full_load` all
+    // passed unseen, in a rule whose stated purpose is unsafe YAML
+    // deserialisation.
     ids: ['py-eval-exec', 'py-pickle-load', 'py-shell-true', 'py-yaml-load'],
-    count: 8,
+    count: 13,
   },
 };
 
@@ -314,10 +370,20 @@ describe('base.yml rules', () => {
    * A rule the YAML declares but no fixture fires is a rule nobody has
    * measured — whether it fails to compile, or compiles and matches a shape
    * real code never has.
+   *
+   * This is also the pack's ONLY load-failure detector, and it detects one
+   * exactly as long as the invariant in the header holds: every declared rule
+   * has at least one hit fixture. The count comparison is not redundant with
+   * the set comparison — `ids()` de-duplicates and `declaredRuleIds()` does
+   * not, so a `- id:` accidentally written twice makes the sets equal and the
+   * counts differ, and a duplicated id is a rule whose second copy nothing
+   * measures.
    */
   it.skipIf(!AVAILABLE)('every rule the YAML declares is exercised by a hit fixture', () => {
     const { rows } = run(RULES, resolve(FIXTURES, 'hits'));
-    expect(ids(rows)).toEqual(declaredRuleIds());
+    const declared = declaredRuleIds();
+    expect(ids(rows)).toEqual(declared);
+    expect(ids(rows).length).toBe(declared.length);
   });
 
   it.skipIf(!AVAILABLE)('fires NOTHING in EACH near-miss fixture', () => {
@@ -328,29 +394,6 @@ describe('base.yml rules', () => {
     for (const file of fixtureFiles(missesDir)) {
       expect(grouped[file] ?? []).toEqual([]);
     }
-  });
-
-  /**
-   * The one shape `wp-unescaped-output` flags that is not a bug, pinned by LINE
-   * so the boundary of the defect is a measurement and not a description.
-   *
-   * Recording a known false positive in a test rather than in a comment is the
-   * difference between a limitation and a rumour: a comment saying "this fires
-   * on X" is unfalsifiable once X changes, whereas this goes red both if the
-   * defect spreads and if a rewrite fixes it. Fixing it is the good outcome —
-   * delete the fixture and this block when it happens.
-   *
-   * The two lines are the body of `known_false_positives()`. Editing the
-   * comment block above it moves them, and the numbers here have to move with
-   * it; `extra.lines` cannot be asserted instead, because current Semgrep
-   * redacts the matched text to "requires login" for a logged-out run.
-   */
-  it.skipIf(!AVAILABLE)('flags exactly the two KNOWN false positives, and nothing else', () => {
-    const dir = resolve(FIXTURES, 'known-false-positives');
-    const { rows, scanned } = run(RULES, dir);
-    expect(scanned).toBe(fixtureFiles(dir).length);
-    expect(ids(rows)).toEqual(['wp-unescaped-output']);
-    expect(rows.map((row) => row.start?.line ?? 0).sort((a, b) => a - b)).toEqual([30, 31]);
   });
 
   it.skipIf(!AVAILABLE)('reports each rule at its DESIGNED severity tier', () => {

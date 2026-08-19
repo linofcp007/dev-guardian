@@ -37,15 +37,23 @@ def spawn(cmd):
 
 
 def load_config(stream):
-    # The first is the function the rule's message tells you to use. The second
-    # is silent BECAUSE `yaml.load($X)` binds exactly ONE argument — passing a
-    # Loader is what makes the call safe, and it is also what makes the arity
-    # wrong for the pattern. The rule gets the right answer here for a reason
-    # that happens to coincide with the right one; see the audit report for the
-    # Loader values this arity check also lets through.
+    # The first is the function the rule's message tells you to use; the other
+    # four name a SAFE loader class, which is the only thing that makes a
+    # `yaml.load` call safe. Silent BECAUSE each is excluded by name, in both
+    # the keyword and the positional position and for both the pure-Python and
+    # the libyaml class — not because of arity. The rule used to match
+    # `yaml.load($X)` alone, which got the right answer here for the wrong
+    # reason and the wrong answer for `Loader=yaml.UnsafeLoader`.
+    #
+    # The bare-name spellings (`Loader=SafeLoader` after
+    # `from yaml import SafeLoader`) need no clause of their own: measured,
+    # Semgrep resolves them through the import to the qualified name.
     first = yaml.safe_load(stream)
     second = yaml.load(stream, Loader=yaml.SafeLoader)
-    return first, second
+    third = yaml.load(stream, Loader=yaml.CSafeLoader)
+    fourth = yaml.load(stream, yaml.SafeLoader)
+    fifth = yaml.load(stream, yaml.CSafeLoader)
+    return first, second, third, fourth, fifth
 
 
 def persist(obj):

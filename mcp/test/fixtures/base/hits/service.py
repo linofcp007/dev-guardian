@@ -33,3 +33,15 @@ def restore(handle, blob):
     first = pickle.load(handle)
     second = pickle.loads(blob)
     return first, second
+
+
+def load_config_unsafely(stream):
+    """The five unsafe spellings a one-argument `yaml.load($X)` never saw. Each
+    of them executes arbitrary code from the document, exactly as the bare call
+    does; `Loader=` is not a safety marker, the LOADER CLASS is."""
+    a = yaml.load(stream, Loader=yaml.Loader)
+    b = yaml.load(stream, Loader=yaml.UnsafeLoader)
+    c = yaml.load(stream, yaml.Loader)
+    d = yaml.unsafe_load(stream)
+    e = yaml.full_load(stream)
+    return a, b, c, d, e

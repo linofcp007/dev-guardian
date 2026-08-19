@@ -62,3 +62,73 @@ function render_other($title) {
     $value = $_GET['x'];
     return $value;
 }
+
+// 16-26: EVERY PHP cast spelling, applied to a raw superglobal. `echo (int)
+// $_GET['id'];` is the standard safe way to emit a numeric request parameter in
+// WordPress: XSS-impossible, and flagged ERROR by this rule until the cast
+// guard was added. Semgrep sees THROUGH a cast node — `$SUPER[...]` binds to
+// the subscript inside it and `metavariable-regex` reads the text of the
+// subscript, not of the cast — so nothing in the pattern language notices the
+// cast is there. Measured before the guard: all eleven fire.
+function render_cast() {
+    echo (int) $_GET['a'];
+    echo (integer) $_GET['b'];
+    echo (float) $_GET['c'];
+    echo (double) $_GET['d'];
+    echo (real) $_GET['e'];
+    echo (bool) $_GET['f'];
+    echo (boolean) $_GET['g'];
+    echo (string) $_GET['h'];
+    echo (binary) $_GET['i'];
+    echo (array) $_GET['j'];
+    echo (object) $_GET['k'];
+}
+
+// 27-33: the same cast, in every OTHER branch the rule now has. The guard is a
+// single `pattern-not-regex` over the matched text rather than one exclusion
+// per branch, and these are what prove it reaches all of them.
+function render_cast_everywhere($flag, $n) {
+    print (int) $_POST['n'];
+    echo "id=" . (int) $_GET['e'];
+    echo (int) $_GET['f'] . "x";
+    echo "n=", (int) $_GET['g'];
+    echo $flag ? (int) $_GET['t'] : "safe";
+    printf("<p>%d</p>", (int) $_GET['c']);
+    echo (int) $_GET['u']['id'];
+}
+
+// 34-40: the near-misses for the branches added alongside the cast guard. Each
+// is the escaped twin of a shape in `hits/output.php`, and each is silent for
+// the same reason the older ones are: the operand the branch names is a CALL
+// node, not a raw subscript.
+function render_new_branches_escaped($flag, $row, $safe, $suffix) {
+    echo $flag ? esc_html($_GET['t']) : "safe";
+    printf("<p>%s</p>", esc_html($_GET['c']));
+    echo "Hello ", esc_html($_GET['name']);
+    echo $row['user']['name'];
+    echo esc_url($_SERVER['PHP_SELF']);
+    echo esc_html($_COOKIE['theme']);
+    echo "<p>{$safe}</p>" . $suffix;
+}
+
+// 41-42: the two lines that were `known-false-positives/output.php` until this
+// commit. A raw superglobal concatenated INSIDE an escaping call, where the
+// call is itself an operand of a concatenation the echo emits. They were
+// recorded as unfixable because `echo` lowers to a call node, so any exclusion
+// naming the escaping call names the echo too. That is true of the AST and
+// false of the FILTER: `metavariable-regex` matches the SOURCE TEXT of $F,
+// which is `echo`, `print` or `<?=` for the language constructs and an
+// identifier for a real call. Requiring identifier shape separates them at no
+// cost — measured, 12/12 true positives kept, these two gone.
+function formerly_false_positive($a, $label) {
+    echo esc_html($a . $_GET['b']) . "x";
+    echo "y" . esc_html($label . $_POST['q']);
+}
+
+// 43: a superglobal read from $_SERVER but never output — the same
+// discriminating shape as line 62 above, for the two names just added to the
+// regex.
+function read_server() {
+    $path = $_SERVER['REQUEST_URI'];
+    return $path;
+}
