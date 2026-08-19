@@ -15,11 +15,16 @@ rules:
     languages: [generic]
 
   # ============== JS/TS ==============
+  # `new Function(...)`, não `new Function($X)`: a forma canónica do construtor
+  # nomeia os parâmetros primeiro e passa o corpo no último argumento
+  # (`new Function('a', 'b', body)`), pelo que a variante de um só argumento —
+  # a única que `$X` apanhava — é a rara. Medido: 0 findings na forma de três
+  # argumentos antes desta alteração.
   - id: js-eval-of-user-input
     pattern-either:
-      - pattern: eval($X)
-      - pattern: new Function($X)
-    message: Uso de eval/new Function. Evitar sempre que possível — risco de RCE se $X vier de input externo.
+      - pattern: eval(...)
+      - pattern: new Function(...)
+    message: Uso de eval/new Function. Evitar sempre que possível — risco de RCE se o argumento vier de input externo.
     severity: WARNING
     languages: [javascript, typescript]
 
@@ -30,8 +35,10 @@ rules:
     languages: [javascript, typescript]
 
   - id: js-document-write
-    pattern: document.write($X)
-    message: document.write é vetor de XSS quando $X contém input não-sanitizado.
+    pattern-either:
+      - pattern: document.write($X)
+      - pattern: document.writeln($X)
+    message: document.write/writeln é vetor de XSS quando $X contém input não-sanitizado.
     severity: WARNING
     languages: [javascript, typescript]
 
@@ -57,9 +64,26 @@ rules:
     severity: WARNING
     languages: [python]
 
+  # `yaml.load($X)` sozinho apanhava UMA das seis grafias inseguras. O que torna
+  # a chamada segura não é a aridade — é a CLASSE DE LOADER: `Loader=yaml.Loader`
+  # e `Loader=yaml.UnsafeLoader` executam código arbitrário do documento
+  # exatamente como a chamada sem Loader, e ambos passavam despercebidos porque
+  # tinham dois argumentos. Medido em `misses/service.py`: as grafias seguras
+  # são excluídas pelo NOME da classe, em posição nomeada e posicional, para a
+  # implementação Python e para a libyaml. As formas de nome simples
+  # (`Loader=SafeLoader` depois de `from yaml import SafeLoader`) não precisam de
+  # cláusula própria — medido, o Semgrep resolve-as pelo import.
   - id: py-yaml-load
-    pattern: yaml.load($X)
-    message: yaml.load() sem Loader é inseguro (RCE). Usa yaml.safe_load().
+    patterns:
+      - pattern-either:
+          - pattern: yaml.load(...)
+          - pattern: yaml.unsafe_load(...)
+          - pattern: yaml.full_load(...)
+      - pattern-not: yaml.load(..., Loader=yaml.SafeLoader)
+      - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader)
+      - pattern-not: yaml.load($X, yaml.SafeLoader)
+      - pattern-not: yaml.load($X, yaml.CSafeLoader)
+    message: yaml.load() com um Loader inseguro (ou sem Loader) permite RCE. Usa yaml.safe_load().
     severity: ERROR
     languages: [python]
 
@@ -78,6 +102,10 @@ rules:
     severity: ERROR
     languages: [php]
 
+  # LIMITE MEDIDO, deliberadamente não alargado: esta regra visa `mysql_query` e
+  # `mysqli_query`, e `mysql_query` foi REMOVIDO no PHP 7. A forma canónica do
+  # WordPress — `$wpdb->query("... " . $id)` — é uma superfície de API diferente
+  # e pertence a uma regra própria, com o seu próprio conjunto de fixtures.
   - id: php-sql-injection-direct
     pattern-either:
       - pattern: mysql_query($X . $Y)
@@ -86,11 +114,147 @@ rules:
     severity: ERROR
     languages: [php]
 
+  # Esta regra esteve MORTA desde que foi escrita: `echo $_GET[$X]` não é PHP
+  # parsável (falta o terminador da instrução), pelo que falhava a compilar e
+  # nunca chegou a fazer match em nada. Medida contra um ficheiro com um
+  # `echo $_GET['name'];` real: results 0, errors 1, exit 2.
+  #
+  # FORMA: um `pattern-either` de ÂMBITOS (`pattern-inside`) que descrevem os
+  # sítios onde um valor chega ao browser, e um `pattern:` estreito —
+  # `$SUPER[...]` — que é o que a regra realmente aponta. O finding aponta o
+  # subscript ofensivo, não a instrução inteira, e essa escolha é estrutural,
+  # não cosmética: uma instrução pode emitir DOIS operandos, um seguro e um em
+  # cru, e um match do tamanho da instrução não os consegue distinguir.
+  #
+  # A regra não tem lista de funções de escape, e isso é deliberado: o que ela
+  # emite é um superglobal EM CRU no caminho de output. Assim que o valor passa
+  # por uma CHAMADA — esc_html(), wp_kses(), intval() ou um escapador da própria
+  # casa — deixa de haver match, sem que nenhuma lista tenha de o prever. Quem
+  # faz isso é o `pattern-not-inside` de `$G(...)` no fim, e o `metavariable-
+  # regex` sobre $G é o que separa uma chamada a sério das CONSTRUÇÕES da
+  # linguagem: `echo` É um nó de chamada na AST de PHP, mas o `metavariable-
+  # regex` casa com o TEXTO DE ORIGEM de $G — `echo`, `print` ou `<?=` para as
+  # construções e um identificador para uma chamada real — pelo que exigir forma
+  # de identificador (e isentar `printf`, que é output) separa-os. Foi assim que
+  # o único falso positivo que esta regra tinha fixado desapareceu:
+  # `echo esc_html($a . $_GET['b']) . "x";` estava registado como incorrigível
+  # porque «qualquer exclusão que nomeie o escapador nomeia também o echo» —
+  # verdade da AST, falso do filtro.
+  #
+  # UM CAST NÃO É UMA CHAMADA: o Semgrep vê ATRAVÉS do nó de cast, o
+  # `$SUPER[...]` liga-se ao subscript lá dentro e o `metavariable-regex` lê o
+  # texto do subscript, não o do cast. Por isso `echo (int) $_GET['id'];`, a
+  # maneira normal e segura de emitir um parâmetro numérico em WordPress, era um
+  # finding ERROR nas onze grafias de cast do PHP. O guarda são os seis
+  # `pattern-not-inside`, e AQUI uma enumeração é legítima: o conjunto de casts
+  # do PHP é FECHADO pela linguagem e não cresce com o código do utilizador — é
+  # categoricamente diferente de uma lista de funções de escape, que é aberta.
+  # Seis entradas chegam para as onze grafias porque os pares
+  # int/integer, float/double/real, bool/boolean e string/binary colapsam no
+  # mesmo nó (medido em `misses/output.php`).
+  #
+  # O guarda de cast SÓ funciona porque o match é estreito. Enquanto foi um
+  # `pattern-not-regex` sobre o TEXTO do match — a versão anterior desta regra —
+  # tinha duas falhas graves, ambas medidas contra código real:
+  #  - suprimia a instrução INTEIRA. `printf("%d %s", (int) $_GET['id'],
+  #    $_GET['name']);` e as quatro polaridades de
+  #    `echo $f ? (int) $_GET['a'] : $_GET['b'];` são XSS real e ficavam
+  #    silenciosas. De nove linhas de XSS real com um cast algures na mesma
+  #    instrução, disparavam DUAS.
+  #  - era um VETOR DE '^\$_(GET|POST|REQUEST|SERVER|COOKIE)$'SSÃO. `pattern-not-regex` lê texto-fonte, pelo que
+  #    `echo 'usa (int)$_GET para números: ' . $_GET['x'];` desligava a regra
+  #    sem que nenhum cast fosse executado — a grafia dentro de um literal de
+  #    string bastava. Num pack de segurança isso não é uma troca documentada,
+  #    é um interruptor que qualquer string prestável (ou hostil) carrega.
+  # Com o match estreito e `pattern-not-inside`, as nove linhas disparam e as
+  # sete formas seguras de `other/casts.php` continuam silenciosas.
+  #
+  # O `metavariable-regex` sobre $SUPER é carga estrutural, não cosmética:
+  # `$SUPER[...]` sozinho apanha QUALQUER acesso a array, e sem ele todo o
+  # `echo $row['title'];` de todos os templates WordPress do mundo passava a
+  # ser um finding ERROR. Há near-misses em fixtures precisamente para isso.
+  # $_SERVER e $_COOKIE estão na lista porque `$_SERVER['PHP_SELF']` é o XSS
+  # refletido canónico do PHP. Todas as chaves de $_SERVER disparam, de
+  # propósito — uma allowlist teria de decidir sobre `SERVER_NAME` e
+  # `HTTP_HOST`, que são influenciáveis pelo atacante num vhost mal
+  # configurado — e por isso a MENSAGEM nomeia as chaves de risco, para que
+  # quem a vir sobre `DOCUMENT_ROOT` não conclua que a regra está errada e
+  # deixe de a ler sobre `PHP_SELF`.
+  #
+  # O ÂNCORA ESTREITO tem um custo próprio, e este foi medido contra código de
+  # i18n normal: doze dos catorze âmbitos ligam eles próprios o $SUPER, pelo que
+  # o `metavariable-regex` rejeita `$labels` e as buscas por chave em vírgula,
+  # printf e ternário nunca correram perigo. Os DOIS âmbitos de concatenação —
+  # `echo $A . $B;` e `print $A . $B;` — não ligam $SUPER, e aí o `$SUPER[...]`
+  # estreito passou a apanhar um subscript em POSIÇÃO DE índice:
+  # `echo $labels[$_GET['lang']] . "</b>";` é uma tabela de tradução, o que sai
+  # vem do array do programador e o pedido só escolhe o elemento. Medido: cinco
+  # findings ERROR em código correto. Guarda-o o
+  # `pattern-not-inside: $ARR[$SUPER[...]]`, que distingue as duas formas pelo
+  # que está DENTRO dos parênteses retos e não pela profundidade — por isso
+  # `echo $_GET['user']['name'];`, cujo índice é um literal, continua a disparar.
+  #
+  # `isset(...)` precisa de cláusula própria e `empty(...)` NÃO, e a assimetria
+  # é medida: `isset` não é um nó de chamada na AST de PHP, pelo que o guarda de
+  # `$G(...)` nunca o vê; `empty` é, e já lá estava. Escrever a cláusula de
+  # `empty` por simetria seria acrescentar uma linha que nenhuma medição
+  # consegue mexer.
+  #
+  # O QUE ESTA REGRA NÃO VÊ, medido e não assumido:
+  #  - Fluxo de dados. `$out = <<<HTML ... {$_GET['m']} ... HTML; echo $out;`
+  #    é silencioso: o superglobal não está no nó que o echo emite.
+  #  - `_e()`, `wp_die()`, `vprintf()` e os restantes helpers de output do
+  #    WordPress. `echo`, `print` e `printf` estão cobertos; os outros não.
+  #    `sprintf` está de fora de propósito — devolve, não emite.
+  #  - UM SUPERGLOBAL EM CRU DENTRO DE QUALQUER CHAMADA é considerado tratado,
+  #    e não só dentro de um escapador. Não é regressão — os padrões de operando
+  #    anteriores também exigiam operando direto — mas a afirmação é muito mais
+  #    forte do que «um escapador trata disto», e tem de estar escrita. Medido,
+  #    são silenciosos: `wp_unslash()`, `stripslashes()`, `trim()`, `sprintf()`,
+  #    `implode()`, `nl2br()`, `str_replace()`, `strtoupper()`, `strrev()`.
+  #    Nenhum deles escapa HTML. O exemplo afiado é o idioma do próprio
+  #    WordPress: `echo wp_unslash($_GET['x']);` é XSS de manual e é
+  #    sintaticamente indistinguível do correto
+  #    `echo esc_html(wp_unslash($_GET['x']));`. Enumerar os NÃO-escapadores é o
+  #    problema do conjunto aberto ao contrário, por isso fica assim, escrito.
+  #    O mesmo alargamento comprou recall: operandos ENTRE PARÊNTESES —
+  #    `echo "x" . ($_GET['h']);` — disparam agora e os padrões de operando
+  #    antigos não lhes chegavam.
   - id: wp-unescaped-output
-    pattern-either:
-      - pattern: echo $_GET[$X]
-      - pattern: echo $_POST[$X]
-      - pattern: echo $_REQUEST[$X]
-    message: Output direto de input do utilizador — XSS. Usa esc_html(), esc_attr(), etc.
+    patterns:
+      - pattern-either:
+          - pattern-inside: echo $SUPER[...];
+          - pattern-inside: print $SUPER[...];
+          - pattern-inside: echo $SUPER[...][...];
+          - pattern-inside: print $SUPER[...][...];
+          - pattern-inside: 'echo "...{$SUPER[...]}...";'
+          - pattern-inside: echo $X, ..., $SUPER[...], ...;
+          - pattern-inside: echo ..., $SUPER[...], ..., $X;
+          - pattern-inside: 'echo $C ? $SUPER[...] : $B;'
+          - pattern-inside: 'echo $C ? $A : $SUPER[...];'
+          - pattern-inside: 'print $C ? $SUPER[...] : $B;'
+          - pattern-inside: 'print $C ? $A : $SUPER[...];'
+          - pattern-inside: printf(..., $SUPER[...], ...)
+          - pattern-inside: echo $A . $B;
+          - pattern-inside: print $A . $B;
+      - pattern: $SUPER[...]
+      - metavariable-regex:
+          metavariable: $SUPER
+          regex: '^\$_(GET|POST|REQUEST|SERVER|COOKIE)$'
+      - pattern-not-inside: (int) $Z
+      - pattern-not-inside: (float) $Z
+      - pattern-not-inside: (bool) $Z
+      - pattern-not-inside: (string) $Z
+      - pattern-not-inside: (array) $Z
+      - pattern-not-inside: (object) $Z
+      - pattern-not-inside: $ARR[$SUPER[...]]
+      - pattern-not-inside: isset(...)
+      - pattern-not-inside:
+          patterns:
+            - pattern: $G(...)
+            - metavariable-regex:
+                metavariable: $G
+                regex: '^(?!echo$)(?!print$)(?!printf$)[A-Za-z_\\][A-Za-z0-9_\\]*$'
+    message: Output direto de input do utilizador ($SUPER) — XSS. Usa esc_html(), esc_attr(), esc_url() ou wp_kses(). Em $_SERVER as chaves de risco são PHP_SELF, REQUEST_URI, QUERY_STRING, PATH_INFO e todas as HTTP_* (HTTP_REFERER, HTTP_USER_AGENT, HTTP_HOST) — vêm do pedido, não do servidor.
     severity: ERROR
     languages: [php]

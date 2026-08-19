@@ -41,7 +41,149 @@ version bump.
   `paths.scanned: 0`, `errors: 0`. Asserting that every pack is clean proves
   nothing if the check has quietly stopped working.
 
+- **Fixture coverage for `base.yml`** — `mcp/test/integration/baseRules.test.ts`
+  and a hits/misses pair per rule under `mcp/test/fixtures/base/`, asserting the
+  exact rule-id set, the raw non-deduplicated finding count and `paths.scanned`
+  per file. Every line in `misses/` was checked against a *deliberately broken*
+  variant of the rule it is a near-miss for — a case-insensitive AWS regex, a
+  `Math.random` with no call, a `$O.write($X)` with an unconstrained receiver,
+  an `$X.eval(...)` that also matches PyTorch's `model.eval()`, a
+  `wp-unescaped-output` with its `metavariable-regex` deleted — so that each one
+  is silent for a reason belonging to the rule rather than by coincidence. The
+  scan is run through `spawnSync`, not `execFileSync`, because `--quiet` leaves
+  stderr **empty** for a rule that failed to compile and puts the id in the
+  JSON `errors` array instead: the old form reported the dead PHP rule as a bare
+  "Command failed: semgrep --config …" four times without naming it once.
+
 ### Fixed
+
+- **`wp-unescaped-output` stops flagging `echo (int) $_GET['id'];`, and now
+  matches the subscript rather than the statement.** A cast is not a call, and
+  Semgrep sees straight through the cast node — `$SUPER[...]` binds to the
+  subscript inside it and `metavariable-regex` reads the text of the subscript,
+  not of the cast. So the standard safe way to emit a numeric request parameter
+  in WordPress was an ERROR-severity finding, in all eleven PHP cast spellings
+  and in every branch of the rule.
+
+  The first fix was a `pattern-not-regex` over the matched text. It was wrong in
+  a way worth recording, because a text guard suppresses everything the match
+  covers and the match was a whole statement:
+
+  - **Recall.** Of nine real-XSS lines carrying a cast somewhere in the same
+    statement, two fired. `printf("%d %s", (int) $_GET['id'], $_GET['name']);`
+    and all four polarities of `echo $f ? (int) $_GET['a'] : $_GET['b'];` were
+    silent — the branches that match at statement level have the widest
+    suppression window of all.
+  - **A suppression vector.** `pattern-not-regex` reads source text, so
+    `echo 'use (int)$_GET for numbers: ' . $_GET['x'];` turned the rule off with
+    no cast executed anywhere. In a security pack that is not a documented
+    trade; it is a switch any helpful — or hostile — string literal can carry.
+
+  The rule is now a `pattern-either` of `pattern-inside` SCOPES plus a narrow
+  `pattern: $SUPER[...]`, so a finding points at the offending subscript and one
+  statement can report one operand while staying quiet about another. The cast
+  guard is six `pattern-not-inside` clauses, which can only remove the operand
+  actually wrapped in a cast; six entries cover all eleven spellings because
+  int/integer, float/double/real, bool/boolean and string/binary collapse to the
+  same node. Enumerating them is legitimate because PHP's cast set is closed by
+  the language, unlike a list of escaping functions. Measured: eleven real-XSS
+  lines fire, the seven safe casts stay silent, a trailing `//` comment with the
+  same spelling never suppressed anything, and `echo (int) $_GET['a'] .
+  $_GET['b'];` — recorded as an accepted loss one commit earlier — fires again.
+
+- **The pinned `wp-unescaped-output` false positive is gone, and both halves of
+  its recorded justification were wrong.** `echo esc_html($a . $_GET['b']) . "x";`
+  was recorded as unfixable because `echo` lowers to a call node, so any
+  exclusion naming the escaping call names the echo too. True of the AST, false
+  of the filter: `metavariable-regex` matches the **source text** of the
+  metavariable, which is `echo`/`print`/`<?=` for the language constructs and an
+  identifier for a real call. Requiring identifier shape of `$F` costs nothing —
+  12/12 true positives kept, both false positives gone, `errors: 0`. The
+  measurement in the old comment was wrong too: the two exclusions said to take
+  the rule "to zero findings, true positives included" actually took it from 12
+  to 8. `mcp/test/fixtures/base/known-false-positives/` is deleted.
+
+- **`wp-unescaped-output` sees eight more shapes of real XSS.** Measured against
+  a reviewer's probe of fourteen, six fired. Now thirteen do: comma-separated
+  `echo`, nested subscript (`$_GET['user']['name']`), a ternary operand,
+  `printf`, an interpolated string used as a concatenation operand, and
+  `$_SERVER` / `$_COOKIE` — `$_SERVER['PHP_SELF']` being the canonical reflected
+  XSS in PHP, which the old `GET|POST|REQUEST` regex could not reach. The
+  fourteenth needs data flow (a heredoc assigned to a variable, echoed later)
+  and is recorded as a limitation rather than guessed at.
+
+- **A superglobal used as an array KEY no longer fires.**
+  `echo $labels[$_GET['lang']] . "</b>";` is ordinary i18n code — the lookup
+  table is the developer's and the request only picks the element — and the
+  narrowed anchor introduced it as an ERROR-tier false positive, five findings
+  on correct code. Twelve of the fourteen scopes bind `$SUPER` themselves, so
+  the comma, `printf` and ternary lookups were never at risk; the two
+  CONCATENATION scopes do not, which left the narrow `pattern: $SUPER[...]`
+  free to match a subscript in index position. Guarded by
+  `pattern-not-inside: $ARR[$SUPER[...]]`, which tells the two apart by what is
+  INSIDE the brackets rather than by nesting depth — so
+  `echo $_GET['user']['name'];`, whose index is a literal, still fires, and
+  there is a fixture saying so. `isset()` needs a clause of its own because
+  Semgrep does not model it as a call; a matching `empty()` clause was proposed,
+  measured to move nothing at all — `$G(...)` already covers it, because
+  `empty` IS a call node — and dropped rather than kept for symmetry.
+
+- **`wp-unescaped-output`'s "inside any call = handled" is now written down.**
+  Not a regression — the old operand patterns needed a direct operand, so none
+  of these ever fired — but a far stronger claim than "an escaper handles it",
+  and it was implied rather than stated. Measured silent: `wp_unslash()`,
+  `stripslashes()`, `trim()`, `sprintf()`, `implode()`, `nl2br()`,
+  `str_replace()`, `strtoupper()`, `strrev()`, none of which escape HTML. The
+  sharpest case is WordPress's own idiom — `echo wp_unslash($_GET['x']);` is
+  textbook XSS and is syntactically indistinguishable from the correct
+  `echo esc_html(wp_unslash($_GET['x']));`. Enumerating the non-escapers is the
+  open-set problem inverted, so the limitation stays and is named instead, in
+  the rule comment and the test header. The other half of the same trade is
+  pinned rather than described: a PARENTHESISED operand
+  (`echo "x" . ($_GET['h']);`) fires now, where the old operand patterns could
+  not reach it.
+
+- **`yaml.load(stream=f, Loader=yaml.SafeLoader)` was an ERROR on safe code.**
+  The `Loader=` exclusions were written `yaml.load($X, Loader=...)`, which
+  requires a POSITIONAL first argument; passing the stream by keyword is legal
+  Python and perfectly safe. Widened to `yaml.load(..., Loader=...)`. Measured
+  on the reviewer's probe: seven findings, exactly the seven unsafe spellings,
+  all eight safe forms silent, no recall lost.
+
+- **`wp-unescaped-output`'s message now names the `$_SERVER` keys that carry
+  risk** — `PHP_SELF`, `REQUEST_URI`, `QUERY_STRING`, `PATH_INFO` and the
+  `HTTP_*` family. All twelve keys still fire and that is deliberate: an
+  allowlist would have to rule on `SERVER_NAME` and `HTTP_HOST`, which an
+  attacker can influence on a misconfigured vhost. But a developer told "XSS"
+  about `$_SERVER['DOCUMENT_ROOT']` concludes the rule is wrong and stops
+  reading it on `PHP_SELF` too, so the message says which is which.
+
+- **`py-yaml-load` caught one unsafe spelling in six.** The rule was
+  `pattern: yaml.load($X)`, a one-argument match — but what makes the call safe
+  is the **loader class**, not the arity. `Loader=yaml.Loader`,
+  `Loader=yaml.UnsafeLoader`, the positional `yaml.load(f, yaml.Loader)`,
+  `yaml.unsafe_load` and `yaml.full_load` all executed arbitrary code unseen.
+  All six now fire and the safe forms stay silent, excluded by loader name in
+  both the keyword and positional position and for both the pure-Python and
+  libyaml classes.
+
+- **`pattern-inside: print $A . $B;` was dead by fixture** — correct, live
+  against real code, and deletable with the suite still green, inside the very
+  branch of work that audits for clauses nobody measures. Pinned by a hit rather
+  than removed.
+
+- **The load-failure invariant is stated rather than accidental.** Ablating the
+  only `pattern:` of `py-yaml-load` produced `scanned=0` with **neither** a
+  `RuleParseError` **nor** an `Invalid YAML` — a fifth spelling of the silent
+  failure family, caught only because the id-set assertion pins the exact set of
+  ids the `hits/` fixtures produce. `baseRules.test.ts` now says so in a comment
+  and adds a count comparison beside the set comparison, which also catches a
+  `- id:` written twice.
+
+- **`php-sql-injection-direct`'s reach is written down.** It targets
+  `mysql_query`, removed in PHP 7, and `mysqli_query`; the canonical WordPress
+  form `$wpdb->query("..." . $id)` is a different API surface and is left to a
+  rule of its own rather than bolted onto this id.
 
 - **The Java rules no longer fire on correct Java.** The first two review
   sweeps found 19 findings on correct code across five of the eight rules; all
@@ -460,14 +602,59 @@ version bump.
   count of operands was never what decided it. The rule is `WARNING` precisely
   because this class of miss has no end.
 
-- **`base.yml`'s `wp-unescaped-output` has never worked**, found by the new
+- **`base.yml`'s `wp-unescaped-output` had never worked**, found by the
   cross-pack test on its first run. `pattern: echo $_GET[$X]` does not parse as
-  PHP (`Stdlib.Parsing.Parse_error`), so the WordPress XSS rule cannot match
+  PHP (`Stdlib.Parsing.Parse_error`), so the WordPress XSS rule could not match
   anything — measured against a file containing a real `echo $_GET['name'];`:
-  `results: 0`, `errors: 1`, exit 2. It is **quarantined, not fixed**: the entry
-  pins the rule id, so the test fails if the pack starts validating cleanly (to
-  force deleting the entry) and fails if it breaks for a different reason.
-  Queued for the non-Java pack sweep.
+  `results: 0`, `errors: 1`, exit 2. Quarantined for one wave, then **fixed**:
+  see the entry below. The quarantine machinery in `semgrepPacks.test.ts` went
+  with its last entry rather than staying behind as an empty map.
+
+- **`base.yml` audited rule by rule, and three of the thirteen were doing
+  nothing.** The pack `init_project` copies into a user's project as
+  `.semgrep.yml` is the only rule file here that ships to somebody else's
+  repository, and it had **no fixture coverage of any kind**. All thirteen rules
+  were run against hand-written vulnerable code and against the correct code
+  that most resembles it; the ten not listed here fire on the bug and are silent
+  on the near-miss, measured.
+  - `wp-unescaped-output` rewritten and fixture-backed. It now covers the whole
+    echoed/printed expression, string interpolation, and a superglobal as a
+    literal operand of a concatenation the statement emits — twelve shapes, one
+    fixture each. It carries **no list of escaping functions**: what it emits is
+    a superglobal in the raw on an output path, so anything that passes through
+    a call — `esc_html()`, `wp_kses()`, `intval()`, or a house escaper nobody
+    could have enumerated — stops matching without needing to be predicted.
+    `pattern-inside: echo $A . $B;` is what keeps the concatenation branch off
+    `echo esc_html($a . $_GET['b']);`, which is correct code the looser scope
+    flags. The `metavariable-regex` on `$SUPER` is load-bearing rather than
+    decorative: `$SUPER[...]` alone matches **any** array access, so without it
+    every `echo $row['title'];` in every WordPress template becomes an
+    ERROR-tier finding — pinned by near-miss fixtures that fire when it is
+    deleted.
+
+    It ships with **one known false positive**, pinned by line in
+    `mcp/test/fixtures/base/known-false-positives/` rather than described in a
+    comment: a superglobal concatenated *inside* an escaping call that is
+    itself an operand of a concatenation the echo emits
+    (`echo esc_html($a . $_GET['b']) . "x";`). It is not removable in Semgrep
+    OSS syntax — `echo` is a CALL node in the PHP AST, so
+    `pattern-not-inside: $F($C . $D)` excludes the echo along with the escaper
+    and takes the rule to zero on everything. The alternative is to anchor the
+    concatenation branch at a bounded set of depths, which trades this for a
+    silent recall cliff at the first echo with one more term than somebody
+    enumerated; in a security pack the missed XSS is the worse failure.
+  - `js-eval-of-user-input` matched `new Function($X)`, the **one-argument**
+    form. The canonical Function constructor names its parameters first and
+    passes the body last, so the shape the rule was written for is the shape
+    real code least often has: measured, 0 findings on
+    `new Function('a', 'b', body)`. Now `new Function(...)`.
+  - `js-document-write` saw `document.write` and not `document.writeln`.
+
+  Neither of the last two would have been caught by `--validate`: both compiled
+  perfectly and matched nothing. The assertion that catches the whole family is
+  the one comparing the rule ids the fixtures exercise against the `- id:`
+  entries parsed out of the YAML — a rule with no hit fixture behind it is a
+  rule nobody has measured.
 
 ### Accepted limitations
 
