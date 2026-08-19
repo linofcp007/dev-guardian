@@ -100,6 +100,8 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     ids: ['bugfix-java-null-safety-optional-get-no-ispresent'],
     count: 1,
   },
+  'LoopLteLength.java': { ids: ['bugfix-java-off-by-one-loop-lte-length'], count: 1 },
+  'StreamNotClosed.java': { ids: ['bugfix-java-memory-leak-stream-not-closed'], count: 1 },
 };
 
 describe('bugfix-java rules', () => {
@@ -153,6 +155,8 @@ const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-java-error-handling-printstacktrace-only': 'error_handling',
   'bugfix-java-null-safety-map-get-deref': 'null_safety',
   'bugfix-java-null-safety-optional-get-no-ispresent': 'null_safety',
+  'bugfix-java-off-by-one-loop-lte-length': 'off_by_one',
+  'bugfix-java-memory-leak-stream-not-closed': 'memory_leak',
 };
 
 describe('every rule id classifies as its own class', () => {

@@ -64,3 +64,27 @@ rules:
       Use `orElse`, `orElseThrow` com mensagem, ou guarde com `isPresent()`.
     severity: ERROR
     languages: [java]
+
+  - id: bugfix-java-off-by-one-loop-lte-length
+    pattern: |
+      for (int $I = 0; $I <= $A.length; $I++) { ... }
+    message: >-
+      Off-by-one. `i <= a.length` corre uma posição para lá do fim, e o índice
+      `a.length` está sempre fora dos limites — é um
+      ArrayIndexOutOfBoundsException. Queria provavelmente `i < a.length`.
+    severity: ERROR
+    languages: [java]
+
+  # WARNING e não ERROR: um stream fechado num `finally` está correto e esta
+  # regra não o vê. A exclusão nomeia o recurso porque `try (...) { ... }` não
+  # é um padrão Java válido — medido, não suposto.
+  - id: bugfix-java-memory-leak-stream-not-closed
+    patterns:
+      - pattern: $T $V = new FileInputStream(...);
+      - pattern-not-inside: try ($T2 $V2 = new FileInputStream(...)) { ... }
+    message: >-
+      Stream aberto fora de um try-with-resources. Se algo lançar antes do
+      `close()`, o descritor fica aberto — e em código que corre em ciclo isso
+      esgota os descritores do processo.
+    severity: WARNING
+    languages: [java]
