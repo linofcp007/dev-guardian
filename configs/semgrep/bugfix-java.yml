@@ -15,9 +15,22 @@
 # primeiro no if-chain. É por isso que a regra de edge_case se chama
 # modify-during-iteration e não concurrent-modification.
 rules:
+  # A exclusão é pelo NOME da variável, não por comentário, e a razão é que o
+  # Semgrep casa a AST — os comentários não estão lá. Um catch documentado
+  # como ignorado de propósito é byte a byte igual a um catch que engole a
+  # falha em silêncio, por isso o comentário nunca podia ser a válvula de
+  # escape. O nome pode, e já é a convenção dos dois linters Java standard:
+  # o EmptyCatchBlock do Checkstyle aceita `ignore` e `expected` por omissão,
+  # a inspeção do IntelliJ aceita `ignored`. Medido: `e`, `ex`, `ignoreMe` e
+  # `expectedly` continuam a disparar — a regra ganha vocabulário, não perde
+  # força.
   - id: bugfix-java-error-handling-empty-catch
-    pattern: |
-      try { ... } catch ($E $V) { }
+    patterns:
+      - pattern: |
+          try { ... } catch ($E $V) { }
+      - metavariable-regex:
+          metavariable: $V
+          regex: ^(?!(ignore|ignored|expected)$)
     message: >-
       Catch vazio. A exceção foi apanhada e deitada fora sem log, sem rethrow e
       sem tratamento, por isso a falha desaparece e o código segue como se
@@ -44,8 +57,38 @@ rules:
   # aqui esteve não excluía nada — medido com e sem ela, zero findings nos
   # dois casos. O que a regra exige mesmo é o DEREFERENCE: `m.get(k)` sozinho,
   # devolvido ao chamador, é código correto e não dispara.
+  #
+  # O recetor é restringido pelo TIPO DECLARADO, e sem isso a regra nunca foi
+  # sobre mapas: `$M.get($K).$METHOD(...)` casa QUALQUER `.get(x)` encadeado
+  # com um método, e disparava em ERROR sobre `list.get(0).trim()` a aconselhar
+  # `getOrDefault` — um método que a `List` não tem.
+  #
+  # Cada ramo repete o `pattern` positivo. Um ramo só com `metavariable-type`
+  # não é uma regra válida ("you need at least one positive term") e o Semgrep
+  # continua a imprimir `Scan completed successfully` nesse erro, por isso uma
+  # regra partida é indistinguível de uma regra que não encontrou nada.
+  #
+  # CUSTO, medido: o `metavariable-type` casa o tipo declarado EXATO, sem
+  # subtipagem. Um mapa atrás de uma interface do próprio projeto, um `Map`
+  # cru, ou um parâmetro de tipo genérico deixam de ser vistos. É recall
+  # trocado por precisão, de propósito.
   - id: bugfix-java-null-safety-map-get-deref
-    pattern: $M.get($K).$METHOD(...)
+    pattern-either:
+      - patterns:
+          - pattern: $M.get($K).$METHOD(...)
+          - metavariable-type: {metavariable: $M, type: Map}
+      - patterns:
+          - pattern: $M.get($K).$METHOD(...)
+          - metavariable-type: {metavariable: $M, type: HashMap}
+      - patterns:
+          - pattern: $M.get($K).$METHOD(...)
+          - metavariable-type: {metavariable: $M, type: TreeMap}
+      - patterns:
+          - pattern: $M.get($K).$METHOD(...)
+          - metavariable-type: {metavariable: $M, type: LinkedHashMap}
+      - patterns:
+          - pattern: $M.get($K).$METHOD(...)
+          - metavariable-type: {metavariable: $M, type: ConcurrentHashMap}
     message: >-
       Método chamado diretamente sobre `map.get()`. O `get` devolve `null`
       quando a chave não existe, por isso isto é um NullPointerException na
@@ -54,10 +97,41 @@ rules:
     severity: ERROR
     languages: [java]
 
+  # Sem o `metavariable-type`, `$O.get()` casa QUALQUER `get()` sem argumentos
+  # — `AtomicInteger.get()`, `ThreadLocal.get()`, `Supplier.get()` — e a regra
+  # nunca foi sobre `Optional`. As oito exclusões cobrem as guardas de saída
+  # antecipada, que são tão corretas como o `if (isPresent())` mas não põem o
+  # `get()` dentro do `if`. Cada uma tem a sua própria near-miss em
+  # misses/OptionalGet.java: apagar uma cláusula acende exatamente uma função.
   - id: bugfix-java-null-safety-optional-get-no-ispresent
     patterns:
       - pattern: $O.get()
+      - metavariable-type: {metavariable: $O, type: Optional}
       - pattern-not-inside: if ($O.isPresent()) { ... }
+      - pattern-not-inside: |
+          if (!$O.isPresent()) { return ...; }
+          ...
+      - pattern-not-inside: |
+          if (!$O.isPresent()) { throw ...; }
+          ...
+      - pattern-not-inside: |
+          if (!$O.isPresent()) { continue; }
+          ...
+      - pattern-not-inside: |
+          if (!$O.isPresent()) { break; }
+          ...
+      - pattern-not-inside: |
+          if ($O.isEmpty()) { return ...; }
+          ...
+      - pattern-not-inside: |
+          if ($O.isEmpty()) { throw ...; }
+          ...
+      - pattern-not-inside: |
+          if ($O.isEmpty()) { continue; }
+          ...
+      - pattern-not-inside: |
+          if ($O.isEmpty()) { break; }
+          ...
     message: >-
       `Optional.get()` sem `isPresent()`. Lança `NoSuchElementException` quando
       está vazio — que é exatamente aquilo que o Optional existia para evitar.
@@ -78,10 +152,22 @@ rules:
   # WARNING e não ERROR: um stream fechado num `finally` está correto e esta
   # regra não o vê. A exclusão nomeia o recurso porque `try (...) { ... }` não
   # é um padrão Java válido — medido, não suposto.
+  #
+  # A segunda exclusão é a forma do Java 9: um recurso já declarado e
+  # efetivamente final pode ser nomeado direto no cabeçalho, `try (in) { ... }`,
+  # e o stream É fechado. A declaração fica FORA do `try`, por isso um
+  # `pattern-not-inside` sobre o corpo do `try` não lhe chega — o que funciona
+  # é a exclusão sobre a SEQUÊNCIA. Medido: o `$V` fica mesmo ligado nas duas
+  # pontas, um `leaked` continua a disparar na mesma função onde um `managed`
+  # é fechado assim.
   - id: bugfix-java-memory-leak-stream-not-closed
     patterns:
       - pattern: $T $V = new FileInputStream(...);
       - pattern-not-inside: try ($T2 $V2 = new FileInputStream(...)) { ... }
+      - pattern-not-inside: |
+          $T $V = new FileInputStream(...);
+          ...
+          try ($V) { ... }
     message: >-
       Stream aberto fora de um try-with-resources. Se algo lançar antes do
       `close()`, o descritor fica aberto — e em código que corre em ciclo isso
@@ -104,9 +190,61 @@ rules:
     severity: ERROR
     languages: [java]
 
+  # Ancorada na CHAMADA `remove`, não no `for`. Duas razões, ambas medidas.
+  # A primeira é que o finding passa a apontar para a mutação em vez do
+  # cabeçalho do ciclo. A segunda é a lição da ronda do Go: um pattern
+  # positivo terminado em `...` mais uma exclusão emparelhada produz spans
+  # sobrepostos que a exclusão só cancela a meio — ancorar na chamada única e
+  # excluir sobre a sequência é a forma que funciona.
+  #
+  # As duas exclusões cobrem o idioma mais comum de mutação de listas em Java:
+  # procurar, remover, sair. Não há `ConcurrentModificationException` possível
+  # porque o `next()` nunca mais é chamado. Um terceiro ramo com `return;` sem
+  # valor foi medido e é INERTE — o `return ...;` já casa o `return;` de um
+  # método `void` — por isso não está aqui.
+  #
+  # O tipo do recetor é enumerado em vez de negado: as coleções concorrentes
+  # ficam de fora por omissão. A `CopyOnWriteArrayList` itera sobre um snapshot
+  # por design, e remover durante o for-each sobre ela é o idioma de remoção
+  # seguro dessa coleção, não um bug.
+  #
+  # CUSTO, medido: tal como no mapa, o `metavariable-type` é o tipo declarado
+  # EXATO, sem subtipagem — medido: `type: List` NÃO casa uma
+  # `CopyOnWriteArrayList`, que é o que faz a enumeração funcionar, e é também
+  # o que faz a regra ficar calada sobre qualquer coleção declarada com um tipo
+  # que não esteja nesta lista (`Deque`, `Queue`, `SortedSet`, uma coleção do
+  # próprio projeto).
   - id: bugfix-java-edge-case-modify-during-iteration
-    pattern: |
-      for ($T $X : $COLL) { ... $COLL.remove(...); ... }
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: $COLL.remove(...)
+              - metavariable-type: {metavariable: $COLL, type: List}
+          - patterns:
+              - pattern: $COLL.remove(...)
+              - metavariable-type: {metavariable: $COLL, type: ArrayList}
+          - patterns:
+              - pattern: $COLL.remove(...)
+              - metavariable-type: {metavariable: $COLL, type: LinkedList}
+          - patterns:
+              - pattern: $COLL.remove(...)
+              - metavariable-type: {metavariable: $COLL, type: Set}
+          - patterns:
+              - pattern: $COLL.remove(...)
+              - metavariable-type: {metavariable: $COLL, type: HashSet}
+          - patterns:
+              - pattern: $COLL.remove(...)
+              - metavariable-type: {metavariable: $COLL, type: LinkedHashSet}
+          - patterns:
+              - pattern: $COLL.remove(...)
+              - metavariable-type: {metavariable: $COLL, type: Collection}
+      - pattern-inside: "for ($T $X : $COLL) { ... }"
+      - pattern-not-inside: |
+          $COLL.remove(...);
+          return ...;
+      - pattern-not-inside: |
+          $COLL.remove(...);
+          break;
     message: >-
       Remoção da coleção durante o for-each sobre ela própria. Lança
       `ConcurrentModificationException` na iteração seguinte. Use

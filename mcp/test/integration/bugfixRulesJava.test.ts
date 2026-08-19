@@ -95,7 +95,14 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     ids: ['bugfix-java-error-handling-printstacktrace-only'],
     count: 1,
   },
-  'MapGetDeref.java': { ids: ['bugfix-java-null-safety-map-get-deref'], count: 1 },
+  'MapGetDeref.java': {
+    // Six: the rule restricts the receiver by DECLARED type, so it carries one
+    // function per `pattern-either` branch (Map, HashMap, TreeMap,
+    // LinkedHashMap, ConcurrentHashMap) plus a `var`-inferred receiver. A
+    // branch with no fixture behind it could be deleted without a test moving.
+    ids: ['bugfix-java-null-safety-map-get-deref'],
+    count: 6,
+  },
   'OptionalGet.java': {
     ids: ['bugfix-java-null-safety-optional-get-no-ispresent'],
     count: 1,
@@ -103,8 +110,12 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'LoopLteLength.java': { ids: ['bugfix-java-off-by-one-loop-lte-length'], count: 1 },
   'StreamNotClosed.java': { ids: ['bugfix-java-memory-leak-stream-not-closed'], count: 1 },
   'ModifyDuringIteration.java': {
+    // Seven, for the same reason as MapGetDeref: one function per enumerated
+    // receiver type (List, ArrayList, LinkedList, Set, HashSet,
+    // LinkedHashSet, Collection). The enumeration is what keeps the rule off
+    // CopyOnWriteArrayList, so every branch has to stay measured.
     ids: ['bugfix-java-edge-case-modify-during-iteration'],
-    count: 1,
+    count: 7,
   },
   'StaticDateFormat.java': {
     // Two: the rule covers `static final` and plain `static`, and this fixture

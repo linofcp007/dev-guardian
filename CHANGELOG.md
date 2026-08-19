@@ -19,15 +19,75 @@ version bump.
   collection during a for-each over it. Java is the emptiest language in the
   registry: of `p/r2c-bug-scan`'s 4 Java rules, **none** lands in a bug class.
 
+### Fixed
+
+- **The Java rules no longer fire on correct Java.** Two review sweeps found
+  19 findings on correct code across five of the eight rules; all 19 are gone,
+  and every one is pinned by a near-miss fixture.
+  - `null-safety-optional-get-no-ispresent` was never about `Optional`:
+    `$O.get()` matched **any** zero-argument `get()`, so `AtomicInteger.get()`,
+    `ThreadLocal.get()` and `Supplier.get()` all fired at ERROR. Restricted by
+    declared type, and eight early-exit guard shapes
+    (`return`/`throw`/`continue`/`break` under `!isPresent()` or `isEmpty()`)
+    are now recognised alongside `if (isPresent())`.
+  - `null-safety-map-get-deref` was never about `Map`: `$M.get($K).$METHOD(...)`
+    matched **any** one-argument `get` chained with a method, so
+    `list.get(0).trim()` fired at ERROR and advised `getOrDefault`, a method
+    `List` does not have. Restricted to `Map`, `HashMap`, `TreeMap`,
+    `LinkedHashMap` and `ConcurrentHashMap` — which also *gains* the
+    `HashMap`-, `TreeMap`- and `var`-declared receivers the old rule matched
+    only by accident.
+  - `memory-leak-stream-not-closed` now recognises Java 9's
+    `try (alreadyDeclared) { ... }` resource form, which closes the stream.
+  - `edge-case-modify-during-iteration` is re-anchored on the `remove` call
+    (the finding now points at the mutation, not the loop header) and no longer
+    fires on the find-remove-`return`/`break` idiom, where no
+    `ConcurrentModificationException` is possible, nor on
+    `CopyOnWriteArrayList`, which iterates a snapshot by design.
+  - `error-handling-empty-catch` honours the Checkstyle / IntelliJ naming
+    convention: an exception variable named `ignore`, `ignored` or `expected`
+    is a deliberate ignore. Every other name still fires.
+
 ### Known gaps
 
 - **No `Integer ==` rule.** Expressing it needs type inference Semgrep OSS does
   not have; the attempt fired on `v == null` and on primitive comparison.
-- `stream-not-closed` only recognises `new FileInputStream(...)`.
+- `stream-not-closed` only recognises `new FileInputStream(...)`, and only by
+  its simple name — a fully-qualified `new java.io.FileInputStream(...)` is not
+  seen.
 - `static-dateformat` only recognises `SimpleDateFormat`.
 - `map-get-deref` has no dataflow, so a map populated on the line above is
   still flagged.
 - `modify-during-iteration` only matches the enhanced-for form.
+- **Declared-type restriction costs recall.** `metavariable-type` matches the
+  exact declared type with **no subtyping** — measured: `type: List` does not
+  match a `CopyOnWriteArrayList`, which is exactly what makes the enumeration
+  work. So `map-get-deref` is silent on a map behind a project interface or a
+  generic type parameter (`<M extends Map<K,V>> ... m.get(k).f()`) — a raw
+  `Map` still fires — and `modify-during-iteration` is silent on a `Deque`, a
+  `Queue`, a `SortedSet` or a project collection type.
+- **The empty-catch naming escape hatch cuts both ways.** A genuinely swallowed
+  exception escapes the rule simply by being named `ignored`.
+- `optional-get-no-ispresent` recognises nine syntactic guard shapes; anything
+  else is a false positive, and the measured one is the ternary
+  `o.isPresent() ? o.get() : d`, which still fires.
+
+### Accepted false positives
+
+Reproduced on correct code, and kept rather than fixed:
+
+- `memory-leak-stream-not-closed` on `open(); try { … } finally { close(); }` —
+  already the rule's stated limitation, and already why it is `WARNING`.
+- `race-condition-static-dateformat` on a `static final SimpleDateFormat` whose
+  every access goes through a `synchronized` method — proving *all* accesses
+  are synchronized is whole-program analysis, which Semgrep OSS does not do,
+  and a shared formatter serialises every caller anyway.
+- `off-by-one-loop-lte-length` on `i <= a.length` where the body guards with
+  `i < a.length`, or never indexes `a` — genuinely rare, and the loop still
+  deserves a human look.
+- `error-handling-printstacktrace-only` on `printStackTrace()` as the fallback
+  when the logger itself threw — the one place the call is right; already
+  `WARNING`; too narrow to encode.
 
 ## [1.8.0] - 2026-08-18
 

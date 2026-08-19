@@ -1,5 +1,6 @@
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class ModifyDuringIteration {
     void viaIterator(List<String> items) {
@@ -25,5 +26,42 @@ public class ModifyDuringIteration {
     }
     void readOnly(List<String> items) {
         for (String s : items) { System.out.println(s); }
+    }
+
+    // findRemoveReturn is DISCRIMINATING for the `return`-terminated
+    // exclusion, and it is the most common list-mutation idiom in Java:
+    // find it, remove it, leave. No `ConcurrentModificationException` is
+    // possible because the loop never calls `next()` again — the `return`
+    // leaves the method on the same iteration that mutated. Delete the
+    // `remove(); return ...;` exclusion and this fires, at ERROR, on correct
+    // code.
+    void findRemoveReturn(List<String> items, String target) {
+        for (String s : items) {
+            if (s.equals(target)) { items.remove(s); return; }
+        }
+    }
+
+    // findRemoveBreak is DISCRIMINATING for the `break`-terminated exclusion,
+    // and for that one only: it is the same argument as findRemoveReturn but
+    // the loop is left by `break`, which is a different AST node and needs
+    // its own clause. Delete the `remove(); break;` exclusion and this fires
+    // while findRemoveReturn stays silent.
+    void findRemoveBreak(List<String> items, String target) {
+        for (String s : items) {
+            if (s.equals(target)) { items.remove(s); break; }
+        }
+    }
+
+    // cowRemove is DISCRIMINATING for the receiver-type restriction.
+    // `CopyOnWriteArrayList` iterates over a snapshot taken when the iterator
+    // was created, so mutating it mid-iteration is not merely tolerated, it
+    // is the collection's designed usage and the textbook safe-removal idiom
+    // for it. Widen `$COLL` back to any receiver — drop the
+    // `metavariable-type` restriction — and this fires at ERROR on code that
+    // cannot throw.
+    void cowRemove(CopyOnWriteArrayList<String> cow) {
+        for (String s : cow) {
+            if (s.isEmpty()) { cow.remove(s); }
+        }
     }
 }

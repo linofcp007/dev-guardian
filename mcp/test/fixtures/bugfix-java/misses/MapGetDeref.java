@@ -1,3 +1,4 @@
+import java.util.List;
 import java.util.Map;
 
 public class MapGetDeref {
@@ -32,5 +33,16 @@ public class MapGetDeref {
     // this rule's.
     Integer justGet(Map<String, Integer> m) {
         return m.get("k");
+    }
+
+    // listGet is DISCRIMINATING for the receiver-type restriction, and it is
+    // the reason that restriction exists. `List.get(int)` is a
+    // one-argument `get` chained with a method call, so it matched
+    // `$M.get($K).$METHOD(...)` exactly. Before the fix this fired at ERROR
+    // on entirely correct code and advised `getOrDefault` — a method `List`
+    // does not have. Delete every `metavariable-type` branch from the map
+    // rule and this fires again.
+    String listGet(List<String> xs) {
+        return xs.get(0).trim();
     }
 }

@@ -160,6 +160,40 @@ descartada: exprimi-la exige inferência de tipos que o Semgrep OSS não faz sem
 compilar, e a tentativa acusava `v == null` e a comparação de primitivos. Para
 essa classe, leia o código.
 
+Duas regras Java restringem o recetor pelo **tipo declarado**, e isso troca
+recall por precisão de propósito. O `metavariable-type` casa o tipo declarado
+exato, sem subtipagem — medido: `type: List` **não** casa uma
+`CopyOnWriteArrayList`, e é isso que mantém a `modify-during-iteration`
+afastada dela. O custo: a `map-get-deref` enumera `Map`, `HashMap`, `TreeMap`,
+`LinkedHashMap` e `ConcurrentHashMap`, por isso um mapa atrás de uma interface
+do próprio projeto ou de um parâmetro de tipo genérico
+(`<M extends Map<K,V>> … m.get(k).f()`) fica silencioso — um `Map` cru continua
+a disparar, medido; e a `modify-during-iteration` enumera `List`, `ArrayList`,
+`LinkedList`, `Set`, `HashSet`, `LinkedHashSet` e `Collection`, por isso um
+`Deque`, uma `Queue`, um `SortedSet` ou uma coleção do próprio projeto ficam
+silenciosos.
+
+A `empty-catch` respeita a convenção do Checkstyle / IntelliJ: nunca dispara se
+a variável da exceção se chamar `ignore`, `ignored` ou `expected`. É a forma
+auto-documentada de dizer "de propósito" sem um comentário de supressão — e o
+reverso é que uma exceção genuinamente engolida escapa à regra só por ter esse
+nome. A `optional-get-no-ispresent` reconhece nove formas de guarda
+(`if (isPresent())`, mais `return`/`throw`/`continue`/`break` antecipados sob
+`!isPresent()` ou `isEmpty()`); tudo o resto é falso positivo, e o medido é o
+ternário `o.isPresent() ? o.get() : d`. A `stream-not-closed` casa o nome
+simples do construtor, por isso um `new java.io.FileInputStream(...)`
+qualificado não é visto.
+
+Quatro falsos positivos são **aceites em vez de corrigidos**, cada um
+reproduzido em código correto:
+
+| Regra | Código correto em que dispara | Porque fica |
+| --- | --- | --- |
+| `memory-leak-stream-not-closed` | `open(); try { … } finally { close(); }` | Já é a limitação declarada da regra, e já é a razão de ser `WARNING`. |
+| `race-condition-static-dateformat` | `static final SimpleDateFormat` cujos acessos passam todos por métodos `synchronized` | Provar que *todos* os acessos estão sincronizados é análise do programa inteiro, que o Semgrep OSS não faz. Um formatter partilhado também serializa todos os chamadores, por isso marcá-lo é defensável. |
+| `off-by-one-loop-lte-length` | `i <= a.length` com o corpo protegido por `i < a.length`, ou que nunca indexa `a` | Genuinamente raro, e o ciclo merece à mesma olhos humanos. |
+| `error-handling-printstacktrace-only` | `printStackTrace()` como fallback quando foi o próprio logger que lançou | O único sítio onde a chamada está certa; já é `WARNING`; estreito demais para codificar. |
+
 **Isto é só para JS/TS, Python, Go e Java.** Para as restantes linguagens desta secção —
 C#, PHP, Ruby, Rust — a situação anterior mantém-se: o
 pack que corre por default (`p/r2c-bug-scan`) só cobre estas classes para

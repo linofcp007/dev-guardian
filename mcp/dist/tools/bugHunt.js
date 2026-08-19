@@ -394,7 +394,32 @@ registerToolModule(makeScanTool({
         'from one whose keys are guaranteed present, so a map populated immediately above the ' +
         'read is still flagged; and `modify-during-iteration` only matches the enhanced-for ' +
         'form, so an indexed loop removing from the list it indexes has the same defect and is ' +
-        'missed. JS/TS, Python, Go and Java only: no other language has ' +
+        'missed. Two Java rules restrict the receiver by DECLARED type, which buys precision ' +
+        'and costs recall: `metavariable-type` matches the exact declared type with no ' +
+        'subtyping (measured — `type: List` does NOT match a CopyOnWriteArrayList, which is ' +
+        'precisely what keeps the rule off it), so `map-get-deref`, enumerating Map, HashMap, ' +
+        'TreeMap, LinkedHashMap and ConcurrentHashMap, is silent on a map behind a project ' +
+        'interface or a generic type parameter (`<M extends Map<K,V>> ... m.get(k).f()`), ' +
+        'though a raw `Map` still fires (measured); and `modify-during-iteration`, enumerating ' +
+        'List, ArrayList, LinkedList, Set, HashSet, LinkedHashSet and Collection, is silent on ' +
+        'a Deque, a Queue, a SortedSet or a project collection type. `empty-catch` honours the ' +
+        'Checkstyle/IntelliJ convention and never fires when the exception variable is named ' +
+        '`ignore`, `ignored` or `expected` — the flip side being that a genuinely swallowed ' +
+        'exception escapes the rule simply by being named `ignored`. ' +
+        '`optional-get-no-ispresent` recognises nine syntactic guard shapes (`if (isPresent())`, ' +
+        'plus an early return/throw/continue/break under `!isPresent()` or `isEmpty()`); ' +
+        'anything else is a false positive, and the measured one is the ternary ' +
+        '`o.isPresent() ? o.get() : d`, which still fires. `stream-not-closed` matches the ' +
+        'simple constructor name, so a fully-qualified `new java.io.FileInputStream(...)` is ' +
+        'not seen. Four Java false positives are accepted rather than fixed, each reproduced on ' +
+        'correct code: `stream-not-closed` on `open(); try {} finally { close(); }` (already ' +
+        'the stated reason it is WARNING); `static-dateformat` on a static final ' +
+        'SimpleDateFormat whose every access goes through a synchronized method (proving ALL ' +
+        'accesses are synchronized is whole-program analysis, which Semgrep OSS does not do, ' +
+        'and a shared formatter serialises every caller anyway); `loop-lte-length` on ' +
+        '`i <= a.length` where the body guards with `i < a.length` or never indexes `a`; and ' +
+        '`printstacktrace-only` on the one place the call is right — the fallback when the ' +
+        'logger itself threw. JS/TS, Python, Go and Java only: no other language has ' +
         'a local rule pack yet, so C#, PHP, Ruby and Rust get only the ' +
         'registry coverage described below, same as before these packs existed. The local ' +
         'packs degrade rather than failing the whole scan if one is ever hand-edited into a bad ' +
