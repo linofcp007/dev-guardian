@@ -41,7 +41,13 @@ function semgrepAvailable(): boolean {
 }
 const AVAILABLE = semgrepAvailable();
 
-interface SemgrepResult { check_id: string; path: string }
+interface SemgrepResult {
+  check_id: string;
+  path: string;
+  /** Semgrep's own tier. `extra.severity` is optional in the schema, so it is
+   *  narrowed rather than asserted at every use. */
+  extra?: { severity?: string };
+}
 
 interface SemgrepRun {
   readonly rows: SemgrepResult[];
@@ -125,6 +131,35 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   },
 };
 
+/**
+ * The severity tier each rule is DESIGNED to carry, per the design of record
+ * §4: `ERROR` where the pattern is a bug regardless of intent, `WARNING` where
+ * it is usually a bug but has legitimate uses.
+ *
+ * Pinned here because nothing else pinned it. The tier is not cosmetic: the
+ * Semgrep parser maps ERROR → `high` and WARNING → `medium`
+ * (`src/runners/scannerParsers/semgrep.ts`), and `create_fix_pr` defaults
+ * `severity_min` to `high` — so a tier change silently moves a rule in or out
+ * of the default fix-PR set. `bug_hunt` itself defaults to no filter, so
+ * nothing disappears from a scan.
+ *
+ * `optional-get-no-ispresent` is WARNING and that is the interesting one:
+ * `o.get()` is a bug only when UNGUARDED, and the rule provably cannot tell —
+ * it recognises guards written inline against the same variable and misses any
+ * guard reached through another method. It failed §4's ERROR criterion, so it
+ * was moved rather than given a longer exclusion list.
+ */
+const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
+  'bugfix-java-error-handling-empty-catch': 'ERROR',
+  'bugfix-java-error-handling-printstacktrace-only': 'WARNING',
+  'bugfix-java-null-safety-map-get-deref': 'ERROR',
+  'bugfix-java-null-safety-optional-get-no-ispresent': 'WARNING',
+  'bugfix-java-off-by-one-loop-lte-length': 'ERROR',
+  'bugfix-java-memory-leak-stream-not-closed': 'WARNING',
+  'bugfix-java-race-condition-static-dateformat': 'ERROR',
+  'bugfix-java-edge-case-modify-during-iteration': 'ERROR',
+};
+
 describe('bugfix-java rules', () => {
   it.runIf(REQUIRE_SEMGREP)('the toolchain must be usable when the flag is set', () => {
     expect(AVAILABLE).toBe(true);
@@ -166,6 +201,23 @@ describe('bugfix-java rules', () => {
     for (const file of fixtureFiles(missesDir)) {
       expect(grouped[file] ?? []).toEqual([]);
     }
+  });
+
+  it.skipIf(!AVAILABLE)('reports each rule at its DESIGNED severity tier', () => {
+    const { rows } = run(RULES, resolve(FIXTURES, 'hits'));
+    const seen = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const id = row.check_id.split('.').pop() ?? row.check_id;
+      const severity = row.extra?.severity;
+      if (severity === undefined) throw new Error(`no severity on ${id}`);
+      const set = seen.get(id);
+      if (set) set.add(severity);
+      else seen.set(id, new Set([severity]));
+    }
+    for (const [id, tier] of Object.entries(EXPECTED_SEVERITY)) {
+      expect([id, [...(seen.get(id) ?? [])]]).toEqual([id, [tier]]);
+    }
+    expect([...seen.keys()].sort()).toEqual(Object.keys(EXPECTED_SEVERITY).sort());
   });
 });
 

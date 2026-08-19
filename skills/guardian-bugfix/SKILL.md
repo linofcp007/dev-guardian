@@ -177,13 +177,29 @@ A `empty-catch` respeita a convenção do Checkstyle / IntelliJ: nunca dispara s
 a variável da exceção se chamar `ignore`, `ignored` ou `expected`. É a forma
 auto-documentada de dizer "de propósito" sem um comentário de supressão — e o
 reverso é que uma exceção genuinamente engolida escapa à regra só por ter esse
-nome. A `optional-get-no-ispresent` reconhece doze formas de guarda:
-`if (isPresent())`, `return`/`throw`/`continue`/`break` antecipados sob
-`!isPresent()` ou `isEmpty()`, e as três formas ternárias
-(`o.isPresent() ? o.get() : d`, a negação, e a variante com `isEmpty()`). O
-ternário precisou de cláusulas próprias porque é uma *expressão* condicional,
-um nó da AST diferente de um `if`, que nenhuma das cláusulas de statement
-alcança. Qualquer forma de guarda fora dessas doze é falso positivo.
+nome.
+
+A `optional-get-no-ispresent` é **WARNING e não ERROR**, e isso aplica o
+critério de tiers do pack em vez de o dobrar: ERROR é para o padrão que é bug
+independentemente da intenção, e um `o.get()` só é bug quando está *sem
+guarda*. A regra reconhece guardas escritas **inline sobre a mesma variável
+`Optional`** — `if (isPresent())`, `return`/`throw`/`continue`/`break`
+antecipados sob `!isPresent()` ou `isEmpty()`, as três formas ternárias, e
+`if (o.filter(p).isPresent())` — e falha **qualquer guarda que chegue ao teste
+através de outro método ou de outra variável**. O exemplo concreto é a guarda
+delegada a um helper:
+
+```java
+if (!present(o)) { return "d"; }
+return o.get();                    // dispara, e é código correto
+```
+
+Isso exige análise interprocedimental, que o Semgrep OSS não faz — a forma é
+falso positivo e vai continuar a ser. Preferir WARNING a uma lista de exclusões
+sem fim é a decisão que daí resulta. Consequência prática: a regra mapeia para
+severidade `medium` em vez de `high`, por isso continua a aparecer no
+`bug_hunt` (que por omissão não filtra) mas deixa de entrar por omissão no
+`create_fix_pr`, cujo `severity_min` é `high`.
 
 A `stream-not-closed` só reconhece `new FileInputStream(...)` — e só por esse
 nome simples: um `new java.io.FileInputStream(...)` totalmente qualificado não

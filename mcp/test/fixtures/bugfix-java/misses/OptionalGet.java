@@ -112,4 +112,17 @@ public class OptionalGet {
     String ternaryIsEmpty(Optional<String> o) {
         return o.isEmpty() ? "d" : o.get();
     }
+
+    // filterIsPresent is DISCRIMINATING for the `filter(...).isPresent()`
+    // clause and no other: delete that clause and this fires alone.
+    //
+    // It is a genuine guard, not a lookalike. `Optional.filter` on an empty
+    // Optional returns empty, so a present FILTER RESULT proves the original
+    // is present too — `o.get()` cannot throw here. What made the rule miss
+    // it is that the existing exclusion binds the receiver to exactly `$O`,
+    // and here the receiver of `isPresent()` is `o.filter(p)`, not `o`.
+    String filterIsPresent(Optional<String> o) {
+        if (o.filter(s -> !s.isEmpty()).isPresent()) { return o.get(); }
+        return "d";
+    }
 }

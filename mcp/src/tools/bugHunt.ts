@@ -511,12 +511,18 @@ registerToolModule(
       'Checkstyle/IntelliJ convention and never fires when the exception variable is named ' +
       '`ignore`, `ignored` or `expected` — the flip side being that a genuinely swallowed ' +
       'exception escapes the rule simply by being named `ignored`. ' +
-      '`optional-get-no-ispresent` recognises twelve syntactic guard shapes: ' +
-      '`if (isPresent())`, an early return/throw/continue/break under `!isPresent()` or ' +
-      '`isEmpty()`, and the three ternary forms (`o.isPresent() ? o.get() : d`, its ' +
-      'negation, and the `isEmpty()` variant) — a ternary needs its own clauses because it ' +
-      'is a conditional EXPRESSION, a different AST node from an `if` statement that none of ' +
-      'the statement clauses reach. Any guard shape outside those twelve is a false positive. ' +
+      '`optional-get-no-ispresent` is WARNING rather than ERROR, applying this pack\'s own ' +
+      'tier rule instead of bending it: ERROR is for a pattern that is a bug regardless of ' +
+      'intent, and `o.get()` is a bug only when UNGUARDED. It recognises guards written ' +
+      'inline against the same Optional variable — `if (isPresent())`, an early ' +
+      'return/throw/continue/break under `!isPresent()` or `isEmpty()`, the three ternary ' +
+      'forms (a ternary needs its own clauses because it is a conditional EXPRESSION, a ' +
+      'different AST node from an `if` statement), and `if (o.filter(p).isPresent())` — and ' +
+      'it misses any guard that reaches the check through another method or another ' +
+      'variable. The concrete case is a guard delegated to a helper, ' +
+      '`if (!present(o)) { return d; }`, which needs interprocedural analysis Semgrep OSS ' +
+      'does not do; that shape is a false positive and always will be, which is why the rule ' +
+      'is WARNING instead of carrying an ever-longer exclusion list. ' +
       'Four Java false positives are accepted rather than fixed, each reproduced on ' +
       'correct code: `stream-not-closed` on `open(); try {} finally { close(); }` (already ' +
       'the stated reason it is WARNING); `static-dateformat` on a static final ' +

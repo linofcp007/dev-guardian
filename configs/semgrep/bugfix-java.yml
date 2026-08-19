@@ -97,6 +97,17 @@ rules:
     severity: ERROR
     languages: [java]
 
+  # WARNING e não ERROR, e a razão é o critério do §4 do design aplicado a
+  # frio: ERROR é para o padrão que é bug independentemente da intenção. Um
+  # `o.get()` não é isso — só é bug quando está SEM GUARDA, e treze cláusulas
+  # depois há prova direta de que a regra não consegue decidir isso de forma
+  # fiável. Ela reconhece guardas escritas inline sobre a mesma variável e
+  # falha qualquer guarda que chegue através de outro método, como
+  # `if (!present(o)) { return d; }` — que exige análise interprocedimental e
+  # não é exprimível em Semgrep OSS. Uma regra que precisa de uma lista de
+  # exclusões sem fim para se manter correta em ERROR nunca foi ERROR segundo
+  # esta definição. Descer de tier é aplicar o critério, não mudar o contrato.
+  #
   # Sem o `metavariable-type`, `$O.get()` casa QUALQUER `get()` sem argumentos
   # — `AtomicInteger.get()`, `ThreadLocal.get()`, `Supplier.get()` — e a regra
   # nunca foi sobre `Optional`. As exclusões cobrem as guardas de saída
@@ -142,11 +153,17 @@ rules:
       - pattern-not-inside: "$O.isPresent() ? ... : ..."
       - pattern-not-inside: "!$O.isPresent() ? ... : ..."
       - pattern-not-inside: "$O.isEmpty() ? ... : ..."
+      # `filter` num Optional vazio devolve vazio, por isso um resultado
+      # presente do filtro prova que o original está presente — o `get()` não
+      # pode lançar. A exclusão do `isPresent()` não chegava aqui porque liga o
+      # recetor a exatamente `$O`, e aqui quem recebe o `isPresent()` é
+      # `o.filter(p)`.
+      - pattern-not-inside: if ($O.filter(...).isPresent()) { ... }
     message: >-
       `Optional.get()` sem `isPresent()`. Lança `NoSuchElementException` quando
       está vazio — que é exatamente aquilo que o Optional existia para evitar.
       Use `orElse`, `orElseThrow` com mensagem, ou guarde com `isPresent()`.
-    severity: ERROR
+    severity: WARNING
     languages: [java]
 
   - id: bugfix-java-off-by-one-loop-lte-length

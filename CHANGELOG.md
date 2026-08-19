@@ -54,6 +54,36 @@ version bump.
     *expression*, a different AST node from an `if` statement, so none of the
     statement-shaped exclusions reached it. Twelve guard shapes are now
     recognised, up from nine.
+  - `null-safety-optional-get-no-ispresent` no longer fires on
+    `if (o.filter(p).isPresent()) { … o.get() … }`. `filter` on an empty
+    `Optional` returns empty, so a present filter result proves the original is
+    present; the `isPresent()` exclusion missed it only because it binds the
+    receiver to exactly `$O`, and here the receiver is `o.filter(p)`.
+
+### Changed
+
+- **`null-safety-optional-get-no-ispresent` drops from `ERROR` to `WARNING`.**
+  This applies the pack's own tier rule rather than changing it: `ERROR` is for
+  a pattern that is a bug regardless of intent, and `o.get()` is a bug only
+  when *unguarded*. Thirteen exclusion clauses in, there is direct evidence the
+  rule cannot reliably tell — it recognises guards written inline against the
+  same `Optional` variable and misses any guard reaching the check through
+  another method, such as `if (!present(o)) { return d; }`, which needs
+  interprocedural analysis Semgrep OSS does not do. A rule that needs an
+  unbounded exclusion list to stay correct at `ERROR` was never `ERROR` by that
+  definition.
+
+  **Practical effect:** the Semgrep parser maps `ERROR` → `high` and `WARNING`
+  → `medium`, so these findings now arrive as `medium`. `bug_hunt` does not
+  filter by default, so nothing disappears from a scan; `create_fix_pr`
+  defaults `severity_min` to `high`, so they no longer enter the default fix-PR
+  set and must be asked for with `severity_min: "medium"`.
+
+  `map-get-deref` and `modify-during-iteration` stay at `ERROR`: both are
+  type-restricted and neither depends on an open-ended guard list.
+
+  The tier of every Java rule is now pinned by the integration test, which
+  previously asserted rule ids but not severities.
 
 ### Known gaps
 
@@ -76,10 +106,13 @@ version bump.
   `Queue`, a `SortedSet` or a project collection type.
 - **The empty-catch naming escape hatch cuts both ways.** A genuinely swallowed
   exception escapes the rule simply by being named `ignored`.
-- `optional-get-no-ispresent` recognises twelve syntactic guard shapes —
-  `if (isPresent())`, an early `return`/`throw`/`continue`/`break` under
-  `!isPresent()` or `isEmpty()`, and the three ternary forms. Any guard shape
-  outside those twelve is a false positive.
+- `optional-get-no-ispresent` recognises guards written **inline against the
+  same `Optional` variable** and misses **any guard that reaches the check
+  through another method or another variable**. The concrete case is a guard
+  delegated to a helper — `if (!present(o)) { return d; }` — which needs
+  interprocedural analysis Semgrep OSS does not do. Stated as a shape rather
+  than a count, because the clause list is a moving target and a count goes
+  stale; the rule is `WARNING` precisely because this class of miss has no end.
 
 ### Accepted false positives
 
