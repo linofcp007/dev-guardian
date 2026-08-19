@@ -112,6 +112,37 @@ version bump.
   fourteenth needs data flow (a heredoc assigned to a variable, echoed later)
   and is recorded as a limitation rather than guessed at.
 
+- **A superglobal used as an array KEY no longer fires.**
+  `echo $labels[$_GET['lang']] . "</b>";` is ordinary i18n code — the lookup
+  table is the developer's and the request only picks the element — and the
+  narrowed anchor introduced it as an ERROR-tier false positive, five findings
+  on correct code. Twelve of the fourteen scopes bind `$SUPER` themselves, so
+  the comma, `printf` and ternary lookups were never at risk; the two
+  CONCATENATION scopes do not, which left the narrow `pattern: $SUPER[...]`
+  free to match a subscript in index position. Guarded by
+  `pattern-not-inside: $ARR[$SUPER[...]]`, which tells the two apart by what is
+  INSIDE the brackets rather than by nesting depth — so
+  `echo $_GET['user']['name'];`, whose index is a literal, still fires, and
+  there is a fixture saying so. `isset()` needs a clause of its own because
+  Semgrep does not model it as a call; a matching `empty()` clause was proposed,
+  measured to move nothing at all — `$G(...)` already covers it, because
+  `empty` IS a call node — and dropped rather than kept for symmetry.
+
+- **`wp-unescaped-output`'s "inside any call = handled" is now written down.**
+  Not a regression — the old operand patterns needed a direct operand, so none
+  of these ever fired — but a far stronger claim than "an escaper handles it",
+  and it was implied rather than stated. Measured silent: `wp_unslash()`,
+  `stripslashes()`, `trim()`, `sprintf()`, `implode()`, `nl2br()`,
+  `str_replace()`, `strtoupper()`, `strrev()`, none of which escape HTML. The
+  sharpest case is WordPress's own idiom — `echo wp_unslash($_GET['x']);` is
+  textbook XSS and is syntactically indistinguishable from the correct
+  `echo esc_html(wp_unslash($_GET['x']));`. Enumerating the non-escapers is the
+  open-set problem inverted, so the limitation stays and is named instead, in
+  the rule comment and the test header. The other half of the same trade is
+  pinned rather than described: a PARENTHESISED operand
+  (`echo "x" . ($_GET['h']);`) fires now, where the old operand patterns could
+  not reach it.
+
 - **`yaml.load(stream=f, Loader=yaml.SafeLoader)` was an ERROR on safe code.**
   The `Loader=` exclusions were written `yaml.load($X, Loader=...)`, which
   requires a POSITIONAL first argument; passing the stream by keyword is legal

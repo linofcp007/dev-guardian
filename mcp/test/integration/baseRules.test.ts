@@ -84,7 +84,28 @@
  *  - `wp-unescaped-output` treats a raw superglobal inside ANY call as handled,
  *    not only inside an escaper. That is the price of having no list of
  *    escaping functions, and it is the same price the rule always paid — the
- *    `$G(...)` guard just applies it at any depth rather than only at the top.
+ *    old operand patterns needed a direct operand too, so none of these ever
+ *    fired. But "inside any call = handled" is a far stronger claim than "an
+ *    escaper handles it", so the claim is written down rather than implied.
+ *    Measured silent: `wp_unslash()`, `stripslashes()`, `trim()`, `sprintf()`,
+ *    `implode()`, `nl2br()`, `str_replace()`, `strtoupper()`, `strrev()` — not
+ *    one of which escapes HTML. The sharpest case is WordPress's own idiom:
+ *    `echo wp_unslash($_GET['x']);` is textbook XSS and is syntactically
+ *    indistinguishable from the correct `echo esc_html(wp_unslash($_GET['x']));`.
+ *    Enumerating the NON-escapers is the open-set problem inverted, so this
+ *    stays as it is. The same widening also bought recall, and that half is
+ *    pinned rather than described: a PARENTHESISED operand
+ *    (`echo "x" . ($_GET['h']);`) fires now, where the old operand patterns
+ *    could not reach it because the operand node was the parenthesis.
+ *  - A superglobal used as an array KEY is not output — what reaches the
+ *    browser is the developer's lookup table. Twelve of the fourteen scopes
+ *    bind `$SUPER` themselves and were never at risk; the two CONCATENATION
+ *    scopes do not, and `pattern-not-inside: $ARR[$SUPER[...]]` is what keeps
+ *    `echo $labels[$_GET['lang']] . "</b>";` quiet without touching
+ *    `echo $_GET['user']['name'];`, whose index is a literal. `isset()` needs a
+ *    clause of its own because Semgrep does not model it as a call; `empty()`
+ *    does not, because it does — an asymmetry measured by ablation rather than
+ *    guessed from the symmetry of the two keywords.
  *
  * What it no longer fails to see, and the reason the whole shape of the rule
  * changed: the cast guard was a `pattern-not-regex` over the matched TEXT while
@@ -290,13 +311,21 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     // never suppressed anything, so the boundary of the defect is measured
     // rather than asserted.
     //
-    // Each of the thirty-seven lines produces EXACTLY ONE finding, and each of
-    // the twenty-two clauses was ablated singly: every one takes its own
-    // fixtures with it and moves nothing else. Line 48 exists because
+    // The last two (lines 126-127) are the other side of the anchor change: a
+    // PARENTHESISED operand, which the old `$X . $SUPER[...]` patterns could
+    // not reach because the operand node was the parenthesis rather than the
+    // subscript. They pin the recall the `$G(...)` widening bought, so that
+    // half of the trade is a measurement and not a sentence.
+    //
+    // Each of the thirty-nine lines produces EXACTLY ONE finding, and each of
+    // the twenty-four clauses was ablated singly: every one takes its own
+    // fixtures with it and moves nothing else. One proposed clause did NOT
+    // survive that check — `pattern-not-inside: empty(...)`, which measured
+    // identical with and without, because `$G(...)` already covered it. Line 48 exists because
     // `pattern-inside: print $A . $B;` was dead BY FIXTURE — correct, live
     // against real code, and deletable with the suite still green.
     ids: ['wp-unescaped-output'],
-    count: 37,
+    count: 39,
   },
   'secrets.txt': {
     // The two `generic` regex rules. A `.txt` file gives them a home no

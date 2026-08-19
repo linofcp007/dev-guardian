@@ -49,7 +49,12 @@ print "<b>" . $_GET['x'];
 
 // 14-15: nested subscript. `$SUPER[...]` alone binds $SUPER to `$_GET['user']`,
 // which fails the metavariable-regex, so the doubly-subscripted form needs its
-// own pattern in both the echo and the print shape.
+// own scope in both the echo and the print shape.
+//
+// These two also guard the array-KEY exclusion in `misses/output.php`: the
+// index here is a LITERAL, so `pattern-not-inside: $ARR[$SUPER[...]]` must not
+// reach them. It is the shape that exclusion could plausibly have eaten, and
+// the two are told apart by what sits in the brackets, not by nesting depth.
 echo $_GET['user']['name'];
 print $_POST['u']['v'];
 
@@ -112,3 +117,11 @@ echo 'use (int)$_GET for numbers: ' . $_GET['x'];
 // suppressed anything — the boundary of the old defect was the string literal,
 // and pinning both is what makes that a measurement rather than a claim.
 echo $_GET['y'];   // prefer (int)$_GET['y'] when numeric
+
+// 38-39: a PARENTHESISED operand. Parentheses are not a call, so the `$G(...)`
+// guard leaves them alone and the narrow anchor reaches inside them — the old
+// operand patterns (`$X . $SUPER[...]`) could not, because the operand node was
+// the parenthesised expression rather than the subscript. This is the recall
+// the `$G` widening bought, pinned so the claim is not prose.
+echo "x" . ($_GET['h']);
+echo "x" . ($_GET['i'] . "y");

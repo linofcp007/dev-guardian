@@ -181,14 +181,45 @@ rules:
   # quem a vir sobre `DOCUMENT_ROOT` não conclua que a regra está errada e
   # deixe de a ler sobre `PHP_SELF`.
   #
+  # O ÂNCORA ESTREITO tem um custo próprio, e este foi medido contra código de
+  # i18n normal: doze dos catorze âmbitos ligam eles próprios o $SUPER, pelo que
+  # o `metavariable-regex` rejeita `$labels` e as buscas por chave em vírgula,
+  # printf e ternário nunca correram perigo. Os DOIS âmbitos de concatenação —
+  # `echo $A . $B;` e `print $A . $B;` — não ligam $SUPER, e aí o `$SUPER[...]`
+  # estreito passou a apanhar um subscript em POSIÇÃO DE índice:
+  # `echo $labels[$_GET['lang']] . "</b>";` é uma tabela de tradução, o que sai
+  # vem do array do programador e o pedido só escolhe o elemento. Medido: cinco
+  # findings ERROR em código correto. Guarda-o o
+  # `pattern-not-inside: $ARR[$SUPER[...]]`, que distingue as duas formas pelo
+  # que está DENTRO dos parênteses retos e não pela profundidade — por isso
+  # `echo $_GET['user']['name'];`, cujo índice é um literal, continua a disparar.
+  #
+  # `isset(...)` precisa de cláusula própria e `empty(...)` NÃO, e a assimetria
+  # é medida: `isset` não é um nó de chamada na AST de PHP, pelo que o guarda de
+  # `$G(...)` nunca o vê; `empty` é, e já lá estava. Escrever a cláusula de
+  # `empty` por simetria seria acrescentar uma linha que nenhuma medição
+  # consegue mexer.
+  #
   # O QUE ESTA REGRA NÃO VÊ, medido e não assumido:
   #  - Fluxo de dados. `$out = <<<HTML ... {$_GET['m']} ... HTML; echo $out;`
   #    é silencioso: o superglobal não está no nó que o echo emite.
   #  - `_e()`, `wp_die()`, `vprintf()` e os restantes helpers de output do
   #    WordPress. `echo`, `print` e `printf` estão cobertos; os outros não.
   #    `sprintf` está de fora de propósito — devolve, não emite.
-  #  - Um superglobal em cru dentro de QUALQUER chamada é considerado tratado,
-  #    não só dentro de um escapador. É o preço de não ter lista de funções.
+  #  - UM SUPERGLOBAL EM CRU DENTRO DE QUALQUER CHAMADA é considerado tratado,
+  #    e não só dentro de um escapador. Não é regressão — os padrões de operando
+  #    anteriores também exigiam operando direto — mas a afirmação é muito mais
+  #    forte do que «um escapador trata disto», e tem de estar escrita. Medido,
+  #    são silenciosos: `wp_unslash()`, `stripslashes()`, `trim()`, `sprintf()`,
+  #    `implode()`, `nl2br()`, `str_replace()`, `strtoupper()`, `strrev()`.
+  #    Nenhum deles escapa HTML. O exemplo afiado é o idioma do próprio
+  #    WordPress: `echo wp_unslash($_GET['x']);` é XSS de manual e é
+  #    sintaticamente indistinguível do correto
+  #    `echo esc_html(wp_unslash($_GET['x']));`. Enumerar os NÃO-escapadores é o
+  #    problema do conjunto aberto ao contrário, por isso fica assim, escrito.
+  #    O mesmo alargamento comprou recall: operandos ENTRE PARÊNTESES —
+  #    `echo "x" . ($_GET['h']);` — disparam agora e os padrões de operando
+  #    antigos não lhes chegavam.
   - id: wp-unescaped-output
     patterns:
       - pattern-either:
@@ -216,6 +247,8 @@ rules:
       - pattern-not-inside: (string) $Z
       - pattern-not-inside: (array) $Z
       - pattern-not-inside: (object) $Z
+      - pattern-not-inside: $ARR[$SUPER[...]]
+      - pattern-not-inside: isset(...)
       - pattern-not-inside:
           patterns:
             - pattern: $G(...)

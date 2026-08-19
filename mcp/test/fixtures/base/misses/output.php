@@ -159,3 +159,45 @@ function render_narrow_match_near_misses($flag, $config, $suffix) {
 function render_condition_only() {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') { echo "posted"; }
 }
+
+// 56-64: the superglobal is an ARRAY KEY, not the output. What reaches the
+// browser comes from a developer-controlled lookup table; the request only
+// chooses which element. Ordinary i18n and menu code.
+//
+// These are near-misses for the ANCHOR of the rule, not for any one branch, and
+// they are the FP the re-architecture introduced. Twelve of the fourteen scopes
+// bind $SUPER themselves, so `metavariable-regex` rejects `$labels` and the
+// comma, printf and ternary lookups below were never in danger. The two
+// CONCATENATION scopes — `echo $A . $B;` and `print $A . $B;` — do not bind
+// $SUPER, so the narrow `pattern: $SUPER[...]` was free to match a subscript in
+// INDEX position. Measured before `pattern-not-inside: $ARR[$SUPER[...]]`: the
+// four concat shapes fire, five findings, all ERROR.
+function render_lookup($labels, $menu, $flag) {
+    echo $labels[$_GET['lang']] . "</b>";
+    echo "<b>" . $labels[$_POST['lang']];
+    echo $menu[$_GET['section']][$_GET['item']] . "";
+    echo "<b>", $labels[$_GET['lang']], "</b>";
+    printf("<p>%s</p>", $labels[$_GET['lang']]);
+    echo $flag ? $labels[$_GET['a']] : $labels[$_POST['b']];
+    echo $_GET['mode'] === 'edit' ? $labels['edit'] : $labels['view'];
+    echo esc_html($labels[$_GET['lang']]) . "x";
+}
+
+// 65-66: the superglobal is being TESTED, and what the echo emits is the
+// literal on the other side. Both are silent, and for DIFFERENT reasons — an
+// asymmetry that is measured, not assumed, and that decides how many clauses
+// the rule carries:
+//
+//  - `isset()` is not a call node in Semgrep's PHP AST, so the `$G(...)` guard
+//    never sees it. Ablating `pattern-not-inside: isset(...)` lights the first
+//    line and nothing else. The clause is load-bearing.
+//  - `empty()` IS modelled as a call, so `$G(...)` already covers it. Ablating
+//    an `empty(...)` clause moved nothing at all; ablating `$G(...)` as well is
+//    what lights the second line. Writing the clause anyway — for symmetry with
+//    `isset`, which is exactly how it got proposed — would have added a rule
+//    line that no measurement can ever move, in the branch of work that exists
+//    to delete those. The near-miss stays; the clause does not.
+function render_guarded() {
+    echo (isset($_GET['x']) ? "set" : "unset") . "!";
+    echo (empty($_GET['q']) ? "none" : "some") . "!";
+}
