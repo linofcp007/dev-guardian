@@ -132,3 +132,30 @@ function read_server() {
     $path = $_SERVER['REQUEST_URI'];
     return $path;
 }
+
+// 44-54: the near-misses for the narrowed match. Once the rule points at the
+// subscript instead of the statement, an escaped operand ELSEWHERE in the same
+// statement stops being the thing that silences it — so each of these has to be
+// silent on its own merits, and each was checked against the branch it belongs
+// to rather than against the statement as a whole.
+function render_narrow_match_near_misses($flag, $config, $suffix) {
+    printf("%s %s", esc_attr($_POST['b']), esc_url($_REQUEST['c']));
+    $s = sprintf("%s", $_GET['d']);
+    echo "a", esc_html($_GET['e']), "b";
+    echo "x", $title, "y";
+    echo $flag ? esc_html($_GET['f']) : esc_html($_POST['g']);
+    echo isset($_GET['h']) ? "set" : "unset";
+    echo $_GET['i'] === 'yes' ? "y" : "n";
+    echo esc_html($_GET['j']['k']);
+    echo $config['db']['host'];
+    echo (int) $_SERVER['CONTENT_LENGTH'];
+    echo (bool) $_COOKIE['flag'];
+    return $s . $suffix;
+}
+
+// 55: a superglobal in a CONDITION and nothing else. The ternary branches are
+// scoped so the superglobal has to be an OPERAND; a `pattern-inside` on the
+// whole ternary plus a bare `$SUPER[...]` flags this, measured.
+function render_condition_only() {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') { echo "posted"; }
+}

@@ -57,17 +57,39 @@ version bump.
 
 ### Fixed
 
-- **`wp-unescaped-output` stops flagging `echo (int) $_GET['id'];`.** A cast is
-  not a call, and Semgrep sees straight through the cast node — `$SUPER[...]`
-  binds to the subscript inside it and `metavariable-regex` reads the text of
-  the subscript, not of the cast. So the standard safe way to emit a numeric
-  request parameter in WordPress was an ERROR-severity finding, in all eleven
-  PHP cast spellings and in every branch of the rule. The guard is one
-  `pattern-not-regex` over the matched text; the enumeration is legitimate here
-  because PHP's cast set is closed by the language and cannot grow with user
-  code, which a list of escaping functions cannot claim. Twenty-four structural
-  `pattern-not` clauses were measured first and reach fewer branches than the
-  one regex does.
+- **`wp-unescaped-output` stops flagging `echo (int) $_GET['id'];`, and now
+  matches the subscript rather than the statement.** A cast is not a call, and
+  Semgrep sees straight through the cast node — `$SUPER[...]` binds to the
+  subscript inside it and `metavariable-regex` reads the text of the subscript,
+  not of the cast. So the standard safe way to emit a numeric request parameter
+  in WordPress was an ERROR-severity finding, in all eleven PHP cast spellings
+  and in every branch of the rule.
+
+  The first fix was a `pattern-not-regex` over the matched text. It was wrong in
+  a way worth recording, because a text guard suppresses everything the match
+  covers and the match was a whole statement:
+
+  - **Recall.** Of nine real-XSS lines carrying a cast somewhere in the same
+    statement, two fired. `printf("%d %s", (int) $_GET['id'], $_GET['name']);`
+    and all four polarities of `echo $f ? (int) $_GET['a'] : $_GET['b'];` were
+    silent — the branches that match at statement level have the widest
+    suppression window of all.
+  - **A suppression vector.** `pattern-not-regex` reads source text, so
+    `echo 'use (int)$_GET for numbers: ' . $_GET['x'];` turned the rule off with
+    no cast executed anywhere. In a security pack that is not a documented
+    trade; it is a switch any helpful — or hostile — string literal can carry.
+
+  The rule is now a `pattern-either` of `pattern-inside` SCOPES plus a narrow
+  `pattern: $SUPER[...]`, so a finding points at the offending subscript and one
+  statement can report one operand while staying quiet about another. The cast
+  guard is six `pattern-not-inside` clauses, which can only remove the operand
+  actually wrapped in a cast; six entries cover all eleven spellings because
+  int/integer, float/double/real, bool/boolean and string/binary collapse to the
+  same node. Enumerating them is legitimate because PHP's cast set is closed by
+  the language, unlike a list of escaping functions. Measured: eleven real-XSS
+  lines fire, the seven safe casts stay silent, a trailing `//` comment with the
+  same spelling never suppressed anything, and `echo (int) $_GET['a'] .
+  $_GET['b'];` — recorded as an accepted loss one commit earlier — fires again.
 
 - **The pinned `wp-unescaped-output` false positive is gone, and both halves of
   its recorded justification were wrong.** `echo esc_html($a . $_GET['b']) . "x";`
@@ -89,6 +111,21 @@ version bump.
   XSS in PHP, which the old `GET|POST|REQUEST` regex could not reach. The
   fourteenth needs data flow (a heredoc assigned to a variable, echoed later)
   and is recorded as a limitation rather than guessed at.
+
+- **`yaml.load(stream=f, Loader=yaml.SafeLoader)` was an ERROR on safe code.**
+  The `Loader=` exclusions were written `yaml.load($X, Loader=...)`, which
+  requires a POSITIONAL first argument; passing the stream by keyword is legal
+  Python and perfectly safe. Widened to `yaml.load(..., Loader=...)`. Measured
+  on the reviewer's probe: seven findings, exactly the seven unsafe spellings,
+  all eight safe forms silent, no recall lost.
+
+- **`wp-unescaped-output`'s message now names the `$_SERVER` keys that carry
+  risk** — `PHP_SELF`, `REQUEST_URI`, `QUERY_STRING`, `PATH_INFO` and the
+  `HTTP_*` family. All twelve keys still fire and that is deliberate: an
+  allowlist would have to rule on `SERVER_NAME` and `HTTP_HOST`, which an
+  attacker can influence on a misconfigured vhost. But a developer told "XSS"
+  about `$_SERVER['DOCUMENT_ROOT']` concludes the rule is wrong and stops
+  reading it on `PHP_SELF` too, so the message says which is which.
 
 - **`py-yaml-load` caught one unsafe spelling in six.** The rule was
   `pattern: yaml.load($X)`, a one-argument match — but what makes the call safe

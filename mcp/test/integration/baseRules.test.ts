@@ -78,15 +78,25 @@
  *  - `wp-unescaped-output` has no data flow. A heredoc assigned to a variable
  *    and echoed afterwards — `$out = <<<HTML {$_GET['m']} HTML; echo $out;` —
  *    is silent, because the superglobal is not in the node the echo emits.
- *  - `wp-unescaped-output`'s cast guard is a regex over the MATCHED TEXT, so a
- *    cast and a raw superglobal inside one match range take the whole match
- *    with them: `echo (int) $_GET['a'] . $_GET['b'];` and
- *    `echo "n=", (int) $_GET['a'], $_GET['b'];` are silent. That is the price
- *    of the guard and it is the cheap one — the nested shape
- *    `echo "<b>" . $_GET['x'] . (int) $_GET['y'];` still fires, because its
- *    left operand is a concatenation node of its own. Measured, all three.
  *  - `wp-unescaped-output` covers `echo`, `print` and `printf`. `_e()`,
  *    `wp_die()`, `vprintf()` and the other WordPress output helpers are not.
+ *    `sprintf` is deliberately outside it: it returns rather than emits.
+ *  - `wp-unescaped-output` treats a raw superglobal inside ANY call as handled,
+ *    not only inside an escaper. That is the price of having no list of
+ *    escaping functions, and it is the same price the rule always paid — the
+ *    `$G(...)` guard just applies it at any depth rather than only at the top.
+ *
+ * What it no longer fails to see, and the reason the whole shape of the rule
+ * changed: the cast guard was a `pattern-not-regex` over the matched TEXT while
+ * the match was a whole statement, which made it BOTH a recall hole and a
+ * suppression vector. Nine real-XSS lines carrying a cast somewhere in the same
+ * statement: two fired. And `echo 'use (int)$_GET for numbers: ' . $_GET['x'];`
+ * went silent although no cast is executed anywhere on it — the spelling inside
+ * a string literal was enough. The rule now matches the SUBSCRIPT rather than
+ * the statement, so the cast guard is six `pattern-not-inside` clauses that can
+ * only remove the operand actually wrapped in a cast. All eleven fire; the
+ * seven safe casts stay silent. A trailing comment never suppressed anything
+ * (comments are not in the matched text) and that is pinned too.
  *  - `js-insecure-randomness` fires on EVERY `Math.random()`, including the
  *    ones used for jitter and animation. It is INFO for that reason.
  *
@@ -257,22 +267,36 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     count: 4,
   },
   'output.php': {
-    // Twenty-six, one per branch of `wp-unescaped-output`, and this number is
-    // the whole reason the fixture directory exists. Measured against the
-    // shipped rule at be01f78: 0 of 12, with `errors: 1` and exit 2; the
-    // fourteen after that were added when a reviewer's probe file found real
-    // XSS the twelve-branch version walked straight past — a comma-separated
-    // `echo`, a nested subscript, a ternary operand, `printf`, an interpolated
-    // string used as a concatenation operand, and $_SERVER / $_COOKIE, of which
+    // Thirty-seven, and the number is the whole reason the fixture directory
+    // exists. Measured against the shipped rule at be01f78: 0 of 12, with
+    // `errors: 1` and exit 2.
+    //
+    // The next fourteen came from a reviewer's probe that found real XSS the
+    // twelve-branch version walked straight past — a comma-separated `echo`, a
+    // nested subscript, a ternary operand, `printf`, an interpolated string
+    // used as a concatenation operand, and $_SERVER / $_COOKIE, of which
     // `$_SERVER['PHP_SELF']` is the canonical reflected XSS in PHP.
     //
-    // Each of the twenty-six lines produces EXACTLY ONE finding, and each of
-    // the twenty branch clauses was ablated singly: every one takes its own
-    // fixture with it and moves nothing else. Line 48 exists because
+    // The last eleven (lines 92-114) came from a second probe and are all one
+    // defect: the cast guard used to be a `pattern-not-regex` over the matched
+    // TEXT, and a text guard suppresses everything the match covers. While the
+    // match was a whole statement that was almost all of it — of eleven real
+    // XSS lines carrying a cast SOMEWHERE in the statement, two fired. Line 108
+    // is the sharpest of them and the reason the guard was replaced rather than
+    // documented: the cast spelling appears only inside a single-quoted STRING
+    // LITERAL, no cast is executed, and the rule went silent anyway. A text
+    // guard over source text is a suppression switch that any string can carry.
+    // Line 114 is its control — the same spelling in a trailing comment, which
+    // never suppressed anything, so the boundary of the defect is measured
+    // rather than asserted.
+    //
+    // Each of the thirty-seven lines produces EXACTLY ONE finding, and each of
+    // the twenty-two clauses was ablated singly: every one takes its own
+    // fixtures with it and moves nothing else. Line 48 exists because
     // `pattern-inside: print $A . $B;` was dead BY FIXTURE — correct, live
     // against real code, and deletable with the suite still green.
     ids: ['wp-unescaped-output'],
-    count: 26,
+    count: 37,
   },
   'secrets.txt': {
     // The two `generic` regex rules. A `.txt` file gives them a home no

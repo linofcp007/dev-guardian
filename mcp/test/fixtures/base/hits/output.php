@@ -82,3 +82,33 @@ echo $prefix . "<p>{$_GET['n']}</p>";
 // reflected XSS in PHP and the regex covered only GET/POST/REQUEST.
 echo '<form action="' . $_SERVER['PHP_SELF'] . '">';
 echo $_COOKIE['theme'];
+
+// 27-37: REAL XSS that carries a cast somewhere in the same statement. These
+// exist because the first cast guard was a `pattern-not-regex` over the matched
+// TEXT, and a text guard suppresses whatever the match covers. When the match
+// was the whole statement that was most of the statement: of these eleven
+// lines, TWO fired. The guard is now six `pattern-not-inside` clauses against a
+// match narrowed to the subscript itself, and all eleven fire.
+printf("%d %s", (int) $_GET['id'], $_GET['name']);
+echo $flag ? (int) $_GET['a'] : $_GET['b'];
+echo $flag ? $_GET['c'] : (int) $_GET['d'];
+print $flag ? (int) $_GET['e'] : $_GET['f'];
+echo "n=", $_GET['g'], (int) $_GET['h'];
+printf("%d %s", (int) $_GET['i'], $_GET['j']['k']);
+echo (int) $_GET['m'] . $_GET['n'];
+echo "<b>" . $_GET['o'] . (int) $_GET['p'];
+echo "n=", (int) $_GET['q'], $_GET['r'];
+
+// 36: the SUPPRESSION VECTOR, and the reason the text guard had to go rather
+// than be documented. No cast is executed anywhere on this line — the spelling
+// appears inside a single-quoted STRING LITERAL — and under a text guard that
+// was enough to turn XSS detection off for the statement. A developer writing a
+// helpful string disabled the rule and got no signal; a hostile theme could
+// carry the same string on purpose.
+echo 'use (int)$_GET for numbers: ' . $_GET['x'];
+
+// 37: a trailing comment carrying the same spelling. Measured separately from
+// the line above because comments are NOT part of the matched text and never
+// suppressed anything — the boundary of the old defect was the string literal,
+// and pinning both is what makes that a measurement rather than a claim.
+echo $_GET['y'];   // prefer (int)$_GET['y'] when numeric

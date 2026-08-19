@@ -48,12 +48,18 @@ def load_config(stream):
     # The bare-name spellings (`Loader=SafeLoader` after
     # `from yaml import SafeLoader`) need no clause of their own: measured,
     # Semgrep resolves them through the import to the qualified name.
+    #
+    # `sixth` is why the two `Loader=` exclusions are written `yaml.load(...,`
+    # and not `yaml.load($X,`. Passing the stream BY KEYWORD is legal Python and
+    # perfectly safe, and `$X` requires a positional first argument — so the
+    # first spelling of the exclusion fired at ERROR on this line.
     first = yaml.safe_load(stream)
     second = yaml.load(stream, Loader=yaml.SafeLoader)
     third = yaml.load(stream, Loader=yaml.CSafeLoader)
     fourth = yaml.load(stream, yaml.SafeLoader)
     fifth = yaml.load(stream, yaml.CSafeLoader)
-    return first, second, third, fourth, fifth
+    sixth = yaml.load(stream=stream, Loader=yaml.SafeLoader)
+    return first, second, third, fourth, fifth, sixth
 
 
 def persist(obj):
