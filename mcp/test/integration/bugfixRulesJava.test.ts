@@ -95,6 +95,11 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     ids: ['bugfix-java-error-handling-printstacktrace-only'],
     count: 1,
   },
+  'MapGetDeref.java': { ids: ['bugfix-java-null-safety-map-get-deref'], count: 1 },
+  'OptionalGet.java': {
+    ids: ['bugfix-java-null-safety-optional-get-no-ispresent'],
+    count: 1,
+  },
 };
 
 describe('bugfix-java rules', () => {
@@ -146,6 +151,8 @@ describe('bugfix-java rules', () => {
 const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-java-error-handling-empty-catch': 'error_handling',
   'bugfix-java-error-handling-printstacktrace-only': 'error_handling',
+  'bugfix-java-null-safety-map-get-deref': 'null_safety',
+  'bugfix-java-null-safety-optional-get-no-ispresent': 'null_safety',
 };
 
 describe('every rule id classifies as its own class', () => {

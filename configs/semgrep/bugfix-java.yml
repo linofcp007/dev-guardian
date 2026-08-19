@@ -37,3 +37,26 @@ rules:
       acontecido. Registe no logger e trate ou relance.
     severity: WARNING
     languages: [java]
+
+  - id: bugfix-java-null-safety-map-get-deref
+    patterns:
+      - pattern: $M.get($K).$METHOD(...)
+      - pattern-not: $M.getOrDefault($K, ...).$METHOD(...)
+    message: >-
+      Método chamado diretamente sobre `map.get()`. O `get` devolve `null`
+      quando a chave não existe, por isso isto é um NullPointerException na
+      primeira chave em falta. Guarde o resultado e teste-o, ou use
+      `getOrDefault`.
+    severity: ERROR
+    languages: [java]
+
+  - id: bugfix-java-null-safety-optional-get-no-ispresent
+    patterns:
+      - pattern: $O.get()
+      - pattern-not-inside: if ($O.isPresent()) { ... }
+    message: >-
+      `Optional.get()` sem `isPresent()`. Lança `NoSuchElementException` quando
+      está vazio — que é exatamente aquilo que o Optional existia para evitar.
+      Use `orElse`, `orElseThrow` com mensagem, ou guarde com `isPresent()`.
+    severity: ERROR
+    languages: [java]
