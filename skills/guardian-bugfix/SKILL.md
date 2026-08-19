@@ -146,8 +146,22 @@ declarado localmente com `var`: um mapa nil que chega como parâmetro de
 função, campo de struct, ou valor de retorno entra em panic da mesma forma ao
 escrever e não é coberto — provavelmente a forma mais comum na prática real.
 
-**Isto é só para JS/TS, Python e Go.** Para as restantes linguagens desta secção —
-Java, C#, PHP, Ruby, Rust — a situação anterior mantém-se: o
+Para Java, o `bug_hunt` corre também por default
+`configs/semgrep/bugfix-java.yml` — oito regras hand-authored, cada uma com o
+seu par de fixtures — cobrindo as mesmas seis classes: catch vazio, catch que
+só faz `printStackTrace()`, dereference de `map.get()`, `Optional.get()` sem
+`isPresent()`, `for (int i = 0; i <= a.length; i++)`, stream aberto fora de um
+try-with-resources, `SimpleDateFormat` num campo estático, e remoção de uma
+coleção durante o for-each sobre ela própria. É a linguagem mais vazia no
+registo: das 4 regras Java do `p/r2c-bug-scan`, nenhuma cai numa classe de bug.
+
+Não cobrem a comparação de `Integer` com `==`. Essa regra foi tentada e
+descartada: exprimi-la exige inferência de tipos que o Semgrep OSS não faz sem
+compilar, e a tentativa acusava `v == null` e a comparação de primitivos. Para
+essa classe, leia o código.
+
+**Isto é só para JS/TS, Python, Go e Java.** Para as restantes linguagens desta secção —
+C#, PHP, Ruby, Rust — a situação anterior mantém-se: o
 pack que corre por default (`p/r2c-bug-scan`) só cobre estas classes para
 Python e Go, os packs de linguagem opcionais (`p/javascript`, `p/typescript`,
 etc., ligados via `include_language_packs`) são packs de segurança e não

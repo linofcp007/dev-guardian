@@ -30,9 +30,13 @@
  * docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md; ten for
  * Python, docs/superpowers/specs/2026-08-18-bugfix-rules-python-design.md;
  * ten for Go, docs/superpowers/specs/2026-08-18-bugfix-rules-go-design.md —
- * Go is where the registry pack leaves the biggest hole, and the design
- * doc's §8 records a fourth exclusion clause that shipped dead and was
- * removed)
+ * Go is where the registry pack leaves the biggest hole among the languages
+ * it partially covers (5 Go rules, only 2 land in a bug class), and the
+ * design doc's §8 records a fourth exclusion clause that shipped dead and
+ * was removed; eight for Java,
+ * docs/superpowers/specs/2026-08-19-bugfix-rules-java-design.md — Java is
+ * the emptiest of the four: p/r2c-bug-scan ships 4 Java rules and NONE of
+ * them land in a bug class, all four being equality/comparison style)
  * — resolved to absolute paths via `resolveBugfixRules`
  * (`../platform/configsDir.js`). Unlike `include_language_packs` below, this
  * is ON BY DEFAULT: a local file cannot 404, so it is also what keeps
@@ -334,12 +338,13 @@ export function mapSubcategory(ruleId, existing) {
 }
 registerToolModule(makeScanTool({
     name: 'bug_hunt',
-    title: 'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python and Go ' +
-        'bug rules; optional language packs, off by default; other languages still registry-only)',
+    title: 'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python, Go and ' +
+        'Java bug rules; optional language packs, off by default; other languages still ' +
+        'registry-only)',
     description: 'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus local, always-on ' +
-        'JS/TS, Python and Go rule packs: `configs/semgrep/bugfix-js.yml` (fourteen rules), ' +
-        '`configs/semgrep/bugfix-py.yml` (ten rules) and `configs/semgrep/bugfix-go.yml` (ten ' +
-        'rules), each covering all six subcategories ' +
+        'JS/TS, Python, Go and Java rule packs: `configs/semgrep/bugfix-js.yml` (fourteen rules), ' +
+        '`configs/semgrep/bugfix-py.yml` (ten rules), `configs/semgrep/bugfix-go.yml` (ten ' +
+        'rules) and `configs/semgrep/bugfix-java.yml` (eight rules), each covering all six subcategories ' +
         'below for its language — race_condition, null_safety, off_by_one, memory_leak, ' +
         'error_handling, edge_case. `commands/guardian-fix.md` also ' +
         'names "broken happy paths" as a bug-hunting focus; that is not a syntactic pattern, ' +
@@ -355,7 +360,8 @@ registerToolModule(makeScanTool({
         "`repo.save()` from an unrelated call that just shares the name, like `ctx.save()` " +
         "(Canvas 2D's synchronous state-stack push, nothing to do with persistence) — both " +
         "fire identically. That's why it isn't ERROR and why `severity_min` exists to " +
-        'filter it out. Go is where the registry pack leaves the biggest hole: p/r2c-bug-scan ' +
+        'filter it out. Go is where the registry pack leaves the biggest hole among the ' +
+        'languages it partially covers: p/r2c-bug-scan ' +
         'ships 5 Go rules and only 2 land in a bug class, both integer-overflow, so ' +
         'error_handling, race_condition, null_safety, memory_leak and edge_case were all empty ' +
         'before this local pack. Its own gaps: no goroutine-leak rule; no loop-variable-capture ' +
@@ -374,9 +380,22 @@ registerToolModule(makeScanTool({
         'struct field, or a return value panics identically on write and is not covered, ' +
         'arguably the commoner real-world shape; and `err-blank-assign` fires on deliberate ' +
         'discards like ' +
-        '`_ = os.Remove(tmp)` in a cleanup path, which is why it is WARNING. JS/TS, Python and ' +
-        'Go only: no other language has ' +
-        'a local rule pack yet, so Java, C#, PHP, Ruby and Rust get only the ' +
+        '`_ = os.Remove(tmp)` in a cleanup path, which is why it is WARNING. Java is the ' +
+        'emptiest language of the four: p/r2c-bug-scan ships 4 Java rules and NONE land in a ' +
+        'bug class — all four are equality and comparison style — so every subcategory was at ' +
+        'zero, in the language whose most famous defect is the NullPointerException. Its own ' +
+        'gaps: no `Integer ==` rule — expressing it needs type inference Semgrep OSS does not ' +
+        'have, and the attempt fired on `v == null` and on primitive comparison, so it was ' +
+        'dropped rather than shipped as a rule that would be uninstalled within a day; ' +
+        '`stream-not-closed` only recognises `new FileInputStream(...)`, so `FileOutputStream`, ' +
+        '`FileReader`, `Socket` and every other closeable leak identically and are not covered; ' +
+        '`static-dateformat` only recognises `SimpleDateFormat`, so a shared `Calendar` or ' +
+        '`Matcher` in a static field is not covered; `map-get-deref` cannot tell a nullable map ' +
+        'from one whose keys are guaranteed present, so a map populated immediately above the ' +
+        'read is still flagged; and `modify-during-iteration` only matches the enhanced-for ' +
+        'form, so an indexed loop removing from the list it indexes has the same defect and is ' +
+        'missed. JS/TS, Python, Go and Java only: no other language has ' +
+        'a local rule pack yet, so C#, PHP, Ruby and Rust get only the ' +
         'registry coverage described below, same as before these packs existed. The local ' +
         'packs degrade rather than failing the whole scan if one is ever hand-edited into a bad ' +
         'state — a YAML syntax error drops just that file and retries with everything else, a ' +
@@ -399,10 +418,11 @@ registerToolModule(makeScanTool({
         'redundant" — measured (exact rule-id duplication): 22% overall, but only ~9% for the ' +
         'JS/TS packs specifically (up to 40-43% for Java/Go) — most of what they add, especially ' +
         'for JS/TS, is net-new security scanning, not duplicate coverage. Beyond the local ' +
-        'JS/TS, Python and Go packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
+        'JS/TS, Python, Go and Java packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
         'registry pack reaching these six classes, and only for Python and Go — Java, C#, ' +
-        'PHP, Ruby and Rust get none of them from the registry, and none yet from a local ' +
-        'pack either. On any of those languages, a quiet or security-only result (with or ' +
+        'PHP, Ruby and Rust get none of them from the registry; C#, PHP, Ruby and Rust have ' +
+        'none yet from a local pack either (Java does — `configs/semgrep/bugfix-java.yml`, ' +
+        'described above). On any of those languages, a quiet or security-only result (with or ' +
         'without the language packs) is not evidence of a bug-free project; pair with ' +
         "`scan_sast` or the guardian-bugfix skill's manual review. " +
         'Findings are categorised as `bug`, with subcategories (race_condition, null_safety, ' +

@@ -6,6 +6,29 @@ All notable changes to dev-guardian are documented here. The format follows
 surface and default behaviours follow semver — breaking changes require a major
 version bump.
 
+## [Unreleased]
+
+### Added
+
+- **Java bug rules** — `configs/semgrep/bugfix-java.yml`, eight hand-authored
+  Semgrep rules covering all six `bug_hunt` subcategories for Java: empty
+  catch, catch that only calls `printStackTrace()`, dereference of
+  `map.get()`, `Optional.get()` without `isPresent()`,
+  `for (int i = 0; i <= a.length; i++)`, a stream opened outside
+  try-with-resources, `SimpleDateFormat` in a static field, and removal from a
+  collection during a for-each over it. Java is the emptiest language in the
+  registry: of `p/r2c-bug-scan`'s 4 Java rules, **none** lands in a bug class.
+
+### Known gaps
+
+- **No `Integer ==` rule.** Expressing it needs type inference Semgrep OSS does
+  not have; the attempt fired on `v == null` and on primitive comparison.
+- `stream-not-closed` only recognises `new FileInputStream(...)`.
+- `static-dateformat` only recognises `SimpleDateFormat`.
+- `map-get-deref` has no dataflow, so a map populated on the line above is
+  still flagged.
+- `modify-during-iteration` only matches the enhanced-for form.
+
 ## [1.8.0] - 2026-08-18
 
 ### Added
