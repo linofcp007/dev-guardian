@@ -90,4 +90,26 @@ public class OptionalGet {
             System.out.println(o.get());
         }
     }
+
+    // ---- the same three guards, written as a ternary --------------------
+    //
+    // All three are DISCRIMINATING, and each for exactly one clause: delete
+    // the matching `pattern-not-inside` and that one function fires while the
+    // other two stay silent. Same one-to-one mapping as the eight statement
+    // guards above.
+    //
+    // A ternary is a conditional EXPRESSION, not an `if` statement, so it is a
+    // structurally different AST node — none of the eight clauses above reach
+    // it, which is why it needed three of its own. Every one is correct Java:
+    // the Optional is proven non-empty on the branch that calls `get()`, and
+    // `o.isPresent() ? o.get() : d` is among the commonest ways to write that.
+    String ternaryIsPresent(Optional<String> o) {
+        return o.isPresent() ? o.get() : "d";
+    }
+    String ternaryNotPresent(Optional<String> o) {
+        return !o.isPresent() ? "d" : o.get();
+    }
+    String ternaryIsEmpty(Optional<String> o) {
+        return o.isEmpty() ? "d" : o.get();
+    }
 }

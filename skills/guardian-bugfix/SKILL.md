@@ -177,12 +177,18 @@ A `empty-catch` respeita a convenção do Checkstyle / IntelliJ: nunca dispara s
 a variável da exceção se chamar `ignore`, `ignored` ou `expected`. É a forma
 auto-documentada de dizer "de propósito" sem um comentário de supressão — e o
 reverso é que uma exceção genuinamente engolida escapa à regra só por ter esse
-nome. A `optional-get-no-ispresent` reconhece nove formas de guarda
-(`if (isPresent())`, mais `return`/`throw`/`continue`/`break` antecipados sob
-`!isPresent()` ou `isEmpty()`); tudo o resto é falso positivo, e o medido é o
-ternário `o.isPresent() ? o.get() : d`. A `stream-not-closed` casa o nome
-simples do construtor, por isso um `new java.io.FileInputStream(...)`
-qualificado não é visto.
+nome. A `optional-get-no-ispresent` reconhece doze formas de guarda:
+`if (isPresent())`, `return`/`throw`/`continue`/`break` antecipados sob
+`!isPresent()` ou `isEmpty()`, e as três formas ternárias
+(`o.isPresent() ? o.get() : d`, a negação, e a variante com `isEmpty()`). O
+ternário precisou de cláusulas próprias porque é uma *expressão* condicional,
+um nó da AST diferente de um `if`, que nenhuma das cláusulas de statement
+alcança. Qualquer forma de guarda fora dessas doze é falso positivo.
+
+A `stream-not-closed` só reconhece `new FileInputStream(...)` — e só por esse
+nome simples: um `new java.io.FileInputStream(...)` totalmente qualificado não
+é visto (medido), tal como não são vistos `FileOutputStream`, `FileReader`,
+`Socket` e os restantes closeables.
 
 Quatro falsos positivos são **aceites em vez de corrigidos**, cada um
 reproduzido em código correto:

@@ -47,14 +47,22 @@ version bump.
   - `error-handling-empty-catch` honours the Checkstyle / IntelliJ naming
     convention: an exception variable named `ignore`, `ignored` or `expected`
     is a deliberate ignore. Every other name still fires.
+  - `null-safety-optional-get-no-ispresent` no longer fires on a **ternary**
+    guard. All three forms were firing at ERROR on correct code —
+    `o.isPresent() ? o.get() : d`, `!o.isPresent() ? d : o.get()` and
+    `o.isEmpty() ? d : o.get()` — because a ternary is a conditional
+    *expression*, a different AST node from an `if` statement, so none of the
+    statement-shaped exclusions reached it. Twelve guard shapes are now
+    recognised, up from nine.
 
 ### Known gaps
 
 - **No `Integer ==` rule.** Expressing it needs type inference Semgrep OSS does
   not have; the attempt fired on `v == null` and on primitive comparison.
 - `stream-not-closed` only recognises `new FileInputStream(...)`, and only by
-  its simple name — a fully-qualified `new java.io.FileInputStream(...)` is not
-  seen.
+  that simple name: `FileOutputStream`, `FileReader`, `Socket` and every other
+  closeable leak identically and are not covered, and neither is a
+  fully-qualified `new java.io.FileInputStream(...)` (measured).
 - `static-dateformat` only recognises `SimpleDateFormat`.
 - `map-get-deref` has no dataflow, so a map populated on the line above is
   still flagged.
@@ -68,9 +76,10 @@ version bump.
   `Queue`, a `SortedSet` or a project collection type.
 - **The empty-catch naming escape hatch cuts both ways.** A genuinely swallowed
   exception escapes the rule simply by being named `ignored`.
-- `optional-get-no-ispresent` recognises nine syntactic guard shapes; anything
-  else is a false positive, and the measured one is the ternary
-  `o.isPresent() ? o.get() : d`, which still fires.
+- `optional-get-no-ispresent` recognises twelve syntactic guard shapes —
+  `if (isPresent())`, an early `return`/`throw`/`continue`/`break` under
+  `!isPresent()` or `isEmpty()`, and the three ternary forms. Any guard shape
+  outside those twelve is a false positive.
 
 ### Accepted false positives
 

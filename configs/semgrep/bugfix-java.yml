@@ -99,10 +99,13 @@ rules:
 
   # Sem o `metavariable-type`, `$O.get()` casa QUALQUER `get()` sem argumentos
   # — `AtomicInteger.get()`, `ThreadLocal.get()`, `Supplier.get()` — e a regra
-  # nunca foi sobre `Optional`. As oito exclusões cobrem as guardas de saída
+  # nunca foi sobre `Optional`. As exclusões cobrem as guardas de saída
   # antecipada, que são tão corretas como o `if (isPresent())` mas não põem o
-  # `get()` dentro do `if`. Cada uma tem a sua própria near-miss em
-  # misses/OptionalGet.java: apagar uma cláusula acende exatamente uma função.
+  # `get()` dentro do `if`, mais as três formas ternárias — um ternário é uma
+  # EXPRESSÃO condicional, um nó da AST diferente de um `if`, por isso nenhuma
+  # das cláusulas de statement lhe chega e precisou das suas próprias. Cada uma
+  # tem a sua própria near-miss em misses/OptionalGet.java: apagar uma cláusula
+  # acende exatamente uma função.
   - id: bugfix-java-null-safety-optional-get-no-ispresent
     patterns:
       - pattern: $O.get()
@@ -132,6 +135,13 @@ rules:
       - pattern-not-inside: |
           if ($O.isEmpty()) { break; }
           ...
+      # As aspas são obrigatórias nas três, e por duas razões. Sem elas o YAML
+      # lê o `?` como indicador de chave complexa e o `:` como mapeamento, e o
+      # ficheiro inteiro deixa de carregar — `Invalid YAML file`, `scanned=0`.
+      # É a mesma armadilha do RuleParseError: a corrida parece ter acontecido.
+      - pattern-not-inside: "$O.isPresent() ? ... : ..."
+      - pattern-not-inside: "!$O.isPresent() ? ... : ..."
+      - pattern-not-inside: "$O.isEmpty() ? ... : ..."
     message: >-
       `Optional.get()` sem `isPresent()`. Lança `NoSuchElementException` quando
       está vazio — que é exatamente aquilo que o Optional existia para evitar.

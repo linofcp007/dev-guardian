@@ -387,8 +387,10 @@ registerToolModule(makeScanTool({
         'gaps: no `Integer ==` rule — expressing it needs type inference Semgrep OSS does not ' +
         'have, and the attempt fired on `v == null` and on primitive comparison, so it was ' +
         'dropped rather than shipped as a rule that would be uninstalled within a day; ' +
-        '`stream-not-closed` only recognises `new FileInputStream(...)`, so `FileOutputStream`, ' +
-        '`FileReader`, `Socket` and every other closeable leak identically and are not covered; ' +
+        '`stream-not-closed` only recognises `new FileInputStream(...)`, and only by that ' +
+        'simple name, so `FileOutputStream`, `FileReader`, `Socket` and every other closeable ' +
+        'leak identically and are not covered — as does a fully-qualified ' +
+        '`new java.io.FileInputStream(...)`, which the pattern does not see (measured); ' +
         '`static-dateformat` only recognises `SimpleDateFormat`, so a shared `Calendar` or ' +
         '`Matcher` in a static field is not covered; `map-get-deref` cannot tell a nullable map ' +
         'from one whose keys are guaranteed present, so a map populated immediately above the ' +
@@ -406,12 +408,13 @@ registerToolModule(makeScanTool({
         'Checkstyle/IntelliJ convention and never fires when the exception variable is named ' +
         '`ignore`, `ignored` or `expected` — the flip side being that a genuinely swallowed ' +
         'exception escapes the rule simply by being named `ignored`. ' +
-        '`optional-get-no-ispresent` recognises nine syntactic guard shapes (`if (isPresent())`, ' +
-        'plus an early return/throw/continue/break under `!isPresent()` or `isEmpty()`); ' +
-        'anything else is a false positive, and the measured one is the ternary ' +
-        '`o.isPresent() ? o.get() : d`, which still fires. `stream-not-closed` matches the ' +
-        'simple constructor name, so a fully-qualified `new java.io.FileInputStream(...)` is ' +
-        'not seen. Four Java false positives are accepted rather than fixed, each reproduced on ' +
+        '`optional-get-no-ispresent` recognises twelve syntactic guard shapes: ' +
+        '`if (isPresent())`, an early return/throw/continue/break under `!isPresent()` or ' +
+        '`isEmpty()`, and the three ternary forms (`o.isPresent() ? o.get() : d`, its ' +
+        'negation, and the `isEmpty()` variant) — a ternary needs its own clauses because it ' +
+        'is a conditional EXPRESSION, a different AST node from an `if` statement that none of ' +
+        'the statement clauses reach. Any guard shape outside those twelve is a false positive. ' +
+        'Four Java false positives are accepted rather than fixed, each reproduced on ' +
         'correct code: `stream-not-closed` on `open(); try {} finally { close(); }` (already ' +
         'the stated reason it is WARNING); `static-dateformat` on a static final ' +
         'SimpleDateFormat whose every access goes through a synchronized method (proving ALL ' +
