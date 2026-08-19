@@ -193,7 +193,7 @@ version bump.
     Measured over the five correct-code shapes the reviewer wrote: it closes the
     plain loop, the `this.`-qualified loop and the loop whose dereference is
     nested inside an `if`; the `entrySet()` form and the form that copies the
-    key set to a local first remain, and are now **accepted limitation (12)**
+    key set to a local first remain, and are now **accepted limitation (11)**
     rather than an implication.
 
     **One clause, not the braced/braceless pair every `if` guard carries**, and
@@ -208,12 +208,12 @@ version bump.
     positive.** That asymmetry is the shape of the defect the previous two waves
     were about: nobody was looking in the recall direction, so nothing was ever
     written down there. Every row now states its direction, and three rows are
-    new — the **invalidated-guarantee** false-negative class (10), five measured
+    new — the **invalidated-guarantee** false-negative class (9), five measured
     guaranteed throws where the guard's guarantee is destroyed *inside the
     region the exclusion covers*, which is the fifth sweep's whole-node bug on the
-    **temporal** axis instead of the branch axis; the local-boolean guard (11),
+    **temporal** axis instead of the branch axis; the local-boolean guard (10),
     agreed in review five waves ago and never written down; and the two
-    `keySet()` residue shapes (12).
+    `keySet()` residue shapes (11).
   - **The real-bugs corpus covered 4 of the 8 rules, and the gap was the
     riskiest one.** Measured: `map-get-deref` 9, `optional-get` 6,
     `loop-lte-length` 4, `static-dateformat` 1, and **nothing** for
@@ -244,16 +244,69 @@ version bump.
     also catches a clause-level compile failure that happens not to change any
     finding, the one thing no finding-count assertion can see. Measured against
     all three traps: exit 2, 5 and 2.
-  - **Accepted false positive (9) was falsified by its own instance and is
-    rewritten.** Its justification — an extra last-but-one-operand clause
-    "removes one of two findings, the line still fires" — was measured on
+  - **Accepted false positive (9) was falsified by its own instance.** Its
+    justification — an extra last-but-one-operand clause "removes one of two
+    findings, the line still fires" — was measured on
     `flag && a.isPresent() && b.isPresent() && a.get().equals(b.get())`, a line
     carrying **two** `get()` calls. On the far commoner single-`get()` chain
-    that clause silences the line outright, and re-measuring with it applied
-    shows it also closes **four**-operand chains, since its `$X` matches the
-    whole left-nested subtree. The row now carries the measurement instead of
-    the generalisation; the clause is recorded as a taken decision deferred out
-    of this wave's scope, not as one that was rejected.
+    that clause silences the line outright. The row was rewritten here and then
+    **deleted** in the next sweep, once re-measurement showed the conclusion was
+    wrong too and the clause was applied.
+- **A seventh review sweep applied the clause the sixth had deferred, and
+  deleted the row that argued against it.** One item, and the smallest diff of
+  any sweep, but it retires the longest-standing wrong answer in the pack.
+  - **Both null-safety rules now honour an expression guard used in a CHAIN.**
+    `flag && m.containsKey(k) && m.get(k).isEmpty()`,
+    `flag && o.isPresent() && o.get().isEmpty()`, and the `||` duals, are
+    ordinary correct Java — a feature flag or a cheap test short-circuiting in
+    front of the guard — and all of them fired. Seven clauses, one per
+    expression guard the two rules already excluded at two operands
+    (`containsKey &&`, `get() != null &&`, `!containsKey ||`, `get() == null ||`,
+    `isPresent() &&`, `!isPresent() ||`, `isEmpty() ||`). Measured: nine
+    near-miss shapes silenced, hit fixtures unmoved at 69, and each of the seven
+    ablates live on its own shape.
+  - **`$X` matches the whole left-nested subtree, and that is the finding.** A
+    Java conjunction nests to the left — `a && b && c` is `(a && b) && c` — so
+    `$X && GUARD && DEREF` matches a chain of **any length** whose last-but-one
+    operand is the guard. One clause per guard is therefore enough, and a second
+    clause "for longer chains" would be inert; the four-operand shapes are
+    closed by the same clause as the three-operand ones.
+  - **Accepted false positive (9) is deleted rather than reworded.** It had
+    carried two successive justifications, and both were reasoning about
+    variables that do not control the outcome: the first measured "removes one
+    of two findings" on a line that happened to carry two `get()` calls, the
+    second generalised to "one clause leaves 4+ operand chains firing" when
+    chain length is not the discriminator at all. A row recording a deferred
+    decision on a false premise is worse than no row, because it reads as
+    considered. The remaining rows renumber; the reasoning is now in the rule
+    file, next to the clauses, where the next person will hit it.
+  - **What still fires, and is pinned.** Six new corpus entries (`b15`–`b20`)
+    cover the three ways a chain can look like a guard without being one: a
+    chain guarding a **different** key or Optional; a **positive-first**
+    disjunction, where the dereference runs precisely when the test was false;
+    and a **negated** guard in a conjunction, where the value is proven absent
+    at the point it is read. Also still firing, and no longer a table row: a
+    chain whose guard is not the last-but-one operand because it guards two
+    different things at once.
+  - **A fourth member of the silent-rule-failure family, found by walking into
+    it.** Semgrep's config loader decodes the rule file with the **locale**
+    codec, not UTF-8. On a Windows cp1252 locale the bytes `0x81`, `0x8D`,
+    `0x8F`, `0x90` and `0x9D` are undefined, and they are exactly the second
+    UTF-8 byte of five characters (U+00C1, U+00CD, U+00CF, U+00D0, U+00DD), so
+    **one** of them in a Portuguese comment takes the entire file down — while
+    lowercase is always fine (`á` is `0xC3 0xA1`), which is why this pack's
+    prose has always worked. It presents exactly like the other three: the scan
+    returns `results: 0`, `paths.scanned: 0` and `errors: 0`, so a caller
+    reading only the findings sees a clean scan. Both wave-6/7 guards caught it
+    — the `paths.scanned` assertion and `semgrep --validate` — which is the
+    first time that machinery has caught a trap nobody had seen before. The
+    rule file now says so in its header, and the comment cannot spell the
+    offending characters, because spelling them breaks the file that describes
+    them. The rule is stated **narrowly and measured**: only two of the twelve
+    accented capitals Portuguese uses are affected, and the first version of the
+    warning — "no uppercase accented letters" — was wrong by excess, which is
+    the same defect this sweep set out to fix. All six packs in
+    `configs/semgrep/` are clean of those bytes today.
 
 ### Changed
 
@@ -361,7 +414,10 @@ version bump.
   condition rules out;
   `while (o.isPresent())`; the same test used as an **expression**
   (`return o.isPresent() && o.get().isEmpty();`) and the negative-first
-  disjunctions `!o.isPresent() || …` and `o.isEmpty() || …`;
+  disjunctions `!o.isPresent() || …` and `o.isEmpty() || …`; each of those three
+  again as a **chain**, with something short-circuiting in front of the guard
+  (`flag && o.isPresent() && o.get()…`), for a conjunction of any length —
+  a positive-first disjunction and a **negated** guard still fire, and are bugs;
   an early `return`/`throw`/`continue`/`break` under
   `!isPresent()` or `isEmpty()`, with or without one statement before the exit;
   the three ternary forms, with the `get()` in the guarded arm;
@@ -376,8 +432,10 @@ version bump.
   and was falsified by a compound condition, a multi-statement exit, a `while`
   and an `Optional.of`; the next version of it, which said "as either operand of
   a conjunction" without saying **where**, was falsified in turn by four
-  expression-form guards. The rule is `WARNING` precisely because this class of
-  miss has no end.
+  expression-form guards; and the version after that, which said "exactly two
+  operands is the shape excluded", was falsified by the chain clauses, since the
+  count of operands was never what decided it. The rule is `WARNING` precisely
+  because this class of miss has no end.
 
 ### Accepted limitations
 
@@ -386,9 +444,18 @@ fixed. **Every row states its DIRECTION**, because for six waves this table had
 nine rows and all nine were false positives — the shape of the defect the last
 two waves were about. Nobody was looking in the recall direction, so nothing was
 ever written down there, and a wave could close a false positive, silently
-delete recall, and still go green. Rows (10) and (11) are the first entries on
+delete recall, and still go green. Rows (9) and (10) are the first entries on
 the other side; the real-bugs corpus in `hits/` is the machinery that keeps them
 honest.
+
+One row also **left** this table, which is the other half of the lesson. The
+conjunction-chain false positive sat here for four waves under two successive
+justifications, and both were reasoning about variables that did not control the
+outcome; re-measured, it was not a limitation at all, just an unexamined
+metavariable, and the clause that closes it costs nothing. A row here is an
+assertion with no test behind it — unlike every other claim in this pack, which
+has a fixture that fails when it goes stale — so a row that has never been
+re-measured is exactly as trustworthy as the day someone wrote it, and no more.
 
 - **(1)** *False positive.* `memory-leak-stream-not-closed` on
   `open(); try { … } finally { close(); }` — already the rule's stated
@@ -429,40 +496,7 @@ honest.
   on a guard held in a **local boolean** —
   `boolean present = m.containsKey(k); if (!present) { return ""; }` — which is
   dataflow rather than syntax, and outside Semgrep OSS.
-- **(9)** *False positive.* The same two on a conjunction **chain** of three or
-  more operands, `flag && o.isPresent() && o.get().isEmpty()` and
-  `flag && m.containsKey(k) && m.get(k).isEmpty()`. The expression clause binds
-  the conjunction's left operand to the guard test itself, and a Java
-  conjunction nests to the left, so in a chain that left operand is another
-  conjunction rather than the guard. Exactly two operands is the shape excluded.
-
-  **This row's own justification was falsified in wave 7 and is replaced.** It
-  used to read: an extra clause for the last-but-one operand "removes one of the
-  two findings on that line and the line still fires from the other, so it
-  changes nothing a caller sees". That was measured on
-  `flag && a.isPresent() && b.isPresent() && a.get().equals(b.get())` — a line
-  carrying **two** `get()` calls, which is what made "one of two" true. It does
-  not generalise: on the single-`get()` lines above the same clause silences the
-  line outright, and the two lines above are far commoner Java than the
-  two-`get()` one the row was measured on.
-
-  Re-measured in wave 7 with the clause actually applied
-  (`"$X && $O.isPresent() && <... $O.get() ...>"` and its map twin): it silences
-  the three-operand single-`get()` chain, silences a **four**-operand
-  single-`get()` chain too — `$X` matches the whole left-nested subtree, so
-  chain length is not the discriminator the old row assumed — leaves exactly one
-  finding on the original two-`get()` instance, and keeps both real bugs firing
-  (`flag && a.isPresent() && b.get()`, `flag && m.containsKey(k1) && m.get(k2)`).
-  Hit and near-miss fixture counts do not move: 63 and 0 either way.
-
-  So the clause is a genuine, measured improvement and the old conclusion does
-  **not** stand. It is not applied here only because wave 7 was scoped to a
-  single rule-behaviour change and this is a second one, in two rules, on the
-  last wave before merge; it is recorded as a decision that is taken, not as one
-  that was rejected. What would still remain after it is the narrower shape the
-  row now describes: a chain where the guard is **not** the last-but-one operand
-  because the chain guards two different things at once.
-- **(10)** *False **negative** — the invalidated-guarantee class.* A guarantee
+- **(9)** *False **negative** — the invalidated-guarantee class.* A guarantee
   the guard establishes and the code then **destroys**, inside the very region
   the exclusion covers. Five measured reproductions, every one a guaranteed
   throw, every one silent:
@@ -486,7 +520,7 @@ honest.
   and not a clause. The `keySet()` exclusion added in wave 7 inherits it
   unchanged: `for (String k : m.keySet()) { m.remove(k); m.get(k).trim(); }` is
   silent for the same reason.
-- **(11)** *False **negative**.* `null-safety-map-get-deref` and
+- **(10)** *False **negative**.* `null-safety-map-get-deref` and
   `null-safety-optional-get-no-ispresent` where the deref is guarded by a
   **local boolean** holding the test —
   `boolean present = m.containsKey(k); if (present) { m.get(k).trim(); }`. The
@@ -496,7 +530,7 @@ honest.
   false-positive half written down for six waves is precisely the asymmetry
   this section's preamble is about. Agreed in review and undocumented until
   wave 7.
-- **(12)** *False positive.* `null-safety-map-get-deref` on the two
+- **(11)** *False positive.* `null-safety-map-get-deref` on the two
   `keySet()`-adjacent iteration idioms the wave-7 exclusion does **not** reach,
   measured rather than assumed:
   `for (Map.Entry<K,V> e : m.entrySet()) { … m.get(e.getKey()) … }`, where the

@@ -198,6 +198,15 @@ Passou a excluir as formas medidas em que a chave fica provada presente:
   local — e as suas duais de De Morgan, `!m.containsKey(k) || …` e
   `m.get(k) == null || …`, em que o `||` faz curto-circuito e o operando
   direito só corre quando a chave **está** presente;
+- qualquer uma dessas quatro formas numa **cadeia**, com outra coisa a fazer
+  curto-circuito à frente da guarda — `flag && m.containsKey(k) &&
+  m.get(k).isEmpty()`, `flag || !m.containsKey(k) || m.get(k).isEmpty()`. Uma
+  cláusula por guarda chega para cadeias de **qualquer comprimento**, porque o
+  `$X` liga a subárvore inteira aninhada à esquerda e não um operando. O que
+  continua a disparar, e são bugs: a cadeia que guarda **outra** chave, a
+  disjunção **positiva-primeiro** (o deref corre exatamente quando o teste foi
+  falso) e a guarda **negada** numa conjunção, em que a chave está provada
+  ausente onde é lida;
 - as quatro polaridades do ternário, com o deref no ramo guardado;
 - um `return`/`throw`/`continue` antecipado sob `!containsKey` ou
   `get() == null`;
@@ -408,7 +417,7 @@ formas de import: o padrão qualificado casa também as formas curtas sempre que
 um import deixa o Semgrep resolver o nome, o curto nunca casou a qualificada,
 por isso o ramo curto era inerte e foi apagado.
 
-Doze limitações são **aceites em vez de corrigidas**, cada uma reproduzida
+Onze limitações são **aceites em vez de corrigidas**, cada uma reproduzida
 contra as fixtures de revisão que existem hoje — a lista é exaustiva contra
 essas, não contra todo o Java que existe.
 
@@ -416,7 +425,9 @@ essas, não contra todo o Java que existe.
 esta tabela teve nove linhas e as nove eram falsos positivos: ninguém estava a
 olhar na direção do recall, por isso nunca lá se escreveu nada — e uma ronda
 podia fechar um falso positivo, apagar recall em silêncio, e continuar verde.
-As linhas 10 e 11 são as primeiras do outro lado.
+As linhas 9 e 10 são as primeiras do outro lado. E uma linha SAIU da tabela na
+ronda 8: a cadeia de conjunção nunca foi uma limitação, era só um `$X` que
+ninguém tinha examinado.
 
 | # | Dir | Regra | Código em que erra | Porque fica |
 | --- | --- | --- | --- | --- |
@@ -428,10 +439,9 @@ As linhas 10 e 11 são as primeiras do outro lado.
 | 6 | FP | as mesmas três | Guarda delegada a um método helper: `if (!present(o)) { return d; }` | Exige análise interprocedimental, que o Semgrep OSS não faz. É a razão declarada de as três estarem em `WARNING` — e, generalizada, a razão de sete das oito regras do pack estarem lá. |
 | 7 | FP | `map-get-deref` | Chave garantida fora das formas enumeradas: mapa preenchido num inicializador estático, ou mapeamento total sobre um enum declarado como `Map` | A garantia não está no caminho sintático que chega ao `get`. Excluir "qualquer mapa que alguma vez recebeu um `put`" apagaria a regra. |
 | 8 | FP | `map-get-deref`, `optional-get-no-ispresent` | Guarda guardada num **booleano local**: `boolean present = m.containsKey(k); if (!present) { return ""; }` | É dataflow, não sintaxe. O Semgrep OSS não liga o valor do local ao teste que o produziu. |
-| 9 | FP | as mesmas duas | **Cadeia** de conjunção com três ou mais operandos: `flag && o.isPresent() && o.get().isEmpty()`, `flag && m.containsKey(k) && m.get(k).isEmpty()` | A cláusula de expressão liga o operando ESQUERDO da conjunção ao próprio teste de guarda, e uma conjunção em Java aninha à esquerda, por isso numa cadeia esse operando esquerdo é outra conjunção. Exatamente dois operandos é a forma excluída. **A justificação desta linha foi falsificada pela sua própria instância e substituída:** dizia que a cláusula extra para o penúltimo operando "remove um de dois findings e a linha continua a disparar" — medido sobre `flag && a.isPresent() && b.isPresent() && a.get().equals(b.get())`, uma linha com **dois** `get()`, que é a única razão por que "um de dois" era verdade. Com um só `get()` a cláusula cala a linha inteira. Remedido com a cláusula aplicada: fecha a cadeia de três operandos com um `get()`, fecha também uma de **quatro** (o `$X` casa toda a subárvore aninhada à esquerda), deixa um finding na instância original de dois `get()`, mantém os dois bugs reais a disparar, e não move nenhuma das contagens de fixtures. A cláusula é uma melhoria medida e a conclusão antiga não se aguenta: está adiada por âmbito, não rejeitada. |
-| 10 | **FN** | `map-get-deref`, `optional-get-no-ispresent` | Garantia **invalidada** depois da guarda, dentro da região que a exclusão cobre: `if (m.containsKey(k)) { m.remove(k); return m.get(k).trim(); }`, `if (o.isPresent()) { o = Optional.empty(); return o.get(); }`, `m.put(k,"v"); m.remove(k); m.get(k).trim();`, `while (m.containsKey(k)) { m.remove(k); … }` | Cinco reproduções medidas, todas exceções garantidas, todas em silêncio. Mesma causa que o bug do ramo `else` — **o `pattern-not-inside` exclui o nó inteiro que casou** — mas no eixo **temporal** em vez do eixo dos ramos. A limitação ao ramo guardado corrigiu o eixo dos ramos; o eixo da sequência dentro desse ramo nunca foi examinado. Saber que `m.remove(k)` invalida `m.containsKey(k)` é dataflow, por isso é linha e não cláusula. A exclusão do `keySet()` herda-a. |
-| 11 | **FN** | `map-get-deref`, `optional-get-no-ispresent` | Deref guardado por um **booleano local**: `boolean present = m.containsKey(k); if (present) { m.get(k).trim(); }` | O espelho da linha 8, que regista a mesma forma como falso positivo quando o booleano guarda uma saída antecipada. As duas direções são a mesma capacidade em falta (dataflow, não sintaxe), e ter só metade escrita durante seis rondas é a assimetria de que fala o preâmbulo. |
-| 12 | FP | `map-get-deref` | As duas formas vizinhas do `keySet()` que a exclusão não alcança: `for (Map.Entry<K,V> e : m.entrySet()) { … m.get(e.getKey()) … }` e o keySet copiado para um local antes do ciclo | Na primeira a chave é `e.getKey()` e não a variável do ciclo; na segunda o cabeçalho já não menciona `keySet()`. A cláusula unifica o mapa **e** a chave de propósito, e alargá-la exige desistir de uma das unificações — os dois bugs reais que ficariam engolidos estão fixados como `b13` e `b14`. Das cinco formas corretas medidas, a cláusula fecha três. |
+| 9 | **FN** | `map-get-deref`, `optional-get-no-ispresent` | Garantia **invalidada** depois da guarda, dentro da região que a exclusão cobre: `if (m.containsKey(k)) { m.remove(k); return m.get(k).trim(); }`, `if (o.isPresent()) { o = Optional.empty(); return o.get(); }`, `m.put(k,"v"); m.remove(k); m.get(k).trim();`, `while (m.containsKey(k)) { m.remove(k); … }` | Cinco reproduções medidas, todas exceções garantidas, todas em silêncio. Mesma causa que o bug do ramo `else` — **o `pattern-not-inside` exclui o nó inteiro que casou** — mas no eixo **temporal** em vez do eixo dos ramos. A limitação ao ramo guardado corrigiu o eixo dos ramos; o eixo da sequência dentro desse ramo nunca foi examinado. Saber que `m.remove(k)` invalida `m.containsKey(k)` é dataflow, por isso é linha e não cláusula. A exclusão do `keySet()` herda-a. |
+| 10 | **FN** | `map-get-deref`, `optional-get-no-ispresent` | Deref guardado por um **booleano local**: `boolean present = m.containsKey(k); if (present) { m.get(k).trim(); }` | O espelho da linha 8, que regista a mesma forma como falso positivo quando o booleano guarda uma saída antecipada. As duas direções são a mesma capacidade em falta (dataflow, não sintaxe), e ter só metade escrita durante seis rondas é a assimetria de que fala o preâmbulo. |
+| 11 | FP | `map-get-deref` | As duas formas vizinhas do `keySet()` que a exclusão não alcança: `for (Map.Entry<K,V> e : m.entrySet()) { … m.get(e.getKey()) … }` e o keySet copiado para um local antes do ciclo | Na primeira a chave é `e.getKey()` e não a variável do ciclo; na segunda o cabeçalho já não menciona `keySet()`. A cláusula unifica o mapa **e** a chave de propósito, e alargá-la exige desistir de uma das unificações — os dois bugs reais que ficariam engolidos estão fixados como `b13` e `b14`. Das cinco formas corretas medidas, a cláusula fecha três. |
 
 **Isto é só para JS/TS, Python, Go e Java.** Para as restantes linguagens desta secção —
 C#, PHP, Ruby, Rust — a situação anterior mantém-se: o

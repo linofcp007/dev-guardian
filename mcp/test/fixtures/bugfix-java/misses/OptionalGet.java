@@ -134,6 +134,44 @@ public class OptionalGet {
         }
     }
 
+    // ---- the same three guards as a CHAIN --------------------------------
+    //
+    // Added in wave 8. The three expression clauses above bind the guard to
+    // exactly ONE operand of a two-operand expression, so every one of these
+    // fired on correct Java. They are the same guards with something else
+    // short-circuiting in front, which is the normal way these read in real
+    // code — a feature flag, a null check, a cheap test first.
+    //
+    // What makes ONE extra clause per guard enough is that `$X` matches the
+    // whole LEFT-NESTED SUBTREE, not a single operand: `a && b && c` parses as
+    // `(a && b) && c`, so `$X && GUARD && DEREF` matches a chain of any length
+    // whose last-but-one operand is the guard. Measured — the four-operand
+    // twins below are closed by the same clause as the three-operand ones, and
+    // adding a second clause for a longer chain would be inert.
+
+    // chainIsPresent: three operands, one `get()`.
+    boolean chainIsPresent(Optional<String> o, boolean flag) {
+        return flag && o.isPresent() && o.get().isEmpty();
+    }
+
+    // chainIsPresentLonger: FOUR operands, and the dereference is chained, so
+    // it is not the clause with its metavariables filled in.
+    boolean chainIsPresentLonger(Optional<String> o, boolean flag, boolean other) {
+        return flag && other && o.isPresent() && o.get().trim().isEmpty();
+    }
+
+    // chainNotPresent: the negative-first disjunction as a chain. `||`
+    // short-circuits identically, so the last operand runs only when the whole
+    // left side was false — which requires `isPresent()` to be true.
+    boolean chainNotPresent(Optional<String> o, boolean flag) {
+        return flag || !o.isPresent() || o.get().isEmpty();
+    }
+
+    // chainIsEmpty: the Java 11 spelling of the same chain.
+    boolean chainIsEmpty(Optional<String> o, boolean flag) {
+        return flag || o.isEmpty() || o.get().isEmpty();
+    }
+
     // optionalOfAssigned is DISCRIMINATING for the `Optional.of` clause.
     // `Optional.of` throws on null, so a value that got past it is present
     // and `get()` cannot throw. `Optional.ofNullable` CAN be empty and is not

@@ -193,13 +193,22 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     // dereferences a DIFFERENT key. Drop either unification from that clause
     // and the matching function stops firing — which is the only thing that
     // distinguishes a scoped exclusion from a blanket one.
+    //
+    // `b15`-`b20`, added in wave 8, do the same job for the seven CHAIN
+    // exclusions, whose `$X` matches a whole left-nested subtree and is
+    // therefore deliberately permissive. Three ways a chain can look like a
+    // guard without being one, two rules each: the chain that guards a
+    // DIFFERENT key or Optional; the POSITIVE-first disjunction, where the
+    // dereference runs precisely when the test was false; and the NEGATED
+    // guard in a conjunction, where the value is proven absent at the point it
+    // is read. Every one is a guaranteed throw.
     ids: [
       'bugfix-java-null-safety-map-get-deref',
       'bugfix-java-null-safety-optional-get-no-ispresent',
       'bugfix-java-off-by-one-loop-lte-length',
       'bugfix-java-race-condition-static-dateformat',
     ],
-    count: 14,
+    count: 20,
   },
   'IterationBugs.java': {
     // Six, all `ConcurrentModificationException`, all in the rule that had
@@ -333,8 +342,8 @@ describe('bugfix-java rules', () => {
       // The TOTAL, asserted on top of the per-file counts, and not redundant:
       // the loop above only visits files that have an expectation, so a finding
       // landing in a file nobody registered — or in no file at all — would not
-      // move any per-file number. 63 = 35 from the eight per-rule fixtures plus
-      // the 28 of the real-bugs corpus.
+      // move any per-file number. 69 = 35 from the eight per-rule fixtures plus
+      // the 34 of the real-bugs corpus.
       expect(rows.length).toBe(
         Object.values(EXPECTED_HITS_BY_FILE).reduce((n, e) => n + e.count, 0),
       );
@@ -345,15 +354,27 @@ describe('bugfix-java rules', () => {
    * THE TRAP FAMILY, and the two assertions that make catching it automatic
    * instead of a matter of somebody noticing.
    *
-   * Three separate silent-failure modes have now shipped through this rule
-   * file: a `pattern-either` branch with no positive term (`RuleParseError`),
-   * an unquoted `?` in a ternary exclusion (`Invalid YAML file`), and
-   * `... <... e ...> ...` written inside a block. They look nothing alike and
+   * Four separate silent-failure modes have now shipped through, or been
+   * caught in, this rule file: a `pattern-either` branch with no positive term
+   * (`RuleParseError`), an unquoted `?` in a ternary exclusion (`Invalid YAML
+   * file`), `... <... e ...> ...` written inside a block, and — new in wave 8 —
+   * an **uppercase accented letter in a comment**. They look nothing alike and
    * were each found the hard way, but they are ONE family, because they share
-   * a signature: **fewer rules actually load than the file declares, and the
-   * run still exits 0 printing `Scan completed successfully`.** Semgrep's
-   * summary output cannot be trusted to tell a broken rule from a rule that
-   * found nothing — that is the whole trap.
+   * a signature: **fewer rules actually load than the file declares, and
+   * nothing in the findings says so.** Semgrep's output cannot be trusted to
+   * tell a broken rule from a rule that found nothing — that is the whole trap.
+   *
+   * The fourth is worth stating concretely, because it is invisible on review
+   * and platform-dependent. Semgrep's config loader decodes the rule file with
+   * the **locale** codec rather than UTF-8. On a Windows cp1252 locale the
+   * second byte of `Á` (U+00C1 → `0xC3 0x81`) is undefined, so ONE uppercase
+   * accented letter in a Portuguese comment takes the whole file down — while
+   * `á` (`0xC3 0xA1`) is fine, which is why this pack's lowercase-accented
+   * prose has always worked. Measured on the broken file: the scan reports
+   * `results: 0`, `paths.scanned: 0` and — the part that matters —
+   * `errors: 0`, so a caller reading only `results` sees a clean scan. It is
+   * caught here twice over, by the `paths.scanned` assertion and by
+   * `--validate`, which is precisely what those two exist for.
    *
    * The total-hits assertion above is already the family-wide catch: a rule
    * that fails to load loses its findings and the total moves. But it only

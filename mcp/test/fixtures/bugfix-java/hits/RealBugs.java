@@ -140,4 +140,52 @@ public class RealBugs {
             System.out.println(k + "=" + m.get(other).trim());
         }
     }
+
+    // ---- near-misses for the wave-8 CHAIN exclusions ----------------------
+    //
+    // The seven chain clauses added in wave 8 each match `$X && GUARD &&
+    // DEREF` (or the `||` dual), and `$X` matches the whole left-nested
+    // subtree — which is deliberately permissive. These six are the shapes
+    // that permissiveness must NOT reach: three ways a chain can look like a
+    // guard without being one. Each is a guaranteed throw.
+
+    // B15: the chain guards a DIFFERENT Optional than the one dereferenced.
+    // `a` present says nothing about `b`.
+    boolean b15(Optional<String> a, Optional<String> b, boolean flag) {
+        return flag && a.isPresent() && b.get().isEmpty();
+    }
+
+    // B16: the chain guards a DIFFERENT key than the one dereferenced.
+    boolean b16(Map<String, String> m, String k1, String k2, boolean flag) {
+        return flag && m.containsKey(k1) && m.get(k2).isEmpty();
+    }
+
+    // B17: a POSITIVE-first disjunction chain, which proves nothing. `||`
+    // short-circuits, so the last operand runs only when everything left of it
+    // was FALSE — and here that means `isPresent()` was false, so the `get()`
+    // is a guaranteed NoSuchElementException. Only the NEGATIVE-first form is
+    // a guard, and this is the structural twin that must stay distinguishable
+    // from it. (`b8` pins the same distinction for the `if`-condition form.)
+    boolean b17(Optional<String> o, boolean flag) {
+        return flag || o.isPresent() || o.get().isEmpty();
+    }
+
+    // B18: the map twin of B17.
+    boolean b18(Map<String, String> m, String k, boolean flag) {
+        return flag || m.containsKey(k) || m.get(k).isEmpty();
+    }
+
+    // B19: a conjunction chain whose guard is NEGATED. `&&` short-circuits, so
+    // the dereference runs only when `!isPresent()` was TRUE — the Optional is
+    // proven EMPTY at exactly the point the value is read. The clause requires
+    // the last-but-one operand to be `$O.isPresent()` literally, not its
+    // negation, and this measures that every run.
+    boolean b19(Optional<String> o, boolean flag) {
+        return flag && !o.isPresent() && o.get().isEmpty();
+    }
+
+    // B20: the map twin of B19 — the key is proven ABSENT where it is read.
+    boolean b20(Map<String, String> m, String k, boolean flag) {
+        return flag && !m.containsKey(k) && m.get(k).isEmpty();
+    }
 }

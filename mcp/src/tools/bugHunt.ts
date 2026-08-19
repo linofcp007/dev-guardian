@@ -537,7 +537,13 @@ registerToolModule(
       'clause unifies the map AND the key, so iterating one map and dereferencing another, or ' +
       'dereferencing a key other than the loop variable, both still fire and are real bugs; the ' +
       '`entrySet()` form and a key set copied to a local before the loop are NOT reached and are ' +
-      'accepted false positive (12). The ARM ' +
+      'accepted false positive (11). Every expression-form guard above is ALSO honoured as a ' +
+      'CHAIN — `flag && m.containsKey(k) && m.get(k).isEmpty()` and the `||` duals — because ' +
+      'the chain clause binds `$X` to the whole LEFT-NESTED subtree, so one clause per guard ' +
+      'covers a conjunction of any length whose last-but-one operand is the guard. What still ' +
+      'fires, and is a real bug: a chain guarding a DIFFERENT key or Optional, a ' +
+      'positive-first disjunction (which proves nothing), and a NEGATED guard, where the value ' +
+      'is proven absent exactly where it is read. The ARM ' +
       'SCOPING is the whole point and was a shipped regression before it: written unscoped, ' +
       '`pattern-not-inside: if (m.containsKey(k)) { ... }` matches the entire IF-ELSE statement ' +
       'and the ternary clauses matched the entire conditional expression, so BOTH arms were ' +
@@ -625,10 +631,12 @@ registerToolModule(
       '`if (!present(o)) { return d; }`, which needs interprocedural analysis Semgrep OSS ' +
       'does not do; that shape is a false positive and always will be, which is why the rule ' +
       'is WARNING instead of carrying an ever-longer exclusion list. ' +
-      'Twelve Java limitations are accepted rather than fixed, each reproduced against the ' +
+      'Eleven Java limitations are accepted rather than fixed, each reproduced against the ' +
       'review fixtures, and EACH STATES ITS DIRECTION — for six waves this list had nine ' +
       'entries and all nine were false positives, which is the asymmetry that let a wave close ' +
-      'a false positive, silently delete recall, and still go green. FALSE POSITIVES: (1) `stream-not-closed` on `open(); try {} finally { close(); }` (already ' +
+      'a false positive, silently delete recall, and still go green. One entry LEFT the list ' +
+      'when it was re-measured: the conjunction-chain false positive was never a limitation, ' +
+      'only an unexamined metavariable. FALSE POSITIVES: (1) `stream-not-closed` on `open(); try {} finally { close(); }` (already ' +
       'the stated reason it is WARNING); (2) `static-dateformat` on a static final ' +
       'SimpleDateFormat whose every access goes through a synchronized method (proving ALL ' +
       'accesses are synchronized is whole-program analysis, which Semgrep OSS does not do; ' +
@@ -649,23 +657,16 @@ registerToolModule(
       'or a total enum mapping declared as a `Map`; (8) `map-get-deref` and ' +
       '`optional-get-no-ispresent` on a guard held in a LOCAL BOOLEAN — ' +
       '`boolean present = m.containsKey(k); if (!present) { return ""; }` — which is dataflow, ' +
-      'not syntax, and outside Semgrep OSS; (9) the same two on a conjunction CHAIN of ' +
-      'three or more operands — `flag && o.isPresent() && o.get().isEmpty()` — because the ' +
-      'expression clause binds the conjunction LEFT OPERAND to the guard test itself, and a ' +
-      'Java conjunction nests to the left, so in a chain that left operand is another ' +
-      'conjunction rather than the guard. That row USED to justify itself with a measurement ' +
-      'taken on a line carrying TWO get() calls, which does not generalise — re-measured in ' +
-      'wave 7, the last-but-one-operand clause silences single-get chains of any length, so ' +
-      'it is deferred by scope rather than rejected; and (12) `map-get-deref` on the two ' +
+      'not syntax, and outside Semgrep OSS; and (11) `map-get-deref` on the two ' +
       'keySet()-adjacent idioms the keySet() exclusion does not reach — `entrySet()`, where ' +
       'the key is `e.getKey()` and not the loop variable, and a key set copied to a local ' +
       'before the loop, where the header no longer mentions keySet(). FALSE NEGATIVES, the ' +
-      'direction nobody was writing down for six waves: (10) the INVALIDATED-GUARANTEE class ' +
+      'direction nobody was writing down for six waves: (9) the INVALIDATED-GUARANTEE class ' +
       '— a guarantee the guard establishes and the code then destroys INSIDE the region the ' +
       'exclusion covers, `if (m.containsKey(k)) { m.remove(k); return m.get(k).trim(); }` and ' +
       'four more measured shapes, all guaranteed throws, all silent. Same root cause as the ' +
       'else-arm bug — pattern-not-inside excludes the whole node it matched — but on the ' +
-      'TEMPORAL axis rather than the branch axis, and not fixable without dataflow; and (11) ' +
+      'TEMPORAL axis rather than the branch axis, and not fixable without dataflow; and (10) ' +
       'the same two rules on a guard held in a LOCAL BOOLEAN, the recall mirror of (8). ' +
       'JS/TS, Python, Go and Java only: no other language has ' +
       'a local rule pack yet, so C#, PHP, Ruby and Rust get only the ' +

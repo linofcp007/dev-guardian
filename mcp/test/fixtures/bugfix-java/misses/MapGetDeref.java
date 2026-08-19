@@ -261,6 +261,54 @@ public class MapGetDeref {
         return m.get(k) == null || m.get(k).isEmpty();
     }
 
+    // ---- as mesmas guardas em CADEIA -------------------------------------
+    //
+    // Added in wave 8. The expression clauses above bind the guard to exactly
+    // ONE operand of a two-operand expression, so all four of these fired on
+    // correct Java. They are the same guards with something else
+    // short-circuiting in front — a feature flag, a cheap test — which is how
+    // they usually read in real code.
+    //
+    // ONE extra clause per guard is enough because `$X` matches the whole
+    // LEFT-NESTED SUBTREE rather than a single operand: `a && b && c` parses as
+    // `(a && b) && c`, so `$X && GUARD && DEREF` matches a chain of ANY length
+    // whose last-but-one operand is the guard. `chainContainsKeyLonger` is the
+    // four-operand proof of that, and it is closed by the same clause as its
+    // three-operand sibling — a second clause for longer chains would be inert.
+    //
+    // Their near-misses are `b15`-`b20` in hits/RealBugs.java: a chain guarding
+    // a different key, a positive-first disjunction that proves nothing, and a
+    // NEGATED guard whose dereference is a guaranteed NPE. All must keep firing.
+
+    // chainContainsKey: three operands, one dereference.
+    boolean chainContainsKey(Map<String, String> m, String k, boolean flag) {
+        return flag && m.containsKey(k) && m.get(k).isEmpty();
+    }
+
+    // chainContainsKeyLonger: FOUR operands, on a TreeMap, with a chained call
+    // on the dereference, so it is not the clause with its metavariables
+    // filled in.
+    boolean chainContainsKeyLonger(TreeMap<String, String> m, String k, boolean flag, boolean on) {
+        return flag && on && m.containsKey(k) && m.get(k).trim().isEmpty();
+    }
+
+    // chainNotNull: the null-check spelling of the same chain.
+    boolean chainNotNull(Map<String, String> m, String k, boolean flag) {
+        return flag && m.get(k) != null && m.get(k).isEmpty();
+    }
+
+    // chainDisjunctionNotContainsKey: the negative-first disjunction as a
+    // chain. `||` short-circuits identically, so the last operand runs only
+    // when the whole left side was false — which requires the key to be there.
+    boolean chainDisjunctionNotContainsKey(Map<String, String> m, String k, boolean flag) {
+        return flag || !m.containsKey(k) || m.get(k).isEmpty();
+    }
+
+    // chainDisjunctionNull: the `get() == null` spelling of the same chain.
+    boolean chainDisjunctionNull(Map<String, String> m, String k, boolean flag) {
+        return flag || m.get(k) == null || m.get(k).isEmpty();
+    }
+
     // disjunctionNotContainsKey: the same shape with `!containsKey`, used as
     // the condition of an `if`, with a chained call on the dereference.
     //
@@ -501,6 +549,18 @@ public class MapGetDeref {
     // level deeper, inside an `if`. The qualified form is the one that could
     // regress silently: `$M` has to bind the whole qualified expression in the
     // exclusion exactly as it does in the positive pattern.
+    //
+    // THIS WHOLE SECTION SITS AT THE BOTTOM OF THE CLASS ON PURPOSE, AND
+    // MOVING IT UP BREAKS IT SILENTLY. Measured in wave 7: `metavariable-type`
+    // resolves a `this.`-qualified field only when the field's DECLARATION
+    // PRECEDES the method in source order. Written above the `cache`
+    // declaration, this function is silent under the rule as it stood BEFORE
+    // the `keySet()` clause existed — so it would have been added, gone green,
+    // and pinned nothing. A fixture that cannot fail is the same defect class
+    // as a dead clause, moved from the rules into the fixtures, and only a RED
+    // measurement taken per FUNCTION rather than per file catches it. Any
+    // near-miss added here that reads a `this.`-qualified field belongs below
+    // that field's declaration.
     void keySetThisQualified(boolean verbose) {
         for (String k : this.cache.keySet()) {
             if (verbose) {
