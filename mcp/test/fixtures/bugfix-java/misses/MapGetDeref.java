@@ -117,17 +117,24 @@ public class MapGetDeref {
     }
 
     // compoundNotNullLeft: `!= null` first, and the second operand of the
-    // conjunction is itself a dereference — the guard covers it too.
+    // conjunction is itself a dereference — the guard covers it too. The body
+    // dereferences again from inside a LOOP, which is what makes this one
+    // discriminating for the multi-statement half of the clause pair rather
+    // than for the braceless half.
     int compoundNotNullLeft(Map<String, String> m, String k) {
+        int total = 0;
         if (m.get(k) != null && !m.get(k).isEmpty()) {
-            return m.get(k).length();
+            for (int i = 0; i < 2; i++) { total += m.get(k).length(); }
         }
-        return 0;
+        return total;
     }
 
-    // compoundNotNullRight: `!= null` second, on a ConcurrentHashMap.
+    // compoundNotNullRight: `!= null` second, on a ConcurrentHashMap, with the
+    // value read into a local and logged before the dereference.
     int compoundNotNullRight(ConcurrentHashMap<String, String> m, String k, boolean on) {
         if (on && m.get(k) != null) {
+            String raw = m.get(k);
+            System.out.println(raw);
             return m.get(k).length();
         }
         return 0;
@@ -162,6 +169,108 @@ public class MapGetDeref {
     // ternaryNotNull — the dereference sits in the false branch.
     String ternaryNull(Map<String, String> m, String k) {
         return m.get(k) == null ? "" : m.get(k).trim();
+    }
+
+    // ---- guarda sem chavetas, ciclo, e as formas de EXPRESSÃO -------------
+    //
+    // Added in wave 6. The six inline clauses above all read `if (...) { ...
+    // }`, and the documentation claimed the rule honoured a conjunction guard
+    // full stop. It did not: a conjunction used as an EXPRESSION — returned,
+    // assigned to a local — was never excluded, and every function in this
+    // section fired on correct Java until the expression-form clauses went in.
+
+    // bracelessContainsKey: the guard body has no braces. It is its own clause
+    // because the arm-scoping added in wave 6 split the old `if (...) { ... }`
+    // exclusion in two, and only the single-statement half reaches this shape.
+    // Chains a call onto the dereference so it is not the clause with its
+    // metavariables filled in.
+    // Each of the six inline guards needs its OWN braceless twin: measured by
+    // ablation, the braceless half of a clause pair is INERT whenever the only
+    // near-miss for that guard shape is a braced one, because the
+    // multi-statement half covers a braced single-statement body too. An inert
+    // clause is one that could be deleted without a test moving, which is the
+    // defect class this repo keeps finding by ablation and not by review.
+    String bracelessContainsKey(Map<String, String> m, String k) {
+        if (m.containsKey(k)) return m.get(k).trim().toLowerCase();
+        return "";
+    }
+
+    int bracelessContainsKeyLeft(Map<String, Integer> m, String k) {
+        if (m.containsKey(k) && k.length() > 0) return m.get(k).intValue();
+        return 0;
+    }
+
+    int bracelessContainsKeyRight(TreeMap<String, Integer> m, String k, boolean on) {
+        if (on && m.containsKey(k)) return m.get(k).intValue();
+        return 0;
+    }
+
+    String bracelessNotNull(LinkedHashMap<String, String> m, String k) {
+        if (m.get(k) != null) return m.get(k).trim();
+        return "";
+    }
+
+    int bracelessNotNullLeft(Map<String, String> m, String k) {
+        if (m.get(k) != null && k.length() > 0) return m.get(k).length();
+        return 0;
+    }
+
+    int bracelessNotNullRight(ConcurrentHashMap<String, String> m, String k, boolean on) {
+        if (on && m.get(k) != null) return m.get(k).length();
+        return 0;
+    }
+
+    // whileContainsKey: the drain loop. The Optional rule had excluded
+    // `while ($O.isPresent())` since wave 1 and the map rule had no
+    // counterpart, so this exact loop — correct, because the body only runs
+    // while the key is in — was flagged.
+    void whileContainsKey(Map<String, String> m, String k) {
+        while (m.containsKey(k)) {
+            System.out.println(m.get(k).trim());
+            m.remove(k);
+        }
+    }
+
+    // conjunctionExpression: the conjunction is not the condition of anything
+    // — it is the returned value. `&&` short-circuits, so the dereference on
+    // the right only evaluates when the left proved the key present.
+    boolean conjunctionExpression(Map<String, String> m, String k) {
+        return m.containsKey(k) && m.get(k).isEmpty();
+    }
+
+    // conjunctionAssigned: the same short-circuit assigned to a local, on a
+    // `this.`-qualified field receiver, so it also walks the qualified-receiver
+    // branch rather than the bare-name one.
+    private final HashMap<String, String> byKind = new HashMap<>();
+
+    boolean conjunctionAssigned(String k) {
+        boolean blank = this.byKind.containsKey(k) && this.byKind.get(k).isEmpty();
+        return blank;
+    }
+
+    // conjunctionNotNull: the null-check spelling of the same idiom.
+    boolean conjunctionNotNull(Map<String, String> m, String k) {
+        return m.get(k) != null && m.get(k).isEmpty();
+    }
+
+    // disjunctionNullFirst: the De Morgan dual of conjunctionNotNull, and the
+    // commonest null-guard idiom in Java — "absent or blank". `||`
+    // short-circuits too, so the right operand only evaluates when the left
+    // was FALSE, which is exactly when the key is present.
+    boolean disjunctionNullFirst(Map<String, String> m, String k) {
+        return m.get(k) == null || m.get(k).isEmpty();
+    }
+
+    // disjunctionNotContainsKey: the same shape with `!containsKey`, used as
+    // the condition of an `if`, with a chained call on the dereference.
+    //
+    // Its near-miss is `b8` in hits/RealBugs.java — `force || containsKey`,
+    // where the disjunction proves NOTHING and the dereference is a real NPE.
+    // The two are structurally distinguishable and both are measured.
+    void disjunctionNotContainsKey(Map<String, String> m, String k) {
+        if (!m.containsKey(k) || m.get(k).trim().isEmpty()) {
+            System.out.println("absent or blank");
+        }
     }
 
     // ---- saída antecipada sobre !containsKey -----------------------------

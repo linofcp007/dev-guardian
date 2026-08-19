@@ -204,4 +204,64 @@ public class ModifyDuringIteration {
         }
         return null;
     }
+
+    // ---- a ORDEM do aninhamento -------------------------------------------
+    //
+    // Added in wave 6, and these are the near-misses the re-inclusion never
+    // had. It used to be written `pattern-inside: switch ($S) { case $C: ... }`
+    // — plain LEXICAL containment — so any removal anywhere inside a case
+    // re-armed the rule. The three below are the other nesting order: a
+    // `switch` that dispatches a command, with a search-and-remove LOOP in one
+    // of its arms. There the innermost breakable statement enclosing the
+    // `break` is the FOR, not the switch, so the loop exits and no `next()`
+    // ever runs on the mutated collection. Correct Java, and it fired.
+    //
+    // Their opposites are removeInSwitchCaseOnly / removeInSwitchDefaultOnly in
+    // hits/, where the switch is INSIDE the loop and the same `break` leaves
+    // only the switch. Both orders are measured, in both directions.
+    void loopInsideSwitchCase(String command, List<String> items, String target) {
+        switch (command) {
+            case "purge":
+                for (String s : items) {
+                    if (s.equals(target)) {
+                        items.remove(s);
+                        break;
+                    }
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    void loopInsideSwitchDefault(String command, List<String> items, String target) {
+        switch (command) {
+            default:
+                for (String s : items) {
+                    if (s.equals(target)) {
+                        items.remove(s);
+                        break;
+                    }
+                }
+        }
+    }
+
+    // The `this.`-qualified field receiver, which walks the qualified branch of
+    // the receiver `metavariable-pattern` rather than the bare-name one.
+    private final List<String> listField = new java.util.ArrayList<>();
+
+    void loopInsideSwitchField(String command, String target) {
+        switch (command) {
+            case "purge":
+                for (String s : this.listField) {
+                    if (s.equals(target)) {
+                        this.listField.remove(s);
+                        break;
+                    }
+                }
+                break;
+            default:
+                break;
+        }
+    }
 }

@@ -197,31 +197,57 @@ the round's central finding and it is written up in §10.
   **Guard exclusions**, added in fix wave 4 after the rule shipped
   with none at all and fired at ERROR on `if (m.containsKey(k)) { …
   m.get(k).trim() … }` — the canonical Java guard — while advising
-  `getOrDefault`. They are: the inline `containsKey` and `get() != null` tests,
-  each alone and as either operand of a **conjunction** (6); the four ternary
-  polarities, quoted (4); an early `return` / `throw` / `continue` under
-  `!containsKey` or `get() == null`, each with and without one interposed
+  `getOrDefault`. They are: the inline `containsKey` and `get() != null` tests
+  **in the condition of an `if`**, each alone and as either operand of a
+  **conjunction**, with the dereference in the *then* branch — two clauses per
+  shape, one reaching a multi-statement or nested body and one reaching the
+  braceless form, measured separately (12); `while (m.containsKey(k))` (1); the
+  same two tests used as an **expression** rather than as a condition, plus
+  their De Morgan duals `!containsKey || …` and `get() == null || …` (4); the
+  four ternary polarities, quoted, with the dereference in the **guarded arm**
+  (4); an early `return` / `throw` / `continue` under `!containsKey` or
+  `get() == null`, each with and without one interposed
   statement (12); and population by `putIfAbsent`, `computeIfAbsent`, a plain
-  `put`, or `if (!containsKey) { put(); }` (4). A **disjunction** is
-  deliberately *not* excluded: `a || m.containsKey(k)` proves nothing inside
-  the body, so excluding it would hide a real bug.
+  `put`, or `if (!containsKey) { put(); }` (4).
+
+  The **arm scoping** is wave 6, and it closed a false negative wave 4 opened.
+  `pattern-not-inside: if ($M.containsKey($K)) { ... }` matches the whole
+  **if-else statement**, and a quoted `"$M.containsKey($K) ? ... : ..."` matches
+  the whole **conditional expression** — so `pattern-not-inside` excluded *both*
+  arms, including the one the guard proves is a guaranteed
+  `NullPointerException`. Measured on the reviewer's eight-bug file: 6 findings
+  before wave 4, **1** after it, **8** now.
+
+  `X || m.containsKey(k)` is still *not* excluded: `force` true with the key
+  absent is an NPE. The negative-first disjunction is a different structure and
+  is excluded; the two do not collapse into each other, and `b8` in
+  `hits/RealBugs.java` measures that every run.
 - **optional-get-no-ispresent** (**WARNING**, demoted from ERROR a round
   earlier than the rest — see §4) —
   `optional.get()` outside a guard. Throws `NoSuchElementException`; `orElse`
   does not. The receiver is constrained to `Optional`; untyped, `$O.get()`
   matched `AtomicInteger.get()`, `ThreadLocal.get()` and `Supplier.get()`.
   The exclusions cover these guard shapes, and only these: the inline
-  `if (o.isPresent())` and the same test as either operand of a **conjunction**
-  (3); `while (o.isPresent())` (1); the early-exit forms of both
+  `if (o.isPresent())` and the same test as either operand of a **conjunction**,
+  in the condition of an `if`, with the `get()` in the *then* branch — two
+  clauses per shape, braced and braceless (6); `while (o.isPresent())` (1); the
+  same test as an **expression** rather than a condition, plus the negative-first
+  disjunctions `!isPresent() || …` and `isEmpty() || …` (3); the early-exit forms
+  of both
   `!isPresent()` and `isEmpty()` — `return`, `throw`, `continue`, `break` —
-  each with and without one interposed statement (16); the three ternaries (3);
+  each with and without one interposed statement (16); the three ternaries, with
+  the `get()` in the **guarded arm** (3);
   `filter(...).isPresent()` (1); and `Optional<T> o = Optional.of(...)` (1),
   which cannot be empty, while `ofNullable` can and still fires. The ternaries
   needed their own clauses because a ternary is a conditional *expression* — a
   different AST node, which no statement-shaped clause reaches — and they must
   be **quoted**, or YAML reads the `?` as a complex-key indicator and the
-  config silently fails to load. A **disjunction** is deliberately not
-  excluded, for the same reason as in `map-get-deref`.
+  config silently fails to load. The arm scoping is wave 6 and has the same
+  cause as in `map-get-deref`: unscoped, the `else` arm of an `isPresent()`
+  guard and the false arm of an `isPresent()` ternary are guaranteed
+  `NoSuchElementException`s and were both excluded. `a.isPresent() || b` is
+  deliberately *not* excluded, for the same reason as in `map-get-deref`; the
+  negative-first form is.
 
 ### `off_by_one` — 1 rule, WARNING
 
@@ -283,7 +309,19 @@ the round's central finding and it is written up in §10.
   `default`-labelled switches, because measured, neither pattern matches a
   switch written only with the other, and both match Java 14 arrow switches.
   `return`, `throw` and a labelled `break` leave the method or the loop from
-  inside a switch too, so those stay excluded everywhere. The receiver is bound
+  inside a switch too, so those stay excluded everywhere.
+
+  Wave 6 corrected the **scope** of that re-inclusion. It was written
+  `pattern-inside: switch ($S) { case $C: ... }`, which is plain lexical
+  containment: any removal anywhere inside a case re-armed the rule, including
+  one inside a **loop** written in that case, where a plain `break` exits the
+  loop and the code is correct. A `switch` dispatching a command with a
+  search-and-remove loop in one arm fired three times on correct Java. Both
+  disjuncts now nest the `switch` **inside the for-each over `$COLL`**, so what
+  the clause tests is the nesting ORDER — switch-inside-loop is the unsound
+  `break`, loop-inside-switch is the sound one. Measured: the three false
+  positives go, and both `hits/` switch fixtures still fire (ablating either
+  disjunct drops exactly one of them). The receiver is bound
   through the same `metavariable-pattern` as `map-get-deref`, so a
   `this.`-qualified field is seen.
 
@@ -335,6 +373,28 @@ before scanning; the exact id set **and** the raw non-deduplicated count **and**
 control; ids asserted against `mapSubcategory`; `makeTempDir`/`cleanupTempDirs`
 rather than a bare `mkdtempSync`; skips when Semgrep is absent and fails hard
 under `GUARDIAN_REQUIRE_SEMGREP=1`.
+
+**And, from wave 6, a REAL-BUGS CORPUS.** That harness has one structural hole,
+and it cost a shipped false negative before anyone saw it: a minimal hit fixture
+per rule proves the rule fires *at all*, and a near-miss per exclusion proves the
+exclusion silences *the shape it was written for*. Neither measures whether an
+exclusion added later also eats a real bug, because a minimal hit carries no
+guard shapes for an exclusion to catch on. So five waves of false-positive work
+could — and did — delete recall with the suite green.
+
+`hits/RealBugs.java` (12 defects) and `hits/ElseArm.java` (8) close it. Both were
+written by the **reviewer**, not by the rule author, which is §3 applied to hits
+rather than to misses: they are dense files of defects placed deliberately
+*next to* the guard shapes the exclusions match — the `else` arm of a guard, the
+arm a ternary condition rules out, a disjunction that proves nothing, a guard on
+a different key. Their counts are asserted per file like any other, and the
+per-file assertions are backed by a **total**, so a finding landing in a file
+nobody registered moves a number too.
+
+The ablation step gains a second axis with them: deleting a clause must make a
+near-miss fire (the clause is live) **and** must leave the hits count unmoved (the
+clause does not eat a real bug). A clause being live proves it does something; it
+never proved it does not also do that.
 
 ## 8. Limitations, stated plainly
 
@@ -389,7 +449,7 @@ under `GUARDIAN_REQUIRE_SEMGREP=1`.
 - **`stream-not-closed` matches the simple constructor name only.** A
   fully-qualified `new java.io.FileInputStream(...)` is invisible to it.
 
-Seven more shapes were reproduced on correct Java and **ruled not fixable**
+Nine more shapes were reproduced on correct Java and **ruled not fixable**
 rather than left unstated. Each fires, each is correct code, and each stays.
 The list is exhaustive against the review fixtures that exist today, not
 against all Java:
@@ -403,6 +463,8 @@ against all Java:
 | 5 | `map-get-deref`, `optional-get-no-ispresent`, `modify-during-iteration` | **two or more** statements between the guard (or the removal) and the exit: `if (!m.containsKey(k)) { log(); metric(); return ""; }`, `items.remove(s); log(s); n++; break;` | The deliberate price of bounding the exclusions. A statement ellipsis matches deep and swallows guards that do not cover every path, which are real bugs; a false negative that hides a bug is worse than this. |
 | 6 | the same three | a guard reached **through a helper method**: `if (!present(o)) { return d; }` | Needs interprocedural analysis, which Semgrep OSS does not do. Already the stated reason `optional-get-no-ispresent` is `WARNING`. |
 | 7 | `map-get-deref` | a key guaranteed present outside the enumerated shapes: a map filled in a static initialiser, a total enum mapping declared as a `Map` | The guarantee is not on the syntactic path reaching the `get`. Excluding "any map that ever received a `put` anywhere in the file" would erase the rule. |
+| 8 | `map-get-deref`, `optional-get-no-ispresent` | a guard held in a **local boolean**: `boolean present = m.containsKey(k); if (!present) { return ""; }` | Dataflow, not syntax. Semgrep OSS does not connect the local's value to the test that produced it, and no pattern shape reaches it. |
+| 9 | the same two | a conjunction **chain** of three or more operands: `flag && a.isPresent() && b.isPresent() && a.get().equals(b.get())` | The expression clause binds the conjunction's LEFT operand to the guard test itself, and a Java conjunction nests to the left, so in a chain that left operand is another conjunction rather than the guard. Exactly two operands is the shape excluded. An extra clause for the last-but-one operand was **measured**: it removes one of the two findings on that line, and the line still fires from the other, so it changes nothing a caller sees. Not applied. |
 
 ### The `loop-lte-length` tightening: measured, then rejected
 
@@ -507,6 +569,42 @@ unquoted `?` in a ternary pattern. Grep stderr for both strings; trust
 **The one thing that worked.** The ablation step — delete each clause alone,
 watch a test go red, restore — caught the **fifth** dead clause in this series
 *before* it shipped, the first time that has happened rather than a later
-reviewer finding it. Forty-four clauses in the final file, forty-four live. That
+reviewer finding it. Every clause in the final file is live. That
 step is now the non-negotiable part of the process, and it is cheap: it is the
 only check here that scales with the rule file rather than with imagination.
+
+### Wave 6: closing a false positive is a change to RECALL, and nobody measured it
+
+The one thing ablation could not see. Waves 1–5 closed 35 false positives on
+correct Java, each one measured, each one with a near-miss fixture, the suite
+green throughout. Wave 4's guard exclusions did that *and* deleted five of six
+findings on a file of guaranteed `NullPointerException`s, because
+`pattern-not-inside: if ($M.containsKey($K)) { ... }` excludes the whole
+**if-else statement** and `"$M.containsKey($K) ? ... : ..."` excludes the whole
+**conditional expression** — both arms, including the one the guard proves is
+the bug. Measured on the reviewer's file: 6 findings before wave 4, 1 after.
+
+Three things follow, and they generalise past this pack:
+
+1. **An exclusion is a recall change written as a precision change.** Every
+   `pattern-not-inside` deletes findings. The near-miss fixture proves it
+   deleted the *intended* ones; nothing proved it stopped there. The fix is
+   structural, not procedural: a real-bugs corpus (§7) that every clause has to
+   pass while it is being ablated.
+2. **`pattern-not-inside` excludes the whole matched node, not the part that
+   matched.** Scoping has to be built into the *pattern* — the deep expression
+   operator in the guarded ternary arm, a dereference requirement in the `if`
+   body — because there is no way to say "not inside this sub-part of the match".
+3. **`pattern-inside` for a re-inclusion is lexical containment and nothing
+   more.** The `switch` disjuncts read as if they knew what `break` binds to;
+   they knew only that the removal appeared somewhere inside a `case`. The
+   distinction that mattered was the NESTING ORDER — switch inside loop, or loop
+   inside switch — and expressing it meant nesting the two patterns.
+
+A fourth, smaller, that only ablation catches: **two clauses can each be live
+against the whole fixture set and inert against each other.** The arm-scoped
+`if` guard needed two clauses per shape — one reaching a multi-statement or
+nested body, one reaching the braceless form — and nine of them came back INERT
+on the first ablation because their twin already covered the only near-miss for
+that shape. Nine near-miss functions were added rather than nine clauses
+deleted, because the braceless guard is real Java that fires without them.

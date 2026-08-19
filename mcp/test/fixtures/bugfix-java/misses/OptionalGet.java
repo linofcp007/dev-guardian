@@ -76,6 +76,64 @@ public class OptionalGet {
         return sink;
     }
 
+    // ---- as formas de EXPRESSÃO ------------------------------------------
+    //
+    // Added in wave 6. compoundLeft / compoundRight above are both `if (...)
+    // { ... }`, and the documentation claimed the rule honoured a conjunction
+    // guard full stop. It did not: used as an expression, the same guard fired.
+    //
+    // The disjunction note above still holds for `a.isPresent() || b` — that
+    // proves nothing. What it got WRONG is the negative-first form: `!isPresent
+    // || X` is the De Morgan dual of the conjunction already excluded, is
+    // exactly as guard-proving, and the two are structurally distinguishable,
+    // so excluding one does not reintroduce the other.
+
+    // The braceless twins. Each inline guard needs one: measured by ablation,
+    // the braceless half of a clause pair is INERT whenever the only near-miss
+    // for that guard shape is a braced one.
+    String bracelessGuard(Optional<String> o) {
+        if (o.isPresent()) return o.get();
+        return "";
+    }
+
+    String bracelessCompoundLeft(Optional<String> o, boolean enabled) {
+        if (o.isPresent() && enabled) return o.get();
+        return "";
+    }
+
+    String bracelessCompoundRight(Optional<String> o, boolean enabled) {
+        if (enabled && o.isPresent()) return o.get();
+        return "";
+    }
+
+    // conjunctionExpression: the conjunction is the returned value, not the
+    // condition of anything.
+    boolean conjunctionExpression(Optional<String> o) {
+        return o.isPresent() && o.get().isEmpty();
+    }
+
+    // conjunctionAssigned: the same short-circuit assigned to a local, with a
+    // chained call on the dereference.
+    boolean conjunctionAssigned(Optional<String> o) {
+        boolean blank = o.isPresent() && o.get().trim().isEmpty();
+        return blank;
+    }
+
+    // disjunctionNotPresent: "absent or blank", the commonest Optional guard
+    // idiom after `orElse`. `||` short-circuits, so the right operand only
+    // evaluates when the left was FALSE — i.e. when the value IS present.
+    boolean disjunctionNotPresent(Optional<String> o) {
+        return !o.isPresent() || o.get().isEmpty();
+    }
+
+    // disjunctionIsEmpty: the Java 11 spelling of the same thing, used as the
+    // condition of an `if`.
+    void disjunctionIsEmpty(Optional<String> o) {
+        if (o.isEmpty() || o.get().trim().isEmpty()) {
+            System.out.println("absent or blank");
+        }
+    }
+
     // optionalOfAssigned is DISCRIMINATING for the `Optional.of` clause.
     // `Optional.of` throws on null, so a value that got past it is present
     // and `get()` cannot throw. `Optional.ofNullable` CAN be empty and is not

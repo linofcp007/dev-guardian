@@ -95,7 +95,59 @@ interface FileExpectation {
   readonly count: number;
 }
 
+/**
+ * THE REAL-BUGS CORPUS — the two entries written by the REVIEWER, and the
+ * structural answer to how five waves of false-positive work opened a
+ * false-negative hole with a green suite.
+ *
+ * Everything else in `hits/` is one minimal instantiation per rule, written by
+ * whoever wrote the rule. That proves a rule fires at all. It cannot prove that
+ * an exclusion added later did not eat a real bug, because a minimal hit
+ * fixture carries no guard shapes for an exclusion to catch on — and the
+ * near-miss fixtures only ever measure the direction the exclusion was written
+ * for. So a wave could close a false positive, silently delete recall, and
+ * still go green. Wave 4 did exactly that: `ElseArm.java` produced 6 findings
+ * before it and 1 after.
+ *
+ * `RealBugs.java` and `ElseArm.java` close that. They are dense files of
+ * defects chosen to sit next to the guard shapes the exclusions match — the
+ * `else` arm of a guard, the false arm of a ternary, a disjunction that proves
+ * nothing, a guard on a different key. Their counts are asserted like any
+ * other, so every future exclusion has to prove it does not eat a real bug
+ * before it can be merged.
+ */
 const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
+  'ElseArm.java': {
+    // Eight, and this number is the whole point of wave 6. Every method is a
+    // guaranteed NPE or NoSuchElementException whose dereference sits on the
+    // branch the guard proves is UNSAFE: the `else` arm of an `if` guard (map
+    // containsKey, map != null, Optional isPresent, Optional conjunction), the
+    // arm of a ternary the condition rules out (both polarities, map and
+    // Optional), plus one unguarded control. Measured against the shipped rule
+    // at 3392a0d: 1 of 8. Against b30499d, before wave 4: 6 of 8.
+    ids: [
+      'bugfix-java-null-safety-map-get-deref',
+      'bugfix-java-null-safety-optional-get-no-ispresent',
+    ],
+    count: 8,
+  },
+  'RealBugs.java': {
+    // Twelve, spread over four rules, each one chosen to be the defect that a
+    // specific tightening plausibly swallows: the short-form
+    // `SimpleDateFormat` the qualified pattern has to resolve through the
+    // import; four array shapes the `"$T[]"` restriction has to keep seeing;
+    // `force || containsKey`, the disjunction that proves NOTHING, which the
+    // wave-6 negative-first `||` exclusions must NOT reach; a guard on a
+    // different key and a guard on a different Optional; and `ofNullable`,
+    // which the `Optional.of` exclusion must not cover.
+    ids: [
+      'bugfix-java-null-safety-map-get-deref',
+      'bugfix-java-null-safety-optional-get-no-ispresent',
+      'bugfix-java-off-by-one-loop-lte-length',
+      'bugfix-java-race-condition-static-dateformat',
+    ],
+    count: 12,
+  },
   'EmptyCatch.java': { ids: ['bugfix-java-error-handling-empty-catch'], count: 1 },
   'PrintStackTraceOnly.java': {
     ids: ['bugfix-java-error-handling-printstacktrace-only'],
@@ -213,6 +265,14 @@ describe('bugfix-java rules', () => {
         expect(ids(fileRows)).toEqual(expected.ids);
         expect(fileRows.length).toBe(expected.count);
       }
+      // The TOTAL, asserted on top of the per-file counts, and not redundant:
+      // the loop above only visits files that have an expectation, so a finding
+      // landing in a file nobody registered — or in no file at all — would not
+      // move any per-file number. 55 = 35 from the eight per-rule fixtures plus
+      // the 20 of the real-bugs corpus.
+      expect(rows.length).toBe(
+        Object.values(EXPECTED_HITS_BY_FILE).reduce((n, e) => n + e.count, 0),
+      );
     },
   );
 

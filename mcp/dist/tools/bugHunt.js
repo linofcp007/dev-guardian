@@ -417,17 +417,36 @@ registerToolModule(makeScanTool({
         'class, same field, same bug (measured). `map-get-deref` shipped with NO guard ' +
         'exclusion at all, so the canonical Java guard `if (m.containsKey(k)) { ... ' +
         'm.get(k).trim() ... }` fired at ERROR and advised `getOrDefault` on already-guarded ' +
-        'code; it now excludes the measured shapes that prove the key present — the inline ' +
-        '`containsKey` and `get() != null` tests, alone or as either operand of a CONJUNCTION; ' +
-        'all four ternary polarities; an early return/throw/continue under `!containsKey` or ' +
-        '`get() == null`; and population by `put`, `putIfAbsent`, `computeIfAbsent` or ' +
-        '`if (!containsKey) { put(); }`. A DISJUNCTION is deliberately not excluded: ' +
-        '`a || m.containsKey(k)` proves nothing inside the body. `modify-during-iteration` had ' +
+        'code; it now excludes the measured shapes that prove the key present, and every one of ' +
+        'them is SCOPED TO THE ARM THE GUARD ACTUALLY PROVES: the inline `containsKey` and ' +
+        '`get() != null` tests IN THE CONDITION OF AN `if` (alone or as either operand of a ' +
+        'conjunction) with the dereference in the THEN branch, braced or braceless; ' +
+        '`while (m.containsKey(k))`; the same two tests used as an EXPRESSION rather than as the ' +
+        'condition of anything — `return m.containsKey(k) && m.get(k).isEmpty();`, or assigned to ' +
+        'a local — together with their De Morgan duals `!m.containsKey(k) || ...` and ' +
+        '`m.get(k) == null || ...`, where `||` short-circuits so the right operand only runs when ' +
+        'the key IS present; all four ternary polarities, with the dereference in the guarded arm; ' +
+        'an early return/throw/continue under `!containsKey` or `get() == null`; and population by ' +
+        '`put`, `putIfAbsent`, `computeIfAbsent` or `if (!containsKey) { put(); }`. The ARM ' +
+        'SCOPING is the whole point and was a shipped regression before it: written unscoped, ' +
+        '`pattern-not-inside: if (m.containsKey(k)) { ... }` matches the entire IF-ELSE statement ' +
+        'and the ternary clauses matched the entire conditional expression, so BOTH arms were ' +
+        'excluded — including the branch the guard proves is a GUARANTEED NullPointerException. ' +
+        'Measured on a file of eight such bugs: six fired before the guard exclusions went in, ' +
+        'one after, eight now. `X || m.containsKey(k)` is still NOT treated as a guard and still ' +
+        'fires — `force` true with the key absent is an NPE — and it is structurally ' +
+        'distinguishable from the negative-first form, which is why excluding one does not ' +
+        'reintroduce the other. `modify-during-iteration` had ' +
         'a false negative worth more than any of its false positives — a `remove()` inside a ' +
         '`switch` followed by `break;` is a real ConcurrentModificationException, because that ' +
         'break leaves the SWITCH and not the loop, and the paired `remove(); break;` exclusion ' +
-        'swallowed it whole; the plain-break exclusion now applies only outside a switch, while ' +
-        'return, throw and a LABELLED break do leave the method or the loop from inside one and ' +
+        'swallowed it whole; the plain-break exclusion now applies only when the removal sits in ' +
+        'a `switch` that is itself INSIDE the for-each over that collection. The nesting ORDER is ' +
+        'what the clause tests, and it used to test mere lexical containment — any removal ' +
+        'anywhere inside a `case` re-armed the rule, including one inside a LOOP written in that ' +
+        'case, where a plain `break` exits the loop and the code is correct; a switch dispatching ' +
+        'a command with a search-and-remove loop in one arm fired three times. return, throw and ' +
+        'a LABELLED break do leave the method or the loop from inside a switch and ' +
         'stay excluded everywhere. `loop-lte-length` restricts its array metavariable to an ' +
         'ARRAY TYPE, because `$A.length` otherwise matches any int field named `length` and ' +
         "fired at ERROR on a domain object's deliberately inclusive loop; measured, that costs " +
@@ -441,7 +460,12 @@ registerToolModule(makeScanTool({
         '`empty-catch` honours the ' +
         'Checkstyle/IntelliJ convention and never fires when the exception variable is named ' +
         '`ignore`, `ignored` or `expected` — the flip side being that a genuinely swallowed ' +
-        'exception escapes the rule simply by being named `ignored`. ' +
+        'exception escapes the rule simply by being named `ignored`. The same trade has a second ' +
+        'edge worth stating outright, because `empty-catch` is now the ONLY rule left at ERROR ' +
+        'and the whole tier argument rests on it: the JUnit expected-exception idiom (call the ' +
+        'code, `throw new AssertionError` if it did not throw, empty `catch`) fires at ERROR when ' +
+        'the caught variable is named `e`, and is silent when it is named `expected` — the test ' +
+        'idiom has to use the conventional name. ' +
         'READ THIS BEFORE WONDERING WHY A JAVA FIX PR CAME BACK EMPTY: seven of these eight ' +
         'rules are WARNING, and create_fix_pr defaults severity_min to `high`, so the Java pack ' +
         'contributes almost nothing to the DEFAULT fix-PR set — ask for it with ' +
@@ -472,19 +496,26 @@ registerToolModule(makeScanTool({
         'shapes, enumerated rather than summarised because the summary that stood here — ' +
         '"inline against the same Optional variable" — was falsifiable and was falsified by a ' +
         'compound condition, a multi-statement exit, a `while` and an `Optional.of`: ' +
-        '`if (o.isPresent())` alone OR as either operand of a conjunction; ' +
-        '`while (o.isPresent())`; an early return/throw/continue/break under `!isPresent()` or ' +
+        '`if (o.isPresent())` alone OR as either operand of a conjunction, IN THE CONDITION OF AN ' +
+        '`if`, with the `get()` in the THEN branch, braced or braceless — the ELSE arm is a ' +
+        'guaranteed NoSuchElementException and still fires; `while (o.isPresent())`; the same ' +
+        'test used as an EXPRESSION rather than as the condition of anything, ' +
+        '`return o.isPresent() && o.get().isEmpty();`, plus the negative-first disjunctions ' +
+        '`!o.isPresent() || ...` and `o.isEmpty() || ...`, which short-circuit the same way; an ' +
+        'early return/throw/continue/break under `!isPresent()` or ' +
         '`isEmpty()`, with or without one statement before the exit; the three ternary ' +
-        'forms (a ternary needs its own clauses because it is a conditional EXPRESSION, a ' +
+        'forms, with the `get()` in the arm the condition PROVES safe (a ternary needs its own ' +
+        'clauses because it is a conditional EXPRESSION, a ' +
         'different AST node from an `if` statement); `if (o.filter(p).isPresent())`; and an ' +
         '`Optional<T> o = Optional.of(...)` construction, which cannot be empty — `ofNullable` ' +
         'can, and still fires. It misses any guard that reaches the check through another ' +
-        'method, and it deliberately does not treat a DISJUNCTION as a guard. ' +
+        'method, and it deliberately does not treat `a.isPresent() || b` as a guard — that ' +
+        'proves nothing about `a`, unlike the negative-first form above. ' +
         'The concrete missed case is a guard delegated to a helper, ' +
         '`if (!present(o)) { return d; }`, which needs interprocedural analysis Semgrep OSS ' +
         'does not do; that shape is a false positive and always will be, which is why the rule ' +
         'is WARNING instead of carrying an ever-longer exclusion list. ' +
-        'Seven Java false positives are accepted rather than fixed, each reproduced on ' +
+        'Nine Java false positives are accepted rather than fixed, each reproduced on ' +
         'correct code: (1) `stream-not-closed` on `open(); try {} finally { close(); }` (already ' +
         'the stated reason it is WARNING); (2) `static-dateformat` on a static final ' +
         'SimpleDateFormat whose every access goes through a synchronized method (proving ALL ' +
@@ -501,9 +532,17 @@ registerToolModule(makeScanTool({
         '`items.remove(s); log(s); n++; break;` — the deliberate price of not using a ' +
         'deep-matching ellipsis, which would hide real bugs instead; (6) all three of those ' +
         'rules on any guard reached THROUGH A HELPER METHOD, `if (!present(o)) { return d; }`, ' +
-        'which needs interprocedural analysis; and (7) `map-get-deref` on a key whose presence ' +
+        'which needs interprocedural analysis; (7) `map-get-deref` on a key whose presence ' +
         'is established outside its enumerated shapes — a map filled in a static initialiser, ' +
-        'or a total enum mapping declared as a `Map`. JS/TS, Python, Go and Java only: no other language has ' +
+        'or a total enum mapping declared as a `Map`; (8) `map-get-deref` and ' +
+        '`optional-get-no-ispresent` on a guard held in a LOCAL BOOLEAN — ' +
+        '`boolean present = m.containsKey(k); if (!present) { return ""; }` — which is dataflow, ' +
+        'not syntax, and outside Semgrep OSS; and (9) the same two on a conjunction CHAIN of ' +
+        'three or more operands — `flag && a.isPresent() && b.isPresent() && ' +
+        'a.get().equals(b.get())` — because the expression clause binds the conjunction LEFT ' +
+        'OPERAND to the guard test itself, and a Java conjunction nests to the left, so in a ' +
+        'chain that left operand is another conjunction rather than the guard. Exactly two ' +
+        'operands is the shape excluded; three or more is not. JS/TS, Python, Go and Java only: no other language has ' +
         'a local rule pack yet, so C#, PHP, Ruby and Rust get only the ' +
         'registry coverage described below, same as before these packs existed. The local ' +
         'packs degrade rather than failing the whole scan if one is ever hand-edited into a bad ' +

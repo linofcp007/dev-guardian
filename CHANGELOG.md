@@ -128,6 +128,56 @@ version bump.
     `if (!m.containsKey(k)) { if (strict) { return ""; } }` and
     `items.remove(s); if (done) { break; }` both stop firing — and both are
     real bugs. The price is accepted false positive (5) below.
+- **A fifth review sweep found that closing the false positives had opened a
+  FALSE NEGATIVE, and the harness went green through all of it.** Wave 4's
+  guard exclusions silenced the branch the guard proves is *unsafe*. On a file
+  of eight guaranteed `NullPointerException`s / `NoSuchElementException`s —
+  the dereference in the `else` arm of the guard, or in the ternary arm the
+  condition rules out — **6 fired before wave 4, 1 after, 8 now.**
+  - **`pattern-not-inside` excludes the whole node it matched.**
+    `if ($M.containsKey($K)) { ... }` matches the entire **if-else statement**,
+    and `"$M.containsKey($K) ? ... : ..."` the entire **conditional
+    expression**, so both arms were excluded. Every guard exclusion in
+    `map-get-deref` and `optional-get-no-ispresent` is now **scoped to the arm
+    the guard actually proves**: the deep expression operator inside the
+    guarded ternary arm, and a dereference requirement inside the `if` body
+    (two clauses per shape — one reaching a multi-statement or nested body, one
+    reaching the braceless form).
+  - **A REAL-BUGS CORPUS, so this class of regression cannot recur silently.**
+    `mcp/test/fixtures/bugfix-java/hits/RealBugs.java` (12 defects) and
+    `hits/ElseArm.java` (8) were written by the reviewer, not by the rule
+    author, and their counts are asserted per file plus a total. Every future
+    exclusion now has to prove — while it is being ablated — that it does not
+    eat a real bug, not merely that it silences the shape it was written for.
+  - **Both rules honour a guard used as an EXPRESSION, not only as the
+    condition of an `if`.** `return m.containsKey(k) && m.get(k).isEmpty();`
+    and `return o.isPresent() && o.get().isEmpty();` are the normal way to
+    write "absent or blank" in Java and fired on correct code; so did the same
+    guard assigned to a local.
+  - **The negative-first disjunction is now excluded.** `m.get(k) == null || …`,
+    `!m.containsKey(k) || …`, `!o.isPresent() || …` and `o.isEmpty() || …` are
+    the De Morgan duals of the conjunction already excluded, `||`
+    short-circuits identically, and all four fired on correct code.
+    `force || m.containsKey(k)` still fires and always will — it proves
+    nothing — and `b8` in `hits/RealBugs.java` measures that every run.
+  - **`map-get-deref` now excludes `while (m.containsKey(k))`.** The `Optional`
+    rule had excluded its `while` counterpart since the first wave; the map
+    rule had none, so a correct drain loop fired.
+  - **The `switch` re-inclusion in `edge-case-modify-during-iteration` was
+    lexical, not scoped.** `pattern-inside: switch ($S) { case $C: ... }`
+    re-armed the rule on any removal anywhere inside a case — including one
+    inside a **loop** written in that case, where a plain `break` exits the
+    loop and the code is correct. A `switch` dispatching a command with a
+    search-and-remove loop in one arm fired three times. Both disjuncts now
+    nest the `switch` **inside the for-each over that collection**, so the
+    clause tests the nesting ORDER; the two `switch` hit fixtures still fire,
+    and ablating either disjunct drops exactly one of them.
+  - **Nine clauses came back INERT on the first ablation** — the braceless half
+    of each pair, covered by its twin because the only near-miss for that guard
+    shape was a braced one. Nine near-miss functions were added rather than
+    nine clauses deleted, since the braceless guard is real Java that fires
+    without them. Final ablation: 34 exclusion clauses, all live, none moving
+    the real-bugs count.
 
 ### Changed
 
@@ -222,21 +272,35 @@ version bump.
   `Map` still fires — and `modify-during-iteration` is silent on a `Deque`, a
   `Queue`, a `SortedSet` or a project collection type.
 - **The empty-catch naming escape hatch cuts both ways.** A genuinely swallowed
-  exception escapes the rule simply by being named `ignored`.
+  exception escapes the rule simply by being named `ignored`. And in the other
+  direction — which matters more now that `empty-catch` is the only rule left at
+  `ERROR` — the JUnit expected-exception idiom (call the code, `throw new
+  AssertionError` if it did not throw, empty `catch`) fires at `ERROR` when the
+  caught variable is named `e`, and is silent when it is named `expected`. The
+  test idiom has to use the conventional name.
 - `optional-get-no-ispresent` recognises exactly these guard shapes:
-  `if (o.isPresent())` alone or as either operand of a **conjunction**;
-  `while (o.isPresent())`; an early `return`/`throw`/`continue`/`break` under
+  `if (o.isPresent())` alone or as either operand of a **conjunction**, in the
+  condition of an `if`, with the `get()` in the **then** branch, braced or
+  braceless — the `else` arm still fires, and so does the ternary arm the
+  condition rules out;
+  `while (o.isPresent())`; the same test used as an **expression**
+  (`return o.isPresent() && o.get().isEmpty();`) and the negative-first
+  disjunctions `!o.isPresent() || …` and `o.isEmpty() || …`;
+  an early `return`/`throw`/`continue`/`break` under
   `!isPresent()` or `isEmpty()`, with or without one statement before the exit;
-  the three ternary forms; `if (o.filter(p).isPresent())`; and an
+  the three ternary forms, with the `get()` in the guarded arm;
+  `if (o.filter(p).isPresent())`; and an
   `Optional<T> o = Optional.of(…)` construction. It misses **any guard that
   reaches the check through another method** — the concrete case is a guard
   delegated to a helper, `if (!present(o)) { return d; }`, which needs
   interprocedural analysis Semgrep OSS does not do — and it deliberately does
-  not treat a **disjunction** as a guard, since `a || o.isPresent()` proves
+  not treat `a.isPresent() || b` as a guard, since that proves
   nothing inside the body. Enumerated rather than summarised: the summary that
   stood here ("inline against the same `Optional` variable") was falsifiable,
   and was falsified by a compound condition, a multi-statement exit, a `while`
-  and an `Optional.of`. The rule is `WARNING` precisely because this class of
+  and an `Optional.of`; the next version of it, which said "as either operand of
+  a conjunction" without saying **where**, was falsified in turn by four
+  expression-form guards. The rule is `WARNING` precisely because this class of
   miss has no end.
 
 ### Accepted false positives
@@ -279,6 +343,18 @@ review fixtures that exist today, not against all Java:
   outside the shapes the rule enumerates: a map filled in a static initialiser,
   or a total enum mapping declared as a `Map`. Excluding "any map that ever
   received a `put`" anywhere in the file would erase the rule.
+- **(8)** `null-safety-map-get-deref` and `null-safety-optional-get-no-ispresent`
+  on a guard held in a **local boolean** —
+  `boolean present = m.containsKey(k); if (!present) { return ""; }` — which is
+  dataflow rather than syntax, and outside Semgrep OSS.
+- **(9)** The same two on a conjunction **chain** of three or more operands,
+  `flag && a.isPresent() && b.isPresent() && a.get().equals(b.get())`. The
+  expression clause binds the conjunction's left operand to the guard test
+  itself, and a Java conjunction nests to the left, so in a chain that left
+  operand is another conjunction rather than the guard. Exactly two operands is
+  the shape excluded. An extra clause for the last-but-one operand was measured:
+  it removes one of the two findings on that line and the line still fires from
+  the other, so it changes nothing a caller sees. Not applied.
 
 ## [1.8.0] - 2026-08-18
 

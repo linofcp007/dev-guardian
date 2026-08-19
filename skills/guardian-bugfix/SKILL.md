@@ -187,13 +187,46 @@ sobre código já guardado:
 if (m.containsKey(k)) { return m.get(k).trim(); }   // disparava, e é correto
 ```
 
-Passou a excluir as formas medidas em que a chave fica provada presente: os
-testes inline `containsKey` e `get() != null`, sozinhos ou como qualquer dos
-operandos de uma **conjunção**; as quatro polaridades do ternário; um
-`return`/`throw`/`continue` antecipado sob `!containsKey` ou `get() == null`;
-e a população por `put`, `putIfAbsent`, `computeIfAbsent` ou
-`if (!containsKey) { put(); }`. A **disjunção** não é excluída de propósito:
-`a || m.containsKey(k)` não prova nada dentro do corpo.
+Passou a excluir as formas medidas em que a chave fica provada presente:
+
+- os testes inline `containsKey` e `get() != null` **na condição de um `if`**
+  (sozinhos ou como qualquer dos operandos de uma **conjunção**), com o deref
+  no ramo **verdadeiro**, com ou sem chavetas;
+- `while (m.containsKey(k))`;
+- os mesmos dois testes usados como **expressão** e não como condição de coisa
+  nenhuma — `return m.containsKey(k) && m.get(k).isEmpty();`, ou atribuído a um
+  local — e as suas duais de De Morgan, `!m.containsKey(k) || …` e
+  `m.get(k) == null || …`, em que o `||` faz curto-circuito e o operando
+  direito só corre quando a chave **está** presente;
+- as quatro polaridades do ternário, com o deref no ramo guardado;
+- um `return`/`throw`/`continue` antecipado sob `!containsKey` ou
+  `get() == null`;
+- a população por `put`, `putIfAbsent`, `computeIfAbsent` ou
+  `if (!containsKey) { put(); }`.
+
+Cada uma está **limitada ao ramo que a guarda prova**, e essa limitação foi uma
+regressão publicada antes de ser uma funcionalidade. Sem ela,
+`pattern-not-inside: if (m.containsKey(k)) { … }` casa o **statement if-else
+inteiro** e as cláusulas do ternário casavam a **expressão condicional
+inteira** — os dois ramos ficavam excluídos, incluindo aquele em que o deref é
+um NPE garantido:
+
+```java
+if (m.containsKey(k)) { return "present"; }
+else { return m.get(k).trim(); }               // NPE certo; deixou de disparar
+return m.containsKey(k) ? "present" : m.get(k).trim();   // idem
+```
+
+Medido num ficheiro com oito bugs desses: seis disparavam antes de as exclusões
+de guarda entrarem, **um** depois, **oito** agora. Esse ficheiro é hoje uma
+fixture (`hits/ElseArm.java`), a par de `hits/RealBugs.java`, e as duas contagens
+são asseridas — é assim que a próxima exclusão tem de provar que não come um bug
+real antes de entrar.
+
+`X || m.containsKey(k)` continua a **não** ser tratado como guarda e continua a
+disparar: `force` verdadeiro com a chave ausente é um NPE. É estruturalmente
+distinto da forma negativa-primeiro, e é por isso que excluir uma não
+reintroduz a outra.
 
 A `modify-during-iteration` tinha um falso negativo que vale mais do que
 qualquer dos seus falsos positivos. Um `remove()` dentro de um `switch`
@@ -210,7 +243,23 @@ for (String s : items) {
 }
 ```
 
-A exclusão do `break` simples passou a aplicar-se só fora de um `switch`.
+A exclusão do `break` simples passou a aplicar-se só quando a remoção está
+dentro de um `switch` que por sua vez está **dentro do for-each sobre essa
+coleção**. É a **ordem do aninhamento** que a cláusula testa, e antes testava
+mera contenção léxica: qualquer remoção dentro de um `case` reativava a regra,
+incluindo uma dentro de um **ciclo** escrito nesse `case`, onde o `break`
+simples sai do ciclo e o código está correto:
+
+```java
+switch (command) {
+    case "purge":
+        for (String s : items) {
+            if (s.equals(target)) { items.remove(s); break; }  // correto
+        }
+        break;
+}
+```
+
 `return`, `throw` e um `break` **etiquetado** saem mesmo do método ou do
 ciclo a partir de dentro de um `switch`, por isso continuam excluídos em todo
 o lado.
@@ -236,6 +285,18 @@ auto-documentada de dizer "de propósito" sem um comentário de supressão — e
 reverso é que uma exceção genuinamente engolida escapa à regra só por ter esse
 nome.
 
+O segundo gume da mesma troca vale ser dito, porque a `empty-catch` é agora a
+**única** regra em ERROR e todo o argumento dos tiers assenta nela: o idioma
+JUnit de exceção esperada dispara em ERROR quando a variável apanhada se chama
+`e`, e fica calada quando se chama `expected`. O idioma de teste tem de usar o
+nome convencional.
+
+```java
+try { parse("nope"); throw new AssertionError("devia ter lançado"); }
+catch (NumberFormatException e) { }          // dispara em ERROR
+catch (NumberFormatException expected) { }   // calado
+```
+
 A `optional-get-no-ispresent` é **WARNING e não ERROR**, e isso aplica o
 critério de tiers do pack em vez de o dobrar: ERROR é para o padrão que é bug
 independentemente da intenção, e um `o.get()` só é bug quando está *sem
@@ -246,18 +307,25 @@ composta, uma saída com mais do que uma instrução, um `while` e um
 `Optional.of`:
 
 - `if (o.isPresent())` sozinho **ou como qualquer dos operandos de uma
-  conjunção** (`a.isPresent() && b.isPresent()`);
+  conjunção** (`a.isPresent() && b.isPresent()`), **na condição de um `if`**,
+  com o `get()` no ramo **verdadeiro**, com ou sem chavetas — o ramo `else` é
+  um `NoSuchElementException` garantido e continua a disparar;
 - `while (o.isPresent())`;
+- o mesmo teste usado como **expressão** e não como condição de coisa nenhuma
+  (`return o.isPresent() && o.get().isEmpty();`), mais as disjunções
+  negativa-primeiro `!o.isPresent() || …` e `o.isEmpty() || …`, que fazem
+  curto-circuito da mesma maneira;
 - `return`/`throw`/`continue`/`break` antecipados sob `!isPresent()` ou
   `isEmpty()`, com ou sem **uma** instrução antes da saída;
-- as três formas ternárias;
+- as três formas ternárias, com o `get()` no ramo que a condição prova seguro;
 - `if (o.filter(p).isPresent())`;
 - `Optional<T> o = Optional.of(…)`, que não pode estar vazio — `ofNullable`
   pode, e continua a disparar.
 
 Falha **qualquer guarda que chegue ao teste através de outro método**, e
-deliberadamente não trata uma **disjunção** como guarda. O exemplo concreto é a
-guarda delegada a um helper:
+deliberadamente não trata `a.isPresent() || b` como guarda — isso não prova
+nada sobre `a`, ao contrário da forma negativa-primeiro acima. O exemplo
+concreto é a guarda delegada a um helper:
 
 ```java
 if (!present(o)) { return "d"; }
@@ -328,7 +396,7 @@ formas de import: o padrão qualificado casa também as formas curtas sempre que
 um import deixa o Semgrep resolver o nome, o curto nunca casou a qualificada,
 por isso o ramo curto era inerte e foi apagado.
 
-Sete falsos positivos são **aceites em vez de corrigidos**, cada um
+Nove falsos positivos são **aceites em vez de corrigidos**, cada um
 reproduzido em código correto. A lista é exaustiva contra as fixtures de
 revisão que existem hoje — não contra todo o Java que existe:
 
@@ -341,6 +409,8 @@ revisão que existem hoje — não contra todo o Java que existe:
 | 5 | `map-get-deref`, `optional-get-no-ispresent`, `modify-during-iteration` | **Duas ou mais** instruções entre a guarda (ou a remoção) e a saída: `if (!m.containsKey(k)) { log(); metric(); return ""; }`, `items.remove(s); log(s); n++; break;` | Preço deliberado. A alternativa — uma reticência de statement — casa em profundidade e engole `if (!m.containsKey(k)) { if (strict) { return ""; } }` e `items.remove(s); if (done) { break; }`, que são bugs reais. Um falso negativo que esconde um bug é pior do que este falso positivo. |
 | 6 | as mesmas três | Guarda delegada a um método helper: `if (!present(o)) { return d; }` | Exige análise interprocedimental, que o Semgrep OSS não faz. É a razão declarada de as três estarem em `WARNING` — e, generalizada, a razão de sete das oito regras do pack estarem lá. |
 | 7 | `map-get-deref` | Chave garantida fora das formas enumeradas: mapa preenchido num inicializador estático, ou mapeamento total sobre um enum declarado como `Map` | A garantia não está no caminho sintático que chega ao `get`. Excluir "qualquer mapa que alguma vez recebeu um `put`" apagaria a regra. |
+| 8 | `map-get-deref`, `optional-get-no-ispresent` | Guarda guardada num **booleano local**: `boolean present = m.containsKey(k); if (!present) { return ""; }` | É dataflow, não sintaxe. O Semgrep OSS não liga o valor do local ao teste que o produziu. |
+| 9 | as mesmas duas | **Cadeia** de conjunção com três ou mais operandos: `flag && a.isPresent() && b.isPresent() && a.get().equals(b.get())` | A cláusula de expressão liga o operando esquerdo da conjunção ao próprio teste de guarda, e uma conjunção em Java aninha à esquerda — numa cadeia, esse operando esquerdo é outra conjunção e não a guarda. Exatamente dois operandos é a forma excluída; três ou mais não é. Uma cláusula extra para o penúltimo operando foi **medida** e fecha metade de um finding numa linha que continua a disparar pelo outro metade, ou seja não muda o que o utilizador vê — não foi aplicada. |
 
 **Isto é só para JS/TS, Python, Go e Java.** Para as restantes linguagens desta secção —
 C#, PHP, Ruby, Rust — a situação anterior mantém-se: o

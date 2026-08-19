@@ -120,11 +120,22 @@ rules:
   # guarda canónica de Java — `if (m.containsKey(k)) { … m.get(k).trim() … }` —
   # disparava em ERROR a aconselhar `getOrDefault` sobre código já guardado.
   # As exclusões abaixo são as formas medidas em que a presença da chave fica
-  # provada no caminho que chega ao deref: guarda inline (simples e em
-  # conjunção), ternário (nas quatro polaridades), saída antecipada
+  # provada no caminho que chega ao deref: guarda inline na condição de um `if`
+  # (simples e em conjunção, com o deref no ramo VERDADEIRO, com e sem
+  # chavetas), `while (containsKey)`, a guarda usada como EXPRESSÃO (conjunção e
+  # disjunção negativa-primeiro), ternário (nas quatro polaridades, com o deref
+  # no ramo guardado), saída antecipada
   # (`return`/`throw`/`continue`, sobre `!containsKey` e sobre `get() == null`,
-  # cada uma com e sem uma instrução interposta) e as duas formas de população
-  # que garantem a chave, `putIfAbsent` e `computeIfAbsent`.
+  # cada uma com e sem uma instrução interposta) e as formas de população
+  # que garantem a chave, `put`, `putIfAbsent` e `computeIfAbsent`.
+  #
+  # TODAS ELAS ESTÃO LIMITADAS AO RAMO QUE A GUARDA PROVA, e isso foi uma
+  # regressão publicada antes de ser uma funcionalidade: um `pattern-not-inside`
+  # exclui o NÓ INTEIRO que casou, por isso a forma sem limitação excluía
+  # também o ramo em que a guarda é falsa e o deref é um NPE garantido. Medido
+  # num ficheiro com oito bugs desses: seis disparavam antes das exclusões de
+  # guarda entrarem, um depois, oito agora. O ficheiro é hoje a fixture
+  # `hits/ElseArm.java` e a contagem é asserida.
   #
   # As aspas são obrigatórias em todo o ternário e em `!$M.containsKey(...)`:
   # sem elas o YAML lê o `?` como indicador de chave complexa e o `!` como
@@ -140,7 +151,7 @@ rules:
   # WARNING e não ERROR, e é o critério do §4 aplicado a frio — desta vez
   # contra esta regra, depois de ter sido aplicado contra a
   # `optional-get-no-ispresent`. Um `m.get(k).f()` só é bug SEM GUARDA, e as
-  # vinte e seis exclusões abaixo são a prova direta de que a regra não
+  # trinta e sete exclusões abaixo são a prova direta de que a regra não
   # consegue decidir isso: cada uma delas existe porque uma forma de guarda
   # perfeitamente correta estava a disparar em ERROR. A lista fecha as formas
   # que alguém já enumerou. Não fecha a próxima, e não fecha nenhuma guarda que
@@ -197,18 +208,62 @@ rules:
                         - pattern: $F
                         - pattern: this.$F
                     - metavariable-type: {metavariable: $F, type: ConcurrentHashMap}
-      # --- guarda inline -----------------------------------------------------
-      - pattern-not-inside: if ($M.containsKey($K)) { ... }
-      - pattern-not-inside: "if ($M.containsKey($K) && ...) { ... }"
-      - pattern-not-inside: "if (... && $M.containsKey($K)) { ... }"
-      - pattern-not-inside: if ($M.get($K) != null) { ... }
-      - pattern-not-inside: "if ($M.get($K) != null && ...) { ... }"
-      - pattern-not-inside: "if (... && $M.get($K) != null) { ... }"
+      # --- guarda inline, LIMITADA AO RAMO QUE A GUARDA PROVA ----------------
+      #
+      # Cada guarda tem DUAS cláusulas e as duas são precisas: a primeira
+      # (`{ ... deref; ... }`) alcança um corpo com várias instruções e o deref
+      # aninhado num ciclo lá dentro; a segunda (`{ <... deref ...>; }`) alcança
+      # a forma SEM CHAVETAS. Medido em separado: a primeira sozinha deixa
+      # `if (m.containsKey(k)) return m.get(k).trim();` disparar, a segunda
+      # sozinha deixa disparar o deref dentro de um `for` aninhado.
+      - pattern-not-inside: "if ($M.containsKey($K)) { ... $M.get($K).$G(...); ... }"
+      - pattern-not-inside: "if ($M.containsKey($K)) { <... $M.get($K).$G(...) ...>; }"
+      - pattern-not-inside: "if ($M.containsKey($K) && ...) { ... $M.get($K).$G(...); ... }"
+      - pattern-not-inside: "if ($M.containsKey($K) && ...) { <... $M.get($K).$G(...) ...>; }"
+      - pattern-not-inside: "if (... && $M.containsKey($K)) { ... $M.get($K).$G(...); ... }"
+      - pattern-not-inside: "if (... && $M.containsKey($K)) { <... $M.get($K).$G(...) ...>; }"
+      - pattern-not-inside: "if ($M.get($K) != null) { ... $M.get($K).$G(...); ... }"
+      - pattern-not-inside: "if ($M.get($K) != null) { <... $M.get($K).$G(...) ...>; }"
+      - pattern-not-inside: "if ($M.get($K) != null && ...) { ... $M.get($K).$G(...); ... }"
+      - pattern-not-inside: "if ($M.get($K) != null && ...) { <... $M.get($K).$G(...) ...>; }"
+      - pattern-not-inside: "if (... && $M.get($K) != null) { ... $M.get($K).$G(...); ... }"
+      - pattern-not-inside: "if (... && $M.get($K) != null) { <... $M.get($K).$G(...) ...>; }"
+      # --- ciclo guardado ----------------------------------------------------
+      #
+      # A regra do Optional excluía `while ($O.isPresent())` desde a primeira
+      # ronda e esta não tinha contrapartida, por isso o ciclo de esvaziamento
+      # — correto, porque o corpo só corre enquanto a chave lá está — disparava.
+      - pattern-not-inside: while ($M.containsKey($K)) { ... }
+      # --- guarda como EXPRESSÃO, não como condição de um `if` ---------------
+      #
+      # As seis cláusulas de cima são todas `if (...) { ... }` e a documentação
+      # dizia que a regra honrava "uma conjunção de qualquer dos lados", ponto.
+      # Não honrava: `return m.containsKey(k) && m.get(k).isEmpty();` — o modo
+      # normal de escrever "ausente ou vazio" em Java — não é a condição de
+      # nada e disparava.
+      #
+      # A DISJUNÇÃO NEGATIVA-PRIMEIRO é a dual de De Morgan da conjunção e
+      # prova exatamente o mesmo: `||` faz curto-circuito, logo o operando
+      # direito só é avaliado quando o esquerdo foi FALSO, que é precisamente
+      # quando a chave está presente. `X || m.containsKey(k)` NÃO prova nada e
+      # continua a disparar — as duas formas são estruturalmente distintas, por
+      # isso excluir a segunda não reintroduz a primeira, e a fixture `b8` de
+      # hits/RealBugs.java existe para medir isso a cada corrida.
+      - pattern-not-inside: "$M.containsKey($K) && <... $M.get($K).$G(...) ...>"
+      - pattern-not-inside: "$M.get($K) != null && <... $M.get($K).$G(...) ...>"
+      - pattern-not-inside: "!$M.containsKey($K) || <... $M.get($K).$G(...) ...>"
+      - pattern-not-inside: "$M.get($K) == null || <... $M.get($K).$G(...) ...>"
       # --- ternário (expressão condicional: nó de AST diferente do `if`) -----
-      - pattern-not-inside: "$M.containsKey($K) ? ... : ..."
-      - pattern-not-inside: "!$M.containsKey($K) ? ... : ..."
-      - pattern-not-inside: "$M.get($K) != null ? ... : ..."
-      - pattern-not-inside: "$M.get($K) == null ? ... : ..."
+      #
+      # LIMITADO AO RAMO GUARDADO, pela mesma razão que o `if`. A forma que
+      # aqui esteve — `"$M.containsKey($K) ? ... : ..."` — casa o ternário
+      # INTEIRO, e um `pattern-not-inside` exclui tudo o que esteja dentro do
+      # nó que casou. Os dois ramos ficavam excluídos, incluindo aquele em que
+      # a guarda é FALSA e o deref é um NullPointerException garantido.
+      - pattern-not-inside: "$M.containsKey($K) ? <... $M.get($K).$G(...) ...> : ..."
+      - pattern-not-inside: "!$M.containsKey($K) ? ... : <... $M.get($K).$G(...) ...>"
+      - pattern-not-inside: "$M.get($K) != null ? <... $M.get($K).$G(...) ...> : ..."
+      - pattern-not-inside: "$M.get($K) == null ? ... : <... $M.get($K).$G(...) ...>"
       # --- saída antecipada sobre !containsKey -------------------------------
       - pattern-not-inside: |
           if (!$M.containsKey($K)) { return ...; }
@@ -292,27 +347,63 @@ rules:
   # condição composta, uma saída com mais do que uma instrução, um `while` e um
   # `Optional.of` atribuído disparavam todos):
   #   * `if ($O.isPresent()) { … }`, incluindo em conjunção (`&&`) com outra
-  #     condição de qualquer dos lados — a disjunção (`||`) NÃO é excluída, e
-  #     deliberadamente: `a.isPresent() || b` não prova nada sobre `a` no corpo;
+  #     condição de qualquer dos lados, NA CONDIÇÃO DE UM `if`, com o `get()`
+  #     no ramo VERDADEIRO, com ou sem chavetas — o ramo `else` é um
+  #     NoSuchElementException garantido e continua a disparar;
   #   * `while ($O.isPresent()) { … }`;
+  #   * o mesmo teste usado como EXPRESSÃO e não como condição de coisa nenhuma
+  #     (`return o.isPresent() && o.get().isEmpty();`), mais as disjunções
+  #     negativa-primeiro `!o.isPresent() || …` e `o.isEmpty() || …`, que fazem
+  #     curto-circuito da mesma maneira. `a.isPresent() || b` NÃO é excluída, e
+  #     deliberadamente: não prova nada sobre `a`;
   #   * saída antecipada por `return`/`throw`/`continue`/`break`, sobre
   #     `!isPresent()` e sobre `isEmpty()`, com e sem uma instrução interposta;
-  #   * as três formas ternárias;
+  #   * as três formas ternárias, com o `get()` no ramo que a condição prova
+  #     seguro;
   #   * `$O.filter(...).isPresent()`;
   #   * `Optional<T> o = Optional.of(...)`, que não pode estar vazio —
   #     `ofNullable` pode, e continua a disparar.
   # O que a regra NÃO reconhece, e não é exprimível em Semgrep OSS: qualquer
   # guarda que chegue através de outro método, como `if (!present(o)) { … }`,
-  # que exige análise interprocedimental.
+  # que exige análise interprocedimental; uma guarda guardada num booleano
+  # local, que é dataflow; e uma CADEIA de conjunção com três ou mais operandos
+  # (`flag && a.isPresent() && b.isPresent() && a.get()…`), porque a cláusula de
+  # expressão liga o operando ESQUERDO da conjunção ao próprio teste de guarda e
+  # uma conjunção em Java aninha à esquerda — numa cadeia, esse operando
+  # esquerdo é outra conjunção. Exatamente dois operandos é a forma excluída.
   - id: bugfix-java-null-safety-optional-get-no-ispresent
     patterns:
       - pattern: $O.get()
       - metavariable-type: {metavariable: $O, type: Optional}
-      # --- guarda inline -----------------------------------------------------
-      - pattern-not-inside: if ($O.isPresent()) { ... }
-      - pattern-not-inside: "if ($O.isPresent() && ...) { ... }"
-      - pattern-not-inside: "if (... && $O.isPresent()) { ... }"
+      # --- guarda inline, LIMITADA AO RAMO QUE A GUARDA PROVA ----------------
+      #
+      # Duas cláusulas por guarda, exatamente como na `map-get-deref`: a
+      # primeira alcança corpos com várias instruções e derefs aninhados, a
+      # segunda alcança a forma sem chavetas. E as duas exigem que o deref
+      # esteja no ramo VERDADEIRO — a forma anterior, `if ($O.isPresent()) {
+      # ... }`, casava o statement if-else inteiro e excluía também o `else`,
+      # onde o `get()` é um NoSuchElementException garantido.
+      - pattern-not-inside: "if ($O.isPresent()) { ... $O.get(); ... }"
+      - pattern-not-inside: "if ($O.isPresent()) { <... $O.get() ...>; }"
+      - pattern-not-inside: "if ($O.isPresent() && ...) { ... $O.get(); ... }"
+      - pattern-not-inside: "if ($O.isPresent() && ...) { <... $O.get() ...>; }"
+      - pattern-not-inside: "if (... && $O.isPresent()) { ... $O.get(); ... }"
+      - pattern-not-inside: "if (... && $O.isPresent()) { <... $O.get() ...>; }"
       - pattern-not-inside: while ($O.isPresent()) { ... }
+      # --- guarda como EXPRESSÃO, não como condição de um `if` ---------------
+      #
+      # Mesmo defeito e mesma correção que na regra do mapa: as cláusulas de
+      # cima são todas `if (...) { ... }` e a prosa dizia "conjunção de
+      # qualquer dos lados" sem qualificar. `return o.isPresent() &&
+      # o.get().isEmpty();` disparava.
+      #
+      # A disjunção continua a NÃO ser excluída na forma `a.isPresent() || b`,
+      # que não prova nada. A forma NEGATIVA-PRIMEIRO prova: `||` faz
+      # curto-circuito, o operando direito só corre quando o esquerdo foi
+      # falso, e aí o valor está presente.
+      - pattern-not-inside: "$O.isPresent() && <... $O.get() ...>"
+      - pattern-not-inside: "!$O.isPresent() || <... $O.get() ...>"
+      - pattern-not-inside: "$O.isEmpty() || <... $O.get() ...>"
       # --- saída antecipada sobre !isPresent() -------------------------------
       - pattern-not-inside: |
           if (!$O.isPresent()) { return ...; }
@@ -367,9 +458,13 @@ rules:
       # lê o `?` como indicador de chave complexa e o `:` como mapeamento, e o
       # ficheiro inteiro deixa de carregar — `Invalid YAML file`, `scanned=0`.
       # É a mesma armadilha do RuleParseError: a corrida parece ter acontecido.
-      - pattern-not-inside: "$O.isPresent() ? ... : ..."
-      - pattern-not-inside: "!$O.isPresent() ? ... : ..."
-      - pattern-not-inside: "$O.isEmpty() ? ... : ..."
+      #
+      # E são LIMITADAS AO RAMO GUARDADO. A forma anterior casava o ternário
+      # inteiro e excluía os dois ramos, incluindo aquele em que a guarda é
+      # falsa e o `get()` lança de certeza.
+      - pattern-not-inside: "$O.isPresent() ? <... $O.get() ...> : ..."
+      - pattern-not-inside: "!$O.isPresent() ? ... : <... $O.get() ...>"
+      - pattern-not-inside: "$O.isEmpty() ? ... : <... $O.get() ...>"
       # `filter` num Optional vazio devolve vazio, por isso um resultado
       # presente do filtro prova que o original está presente — o `get()` não
       # pode lançar. A exclusão do `isPresent()` não chegava aqui porque liga o
@@ -642,15 +737,38 @@ rules:
           # tirá-lo do terceiro parte a regra. Sexta ocorrência desta classe
           # de defeito na série, e a primeira apanhada pela ablação antes de
           # sair.
+          #
+          # O `switch` tem de estar DENTRO do for-each, e não o contrário. A
+          # forma que aqui esteve — `pattern-inside: switch ($S) { case $C:
+          # ... }` — era CONTENÇÃO LÉXICA e mais nada: qualquer `remove` que
+          # estivesse algures dentro de um `case` reativava a regra, incluindo
+          # um `remove` dentro de um CICLO escrito nesse `case`, onde o `break`
+          # simples sai do ciclo e não do `switch` e o código está correto.
+          # Medido: um `switch` que despacha um comando e tem um ciclo de
+          # procurar-e-remover num dos ramos disparava três vezes.
+          #
+          # Aninhar o `switch` dentro do for-each — o mesmo `$COLL`, o mesmo
+          # cabeçalho de ciclo — distingue as duas ordens, que é a distinção
+          # que importa: se o `switch` está dentro do ciclo, o `break` de um
+          # `case` sai do `switch` e a iteração continua; se o ciclo está
+          # dentro do `case`, o `break` sai do ciclo.
           - pattern-inside: |
-              switch ($S) {
-                case $C:
-                  ...
+              for ($T $X : $COLL) {
+                ...
+                switch ($S) {
+                  case $C:
+                    ...
+                }
+                ...
               }
           - pattern-inside: |
-              switch ($S) {
-                default:
-                  ...
+              for ($T $X : $COLL) {
+                ...
+                switch ($S) {
+                  default:
+                    ...
+                }
+                ...
               }
           - patterns:
               - pattern: $COLL.remove(...)
