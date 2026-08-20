@@ -238,6 +238,45 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     ids: ['bugfix-cs-edge-case-modify-during-iteration'],
     count: 9,
   },
+  'RealBugs.cs': {
+    // THE REAL-BUGS CORPUS — 13 defects over all TWELVE rules, so every rule
+    // in the pack has corpus coverage. The Java round left three rules at zero
+    // and that was the riskiest gap in that pack.
+    //
+    // It exists to give the ablation its second axis. Everything else in hits/
+    // is one minimal instantiation per rule, written by whoever wrote the
+    // rule: that proves a rule fires, but it cannot prove an exclusion added
+    // later did not eat a real bug, because a minimal fixture carries no guard
+    // shapes for an exclusion to catch on. Every defect here sits where it
+    // would sit in real code — inside a `try`, in a constructor, under a
+    // `finally`, next to a guard on a different variable.
+    //
+    // It carries extra weight this round: ablation axis 3, which measures a
+    // clause's width on code nobody wrote as a fixture, is N/A for the whole
+    // C# pack because this repo holds no C# outside this tree.
+    //
+    // AND IT ALREADY EARNED ITS KEEP. Written with the as-cast entry
+    // dereferencing in BOTH arms of the guard, it did not fire, and finding
+    // out why exposed a residual of the else-arm swallow that reasoning had
+    // missed: when the THEN arm also dereferences, the exclusion matches the
+    // whole `if` and takes the else arm with it. Narrower than the original
+    // hole, but real, and now stated in the rule.
+    ids: [
+      'bugfix-cs-edge-case-modify-during-iteration',
+      'bugfix-cs-error-handling-empty-catch',
+      'bugfix-cs-error-handling-rethrow-loses-stacktrace',
+      'bugfix-cs-memory-leak-httpclient-per-call',
+      'bugfix-cs-null-safety-as-cast-deref',
+      'bugfix-cs-null-safety-ordefault-deref',
+      'bugfix-cs-off-by-one-loop-lte-count',
+      'bugfix-cs-off-by-one-loop-lte-length',
+      'bugfix-cs-race-condition-async-void',
+      'bugfix-cs-race-condition-blocking-on-task',
+      'bugfix-cs-race-condition-lock-on-shared-instance',
+      'bugfix-cs-race-condition-static-random',
+    ],
+    count: 13,
+  },
   'HttpClient.cs': {
     // Four: a constructor assignment, a plain per-call local, `using var`,
     // and a `using` block. The constructor one is the site that chose the
@@ -435,4 +474,128 @@ describe('every rule id classifies as its own class', () => {
       expect(id).not.toContain('disposed');
     }
   });
+});
+
+/**
+ * DESIGN OF RECORD §2: no local rule may re-report what the registry packs
+ * already find. For C# the answer is stronger than for any other language in
+ * the series — and one third of it cannot be proved at all, which is said here
+ * rather than papered over.
+ *
+ * Measured, and reproduced by these tests:
+ *
+ *   | pack               | on the hit fixtures       | positive control          |
+ *   | ------------------ | ------------------------- | ------------------------- |
+ *   | p/r2c-bug-scan     | paths.scanned = 0         | control_r2c.py (Python)   |
+ *   | p/csharp           | scanned = N, 0 findings   | Control.cs (DES)          |
+ *   | p/security-audit   | scanned = N, 0 findings   | NONE FOUND                |
+ *
+ * `p/r2c-bug-scan` SHIPS NO C# RULES AT ALL. It does not merely find nothing —
+ * it scans nothing, reporting `paths.scanned = 0`. So for that pack a zero
+ * finding count is not evidence of anything, and no C# control could rescue it
+ * either, because there is no C# rule for a C# control to trip. The only way
+ * to distinguish "additive" from "never ran" is to prove the pack is alive in
+ * a language it does cover, which is why there is a PYTHON file in a C#
+ * fixture tree. A Go-round defect was a control directory nothing enumerated,
+ * deleted silently, leaving the test skipping while the suite stayed green —
+ * so the controls are asserted to have RUN, not merely to have been clean.
+ *
+ * `p/security-audit` HAS NO POSITIVE CONTROL, and that is a measured gap
+ * rather than an oversight. It was probed against eleven classic vulnerable C#
+ * shapes across two batteries — concatenated SQL, MD5, SHA1, DES, command
+ * injection, hardcoded password, insecure Random, disabled TLS validation,
+ * XXE, path traversal, BinaryFormatter — and fired on NONE of them, while
+ * `p/csharp` fired on two of the same file. The design of record claims it
+ * fires `csharp-sqli` on a concatenated-SQL control; measured, it does not.
+ *
+ * What is left for that pack is weaker but not nothing: `paths.scanned > 0`
+ * proves it HAS C# rules and enumerated our files, since a pack with no rules
+ * for a language reports 0 — which is exactly how `p/r2c-bug-scan` behaves
+ * three lines up. That is asserted below, and labelled as the weaker claim it
+ * is.
+ */
+const REGISTRY_PACKS = ['p/r2c-bug-scan', 'p/csharp', 'p/security-audit'] as const;
+
+function registryRunOrNull(config: string, dir: string): SemgrepRun | null {
+  if (!AVAILABLE) return null;
+  try {
+    return run(config, dir);
+  } catch {
+    return null;
+  }
+}
+
+const HITS_DIR = resolve(FIXTURES, 'hits');
+const CONTROL_DIR = resolve(FIXTURES, 'control');
+
+/** Run once at module load, not inside a test: a registry scan takes far
+ *  longer than vitest's 10s per-test timeout allows. */
+const ON_HITS = new Map<string, SemgrepRun | null>(
+  REGISTRY_PACKS.map((p) => [p, registryRunOrNull(p, HITS_DIR)]),
+);
+const R2C_ON_CONTROL = registryRunOrNull('p/r2c-bug-scan', CONTROL_DIR);
+const CSHARP_ON_CONTROL = registryRunOrNull('p/csharp', CONTROL_DIR);
+
+describe('no local C# rule duplicates the registry packs', () => {
+  it.runIf(REQUIRE_SEMGREP)('every registry pack must be reachable when the flag is set', () => {
+    for (const pack of REGISTRY_PACKS) {
+      expect([pack, ON_HITS.get(pack) ?? null]).not.toEqual([pack, null]);
+    }
+    // Asserted too, and deliberately: without this the control fixtures could
+    // be deleted and this whole describe block would go on passing, with the
+    // control tests merely SKIPPING. That exact hole shipped in the Go round.
+    expect(R2C_ON_CONTROL).not.toBeNull();
+    expect(CSHARP_ON_CONTROL).not.toBeNull();
+  });
+
+  it.skipIf(R2C_ON_CONTROL === null)(
+    'positive control: p/r2c-bug-scan is LIVE — proved in Python, because it has no C# rules',
+    () => {
+      expect(R2C_ON_CONTROL?.scanned).toBe(1);
+      expect(R2C_ON_CONTROL?.rows.length).toBeGreaterThan(0);
+    },
+  );
+
+  it.skipIf(CSHARP_ON_CONTROL === null)('positive control: p/csharp is LIVE for C#', () => {
+    expect(CSHARP_ON_CONTROL?.scanned).toBe(1);
+    expect(CSHARP_ON_CONTROL?.rows.length).toBeGreaterThan(0);
+  });
+
+  it.skipIf(ON_HITS.get('p/r2c-bug-scan') === null)(
+    'p/r2c-bug-scan scans ZERO C# files — the pack has no C# rules at all',
+    () => {
+      // Pinned as an equality rather than "found nothing", because the two are
+      // different facts and only this one explains why the Python control has
+      // to exist. If this ever becomes non-zero the pack has gained C# rules
+      // and the whole overlap question must be re-measured.
+      expect(ON_HITS.get('p/r2c-bug-scan')?.scanned).toBe(0);
+      expect(ON_HITS.get('p/r2c-bug-scan')?.rows.length).toBe(0);
+    },
+  );
+
+  it.skipIf(ON_HITS.get('p/security-audit') === null)(
+    'p/security-audit DID look at every hit fixture — the weaker liveness claim, stated as such',
+    () => {
+      // No positive control exists for this pack (see the block comment), so
+      // this is the strongest available evidence that its zero below means
+      // "found nothing" rather than "never ran": a pack with no rules for a
+      // language reports scanned = 0, as p/r2c-bug-scan does above.
+      expect(ON_HITS.get('p/security-audit')?.scanned).toBe(
+        fixtureFiles(HITS_DIR).length,
+      );
+    },
+  );
+
+  for (const pack of ['p/csharp', 'p/security-audit'] as const) {
+    it.skipIf(ON_HITS.get(pack) === null)(
+      `${pack} finds NOTHING in any hit fixture — every local rule is additive`,
+      () => {
+        expect(ON_HITS.get(pack)?.scanned).toBe(fixtureFiles(HITS_DIR).length);
+        const grouped = rowsByFile(ON_HITS.get(pack)?.rows ?? []);
+        for (const file of fixtureFiles(HITS_DIR)) {
+          expect(grouped[file] ?? []).toEqual([]);
+        }
+      },
+    );
+  }
 });

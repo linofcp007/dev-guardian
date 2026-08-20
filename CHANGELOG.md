@@ -8,6 +8,93 @@ version bump.
 
 ## [Unreleased]
 
+### Added — a C# bug-finding rule pack, in the language where the registry is at zero
+
+`configs/semgrep/bugfix-cs.yml`: **twelve** hand-authored rules across all six
+bug subcategories, always on in `bug_hunt`, each with a hits/misses fixture
+pair. Rule counts are now 13 JS/TS, 10 Python, 9 Go, 8 Java and **12 C#**.
+
+**The registry gap is total, and it was measured with positive controls rather
+than assumed.** `p/r2c-bug-scan` reports `paths.scanned = 0` on the C#
+fixtures — it ships **no C# rules at all** — and `p/csharp` and
+`p/security-audit` scan every file and find nothing. Because a pack that never
+ran is indistinguishable from a clean result, the proof carries controls that
+are asserted to have *fired*, and for `p/r2c-bug-scan` that control is a
+**Python** file inside a C# fixture tree: there is no C# rule for a C# control
+to trip.
+
+**Two of the twelve sit at `ERROR`, the best ratio in the series**, and the
+reason is structural rather than generous. C# contains one defect —
+`throw ex;` inside a `catch` — whose *correct* form, `throw;`, is a **different
+AST node**. There is no guard to recognise because there is nothing to guard,
+which is the only way to clear the severity criterion in an engine without
+dataflow.
+
+**A compiler as an independent oracle, which no round in this series has had
+before.** `dotnet build` emits `CA2200` for `throw ex;` inside a catch, and it
+fires at exactly the nine sites the rule fires on and zero in the near-miss
+fixture — so the hit/miss split was not graded by the rule's own author.
+`CA2002` does the same for the `lock` rule. Recorded just as deliberately:
+`CA5394` is **not** an oracle for the `Random` rule, because it fires on all
+four correct sites too — it is about cryptographic predictability, not a data
+race. Confirming that an oracle is not an oracle is worth as much as
+confirming that one is.
+
+**The oracle immediately earned its place.** It found that a trailing
+`finally` made both `error_handling` rules silent: a `try/catch/finally` is a
+different AST node, and the two shapes are disjoint, so neither pattern
+subsumes the other. `CA2200` fired on a `throw ex;` whose catch had a
+finalizer and Semgrep did not. The same hole was found and fixed in
+`bugfix-java.yml` in this release.
+
+**Java's wave-4 unsoundness was ported already corrected, not rediscovered.**
+Adding the loop-exit exclusions to `modify-during-iteration` closes five false
+positives *and* deletes a real bug — a `Remove` inside a `switch` arm followed
+by `break`, where the `break` leaves the switch rather than the loop. Measured
+here: exclusions alone give 7 findings and lose it; with the
+switch-inside-foreach re-inclusion, 9 and the false positives stay closed. The
+same discipline caught the `as-cast-deref` else-arm swallow *before* it
+shipped, by writing the guard-adjacent bugs as **hits** rather than misses —
+the only place ablation can see an exclusion eating a true positive.
+
+**Stated limitations, all measured:**
+
+- `memory_leak` is carried by a single rule. The `IDisposable` one is **not
+  expressible**: Semgrep's C# frontend erases the `using` modifier from a
+  using-declaration, making the Microsoft-recommended idiom byte-identical to
+  a leak. A rule that flags `using var` is worse than no rule.
+- `blocking-on-task` misses `var t = GetAsync(); t.Result` (`metavariable-type`
+  does not resolve through `var` plus a *call* initialiser, though it does
+  through `var` plus a `new`), `Task.Run(...).Result`, and a dotted receiver
+  such as `_source.Pending.Wait()`.
+- `ordefault-deref` cannot see generic arguments, so a value-type sequence is
+  an unfixable false positive in one direction or a false negative in the
+  other; both spellings are stated rather than implied.
+- `as-cast-deref` still loses the `else` arm when the `then` arm *also*
+  dereferences — a narrower residual of the hole the then-block scoping closed,
+  found by writing the real-bugs corpus.
+- `off_by_one` keeps Java's sentinel false positive (`new int[a.Length + 1]`),
+  whose obvious tightening was measured in the Java round and rejected for
+  trading a false positive for a false negative.
+- `.Count` covers six enumerated receiver types; anything outside that list is
+  not matched, because `metavariable-type` is **not subtype-aware** — a
+  receiver declared `List<int>` does not match `ICollection<$T>`.
+- `Dictionary` is deliberately excluded from `modify-during-iteration`:
+  removal during enumeration has been documented safe since .NET Core 3.0.
+- These rules match syntax, not dataflow, and they complement the registry
+  packs rather than replacing them — though here that is close to vacuous,
+  since the registry has no C# bug rules at all. They do not replace the
+  model-driven `/guardian-fix` path.
+
+Every clause is ablated on both available axes — live, and does not suppress a
+true positive — with one row per clause. Axis 3, which measures a clause's
+width against code nobody wrote as a fixture, is `N/A` for the whole C# round
+because this repo holds no C# outside the fixture tree; the real-bugs corpus
+and the guard-adjacent hits are the compensation, and the gap is stated rather
+than left silent. All twelve rules pass the prescribed-fix check: the fix each
+message advises, applied to the code the rule fired on, silences it.
+
+
 ### Action required — the SAST rules this plugin installs were never actually run
 
 **Until this release, `scan_sast` did not load the rules `init_project` writes

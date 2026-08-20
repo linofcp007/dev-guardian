@@ -569,6 +569,18 @@ rules:
   # hits/", e uma exclusão que come um bug real só é visível se o bug estiver
   # lá.
   #
+  # RESIDUO DO MESMO BURACO, MEDIDO E DECLARADO. A limitação do bloco-entao
+  # fecha o caso geral mas nao o caso em que O RAMO ENTAO TAMBEM DEREFERENCIA:
+  # aí a exclusão casa mesmo o `if` inteiro, e o `pattern-not-inside` leva o
+  # ramo `else` atrás. Ou seja, `if (x != null) { usa(x.A); } else { usa(x.A); }`
+  # perde o segundo `usa`. E muito mais estreito do que o original — que engolia
+  # o ramo `else` SEMPRE, dereferenciasse o ramo entao ou nao — mas nao é zero.
+  #
+  # Foi o corpus de bugs reais que o encontrou, e nao o raciocínio: a entrada de
+  # as-cast do RealBugs.cs escrita com os dois ramos a dereferenciar nao
+  # disparou, e foi preciso perceber porque. Nao tem fixture, porque uma
+  # fixture que nao dispara nao pode ser afirmada em hits/.
+  #
   # A ABLACAO SINALIZA O `pattern-inside` DESTA REGRA NO EIXO 2, E E UM FALSO
   # ALARME — dito aqui para ninguém o "corrigir". O eixo 2 pergunta "tirar esta
   # clausula revela findings em hits/?", e assume que a clausula é uma
