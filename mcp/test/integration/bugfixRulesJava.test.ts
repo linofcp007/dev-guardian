@@ -315,24 +315,50 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
  * shape nobody enumerated, and no exclusion list closes that, because the
  * guard can always be one method away.
  *
- * Seven of the eight are `WARNING` on that test, and only `empty-catch`
- * survives at `ERROR`. That ratio is the honest result for a syntactic matcher
- * with no dataflow, not a failure of the pack: almost nothing clears the bar.
- * `empty-catch` clears it because its escape hatch is not a guard at all — it
- * is a DECLARATION OF INTENT the rule itself reads, the Checkstyle / IntelliJ
- * `ignore` / `ignored` / `expected` convention. What it emits after honouring
- * that is an unmarked silent swallow, which is a bug whatever the author meant.
+ * ALL EIGHT are `WARNING` on that test. That is the honest result for a
+ * syntactic matcher with no dataflow, not a failure of the pack: almost
+ * nothing clears the bar.
+ *
+ * `empty-catch` was the last one at `ERROR`, and it held that tier on an
+ * argument rather than on a measurement — that its escape hatch is not a guard
+ * but a DECLARATION OF INTENT the rule itself reads (the Checkstyle /
+ * IntelliJ `ignore` / `ignored` / `expected` convention), so what it emits
+ * afterwards is an *unmarked* silent swallow. The argument was sound and the
+ * premise was false. Measured against OpenJDK — 12 593 files of
+ * `src/<module>/share/classes`, code nobody here wrote or picked for its shapes — the
+ * rule produces 1589 findings in 770 files, and **903 of them (56.8%) declare
+ * the intent in a comment INSIDE the empty catch**, which Semgrep cannot read
+ * (`// ignore`, `// Expected or ignored`, `// swallow, since it should never
+ * happen`). Another 27 declare it in a name the rule does not recognise:
+ * `cannotHappen` ×13, `_` ×10 (Java 21's unnamed variable, which *means*
+ * "unused binding"), `unused` ×2. An inverted-regex probe puts the recognised
+ * spelling at 139 occurrences, so the convention the tier rested on covers
+ * **8.0% (139/1728)** of the corpus's empty catches. 45 findings were read
+ * individually; roughly 39 were deliberate.
+ *
+ * That is the fourth language to test the same premise and the fourth to
+ * refute it (JS/TS 42 of 42 deliberate, PHP 10 of 10, Ruby's convention at
+ * 2.7%), so the argument that Java was different because its convention is
+ * *readable* does not survive its own numbers.
  *
  * Pinned here because nothing else pinned it. The tier is not cosmetic: the
  * Semgrep parser maps ERROR → `high` and WARNING → `medium`
  * (`src/runners/scannerParsers/semgrep.ts`), and `create_fix_pr` defaults
- * `severity_min` to `high`. With seven of eight at `WARNING`, the Java pack
- * now contributes almost nothing to the DEFAULT fix-PR set, and a caller who
+ * `severity_min` to `high`. With all eight at `WARNING`, the Java pack now
+ * contributes NOTHING AT ALL to the DEFAULT fix-PR set, and a caller who
  * wants Java bugs fixed has to ask: `severity_min: "medium"`. `bug_hunt` itself
  * defaults to no filter, so nothing disappears from a scan.
  */
 const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
-  'bugfix-java-error-handling-empty-catch': 'ERROR',
+  // ZERO at ERROR, and `empty-catch` was the one that moved. It sat at ERROR
+  // on the premise that an unmarked silent swallow is a bug whatever the
+  // author meant, and an external corpus refuted the premise: 1589 findings on
+  // 12 593 OpenJDK files, 903 of them (56.8%) carrying an explanatory comment
+  // INSIDE the empty catch — a declaration of intent Semgrep cannot read. The
+  // Checkstyle/IntelliJ name the rule does read covers 8.0% of the corpus's
+  // empty catches (139 of 1728, measured with the inverted regex). The pack
+  // now contributes NOTHING to a default `create_fix_pr` run.
+  'bugfix-java-error-handling-empty-catch': 'WARNING',
   'bugfix-java-error-handling-printstacktrace-only': 'WARNING',
   'bugfix-java-null-safety-map-get-deref': 'WARNING',
   'bugfix-java-null-safety-optional-get-no-ispresent': 'WARNING',

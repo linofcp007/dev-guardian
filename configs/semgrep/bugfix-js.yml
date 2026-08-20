@@ -110,11 +110,17 @@ rules:
   # Semgrep cannot read. A declaration of intent the rule cannot recognise is
   # the severity criterion exactly, so this is WARNING.
   #
-  # That is the same reasoning that keeps the JAVA empty-catch at ERROR, not
-  # a contradiction of it. The Java rule clears the bar because it CAN read
-  # its ecosystem's intent marker — the Checkstyle / IntelliJ convention of
-  # naming the binding `ignore` / `ignored` / `expected`. JS/TS has no
-  # equivalent of comparable standing, and the reason is structural rather
+  # That reasoning has since been applied to every other pack that carries
+  # this rule, and it moved all of them. The JAVA rule stayed at ERROR for
+  # three rounds on the argument that it CAN read its ecosystem's intent
+  # marker — the Checkstyle / IntelliJ convention of naming the binding
+  # `ignore` / `ignored` / `expected`. Measured on OpenJDK, that convention
+  # covers 8.0% of real empty catches while 56.8% of what the rule emits
+  # carries a COMMENT instead, so Java is now WARNING too; C# is WARNING with
+  # the harder number, 0 of 402 on dotnet/runtime, because 93% of its findings
+  # are `catch (Type) { }` or `catch { }` with nothing to name and the
+  # compiler emits CS0168 on the spelling the rule prescribes. JS/TS has no
+  # marker of comparable standing either, and the reason is structural rather
   # than cultural: **ES2019 optional catch binding removed the identifier a
   # naming convention would attach to.** 41 of those 42 are written
   # `catch {`, with nothing to name. The ecosystem marks intent with a

@@ -44,12 +44,13 @@ the pack is silent **except** for three `@`-rule findings, all three on the
 `toctou` fix. **One rule firing on another rule's prescribed fix is not a
 tuning problem**, and no per-rule check can see it.
 
-## 3. Severity: zero of six at ERROR, and the reason indicts two shipped packs
+## 3. Severity: zero of six at ERROR, and the reason indicted two shipped packs
 
-For scale: Java 1 of 8, JS/TS 1 of 13, Python + Go 2 of 19, C# 2 of 12, PHP
-**0 of 6**.
+For scale: Java **0 of 8**, JS/TS 1 of 13, Python + Go 2 of 19, C# **1 of 12**,
+PHP **0 of 6**. (Java and C# were 1 and 2 when this section was written; the
+indictment below was acted on and both moved — see the closing note.)
 
-C# reached ERROR twice because one defect (`throw ex;`) has a correct form that
+C# reaches ERROR because one defect (`throw ex;`) has a correct form that
 is a *different AST node* — there is no guard to recognise. **No PHP candidate
 has that property.**
 
@@ -71,6 +72,35 @@ the same route — 42 findings on this repo's own source, every one deliberate �
 and demoted. **Java and C# should be re-measured against an external corpus
 before their ERROR tier is trusted.** Recorded here rather than acted on,
 because it is a separate change with its own fixture counts.
+
+### Answered: both were measured, and both moved to WARNING
+
+That re-measurement happened, on external corpora neither pack's author chose,
+and it is written up in
+[the Java design §4a](2026-08-19-bugfix-rules-java-design.md) and
+[the C# design §4a](2026-08-20-bugfix-rules-csharp-design.md). In short:
+
+- **Java**, OpenJDK `src/*/share/classes`, 12 593 files scanned: **1589
+  findings**, of which **903 (56.8 %) declare their intent in a comment inside
+  the empty catch**, which Semgrep cannot read, and 27 more in a name the rule
+  does not carry (`cannotHappen`, `_`, `unused`). An inverted-regex probe puts
+  the Checkstyle / IntelliJ spelling at **139**, so the convention the ERROR
+  tier rested on covers **8.0 %** (139/1728) of the corpus's empty catches. It
+  exists — unlike JS/TS's — and it is not how Java is written.
+- **C#**, `dotnet/runtime` `src/libraries/*/src/**`, 11 800 files scanned:
+  **402 findings**, of which **374 (93 %) are written `catch (Type) { }` or
+  `catch { }`** — spellings with no identifier at all, C#'s own version of the
+  ES2019 problem this section names. The exempt spelling appears **0 times** in
+  the whole corpus, and `dotnet build` explains why: `catch (FormatException
+  ignored) { }` emits **CS0168**, while both nameless spellings compile clean.
+  The escape hatch is a spelling the compiler warns on.
+
+So the guess this section recorded — that Java and C# might be *different*
+because they have a working, machine-readable naming convention — was worth
+making and turned out to be wrong in both languages, for different reasons.
+**Five languages have now tested the premise and five have refuted it.** PHP's
+place in the series is unchanged; what changed is that it is no longer the
+outlier.
 
 ## 4. The six rules
 

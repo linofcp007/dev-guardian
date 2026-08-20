@@ -1,0 +1,241 @@
+# dev-guardian Semgrep config bugfix-rs.
+#
+# UMA REGRA. NAO É TRABALHO POR ACABAR — leia este cabeçalho antes de assumir
+# que sim, porque um pack de uma regra parece sempre um pack abandonado a meio.
+#
+# Este ficheiro é o resíduo de uma sondagem que MATOU DOZE CANDIDATOS. As
+# medições estão em
+# docs/superpowers/specs/2026-08-20-bugfix-rules-rust-and-ruby-decision.md,
+# que é a decisão de registo. Resumo do porquê:
+#
+# 1. O COMPILADOR DE RUST FICA COM AS QUATRO CLASSES PRINCIPAIS. Escritas e
+#    dadas ao `rustc --edition 2021`, as regras que ancoram quatro das seis
+#    subcategorias nos outros packs são ERROS DE COMPILAÇAO em Rust:
+#
+#      modify-during-iteration        -> E0502 (cannot borrow as mutable)
+#      use-after-free / dangling      -> E0515 (returns reference to local)
+#      data race em estado partilhado -> E0373 + E0503
+#      null dereference               -> E0599 (no method on Option)
+#
+#    Não são raras — são impossíveis. Uma regra de Semgrep para elas não
+#    encontraria nada em código que compila, que é todo o código que existe.
+#
+# 2. PARA O RESTO, A RESPOSTA É O `clippy`, e não este ficheiro. Os lints com
+#    consciencia de tipos do clippy ganham a todos os equivalentes de Semgrep
+#    que foram medidos nesta ronda. Configure-o:
+#
+#      - por omissão já cobre `await_holding_lock`;
+#      - `-W clippy::pedantic` acrescenta `float_cmp`, `future_not_send`,
+#        `missing_panics_doc`;
+#      - o grupo `restriction`, lint a lint, acrescenta `unwrap_used`,
+#        `mem_forget`, `indexing_slicing`, `string_slice`,
+#        `let_underscore_must_use`.
+#
+#    Dois candidatos passaram as fixtures e foram mortos pelo eixo 3 da
+#    ablação (contagem em código real, ~870 ficheiros de biblioteca padrão):
+#    `mem-forget` deu 43 achados e ZERO verdadeiros positivos, e
+#    `unwrap-in-drop` acusa `if !thread::panicking() { r.unwrap(); }`, que é a
+#    mitigação canónica — a regra acusa a correção.
+#
+# 3. O QUE SOBRA É ADITIVO, medido. A regra deste ficheiro é invisível a toda
+#    a cadeia de ferramentas de Rust: nada ao nível default, pedantic, nursery
+#    ou restriction a apanha. Do registo, `p/r2c-bug-scan` reporta
+#    `paths.scanned = 0` (não traz UMA regra de Rust) e o `p/rust` varre os
+#    ficheiros e não encontra nada.
+#
+# A regra tem um par de fixtures em
+# mcp/test/fixtures/bugfix-rs/{hits,misses}/: um ficheiro que tem de disparar,
+# outro parecido que NAO pode. O ficheiro misses/ é a especificação do que é
+# código correto — se ele disparar, a regra é que está errada. E as duas
+# fixtures COMPILAM: `cargo build` com zero erros. A ronda de Go despachou uma
+# regra cuja fixture de hit não era compilável, o que punha o conjunto de
+# verdadeiros positivos a zero em qualquer projeto que construa.
+#
+# ---------------------------------------------------------------------------
+# A ARMADILHA DE RUST, e ela tem DUAS DIREÇOES OPOSTAS no mesmo padrão.
+#
+# É a mesma família da armadilha do `var` em C#: uma parte OPCIONAL da sintaxe
+# do padrão está a funcionar como FILTRO. Em Rust aparece duas vezes, e o lado
+# largo é diferente nas duas.
+#
+# (a) NA ASSINATURA, O CURTO É O LARGO. Medido:
+#
+#       async fn $F(...) -> $R { ... }   encontra 2 de 4 bugs
+#       async fn $F(...) { ... }         encontra 4 de 4
+#
+#     `-> $R` não é opcional para o motor: exige um tipo de retorno escrito, e
+#     toda a `async fn` sem tipo de retorno deixa de casar. `paths.scanned`
+#     saudável, `errors: 0`, e metade dos bugs perdidos. ESCREVA SEMPRE A
+#     FORMA SEM `-> $R`.
+#
+# (b) NOS CAMINHOS, O LONGO É O LARGO — o inverso exato de (a). Medido:
+#
+#       pattern: std::thread::sleep(...)   casa `std::thread::sleep(d)`,
+#                                          `thread::sleep(d)` com
+#                                          `use std::thread;`, e `sleep(d)`
+#                                          com `use std::thread::sleep;`
+#       pattern: thread::sleep(...)        SO casa a grafia `thread::sleep`
+#
+#     O motor resolve os `use`, por isso o caminho TOTALMENTE QUALIFICADO é o
+#     padrão largo e o curto é o estreito. O mesmo foi medido do lado das
+#     exclusões: `pattern-not-inside: std::thread::spawn(...)` exclui as duas
+#     grafias, `thread::spawn(...)` exclui uma. Um `pattern-either` com as duas
+#     grafias é portanto REDUNDANTE — as duas metades leem DEAD na ablação — e
+#     por isso este ficheiro escreve uma só, a qualificada.
+#
+#     É preciso e não apenas largo: `tokio::time::sleep(d).await`,
+#     `time::sleep(d)`, `c.sleep(d)` e `my::sleep(d)` NAO casam. A resolução é
+#     por `use` e não por sufixo, e é isso que torna seguro pedir o caminho
+#     qualificado.
+#
+# (c) O `move` DE UM CLOSURE É IGNORADO, nas duas direções. Medido:
+#     `$F(|| { ... })` casa `f(move || { ... })`, e `$F(move || { ... })` casa
+#     `f(|| { ... })`. Não é subconjunto como os modificadores de C# — é
+#     simetria. Consequência prática: enumerar as duas grafias produz um par
+#     MUTUAMENTE REDUNDANTE, em que cada metade lê DEAD na ablação e remover
+#     as duas é uma regressão. Escreva uma só, a sem `move`.
+#
+# TERCEIRA FORMA DE FALHA SILENCIOSA MEDIDA NESTA RONDA, aqui só para registo
+# porque nenhuma regra deste ficheiro depende dela: o NOME DO TRAIT em
+# `impl Trait for Type` É IGNORADO. `impl ThisTraitDoesNotExist for $T` casa os
+# mesmos 14 blocos que `impl Drop for $T`, impls inerentes incluídos, com
+# `paths.scanned` saudável e zero erros. Qualquer regra ancorada em
+# `impl Drop` / `impl Iterator` / `impl Future` aplica-se em silencio ao
+# projeto inteiro. Ancore no METODO.
+#
+# E: ficheiros com `PartialParsing` CONTAM COMO VARRIDOS (16 de 870 na
+# biblioteca padrão, a `level=warn`, saída limpa). Rust com muitas macros
+# degrada-se em silencio, e `paths.scanned` não o mostra.
+#
+# ---------------------------------------------------------------------------
+# CINCO CARACTERES SAO PROIBIDOS NESTE FICHEIRO, incluindo nos comentários: o A
+# maiúsculo com acento agudo (U+00C1), o I maiúsculo com acento agudo (U+00CD),
+# e mais tres que o portugues não usa (U+00CF, U+00D0, U+00DD). Em portugues,
+# na prática, são dois — e é por isso que este bloco escreve "NAO" e "SAO" sem
+# acento.
+#
+# Porque: o carregador de configuração do Semgrep descodifica este ficheiro com
+# o codec do LOCALE e não em UTF-8. Num locale cp1252 (Windows) os bytes 0x81,
+# 0x8D, 0x8F, 0x90 e 0x9D não existem na tabela, e são exatamente os segundos
+# bytes UTF-8 desses cinco caracteres. UM deles num comentário derruba o
+# ficheiro inteiro, e o scan devolve `results: 0`, `paths.scanned: 0` e
+# `errors: 0` — quem leia só os findings ve um scan limpo. O
+# `semgrepPacks.test.ts` apanha isto em todos os packs, por duas vias.
+#
+# Só esses cinco. `Ã À Â É Ê Ó Ô Õ Ú Ç` são todos válidos, e todas as
+# minúsculas acentuadas são válidas.
+# ---------------------------------------------------------------------------
+
+rules:
+  # Sleep bloqueante dentro de uma `async fn`.
+  #
+  # SEVERIDADE: WARNING, e a decisão é discutível, por isso fica aqui o
+  # raciocínio. O critério do §4 do design de C# é uma pergunta sobre o que a
+  # regra EMITE — "o que sai daqui é sempre um bug?" — e não sobre a classe de
+  # defeito que ela persegue. A sondagem leu isto como "possivelmente ERROR",
+  # com o argumento de que a forma legítima mais próxima, um helper
+  # deliberadamente bloqueante, não se escreve como `async fn`.
+  #
+  # O argumento é bom mas está incompleto, e a medição mostra onde. Existe uma
+  # segunda forma legítima que SE ESCREVE mesmo dentro de uma `async fn`:
+  # mandar o trabalho bloqueante para OUTRA thread. Medido, tudo dentro de uma
+  # `async fn`, tudo correto, e tudo a disparar na versão sem exclusão:
+  #
+  #     thread::spawn(|| { thread::sleep(d); })       -- outra thread
+  #     tokio::task::spawn_blocking(|| { ... })       -- a correção canónica
+  #     async_std::task::spawn_blocking(|| { ... })
+  #     rt.spawn_blocking(|| { ... })                 -- chamada por método
+  #     thread::Builder::new().spawn(|| { ... })
+  #
+  # A segunda dessas é A CORREÇAO QUE A PRÓPRIA MENSAGEM PRESCREVE. Uma regra
+  # que acusa a sua própria correção é exatamente o defeito que matou o
+  # candidato `unwrap-in-drop` nesta ronda, por isso a exclusão abaixo existe.
+  #
+  # E POR ISSO É QUE A EXCLUSAO EXIGE UM CLOSURE, e não apenas um nome com
+  # `spawn`. Uma primeira versão excluía qualquer chamada cujo nome contivesse
+  # `spawn`, e isso engolia `tokio::spawn(async move { thread::sleep(d); })`,
+  # que é um BUG A SERIO — o `tokio::spawn` agenda o future NO MESMO executor,
+  # ao contrário do `spawn_blocking`. Medido nas duas versões, sobre dez
+  # formas: a versão por nome apanha 1 de 2 bugs e a versão com closure apanha
+  # os 2, excluindo as mesmas oito formas corretas.
+  #
+  # A distinção é estrutural e é o que a torna fiável: as chamadas que tiram o
+  # trabalho do executor recebem um CLOSURE (`|| { ... }`, `move || { ... }`),
+  # e as que o mantêm no executor recebem um FUTURE (um bloco `async`). Dois
+  # ramos — chamada livre e chamada por método — chegam, porque o `move` de um
+  # closure é ignorado pelo motor; ver a nota junto ao `pattern-not-inside`.
+  #
+  # Mesmo assim a lista de nomes não fecha: uma função de aplicação chamada
+  # `run_off_thread` ou `blocking_pool` que receba um closure faz o mesmo e
+  # emite. Ou seja, a correção desta regra depende de reconhecer um invólucro
+  # que ela não consegue enumerar, que é palavra por palavra a condição de
+  # WARNING do §4. ERROR exigiria que não houvesse invólucro nenhum a
+  # reconhecer, como no `throw ex;` de C#, onde a forma correta é outro nó da
+  # AST.
+  #
+  # FALSO NEGATIVO DECLARADO, em vez de implícito: O BLOCO `async` SOLTO. A
+  # âncora é `async fn`, por isso um `async { ... }` ou `async move { ... }`
+  # escrito dentro de uma `fn` SINCRONA não casa — medido, e a forma comum é
+  # `tokio::spawn(async move { thread::sleep(d); })` no `main`. O bug é o
+  # mesmo e a regra não o vê. Um bloco `async` DENTRO de uma `async fn` casa,
+  # porque aí o `pattern-inside` já se aplica; é só o bloco sem `async fn` por
+  # cima que escapa. Não foi fechado porque acrescentar `pattern-inside:
+  # async { ... }` precisa de ser medido contra a hipótese oposta — um bloco
+  # `async` construído e nunca sondado por executor nenhum —, e essa medição
+  # não foi feita nesta ronda. Ficaria mal fechá-la a adivinhar num pack cujo
+  # argumento inteiro é que os doze candidatos que faltam foram MEDIDOS.
+  #
+  # ID: o token `race.condition` classifica em `race_condition` no
+  # `mapSubcategory`. Verificado contra o classificador COMPILADO. Cuidado com
+  # `unchecked` (vai para error_handling), `concurren` (race_condition, e a
+  # cadeia testa-o primeiro) e, em Rust, com `boundary` / `overflow` /
+  # `underflow` / `out.of.range`, que vão todos para `off_by_one` porque
+  # `edge_case` é testado em último lugar.
+  - id: bugfix-rs-race-condition-blocking-sleep-in-async
+    patterns:
+      # (b) acima: a grafia QUALIFICADA é a larga. Não acrescente um
+      # `pattern-either` com `thread::sleep(...)` — é um subconjunto estrito.
+      - pattern: std::thread::sleep(...)
+      # (a) acima: SEM `-> $R`. Com ele, metade dos bugs desaparece.
+      - pattern-inside: |
+          async fn $F(...) { ... }
+      # O trabalho bloqueante mandado para fora do executor está correto.
+      # Ancorado no NOME e não no caminho, para cobrir qualquer crate — medido:
+      # um `pattern-not-inside: tokio::task::spawn_blocking(...)` deixa passar
+      # a grafia do `async_std` e a chamada por método. E ancorado no CLOSURE,
+      # para NAO cobrir `tokio::spawn(async move { ... })`, que mantém o
+      # trabalho no executor e é um bug a sério.
+      #
+      # DOIS ramos, e nao quatro: o `move` de um closure e IGNORADO pelo
+      # frontend de Rust do Semgrep. Medido nas duas direçoes — `|| { ... }`
+      # casa `move || { ... }` E `move || { ... }` casa `|| { ... }` —, por
+      # isso um par {closure, move closure} e mutuamente redundante e as duas
+      # metades leem DEAD na ablaçao. Foi assim que se descobriu: a primeira
+      # versao tinha os quatro ramos e o passe de PARES da ablaçao devolveu
+      # MOVES para {`$SPAWN(||…)`, `$SPAWN(move ||…)`} e para o par gemeo por
+      # metodo. As fixtures de misses/ mantem as duas grafias na mesma, porque
+      # sao as duas codigo correto e e o que prova esta simetria.
+      - pattern-not-inside:
+          patterns:
+            - pattern-either:
+                - pattern: $SPAWN(|| { ... })
+                - pattern: $X.$SPAWN(|| { ... })
+            # Sem isto a exclusao apanha QUALQUER chamada que receba um
+            # closure — medido: `retry(|| { thread::sleep(d); })` dentro de uma
+            # `async fn` deixa de disparar, e isso e um bug a serio, porque o
+            # `retry` corre o closure na propria thread do executor. E a
+            # fixture `retry` em hits/ que torna esta clausula mensuravel; sem
+            # ela lia DEAD por falta de forma, que e a segunda das tres causas
+            # de DEAD listadas no CLAUDE.md.
+            - metavariable-regex:
+                metavariable: $SPAWN
+                regex: (.*::)?[a-z_]*spawn[a-z_]*
+    message: >-
+      `std::thread::sleep` dentro de uma `async fn` bloqueia a THREAD do
+      executor, e não apenas esta tarefa: todas as outras tarefas agendadas
+      nessa thread ficam paradas até ela regressar. Use o sleep do runtime, que
+      devolve um future — `tokio::time::sleep(d).await` ou
+      `async_std::task::sleep(d).await`. Se o trabalho bloqueante for mesmo
+      necessário, mova-o para `tokio::task::spawn_blocking(...)`.
+    severity: WARNING
+    languages: [rust]

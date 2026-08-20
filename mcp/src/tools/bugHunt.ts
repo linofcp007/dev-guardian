@@ -441,8 +441,8 @@ registerToolModule(
     name: 'bug_hunt',
     title:
       'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python, Go, ' +
-      'Java, C# and PHP bug rules; optional language packs, off by default; other languages ' +
-      'still registry-only)',
+      'Java, C# and PHP bug rules, plus ONE Rust rule; optional language packs, off by ' +
+      'default; other languages still registry-only)',
     description:
       'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus local, always-on ' +
       'JS/TS, Python, Go, Java, C# and PHP rule packs: `configs/semgrep/bugfix-js.yml` (thirteen ' +
@@ -458,7 +458,17 @@ registerToolModule(
       'first measured against an external corpus (WordPress 6.9, 1467 files) from the start, ' +
       'and ZERO of its six rules sit at ERROR: the closest candidate, `empty-catch`, produced ' +
       'ten findings there and every one is a deliberate empty catch carrying an explanatory ' +
-      'comment, which Semgrep cannot read. `commands/guardian-fix.md` also ' +
+      'comment, which Semgrep cannot read. Rust is NOT one of those languages: ' +
+      '`configs/semgrep/bugfix-rs.yml` holds exactly ONE rule, ' +
+      '`blocking-sleep-in-async` (a `std::thread::sleep` inside an `async fn`, which blocks ' +
+      'the executor thread and stalls every other task on it), and covers one of the six ' +
+      'subcategories, race_condition. It is not partial Rust coverage and must not be ' +
+      'reported as such: four of the six classes are COMPILE ERRORS in Rust (E0502, E0515, ' +
+      'E0373, E0599) and for the rest the answer is `cargo clippy` — default already catches ' +
+      '`await_holding_lock`, `-W clippy::pedantic` adds more, and the `restriction` group ' +
+      'adds `unwrap_used`, `mem_forget`, `indexing_slicing`. Tell Rust users to configure ' +
+      'clippy; dev-guardian adds exactly the one rule clippy has no equivalent for. ' +
+      '`commands/guardian-fix.md` also ' +
       'names "broken happy paths" as a bug-hunting focus; that is not a syntactic pattern, ' +
       'so only its commonest concrete form is covered (an un-awaited mutating call inside ' +
       'an async function — rule `floating-mutation`, the race_condition entry, covering async ' +
@@ -614,14 +624,23 @@ registerToolModule(
       'Checkstyle/IntelliJ convention and never fires when the exception variable is named ' +
       '`ignore`, `ignored` or `expected` — the flip side being that a genuinely swallowed ' +
       'exception escapes the rule simply by being named `ignored`. The same trade has a second ' +
-      'edge worth stating outright, because `empty-catch` is now the ONLY rule left at ERROR ' +
-      'and the whole tier argument rests on it: the JUnit expected-exception idiom (call the ' +
-      'code, `throw new AssertionError` if it did not throw, empty `catch`) fires at ERROR when ' +
+      'edge: the JUnit expected-exception idiom (call the ' +
+      'code, `throw new AssertionError` if it did not throw, empty `catch`) fires when ' +
       'the caught variable is named `e`, and is silent when it is named `expected` — the test ' +
-      'idiom has to use the conventional name. ' +
-      'READ THIS BEFORE WONDERING WHY A JAVA FIX PR CAME BACK EMPTY: seven of these eight ' +
+      'idiom has to use the conventional name. `empty-catch` was the LAST Java rule at ERROR ' +
+      'and it moved to WARNING once it was measured against an external corpus, which no ' +
+      'earlier round had done. On OpenJDK (12 593 files of `src/*/share/classes`) it produces ' +
+      '1589 findings in 770 files, and 903 of them — 56.8% — declare the intent in a COMMENT ' +
+      'inside the empty catch, which Semgrep cannot read (`// ignore`, `// Expected or ' +
+      'ignored`, `// swallow, since it should never happen`); another 27 declare it in a name ' +
+      'the rule does not recognise (`cannotHappen` x13, `_` x10 — Java 21 unnamed variable — ' +
+      '`unused` x2). An inverted-regex probe puts the recognised spelling at 139, so the ' +
+      'Checkstyle/IntelliJ convention the ERROR tier rested on covers 8.0% (139/1728) of the ' +
+      'corpus empty catches. 45 findings were read individually; about 39 were deliberate. ' +
+      'Four languages have now tested that premise and four have refuted it. ' +
+      'READ THIS BEFORE WONDERING WHY A JAVA FIX PR CAME BACK EMPTY: ALL EIGHT of these ' +
       'rules are WARNING, and create_fix_pr defaults severity_min to `high`, so the Java pack ' +
-      'contributes almost nothing to the DEFAULT fix-PR set — ask for it with ' +
+      'contributes NOTHING AT ALL to the DEFAULT fix-PR set — ask for it with ' +
       '`severity_min: "medium"`. bug_hunt itself does not filter by default, so nothing ' +
       'disappears from a SCAN; only the fix PR is affected. That default was deliberately NOT ' +
       'changed here: it affects all four language packs and is a separate decision. The tier ' +
@@ -629,11 +648,13 @@ registerToolModule(
       'rather than the pattern — is what the rule EMITS always a bug? A rule whose ' +
       'correctness depends on having recognised a GUARD emits a false positive every time it ' +
       'meets a guard shape nobody enumerated, and no exclusion list closes that, because the ' +
-      'guard can always be one method away. Only `empty-catch` clears that bar, and it clears ' +
-      'it for the one reason available: its escape hatch is not a guard but a DECLARATION OF ' +
-      'INTENT the rule itself reads (the Checkstyle/IntelliJ ignore/ignored/expected ' +
-      'convention), so what it emits afterwards is an UNMARKED silent swallow — a bug ' +
-      'whatever the author meant. One rule in eight is the honest result for a syntactic ' +
+      'guard can always be one method away. NOTHING clears that bar in Java. `empty-catch` ' +
+      'held it longest on the one reason available — its escape hatch is not a guard but a ' +
+      'DECLARATION OF INTENT the rule itself reads (the Checkstyle/IntelliJ ' +
+      'ignore/ignored/expected convention), so what it emits afterwards would be an UNMARKED ' +
+      'silent swallow — and the OpenJDK measurement above refutes the "unmarked" half: the ' +
+      'mark is a comment, and the name the rule reads covers 8% of real occurrences. ' +
+      'Zero rules in eight is the honest result for a syntactic ' +
       'matcher with no dataflow, not a failure of the pack. `map-get-deref`, ' +
       '`modify-during-iteration`, `static-dateformat` and `loop-lte-length` were demoted on ' +
       'that criterion. `loop-lte-length` only after the obvious tightening was MEASURED and ' +
@@ -705,8 +726,8 @@ registerToolModule(
       'else-arm bug — pattern-not-inside excludes the whole node it matched — but on the ' +
       'TEMPORAL axis rather than the branch axis, and not fixable without dataflow; and (10) ' +
       'the same two rules on a guard held in a LOCAL BOOLEAN, the recall mirror of (8). ' +
-      'JS/TS, Python, Go and Java only: no other language has ' +
-      'a local rule pack yet, so C#, PHP, Ruby and Rust get only the ' +
+      'JS/TS, Python, Go, Java, C# and PHP only: Rust has a single rule and no other ' +
+      'language has a local rule pack yet, so Ruby gets only the ' +
       'registry coverage described below, same as before these packs existed. The local ' +
       'packs degrade rather than failing the whole scan if one is ever hand-edited into a bad ' +
       'state — a YAML syntax error drops just that file and retries with everything else, a ' +
@@ -729,11 +750,14 @@ registerToolModule(
       'redundant" — measured (exact rule-id duplication): 22% overall, but only ~9% for the ' +
       'JS/TS packs specifically (up to 40-43% for Java/Go) — most of what they add, especially ' +
       'for JS/TS, is net-new security scanning, not duplicate coverage. Beyond the local ' +
-      'JS/TS, Python, Go and Java packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
+      'JS/TS, Python, Go, Java, C# and PHP packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
       'registry pack reaching these six classes, and only for Python and Go — Java, C#, ' +
-      'PHP, Ruby and Rust get none of them from the registry; C#, PHP, Ruby and Rust have ' +
-      'none yet from a local pack either (Java does — `configs/semgrep/bugfix-java.yml`, ' +
-      'described above). On any of those languages, a quiet or security-only result (with or ' +
+      'PHP, Ruby and Rust get none of them from the registry. Locally, Java, C# and PHP now ' +
+      'have full packs (described above), Rust has exactly one rule and no more, and Ruby ' +
+      'has nothing at all — by measurement rather than backlog: Semgrep\'s Ruby ' +
+      'frontend erases `&.` and the `..`/`...` distinction, so a nil-safety or off-by-one ' +
+      'rule matches the CORRECT code identically, and RuboCop plus the registry\'s p/ruby is ' +
+      'the honest answer there. On any of those languages, a quiet or security-only result (with or ' +
       'without the language packs) is not evidence of a bug-free project; pair with ' +
       "`scan_sast` or the guardian-bugfix skill's manual review. " +
       'Findings are categorised as `bug`, with subcategories (race_condition, null_safety, ' +

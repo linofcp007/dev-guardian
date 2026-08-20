@@ -62,32 +62,65 @@
 # ---------------------------------------------------------------------------
 # OS TIERS, e a consequência prática que ninguém quer descobrir sozinho.
 #
-# Sete das oito regras estão em WARNING. Uma única, a `empty-catch`, está em
-# ERROR. Não é desleixo: é o critério do §4 do design aplicado a frio, na sua
-# forma geral — a pergunta não é "o que é que a regra procura?" mas "aquilo
-# que a regra EMITE é sempre um bug?". Uma regra cuja correção depende de ter
-# reconhecido uma GUARDA falha sempre que encontra uma guarda que ninguém
-# enumerou, e a guarda pode estar a um método de distância, fora do alcance de
-# qualquer matcher sintático. Num motor sem dataflow quase nada passa nesta
-# barra; uma em oito é o resultado honesto, não uma falha do pack.
+# AS OITO REGRAS ESTAO EM WARNING. Nenhuma em ERROR. Não é desleixo: é o
+# critério do §4 do design aplicado a frio, na sua forma geral — a pergunta
+# não é "o que é que a regra procura?" mas "aquilo que a regra EMITE é sempre
+# um bug?". Uma regra cuja correção depende de ter reconhecido uma GUARDA
+# falha sempre que encontra uma guarda que ninguém enumerou, e a guarda pode
+# estar a um método de distância, fora do alcance de qualquer matcher
+# sintático. Num motor sem dataflow quase nada passa nesta barra; zero em oito
+# é o resultado honesto, não uma falha do pack.
 #
-# CONSEQUÊNCIA: o parser do Semgrep mapeia ERROR -> `high` e WARNING ->
-# `medium`, e o `create_fix_pr` tem `severity_min` a `high` por omissão. Com
-# sete das oito em WARNING, este pack praticamente NÃO CONTRIBUI para o
-# conjunto de fixes por omissão. Quem quiser bugs de Java corrigidos tem de
-# pedir: `severity_min: "medium"`. O `bug_hunt` não filtra por omissão, por
-# isso nada desaparece de um scan — o que muda é só o fix-PR.
+# A `empty-catch` esteve em ERROR durante toda a série, com o argumento de que
+# a sua válvula de escape não era uma guarda mas uma DECLARACAO DE INTENCAO
+# que a própria regra lê — a convenção Checkstyle/IntelliJ `ignore` /
+# `ignored` / `expected`. O argumento era bom e a premissa era falsa, e foi
+# preciso medi-la para o saber. MEDIDO em 12 593 ficheiros do OpenJDK (tag do
+# dia, `src/*/share/classes`, código que ninguém aqui escreveu nem escolheu):
+# 1589 findings em 770 ficheiros. 903 deles — 56,8 % — trazem um COMENTARIO
+# explicativo dentro do próprio catch vazio ("// ignore", "// Expected or
+# ignored", "// swallow, since it should never happen", "// Ignoring
+# exception causes specified default to be returned"). Outros 27 declaram a
+# intenção NO NOME, num nome que esta regra não reconhece: `cannotHappen`
+# (13), `_` (10 — a variável sem nome do Java 21, que é precisamente "não uso
+# este binding"), `unused` (2), `ignored0` e `ignored1` (a regex está
+# ancorada, por isso o sufixo dispara). Amostra de 45 lidos um a um: cerca de
+# 39 deliberados. A intenção ESTA declarada; está declarada num comentário que
+# o Semgrep não lê e num vocabulário maior do que estas tres palavras. Isso é
+# o critério, não uma exceção a ele — a mesma conclusão a que o pack de JS/TS,
+# o de PHP e o de Ruby chegaram, cada um pela sua via.
+#
+# QUANTO É QUE A CONVENCAO COBRE, medido em vez de suposto: uma sonda com a
+# regex invertida (`^(ignore|ignored|expected)$`) encontra 139 catches vazios
+# assim nomeados no mesmo corpus. 139 + 1589 = 1728 catches vazios no total,
+# por isso a convenção — a que sustentava o tier — cobre 8,0 % das ocorrencias
+# reais. Existe, ao contrário do que se passa em JS/TS; simplesmente não é
+# como o Java se escreve. (Para escala: em Ruby a grafia equivalente cobria
+# 2,7 %.)
+#
+# A saída pelo nome fica onde está: continua a ser a única forma de silenciar
+# um caso em código em vez de com `// nosemgrep`, e as tres palavras são as
+# dos dois linters standard de Java. Só não é evidência de que a regra é
+# precisa — no OpenJDK inteiro cobre 8 % das ocorrencias reais.
+#
+# CONSEQUÊNCIA, e agora é a manchete: o parser do Semgrep mapeia ERROR ->
+# `high` e WARNING -> `medium`, e o `create_fix_pr` tem `severity_min` a
+# `high` por omissão. Com as oito em WARNING, este pack NAO CONTRIBUI DE TODO
+# para o conjunto de fixes por omissão. Quem quiser bugs de Java corrigidos
+# tem de pedir: `severity_min: "medium"`. O `bug_hunt` não filtra por omissão,
+# por isso nada desaparece de um scan — o que muda é só o fix-PR.
 # ---------------------------------------------------------------------------
 rules:
-  # A única regra do pack que fica em ERROR, e o critério do §4 explica porquê.
-  # A pergunta é "aquilo que a regra emite é sempre um bug?", e aqui a resposta
-  # é sim, porque esta regra não depende de reconhecer guarda nenhuma. A sua
-  # válvula de escape não é uma guarda: é uma DECLARAÇÃO DE INTENÇÃO que a
-  # própria regra lê, escrita no nome da variável. Depois de a honrar, o que
-  # sobra e é emitido é um catch que engole a falha sem o declarar em lado
-  # nenhum — e isso é bug independentemente do que o autor tencionava. As
-  # outras sete regras não têm nada equivalente: todas dependem de ter visto
-  # uma guarda, e nenhuma consegue ver todas.
+  # WARNING desde a ronda do corpus externo, e ESTEVE em ERROR até lá — a
+  # única do pack. O argumento era o do §4: esta regra não depende de
+  # reconhecer guarda nenhuma, porque a sua válvula de escape não é uma guarda
+  # mas uma DECLARAÇÃO DE INTENÇÃO que a própria regra lê, escrita no nome da
+  # variável; honrada essa, o que sobra seria um catch que engole a falha sem
+  # o declarar em lado nenhum. O argumento estava certo e a premissa estava
+  # errada: em 12 593 ficheiros do OpenJDK, 903 dos 1589 findings declaram a
+  # intenção — num COMENTARIO, que o Semgrep não lê. A grafia que a regra
+  # reconhece cobre 8,0 % dos catches vazios do corpus. O bloco OS TIERS, no
+  # cabeçalho, tem os números e a leitura.
   #
   # A exclusão é pelo NOME da variável, não por comentário, e a razão é que o
   # Semgrep casa a AST — os comentários não estão lá. Um catch documentado
@@ -97,7 +130,12 @@ rules:
   # o EmptyCatchBlock do Checkstyle aceita `ignore` e `expected` por omissão,
   # a inspeção do IntelliJ aceita `ignored`. Medido: `e`, `ex`, `ignoreMe` e
   # `expectedly` continuam a disparar — a regra ganha vocabulário, não perde
-  # força.
+  # força. O que a medição acrescenta é que o vocabulário REAL do OpenJDK é
+  # maior do que estas tres palavras e não se sobrepõe a elas: `cannotHappen`
+  # (13), `_` (10 — a variável sem nome do Java 21), `unused` (2). Alargar a
+  # lista foi considerado e recusado: `_` é o caso forte, mas cada palavra
+  # nova é mais uma forma de um bug real escapar por se chamar bem, e o tier
+  # já não depende disto.
   #
   # DUAS FORMAS DE `try`, e a segunda foi um falso negativo publicado. Um `try`
   # COM finalizador é um nó de AST diferente de um `try` sem ele, por isso
@@ -132,8 +170,9 @@ rules:
     message: >-
       Catch vazio. A exceção foi apanhada e deitada fora sem log, sem rethrow e
       sem tratamento, por isso a falha desaparece e o código segue como se
-      nada fosse.
-    severity: ERROR
+      nada fosse. Se o silencio for mesmo deliberado, declare-o no nome:
+      `catch (NumberFormatException ignored)`.
+    severity: WARNING
     languages: [java]
 
   # WARNING e não ERROR: num `main` descartável imprimir o stack trace e seguir

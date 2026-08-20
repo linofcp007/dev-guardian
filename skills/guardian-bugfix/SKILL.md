@@ -150,10 +150,16 @@ conclusão: estão marcados. Estão marcados com um **comentário**, que o Semgr
 não lê. Uma declaração de intenção que a regra não consegue reconhecer é
 exatamente o critério.
 
-É o mesmo raciocínio que mantém a `empty-catch` **do Java** em `ERROR`, e não
-uma contradição dele: a regra Java passa o critério porque **consegue** ler o
-marcador de intenção do seu ecossistema — a convenção Checkstyle/IntelliJ de
-chamar ao binding `ignore`/`ignored`/`expected`. JS/TS não tem equivalente com
+É o mesmo raciocínio que acabou por descer a `empty-catch` **do Java e do C#**
+a `WARNING` também. A regra de Java aguentou-se três rondas em `ERROR` com o
+argumento de que **consegue** ler o marcador de intenção do seu ecossistema — a
+convenção Checkstyle/IntelliJ de chamar ao binding `ignore`/`ignored`/
+`expected`. Medida no OpenJDK, essa convenção cobre **8,0 %** dos catches
+vazios reais, enquanto **56,8 %** dos 1589 findings declaram a intenção num
+**comentário**. Em C# é pior: `ignore`/`ignored`/`expected` aparecem **zero**
+vezes em 11 800 ficheiros do `dotnet/runtime`, 93 % dos 402 findings estão
+escritos `catch (Tipo) { }` ou `catch { }` (sem nada para nomear), e o
+`dotnet build` emite **CS0168** na grafia que a própria regra prescreve. JS/TS não tem equivalente com
 o mesmo peso, e a razão é estrutural e não cultural: **o optional catch binding
 do ES2019 tirou o identificador a que uma convenção de nomes se agarraria.** 41
 dos 42 estão escritos `catch {`, sem nada para nomear. O ecossistema marca a
@@ -467,15 +473,13 @@ auto-documentada de dizer "de propósito" sem um comentário de supressão — e
 reverso é que uma exceção genuinamente engolida escapa à regra só por ter esse
 nome.
 
-O segundo gume da mesma troca vale ser dito, porque a `empty-catch` é agora a
-**única** regra em ERROR e todo o argumento dos tiers assenta nela: o idioma
-JUnit de exceção esperada dispara em ERROR quando a variável apanhada se chama
-`e`, e fica calada quando se chama `expected`. O idioma de teste tem de usar o
-nome convencional.
+O segundo gume da mesma troca vale ser dito: o idioma JUnit de exceção esperada
+dispara quando a variável apanhada se chama `e`, e fica calada quando se chama
+`expected`. O idioma de teste tem de usar o nome convencional.
 
 ```java
 try { parse("nope"); throw new AssertionError("devia ter lançado"); }
-catch (NumberFormatException e) { }          // dispara em ERROR
+catch (NumberFormatException e) { }          // dispara
 catch (NumberFormatException expected) { }   // calado
 ```
 
@@ -537,11 +541,18 @@ fixtures reporta `paths.scanned = 0`, e por isso o controlo positivo desse pack
 forma de distinguir "aditivo" de "nunca correu". O `p/csharp` e o
 `p/security-audit` varrem todos os ficheiros e não encontram nada.
 
-**Duas das doze estão em `ERROR`**, a melhor proporção da série, e a razão é
-estrutural: o C# tem um defeito — `throw ex;` dentro de um `catch` — cuja forma
-*correta*, `throw;`, é **outro nó da AST**. Não há guarda para reconhecer
-porque não há nada a guardar, que é a única maneira de passar o critério do §4
-num motor sem dataflow.
+**Uma das doze está em `ERROR`**, e a razão é estrutural: o C# tem um defeito —
+`throw ex;` dentro de um `catch` — cuja forma *correta*, `throw;`, é **outro nó
+da AST**. Não há guarda para reconhecer porque não há nada a guardar, que é a
+única maneira de passar o critério do §4 num motor sem dataflow.
+
+A `empty-catch` estava lá ao lado e desceu a `WARNING` quando foi medida contra
+o `dotnet/runtime`: 402 findings em 11 800 ficheiros, **374 deles (93 %)
+escritos `catch (Tipo) { }` ou `catch { }`** — grafias sem identificador
+nenhum, onde a isenção por nome não tem onde se agarrar. Dos 28 que ligam um
+nome, nenhum usa `ignore`/`ignored`/`expected`. E o compilador explica porquê:
+`catch (FormatException ignored) { }` emite **CS0168** ("variável declarada e
+nunca usada"), enquanto as duas grafias sem nome compilam sem aviso.
 
 **Um oráculo independente, e é o primeiro da série.** O `dotnet build` emite
 `CA2200` para `throw ex;` dentro de um catch, e dispara exatamente nos mesmos
@@ -620,11 +631,13 @@ encontrava nada.
 candidata mais próxima era a `empty-catch`, e o código real refutou-a: as
 **dez** ocorrências dela no WordPress são todas silêncios deliberados com
 comentário a explicar — `//Do nothing` no PHPMailer, um parágrafo inteiro no
-php-ai-client — e o Semgrep não lê comentários. Java e C# enviam esta regra em
+php-ai-client — e o Semgrep não lê comentários. Java e C# enviavam esta regra em
 `ERROR` sobre a premissa de que um engolir não declarado é bug independentemente
-da intenção; nenhum dos dois mediu essa premissa contra código externo, porque
-não tinham corpus. O PHP é a terceira linguagem a testá-la e a primeira com
-dados.
+da intenção; à data nenhum dos dois tinha medido essa premissa contra código
+externo, porque não tinham corpus. O PHP é a terceira linguagem a testá-la e a
+primeira com dados. Os dois foram medidos entretanto — OpenJDK e
+`dotnet/runtime` — e a premissa caiu nos dois: a regra está hoje em `WARNING`
+em Java e em C#, o que deixa o Java a 0 de 8 em `ERROR` e o C# a 1 de 12.
 
 **Três armadilhas de PHP que valem por si:**
 
@@ -637,9 +650,84 @@ dados.
   padrão de AST. Importa porque é assim que o PHP moderno declara silêncio
   deliberado: o buraco é também uma auto-isenção.
 
+### Rust: uma regra, e uma regra é a resposta toda
+
+Para Rust, o `bug_hunt` corre também por default `configs/semgrep/bugfix-rs.yml`
+— **uma** regra, e o número não é um trabalho por acabar. É
+`bugfix-rs-race-condition-blocking-sleep-in-async`: um `std::thread::sleep`
+dentro de uma `async fn`, que bloqueia a **thread** do executor e deixa paradas
+todas as outras tarefas agendadas nela.
+
+**Não digas ao utilizador que o dev-guardian cobre Rust.** Cobre *isto*. Uma
+sondagem mediu treze candidatas e matou doze, e vale a pena saber porquê antes
+de propores acrescentar regras:
+
+- **Quatro das seis classes são erros de compilação.** Escritas e dadas ao
+  `rustc`: modify-during-iteration é `E0502`, use-after-free é `E0515`, a
+  corrida sobre estado partilhado é `E0373`/`E0503`, o null dereference é
+  `E0599`. Não são raras — são impossíveis em código que compila, que é todo o
+  código que existe.
+- **Para o resto a resposta é o `cargo clippy`**, e os lints dele com
+  consciência de tipos ganham a todos os equivalentes de Semgrep que foram
+  medidos. Por omissão já apanha o `await_holding_lock`;
+  `-W clippy::pedantic` acrescenta `float_cmp`, `future_not_send`,
+  `missing_panics_doc`; o grupo `restriction`, lint a lint, acrescenta
+  `unwrap_used`, `mem_forget`, `indexing_slicing`, `string_slice`. **Quando um
+  utilizador de Rust pedir mais cobertura de bugs, a recomendação é configurar
+  o clippy**, não escrever mais regras aqui.
+- **Duas candidatas foram mortas por código real**, depois de passarem as
+  próprias fixtures: a `mem-forget` deu 43 achados e **zero** verdadeiros
+  positivos em 1200 ficheiros de biblioteca padrão, e a `unwrap-in-drop` acusa
+  `if !thread::panicking() { r.unwrap(); }`, que é a mitigação canónica — a
+  regra acusa a correção. As duas teriam passado numa ronda ao estilo do C#,
+  onde o eixo de código real não estava disponível.
+- **A `guard-across-await` é mais precisa do que o lint que duplica** (5
+  verdadeiros e 0 falsos, contra 5 e 2 do `clippy::await_holding_lock`) e mesmo
+  assim não entrou: duplicar um lint que está **ligado por omissão** para ganhar
+  dois falsos positivos não paga uma regra.
+
+**A regra está em `WARNING`, e a decisão foi contra a leitura da sondagem.** O
+argumento para `ERROR` era que a forma legítima mais próxima — um helper
+deliberadamente bloqueante — não se escreve como `async fn`. É verdade, mas há
+uma segunda forma legítima que **se escreve mesmo dentro de uma `async fn`**:
+mandar o trabalho bloqueante para outra thread. Todas estas foram medidas
+dentro de uma `async fn`, todas corretas, e todas disparavam antes de existir a
+exclusão:
+
+```rust
+thread::spawn(|| { thread::sleep(d); });
+tokio::task::spawn_blocking(|| { … });     // a correção que a regra prescreve
+async_std::task::spawn_blocking(|| { … });
+rt.spawn_blocking(|| { … });
+thread::Builder::new().spawn(|| { … });
+```
+
+A regra exclui-as pelo **nome** da chamada e não pelo caminho — ancorar no
+caminho deixava passar a grafia do `async_std` e a chamada por método — **e**
+pelo **closure** e não só pelo nome, porque `tokio::spawn(async move { … })`
+mantém o trabalho no executor e é um bug a sério: recebe um future, não um
+closure. As duas metades da exclusão têm uma fixture que falha sem elas.
+
+Mas uma lista de nomes nunca fecha: um helper de aplicação chamado
+`run_off_thread` que receba um closure faz o mesmo e continua a disparar. É
+exatamente a condição de `WARNING` do §4 — correção dependente de reconhecer um
+invólucro que o matcher não consegue enumerar.
+
+**Um falso negativo declarado, e é o maior:** um bloco `async` solto dentro de
+uma `fn` **síncrona** — `tokio::spawn(async move { thread::sleep(d); })` no
+`main` — não é apanhado, porque a âncora é `async fn`. O bug é o mesmo. Não foi
+fechado porque a alternativa exige medir a hipótese oposta (um bloco `async`
+construído e nunca sondado) e essa medição não foi feita.
+
+**Ruby não tem pack nenhum, e também isso foi medido.** O frontend de Ruby do
+Semgrep apaga o `&.` e a distinção entre `..` e `...` — `x&.a.b` e `x.a.b`
+produzem ASTs byte a byte iguais —, por isso qualquer regra de nil-safety ou de
+off-by-one casa a forma **correta** e a forma com bug de maneira idêntica. Para
+Ruby, recomenda o RuboCop e o `p/ruby` do registry, que é genuinamente vivo.
+
 ### Os tiers, e porque é que o teu fix PR de Java pode vir vazio
 
-**Sete das oito regras estão em `WARNING`. Só a `empty-catch` está em `ERROR`.**
+**As oito regras estão em `WARNING`. Nenhuma está em `ERROR`.**
 
 O critério é o do design (§4), aplicado a frio e enunciado como uma pergunta
 sobre o *output* em vez de sobre o padrão:
@@ -651,15 +739,28 @@ depende de ter reconhecido uma **guarda** emite um falso positivo sempre que
 encontra uma forma de guarda que ninguém enumerou — e nenhuma lista de
 exclusões fecha isso, porque a guarda pode estar sempre a um método de
 distância, onde um matcher sintático não chega. Num motor sem dataflow quase
-nada passa nesta barra: **uma em oito é o resultado honesto, não uma falha do
+nada passa nesta barra: **zero em oito é o resultado honesto, não uma falha do
 pack.**
 
-A `empty-catch` passa por uma razão que vale a pena nomear, porque é a única
-disponível: a sua válvula de escape **não é uma guarda**. É uma *declaração de
-intenção que a própria regra lê* — a convenção `ignore` / `ignored` /
-`expected` do Checkstyle / IntelliJ. Depois de a honrar, o que ela emite é um
-engolir de exceção **não declarado**, e isso é bug independentemente do que o
-autor tencionava.
+A `empty-catch` foi a última a descer, e aguentou-se por uma razão que vale a
+pena nomear porque era a única disponível: a sua válvula de escape **não é uma
+guarda**. É uma *declaração de intenção que a própria regra lê* — a convenção
+`ignore` / `ignored` / `expected` do Checkstyle / IntelliJ. Depois de a honrar,
+o que ela emite seria um engolir de exceção **não declarado**.
+
+O argumento estava certo; a premissa não. **Medido no OpenJDK** (12 593
+ficheiros de `src/*/share/classes`, código que ninguém aqui escreveu nem
+escolheu): **1589 findings em 770 ficheiros**, e **903 deles — 56,8 % — trazem
+um comentário explicativo dentro do próprio catch vazio** (um bloco só com
+comentário é vazio para a AST, e é por isso que dispara). Mais 27 declaram a
+intenção num nome que a regra não conhece: `cannotHappen` ×13, `_` ×10 (a
+variável sem nome do Java 21, que significa exatamente "não uso este binding"),
+`unused` ×2. Uma sonda com a regex invertida conta **139** catches vazios com a
+grafia isenta, ou seja **8,0 %** dos 1728 do corpus. Lidos um a um, 45
+findings: cerca de 39 deliberados — o idioma de veto do Swing, o `close()` num
+`finally`, sondas de parsing e de reflexão, ciclos que tentam o próximo
+provider. A intenção **está** declarada; está declarada onde o Semgrep não
+chega, e é isso o critério.
 
 A `loop-lte-length` desceu, mas só depois de o aperto óbvio ter sido **medido e
 rejeitado**. Exigir que o corpo indexe mesmo o array (`<... $A[$I] ...>`)
@@ -673,9 +774,9 @@ os patterns ficaram como estavam e só o tier mudou.
 **Consequência prática, e é a parte que morde.** O parser mapeia `ERROR` →
 `high` e `WARNING` → `medium`. O `bug_hunt` **não filtra por omissão**, por
 isso nada desaparece de um scan. Mas o `create_fix_pr` tem `severity_min` a
-`high` por omissão — portanto, com sete das oito em `WARNING`, **o pack de Java
-praticamente não contribui para o conjunto de fixes por omissão**. Se pediste
-um fix PR de Java e veio vazio, é isto. Pede explicitamente:
+`high` por omissão — portanto, com as oito em `WARNING`, **o pack de Java não
+contribui de todo para o conjunto de fixes por omissão**. Se pediste um fix PR
+de Java e veio vazio, é isto. Pede explicitamente:
 
 ```jsonc
 { "severity_min": "medium" }   // create_fix_pr, para apanhar o pack de Java
@@ -715,20 +816,21 @@ ninguém tinha examinado.
 | 3 | FP | `off-by-one-loop-lte-length` | `i <= a.length` com o corpo protegido por `i < a.length`, ou que nunca indexa `a` | O aperto óbvio foi **tentado e rejeitado** (medição acima): troca este falso positivo por um falso negativo num bug real sem resolver o caso principal. Os patterns ficaram; o tier desceu. |
 | 4 | FP | `error-handling-printstacktrace-only` | `printStackTrace()` como fallback quando foi o próprio logger que lançou | O único sítio onde a chamada está certa; já é `WARNING`; estreito demais para codificar. |
 | 5 | FP | `map-get-deref`, `optional-get-no-ispresent`, `modify-during-iteration` | **Duas ou mais** instruções entre a guarda (ou a remoção) e a saída: `if (!m.containsKey(k)) { log(); metric(); return ""; }`, `items.remove(s); log(s); n++; break;` | Preço deliberado. A alternativa — uma reticência de statement — casa em profundidade e engole `if (!m.containsKey(k)) { if (strict) { return ""; } }` e `items.remove(s); if (done) { break; }`, que são bugs reais. Um falso negativo que esconde um bug é pior do que este falso positivo. |
-| 6 | FP | as mesmas três | Guarda delegada a um método helper: `if (!present(o)) { return d; }` | Exige análise interprocedimental, que o Semgrep OSS não faz. É a razão declarada de as três estarem em `WARNING` — e, generalizada, a razão de sete das oito regras do pack estarem lá. |
+| 6 | FP | as mesmas três | Guarda delegada a um método helper: `if (!present(o)) { return d; }` | Exige análise interprocedimental, que o Semgrep OSS não faz. É a razão declarada de as três estarem em `WARNING` — e, generalizada, a razão de as oito regras do pack estarem lá. |
 | 7 | FP | `map-get-deref` | Chave garantida fora das formas enumeradas: mapa preenchido num inicializador estático, ou mapeamento total sobre um enum declarado como `Map` | A garantia não está no caminho sintático que chega ao `get`. Excluir "qualquer mapa que alguma vez recebeu um `put`" apagaria a regra. |
 | 8 | FP | `map-get-deref`, `optional-get-no-ispresent` | Guarda guardada num **booleano local**: `boolean present = m.containsKey(k); if (!present) { return ""; }` | É dataflow, não sintaxe. O Semgrep OSS não liga o valor do local ao teste que o produziu. |
 | 9 | **FN** | `map-get-deref`, `optional-get-no-ispresent` | Garantia **invalidada** depois da guarda, dentro da região que a exclusão cobre: `if (m.containsKey(k)) { m.remove(k); return m.get(k).trim(); }`, `if (o.isPresent()) { o = Optional.empty(); return o.get(); }`, `m.put(k,"v"); m.remove(k); m.get(k).trim();`, `while (m.containsKey(k)) { m.remove(k); … }` | Cinco reproduções medidas, todas exceções garantidas, todas em silêncio. Mesma causa que o bug do ramo `else` — **o `pattern-not-inside` exclui o nó inteiro que casou** — mas no eixo **temporal** em vez do eixo dos ramos. A limitação ao ramo guardado corrigiu o eixo dos ramos; o eixo da sequência dentro desse ramo nunca foi examinado. Saber que `m.remove(k)` invalida `m.containsKey(k)` é dataflow, por isso é linha e não cláusula. A exclusão do `keySet()` herda-a. |
 | 10 | **FN** | `map-get-deref`, `optional-get-no-ispresent` | Deref guardado por um **booleano local**: `boolean present = m.containsKey(k); if (present) { m.get(k).trim(); }` | O espelho da linha 8, que regista a mesma forma como falso positivo quando o booleano guarda uma saída antecipada. As duas direções são a mesma capacidade em falta (dataflow, não sintaxe), e ter só metade escrita durante seis rondas é a assimetria de que fala o preâmbulo. |
 | 11 | FP | `map-get-deref` | As duas formas vizinhas do `keySet()` que a exclusão não alcança: `for (Map.Entry<K,V> e : m.entrySet()) { … m.get(e.getKey()) … }` e o keySet copiado para um local antes do ciclo | Na primeira a chave é `e.getKey()` e não a variável do ciclo; na segunda o cabeçalho já não menciona `keySet()`. A cláusula unifica o mapa **e** a chave de propósito, e alargá-la exige desistir de uma das unificações — os dois bugs reais que ficariam engolidos estão fixados como `b13` e `b14`. Das cinco formas corretas medidas, a cláusula fecha três. |
 
-**Isto é só para JS/TS, Python, Go e Java.** Para as restantes linguagens desta secção —
-C#, PHP, Ruby, Rust — a situação anterior mantém-se: o
+**Isto é só para JS/TS, Python, Go e Java.** C#, PHP e Rust têm as suas próprias
+limitações declaradas nas secções acima. Para a linguagem que resta —
+Ruby — a situação anterior mantém-se: o
 pack que corre por default (`p/r2c-bug-scan`) só cobre estas classes para
 Python e Go, os packs de linguagem opcionais (`p/javascript`, `p/typescript`,
 etc., ligados via `include_language_packs`) são packs de segurança e não
-acrescentam nenhuma, e nenhuma tem ainda um pack local próprio. O caminho
-fiável para elas continua a ser o raciocínio guiado por modelo desta própria
+acrescentam nenhuma, e não tem ainda um pack local próprio. O caminho
+fiável para ela continua a ser o raciocínio guiado por modelo desta própria
 skill — ficheiro a ficheiro pelas zonas críticas (secção 1) e os padrões e
 fixes da secção 4 abaixo.
 

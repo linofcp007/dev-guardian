@@ -12,7 +12,7 @@ version bump.
 
 `configs/semgrep/bugfix-php.yml`: **six** hand-authored rules, always on in
 `bug_hunt`, each with a hits/misses fixture pair. Rule counts are now 13 JS/TS,
-10 Python, 9 Go, 8 Java, 12 C# and **6 PHP**.
+10 Python, 9 Go, 8 Java, 12 C#, **6 PHP** and 1 Rust.
 
 **`memory_leak` is an EMPTY class in this pack, and that is stated rather than
 implied.** Resource tracking — `fopen`/`curl` handles — needs escape analysis
@@ -44,18 +44,21 @@ can see it. `mcp/test/fixtures/bugfix-php/fixed/fixed.php` is scanned with the
 whole pack and asserted to produce zero findings.
 
 **ZERO of the six sit at `ERROR`, and the reason indicts two packs already
-shipped.** For scale: Java 1 of 8, JS/TS 1 of 13, Python + Go 2 of 19, C# 2 of
-12. C# reached `ERROR` twice because one defect (`throw ex;`) has a correct
+shipped.** For scale, as those packs stood when this one was written: Java 1 of
+8, JS/TS 1 of 13, Python + Go 2 of 19, C# 2 of 12. C# reached `ERROR` twice
+because one defect (`throw ex;`) has a correct
 form that is a *different AST node*, so there is no guard to recognise. No PHP
 candidate has that property. The closest was `empty-catch` — which **Java and
-C# both ship at `ERROR`** — and real code refuted it: all **ten** WordPress
+C# both shipped at `ERROR`** — and real code refuted it: all **ten** WordPress
 findings are deliberate empty catches carrying an explanatory comment
 (`//Do nothing` in PHPMailer, `// Do nothing if we cannot memzero` in
 sodium_compat, a full paragraph in php-ai-client), and Semgrep cannot read
-comments. Neither Java nor C# measured that premise against external code,
+comments. Neither Java nor C# had measured that premise against external code,
 because a real corpus was unavailable for both. **Recorded here rather than
-acted on**: re-tiering those two packs is a separate change with its own
-fixture counts.
+acted on in this entry**: the re-tiering is a separate change with its own
+corpora and fixture counts, and it landed — see the `empty-catch` entry below,
+which drops the rule to `WARNING` in both, leaving Java at **0 of 8** and C# at
+**1 of 12**.
 
 **PHP is strictly easier than C# or Java in one place, and it is the round's
 free win.** Both of those packs needed an enumerated `metavariable-type` list
@@ -124,6 +127,148 @@ rather than an exclusion. Axis 3 is registered `N/A` in
 fixture tree — and was run by hand against the WordPress corpus with
 `--real-code`.
 
+### Added — one Rust rule, and one rule is the whole answer
+
+`configs/semgrep/bugfix-rs.yml`: **exactly one** hand-authored rule, always on
+in `bug_hunt`, with a hits/misses fixture pair. Rule counts are now 13 JS/TS,
+10 Python, 9 Go, 8 Java, 12 C# and **1 Rust**.
+
+**This is not partial Rust coverage and must not be read as one.** The rule is
+`bugfix-rs-race-condition-blocking-sleep-in-async` — a `std::thread::sleep`
+inside an `async fn`, which blocks the executor *thread* and stalls every other
+task scheduled on it. That is what dev-guardian finds in Rust. Everything else
+is somebody else's job, and the file header says so at length so that the next
+reader does not mistake a one-rule pack for abandoned work.
+
+**Twelve of thirteen candidates were measured and killed**, which is why. Four
+of the six bug classes are **compile errors** in Rust — `E0502` for
+modify-during-iteration, `E0515` for use-after-free, `E0373`/`E0503` for a data
+race on shared state, `E0599` for a null dereference. Not rare: impossible in
+code that compiles. For the rest the answer is `cargo clippy`, whose type-aware
+lints beat every Semgrep equivalent measured — default already catches
+`await_holding_lock`, `-W clippy::pedantic` adds `float_cmp` and
+`future_not_send`, and the `restriction` group adds `unwrap_used`,
+`mem_forget`, `indexing_slicing`. The docs now say that to Rust users
+explicitly rather than implying a gap dev-guardian intends to fill.
+
+**Two candidates that passed their own fixtures were killed by real code**, and
+this is the strongest evidence the rule-pack series has produced for the
+real-code ablation axis: `mem-forget` scored **43 findings and zero true
+positives** on ~1200 files of the actual Rust standard library, and
+`unwrap-in-drop` flags `if !thread::panicking() { r.unwrap(); }` — the
+canonical mitigation its own message prescribes. Both would have shipped under
+a C#-style round, where that axis was permanently `N/A` for want of a corpus.
+The ablation harness now accepts a Rust corpus for that axis, via
+`GUARDIAN_RUST_SRC`.
+
+**`WARNING`, not `ERROR`, and the call went against the probe's reading.** The
+argument for `ERROR` was that the nearest legitimate shape — a deliberately
+blocking helper — is not written as an `async fn`. True but incomplete: handing
+the blocking work to another thread *is* written inside an `async fn`, and
+`thread::spawn`, `tokio::task::spawn_blocking` (the fix the rule's own message
+prescribes), `async_std::task::spawn_blocking`, `rt.spawn_blocking` and
+`thread::Builder::new().spawn` all fired before the exclusion existed. The rule
+excludes them by call *name* rather than by path — anchoring on the path let
+the `async_std` spelling and the method call straight through — **and** by
+closure rather than by name alone, because a name-only exclusion swallowed
+`tokio::spawn(async move { … })`, which keeps the work on the executor and is a
+genuine bug. Both halves have a fixture that fails without them: the two shapes
+are symmetric, one bug per half. But a name list never closes, so correctness
+still depends on a wrapper the matcher cannot enumerate. That is the `WARNING`
+condition of the severity criterion word for word. The rule's one declared
+false negative points the same way: a bare `async` block in a *sync* `fn` —
+`tokio::spawn(async move { … })` in `main` — is not matched, because the anchor
+is `async fn`.
+
+**A measured Semgrep trap, running in two opposite directions in one pattern.**
+`async fn $F(...) -> $R { ... }` is the NARROW form: `-> $R` requires a written
+return type, so it found **2 of 4** bugs with `paths.scanned` healthy and zero
+errors — C#'s `var` trap in a second language. For *paths* it inverts: the
+engine resolves `use` declarations, so the fully-qualified
+`std::thread::sleep(...)` matches all three spellings (`std::thread::sleep`,
+`thread::sleep`, and a bare `sleep`) while the short `thread::sleep(...)`
+matches only one. Both directions are pinned by the fixture's finding count.
+A third member of the same family was found by the ablation harness rather than
+by reading: the `move` on a closure is **ignored, symmetrically** —
+`$F(|| { … })` matches `f(move || { … })` *and* vice versa — so enumerating
+both spellings produces a mutually redundant pair in which each half reads
+`DEAD` alone and removing both is a regression. The harness's pair pass named
+it; the rule now writes one spelling and the near-miss fixture keeps both.
+
+**Nothing ships for Ruby, also by measurement.** Semgrep's Ruby frontend erases
+`&.` and the `..`/`...` distinction — `x&.a.b` and `x.a.b` produce
+byte-identical ASTs — so every nil-safety and off-by-one rule matches the
+correct code and the buggy code identically, in the language whose signature
+runtime error is `NoMethodError` on nil. Five further candidates passed their
+fixtures at 0 false positives and were killed by 1244 files of real Ruby.
+RuboCop and the registry's `p/ruby` are the honest answer, and the docs say so.
+The full measurement is in
+`docs/superpowers/specs/2026-08-20-bugfix-rules-rust-and-ruby-decision.md`.
+
+### Changed — `error-handling-empty-catch` drops to WARNING in Java and C#, measured
+
+`bugfix-java.yml` and `bugfix-cs.yml` shipped this rule at `ERROR` on one
+premise: **an empty catch that does not declare intent is a bug whatever the
+author meant**, because the rule *reads* the intent — the Checkstyle / IntelliJ
+`ignore` / `ignored` / `expected` binding name — so what it emits afterwards is
+unmarked. Neither pack had ever tested that premise, because the ablation
+harness reports its real-code axis as `N/A` for both: this repository contains
+no Java and no C#. Three other languages had tested it and all three refuted it
+(JS/TS 42 of 42 deliberate, PHP 10 of 10, Ruby's convention at 2.7 %), and the
+PHP design recorded the gap as open rather than closing it.
+
+Both are now measured against external corpora, and **both premises fail**.
+
+**Java — OpenJDK (`openjdk/jdk` @ `e296cefb`, `src/*/share/classes`, 12 593
+files scanned): 1589 findings in 770 files.** 903 of them — **56.8 %** — carry
+an explanatory comment *inside* the empty catch, which is why they fire at all:
+a comment-only block is empty to the AST. In the corpus's own words: `// ignore`,
+`// Expected or ignored`, `// swallow, since it should never happen`, `// no op`,
+`// Ignoring exception causes specified default to be returned`. Another 27
+declare intent in a name the rule does not carry — `cannotHappen` ×13, **`_`
+×10** (Java 21's *unnamed variable*, which means precisely "unused binding", the
+same erosion ES2019 caused in JS/TS arriving from the other direction), `unused`
+×2. An inverted-regex probe puts the recognised spelling at **139**, so the
+convention the whole tier rested on covers **8.0 %** (139 of 1728) of the
+corpus's empty catches. 45 findings were read one by one; about 39 were
+deliberate — the Swing `PropertyVetoException` idiom, `close()` in a `finally`,
+parse and reflection probes, try-the-next-provider loops. **Java's pack is now
+0 of 8 at ERROR.**
+
+**C# — `dotnet/runtime` (@ `6ecee4dd`, `src/libraries/*/src/**`, 11 800 files
+scanned): 402 findings in 233 files**, and here the refutation is structural
+rather than statistical. **374 of them — 93 % — are written `catch (Type) { }`
+or `catch { }`: spellings with no identifier for a naming convention to attach
+to.** Only 28 bind a name and not one uses the exempt vocabulary (`ex` ×15, `e`
+×5). The inverted-regex probe finds `ignore` / `ignored` / `expected` **zero
+times in 11 800 files**.
+
+**The compiler is the oracle again, and this time it refutes a design
+decision.** `dotnet build` on `mcr.microsoft.com/dotnet/sdk:8.0` emits **CS0168,
+"The variable 'ignored' is declared but never used"** for
+`catch (FormatException ignored) { }` — the exact spelling this rule's own
+message prescribes — while `catch (FormatException) { }` and `catch { }` compile
+clean. The escape hatch is the one spelling C# warns you off, which explains the
+zero without appealing to taste. `CA2200` and `CA2002` confirmed this pack's
+fixtures; `CS0168` contradicts its severity, and that is worth exactly as much.
+**C#'s pack is now 1 of 12 at ERROR** — `rethrow-loses-stacktrace`, whose
+correct form really is a different AST node.
+
+**What this changes downstream.** The Semgrep parser maps `ERROR → high` and
+`WARNING → medium`, and `create_fix_pr` defaults `severity_min` to `high`. The
+**Java pack now contributes nothing at all to a default fix-PR run** and C#
+contributes one rule; ask for `severity_min: "medium"`. `bug_hunt` does not
+filter by default, so **nothing disappears from a scan** — only the fix PR is
+affected. Patterns and recall are untouched: only the tier moved, and
+`EXPECTED_SEVERITY` in both integration tests pins every rule exhaustively in
+both directions, so the flips failed the tests before the YAML was edited.
+
+The naming exemption stays in both rules. It is still the only way to silence
+one case in code rather than with `// nosemgrep`; it simply is not evidence that
+the rule is precise, and it no longer carries a tier. It was **not** widened to
+`_`, `cannotHappen` or `unused` — every word added is another way for a real
+swallow to escape by being well named.
+
 ### Added — a C# bug-finding rule pack, in the language where the registry is at zero
 
 `configs/semgrep/bugfix-cs.yml`: **twelve** hand-authored rules across all six
@@ -139,12 +284,13 @@ are asserted to have *fired*, and for `p/r2c-bug-scan` that control is a
 **Python** file inside a C# fixture tree: there is no C# rule for a C# control
 to trip.
 
-**Two of the twelve sit at `ERROR`, the best ratio in the series**, and the
-reason is structural rather than generous. C# contains one defect —
-`throw ex;` inside a `catch` — whose *correct* form, `throw;`, is a **different
-AST node**. There is no guard to recognise because there is nothing to guard,
-which is the only way to clear the severity criterion in an engine without
-dataflow.
+**One of the twelve sits at `ERROR`**, and the reason is structural rather than
+generous. C# contains one defect — `throw ex;` inside a `catch` — whose
+*correct* form, `throw;`, is a **different AST node**. There is no guard to
+recognise because there is nothing to guard, which is the only way to clear the
+severity criterion in an engine without dataflow. (`empty-catch` shipped at
+`ERROR` beside it in the first cut of this pack and was demoted in the same
+release once it was measured — see the entry above.)
 
 **A compiler as an independent oracle, which no round in this series has had
 before.** `dotnet build` emits `CA2200` for `throw ex;` inside a catch, and it
