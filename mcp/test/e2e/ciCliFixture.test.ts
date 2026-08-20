@@ -52,6 +52,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it, beforeAll } from 'vitest';
 
 import { detectOs } from '../../src/platform/osDetect.js';
+import { isInstalled, PROBE_TIMEOUT_MS } from '../helpers/toolchain.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 // mcp/test/e2e -> mcp/test -> mcp -> repo root
@@ -111,17 +112,6 @@ const START_COMMAND_SUITE_TIMEOUT_MS = 60_000;
 /* Toolchain availability — same technique as rulePackFixture.test.ts  */
 /* ------------------------------------------------------------------ */
 
-async function isInstalled(bin: string): Promise<boolean> {
-  try {
-    const r = await execa(detectOs() === 'win32' ? 'where' : 'which', [bin], {
-      reject: false,
-      timeout: 2_000,
-    });
-    return r.exitCode === 0;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * The directory holding `bin`'s executable, or `null` if it can't be
@@ -132,9 +122,13 @@ async function isInstalled(bin: string): Promise<boolean> {
  */
 async function resolveBinDir(bin: string): Promise<string | null> {
   try {
+    // Same probe, and the same reason for the same generous ceiling as
+    // `isInstalled`: this result gates `it.skipIf(... || !SEMGREP_DIR)`, so a
+    // probe that times out on a busy machine silently skips a test that had
+    // everything it needed. See `test/helpers/toolchain.ts`.
     const r = await execa(detectOs() === 'win32' ? 'where' : 'which', [bin], {
       reject: false,
-      timeout: 2_000,
+      timeout: PROBE_TIMEOUT_MS,
     });
     if (r.exitCode !== 0) return null;
     const first = r.stdout.split(/\r?\n/)[0]?.trim();

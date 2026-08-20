@@ -5,6 +5,14 @@ export default defineConfig({
     include: ['test/**/*.test.ts'],
     environment: 'node',
     testTimeout: 10_000,
+    // Runs in every worker before its test files. Gives each worker its own
+    // Semgrep settings file so concurrent Semgrep invocations — within one
+    // run, or across two agents running this suite at once — stop racing on
+    // the single global `~/.semgrep/settings.yml`. That race is not
+    // theoretical: it crashes Semgrep with an uncaught PermissionError and
+    // the failure reads as a broken rule pack. See the file's own comment for
+    // the mechanism and the measurements.
+    setupFiles: ['./test/setup/semgrepSettings.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

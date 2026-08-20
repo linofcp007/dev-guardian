@@ -23,12 +23,12 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';
-import { detectOs } from '../../src/platform/osDetect.js';
 import { probeShell } from '../../src/platform/shellProbe.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+import { isInstalled } from '../helpers/toolchain.js';
 
 afterAll(cleanupTempDirs);
 
@@ -53,17 +53,6 @@ beforeAll(async () => {
   await import('../../src/tools/scanDeps.js');
 });
 
-async function isInstalled(bin: string): Promise<boolean> {
-  try {
-    const r = await execa(detectOs() === 'win32' ? 'where' : 'which', [bin], {
-      reject: false,
-      timeout: 2_000,
-    });
-    return r.exitCode === 0;
-  } catch {
-    return false;
-  }
-}
 
 /** Resolved once at collection time so `it.skipIf` can report a skip as a skip. */
 const FIXTURE_PRESENT = existsSync(FIXTURE);

@@ -21,13 +21,11 @@
  * would have caught defect 2.
  */
 
-import { execa } from 'execa';
 import { writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PluginContext } from '../../src/context.js';
-import { detectOs } from '../../src/platform/osDetect.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
@@ -35,6 +33,7 @@ import { TOOLS } from '../../src/tools/index.js';
 import type { Finding } from '../../src/types.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { okResult } from '../helpers/toolResult.js';
+import { isInstalled } from '../helpers/toolchain.js';
 
 afterAll(cleanupTempDirs);
 
@@ -50,17 +49,6 @@ const SCRIPTS_DIR = resolve(ROOT, 'scripts');
 /** A registry-backed `--config=auto` pass takes tens of seconds. */
 const SLOW = 300_000;
 
-async function isInstalled(bin: string): Promise<boolean> {
-  try {
-    const r = await execa(detectOs() === 'win32' ? 'where' : 'which', [bin], {
-      reject: false,
-      timeout: 2_000,
-    });
-    return r.exitCode === 0;
-  } catch {
-    return false;
-  }
-}
 
 const SEMGREP_INSTALLED = await isInstalled('semgrep');
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';

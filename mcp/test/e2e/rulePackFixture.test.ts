@@ -50,14 +50,12 @@
  * set, so an extra route fails just as loudly as a missing one.
  */
 
-import { execa } from 'execa';
 import { cpSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';
-import { detectOs } from '../../src/platform/osDetect.js';
 import { languageFromPath } from '../../src/surface/extract.js';
 import { invokeSemgrep } from '../../src/surface/scanSemgrep.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
@@ -69,6 +67,7 @@ import '../../src/tools/mapAttackSurface.js';
 import type { AttackSurfaceSnapshot, RouteRecord, SpecDiffEntry } from '../../src/types.js';
 import { okResult } from '../helpers/toolResult.js';
 import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+import { isInstalled } from '../helpers/toolchain.js';
 
 afterAll(cleanupTempDirs);
 
@@ -395,17 +394,6 @@ const EXPECTED_SHADOW = [
 
 const EXPECTED_DEAD = ['GET /deprecated/v0/orders'];
 
-async function isInstalled(bin: string): Promise<boolean> {
-  try {
-    const r = await execa(detectOs() === 'win32' ? 'where' : 'which', [bin], {
-      reject: false,
-      timeout: 2_000,
-    });
-    return r.exitCode === 0;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Resolved once, at collection time, so `it.skipIf` can report a skip as a

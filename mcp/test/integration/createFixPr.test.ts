@@ -39,7 +39,6 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, writeFileSync, chmodSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execa } from 'execa';
 import { openDatabase } from '../../src/storage/db.js';
 import { Storage } from '../../src/storage/index.js';
 import { buildPrBody } from '../../src/tools/createFixPr.js';
@@ -49,6 +48,7 @@ import type { Finding } from '../../src/types.js';
 import '../../src/registerAll.js';
 import { okResult } from '../helpers/toolResult.js';
 import { rmDir } from '../helpers/tempDir.js';
+import { isInstalled } from '../helpers/toolchain.js';
 
 // execFileSync (unlike execa/runProcess, which shell out through
 // cross-spawn) does not resolve npm's Windows .cmd shim on its own — same
@@ -61,18 +61,6 @@ const REGISTRY_BACKED_TIMEOUT_MS = 120_000;
 /* ------------------------------------------------------------------ */
 /* Toolchain availability — same technique as rulePackFixture.test.ts  */
 /* ------------------------------------------------------------------ */
-
-async function isInstalled(bin: string): Promise<boolean> {
-  try {
-    const r = await execa(process.platform === 'win32' ? 'where' : 'which', [bin], {
-      reject: false,
-      timeout: 2_000,
-    });
-    return r.exitCode === 0;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Resolved once, at collection time, so `it.skipIf` can report a skip as a
