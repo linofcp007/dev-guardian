@@ -141,6 +141,145 @@ describe('enumerateClauses', () => {
   });
 });
 
+describe('the rule inventory', () => {
+  // The gap this covers: a rule with no ablatable clause used to appear
+  // NOWHERE -- not in `clauses`, not in `skipped`, not in the report -- so
+  // `N/N live, 0 DEAD` read as "the whole pack was checked" while 27% of the
+  // rules across this repo's packs had never been touched.
+  const SHAPES = `rules:
+  - id: bare-pattern
+    pattern: static $T $F = new Random(...);
+    message: m
+    severity: WARNING
+    languages: [csharp]
+
+  - id: bare-pattern-regex
+    pattern-regex: AKIA[0-9A-Z]{16}
+    message: m
+    severity: ERROR
+    languages: [generic]
+
+  - id: positive-terms-only
+    patterns:
+      - pattern: f($X)
+      - pattern-inside: class $C { ... }
+    message: m
+    severity: INFO
+    languages: [javascript]
+
+  - id: has-a-clause
+    patterns:
+      - pattern: f($X)
+      - pattern-not: f(null)
+    message: m
+    severity: INFO
+    languages: [javascript]
+`;
+
+  it('carries one entry per rule, in source order, whatever the rule shape', () => {
+    const inventory = enumerateClauses(SHAPES);
+    expect(inventory.rules.map((r) => r.ruleId)).toEqual(inventory.ruleIds);
+    expect(inventory.rules.map((r) => r.ruleId)).toEqual([
+      'bare-pattern',
+      'bare-pattern-regex',
+      'positive-terms-only',
+      'has-a-clause',
+    ]);
+  });
+
+  it('states, per rule, why there is nothing to ablate', () => {
+    const byId = new Map(enumerateClauses(SHAPES).rules.map((r) => [r.ruleId, r]));
+    const bare = byId.get('bare-pattern');
+    const regex = byId.get('bare-pattern-regex');
+    const positive = byId.get('positive-terms-only');
+    const measured = byId.get('has-a-clause');
+    if (bare === undefined || regex === undefined) throw new Error('missing bare rules');
+    if (positive === undefined || measured === undefined) throw new Error('missing rules');
+
+    expect(bare.clauseCount).toBe(0);
+    expect(bare.entryPoints).toEqual(['pattern']);
+    expect(bare.noClausesReason).toMatch(/bare `pattern`/);
+    expect(regex.noClausesReason).toMatch(/bare `pattern-regex`/);
+
+    // `pattern-inside` IS an ablatable clause kind, so this rule is measured
+    // rather than clauseless -- it is the shape where the ONLY qualifier is
+    // load-bearing that lands in `skipped`, not here.
+    expect(positive.clauseCount).toBe(1);
+
+    // A rule that does enter the run carries no reason at all: the field is
+    // set exactly when the rule has nothing to ablate.
+    expect(measured.clauseCount).toBe(1);
+    expect(measured.noClausesReason).toBeUndefined();
+  });
+
+  it('says "only positive terms" for a group with no qualifier in it', () => {
+    const onlyPositive = `rules:
+  - id: r
+    patterns:
+      - pattern: f($X)
+      - pattern: g($X)
+    message: m
+    severity: INFO
+    languages: [javascript]
+`;
+    const only = enumerateClauses(onlyPositive).rules[0];
+    if (only === undefined) throw new Error('expected one rule');
+    expect(only.clauseCount).toBe(0);
+    expect(only.noClausesReason).toMatch(/only positive terms/);
+  });
+
+  it('points at the skipped list when a rule\'s only clause is load-bearing', () => {
+    const soleBranch = `rules:
+  - id: r
+    pattern-either:
+      - pattern: f($X)
+    message: m
+    severity: INFO
+    languages: [javascript]
+`;
+    const inventory = enumerateClauses(soleBranch);
+    const only = inventory.rules[0];
+    if (only === undefined) throw new Error('expected one rule');
+    expect(inventory.skipped).toHaveLength(1);
+    expect(only.clauseCount).toBe(0);
+    expect(only.skippedCount).toBe(1);
+    expect(only.noClausesReason).toMatch(/skipped list/);
+  });
+
+  it('accounts for every rule in every shipped pack', () => {
+    // The measured coverage, pinned. These are the numbers the report prints
+    // as "N clauses across X of Y rules"; a change to either half of a
+    // fraction here is a change to what an ablation run actually covers.
+    const expected: Record<string, { rules: number; withClauses: number }> = {
+      base: { rules: 13, withClauses: 7 },
+      'bugfix-js': { rules: 13, withClauses: 12 },
+      'bugfix-py': { rules: 10, withClauses: 10 },
+      'bugfix-go': { rules: 9, withClauses: 8 },
+      'bugfix-java': { rules: 8, withClauses: 7 },
+      'bugfix-cs': { rules: 12, withClauses: 11 },
+      routes: { rules: 64, withClauses: 44 },
+    };
+    for (const [name, want] of Object.entries(expected)) {
+      const path = resolve(REPO_ROOT, 'configs', 'semgrep', `${name}.yml`);
+      const inventory = enumerateClauses(readFileSync(path, 'utf8'));
+      expect(inventory.rules, `${name}.yml rule count`).toHaveLength(want.rules);
+      expect(inventory.rules.map((r) => r.ruleId), `${name}.yml ids`).toEqual(inventory.ruleIds);
+      const withClauses = inventory.rules.filter((r) => r.clauseCount > 0);
+      expect(withClauses.length, `${name}.yml rules with ablatable clauses`).toBe(want.withClauses);
+      // The invariant that matters more than any single number: a rule with
+      // nothing to ablate is never silent about it.
+      for (const r of inventory.rules) {
+        if (r.clauseCount > 0) continue;
+        expect(r.noClausesReason, `${name}.yml :: ${r.ruleId}`).toBeTruthy();
+      }
+      // ...and the clause total is exactly the per-rule totals, so no clause
+      // is attributed to a rule the inventory does not list.
+      const summed = inventory.rules.reduce((n, r) => n + r.clauseCount, 0);
+      expect(summed, `${name}.yml clause total`).toBe(inventory.clauses.length);
+    }
+  });
+});
+
 function clauseByBody(source: string, needle: string) {
   const found = enumerateClauses(source).clauses.find((c) => c.body.includes(needle));
   if (found === undefined) throw new Error(`no clause matching ${needle}`);
