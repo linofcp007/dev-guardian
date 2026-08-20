@@ -66,6 +66,7 @@ describe('resolveBugfixRules', () => {
       join(dir, 'bugfix-go.yml'),
       join(dir, 'bugfix-java.yml'),
       join(dir, 'bugfix-js.yml'),
+      join(dir, 'bugfix-php.yml'),
       join(dir, 'bugfix-py.yml'),
     ]);
   });

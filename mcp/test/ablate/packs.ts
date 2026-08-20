@@ -43,6 +43,14 @@ export const PACKS: readonly PackSpec[] = [
   { name: 'bugfix-go', config: config('bugfix-go'), fixtures: fixtures('bugfix-go'), hitsSubdir: 'hits' },
   { name: 'bugfix-java', config: config('bugfix-java'), fixtures: fixtures('bugfix-java'), hitsSubdir: 'hits' },
   { name: 'bugfix-cs', config: config('bugfix-cs'), fixtures: fixtures('bugfix-cs'), hitsSubdir: 'hits' },
+  // Axis 3 is N/A: this repo holds no PHP outside this fixture tree. The PHP
+  // pack WAS measured against a real corpus — WordPress 6.9, 1467 files, and
+  // that measurement changed four verdicts (design of record §1) — but the
+  // corpus is a 60 MB third-party download, not something to vendor here.
+  // Point the harness at one with `--real-code=<dir>` when you have a WordPress
+  // (or any PHP) tree on disk; without it the report prints N/A rather than
+  // pretending the axis ran.
+  { name: 'bugfix-php', config: config('bugfix-php'), fixtures: fixtures('bugfix-php'), hitsSubdir: 'hits' },
   { name: 'base', config: config('base'), fixtures: fixtures('base'), hitsSubdir: 'hits' },
 ];
 

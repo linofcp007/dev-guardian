@@ -1,0 +1,208 @@
+# dev-guardian Semgrep config bugfix-php.
+# Bugs de implementação em PHP. É a sexta linguagem da série, e a primeira em
+# que o eixo do CODIGO REAL esteve disponivel desde o inicio: as regras foram
+# medidas contra o WordPress 6.9, 1467 ficheiros varridos. Esse eixo mudou
+# quatro veredictos — tres candidatas morreram por volume em codigo correto e
+# uma quarta morreu por disparar sobre a correção prescrita por outra regra.
+# As medições estao em
+# docs/superpowers/specs/2026-08-20-bugfix-rules-php-design.md.
+#
+# Linha de base do registo, com o controlo positivo sempre afirmado:
+#
+#   | pack               | nas fixtures de hit       | controlo positivo        |
+#   | ------------------ | ------------------------- | ------------------------ |
+#   | p/r2c-bug-scan     | paths.scanned = 0         | dispara em Python        |
+#   | p/php              | scanned = N, 0 findings   | 9 findings em 12 formas  |
+#   | p/security-audit   | scanned = N, 0 findings   | NENHUM — nao existe      |
+#
+# O `p/r2c-bug-scan` nao traz UMA regra de PHP: nao encontra nada porque nao
+# varre nada. O `p/security-audit` nao dispara em codigo deliberadamente
+# vulneravel — medido em duas linguagens, C# e PHP —, por isso a unica coisa
+# que dele se afirma é `paths.scanned > 0`. E o `base.yml` deste repo so tem
+# regras de segurança para PHP (`php-eval`, `php-sql-injection-direct`,
+# `wp-unescaped-output`), que nao intersetam nenhuma das seis.
+#
+# Cada regra tem um par de fixtures em
+# mcp/test/fixtures/bugfix-php/{hits,misses}/: um ficheiro que tem de disparar
+# a regra, outro parecido que NAO pode. O ficheiro misses/ é a especificação do
+# que é codigo correto — se ele disparar, a regra é que esta errada. E todas as
+# fixtures passam `php -l` (php:8.3-cli), o que ja apanhou uma fixture que
+# definia uma função chamada `pos()`, um builtin do PHP.
+#
+# ---------------------------------------------------------------------------
+# NUNCA ESCREVA UM NOME DE TIPO QUALIFICADO NUM PADRAO DE PHP. É a forma de
+# falha silenciosa desta ronda, gemea do `var` do C#.
+#
+# `catch (\RuntimeException $E)` encontrou ZERO ocorrencias de codigo que diz
+# exatamente `catch (\RuntimeException $e)`. Todos os indicadores ficam verdes:
+# o scan corre, `paths.scanned` esta saudavel, `errors: 0`, e a resposta é
+# nada. Ligue o tipo a uma metavariavel — `catch ($E $V)` — e a regra passa a
+# existir.
+#
+# OUTRAS ARMADILHAS MEDIDAS NESTA RONDA:
+#
+# - `?->` E `->` SAO O MESMO NO. Confirmado nos dois sentidos e por
+#   `--dump-ast`. Um `pattern-not: $V?->$M` nao exclui o idioma seguro: APAGA
+#   a regra. A unica saida é `pattern-not-regex: '\?->'`, um guarda de TEXTO
+#   sobre uma regra de AST. O `base.yml` documenta o `pattern-not-regex` como
+#   armadilha; aqui é uma exceção deliberada, e esta anotada como tal na regra
+#   que a usa.
+# - A FORMA DO TRY É UMA DIMENSAO. `try{}catch(){}` e `try{}catch(){}finally{}`
+#   sao nos DISJUNTOS — nenhum contem o outro —, por isso enumeram-se os dois
+#   em vez de alargar um. Este buraco chegou a ser enviado no pack de Java e
+#   custou uma ronda de correção so para ele.
+# - PREFIRA A ELIPSE DE STATEMENT AO CORPO EM CHAVETAS. `for (...) ...` casa o
+#   corpo com chavetas, o corpo sem chavetas E a sintaxe alternativa
+#   `for(): ... endfor;`; `for (...) { ... }` so casa o primeiro. Recall de
+#   graça, sem custo medido — e as tres formas tem fixture.
+# - A EXPRESSAO PROFUNDA NAO FAZ PARSE DENTRO DE UM BLOCO PHP. Use
+#   `{ ... stmt; ... }`.
+# - MAIS DUAS ROTAS PARA `paths.scanned = 0`: um ternario sem aspas (o ` : `
+#   lê-se como um mapeamento YAML) e um `\R` dentro de um escalar com aspas
+#   duplas (escape desconhecido, invalida a configuração inteira). E uma rota
+#   ambiental: um CAMINHO LONGO no Windows da
+#   `Failed to obtain target files from semgrep-core` com `paths.scanned = 0`
+#   e uma mensagem que nao aponta para nada perto da causa.
+# - O PARSER DE PHP DO SEMGREP ESTA ATRAS DA LINGUAGEM: `const VOID = 'void';`
+#   dentro de uma classe é erro de sintaxe. Aparece em `errors[]`, por isso nao
+#   é silencioso.
+#
+# ---------------------------------------------------------------------------
+# ZERO DE SEIS REGRAS EM ERROR, e a razao é uma medição, nao um gosto. O
+# criterio é uma pergunta sobre o OUTPUT: aquilo que a regra EMITE é sempre um
+# bug? Em C# duas regras passaram porque a forma CORRETA do codigo que elas
+# acusam é um NO DIFERENTE, e entao nao ha guarda nenhum para reconhecer.
+# Nenhuma candidata de PHP tem essa propriedade. A mais proxima era a
+# `empty-catch`, e o codigo real refutou-a: as 10 ocorrencias no WordPress sao
+# todas silencios deliberados com comentario a explicar, e o Semgrep nao lê
+# comentarios. Detalhe no §3 do design.
+#
+# ---------------------------------------------------------------------------
+# CINCO CARACTERES SAO PROIBIDOS NESTE FICHEIRO, incluindo nos comentarios: o A
+# maiusculo com acento agudo (U+00C1), o I maiusculo com acento agudo
+# (U+00CD), e mais tres que o portugues nao usa (U+00CF, U+00D0, U+00DD). Em
+# portugues, na pratica, sao dois — e é por isso que este bloco escreve "NAO" e
+# "SAO" sem acento, e "codigo" em minusculas.
+#
+# Porque: o carregador de configuração do Semgrep descodifica este ficheiro com
+# o codec do LOCALE e nao em UTF-8. Num locale cp1252 (Windows) os bytes 0x81,
+# 0x8D, 0x8F, 0x90 e 0x9D nao existem na tabela, e sao exatamente os segundos
+# bytes UTF-8 desses cinco caracteres. UM deles num comentario derruba o
+# ficheiro inteiro, e o scan devolve `results: 0`, `paths.scanned: 0` e
+# `errors: 0` — quem leia so os findings ve um scan limpo. O
+# `semgrepPacks.test.ts` apanha isto em todos os packs, por duas vias.
+#
+# Os acentos minusculos sao todos seguros, e `Ã À Â É Ê Ó Ô Õ Ú Ç` tambem.
+
+rules:
+  # A REGRA MAIS FORTE DO PACK, e a mais barata: 13 de 13 nas fixtures, zero
+  # nos quase-acertos e ZERO em 1467 ficheiros de WordPress.
+  #
+  # E PHP É ESTRITAMENTE MAIS FACIL AQUI DO QUE C# OU JAVA. Nesses dois packs o
+  # falso positivo que obrigou a uma lista enumerada de `metavariable-type` foi
+  # um objeto de dominio com um membro `.Count`/`.length`: um ciclo inclusivo
+  # sobre "quantas estacas" esta certo e a regra nao distingue. Em PHP esse
+  # caso NAO PODE ACONTECER, porque `count()` é uma FUNÇAO GLOBAL e
+  # `$obj->count()` é uma chamada de metodo, um no diferente que `count($a)`
+  # nao casa. Medido contra uma classe que tem ao mesmo tempo uma propriedade
+  # `->length` e um metodo `->count()` dentro de ciclos `<=`: silenciosa nas
+  # duas. NAO É PRECISA LISTA DE TIPOS E NAO SE DEVE ACRESCENTAR NENHUMA.
+  #
+  # O que É preciso é o filtro do NOME, e isso foi medido aqui e nao herdado:
+  # `$F($A)` casa tambem uma chamada ESTATICA, `Ruler::count($xs)`, com `$F`
+  # ligado a `Ruler::count`. A regex ancorada em `^count$` é o que a mantem de
+  # fora, e a fixture de miss carrega essa forma para o provar. Sem o filtro, a
+  # regra acusa qualquer `<= f($x)` no cabeçalho de um for — incluindo a
+  # `last_index()` que devolve mesmo o ultimo indice valido e para a qual o
+  # `<=` esta certo.
+  #
+  # O RAMO HOISTADO existe porque a grafia mais comum tira o `count()` da
+  # condição: `$n = count($xs); for ($i = 0; $i <= $n; $i++)`. Uma regra que
+  # nomeie `count()` na condição perde-a inteira.
+  #
+  # A FORMA DO INCREMENTO É UMA DIMENSAO: `$i++` e `++$i` sao nos diferentes, e
+  # os dois ramos tem fixture.
+  #
+  # WARNING e nao ERROR, e o falso positivo conhecido esta na fixture de HITS a
+  # dizer que é um: um array-sentinela alocado de proposito com count+1
+  # posições torna o limite inclusivo correto e a regra dispara na mesma. O
+  # aperto obvio — exigir que o corpo indexe mesmo o array contado — foi MEDIDO
+  # na ronda de Java e rejeitado: nao mata o sentinela e perde um bug real em
+  # que o indice fora dos limites é passado a um helper. Troca um falso
+  # positivo por um falso negativo, por isso nao foi aplicado aqui tambem.
+  - id: bugfix-php-off-by-one-loop-lte-count
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: 'for ($I = 0; $I <= $F($A); $I++) ...'
+              - pattern: 'for ($I = 0; $I <= $F($A); ++$I) ...'
+          - metavariable-regex:
+              metavariable: $F
+              regex: '^(count|sizeof|strlen|mb_strlen)$'
+      - patterns:
+          - pattern-either:
+              - pattern: 'for ($I = 0; $I <= $N; $I++) ...'
+              - pattern: 'for ($I = 0; $I <= $N; ++$I) ...'
+          - pattern-inside: |
+              $N = $F($A);
+              ...
+          - metavariable-regex:
+              metavariable: $F
+              regex: '^(count|sizeof|strlen|mb_strlen)$'
+    message: >-
+      Off-by-one. `$i <= count($a)` corre uma posição para la do fim: o indice
+      `count($a)` nunca existe, e a leitura devolve null com um warning
+      "Undefined array key". Queria provavelmente `$i < count($a)`. Se o ciclo
+      conta em vez de indexar, ou se o array foi alocado de proposito com uma
+      posição a mais, o limite inclusivo esta certo e este aviso é ruido.
+    severity: WARNING
+    languages: [php]
+
+  # TOCTOU: entre a verificação e a ação ha uma janela em que outro processo
+  # muda o estado do sistema de ficheiros. Sao quatro formas irmas, e sao
+  # ramos separados porque a ação é diferente em cada uma.
+  #
+  # O `mkdir($D, ...)` cobre tambem `mkdir($d)` sem argumentos extra — medido,
+  # a elipse aceita zero argumentos —, por isso nao ha um ramo separado.
+  #
+  # O RAMO DO `fopen` NAO PRECISA DA FORMA COM ATRIBUIÇAO. `{ ... fopen($F,
+  # $MODE); ... }` ja casa `$h = fopen($f, 'ab')`, porque a elipse de statement
+  # encontra a chamada dentro da atribuição. A sondagem tinha os dois ramos; o
+  # segundo foi medido a nao acrescentar nada e nao foi enviado.
+  #
+  # O FILTRO DO MODO é que faz a diferença entre uma regra e um falso positivo:
+  # `is_writable()` seguido de `fopen($f, 'rb')` NAO é este bug, porque ler nao
+  # corre com a verificação de escrita. A regex `^.[wacx]` é aplicada ao
+  # literal com as aspas incluidas, por isso o primeiro caractere é a aspa e o
+  # segundo é o modo. Um modo que venha numa variavel tambem fica de fora, o
+  # que é o lado conservador.
+  #
+  # A CORREÇAO QUE ESTA MENSAGEM PRESCREVE — agir primeiro e inspecionar o
+  # retorno — escreve-se em PHP idiomatico como `@mkdir(...)` ou `@unlink(...)`.
+  # Foi isso que matou a candidata `error-suppression-operator`: no ficheiro em
+  # que cada bug esta reescrito com a correção da sua propria mensagem, ela
+  # disparava tres vezes, todas sobre a correção DESTA regra. Uma regra a
+  # disparar sobre a correção prescrita por outra nao é um problema de afinação,
+  # e nenhuma verificação por regra o consegue ver.
+  #
+  # WARNING e nao ERROR: um `if (!is_dir($d)) mkdir($d)` num script de arranque
+  # de processo unico esta correto, e a regra nao ve a diferença.
+  - id: bugfix-php-race-condition-toctou-file
+    pattern-either:
+      - pattern: 'if (file_exists($F)) { ... unlink($F); ... }'
+      - pattern: 'if (!is_dir($D)) { ... mkdir($D, ...); ... }'
+      - pattern: 'if (!file_exists($F)) { ... file_put_contents($F, ...); ... }'
+      - patterns:
+          - pattern: 'if (is_writable($F)) { ... fopen($F, $MODE); ... }'
+          - metavariable-regex:
+              metavariable: $MODE
+              regex: '^.[wacx]'
+    message: >-
+      TOCTOU: entre a verificação e a ação outro processo pode mudar o
+      ficheiro. `file_exists()` seguido de `unlink()`, ou `!is_dir()` seguido
+      de `mkdir()`, deixam uma janela em que a ação falha e devolve false sem
+      ninguem olhar. Aja primeiro e inspecione o valor de retorno —
+      `@unlink($f)`, `@mkdir($d, 0777, true) === false && !is_dir($d)`, ou
+      `fopen($f, 'xb')` para uma criação atomica.
+    severity: WARNING
+    languages: [php]
