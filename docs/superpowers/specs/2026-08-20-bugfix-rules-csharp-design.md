@@ -100,11 +100,17 @@ live type names. A third: `disposed` matches `memory_leak` before
 
 C# supports this class better than any language in the series so far.
 
-- **async-void** — `async void` outside an event handler. The naive form fires
-  on both event handlers in the correct fixture, including one with a *derived*
-  `ElapsedArgs`; one `pattern-not` on the `(object, EventArgs)` shape closes
-  both and keeps both bugs, the second being `static async void` — modifiers
-  match by subset, exactly as in Java.
+- **async-void** — `async void` outside an event handler. **The probe's reading
+  of the exclusion was wrong, and Task 2 measured it:** a `pattern-not` naming
+  `EventArgs` literally closes only the exactly-typed handler, and
+  `metavariable-type: EventArgs` does not close it either — it is not
+  subtype-aware here. Binding the args type as a metavariable `$T` is what
+  works. Since `ElapsedEventArgs`, `PropertyChangedEventArgs` and every
+  `EventHandler<T>` are subclasses, the literal version would have fired on
+  nearly every real handler in a codebase. The cost of the working form —
+  any `async void (object, X)` is exempt — is stated in the rule.
+  Both bugs still fire, the second being `static async void`, since modifiers
+  match by subset exactly as in Java.
 - **blocking-on-task** — `.Result` / `.Wait()` on a `Task`, **only in its
   four-branch form**. This is the §2 rule working: untyped `$T.Result` fires on
   a POCO with a `bool Result` property *and* on `Regex.Match.Result(string)`,
@@ -116,8 +122,13 @@ C# supports this class better than any language in the series so far.
   `$F(...).Result` with `metavariable-regex: ".*Async"`.
 - **static-random** — `static Random` shared across threads. 2 of 2, no false
   positives; `Random.Shared` and an instance field stay silent.
+  **CA5394 is not an oracle for this rule** — measured: it fires on all four
+  correct sites too, including `Random.Shared`, because it is about
+  cryptographic predictability rather than a race. Recorded so nobody later
+  reads agreement into a coincidence.
 - **lock-on-shared-instance** — `lock (this)` and `lock ("literal")`. Low
-  volume, 2 of 2, no false positives.
+  volume, 2 of 2, no false positives. **A second independent oracle:** `CA2002`
+  fires at exactly the sites this rule does and nowhere in the near-misses.
 
 ### `off_by_one` — 2 rules, WARNING
 
