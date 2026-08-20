@@ -129,6 +129,29 @@ interface FileExpectation {
  * no entry here fails Step 0 below rather than being silently unmeasured.
  */
 const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
+  'empty_catch.php': {
+    // SIX of the eight catch spellings in the file, and the two it misses are
+    // the same one twice: the PHP 8 NON-CAPTURING `catch (\Foo) { }`, with and
+    // without a `finally`. Every pattern spelling of that form fails to parse,
+    // so the rule cannot reach it at all. It is in hits/ and annotated rather
+    // than omitted, because a spelling nobody wrote down is a spelling nobody
+    // notices is missing.
+    //
+    // The six that do fire are one plain, one `\Throwable`, one with a
+    // FINALLY, one union catch type, one first-of-two-catch-clauses, and one
+    // whose body holds only a comment.
+    //
+    // The `finally` one is not padding: `try{}catch(){}` and
+    // `try{}catch(){}finally{}` are DISJOINT AST nodes, and the no-finally
+    // pattern alone scores 5 here instead of 6. Measured before the rule was
+    // written rather than after — this exact hole shipped in the Java pack.
+    //
+    // The union catch is what proves the type metavariable is load-bearing:
+    // a pattern naming `\RuntimeException` matches neither it nor the
+    // `\Throwable` one, and — per the file header — matches nothing at all.
+    ids: ['bugfix-php-error-handling-empty-catch'],
+    count: 6,
+  },
   'off_by_one.php': {
     // THIRTEEN, and the breakdown is the point: the rule has two branches
     // (the count in the condition, and the count hoisted into a local) and
@@ -154,6 +177,20 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     // does fire, and misses/ is a promise that nothing in it fires.
     ids: ['bugfix-php-off-by-one-loop-lte-count'],
     count: 13,
+  },
+  'strpos.php': {
+    // TEN, one per branch plus two extra receivers on the `if` branch, and
+    // ELEVEN bug sites in the file: the eleventh is the store-then-test
+    // spelling (`$at = strpos(...); if ($at)`), which the rule cannot reach
+    // because once the result is bound to a local there is no call left in
+    // the boolean position to name. It is in hits/ and annotated, on the same
+    // principle as the non-capturing catch above.
+    //
+    // Every one of the eight branches has a fixture behind it, deliberately:
+    // a `pattern-either` branch with nothing exercising it reads DEAD under
+    // ablation and cannot be told apart from a branch that never worked.
+    ids: ['bugfix-php-edge-case-strpos-truthiness'],
+    count: 10,
   },
   'toctou.php': {
     // Five over four branches: file_exists->unlink, !is_dir->mkdir,
@@ -181,8 +218,8 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
  * Java and 1 of 13 in JS/TS. C# reached ERROR twice because one defect
  * (`throw ex;`) has a correct form that is a DIFFERENT AST NODE, so there is
  * no guard to recognise. No PHP candidate has that property, and the closest
- * one was refuted by real code rather than by argument: see the block above
- * `EXPECTED_SEVERITY`'s entry for `empty-catch` when Task 2 adds it.
+ * one — `empty-catch`, which Java and C# both ship at ERROR — was refuted by
+ * real code rather than by argument. See its entry below.
  *
  * Pinned here because nothing else pins it. The tier is not cosmetic: the
  * Semgrep parser maps ERROR -> `high` and WARNING -> `medium`
@@ -199,6 +236,29 @@ const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
   // A check-then-act pair is correct in any single-process program, and most
   // PHP bootstrap scripts are one. The rule cannot see concurrency.
   'bugfix-php-race-condition-toctou-file': 'WARNING',
+  // WARNING, AND THIS ONE IS THE INTERESTING CALL. Java and C# both ship
+  // `empty-catch` at ERROR, on the premise that an unmarked swallow is a bug
+  // whatever the author meant. Neither measured that premise against code
+  // nobody wrote as a fixture, because a real-code corpus was N/A for both.
+  //
+  // PHP has one, and it refutes the premise: all TEN findings on WordPress 6.9
+  // are deliberate empty catches carrying an explanatory comment. Semgrep
+  // cannot read comments, and PHP's naming convention for deliberate silence
+  // is weaker than Java's or C#'s — modern PHP declares intent with the
+  // non-capturing `catch (\Foo) { }`, which this rule cannot match at all and
+  // which therefore self-exempts, leaving only the capturing spelling that
+  // real code uses for exactly the same intent.
+  //
+  // So what this rule emits is NOT always a bug, and it is WARNING here. The
+  // consequence for the two packs already shipping it at ERROR is recorded in
+  // the design of record §3 rather than acted on: it is a separate change,
+  // with its own fixture counts.
+  'bugfix-php-error-handling-empty-catch': 'WARNING',
+  // WARNING. Most of the 26 findings on WordPress are correct BY A DOMAIN
+  // INVARIANT — a version string cannot start with `-`, an email cannot start
+  // with `@` — and an invariant is not visible to a syntactic matcher. That is
+  // the WARNING profile exactly.
+  'bugfix-php-edge-case-strpos-truthiness': 'WARNING',
 };
 
 describe('bugfix-php rules', () => {
@@ -299,6 +359,8 @@ describe('bugfix-php rules', () => {
 const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-php-off-by-one-loop-lte-count': 'off_by_one',
   'bugfix-php-race-condition-toctou-file': 'race_condition',
+  'bugfix-php-error-handling-empty-catch': 'error_handling',
+  'bugfix-php-edge-case-strpos-truthiness': 'edge_case',
 };
 
 describe('every rule id classifies as its own class', () => {
