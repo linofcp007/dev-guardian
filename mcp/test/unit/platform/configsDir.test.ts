@@ -67,6 +67,7 @@ describe('resolveBugfixRules', () => {
       join(dir, 'bugfix-java.yml'),
       join(dir, 'bugfix-js.yml'),
       join(dir, 'bugfix-py.yml'),
+      join(dir, 'bugfix-rs.yml'),
     ]);
   });
 

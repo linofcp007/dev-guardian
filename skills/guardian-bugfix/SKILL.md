@@ -600,6 +600,81 @@ falso negativo.
 remover de um Dictionary durante a enumeração está documentado como seguro
 desde o .NET Core 3.0, por isso esse ramo dispararia em código correto.
 
+### Rust: uma regra, e uma regra é a resposta toda
+
+Para Rust, o `bug_hunt` corre também por default `configs/semgrep/bugfix-rs.yml`
+— **uma** regra, e o número não é um trabalho por acabar. É
+`bugfix-rs-race-condition-blocking-sleep-in-async`: um `std::thread::sleep`
+dentro de uma `async fn`, que bloqueia a **thread** do executor e deixa paradas
+todas as outras tarefas agendadas nela.
+
+**Não digas ao utilizador que o dev-guardian cobre Rust.** Cobre *isto*. Uma
+sondagem mediu treze candidatas e matou doze, e vale a pena saber porquê antes
+de propores acrescentar regras:
+
+- **Quatro das seis classes são erros de compilação.** Escritas e dadas ao
+  `rustc`: modify-during-iteration é `E0502`, use-after-free é `E0515`, a
+  corrida sobre estado partilhado é `E0373`/`E0503`, o null dereference é
+  `E0599`. Não são raras — são impossíveis em código que compila, que é todo o
+  código que existe.
+- **Para o resto a resposta é o `cargo clippy`**, e os lints dele com
+  consciência de tipos ganham a todos os equivalentes de Semgrep que foram
+  medidos. Por omissão já apanha o `await_holding_lock`;
+  `-W clippy::pedantic` acrescenta `float_cmp`, `future_not_send`,
+  `missing_panics_doc`; o grupo `restriction`, lint a lint, acrescenta
+  `unwrap_used`, `mem_forget`, `indexing_slicing`, `string_slice`. **Quando um
+  utilizador de Rust pedir mais cobertura de bugs, a recomendação é configurar
+  o clippy**, não escrever mais regras aqui.
+- **Duas candidatas foram mortas por código real**, depois de passarem as
+  próprias fixtures: a `mem-forget` deu 43 achados e **zero** verdadeiros
+  positivos em 1200 ficheiros de biblioteca padrão, e a `unwrap-in-drop` acusa
+  `if !thread::panicking() { r.unwrap(); }`, que é a mitigação canónica — a
+  regra acusa a correção. As duas teriam passado numa ronda ao estilo do C#,
+  onde o eixo de código real não estava disponível.
+- **A `guard-across-await` é mais precisa do que o lint que duplica** (5
+  verdadeiros e 0 falsos, contra 5 e 2 do `clippy::await_holding_lock`) e mesmo
+  assim não entrou: duplicar um lint que está **ligado por omissão** para ganhar
+  dois falsos positivos não paga uma regra.
+
+**A regra está em `WARNING`, e a decisão foi contra a leitura da sondagem.** O
+argumento para `ERROR` era que a forma legítima mais próxima — um helper
+deliberadamente bloqueante — não se escreve como `async fn`. É verdade, mas há
+uma segunda forma legítima que **se escreve mesmo dentro de uma `async fn`**:
+mandar o trabalho bloqueante para outra thread. Todas estas foram medidas
+dentro de uma `async fn`, todas corretas, e todas disparavam antes de existir a
+exclusão:
+
+```rust
+thread::spawn(|| { thread::sleep(d); });
+tokio::task::spawn_blocking(|| { … });     // a correção que a regra prescreve
+async_std::task::spawn_blocking(|| { … });
+rt.spawn_blocking(|| { … });
+thread::Builder::new().spawn(|| { … });
+```
+
+A regra exclui-as pelo **nome** da chamada e não pelo caminho — ancorar no
+caminho deixava passar a grafia do `async_std` e a chamada por método — **e**
+pelo **closure** e não só pelo nome, porque `tokio::spawn(async move { … })`
+mantém o trabalho no executor e é um bug a sério: recebe um future, não um
+closure. As duas metades da exclusão têm uma fixture que falha sem elas.
+
+Mas uma lista de nomes nunca fecha: um helper de aplicação chamado
+`run_off_thread` que receba um closure faz o mesmo e continua a disparar. É
+exatamente a condição de `WARNING` do §4 — correção dependente de reconhecer um
+invólucro que o matcher não consegue enumerar.
+
+**Um falso negativo declarado, e é o maior:** um bloco `async` solto dentro de
+uma `fn` **síncrona** — `tokio::spawn(async move { thread::sleep(d); })` no
+`main` — não é apanhado, porque a âncora é `async fn`. O bug é o mesmo. Não foi
+fechado porque a alternativa exige medir a hipótese oposta (um bloco `async`
+construído e nunca sondado) e essa medição não foi feita.
+
+**Ruby não tem pack nenhum, e também isso foi medido.** O frontend de Ruby do
+Semgrep apaga o `&.` e a distinção entre `..` e `...` — `x&.a.b` e `x.a.b`
+produzem ASTs byte a byte iguais —, por isso qualquer regra de nil-safety ou de
+off-by-one casa a forma **correta** e a forma com bug de maneira idêntica. Para
+Ruby, recomenda o RuboCop e o `p/ruby` do registry, que é genuinamente vivo.
+
 ### Os tiers, e porque é que o teu fix PR de Java pode vir vazio
 
 **As oito regras estão em `WARNING`. Nenhuma está em `ERROR`.**
