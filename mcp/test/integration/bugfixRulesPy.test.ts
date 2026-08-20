@@ -25,7 +25,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,7 +43,13 @@ function semgrepAvailable(): boolean {
 }
 const AVAILABLE = semgrepAvailable();
 
-interface SemgrepResult { check_id: string; path: string }
+interface SemgrepResult {
+  check_id: string;
+  path: string;
+  /** Semgrep's own tier. `extra.severity` is optional in the schema, so it is
+   *  narrowed rather than asserted at every use. */
+  extra?: { severity?: string };
+}
 
 interface SemgrepRun {
   readonly rows: SemgrepResult[];
@@ -109,12 +115,65 @@ function fixtureFiles(dir: string): string[] {
   return readdirSync(dir).filter((name) => name.endsWith('.py')).sort();
 }
 
+/**
+ * Every `- id:` the rule file DECLARES, read out of the YAML text rather than
+ * out of a list maintained here. It is the left-hand side of the invariant
+ * below: what the file declares must equal what the fixtures exercise.
+ */
+function declaredRuleIds(): string[] {
+  const declared: string[] = [];
+  for (const line of readFileSync(RULES, 'utf8').split('\n')) {
+    const id = /^\s*-\s+id:\s*(\S+)\s*$/.exec(line)?.[1];
+    if (id !== undefined) declared.push(id);
+  }
+  return declared.sort();
+}
+
 interface FileExpectation {
   readonly ids: readonly string[];
   readonly count: number;
 }
 
+/** Every rule the pack declares. Spelled once, used by `real_bugs.py`. */
+const ALL_RULES = [
+  'bugfix-py-edge-case-queryset-n-plus-one',
+  'bugfix-py-error-handling-bare-except',
+  'bugfix-py-error-handling-except-pass',
+  'bugfix-py-error-handling-get-without-doesnotexist',
+  'bugfix-py-memory-leak-open-without-context',
+  'bugfix-py-null-safety-none-deref-dict-get',
+  'bugfix-py-null-safety-none-deref-match',
+  'bugfix-py-off-by-one-range-len-plus-one',
+  'bugfix-py-race-condition-asyncio-not-awaited',
+  'bugfix-py-race-condition-toctou-exists-open',
+] as const;
+
 const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
+  /**
+   * THE REAL-BUGS CORPUS, written by the AUDITOR rather than by the rules'
+   * author. Thirty-three defects, at least one per rule, every one of them
+   * SILENT before the 2026-08 audit and every one placed next to the guard
+   * shape its rule's exclusions match.
+   *
+   * It exists because a minimal per-rule hit fixture carries no guard shapes
+   * for an exclusion to catch on, so a wave of false-positive work can delete
+   * recall and still go green — which is exactly what happened in the Java
+   * pack (wave 4 took one fixture from 6 findings to 1 with a green suite).
+   *
+   * What it covers, and why each entry is a defect the old pack could not see:
+   * four TOCTOU spellings the two-exact-function-names version missed; two
+   * real dict bugs the receiver-name SUBSTRING allow-list silenced
+   * (`session.get("user_id")`, `client_config.get("timeout")`); six `re` match
+   * accessors beyond `.group()`; the explicit-start `range(0, n + 1)`; two
+   * genuine N+1s behind a chained call, which broke the `.objects.all()`
+   * anchor; an unguarded `.objects.get()` inside an `except` arm, silenced by
+   * the guard that protects the OTHER arm; three `.objects.get()` calls in a
+   * try whose handler does not guard the miss at all; nine swallows that were
+   * silenced by adding a `finally:`, an `else:` or a second exception type;
+   * and one leaked file handle and one un-awaited coroutine, each sitting in
+   * the same function as the correct shape their rule excludes.
+   */
+  'real_bugs.py': { ids: [...ALL_RULES], count: 33 },
   'asyncio_not_awaited.py': {
     // All FOUR pattern-either branches (sleep, gather, wait, wait_for) are
     // exercised, so a branch that silently stops matching drops the count.
@@ -141,6 +200,45 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'queryset_n_plus_one.py': { ids: ['bugfix-py-edge-case-queryset-n-plus-one'], count: 2 },
   'range_len_plus_one.py': { ids: ['bugfix-py-off-by-one-range-len-plus-one'], count: 2 },
   'toctou_exists_open.py': { ids: ['bugfix-py-race-condition-toctou-exists-open'], count: 2 },
+};
+
+/**
+ * The severity tier each rule is DESIGNED to carry, and the criterion applied
+ * to the OUTPUT rather than to the bug class: **is what the rule EMITS always
+ * a bug?** Not "is the shape it looks for usually wrong" — a rule whose
+ * correctness depends on having recognised a guard emits a false positive
+ * every time it meets a guard shape nobody enumerated, and no exclusion list
+ * closes that, because the guard can always be one line away.
+ *
+ * Nine of the ten are `WARNING` on that test, and only `none-deref-match`
+ * survives at `ERROR`: its output is an accessor glued straight onto the
+ * result of `re.match/search/fullmatch`, where the dereference is
+ * unconditional on a value that is None whenever the pattern does not match,
+ * and there is no guard to recognise. The pack's header used to define this
+ * criterion correctly and then assign the tier by bug CLASS ("null-safety is
+ * always serious"), which is how five rules ended up at ERROR; the 2026-08
+ * audit applied it cold.
+ *
+ * Pinned here because nothing pinned it before — no test read
+ * `extra.severity`, so any tier could be changed with a green suite. The tier
+ * is not cosmetic: the Semgrep parser maps ERROR -> `high` and WARNING ->
+ * `medium` (`src/runners/scannerParsers/semgrep.ts`), and `create_fix_pr`
+ * defaults `severity_min` to `high`. With nine of ten at WARNING the Python
+ * pack contributes almost nothing to the DEFAULT fix-PR set, and a caller who
+ * wants Python bugs fixed has to ask: `severity_min: "medium"`. `bug_hunt`
+ * itself defaults to no filter, so nothing disappears from a scan.
+ */
+const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
+  'bugfix-py-null-safety-none-deref-match': 'ERROR',
+  'bugfix-py-error-handling-bare-except': 'WARNING',
+  'bugfix-py-error-handling-except-pass': 'WARNING',
+  'bugfix-py-error-handling-get-without-doesnotexist': 'WARNING',
+  'bugfix-py-null-safety-none-deref-dict-get': 'WARNING',
+  'bugfix-py-off-by-one-range-len-plus-one': 'WARNING',
+  'bugfix-py-memory-leak-open-without-context': 'WARNING',
+  'bugfix-py-race-condition-asyncio-not-awaited': 'WARNING',
+  'bugfix-py-race-condition-toctou-exists-open': 'WARNING',
+  'bugfix-py-edge-case-queryset-n-plus-one': 'WARNING',
 };
 
 describe('bugfix-py rules', () => {
@@ -173,11 +271,56 @@ describe('bugfix-py rules', () => {
       const grouped = rowsByFile(rows);
       for (const [file, expected] of Object.entries(EXPECTED_HITS_BY_FILE)) {
         const fileRows = grouped[file] ?? [];
-        expect(ids(fileRows)).toEqual(expected.ids);
+        expect(ids(fileRows)).toEqual([...expected.ids].sort());
         expect(fileRows.length).toBe(expected.count);
       }
+      // The TOTAL, on top of the per-file counts, and not redundant: the loop
+      // above only visits files that HAVE an expectation, so a finding landing
+      // in a file nobody registered would not move any per-file number.
+      expect(rows.length).toBe(
+        Object.values(EXPECTED_HITS_BY_FILE).reduce((n, e) => n + e.count, 0),
+      );
     },
   );
+
+  /**
+   * The trap family: a `pattern-either` branch with no positive term
+   * (`RuleParseError`), an unquoted `?` in an exclusion (`Invalid YAML`), and
+   * an UPPERCASE ACCENTED LETTER in a Portuguese comment all share one
+   * signature — fewer rules load than the file declares, and nothing in the
+   * findings says so. The third bit during the 2026-08 audit: Semgrep's config
+   * loader decodes the rule file with the LOCALE codec, so on a Windows cp1252
+   * locale the second byte of `Á` (U+00C1 -> 0xC3 0x81) is undefined and one
+   * letter takes the whole file down, reporting `results: 0`,
+   * `paths.scanned: 0` and `errors: 0`.
+   *
+   * The total-hits assertion above is the family-wide catch, but only while
+   * EVERY rule has a hit fixture behind it. This closes that, comparing the ids
+   * the fixtures exercise against the `- id:` entries parsed out of the YAML
+   * itself rather than a hand-maintained list. (`semgrep --validate` and the
+   * locale-codec byte check run over every pack in `semgrepPacks.test.ts`.)
+   */
+  it.skipIf(!AVAILABLE)('every rule the YAML declares is exercised by a hit fixture', () => {
+    const { rows } = run(RULES, resolve(FIXTURES, 'hits'));
+    expect(ids(rows)).toEqual(declaredRuleIds());
+  });
+
+  it.skipIf(!AVAILABLE)('reports each rule at its DESIGNED severity tier', () => {
+    const { rows } = run(RULES, resolve(FIXTURES, 'hits'));
+    const seen = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const id = row.check_id.split('.').pop() ?? row.check_id;
+      const severity = row.extra?.severity;
+      if (severity === undefined) throw new Error(`no severity on ${id}`);
+      const set = seen.get(id);
+      if (set) set.add(severity);
+      else seen.set(id, new Set([severity]));
+    }
+    for (const [id, tier] of Object.entries(EXPECTED_SEVERITY)) {
+      expect([id, [...(seen.get(id) ?? [])]]).toEqual([id, [tier]]);
+    }
+    expect([...seen.keys()].sort()).toEqual(Object.keys(EXPECTED_SEVERITY).sort());
+  });
 
   it.skipIf(!AVAILABLE)('fires NOTHING in EACH near-miss fixture file', () => {
     const dir = resolve(FIXTURES, 'misses');

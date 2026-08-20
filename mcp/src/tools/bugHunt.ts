@@ -446,7 +446,7 @@ registerToolModule(
     description:
       'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus local, always-on ' +
       'JS/TS, Python, Go and Java rule packs: `configs/semgrep/bugfix-js.yml` (fourteen rules), ' +
-      '`configs/semgrep/bugfix-py.yml` (ten rules), `configs/semgrep/bugfix-go.yml` (ten ' +
+      '`configs/semgrep/bugfix-py.yml` (ten rules), `configs/semgrep/bugfix-go.yml` (nine ' +
       'rules) and `configs/semgrep/bugfix-java.yml` (eight rules), each covering all six subcategories ' +
       'below for its language — race_condition, null_safety, off_by_one, memory_leak, ' +
       'error_handling, edge_case. `commands/guardian-fix.md` also ' +
@@ -470,20 +470,23 @@ registerToolModule(
       'before this local pack. Its own gaps: no goroutine-leak rule; no loop-variable-capture ' +
       'rule (built and verified working, then deliberately excluded — Go 1.22 made loop ' +
       'variables per-iteration and Semgrep cannot read go.mod, so on a modern module it would ' +
-      'fire on correct code); `body-not-closed` only recognises http.Get, so http.Post and ' +
-      'client.Do(req) leak identically and are not covered; `lock-without-defer` accepts any ' +
-      'defer mu.Unlock() in the block, so it cannot tell a correctly scoped unlock from one ' +
-      'deferred in the wrong branch, and it does not cover sync.RWMutex read locks — the pattern ' +
-      'matches the literal Lock()/Unlock() method names, not RLock()/RUnlock(), so a read-lock ' +
-      'without defer, a common Go idiom, is entirely outside its reach (the write lock, ' +
-      'Lock()/Unlock(), on a *sync.RWMutex IS covered); `body-not-closed` and ' +
-      '`ticker-not-stopped` match only the := declaration form, so the var-then-assign form is ' +
-      'silent for both; `nil-map-write` only ' +
-      'catches a locally var-declared map — a nil map arriving as a function parameter, a ' +
-      'struct field, or a return value panics identically on write and is not covered, ' +
-      'arguably the commoner real-world shape; and `err-blank-assign` fires on deliberate ' +
-      'discards like ' +
-      '`_ = os.Remove(tmp)` in a cleanup path, which is why it is WARNING. Java is the ' +
+      'fire on correct code); the pack shipped a tenth rule, `edge-case-append-discarded`, ' +
+      'which was DELETED in the 2026-08 audit — it matched `append(xs, 1)` in statement ' +
+      'position, which the Go spec forbids and the compiler rejects, so its true-positive set ' +
+      'was empty in any project that compiles and everything it emitted in a real repository ' +
+      'was a false positive (for the bug that does compile, `xs = append(xs, v)` on a ' +
+      'parameter, use staticcheck/ineffassign, which have the dataflow a syntactic rule does ' +
+      'not); `body-not-closed` and `ticker-not-stopped` match only the := declaration form, ' +
+      'so the var-then-assign form is silent for both; `nil-map-write` catches a locally ' +
+      'var-declared map and a map field of a struct built with `&T{}`, but not a nil map ' +
+      'arriving as a function parameter or returned by a constructor — neither is always a ' +
+      'bug, since it depends on the caller; `type-assert-no-ok` still fires on ' +
+      '`var s, ok = v.(string)`, because the pattern `var $X, $OK = ...` matches nothing in ' +
+      "Semgrep 1.164's Go parser (verified as a bare positive pattern); `err-discarded` " +
+      'cannot tell a project function returning (T, bool) from a discarded error — the ' +
+      'standard library is covered by a short deny-list (sync.Map, strings.Cut*, ' +
+      'utf8.Decode*), nothing else is; and `err-blank-assign` fires on deliberate discards ' +
+      'like `_ = os.Remove(tmp)` in a cleanup path, which is why it is WARNING. Java is the ' +
       'emptiest language of the four: p/r2c-bug-scan ships 4 Java rules and NONE land in a ' +
       'bug class — all four are equality and comparison style — so every subcategory was at ' +
       'zero, in the language whose most famous defect is the NullPointerException. Its own ' +
