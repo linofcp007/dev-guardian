@@ -72,8 +72,12 @@ export type RefreshAction =
   | 'up_to_date'
   /** Provably untouched since we wrote it, and we shipped newer — safe to replace. */
   | 'update_in_place'
-  /** Edited, diverged, or of unknown provenance — deliver as `<target>.new`. */
+  /** Edited, diverged, or of unknown provenance — deliver beside the file. */
   | 'write_alongside'
+  /** We had something to deliver, but the delivery path is already taken. */
+  | 'alongside_blocked'
+  /** A previous delivery is still sitting there unmerged. Nothing is touched. */
+  | 'pending_merge'
   /** Already identical to what we ship; only the manifest record is missing. */
   | 'adopt'
   /** The shipped baseline is unreachable. A broken install, not user drift. */
@@ -104,8 +108,28 @@ export interface RefreshOutcome {
   plan: RefreshPlanItem[];
 }
 
-/** Suffix for a baseline delivered next to a file we must not overwrite. */
-const ALONGSIDE_SUFFIX = '.new';
+/**
+ * Name for a baseline delivered next to a file we must not overwrite.
+ *
+ * ---- Why not a plain `<target>.new` ----------------------------------
+ *
+ * Because `.new` is not ours. A user can perfectly well be keeping their own
+ * `.semgrep.yml.new`, and writing over it to deliver a baseline is the same
+ * data loss `write_alongside` exists to prevent — the asymmetry (a needless
+ * extra file is noise; a clobbered file is gone) does not stop applying just
+ * because the suffix looks like scratch space. Two things follow:
+ *
+ *   - the name carries `dev-guardian` and the plugin version, so it is not a
+ *     name anyone else would land on by accident, and two deliveries from
+ *     different releases are told apart on sight rather than overwriting each
+ *     other;
+ *   - and even so, a path that already exists and is NOT recorded in the
+ *     manifest as our own previous delivery is refused, not overwritten.
+ *     `alongside_blocked` reports it and leaves both files alone.
+ */
+function alongsideName(target: string, version: string): string {
+  return `${target}.dev-guardian-${version}.new`;
+}
 
 export function refreshConfigs(input: RefreshInput): RefreshOutcome {
   let manifest: ConfigManifest = readManifest(input.projectPath) ?? emptyManifest();
@@ -167,19 +191,41 @@ export function refreshConfigs(input: RefreshInput): RefreshOutcome {
         manifestTouched = true;
         continue;
       }
-      const written = deliverAlongside(input, file, srcPath, dstPath, srcHash, dstHash, manifest);
-      plan.push({
-        ...ids(file),
-        action: 'write_alongside',
+      const delivery = deliverAlongside({
+        input,
+        file,
+        srcPath,
+        srcHash,
+        dstHash,
+        manifest,
         reason:
           'this file predates provenance tracking — an older copy of ours and your own config ' +
           'are indistinguishable, so it is never overwritten',
-        alongside_path: alongside(file.target),
       });
-      if (written !== null) {
-        manifest = written;
+      plan.push(delivery.item);
+      if (delivery.manifest !== null) {
+        manifest = delivery.manifest;
         manifestTouched = true;
       }
+      continue;
+    }
+
+    // A delivery already made and not yet merged outranks everything below.
+    // Re-running the refresh must not rewrite that file: the user may have
+    // started merging INTO it, which would make a second delivery a clobber of
+    // their work — the same mistake, one directory along. It also keeps a
+    // stream of `.new` files from piling up for someone who is simply not
+    // ready to merge yet. `detectConfigDrift` gives `pending_merge` the same
+    // precedence, so the advisory and the plan say the same thing.
+    if (entry.delivered_as !== undefined && existsSync(join(input.projectPath, entry.delivered_as))) {
+      plan.push({
+        ...ids(file),
+        action: 'pending_merge',
+        reason:
+          `${entry.delivered_as} is still waiting to be merged into ${file.target}. Merge it ` +
+          'and delete it, then run the refresh again.',
+        alongside_path: entry.delivered_as,
+      });
       continue;
     }
 
@@ -214,15 +260,18 @@ export function refreshConfigs(input: RefreshInput): RefreshOutcome {
       continue;
     }
 
-    const written = deliverAlongside(input, file, srcPath, dstPath, srcHash, dstHash, manifest);
-    plan.push({
-      ...ids(file),
-      action: 'write_alongside',
+    const delivery = deliverAlongside({
+      input,
+      file,
+      srcPath,
+      srcHash,
+      dstHash,
+      manifest,
       reason: 'changed on both sides since install — merge required, your file is untouched',
-      alongside_path: alongside(file.target),
     });
-    if (written !== null) {
-      manifest = written;
+    plan.push(delivery.item);
+    if (delivery.manifest !== null) {
+      manifest = delivery.manifest;
       manifestTouched = true;
     }
   }
@@ -280,8 +329,8 @@ export function installFile(input: {
   version: string;
   /**
    * Path whose extension decides the comment syntax. Needed because a
-   * delivered baseline is written to `.semgrep.yml.new`, whose own extension
-   * is `.new` and says nothing about the format inside it.
+   * delivered baseline is written to `<target>.dev-guardian-<version>.new`,
+   * whose own extension is `.new` and says nothing about the format inside.
    */
   formatHint?: string;
 }): boolean {
@@ -302,11 +351,6 @@ export function installFile(input: {
   } catch {
     return false;
   }
-}
-
-/** `.semgrep.yml` -> `.semgrep.yml.new` */
-function alongside(target: string): string {
-  return `${target}${ALONGSIDE_SUFFIX}`;
 }
 
 function ids(file: ConfigFileSpec): { target: string; source: string } {
@@ -332,42 +376,73 @@ function record(
 }
 
 /**
- * Writes `<target>.new` and returns the manifest with the delivery recorded,
- * or `null` when nothing was written (dry run, or the write did not land).
+ * Delivers the baseline beside a file we must not overwrite, and reports what
+ * happened.
  *
- * The `.new` file is ours, not the user's, so overwriting a previous one is
- * not a clobber — it is replacing a stale delivery with a current one.
+ * Two outcomes. Normally the file lands at
+ * `<target>.dev-guardian-<version>.new` and the manifest records the delivery,
+ * so the drift advisory reads `pending_merge` until the user merges and
+ * deletes it. But if something is already sitting at that path and the
+ * manifest does not say we put it there, nothing is written: `alongside_blocked`
+ * names the path and leaves both files untouched. Overwriting a file we did
+ * not create is the data loss this whole branch exists to avoid, and a name
+ * that merely looks like scratch space is not proof of ownership.
+ *
+ * `manifest` comes back `null` when nothing was written — a dry run, a failed
+ * write, or a blocked path — so the caller records no delivery that did not
+ * happen.
  */
-function deliverAlongside(
-  input: RefreshInput,
-  file: ConfigFileSpec,
-  srcPath: string,
-  dstPath: string,
-  srcHash: string,
-  dstHash: string,
-  manifest: ConfigManifest,
-): ConfigManifest | null {
-  if (!input.apply) return null;
-  const relativeNew = alongside(file.target);
+function deliverAlongside(args: {
+  input: RefreshInput;
+  file: ConfigFileSpec;
+  srcPath: string;
+  srcHash: string;
+  dstHash: string;
+  manifest: ConfigManifest;
+  reason: string;
+}): { item: RefreshPlanItem; manifest: ConfigManifest | null } {
+  const { input, file, manifest } = args;
+  const relativeNew = alongsideName(file.target, input.currentVersion);
+  const newPath = join(input.projectPath, relativeNew);
+  const existing = findManifestEntry(manifest, file.target);
+  const oursAlready = existing?.delivered_as === relativeNew;
+
+  if (existsSync(newPath) && !oursAlready) {
+    return {
+      item: {
+        ...ids(file),
+        action: 'alongside_blocked',
+        reason:
+          `a newer baseline is ready for ${file.target}, but ${relativeNew} already exists and ` +
+          'was not written by dev-guardian — nothing was overwritten. Move or delete that file ' +
+          'and run the refresh again.',
+        alongside_path: relativeNew,
+      },
+      manifest: null,
+    };
+  }
+
+  const item: RefreshPlanItem = {
+    ...ids(file),
+    action: 'write_alongside',
+    reason: args.reason,
+    alongside_path: relativeNew,
+  };
+  if (!input.apply) return { item, manifest: null };
+
   const written = installFile({
-    srcPath,
-    dstPath: `${dstPath}${ALONGSIDE_SUFFIX}`,
+    srcPath: args.srcPath,
+    dstPath: newPath,
     source: file.source,
     version: input.currentVersion,
     formatHint: file.target,
   });
-  if (!written) return null;
-  const existing = findManifestEntry(manifest, file.target);
+  if (!written) return { item, manifest: null };
+
   const entry: ConfigManifestEntry = {
-    ...record(
-      file,
-      input.currentVersion,
-      srcHash,
-      dstHash,
-      existing?.provenance ?? 'adopted',
-    ),
+    ...record(file, input.currentVersion, args.srcHash, args.dstHash, existing?.provenance ?? 'adopted'),
     delivered_as: relativeNew,
     delivered_at: new Date().toISOString(),
   };
-  return upsertManifestEntry(manifest, entry);
+  return { item, manifest: upsertManifestEntry(manifest, entry) };
 }

@@ -36,8 +36,8 @@ Corre `bash ${CLAUDE_PLUGIN_ROOT}/scripts/scan/full-security-scan.sh <project-pa
 Internamente:
 
 ```bash
-# SAST
-semgrep --config=auto --json --output=.guardian/sast.json .
+# SAST — repara nos DOIS --config: ver a nota abaixo
+semgrep --config=auto --config=.semgrep.yml --json --output=.guardian/sast.json .
 
 # Secrets (incluindo histórico Git)
 gitleaks detect --no-banner --report-format=json --report-path=.guardian/secrets.json
@@ -51,6 +51,42 @@ trivy fs --scanners vuln,license --format json --output .guardian/deps.json .
 # IaC (se houver)
 trivy config --format json --output .guardian/iac.json .
 ```
+
+#### `--config=auto` não carrega o `.semgrep.yml` do projeto
+
+Medido no semgrep 1.164.0, num projeto com o pack `base.yml` e uma linha de
+`<?php echo $_GET['name'];`:
+
+| Comando                | Findings |
+| ---------------------- | -------- |
+| `--config=<ficheiro>`  | 1        |
+| `--config=auto`        | 0        |
+
+As treze regras que o `init_project` instala como `.semgrep.yml` **não têm
+consumidor** se só se passar `--config=auto`. É por isso que os dois `--config`
+estão ali em cima, e é por isso que a tool `scan_sast` passou a carregar as
+regras do projeto (do manifesto `.dev-guardian/configs.json`, ou dos nomes
+convencionais). Prefere sempre a tool ao comando em bruto.
+
+Um `--config` que o Semgrep não consiga carregar aborta a corrida **inteira**
+(`paths.scanned: []`, exit 7), não só esse pack — por isso a tool valida a
+estrutura do ficheiro antes de o passar, e reporta em `tools_run` o que
+descartou. Uma regra que não compila é outro caso: exit 2, tudo scaneado,
+perde-se essa regra e mais nada.
+
+#### Privacidade: o modo por defeito envia telemetria
+
+`--config=auto` vai buscar as regras ao registry do Semgrep e envia métricas de
+uso à Semgrep Inc. **como condição** disso: `--metrics=off` em conjunto falha
+com "Cannot create auto config when metrics are off". Não é evitável no modo
+por defeito, e vale a pena dizê-lo ao utilizador quando ele pergunta se algo
+sai da máquina.
+
+Alternativa: `scan_sast` com `local_only: true` — sem registry, com
+`--metrics=off`, só regras já em disco (o `.semgrep.yml` do projeto e o que
+tenha sido registado com `register_custom_rules`). Menos regras que o modo por
+defeito; nada sai da máquina. Sem regras locais, o scan é reportado como
+skipped e não como resultado limpo.
 
 ### 3. Triagem inteligente
 

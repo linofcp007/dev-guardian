@@ -8,6 +8,64 @@ version bump.
 
 ## [Unreleased]
 
+### Action required — the SAST rules this plugin installs were never actually run
+
+**Until this release, `scan_sast` did not load the rules `init_project` writes
+into your project.** It ran `semgrep --config=auto`, and `--config=auto` does
+not pick up a project's `.semgrep.yml`. Measured on semgrep 1.164.0, against a
+project containing the shipped pack and one line of
+`<?php echo $_GET['name'];`:
+
+| Command                   | Findings | Files scanned |
+| ------------------------- | -------- | ------------- |
+| `--config=<the pack>`     | 1        | 2             |
+| `--config=auto`           | 0        | 2             |
+
+So the thirteen security rules `init_project` installs as `.semgrep.yml` had no
+consumer anywhere in the product. **The shipped pre-commit hook had the same
+gap** — it also passed only `--config=auto` — so a project that installed our
+hooks was not running our rules either.
+
+This is why the `wp-unescaped-output` note below matters twice: that rule was
+dead for two entirely independent reasons, and fixing the pattern in b51a2dc
+could not have helped, because nothing loaded the file it lives in.
+
+Both are fixed. `scan_sast` now passes the project's own config — from
+`.dev-guardian/configs.json` where there is one, falling back to `.semgrep.yml`
+/ `.semgrep.yaml` — and `configs/pre-commit/pre-commit-config.yaml` now passes
+`--config=.semgrep.yml` alongside `--config=auto`. **If you already installed
+our pre-commit hook, re-run `init_project` with `refresh=true` to pick up the
+corrected hook config**, or add the flag by hand.
+
+A guard comes with it, because loading a file the user owns is a new risk: a
+`--config` Semgrep cannot load aborts the *whole* run (`paths.scanned: []`,
+exit 7), not just that pack. Every candidate is parsed and shape-checked
+first, and one that would abort the scan is dropped **and named in
+`tools_run`** rather than passed through. A rule that merely fails to compile
+is a different case — exit 2, everything still scanned — and now counts as a
+real scan that lost one rule instead of flipping the whole result to `failed`.
+
+### Privacy — the default SAST mode sends telemetry to Semgrep Inc
+
+`SECURITY.md` said "Local-only, no telemetry" without qualification. That was
+wrong, and it is corrected there.
+
+`--config=auto` fetches its ruleset from the Semgrep registry and reports usage
+metrics to Semgrep Inc. **as a condition of doing so**: passing `--metrics=off`
+alongside it fails outright with `Cannot create auto config when metrics are
+off`. Every default `scan_sast` run has therefore sent telemetry, and could not
+have done otherwise. dev-guardian neither adds to that data nor sees it; what
+Semgrep collects is documented at <https://semgrep.dev/docs/metrics>.
+
+New in this release: **`scan_sast(local_only: true)`** drops the registry,
+passes `--metrics=off`, and runs only rules already on disk — your project's
+`.semgrep.yml` plus anything added with `register_custom_rules`. Nothing leaves
+the machine, at the cost of the registry's rules. When the project has no local
+rules it reports the scan as **skipped** rather than as a clean result, because
+zero findings from zero rules is not a clean bill of health. That mode only
+became coherent rather than empty once the project's own config started being
+loaded, which is why the two arrived together.
+
 ### Action required — projects initialised before b51a2dc are running a dead XSS rule
 
 **If you ran `init_project` before b51a2dc, your `.semgrep.yml` contains a
@@ -74,11 +132,20 @@ not just the Semgrep one — the same gap existed for every one of them.
     `apply=false` it reports the per-file action and writes nothing. With
     `apply=true` it updates a file you have provably never touched, and for
     anything else — edited, diverged, or of unknown provenance — writes the new
-    baseline as `<name>.new` beside your file and leaves yours closed. **No flag
-    overwrites a modified file.** "Unknown provenance" is treated as modified on
-    purpose: an old copy of ours and a config you wrote by hand are
-    indistinguishable from the bytes, and the costs of guessing wrong are not
-    symmetric.
+    baseline as `<name>.dev-guardian-<version>.new` beside your file and leaves
+    yours closed. **No flag overwrites a modified file.** "Unknown provenance"
+    is treated as modified on purpose: an old copy of ours and a config you
+    wrote by hand are indistinguishable from the bytes, and the costs of
+    guessing wrong are not symmetric.
+
+    The delivered file is not called `<name>.new`, because that name is not
+    ours — a user can be keeping their own `.semgrep.yml.new`, and writing over
+    it is the same data loss the rule above exists to prevent. It carries
+    `dev-guardian` and the plugin version, and even then a path that already
+    exists and is not recorded as our own previous delivery is **refused**
+    (`alongside_blocked`) rather than overwritten. Re-running a refresh while a
+    delivery is still unmerged reports `pending_merge` and rewrites nothing:
+    the user's half-finished merge lives in that file.
 
   - **Graceful degradation for projects with no manifest.** They get no warning
     at all rather than a wrong one — with nothing recorded, "an old copy of

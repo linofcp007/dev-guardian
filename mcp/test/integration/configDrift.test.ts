@@ -220,10 +220,10 @@ describe('init_project refresh mode', () => {
     const r = await init(h, { refresh: true, apply: true });
     const item = planFor(r, '.semgrep.yml');
     expect(item.action).toBe('write_alongside');
-    expect(item.alongside_path).toBe('.semgrep.yml.new');
+    if (item.alongside_path === undefined) throw new Error('expected an alongside path');
     // Their file is exactly as they left it.
     expect(readFileSync(join(h.project, '.semgrep.yml'), 'utf8')).toBe(mine);
-    expect(readFileSync(join(h.project, '.semgrep.yml.new'), 'utf8')).toContain('echo $_GET[...]');
+    expect(readFileSync(join(h.project, item.alongside_path), 'utf8')).toContain('echo $_GET[...]');
   });
 
   it('degrades gracefully on a project with no manifest, and adopts one', async () => {
@@ -238,11 +238,85 @@ describe('init_project refresh mode', () => {
     // are indistinguishable — so the safe action is the non-destructive one.
     const item = planFor(r, '.semgrep.yml');
     expect(item.action).toBe('write_alongside');
+    if (item.alongside_path === undefined) throw new Error('expected an alongside path');
     expect(readFileSync(join(h.project, '.semgrep.yml'), 'utf8')).toBe(BASE_V1);
-    expect(existsSync(join(h.project, '.semgrep.yml.new'))).toBe(true);
+    expect(existsSync(join(h.project, item.alongside_path))).toBe(true);
     // From here on, drift is detectable.
     const entry = readManifest(h.project)?.entries.find((e) => e.target === '.semgrep.yml');
     expect(entry?.provenance).toBe('adopted');
+  });
+
+  it('delivers under a name a user would not have chosen, not a bare .new', async () => {
+    // `<target>.new` is not ours. A user can perfectly well keep their own
+    // `.semgrep.yml.new`, and overwriting it to deliver a baseline is the
+    // same data loss the write_alongside rule exists to prevent — the
+    // asymmetry does not stop applying just because the suffix looks like
+    // scratch space.
+    const h = harness();
+    await init(h);
+    writeFileSync(join(h.project, '.semgrep.yml'), 'rules: []  # mine\n', 'utf8');
+    shipNewerBaseYml(h);
+
+    const r = await init(h, { refresh: true, apply: true });
+    const item = planFor(r, '.semgrep.yml');
+    expect(item.alongside_path).not.toBe('.semgrep.yml.new');
+    expect(item.alongside_path).toContain('dev-guardian');
+    if (item.alongside_path === undefined) throw new Error('expected an alongside path');
+    expect(existsSync(join(h.project, item.alongside_path))).toBe(true);
+  });
+
+  it('names the plugin version in the delivered file, so two are told apart', async () => {
+    const h = harness();
+    await init(h);
+    writeFileSync(join(h.project, '.semgrep.yml'), 'rules: []  # mine\n', 'utf8');
+    shipNewerBaseYml(h);
+
+    const r = await init(h, { refresh: true, apply: true });
+    const manifest = readManifest(h.project);
+    const entry = manifest?.entries.find((e) => e.target === '.semgrep.yml');
+    expect(entry?.delivered_as).toBe(planFor(r, '.semgrep.yml').alongside_path);
+    expect(entry?.delivered_as ?? '').toContain(entry?.plugin_version ?? 'no-version');
+  });
+
+  it('refuses, rather than overwriting, a delivery path it did not write', async () => {
+    const h = harness();
+    await init(h);
+    writeFileSync(join(h.project, '.semgrep.yml'), 'rules: []  # mine\n', 'utf8');
+    shipNewerBaseYml(h);
+
+    // Find out where it would land, then squat on it with the user's content.
+    const dry = await init(h, { refresh: true, apply: false });
+    const target = planFor(dry, '.semgrep.yml').alongside_path;
+    if (target === undefined) throw new Error('expected an alongside path');
+    const squatted = 'something the user was keeping here\n';
+    writeFileSync(join(h.project, target), squatted, 'utf8');
+
+    const r = await init(h, { refresh: true, apply: true });
+    const item = planFor(r, '.semgrep.yml');
+    expect(item.action).toBe('alongside_blocked');
+    expect(item.reason).toContain(target);
+    expect(readFileSync(join(h.project, target), 'utf8')).toBe(squatted);
+  });
+
+  it('does not rewrite a delivery the user may already be merging into', async () => {
+    // Re-delivering on top of an unmerged file would be the same clobber one
+    // directory along: the user's half-finished merge lives in THAT file.
+    const h = harness();
+    await init(h);
+    writeFileSync(join(h.project, '.semgrep.yml'), 'rules: []  # mine\n', 'utf8');
+    shipNewerBaseYml(h);
+
+    const first = await init(h, { refresh: true, apply: true });
+    const target = planFor(first, '.semgrep.yml').alongside_path;
+    if (target === undefined) throw new Error('expected an alongside path');
+    const halfMerged = 'rules: []  # mine, plus the bits I have merged so far\n';
+    writeFileSync(join(h.project, target), halfMerged, 'utf8');
+
+    const second = await init(h, { refresh: true, apply: true });
+    const item = planFor(second, '.semgrep.yml');
+    expect(item.action).toBe('pending_merge');
+    expect(item.reason).toContain(target);
+    expect(readFileSync(join(h.project, target), 'utf8')).toBe(halfMerged);
   });
 
   it('creates files that are missing entirely', async () => {

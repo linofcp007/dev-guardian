@@ -37007,8 +37007,8 @@ async function probeShell(runtimeMeta, deps = defaultDeps(), os = detectOs()) {
   if (cached2 && await isStillUsable(cached2, deps)) {
     return cached2;
   }
-  const candidates = candidatesFor(os);
-  for (const candidate of candidates) {
+  const candidates2 = candidatesFor(os);
+  for (const candidate of candidates2) {
     const version2 = await deps.testShell(candidate.command, candidate.args_prefix);
     if (version2) {
       const chosen = { ...candidate, label: `${candidate.label} (${version2})` };
@@ -37096,7 +37096,7 @@ function readVersion(path6) {
 }
 function resolveVersion() {
   const here = dirname2(fileURLToPath4(import.meta.url));
-  const candidates = [
+  const candidates2 = [
     // .claude-plugin/plugin.json — the real release version — tried at both
     // depths before falling back to mcp/package.json at either depth, same
     // preference order the pre-lift server.ts-local version used.
@@ -37109,7 +37109,7 @@ function resolveVersion() {
     resolve(here, "..", "..", "package.json")
     // unbundled — mcp/package.json
   ];
-  for (const candidate of candidates) {
+  for (const candidate of candidates2) {
     const version2 = readVersion(candidate);
     if (version2) return version2;
   }
@@ -38122,8 +38122,8 @@ import { dirname as dirname3, join as join3 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 function resolveMigrationsDir() {
   const here = dirname3(fileURLToPath5(import.meta.url));
-  const candidates = [here, join3(here, "storage", "migrations"), join3(here, "migrations")];
-  for (const dir of candidates) {
+  const candidates2 = [here, join3(here, "storage", "migrations"), join3(here, "migrations")];
+  for (const dir of candidates2) {
     try {
       if (existsSync3(dir) && readdirSync(dir).some((f) => /^\d+_.+\.sql$/.test(f))) return dir;
     } catch {
@@ -39986,8 +39986,8 @@ registerToolModule(
 );
 
 // src/tools/scanSast.ts
-import { existsSync as existsSync10, readdirSync as readdirSync4, readFileSync as readFileSync9 } from "node:fs";
-import { join as join11 } from "node:path";
+import { existsSync as existsSync11, readdirSync as readdirSync4, readFileSync as readFileSync10 } from "node:fs";
+import { join as join12 } from "node:path";
 
 // src/runners/scannerParsers/securityCodeScan.ts
 var SCS_TOOL_NAME = "security-code-scan";
@@ -40070,6 +40070,7 @@ function buildSemgrepDockerArgs(opts) {
   ];
   for (const config2 of opts.configs ?? ["auto"]) args.push(`--config=${config2}`);
   if (opts.hasCsproj) args.push("--config=p/csharp");
+  if (opts.metricsOff) args.push("--metrics=off");
   args.push("--json", "--quiet", "--output", containerOut);
   if (opts.autoFix) args.push("--autofix");
   args.push("/src");
@@ -40100,12 +40101,74 @@ function resolveCustomSemgrepConfigs(ctx) {
   return raw.filter((p) => typeof p === "string" && p.length > 0 && existsSync9(p));
 }
 
+// src/platform/projectSemgrepConfig.ts
+var import_yaml = __toESM(require_dist2(), 1);
+import { existsSync as existsSync10, readFileSync as readFileSync9 } from "node:fs";
+import { join as join11 } from "node:path";
+var CONVENTIONAL_TARGETS = [".semgrep.yml", ".semgrep.yaml"];
+var SEMGREP_SOURCE_PREFIX = "semgrep/";
+function inspectProjectSemgrepConfigs(projectPath) {
+  const usable = [];
+  const unusable = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const candidate of candidates(projectPath)) {
+    const absolute = join11(projectPath, candidate.target);
+    const key = absolute.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!existsSync10(absolute)) continue;
+    const verdict = classify2(absolute);
+    if (verdict.ok) {
+      usable.push({ path: absolute, target: candidate.target, via: candidate.via });
+    } else {
+      unusable.push({ target: candidate.target, reason: verdict.reason });
+    }
+  }
+  return { usable, unusable };
+}
+function classify2(path6) {
+  let text;
+  try {
+    text = readFileSync9(path6, "utf8");
+  } catch {
+    return { ok: false, reason: "unreadable" };
+  }
+  let doc;
+  try {
+    doc = (0, import_yaml.parse)(text);
+  } catch {
+    return { ok: false, reason: "not valid YAML" };
+  }
+  if (typeof doc !== "object" || doc === null) {
+    return { ok: false, reason: "no `rules:` list" };
+  }
+  const rules = doc["rules"];
+  if (!Array.isArray(rules)) return { ok: false, reason: "no `rules:` list" };
+  if (rules.length === 0) {
+    return { ok: false, reason: "empty `rules:` list" };
+  }
+  return { ok: true };
+}
+function candidates(projectPath) {
+  const out = [];
+  const manifest = readManifest(projectPath);
+  for (const entry of manifest?.entries ?? []) {
+    if (entry.source.startsWith(SEMGREP_SOURCE_PREFIX)) {
+      out.push({ target: entry.target, via: "manifest" });
+    }
+  }
+  for (const target of CONVENTIONAL_TARGETS) {
+    out.push({ target, via: "convention" });
+  }
+  return out;
+}
+
 // src/tools/scanSast.ts
 registerToolModule(
   makeScanTool({
     name: "scan_sast",
     title: "SAST scan (Semgrep)",
-    description: "Static analysis with Semgrep against the project (config=auto). Also runs Bandit when Python files are present and the CLI is installed. Output JSON is written to .guardian/reports/sast-<scan>/ and parsed into Findings.",
+    description: "Static analysis with Semgrep against the project. Runs the Semgrep registry ruleset (--config=auto), the project's own rules (.semgrep.yml, or whatever .dev-guardian/configs.json records as its target) and any rules added with register_custom_rules. Also runs Bandit when Python files are present and the CLI is installed. Output JSON is written to .guardian/reports/sast-<scan>/ and parsed into Findings. PRIVACY: --config=auto downloads rules from the Semgrep registry and sends usage metrics to Semgrep Inc.; Semgrep refuses to build an auto config with metrics off, so this is unavoidable in the default mode. Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using only rules already on disk.",
     scan_type: "sast",
     category: "security",
     inputSchema: {
@@ -40113,7 +40176,10 @@ registerToolModule(
       severity_min: SeverityMin,
       auto_fix: AutoFix,
       allow_dirty: AllowDirty,
-      force: Force
+      force: Force,
+      local_only: external_exports.boolean().optional().describe(
+        "Run only rules already on disk (the project's own Semgrep config plus anything registered with register_custom_rules), skip the Semgrep registry, and pass --metrics=off so no telemetry leaves the machine. Fewer rules than the default. When the project has no local rules the scan is reported as skipped rather than as a clean result. Default: false."
+      )
     },
     invoke: async (input, ctx) => {
       const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, "sast");
@@ -40121,13 +40187,33 @@ registerToolModule(
       const missing_tools = [];
       const parser_inputs = [];
       const autoFix = input.auto_fix === true;
-      const semgrepBin = await scannerAvailable("semgrep");
       const hasCsproj = anyCsprojInProject(ctx.projectPath);
-      const outFile = join11(reportDir, "sast.json");
-      if (semgrepBin) {
-        const args = ["--config=auto"];
-        if (hasCsproj) args.push("--config=p/csharp");
-        for (const cfg of resolveCustomSemgrepConfigs(ctx.plugin)) {
+      const outFile = join12(reportDir, "sast.json");
+      const localOnly = input.local_only === true;
+      const projectRules = inspectProjectSemgrepConfigs(ctx.projectPath);
+      const localConfigs = [
+        ...projectRules.usable.map((c3) => c3.path),
+        ...resolveCustomSemgrepConfigs(ctx.plugin)
+      ];
+      const configNotes = projectRules.unusable.map((u2) => `${u2.target} not loaded (${u2.reason})`);
+      const nothingToRun = localOnly && localConfigs.length === 0;
+      const semgrepBin = nothingToRun ? null : await scannerAvailable("semgrep");
+      if (nothingToRun) {
+        tools_run.push({
+          name: "semgrep",
+          status: "skipped",
+          reason: "local_only=true but this project has no local Semgrep rules \u2014 no .semgrep.yml, nothing registered with register_custom_rules. Run init_project, or drop local_only to use the Semgrep registry."
+        });
+        missing_tools.push("semgrep");
+      } else if (semgrepBin) {
+        const args = [];
+        if (localOnly) {
+          args.push("--metrics=off");
+        } else {
+          args.push("--config=auto");
+          if (hasCsproj) args.push("--config=p/csharp");
+        }
+        for (const cfg of localConfigs) {
           args.push(`--config=${cfg}`);
         }
         args.push("--json", "--quiet", "--output", outFile);
@@ -40145,22 +40231,33 @@ registerToolModule(
         if (raw) {
           parser_inputs.push({ parser: semgrepParser, input: raw });
         }
-        const ok = result.outcome === "completed" || result.exitCode === 1;
+        const ok = result.outcome === "completed" || result.exitCode === 1 || result.exitCode === 2 && semgrepScannedFiles(raw);
         const semgrepRun = { name: "semgrep", status: ok ? "ok" : "failed" };
-        if (!ok && result.stderr) {
-          semgrepRun.reason = result.stderr.split(/\r?\n/)[0] ?? "unknown";
+        const notes = [...configNotes];
+        if (result.exitCode === 2) {
+          notes.push("semgrep raised rule errors (exit 2) \u2014 at least one rule did not load");
         }
+        if (!ok && result.stderr) {
+          notes.push(result.stderr.split(/\r?\n/)[0] ?? "unknown");
+        }
+        if (notes.length > 0) semgrepRun.reason = notes.join("; ");
         tools_run.push(semgrepRun);
       } else {
         const dockerBin = await scannerAvailable("docker");
         if (dockerBin) {
           const image = process.env["GUARDIAN_SEMGREP_IMAGE"] || DEFAULT_SEMGREP_IMAGE;
+          const dockerConfigs = localOnly ? [] : ["auto"];
+          for (const cfg of projectRules.usable) {
+            dockerConfigs.push(toContainerPath(ctx.projectPath, cfg.path));
+          }
           const args = buildSemgrepDockerArgs({
             projectPath: ctx.projectPath,
             outFileHost: outFile,
-            hasCsproj,
+            hasCsproj: hasCsproj && !localOnly,
             autoFix,
-            image
+            image,
+            configs: dockerConfigs,
+            metricsOff: localOnly
           });
           const result = await runProcess({
             command: "docker",
@@ -40193,11 +40290,11 @@ registerToolModule(
           missing_tools.push("semgrep");
         }
       }
-      const looksPython = existsSync10(join11(ctx.projectPath, "pyproject.toml")) || existsSync10(join11(ctx.projectPath, "requirements.txt")) || existsSync10(join11(ctx.projectPath, "setup.py"));
+      const looksPython = existsSync11(join12(ctx.projectPath, "pyproject.toml")) || existsSync11(join12(ctx.projectPath, "requirements.txt")) || existsSync11(join12(ctx.projectPath, "setup.py"));
       if (looksPython) {
         const banditBin = await scannerAvailable("bandit");
         if (banditBin) {
-          const outFile2 = join11(reportDir, "bandit.json");
+          const outFile2 = join12(reportDir, "bandit.json");
           const result = await runProcess({
             command: "bandit",
             args: ["-r", ctx.projectPath, "-f", "json", "-o", outFile2, "-q"],
@@ -40272,24 +40369,37 @@ function csprojReferencesScs(projectPath) {
   }
   for (const file of csprojs) {
     try {
-      const xml = readFileSync9(join11(projectPath, file), "utf8");
+      const xml = readFileSync10(join12(projectPath, file), "utf8");
       if (/security[-_]?code[-_]?scan/i.test(xml)) return true;
     } catch {
     }
   }
-  const dbProps = join11(projectPath, "Directory.Build.props");
-  if (existsSync10(dbProps)) {
+  const dbProps = join12(projectPath, "Directory.Build.props");
+  if (existsSync11(dbProps)) {
     try {
-      const xml = readFileSync9(dbProps, "utf8");
+      const xml = readFileSync10(dbProps, "utf8");
       if (/security[-_]?code[-_]?scan/i.test(xml)) return true;
     } catch {
     }
   }
   return false;
 }
+function semgrepScannedFiles(raw) {
+  if (raw === null) return false;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return false;
+    const paths = parsed["paths"];
+    if (typeof paths !== "object" || paths === null) return false;
+    const scanned = paths["scanned"];
+    return Array.isArray(scanned) && scanned.length > 0;
+  } catch {
+    return false;
+  }
+}
 
 // src/tools/scanSecrets.ts
-import { join as join12 } from "node:path";
+import { join as join13 } from "node:path";
 registerToolModule(
   makeScanTool({
     name: "scan_secrets",
@@ -40319,7 +40429,7 @@ registerToolModule(
           report_paths: [reportDir]
         };
       }
-      const outFile = join12(reportDir, "secrets.json");
+      const outFile = join13(reportDir, "secrets.json");
       const result = await runProcess({
         command: "gitleaks",
         args: [
@@ -40352,7 +40462,7 @@ registerToolModule(
 );
 
 // src/tools/scanDeps.ts
-import { join as join13 } from "node:path";
+import { join as join14 } from "node:path";
 registerToolModule(
   makeScanTool({
     name: "scan_deps",
@@ -40383,7 +40493,7 @@ registerToolModule(
           report_paths: [reportDir]
         };
       }
-      const outFile = join13(reportDir, "deps.json");
+      const outFile = join14(reportDir, "deps.json");
       const result = await runProcess({
         command: "trivy",
         args: [
@@ -40420,8 +40530,8 @@ registerToolModule(
 );
 
 // src/tools/scanContainers.ts
-import { existsSync as existsSync11 } from "node:fs";
-import { join as join14 } from "node:path";
+import { existsSync as existsSync12 } from "node:fs";
+import { join as join15 } from "node:path";
 registerToolModule(
   makeScanTool({
     name: "scan_containers",
@@ -40455,10 +40565,10 @@ registerToolModule(
         };
       }
       const inp = input;
-      const dockerfile = inp.dockerfile_path ?? (existsSync11(join14(ctx.projectPath, "Dockerfile")) ? join14(ctx.projectPath, "Dockerfile") : void 0);
+      const dockerfile = inp.dockerfile_path ?? (existsSync12(join15(ctx.projectPath, "Dockerfile")) ? join15(ctx.projectPath, "Dockerfile") : void 0);
       let anyOutcome = "completed";
       if (dockerfile) {
-        const outFile = join14(reportDir, "dockerfile.json");
+        const outFile = join15(reportDir, "dockerfile.json");
         const result = await runProcess({
           command: "trivy",
           args: ["config", "--format", "json", "--output", outFile, "--quiet", dockerfile],
@@ -40476,7 +40586,7 @@ registerToolModule(
         if (result.outcome !== "completed") anyOutcome = result.outcome;
       }
       if (inp.image) {
-        const outFile = join14(reportDir, "image.json");
+        const outFile = join15(reportDir, "image.json");
         const result = await runProcess({
           command: "trivy",
           args: [
@@ -40522,7 +40632,7 @@ registerToolModule(
 );
 
 // src/tools/scanIac.ts
-import { join as join15 } from "node:path";
+import { join as join16 } from "node:path";
 registerToolModule(
   makeScanTool({
     name: "scan_iac",
@@ -40553,7 +40663,7 @@ registerToolModule(
           report_paths: [reportDir]
         };
       }
-      const outFile = join15(reportDir, "iac.json");
+      const outFile = join16(reportDir, "iac.json");
       const result = await runProcess({
         command: "trivy",
         args: ["config", "--format", "json", "--output", outFile, "--quiet", ctx.projectPath],
@@ -40580,8 +40690,8 @@ registerToolModule(
 );
 
 // src/tools/bugHunt.ts
-import { existsSync as existsSync12 } from "node:fs";
-import { join as join16 } from "node:path";
+import { existsSync as existsSync13 } from "node:fs";
+import { join as join17 } from "node:path";
 
 // src/tools/semgrepConfigFailure.ts
 var DOWNLOAD_FAILURE_RE = /Failed to download configuration from (\S+)/;
@@ -40658,7 +40768,7 @@ function languagePacksFor(languages) {
   return packs;
 }
 function fallbackLanguages(projectPath) {
-  const has = (name) => existsSync12(join16(projectPath, name));
+  const has = (name) => existsSync13(join17(projectPath, name));
   const languages = [];
   if (has("package.json")) {
     languages.push("javascript");
@@ -40780,7 +40890,7 @@ registerToolModule(
         customConfigs: resolveCustomSemgrepConfigs(ctx.plugin)
       });
       const categoryParser = makeBugCategoryParser(input.categories);
-      const outFile = join16(reportDir, "bugs.json");
+      const outFile = join17(reportDir, "bugs.json");
       const runWithPacks = (packs) => {
         const args = packs.map((pack) => `--config=${pack}`);
         args.push("--json", "--quiet", "--output", outFile);
@@ -40876,8 +40986,8 @@ registerToolModule(
 );
 
 // src/tools/qualityCheck.ts
-import { existsSync as existsSync13, readdirSync as readdirSync5 } from "node:fs";
-import { join as join17 } from "node:path";
+import { existsSync as existsSync14, readdirSync as readdirSync5 } from "node:fs";
+import { join as join18 } from "node:path";
 
 // src/runners/scannerParsers/jscpd.ts
 var JSCPD_TOOL_NAME = "jscpd";
@@ -40996,7 +41106,7 @@ registerToolModule(
     },
     invoke: async (_input, ctx) => {
       const startedAt2 = Date.now() - 1e3;
-      const scriptPath = join17(ctx.plugin.scriptsDir, ...SCRIPT_REL_PATH2);
+      const scriptPath = join18(ctx.plugin.scriptsDir, ...SCRIPT_REL_PATH2);
       const shell = ctx.plugin.shell;
       if (shell === null) throw new Error("no usable bash shell");
       const shellResult = await runShellScript({
@@ -41008,30 +41118,30 @@ registerToolModule(
         signal: ctx.signal,
         onLog: ctx.onLog
       });
-      const reportsRoot = join17(ctx.projectPath, ".guardian", "reports");
+      const reportsRoot = join18(ctx.projectPath, ".guardian", "reports");
       const reportDir = findNewestDir(reportsRoot, "quality-", startedAt2);
       const tools_run = [];
       const missing_tools = [];
       const parser_inputs = [];
       if (reportDir) {
-        const dupDir = join17(reportDir, "dup");
-        if (existsSync13(dupDir)) {
+        const dupDir = join18(reportDir, "dup");
+        if (existsSync14(dupDir)) {
           const candidate = readdirSync5(dupDir).find((n2) => /jscpd.*\.json$/.test(n2));
-          const path6 = candidate ? join17(dupDir, candidate) : null;
+          const path6 = candidate ? join18(dupDir, candidate) : null;
           const raw = path6 ? readJsonSafe(path6) : null;
           if (raw) {
             parser_inputs.push({ parser: jscpdParser, input: raw });
             tools_run.push({ name: "jscpd", status: "ok" });
           }
         }
-        const ruffPath = join17(reportDir, "ruff.json");
+        const ruffPath = join18(reportDir, "ruff.json");
         const ruffRaw = readJsonSafe(ruffPath);
         if (ruffRaw) {
           parser_inputs.push({ parser: ruffParser, input: ruffRaw });
           tools_run.push({ name: "ruff", status: "ok" });
         }
         for (const f of ["eslint.json", "staticcheck.json", "complexity-py.json"]) {
-          if (readJsonSafe(join17(reportDir, f))) {
+          if (readJsonSafe(join18(reportDir, f))) {
             tools_run.push({
               name: f.replace(".json", ""),
               status: "ok",
@@ -41060,7 +41170,7 @@ registerToolModule(
 
 // src/tools/reviewPr.ts
 init_execa();
-import { join as join18 } from "node:path";
+import { join as join19 } from "node:path";
 var SCRIPT_REL_PATH3 = ["scan", "review-scan.sh"];
 registerToolModule(
   makeScanTool({
@@ -41079,7 +41189,7 @@ registerToolModule(
     },
     invoke: async (input, ctx) => {
       const startedAt2 = Date.now() - 1e3;
-      const scriptPath = join18(ctx.plugin.scriptsDir, ...SCRIPT_REL_PATH3);
+      const scriptPath = join19(ctx.plugin.scriptsDir, ...SCRIPT_REL_PATH3);
       const tools_run = [];
       const missing_tools = [];
       const parser_inputs = [];
@@ -41107,10 +41217,10 @@ registerToolModule(
         signal: ctx.signal,
         onLog: ctx.onLog
       });
-      const reportsRoot = join18(ctx.projectPath, ".guardian", "reports");
+      const reportsRoot = join19(ctx.projectPath, ".guardian", "reports");
       const reportDir = findNewestDir(reportsRoot, "review-", startedAt2);
       if (reportDir) {
-        const sastRaw = readJsonSafe(join18(reportDir, "sast.json"));
+        const sastRaw = readJsonSafe(join19(reportDir, "sast.json"));
         if (sastRaw) {
           parser_inputs.push({ parser: semgrepParser, input: sastRaw });
           tools_run.push({ name: "semgrep", status: "ok" });
@@ -41118,7 +41228,7 @@ registerToolModule(
           tools_run.push({ name: "semgrep", status: "skipped", reason: "not_installed" });
           missing_tools.push("semgrep");
         }
-        const secretsRaw = readJsonSafe(join18(reportDir, "secrets.json"));
+        const secretsRaw = readJsonSafe(join19(reportDir, "secrets.json"));
         if (secretsRaw) {
           parser_inputs.push({ parser: gitleaksParser, input: secretsRaw });
           tools_run.push({ name: "gitleaks", status: "ok" });
@@ -41126,7 +41236,7 @@ registerToolModule(
           tools_run.push({ name: "gitleaks", status: "skipped", reason: "not_installed" });
           missing_tools.push("gitleaks");
         }
-        const depsRaw = readJsonSafe(join18(reportDir, "deps.json"));
+        const depsRaw = readJsonSafe(join19(reportDir, "deps.json"));
         if (depsRaw) {
           parser_inputs.push({ parser: trivyParser, input: depsRaw });
           tools_run.push({ name: "trivy", status: "ok" });
@@ -41171,8 +41281,8 @@ async function diffFiles(base, head, cwd) {
 }
 
 // src/tools/depsAudit.ts
-import { existsSync as existsSync14 } from "node:fs";
-import { join as join19 } from "node:path";
+import { existsSync as existsSync15 } from "node:fs";
+import { join as join20 } from "node:path";
 
 // src/runners/scannerParsers/npmAudit.ts
 var NPM_AUDIT_TOOL_NAME = "npm-audit";
@@ -41304,8 +41414,8 @@ function dropNpmDuplicatesOfTrivy(findings) {
 }
 function detectBots(projectPath) {
   return {
-    renovate: existsSync14(join19(projectPath, "renovate.json")) || existsSync14(join19(projectPath, ".renovaterc")) || existsSync14(join19(projectPath, ".renovaterc.json")),
-    dependabot: existsSync14(join19(projectPath, ".github", "dependabot.yml"))
+    renovate: existsSync15(join20(projectPath, "renovate.json")) || existsSync15(join20(projectPath, ".renovaterc")) || existsSync15(join20(projectPath, ".renovaterc.json")),
+    dependabot: existsSync15(join20(projectPath, ".github", "dependabot.yml"))
   };
 }
 registerToolModule(
@@ -41328,7 +41438,7 @@ registerToolModule(
       const parser_inputs = [];
       const trivyBin = await scannerAvailable("trivy");
       if (trivyBin) {
-        const outFile = join19(reportDir, "deps.json");
+        const outFile = join20(reportDir, "deps.json");
         const result = await runProcess({
           command: "trivy",
           args: [
@@ -41357,11 +41467,11 @@ registerToolModule(
         tools_run.push({ name: "trivy", status: "skipped", reason: "not_installed" });
         missing_tools.push("trivy");
       }
-      if (existsSync14(join19(ctx.projectPath, "package.json"))) {
+      if (existsSync15(join20(ctx.projectPath, "package.json"))) {
         await tryNativeAudit({
           command: "npm",
           args: ["audit", "--json", "--audit-level=info"],
-          outFile: join19(reportDir, "npm-audit.json"),
+          outFile: join20(reportDir, "npm-audit.json"),
           ctx,
           tools_run,
           missing_tools,
@@ -41369,11 +41479,11 @@ registerToolModule(
           parser: npmAuditParser
         });
       }
-      if (existsSync14(join19(ctx.projectPath, "pyproject.toml")) || existsSync14(join19(ctx.projectPath, "requirements.txt"))) {
+      if (existsSync15(join20(ctx.projectPath, "pyproject.toml")) || existsSync15(join20(ctx.projectPath, "requirements.txt"))) {
         await tryNativeAudit({
           command: "pip-audit",
-          args: ["-f", "json", "-o", join19(reportDir, "pip-audit.json")],
-          outFile: join19(reportDir, "pip-audit.json"),
+          args: ["-f", "json", "-o", join20(reportDir, "pip-audit.json")],
+          outFile: join20(reportDir, "pip-audit.json"),
           ctx,
           tools_run,
           missing_tools
@@ -41454,8 +41564,8 @@ async function tryNativeAudit(opts) {
 
 // src/tools/depsUpdatePlan.ts
 init_execa();
-import { existsSync as existsSync15 } from "node:fs";
-import { join as join20 } from "node:path";
+import { existsSync as existsSync16 } from "node:fs";
+import { join as join21 } from "node:path";
 var inputSchema = {
   project_path: ProjectPath,
   prefer: external_exports.enum(["security", "patch", "minor", "major"]).optional().describe("Sort entries so this classification appears first. Default: security.")
@@ -41513,13 +41623,13 @@ async function handler(input, ctx) {
 }
 function detectEcosystems(projectPath) {
   const out = [];
-  if (existsSync15(join20(projectPath, "package.json"))) out.push("npm");
-  if (existsSync15(join20(projectPath, "pyproject.toml")) || existsSync15(join20(projectPath, "requirements.txt")) || existsSync15(join20(projectPath, "setup.py")))
+  if (existsSync16(join21(projectPath, "package.json"))) out.push("npm");
+  if (existsSync16(join21(projectPath, "pyproject.toml")) || existsSync16(join21(projectPath, "requirements.txt")) || existsSync16(join21(projectPath, "setup.py")))
     out.push("pip");
-  if (existsSync15(join20(projectPath, "composer.json"))) out.push("composer");
-  if (existsSync15(join20(projectPath, "Cargo.toml"))) out.push("cargo");
-  if (existsSync15(join20(projectPath, "go.mod"))) out.push("go");
-  if (existsSync15(join20(projectPath, "Gemfile"))) out.push("rubygems");
+  if (existsSync16(join21(projectPath, "composer.json"))) out.push("composer");
+  if (existsSync16(join21(projectPath, "Cargo.toml"))) out.push("cargo");
+  if (existsSync16(join21(projectPath, "go.mod"))) out.push("go");
+  if (existsSync16(join21(projectPath, "Gemfile"))) out.push("rubygems");
   if (anyCsproj(projectPath)) out.push("dotnet");
   return out;
 }
@@ -41532,8 +41642,8 @@ function anyCsproj(projectPath) {
 }
 function detectUnsupportedEcosystems(projectPath) {
   const out = [];
-  if (existsSync15(join20(projectPath, "pom.xml"))) out.push("maven");
-  if (existsSync15(join20(projectPath, "build.gradle")) || existsSync15(join20(projectPath, "build.gradle.kts")))
+  if (existsSync16(join21(projectPath, "pom.xml"))) out.push("maven");
+  if (existsSync16(join21(projectPath, "build.gradle")) || existsSync16(join21(projectPath, "build.gradle.kts")))
     out.push("gradle");
   return out;
 }
@@ -41879,7 +41989,7 @@ function failDomain2(code, message) {
 
 // src/tools/complianceCheck.ts
 import { readdirSync as readdirSync6, statSync as statSync4 } from "node:fs";
-import { join as join21 } from "node:path";
+import { join as join22 } from "node:path";
 var RISKY_LICENSE_PATTERNS = [
   { pattern: /^AGPL/i, severity: "high" },
   { pattern: /^GPL-?[23]/i, severity: "high" },
@@ -41906,8 +42016,8 @@ function detectPolicyDocs(projectPath) {
     code_of_conduct: false,
     paths: []
   };
-  const candidates = listShallowFiles(projectPath, 2);
-  for (const rel2 of candidates) {
+  const candidates2 = listShallowFiles(projectPath, 2);
+  for (const rel2 of candidates2) {
     const base = rel2.split("/").pop() ?? rel2;
     for (const { kind, pattern } of POLICY_DOC_PATTERNS) {
       if (pattern.test(base)) {
@@ -41935,7 +42045,7 @@ function walk2(root, dir, depth, maxDepth, out) {
     if (entry.startsWith(".") && entry !== ".github" && entry !== ".gitlab") continue;
     if (entry === "node_modules" || entry === ".guardian" || entry === "dist" || entry === "build")
       continue;
-    const abs = join21(dir, entry);
+    const abs = join22(dir, entry);
     try {
       const s = statSync4(abs);
       if (s.isDirectory()) {
@@ -42011,7 +42121,7 @@ registerToolModule(
       };
       const trivyBin = await scannerAvailable("trivy");
       if (trivyBin) {
-        const outFile = join21(reportDir, "licenses.json");
+        const outFile = join22(reportDir, "licenses.json");
         const result = await runProcess({
           command: "trivy",
           args: [
@@ -42062,8 +42172,8 @@ registerToolModule(
 );
 
 // src/tools/generateSbom.ts
-import { existsSync as existsSync16, readFileSync as readFileSync10, statSync as statSync5 } from "node:fs";
-import { join as join22 } from "node:path";
+import { existsSync as existsSync17, readFileSync as readFileSync11, statSync as statSync5 } from "node:fs";
+import { join as join23 } from "node:path";
 import { randomUUID as randomUUID2 } from "node:crypto";
 
 // src/runners/scannerParsers/syft.ts
@@ -42143,7 +42253,7 @@ async function handler2(input, ctx) {
   const inlineMaxBytes = (inp.inline_max_kb ?? 256) * 1024;
   const scanId = randomUUID2();
   const reportDir = ensureReportDir(projectPath, scanId, "sbom");
-  const outFile = join22(reportDir, `sbom.${format2 === "cyclonedx-json" ? "cdx" : "spdx"}.json`);
+  const outFile = join23(reportDir, `sbom.${format2 === "cyclonedx-json" ? "cdx" : "spdx"}.json`);
   const syftBin = await scannerAvailable("syft");
   let producedBy = null;
   if (syftBin) {
@@ -42153,7 +42263,7 @@ async function handler2(input, ctx) {
       args: [projectPath, "-o", `${syftFormat}=${outFile}`, "--quiet"],
       cwd: projectPath
     });
-    if (result.outcome === "completed" && existsSync16(outFile)) {
+    if (result.outcome === "completed" && existsSync17(outFile)) {
       producedBy = "syft";
     }
   }
@@ -42166,7 +42276,7 @@ async function handler2(input, ctx) {
         args: ["fs", "--format", trivyFormat, "--output", outFile, "--quiet", projectPath],
         cwd: projectPath
       });
-      if (result.outcome === "completed" && existsSync16(outFile)) {
+      if (result.outcome === "completed" && existsSync17(outFile)) {
         producedBy = "trivy";
       }
     }
@@ -42181,7 +42291,7 @@ async function handler2(input, ctx) {
     };
   }
   const stat2 = statSync5(outFile);
-  const raw = readFileSync10(outFile, "utf8");
+  const raw = readFileSync11(outFile, "utf8");
   const summary = summarize2(raw);
   ctx.storage.scans.insert({
     scan_id: scanId,
@@ -42228,8 +42338,8 @@ function failDomain3(code, message) {
 }
 
 // src/tools/detectStack.ts
-import { existsSync as existsSync17, readdirSync as readdirSync7 } from "node:fs";
-import { join as join23 } from "node:path";
+import { existsSync as existsSync18, readdirSync as readdirSync7 } from "node:fs";
+import { join as join24 } from "node:path";
 var SCRIPT_REL_PATH4 = ["detect", "detect-stack.sh"];
 var tool3 = {
   name: "detect_stack",
@@ -42253,7 +42363,7 @@ async function handler3(input, ctx) {
       "No usable bash shell found. Install Git Bash or WSL, then restart."
     );
   }
-  const scriptPath = join23(ctx.scriptsDir, ...SCRIPT_REL_PATH4);
+  const scriptPath = join24(ctx.scriptsDir, ...SCRIPT_REL_PATH4);
   const result = await runShellScript({
     shell: ctx.shell,
     scriptPath,
@@ -42292,11 +42402,11 @@ function enrichDotnet(snap, projectPath) {
     if (!arr) return [value];
     return arr.includes(value) ? arr : [...arr, value];
   };
-  const hasFile = (rel2) => existsSync17(join23(projectPath, rel2));
+  const hasFile = (rel2) => existsSync18(join24(projectPath, rel2));
   const anyMatching = (rel2, suffix) => {
     try {
-      const target = rel2 === "" ? projectPath : join23(projectPath, rel2);
-      if (!existsSync17(target)) return false;
+      const target = rel2 === "" ? projectPath : join24(projectPath, rel2);
+      if (!existsSync18(target)) return false;
       return readdirSync7(target).some((name) => name.endsWith(suffix));
     } catch {
       return false;
@@ -42344,7 +42454,7 @@ function anyDeepMatching(root, suffix, maxDepth) {
     }
     for (const name of entries) {
       if (SKIP.has(name) || name.startsWith(".")) continue;
-      const abs = join23(dir, name);
+      const abs = join24(dir, name);
       if (name.endsWith(suffix)) return true;
       try {
         if (readdirSync7(abs).length >= 0 && walk4(abs, depth + 1)) return true;
@@ -42357,19 +42467,21 @@ function anyDeepMatching(root, suffix, maxDepth) {
 }
 
 // src/tools/initProject.ts
-import { existsSync as existsSync19 } from "node:fs";
-import { join as join25 } from "node:path";
+import { existsSync as existsSync20 } from "node:fs";
+import { join as join26 } from "node:path";
 
 // src/configdrift/refresh.ts
-import { copyFileSync, existsSync as existsSync18, mkdirSync as mkdirSync4, writeFileSync as writeFileSync4, readFileSync as readFileSync11 } from "node:fs";
-import { dirname as dirname7, join as join24 } from "node:path";
-var ALONGSIDE_SUFFIX = ".new";
+import { copyFileSync, existsSync as existsSync19, mkdirSync as mkdirSync4, writeFileSync as writeFileSync4, readFileSync as readFileSync12 } from "node:fs";
+import { dirname as dirname7, join as join25 } from "node:path";
+function alongsideName(target, version2) {
+  return `${target}.dev-guardian-${version2}.new`;
+}
 function refreshConfigs(input) {
   let manifest = readManifest(input.projectPath) ?? emptyManifest();
   let manifestTouched = false;
   const plan = [];
   for (const file of input.files) {
-    const srcPath = join24(input.configsDir, file.source);
+    const srcPath = join25(input.configsDir, file.source);
     const srcHash = hashConfigFile(srcPath);
     if (srcHash === null) {
       plan.push({
@@ -42379,9 +42491,9 @@ function refreshConfigs(input) {
       });
       continue;
     }
-    const dstPath = join24(input.projectPath, file.target);
+    const dstPath = join25(input.projectPath, file.target);
     const entry = findManifestEntry(manifest, file.target);
-    if (!existsSync18(dstPath)) {
+    if (!existsSync19(dstPath)) {
       plan.push({ ...ids(file), action: "create", reason: file.reason });
       if (!input.apply) continue;
       if (installFile({ srcPath, dstPath, source: file.source, version: input.currentVersion })) {
@@ -42417,17 +42529,29 @@ function refreshConfigs(input) {
         manifestTouched = true;
         continue;
       }
-      const written2 = deliverAlongside(input, file, srcPath, dstPath, srcHash, dstHash, manifest);
-      plan.push({
-        ...ids(file),
-        action: "write_alongside",
-        reason: "this file predates provenance tracking \u2014 an older copy of ours and your own config are indistinguishable, so it is never overwritten",
-        alongside_path: alongside(file.target)
+      const delivery2 = deliverAlongside({
+        input,
+        file,
+        srcPath,
+        srcHash,
+        dstHash,
+        manifest,
+        reason: "this file predates provenance tracking \u2014 an older copy of ours and your own config are indistinguishable, so it is never overwritten"
       });
-      if (written2 !== null) {
-        manifest = written2;
+      plan.push(delivery2.item);
+      if (delivery2.manifest !== null) {
+        manifest = delivery2.manifest;
         manifestTouched = true;
       }
+      continue;
+    }
+    if (entry.delivered_as !== void 0 && existsSync19(join25(input.projectPath, entry.delivered_as))) {
+      plan.push({
+        ...ids(file),
+        action: "pending_merge",
+        reason: `${entry.delivered_as} is still waiting to be merged into ${file.target}. Merge it and delete it, then run the refresh again.`,
+        alongside_path: entry.delivered_as
+      });
       continue;
     }
     const oursMoved = srcHash !== entry.source_sha256;
@@ -42456,15 +42580,18 @@ function refreshConfigs(input) {
       }
       continue;
     }
-    const written = deliverAlongside(input, file, srcPath, dstPath, srcHash, dstHash, manifest);
-    plan.push({
-      ...ids(file),
-      action: "write_alongside",
-      reason: "changed on both sides since install \u2014 merge required, your file is untouched",
-      alongside_path: alongside(file.target)
+    const delivery = deliverAlongside({
+      input,
+      file,
+      srcPath,
+      srcHash,
+      dstHash,
+      manifest,
+      reason: "changed on both sides since install \u2014 merge required, your file is untouched"
     });
-    if (written !== null) {
-      manifest = written;
+    plan.push(delivery.item);
+    if (delivery.manifest !== null) {
+      manifest = delivery.manifest;
       manifestTouched = true;
     }
   }
@@ -42476,8 +42603,8 @@ function adoptIdenticalConfigs(input) {
   const adopted = [];
   for (const file of input.files) {
     if (findManifestEntry(manifest, file.target) !== null) continue;
-    const srcHash = hashConfigFile(join24(input.configsDir, file.source));
-    const dstHash = hashConfigFile(join24(input.projectPath, file.target));
+    const srcHash = hashConfigFile(join25(input.configsDir, file.source));
+    const dstHash = hashConfigFile(join25(input.projectPath, file.target));
     if (srcHash === null || dstHash === null || srcHash !== dstHash) continue;
     manifest = upsertManifestEntry(
       manifest,
@@ -42501,14 +42628,11 @@ function installFile(input) {
       pluginVersion: input.version,
       prefix
     });
-    writeFileSync4(input.dstPath, header + readFileSync11(input.srcPath, "utf8"), "utf8");
+    writeFileSync4(input.dstPath, header + readFileSync12(input.srcPath, "utf8"), "utf8");
     return true;
   } catch {
     return false;
   }
-}
-function alongside(target) {
-  return `${target}${ALONGSIDE_SUFFIX}`;
 }
 function ids(file) {
   return { target: file.target, source: file.source };
@@ -42524,30 +42648,44 @@ function record2(file, version2, sourceHash, targetHash, provenance) {
     provenance
   };
 }
-function deliverAlongside(input, file, srcPath, dstPath, srcHash, dstHash, manifest) {
-  if (!input.apply) return null;
-  const relativeNew = alongside(file.target);
+function deliverAlongside(args) {
+  const { input, file, manifest } = args;
+  const relativeNew = alongsideName(file.target, input.currentVersion);
+  const newPath = join25(input.projectPath, relativeNew);
+  const existing = findManifestEntry(manifest, file.target);
+  const oursAlready = existing?.delivered_as === relativeNew;
+  if (existsSync19(newPath) && !oursAlready) {
+    return {
+      item: {
+        ...ids(file),
+        action: "alongside_blocked",
+        reason: `a newer baseline is ready for ${file.target}, but ${relativeNew} already exists and was not written by dev-guardian \u2014 nothing was overwritten. Move or delete that file and run the refresh again.`,
+        alongside_path: relativeNew
+      },
+      manifest: null
+    };
+  }
+  const item = {
+    ...ids(file),
+    action: "write_alongside",
+    reason: args.reason,
+    alongside_path: relativeNew
+  };
+  if (!input.apply) return { item, manifest: null };
   const written = installFile({
-    srcPath,
-    dstPath: `${dstPath}${ALONGSIDE_SUFFIX}`,
+    srcPath: args.srcPath,
+    dstPath: newPath,
     source: file.source,
     version: input.currentVersion,
     formatHint: file.target
   });
-  if (!written) return null;
-  const existing = findManifestEntry(manifest, file.target);
+  if (!written) return { item, manifest: null };
   const entry = {
-    ...record2(
-      file,
-      input.currentVersion,
-      srcHash,
-      dstHash,
-      existing?.provenance ?? "adopted"
-    ),
+    ...record2(file, input.currentVersion, args.srcHash, args.dstHash, existing?.provenance ?? "adopted"),
     delivered_as: relativeNew,
     delivered_at: (/* @__PURE__ */ new Date()).toISOString()
   };
-  return upsertManifestEntry(manifest, entry);
+  return { item, manifest: upsertManifestEntry(manifest, entry) };
 }
 
 // src/tools/initProject.ts
@@ -42633,13 +42771,13 @@ async function handler4(input, ctx) {
   }
   if (!refresh) {
     for (const p of proposals) {
-      const src = join25(configsDir, p.source);
-      const dst = join25(projectPath, p.target);
-      if (!existsSync19(src)) {
+      const src = join26(configsDir, p.source);
+      const dst = join26(projectPath, p.target);
+      if (!existsSync20(src)) {
         failed.push({ ...p, error: `source missing: ${src}` });
         continue;
       }
-      if (existsSync19(dst)) {
+      if (existsSync20(dst)) {
         skipped.push({ ...p, reason_skipped: "already_exists" });
         continue;
       }
@@ -42669,8 +42807,8 @@ async function handler4(input, ctx) {
   const stackSnapshot = readLatestStackSnapshot(ctx);
   let initialStateLines = [];
   if (apply && ctx.shell) {
-    const scriptPath = join25(ctx.scriptsDir, "scan", "initial-scan.sh");
-    if (existsSync19(scriptPath)) {
+    const scriptPath = join26(ctx.scriptsDir, "scan", "initial-scan.sh");
+    if (existsSync20(scriptPath)) {
       const r = await runShellScript({
         shell: ctx.shell,
         scriptPath,
@@ -42703,8 +42841,8 @@ function failDomain5(code, message) {
 }
 
 // src/tools/observabilitySetup.ts
-import { existsSync as existsSync20, mkdirSync as mkdirSync5, writeFileSync as writeFileSync5 } from "node:fs";
-import { dirname as dirname8, join as join26 } from "node:path";
+import { existsSync as existsSync21, mkdirSync as mkdirSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { dirname as dirname8, join as join27 } from "node:path";
 var tool5 = {
   name: "observability_setup",
   title: "Configure logging + metrics scaffolding",
@@ -42732,8 +42870,8 @@ async function handler5(input, ctx) {
   const failed = [];
   if (apply) {
     for (const p of proposals) {
-      const abs = join26(projectPath, p.target);
-      if (existsSync20(abs)) {
+      const abs = join27(projectPath, p.target);
+      if (existsSync21(abs)) {
         skipped.push({ ...p, reason_skipped: "already_exists" });
         continue;
       }
@@ -42776,15 +42914,15 @@ function inferStack(projectPath, ctx) {
     if (snap.languages?.includes("ruby")) return "ruby";
     if (snap.languages?.includes("csharp")) return "dotnet";
   }
-  if (existsSync20(join26(projectPath, "package.json"))) return "node";
-  if (existsSync20(join26(projectPath, "pyproject.toml")) || existsSync20(join26(projectPath, "requirements.txt")))
+  if (existsSync21(join27(projectPath, "package.json"))) return "node";
+  if (existsSync21(join27(projectPath, "pyproject.toml")) || existsSync21(join27(projectPath, "requirements.txt")))
     return "python";
-  if (existsSync20(join26(projectPath, "composer.json"))) return "php";
-  if (existsSync20(join26(projectPath, "go.mod"))) return "go";
-  if (existsSync20(join26(projectPath, "Cargo.toml"))) return "rust";
-  if (existsSync20(join26(projectPath, "pom.xml")) || existsSync20(join26(projectPath, "build.gradle")))
+  if (existsSync21(join27(projectPath, "composer.json"))) return "php";
+  if (existsSync21(join27(projectPath, "go.mod"))) return "go";
+  if (existsSync21(join27(projectPath, "Cargo.toml"))) return "rust";
+  if (existsSync21(join27(projectPath, "pom.xml")) || existsSync21(join27(projectPath, "build.gradle")))
     return "java";
-  if (existsSync20(join26(projectPath, "Gemfile"))) return "ruby";
+  if (existsSync21(join27(projectPath, "Gemfile"))) return "ruby";
   try {
     const entries = __require("node:fs").readdirSync(projectPath);
     if (entries.some((n2) => n2.endsWith(".csproj") || n2.endsWith(".sln") || n2 === "global.json"))
@@ -43068,8 +43206,8 @@ function failDomain6(code, message) {
 }
 
 // src/tools/perfCheck.ts
-import { existsSync as existsSync21, readFileSync as readFileSync12, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join27 } from "node:path";
+import { existsSync as existsSync22, readFileSync as readFileSync13, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join28 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 var inputSchema3 = {
   project_path: ProjectPath,
@@ -43125,7 +43263,7 @@ async function runLighthouse(opts) {
       "Lighthouse CLI is not installed. Install with `npm i -g lighthouse`."
     );
   }
-  const outFile = join27(opts.reportDir, "lighthouse.json");
+  const outFile = join28(opts.reportDir, "lighthouse.json");
   const args = [
     opts.url,
     "--quiet",
@@ -43143,13 +43281,13 @@ async function runLighthouse(opts) {
     // Lighthouse fetches a real page; cap higher than the default 10 min.
     timeoutMs: 5 * 6e4
   });
-  if (!existsSync21(outFile)) {
+  if (!existsSync22(outFile)) {
     return failDomain7(
       "scanner_failed",
       `Lighthouse did not produce a report. stderr: ${result.stderr.split(/\r?\n/)[0] ?? ""}`
     );
   }
-  const raw = readFileSync12(outFile, "utf8");
+  const raw = readFileSync13(outFile, "utf8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -43200,20 +43338,20 @@ async function runK6(opts) {
       "k6 CLI is not installed. Install from https://k6.io/docs/getting-started/installation/."
     );
   }
-  if (!existsSync21(opts.scriptPath)) {
+  if (!existsSync22(opts.scriptPath)) {
     return failDomain7("scanner_failed", `k6 script not found: ${opts.scriptPath}`);
   }
-  const summaryFile = join27(opts.reportDir, "k6-summary.json");
+  const summaryFile = join28(opts.reportDir, "k6-summary.json");
   const result = await runProcess({
     command: "k6",
     args: ["run", `--summary-export=${summaryFile}`, opts.scriptPath],
     cwd: opts.projectPath,
     timeoutMs: 30 * 6e4
   });
-  if (!existsSync21(summaryFile)) {
+  if (!existsSync22(summaryFile)) {
     writeFileSync6(summaryFile, result.stdout || "{}", "utf8");
   }
-  const raw = readFileSync12(summaryFile, "utf8");
+  const raw = readFileSync13(summaryFile, "utf8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -43655,7 +43793,7 @@ function failDomain11(code, message) {
 }
 
 // src/tools/checkToolchain.ts
-import { join as join28 } from "node:path";
+import { join as join29 } from "node:path";
 
 // src/platform/semverCompare.ts
 function compareSemver(a2, b) {
@@ -44049,10 +44187,10 @@ function listDefaultTools() {
 function pickInstallSpec(toolName, os, availableManagers) {
   const meta = TOOL_CATALOG[toolName];
   if (!meta) return null;
-  const candidates = os === "win32" ? meta.install.win32 : os === "darwin" ? meta.install.darwin : os === "linux" ? meta.install.linux : null;
-  if (!candidates) return null;
+  const candidates2 = os === "win32" ? meta.install.win32 : os === "darwin" ? meta.install.darwin : os === "linux" ? meta.install.linux : null;
+  if (!candidates2) return null;
   for (const { name } of availableManagers) {
-    const spec = candidates[name];
+    const spec = candidates2[name];
     if (spec) return { manager: name, spec };
   }
   return null;
@@ -44060,9 +44198,9 @@ function pickInstallSpec(toolName, os, availableManagers) {
 function suggestedInstallCommandString(toolName, os) {
   const meta = TOOL_CATALOG[toolName];
   if (!meta) return null;
-  const candidates = os === "win32" ? meta.install.win32 : os === "darwin" ? meta.install.darwin : os === "linux" ? meta.install.linux : null;
-  if (!candidates) return null;
-  const first = Object.values(candidates)[0];
+  const candidates2 = os === "win32" ? meta.install.win32 : os === "darwin" ? meta.install.darwin : os === "linux" ? meta.install.linux : null;
+  if (!candidates2) return null;
+  const first = Object.values(candidates2)[0];
   return first?.description ?? null;
 }
 
@@ -44083,7 +44221,7 @@ async function handler11(ctx) {
       "No usable bash shell found. Install Git Bash or WSL, then restart."
     );
   }
-  const scriptPath = join28(ctx.scriptsDir, ...SCRIPT_REL_PATH5);
+  const scriptPath = join29(ctx.scriptsDir, ...SCRIPT_REL_PATH5);
   const result = await runShellScript({
     shell: ctx.shell,
     scriptPath,
@@ -44155,7 +44293,7 @@ function failDomain12(code, message) {
 }
 
 // src/tools/installToolchain.ts
-import { join as join29 } from "node:path";
+import { join as join30 } from "node:path";
 var inputSchema7 = {
   tools: external_exports.array(external_exports.string()).optional().describe(
     "When set, install only these scanners (must exist in the catalogue). When omitted, install the default set: semgrep, trivy, gitleaks, syft, pre-commit (+ ruff/bandit/jscpd if stack detected)."
@@ -44251,7 +44389,7 @@ async function installDefaults(opts) {
     });
     return;
   }
-  const scriptPath = join29(opts.ctx.scriptsDir, "install", "install-linux.sh");
+  const scriptPath = join30(opts.ctx.scriptsDir, "install", "install-linux.sh");
   const r = await runProcess({
     command: "wsl",
     args: ["bash", scriptPath, "--no-sudo"],
@@ -44278,7 +44416,7 @@ async function runPosixInstaller(opts) {
     return;
   }
   const scriptName = opts.os === "darwin" ? "install-macos.sh" : "install-linux.sh";
-  const scriptPath = join29(opts.ctx.scriptsDir, "install", scriptName);
+  const scriptPath = join30(opts.ctx.scriptsDir, "install", scriptName);
   const extraArgs = opts.elevation ? [] : ["--no-sudo"];
   if (opts.dryRun) {
     opts.result.would_install.push({
@@ -44429,8 +44567,8 @@ async function runCheckToolchain(ctx) {
 }
 
 // src/tools/licenseCompatibility.ts
-import { existsSync as existsSync22, readFileSync as readFileSync13 } from "node:fs";
-import { join as join30 } from "node:path";
+import { existsSync as existsSync23, readFileSync as readFileSync14 } from "node:fs";
+import { join as join31 } from "node:path";
 var tool13 = {
   name: "license_compatibility",
   title: "License compatibility check",
@@ -44480,26 +44618,26 @@ async function handler13(input, ctx) {
 }
 function detectProjectLicense(projectPath) {
   try {
-    const pkgPath = join30(projectPath, "package.json");
-    if (existsSync22(pkgPath)) {
-      const pkg = JSON.parse(readFileSync13(pkgPath, "utf8"));
+    const pkgPath = join31(projectPath, "package.json");
+    if (existsSync23(pkgPath)) {
+      const pkg = JSON.parse(readFileSync14(pkgPath, "utf8"));
       if (typeof pkg.license === "string") return pkg.license;
     }
   } catch {
   }
   try {
-    const pyProject = join30(projectPath, "pyproject.toml");
-    if (existsSync22(pyProject)) {
-      const raw = readFileSync13(pyProject, "utf8");
+    const pyProject = join31(projectPath, "pyproject.toml");
+    if (existsSync23(pyProject)) {
+      const raw = readFileSync14(pyProject, "utf8");
       const m = /license\s*=\s*["']([^"']+)["']/i.exec(raw) ?? /license-expression\s*=\s*["']([^"']+)["']/i.exec(raw);
       if (m && m[1]) return m[1];
     }
   } catch {
   }
   try {
-    const composer = join30(projectPath, "composer.json");
-    if (existsSync22(composer)) {
-      const cjson = JSON.parse(readFileSync13(composer, "utf8"));
+    const composer = join31(projectPath, "composer.json");
+    if (existsSync23(composer)) {
+      const cjson = JSON.parse(readFileSync14(composer, "utf8"));
       if (typeof cjson.license === "string") return cjson.license;
       if (Array.isArray(cjson.license) && typeof cjson.license[0] === "string")
         return cjson.license[0];
@@ -44507,10 +44645,10 @@ function detectProjectLicense(projectPath) {
   } catch {
   }
   for (const name of ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"]) {
-    const p = join30(projectPath, name);
-    if (!existsSync22(p)) continue;
+    const p = join31(projectPath, name);
+    if (!existsSync23(p)) continue;
     try {
-      const head = readFileSync13(p, "utf8").slice(0, 500);
+      const head = readFileSync14(p, "utf8").slice(0, 500);
       if (/MIT License/i.test(head)) return "MIT";
       if (/Apache License,?\s*Version\s*2/i.test(head)) return "Apache-2.0";
       if (/BSD 3-Clause/i.test(head)) return "BSD-3-Clause";
@@ -44721,7 +44859,7 @@ function findLatestOfType(ctx, types) {
 }
 
 // src/tools/sbomDiff.ts
-import { existsSync as existsSync23, readFileSync as readFileSync14 } from "node:fs";
+import { existsSync as existsSync24, readFileSync as readFileSync15 } from "node:fs";
 var inputSchema8 = {
   from_scan_id: external_exports.string().uuid().optional(),
   to_scan_id: external_exports.string().uuid().optional(),
@@ -44800,9 +44938,9 @@ async function loadComponents(ctx, scanId, useFullFile) {
   if (!rec) return null;
   if (useFullFile) {
     const filePath = rec.meta?.file_path;
-    if (filePath && existsSync23(filePath)) {
+    if (filePath && existsSync24(filePath)) {
       try {
-        const raw = readFileSync14(filePath, "utf8");
+        const raw = readFileSync15(filePath, "utf8");
         return extractFromSbomJson(raw);
       } catch {
       }
@@ -44926,8 +45064,8 @@ function countBySeverity3(findings) {
 }
 
 // src/tools/suggestFix.ts
-import { existsSync as existsSync24, readFileSync as readFileSync15 } from "node:fs";
-import { join as join31 } from "node:path";
+import { existsSync as existsSync25, readFileSync as readFileSync16 } from "node:fs";
+import { join as join32 } from "node:path";
 var inputSchema10 = {
   project_path: ProjectPath,
   finding_fingerprint: external_exports.string().regex(/^[0-9a-f]{64}$/).describe("Fingerprint of the finding to gather context for."),
@@ -44959,10 +45097,10 @@ async function handler17(input, ctx) {
   let source_start_line = 0;
   let source_end_line = 0;
   if (finding2.file_path) {
-    const abs = join31(projectPath, finding2.file_path);
-    if (existsSync24(abs)) {
+    const abs = join32(projectPath, finding2.file_path);
+    if (existsSync25(abs)) {
       try {
-        const raw = readFileSync15(abs, "utf8");
+        const raw = readFileSync16(abs, "utf8");
         const lines = raw.split(/\r?\n/);
         const start = Math.max(0, (finding2.line_start ?? 1) - 1 - contextLines);
         const end = Math.min(lines.length, (finding2.line_end ?? finding2.line_start ?? 1) + contextLines);
@@ -45091,8 +45229,8 @@ function toBucket(f, reason) {
 }
 
 // src/tools/precommitInstall.ts
-import { existsSync as existsSync25 } from "node:fs";
-import { join as join32 } from "node:path";
+import { existsSync as existsSync26 } from "node:fs";
+import { join as join33 } from "node:path";
 var tool19 = {
   name: "precommit_install",
   title: "Install pre-commit hooks",
@@ -45109,13 +45247,13 @@ async function handler19(input, _ctx) {
   } catch (e) {
     return failDomain16("not_a_git_repo", e.message);
   }
-  if (!existsSync25(join32(projectPath, ".pre-commit-config.yaml"))) {
+  if (!existsSync26(join33(projectPath, ".pre-commit-config.yaml"))) {
     return failDomain16(
       "scanner_failed",
       "No .pre-commit-config.yaml in project. Run init_project first."
     );
   }
-  if (!existsSync25(join32(projectPath, ".git"))) {
+  if (!existsSync26(join33(projectPath, ".git"))) {
     return failDomain16("not_a_git_repo", "pre-commit needs a git repo to install hooks into.");
   }
   const bin = await scannerAvailable("pre-commit");
@@ -45157,8 +45295,8 @@ function failDomain16(code, message) {
 }
 
 // src/tools/registerCustomRules.ts
-import { existsSync as existsSync26, readdirSync as readdirSync8 } from "node:fs";
-import { join as join33, resolve as resolve5 } from "node:path";
+import { existsSync as existsSync27, readdirSync as readdirSync8 } from "node:fs";
+import { join as join34, resolve as resolve5 } from "node:path";
 var inputSchema11 = {
   project_path: ProjectPath,
   paths: external_exports.array(external_exports.string()).optional().describe("Explicit paths or globs to register. When omitted, auto-discovers .semgrep/ etc."),
@@ -45203,8 +45341,8 @@ async function handler20(input, ctx) {
 function autoDiscover(projectPath) {
   const out = [];
   for (const dir of [".semgrep", "semgrep", "rules"]) {
-    const abs = join33(projectPath, dir);
-    if (!existsSync26(abs)) continue;
+    const abs = join34(projectPath, dir);
+    if (!existsSync27(abs)) continue;
     try {
       const hasYaml = readdirSync8(abs).some((f) => /\.ya?ml$/.test(f));
       if (hasYaml) out.push(abs);
@@ -45218,7 +45356,7 @@ function failDomain17(code, message) {
 }
 
 // src/tools/healthStatus.ts
-import { existsSync as existsSync27, statSync as statSync6 } from "node:fs";
+import { existsSync as existsSync28, statSync as statSync6 } from "node:fs";
 var startedAt = Date.now();
 var SERVER_VERSION = resolveVersion();
 var tool21 = {
@@ -45234,7 +45372,7 @@ async function handler21(ctx) {
   const limiter2 = getScanLimiter();
   const dbPath = ctx.storage.rawHandle().name;
   let dbSizeBytes = null;
-  if (dbPath && dbPath !== ":memory:" && existsSync27(dbPath)) {
+  if (dbPath && dbPath !== ":memory:" && existsSync28(dbPath)) {
     try {
       dbSizeBytes = statSync6(dbPath).size;
     } catch {
@@ -45276,7 +45414,7 @@ async function handler21(ctx) {
 
 // src/tools/reportExport.ts
 import { mkdirSync as mkdirSync6, writeFileSync as writeFileSync7 } from "node:fs";
-import { join as join34 } from "node:path";
+import { join as join35 } from "node:path";
 
 // src/report/htmlTheme.ts
 var SHARED = { "--accent": "#00AAFF", "--brand-blue": "#11689B" };
@@ -45691,10 +45829,10 @@ async function handler22(input, ctx) {
       sections: [markdownToSafeHtml(inp.content_markdown)],
       lang
     });
-    const outDir2 = join34(projectPath, ".guardian", "reports", `report-${slugify(title)}`);
+    const outDir2 = join35(projectPath, ".guardian", "reports", `report-${slugify(title)}`);
     mkdirSync6(outDir2, { recursive: true });
     const fileName2 = narrativeFormat === "markdown" ? "report.md" : "report.html";
-    const outFile2 = join34(outDir2, fileName2);
+    const outFile2 = join35(outDir2, fileName2);
     writeFileSync7(outFile2, content2, "utf8");
     return {
       ok: true,
@@ -45714,9 +45852,9 @@ async function handler22(input, ctx) {
   const findings = ctx.storage.findings.listByScan(scanId);
   const cves = scan.scan_type === "deps" || scan.scan_type === "security_full" ? ctx.storage.cves.listActive(scanId) : [];
   const { content, fileName } = renderReport(format2, scan, findings, cves, lang);
-  const outDir = join34(projectPath, ".guardian", "reports", `export-${scanId.slice(0, 8)}`);
+  const outDir = join35(projectPath, ".guardian", "reports", `export-${scanId.slice(0, 8)}`);
   mkdirSync6(outDir, { recursive: true });
-  const outFile = join34(outDir, fileName);
+  const outFile = join35(outDir, fileName);
   writeFileSync7(outFile, content, "utf8");
   return {
     ok: true,
@@ -46131,8 +46269,8 @@ function failDomain19(code, message) {
 }
 
 // src/tools/scanWordpress.ts
-import { existsSync as existsSync28 } from "node:fs";
-import { join as join35 } from "node:path";
+import { existsSync as existsSync29 } from "node:fs";
+import { join as join36 } from "node:path";
 
 // src/runners/scannerParsers/phpcs.ts
 var PHPCS_TOOL_NAME = "phpcs";
@@ -46216,8 +46354,8 @@ registerToolModule(
       const parser_inputs = [];
       const inp = input;
       const standard = inp.standard ?? "WordPress";
-      const looksWp = existsSync28(join35(ctx.projectPath, "wp-config.php")) || existsSync28(join35(ctx.projectPath, "wp-config-sample.php")) || existsSync28(join35(ctx.projectPath, "style.css")) || // theme root
-      existsSync28(join35(ctx.projectPath, "readme.txt"));
+      const looksWp = existsSync29(join36(ctx.projectPath, "wp-config.php")) || existsSync29(join36(ctx.projectPath, "wp-config-sample.php")) || existsSync29(join36(ctx.projectPath, "style.css")) || // theme root
+      existsSync29(join36(ctx.projectPath, "readme.txt"));
       const warnings = [];
       if (!looksWp) {
         warnings.push(
@@ -46234,7 +46372,7 @@ registerToolModule(
       if (semgrepBin) {
         tasks.push(
           (async () => {
-            const outFile = join35(reportDir, "sast.json");
+            const outFile = join36(reportDir, "sast.json");
             const args = [
               "--config=p/php",
               "--config=p/wordpress",
@@ -46266,7 +46404,7 @@ registerToolModule(
       if (gitleaksBin) {
         tasks.push(
           (async () => {
-            const outFile = join35(reportDir, "secrets.json");
+            const outFile = join36(reportDir, "secrets.json");
             const r = await runProcess({
               command: "gitleaks",
               args: [
@@ -46296,7 +46434,7 @@ registerToolModule(
       if (trivyBin) {
         tasks.push(
           (async () => {
-            const outFile = join35(reportDir, "deps.json");
+            const outFile = join36(reportDir, "deps.json");
             const r = await runProcess({
               command: "trivy",
               args: [
@@ -46330,7 +46468,7 @@ registerToolModule(
       if (phpcsBin) {
         tasks.push(
           (async () => {
-            const outFile = join35(reportDir, "phpcs.json");
+            const outFile = join36(reportDir, "phpcs.json");
             const r = await runProcess({
               command: "phpcs",
               args: [
@@ -46375,9 +46513,9 @@ registerToolModule(
 );
 
 // src/tools/wpAudit.ts
-import { existsSync as existsSync29 } from "node:fs";
+import { existsSync as existsSync30 } from "node:fs";
 import { randomUUID as randomUUID5 } from "node:crypto";
-import { join as join36 } from "node:path";
+import { join as join37 } from "node:path";
 var RETRY_DELAYS_MS = [1e3, 3e3, 9e3];
 var DEFAULT_RISKY_LOGINS = ["admin", "administrator", "root", "wpadmin"];
 var inputSchema15 = {
@@ -46405,7 +46543,7 @@ async function handler25(input, ctx) {
   } catch (e) {
     return failDomain20("not_a_wordpress_install", e.message);
   }
-  if (!existsSync29(join36(installPath, "wp-config.php"))) {
+  if (!existsSync30(join37(installPath, "wp-config.php"))) {
     return failDomain20(
       "not_a_wordpress_install",
       `No wp-config.php in ${installPath}`
@@ -46638,9 +46776,9 @@ function failDomain20(code, message) {
 }
 
 // src/tools/wpVulnCheck.ts
-import { existsSync as existsSync30, mkdirSync as mkdirSync7, writeFileSync as writeFileSync8 } from "node:fs";
+import { existsSync as existsSync31, mkdirSync as mkdirSync7, writeFileSync as writeFileSync8 } from "node:fs";
 import { randomUUID as randomUUID6 } from "node:crypto";
-import { join as join37 } from "node:path";
+import { join as join38 } from "node:path";
 
 // src/runners/scannerParsers/wpscan.ts
 var WPSCAN_TOOL_NAME = "wpscan";
@@ -46793,14 +46931,14 @@ async function handler26(input, ctx) {
   const token = inp.api_token ?? process.env["WPSCAN_API_TOKEN"] ?? "";
   if (!token) warnings.push("No WPSCAN_API_TOKEN \u2014 public-no-token rate limit applies.");
   const scanId = randomUUID6();
-  const reportDir = join37(
+  const reportDir = join38(
     inp.wp_install_path ?? process.cwd(),
     ".guardian",
     "reports",
     `wpvuln-${scanId.slice(0, 8)}`
   );
   mkdirSync7(reportDir, { recursive: true });
-  const outFile = join37(reportDir, "wpscan.json");
+  const outFile = join38(reportDir, "wpscan.json");
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_vuln_check",
@@ -46832,7 +46970,7 @@ async function handler26(input, ctx) {
     warnings.push("WPScan rate-limited \u2014 results are partial. Try again later or set WPSCAN_API_TOKEN.");
   }
   let raw = null;
-  if (existsSync30(outFile)) {
+  if (existsSync31(outFile)) {
     try {
       raw = __require("node:fs").readFileSync(outFile, "utf8");
     } catch {
@@ -46888,9 +47026,9 @@ function failDomain21(code, message) {
 }
 
 // src/tools/wpCronAudit.ts
-import { existsSync as existsSync31 } from "node:fs";
+import { existsSync as existsSync32 } from "node:fs";
 import { randomUUID as randomUUID7 } from "node:crypto";
-import { join as join38 } from "node:path";
+import { join as join39 } from "node:path";
 var inputSchema17 = {
   wp_install_path: external_exports.string().min(1).describe("Path to the directory containing wp-config.php.")
 };
@@ -46931,7 +47069,7 @@ async function handler27(input, ctx) {
   } catch (e) {
     return failDomain22("not_a_wordpress_install", e.message);
   }
-  if (!existsSync31(join38(installPath, "wp-config.php"))) {
+  if (!existsSync32(join39(installPath, "wp-config.php"))) {
     return failDomain22("not_a_wordpress_install", `No wp-config.php in ${installPath}`);
   }
   const wpBin = await scannerAvailable("wp");
@@ -47523,8 +47661,8 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID10 } from "node:crypto";
-import { existsSync as existsSync32, readFileSync as readFileSync16, readdirSync as readdirSync9, statSync as statSync7 } from "node:fs";
-import { join as join39, relative as relative2 } from "node:path";
+import { existsSync as existsSync33, readFileSync as readFileSync17, readdirSync as readdirSync9, statSync as statSync7 } from "node:fs";
+import { join as join40, relative as relative2 } from "node:path";
 var PATTERNS = [
   {
     id: "dotnet-sql-server-conn",
@@ -47634,7 +47772,7 @@ async function handler33(input, ctx) {
   for (const file of files) {
     let content;
     try {
-      content = readFileSync16(file, "utf8");
+      content = readFileSync17(file, "utf8");
     } catch {
       continue;
     }
@@ -47702,7 +47840,7 @@ function collectConfigFiles(root, maxDepth) {
     }
     for (const name of entries) {
       if (SKIP_DIRS.has(name)) continue;
-      const abs = join39(dir, name);
+      const abs = join40(dir, name);
       let stat2;
       try {
         stat2 = statSync7(abs);
@@ -47711,7 +47849,7 @@ function collectConfigFiles(root, maxDepth) {
       }
       if (stat2.isDirectory()) {
         walk4(abs, depth + 1);
-      } else if (TARGET_FILES.some((re) => re.test(name)) && existsSync32(abs)) {
+      } else if (TARGET_FILES.some((re) => re.test(name)) && existsSync33(abs)) {
         out.push(abs);
       }
     }
@@ -47722,8 +47860,8 @@ function collectConfigFiles(root, maxDepth) {
 
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID11 } from "node:crypto";
-import { readFileSync as readFileSync17, readdirSync as readdirSync10, statSync as statSync8 } from "node:fs";
-import { join as join40, relative as relative3 } from "node:path";
+import { readFileSync as readFileSync18, readdirSync as readdirSync10, statSync as statSync8 } from "node:fs";
+import { join as join41, relative as relative3 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
   "net9.0": { tfm: "net9.0", status: "sts-current", hint: "STS until May 2026." },
@@ -47763,7 +47901,7 @@ async function handler34(input, ctx) {
   for (const file of projects) {
     let xml;
     try {
-      xml = readFileSync17(file, "utf8");
+      xml = readFileSync18(file, "utf8");
     } catch {
       continue;
     }
@@ -47845,7 +47983,7 @@ function collectCsprojFiles(root, maxDepth) {
     }
     for (const name of entries) {
       if (SKIP_DIRS2.has(name)) continue;
-      const abs = join40(dir, name);
+      const abs = join41(dir, name);
       try {
         const s = statSync8(abs);
         if (s.isDirectory()) walk4(abs, depth + 1);
@@ -47863,8 +48001,8 @@ function failDomain24(code, message) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
-import { existsSync as existsSync33, readFileSync as readFileSync18, readdirSync as readdirSync11, statSync as statSync9 } from "node:fs";
-import { join as join41, relative as relative4 } from "node:path";
+import { existsSync as existsSync34, readFileSync as readFileSync19, readdirSync as readdirSync11, statSync as statSync9 } from "node:fs";
+import { join as join42, relative as relative4 } from "node:path";
 var RULES = [
   {
     id: "efcore-drop-table",
@@ -47927,10 +48065,10 @@ async function handler35(input, ctx) {
       continue;
     }
     for (const fname of files) {
-      const abs = join41(dir, fname);
+      const abs = join42(dir, fname);
       let content;
       try {
-        content = readFileSync18(abs, "utf8");
+        content = readFileSync19(abs, "utf8");
       } catch {
         continue;
       }
@@ -47999,7 +48137,7 @@ function findMigrationsDirs(root) {
     }
     for (const name of entries) {
       if (SKIP.has(name)) continue;
-      const abs = join41(dir, name);
+      const abs = join42(dir, name);
       let s;
       try {
         s = statSync9(abs);
@@ -48007,7 +48145,7 @@ function findMigrationsDirs(root) {
         continue;
       }
       if (!s.isDirectory()) continue;
-      if (name === "Migrations" && existsSync33(abs)) {
+      if (name === "Migrations" && existsSync34(abs)) {
         out.push(abs);
       } else {
         walk4(abs, depth + 1);
@@ -48148,7 +48286,7 @@ function scoreRange(top) {
 // src/tools/scanSkill.ts
 import { createHash as createHash5, randomUUID as randomUUID13 } from "node:crypto";
 import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync10 } from "node:fs";
-import { join as join43 } from "node:path";
+import { join as join44 } from "node:path";
 
 // src/runners/osv.ts
 var OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
@@ -49271,16 +49409,16 @@ function finding(file, ruleId, severity, subcategory, title, message) {
 // src/skillaudit/ingest.ts
 init_execa();
 import {
-  existsSync as existsSync34,
+  existsSync as existsSync35,
   mkdtempSync,
-  readFileSync as readFileSync19,
+  readFileSync as readFileSync20,
   readdirSync as readdirSync12,
   rmSync,
   statSync as statSync10,
   writeFileSync as writeFileSync9
 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { basename, join as join42 } from "node:path";
+import { basename, join as join43 } from "node:path";
 var MAX_FILES = 4e3;
 var MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 var MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -49398,7 +49536,7 @@ async function ingestTarget(targetRaw) {
     if (looksLikeGitHost(target)) return ingestGit(target);
     return ingestUrl(target);
   }
-  if (!existsSync34(target)) {
+  if (!existsSync35(target)) {
     return { ok: false, code: "target_not_found", message: `Path does not exist: ${target}` };
   }
   const st = statSync10(target);
@@ -49437,7 +49575,7 @@ function looksLikeGitHost(url) {
   return /(github\.com|gitlab\.com|bitbucket\.org)\/[^/]+\/[^/]+\/?$/.test(url);
 }
 async function ingestGit(url) {
-  const dir = mkdtempSync(join42(tmpdir2(), "guardian-scanskill-git-"));
+  const dir = mkdtempSync(join43(tmpdir2(), "guardian-scanskill-git-"));
   try {
     await execa("git", ["clone", "--depth", "1", "--quiet", url, dir], { timeout: 12e4 });
   } catch (e) {
@@ -49462,10 +49600,10 @@ async function ingestUrl(url) {
   if (typeof fetch !== "function") {
     return { ok: false, code: "unsupported_target", message: "No fetch available to download URL." };
   }
-  const dir = mkdtempSync(join42(tmpdir2(), "guardian-scanskill-url-"));
+  const dir = mkdtempSync(join43(tmpdir2(), "guardian-scanskill-url-"));
   const isZip = /\.zip($|\?)/i.test(url);
   const fileName = isZip ? "download.zip" : basename(url.split("?")[0] ?? "download") || "download";
-  const dest = join42(dir, fileName);
+  const dest = join43(dir, fileName);
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6e4);
@@ -49506,7 +49644,7 @@ async function ingestUrl(url) {
   };
 }
 async function ingestZip(zipPath, ownsParent, parentDir) {
-  const extractDir = mkdtempSync(join42(tmpdir2(), "guardian-scanskill-zip-"));
+  const extractDir = mkdtempSync(join43(tmpdir2(), "guardian-scanskill-zip-"));
   const extracted = await tryExtract(zipPath, extractDir);
   if (!extracted) {
     safeRm(extractDir);
@@ -49563,7 +49701,7 @@ function collectDir(root) {
         truncated = true;
         break;
       }
-      const abs = join42(dir, entry);
+      const abs = join43(dir, entry);
       let s;
       try {
         s = statSync10(abs);
@@ -49609,7 +49747,7 @@ function rel(root, abs) {
 function readOne(abs, relPath) {
   let raw;
   try {
-    raw = readFileSync19(abs);
+    raw = readFileSync20(abs);
   } catch {
     return null;
   }
@@ -49710,11 +49848,11 @@ async function handler38(input, ctx, callMeta) {
     }
     const reportPaths = [];
     if (inp.write_reports !== false) {
-      const outDir = join43(basePath, ".guardian", "reports", `skill-audit-${scanId.slice(0, 8)}`);
+      const outDir = join44(basePath, ".guardian", "reports", `skill-audit-${scanId.slice(0, 8)}`);
       try {
         mkdirSync8(outDir, { recursive: true });
-        const sarifPath = join43(outDir, "report.sarif");
-        const jsonPath = join43(outDir, "report.json");
+        const sarifPath = join44(outDir, "report.sarif");
+        const jsonPath = join44(outDir, "report.json");
         writeFileSync10(sarifPath, toSarif(findings, { toolName: "guardian-scanskill" }), "utf8");
         writeFileSync10(
           jsonPath,
@@ -49820,8 +49958,8 @@ function hashFiles(parts) {
 }
 
 // src/tools/mapAttackSurface.ts
-import { readFileSync as readFileSync22 } from "node:fs";
-import { isAbsolute, join as join47, resolve as resolve7 } from "node:path";
+import { readFileSync as readFileSync23 } from "node:fs";
+import { isAbsolute, join as join48, resolve as resolve7 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -49857,8 +49995,8 @@ function numProp(value, key) {
 }
 
 // src/surface/collectors/ports.ts
-import { existsSync as existsSync35, readFileSync as readFileSync20, realpathSync } from "node:fs";
-import { basename as basename2, join as join44 } from "node:path";
+import { existsSync as existsSync36, readFileSync as readFileSync21, realpathSync } from "node:fs";
+import { basename as basename2, join as join45 } from "node:path";
 var DOCKERFILES = ["Dockerfile", "dockerfile"];
 var COMPOSE_FILES = [
   "docker-compose.yml",
@@ -49878,7 +50016,7 @@ function collectPorts(projectPath) {
   };
   const seenDockerfiles = /* @__PURE__ */ new Set();
   for (const name of DOCKERFILES) {
-    const path6 = join44(projectPath, name);
+    const path6 = join45(projectPath, name);
     const canonical = canonicalPath(path6);
     if (canonical === void 0) continue;
     if (seenDockerfiles.has(canonical)) continue;
@@ -49897,7 +50035,7 @@ function collectPorts(projectPath) {
     }
   }
   for (const name of COMPOSE_FILES) {
-    for (const line of readLines(join44(projectPath, name))) {
+    for (const line of readLines(join45(projectPath, name))) {
       const published = /^\s*published:\s*"?(\d+)"?\s*$/.exec(line);
       if (published?.[1] !== void 0) {
         push(Number.parseInt(published[1], 10), name);
@@ -49912,9 +50050,9 @@ function collectPorts(projectPath) {
   return out;
 }
 function readLines(path6) {
-  if (!existsSync35(path6)) return [];
+  if (!existsSync36(path6)) return [];
   try {
-    return readFileSync20(path6, "utf8").split(/\r?\n/);
+    return readFileSync21(path6, "utf8").split(/\r?\n/);
   } catch {
     return [];
   }
@@ -50243,8 +50381,8 @@ function buildResolutionIndex(projectFiles) {
   }
   return { byPosixPath, goPackages };
 }
-function lookupCandidates(byPosixPath, candidates) {
-  for (const candidate of candidates) {
+function lookupCandidates(byPosixPath, candidates2) {
+  for (const candidate of candidates2) {
     const hit = byPosixPath.get(candidate);
     if (hit !== void 0) return hit;
   }
@@ -50749,7 +50887,7 @@ function resolveWordpressRoutes(routes) {
 
 // src/surface/scanSemgrep.ts
 import { copyFileSync as copyFileSync2 } from "node:fs";
-import { join as join45 } from "node:path";
+import { join as join46 } from "node:path";
 async function invokeSemgrep(options) {
   const { projectPath, rulesPath, outFile, reportDir } = options;
   const semgrepBin = await scannerAvailable("semgrep");
@@ -50765,7 +50903,7 @@ async function invokeSemgrep(options) {
   if (dockerBin === null) return null;
   let containerRules;
   try {
-    const stagedRules = join45(reportDir, "routes.yml");
+    const stagedRules = join46(reportDir, "routes.yml");
     copyFileSync2(rulesPath, stagedRules);
     containerRules = toContainerPath(projectPath, stagedRules);
   } catch (e) {
@@ -50801,17 +50939,17 @@ function buildToolRun(run, via) {
 }
 
 // src/surface/specDiscover.ts
-import { readFileSync as readFileSync21, readdirSync as readdirSync13, statSync as statSync11 } from "node:fs";
-import { join as join46, relative as relative5, resolve as resolve6, sep as sep2 } from "node:path";
+import { readFileSync as readFileSync22, readdirSync as readdirSync13, statSync as statSync11 } from "node:fs";
+import { join as join47, relative as relative5, resolve as resolve6, sep as sep2 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
 var SPEC_BASENAMES = /* @__PURE__ */ new Set(["openapi", "swagger", "api-docs"]);
 var SPEC_EXTENSIONS = /* @__PURE__ */ new Set([".json", ".yaml", ".yml"]);
 function discoverSpecs(projectPath, explicit) {
   const root = resolve6(projectPath);
-  const candidates = explicit && explicit.length > 0 ? dedupeResolved(explicit) : walk3(root, root).sort();
-  const truncated = candidates.length > MAX_SPEC_FILES;
-  const selected = candidates.slice(0, MAX_SPEC_FILES);
+  const candidates2 = explicit && explicit.length > 0 ? dedupeResolved(explicit) : walk3(root, root).sort();
+  const truncated = candidates2.length > MAX_SPEC_FILES;
+  const selected = candidates2.slice(0, MAX_SPEC_FILES);
   const outcome = readCandidates(selected);
   outcome.truncated = truncated;
   return outcome;
@@ -50842,7 +50980,7 @@ function readCandidates(paths) {
       continue;
     }
     try {
-      const text = readFileSync21(path6, "utf8");
+      const text = readFileSync22(path6, "utf8");
       specs.push({ file: path6, text });
     } catch {
       continue;
@@ -50861,10 +50999,10 @@ function walk3(root, dir) {
   for (const entry of entries) {
     if (entry.isDirectory()) {
       if (FS_EXCLUDE.has(entry.name)) continue;
-      out.push(...walk3(root, join46(dir, entry.name)));
+      out.push(...walk3(root, join47(dir, entry.name)));
     } else if (entry.isFile()) {
       if (isSpecCandidate(root, dir, entry.name)) {
-        out.push(join46(dir, entry.name));
+        out.push(join47(dir, entry.name));
       }
     }
   }
@@ -50931,8 +51069,8 @@ function diffSpecRoutes(codeRoutes, specRoutes, specsParsed) {
   const matchedSpec = /* @__PURE__ */ new Set();
   for (const c3 of codeResolvable) {
     const path6 = normalisePath(c3.path_resolved);
-    const candidates = specByPath.get(path6) ?? [];
-    for (const s of candidates) {
+    const candidates2 = specByPath.get(path6) ?? [];
+    for (const s of candidates2) {
       if (!methodsMatch(c3.method, s.method)) continue;
       matched.push({ method: displayMethod(c3.method, s.method), path: path6, code_route: c3, spec_route: s });
       matchedCode.add(c3);
@@ -50996,7 +51134,7 @@ function diffSpecRoutes(codeRoutes, specRoutes, specsParsed) {
 }
 
 // src/surface/specImport.ts
-var import_yaml = __toESM(require_dist2(), 1);
+var import_yaml2 = __toESM(require_dist2(), 1);
 var OPERATION_KEYS = [
   "get",
   "put",
@@ -51101,16 +51239,16 @@ function parseRoot(text) {
     return { kind: "ok", root: JSON.parse(text), lineFor: () => 0 };
   } catch {
   }
-  const doc = (0, import_yaml.parseDocument)(text);
+  const doc = (0, import_yaml2.parseDocument)(text);
   if (doc.errors.length > 0) {
     return { kind: "parse_error", reason: doc.errors[0]?.message ?? "YAML parse error" };
   }
   const lineByPath = /* @__PURE__ */ new Map();
   const pathsNode = doc.get("paths", true);
-  if ((0, import_yaml.isMap)(pathsNode)) {
+  if ((0, import_yaml2.isMap)(pathsNode)) {
     for (const item of pathsNode.items) {
       const key = item.key;
-      if (!(0, import_yaml.isScalar)(key) || typeof key.value !== "string") continue;
+      if (!(0, import_yaml2.isScalar)(key) || typeof key.value !== "string") continue;
       const range = key.range;
       if (range == null) continue;
       lineByPath.set(key.value, text.slice(0, range[0]).split("\n").length);
@@ -51268,8 +51406,8 @@ async function handler39(input, ctx) {
   }
   const includeEnvVars = inp.include_env_vars !== false;
   const reportDir = ensureReportDir(projectPath, treeHash, "surface");
-  const outFile = join47(reportDir, "surface.json");
-  const rulesPath = join47(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
+  const outFile = join48(reportDir, "surface.json");
+  const rulesPath = join48(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
   const invocation = await invokeSemgrep({ projectPath, rulesPath, outFile, reportDir });
   if (invocation === null) {
     return degradedResult(
@@ -51350,7 +51488,7 @@ function readSources(parsed, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path6 of collectAllFiles(parsed)) {
     try {
-      const buffer = readFileSync22(isAbsolute(path6) ? path6 : join47(projectPath, path6));
+      const buffer = readFileSync23(isAbsolute(path6) ? path6 : join48(projectPath, path6));
       const text = buffer.toString("utf8");
       if (Buffer.byteLength(text, "utf8") !== buffer.length) continue;
       sources.set(path6, text);
@@ -51488,7 +51626,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path6) {
-  return resolve7(isAbsolute(path6) ? path6 : join47(projectPath, path6));
+  return resolve7(isAbsolute(path6) ? path6 : join48(projectPath, path6));
 }
 function resultsArrayOf(parsed) {
   const results = parsed.results;
@@ -51674,7 +51812,7 @@ function degradedResult(toolsRun, missingTools, note, ctx) {
 
 // src/tools/scanDast.ts
 import { randomUUID as randomUUID14 } from "node:crypto";
-import { join as join50 } from "node:path";
+import { join as join51 } from "node:path";
 
 // src/dast/plan.ts
 var READ_METHODS = ["GET", "HEAD", "OPTIONS"];
@@ -52228,7 +52366,7 @@ function armDeadline(ms, hostSignal) {
 
 // src/dast/evidence.ts
 import { writeFileSync as writeFileSync11 } from "node:fs";
-import { join as join48 } from "node:path";
+import { join as join49 } from "node:path";
 var EVIDENCE_BODY_CHARS = 2e3;
 var MAX_EVIDENCE_FILES = 200;
 function toExchange(result) {
@@ -52305,7 +52443,7 @@ function writeEvidenceFiles(dir, records, redact) {
     }
     try {
       writeFileSync11(
-        join48(dir, `${record3.fingerprint}.json`),
+        join49(dir, `${record3.fingerprint}.json`),
         redact(JSON.stringify(record3, null, 2)),
         "utf8"
       );
@@ -52338,7 +52476,7 @@ function livenessMessage(target, liveness, timeoutMs) {
 }
 
 // src/dast/passes.ts
-import { join as join49 } from "node:path";
+import { join as join50 } from "node:path";
 
 // src/dast/nuclei.ts
 import { dirname as dirname9 } from "node:path";
@@ -52824,7 +52962,7 @@ async function runNuclei(opts) {
       missing: true
     };
   }
-  const outputPath = join49(opts.outputDir, "nuclei.jsonl");
+  const outputPath = join50(opts.outputDir, "nuclei.jsonl");
   const run = await invokeNuclei({
     binaryPath: opts.binaryPath,
     targetUrl: opts.origin,
@@ -53349,7 +53487,7 @@ function toInsertInput(finding2, scanId, evidenceDir) {
     raw: {
       check: check2,
       evidence_id,
-      evidence_file: evidenceDir === null ? null : join50(evidenceDir, `${finding2.fingerprint}.json`)
+      evidence_file: evidenceDir === null ? null : join51(evidenceDir, `${finding2.fingerprint}.json`)
     }
   };
 }
@@ -53841,8 +53979,8 @@ function collectAnonymousExposures(ctx, projectPath) {
 }
 
 // src/tools/createFixPr.ts
-import { existsSync as existsSync37, readFileSync as readFileSync23 } from "node:fs";
-import { join as join52 } from "node:path";
+import { existsSync as existsSync38, readFileSync as readFileSync24 } from "node:fs";
+import { join as join53 } from "node:path";
 
 // src/fixpr/apply.ts
 async function applyGroup(opts) {
@@ -53865,9 +54003,9 @@ async function applySemgrepPass(run, worktreePath, timeoutMs) {
   }
   return { applied: true, commands: [invoked], failure: null };
 }
-async function applyDepsCandidates(run, worktreePath, timeoutMs, lockfileOnly, candidates) {
+async function applyDepsCandidates(run, worktreePath, timeoutMs, lockfileOnly, candidates2) {
   const commands = [];
-  for (const candidate of candidates) {
+  for (const candidate of candidates2) {
     const argv = candidate.command === null ? null : toArgv(candidate.command);
     if (argv === null) {
       return {
@@ -53984,7 +54122,7 @@ function buildDepsGroups(findings, upgradeSteps) {
     else list2.push(candidate);
   }
   return [...byEcosystem.entries()].map(
-    ([ecosystem, candidates]) => makeGroup("deps", ecosystem, candidates)
+    ([ecosystem, candidates2]) => makeGroup("deps", ecosystem, candidates2)
   );
 }
 function mentionsPackage(finding2, packageName) {
@@ -54006,7 +54144,7 @@ function isPackageNameChar(ch) {
   return ch !== void 0 && /[A-Za-z0-9_.@/-]/.test(ch);
 }
 function buildSemgrepGroup(findings) {
-  const candidates = findings.filter((finding2) => finding2.tool === "semgrep").map((finding2) => ({
+  const candidates2 = findings.filter((finding2) => finding2.tool === "semgrep").map((finding2) => ({
     source: "semgrep",
     fingerprints: [finding2.fingerprint],
     severity: finding2.severity,
@@ -54015,16 +54153,16 @@ function buildSemgrepGroup(findings) {
     // label as a missing one, and `??` would let '' straight through.
     label: finding2.rule_id || finding2.title
   }));
-  return candidates.length === 0 ? null : makeGroup("semgrep", "semgrep", candidates);
+  return candidates2.length === 0 ? null : makeGroup("semgrep", "semgrep", candidates2);
 }
-function makeGroup(source, key, candidates) {
+function makeGroup(source, key, candidates2) {
   let severity = "info";
-  for (const candidate of candidates) {
+  for (const candidate of candidates2) {
     if (SEVERITY_ORDER[candidate.severity] > SEVERITY_ORDER[severity]) severity = candidate.severity;
   }
-  const fingerprints = candidates.flatMap((candidate) => candidate.fingerprints);
+  const fingerprints = candidates2.flatMap((candidate) => candidate.fingerprints);
   const hash = createHash7("sha256").update([...fingerprints].sort().join("\n")).digest("hex").slice(0, 12);
-  return { source, key, candidates, severity, hash };
+  return { source, key, candidates: candidates2, severity, hash };
 }
 function countFingerprints(group) {
   return group.candidates.reduce((total, candidate) => total + candidate.fingerprints.length, 0);
@@ -54322,14 +54460,14 @@ function headOf(stdout, stderr) {
 }
 
 // src/fixpr/worktree.ts
-import { existsSync as existsSync36, mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "node:fs";
+import { existsSync as existsSync37, mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { join as join51 } from "node:path";
+import { join as join52 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
 async function createWorktree(opts) {
   let dir;
   try {
-    dir = mkdtempSync2(join51(tmpdir3(), WORKTREE_DIR_PREFIX));
+    dir = mkdtempSync2(join52(tmpdir3(), WORKTREE_DIR_PREFIX));
   } catch (e) {
     return { ok: false, reason: `could not create a temp directory: ${errorMessage2(e)}` };
   }
@@ -54379,7 +54517,7 @@ async function removeWorktree(projectPath, path6, timeoutMs) {
     cwd: projectPath,
     timeoutMs
   });
-  if (!existsSync36(path6)) {
+  if (!existsSync37(path6)) {
     return { removed: true, warning: null };
   }
   const detail = removeResult.outcome !== "completed" ? `: ${describeFailure2(removeResult, "git worktree remove")}` : "";
@@ -54678,10 +54816,10 @@ function prNote(pr) {
 function readManifests(worktreePath) {
   const files = {};
   for (const name of TEST_MANIFESTS) {
-    const path6 = join52(worktreePath, name);
-    if (!existsSync37(path6)) continue;
+    const path6 = join53(worktreePath, name);
+    if (!existsSync38(path6)) continue;
     try {
-      files[name] = readFileSync23(path6, "utf8");
+      files[name] = readFileSync24(path6, "utf8");
     } catch {
     }
   }
