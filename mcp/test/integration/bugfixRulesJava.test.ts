@@ -146,13 +146,26 @@ interface FileExpectation {
  *   | `memory-leak-stream-not-closed` | 0            |
  *
  * Five of eight, and the three at zero are a DECISION, not an oversight: they
- * are the three rules that carry no guard exclusions worth speaking of —
- * `empty-catch` has one metavariable-regex, `printstacktrace-only` has none at
- * all, `stream-not-closed` has two, and none of the three has ever had a
- * clause added to silence correct code. The corpus exists to catch an exclusion
- * eating a real bug; a rule with nothing to eat with is low-risk by
- * construction. Add a guard exclusion to any of the three and it needs corpus
- * entries before that clause can be merged.
+ * are the three rules that carry no GUARD exclusions — `empty-catch` has one
+ * metavariable-regex, `printstacktrace-only` has none at all, and
+ * `stream-not-closed` has four, all four of them the same statement: "this
+ * stream is in a try-with-resources header, so it is closed". The corpus exists
+ * to catch an exclusion eating a real bug; a rule with nothing to eat with is
+ * low-risk by construction. Add a guard exclusion to any of the three and it
+ * needs corpus entries before that clause can be merged.
+ *
+ * Wave 10 added two of those four and measured the cost rather than asserting
+ * there was none, because they ARE clauses added to silence correct code and
+ * the rule above applies to them. `pattern-not-inside` excludes the whole node
+ * it matched, and the node is the whole try statement, so a SECOND, unmanaged
+ * stream opened inside the body of a try-with-resources is invisible. That was
+ * already true of the two clauses that shipped at 35b4b58 — measured directly:
+ * the same nested leak is silent in a `try (r = …) { … }` and was reported in a
+ * `try (r = …) { … } finally { … }` only because the exclusion could not see
+ * the finalizer at all, alongside a false positive on the managed stream on the
+ * line above it. The new clauses make the blind spot consistent instead of
+ * adding one, which is why they carry near-misses in `misses/` and no corpus
+ * entry: there is no shape here that the shipping rule did not already miss.
  *
  * `modify-during-iteration` was at zero until wave 7 and was the OPPOSITE of
  * low-risk: eight exclusion clauses over a seven-branch receiver enumeration, the
@@ -222,10 +235,30 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     ids: ['bugfix-java-edge-case-modify-during-iteration'],
     count: 6,
   },
-  'EmptyCatch.java': { ids: ['bugfix-java-error-handling-empty-catch'], count: 1 },
+  'EmptyCatch.java': {
+    // Six, and the jump from one is the wave-10 `finally` hole. A Java try
+    // statement WITH a finalizer is a different AST node, so
+    // `try { ... } catch ($E $V) { }` never matched a try/catch/finally and
+    // attaching `finally { cleanup(); }` to a swallowing catch silenced the
+    // rule outright. Three of the six carry a `finally`; measured against the
+    // shipped rule at 35b4b58: 3 of 6.
+    //
+    // The other three pin the two shapes the same run proved were NOT holes,
+    // rather than leaving them to accident: a try-with-resources header and a
+    // multi-catch (`catch (A | B e)`) both already matched. Java's multi-catch
+    // is the construct analogous to Python's `except (A, B):`, which WAS a
+    // hole there because the metavariable did not bind a tuple; here `$V`
+    // binds the name and the naming escape hatch still applies, which
+    // misses/EmptyCatch.java asserts from the other side.
+    ids: ['bugfix-java-error-handling-empty-catch'],
+    count: 6,
+  },
   'PrintStackTraceOnly.java': {
+    // Six, for exactly the reasons above: the rule was anchored on the same
+    // `try { ... } catch ($E $V) { ... }` shape, so the same `finally`
+    // silenced it. 3 of 6 at 35b4b58.
     ids: ['bugfix-java-error-handling-printstacktrace-only'],
-    count: 1,
+    count: 6,
   },
   'MapGetDeref.java': {
     // Eleven: the rule restricts the receiver by DECLARED type, so it carries
@@ -342,7 +375,7 @@ describe('bugfix-java rules', () => {
       // The TOTAL, asserted on top of the per-file counts, and not redundant:
       // the loop above only visits files that have an expectation, so a finding
       // landing in a file nobody registered — or in no file at all — would not
-      // move any per-file number. 69 = 35 from the eight per-rule fixtures plus
+      // move any per-file number. 79 = 45 from the eight per-rule fixtures plus
       // the 34 of the real-bugs corpus.
       expect(rows.length).toBe(
         Object.values(EXPECTED_HITS_BY_FILE).reduce((n, e) => n + e.count, 0),
