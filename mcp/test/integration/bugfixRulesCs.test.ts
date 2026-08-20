@@ -185,6 +185,29 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     ids: ['bugfix-cs-race-condition-lock-on-shared-instance'],
     count: 2,
   },
+  'LoopLte.cs': {
+    // Eight over two rules: two `.Length` receivers (array, string) and SIX
+    // `.Count` receivers, one per enumerated type.
+    //
+    // The six are not padding. `metavariable-type` is NOT subtype-aware —
+    // measured: a receiver declared `List<int>` does not match
+    // `ICollection<$T>`, and vice versa — so each type in the rule's list is
+    // an independent claim. A type with no fixture behind it could be
+    // deleted, or could silently never have worked, without a number moving.
+    ids: [
+      'bugfix-cs-off-by-one-loop-lte-count',
+      'bugfix-cs-off-by-one-loop-lte-length',
+    ],
+    count: 8,
+  },
+  'HttpClient.cs': {
+    // Four: a constructor assignment, a plain per-call local, `using var`,
+    // and a `using` block. The constructor one is the site that chose the
+    // rule's scoping clause — `pattern-inside: $R $M(...) { ... }` silently
+    // excludes constructors, so it would have escaped.
+    ids: ['bugfix-cs-memory-leak-httpclient-per-call'],
+    count: 4,
+  },
 };
 
 /**
@@ -223,6 +246,13 @@ const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
   'bugfix-cs-race-condition-blocking-on-task': 'WARNING',
   'bugfix-cs-race-condition-static-random': 'WARNING',
   'bugfix-cs-race-condition-lock-on-shared-instance': 'WARNING',
+  // off_by_one and memory_leak, both WARNING for the same §4 reason: an
+  // inclusive bound is correct when the loop counts rather than indexes, and
+  // a per-call HttpClient is correct in a one-shot console program. Neither
+  // condition is visible to a syntactic matcher.
+  'bugfix-cs-off-by-one-loop-lte-length': 'WARNING',
+  'bugfix-cs-off-by-one-loop-lte-count': 'WARNING',
+  'bugfix-cs-memory-leak-httpclient-per-call': 'WARNING',
 };
 
 describe('bugfix-cs rules', () => {
@@ -327,6 +357,9 @@ const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-cs-race-condition-blocking-on-task': 'race_condition',
   'bugfix-cs-race-condition-static-random': 'race_condition',
   'bugfix-cs-race-condition-lock-on-shared-instance': 'race_condition',
+  'bugfix-cs-off-by-one-loop-lte-length': 'off_by_one',
+  'bugfix-cs-off-by-one-loop-lte-count': 'off_by_one',
+  'bugfix-cs-memory-leak-httpclient-per-call': 'memory_leak',
 };
 
 describe('every rule id classifies as its own class', () => {

@@ -407,3 +407,119 @@ rules:
       internados. Tranque num `private readonly object` dedicado.
     severity: WARNING
     languages: [csharp]
+
+  # ---------------------------------------------------------------------------
+  # off_by_one — duas regras, e a lista de tipos é o que as separa de um
+  # gerador de falsos positivos.
+  # ---------------------------------------------------------------------------
+
+  # `i <= a.Length` corre uma posição para lá do fim, e o índice `a.Length`
+  # está sempre fora dos limites.
+  #
+  # O `metavariable-type` é o que impede a regra de disparar num objeto de
+  # domínio com um `int Length` — um segmento tem comprimento, e o ciclo
+  # inclusivo pode estar certo porque conta estacas em vez de indexar. Sem a
+  # restrição de tipo, a regra dispara nesse ciclo correto: é EXATAMENTE o
+  # defeito que o pack de Java despachou e depois teve de fechar, reproduzido
+  # aqui de propósito antes de a regra ser escrita.
+  #
+  # `var` NO PADRAO, e nao `$T $I`: `for (var i = 0; ...)` é como o C# se
+  # escreve, e a forma com tipo explícito só casaria `for (int i = 0; ...)`.
+  # A restrição de tipo aplica-se ao RECETOR `$A`, que é outra coisa.
+  #
+  # FALSO POSITIVO CONHECIDO, HERDADO E MANTIDO DE PROPOSITO: um ciclo que
+  # preenche `new int[a.Length + 1]` continua a disparar. O array de destino
+  # tem mesmo `a.Length + 1` posições, por isso `i <= a.Length` está certo. O
+  # aperto óbvio — exigir que o corpo indexe o MESMO array do limite — foi
+  # medido na ronda de Java e rejeitado: trocava este falso positivo por um
+  # falso negativo em todos os ciclos que leem `a[i]` para escrever noutro
+  # lado. A medição é transportada, nao repetida.
+  - id: bugfix-cs-off-by-one-loop-lte-length
+    patterns:
+      - pattern: for (var $I = 0; $I <= $A.Length; $I++) { ... }
+      - metavariable-type:
+          metavariable: $A
+          types: ["$T[]", "string"]
+    message: >-
+      Off-by-one. `i <= a.Length` corre uma posição para lá do fim, e o índice
+      `a.Length` está sempre fora dos limites — é uma
+      IndexOutOfRangeException. Provavelmente queria `i < a.Length`.
+    severity: WARNING
+    languages: [csharp]
+
+  # O mesmo defeito na propriedade `.Count` das coleções.
+  #
+  # SEIS TIPOS ENUMERADOS, e a enumeração é obrigatória e nao preguiça:
+  # MEDIDO, o `metavariable-type` NAO É SENSIVEL A SUBTIPOS. Um recetor
+  # declarado `List<int>` nao casa `ICollection<$T>`, e um declarado
+  # `ICollection<int>` nao casa `List<$T>`, apesar de a List implementar a
+  # interface. Cada tipo da lista é uma afirmação independente, e por isso cada
+  # um tem a sua própria fixture de hit: um tipo sem fixture podia ser apagado,
+  # ou podia nunca ter funcionado, sem nenhum número se mexer.
+  #
+  # A mesma medição está por trás da exclusão da regra `async-void` mais acima,
+  # onde `EventArgs` nao cobria `ElapsedArgs`. E a mesma propriedade do motor
+  # vista de dois ângulos: aqui obriga a enumerar, lá obrigou a ligar o tipo a
+  # uma metavariável.
+  #
+  # NAO COBERTO, e dito em vez de implícito: um recetor tipado por uma
+  # interface ou classe que nao esteja nesta lista — `IReadOnlyCollection<T>`,
+  # `Queue<T>`, `Stack<T>`, `SortedDictionary<K,V>`, ou um tipo próprio com um
+  # `Count`. A alternativa era largar a restrição de tipo, e isso traz de volta
+  # o objeto de domínio com um `int Count`, que é pior.
+  - id: bugfix-cs-off-by-one-loop-lte-count
+    patterns:
+      - pattern: for (var $I = 0; $I <= $A.Count; $I++) { ... }
+      - metavariable-type:
+          metavariable: $A
+          types:
+            - "List<$T>"
+            - "IList<$T>"
+            - "ICollection<$T>"
+            - "IReadOnlyList<$T>"
+            - "Dictionary<$K, $V>"
+            - "HashSet<$T>"
+    message: >-
+      Off-by-one. `i <= xs.Count` corre uma posição para lá do fim, e o índice
+      `xs.Count` está sempre fora dos limites — é uma
+      ArgumentOutOfRangeException. Provavelmente queria `i < xs.Count`.
+    severity: WARNING
+    languages: [csharp]
+
+  # ---------------------------------------------------------------------------
+  # memory_leak — uma regra só, e o design diz porque: a regra do IDisposable
+  # NAO E EXPRIMIVEL. O frontend de C# do Semgrep APAGA o modificador `using`
+  # de uma using-declaration, confirmado por `dump-ast`, por comportamento e
+  # pelo span do match. O idioma recomendado pela Microsoft fica byte a byte
+  # igual a uma fuga, e a única exclusão que o distinguiria apaga a regra. Uma
+  # regra a menos é melhor do que uma regra que acusa `using var`.
+  # ---------------------------------------------------------------------------
+
+  # Um `HttpClient` novo por chamada esgota o intervalo de portos efémeros: cada
+  # cliente descartado deixa o socket em TIME_WAIT durante o timeout do sistema,
+  # por isso um serviço com carga fica sem portos enquanto cada chamada
+  # individual parece correta.
+  #
+  # A INVERSAO, e é o que torna esta regra diferente de todas as outras que
+  # tocam em IDisposable: descartar por chamada E o bug. Esta regra QUER
+  # disparar dentro de um `using`, e dispara. Quanto mais arrumada a
+  # eliminação, mais garantido o socket perdido.
+  #
+  # `pattern-not-inside` NO CAMPO ESTATICO, e nao `pattern-inside` no método.
+  # Medido, e a diferença custa um verdadeiro positivo inteiro: com
+  # `pattern-inside: $R $M(...) { ... }` os CONSTRUTORES ficam silenciosamente
+  # de fora, por isso `_client = new HttpClient()` num construtor — que é
+  # precisamente onde este defeito costuma viver numa classe de serviço —
+  # escapava. A exclusão pelo campo estático nao tem esse ponto cego: nomeia a
+  # forma correta em vez de tentar delimitar onde a errada pode aparecer.
+  - id: bugfix-cs-memory-leak-httpclient-per-call
+    patterns:
+      - pattern: new HttpClient(...)
+      - pattern-not-inside: static $T $F = new HttpClient(...);
+    message: >-
+      `new HttpClient()` por chamada. Cada instancia descartada deixa o socket
+      em TIME_WAIT, por isso sob carga o serviço esgota os portos efémeros —
+      e descartar num `using` nao resolve, agrava. Use uma instancia estática
+      de longa duração ou o `IHttpClientFactory`.
+    severity: WARNING
+    languages: [csharp]
