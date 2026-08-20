@@ -81,21 +81,25 @@ exclusion list gets. Indeed the length of the list is the evidence *for* the
 demotion, not against it: **an exclusion list that keeps growing is a severity
 signal, not a backlog.**
 
-### One rule in eight clears the bar, and that is the honest result
+### Zero rules in eight clear the bar, and that is the honest result
 
-Applied cold, the criterion leaves **`empty-catch` alone at `ERROR` and the
-other seven at `WARNING`.** That ratio looks alarming until you notice what it
-is measuring: Semgrep OSS matches syntax and has no dataflow, so *almost
-nothing* clears a bar that says "always a bug". One in eight is what this
-engine can honestly claim, not a failure of the pack.
+Applied cold, the criterion leaves **all eight at `WARNING`.** That looks
+alarming until you notice what it is measuring: Semgrep OSS matches syntax and
+has no dataflow, so *almost nothing* clears a bar that says "always a bug".
+Zero in eight is what this engine can honestly claim here, not a failure of the
+pack.
 
-`empty-catch` clears it for a reason worth stating precisely, because it is the
-only reason available: **its escape hatch is not a guard.** It is a
-*declaration of intent* that the rule itself reads — the Checkstyle / IntelliJ
-convention of naming the variable `ignore`, `ignored` or `expected`. Having
-honoured that, what the rule emits is an *unmarked* silent swallow, and that is
-a bug whatever the author meant. Every other rule in the pack depends on having
-seen a guard, and none of them can see all guards.
+`empty-catch` was the last one at `ERROR`, and it held that tier for three
+rounds on a reason worth stating precisely, because it was the only reason
+available: **its escape hatch is not a guard.** It is a *declaration of intent*
+that the rule itself reads — the Checkstyle / IntelliJ convention of naming the
+variable `ignore`, `ignored` or `expected`. Having honoured that, what the rule
+emits would be an *unmarked* silent swallow, and that is a bug whatever the
+author meant.
+
+The argument is sound and the premise is false. See
+[§4a](#4a-the-empty-catch-premise-measured-against-openjdk) — the round that
+finally measured it.
 
 The four demotions this applies, each with its own reasoning in the rule's own
 comment: `map-get-deref`, `modify-during-iteration`, `static-dateformat` and
@@ -114,21 +118,124 @@ criterion.
 The tier split is **pinned by a test**. It was decided here and asserted
 nowhere until fix wave 1, which made it documented and unfalsifiable — exactly
 the shape of every other defect in this series. `EXPECTED_SEVERITY` in the Java
-integration test pins all eight rules, exhaustive in both directions, and this
+integration test pins all eight rules, exhaustive in both directions, and that
 round's change was made **RED first**: the four flips failed the test before the
 YAML was touched, which is the entire point of having pinned it.
 
-The tier is not cosmetic, and with seven of eight at `WARNING` the consequence
+The §4a flip was verified the same way, in the other direction: with the YAML
+already at `WARNING`, putting `'ERROR'` back into `EXPECTED_SEVERITY` fails
+`reports each rule at its DESIGNED severity tier`, and restoring `'WARNING'`
+passes. The pin is load-bearing rather than decorative, demonstrated rather than
+asserted.
+
+The tier is not cosmetic, and with eight of eight at `WARNING` the consequence
 is now the headline rather than a footnote. The parser maps `ERROR → high` and
 `WARNING → medium`. `bug_hunt`'s `severity_min` is optional, so **nothing
 vanishes from a scan**. But `create_fix_pr` defaults `severity_min` to `high`,
-so the Java pack now contributes **almost nothing to the default fix-PR set** —
-one rule. A caller who wants Java bugs fixed has to ask for them:
+so the Java pack now contributes **nothing at all to the default fix-PR set**.
+A caller who wants Java bugs fixed has to ask for them:
 `severity_min: "medium"`.
 
 `create_fix_pr`'s default was deliberately **not** changed here. It affects all
 four language packs and is a separate decision, queued for the round that
 sweeps the shipped packs together.
+
+## 4a. The `empty-catch` premise, measured against OpenJDK
+
+`empty-catch` shipped at `ERROR` on this premise: *an empty catch that does not
+declare intent is a bug whatever the author meant.* Three rounds accepted it
+without measuring it, because the ablation harness reported axis 3 as `N/A` for
+this pack — there is no Java in this repository to use as a real-code corpus.
+This round got one.
+
+**Corpus.** OpenJDK, `github.com/openjdk/jdk` at `e296cefb`, shallow sparse
+clone of `src/*/share/classes` — 12 596 `.java` files of product source that
+nobody here wrote or picked for its shapes. Semgrep 1.164.0 scanned **12 593**
+of them; the three-file gap is unexplained — the run reports only 12
+`PartialParsing` warnings and no hard error. `paths.scanned > 0` was asserted,
+because a zero there is a broken run and not a clean result. The first attempt, running
+the whole pack, was killed by the OS for memory and reported
+`paths.scanned: []` with exit 2 — caught by that assertion, not by reading the
+finding count.
+
+**Raw count: 1589 findings in 770 files.** That is one empty catch per eight
+files of the Java standard library.
+
+**The split, and it is not close.**
+
+| | count | share |
+| --- | ---: | ---: |
+| findings carrying an explanatory **comment inside** the empty catch | 903 | 56.8 % |
+| findings with a comment on the line immediately **before the `try`** | 169 | 10.6 % |
+| findings declaring intent in a **name the rule does not read** | 27 | 1.7 % |
+
+A block containing only a comment is *empty to the AST*, which is why those 903
+fire at all. Sampled from the comment-bearing stratum, in the corpus's own
+words: `// ignore` (`com/sun/jndi/ldap/Ber.java:63`), `// Expected or ignored`
+(`sun/security/pkcs/SignerInfo.java:350`), `// swallow, since it should never
+happen` (`sun/security/krb5/internal/crypto/DesMacCksumType.java:104`), `//
+Ignoring exception causes specified default to be returned`
+(`java/util/prefs/AbstractPreferences.java:693`), `// All exceptions are
+ignored.`
+(`com/sun/org/apache/xerces/internal/dom/DocumentImpl.java:814`), `// no op`
+(`.../XML11DTDConfiguration.java:811`), `// fall through`
+(`java/beans/PropertyDescriptor.java:590`). Two of the 25 sampled comments are
+*not* declarations of deliberate silence and are the genuine article: `// Should
+do something reasonable`
+(`javax/swing/text/html/HTMLDocument.java:3842`) and `// TODO should this
+throw?` (`.../bcel/internal/classfile/CodeException.java:130`) — an
+acknowledged defect is still a defect.
+
+The 27 that name their intent name it in a vocabulary this rule does not carry:
+**`cannotHappen` ×13, `_` ×10, `unused` ×2, `ignored0` / `ignored1` ×1** (the
+regex is anchored, so a suffix fires). `_` is Java 21's *unnamed variable*, and
+it means precisely "I do not use this binding" — the same erosion ES2019
+optional catch binding caused in JS/TS, arriving in Java from the other
+direction.
+
+**How much does the convention the tier rested on actually cover?** Measured
+rather than assumed, with an inverted-regex probe (`^(ignore|ignored|expected)$`)
+over the same corpus: **139** intent-named empty catches — `java/lang/
+ClassLoader.java:715`, `java/lang/Module.java:1669`,
+`java/net/HttpCookie.java:1000` among them. So the corpus holds 139 + 1589 =
+1728 empty catches, and the convention covers **8.0 %** of them. It is real,
+unlike JS/TS's, and it is not how Java is written. (Ruby's equivalent spelling
+measured 2.7 %.)
+
+**Read individually: 20 from the no-comment stratum (643 findings, the hardest
+case for "deliberate"), 25 from the comment-bearing one.** Roughly 39 of the 45
+are deliberate. The no-comment ones are deliberate by *shape* rather than by
+prose — the Swing veto idiom (`javax/swing/DefaultDesktopManager.java:247`,
+`javax/swing/plaf/basic/BasicInternalFrameUI.java:870`: a
+`PropertyVetoException` means "do not select", and there is nothing to log), a
+`close()` in a `finally` (`sun/awt/image/ImageDecoder.java:171`,
+`sun/jvm/hotspot/HotSpotTypeDataBase.java:383`), a parse probe that falls
+through to a default (`com/sun/java/swing/plaf/gtk/PangoFonts.java:224`), a
+reflection probe (`com/sun/org/apache/xpath/internal/XPathContext.java:323`),
+a try-the-next-provider loop (`java/security/SecureRandom.java:979`), a
+checked-exception ceremony on a constant that cannot throw
+(`sun/print/ServiceDialog.java:390`), and exceptions used as loop control
+(`com/sun/org/apache/xerces/internal/impl/xs/XSConstraints.java:1376`). The
+genuine swallows in that stratum: `jdk/internal/access/SharedSecrets.java:503`
+(a failed `ensureInitialized` vanishes),
+`com/sun/org/apache/xerces/internal/dom/DOMConfigurationImpl.java:777` (a
+resolver silently not set), `sun/tools/jconsole/inspector/XTextFieldEditor.java:148`
+(`catch(Exception e) {}` around an initialiser), and
+`sun/font/Type1Font.java:224` (an empty `FileNotFoundException` catch that
+leaves `raf` null and relies on the `NullPointerException` catch below it).
+
+**The verdict.** The premise fails on its own terms. The intent *is* declared —
+903 times, in a comment Semgrep cannot read, and 27 more times in a name it does
+not carry. "Unmarked" was the load-bearing word and it is wrong. That is the
+severity criterion applied, not an exception to it: a declaration of intent the
+rule cannot recognise is exactly what `WARNING` is for. Java is the fourth
+language to test this premise and the fourth to refute it.
+
+**What was *not* done.** The exemption list was not widened to `_`,
+`cannotHappen` and `unused`, though `_` is a strong candidate. Every word added
+is another way for a real swallow to escape by being well named, and with the
+tier moved the list no longer has to carry the argument. The patterns were not
+touched either: the rule's recall is unchanged and only its tier moved.
 
 ## 5. The eight rules
 
@@ -147,7 +254,7 @@ running the classifier over the proposed ids before writing this document.
 
 | rule | tier | why |
 | --- | --- | --- |
-| `empty-catch` | **ERROR** | The only one that does not depend on recognising a guard. Its escape hatch is a *declaration of intent* the rule reads (`ignore`/`ignored`/`expected`); what it emits after that is an unmarked silent swallow, a bug whatever was meant. |
+| `empty-catch` | WARNING | Demoted in §4a, after the first external corpus this pack has ever had. It does not depend on recognising a guard, and that argument held it at `ERROR` for three rounds — but on OpenJDK 903 of its 1589 findings declare their intent in a **comment**, which Semgrep cannot read, and the name it *can* read covers 8.0 % of the corpus's empty catches. "Unmarked" was the load-bearing word and it is wrong. |
 | `printstacktrace-only` | WARNING | In a throwaway `main`, printing and continuing is a legitimate choice. |
 | `map-get-deref` | WARNING | Correctness depends on 26 guard exclusions. Each exists because correct code was firing; the list closes the shapes someone enumerated, never the next one. |
 | `optional-get-no-ispresent` | WARNING | Same, demoted a round earlier. Applying the argument to one of these two and not the other was the inconsistency §4 closes. |
@@ -156,9 +263,9 @@ running the classifier over the proposed ids before writing this document.
 | `static-dateformat` | WARNING | A shared formatter behind `synchronized` access is correct, and proving *all* accesses are synchronized is whole-program analysis. |
 | `modify-during-iteration` | WARNING | Correctness depends entirely on having recognised the exit that makes the removal safe; two statements between removal and exit is enough to accuse correct code. |
 
-### `error_handling` — 2 rules, one ERROR and one WARNING
+### `error_handling` — 2 rules, both WARNING
 
-- **empty-catch** (**ERROR**, and the only one) — `try { … } catch (E e) { }`.
+- **empty-catch** (**WARNING**, demoted in §4a) — `try { … } catch (E e) { }`.
   The exception was caught and discarded with no log, no rethrow, no handling.
   **Except when the variable is named `ignore`, `ignored` or `expected`.**
   A deliberate, documented empty catch is a real idiom, but the comment that
@@ -167,6 +274,11 @@ running the classifier over the proposed ids before writing this document.
   The *name* can: those three are Checkstyle's and IntelliJ's conventions for
   exactly this, so honouring them gives users a tool-standard way to say
   "deliberate" without a suppression comment. Every other name still fires.
+  **That escape hatch is why the rule sat at `ERROR`, and §4a is why it no
+  longer does**: on OpenJDK the convention covers 8.0 % of empty catches while
+  56.8 % of the findings declare intent in a comment instead. The hatch stays —
+  it is still the only way to silence one case in code rather than with
+  `// nosemgrep` — but it does not carry a tier.
 - **printstacktrace-only** (WARNING) — a catch whose only statement is
   `e.printStackTrace()`. It goes to stderr, not to the log, and execution
   continues as though nothing happened. `WARNING` because in a throwaway

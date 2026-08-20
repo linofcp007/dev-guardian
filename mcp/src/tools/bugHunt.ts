@@ -606,14 +606,23 @@ registerToolModule(
       'Checkstyle/IntelliJ convention and never fires when the exception variable is named ' +
       '`ignore`, `ignored` or `expected` — the flip side being that a genuinely swallowed ' +
       'exception escapes the rule simply by being named `ignored`. The same trade has a second ' +
-      'edge worth stating outright, because `empty-catch` is now the ONLY rule left at ERROR ' +
-      'and the whole tier argument rests on it: the JUnit expected-exception idiom (call the ' +
-      'code, `throw new AssertionError` if it did not throw, empty `catch`) fires at ERROR when ' +
+      'edge: the JUnit expected-exception idiom (call the ' +
+      'code, `throw new AssertionError` if it did not throw, empty `catch`) fires when ' +
       'the caught variable is named `e`, and is silent when it is named `expected` — the test ' +
-      'idiom has to use the conventional name. ' +
-      'READ THIS BEFORE WONDERING WHY A JAVA FIX PR CAME BACK EMPTY: seven of these eight ' +
+      'idiom has to use the conventional name. `empty-catch` was the LAST Java rule at ERROR ' +
+      'and it moved to WARNING once it was measured against an external corpus, which no ' +
+      'earlier round had done. On OpenJDK (12 593 files of `src/*/share/classes`) it produces ' +
+      '1589 findings in 770 files, and 903 of them — 56.8% — declare the intent in a COMMENT ' +
+      'inside the empty catch, which Semgrep cannot read (`// ignore`, `// Expected or ' +
+      'ignored`, `// swallow, since it should never happen`); another 27 declare it in a name ' +
+      'the rule does not recognise (`cannotHappen` x13, `_` x10 — Java 21 unnamed variable — ' +
+      '`unused` x2). An inverted-regex probe puts the recognised spelling at 139, so the ' +
+      'Checkstyle/IntelliJ convention the ERROR tier rested on covers 8.0% (139/1728) of the ' +
+      'corpus empty catches. 45 findings were read individually; about 39 were deliberate. ' +
+      'Four languages have now tested that premise and four have refuted it. ' +
+      'READ THIS BEFORE WONDERING WHY A JAVA FIX PR CAME BACK EMPTY: ALL EIGHT of these ' +
       'rules are WARNING, and create_fix_pr defaults severity_min to `high`, so the Java pack ' +
-      'contributes almost nothing to the DEFAULT fix-PR set — ask for it with ' +
+      'contributes NOTHING AT ALL to the DEFAULT fix-PR set — ask for it with ' +
       '`severity_min: "medium"`. bug_hunt itself does not filter by default, so nothing ' +
       'disappears from a SCAN; only the fix PR is affected. That default was deliberately NOT ' +
       'changed here: it affects all four language packs and is a separate decision. The tier ' +
@@ -621,11 +630,13 @@ registerToolModule(
       'rather than the pattern — is what the rule EMITS always a bug? A rule whose ' +
       'correctness depends on having recognised a GUARD emits a false positive every time it ' +
       'meets a guard shape nobody enumerated, and no exclusion list closes that, because the ' +
-      'guard can always be one method away. Only `empty-catch` clears that bar, and it clears ' +
-      'it for the one reason available: its escape hatch is not a guard but a DECLARATION OF ' +
-      'INTENT the rule itself reads (the Checkstyle/IntelliJ ignore/ignored/expected ' +
-      'convention), so what it emits afterwards is an UNMARKED silent swallow — a bug ' +
-      'whatever the author meant. One rule in eight is the honest result for a syntactic ' +
+      'guard can always be one method away. NOTHING clears that bar in Java. `empty-catch` ' +
+      'held it longest on the one reason available — its escape hatch is not a guard but a ' +
+      'DECLARATION OF INTENT the rule itself reads (the Checkstyle/IntelliJ ' +
+      'ignore/ignored/expected convention), so what it emits afterwards would be an UNMARKED ' +
+      'silent swallow — and the OpenJDK measurement above refutes the "unmarked" half: the ' +
+      'mark is a comment, and the name the rule reads covers 8% of real occurrences. ' +
+      'Zero rules in eight is the honest result for a syntactic ' +
       'matcher with no dataflow, not a failure of the pack. `map-get-deref`, ' +
       '`modify-during-iteration`, `static-dateformat` and `loop-lte-length` were demoted on ' +
       'that criterion. `loop-lte-length` only after the obvious tightening was MEASURED and ' +
