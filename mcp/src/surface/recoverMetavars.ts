@@ -42,6 +42,16 @@
  * reads that flag rather than inferring anything from the framework name — the
  * rule pack is the thing that knows whether it focused.
  *
+ * ---- And a third kind of span, which is not read at all ------------------
+ *
+ * A bare `@Get()`, `[HttpGet]` or `@GetMapping` has no path argument to
+ * capture, so its rule binds no `$PATH` on ANY Semgrep version. Those rules
+ * declare `metadata.guardian_path: inherited` (see extract.ts) and this module
+ * hands the match straight back: there is no capture to rebuild, the span is a
+ * whole decorated declaration, and reading a path out of one of those is the
+ * exact fabrication described above. `extract.ts` builds the route from the
+ * metadata instead, with an empty own-path flagged `path_partial`.
+ *
  * The point of all this: coverage no longer depends on the Semgrep version, or
  * on being logged in. All thirteen families yield the same routes on 1.86.0
  * (real metavariables) and on 1.164.0 (redacted, rebuilt from offsets) —
@@ -75,6 +85,8 @@
  * stripping one would erase a route we can legitimately name.
  */
 
+import { INHERITED_PATH, INHERITED_PATH_KEY } from './extract.js';
+
 /** Source text of each file Semgrep reported, keyed by the `path` value verbatim. */
 export type SourceMap = ReadonlyMap<string, string>;
 
@@ -87,6 +99,17 @@ export interface RecoveryOutcome {
   recovered: number;
   /** Matches that had no metavars and could not be recovered. */
   unrecoverable: number;
+  /**
+   * Matches from a rule that captures nothing by design — a bare `@Get()` /
+   * `[HttpGet]` / `@GetMapping`, which declares
+   * `metadata.guardian_path: inherited` (see extract.ts). There is nothing to
+   * recover and nothing was lost, so counting these anywhere else would lie in
+   * one direction or the other: as `recovered` they would inflate the count of
+   * captures rebuilt from offsets, and as `unrecoverable` they would flip
+   * their language's `coverage` to `unreadable` — "routes here could not be
+   * read" — when the route is in the snapshot and correct.
+   */
+  noCaptures: number;
   /**
    * The `path` of every unrecoverable match whose `guardian_kind` is `route`,
    * in match order and with repeats — one entry per lost ROUTE, not per file.
@@ -129,6 +152,7 @@ export function recoverMetavars(semgrepJson: unknown, sources: SourceMap): Recov
       intact: 0,
       recovered: 0,
       unrecoverable: 0,
+      noCaptures: 0,
       unreadableRouteFiles: [],
     };
   }
@@ -138,6 +162,7 @@ export function recoverMetavars(semgrepJson: unknown, sources: SourceMap): Recov
   let intact = 0;
   let recovered = 0;
   let unrecoverable = 0;
+  let noCaptures = 0;
   const unreadableRouteFiles: string[] = [];
 
   const rebuilt = results.map((raw) => {
@@ -145,6 +170,19 @@ export function recoverMetavars(semgrepJson: unknown, sources: SourceMap): Recov
     const metadata = prop(extra, 'metadata');
     const kind = str(metadata, 'guardian_kind');
     if (kind === undefined || !RECOVERABLE_KINDS.has(kind)) return raw;
+
+    // A rule that binds no path binds nothing at all worth reading, on either
+    // Semgrep version: the span is the whole decorated declaration, and
+    // reading a path out of one of those is the fabrication this module's
+    // header is about. `extract.ts` builds the route from `metadata` alone, so
+    // this returns the match untouched rather than scanning it — checked
+    // BEFORE `hasMetavars`, because such a rule binds `$M`/`$RET` on a
+    // non-redacting Semgrep and would otherwise be counted `intact`, which
+    // would be true but would make the two versions disagree about the totals.
+    if (str(metadata, INHERITED_PATH_KEY) === INHERITED_PATH) {
+      noCaptures += 1;
+      return raw;
+    }
 
     // Real metavars are more precise than anything we can reconstruct — an
     // older Semgrep, or a logged-in one, must win.
@@ -172,6 +210,7 @@ export function recoverMetavars(semgrepJson: unknown, sources: SourceMap): Recov
     intact,
     recovered,
     unrecoverable,
+    noCaptures,
     unreadableRouteFiles,
   };
 }

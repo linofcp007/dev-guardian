@@ -49567,9 +49567,12 @@ function extractSurface(semgrepJson) {
   }
   return { routes, mounts };
 }
+var INHERITED_PATH_KEY = "guardian_path";
+var INHERITED_PATH = "inherited";
 function toRoute(metadata, metavars, file, line) {
   const namespace = stripQuotes(metavar(metavars, "$NS"));
-  const path6 = stripQuotes(metavar(metavars, "$PATH") ?? metavar(metavars, "$ROUTE"));
+  const captured = stripQuotes(metavar(metavars, "$PATH") ?? metavar(metavars, "$ROUTE"));
+  const path6 = captured ?? (str2(metadata, INHERITED_PATH_KEY) === INHERITED_PATH ? "" : void 0);
   if (path6 === void 0) return null;
   const literalPath = isLiteralPath(path6);
   const usable = literalPath && (namespace === void 0 || isLiteralPath(namespace));
@@ -49836,6 +49839,7 @@ function recoverMetavars(semgrepJson, sources) {
       intact: 0,
       recovered: 0,
       unrecoverable: 0,
+      noCaptures: 0,
       unreadableRouteFiles: []
     };
   }
@@ -49843,12 +49847,17 @@ function recoverMetavars(semgrepJson, sources) {
   let intact = 0;
   let recovered = 0;
   let unrecoverable = 0;
+  let noCaptures = 0;
   const unreadableRouteFiles = [];
   const rebuilt = results.map((raw) => {
     const extra = prop4(raw, "extra");
     const metadata = prop4(extra, "metadata");
     const kind = str4(metadata, "guardian_kind");
     if (kind === void 0 || !RECOVERABLE_KINDS.has(kind)) return raw;
+    if (str4(metadata, INHERITED_PATH_KEY) === INHERITED_PATH) {
+      noCaptures += 1;
+      return raw;
+    }
     if (hasMetavars(extra)) {
       intact += 1;
       return raw;
@@ -49869,6 +49878,7 @@ function recoverMetavars(semgrepJson, sources) {
     intact,
     recovered,
     unrecoverable,
+    noCaptures,
     unreadableRouteFiles
   };
 }
@@ -50917,7 +50927,11 @@ function readSources(parsed, projectPath) {
 var REDACTION_REMEDY = "this Semgrep version redacts match content unless you run `semgrep login`, so the captures are rebuilt by re-reading the source at the reported byte offsets, and that read failed for these matches. Either log in, or use a Semgrep older than ~1.100, and the captures arrive directly. dev-guardian does not require an account \u2014 every route family is rebuilt from byte offsets either way";
 function recoveryToolRun(recovery) {
   if (recovery.recovered === 0 && recovery.unrecoverable === 0) return [];
-  const base = `recovered ${recovery.recovered} redacted match(es) from byte offsets` + (recovery.intact > 0 ? `; ${recovery.intact} already carried metavariables` : "");
+  const base = `recovered ${recovery.recovered} redacted match(es) from byte offsets` + (recovery.intact > 0 ? `; ${recovery.intact} already carried metavariables` : "") + // Not a loss and not a recovery: a bare `@Get()` / `[HttpGet]` /
+  // `@GetMapping` captures nothing on any Semgrep version, and its route is
+  // built from the rule's metadata (see RecoveryOutcome.noCaptures). Named
+  // here so the two numbers below still add up for a reader.
+  (recovery.noCaptures > 0 ? `; ${recovery.noCaptures} carry no path of their own and needed none` : "");
   if (recovery.unrecoverable === 0) {
     return [{ name: RECOVERY_STEP, status: "ok", reason: base }];
   }
@@ -53139,10 +53153,10 @@ function reachableVerdict(envelope, hops, reachingRoots, routesByFile, exposedFi
 }
 function buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, exposedFiles) {
   const evidence = [];
-  const nearestRoute = routesByFile.get(nearestFile)?.[0];
+  const nearestRoute = mostInformative(routesByFile.get(nearestFile));
   if (nearestRoute !== void 0) {
     evidence.push({
-      detail: `reachable in ${hopWord(hops)} via ${nearestRoute.method} ${nearestRoute.path_resolved} (${nearestFile})`
+      detail: `reachable in ${hopWord(hops)} via ${routeLabel(nearestRoute)} (${nearestFile})`
     });
   }
   const totalReaching = reachingRoots.reduce((sum, root) => sum + (routesByFile.get(root)?.length ?? 0), 0);
@@ -53155,9 +53169,17 @@ function buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, 
 function exposedEvidence(reachingRoots, routesByFile, exposedFiles) {
   const exposedFile = reachingRoots.find((root) => exposedFiles.has(root));
   if (exposedFile === void 0) return null;
-  const route = routesByFile.get(exposedFile)?.[0];
-  const label = route === void 0 ? exposedFile : `${route.method} ${route.path_resolved} (${exposedFile})`;
+  const route = mostInformative(routesByFile.get(exposedFile));
+  const label = route === void 0 ? exposedFile : `${routeLabel(route)} (${exposedFile})`;
   return { detail: `${label} is confirmed anonymously exposed by a live scan` };
+}
+function mostInformative(routes) {
+  if (routes === void 0) return void 0;
+  return routes.find((r) => r.path_resolved !== "") ?? routes[0];
+}
+function routeLabel(route) {
+  if (route.path_resolved !== "") return `${route.method} ${route.path_resolved}`;
+  return `${route.method} (path inherited from the controller)`;
 }
 function hopWord(hops) {
   return hops === 1 ? "1 hop" : `${hops} hops`;

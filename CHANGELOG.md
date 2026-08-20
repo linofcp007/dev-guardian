@@ -57,6 +57,77 @@ version bump.
 
 ### Fixed
 
+- **The three annotation route families now match the form their framework
+  documents.** `configs/semgrep/routes.yml`'s 16 annotation-based route rules
+  each demanded an argument that the canonical form does not supply, so the
+  most ordinary controller in each framework lost routes — silently, because a
+  route this pack does not match produces no error anywhere and simply never
+  enters the attack surface.
+
+  Measured on a corpus written by an auditor who did not write the rules
+  (`mcp/test/fixtures/surface/annotations/`, 52 endpoints): **18 of 52** were
+  reported before this change. ASP.NET 5 of 15 — a controller scaffolded by
+  `dotnet new webapi`, whose actions carry a bare `[HttpGet]` and whose path
+  lives on the class `[Route("api/[controller]")]`, mapped to **zero routes**,
+  i.e. "this C# API exposes nothing". NestJS 6 of 12: `@Get()` and `@Post()`,
+  the forms docs.nestjs.com uses for index and create actions, matched
+  nothing. Spring 7 of 25: only a lone string literal matched, so
+  `@GetMapping(value = "/x", produces = "…")`, `@GetMapping(path = "/x")` and
+  a bare `@GetMapping` were all absent. All 52 are reported now.
+
+  - **Spring's named-argument forms are matched, and the note in the previous
+    release saying they could not be is withdrawn.** `@GetMapping($PATH, ...)`
+    is indeed rejected as "Invalid pattern for Java" — but only because the
+    ellipsis follows a bare metavariable. `@GetMapping(value = $PATH, ...)`
+    parses cleanly and binds `$PATH` to the path literal alone, whatever order
+    the arguments are written in.
+  - **The six Spring rules are now `focus-metavariable: $PATH`.** A named
+    argument need not be the first one, and the recovery path that rebuilds
+    captures from byte offsets reads the FIRST argument: measured with the
+    focus removed, `@PutMapping(produces = "application/json", value = "/x")`
+    reports as `PUT produces = "application/json" [partial]` on a redacting
+    Semgrep while a Semgrep that emits metavariables reports `/x`. Nothing is
+    fabricated (the extractor refuses that text as a path), but the answer
+    would depend on the reader's Semgrep version, which nothing else in this
+    pack does.
+  - **ASP.NET reads a `[Route("…")]` companion attribute** on a method whose
+    verb attribute carries no path, in either attribute order (Semgrep matches
+    both with one alternative). The bare rules exclude that shape with a
+    `pattern-not`, so such a method is reported once, at the path `[Route]`
+    names, rather than twice.
+  - **A bare annotation is reported with an empty own-path, flagged
+    `path_partial` at 'low' confidence** — the endpoint exists, and its full
+    URL, being the class-level prefix, is honestly unknown. Such a rule
+    captures nothing, so it declares `metadata.guardian_path: inherited`,
+    which `surface/extract.ts` reads to build the record and
+    `surface/recoverMetavars.ts` reads to hand the match back unscanned (a new
+    `noCaptures` counter, so it is neither counted as recovered nor as
+    unreadable — the latter would flip the language's `coverage` to "routes
+    here could not be read" when nothing was lost).
+
+    A companion `mount` rule for `@Controller('users')` was considered and
+    rejected: nothing consumes a mount for these frameworks
+    (`resolvers/node.ts` resolves one only through an import binding its
+    `$ROUTER` in the same file, and a controller class is not imported into
+    its own file), and `resolveNodeMounts` treats any route declared in a
+    file that mounts something as attached to the app directly — so adding
+    one would flip every route in that controller from honestly partial to
+    confidently wrong, at its un-prefixed path, which `scan_dast` would then
+    send requests to. Resolving class-level prefixes is a follow-up in
+    `resolvers/node.ts`, not a rule-pack change.
+  - **Two new invariants in `mcp/test/unit/surface/rulePack.test.ts`.** A route
+    rule that binds no `$PATH` must declare the flag (without it the rule
+    matches perfectly and yields nothing — the defect above, as a test), and a
+    rule whose pattern spans a declaration must either focus `$PATH` or
+    capture no path at all, so no declaration-spanning span is ever scanned for
+    a path.
+  - **50 ablations, zero dead clauses.** Every alternative and operator added
+    here was removed on its own and the fixture set checked: each removal loses
+    exactly the endpoints it should, and removing an ASP.NET `pattern-not`
+    duplicates exactly one endpoint. The decoy corpus is unchanged
+    (14 matches before and after), and the old and new packs differ over the
+    whole corpus by 36 added matches, 0 removed.
+
 - **`wp-unescaped-output` stops flagging `echo (int) $_GET['id'];`, and now
   matches the subscript rather than the statement.** A cast is not a call, and
   Semgrep sees straight through the cast node — `$SUPER[...]` binds to the

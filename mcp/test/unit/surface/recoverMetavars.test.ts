@@ -131,6 +131,56 @@ describe('recoverMetavars — $PATH from the first string literal', () => {
   });
 });
 
+describe('recoverMetavars — a rule that captures nothing by design', () => {
+  // A bare `@Get()` / `[HttpGet]` / `@GetMapping` binds no $PATH on ANY
+  // Semgrep version, so its rule declares `guardian_path: inherited` and this
+  // module must hand the match straight back. The spans below are what
+  // Semgrep 1.164.0 actually reports for those matches: the whole decorated
+  // declaration, starting at whichever annotation comes first.
+  const INHERITED = { guardian_kind: 'route', framework: 'nestjs', method: 'GET', guardian_path: 'inherited' };
+
+  it('counts the match as noCaptures — neither recovered nor lost', () => {
+    const outcome = recoverSpan("@Get()\n  findAll() { return this.svc.all('/decoy'); }", INHERITED);
+    expect(outcome.noCaptures).toBe(1);
+    expect(outcome.recovered).toBe(0);
+    expect(outcome.unrecoverable).toBe(0);
+    // `unrecoverable` is what flips a language's coverage to `unreadable`
+    // ("routes here could not be read"), and nothing was lost here — the
+    // route is in the snapshot, at an empty own-path, flagged partial.
+    expect(outcome.unreadableRouteFiles).toEqual([]);
+  });
+
+  it('synthesizes no $PATH out of a decoy sitting in the declaration', () => {
+    // The span contains a string literal that the scanner would happily read
+    // as the path. This is the case the whole focus/no-scan design exists for:
+    // the route has no path, so any path found in its span is invention.
+    const outcome = recoverSpan("@Get()\n  findAll() { return this.svc.all('/decoy'); }", INHERITED);
+    expect(mv(outcome, '$PATH')).toBeUndefined();
+    const routes = extractSurface(outcome.json).routes;
+    expect(routes).toHaveLength(1);
+    expect(routes[0]?.path_resolved).toBe('');
+    expect(routes[0]?.path_partial).toBe(true);
+  });
+
+  it('leaves the flag alone on a Semgrep that reports real metavariables', () => {
+    // Such a rule DOES bind $M (the method name) on a non-redacting Semgrep,
+    // which would otherwise be counted `intact` and make the two versions
+    // report different totals for the same project. The flag is checked
+    // first, so both versions count it the same way.
+    const { json, sources } = scenario('@Get()\n  findAll() {}', '@Get()\n  findAll() {}', INHERITED);
+    const withMetavars = {
+      results: json.results.map((r) => ({
+        ...r,
+        extra: { ...r.extra, metavars: { $M: { abstract_content: 'findAll' } } },
+      })),
+    };
+    const outcome = recoverMetavars(withMetavars, sources);
+    expect(outcome.noCaptures).toBe(1);
+    expect(outcome.intact).toBe(0);
+    expect(extractSurface(outcome.json).routes).toHaveLength(1);
+  });
+});
+
 describe('recoverMetavars — $METHOD from the callee', () => {
   const cases: [span: string, expected: string][] = [
     ["app.get('/health', h)", 'get'],
