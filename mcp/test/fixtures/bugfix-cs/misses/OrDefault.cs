@@ -10,7 +10,10 @@
 // day someone adds a via-a-local branch — `var c = xs.FirstOrDefault(); c.Name`
 // — these shapes stop being free and this file starts earning its place.
 // Measured while probing that branch: it fires on the guarded forms below, so
-// it would need the whole `as-cast-deref` guard battery before it could ship.
+// it would need a full guard battery before it could ship — and the pack's one
+// attempt at such a battery, `as-cast-deref`, was deleted for being wrong 6490
+// times on real C# with every fixture green. Read that as the cost of the
+// branch, not as a reason to skip the battery.
 using System;
 using System.Collections.Generic;
 using System.Linq;

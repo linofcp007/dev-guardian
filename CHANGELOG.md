@@ -8,11 +8,70 @@ version bump.
 
 ## [Unreleased]
 
+### Removed — `bugfix-cs-null-safety-as-cast-deref`, deleted by the first real-code corpus the C# pack ever had
+
+`configs/semgrep/bugfix-cs.yml` is **eleven** rules, not twelve. The rule
+matched `var $V = $O as $T;` followed by `$V.$M` and fired **6490 times** on
+`dotnet/runtime` (`src/libraries/*/src`, 11 800 `.cs` files, `paths.scanned`
+asserted before any count was read). For scale, on the same corpus
+`empty-catch` fires 402 times and `lock-on-shared-instance` 322.
+
+**The count is not the argument.** Two measurements are:
+
+- **The rule's premise is not expressible in this engine.** Semgrep's C#
+  frontend puts `o as T` and `(T)o` on the **same node**. `pattern: var $V =
+  $O as $T;` and `pattern: var $V = ($T)$O;` match exactly the same sites,
+  line for line; and a `patterns:` group combining the first with
+  `pattern-not:` the second returns **zero**, because the negation annihilates
+  every match. There is no spelling that catches the `as` and lets the direct
+  cast through. That distinction *was* the rule — a direct cast throws
+  `InvalidCastException` at the cast site and never yields null, so on top of
+  one the rule accuses a defect that cannot occur. By textual attribution over
+  the corpus, **4385 of the 6490 findings (67.6 %) come from a direct cast**
+  and only 1122 (17.3 %) from an `as`.
+- **The remaining 17.3 % were not true positives either.** 75 findings read by
+  hand across dozens of assemblies, zero live bugs. Real C# guards are not the
+  eleven in the exclusion list: `null != x`, `while (x != null)`,
+  `x is null || …`, `Debug.Assert(x != null)`, `ContractUtils.Requires(…)`, a
+  reassignment in the null branch, a `[DoesNotReturn]` helper, any `&&`/`||`
+  chain of three or more terms (it associates left, so `$V != null && <… $V.$M
+  …>` never matches), and — the largest — **any `if (x != null) { … }` whose
+  block holds more than one statement**, because `if ($V != null) { <… $V.$M
+  …>; }` requires a single-statement block and every `misses/` fixture had one.
+  A deliberately generous filter ("the name is not in any null test anywhere
+  nearby") leaves **70 of 6490 findings, 1.1 %**, and reading those leaves five
+  variables with the genuine shape, all latent, none a live bug.
+
+**Axes 0, 1 and 2 all passed, throughout, on fixtures written by the rule's own
+author** — nine hits and fifteen near-misses, the largest `misses/` file in the
+pack, written from the shape of the pattern exactly as the design prescribed.
+None of that could see either defect. `WARNING` is not a tier for a rule that
+has never been right; it is a quieter way to keep being wrong. Same reasoning
+that deleted `catch-returns-null` from the JS/TS pack.
+
+Gone with it: `hits/AsCast.cs`, `misses/AsCast.cs`, and the as-cast entry in
+`hits/RealBugs.cs` (now 12 defects over 11 rules). A deletion note in the pack
+records the two probes, so nobody re-adds it without a way to tell `as` from a
+cast.
+
+### Added — ablation axis 3 for the C# pack, via `GUARDIAN_CS_SRC`
+
+The C# round shipped with axis 3 — "does removing this clause *lower* the
+finding count on code nobody wrote as a fixture?" — recorded as **permanently
+`N/A`**, because this repo holds no C#. The rule above shipped under that gap
+and did not survive first contact with a corpus.
+
+`mcp/test/ablate/packs.ts` now reads a C# corpus path from `GUARDIAN_CS_SRC`,
+on the same terms as `GUARDIAN_RUST_SRC`: unset, axis 3 prints `N/A` for the
+pack, loudly; **set to a path that does not exist, it throws** rather than
+degrading to a silent "not measured". The design of record's §8 and §9 no
+longer say the axis is unavailable for the round.
+
 ### Added — a PHP bug-finding rule pack, and the first round measured against real code from the start
 
 `configs/semgrep/bugfix-php.yml`: **six** hand-authored rules, always on in
 `bug_hunt`, each with a hits/misses fixture pair. Rule counts are now 13 JS/TS,
-10 Python, 9 Go, 8 Java, 12 C#, **6 PHP** and 1 Rust.
+10 Python, 9 Go, 8 Java, 11 C#, **6 PHP** and 1 Rust.
 
 **`memory_leak` is an EMPTY class in this pack, and that is stated rather than
 implied.** Resource tracking — `fopen`/`curl` handles — needs escape analysis
@@ -131,7 +190,7 @@ fixture tree — and was run by hand against the WordPress corpus with
 
 `configs/semgrep/bugfix-rs.yml`: **exactly one** hand-authored rule, always on
 in `bug_hunt`, with a hits/misses fixture pair. Rule counts are now 13 JS/TS,
-10 Python, 9 Go, 8 Java, 12 C# and **1 Rust**.
+10 Python, 9 Go, 8 Java, 11 C# and **1 Rust**.
 
 **This is not partial Rust coverage and must not be read as one.** The rule is
 `bugfix-rs-race-condition-blocking-sleep-in-async` — a `std::thread::sleep`
@@ -271,9 +330,11 @@ swallow to escape by being well named.
 
 ### Added — a C# bug-finding rule pack, in the language where the registry is at zero
 
-`configs/semgrep/bugfix-cs.yml`: **twelve** hand-authored rules across all six
+`configs/semgrep/bugfix-cs.yml`: **eleven** hand-authored rules across all six
 bug subcategories, always on in `bug_hunt`, each with a hits/misses fixture
-pair. Rule counts are now 13 JS/TS, 10 Python, 9 Go, 8 Java and **12 C#**.
+pair. Rule counts are now 13 JS/TS, 10 Python, 9 Go, 8 Java and **11 C#**.
+It was twelve when this entry was written; `null-safety-as-cast-deref` was
+deleted before release — see the `Removed` entry above.
 
 **The registry gap is total, and it was measured with positive controls rather
 than assumed.** `p/r2c-bug-scan` reports `paths.scanned = 0` on the C#
@@ -284,7 +345,7 @@ are asserted to have *fired*, and for `p/r2c-bug-scan` that control is a
 **Python** file inside a C# fixture tree: there is no C# rule for a C# control
 to trip.
 
-**One of the twelve sits at `ERROR`**, and the reason is structural rather than
+**One of the eleven sits at `ERROR`**, and the reason is structural rather than
 generous. C# contains one defect — `throw ex;` inside a `catch` — whose
 *correct* form, `throw;`, is a **different AST node**. There is no guard to
 recognise because there is nothing to guard, which is the only way to clear the
@@ -317,7 +378,9 @@ here: exclusions alone give 7 findings and lose it; with the
 switch-inside-foreach re-inclusion, 9 and the false positives stay closed. The
 same discipline caught the `as-cast-deref` else-arm swallow *before* it
 shipped, by writing the guard-adjacent bugs as **hits** rather than misses —
-the only place ablation can see an exclusion eating a true positive.
+the only place ablation can see an exclusion eating a true positive. (That
+rule is gone now, for a defect none of those axes could see; the technique
+stands.)
 
 **Stated limitations, all measured:**
 
@@ -332,9 +395,6 @@ the only place ablation can see an exclusion eating a true positive.
 - `ordefault-deref` cannot see generic arguments, so a value-type sequence is
   an unfixable false positive in one direction or a false negative in the
   other; both spellings are stated rather than implied.
-- `as-cast-deref` still loses the `else` arm when the `then` arm *also*
-  dereferences — a narrower residual of the hole the then-block scoping closed,
-  found by writing the real-bugs corpus.
 - `off_by_one` keeps Java's sentinel false positive (`new int[a.Length + 1]`),
   whose obvious tightening was measured in the Java round and rejected for
   trading a false positive for a false negative.
