@@ -37,6 +37,22 @@
  * re-serialisation has to be trusted, so `harness.ts` does not trust it: it
  * scans the round-tripped-but-UNMODIFIED pack first and aborts unless it
  * produces exactly the same findings as the original file on disk.
+ *
+ * ---- Why the inventory is per RULE, not just a flat clause list ----------
+ *
+ * A rule written as a bare `pattern:` -- no `patterns:` group, no
+ * `pattern-either:` -- has no qualifier to remove, so it contributes zero
+ * clauses. For a long time that meant it appeared NOWHERE: not in the clause
+ * list, not under `skipped`, not in the report. `24/24 live, 0 DEAD` read as
+ * "the whole pack was checked" while a quarter of the rules in this repo's
+ * packs had never been touched. The capability was never missing -- there is
+ * genuinely nothing to ablate -- but the reporting was dishonest, which is
+ * exactly what axis 3 already refuses to be when it prints `N/A`.
+ *
+ * So `enumerateClauses` returns a {@link RuleInventory} for EVERY rule,
+ * carrying the reason when a rule has nothing ablatable in it. The harness
+ * then gives those rules the one check they CAN have -- does the rule fire on
+ * `hits/` at all -- and the report lists every rule either way.
  */
 
 import { createHash } from 'node:crypto';
@@ -78,6 +94,9 @@ const NON_MATCHING_KEYS: ReadonlySet<string> = new Set<string>([
   'max-version',
 ]);
 
+/** Top-level rule keys through which a rule matches anything at all. */
+const RULE_ENTRY_POINTS = ['pattern', 'patterns', 'pattern-either', 'pattern-regex', 'mode'];
+
 /** A step in an address: a map key, or an index into a sequence. */
 export type Step = string | number;
 export type Address = readonly Step[];
@@ -108,11 +127,33 @@ export interface SkippedClause {
   readonly reason: string;
 }
 
+/**
+ * One entry per rule in the pack, whether or not it has anything ablatable.
+ * The point of the type is the `noClausesReason`: a rule that contributes no
+ * clauses must still be nameable in the report, with the reason attached.
+ */
+export interface RuleInventory {
+  readonly ruleId: string;
+  /** Top-level matching keys the rule declares, in source order. */
+  readonly entryPoints: readonly string[];
+  /** Ablatable clauses enumerated inside this rule. */
+  readonly clauseCount: number;
+  /** Clauses in this rule that exist but cannot be removed in isolation. */
+  readonly skippedCount: number;
+  /**
+   * Why this rule has nothing to ablate. `undefined` exactly when
+   * `clauseCount > 0`, i.e. when the rule does enter an ablation run.
+   */
+  readonly noClausesReason: string | undefined;
+}
+
 export interface ClauseInventory {
   readonly clauses: readonly Clause[];
   readonly skipped: readonly SkippedClause[];
   /** Every `- id:` the pack declares, in source order. */
   readonly ruleIds: readonly string[];
+  /** Every rule, in source order. Same length and order as `ruleIds`. */
+  readonly rules: readonly RuleInventory[];
 }
 
 export class AblationError extends Error {}
@@ -219,6 +260,33 @@ function collectBranches(node: unknown, address: Address, state: WalkState): voi
   });
 }
 
+/** The rule's own top-level matching keys, in source order. */
+function entryPointsOf(rule: unknown): string[] {
+  if (!isMap(rule)) return [];
+  const out: string[] = [];
+  for (const pair of rule.items) {
+    const key = keyName(pair.key);
+    if (key !== undefined && RULE_ENTRY_POINTS.includes(key)) out.push(key);
+  }
+  return out;
+}
+
+/**
+ * Why a rule contributed no clauses. Written for a reader deciding whether
+ * "0 clauses" is a gap in the harness or a property of the rule -- it is
+ * always the latter, and saying so is the whole point of the field.
+ */
+function noClausesReason(entryPoints: readonly string[], skippedCount: number): string {
+  const shape = entryPoints.length === 0 ? '(no top-level pattern key)' : entryPoints.join(' + ');
+  if (skippedCount > 0) {
+    return `every clause in it is load-bearing and cannot be removed in isolation (${shape}); see the skipped list`;
+  }
+  if (entryPoints.includes('patterns') || entryPoints.includes('pattern-either')) {
+    return `its \`${shape}\` group holds only positive terms -- no exclusion or metavariable clause to remove`;
+  }
+  return `a bare \`${shape}\` with no \`patterns:\` group and no \`pattern-either:\` -- there is no qualifier to remove`;
+}
+
 /**
  * Enumerates every ablatable clause in a pack, in source order.
  *
@@ -235,12 +303,14 @@ export function enumerateClauses(source: string): ClauseInventory {
 
   const state: WalkState = { ruleId: '<unknown>', drafts: [], skipped: [] };
   const ruleIds: string[] = [];
+  const shapes: { readonly ruleId: string; readonly entryPoints: readonly string[] }[] = [];
 
   rules.items.forEach((rule, index) => {
     if (!isMap(rule)) return;
     const id: unknown = rule.get('id', false);
     state.ruleId = typeof id === 'string' ? id : `<rules[${String(index)}] has no id>`;
     ruleIds.push(state.ruleId);
+    shapes.push({ ruleId: state.ruleId, entryPoints: entryPointsOf(rule) });
     walk(rule, ['rules', index], state);
   });
 
@@ -266,7 +336,27 @@ export function enumerateClauses(source: string): ClauseInventory {
     };
   });
 
-  return { clauses, skipped: state.skipped, ruleIds };
+  const clausesPerRule = new Map<string, number>();
+  for (const c of clauses) clausesPerRule.set(c.ruleId, (clausesPerRule.get(c.ruleId) ?? 0) + 1);
+  const skippedPerRule = new Map<string, number>();
+  for (const s of state.skipped) {
+    skippedPerRule.set(s.ruleId, (skippedPerRule.get(s.ruleId) ?? 0) + 1);
+  }
+
+  const ruleInventory: RuleInventory[] = shapes.map((shape) => {
+    const clauseCount = clausesPerRule.get(shape.ruleId) ?? 0;
+    const skippedCount = skippedPerRule.get(shape.ruleId) ?? 0;
+    return {
+      ruleId: shape.ruleId,
+      entryPoints: shape.entryPoints,
+      clauseCount,
+      skippedCount,
+      noClausesReason:
+        clauseCount > 0 ? undefined : noClausesReason(shape.entryPoints, skippedCount),
+    };
+  });
+
+  return { clauses, skipped: state.skipped, ruleIds, rules: ruleInventory };
 }
 
 function resolveNode(root: unknown, address: Address): unknown {
@@ -316,8 +406,6 @@ function pruneEmptyAncestors(root: unknown, address: Address): void {
     detach(root, ancestor);
   }
 }
-
-const RULE_ENTRY_POINTS = ['pattern', 'patterns', 'pattern-either', 'pattern-regex', 'mode'];
 
 /**
  * Keys that MATCH something. Everything else in a `patterns:` group --

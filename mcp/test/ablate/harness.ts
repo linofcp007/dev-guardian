@@ -38,6 +38,32 @@
  * corpus if one exists in a language it matches (see `packs.ts`). Where none
  * does, axis 3 reports N/A rather than being quietly skipped.
  *
+ * ---- Axis 0, and the rules the other three axes cannot see ---------------
+ *
+ * The three axes above are properties of a CLAUSE, so a rule with no clauses
+ * -- a bare `pattern:`, or a `patterns:` group of nothing but positive terms
+ * -- has no verdict on any of them. It used to have no line in the report
+ * either, which made `52/52 live` read as "the pack was checked" when a
+ * quarter of the rules in this repo's packs had never been ablated because
+ * there was nothing in them to ablate. Nothing was missing from the harness;
+ * the count was lying about what it covered.
+ *
+ * Axis 0 is the one check every rule can have, clauses or not:
+ *
+ *  0. FIRES ON hits/. The rule produces at least one baseline finding in the
+ *     fixture directory built to contain the bugs it is for. A rule that
+ *     matches nothing is this repo's sixth recorded silent failure: the C#
+ *     pack shipped `foreach ($T $X in $C)` where `foreach (var $X in $C)` was
+ *     needed, and it found 0 of 5 real bugs with `paths.scanned` healthy,
+ *     zero errors and every gate green. A rule ported by textual analogy
+ *     finds nothing and nothing complains.
+ *
+ * It costs no extra Semgrep run -- the baseline fixture scan is already
+ * there -- and it applies to every rule in the pack, not only the clauseless
+ * ones. Where the fixture root has no `hits/` subdirectory at all it reports
+ * N/A for the whole pack, on the same principle as axis 3: never a silent
+ * skip.
+ *
  * ---- Byte-identity of the pack ------------------------------------------
  *
  * The strongest available guarantee that the pack is unchanged after a run,
@@ -48,7 +74,7 @@
  * discarded a previous run -- somebody editing the pack while it was going.
  */
 
-import { cpSync, mkdtempSync, readFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -139,11 +165,36 @@ export interface PairVerdict {
   readonly error: string | undefined;
 }
 
+/**
+ * The per-RULE line of the report. Every rule in the pack gets one, including
+ * every rule that has nothing to ablate -- that is the point of the type.
+ *
+ * `ablatedClauses === 0` is never a silence here: either `noClausesReason`
+ * says why the rule has no clauses, or the clauses it has were filtered out
+ * of this invocation, collapsed as duplicates, or skipped as load-bearing.
+ */
+export interface RuleVerdict {
+  readonly ruleId: string;
+  /** Ablatable clauses the pack declares in this rule. */
+  readonly enumeratedClauses: number;
+  /** Of those, the ones this run actually removed and measured. */
+  readonly ablatedClauses: number;
+  /** Set exactly when `enumeratedClauses === 0`: why there is nothing here. */
+  readonly noClausesReason: string | undefined;
+  /** Baseline findings this rule produced under `hits/`. */
+  readonly hitsFindings: number;
+  /** Axis 0. PASS = fires at least once in hits/. N/A = no hits corpus. */
+  readonly firesOnHits: Verdict;
+}
+
 export interface PackReport {
   readonly pack: string;
   readonly configPath: string;
   readonly configSha256: string;
   readonly ruleCount: number;
+  /** Rules that declare at least one ablatable clause. */
+  readonly rulesWithClauses: number;
+  readonly rules: readonly RuleVerdict[];
   readonly clauseCount: number;
   readonly skipped: readonly SkippedClause[];
   readonly collapsed: readonly CollapsedClause[];
@@ -216,10 +267,20 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
       ? []
       : scan({ bin: options.semgrepBin, config: cfg, target: real.dir, root: real.dir }).findings;
 
+  // Axis 0 needs a `hits/` corpus the way axis 3 needs a real-code one, and
+  // reports N/A on the same terms when there is none rather than passing
+  // every rule by default. `routes.yml` is the pack that would land here.
+  const hitsCorpus = existsSync(join(spec.fixtures, spec.hitsSubdir));
+
+  const withClauses = inventory.rules.filter((r) => r.clauseCount > 0).length;
   options.log(`pack        ${spec.name}`);
   options.log(`config      ${spec.config}`);
   options.log(`sha256      ${hash}`);
-  options.log(`rules       ${String(inventory.ruleIds.length)}`);
+  options.log(
+    `rules       ${String(inventory.rules.length)}` +
+      ` (${String(withClauses)} with ablatable clauses, ` +
+      `${String(inventory.rules.length - withClauses)} with none)`,
+  );
   options.log(`fixtures    ${spec.fixtures}`);
   options.log(`real code   ${real === undefined ? '(none -- axis 3 is N/A for this pack)' : real.label}`);
 
@@ -290,6 +351,51 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
     (options.filter === undefined ? '' : ` (filtered from ${String(inventory.clauses.length)})`) +
     (collapsed.length === 0 ? '' : `, ${String(collapsed.length)} collapsed as duplicate ablations`) +
     (skipped.length === 0 ? '' : `, ${String(skipped.length)} not ablatable in isolation`));
+
+  // ---- Axis 0, computed off the baseline scan that has already run.
+  const ablatedPerRule = new Map<string, number>();
+  for (const { clause } of prepared) {
+    ablatedPerRule.set(clause.ruleId, (ablatedPerRule.get(clause.ruleId) ?? 0) + 1);
+  }
+  const hitsPerRule = new Map<string, number>();
+  for (const f of baselineHits) hitsPerRule.set(f.ruleId, (hitsPerRule.get(f.ruleId) ?? 0) + 1);
+
+  // A finding's rule id is the last dot-segment of Semgrep's `check_id`. If
+  // that stops lining up with the pack's `- id:` values -- a rule id
+  // containing a dot would do it -- every rule reads "fires on nothing" and
+  // axis 0 becomes noise indistinguishable from the defect it hunts.
+  if (baselineHits.length > 0 && !baselineHits.some((f) => inventory.ruleIds.includes(f.ruleId))) {
+    throw new Error(
+      `none of the ${String(baselineHits.length)} baseline findings in ${spec.hitsSubdir}/ ` +
+        `carry a rule id this pack declares (got e.g. \`${baselineHits[0]?.ruleId ?? ''}\`). ` +
+        `Axis 0 would report every rule as firing on nothing. Aborting.`,
+    );
+  }
+
+  const ruleVerdicts: RuleVerdict[] = inventory.rules.map((r) => {
+    const hits = hitsPerRule.get(r.ruleId) ?? 0;
+    return {
+      ruleId: r.ruleId,
+      enumeratedClauses: r.clauseCount,
+      ablatedClauses: ablatedPerRule.get(r.ruleId) ?? 0,
+      noClausesReason: r.noClausesReason,
+      hitsFindings: hits,
+      firesOnHits: !hitsCorpus ? 'N/A' : hits > 0 ? 'PASS' : 'FAIL',
+    };
+  });
+  const silent = ruleVerdicts.filter((r) => r.firesOnHits === 'FAIL');
+  options.log(
+    `axis 0      ` +
+      (!hitsCorpus
+        ? `N/A -- ${spec.hitsSubdir}/ does not exist under the fixture root, so ` +
+          `"does this rule fire at all?" cannot be asked here`
+        : `${String(ruleVerdicts.length - silent.length)}/${String(ruleVerdicts.length)} rules ` +
+          `fire at least once in ${spec.hitsSubdir}/` +
+          (silent.length === 0 ? '' : `, ${String(silent.length)} FIRE ON NOTHING`)),
+  );
+  for (const r of silent) {
+    options.log(`  SILENT  ${spec.name} :: ${r.ruleId} -- 0 findings in ${spec.hitsSubdir}/`);
+  }
   options.log('');
 
   const verdicts: ClauseVerdict[] = [];
@@ -433,7 +539,9 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
     pack: spec.name,
     configPath: spec.config,
     configSha256: hash,
-    ruleCount: inventory.ruleIds.length,
+    ruleCount: inventory.rules.length,
+    rulesWithClauses: withClauses,
+    rules: ruleVerdicts,
     clauseCount: prepared.length,
     skipped,
     collapsed,
@@ -473,6 +581,15 @@ function progressLine(pack: string, index: number, total: number, v: ClauseVerdi
     `${counter} ${overallVerdict(v).padEnd(4, ' ')} ${flags.padEnd(32, ' ')} ` +
     `${pack} :: ${v.clause.ruleId} :: [${v.clause.hash}] ${short(v.clause.body, 80)}`
   );
+}
+
+/**
+ * A rule is flagged when it fires on nothing in the corpus built to contain
+ * the bugs it is for. Deliberately NOT flagged for having no clauses: having
+ * nothing to ablate is a property of the rule, not a defect in it.
+ */
+export function ruleFlagged(r: RuleVerdict): boolean {
+  return r.firesOnHits === 'FAIL';
 }
 
 export function overallVerdict(v: ClauseVerdict): string {

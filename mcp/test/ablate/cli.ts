@@ -18,15 +18,18 @@
  *
  * Semgrep is located from `--semgrep=`, then `GUARDIAN_SEMGREP`, then PATH.
  *
- * Exit code is 1 when any clause is flagged or errored, 0 when every clause
- * passes all three axes -- so it can gate a release check if anyone wants it
- * to, without being wired into the test suite.
+ * Exit code is 1 when any clause is flagged or errored, or any RULE fires on
+ * nothing in `hits/` (axis 0); 0 when every clause passes axes 1-3 and every
+ * rule passes axis 0 -- so it can gate a release check if anyone wants it to,
+ * without being wired into the test suite. A rule with no ablatable clauses
+ * is reported, never counted against the pack: there is nothing in it to
+ * ablate, which is a fact about the rule and not a defect.
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { clauseLabel, enumerateClauses } from './clauses.js';
-import { overallVerdict, runPack, sha256 } from './harness.js';
+import { overallVerdict, ruleFlagged, runPack, sha256 } from './harness.js';
 import type { PackReport, PackSpec, RealCorpus } from './harness.js';
 import { PACKS, packByName, packNames } from './packs.js';
 import { renderPackReport, renderSummary } from './report.js';
@@ -110,8 +113,12 @@ function parse(argv: readonly string[]): Options {
 function listClauses(spec: PackSpec, filter: string | undefined): void {
   const source = readFileSync(spec.config, 'utf8');
   const inventory = enumerateClauses(source);
+  const withClauses = inventory.rules.filter((r) => r.clauseCount > 0).length;
   process.stdout.write(`${spec.name}  sha256 ${sha256(source)}\n`);
-  process.stdout.write(`  ${String(inventory.ruleIds.length)} rules, ${String(inventory.clauses.length)} ablatable clauses\n`);
+  process.stdout.write(
+    `  ${String(inventory.clauses.length)} ablatable clauses across ${String(withClauses)} ` +
+      `of ${String(inventory.rules.length)} rules\n`,
+  );
   let shown = 0;
   for (const c of inventory.clauses) {
     if (filter !== undefined && !`${c.ruleId} ${c.kind} ${c.body} ${c.hash}`.toLowerCase().includes(filter.toLowerCase())) {
@@ -123,6 +130,13 @@ function listClauses(spec: PackSpec, filter: string | undefined): void {
   if (filter !== undefined) process.stdout.write(`  (${String(shown)} shown by filter)\n`);
   for (const s of inventory.skipped) {
     process.stdout.write(`  SKIPPED ${s.ruleId} :: ${s.reason}\n`);
+  }
+  // Rules with nothing to ablate are listed HERE rather than left out, for
+  // the same reason the report lists them: an enumeration that silently omits
+  // a quarter of the pack reads as a complete one.
+  for (const r of inventory.rules) {
+    if (r.clauseCount > 0) continue;
+    process.stdout.write(`  NO CLAUSES ${r.ruleId} :: ${r.noClausesReason ?? ''}\n`);
   }
   process.stdout.write('\n');
 }
@@ -209,7 +223,11 @@ function main(): number {
   }
 
   const flagged = reports.flatMap((r) => r.verdicts).filter((v) => overallVerdict(v) !== 'ok');
-  return flagged.length === 0 ? 0 : 1;
+  // A rule that fires on nothing is a defect in the pack exactly as much as a
+  // DEAD clause is, so it gates the same way. Having NO clauses does not:
+  // that is a property of the rule, reported and not counted against it.
+  const silentRules = reports.flatMap((r) => r.rules).filter(ruleFlagged);
+  return flagged.length === 0 && silentRules.length === 0 ? 0 : 1;
 }
 
 process.exitCode = main();

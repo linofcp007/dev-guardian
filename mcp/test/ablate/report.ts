@@ -7,8 +7,8 @@
  */
 
 import { clauseLabel } from './clauses.js';
-import { overallVerdict, short } from './harness.js';
-import type { ClauseVerdict, PackReport } from './harness.js';
+import { overallVerdict, ruleFlagged, short } from './harness.js';
+import type { ClauseVerdict, PackReport, RuleVerdict } from './harness.js';
 import type { Finding } from './semgrep.js';
 
 function rule(char = '-'): string {
@@ -80,6 +80,48 @@ function detail(v: ClauseVerdict): string[] {
   return out;
 }
 
+/**
+ * How much of the pack the clause axes actually cover, in a sentence that
+ * cannot be mistaken for "all of it". `52/52` was true and useless: it counted
+ * the clauses that were measured against the clauses that exist, and said
+ * nothing about the rules that have none.
+ */
+function coverageSentence(report: PackReport): string {
+  const clauseless = report.ruleCount - report.rulesWithClauses;
+  // `clauseCount` is what this run MEASURED; the enumerated total is what the
+  // pack declares. They differ under `--filter`, and whenever a clause was
+  // collapsed as a duplicate ablation or skipped as load-bearing -- all three
+  // of which have their own section, and none of which should be able to hide
+  // inside a bare "52 clauses" headline.
+  const enumerated = report.rules.reduce((n, r) => n + r.enumeratedClauses, 0);
+  const measured =
+    report.clauseCount === enumerated
+      ? `${String(report.clauseCount)} clause(s)`
+      : `${String(report.clauseCount)} of ${String(enumerated)} clause(s)`;
+  return (
+    `${measured} across ${String(report.rulesWithClauses)} of ${String(report.ruleCount)} rules` +
+    (clauseless === 0
+      ? ''
+      : `; ${String(clauseless)} rule(s) have no ablatable clauses (axis 0 only)`)
+  );
+}
+
+function ruleLine(r: RuleVerdict): string {
+  const axis0 =
+    r.firesOnHits === 'N/A'
+      ? 'hits n/a'
+      : r.firesOnHits === 'PASS'
+        ? `hits ${String(r.hitsFindings)}`
+        : 'FIRES ON NOTHING';
+  const clauses =
+    r.enumeratedClauses === 0
+      ? 'no ablatable clauses'
+      : r.ablatedClauses === r.enumeratedClauses
+        ? `${String(r.ablatedClauses)} clause(s) ablated`
+        : `${String(r.ablatedClauses)}/${String(r.enumeratedClauses)} clause(s) ablated`;
+  return `  ${axis0.padEnd(17, ' ')} ${clauses.padEnd(24, ' ')} ${r.ruleId}`;
+}
+
 export function renderPackReport(report: PackReport): string {
   const lines: string[] = [];
   const flagged = report.verdicts.filter((v) => overallVerdict(v) === 'FLAG');
@@ -87,14 +129,20 @@ export function renderPackReport(report: PackReport): string {
   const dead = report.verdicts.filter((v) => v.live === 'FAIL');
   const suppressing = report.verdicts.filter((v) => v.keepsTruePositives === 'FAIL');
   const noisy = report.verdicts.filter((v) => v.noAddedNoise === 'FAIL');
+  const silent = report.rules.filter(ruleFlagged);
+  const hitsNA = report.rules.every((r) => r.firesOnHits === 'N/A');
 
   lines.push(rule('='));
   lines.push(`ABLATION REPORT -- ${report.pack}`);
   lines.push(rule('='));
   lines.push(`config          ${report.configPath}`);
   lines.push(`sha256          ${report.configSha256}`);
-  lines.push(`rules           ${String(report.ruleCount)}`);
-  lines.push(`clauses ablated ${String(report.clauseCount)}`);
+  lines.push(
+    `rules           ${String(report.ruleCount)}  ` +
+      `(${String(report.rulesWithClauses)} with ablatable clauses, ` +
+      `${String(report.ruleCount - report.rulesWithClauses)} with none)`,
+  );
+  lines.push(`coverage        ${coverageSentence(report)}`);
   lines.push(`fixture corpus  ${report.fixtureCorpus}  (${String(report.baselineFixtures)} baseline findings, ${String(report.baselineHits)} in hits/)`);
   lines.push(
     `real corpus     ${report.realCorpus ?? '(none -- axis 3 N/A)'}` +
@@ -102,14 +150,47 @@ export function renderPackReport(report: PackReport): string {
   );
   lines.push(`wall clock      ${report.seconds.toFixed(1)}s`);
   lines.push('');
-  lines.push(`axis 1 live                     ${String(report.clauseCount - dead.length - errored.length)}/${String(report.clauseCount)} pass, ${String(dead.length)} DEAD`);
-  lines.push(`axis 2 keeps true positives     ${String(report.clauseCount - suppressing.length - errored.length)}/${String(report.clauseCount)} pass, ${String(suppressing.length)} SUPPRESSING`);
+  lines.push(
+    hitsNA
+      ? `axis 0 fires on hits/           N/A -- this pack has no hits/ fixture corpus`
+      : `axis 0 fires on hits/           ${String(report.ruleCount - silent.length)}/${String(report.ruleCount)} rules fire, ${String(silent.length)} FIRING ON NOTHING`,
+  );
+  lines.push(`axis 1 live                     ${String(report.clauseCount - dead.length - errored.length)}/${String(report.clauseCount)} clauses pass, ${String(dead.length)} DEAD`);
+  lines.push(`axis 2 keeps true positives     ${String(report.clauseCount - suppressing.length - errored.length)}/${String(report.clauseCount)} clauses pass, ${String(suppressing.length)} SUPPRESSING`);
   lines.push(
     report.realCorpus === null
       ? `axis 3 no rise in real-code count  N/A -- no real-code corpus for this pack`
-      : `axis 3 no rise in real-code count  ${String(report.clauseCount - noisy.length - errored.length)}/${String(report.clauseCount)} pass, ${String(noisy.length)} RAISING the count`,
+      : `axis 3 no rise in real-code count  ${String(report.clauseCount - noisy.length - errored.length)}/${String(report.clauseCount)} clauses pass, ${String(noisy.length)} RAISING the count`,
   );
+  lines.push('     (axes 1-3 are properties of a CLAUSE. Rules with none are');
+  lines.push('      covered by axis 0 alone -- see RULE COVERAGE below.)');
   if (errored.length > 0) lines.push(`errors                          ${String(errored.length)}`);
+  lines.push('');
+
+  lines.push(rule());
+  lines.push(`RULE COVERAGE (${String(report.ruleCount)}) -- every rule in the pack, measured or not`);
+  lines.push(rule());
+  for (const r of report.rules) lines.push(ruleLine(r));
+  const clauseless = report.rules.filter((r) => r.enumeratedClauses === 0);
+  if (clauseless.length > 0) {
+    lines.push('');
+    lines.push(`${String(clauseless.length)} rule(s) have nothing to ablate. This is a property of the rule,`);
+    lines.push('not a gap in the harness -- but it is also not a pass on axes 1-3,');
+    lines.push('which is why they are named here instead of rounding into the totals:');
+    for (const r of clauseless) {
+      lines.push(`  ${r.ruleId}`);
+      lines.push(`    ${r.noClausesReason ?? 'no reason recorded'}`);
+    }
+  }
+  if (silent.length > 0) {
+    lines.push('');
+    lines.push(`${String(silent.length)} rule(s) FIRE ON NOTHING in hits/. A rule that matches nothing is`);
+    lines.push('this repo\'s sixth silent-failure mode: the C# pack shipped');
+    lines.push('`foreach ($T $X in $C)` where `foreach (var $X in $C)` was needed and');
+    lines.push('found 0 of 5 real bugs, with paths.scanned healthy and no errors.');
+    lines.push('Either the rule does not match its own fixture, or no fixture exists:');
+    for (const r of silent) lines.push(`  ${r.ruleId}`);
+  }
   lines.push('');
 
   if (report.collapsed.length > 0) {
@@ -136,7 +217,7 @@ export function renderPackReport(report: PackReport): string {
 
   if (flagged.length === 0 && errored.length === 0) {
     lines.push('Every clause is live, suppresses nothing in hits/, and raises no count');
-    lines.push('on real code. Nothing to act on.');
+    lines.push('on real code.' + (silent.length === 0 ? ' Nothing to act on.' : ''));
   } else {
     lines.push(rule());
     lines.push(`FLAGGED CLAUSES (${String(flagged.length + errored.length)})`);
@@ -186,16 +267,24 @@ export function renderSummary(reports: readonly PackReport[]): string {
   lines.push(rule('='));
   lines.push('ABLATION SUMMARY');
   lines.push(rule('='));
-  lines.push('pack         rules clauses  dead    suppress raise errors  secs');
+  lines.push('`rules` counts every rule; `covered` is the rules with at least one');
+  lines.push('ablatable clause, so `rules - covered` were reached by axis 0 alone.');
+  lines.push('`silent` is rules that fire on nothing in hits/ -- always act on those.');
+  lines.push('');
+  lines.push('pack         rules covered silent clauses  dead    suppress raise errors  secs');
   for (const r of reports) {
     const dead = r.verdicts.filter((v) => v.live === 'FAIL').length;
     const supp = r.verdicts.filter((v) => v.keepsTruePositives === 'FAIL').length;
     const noisy = r.verdicts.filter((v) => v.noAddedNoise === 'FAIL').length;
     const errs = r.verdicts.filter((v) => v.live === 'ERROR').length;
+    const silent = r.rules.filter(ruleFlagged).length;
+    const hitsNA = r.rules.every((v) => v.firesOnHits === 'N/A');
     lines.push(
       [
         r.pack.padEnd(13, ' '),
         String(r.ruleCount).padStart(5, ' '),
+        String(r.rulesWithClauses).padStart(8, ' '),
+        (hitsNA ? 'n/a' : String(silent)).padStart(7, ' '),
         String(r.clauseCount).padStart(8, ' '),
         String(dead).padStart(6, ' '),
         String(supp).padStart(12, ' '),

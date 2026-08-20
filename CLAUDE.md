@@ -48,16 +48,26 @@ it is developer tooling that must never reach `dist/`, and because
 `tsconfig.test.json` already type-checks that tree at full strictness. It is
 **not** a vitest test (`vitest.config.ts` only collects `*.test.ts`): a full
 run is tens of minutes, and the report is the product. Its pure half — clause
-enumeration and removal — *is* unit-tested, in
-[`mcp/test/ablate/clauses.test.ts`](mcp/test/ablate/clauses.test.ts).
+enumeration and removal, and the report's coverage arithmetic — *is*
+unit-tested, in [`mcp/test/ablate/clauses.test.ts`](mcp/test/ablate/clauses.test.ts)
+and [`mcp/test/ablate/report.test.ts`](mcp/test/ablate/report.test.ts).
 
 **What it is for.** Six exclusion clauses that did nothing at all have shipped
 across the rule-pack series. Every one was written by someone sure it was
 needed, and found only when somebody deleted it and watched nothing change.
 The harness deletes one clause at a time, re-runs the pack, and reports three
 verdicts — all three, because each axis was added after a defect escaped the
-previous ones:
+previous ones. A fourth, **axis 0**, is a property of the *rule* rather than of
+a clause, and is the only one that reaches a rule with no clauses at all:
 
+0. **fires on `hits/`** — the rule produces at least one baseline finding in
+   the fixture directory built to hold the bugs it is for. A rule that matches
+   nothing is the sixth silent-failure mode: in C#, `foreach ($T $X in $C)`
+   found **0 of 5** real bugs where `foreach (var $X in $C)` found all five,
+   with `paths.scanned` healthy, zero errors and every gate green. A rule
+   ported by textual analogy finds nothing and nothing complains. It costs no
+   extra scan — the baseline fixture scan is already there — and it applies to
+   every rule in the pack, not only the clauseless ones.
 1. **live** — removing the clause changes the result somewhere.
 2. **keeps true positives** — removing it must not *reveal* findings in
    `hits/`. `pattern-not-inside` excludes the whole node it matched, so a
@@ -68,6 +78,34 @@ previous ones:
    that caught `unchecked-match` going 0 → 13 false positives on our own
    TypeScript; axes 1 and 2 both passed, because "live" and "keeps true
    positives" are both true of a clause that only *adds* false positives.
+
+**Read the coverage line, not the axis fractions.** Axes 1–3 are properties of
+a **clause**, so a rule with no ablatable clause has no verdict on any of them.
+Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
+`patterns:` group and no `pattern-either:`, and a `patterns:` group holding
+nothing but positive terms. **30 of the 129 rules** across the seven packs are
+one of those — 24 bare and 6 positive-only — and they used to appear
+**nowhere** in the report: not in the clause list, not under `skipped`. So
+`52/52 live, 0 DEAD` read as "the pack was checked" when it covered 11 rules of
+12. The capability was never missing — there is genuinely nothing to ablate.
+The *reporting* was dishonest, in exactly the way axis 3 refuses to be when it
+prints `N/A`.
+
+| pack | rules | with ablatable clauses | with none |
+| --- | --- | --- | --- |
+| `bugfix-js` | 13 | 12 | 1 |
+| `bugfix-py` | 10 | 10 | 0 |
+| `bugfix-go` | 9 | 8 | 1 |
+| `bugfix-java` | 8 | 7 | 1 |
+| `bugfix-cs` | 12 | 11 | 1 |
+| `base` | 13 | 7 | 6 |
+| `routes` | 64 | 44 | 20 |
+
+The report therefore leads with a coverage line naming both halves —
+`52 clause(s) across 11 of 12 rules; 1 rule(s) have no ablatable clauses (axis
+0 only)` — lists **every** rule under `RULE COVERAGE` with its clause count and
+its `hits/` count, and names each clauseless rule with the reason it has none.
+`npm run ablate -- <pack> --list` does the same without scanning.
 
 **`DEAD` never means "safe to delete" on its own.** Three different situations
 produce it, and they have different fixes:
@@ -96,7 +134,9 @@ Axis 3 needs a real-code corpus in a language the pack matches, so it is a
 property of the invocation — registered per pack in
 [`mcp/test/ablate/packs.ts`](mcp/test/ablate/packs.ts), overridable with
 `--real-code=<dir>` / `--no-real-code`, and reported as `N/A` (never silently
-skipped) where none exists.
+skipped) where none exists. Axis 0 needs a `hits/` corpus on the same terms and
+reports `N/A` for the whole pack where the fixture root has no `hits/`
+subdirectory.
 
 **Invariants worth knowing before you change it.**
 
@@ -113,15 +153,24 @@ skipped) where none exists.
 - **`paths.scanned == 0` is an exception, not a result.** This repo has five
   recorded ways for Semgrep to scan nothing while printing success and exit 0;
   two of them emit neither `RuleParseError` nor `Invalid YAML`, so matching on
-  error strings does not cover the set.
+  error strings does not cover the set. The **sixth** mode is not one of these
+  and this gate cannot see it: the rule loads, `paths.scanned` is healthy,
+  `errors` is empty, and the rule simply matches nothing. Only axis 0 catches
+  that one.
 - **A round-trip control runs first.** Removal goes through the YAML AST, so
   the unmodified pack is re-serialised and scanned before anything is ablated;
   if it does not reproduce the on-disk result exactly, the run aborts rather
   than measure the serialiser.
 
-Exit code is 1 when any clause is flagged, 0 when every clause passes.
+Exit code is 1 when any clause is flagged **or any rule fires on nothing in
+`hits/`**, 0 when every clause passes axes 1–3 and every rule passes axis 0.
+Having no ablatable clauses is reported, never counted against a pack: it is a
+fact about the rule, not a defect in it.
+
 `routes.yml` is unregistered: it has no `hits/` + `misses/` fixture pair, so
-axes 1 and 2 have nothing to measure against.
+axes 0, 1 and 2 all have nothing to measure against. Twenty of its 64 rules
+have no ablatable clause, so registering it would need fixtures before the
+report said anything about two thirds of the pack.
 
 ## TypeScript conventions
 

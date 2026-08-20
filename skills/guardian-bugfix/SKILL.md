@@ -150,10 +150,16 @@ conclusão: estão marcados. Estão marcados com um **comentário**, que o Semgr
 não lê. Uma declaração de intenção que a regra não consegue reconhecer é
 exatamente o critério.
 
-É o mesmo raciocínio que mantém a `empty-catch` **do Java** em `ERROR`, e não
-uma contradição dele: a regra Java passa o critério porque **consegue** ler o
-marcador de intenção do seu ecossistema — a convenção Checkstyle/IntelliJ de
-chamar ao binding `ignore`/`ignored`/`expected`. JS/TS não tem equivalente com
+É o mesmo raciocínio que acabou por descer a `empty-catch` **do Java e do C#**
+a `WARNING` também. A regra de Java aguentou-se três rondas em `ERROR` com o
+argumento de que **consegue** ler o marcador de intenção do seu ecossistema — a
+convenção Checkstyle/IntelliJ de chamar ao binding `ignore`/`ignored`/
+`expected`. Medida no OpenJDK, essa convenção cobre **8,0 %** dos catches
+vazios reais, enquanto **56,8 %** dos 1589 findings declaram a intenção num
+**comentário**. Em C# é pior: `ignore`/`ignored`/`expected` aparecem **zero**
+vezes em 11 800 ficheiros do `dotnet/runtime`, 93 % dos 402 findings estão
+escritos `catch (Tipo) { }` ou `catch { }` (sem nada para nomear), e o
+`dotnet build` emite **CS0168** na grafia que a própria regra prescreve. JS/TS não tem equivalente com
 o mesmo peso, e a razão é estrutural e não cultural: **o optional catch binding
 do ES2019 tirou o identificador a que uma convenção de nomes se agarraria.** 41
 dos 42 estão escritos `catch {`, sem nada para nomear. O ecossistema marca a
@@ -467,15 +473,13 @@ auto-documentada de dizer "de propósito" sem um comentário de supressão — e
 reverso é que uma exceção genuinamente engolida escapa à regra só por ter esse
 nome.
 
-O segundo gume da mesma troca vale ser dito, porque a `empty-catch` é agora a
-**única** regra em ERROR e todo o argumento dos tiers assenta nela: o idioma
-JUnit de exceção esperada dispara em ERROR quando a variável apanhada se chama
-`e`, e fica calada quando se chama `expected`. O idioma de teste tem de usar o
-nome convencional.
+O segundo gume da mesma troca vale ser dito: o idioma JUnit de exceção esperada
+dispara quando a variável apanhada se chama `e`, e fica calada quando se chama
+`expected`. O idioma de teste tem de usar o nome convencional.
 
 ```java
 try { parse("nope"); throw new AssertionError("devia ter lançado"); }
-catch (NumberFormatException e) { }          // dispara em ERROR
+catch (NumberFormatException e) { }          // dispara
 catch (NumberFormatException expected) { }   // calado
 ```
 
@@ -537,11 +541,18 @@ fixtures reporta `paths.scanned = 0`, e por isso o controlo positivo desse pack
 forma de distinguir "aditivo" de "nunca correu". O `p/csharp` e o
 `p/security-audit` varrem todos os ficheiros e não encontram nada.
 
-**Duas das doze estão em `ERROR`**, a melhor proporção da série, e a razão é
-estrutural: o C# tem um defeito — `throw ex;` dentro de um `catch` — cuja forma
-*correta*, `throw;`, é **outro nó da AST**. Não há guarda para reconhecer
-porque não há nada a guardar, que é a única maneira de passar o critério do §4
-num motor sem dataflow.
+**Uma das doze está em `ERROR`**, e a razão é estrutural: o C# tem um defeito —
+`throw ex;` dentro de um `catch` — cuja forma *correta*, `throw;`, é **outro nó
+da AST**. Não há guarda para reconhecer porque não há nada a guardar, que é a
+única maneira de passar o critério do §4 num motor sem dataflow.
+
+A `empty-catch` estava lá ao lado e desceu a `WARNING` quando foi medida contra
+o `dotnet/runtime`: 402 findings em 11 800 ficheiros, **374 deles (93 %)
+escritos `catch (Tipo) { }` ou `catch { }`** — grafias sem identificador
+nenhum, onde a isenção por nome não tem onde se agarrar. Dos 28 que ligam um
+nome, nenhum usa `ignore`/`ignored`/`expected`. E o compilador explica porquê:
+`catch (FormatException ignored) { }` emite **CS0168** ("variável declarada e
+nunca usada"), enquanto as duas grafias sem nome compilam sem aviso.
 
 **Um oráculo independente, e é o primeiro da série.** O `dotnet build` emite
 `CA2200` para `throw ex;` dentro de um catch, e dispara exatamente nos mesmos
@@ -666,7 +677,7 @@ Ruby, recomenda o RuboCop e o `p/ruby` do registry, que é genuinamente vivo.
 
 ### Os tiers, e porque é que o teu fix PR de Java pode vir vazio
 
-**Sete das oito regras estão em `WARNING`. Só a `empty-catch` está em `ERROR`.**
+**As oito regras estão em `WARNING`. Nenhuma está em `ERROR`.**
 
 O critério é o do design (§4), aplicado a frio e enunciado como uma pergunta
 sobre o *output* em vez de sobre o padrão:
@@ -678,15 +689,28 @@ depende de ter reconhecido uma **guarda** emite um falso positivo sempre que
 encontra uma forma de guarda que ninguém enumerou — e nenhuma lista de
 exclusões fecha isso, porque a guarda pode estar sempre a um método de
 distância, onde um matcher sintático não chega. Num motor sem dataflow quase
-nada passa nesta barra: **uma em oito é o resultado honesto, não uma falha do
+nada passa nesta barra: **zero em oito é o resultado honesto, não uma falha do
 pack.**
 
-A `empty-catch` passa por uma razão que vale a pena nomear, porque é a única
-disponível: a sua válvula de escape **não é uma guarda**. É uma *declaração de
-intenção que a própria regra lê* — a convenção `ignore` / `ignored` /
-`expected` do Checkstyle / IntelliJ. Depois de a honrar, o que ela emite é um
-engolir de exceção **não declarado**, e isso é bug independentemente do que o
-autor tencionava.
+A `empty-catch` foi a última a descer, e aguentou-se por uma razão que vale a
+pena nomear porque era a única disponível: a sua válvula de escape **não é uma
+guarda**. É uma *declaração de intenção que a própria regra lê* — a convenção
+`ignore` / `ignored` / `expected` do Checkstyle / IntelliJ. Depois de a honrar,
+o que ela emite seria um engolir de exceção **não declarado**.
+
+O argumento estava certo; a premissa não. **Medido no OpenJDK** (12 593
+ficheiros de `src/*/share/classes`, código que ninguém aqui escreveu nem
+escolheu): **1589 findings em 770 ficheiros**, e **903 deles — 56,8 % — trazem
+um comentário explicativo dentro do próprio catch vazio** (um bloco só com
+comentário é vazio para a AST, e é por isso que dispara). Mais 27 declaram a
+intenção num nome que a regra não conhece: `cannotHappen` ×13, `_` ×10 (a
+variável sem nome do Java 21, que significa exatamente "não uso este binding"),
+`unused` ×2. Uma sonda com a regex invertida conta **139** catches vazios com a
+grafia isenta, ou seja **8,0 %** dos 1728 do corpus. Lidos um a um, 45
+findings: cerca de 39 deliberados — o idioma de veto do Swing, o `close()` num
+`finally`, sondas de parsing e de reflexão, ciclos que tentam o próximo
+provider. A intenção **está** declarada; está declarada onde o Semgrep não
+chega, e é isso o critério.
 
 A `loop-lte-length` desceu, mas só depois de o aperto óbvio ter sido **medido e
 rejeitado**. Exigir que o corpo indexe mesmo o array (`<... $A[$I] ...>`)
@@ -700,9 +724,9 @@ os patterns ficaram como estavam e só o tier mudou.
 **Consequência prática, e é a parte que morde.** O parser mapeia `ERROR` →
 `high` e `WARNING` → `medium`. O `bug_hunt` **não filtra por omissão**, por
 isso nada desaparece de um scan. Mas o `create_fix_pr` tem `severity_min` a
-`high` por omissão — portanto, com sete das oito em `WARNING`, **o pack de Java
-praticamente não contribui para o conjunto de fixes por omissão**. Se pediste
-um fix PR de Java e veio vazio, é isto. Pede explicitamente:
+`high` por omissão — portanto, com as oito em `WARNING`, **o pack de Java não
+contribui de todo para o conjunto de fixes por omissão**. Se pediste um fix PR
+de Java e veio vazio, é isto. Pede explicitamente:
 
 ```jsonc
 { "severity_min": "medium" }   // create_fix_pr, para apanhar o pack de Java
