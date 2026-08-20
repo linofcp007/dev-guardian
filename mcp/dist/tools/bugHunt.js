@@ -355,12 +355,28 @@ registerToolModule(makeScanTool({
         "These are Semgrep OSS pattern rules: they match syntax, not " +
         'dataflow, so this finds the shapes bugs take, not bugs proven by analysis — a null ' +
         'dereference two functions from its guard is invisible to them. The heuristic-tier ' +
-        'rules (WARNING/INFO) produce false positives by construction — `floating-mutation` ' +
-        "matches on the method name alone, so it can't tell a real mutation like " +
-        "`repo.save()` from an unrelated call that just shares the name, like `ctx.save()` " +
-        "(Canvas 2D's synchronous state-stack push, nothing to do with persistence) — both " +
-        "fire identically. That's why it isn't ERROR and why `severity_min` exists to " +
-        'filter it out. Go is where the registry pack leaves the biggest hole among the ' +
+        'rules (WARNING/INFO) produce false positives by construction, which is what ' +
+        '`severity_min` exists to filter. The JS/TS pack was audited in 1.8.1 against ~600 ' +
+        'lines written by someone who had not written the rules: ~40 false positives across 14 ' +
+        'rules, including `unchecked-find` firing at ERROR on every Mongoose query and every ' +
+        'jQuery `.find()` (nine reproductions, zero true positives) and `floating-mutation` ' +
+        'firing on `res.send(rows)` and on `void repo.save(a)` — the fix its own message ' +
+        'prescribes. `unchecked-find` now requires a literal callback argument, and ' +
+        '`floating-mutation` requires the receiver name to look like a persistence boundary as ' +
+        'well as the method name. Severity was re-derived by asking whether what a rule EMITS ' +
+        'is always a bug: only `empty-catch`, `empty-promise-catch` and `index-at-length` clear ' +
+        'that, so only those three map to `high` and reach a default `create_fix_pr` run — nine ' +
+        'sit at WARNING (`medium`) and two at INFO. What the JS/TS pack still cannot do, stated ' +
+        'rather than implied: `catch-returns-null` fires on safe-parse helpers whose documented ' +
+        'contract IS null-on-failure and cannot be made not to (hence INFO); `unchecked-find` is ' +
+        'blind to a named predicate (`users.find(byId).name`); `floating-mutation` is blind to a ' +
+        'repository whose variable is not named like one, and to a captured-but-never-awaited ' +
+        'promise; `loop-lte-length` does not cover while/do-while or a cached length; ' +
+        '`unchecked-match` still collides with a non-string `.match()`; and the ' +
+        'listener/subscribe rules cannot tell a cleanup that removes nothing from one that ' +
+        'works, nor see a second uncleaned registration beside a cleaned one, nor reach any ' +
+        'lifecycle that is not `useEffect` (componentDidMount, ngOnInit, onMounted, ' +
+        'useLayoutEffect). Go is where the registry pack leaves the biggest hole among the ' +
         'languages it partially covers: p/r2c-bug-scan ' +
         'ships 5 Go rules and only 2 land in a bug class, both integer-overflow, so ' +
         'error_handling, race_condition, null_safety, memory_leak and edge_case were all empty ' +

@@ -57,6 +57,121 @@ version bump.
 
 ### Fixed
 
+- **The JS/TS bug pack, audited against code written by someone who did not
+  write the rules.** `configs/semgrep/bugfix-js.yml` shipped in 1.6.0 and had
+  never been read by anybody but its author; every fixture behind it had been
+  written by that author too, so each one tested the author's INTENT rather
+  than what the pattern binds to. An independent auditor wrote ~600 lines of
+  JS/TS against the rule TEXTS and found **~40 false positives across 14
+  rules**. Three were catastrophic on real codebases:
+
+  - **`null-safety-unchecked-find` had zero true positives.**
+    `$A.find(...).$PROP` binds to any method named `find`, and `$PROP` matches
+    method calls, not just property reads. In any Node backend on Mongoose or
+    the Mongo driver, or any page using jQuery, it fired at **ERROR** on
+    essentially every query — `User.find({}).sort(…)`, `User.find({}).lean()`,
+    `collection.find({}).toArray()`, `$('#root').find('.item').addClass(…)`,
+    `repo.find({}).length` — and advised `?.`, which is wrong advice for a
+    Query object. Nine reproductions, none of them a bug. It now requires the
+    single argument to be a **literal callback**, which is the only thing that
+    separates `Array#find` from a Mongoose query (an object), a jQuery
+    selector (a string) or Immutable's `find(fn, ctx, notSetValue)` (three
+    arguments), with no type inference available. `findLast` added.
+  - **`race-condition-floating-mutation` was wrong 12 times out of 15**,
+    including on `res.send(rows)` — the most common line in an Express app —
+    and on `void repo.save(a)`, **the fix its own message prescribes**. A rule
+    whose prescribed fix does not silence it teaches people to ignore it. The
+    receiver is now constrained by name as well as the method, and `void`,
+    `Promise.all`/`allSettled`, `.catch`/`.then`/`.finally` continuation and
+    capture-then-await are excluded, one clause per near-miss function.
+  - **`off-by-one-loop-lte-length` told loops that never index anything that
+    they read past the end.** `<= .length` is correct whenever a loop counts
+    boundaries rather than elements (1-based iteration, insertion slots, string
+    prefixes), and the rule fired at ERROR on all of them. It now matches the
+    out-of-range **read** and uses the loop only as context, which makes the
+    message true by construction — and picks up the braceless loop body that
+    the old block-shaped pattern could not see.
+
+  Also fixed: a `finally` clause silenced `empty-catch` outright; the listener
+  rule's pattern took exactly two arguments, so `{ passive: true }`,
+  `{ capture: true }`, `{ once: true }`, `{ signal }` and the legacy boolean
+  third argument were all invisible; the interval rule required `const $T =`,
+  so `setInterval(tick, 1000)` with no handle captured — an interval nobody can
+  ever clear, the strongest form of the bug — was silent, along with `let t =`,
+  `this.t =` and `ref.current =`; the same rule's exclusions keyed on the shape
+  of the CONTAINER rather than on whether the timer was cleared, so an arrow
+  function calling `clearInterval(t)` two lines later still fired while the
+  byte-identical body in a `function` declaration was correctly silent; an
+  early `return` of a cleanup suppressed the listener/subscription leak in the
+  branch AFTER it; `unchecked-env` missed bracket access and property reads
+  (`process.env['KEY'].trim()`, `process.env.KEY.length`); `unchecked-match`
+  missed `RegExp#exec`; and `reduce-without-initial` fired on array literals,
+  which cannot be empty.
+
+- **Every JS/TS rule's severity tier is now pinned by a test, and five tiers
+  changed.** Nothing read `extra.severity` anywhere in the suite, so changing
+  any rule's tier — including promoting one to ERROR — was a mutation the whole
+  pack passed green. `EXPECTED_SEVERITY` in `bugfixRulesJs.test.ts` asserts all
+  fourteen exhaustively, in both directions. The tiers were re-derived from the
+  criterion the Java pack settled on, asked of the OUTPUT rather than the
+  pattern: **is what the rule emits always a bug?** Three of fourteen clear it
+  and stay at ERROR (`empty-catch`, `empty-promise-catch`, `index-at-length` —
+  the last because a *read* at `a[a.length]` is unconditionally `undefined`,
+  which is a fact about the AST rather than a guard). `catch-returns-null`,
+  `loop-lte-length`, `unchecked-find`, `unchecked-match` and
+  `listener-without-cleanup` move to WARNING or INFO. This also settles a
+  split that had no principle behind it: `listener-without-cleanup` (ERROR) and
+  `subscribe-without-unsubscribe` (WARNING) are structurally identical rules
+  and are now on the same tier.
+
+  **This changes what a default `create_fix_pr` run does.** ERROR maps to
+  `high`, WARNING to `medium`, INFO to `info`, and `create_fix_pr` defaults to
+  `severity_min: "high"` — so the JS/TS pack now contributes three rules to the
+  default fix-PR set, and a caller who wants the rest must ask for
+  `severity_min: "medium"`. `bug_hunt` itself applies no filter, so nothing
+  disappears from a scan.
+
+- **`error-handling-catch-returns-null` had its CLAIM corrected rather than its
+  pattern.** On the auditor's corpus it produced five instances of
+  textbook-correct code and zero true positives: `safeJsonParse`, an
+  optional-dependency `require` probe, a `new URL()` validity check, a lookup
+  typed `| null`, and a config reader returning `[]`. Returning an empty value
+  from a catch is idiomatic JavaScript with a documented contract, and there is
+  no syntactic difference between those and a genuine swallow — every candidate
+  narrowing was measured and silences the pack's own hit fixture too. So the
+  rule dropped to INFO, and its message stopped saying "log and/or rethrow":
+  that advice was **circular**, because adding the log made the rule go quiet
+  while the stated complaint (an empty value the caller cannot distinguish from
+  a real result) was untouched. `hits/catch-returns-null-idioms.ts` now pins
+  those five idioms as hits, with the trade written down, so re-promoting the
+  tier turns the severity assertion red with that file as the evidence.
+
+- **The JS/TS near-miss corpus is now written by the auditor, not the rule
+  author.** Eight new `misses/` files, credited in-file, reproducing every
+  false-positive class above; plus `hits/` fixtures for every newly-covered
+  shape. Each was RED before the corresponding rule change. Every clause added
+  in this wave was then ablated on both axes — deleted to confirm a test goes
+  red, and checked against the true-positive count to confirm it eats no real
+  bugs — which removed **six clauses that turned out to be dead**: three
+  optional-catch-binding branches (Semgrep's matcher already ignores the
+  binding, so `catch ($E) { }` was matching `catch { }` all along, contrary to
+  the audit's reading of the pattern text), an AbortSignal exclusion that the
+  cleanup clause already covered, an expression-bodied-arrow exclusion that the
+  pre-existing `return $O.$M(...)` clause already covered, and two
+  returned-cleanup variants in the interval rule. It also caught a near-miss
+  that this wave itself had silently disarmed: `misses/race-condition.ts`'s
+  `bulkSave` exists to prove the verb list's trailing `$` anchor is
+  load-bearing, and the new receiver constraint made it stop proving that, so
+  its receiver was renamed. Two heuristics in one rule can each hide the
+  other's regression unless the near-miss clears every constraint but the one
+  it is aimed at.
+
+- **`bugfixRulesJs.test.ts` gained the total-count and declared-rules
+  assertions** the Java suite already had: a finding landing in an unregistered
+  file moves no per-file number, and a rule that fails to LOAD (a
+  `RuleParseError` branch, an unquoted `:` producing `Invalid YAML`) is
+  indistinguishable in Semgrep's output from a rule that found nothing.
+
 - **`wp-unescaped-output` stops flagging `echo (int) $_GET['id'];`, and now
   matches the subscript rather than the statement.** A cast is not a call, and
   Semgrep sees straight through the cast node — `$SUPER[...]` binds to the

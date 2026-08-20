@@ -15,12 +15,79 @@
 # reconhece por regex sobre o id em minúsculas: race-condition, null-safety,
 # off-by-one, memory-leak, error-handling, edge-case.
 #
-# Duas severidades: ERROR quando o padrão é sempre um bug, independentemente
-# da intenção; WARNING/INFO quando é normalmente um bug mas tem usos
-# legítimos (heurística).
+# ---------------------------------------------------------------------------
+# THE AUDIT WAVE (2026-08-20), and the criterion that now decides severity.
+# ---------------------------------------------------------------------------
+#
+# This pack shipped in 1.6.0 and had never been read by anybody but its
+# author. An independent auditor wrote ~600 lines of JS/TS against the rule
+# TEXTS (probes/, iso/ — reproduced as the `misses/` files credited in-file to
+# them) and found ~40 false positives across 14 rules. The failure mode was
+# structural, not a collection of separate mistakes: every fixture had been
+# written by the rule's own author, so each one tested the AUTHOR'S INTENT
+# rather than what the pattern actually binds to. Three examples of what that
+# hid, all now closed:
+#
+#  - `$A.find(...).$PROP` binds to any method named `find`, and `$PROP`
+#    matches method calls, not just property reads. Nine reproductions, ZERO
+#    true positives: in any Node backend on Mongoose or the Mongo driver, or
+#    any page using jQuery, it fired at ERROR on essentially every query and
+#    advised `?.` — which is wrong advice for a Query object.
+#  - `race-condition-floating-mutation` fired on `res.send(rows)`, the most
+#    common line in an Express app, and on `void repo.save(a)` — the fix its
+#    OWN MESSAGE prescribes. 12 of 15 fires were false.
+#  - `off-by-one-loop-lte-length` told a loop that never indexes anything that
+#    "a última iteração lê $A[$A.length]". The message was a statement about
+#    code that did not exist.
+#
+# SEVERITY is now decided by one question, asked about the OUTPUT rather than
+# the pattern: **is what the rule EMITS always a bug?** Not "is the shape it
+# looks for usually wrong" — a rule whose correctness depends on having
+# recognised a guard emits a false positive every time it meets a guard shape
+# nobody enumerated, and no exclusion list closes that, because the guard can
+# always be one method away. Three of fourteen clear that bar and stay at
+# ERROR (empty-catch, empty-promise-catch, index-at-length); nine sit at
+# WARNING; two sit at INFO because on the auditor's corpus their output was
+# mostly CORRECT code rather than mostly bugs. The tiers are pinned
+# exhaustively, in both directions, by EXPECTED_SEVERITY in
+# mcp/test/integration/bugfixRulesJs.test.ts — before this wave nothing read
+# `extra.severity` at all, so changing any rule's tier was a mutation the
+# whole suite passed green.
 rules:
+  # (audit wave) ONE false negative closed, and one non-bug recorded — the
+  # difference between the two only became visible by ablating each added
+  # branch separately rather than adding both and watching the suite go
+  # green:
+  #
+  #  - CLOSED: a `finally` CLAUSE silenced the rule outright. A try statement
+  #    with a finalizer is a different AST node, and `try { ... } catch ($E)
+  #    { }` does not match it, so `try { risky(); } catch (e) { } finally
+  #    { log(); }` was invisible. An empty catch is exactly as swallowed with
+  #    a `finally` attached. Isolated as iso/i1.ts [A]/[A'].
+  #  - NOT A GAP, contrary to the audit's reading of the pattern text:
+  #    OPTIONAL CATCH BINDING (`catch { }`, ES2019) was ALREADY matched by
+  #    `catch ($E) { }`. Semgrep's generic matcher is insensitive to the
+  #    presence of the binding here, the same way it is insensitive to
+  #    handler arity in the promise rule below. A separate `catch { }`
+  #    branch was drafted, measured, and removed: deleting it changed
+  #    nothing, in either direction, on a fixture that contains both shapes.
+  #    hits/error-handling.ts keeps both shapes anyway, so the day that
+  #    stops being true, the count moves.
+  #
+  # Stays at ERROR, and is one of only three that do. What it emits after
+  # matching is an unmarked silent swallow, which is a bug whatever the
+  # author meant; there is no guard for the rule to recognise, because a
+  # non-empty handler is a different AST shape rather than a guard shape.
+  # Its one residual false positive is a catch whose body is only a COMMENT
+  # explaining the deliberate ignore (auditor's p01 FP-1) — comments are not
+  # AST nodes, so no pattern can see one. Semgrep's own `// nosemgrep` is the
+  # escape hatch there. Still missed, and left missed rather than chased: a
+  # catch body of `;` or `void 0`, which are non-empty blocks.
   - id: bugfix-js-error-handling-empty-catch
-    pattern: try { ... } catch ($E) { }
+    patterns:
+      - pattern-either:
+          - pattern: try { ... } catch ($E) { }
+          - pattern: try { ... } catch ($E) { } finally { ... }
     message: >-
       Erro engolido em silêncio. O bloco catch está vazio, por isso a falha
       desaparece sem log, sem rethrow e sem tratamento.
@@ -46,6 +113,17 @@ rules:
   # here. A non-empty block remains a structurally different AST shape than
   # `{}` regardless of arity, so a catch that logs or rethrows still stays
   # silent with no exclusion clause needed.
+  #
+  # (audit wave) Measured on the auditor's p02 probe and left UNCHANGED: 5
+  # fires, 4 of them real (`err => {}` unparenthesised, `async () => {}`, an
+  # empty body holding only a comment, and an empty `.catch` at the end of a
+  # `.then()` chain), 1 a name collision on a non-promise object that
+  # happens to expose a `catch(handler)` method. That collision is not worth
+  # a receiver constraint: an empty handler passed to a method literally
+  # named `catch` is suspicious whatever the receiver is. Still missed, and
+  # recorded rather than closed: `.catch(noop)` (a named no-op reference),
+  # `.catch(() => undefined)` (expression-bodied), a two-parameter arrow,
+  # and `.then(ok, () => {})`'s second argument.
   - id: bugfix-js-error-handling-empty-promise-catch
     patterns:
       - pattern-either:
@@ -57,6 +135,50 @@ rules:
     severity: ERROR
     languages: [javascript, typescript]
 
+  # (audit wave) THE RULE THIS WAVE CHANGED THE CLAIM OF, rather than the
+  # pattern. It shipped at ERROR, and on the auditor's p03 probe it produced
+  # FIVE instances of textbook-correct code and ZERO true positives:
+  # `safeJsonParse`, `tryRequire`, a `new URL()` validity probe, a lookup
+  # whose TS return type is explicitly `| null`, and a "read the optional
+  # plugin list" helper returning `[]`. Returning an empty value from a catch
+  # is IDIOMATIC JavaScript — the documented contract of a whole family of
+  # probe helpers — in a way it is not in, say, Java.
+  #
+  # There is no syntactic discriminator. `safeJsonParse` and a function that
+  # loses a database error are the same AST; every candidate narrowing that
+  # silences the five idioms (require a multi-statement try, require the
+  # catch to be the whole body, restrict the returned value) also silences
+  # every genuine instance, including this pack's own hit fixture. Measured,
+  # not assumed.
+  #
+  # So the honest repair is to the CLAIM, not the pattern:
+  #
+  #  1. ERROR -> INFO. What it emits is mostly correct code, so it is not
+  #     "normally a bug" (WARNING) either.
+  #  2. The message no longer says "loga e/ou relança". That advice was
+  #     CIRCULAR: adding a log made the rule go quiet while the stated
+  #     complaint — an empty value the caller cannot distinguish from a
+  #     legitimate result — was untouched. It now asks the reader to confirm
+  #     the contract, which is the only thing a reader can actually do.
+  #  3. hits/catch-returns-null-idioms.ts pins the five idioms AS HITS, with
+  #     the trade written down, so re-promoting the tier turns the severity
+  #     assertion red with that file as the evidence of what would then be
+  #     reported as `high`.
+  #
+  # The pattern itself is UNCHANGED, and that is a measured result rather
+  # than an omission: optional catch binding (`catch { return null; }`),
+  # which the audit read as a gap, is already matched by the bound form —
+  # three explicit `catch { ... }` branches were added, ablated, and found to
+  # change nothing in either direction, so they are not here. The fixture
+  # keeps all six shapes so the day that stops being true, the count moves.
+  #
+  # The remaining gap IS real and is stated rather than hidden: any catch
+  # with a statement before the return escapes
+  # (`catch (e) { logger.debug(e); return null; }`),
+  # because the pattern is the whole block. Broadening to `{ ... return
+  # null; ... }` was rejected — at INFO it would add fires on code that
+  # logs the error properly, which is strictly better code than the shape
+  # this rule is about, for no gain in signal.
   - id: bugfix-js-error-handling-catch-returns-null
     patterns:
       - pattern-either:
@@ -68,17 +190,57 @@ rules:
               try { ... } catch ($E) { return []; }
     message: >-
       O catch converte uma falha num valor vazio (null/undefined/[]) que
-      quem chama não consegue distinguir de um resultado legítimo. Loga
-      e/ou relança, ou devolve um resultado tipado que marque o erro.
-    severity: ERROR
+      quem chama não consegue distinguir de um resultado legítimo. Confirma
+      que isto é o contrato documentado da função e não um erro perdido; se
+      não for, devolve um resultado tipado que marque o erro.
+    severity: INFO
     languages: [javascript, typescript]
 
+  # (audit wave) REWRITTEN. The old pattern matched the LOOP
+  # (`for (...; $I <= $A.length; ...) { ... }`) and said nothing about the
+  # body, so it fired on every `<=` against `.length` — four reproductions of
+  # deliberately correct code on the auditor's p04, against one true
+  # positive:
+  #
+  #   for (let i = 1; i <= pages.length; i++) emit(pages[i - 1]);  // 1-based
+  #   for (let i = 0; i <= items.length; i++) insertAt(i);         // slots
+  #   for (let i = 0; i <= s.length; i++) out.push(s.slice(0, i)); // prefixes
+  #   for (let n = 0; n <= pages.length; n++) emit(String(n));     // no index
+  #
+  # `<= length` is correct whenever the loop counts BOUNDARIES (length+1 of
+  # them) rather than ELEMENTS. The last one is the sharpest: it never
+  # indexes anything, so the message — "a última iteração lê $A[$A.length]" —
+  # described code that did not exist.
+  #
+  # The rule now matches the READ and uses the loop only as containing
+  # context, which makes the message true by construction: there IS an
+  # `$A[$I]` and the loop DOES reach `$I == $A.length`. It also closes a
+  # false negative one pair of braces away — the old block-bodied pattern
+  # could not see `for (...) console.log(items[i]);` with no braces, while
+  # `pattern-inside: for (...; ...; ...) ...` matches both body shapes
+  # (iso/i1.ts [F]).
+  #
+  # The `$A[$I] = ...` exclusion draws the same read-vs-write line that
+  # index-at-length draws below, for the same reason: a write at the trailing
+  # index is an append, not an out-of-range read.
+  #
+  # WARNING, not ERROR: an `if (i < a.length)` inside the body would make it
+  # correct, and recognising that guard is exactly what a syntactic matcher
+  # cannot promise. Stated limitations, each measured on p04 and left open:
+  # `while` / `do-while` loops, `i < items.length + 1`, the cached-length
+  # form (`const n = items.length; for (let i = 0; i <= n; i++)`) that hot
+  # paths are written in, and a body that reaches the element through a
+  # method (`s.charAt(i)`) instead of a subscript.
   - id: bugfix-js-off-by-one-loop-lte-length
-    pattern: for (...; $I <= $A.length; ...) { ... }
+    patterns:
+      - pattern: $A[$I]
+      - pattern-inside: for (...; $I <= $A.length; ...) ...
+      - pattern-not-inside: $A[$I] = ...
     message: >-
-      Provável off-by-one: a condição usa <= com .length, por isso a última
-      iteração lê $A[$A.length], que é sempre undefined.
-    severity: ERROR
+      Off-by-one: a condição usa <= com .length, por isso a última iteração
+      lê $A[$A.length], que é sempre undefined. O último índice válido é
+      $A.length - 1.
+    severity: WARNING
     languages: [javascript, typescript]
 
   # Turns on read vs write: `items[items.length]` alone is a naive `pattern`
@@ -92,6 +254,16 @@ rules:
   # readLastValid uses `.length - 1`, a different AST shape, already safe)
   # and Task 1's own append case (misses/off-by-one.ts writesToLength) — the
   # pattern-not-inside clause below is what makes the append case go silent.
+  #
+  # (audit wave) Measured on the auditor's p05 and left UNCHANGED — the only
+  # rule in the pack with a clean sheet: 4 fires, 4 real (a member-path
+  # receiver, `this.data`, a read feeding `?? 0`, and an optional-chained
+  # `items?.[items.length]`), and every append shape it was asked about
+  # stayed silent, including `??=`. Stays at ERROR on the criterion, and it
+  # is the only non-trivial rule that clears it: a READ at `a[a.length]` is
+  # unconditionally `undefined`. That is a fact about the AST, not something
+  # a guard elsewhere can make true. Known gap: the cached-length form
+  # (`const n = items.length; items[n]`).
   - id: bugfix-js-off-by-one-index-at-length
     patterns:
       - pattern: $A[$A.length]
@@ -190,6 +362,73 @@ rules:
     #    expressions are left as a documented gap rather than shipped
     #    half-working. Not chased further here; re-probe if a future
     #    Semgrep version changes this.
+    #
+    # 4. (audit wave) THE WORST RULE IN THE PACK, measured: 15 fires on the
+    #    auditor's p06, 12 of them false. Two independent causes, closed by
+    #    two independent groups of clauses, each with its own near-miss file
+    #    so that neither can silently take credit for the other's work.
+    #
+    #    (a) THE RECEIVER WAS UNCONSTRAINED. `$O.$M(...)` binds to anything
+    #        with a method in the verb list, and most of the ecosystem's
+    #        `save|update|delete|create|send` methods are SYNCHRONOUS:
+    #
+    #          res.send(rows);                    // Express — the most
+    #          res.status(200).send({ ok: true }); // common line in Node
+    #          h.update('data');                  // crypto hash
+    #          cache.delete('k');                 // Map#delete -> boolean
+    #
+    #        Semgrep OSS has no type inference, so "does this return a
+    #        promise" is unanswerable. The only signal available is naming,
+    #        and the verb alone is not enough of it — the RECEIVER carries
+    #        the other half. The `$O` metavariable-regex below is therefore
+    #        a second naming heuristic layered on the first, and the rule's
+    #        honest claim is now narrower and stated: it fires when BOTH the
+    #        method name AND the receiver name say "persistence boundary".
+    #        It is an unanchored substring search over the receiver's own
+    #        text, so it reaches a member path (`db.users.save(...)` matches
+    #        on `db`) and a qualified field (`this.userRepository.save(...)`
+    #        on `repositor`), while `res`, `h`, `cache` and a chained
+    #        `res.status(200)` all fail it. misses/race-sync-lookalikes.ts
+    #        exists solely to make this clause load-bearing: delete it and
+    #        all five of its functions fire.
+    #        The cost, stated: a repository whose variable is named
+    #        something else entirely is now invisible. That is the price of
+    #        not flagging every Express route in the world.
+    #
+    #    (b) DELIBERATELY HANDLED PROMISES WERE NOT EXCLUDED. Eight of the
+    #        twelve were floating on their own line ON PURPOSE, handed to
+    #        something that does await or handle them — including, and this
+    #        one matters beyond its own line, `void repo.save(a)`: THE FIX
+    #        THIS RULE'S OWN MESSAGE PRESCRIBES. A rule whose prescribed fix
+    #        does not silence it teaches people to ignore it. One clause per
+    #        shape (`void`, `Promise.all`/`allSettled`/`race`/`any`,
+    #        `.catch`/`.then`/`.finally` continuation, capture-then-await,
+    #        expression-bodied-arrow return), one function per clause in
+    #        misses/race-handled-promise.ts, so each is independently
+    #        ablatable — except the last, which needed no clause at all: a
+    #        dedicated `pattern-not-inside: (...) => $O.$M(...)` was written,
+    #        ablated, and REMOVED after measuring that the pre-existing
+    #        `return $O.$M(...)` clause already covers an expression-bodied
+    #        arrow. Semgrep treats the implicit return as a return, so
+    #        `ids.map((id) => repo.save(id))` was excluded either way. The
+    #        near-miss stays, now attributed to the clause that actually
+    #        does the work.
+    #        Note `Promise.$PM(...)` needs its OWN metavariable rather than
+    #        reusing `$M`: `$M` is pinned to the verb list by the regex
+    #        below, `all` is not in it, and so the pre-existing
+    #        `await $O.$M(...)` clause could never exclude an
+    #        `await Promise.all([repo.save(a)])`.
+    #        The capture clause (`$VAR = $O.$M(...)`) is the one real trade
+    #        in this group: `const p = repo.save(a);` that is never awaited
+    #        IS a bug, and is now silent. Capturing the promise is a
+    #        deliberate act and the auditor's `fp7_deferredAwait` is the far
+    #        more common reading of it; measured, this clause removes two
+    #        false positives and no true ones from the corpus.
+    #
+    #    After both groups: 3 fires on p06, all real (an async class method,
+    #    an async object-literal method, and `db.users.save({})`), 0 false.
+    #    Still WARNING, unchanged — nothing here makes the output "always a
+    #    bug", it makes it plausible often enough to be worth reading.
     patterns:
       - pattern: $O.$M(...)
       - pattern-either:
@@ -210,8 +449,21 @@ rules:
       - metavariable-regex:
           metavariable: $M
           regex: ^(save|update|delete|create|insert|commit|send)$
+      # Receiver half of the naming heuristic — see point 4(a). Unanchored on
+      # purpose: it must reach `db.users` and `this.userRepository`.
+      - metavariable-regex:
+          metavariable: $O
+          regex: (?i)(repo|repositor|\bdb\b|database|dao|store|model|orm|prisma|knex|sequelize|mongo|collection|conn|session|\btx\b|\btrx\b|entitymanager|client|queue|producer|publisher|mailer)
       - pattern-not-inside: await $O.$M(...)
       - pattern-not-inside: return $O.$M(...)
+      # Deliberately-handled shapes — see point 4(b). One per near-miss
+      # function in misses/race-handled-promise.ts.
+      - pattern-not-inside: void $VOIDED
+      - pattern-not-inside: Promise.$PM(...)
+      - pattern-not-inside: $O.$M(...).catch(...)
+      - pattern-not-inside: $O.$M(...).then(...)
+      - pattern-not-inside: $O.$M(...).finally(...)
+      - pattern-not-inside: $VAR = $O.$M(...)
     message: >-
       Chamada que altera estado sem await. Quem chama continua como se a
       escrita tivesse terminado — é ao mesmo tempo uma race e um happy path
@@ -225,14 +477,31 @@ rules:
   # (with-initial) call, and `parseInt($S)` naturally excludes the
   # two-argument (with-radix) call, with no exclusion clause needed. Proven
   # against both near-miss fixtures.
+  #
+  # (audit wave) reduce gained one exclusion, from the auditor's p07: an
+  # ARRAY LITERAL with elements is provably non-empty, so `[1, 2, 3]
+  # .reduce(add)` cannot throw the TypeError this rule is about. Two false
+  # positives were measured and left open rather than guessed at: a
+  # `.reduce()` on an RxJS Observable (a name collision, which completes
+  # empty rather than throwing) and a call guarded by an explicit
+  # `if (xs.length === 0) return 0;` one line above — the second being
+  # precisely the "correctness depends on recognising a guard" case that
+  # keeps this rule at WARNING. reduceRight has the identical hazard and is
+  # still not covered.
   - id: bugfix-js-edge-case-reduce-without-initial
-    pattern: $A.reduce($F)
+    patterns:
+      - pattern: $A.reduce($F)
+      - pattern-not: "[...].reduce($F)"
     message: >-
       reduce() sem valor inicial rebenta com TypeError num array vazio.
       Passa um segundo argumento como valor inicial.
     severity: WARNING
     languages: [javascript, typescript]
 
+  # (audit wave) Unchanged, and confirmed correct at INFO — the tier already
+  # matched what the criterion asks for. Known gaps from p07, recorded:
+  # `Number.parseInt(s)` (the ES2015 alias, identical hazard) and
+  # `parseInt(s, undefined)`.
   - id: bugfix-js-edge-case-parseint-without-radix
     pattern: parseInt($S)
     message: >-
@@ -246,12 +515,59 @@ rules:
   # mapSubcategory's error_handling regex also matches. They classify as
   # null_safety only because that branch runs earlier in the if-chain — see
   # the dedicated classification test in bugfixRulesJs.test.ts.
+
+  # (audit wave) THE RULE WITH ZERO TRUE POSITIVES. `$A.find(...).$PROP`
+  # fired nine times on the auditor's p09 and was wrong every single time,
+  # because `find` is one of the most overloaded method names in the JS
+  # ecosystem and `...` accepts any argument at all:
+  #
+  #   User.find({ active: true }).sort({ name: 1 })  // Mongoose Query
+  #   User.find({}).lean()  /  .exec()               // Mongoose
+  #   collection.find({}).toArray()                  // Mongo driver cursor
+  #   $('#root').find('.item').addClass('active')    // jQuery / Cheerio
+  #   page.find('button').click()                    // locator API
+  #   repo.find({}).length                           // repository find-all
+  #
+  # In any Node backend on Mongoose or the Mongo driver, or any page using
+  # jQuery, this fired at ERROR on essentially every query and advised `?.` —
+  # advice that is simply wrong for a Query object, in the same way the Java
+  # pack's `$O.get()` rule advised `getOrDefault` on a `List`.
+  #
+  # Semgrep OSS cannot ask what `find` returned, so the question was reduced
+  # to what CAN be asked honestly: the ARGUMENT. `Array.prototype.find` is
+  # the only `.find(` in this list that takes a single LITERAL CALLBACK —
+  # Mongoose and the Mongo driver take a query object, jQuery/Cheerio and
+  # locator APIs take a selector string, and Immutable's `find(fn, ctx,
+  # notSetValue)` takes three arguments and returns the supplied default.
+  # Requiring `(...) => ...` as the sole argument silences all nine with one
+  # clause, and misses/find-non-array.ts pins every one of them.
+  #
+  # Verified while writing it, and worth recording because it removed a
+  # clause: `(...) => ...` ALSO matches a `function (u) { ... }` expression
+  # in this Semgrep version, so a separate function-expression alternative
+  # would have been dead code, not extra coverage. `findLast` (ES2023) has
+  # identical semantics and is a genuinely separate branch — deleting it
+  # turns hits/unchecked-find.ts's `lastNamed` red.
+  #
+  # The narrowing is real and the cost is stated: a NAMED predicate
+  # (`users.find(byId).name`) is a real Array#find and is now invisible,
+  # because a bare identifier argument is exactly what a Mongoose query
+  # variable looks like too. That is the honest trade — a much narrower rule
+  # was the right answer.
+  #
+  # WARNING, not ERROR: a preceding `if (users.some(p))` makes the deref
+  # safe, and recognising that guard is what a syntactic matcher cannot
+  # promise. Also still missed, and recorded: the result stored in a variable
+  # first, a `!` non-null assertion, `filter(p)[0].prop`, and destructuring.
   - id: bugfix-js-null-safety-unchecked-find
-    pattern: $A.find(...).$PROP
+    patterns:
+      - pattern-either:
+          - pattern: $A.find((...) => ...).$PROP
+          - pattern: $A.findLast((...) => ...).$PROP
     message: >-
       .find() devolve undefined quando nada corresponde, e a propriedade é
       acedida sem verificar. Usa ?. ou verifica o resultado antes de aceder.
-    severity: ERROR
+    severity: WARNING
     languages: [javascript, typescript]
 
   # `[$I]` (plain, non-optional computed member access) and `?.[$I]`
@@ -293,15 +609,15 @@ rules:
   # earlier version of this comment generalised it to `metavariable-regex`
   # too ("this holds ... for metavariable-regex alike") and told future
   # authors not to bother re-trying anchors here at all — that
-  # generalisation is FALSE, caught only because line 134's own verb-list
-  # regex (`^(save|update|delete|create|insert|commit|send)$`) depends on
-  # the trailing `$` working. Measured directly, same Semgrep version, four
+  # generalisation is FALSE, caught only because the verb-list regex above
+  # (`^(save|update|delete|create|insert|commit|send)$`) depends on the
+  # trailing `$` working. Measured directly, same Semgrep version, four
   # `metavariable-regex` rules over one file containing `a.save()`,
   # `a.saveAll()`, `a.autosave()`: `save` matches `save` AND `saveAll`
   # (prefix-anchored, not full-match); `save$` matches `save` ONLY; `^save`
   # matches both; `^save$` matches `save` ONLY. `$` anchors correctly in
   # `metavariable-regex` and is fully load-bearing there — dropping it from
-  # line 134 would make `document.createElement()`, `res.sendStatus()`,
+  # the verb list would make `document.createElement()`, `res.sendStatus()`,
   # `crypto.createHash()` and any `saveAll`/`updateMany`-style method fire
   # as false positives (see misses/race-condition.ts's `bulkSave`, added to
   # prove exactly this). Do not spend time re-trying `^`/`$` in a future
@@ -334,12 +650,34 @@ rules:
   # elimination — it fires anyway. That is a false positive on a
   # doubly-optional-chained expression nobody has written in this codebase's
   # fixtures or (as far as this investigation went) in the wild; it is
-  # accepted rather than chased further, and it fails in the safer direction
-  # for an ERROR-tier rule (over-flagging rare correct code) rather than the
-  # direction this whole fix exists to close (silently missing a real bug).
+  # accepted rather than chased further.
+  #
+  # (audit wave) One false negative closed, one false positive measured and
+  # deliberately NOT closed, and the tier corrected.
+  #
+  #  - CLOSED: `RegExp#exec` has the identical null-on-no-match contract and
+  #    is indexed just as unguarded (`/x(\d)/.exec(s)[1]`). The rule only
+  #    knew `String#match`. New `pattern-either` branch.
+  #  - NOT CLOSED, on purpose: a name collision on a non-string matcher
+  #    object that returns an array (`matcher.match(url)[0]`, iso/i2.ts [G]).
+  #    The only available discriminator is the ARGUMENT — requiring a regex
+  #    literal would silence it — but that also silences
+  #    hits/unchecked-match.ts's `firstGroupFromConfig`, where the pattern is
+  #    legitimately built from config at runtime, and `s.match(re)[1]` with a
+  #    RegExp variable is the ordinary way to write this rule's true
+  #    positives. Measured: the fix costs more true positives than the false
+  #    positive it removes, so it is recorded instead.
+  #  - ERROR -> WARNING: the auditor's `if (!re.test(s)) return '';` case is
+  #    a genuine guard the rule cannot see, which is exactly the criterion.
+  #
+  # Still missed, recorded: `.groups`, `.length` and other property (rather
+  # than index) accesses on the result, a `!` non-null assertion, and the
+  # result stored in a variable first.
   - id: bugfix-js-null-safety-unchecked-match
     patterns:
-      - pattern: $S.match($ARG)[$I]
+      - pattern-either:
+          - pattern: $S.match($ARG)[$I]
+          - pattern: $RE.exec($S)[$I]
       - pattern-not:
           patterns:
             - pattern: $S.match($ARG)[$I]
@@ -348,17 +686,43 @@ rules:
                 metavariable: $ARG
                 comparison: "'?.[' not in str($ARG)"
     message: >-
-      .match() devolve null quando não há correspondência, e o resultado é
-      indexado sem verificar. Usa ?.[$I] ou verifica o resultado antes.
-    severity: ERROR
+      .match()/.exec() devolvem null quando não há correspondência, e o
+      resultado é indexado sem verificar. Usa ?.[$I] ou verifica o resultado
+      antes.
+    severity: WARNING
     languages: [javascript, typescript]
 
+  # (audit wave) Two false negatives closed, both from the auditor's p10, by
+  # generalising the access rather than adding cases:
+  #
+  #  - `process.env['KEY'].trim()` — bracket access, which is what you MUST
+  #    write when the key is dynamic or contains a dash.
+  #  - `process.env.KEY.length` — a PROPERTY read rather than a method call.
+  #    `.length` on undefined throws exactly as hard as `.trim()` does, and
+  #    the old `process.env.$X.$M(...)` required a call.
+  #
+  # Matching the member access (`.$P`) rather than the call also means a
+  # method call produces ONE finding, not two: `process.env.X.trim()`
+  # contains the member access `process.env.X.trim` as a sub-node, so the
+  # narrower pattern is the only one that matches. Verified.
+  #
+  # Optional chaining stays silent with no exclusion clause, because plain
+  # DOT access does not match `?.` in this Semgrep version (unlike bracket
+  # access — see the unchecked-match comment above for that asymmetry).
+  #
+  # Stays at WARNING. One measured false positive left open: `process.env
+  # .NODE_ENV`, which Node and every bundler define in practice. Still
+  # missed: destructuring (`const { API_URL } = process.env`) and aliasing
+  # (`const env = process.env`), both of which need dataflow.
   - id: bugfix-js-null-safety-unchecked-env
-    pattern: process.env.$X.$M(...)
+    patterns:
+      - pattern-either:
+          - pattern: process.env.$X.$P
+          - pattern: process.env[$K].$P
     message: >-
-      Variável de ambiente pode ser undefined; chamar um método diretamente
-      nela rebenta em runtime se não estiver definida. Usa ?. ou um
-      fallback (?? '').
+      Variável de ambiente pode ser undefined; aceder a uma propriedade ou
+      chamar um método diretamente nela rebenta em runtime se não estiver
+      definida. Usa ?. ou um fallback (?? '').
     severity: WARNING
     languages: [javascript, typescript]
 
@@ -389,13 +753,51 @@ rules:
   # codebase, useEffect or not. misses/listener-without-cleanup.ts and
   # misses/subscribe-without-unsubscribe.ts each gained a module-scope call
   # with no enclosing useEffect to close this.
+  #
+  # (audit wave) THE ARITY WAS THE WHOLE RULE'S BLIND SPOT.
+  # `$EL.addEventListener($EVT, $HANDLER)` takes EXACTLY two arguments, so
+  # every modern registration was invisible: `{ passive: true }`,
+  # `{ capture: true }`, `{ once: true }`, `{ signal }`, and the legacy
+  # boolean third argument. Widened to `(...)`, which is the single change
+  # that closes all five (iso/i1.ts [B]/[B']).
+  #
+  # An AbortSignal exclusion was drafted and then DROPPED rather than
+  # shipped: `{ signal }` registrations that are correct are already
+  # excluded by the cleanup clause below (the effect returns `() =>
+  # c.abort()`), and a `{ signal }` whose controller is never aborted is a
+  # genuine leak. The clause could not be made load-bearing without a
+  # fixture asserting the wrong thing, so it is not here. See
+  # misses/listener-modern-cleanup.ts.
+  #
+  # The exclusion also gained an ORDER requirement: it now needs the
+  # registration to appear BEFORE the `return`, instead of merely asking
+  # whether a `return` exists anywhere in the effect. Without it, an early
+  # `if (enabled) { return () => undefined; }` suppressed the leak in the
+  # branch AFTER it — the "guard on the `if` suppresses the branch where the
+  # bug is" case (auditor's p12 FN-4).
+  #
+  # ERROR -> WARNING, and this also settles a tier inconsistency that had no
+  # principle behind it: this rule and subscribe-without-unsubscribe below
+  # are structurally identical and sat on different tiers. Both are WARNING
+  # now, because both depend on recognising a cleanup.
+  #
+  # LIMITATION, from the same measurement and unavoidable with this
+  # primitive: `pattern-not-inside` cannot be made relative to the
+  # OCCURRENCE being judged, only to the enclosing node. So a returned
+  # cleanup still covers for a SECOND, uncleaned registration on the same
+  # `$EL` in the same effect, and a cleanup that removes nothing
+  # (`return () => {};`) still suppresses. Also still missed: registrations
+  # in a class component's `componentDidMount`, in a helper the effect
+  # calls, and inside `useLayoutEffect`.
   - id: bugfix-js-memory-leak-listener-without-cleanup
     patterns:
-      - pattern: $EL.addEventListener($EVT, $HANDLER)
+      - pattern: $EL.addEventListener(...)
       - pattern-inside: |
           useEffect(() => { ... }, ...)
       - pattern-not-inside: |
           useEffect(() => {
+            ...
+            $EL.addEventListener(...);
             ...
             return $CLEANUP;
             ...
@@ -403,74 +805,106 @@ rules:
     message: >-
       addEventListener dentro de useEffect sem função de cleanup. O
       listener fica preso depois do componente desmontar — memory leak.
-    severity: ERROR
+    severity: WARNING
     languages: [javascript, typescript]
 
   # "Same scope" = same enclosing function, taken literally: the handle
   # variable must be passed to clearInterval somewhere within the SAME
   # function body that created it (including nested closures within that
   # body, such as a useEffect's returned cleanup) — not merely anywhere
-  # later in the file. Two independent shapes are excluded: a plain function
-  # calling clearInterval directly (first clause below), and a useEffect
-  # returning a cleanup (second clause below) — proven by
-  # misses/interval-without-clear.ts's near-miss functions, which the
-  # bugfix-rules-jsts fix wave rewrote as ARROW COMPONENTS specifically so
-  # the first (function-declaration-shaped) clause cannot silently take
-  # credit for excluding them; see below for why that mattered.
+  # later in the file.
   #
-  # (bugfix-rules-jsts fix wave) A THIRD pattern-not-inside used to sit here,
-  # written for the useEffect cleanup's EXPRESSION-bodied arrow form only
-  # (`return () => clearInterval($T);`, no braces), on the stated belief
-  # that the remaining, BLOCK-bodied clause below (`return () => { ...;
-  # clearInterval($T); ... };`) could not also match it — same lesson as the
-  # listener/subscribe rules' generic `return $CLEANUP` trick not applying
-  # to a concrete call, or so the reasoning went. That belief was never
-  # checked against a fixture that could tell the two clauses apart: both
-  # near-miss functions were `export function ...(...) { ... }`
-  # declarations, already fully excluded by the first clause above
-  # regardless of what either useEffect clause did — proven by mutation:
-  # deleting BOTH useEffect clauses at once still left the near-miss file
-  # silent. Measured directly on an isolated arrow-component probe (both
-  # cleanup shapes, each clause deleted independently): the block-bodied
-  # clause ALONE silences BOTH the expression-bodied and block-bodied safe
-  # cases; deleting the expression-bodied clause while keeping the
-  # block-bodied one changes nothing on any shape tested. So the
-  # expression-bodied clause was redundant, not merely unproven, and is
-  # removed here rather than given a fixture that could never make it
-  # independently load-bearing while the block-bodied clause remains. One
-  # pattern-not-inside now does both jobs; the near-miss functions were
-  # rewritten as arrow components (not `function` declarations) so THIS
-  # clause, not the first one, is what the suite actually exercises —
-  # confirmed by deleting it and watching both near-misses fire.
+  # (audit wave) REWRITTEN on both sides, because it had the pack's worst
+  # false NEGATIVE and a false positive whose discriminator was the wrong
+  # thing entirely.
+  #
+  #  - `const $T = ` was MANDATORY, so `setInterval(tick, 1000);` with no
+  #    handle captured at all was silent — an interval nobody can ever clear,
+  #    which is the strongest version of this bug (iso/i1.ts [C'']). Also
+  #    silent for the same reason: `let t =`, `ref.current =`, `this.t =`.
+  #    Measured while fixing it, and it collapses four cases into one:
+  #    `$T = setInterval(...)` matches a `const`/`let`/`var` DECLARATOR as
+  #    well as a plain assignment, so the first branch below covers every
+  #    captured form and binds `$T` to whatever the handle actually is —
+  #    including `this.t`, so the exclusion then looks for
+  #    `clearInterval(this.t)`, which is exactly right. The second branch
+  #    catches the uncaptured call, excluding the captured ones so a single
+  #    line cannot produce two findings.
+  #  - The two exclusions recognised a `function` declaration and a
+  #    `useEffect`. So an ARROW that calls `clearInterval(t)` two lines later
+  #    still fired, while the byte-identical body inside a `function`
+  #    declaration was correctly silent: the discriminator was the shape of
+  #    the CONTAINER, not whether the timer was cleared (iso/i1.ts [C]/[C']).
+  #    Replaced by one generic arrow clause and one generic
+  #    function-declaration clause.
+  #
+  # Two clauses, not four: a `return () => { ... clearInterval($T); ... }`
+  # variant was drafted for each container and then dropped after measuring
+  # that the DIRECT clause already excludes the returned-cleanup shape —
+  # block-level `...` reaches the nested arrow. Verified per container on the
+  # auditor's p13 by deleting each clause independently; the two that remain
+  # are each load-bearing (delete the arrow one and four near-misses in
+  # misses/interval-cleared-shapes.ts fire; delete the declaration one and
+  # the other two do), and the ones removed changed nothing on any shape
+  # tested. This also retires the previous wave's separate useEffect clause:
+  # a useEffect callback IS an arrow, so the generic clause subsumes it.
+  #
+  # Stays at WARNING. Still fires, and correctly by this rule's own scope
+  # rule, when the handle is stashed in a module-level variable and cleared
+  # from a DIFFERENT function — "same function" is the deliberate choice, and
+  # hits/ and misses/interval-without-clear.ts carry a sibling-decoy pair on
+  # each side of it. Not covered: a cleanup registered through a callback the
+  # rule cannot follow, e.g. `registry.add(() => clearInterval(t))` at a
+  # nesting the block ellipsis does not reach.
   - id: bugfix-js-memory-leak-interval-without-clear
     patterns:
-      - pattern: const $T = setInterval(...)
-      - pattern-not-inside: |
-          function $F(...) {
-            ...
-            const $T = setInterval(...);
-            ...
-            clearInterval($T);
-            ...
-          }
-      - pattern-not-inside: |
-          useEffect(() => {
-            ...
-            const $T = setInterval(...);
-            ...
-            return () => {
-              ...
-              clearInterval($T);
-              ...
-            };
-            ...
-          }, ...)
+      - pattern-either:
+          # Captured handle, in any of const / let / var / field / ref form.
+          - patterns:
+              - pattern: $T = setInterval(...)
+              - pattern-not-inside: |
+                  function $F(...) {
+                    ...
+                    clearInterval($T);
+                    ...
+                  }
+              - pattern-not-inside: |
+                  (...) => {
+                    ...
+                    clearInterval($T);
+                    ...
+                  }
+          # No handle at all — nobody can ever clear this one.
+          - patterns:
+              - pattern: setInterval(...)
+              - pattern-not-inside: $ANYT = setInterval(...)
+              - pattern-not-inside: return setInterval(...)
     message: >-
       setInterval cujo handle nunca é passado a clearInterval na mesma
-      função. O temporizador continua a correr para sempre — memory leak.
+      função — ou que nem sequer é guardado, e por isso nunca poderá ser
+      cancelado. O temporizador continua a correr para sempre — memory leak.
     severity: WARNING
     languages: [javascript, typescript]
 
+  # (audit wave) Same ordering repair as the listener rule above — a cleanup
+  # returned from one branch used to suppress an uncleaned subscription in
+  # the other (auditor's p14 FN-1) — plus two false positives closed:
+  #
+  #  - `finite$.pipe(take(1)).subscribe(...)`: an auto-completing observable
+  #    needs no unsubscribe, and this is the idiomatic RxJS way to say so.
+  #    Excluded by name, on the pipe operator, via the same
+  #    text-on-a-metavariable technique used elsewhere in this file.
+  #  - `void mailingList.subscribe('a@b.c')`: a name collision on something
+  #    that is not a subscription at all, explicitly voided.
+  #
+  # Already WARNING; unchanged, and now consistent with the listener rule
+  # rather than accidentally one tier apart from it. Carries the same
+  # occurrence-relative limitation stated there: two subscriptions on the
+  # same receiver with only one cleaned still go silent, and so does a
+  # cleanup that does nothing. Structurally out of reach: Angular's
+  # `ngOnInit`, Vue's `onMounted`, Svelte's `onMount` — none of them a
+  # useEffect — and `emitter.on(...)`, which is the same leak class under a
+  # different verb.
   - id: bugfix-js-memory-leak-subscribe-without-unsubscribe
     patterns:
       - pattern: $O.subscribe(...)
@@ -479,9 +913,18 @@ rules:
       - pattern-not-inside: |
           useEffect(() => {
             ...
+            $O.subscribe(...);
+            ...
             return $CLEANUP;
             ...
           }, ...)
+      - pattern-not-inside: void $VOIDEDSUB
+      - pattern-not:
+          patterns:
+            - pattern: $X.pipe(..., $OP, ...).subscribe(...)
+            - metavariable-regex:
+                metavariable: $OP
+                regex: ^(take|takeUntil|takeWhile|first|last)\(
     message: >-
       subscribe() dentro de useEffect sem função de cleanup. A subscrição
       fica presa depois do componente desmontar — memory leak.
