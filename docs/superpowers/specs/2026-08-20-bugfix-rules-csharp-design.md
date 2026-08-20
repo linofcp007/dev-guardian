@@ -14,10 +14,18 @@ ran" is worth nothing:
 | --- | --- | --- |
 | `p/r2c-bug-scan` | `paths.scanned = 0` — **the pack ships no C# rules at all** | fires `useless-eqeq` on a Python control, so the pack is live |
 | `p/csharp` | `scanned = 9`, **0 findings** | fires `csharp-sqli` on a concatenated-SQL control |
-| `p/security-audit` | `scanned = 9`, **0 findings** | same control |
+| `p/security-audit` | `scanned = 9`, **0 findings** | **none — see below** |
 
 Java was "4 rules, none in a bug class". C# is **no rules**. Every rule below is
 additive by measurement, not by assumption.
+
+**One correction to an earlier draft, made during Task 5.** This document
+claimed `p/security-audit` fires `csharp-sqli` on a concatenated-SQL control.
+It does not — measured against eleven classic vulnerable C# shapes across two
+batteries, it fires on **none** of them. So that pack has **no positive
+control**, and the honest remaining claim is the weaker one: `paths.scanned > 0`
+proves it has C# rules and ran them. Said plainly rather than fudged, because a
+control that does not control is worse than an acknowledged gap.
 
 ## 2. The three rules that govern every rule
 
@@ -57,7 +65,11 @@ Unchanged: **`ERROR`** where what the rule *emits* is always a bug;
 **`WARNING`** where it is usually a bug but has legitimate uses. The deciding
 question is what the rule emits, not what class of defect it targets.
 
-**2 ERROR of 11.** For scale: Java 1 of 8, JS/TS 1 of 13, Python + Go 2 of 19.
+**2 ERROR of 12.** For scale: Java 1 of 8, JS/TS 1 of 13, Python + Go 2 of 19.
+
+(An earlier draft of this document said eleven and then enumerated twelve in
+this very section. The arithmetic was mine; the pack has twelve `- id:` entries
+and no rule is missing.)
 
 That is not generosity. C# contains one defect — `throw ex;` inside a `catch` —
 whose *correct* form (`throw;`) is a **different AST node**. That is the only
@@ -65,7 +77,7 @@ shape that clears §4 in an engine without dataflow: there is no guard to
 recognise, because there is nothing to guard. Everywhere else, correctness
 depends on a guard the rule cannot see, and the tier follows.
 
-## 5. The eleven rules
+## 5. The twelve rules
 
 Ids follow `bugfix-cs-<class-token>-<name>`, because `mapSubcategory` classifies
 by regex over the lowercased id. All 17 candidate ids were run through the
