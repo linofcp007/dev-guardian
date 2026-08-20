@@ -152,6 +152,31 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     ids: ['bugfix-php-error-handling-empty-catch'],
     count: 6,
   },
+  'json_decode.php': {
+    // SIX, and the last two are the ones that matter under ablation.
+    //
+    // Four are the plain shapes: a dereference straight off the call, the
+    // same through a local, a subscript off the call, and a method call on
+    // the decoded value.
+    //
+    // The fifth and sixth are guarded bugs, in hits/ deliberately. Ablation
+    // axis 2 asks whether removing an exclusion REVEALS a finding here, and
+    // an exclusion that swallows a real bug is invisible unless the bug sits
+    // beside the guard shape that exclusion matches. One has a null check on
+    // a DIFFERENT variable; the other has an `isset()` on a DIFFERENT
+    // property than the one it goes on to read. Both are unguarded reads, and
+    // both would be swallowed by an exclusion keyed one notch too wide.
+    ids: ['bugfix-php-null-safety-json-decode-deref'],
+    count: 6,
+  },
+  'loose_null.php': {
+    // Six over four patterns: `$x == null`, `$x != null` and both with `null`
+    // on the left, plus two shouty spellings. `null` in a Semgrep pattern is
+    // CASE-INSENSITIVE, so `NULL` and `Null` need no branches of their own —
+    // the two extra fixtures are the measurement of that, not padding.
+    ids: ['bugfix-php-null-safety-loose-null-compare'],
+    count: 6,
+  },
   'off_by_one.php': {
     // THIRTEEN, and the breakdown is the point: the rule has two branches
     // (the count in the condition, and the count hoisted into a local) and
@@ -259,6 +284,14 @@ const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
   // with `@` — and an invariant is not visible to a syntactic matcher. That is
   // the WARNING profile exactly.
   'bugfix-php-edge-case-strpos-truthiness': 'WARNING',
+  // The two null_safety rules, and they are the clearest illustration of the
+  // §3 criterion in the pack: `json-decode-deref` is correct ONLY where it has
+  // recognised a guard, and a guard can always be one call away, outside any
+  // syntactic matcher's reach. `loose-null-compare` fails the bar from the
+  // other side — `== null` is the RIGHT comparison when the domain really
+  // means "empty or absent", and that intent is not in the syntax.
+  'bugfix-php-null-safety-json-decode-deref': 'WARNING',
+  'bugfix-php-null-safety-loose-null-compare': 'WARNING',
 };
 
 describe('bugfix-php rules', () => {
@@ -361,6 +394,8 @@ const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-php-race-condition-toctou-file': 'race_condition',
   'bugfix-php-error-handling-empty-catch': 'error_handling',
   'bugfix-php-edge-case-strpos-truthiness': 'edge_case',
+  'bugfix-php-null-safety-json-decode-deref': 'null_safety',
+  'bugfix-php-null-safety-loose-null-compare': 'null_safety',
 };
 
 describe('every rule id classifies as its own class', () => {

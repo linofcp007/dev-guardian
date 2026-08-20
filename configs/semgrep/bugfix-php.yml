@@ -315,3 +315,115 @@ rules:
       veracidade do valor.
     severity: WARNING
     languages: [php]
+
+  # ESTA REGRA SO EXISTE POR CAUSA DE UM `pattern-not-regex`, e isso é uma
+  # EXCEÇAO DELIBERADA e nao um descuido. O `base.yml` documenta o
+  # `pattern-not-regex` como armadilha — é um guarda de TEXTO sobre uma regra
+  # de AST, casa comentarios e strings, e nao acompanha o codigo. Aqui nao ha
+  # alternativa: `?->` e `->` sao O MESMO NO no parser de PHP do Semgrep,
+  # confirmado nos dois sentidos e por `--dump-ast`. Um `pattern-not: $V?->$M`
+  # nao exclui o idioma seguro — APAGA a regra inteira, porque casa tambem
+  # todas as ocorrencias que ela devia encontrar. Igual em forma ao `&.`
+  # apagado do Ruby e ao `using` apagado do C#.
+  #
+  # AS EXCLUSOES DE `isset`/`empty` FORAM O CODIGO REAL A DECIDIR, nao a
+  # simetria: sem elas a regra produziu QUATRO falsos positivos no WordPress
+  # 6.9, todos guardados por `isset($res->error)`. Com elas: 0 em 1467
+  # ficheiros. E o zero corta para os dois lados — nem falsos positivos nem
+  # verdadeiros positivos; a forma é rara no WordPress.
+  #
+  # As exclusoes sao ancoradas na MESMA VARIAVEL do dereference, nunca na
+  # mesma propriedade. Um `isset($o->error)` nao protege um `$o->title` a
+  # seguir, e a fixture de hits carrega essa forma exatamente para provar que
+  # a exclusao nao é larga de mais.
+  #
+  # O `pattern-inside` DO SEGUNDO RAMO DA FLAG NO EIXO 2 DA ABLAÇAO, e é
+  # esperado. Ele nao é uma exclusao: é o termo POSITIVO que liga `$V->$M` ao
+  # `json_decode`. Remove-lo faz o ramo casar QUALQUER acesso a propriedade em
+  # qualquer ficheiro — 13 revelações em `hits/`, quase todas `$this->risky()`
+  # nas fixtures da regra do catch vazio. O eixo 2 pergunta se remover um
+  # clause revela findings em hits/ e nao consegue distinguir um verdadeiro
+  # positivo revelado de um ramo positivo a fazer o seu trabalho.
+  #
+  # O SEGUNDO RAMO SO COBRE `$v->$m`, NUNCA `$v[...]` atraves de um local, e é
+  # de proposito: um subscript sobre null é um warning e uma leitura nula, nao
+  # um fatal, e a forma é comum de mais para ser acusada. Escrito aqui para
+  # que ninguem "complete" a regra a acrescenta-la.
+  #
+  # WARNING e nao ERROR: a correção depende inteiramente de ter reconhecido um
+  # guarda, e um guarda pode estar sempre a uma chamada de distancia.
+  - id: bugfix-php-null-safety-json-decode-deref
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: 'json_decode(...)->$M'
+              - pattern: 'json_decode(...)[...]'
+          - pattern-not-regex: '\?->'
+          - pattern-not: 'json_decode(..., JSON_THROW_ON_ERROR)->$M'
+          - pattern-not: 'json_decode(..., JSON_THROW_ON_ERROR)[...]'
+      - patterns:
+          - pattern: '$V->$M'
+          - pattern-inside: |
+              $V = json_decode(...);
+              ...
+          - pattern-not-regex: '\?->'
+          - pattern-not-inside: |
+              $V = json_decode(..., JSON_THROW_ON_ERROR);
+              ...
+          - pattern-not-inside: |
+              if ($V === null) { return ...; }
+              ...
+          - pattern-not-inside: |
+              if ($V === null) { throw ...; }
+              ...
+          - pattern-not-inside: |
+              if (!is_object($V)) { return ...; }
+              ...
+          - pattern-not-inside: |
+              if (!isset($V->$P)) { return ...; }
+              ...
+          - pattern-not-inside: 'if ($V !== null) { ... }'
+          - pattern-not-inside: 'if (is_object($V)) { ... }'
+          - pattern-not-inside: 'isset($V->$M)'
+          - pattern-not-inside: 'empty($V->$M)'
+          - pattern-not-inside: 'if (isset($V->$P)) { ... }'
+    message: >-
+      `json_decode()` devolve null quando o payload é invalido, e o
+      dereference a seguir é um "Attempt to read property on null" — o valor
+      lido é null e o programa segue com ele. Verifique o null, use `?->`, ou
+      passe `JSON_THROW_ON_ERROR` para que um payload mau lance em vez de
+      devolver null.
+    severity: WARNING
+    languages: [php]
+
+  # A REGRA MAIS FRACA DO PACK, e é dito aqui em vez de ficar implicito. O
+  # `WordPress.PHP.StrictComparisons` do WPCS ja cobre esta comparação, por
+  # isso a alegação de ser aditiva so se sustenta onde o phpcs+WPCS nao esta
+  # instalado — o que o `scan_wordpress` trata como opcional — ou fora do
+  # WordPress. Nao duplica nenhum pack do registo (esses nao trazem regra
+  # nenhuma para isto), mas duplica uma ferramenta que muitos projetos de PHP
+  # ja correm.
+  #
+  # `null` NUM PADRAO É INSENSIVEL A MAIUSCULAS, por isso `NULL` e `Null` sao
+  # apanhados pelos mesmos quatro padroes e nao precisam de ramos proprios.
+  # Medido, com fixture.
+  #
+  # As duas ordens dos operandos sao padroes separados porque o no da
+  # comparação nao é normalizado.
+  #
+  # WARNING e nao ERROR: `== null` é a comparação certa quando o que se quer
+  # mesmo é "vazio ou ausente", que é uma decisao de dominio invisivel a um
+  # matcher sintatico.
+  - id: bugfix-php-null-safety-loose-null-compare
+    pattern-either:
+      - pattern: '$X == null'
+      - pattern: '$X != null'
+      - pattern: 'null == $X'
+      - pattern: 'null != $X'
+    message: >-
+      Comparação solta com null. `== null` é verdadeiro para 0, '', '0', []
+      e false, por isso uma string vazia legitima ou uma quantidade zero sao
+      reportadas como "em falta". Use `=== null` (ou `!== null`), ou `??` se o
+      que quer é um valor por omissao.
+    severity: WARNING
+    languages: [php]
