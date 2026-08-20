@@ -256,7 +256,12 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'reduce-without-initial.ts': { ids: ['bugfix-js-edge-case-reduce-without-initial'], count: 1 },
   'subscribe-without-unsubscribe.ts': {
     ids: ['bugfix-js-memory-leak-subscribe-without-unsubscribe'],
-    count: 2, // Watcher, BranchWatcher (cleanup returned from the other branch)
+    // Watcher, BranchWatcher (cleanup returned from the other branch), and
+    // MappedWatcher — a `.pipe(map(...)).subscribe()` that the pipe-operator
+    // exclusion must NOT swallow. Added because ablation measured the
+    // operator-name regex DEAD: the near-miss it was written for stays
+    // silent whether or not the regex is there.
+    count: 3,
   },
   'unchecked-env.ts': {
     ids: ['bugfix-js-null-safety-unchecked-env'],
@@ -268,7 +273,12 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   },
   'unchecked-match.ts': {
     ids: ['bugfix-js-null-safety-unchecked-match'],
-    count: 3, // firstGroup, firstGroupFromConfig (see the module comment), exec
+    // firstGroup, firstGroupFromConfig (see the module comment), exec, and
+    // firstGroupViaExecOfConfigValue — the `exec` twin of
+    // firstGroupFromConfig, added because ablation measured the `$S2`
+    // metavariable-comparison DEAD while its `$ARG` twin was live: nothing
+    // exercised the exec branch's argument half.
+    count: 4,
   },
 };
 

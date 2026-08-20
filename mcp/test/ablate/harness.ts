@@ -53,7 +53,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileSync } from 'node:fs';
-import { AblationError, ablate, enumerateClauses, roundTrip } from './clauses.js';
+import { AblationError, ablate, ablateAll, enumerateClauses, roundTrip } from './clauses.js';
 import type { Clause, SkippedClause } from './clauses.js';
 import { SemgrepFailure, findingsMissingFrom, sameFindings, scan, under } from './semgrep.js';
 import type { Finding } from './semgrep.js';
@@ -117,6 +117,28 @@ export interface CollapsedClause {
   readonly sameAs: Clause;
 }
 
+/**
+ * The second pass, over DEAD clauses only. Two clauses in the same rule that
+ * exclude the same shape are each redundant with the other, so each one alone
+ * reads DEAD -- and removing BOTH still changes the result. `MOVES` here means
+ * the pair is mutually redundant: delete either half, never both.
+ *
+ * Restricted to same-rule pairs because rules are independent -- a clause in
+ * one rule cannot mask a clause in another -- and to the DEAD set because
+ * that is where the ambiguity lives, which keeps this a handful of extra
+ * scans rather than a cross product.
+ */
+export interface PairVerdict {
+  readonly ruleId: string;
+  readonly a: Clause;
+  readonly b: Clause;
+  /** 'MOVES' = mutually redundant. 'INERT' = both really are dead weight. */
+  readonly outcome: 'MOVES' | 'INERT' | 'ERROR';
+  readonly fixtureDelta: number;
+  readonly realDelta: number | null;
+  readonly error: string | undefined;
+}
+
 export interface PackReport {
   readonly pack: string;
   readonly configPath: string;
@@ -131,6 +153,7 @@ export interface PackReport {
   readonly baselineHits: number;
   readonly baselineReal: number | null;
   readonly verdicts: readonly ClauseVerdict[];
+  readonly pairs: readonly PairVerdict[];
   readonly seconds: number;
 }
 
@@ -344,6 +367,63 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
     options.log(progressLine(spec.name, index, prepared.length, verdict));
   }
 
+  // ---- Second pass: the mutually-redundant pairs the first pass cannot see.
+  const pairs: PairVerdict[] = [];
+  const deadByRule = new Map<string, Clause[]>();
+  for (const v of verdicts) {
+    if (v.live !== 'FAIL') continue;
+    const list = deadByRule.get(v.clause.ruleId);
+    if (list) list.push(v.clause);
+    else deadByRule.set(v.clause.ruleId, [v.clause]);
+  }
+  const pairCount = [...deadByRule.values()].reduce((n, cs) => n + (cs.length * (cs.length - 1)) / 2, 0);
+  if (pairCount > 0) {
+    options.log('');
+    options.log(`pairs       ${String(pairCount)} same-rule DEAD pair(s) to re-ablate together`);
+  }
+  for (const [ruleId, dead] of deadByRule) {
+    for (let i = 0; i < dead.length; i += 1) {
+      for (let j = i + 1; j < dead.length; j += 1) {
+        const a = dead[i];
+        const b = dead[j];
+        if (a === undefined || b === undefined) continue;
+        let pair: PairVerdict;
+        try {
+          write(ablateAll(source, [a, b]));
+          const ablatedFixtures = scanFixtures(configPath);
+          const ablatedReal = scanReal(configPath);
+          const moved =
+            !sameFindings(baselineFixtures, ablatedFixtures) ||
+            (real !== undefined && !sameFindings(baselineReal, ablatedReal));
+          pair = {
+            ruleId,
+            a,
+            b,
+            outcome: moved ? 'MOVES' : 'INERT',
+            fixtureDelta: ablatedFixtures.length - baselineFixtures.length,
+            realDelta: real === undefined ? null : ablatedReal.length - baselineReal.length,
+            error: undefined,
+          };
+        } catch (err) {
+          pair = {
+            ruleId,
+            a,
+            b,
+            outcome: 'ERROR',
+            fixtureDelta: 0,
+            realDelta: null,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+        pairs.push(pair);
+        options.log(
+          `  pair  ${pair.outcome.padEnd(5, ' ')} ${ruleId} :: [${a.hash}] + [${b.hash}]` +
+            (pair.error === undefined ? '' : ` -- ${pair.error.split('\n')[0] ?? ''}`),
+        );
+      }
+    }
+  }
+
   const after = readPack(spec.config);
   if (after.hash !== hash) {
     throw new Error(`${spec.config} is not byte-identical after the run (${hash} -> ${after.hash}).`);
@@ -363,6 +443,7 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
     baselineHits: baselineHits.length,
     baselineReal: real === undefined ? null : baselineReal.length,
     verdicts,
+    pairs,
     seconds: (Date.now() - started) / 1000,
   };
 }

@@ -61,3 +61,12 @@ export const objPoller = {
     clearInterval(t);
   },
 };
+
+// Ownership transfer. The handle is not stored and not cleared here — it is
+// RETURNED, so the caller owns the timer and is the only one who can stop it.
+// There is nothing for this function to clean up, and no leak until the
+// caller drops the value on the floor, which is the caller's bug and not
+// visible from here.
+export function startPolling(): ReturnType<typeof setInterval> {
+  return setInterval(tick, 1000);
+}

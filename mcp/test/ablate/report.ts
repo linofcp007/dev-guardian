@@ -40,8 +40,11 @@ function detail(v: ClauseVerdict): string[] {
   }
   if (v.live === 'FAIL') {
     out.push('  axis 1  DEAD -- removing this clause changed nothing, on any corpus.');
-    out.push('          Nothing in the pack depends on it. Delete it, or add the');
-    out.push('          fixture that proves it is needed.');
+    out.push('          Two different defects look like this, and they have opposite');
+    out.push('          fixes: the clause is genuinely inert, or the FIXTURE that would');
+    out.push('          prove it is needed does not exist. Probe the shape by hand');
+    out.push('          before deleting anything. See also the pair pass below --');
+    out.push('          two clauses excluding the same shape both read DEAD here.');
   } else {
     out.push(`  axis 1  live -- result moved in: ${v.movedIn.join(', ')} (fixtures ${signed(v.fixtureDelta)})`);
   }
@@ -142,6 +145,37 @@ export function renderPackReport(report: PackReport): string {
       lines.push('');
       lines.push(...detail(v));
     }
+  }
+  const moving = report.pairs.filter((p) => p.outcome === 'MOVES');
+  if (report.pairs.length > 0) {
+    lines.push('');
+    lines.push(rule());
+    lines.push(`PAIR PASS -- ${String(report.pairs.length)} same-rule DEAD pair(s)`);
+    lines.push(rule());
+    lines.push('Two clauses that exclude the same shape are each redundant with the');
+    lines.push('other, so each one alone reads DEAD while removing BOTH is a');
+    lines.push('regression. This repo has shipped that pair twice.');
+    for (const p of report.pairs) {
+      lines.push('');
+      lines.push(`  rule    ${p.ruleId}`);
+      lines.push(`  a       [${p.a.hash}] ${short(p.a.body, 66)}`);
+      lines.push(`  b       [${p.b.hash}] ${short(p.b.body, 66)}`);
+      if (p.outcome === 'ERROR') {
+        lines.push(`  ERROR   ${(p.error ?? '').split('\n')[0] ?? ''}`);
+      } else if (p.outcome === 'MOVES') {
+        lines.push(`  MOVES   MUTUALLY REDUNDANT (fixtures ${signed(p.fixtureDelta)}` +
+          (p.realDelta === null ? '' : `, real ${signed(p.realDelta)}`) + ').');
+        lines.push('          Neither alone changed anything; together they do. Delete');
+        lines.push('          EITHER one, never both, and say in the pack which is which.');
+      } else {
+        lines.push('  INERT   removing both still changes nothing. Not a redundant pair --');
+        lines.push('          whatever these two are for, no corpus here exercises it.');
+      }
+    }
+  }
+  if (moving.length > 0) {
+    lines.push('');
+    lines.push(`${String(moving.length)} mutually redundant pair(s) -- see above.`);
   }
   lines.push('');
   return lines.join('\n');

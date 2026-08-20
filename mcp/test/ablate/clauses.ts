@@ -423,10 +423,79 @@ export function roundTrip(source: string): string {
 
 /** The pack with exactly one clause removed. Throws {@link AblationError}. */
 export function ablate(source: string, clause: Clause): string {
+  return ablateAll(source, [clause]);
+}
+
+/** True when `outer` names an ancestor of (or the same node as) `inner`. */
+export function containsAddress(outer: Address, inner: Address): boolean {
+  if (outer.length > inner.length) return false;
+  return outer.every((step, i) => step === inner[i]);
+}
+
+/**
+ * Document order. Only the numeric steps matter -- removing a sequence item
+ * shifts its later siblings, and nothing else -- but strings are ordered too
+ * so the comparison is total and the sort is deterministic.
+ */
+function compareAddress(a: Address, b: Address): number {
+  const shared = Math.min(a.length, b.length);
+  for (let i = 0; i < shared; i += 1) {
+    const x = a[i];
+    const y = b[i];
+    if (x === y) continue;
+    if (typeof x === 'number' && typeof y === 'number') return x - y;
+    return String(x) < String(y) ? -1 : 1;
+  }
+  return a.length - b.length;
+}
+
+/**
+ * The pack with SEVERAL clauses removed at once.
+ *
+ * ---- Why this exists: the mutually-redundant pair ------------------------
+ *
+ * Single-clause ablation cannot see two clauses that exclude the same shape.
+ * Each one alone is redundant with the other, so removing either changes
+ * nothing and BOTH report DEAD -- while removing both together does change
+ * the result. This repo has shipped that exact pair twice: `bugfix-go`'s
+ * `type-assert-no-ok` carried two mutually redundant `pattern-not-inside`
+ * clauses, and `err-discarded`'s `:=` branch was subsumed by its `=` branch.
+ * Deleting either half is safe; deleting both is a regression, and a DEAD
+ * verdict on its own does not tell you which situation you are in.
+ *
+ * ---- The two things that make it fiddly ---------------------------------
+ *
+ * Addresses are positions, and removing one node moves the others. Clauses
+ * are therefore removed in DESCENDING document order: everything a removal
+ * disturbs sits at an index at or after the divergence point, so every
+ * address still to be processed -- all of them earlier -- stays valid.
+ * Pruning happens per clause, immediately after its own detach, for the same
+ * reason.
+ *
+ * And a pair where one clause CONTAINS the other is rejected rather than
+ * measured: removing a `pattern-not` and the `metavariable-comparison` inside
+ * it is just removing the `pattern-not`, which the single-clause pass already
+ * did. It is not evidence of redundancy between two independent clauses.
+ */
+export function ablateAll(source: string, clauses: readonly Clause[]): string {
+  if (clauses.length === 0) throw new AblationError('no clauses to ablate');
+  for (const outer of clauses) {
+    for (const inner of clauses) {
+      if (outer !== inner && containsAddress(outer.address, inner.address)) {
+        throw new AblationError(
+          `${clauseLabel(outer)} encloses ${clauseLabel(inner)}; removing both is ` +
+            `just removing the outer one, which the single-clause pass already measured`,
+        );
+      }
+    }
+  }
   const doc = parseDocument(source);
   const root: unknown = doc.contents;
-  detach(root, clause.address);
-  pruneEmptyAncestors(root, clause.address);
+  const descending = [...clauses].sort((x, y) => compareAddress(y.address, x.address));
+  for (const clause of descending) {
+    detach(root, clause.address);
+    pruneEmptyAncestors(root, clause.address);
+  }
   assertStillWellFormed(root);
   return doc.toString(STRINGIFY);
 }

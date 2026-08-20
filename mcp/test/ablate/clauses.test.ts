@@ -22,7 +22,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse } from 'yaml';
-import { AblationError, ablate, clauseLabel, enumerateClauses, roundTrip } from './clauses.js';
+import { AblationError, ablate, ablateAll, clauseLabel, enumerateClauses, roundTrip } from './clauses.js';
 import { REPO_ROOT } from './packs.js';
 
 const SAMPLE = `rules:
@@ -224,6 +224,66 @@ describe('ablate', () => {
     const target = clauseByBody(solo, 'f($X)');
     expect(() => ablate(solo, target)).toThrow(AblationError);
     expect(enumerateClauses(onlyClause).clauses.length).toBe(4);
+  });
+});
+
+describe('ablateAll', () => {
+  const THREE = `rules:
+  - id: r
+    patterns:
+      - pattern: f($X)
+      - pattern-not-inside: a($X)
+      - pattern-not-inside: b($X)
+      - pattern-not-inside: c($X)
+    message: m
+    severity: INFO
+    languages: [javascript]
+`;
+
+  function pick(source: string, needle: string) {
+    const c = enumerateClauses(source).clauses.find((x) => x.body.includes(needle));
+    if (c === undefined) throw new Error(`no clause ${needle}`);
+    return c;
+  }
+
+  it('removes both clauses, whichever order they are given in', () => {
+    // The hazard: addresses are POSITIONS. Removing `patterns[1]` first
+    // renumbers `patterns[3]`, so a naive implementation removes `b` and then
+    // whatever slid into slot 3 -- silently ablating a clause it did not name
+    // while reporting the one it did.
+    const a = pick(THREE, 'a($X)');
+    const c = pick(THREE, 'c($X)');
+    const forwards = ablateAll(THREE, [a, c]);
+    const backwards = ablateAll(THREE, [c, a]);
+    expect(forwards).toBe(backwards);
+    expect(bodies(forwards)).toEqual(['pattern-not-inside: "b($X)"']);
+  });
+
+  it('removes three at once without disturbing the positive term', () => {
+    const all = enumerateClauses(THREE).clauses;
+    const stripped = ablateAll(THREE, all);
+    expect(bodies(stripped)).toEqual([]);
+    const parsed = parse(stripped) as { rules: { patterns: Record<string, unknown>[] }[] };
+    expect(parsed.rules[0]?.patterns).toEqual([{ pattern: 'f($X)' }]);
+  });
+
+  it('refuses a pair where one clause encloses the other', () => {
+    // Removing a `pattern-not` and the `metavariable-comparison` inside it is
+    // just removing the `pattern-not`, which the single-clause pass already
+    // measured. Reporting it as a redundant pair would be a false positive.
+    const outer = pick(SAMPLE, "'?.[' not in str($ARG)"); // the pattern-not
+    const inner = enumerateClauses(SAMPLE).clauses.find(
+      (x) => x.kind === 'metavariable-comparison',
+    );
+    if (inner === undefined) throw new Error('no inner clause');
+    expect(outer.kind).toBe('pattern-not');
+    expect(() => ablateAll(SAMPLE, [outer, inner])).toThrow(/encloses/);
+    expect(() => ablateAll(SAMPLE, [inner, outer])).toThrow(/encloses/);
+  });
+
+  it('matches single-clause ablation when given one clause', () => {
+    const a = pick(THREE, 'a($X)');
+    expect(ablateAll(THREE, [a])).toBe(ablate(THREE, a));
   });
 });
 

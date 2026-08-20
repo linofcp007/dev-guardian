@@ -58,8 +58,7 @@ The harness deletes one clause at a time, re-runs the pack, and reports three
 verdicts — all three, because each axis was added after a defect escaped the
 previous ones:
 
-1. **live** — removing the clause changes the result somewhere. A clause that
-   changes nothing is dead: delete it, don't keep it "for symmetry".
+1. **live** — removing the clause changes the result somewhere.
 2. **keeps true positives** — removing it must not *reveal* findings in
    `hits/`. `pattern-not-inside` excludes the whole node it matched, so a
    guard written for an `if` also swallowed the `else` arm, where the bug was.
@@ -69,6 +68,23 @@ previous ones:
    that caught `unchecked-match` going 0 → 13 false positives on our own
    TypeScript; axes 1 and 2 both passed, because "live" and "keeps true
    positives" are both true of a clause that only *adds* false positives.
+
+**`DEAD` never means "safe to delete" on its own.** Three different situations
+produce it, and they have different fixes:
+
+- the clause really is inert — six of those have shipped here;
+- the clause works, but the **fixture that would prove it** does not exist. All
+  four `bugfix-js` DEAD verdicts from the first run were this: probed by hand,
+  each one did exactly its job on a shape no fixture carried. The fix is a
+  fixture, not a deletion, and the same call was made for nine Java clauses;
+- the clause is **mutually redundant with a sibling** in the same rule. Each
+  half alone reads DEAD; removing both is a regression. `type-assert-no-ok`
+  and `err-discarded` have both shipped that pair. The harness re-ablates
+  same-rule DEAD clauses **in pairs** and reports `MOVES` when it finds one,
+  but it only pairs clauses that were already DEAD, so a redundant pair whose
+  halves are individually live is still invisible.
+
+Probe the shape by hand before deleting anything.
 
 Axes 2 and 3 are attributions, not proofs, and both flag more than the defect
 they were built for. Axis 2 fires whenever a `hits/` fixture deliberately
