@@ -75,6 +75,7 @@ afterAll(cleanupTempDirs);
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(here, '..', '..', '..');
 const FIXTURE = resolve(here, '..', 'fixtures', 'surface', 'apps');
+const ANNOTATION_FIXTURE = resolve(here, '..', 'fixtures', 'surface', 'annotations');
 const SCRIPTS_DIR = resolve(ROOT, 'scripts');
 const RULES_PATH = resolve(ROOT, 'configs', 'semgrep', 'routes.yml');
 
@@ -86,7 +87,21 @@ const RULES_PATH = resolve(ROOT, 'configs', 'semgrep', 'routes.yml');
  * matching it still fails the comparison.
  */
 function describeRoute(route: RouteRecord): string {
-  return `${route.framework} ${route.method} ${route.path_resolved}${route.path_partial ? ' [partial]' : ''}`;
+  return `${route.framework} ${route.method} ${pathLabel(route)}${route.path_partial ? ' [partial]' : ''}`;
+}
+
+/**
+ * An empty own-path reads as `<inherited>` rather than as nothing at all.
+ *
+ * A route from a bare `@Get()` / `[HttpGet]` / `@GetMapping` has no path of
+ * its own — the served URL is the class-level prefix, which no resolver here
+ * follows — so `path_resolved` is the empty string by design (see the
+ * "annotation with no path of its own" section of configs/semgrep/routes.yml).
+ * Interpolated raw, that produces a row with two spaces in it, which reads as
+ * a typo and invites someone to "fix" the expected value rather than the rule.
+ */
+function pathLabel(route: RouteRecord): string {
+  return route.path_resolved === '' ? '<inherited>' : route.path_resolved;
 }
 
 /** Same shape as the file's existing `describeRoute`, for diff entries. */
@@ -161,10 +176,21 @@ const BASE_ROUTES = [
   'rails POST /rails/orders',
   // ---- Spring. @RequestMapping declares no verb, so both the class-level
   // base path and the method-level one are reported as ANY.
+  //
+  // The six Spring rules are focused on $PATH now — for a reason of their own
+  // (a named annotation argument, see routes.yml's Java section), not the
+  // declaration-spanning one FOCUSED_ROUTES below is about — so their rows
+  // stay here rather than moving.
   'spring ANY /legacy',
   'spring ANY /spring/orders',
   'spring DELETE /{id}',
   'spring GET /list',
+  // `@GetMapping(value = "/named", produces = "application/json")`. This one
+  // was pinned in java-spring/OrderController.java as a KNOWN LIMITATION —
+  // "the named-argument form is not matched" — on the strength of
+  // `@GetMapping($PATH, ...)` being an invalid Java pattern. The ellipsis is
+  // rejected only after a bare metavariable; `(value = $PATH, ...)` parses.
+  'spring GET /named',
   'spring PATCH /{id}/status',
   'spring POST /create',
   'spring PUT /{id}',
@@ -219,13 +245,33 @@ const FOCUSED_ROUTES = [
 ].sort();
 
 /**
+ * The two routes this tree declares with a bare annotation — `@Get()` in
+ * node-nest/users.controller.ts and `[HttpGet]` in
+ * dotnet-api/OrdersController.cs.
+ *
+ * Both files USED to carry a comment saying the pack does not report them
+ * ("No argument: there is no path to capture"), which described the defect
+ * rather than a decision: `@Get()` is what docs.nestjs.com uses for an index
+ * action and `[HttpGet]` is what `dotnet new webapi` scaffolds, so a real
+ * controller loses its collection endpoints entirely and says nothing about
+ * it. They are now reported with an empty own-path at `path_partial: true` —
+ * the endpoint exists, its full URL is the class-level prefix and is honestly
+ * unknown. `test/fixtures/surface/annotations/` is where that behaviour is
+ * pinned in depth; these two rows are here so this tree's own set stays exact.
+ */
+const INHERITED_ROUTES = [
+  'aspnet GET <inherited> [partial]',
+  'nestjs GET <inherited> [partial]',
+].sort();
+
+/**
  * The whole expected surface — one set, on any Semgrep version.
  *
  * That it no longer forks on the version is the point of the focus change, so
  * the tests below assert the version-independence explicitly rather than
  * letting a single-version run imply it.
  */
-const EXPECTED_ROUTES = [...BASE_ROUTES, ...FOCUSED_ROUTES].sort();
+const EXPECTED_ROUTES = [...BASE_ROUTES, ...FOCUSED_ROUTES, ...INHERITED_ROUTES].sort();
 
 /**
  * node-mount-forms/'s two routes, held out of EXPECTED_ROUTES because their
@@ -319,6 +365,9 @@ const EXPECTED_SHADOW = [
   'GET /laravel/orders',
   'GET /list',
   'GET /minimal/health',
+  // Newly extracted (the Spring named-argument form) and undocumented in
+  // openapi.yaml, so it is a shadow endpoint like every other route here.
+  'GET /named',
   'GET /rails/orders',
   'GET /rails/orders/{}',
   'GET /rust/documented',
@@ -362,7 +411,7 @@ async function isInstalled(bin: string): Promise<boolean> {
  * Resolved once, at collection time, so `it.skipIf` can report a skip as a
  * skip rather than each test deciding for itself and returning early.
  */
-const FIXTURE_PRESENT = existsSync(FIXTURE);
+const FIXTURE_PRESENT = existsSync(FIXTURE) && existsSync(ANNOTATION_FIXTURE);
 const SEMGREP_INSTALLED = await isInstalled('semgrep');
 const SEMGREP_AVAILABLE = FIXTURE_PRESENT && SEMGREP_INSTALLED;
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
@@ -778,4 +827,208 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     expect(codeOnly.map(describeDiffEntry).sort()).toEqual(EXPECTED_SHADOW);
     expect(diff.spec_only.map(describeDiffEntry).sort()).toEqual(EXPECTED_DEAD);
   }, 6 * 60_000);
+});
+
+/* ---- the annotation fixture ---------------------------------------------
+ *
+ * A SECOND tree, `test/fixtures/surface/annotations/`, written by someone who
+ * did not write the rules — which is the finding it exists to close. Every
+ * file under `apps/` was written alongside the rule that reads it, so each
+ * rule was only ever exercised against the syntax it was written for: there
+ * was not one `@Get()`, `[HttpGet]` or `@GetMapping(value = …)` anywhere in
+ * this repository, and those are the forms NestJS, `dotnet new webapi` and
+ * spring.io's guides emit by default. The measured cost was 3 of 7 NestJS
+ * endpoints, every route in a C# controller, and 4 of 8 Spring mappings —
+ * missing with no error, since a route this pack does not match simply never
+ * enters the inventory.
+ *
+ * It is a separate tree rather than more files under `apps/` so that the two
+ * expected sets stay independently readable: `apps/` pins the whole pipeline
+ * across nine languages (mount resolution, spec diff, import edges), while
+ * this one pins one question — does each annotation family match the form its
+ * framework actually documents — and can be read end to end while looking at
+ * three files.
+ */
+
+/**
+ * `file:line framework METHOD path` plus a `[partial]` marker.
+ *
+ * The line number is part of the key here, unlike `describeRoute` above,
+ * because this fixture deliberately contains several routes that extract to
+ * the SAME record: a bare `@Get()` and a `@Get('')` are both an empty
+ * own-path, and there are three bare `@Get()`s in one file. Without the line,
+ * a rule that stopped matching one of them would show up only as a shorter
+ * array, and the failure would not say which declaration went quiet.
+ */
+function describeAnnotationRoute(route: RouteRecord): string {
+  const file = route.file.replace(/\\/g, '/').split('/').slice(-2).join('/');
+  const path = route.path_resolved === '' ? '<inherited>' : route.path_resolved;
+  return `${file}:${route.line} ${route.framework} ${route.method} ${path}${route.path_partial ? ' [partial]' : ''}`;
+}
+
+/**
+ * Every route the three annotation fixtures declare, checked declaration by
+ * declaration against the files rather than pasted from a run.
+ *
+ * `<inherited>` is an empty own-path: the annotation carries no path and the
+ * served URL is the class-level prefix, which no resolver here can follow, so
+ * the endpoint is inventoried and flagged `partial` rather than dropped (which
+ * is what used to happen) or guessed (which would be worse). See the
+ * "annotation with no path of its own" section of configs/semgrep/routes.yml.
+ *
+ * Two line numbers point one line ABOVE the route annotation
+ * (`users.controller.ts:69` is `@UseGuards(AuthGuard)`, `OrderController.java:69`
+ * is `@Deprecated`). That is correct and is the whole reason the bare rules
+ * read nothing out of their span: an unfocused declaration-spanning match
+ * starts at the FIRST annotation on the declaration, which is routinely not
+ * the route one. The line is where the match begins; the route is the
+ * declaration it decorates.
+ *
+ * Measured against the shipped pack before the fix, this same fixture produced
+ * 18 of these 52 rows: ASP.NET 5 of 15, NestJS 6 of 12, Spring 7 of 25. What
+ * was missing was every bare annotation in all three frameworks, every Spring
+ * named-argument mapping, and every ASP.NET path carried by a `[Route]`
+ * companion attribute.
+ */
+const EXPECTED_ANNOTATION_ROUTES = [
+  // ---- NestJS: every verb bare and with a path. EVERY route here is
+  // `[partial]`, including the ones with a literal path — resolvers/node.ts
+  // flags any JS/TS route whose file is not mounted anywhere, and a NestJS
+  // controller is mounted by a module, not by `app.use`. That is pre-existing
+  // and correct: the controller prefix really is unknown.
+  'nest/users.controller.ts:48 nestjs GET <inherited> [partial]',
+  'nest/users.controller.ts:54 nestjs GET :id [partial]',
+  // `@Get('')` — a different source form, the same extracted record as the
+  // bare `@Get()` two rows up.
+  'nest/users.controller.ts:60 nestjs GET <inherited> [partial]',
+  'nest/users.controller.ts:66 nestjs POST <inherited> [partial]',
+  'nest/users.controller.ts:72 nestjs POST bulk [partial]',
+  // Line 79 is `@UseGuards(AuthGuard)`, not the `@Put()` below it — see the
+  // note above about where a declaration-spanning match starts.
+  'nest/users.controller.ts:79 nestjs PUT <inherited> [partial]',
+  'nest/users.controller.ts:85 nestjs PUT :id [partial]',
+  'nest/users.controller.ts:90 nestjs PATCH <inherited> [partial]',
+  'nest/users.controller.ts:95 nestjs PATCH :id/status [partial]',
+  'nest/users.controller.ts:101 nestjs DELETE <inherited> [partial]',
+  'nest/users.controller.ts:106 nestjs DELETE :id [partial]',
+  // The arrow-property handler, bare.
+  'nest/users.controller.ts:112 nestjs GET <inherited> [partial]',
+  // ---- ASP.NET: every verb in all three forms. A path from a `[Route]`
+  // companion is reported at the line of the `[Route]` attribute, which is
+  // where the focused span is. `all`, `submit`, `get-named` and friends are
+  // bare relative segments, which isLiteralPath accepts (lower-case, no code
+  // punctuation); `{id}` is not, while `{id}/status` is (it has a slash).
+  'aspnet/OrdersController.cs:31 aspnet GET all',
+  'aspnet/OrdersController.cs:35 aspnet GET get-named',
+  'aspnet/OrdersController.cs:39 aspnet GET <inherited> [partial]',
+  'aspnet/OrdersController.cs:43 aspnet POST post-attr',
+  'aspnet/OrdersController.cs:47 aspnet POST submit',
+  'aspnet/OrdersController.cs:51 aspnet POST <inherited> [partial]',
+  'aspnet/OrdersController.cs:55 aspnet PUT put-attr',
+  'aspnet/OrdersController.cs:60 aspnet PUT before',
+  'aspnet/OrdersController.cs:64 aspnet PUT <inherited> [partial]',
+  'aspnet/OrdersController.cs:68 aspnet PATCH {id}/status',
+  'aspnet/OrdersController.cs:72 aspnet PATCH patch-named',
+  'aspnet/OrdersController.cs:76 aspnet PATCH <inherited> [partial]',
+  'aspnet/OrdersController.cs:81 aspnet DELETE {id} [partial]',
+  'aspnet/OrdersController.cs:85 aspnet DELETE delete-named',
+  'aspnet/OrdersController.cs:89 aspnet DELETE <inherited> [partial]',
+  // ---- Spring: every annotation in all four forms. The class-level
+  // @RequestMapping is itself reported, as it always was. `/reordered` is the
+  // load-bearing one — reachable only by binding the named argument, never by
+  // reading the first one. Every @RequestMapping row is ANY, `/request-value`
+  // included: its `method = RequestMethod.GET` is an attribute this pack does
+  // not read, and ANY is the truth rather than a guess.
+  'spring/OrderController.java:50 spring ANY /api/orders',
+  'spring/OrderController.java:54 spring GET /get-positional',
+  'spring/OrderController.java:57 spring GET /get-value',
+  'spring/OrderController.java:60 spring GET /get-path',
+  'spring/OrderController.java:63 spring GET <inherited> [partial]',
+  'spring/OrderController.java:67 spring POST /post-positional',
+  'spring/OrderController.java:70 spring POST /post-value',
+  'spring/OrderController.java:73 spring POST /post-path',
+  // Line 77 is `@Deprecated`, not the `@PostMapping` below it.
+  'spring/OrderController.java:77 spring POST <inherited> [partial]',
+  'spring/OrderController.java:82 spring PUT /put-positional',
+  'spring/OrderController.java:87 spring PUT /reordered',
+  'spring/OrderController.java:90 spring PUT /put-path',
+  'spring/OrderController.java:93 spring PUT <inherited> [partial]',
+  'spring/OrderController.java:97 spring PATCH /{id}/status',
+  'spring/OrderController.java:100 spring PATCH /patch-value',
+  'spring/OrderController.java:103 spring PATCH /patch-path',
+  'spring/OrderController.java:106 spring PATCH <inherited> [partial]',
+  'spring/OrderController.java:110 spring DELETE /delete-positional',
+  'spring/OrderController.java:115 spring DELETE {"/a", "/b"} [partial]',
+  'spring/OrderController.java:118 spring DELETE /delete-path',
+  'spring/OrderController.java:122 spring DELETE <inherited> [partial]',
+  'spring/OrderController.java:126 spring ANY /request-positional',
+  'spring/OrderController.java:131 spring ANY /request-value',
+  'spring/OrderController.java:134 spring ANY /request-path',
+  'spring/OrderController.java:137 spring ANY <inherited> [partial]',
+].sort();
+
+/**
+ * Text that must never appear in any extracted path. `application/json` is
+ * the one this fixture was built around: it is inside the first argument of
+ * `@PutMapping(produces = "application/json", value = "/reordered")`, and a
+ * rule that reads the first argument of the span rather than the range
+ * Semgrep focused reports the route under that text instead of under its
+ * path (measured: `spring PUT produces = "application/json" [partial]`).
+ */
+const ANNOTATION_DECOYS = ['application/json', 'AuthGuard', 'IgnoreApi', 'RemoveOrder', 'pong'];
+
+describe('E2E — annotation route rules against the auditor fixture', () => {
+  it.skipIf(!SEMGREP_AVAILABLE)(
+    'reports every endpoint the three frameworks declare in their own documented style',
+    async () => {
+      // Outside any `test/` path — see the module comment.
+      const work = makeTempDir('guardian-annotations-');
+      cpSync(ANNOTATION_FIXTURE, work, { recursive: true });
+
+      const ctx = makeContext();
+      const tool = TOOLS.find((t) => t.name === 'map_attack_surface');
+      if (!tool) throw new Error('map_attack_surface is not registered');
+
+      const result = okResult<SurfaceResult>(
+        await tool.handler({ project_path: work, force: true }, ctx),
+      );
+      expect(result.tools_run.map((t) => `${t.name}:${t.status}`)).toContain('semgrep:ok');
+      const snapshotId = result.snapshot_id;
+      expect(snapshotId).not.toBeNull();
+      if (snapshotId === null) return;
+      const snapshot = ctx.storage.surface.getById(snapshotId)?.snapshot;
+      if (!snapshot) throw new Error('snapshot was not persisted');
+
+      const actual = snapshot.routes
+        .filter((r) => r.provenance === 'code')
+        .map(describeAnnotationRoute)
+        .sort();
+      expect(actual).toEqual(EXPECTED_ANNOTATION_ROUTES);
+
+      // An over-match fails the equality above; this says what it would mean.
+      // A duplicated endpoint is the specific risk of adding a second
+      // alternative to a rule that already matched the first — [HttpGet] +
+      // [Route("submit")] is matched by both the path rule and (without its
+      // pattern-not) the bare rule.
+      expect(new Set(actual).size, 'two rules reported the same declaration').toBe(actual.length);
+
+      for (const decoy of ANNOTATION_DECOYS) {
+        expect(
+          snapshot.routes.filter((r) => r.path_resolved.includes(decoy)),
+          `fabricated route containing ${decoy}`,
+        ).toEqual([]);
+      }
+
+      // The three languages must all read `ok`. `no_matches` would be the
+      // shipped behaviour for csharp here — the whole controller matched
+      // nothing — and `unreadable` would mean the bare rules' declaration-
+      // spanning spans reached the span scanner, which they must not.
+      for (const language of ['typescript', 'csharp', 'java']) {
+        const entry = snapshot.coverage.find((c) => c.language === language);
+        expect(entry?.status, `${language} coverage status`).toBe('ok');
+        expect(entry?.unreadable_matches, `${language} unreadable_matches`).toBe(0);
+      }
+    },
+    6 * 60_000,
+  );
 });

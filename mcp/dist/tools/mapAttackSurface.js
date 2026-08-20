@@ -281,7 +281,14 @@ function recoveryToolRun(recovery) {
     if (recovery.recovered === 0 && recovery.unrecoverable === 0)
         return [];
     const base = `recovered ${recovery.recovered} redacted match(es) from byte offsets` +
-        (recovery.intact > 0 ? `; ${recovery.intact} already carried metavariables` : '');
+        (recovery.intact > 0 ? `; ${recovery.intact} already carried metavariables` : '') +
+        // Not a loss and not a recovery: a bare `@Get()` / `[HttpGet]` /
+        // `@GetMapping` captures nothing on any Semgrep version, and its route is
+        // built from the rule's metadata (see RecoveryOutcome.noCaptures). Named
+        // here so the two numbers below still add up for a reader.
+        (recovery.noCaptures > 0
+            ? `; ${recovery.noCaptures} carry no path of their own and needed none`
+            : '');
     if (recovery.unrecoverable === 0) {
         return [{ name: RECOVERY_STEP, status: 'ok', reason: base }];
     }

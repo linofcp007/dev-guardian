@@ -16,8 +16,13 @@ import UsersService from './users.service.js';
 export class UsersController {
   constructor(private readonly service: UsersService) {}
 
-  // No argument: there is no path to capture, so the pack does not report it.
-  // The controller prefix ('users') is not resolvable from the decorator alone.
+  // No argument: there is no path to capture, and this is the form NestJS's
+  // own docs use for an index action. The route is reported with an EMPTY
+  // own-path at path_partial: true — the controller prefix ('users') is not
+  // resolvable from the decorator alone, but the endpoint exists. Reporting
+  // nothing (the behaviour this comment used to describe as a design) meant a
+  // real controller silently lost every collection endpoint it has. See
+  // ../../annotations/ for the fixture that measures this properly.
   @Get()
   findAll(): string[] {
     return this.service.all();

@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import {
   extractParams,
   extractSurface,
+  INHERITED_PATH,
+  INHERITED_PATH_KEY,
   isLiteralPath,
   languageFromPath,
 } from '../../../src/surface/extract.js';
@@ -254,6 +256,89 @@ describe('extractSurface path-literal guard', () => {
     });
     expect(routes[0]?.namespace).toBe('self::NAMESPACE');
     expect(routes[0]?.path_partial).toBe(true);
+  });
+});
+
+describe('extractSurface — an annotation with no path of its own', () => {
+  /** A bare `@Get()` / `[HttpGet]` / `@GetMapping` match: no metavars at all. */
+  function bareMatch(metadata: Record<string, unknown>): unknown {
+    return {
+      results: [
+        {
+          check_id: 'guardian-route-nestjs-get-bare',
+          path: 'src/users.controller.ts',
+          start: { line: 7 },
+          extra: {
+            metadata: {
+              guardian_kind: 'route',
+              framework: 'nestjs',
+              confidence: 'low',
+              method: 'GET',
+              ...metadata,
+            },
+            // No `metavars` key at all — there was nothing to capture.
+          },
+        },
+      ],
+    };
+  }
+
+  it('drops a path-less route rule that does not declare the flag', () => {
+    // The shipped behaviour for three whole annotation families, stated as a
+    // test: the rule matched, and the route silently did not exist. Without
+    // `guardian_path`, `toRoute` has no path and no way to tell "the rule
+    // captures none" from "the capture failed", so dropping it stays correct
+    // — which is exactly why the rule pack has to declare the flag, and why
+    // rulePack.test.ts holds it in lock-step with the patterns.
+    const { routes } = extractSurface(bareMatch({}));
+    expect(routes).toEqual([]);
+  });
+
+  it('emits an empty own-path, partial and low, when the rule declares it', () => {
+    const { routes } = extractSurface(bareMatch({ [INHERITED_PATH_KEY]: INHERITED_PATH }));
+    expect(routes).toHaveLength(1);
+    expect(routes[0]?.path_raw).toBe('');
+    expect(routes[0]?.path_resolved).toBe('');
+    // Never presented as a URL: the served path is the class-level prefix and
+    // nothing here can resolve it, so a consumer that sends HTTP requests
+    // (scan_dast) skips it on `path_partial` like any other unresolved route.
+    expect(routes[0]?.path_partial).toBe(true);
+    expect(routes[0]?.confidence).toBe('low');
+    // The verb still comes from the rule identity, and the endpoint is in the
+    // inventory with its file and line — which is the whole point.
+    expect(routes[0]?.method).toBe('GET');
+    expect(routes[0]?.line).toBe(7);
+    expect(routes[0]?.params).toEqual([]);
+  });
+
+  it('ignores the flag when the rule did capture a path', () => {
+    // A real capture always wins: the flag says "this rule binds no path", so
+    // if one arrives the flag is the thing that is wrong, not the capture.
+    const { routes } = extractSurface({
+      results: [
+        {
+          check_id: 'guardian-route-x',
+          path: 'a.java',
+          start: { line: 3 },
+          extra: {
+            metadata: {
+              guardian_kind: 'route',
+              framework: 'spring',
+              confidence: 'medium',
+              [INHERITED_PATH_KEY]: INHERITED_PATH,
+            },
+            metavars: { $PATH: { abstract_content: '"/list"' } },
+          },
+        },
+      ],
+    });
+    expect(routes[0]?.path_resolved).toBe('/list');
+    expect(routes[0]?.path_partial).toBe(false);
+  });
+
+  it('does not treat an unknown guardian_path value as inherited', () => {
+    const { routes } = extractSurface(bareMatch({ [INHERITED_PATH_KEY]: 'whatever' }));
+    expect(routes).toEqual([]);
   });
 });
 
