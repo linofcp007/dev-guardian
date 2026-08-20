@@ -224,17 +224,6 @@ interface FileExpectation {
  * fails loudly, and a stale entry for a deleted file does too.
  */
 const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
-  'catch-returns-null-idioms.ts': {
-    // Correct code, on purpose. See the file's own header: this rule fires
-    // on the four standard null-on-failure idioms and there is no syntactic
-    // way to tell them from a swallow, which is why the tier is INFO.
-    ids: ['bugfix-js-error-handling-catch-returns-null'],
-    count: 4, // safeJsonParse, tryRequire, parseUrl, readPluginList
-  },
-  'catch-returns-null.ts': {
-    ids: ['bugfix-js-error-handling-catch-returns-null'],
-    count: 6, // three bound + three optional-catch-binding forms
-  },
   'empty-promise-catch.ts': {
     ids: ['bugfix-js-error-handling-empty-promise-catch'],
     count: 3, // fireAndIgnore, fireAndIgnoreNamed, fireAndIgnoreArrowWithParam
@@ -291,41 +280,53 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
  *
  * The criterion is a question about the OUTPUT, not the pattern: **is what
  * the rule EMITS always a bug?** Not "is the shape it looks for usually
- * wrong". A rule whose correctness depends on having recognised a guard
- * emits a false positive every time it meets a guard shape nobody
- * enumerated, and no exclusion list closes that, because the guard can
- * always be one method away. Applied cold, three of fourteen clear the bar:
+ * wrong". A rule whose correctness depends on having recognised a guard —
+ * or a DECLARATION OF INTENT — emits a false positive every time it meets
+ * one it cannot read, and no exclusion list closes that.
  *
- *  - `empty-catch` / `empty-promise-catch`: what they emit is an unmarked
- *    silent swallow. There is no guard to recognise — a non-empty handler
- *    is a different AST shape, not a guard the rule must be taught.
- *  - `index-at-length`: a READ at `a[a.length]` is unconditionally
- *    `undefined`. That is a fact about the AST, and the one shape that
- *    isn't (the append `a[a.length] = x`) is excluded structurally.
+ * Applied cold, and then re-applied against 183 files of this repo's own
+ * `mcp/src` (real TypeScript nobody wrote as a fixture), exactly ONE of
+ * thirteen clears the bar:
  *
- * Everything else depends on recognising a guard, a cleanup, or a name, and
- * sits at WARNING. Two sit lower still, at INFO, because on an independent
- * corpus their output was mostly CORRECT code rather than mostly bugs:
- * `catch-returns-null` (five idiomatic instances, zero true positives — see
- * hits/catch-returns-null-idioms.ts) and `parseint-without-radix`.
+ *  - `index-at-length`, at ERROR: a READ at `a[a.length]` is
+ *    unconditionally `undefined`. That is a fact about the AST, and the one
+ *    shape that isn't (the append `a[a.length] = x`) is excluded
+ *    structurally. It produces ZERO findings on `mcp/src`, which is the
+ *    right number for a rule this narrow.
+ *
+ * `empty-catch` and `empty-promise-catch` were at ERROR on the reasoning
+ * that an unmarked silent swallow is a bug whatever the author meant. The
+ * self-scan refuted the premise rather than the conclusion: they produce
+ * **45 findings on `mcp/src` and all 45 are deliberate, comment-documented
+ * fail-open** — an empty `catch` holding only the words "ESRCH: already
+ * dead", or "already closed, or never fully opened". They ARE marked, with
+ * a comment, which Semgrep cannot read. That is a declaration of intent the rule
+ * cannot recognise, which is the criterion, so both are WARNING. This is
+ * the same reasoning that keeps the JAVA empty-catch at ERROR, not a
+ * contradiction of it: that rule can read its ecosystem's intent marker
+ * (the Checkstyle `ignore`/`ignored`/`expected` binding name) and this one
+ * cannot, because ES2019 optional catch binding removed the identifier a
+ * naming convention would attach to — 41 of those 42 are written `catch {`.
+ *
+ * `parseint-without-radix` sits at INFO; everything else at WARNING.
  *
  * Note what moved and why it matters downstream: the Semgrep parser maps
  * ERROR → `high`, WARNING → `medium`, INFO → `info`
  * (`src/runners/scannerParsers/semgrep.ts`), and `create_fix_pr` defaults
- * `severity_min` to `high`. Demoting five rules out of ERROR takes them out
- * of the DEFAULT fix-PR set; a caller who wants them has to ask for
- * `severity_min: "medium"`. `bug_hunt` itself defaults to no filter, so
- * nothing disappears from a scan.
+ * `severity_min` to `high`. With one rule at ERROR the pack contributes
+ * almost nothing to the DEFAULT fix-PR set — which is the point: a default
+ * run must not open a PR rewriting 45 deliberate fail-open handlers.
+ * `bug_hunt` itself defaults to no filter, so nothing disappears from a
+ * scan.
  *
  * Asserted exhaustively in BOTH directions: every id here must be seen at
  * exactly this tier, and every id seen must appear here.
  */
 const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
-  'bugfix-js-error-handling-empty-catch': 'ERROR',
-  'bugfix-js-error-handling-empty-promise-catch': 'ERROR',
   'bugfix-js-off-by-one-index-at-length': 'ERROR',
-  'bugfix-js-error-handling-catch-returns-null': 'INFO',
   'bugfix-js-edge-case-parseint-without-radix': 'INFO',
+  'bugfix-js-error-handling-empty-catch': 'WARNING',
+  'bugfix-js-error-handling-empty-promise-catch': 'WARNING',
   'bugfix-js-off-by-one-loop-lte-length': 'WARNING',
   'bugfix-js-race-condition-floating-mutation': 'WARNING',
   'bugfix-js-edge-case-reduce-without-initial': 'WARNING',
@@ -449,7 +450,6 @@ describe('bugfix-js rules', () => {
 const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-js-error-handling-empty-catch': 'error_handling',
   'bugfix-js-error-handling-empty-promise-catch': 'error_handling',
-  'bugfix-js-error-handling-catch-returns-null': 'error_handling',
   'bugfix-js-off-by-one-loop-lte-length': 'off_by_one',
   'bugfix-js-off-by-one-index-at-length': 'off_by_one',
   'bugfix-js-null-safety-unchecked-find': 'null_safety',
@@ -464,7 +464,7 @@ const EXPECTED_CLASS: Readonly<Record<string, string>> = {
 };
 
 describe('every rule id classifies as its own class', () => {
-  it('maps all fourteen', () => {
+  it('maps all thirteen', () => {
     for (const [id, cls] of Object.entries(EXPECTED_CLASS)) {
       expect(mapSubcategory(id, undefined)).toBe(cls);
     }

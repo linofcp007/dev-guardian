@@ -55,7 +55,80 @@ version bump.
   JSON `errors` array instead: the old form reported the dead PHP rule as a bare
   "Command failed: semgrep --config …" four times without naming it once.
 
+### Removed
+
+- **`bugfix-js-error-handling-catch-returns-null` is gone.** It matched
+  `try { ... } catch { return null|undefined|[]; }`. Two independent corpora
+  now say the same thing: five instances of textbook-correct code and zero true
+  positives on the auditor's probes, and **25 findings on this repo's own
+  `mcp/src`, every one of them correct code** — the safe-`JSON.parse` helper, a
+  `readdirSync` with a `[]` fallback, `runtimeMeta.getJson` with a `[]`
+  fallback. Returning an empty value from a catch is a documented JavaScript
+  idiom, not a defect shape, and there is no syntactic difference between the
+  idiom and a genuine swallow — every candidate narrowing was measured and
+  silences the rule's own hit fixture too. It had been demoted to INFO earlier
+  in this same Unreleased block; that was the wrong call. INFO is not a tier for
+  a rule that has never been right, it is a quieter way to keep being wrong, and
+  it still costs everyone who reads the output. The rule and its three fixtures
+  are deleted. The JS/TS pack is now **thirteen** rules.
+
 ### Fixed
+
+- **The JS/TS pack, measured against this repo's own `mcp/src`** — 183 files of
+  TypeScript nobody wrote as a fixture, chosen by neither the rule author nor
+  the auditor. The check is cheap, needs no fixture, and caught two things that
+  36 two-axis ablations did not, because "the clause is live" and "it does not
+  reduce true positives" are **both true of a clause that only adds false
+  positives**:
+
+  | rule | before the audit wave | after it | now |
+  | --- | --- | --- | --- |
+  | `race-condition-floating-mutation` | 20 | 0 | 0 |
+  | `null-safety-unchecked-match` | 0 | **13** | 0 |
+  | `error-handling-catch-returns-null` | 25 | 25 | *deleted* |
+  | `error-handling-empty-catch` | 42 | 42 | 42, now WARNING |
+  | `error-handling-empty-promise-catch` | 3 | 3 | 3, now WARNING |
+  | total | 90 | 83 | 45 |
+
+  The `floating-mutation` column is the audit wave working exactly as intended
+  on code none of us picked. The `unchecked-match` column is a **regression the
+  audit wave introduced**: its new `RegExp#exec` branch did not inherit the
+  optional-chaining exclusion the `match` branch already had, so guarded
+  `exec(...)?.[1]` started firing — 13 of them, all correct, against the single
+  true positive the branch was added for. Fixed with a second `pattern-not`
+  mirroring the existing one, and pinned by two near-misses that came from the
+  self-scan rather than from any probe corpus.
+
+- **`empty-catch` and `empty-promise-catch` move ERROR → WARNING.** They produce
+  **45 findings on `mcp/src` and all 45 are deliberate, comment-documented
+  fail-open** — an empty `catch` whose comment says the process is already dead,
+  the handle already closed, the cleanup best-effort. They were at ERROR on the
+  reasoning that an *unmarked* silent swallow is a bug whatever the author
+  meant. The self-scan refutes the premise, not the conclusion: they **are**
+  marked, with a comment, which Semgrep cannot read. A declaration of intent the
+  rule cannot recognise is the severity criterion exactly.
+
+  This is the same reasoning that keeps the **Java** empty-catch at ERROR, not a
+  contradiction of it: that rule can read its ecosystem's intent marker — the
+  Checkstyle/IntelliJ convention of naming the binding `ignore`/`ignored`/
+  `expected`. JS/TS has no equivalent of comparable standing, and the reason is
+  structural rather than cultural: **ES2019 optional catch binding removed the
+  identifier a naming convention would attach to.** 41 of those 42 are written
+  `catch {`, with nothing to name; the ecosystem marks intent with a comment, or
+  with ESLint's `no-empty` `allowEmptyCatch` switch, which is project
+  configuration rather than an in-code marker. The nearest thing that *is*
+  machine-readable is honoured anyway, so one case can be marked deliberate in
+  code instead of with `// nosemgrep`: a binding named `_`/`_e`/`_err`
+  (ESLint's `caughtErrorsIgnorePattern`, TypeScript's leading-underscore
+  convention) or one of the three Checkstyle words. Stated rather than implied:
+  **it removed zero of the 42.** `empty-promise-catch` gets no escape hatch at
+  all, because `.catch(() => {})` has no binding to name.
+
+  **One rule in the pack is now at ERROR** — `index-at-length`, which produces
+  zero findings on `mcp/src`, the right number for a rule that narrow. Eleven
+  are WARNING and one INFO. A default `create_fix_pr` run therefore takes almost
+  nothing from this pack, which is the point: it must not open a PR rewriting 45
+  deliberate fail-open handlers.
 
 - **The JS/TS bug pack, audited against code written by someone who did not
   write the rules.** `configs/semgrep/bugfix-js.yml` shipped in 1.6.0 and had

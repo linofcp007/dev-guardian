@@ -45,14 +45,35 @@
 # looks for usually wrong" — a rule whose correctness depends on having
 # recognised a guard emits a false positive every time it meets a guard shape
 # nobody enumerated, and no exclusion list closes that, because the guard can
-# always be one method away. Three of fourteen clear that bar and stay at
-# ERROR (empty-catch, empty-promise-catch, index-at-length); nine sit at
-# WARNING; two sit at INFO because on the auditor's corpus their output was
-# mostly CORRECT code rather than mostly bugs. The tiers are pinned
-# exhaustively, in both directions, by EXPECTED_SEVERITY in
+# always be one method away. Exactly ONE of thirteen clears that bar and
+# stays at ERROR (index-at-length); eleven sit at WARNING and one at INFO.
+# The tiers are
+# pinned exhaustively, in both directions, by EXPECTED_SEVERITY in
 # mcp/test/integration/bugfixRulesJs.test.ts — before this wave nothing read
 # `extra.severity` at all, so changing any rule's tier was a mutation the
 # whole suite passed green.
+#
+# ---------------------------------------------------------------------------
+# THE SELF-SCAN, and the two things it decided that the probe corpus could not
+# ---------------------------------------------------------------------------
+#
+# After the audit wave the pack was run against **this repo's own `mcp/src`** —
+# 183 files of real TypeScript that nobody wrote as a fixture, chosen by
+# neither the rule author nor the auditor. It is a cheap check, it needs no
+# fixture, and it caught two things 36 two-axis ablations did not, because "the
+# clause is live" and "it does not reduce true positives" are BOTH true of a
+# clause that only adds false positives:
+#
+#  - `floating-mutation` went 20 -> 0. The receiver constraint working exactly
+#    as intended, on code none of us picked. That is the wave's best result.
+#  - `unchecked-match` went 0 -> 13, a REGRESSION the wave introduced: the new
+#    `exec` branch did not inherit the optional-chaining exclusion the `match`
+#    branch already had, so it bought one true positive and opened two
+#    false-positive shapes. Every one of the 13 was `exec(...)?.[1]`. Fixed
+#    below, with the near-misses in misses/unchecked-match.ts.
+#
+# It also retired a rule and moved two tiers — see `error-handling-empty-catch`
+# below, and the deletion note where `catch-returns-null` used to be.
 rules:
   # (audit wave) ONE false negative closed, and one non-bug recorded — the
   # difference between the two only became visible by ablating each added
@@ -74,24 +95,63 @@ rules:
   #    hits/error-handling.ts keeps both shapes anyway, so the day that
   #    stops being true, the count moves.
   #
-  # Stays at ERROR, and is one of only three that do. What it emits after
-  # matching is an unmarked silent swallow, which is a bug whatever the
-  # author meant; there is no guard for the rule to recognise, because a
-  # non-empty handler is a different AST shape rather than a guard shape.
-  # Its one residual false positive is a catch whose body is only a COMMENT
-  # explaining the deliberate ignore (auditor's p01 FP-1) — comments are not
-  # AST nodes, so no pattern can see one. Semgrep's own `// nosemgrep` is the
-  # escape hatch there. Still missed, and left missed rather than chased: a
-  # catch body of `;` or `void 0`, which are non-empty blocks.
+  # (self-scan) ERROR -> WARNING, and the number that decided it: this rule
+  # produces **42 findings on this repo's own `mcp/src`, and all 42 are
+  # deliberate, comment-documented fail-open**. Not a sample — every one was
+  # read:
+  #
+  #   try { process.kill(pid, signal); } catch { }   // ESRCH: already dead
+  #   try { db.close(); }                catch { }   // already closed
+  #   try { rmSync(dir, ...); }          catch { }   // best effort
+  #
+  # The rule was at ERROR on the reasoning that an unmarked silent swallow is
+  # a bug whatever the author meant. The self-scan refutes the PREMISE, not
+  # the conclusion: these are marked. They are marked with a COMMENT, which
+  # Semgrep cannot read. A declaration of intent the rule cannot recognise is
+  # the severity criterion exactly, so this is WARNING.
+  #
+  # That is the same reasoning that keeps the JAVA empty-catch at ERROR, not
+  # a contradiction of it. The Java rule clears the bar because it CAN read
+  # its ecosystem's intent marker — the Checkstyle / IntelliJ convention of
+  # naming the binding `ignore` / `ignored` / `expected`. JS/TS has no
+  # equivalent of comparable standing, and the reason is structural rather
+  # than cultural: **ES2019 optional catch binding removed the identifier a
+  # naming convention would attach to.** 41 of those 42 are written
+  # `catch {`, with nothing to name. The ecosystem marks intent with a
+  # comment (unreadable here) or with ESLint's `no-empty` `allowEmptyCatch`
+  # switch, which is project configuration rather than an in-code marker.
+  #
+  # The nearest thing that IS in-code and machine-readable is honoured below
+  # anyway, so that a reader who wants to silence one case has a way that is
+  # not `// nosemgrep`: a binding named `_`/`_e`/`_err` (ESLint's
+  # `caughtErrorsIgnorePattern`, conventionally `^_`, and TypeScript's
+  # leading-underscore convention for a deliberately unused binding), or
+  # named with one of the three Checkstyle words. Measured, and stated rather
+  # than implied: it removed **ZERO of the 42**. `mcp/src` contains no
+  # intent-named catch binding at all. Its near-misses are in
+  # misses/error-handling.ts, so the clause is at least live and provably
+  # works; do not read it as evidence that the rule is now precise.
+  #
+  # Still missed, and left missed rather than chased: a catch body of `;` or
+  # `void 0`, which are non-empty blocks.
   - id: bugfix-js-error-handling-empty-catch
     patterns:
       - pattern-either:
           - pattern: try { ... } catch ($E) { }
           - pattern: try { ... } catch ($E) { } finally { ... }
+      - pattern-not:
+          patterns:
+            - pattern-either:
+                - pattern: try { ... } catch ($E) { }
+                - pattern: try { ... } catch ($E) { } finally { ... }
+            - metavariable-regex:
+                metavariable: $E
+                regex: ^(_.*|ignore|ignored|expected)$
     message: >-
       Erro engolido em silêncio. O bloco catch está vazio, por isso a falha
-      desaparece sem log, sem rethrow e sem tratamento.
-    severity: ERROR
+      desaparece sem log, sem rethrow e sem tratamento. Se for deliberado,
+      nomeia o binding `_` (ou `ignored`) para o dizer no código.
+    severity: WARNING
     languages: [javascript, typescript]
 
   # Task 1 grouped this with empty-catch via pattern-either, to keep that
@@ -114,6 +174,19 @@ rules:
   # `{}` regardless of arity, so a catch that logs or rethrows still stays
   # silent with no exclusion clause needed.
   #
+  # (self-scan) ERROR -> WARNING, for the same measured reason as empty-catch
+  # above and on the same corpus: 3 findings on `mcp/src`, 3 of them
+  # deliberate, comment-documented fail-open — a `.catch()` on a call made
+  # with `reject: false` (documented as unreachable), a detached `taskkill`
+  # nobody waits on, and a best-effort `pipx ensurepath`. What it emits is
+  # not always a bug, so it is not ERROR.
+  #
+  # Unlike empty-catch, this rule gets NO in-code escape hatch: the dominant
+  # form is `.catch(() => {})`, which has no binding to name, and adding a
+  # named-parameter exclusion for the `function ($E) {}` branch alone would
+  # be a clause almost nobody could reach. `// nosemgrep` is the only way to
+  # mark one deliberate. Stated rather than left to be discovered.
+  #
   # (audit wave) Measured on the auditor's p02 probe and left UNCHANGED: 5
   # fires, 4 of them real (`err => {}` unparenthesised, `async () => {}`, an
   # empty body holding only a comment, and an empty `.catch` at the end of a
@@ -132,69 +205,31 @@ rules:
     message: >-
       Promise .catch() vazio. A rejeição é silenciada sem log, sem rethrow e
       sem tratamento.
-    severity: ERROR
+    severity: WARNING
     languages: [javascript, typescript]
 
-  # (audit wave) THE RULE THIS WAVE CHANGED THE CLAIM OF, rather than the
-  # pattern. It shipped at ERROR, and on the auditor's p03 probe it produced
-  # FIVE instances of textbook-correct code and ZERO true positives:
-  # `safeJsonParse`, `tryRequire`, a `new URL()` validity probe, a lookup
-  # whose TS return type is explicitly `| null`, and a "read the optional
-  # plugin list" helper returning `[]`. Returning an empty value from a catch
-  # is IDIOMATIC JavaScript — the documented contract of a whole family of
-  # probe helpers — in a way it is not in, say, Java.
+  # ---------------------------------------------------------------------
+  # DELETED (self-scan): bugfix-js-error-handling-catch-returns-null.
   #
-  # There is no syntactic discriminator. `safeJsonParse` and a function that
-  # loses a database error are the same AST; every candidate narrowing that
-  # silences the five idioms (require a multi-statement try, require the
-  # catch to be the whole body, restrict the returned value) also silences
-  # every genuine instance, including this pack's own hit fixture. Measured,
-  # not assumed.
+  # It matched `try { ... } catch ($E) { return null|undefined|[]; }`. The
+  # audit wave demoted it to INFO after the auditor's corpus produced five
+  # instances of textbook-correct code and zero true positives. The self-scan
+  # settled it: **25 findings on this repo's own `mcp/src`, and every one
+  # sampled is correct code** — the safe-`JSON.parse` helper, a `readdirSync`
+  # with a `[]` fallback, `runtimeMeta.getJson` with a `[]` fallback. Zero
+  # true positives on an independent corpus, zero on ours.
   #
-  # So the honest repair is to the CLAIM, not the pattern:
+  # INFO is not a tier for a rule that has never been right. It is a quieter
+  # way to keep being wrong, and it still costs every person who reads the
+  # output. Returning an empty value from a catch is a documented JavaScript
+  # idiom, not a defect shape, and there is no syntactic difference between
+  # the idiom and a genuine swallow — every candidate narrowing was measured
+  # and silences the rule's own hit fixture too. So the rule is gone, along
+  # with its three fixtures.
   #
-  #  1. ERROR -> INFO. What it emits is mostly correct code, so it is not
-  #     "normally a bug" (WARNING) either.
-  #  2. The message no longer says "loga e/ou relança". That advice was
-  #     CIRCULAR: adding a log made the rule go quiet while the stated
-  #     complaint — an empty value the caller cannot distinguish from a
-  #     legitimate result — was untouched. It now asks the reader to confirm
-  #     the contract, which is the only thing a reader can actually do.
-  #  3. hits/catch-returns-null-idioms.ts pins the five idioms AS HITS, with
-  #     the trade written down, so re-promoting the tier turns the severity
-  #     assertion red with that file as the evidence of what would then be
-  #     reported as `high`.
-  #
-  # The pattern itself is UNCHANGED, and that is a measured result rather
-  # than an omission: optional catch binding (`catch { return null; }`),
-  # which the audit read as a gap, is already matched by the bound form —
-  # three explicit `catch { ... }` branches were added, ablated, and found to
-  # change nothing in either direction, so they are not here. The fixture
-  # keeps all six shapes so the day that stops being true, the count moves.
-  #
-  # The remaining gap IS real and is stated rather than hidden: any catch
-  # with a statement before the return escapes
-  # (`catch (e) { logger.debug(e); return null; }`),
-  # because the pattern is the whole block. Broadening to `{ ... return
-  # null; ... }` was rejected — at INFO it would add fires on code that
-  # logs the error properly, which is strictly better code than the shape
-  # this rule is about, for no gain in signal.
-  - id: bugfix-js-error-handling-catch-returns-null
-    patterns:
-      - pattern-either:
-          - pattern: |
-              try { ... } catch ($E) { return null; }
-          - pattern: |
-              try { ... } catch ($E) { return undefined; }
-          - pattern: |
-              try { ... } catch ($E) { return []; }
-    message: >-
-      O catch converte uma falha num valor vazio (null/undefined/[]) que
-      quem chama não consegue distinguir de um resultado legítimo. Confirma
-      que isto é o contrato documentado da função e não um erro perdido; se
-      não for, devolve um resultado tipado que marque o erro.
-    severity: INFO
-    languages: [javascript, typescript]
+  # Do not re-add it without a corpus that shows it being right about
+  # something.
+  # ---------------------------------------------------------------------
 
   # (audit wave) REWRITTEN. The old pattern matched the LOOP
   # (`for (...; $I <= $A.length; ...) { ... }`) and said nothing about the
@@ -658,6 +693,34 @@ rules:
   #  - CLOSED: `RegExp#exec` has the identical null-on-no-match contract and
   #    is indexed just as unguarded (`/x(\d)/.exec(s)[1]`). The rule only
   #    knew `String#match`. New `pattern-either` branch.
+  #
+  # (self-scan) THAT BRANCH SHIPPED BROKEN, and no fixture could have caught
+  # it: it did not inherit the optional-chaining exclusion the `match` branch
+  # already had, so `RE.exec(s)?.[1]` — correct, guarded code — started
+  # firing. On this repo's own `mcp/src` the rule went from 0 findings to
+  # **13, every one of them `exec(...)?.[1]`**, mostly in
+  # `recoverMetavars.ts`, against the single true positive the branch was
+  # added for. The ablation harness could not see this: deleting the branch
+  # turned a test red (it was live) and it reduced no true-positive count
+  # (axis two), and BOTH of those remain true of a clause that only adds
+  # false positives. Only a scan of code nobody wrote as a fixture showed it.
+  #
+  # Fixed with a second `pattern-not` mirroring the `match` one, reasoning
+  # the same way: if `?.[` appears in the match but NOT in the argument, it
+  # can only be the outer connector.
+  #
+  # The exec branch's string argument is named `$S2` rather than reusing the
+  # `$S` the match branch binds. That is HYGIENE, not a fix, and the
+  # distinction is worth keeping straight because an earlier draft of this
+  # comment claimed the shared name was a second bug: ablated, renaming
+  # `$S2` back to `$S` changes nothing at all, in either direction. The two
+  # exclusions cannot cross-unify however the metavariables are named,
+  # because each one pins its own call shape (`.match(...)` vs `.exec(...)`)
+  # and no expression is both. Distinct names are kept for readability; do
+  # not record them as load-bearing.
+  #
+  # Same residual as the match branch, moved to the receiver instead of the
+  # argument: `weird?.[0].exec(s)?.[1]` would still fire.
   #  - NOT CLOSED, on purpose: a name collision on a non-string matcher
   #    object that returns an array (`matcher.match(url)[0]`, iso/i2.ts [G]).
   #    The only available discriminator is the ARGUMENT — requiring a regex
@@ -677,7 +740,7 @@ rules:
     patterns:
       - pattern-either:
           - pattern: $S.match($ARG)[$I]
-          - pattern: $RE.exec($S)[$I]
+          - pattern: $RE.exec($S2)[$I]
       - pattern-not:
           patterns:
             - pattern: $S.match($ARG)[$I]
@@ -685,6 +748,13 @@ rules:
             - metavariable-comparison:
                 metavariable: $ARG
                 comparison: "'?.[' not in str($ARG)"
+      - pattern-not:
+          patterns:
+            - pattern: $RE.exec($S2)[$I]
+            - pattern-regex: '\?\.\['
+            - metavariable-comparison:
+                metavariable: $S2
+                comparison: "'?.[' not in str($S2)"
     message: >-
       .match()/.exec() devolvem null quando não há correspondência, e o
       resultado é indexado sem verificar. Usa ?.[$I] ou verifica o resultado
