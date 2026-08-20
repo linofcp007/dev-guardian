@@ -200,6 +200,44 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     ],
     count: 8,
   },
+  'AsCast.cs': {
+    // Nine, and only TWO of them are the plain shape. The other seven are
+    // guaranteed NREs sitting right next to a guard that does not protect
+    // them — the `else` arm, a ternary's ruled-out arm, a disjunction that
+    // proves nothing, a guard on a different variable.
+    //
+    // They are in hits/ rather than misses/ because of what ablation axis 2
+    // measures: removing a clause must not REVEAL a finding here. An
+    // exclusion that swallows a real bug is invisible unless that bug is in
+    // this file. Measured: writing the two `if` exclusions with the obvious
+    // `if ($V != null) { ... }` spelling closes every correct case in misses/
+    // AND swallows two of these. Axis 3, which would have measured the same
+    // width on real code, is unavailable all round.
+    ids: ['bugfix-cs-null-safety-as-cast-deref'],
+    count: 9,
+  },
+  'OrDefault.cs': {
+    // Four: one per enumerated LINQ method plus a chained receiver.
+    ids: ['bugfix-cs-null-safety-ordefault-deref'],
+    count: 4,
+  },
+  'ModifyDuringIteration.cs': {
+    // Eight: four enumerated receiver types, `RemoveAt`, a plain field, the
+    // `this.`-qualified twin, and — the one that matters — a removal inside a
+    // `switch` arm followed by `break`, which is the real bug Java's fourth
+    // wave deleted. The exit exclusions alone swallow it; the
+    // switch-inside-foreach re-inclusion is what keeps it.
+    //
+    // NINE, not eight, and the ninth is an ablation result rather than a
+    // hunch: the re-inclusion is two `pattern-inside` branches, one per switch
+    // label kind, and a single fixture carrying BOTH a `case` and a `default`
+    // satisfied either branch alone. Both read DEAD while removing the pair
+    // was a regression — CLAUDE.md's third cause of DEAD, mutual redundancy,
+    // caught by the harness re-ablating DEAD siblings in pairs. One switch of
+    // each label kind makes each branch independently measurable.
+    ids: ['bugfix-cs-edge-case-modify-during-iteration'],
+    count: 9,
+  },
   'HttpClient.cs': {
     // Four: a constructor assignment, a plain per-call local, `using var`,
     // and a `using` block. The constructor one is the site that chose the
@@ -253,6 +291,13 @@ const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
   'bugfix-cs-off-by-one-loop-lte-length': 'WARNING',
   'bugfix-cs-off-by-one-loop-lte-count': 'WARNING',
   'bugfix-cs-memory-leak-httpclient-per-call': 'WARNING',
+  // null_safety and edge_case. All WARNING, and these three are the clearest
+  // illustration of the §4 criterion in the pack: their correctness depends
+  // ENTIRELY on having recognised a guard, and a guard can always be one
+  // method away, outside any syntactic matcher's reach.
+  'bugfix-cs-null-safety-as-cast-deref': 'WARNING',
+  'bugfix-cs-null-safety-ordefault-deref': 'WARNING',
+  'bugfix-cs-edge-case-modify-during-iteration': 'WARNING',
 };
 
 describe('bugfix-cs rules', () => {
@@ -360,6 +405,9 @@ const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-cs-off-by-one-loop-lte-length': 'off_by_one',
   'bugfix-cs-off-by-one-loop-lte-count': 'off_by_one',
   'bugfix-cs-memory-leak-httpclient-per-call': 'memory_leak',
+  'bugfix-cs-null-safety-as-cast-deref': 'null_safety',
+  'bugfix-cs-null-safety-ordefault-deref': 'null_safety',
+  'bugfix-cs-edge-case-modify-during-iteration': 'edge_case',
 };
 
 describe('every rule id classifies as its own class', () => {

@@ -523,3 +523,260 @@ rules:
       de longa duração ou o `IHttpClientFactory`.
     severity: WARNING
     languages: [csharp]
+
+  # ---------------------------------------------------------------------------
+  # null_safety — duas regras, e a primeira tem a bateria de guardas maior do
+  # pack. As duas ficam em WARNING, e sao a ilustração mais limpa do critério
+  # do §4: a correção delas depende INTEIRAMENTE de ter reconhecido uma guarda,
+  # e uma guarda pode estar a um método de distancia.
+  # ---------------------------------------------------------------------------
+
+  # `x as T` devolve null quando o cast falha — é a diferença toda entre o `as`
+  # e um cast direto, que lança. Dereferenciar sem verificar transforma uma
+  # incompatibilidade de tipos numa NullReferenceException longe da causa.
+  #
+  # A FORMA POSITIVA NAO PODE SER A SEQUENCIA. Medido:
+  #
+  #     var $V = $O as $T;
+  #     ...
+  #     $V.$M
+  #
+  # NAO FAZ PARSE — `Invalid pattern for C#: Parse_error`. Felizmente é das
+  # falhas seguras: levanta RuleParseError e sai com 2. O que funciona é
+  # `pattern: $V.$M` com `pattern-inside` na declaração seguida de `...`.
+  #
+  # E ISSO TORNA ESTA A REGRA MAIS LARGA DO PACK: uma vez que `var s = o as
+  # string;` está no escopo, TODOS os usos posteriores de `s` sao candidatos. A
+  # lista de guardas faz o trabalho todo. Sem ela: 12 matches na fixture de
+  # código correto; com ela: 2, que sao os dois bugs.
+  #
+  # O ESCOPO DA EXCLUSAO E TUDO, e este é o ponto onde o pack de Java se
+  # enganou durante quatro waves. A grafia óbvia,
+  #
+  #     pattern-not-inside: "if ($V != null) { ... }"
+  #
+  # fecha os casos corretos E ENGOLE O RAMO `else`, porque o
+  # `pattern-not-inside` exclui o NO INTEIRO que casou, ramo `else` incluído —
+  # e no `else` de uma guarda de nao-nulidade o deref é uma NRE GARANTIDA.
+  # Medido nas fixtures desta ronda: essa grafia perde dois bugs reais. A
+  # grafia que se usa aqui limita a exclusão ao BLOCO ENTAO,
+  #
+  #     pattern-not-inside: "if ($V != null) { <... $V.$M ...>; }"
+  #
+  # fecha exatamente os mesmos casos corretos e mantém os dois bugs. As sete
+  # NREs garantidas ao lado de guardas estao em hits/AsCast.cs de propósito: o
+  # eixo 2 da ablação mede "tirar esta clausula nao pode REVELAR findings em
+  # hits/", e uma exclusão que come um bug real só é visível se o bug estiver
+  # lá.
+  #
+  # A ABLACAO SINALIZA O `pattern-inside` DESTA REGRA NO EIXO 2, E E UM FALSO
+  # ALARME — dito aqui para ninguém o "corrigir". O eixo 2 pergunta "tirar esta
+  # clausula revela findings em hits/?", e assume que a clausula é uma
+  # EXCLUSAO. Esta nao é: é a ANCORA POSITIVA da regra. Sem ela o `$V.$M`
+  # passa a casar todos os acessos a membro do corpus (+135), e 58 deles caem
+  # em ficheiros de hits/ de OUTRAS regras — `StaticRandom.cs`, `EmptyCatch.cs`,
+  # `Rethrow.cs`, que nao tem um único `as` lá dentro. Sao lixo, e nao
+  # verdadeiros positivos que a clausula estivesse a esconder. Verificado
+  # ficheiro a ficheiro, e é exatamente o que o CLAUDE.md avisa: os eixos 2 e 3
+  # sao ATRIBUICOES, nao provas, e sinalizam mais do que o defeito para que
+  # foram feitos.
+  #
+  # TRES FORMAS CORRETAS SAO GRATIS e nao levam clausula nenhuma, medido: `?.`
+  # é outro nó, `o is string s` é outro nó, e `o as string ?? "d"` nao é um
+  # inicializador `as` simples. Estao em misses/ marcadas como tal, para
+  # ninguém as ler como prova de que a regra é precisa.
+  - id: bugfix-cs-null-safety-as-cast-deref
+    patterns:
+      - pattern: $V.$M
+      - pattern-inside: |
+          var $V = $O as $T;
+          ...
+      - pattern-not-inside: "if ($V != null) { <... $V.$M ...>; }"
+      - pattern-not-inside: "if ($V is not null) { <... $V.$M ...>; }"
+      - pattern-not-inside: |
+          if ($V == null) { return ...; }
+          ...
+      - pattern-not-inside: |
+          if ($V is null) { return ...; }
+          ...
+      - pattern-not-inside: |
+          if ($V == null) { throw ...; }
+          ...
+      - pattern-not-inside: |
+          if ($V == null) { continue; }
+          ...
+      - pattern-not-inside: |
+          ArgumentNullException.ThrowIfNull($V);
+          ...
+      - pattern-not-inside: "$V != null && <... $V.$M ...>"
+      - pattern-not-inside: "$V == null || <... $V.$M ...>"
+      - pattern-not-inside: "$V != null ? <... $V.$M ...> : ..."
+      - pattern-not-inside: "$V == null ? ... : <... $V.$M ...>"
+    message: >-
+      Dereferencia do resultado de um `as` sem verificar o nulo. O `as` devolve
+      null quando o cast falha — é essa a diferença para um cast direto —, por
+      isso isto lança NullReferenceException longe da causa. Use
+      `if (x is T y)`, ou verifique o nulo antes.
+    severity: WARNING
+    languages: [csharp]
+
+  # `FirstOrDefault()` e companhia devolvem `default(T)` numa sequencia vazia —
+  # null para um tipo de referencia. A razao inteira para escolher a variante
+  # `OrDefault` em vez de `First()` é a sequencia PODER estar vazia, por isso
+  # dereferenciar o resultado logo a seguir contradiz a escolha do método.
+  #
+  # ESTA REGRA NAO TEM CLAUSULAS DE EXCLUSAO, e isso é um resultado e nao um
+  # esquecimento: as formas corretas ficam caladas por serem nós diferentes.
+  # A fixture de misses continua a existir como rede de regressao, e diz lá
+  # dentro que nao prova precisao nenhuma.
+  #
+  # UMA CLASSE DE FALSOS POSITIVOS QUE NAO TEM SOLUCAO, nas duas direções, dita
+  # em vez de escondida. Numa sequencia de tipos POR VALOR o `FirstOrDefault()`
+  # devolve `default(T)` e NUNCA null, por isso
+  # `List<int>.FirstOrDefault().ToString()` é código correto e esta regra
+  # dispara nele. Medido, e a saída óbvia nao serve:
+  #
+  #   - uma deny-list de membros (`ToString`, `Year`, ...) fecharia essa
+  #     instancia, mas passa a perder `List<Cliente>.FirstOrDefault().ToString()`,
+  #     que é uma NRE a sério;
+  #   - e continua a nao fechar `List<DateTime>.FirstOrDefault().Year`, porque
+  #     a lista de membros de todos os tipos por valor nao é enumerável.
+  #
+  # O que resolveria era inferir o argumento genérico do recetor, e isso nao
+  # está disponível. Fica o falso positivo, declarado.
+  - id: bugfix-cs-null-safety-ordefault-deref
+    pattern-either:
+      - pattern: $X.FirstOrDefault(...).$M
+      - pattern: $X.SingleOrDefault(...).$M
+      - pattern: $X.LastOrDefault(...).$M
+    message: >-
+      Dereferencia direta de `FirstOrDefault()`. Numa sequencia vazia devolve
+      null, e escolher a variante `OrDefault` é precisamente admitir que ela
+      pode estar vazia. Verifique o nulo, use `?.`, ou chame `First()` se a
+      sequencia nao puder mesmo estar vazia.
+    severity: WARNING
+    languages: [csharp]
+
+  # ---------------------------------------------------------------------------
+  # edge_case — uma regra, e é a que carrega a única falta de solidez que esta
+  # série já despachou uma vez. Aqui ela nao chega a existir, porque a fixture
+  # que a apanha foi escrita antes da clausula.
+  # ---------------------------------------------------------------------------
+
+  # Remover de uma coleção enquanto um `foreach` a enumera invalida o
+  # enumerador: o `MoveNext()` seguinte lança InvalidOperationException,
+  # "Collection was modified; enumeration operation may not execute."
+  #
+  # `foreach (var $X in $COLL)`, e nao `foreach ($T $X in $COLL)`. Medido na
+  # sondagem desta ronda: a forma com tipo explícito encontrou 0 de 5 bugs
+  # reais, a forma com `var` encontrou os cinco. E a sexta forma de falha
+  # silenciosa da série e a primeira que o `paths.scanned` nao apanha.
+  #
+  # QUATRO TIPOS ENUMERADOS e nao cinco: o `Dictionary` foi DEIXADO DE FORA de
+  # propósito. Remover de um Dictionary durante a enumeração está DOCUMENTADO
+  # COMO SEGURO desde o .NET Core 3.0, por isso um ramo de Dictionary
+  # dispararia em código correto. Há uma fixture em misses/ só para o manter
+  # fora.
+  #
+  # O METODO DE REMOCAO LIGA-SE A `$RM`, em vez de os padrões repetirem
+  # `Remove`. Medido, e custa um falso positivo inteiro: com as exclusões a
+  # nomear `Remove` literalmente enquanto o padrao positivo também aceitava
+  # `RemoveAt`, um `RemoveAt(0); break;` correto passava a disparar, porque
+  # exclusão nenhuma o conseguia ver.
+  #
+  # A FALTA DE SOLIDEZ DA WAVE 4 DO JAVA, PORTADA JA CORRIGIDA. As exclusões de
+  # saída fecham os falsos positivos de "remove e sai do ciclo" — e sozinhas
+  # ENGOLEM UM BUG REAL: um `Remove` dentro de um ramo de `switch` seguido de
+  # `break`, onde o `break` sai do SWITCH e nao do ciclo, por isso a iteração
+  # continua sobre um enumerador invalidado. Medido nesta ronda: só com as
+  # exclusões de saída sao 7 findings e o bug do switch desaparece; com a
+  # reinclusao sao 8 e os falsos positivos continuam fechados.
+  #
+  # A DIRECAO DO ANINHAMENTO E QUE FAZ O TRABALHO: o `switch` tem de estar
+  # DENTRO do `foreach`. Contenção léxica simples — "algures dentro de um
+  # switch" — reativaria a regra num `foreach` escrito dentro de um `case`,
+  # onde o `break` sai mesmo do ciclo e o código está correto. Essa forma tem a
+  # sua própria near-miss.
+  #
+  # O C# NAO TEM `break` ETIQUETADO, por isso as duas exclusões de `break $L`
+  # do pack de Java nao portam e nao estao aqui. O equivalente em C# seria um
+  # `goto`, que ninguém escreve e que nenhuma fixture cobre — acrescentá-lo
+  # seria uma clausula morta.
+  - id: bugfix-cs-edge-case-modify-during-iteration
+    patterns:
+      - pattern: $COLL.$RM(...)
+      - metavariable-regex:
+          metavariable: $RM
+          regex: ^(Remove|RemoveAt)$
+      # O `metavariable-pattern` liga o recetor ANTES de o tipar. No pack de
+      # Java era preciso um `pattern-either` de `$F` e `this.$F` aqui, porque
+      # lá o `metavariable-type` nao resolvia um campo qualificado — o
+      # `cache.get(k)` disparava e o `this.cache.get(k)` era invisível, na
+      # mesma classe e no mesmo campo.
+      #
+      # EM C# ISSO NAO ACONTECE, medido nesta ronda: o ramo `this.$F` foi
+      # ablado e nao mexeu um único finding, porque o `$F` sozinho já liga E
+      # TIPA `this._items`. A fixture `OverThisField` continua em hits/ a
+      # provar que a forma qualificada é apanhada — o que desapareceu foi a
+      # clausula redundante, nao a cobertura.
+      - metavariable-pattern:
+          metavariable: $COLL
+          patterns:
+            - pattern: $F
+            - metavariable-type:
+                metavariable: $F
+                types: ["List<$T>", "IList<$T>", "ICollection<$T>", "HashSet<$T>"]
+      - pattern-inside: "foreach (var $X in $COLL) { ... }"
+      - pattern-not-inside: |
+          $COLL.$RM(...);
+          return ...;
+      - pattern-not-inside: |
+          $COLL.$RM(...);
+          $S1;
+          return ...;
+      - pattern-not-inside: |
+          $COLL.$RM(...);
+          throw ...;
+      - pattern-not-inside: |
+          $COLL.$RM(...);
+          $S1;
+          throw ...;
+      # O `break` SIMPLES só sai do ciclo FORA de um `switch`. Os dois
+      # primeiros ramos sao reinclusões e nao repetem o termo positivo, porque
+      # um `pattern-inside` já é positivo por si; o terceiro TEM de o repetir,
+      # senao é uma regra inválida — um ramo só com termos negativos nao
+      # carrega regra nenhuma.
+      - pattern-either:
+          - pattern-inside: |
+              foreach (var $X in $COLL) {
+                ...
+                switch ($S) {
+                  case $C:
+                    ...
+                }
+                ...
+              }
+          - pattern-inside: |
+              foreach (var $X in $COLL) {
+                ...
+                switch ($S) {
+                  default:
+                    ...
+                }
+                ...
+              }
+          - patterns:
+              - pattern: $COLL.$RM(...)
+              - pattern-not-inside: |
+                  $COLL.$RM(...);
+                  break;
+              - pattern-not-inside: |
+                  $COLL.$RM(...);
+                  $S1;
+                  break;
+    message: >-
+      Remoção da coleção durante o `foreach` sobre ela própria. Invalida o
+      enumerador e o `MoveNext()` seguinte lança InvalidOperationException.
+      Itere sobre uma cópia (`.ToList()`) ou use `RemoveAll(...)`.
+    severity: WARNING
+    languages: [csharp]
