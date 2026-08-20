@@ -30,3 +30,13 @@ export function deliberateIgnored(): void {
 export function deliberateExpected(): void {
   try { risky(); } catch (expected) { }
 }
+
+// The same declared intent, with a finalizer attached. A `finally` makes this
+// a different AST node — `try { ... } catch ($E) { }` does not match a try
+// statement that has one — but it does not make the swallow any less
+// deliberate, and the binding still says so. Written from the shape: a
+// best-effort cleanup that must run whether or not the risky call threw.
+export function deliberateIgnoredWithFinally(): void {
+  try { risky(); } catch (ignored) { } finally { releaseLock(); }
+}
+function releaseLock(): void {}

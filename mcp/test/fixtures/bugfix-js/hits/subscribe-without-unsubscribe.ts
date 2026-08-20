@@ -38,3 +38,37 @@ export function BranchWatcher(
     source.subscribe(onNext);
   }, [flag]);
 }
+
+// A piped subscription whose operator does NOT complete the stream. `map`
+// transforms every value and passes it through; the stream runs until
+// somebody unsubscribes, and nobody does, so this leaks exactly as much as an
+// unpiped `subscribe`.
+//
+// It is here because ablation measured the pipe-operator exclusion's
+// OPERATOR-NAME constraint dead. The exclusion covers
+// `.pipe(...).subscribe(...)` wholesale; what stops it swallowing a
+// non-completing operator is the name constraint on the piped argument, and
+// deleting that left every fixture unchanged — `misses/subscribe-
+// autocomplete.ts`'s `take(1)` stays silent whether the constraint is there
+// or not, because the wider exclusion still covers it. A near-miss can only
+// prove an exclusion EXISTS. Proving it is the right WIDTH needs a hit.
+//
+// The operator is a named function on purpose, and this cost a measurement to
+// learn: written the obvious way, `map((x) => x)`, this fixture is silent —
+// not because of the pipe exclusion but because of the CLEANUP exclusion two
+// clauses above. An expression-bodied arrow is a `return`, and that clause
+// asks only whether a return exists anywhere inside the effect, so any nested
+// callback satisfies it on the leak's behalf. `map((x) => { return x; })`
+// goes silent too. That is the same "cannot be made relative to the
+// occurrence being judged" limitation the BranchWatcher note above describes,
+// one level further in — recorded here, not fixed here.
+interface Piped {
+  pipe(op: unknown): { subscribe(cb: () => void): Subscription };
+}
+declare function map(f: unknown): unknown;
+declare function normalise(x: number): number;
+export function MappedWatcher(source: Piped, onNext: () => void): void {
+  useEffect(() => {
+    source.pipe(map(normalise)).subscribe(onNext);
+  }, []);
+}

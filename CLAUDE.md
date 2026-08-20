@@ -32,6 +32,97 @@ Semgrep-dependent e2e tests skip when Semgrep is absent. A skip is visible as a
 skip, and `GUARDIAN_REQUIRE_SEMGREP=1` turns absence into a hard failure — set it
 when you need to know the rule pack was actually exercised.
 
+## Ablating a Semgrep rule pack (`npm run ablate`)
+
+```bash
+cd mcp
+npm run ablate -- all                          # every registered pack
+npm run ablate -- bugfix-js                    # one pack
+npm run ablate -- bugfix-java --filter=map-get # one rule, while iterating
+npm run ablate -- bugfix-js --list             # enumerate clauses, no scanning
+```
+
+Semgrep is found via `--semgrep=<path>`, then `GUARDIAN_SEMGREP`, then `PATH`.
+Code lives in [`mcp/test/ablate/`](mcp/test/ablate/) — under `test/` because
+it is developer tooling that must never reach `dist/`, and because
+`tsconfig.test.json` already type-checks that tree at full strictness. It is
+**not** a vitest test (`vitest.config.ts` only collects `*.test.ts`): a full
+run is tens of minutes, and the report is the product. Its pure half — clause
+enumeration and removal — *is* unit-tested, in
+[`mcp/test/ablate/clauses.test.ts`](mcp/test/ablate/clauses.test.ts).
+
+**What it is for.** Six exclusion clauses that did nothing at all have shipped
+across the rule-pack series. Every one was written by someone sure it was
+needed, and found only when somebody deleted it and watched nothing change.
+The harness deletes one clause at a time, re-runs the pack, and reports three
+verdicts — all three, because each axis was added after a defect escaped the
+previous ones:
+
+1. **live** — removing the clause changes the result somewhere.
+2. **keeps true positives** — removing it must not *reveal* findings in
+   `hits/`. `pattern-not-inside` excludes the whole node it matched, so a
+   guard written for an `if` also swallowed the `else` arm, where the bug was.
+3. **no rise in the real-code count** — scan a corpus nobody wrote as a
+   fixture (`mcp/src`, for the JS/TS pack) and compare. If removing the clause
+   *lowers* the count, the clause was adding those findings. This is the axis
+   that caught `unchecked-match` going 0 → 13 false positives on our own
+   TypeScript; axes 1 and 2 both passed, because "live" and "keeps true
+   positives" are both true of a clause that only *adds* false positives.
+
+**`DEAD` never means "safe to delete" on its own.** Three different situations
+produce it, and they have different fixes:
+
+- the clause really is inert — six of those have shipped here;
+- the clause works, but the **fixture that would prove it** does not exist. All
+  four `bugfix-js` DEAD verdicts from the first run were this: probed by hand,
+  each one did exactly its job on a shape no fixture carried. The fix is a
+  fixture, not a deletion, and the same call was made for nine Java clauses;
+- the clause is **mutually redundant with a sibling** in the same rule. Each
+  half alone reads DEAD; removing both is a regression. `type-assert-no-ok`
+  and `err-discarded` have both shipped that pair. The harness re-ablates
+  same-rule DEAD clauses **in pairs** and reports `MOVES` when it finds one,
+  but it only pairs clauses that were already DEAD, so a redundant pair whose
+  halves are individually live is still invisible.
+
+Probe the shape by hand before deleting anything.
+
+Axes 2 and 3 are attributions, not proofs, and both flag more than the defect
+they were built for. Axis 2 fires whenever a `hits/` fixture deliberately
+carries the excluded near-miss beside the bug — the `real_bugs` files do, and
+annotate it. Axis 3 fires for any clause whose removal makes the rule match
+less, which includes a *working* positive branch. Read the lines it prints.
+
+Axis 3 needs a real-code corpus in a language the pack matches, so it is a
+property of the invocation — registered per pack in
+[`mcp/test/ablate/packs.ts`](mcp/test/ablate/packs.ts), overridable with
+`--real-code=<dir>` / `--no-real-code`, and reported as `N/A` (never silently
+skipped) where none exists.
+
+**Invariants worth knowing before you change it.**
+
+- **The pack is never written to.** The source is read once, hashed, and
+  ablated variants go to a temp dir. That is what makes it byte-identical
+  after a crash or a Ctrl-C, without a restore path that can itself fail. The
+  on-disk hash is re-checked before every ablation, which also catches the
+  pack being edited mid-run.
+- **Clauses are named by body text, never by line number.** A previous
+  hand-rolled run was discarded because a *comment* was edited while it ran:
+  every line shifted, and since all 86 `- pattern-not-inside:` first lines in
+  `bugfix-java.yml` are identical, the one INERT verdict could not be
+  attributed to any clause.
+- **`paths.scanned == 0` is an exception, not a result.** This repo has five
+  recorded ways for Semgrep to scan nothing while printing success and exit 0;
+  two of them emit neither `RuleParseError` nor `Invalid YAML`, so matching on
+  error strings does not cover the set.
+- **A round-trip control runs first.** Removal goes through the YAML AST, so
+  the unmodified pack is re-serialised and scanned before anything is ablated;
+  if it does not reproduce the on-disk result exactly, the run aborts rather
+  than measure the serialiser.
+
+Exit code is 1 when any clause is flagged, 0 when every clause passes.
+`routes.yml` is unregistered: it has no `hits/` + `misses/` fixture pair, so
+axes 1 and 2 have nothing to measure against.
+
 ## TypeScript conventions
 
 Enforced by the compiler where possible, by review where not:
