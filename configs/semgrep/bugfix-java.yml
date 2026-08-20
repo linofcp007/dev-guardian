@@ -42,7 +42,7 @@
 # apanha isto por duas vias (`paths.scanned` e `semgrep --validate`).
 #
 # ---------------------------------------------------------------------------
-# DUAS FORMAS que aparecem em todo o ficheiro, ambas medidas, ambas com custo:
+# TRÊS FORMAS que aparecem em todo o ficheiro, todas medidas, todas com custo:
 #
 # 1. `{ $S1; return ...; }` em vez de `{ ... return ...; }`. O `...` de
 #    statement faz DEEP MATCHING: `if (!m.containsKey(k)) { if (strict) {
@@ -98,10 +98,34 @@ rules:
   # a inspeção do IntelliJ aceita `ignored`. Medido: `e`, `ex`, `ignoreMe` e
   # `expectedly` continuam a disparar — a regra ganha vocabulário, não perde
   # força.
+  #
+  # DUAS FORMAS DE `try`, e a segunda foi um falso negativo publicado. Um `try`
+  # COM finalizador é um nó de AST diferente de um `try` sem ele, por isso
+  # `try { ... } catch ($E $V) { }` não casava um try/catch/finally: pendurar
+  # `finally { cleanup(); }` num catch que engole silenciava a regra por
+  # completo, e o bug que ela vigiava deixava de ser reportado. Medido em
+  # hits/EmptyCatch.java: 3 de 6 antes, 6 de 6 depois. É o mesmo defeito que os
+  # packs de JS/TS e Python tinham e fecharam — a mesma forma, medida três
+  # vezes em três linguagens.
+  #
+  # O QUE FOI MEDIDO E NÃO É BURACO, em vez de suposto pela leitura do padrão:
+  #   * try-with-resources — `try (R r = ...) { ... } catch ($E $V) { }` já
+  #     casava. O cabeçalho de recursos não altera o nó para efeitos deste
+  #     padrão;
+  #   * MULTI-CATCH — `catch (A | B e) { }` já casava, e o `$V` liga o nome na
+  #     mesma, por isso a exclusão por nome continua a valer. É a construção
+  #     análoga ao tuplo de Python, onde a metavariável NÃO ligava e
+  #     `except (ValueError, TypeError): pass` era silencioso; em Java não é.
+  #   * dois `catch` seguidos, com o segundo vazio, também já casava.
+  # As três formas têm fixture própria em hits/EmptyCatch.java, porque "já
+  # casava" é uma medição com data e as contagens são asseridas.
   - id: bugfix-java-error-handling-empty-catch
     patterns:
-      - pattern: |
-          try { ... } catch ($E $V) { }
+      - pattern-either:
+          - pattern: |
+              try { ... } catch ($E $V) { }
+          - pattern: |
+              try { ... } catch ($E $V) { } finally { ... }
       - metavariable-regex:
           metavariable: $V
           regex: ^(?!(ignore|ignored|expected)$)
@@ -115,9 +139,19 @@ rules:
   # WARNING e não ERROR: num `main` descartável imprimir o stack trace e seguir
   # é uma escolha legítima. Em serviço não é — vai para o stderr, não para o
   # log, e a execução continua como se a exceção não tivesse acontecido.
+  #
+  # As duas formas de `try` são as mesmas da `empty-catch`, e pela mesma razão:
+  # a regra estava ancorada no mesmo `try { ... } catch ($E $V) { ... }`, por
+  # isso um `finally` silenciava-a de forma idêntica. Medido em
+  # hits/PrintStackTraceOnly.java: 3 de 6 antes, 6 de 6 depois. O
+  # try-with-resources e o multi-catch já casavam aqui também, e estão pinados
+  # em fixture pela mesma razão.
   - id: bugfix-java-error-handling-printstacktrace-only
-    pattern: |
-      try { ... } catch ($E $V) { $V.printStackTrace(); }
+    pattern-either:
+      - pattern: |
+          try { ... } catch ($E $V) { $V.printStackTrace(); }
+      - pattern: |
+          try { ... } catch ($E $V) { $V.printStackTrace(); } finally { ... }
     message: >-
       O catch só faz `printStackTrace()`. Isso escreve no stderr em vez do log
       e não trata nada — a execução continua como se a exceção não tivesse
@@ -656,14 +690,38 @@ rules:
   # é a exclusão sobre a SEQUÊNCIA. Medido: o `$V` fica mesmo ligado nas duas
   # pontas, um `leaked` continua a disparar na mesma função onde um `managed`
   # é fechado assim.
+  #
+  # O `finally` DUPLICA as duas exclusões, e aqui o defeito corre ao contrário
+  # do que corre nas duas regras de error_handling. Nelas a forma do `try` está
+  # no padrão POSITIVO, por isso uma forma não coberta silencia a regra; aqui
+  # está numa EXCLUSÃO, por isso uma forma não coberta faz a regra acusar
+  # código correto. Um `try` com finalizador é um nó diferente, nenhuma das
+  # duas exclusões lhe chegava, e um stream declarado no cabeçalho de recursos
+  # É fechado independentemente do que esteja pendurado no statement. Medido em
+  # misses/StreamNotClosed.java: quatro falsos positivos em WARNING sobre
+  # código que fecha o stream — as duas formas de recurso (declarado no
+  # cabeçalho e a forma do Java 9) vezes as duas com `finally` (com e sem
+  # `catch`). Zero depois.
+  #
+  # O `catch` sozinho foi medido na mesma corrida e NÃO é buraco: as duas
+  # exclusões já casavam `try (r = ...) { ... } catch (...) { ... }`. O
+  # emparelhamento de `try` do Semgrep é insensível a cláusulas `catch` a mais
+  # e sensível à presença do finalizador, e as duas formas estão pinadas em
+  # separado na fixture para o dia em que isso deixe de ser verdade.
   - id: bugfix-java-memory-leak-stream-not-closed
     patterns:
       - pattern: $T $V = new FileInputStream(...);
       - pattern-not-inside: try ($T2 $V2 = new FileInputStream(...)) { ... }
       - pattern-not-inside: |
+          try ($T2 $V2 = new FileInputStream(...)) { ... } finally { ... }
+      - pattern-not-inside: |
           $T $V = new FileInputStream(...);
           ...
           try ($V) { ... }
+      - pattern-not-inside: |
+          $T $V = new FileInputStream(...);
+          ...
+          try ($V) { ... } finally { ... }
     message: >-
       Stream aberto fora de um try-with-resources. Se algo lançar antes do
       `close()`, o descritor fica aberto — e em código que corre em ciclo isso

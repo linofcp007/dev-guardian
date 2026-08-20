@@ -34,4 +34,28 @@ public class EmptyCatch {
         // Checkstyle's second default: the throw IS the assertion.
         try { Integer.parseInt(p); } catch (NumberFormatException expected) { }
     }
+
+    // The four below exist because the `finally` branch added to the positive
+    // pattern could have been bolted on WITHOUT the naming escape hatch and
+    // without the non-empty-body requirement, and nothing would have noticed:
+    // before the fix every one of these was silent for the wrong reason — the
+    // `finally` was doing the silencing, not the rule's own logic. They pin
+    // that the two properties survive on the new branch as well as the old
+    // one. Delete the `metavariable-regex` and the first two fire; write the
+    // `finally` branch without requiring an EMPTY catch body and the last two
+    // fire.
+    void ignoredNameWithFinally(String p) {
+        try { Integer.parseInt(p); } catch (NumberFormatException ignored) { } finally { cleanup(); }
+    }
+    void ignoredNameMultiCatch(String p) {
+        try { Integer.parseInt(p); } catch (NumberFormatException | NullPointerException ignored) { }
+    }
+    void logsWithFinally(String p) {
+        try { Integer.parseInt(p); } catch (NumberFormatException e) { log(e); } finally { cleanup(); }
+    }
+    void rethrowsWithFinally(String p) {
+        try { Integer.parseInt(p); } catch (NumberFormatException e) { throw new IllegalStateException(e); } finally { cleanup(); }
+    }
+
+    void cleanup() { }
 }

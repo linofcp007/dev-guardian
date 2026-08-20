@@ -303,6 +303,43 @@ not just the Semgrep one — the same gap existed for every one of them.
 
 ### Fixed
 
+- **A `finally` clause silenced two of the Java pack's rules outright — the
+  third pack in a row with the identical hole.** A Java `try` statement *with*
+  a finalizer is a different AST node, so `try { … } catch ($E $V) { … }` never
+  matched a `try/catch/finally`: attaching `finally { cleanup(); }` to a
+  swallowing catch made `error-handling-empty-catch` (the pack's only `ERROR`
+  rule) and `error-handling-printstacktrace-only` report nothing at all.
+  Measured per fixture, before → after: **3 of 6 → 6 of 6** in each. Both rules
+  now carry the two try shapes as a `pattern-either`, which is the shape the
+  JS/TS and Python packs already measured — JS closed the same `finally` hole
+  in `empty-catch`, Python needed *three* shapes because it also has `else:`.
+
+  `memory-leak-stream-not-closed` has it too, and in the **opposite
+  direction**: there the try shape lives in an *exclusion*, so a shape the
+  exclusion cannot match does not silence the rule, it makes the rule accuse
+  correct code. Neither exclusion reached a try-with-resources that also has a
+  `finally`, so **four correct shapes fired at WARNING on streams that are
+  closed** — `try (r = …) { … } finally { … }`, the same with a `catch`, and
+  both again in the Java 9 `try (r) { … }` form. Zero now.
+
+  What was **measured and is not a hole**, rather than assumed from reading the
+  patterns: a try-with-resources header, a second `catch` clause, and — the
+  sibling shape Python's audit found broken — **multi-catch**. `catch (A | B e)
+  { }` already matched, and `$V` still binds the name, so the Checkstyle
+  `ignore`/`ignored`/`expected` escape hatch still applies to it; Java's
+  multi-catch is not the false negative that `except (ValueError, TypeError):
+  pass` was, where the metavariable did not bind a tuple. All three are pinned
+  by fixtures now, in both directions, because "already matched" is a
+  measurement with a date on it.
+
+  The cost of the two new exclusion clauses was measured rather than asserted:
+  `pattern-not-inside` excludes the whole node it matched, so a *second*,
+  unmanaged stream opened inside a try-with-resources body stays invisible —
+  which was already true of the two clauses that shipped, so the new ones make
+  an existing blind spot consistent instead of adding one. No stated limitation
+  changed: `open(); try { … } finally { close(); }` still fires, still for the
+  reason the rule is `WARNING`.
+
 - **The JS/TS pack, measured against this repo's own `mcp/src`** — 183 files of
   TypeScript nobody wrote as a fixture, chosen by neither the rule author nor
   the auditor. The check is cheap, needs no fixture, and caught two things that
