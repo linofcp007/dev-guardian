@@ -83,7 +83,7 @@ a clause, and is the only one that reaches a rule with no clauses at all:
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
 Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
 `patterns:` group and no `pattern-either:`, and a `patterns:` group holding
-nothing but positive terms. **30 of the 129 rules** across the seven packs are
+nothing but positive terms. **30 of the 136 rules** across the nine packs are
 one of those — 24 bare and 6 positive-only — and they used to appear
 **nowhere** in the report: not in the clause list, not under `skipped`. So
 `52/52 live, 0 DEAD` read as "the pack was checked" when it covered 11 rules of
@@ -98,6 +98,8 @@ prints `N/A`.
 | `bugfix-go` | 9 | 8 | 1 |
 | `bugfix-java` | 8 | 7 | 1 |
 | `bugfix-cs` | 12 | 11 | 1 |
+| `bugfix-php` | 6 | 6 | 0 |
+| `bugfix-rs` | 1 | 1 | 0 |
 | `base` | 13 | 7 | 6 |
 | `routes` | 64 | 44 | 20 |
 
