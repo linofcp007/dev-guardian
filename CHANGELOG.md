@@ -8,7 +8,95 @@ version bump.
 
 ## [Unreleased]
 
+### Action required — projects initialised before b51a2dc are running a dead XSS rule
+
+**If you ran `init_project` before b51a2dc, your `.semgrep.yml` contains a
+WordPress cross-site-scripting rule, `wp-unescaped-output`, that has never
+matched anything.** Its pattern was `echo $_GET[$X]`, which is not valid PHP, so
+Semgrep could not compile it; with `--quiet` the failure went to a JSON `errors`
+array instead of stderr and nothing surfaced it. Every scan since has been
+reporting zero WordPress XSS findings from a rule that could not have produced
+one — a clean result that meant nothing. The rule was fixed in b51a2dc, and
+because `init_project` never touched a config it had already copied, **the fix
+has not reached any existing project.**
+
+To get it, run `init_project` with `refresh` — as a dry run first:
+
+```text
+init_project(project_path=".", refresh=true, apply=false)   # show me what would change
+init_project(project_path=".", refresh=true, apply=true)    # do it
+```
+
+Your own edits are safe. `apply=true` overwrites only a file you have never
+touched; anything you customised is left exactly as it is and the new baseline
+is written beside it as `.semgrep.yml.new` for you to merge. If you would rather
+not run the tool at all, copying `configs/semgrep/base.yml` over your
+`.semgrep.yml` by hand gets you the same rules.
+
+This applies to all four baseline configs `init_project` installs
+(`.gitleaks.toml`, `renovate.json`, `.semgrep.yml`, `.pre-commit-config.yaml`),
+not just the Semgrep one — the same gap existed for every one of them.
+
 ### Added
+
+- **Configuration-drift detection for the configs `init_project` installs.**
+  `init_project` copied four baseline configs into a project and then never
+  looked at them again — an existing target was skipped as `already_exists`,
+  which is the right call, since the user owns and edits those files, but it
+  meant a fix to a shipped config could never reach anyone who had already run
+  init. Nothing recorded what had been copied, so nothing could notice. The
+  `wp-unescaped-output` incident above is what that costs.
+
+  Four parts:
+
+  - **A provenance stamp.** `init_project` now records each file it copies in
+    `.dev-guardian/configs.json` — target, source, plugin version, and a content
+    hash at copy time — and stamps a comment header into the file itself where
+    the format allows one. The manifest is the mechanism and the header is an
+    affordance on top, because `renovate.json` is JSON and a `//` line would
+    break the parser Renovate reads it with. It is a separate directory from
+    `.guardian/`, which `gitignoreGuard` adds to `.gitignore` on every server
+    start: a provenance record has to be committed alongside the configs it
+    describes, or a teammate's clone and CI learn nothing.
+
+  - **A drift advisory on the scan path.** Every scan tool now checks the
+    manifest and emits at most **one** line into `warnings`. It is never a
+    finding, never an error, and cannot move a scan's status or the CI exit
+    code. Silence is the default: a user who edited their own config — the
+    common case, and the intended one — is told nothing, because a warning that
+    fires on almost every project is a warning nobody reads. Only two states
+    speak, and they are worded differently because their remedies differ: *we
+    shipped a newer baseline and your copy is unchanged* (a fix may be missing,
+    here is how to get it), and *both sides moved* (the refresh will need a
+    merge).
+
+  - **`init_project(refresh=true)`.** Opt-in, never a default. With
+    `apply=false` it reports the per-file action and writes nothing. With
+    `apply=true` it updates a file you have provably never touched, and for
+    anything else — edited, diverged, or of unknown provenance — writes the new
+    baseline as `<name>.new` beside your file and leaves yours closed. **No flag
+    overwrites a modified file.** "Unknown provenance" is treated as modified on
+    purpose: an old copy of ours and a config you wrote by hand are
+    indistinguishable from the bytes, and the costs of guessing wrong are not
+    symmetric.
+
+  - **Graceful degradation for projects with no manifest.** They get no warning
+    at all rather than a wrong one — with nothing recorded, "an old copy of
+    ours" cannot be told apart from "a file you wrote that happens to share the
+    name". Two adoption paths close that: plain `init_project` now records
+    provenance for any skipped file that is byte-identical to what we ship, and
+    `refresh` adopts the rest as it delivers to them. That gap is precisely why
+    the note at the top of this release exists in plain words.
+
+  The hash is taken over a canonical form — CRLF/CR normalised to LF, leading
+  BOM dropped, trailing newlines at EOF trimmed, our own header stripped — not
+  over raw bytes. A byte hash gets the answer wrong on this project's own
+  platform pair: git's `core.autocrlf` rewrites line endings on checkout, so the
+  identical commit would read as "the user edited their copy" on Windows and
+  "they did not" on Linux, and a false *local edit* silences the one state that
+  matters. Trailing whitespace inside a line, indentation and comment text all
+  still count as changes; erring toward "this changed" costs only a silent
+  `local_edit`.
 
 - **Java bug rules** — `configs/semgrep/bugfix-java.yml`, eight hand-authored
   Semgrep rules covering all six `bug_hunt` subcategories for Java: empty

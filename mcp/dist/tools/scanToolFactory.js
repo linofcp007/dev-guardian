@@ -22,6 +22,10 @@
  * doesn't attempt to coalesce two in-flight calls into a single run.
  */
 import { randomUUID } from 'node:crypto';
+import { buildDriftAdvisory } from '../configdrift/advisory.js';
+import { detectConfigDrift } from '../configdrift/detect.js';
+import { configsDirFromScriptsDir } from '../platform/configsDir.js';
+import { resolveVersion } from '../platform/version.js';
 import { makeProgressEmitter } from '../progress/progressEmitter.js';
 import { getScanLimiter } from '../runners/concurrencyLimiter.js';
 import { runShellScript } from '../runners/shellRunner.js';
@@ -76,6 +80,9 @@ async function runScanPipeline(config, input, plugin, callMeta) {
         warnings.push(resolvedProject.warning);
     if (plugin.storageWarning)
         warnings.push(plugin.storageWarning);
+    const driftAdvisory = configDriftAdvisory(plugin, projectPath);
+    if (driftAdvisory)
+        warnings.push(driftAdvisory);
     if (plugin.shell === null) {
         return failDomain('no_bash_shell', 'No usable bash shell was found on this host. Run `install_toolchain` or install Git Bash / WSL.');
     }
@@ -242,6 +249,45 @@ async function runScanPipeline(config, input, plugin, callMeta) {
         ...(invocation.extras ?? {}),
     };
     return { ok: true, ...payload };
+}
+/**
+ * The config-drift advisory, or `null` when there is nothing to say.
+ *
+ * ---- Why it hangs off the scan pipeline ------------------------------
+ *
+ * `init_project` copies four baseline configs into a project and then never
+ * looks at them again, so a fix to a shipped config — `base.yml`'s
+ * `wp-unescaped-output`, which could not match anything until b51a2dc — never
+ * reaches a project that already ran init. A check only helps if it runs
+ * somewhere people actually go, and every scan tool in this codebase comes
+ * through here, including the cached path.
+ *
+ * ---- Why it checks all four, not "the one this scan reads" -----------
+ *
+ * The narrower design was tried first and does not survive contact: `scan_sast`
+ * runs Semgrep with `--config=auto` plus registered custom rules and never
+ * reads `.semgrep.yml` at all; `deps_audit` only existence-checks
+ * `renovate.json`; `.pre-commit-config.yaml` is consumed by git hooks, not by
+ * any scan. Mapping scan types to files would encode four claims about who
+ * reads what, three of which are already false. What is true is simpler: these
+ * are the baselines this project installed, and the scan is when the user is
+ * looking. Reading four small files and hashing them costs nothing next to a
+ * Semgrep run.
+ *
+ * Never throws, and cannot alter the scan: the return value's only
+ * destination is the `warnings` string array.
+ */
+function configDriftAdvisory(plugin, projectPath) {
+    try {
+        return buildDriftAdvisory(detectConfigDrift({
+            projectPath,
+            configsDir: configsDirFromScriptsDir(plugin.scriptsDir),
+            currentVersion: resolveVersion(),
+        }));
+    }
+    catch {
+        return null;
+    }
 }
 function cachedResult(plugin, scanId, warnings) {
     const record = plugin.storage.scans.getById(scanId);

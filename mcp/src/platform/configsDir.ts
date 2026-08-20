@@ -24,17 +24,17 @@
  * `scriptsDir.ts`'s own doc comment for the fuller account of why a bare
  * `..` count broke.
  *
- * This is deliberately a SEPARATE resolver from `initProject.ts`'s own
- * (unexported, narrower) `resolveConfigsDir(scriptsDir)`, which derives the
- * configs directory from an already-resolved `ctx.plugin.scriptsDir`. That
- * shape is right for `init_project`, whose whole job is copying template
- * files the caller/tests may reasonably want to point elsewhere. It is
- * wrong for `bug_hunt`: its own integration tests fake `ctx.plugin.scriptsDir`
- * to a throwaway temp directory (to sandbox the shell scripts other scan
- * tools invoke), and nothing populates a fake `configs/semgrep/bugfix-js.yml`
- * next to it — so `bug_hunt` needs a resolver that finds the REAL, checked-in
- * rule file regardless of what a test (or an unusual host) sets `ctx` to.
- * That is exactly what an independent, `import.meta.url`-based probe gives.
+ * This is deliberately a SEPARATE resolver from `configsDirFromScriptsDir`
+ * below, which derives the configs directory from an already-resolved
+ * `ctx.plugin.scriptsDir`. That shape is right for `init_project` and for the
+ * config-drift check, whose whole job is comparing against template files the
+ * caller/tests may reasonably want to point elsewhere. It is wrong for
+ * `bug_hunt`: its own integration tests fake `ctx.plugin.scriptsDir` to a
+ * throwaway temp directory (to sandbox the shell scripts other scan tools
+ * invoke), and nothing populates a fake `configs/semgrep/bugfix-js.yml` next
+ * to it — so `bug_hunt` needs a resolver that finds the REAL, checked-in rule
+ * file regardless of what a test (or an unusual host) sets `ctx` to. That is
+ * exactly what an independent, `import.meta.url`-based probe gives.
  */
 
 import { existsSync, readdirSync } from 'node:fs';
@@ -67,6 +67,25 @@ export function resolveConfigsDir(): string {
   // guess so a caller gets a deterministic path to report in its own error,
   // rather than `undefined` — same fallback discipline as resolveScriptsDir.
   return unbundled;
+}
+
+/**
+ * `configs/` as seen from an already-resolved `scripts/` directory — they are
+ * siblings under the plugin root.
+ *
+ * The counterpart to `resolveConfigsDir` above, and the one `init_project`
+ * and the config-drift check both use, for two reasons. It follows whatever
+ * `ctx.plugin.scriptsDir` says, which is what lets a test point the whole
+ * mechanism at a sandbox directory containing throwaway configs; and it is
+ * the *same* arithmetic on both sides, so the drift check can only ever
+ * compare against the directory `init_project` actually copied from. Two
+ * resolvers there would be a bug waiting for the day the two disagree.
+ *
+ * Lives here rather than in `init_project` so the drift check does not have
+ * to import a tool module to get a path.
+ */
+export function configsDirFromScriptsDir(scriptsDir: string): string {
+  return join(scriptsDir, '..', 'configs');
 }
 
 const BUGFIX_PREFIX = 'bugfix-';
