@@ -102,6 +102,19 @@ export function extractModuleEdges(results: readonly unknown[]): ModuleEdge[] {
  * path, not `$MODULE` alone.
  */
 function buildSpecifier(language: string, module: string, symbol: string | undefined): string {
+  // Python has the same space-join and needs the same undoing, for a defect
+  // that was invisible on this project's own pipeline. `resolvePython` splits a
+  // specifier on `.`, and Semgrep 1.86.0 reports $MODULE="django urls" for
+  // `from django.urls import path` — so on a logged-in or pre-1.100 Semgrep
+  // (real `extra.metavars`, no recovery) EVERY multi-segment Python import
+  // edge failed to resolve, while a redacting Semgrep resolved it, because
+  // `recoverMetavars.ts` was synthesizing the dotted text instead of
+  // reproducing the join. That synthesizer now reproduces it, which is what
+  // the pack header promises; this is the other half, and without it the
+  // parity fix would have broken the version that used to work.
+  //
+  // A relative specifier (`.models`) has no spaces to undo and passes through.
+  if (language === 'python') return module.replace(/ /g, '.');
   if (language !== 'rust' || symbol === undefined) return module;
   // routes.yml's guardian-import-rust comment: Semgrep joins a multi-segment
   // $MODULE capture with a SPACE instead of `::` (a rendering quirk of

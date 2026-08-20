@@ -1056,3 +1056,237 @@ describe('recoverMetavars — byte offsets are not string indices', () => {
     expect(mv(recoverSpan(span, ROUTE), '$PATH')).toBe("'/café'");
   });
 });
+
+/**
+ * Every span below is a real 1.164.0 observation from the auditor's corpus
+ * (`test/fixtures/surface/frameworks/`), and every expected value is Semgrep
+ * 1.86.0's own `abstract_content` for the same match — the parity the pack
+ * header promises. Where the two disagreed, that disagreement WAS the defect.
+ */
+describe('recoverMetavars — fluent chains: the span grows rightwards', () => {
+  const EXPRESS = { guardian_kind: 'route', framework: 'express' };
+
+  /* `app.get('/chain-a', h).post('/chain-b', h);` reports TWO matches whose
+     spans share a left edge — the outer call's receiver IS the inner call. */
+  const CHAIN_SOURCE = "app.get('/chain-a', h).post('/chain-b', h);";
+
+  it('reads the INNER call when the span stops at its closing bracket', () => {
+    const outcome = recoverSpan("app.get('/chain-a', h)", EXPRESS, CHAIN_SOURCE);
+    expect(mv(outcome, '$PATH')).toBe("'/chain-a'");
+    expect(mv(outcome, '$METHOD')).toBe('get');
+  });
+
+  /* The regression this whole helper exists for: anchoring on the FIRST `(`
+     read `'/chain-a'` out of this span too, so `/chain-a` was emitted twice
+     and `/chain-b` never — while Semgrep 1.86.0 binds $PATH="'/chain-b'" and
+     $METHOD="post" here. */
+  it('reads the OUTER call, path and verb together, from the longer span', () => {
+    const outcome = recoverSpan("app.get('/chain-a', h).post('/chain-b', h)", EXPRESS, CHAIN_SOURCE);
+    expect(mv(outcome, '$PATH')).toBe("'/chain-b'");
+    expect(mv(outcome, '$METHOD')).toBe('post');
+  });
+
+  it('handles a chain broken across lines, which is canonical Hono', () => {
+    const source =
+      "app\n  .get('/hono/a', (c) => c.text('a'))\n  .post('/hono/b', (c) => c.text('b'));";
+    const span = "app\n  .get('/hono/a', (c) => c.text('a'))\n  .post('/hono/b', (c) => c.text('b'))";
+    const outcome = recoverSpan(span, EXPRESS, source);
+    expect(mv(outcome, '$PATH')).toBe("'/hono/b'");
+    expect(mv(outcome, '$METHOD')).toBe('post');
+  });
+
+  /* The counter-case that rules out "just take the last call in the span".
+     Semgrep's span for `app.MapPost(...).RequireAuthorization()` STOPS at the
+     MapPost call's `)`, so the trailing call is not in the span at all — but a
+     span that did include a trailing empty call must still read the path off
+     the call that closes at the end, not off whichever call came last. */
+  it('is unaffected by a trailing chained call outside the span', () => {
+    const source = 'app.MapPost("/minimal/orders", () => Results.Created()).RequireAuthorization();';
+    const outcome = recoverSpan(
+      'app.MapPost("/minimal/orders", () => Results.Created())',
+      { guardian_kind: 'route', framework: 'aspnet-minimal' },
+      source,
+    );
+    expect(mv(outcome, '$PATH')).toBe('"/minimal/orders"');
+    expect(mv(outcome, '$METHOD')).toBe('MapPost');
+  });
+
+  /* Laravel's fluent form is the same shape in another language: the verb call
+     is LAST and the first `(` belongs to `middleware(...)`, whose argument is
+     an array of middleware names. */
+  it('reads past a leading Laravel middleware call', () => {
+    const span =
+      "Route::middleware(['auth:sanctum'])->get('/orders/secure', [OrderController::class, 'secure'])";
+    const outcome = recoverSpan(span, { guardian_kind: 'route', framework: 'laravel' });
+    expect(mv(outcome, '$PATH')).toBe("'/orders/secure'");
+    expect(mv(outcome, '$METHOD')).toBe('get');
+  });
+
+  /* Ruby's DSL has no brackets at all, so it must still fall through to the
+     first string literal rather than to nothing. */
+  it('still falls through to the first literal for a bracket-less Ruby route', () => {
+    const outcome = recoverSpan("get '/rails/orders', to: 'orders#index'", {
+      guardian_kind: 'route',
+      framework: 'rails',
+    });
+    expect(mv(outcome, '$PATH')).toBe("'/rails/orders'");
+    expect(mv(outcome, '$METHOD')).toBe('get');
+  });
+});
+
+describe('recoverMetavars — mount with middleware between prefix and router', () => {
+  const MOUNT = { guardian_kind: 'mount', framework: 'express' };
+
+  it('reads the LAST argument as $ROUTER, not the one after the prefix', () => {
+    const outcome = recoverSpan("app.use('/api/users', authMw, usersRouter)", MOUNT);
+    expect(mv(outcome, '$PREFIX')).toBe("'/api/users'");
+    // `authMw` here is what "the next identifier after the literal" produced,
+    // and it binds to nothing in buildPrefixIndex — which leaves every route in
+    // the mounted file path_partial, the same outcome as no mount at all.
+    expect(mv(outcome, '$ROUTER')).toBe('usersRouter');
+  });
+
+  it('still reads the two-argument form', () => {
+    const outcome = recoverSpan("app.use('/admin', usersRouter)", MOUNT);
+    expect(mv(outcome, '$PREFIX')).toBe("'/admin'");
+    expect(mv(outcome, '$ROUTER')).toBe('usersRouter');
+  });
+
+  /* Pre-existing, deliberate truncation: `ns.router` recovers as the bare
+     `ns`, which is what the import binds and therefore what buildPrefixIndex
+     can match. guardian-mount-express's comment records why that is a
+     coincidence rather than a correct reading; this pins that it survived. */
+  it('keeps the bare-identifier truncation for a namespaced router', () => {
+    const outcome = recoverSpan("app.use('/api', ns.router)", MOUNT);
+    expect(mv(outcome, '$ROUTER')).toBe('ns');
+  });
+});
+
+describe('recoverMetavars — import forms the synthesizers used to lose', () => {
+  const ESM = { guardian_kind: 'import', framework: 'esm' };
+  const PHP_IMPORT = { guardian_kind: 'import', framework: 'php' };
+  const RUST = { guardian_kind: 'import', framework: 'rust' };
+  const CSHARP_IMPORT = { guardian_kind: 'import', framework: 'csharp' };
+  const PYTHON = { guardian_kind: 'import', framework: 'python' };
+
+  it('binds the default half of a mixed import', () => {
+    const outcome = recoverSpan("import def, { helperA } from './helpers.js'", ESM);
+    expect(mv(outcome, '$SYMBOL')).toBe('def');
+    expect(mv(outcome, '$MODULE')).toBe('./helpers.js');
+  });
+
+  /* Semgrep's span for a re-export starts INSIDE the statement — no `export`
+     and no `import` keyword in it at all. */
+  it('binds a re-export whose span carries no keyword', () => {
+    const outcome = recoverSpan(
+      "thing } from './thing.js'",
+      ESM,
+      "export { thing } from './thing.js';",
+    );
+    expect(mv(outcome, '$SYMBOL')).toBe('thing');
+    expect(mv(outcome, '$MODULE')).toBe('./thing.js');
+  });
+
+  /* 1.86.0 binds the IMPORTED name, never the local alias — so recovery must
+     too, even though `R2` is the name buildPrefixIndex would need. A router
+     imported under an alias therefore does not resolve its mount; the route
+     stays path_partial, which is the honest outcome for a link this resolver
+     cannot follow. */
+  it('binds the imported name of an aliased named import, matching 1.86.0', () => {
+    const outcome = recoverSpan("import { Router as R2 } from 'express'", ESM);
+    expect(mv(outcome, '$SYMBOL')).toBe('Router');
+  });
+
+  it('takes the LAST item of a PHP group use, whose span grows', () => {
+    const source = 'use App\\Models\\{Order, Invoice};';
+    const first = recoverSpan('use App\\Models\\{Order', PHP_IMPORT, source);
+    expect(mv(first, '$MODULE')).toBe('App Models');
+    expect(mv(first, '$SYMBOL')).toBe('Order');
+
+    const second = recoverSpan('use App\\Models\\{Order, Invoice', PHP_IMPORT, source);
+    expect(mv(second, '$MODULE')).toBe('App Models');
+    // `{Order` is what the old `^use\s+(\S+)$` regex produced for the first
+    // span; the second produced nothing at all.
+    expect(mv(second, '$SYMBOL')).toBe('Invoice');
+  });
+
+  it('strips the `function` keyword from a PHP function import', () => {
+    const outcome = recoverSpan('use function App\\Support\\slugify', PHP_IMPORT);
+    expect(mv(outcome, '$MODULE')).toBe('App Support');
+    expect(mv(outcome, '$SYMBOL')).toBe('slugify');
+  });
+
+  /* Reproduces a Semgrep quirk rather than a sensible reading: an ALIASED PHP
+     `use` splits at the FIRST separator and drops the alias, so 1.86.0 reports
+     $MODULE="App" and $SYMBOL="Support Helper" — neither of which is the name
+     the statement binds (`H`). Parity with an intact run is the contract; see
+     synthesizePhpImport. */
+  it('reproduces 1.86.0 for an aliased PHP use, quirk and all', () => {
+    const outcome = recoverSpan('use App\\Support\\Helper as H', PHP_IMPORT);
+    expect(mv(outcome, '$MODULE')).toBe('App');
+    expect(mv(outcome, '$SYMBOL')).toBe('Support Helper');
+  });
+
+  it('drops a Rust alias, single and grouped', () => {
+    const single = recoverSpan('use std::collections::HashMap as Map', RUST);
+    expect(single && mv(single, '$MODULE')).toBe('std collections');
+    expect(mv(single, '$SYMBOL')).toBe('HashMap');
+
+    const grouped = recoverSpan('use rocket::{get as rget', RUST, 'use rocket::{get as rget, routes};');
+    expect(mv(grouped, '$MODULE')).toBe('rocket');
+    expect(mv(grouped, '$SYMBOL')).toBe('get');
+  });
+
+  /* A grouped item may carry its own path; 1.86.0 folds that prefix into
+     $MODULE instead of leaving `routing::get` sitting in $SYMBOL. */
+  it('folds a grouped Rust item path into $MODULE', () => {
+    const source = 'use axum::{routing::get, routing::post, Router};';
+    const first = recoverSpan('use axum::{routing::get', RUST, source);
+    expect(mv(first, '$MODULE')).toBe('axum routing');
+    expect(mv(first, '$SYMBOL')).toBe('get');
+
+    const third = recoverSpan('use axum::{routing::get, routing::post, Router', RUST, source);
+    expect(mv(third, '$MODULE')).toBe('axum');
+    expect(mv(third, '$SYMBOL')).toBe('Router');
+  });
+
+  it('strips `static` from a C# using directive', () => {
+    const outcome = recoverSpan('using static System.Math;', CSHARP_IMPORT);
+    expect(mv(outcome, '$MODULE')).toBe('System Math');
+  });
+
+  /* Semgrep space-joins a multi-segment capture, Python's $MODULE included.
+     moduleEdges.ts's buildSpecifier undoes it so resolvePython still gets
+     dots — the two halves have to move together. */
+  it('space-joins an absolute dotted Python module, and only that', () => {
+    expect(mv(recoverSpan('from django.urls import path', PYTHON), '$MODULE')).toBe('django urls');
+    expect(mv(recoverSpan('from .models import User', PYTHON), '$MODULE')).toBe('.models');
+    expect(mv(recoverSpan('from . import views', PYTHON), '$MODULE')).toBe('.');
+  });
+});
+
+describe('recoverMetavars — destructured environment reads', () => {
+  const ENV = { guardian_kind: 'env' };
+
+  /* Without its own branch this span fell through to the trailing
+     member-access fallback, which reads the last `.name` — and the span ENDS
+     in `process.env`, so every destructured read was inventoried as a variable
+     called `env`. */
+  it('binds the first destructured name, not the trailing member', () => {
+    const outcome = recoverSpan('const { STRIPE_KEY, SENTRY_DSN } = process.env', ENV);
+    expect(mv(outcome, '$NAME')).toBe('STRIPE_KEY');
+  });
+
+  it('leaves the member and index forms alone', () => {
+    expect(mv(recoverSpan('process.env.DATABASE_URL', ENV), '$NAME')).toBe('DATABASE_URL');
+    expect(mv(recoverSpan("process.env['REDIS_URL']", ENV), '$NAME')).toBe("'REDIS_URL'");
+  });
+
+  it('reads the name from a two-argument .NET overload', () => {
+    const outcome = recoverSpan(
+      'Environment.GetEnvironmentVariable("TWO_ARG", EnvironmentVariableTarget.Process)',
+      ENV,
+    );
+    expect(mv(outcome, '$NAME')).toBe('"TWO_ARG"');
+  });
+});

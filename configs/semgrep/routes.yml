@@ -215,15 +215,30 @@
 # recorded for the SAST tools, not for this scan (and as of today nothing reads
 # them back, so they reach no scan at all).
 #
-# Exactly two rules carry a $PATH guard, and only because their pattern does
-# not identify a route on its own — there the guard disambiguates rather than
-# discards:
+# FIVE rules carry a $PATH guard, and only because their pattern does not
+# identify a route on its own — there the guard disambiguates rather than
+# discards. Every one of them binds a bare `$X.$METHOD(...)` or `$METHOD $PATH`,
+# i.e. a shape that matches any method call in the language:
 #
-#   guardian-route-rails    `$METHOD $PATH` matches ANY one-argument Ruby
-#                           call (`get foo`), so without the literal the rule
-#                           would report arbitrary method calls as routes.
-#   guardian-route-express  `$APP.$METHOD($PATH, ...)` matches any two-arg
-#                           method call on any object.
+#   guardian-route-rails      `$METHOD $PATH` matches ANY one-argument Ruby
+#                             call (`get foo`), so without the literal the rule
+#                             would report arbitrary method calls as routes.
+#   guardian-route-express    `$APP.$METHOD($PATH, ...)` matches any two-arg
+#                             method call on any object.
+#   guardian-route-go-gin     `$R.$METHOD($PATH, ...)` matches any type with a
+#   guardian-route-go-chi     GET/Get method — demonstrated by a plain struct
+#                             in the decoy corpus, reported as a route.
+#   guardian-route-go-nethttp on its `Handle` alternatives ONLY. `HandleFunc`
+#                             names the registration API on its own and is
+#                             unguarded; `Handle` is an ordinary method name.
+#
+# What a guard costs is stated rather than assumed: a route on one of those
+# five whose path is COMPUTED is dropped instead of reported `path_partial`.
+# That is the trade the header's paragraph above rules out in general, taken
+# deliberately in the five places where the alternative is reporting arbitrary
+# method calls as URLs a DAST consumer would then request.
+# `mcp/test/unit/surface/rulePack.test.ts` pins the list, so a sixth is an
+# explicit edit there rather than a quiet addition here.
 #
 # `guardian-mount-express` keeps its $PREFIX guard for the same reason.
 # Every other rule below names its framework's registration API explicitly, so
@@ -237,6 +252,52 @@
 
 rules:
   # ---------- JavaScript / TypeScript ----------
+  # ---- The fabrication guards, and why this rule needs three of them -------
+  #
+  # `$APP.$METHOD($PATH, ...)` matches ANY method call on ANY object whose
+  # first argument is a `/`-leading string. `Map`, `localStorage`, axios and
+  # `got` all have `get`/`post`/`delete` methods, so the leading-slash guard
+  # alone discriminates nothing: measured against the auditor's decoy corpus,
+  # five ordinary non-route calls were each reported as a route at
+  # `confidence: high` with `path_partial: false` —
+  #
+  #   const v = cache.get('/etc/passwd');       api.get('/external/thing', {…});
+  #   cache.delete('/tmp/session');             http.post('/webhook/out', body);
+  #   storage.get('/prefs');
+  #
+  # — which extract.ts:56-63 names as the worst outcome this pipeline has: the
+  # next tool in the series sends HTTP requests to whatever path it is handed,
+  # and a fabricated path at full confidence reads as one we verified. Three
+  # guards, each ablated on both axes (does it kill the decoy, does it leave
+  # every real route firing) against `mod/js/` and `fp/decoys.js`:
+  #
+  #   1. `pattern-not: $APP.$METHOD($PATH)` — a ONE-argument call. No router in
+  #      any of the four frameworks registers a route without a handler, and
+  #      Express's own one-argument `app.get('title')` is the SETTINGS GETTER,
+  #      not a route. Kills three decoys (`cache.get`, `cache.delete`,
+  #      `storage.get`); costs nothing.
+  #   2. `pattern-not: $APP.$METHOD($PATH, {…})` — exactly two arguments, the
+  #      second an object literal. A handler is never an object literal, and
+  #      Fastify's options form always carries the handler AFTER the options
+  #      (`fastify.post('/f/orders', { schema: {} }, async () => ({}))` has
+  #      three arguments and still matches — measured). Kills `api.get(…,
+  #      { timeout: 1 })`.
+  #   3. The `$APP` denylist. `http.post('/webhook/out', body)` is
+  #      SYNTACTICALLY IDENTICAL to `router.post('/x', handler)`; no shape-based
+  #      guard can separate them, so the only remaining discriminator is the
+  #      receiver's name. The list is deliberately short and every entry is a
+  #      Node core module, a well-known HTTP client, or a Web Storage global —
+  #      names nobody binds an Express app or a router to. `\b` gives it
+  #      exact-word semantics, so `httpServer` and `cacheRouter` still match.
+  #
+  # Residual, stated rather than papered over: an HTTP client bound to a name
+  # NOT on that list (`const client = axios.create(); client.get('/x', opts)`)
+  # is still reported. Guard 2 catches the common options-object spelling of it;
+  # a second argument that is a bare identifier does not, and cannot be, without
+  # deciding what a name refers to — which is not local information. The trade
+  # is the one the header sets out: this rule is `confidence: high`, so it must
+  # not invent, and a narrower rule under-reporting a hand-rolled client wrapper
+  # is the cheaper error.
   - id: guardian-route-express
     languages: [javascript, typescript]
     severity: INFO
@@ -254,7 +315,26 @@ rules:
       - metavariable-regex:
           metavariable: $PATH
           regex: ^['"`]/.*
+      - pattern-not: $APP.$METHOD($PATH)
+      - pattern-not: $APP.$METHOD($PATH, {...})
+      - metavariable-regex:
+          metavariable: $APP
+          regex: ^(?!(?:https?|axios|got|ky|superagent|fetch|cache|storage|localStorage|sessionStorage)\b)
 
+  # The `..., $ROUTER` is load-bearing. `$APP.use($PREFIX, $ROUTER)` has no
+  # ellipsis, so it matched the two-argument form ONLY — and
+  # `app.use('/api/users', requireAuth, usersRouter)`, a prefix plus middleware,
+  # is the standard way to protect a mounted router. Missing it costs more than
+  # the prefix: `resolveNodeMounts` (resolvers/node.ts) finds
+  # `prefixesByFile.get(file) === undefined` for the mounted file and flips
+  # EVERY route in it to `path_partial: true` — so one unmatched middleware
+  # argument silently un-resolves a whole router's worth of paths.
+  #
+  # `$ROUTER` binds the LAST argument, which is where the router sits in both
+  # forms; `recoverMetavars.ts`'s `synthesizeMount` reads the last argument for
+  # the same reason. `app.use(helmet())` still does not match — its first
+  # argument is a call, not a `/`-leading literal, so the $PREFIX guard rejects
+  # it (measured).
   - id: guardian-mount-express
     languages: [javascript, typescript]
     severity: INFO
@@ -263,7 +343,7 @@ rules:
       guardian_kind: mount
       framework: express
     patterns:
-      - pattern: $APP.use($PREFIX, $ROUTER)
+      - pattern: $APP.use($PREFIX, ..., $ROUTER)
       - metavariable-regex:
           metavariable: $PREFIX
           regex: ^['"`]/.*
@@ -540,6 +620,22 @@ rules:
       $M(...) { ... }
 
   # ---------- Python ----------
+  # DECIDED, not overlooked: Flask 2.x's verb shortcut (`@app.get("/items")`)
+  # is matched by the `fastapi` rule below, so a pure-Flask app is inventoried
+  # with `framework: "fastapi"` on exactly those routes. Everything else about
+  # the record — path, method, file, line, confidence — is correct; only the
+  # attribution is wrong.
+  #
+  # It is left that way because the two decorators are the SAME SYNTAX
+  # (`@$APP.$METHOD($PATH, ...)`), and telling them apart needs to know what
+  # `app` was constructed from — an import-and-assignment fact that lives
+  # elsewhere in the file and that a single Semgrep pattern cannot reach.
+  # Every alternative considered was worse: narrowing the fastapi rule to a
+  # `$APP` allowlist would drop real FastAPI routers under any other variable
+  # name, and splitting on Flask converter syntax in the path
+  # (`<int:item_id>`) only labels the subset of Flask routes that happen to
+  # take a typed parameter. A route inventoried under the wrong framework name
+  # is still an inventoried route; a route dropped to protect the label is not.
   - id: guardian-route-flask
     languages: [python]
     severity: INFO
@@ -576,6 +672,22 @@ rules:
   # `from django.urls import path` still does. This is NOT a $PATH guard: a
   # computed path (`path(settings.ADMIN_URL, ...)`) still matches and is still
   # reported, flagged path_partial by the extractor.
+  #
+  # The `pattern-not` excludes `path("api/", include("app.api.urls"))`. That
+  # form is a MOUNT POINT, not an endpoint: Django serves the URLs the included
+  # module declares, and `/api/` itself is normally not one of them. Before the
+  # exclusion it was reported as an ordinary route at `confidence: medium` with
+  # `path_partial: false` — handed to the next tool in this series as a path we
+  # verified, which is the failure extract.ts:56-63 exists to prevent.
+  #
+  # Nothing is lost by dropping it. Mount resolution is Node-only (see
+  # resolvers/node.ts and the last paragraph of this header), so the included
+  # module's routes were never going to be prefixed with `api/` whether or not
+  # this match existed — they are reported from their own `urls.py`, unprefixed,
+  # exactly as before. Measured on the auditor's corpus: the exclusion removes
+  # the one `include()` line and leaves all three other `path()`/`re_path()`
+  # calls in `py/urls.py` and both qualified calls in `py/urls_qualified.py`
+  # matching.
   - id: guardian-route-django
     languages: [python]
     severity: INFO
@@ -584,9 +696,11 @@ rules:
       guardian_kind: route
       framework: django
       confidence: medium
-    pattern-either:
-      - pattern: django.urls.path($PATH, ...)
-      - pattern: django.urls.re_path($PATH, ...)
+    patterns:
+      - pattern-either:
+          - pattern: django.urls.path($PATH, ...)
+          - pattern: django.urls.re_path($PATH, ...)
+      - pattern-not: django.urls.path($PATH, django.urls.include(...), ...)
 
   # `from $MODULE import $SYMBOL` covers every relative form for free: Semgrep
   # binds $MODULE to `.`, `.models` or `..shared` exactly as written for
@@ -639,6 +753,95 @@ rules:
           metavariable: $METHOD
           regex: ^(get|post|put|patch|delete|options|any)$
 
+  # The fluent form: `Route::middleware(['auth:sanctum'])->get('/orders/secure',
+  # …)`. The rule above cannot see it — the verb is not the static call, so
+  # `Route::$METHOD(…)` binds $METHOD to `middleware` and the verb regex
+  # correctly rejects it. The routes this cost are the AUTHENTICATED ones,
+  # which is the worst possible subset to lose from an attack surface: an
+  # inventory that silently contains only the unprotected half of an API reads
+  # as an API with nothing behind auth.
+  #
+  # Anchored on `Route::`, deliberately, rather than written as the general
+  # `$X->$METHOD($PATH, …)`. The general form matches EVERY PHP method call
+  # whose first argument is a string — the same shape that made
+  # `guardian-route-express` fabricate five routes out of `Map` and axios calls
+  # (see its comment above), and PHP has no leading-slash convention to lean on
+  # the way that rule does, since `Route::get('orders', …)` is ordinary Laravel.
+  # Requiring the chain to ROOT at the `Route` facade keeps the rule's own
+  # identification of a route intact, which is what the header asks of every
+  # rule that is not one of the two documented guard-carrying exceptions.
+  #
+  # Measured on the auditor's corpus: matches the `middleware(...)->get(...)`
+  # chain; does NOT double-report `Route::prefix('admin')->group(...)` (the
+  # verb regex rejects `group`) or `Route::post(...)->name('orders.store')`
+  # (already matched by the rule above, where the verb IS the static call, and
+  # not matched here). Recovery reads the LAST call in the chain, not the first
+  # — see `recoverMetavars.ts`'s `outermostCallOpener`, without which the
+  # captured path would be `['auth:sanctum']`.
+  - id: guardian-route-laravel-fluent
+    languages: [php]
+    severity: INFO
+    message: Laravel route (fluent chain)
+    metadata:
+      guardian_kind: route
+      framework: laravel
+      confidence: medium
+    patterns:
+      - pattern: Route::$CHAIN(...)->$METHOD($PATH, ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(get|post|put|patch|delete|options|any)$
+
+  # `Route::resource('photos', …)` registers SEVEN endpoints and
+  # `Route::apiResource` five; before this rule it registered none as far as the
+  # inventory was concerned.
+  #
+  # One record, not seven. The base path IS genuinely served (`GET /photos` is
+  # the index action), so reporting it is honest, and it is the only one of the
+  # seven whose URL follows from this line alone — the rest need Laravel's
+  # pluralisation and parameter-naming rules, which is expansion, not
+  # extraction. `confidence: low` and no `metadata.method` (so the extractor
+  # reports ANY) are the record saying exactly that: something is served here,
+  # under more than one verb, and this line does not spell out what.
+  - id: guardian-route-laravel-resource
+    languages: [php]
+    severity: INFO
+    message: Laravel resource routes (base path only; expands to several endpoints)
+    metadata:
+      guardian_kind: route
+      framework: laravel
+      confidence: low
+    patterns:
+      - pattern: Route::$METHOD($PATH, ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(resource|apiResource)$
+
+  # `Route::match(['get', 'post'], '/either', …)` puts the path in the SECOND
+  # argument. That is why this is a rule of its own and why it is FOCUSED:
+  # `recoverMetavars.ts`'s `routePath` reads the first argument of the matched
+  # call, so on a redacting Semgrep an unfocused version of this rule would
+  # recover `['get', 'post']` as the path. `focus-metavariable: $PATH` narrows
+  # Semgrep's reported range to the path literal itself, so recovery is "the
+  # span is the value" and both Semgrep versions agree — the same mechanism the
+  # attribute families use, applied here for a different reason (argument
+  # position rather than a foreign leading attribute).
+  #
+  # No `metadata.method`: the verbs are in `$VERBS`, which focusing discards,
+  # and a route served under two verbs is honestly ANY rather than either one.
+  - id: guardian-route-laravel-match
+    languages: [php]
+    severity: INFO
+    message: Laravel multi-verb route
+    metadata:
+      guardian_kind: route
+      framework: laravel
+      confidence: medium
+      guardian_focus: path
+    patterns:
+      - pattern: Route::match($VERBS, $PATH, ...)
+      - focus-metavariable: $PATH
+
   # `use $MODULE\$SYMBOL;` splits at the LAST namespace separator: for
   # `use App\Http\Controllers\OrderController;`, $SYMBOL is the class name
   # `OrderController` and $MODULE is the rest — ground-truthed on 1.86.0.
@@ -658,6 +861,23 @@ rules:
     pattern: use $MODULE\$SYMBOL;
 
   # ---------- Go ----------
+  # `Handle` alongside `HandleFunc`, because `http.Handle` / `$MUX.Handle` is
+  # how EVERY `http.Handler` VALUE is registered — `http.StripPrefix`,
+  # `http.FileServer`, any middleware-wrapped handler, and every third-party
+  # router that satisfies the interface. Only the `HandleFunc` spelling was
+  # matched, so a `net/http` service that registers handler values rather than
+  # bare functions reported a fraction of its endpoints, or none.
+  #
+  # The `Handle` alternatives carry a $PATH string-literal guard and the
+  # `HandleFunc` ones do not, which is deliberate rather than inconsistent.
+  # `HandleFunc` is a distinctive name that identifies the registration API on
+  # its own, so the header's rule applies and the path stays the extractor's
+  # problem. `Handle` is not: it is an ordinary method name (`job.Handle`,
+  # `conn.Handle`), so `$MUX.Handle($PATH, ...)` alone is the same
+  # matches-anything shape that made the express rule fabricate routes. Here
+  # the guard disambiguates rather than discards, which is the exception the
+  # header allows — and it costs only computed paths registered through
+  # `Handle`, where the alternative was not reporting the route at all.
   - id: guardian-route-go-nethttp
     languages: [go]
     severity: INFO
@@ -669,11 +889,38 @@ rules:
     pattern-either:
       - pattern: http.HandleFunc($PATH, ...)
       - pattern: $MUX.HandleFunc($PATH, ...)
+      - patterns:
+          - pattern-either:
+              - pattern: http.Handle($PATH, ...)
+              - pattern: $MUX.Handle($PATH, ...)
+          - metavariable-regex:
+              metavariable: $PATH
+              regex: ^["`]
 
+  # Gin and echo spell their verbs in SCREAMING case; this rule covers both.
+  #
+  # The two `pattern-not`s are the containment for what is otherwise a
+  # matches-any-type rule: `$R.$METHOD($PATH, ...)` fires on ANY value with a
+  # method called `GET`, which the auditor's decoy corpus demonstrates with a
+  # plain `registry` struct (`reg.GET("/cache/key", nil)`) that was reported as
+  # a route at `confidence: medium`, `path_partial: false`.
+  #
+  #   - `$R.$METHOD($PATH)` — a one-argument call. Neither gin nor echo
+  #     registers a route without a handler.
+  #   - `$R.$METHOD($PATH, nil)` — a nil handler. Registering nil is not
+  #     registering a route; gin panics on it.
+  #
+  # Stated plainly because it is a residual and not a fix: those two guards
+  # kill the decoy, and they do NOT solve the general case. A type with a
+  # `GET(string, something)` method is indistinguishable from a gin router at
+  # the syntax level, and deciding otherwise needs to know what `$R` was
+  # constructed from — not local information. The $PATH string-literal guard
+  # narrows it further (a route registered here must at least be a literal),
+  # and the rest is the price of covering gin and echo at all.
   - id: guardian-route-go-gin
     languages: [go]
     severity: INFO
-    message: Gin route
+    message: Gin/Echo route
     metadata:
       guardian_kind: route
       framework: gin
@@ -683,6 +930,46 @@ rules:
       - metavariable-regex:
           metavariable: $METHOD
           regex: ^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD|Any)$
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^["`]
+      - pattern-not: $R.$METHOD($PATH)
+      - pattern-not: $R.$METHOD($PATH, nil)
+
+  # chi — `r.Get`, `r.Post`, TitleCase. Entirely invisible before this rule:
+  # the gin rule's verb regex demands SCREAMING case, so one of the most widely
+  # used Go routers contributed nothing to the inventory at all, silently.
+  #
+  # Same guards and the same residual as the gin rule above, for the same
+  # reason; TitleCase `Get`/`Post` are, if anything, MORE common as ordinary
+  # method names than the SCREAMING spellings, so the string-literal path guard
+  # and the arity/nil exclusions are doing more work here.
+  #
+  # KNOWN LIMITATION, measured on the auditor's corpus: chi's sub-router form
+  # `r.Route("/chi/sub", func(r chi.Router) { r.Get("/x", handler) })` reports
+  # the inner route at `/x`, not `/chi/sub/x`. Mount resolution is Node-only
+  # (resolvers/node.ts), so there is nowhere for a Go prefix to be applied;
+  # gin's `r.Group("/api/v1")` has behaved this way for as long as that rule has
+  # existed. It is recorded here rather than fixed because the fix is a Go mount
+  # resolver, not a rule.
+  - id: guardian-route-go-chi
+    languages: [go]
+    severity: INFO
+    message: chi route
+    metadata:
+      guardian_kind: route
+      framework: chi
+      confidence: medium
+    patterns:
+      - pattern: $R.$METHOD($PATH, ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(Get|Post|Put|Patch|Delete|Options|Head)$
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^["`]
+      - pattern-not: $R.$METHOD($PATH)
+      - pattern-not: $R.$METHOD($PATH, nil)
 
   # Four alternatives: single and grouped, each with and without an explicit
   # local alias (`import myhttp "net/http"`). The grouped forms use an
@@ -744,6 +1031,30 @@ rules:
   # single-argument attribute, the common case, works; Rocket routes carrying
   # `data`, `rank` or `format` are simply not reported. Under-reporting a route
   # is a gap; reporting one at a path we did not read would be a lie.
+  #
+  # ---- Three spellings per verb, not one ----
+  #
+  # Only the UNQUALIFIED attribute matched. `#[actix_web::get("/x")]` and
+  # `#[rocket::get("/x")]` are the same attribute written with its path, and
+  # both are ordinary in real code — the qualified spelling is what you write
+  # when the verb name would collide with something already in scope, which for
+  # `get`/`post`/`delete` is often. Rocket's own guides use `#[rocket::get]` in
+  # any file that also imports something called `get`.
+  #
+  # Semgrep resolves nothing here — an attribute path is matched as written —
+  # so each spelling needs its own alternative. All three parse: verified with
+  # `errors: 0` on 1.164.0 over `rs/actix.rs` and `rs/axum_rocket.rs`, which
+  # matters more than usual for this family, because a single unparseable
+  # alternative inside a `pattern-either` silently zeroes the WHOLE rule (the
+  # failure that cost the five NestJS rules their family once — see the header).
+  # Measured: `#[actix_web::get("/rust/qualified")]` and
+  # `#[rocket::get("/rocket/health")]` now report, and the plain
+  # `#[get("/rust/health")]` still does.
+  #
+  # axum is deliberately NOT here. It registers routes through method calls
+  # (`Router::new().route("/axum/health", get(health))`), not attributes, so it
+  # needs a rule of a different shape rather than another alternative in this
+  # one; it is unmatched today and stays unmatched, recorded as a gap.
   - id: guardian-route-rust-actix-get
     languages: [rust]
     severity: INFO
@@ -755,7 +1066,10 @@ rules:
       method: GET
       guardian_focus: path
     patterns:
-      - pattern: "#[get($PATH, ...)] fn $F(...) { ... }"
+      - pattern-either:
+          - pattern: "#[get($PATH, ...)] fn $F(...) { ... }"
+          - pattern: "#[actix_web::get($PATH, ...)] fn $F(...) { ... }"
+          - pattern: "#[rocket::get($PATH, ...)] fn $F(...) { ... }"
       - focus-metavariable: $PATH
 
   - id: guardian-route-rust-actix-post
@@ -769,7 +1083,10 @@ rules:
       method: POST
       guardian_focus: path
     patterns:
-      - pattern: "#[post($PATH, ...)] fn $F(...) { ... }"
+      - pattern-either:
+          - pattern: "#[post($PATH, ...)] fn $F(...) { ... }"
+          - pattern: "#[actix_web::post($PATH, ...)] fn $F(...) { ... }"
+          - pattern: "#[rocket::post($PATH, ...)] fn $F(...) { ... }"
       - focus-metavariable: $PATH
 
   - id: guardian-route-rust-actix-put
@@ -783,7 +1100,10 @@ rules:
       method: PUT
       guardian_focus: path
     patterns:
-      - pattern: "#[put($PATH, ...)] fn $F(...) { ... }"
+      - pattern-either:
+          - pattern: "#[put($PATH, ...)] fn $F(...) { ... }"
+          - pattern: "#[actix_web::put($PATH, ...)] fn $F(...) { ... }"
+          - pattern: "#[rocket::put($PATH, ...)] fn $F(...) { ... }"
       - focus-metavariable: $PATH
 
   - id: guardian-route-rust-actix-patch
@@ -797,7 +1117,10 @@ rules:
       method: PATCH
       guardian_focus: path
     patterns:
-      - pattern: "#[patch($PATH, ...)] fn $F(...) { ... }"
+      - pattern-either:
+          - pattern: "#[patch($PATH, ...)] fn $F(...) { ... }"
+          - pattern: "#[actix_web::patch($PATH, ...)] fn $F(...) { ... }"
+          - pattern: "#[rocket::patch($PATH, ...)] fn $F(...) { ... }"
       - focus-metavariable: $PATH
 
   - id: guardian-route-rust-actix-delete
@@ -811,7 +1134,10 @@ rules:
       method: DELETE
       guardian_focus: path
     patterns:
-      - pattern: "#[delete($PATH, ...)] fn $F(...) { ... }"
+      - pattern-either:
+          - pattern: "#[delete($PATH, ...)] fn $F(...) { ... }"
+          - pattern: "#[actix_web::delete($PATH, ...)] fn $F(...) { ... }"
+          - pattern: "#[rocket::delete($PATH, ...)] fn $F(...) { ... }"
       - focus-metavariable: $PATH
 
   # `use $MODULE::$SYMBOL;` for a single item; `use $MODULE::{$SYMBOL};` for a
@@ -1445,6 +1771,17 @@ rules:
       - pattern: "using $MODULE;"
 
   # ---------- Environment variables (all stacks) ----------
+  # The destructuring alternative covers `const { STRIPE_KEY } = process.env`,
+  # which is how a modern config module reads its environment and which neither
+  # member-access nor index-access alternative sees. Without it a project that
+  # centralises its config in one destructuring statement — the recommended
+  # shape — reported no environment dependencies at all.
+  #
+  # It binds the FIRST name only: `const { STRIPE_KEY, SENTRY_DSN } =
+  # process.env` yields one match, `$NAME = STRIPE_KEY`. Semgrep cannot emit
+  # several results from one pattern-either alternative — the same limitation
+  # the ESM named-import rule carries and documents above, measured the same
+  # way. `SENTRY_DSN` is invisible to this rule, not fabricated as anything.
   - id: guardian-env-node
     languages: [javascript, typescript]
     severity: INFO
@@ -1454,6 +1791,7 @@ rules:
     pattern-either:
       - pattern: process.env.$NAME
       - pattern: process.env[$NAME]
+      - pattern: const { $NAME, ... } = process.env
 
   - id: guardian-env-python
     languages: [python]
@@ -1466,6 +1804,9 @@ rules:
       - pattern: os.environ.get($NAME, ...)
       - pattern: os.getenv($NAME, ...)
 
+  # `env('APP_KEY')` is Laravel's own helper and the form a Laravel codebase
+  # actually uses — `getenv()` barely appears in one. The `, ...` covers the
+  # two-argument default form (`env('APP_DEBUG', false)`) as well.
   - id: guardian-env-php
     languages: [php]
     severity: INFO
@@ -1475,11 +1816,16 @@ rules:
     pattern-either:
       - pattern: getenv($NAME)
       - pattern: $_ENV[$NAME]
+      - pattern: env($NAME, ...)
 
+  # `, ...` for the two-argument overload,
+  # `GetEnvironmentVariable(name, EnvironmentVariableTarget.Process)`. Without
+  # it the rule had no ellipsis at all and that overload was invisible — and it
+  # is the one a service reads machine- or user-scoped configuration with.
   - id: guardian-env-dotnet
     languages: [csharp]
     severity: INFO
     message: environment variable read
     metadata:
       guardian_kind: env
-    pattern: Environment.GetEnvironmentVariable($NAME)
+    pattern: Environment.GetEnvironmentVariable($NAME, ...)

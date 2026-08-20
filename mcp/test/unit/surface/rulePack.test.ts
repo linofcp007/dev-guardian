@@ -212,7 +212,18 @@ describe('configs/semgrep/routes.yml', () => {
     // reported as ANY — the truth, and the same on every Semgrep version
     // because nothing about it is captured. Naming it keeps the exemption
     // from spreading: a NEW focused rule that forgets its verb still fails.
-    const VERBLESS_FOCUSED = new Set(['guardian-route-spring-request']);
+    //
+    // `guardian-route-laravel-match` is exempt for the same reason, arrived at
+    // from the other direction: `Route::match(['get', 'post'], '/either', …)`
+    // serves ONE path under SEVERAL verbs, and the verbs are in `$VERBS`, which
+    // focusing discards. Declaring `metadata.method` would have to pick one of
+    // them, so ANY is the truth here rather than a gap. (That rule is focused
+    // for a third distinct reason again: its path is the SECOND argument, and
+    // the unfocused recovery path reads the first.)
+    const VERBLESS_FOCUSED = new Set([
+      'guardian-route-spring-request',
+      'guardian-route-laravel-match',
+    ]);
     for (const rule of rules().filter((r) => r.metadata?.[FOCUS_METADATA_KEY] !== undefined)) {
       if (!VERBLESS_FOCUSED.has(String(rule.id))) {
         expect(rule.metadata?.method, `${rule.id} declares no metadata.method`).toBeDefined();
@@ -314,7 +325,11 @@ describe('configs/semgrep/routes.yml', () => {
     // "there is no path"), and the counts are pinned so that quietly adding
     // one to an existing rule shows up here.
     expect([...focusedRules].filter((id) => inheritedRules.has(id))).toEqual([]);
-    expect(focusedRules.size, 'focused route rules').toBe(21);
+    // 22, not 21: `guardian-route-laravel-match` joined the focused set. It
+    // does NOT span a declaration — it is focused because its path is the
+    // SECOND argument and the span scanner reads the first, which is the third
+    // independent reason a rule in this pack has needed focusing.
+    expect(focusedRules.size, 'focused route rules').toBe(22);
     expect(inheritedRules.size, 'path-less route rules').toBe(16);
   });
 
@@ -353,7 +368,7 @@ describe('configs/semgrep/routes.yml', () => {
     }
   });
 
-  it('constrains $PATH to a literal on exactly the two rules that need it', () => {
+  it('constrains $PATH to a literal on exactly the rules that need it', () => {
     // A $PATH literal guard DROPS the match, so the extractor never sees it —
     // and a route registered with a computed path (@GetMapping(Paths.ORDERS),
     // path(settings.ADMIN_URL, ...)) is still surface. Dropping it makes
@@ -363,16 +378,43 @@ describe('configs/semgrep/routes.yml', () => {
     // path_partial instead.
     //
     // The guard is correct ONLY where the pattern does not identify a route on
-    // its own, so the literal disambiguates rather than discards. Two rules
-    // qualify. If you are adding a third, the bar is: does a match on this
-    // pattern, with a non-literal path, mean "not a route" (guard) or "a route
-    // whose path is computed" (no guard)?
+    // its own, so the literal disambiguates rather than discards. The bar for
+    // adding one: does a match on this pattern, with a non-literal path, mean
+    // "not a route" (guard) or "a route whose path is computed" (no guard)?
+    //
+    // Five rules qualify, and every one of them binds a bare `$X.$METHOD(...)`
+    // or `$METHOD $PATH` — a shape that matches any method call in the
+    // language, which is precisely the "does not identify a route on its own"
+    // test:
+    //
+    //   express      `$APP.$METHOD($PATH, ...)` on any object at all.
+    //   rails        `$METHOD $PATH` is any one-argument Ruby call.
+    //   go-gin       `$R.$METHOD($PATH, ...)` on any type with a GET method —
+    //                demonstrated by a plain `registry` struct in the decoy
+    //                corpus, which was reported as a route.
+    //   go-chi       the same, with TitleCase verbs, where `Get`/`Post` are if
+    //                anything MORE common as ordinary method names.
+    //   go-nethttp   only on its `Handle` alternatives, not `HandleFunc`.
+    //                `HandleFunc` names the registration API on its own;
+    //                `Handle` is an ordinary method name (`job.Handle`).
+    //
+    // What the three Go entries cost is real and bounded: a route registered
+    // through one of those calls with a COMPUTED path is dropped rather than
+    // reported partial. For gin/chi that is the price of covering them at all,
+    // and for net/http it applies only to `Handle`, whose routes were not
+    // reported at all until now.
     const guarded = rules()
       .filter((r) => r.metadata?.guardian_kind === 'route')
       .filter((r) => guardedMetavars(r).has('$PATH'))
       .map((r) => r.id)
       .sort();
-    expect(guarded).toEqual(['guardian-route-express', 'guardian-route-rails']);
+    expect(guarded).toEqual([
+      'guardian-route-express',
+      'guardian-route-go-chi',
+      'guardian-route-go-gin',
+      'guardian-route-go-nethttp',
+      'guardian-route-rails',
+    ]);
   });
 
   it('covers all 8 supported stacks with at least one route rule', () => {

@@ -50256,6 +50256,7 @@ function extractModuleEdges(results) {
   return edges;
 }
 function buildSpecifier(language, module, symbol) {
+  if (language === "python") return module.replace(/ /g, ".");
   if (language !== "rust" || symbol === void 0) return module;
   return `${module.replace(/ /g, "::")}::${symbol}`;
 }
@@ -50517,9 +50518,41 @@ function synthesizeRoute(span, metadata) {
   return metavars;
 }
 function routePath(span) {
-  const args = argumentList(span);
-  if (args !== void 0) return args[0];
-  return findOpener(span) === void 0 ? firstStringLiteral(span) : void 0;
+  const open = callOpener(span);
+  if (open !== void 0) return argumentsAt(span, open)?.[0];
+  return firstStringLiteral(span);
+}
+function callOpener(span) {
+  return outermostCallOpener(span) ?? findOpener(span);
+}
+function outermostCallOpener(span) {
+  const end = lastNonSpaceIndex(span);
+  if (end === void 0) return void 0;
+  let i2 = 0;
+  while (i2 < span.length) {
+    const ch = span[i2];
+    if (ch === void 0) break;
+    if (isQuote(ch)) {
+      i2 = skipString(span, i2);
+      continue;
+    }
+    if (CLOSERS[ch] === void 0) {
+      i2 += 1;
+      continue;
+    }
+    const close = matchingClose(span, i2);
+    if (close === void 0) return void 0;
+    if (close === end && ch === "(") return i2;
+    i2 = close + 1;
+  }
+  return void 0;
+}
+function lastNonSpaceIndex(span) {
+  for (let i2 = span.length - 1; i2 >= 0; i2 -= 1) {
+    const ch = span[i2];
+    if (ch !== void 0 && !/\s/.test(ch)) return i2;
+  }
+  return void 0;
 }
 function synthesizeNamespacedRoute(span) {
   const args = argumentList(span);
@@ -50533,12 +50566,16 @@ function synthesizeNamespacedRoute(span) {
   };
 }
 function synthesizeMount(span) {
-  const literal2 = findStringLiteral(span);
-  if (literal2 === void 0) return void 0;
-  const router = IDENTIFIER.exec(span.slice(literal2.end))?.[1];
+  const open = callOpener(span);
+  const args = open === void 0 ? void 0 : argumentsAt(span, open);
+  if (args === void 0) return void 0;
+  const prefix = args[0];
+  const last = args[args.length - 1];
+  if (prefix === void 0 || last === void 0) return void 0;
+  const router = IDENTIFIER.exec(last)?.[1];
   if (router === void 0) return void 0;
   return {
-    $PREFIX: { abstract_content: literal2.text },
+    $PREFIX: { abstract_content: prefix },
     $ROUTER: { abstract_content: router }
   };
 }
@@ -50568,7 +50605,28 @@ function synthesizeEsmImport(span) {
   if (literal2 === void 0) return void 0;
   const module = stripQuotes3(literal2.text);
   if (module.length === 0) return void 0;
-  const symbol = /\bimport\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\bimport\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? /\bimport\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\b(?:const|let|var)\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span)?.[1];
+  const symbol = /\bimport\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\bimport\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? // `import def, { helperA } from './helpers.js'` — the DEFAULT half of a
+  // mixed import. None of the other four accepted it: the bare-default
+  // regex below needs `from` immediately after the name and finds a comma,
+  // and the named regex above needs `{` immediately after `import`. Semgrep
+  // 1.86.0 binds $SYMBOL="def" here (the generic-import equivalence the
+  // rule's own comment in routes.yml describes), so the match was arriving
+  // with a real capture on one Semgrep version and none at all on the
+  // shipped one — the exact version-dependence the pack header rules out.
+  /\bimport\s+([A-Za-z_$][\w$]*)\s*,/.exec(span)?.[1] ?? /\bimport\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\b(?:const|let|var)\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span)?.[1] ?? // A re-export, `export { thing } from './thing.js'`. Semgrep matches it
+  // with the named-import alternative and reports a span that begins INSIDE
+  // the statement — measured as `thing } from './thing.js'`, with no
+  // `export` or `import` keyword in it at all, which is why every regex
+  // above misses. Last, so it can only fire on a span no keyword-anchored
+  // branch claimed.
+  //
+  // DECIDED, not inherited: a re-export is kept as an import edge. It
+  // creates a real module dependency and it rebinds the name into this
+  // module's namespace, so it is exactly the kind of link `moduleEdges.ts`
+  // exists to follow; and Semgrep 1.86.0 reports it with
+  // $SYMBOL="thing" $MODULE="./thing.js", so dropping it here would put the
+  // two Semgrep versions back into disagreement to remove a true edge.
+  /^\s*([A-Za-z_$][\w$]*)\s*\}/.exec(span)?.[1];
   if (symbol === void 0) return void 0;
   return {
     $SYMBOL: { abstract_content: symbol },
@@ -50582,13 +50640,17 @@ function synthesizePythonImport(span) {
   const fromSymbol = fromMatch?.[2];
   if (fromModule !== void 0 && fromModule.length > 0 && fromSymbol !== void 0) {
     return {
-      $MODULE: { abstract_content: fromModule },
+      $MODULE: { abstract_content: joinPythonModule(fromModule) },
       $SYMBOL: { abstract_content: fromSymbol }
     };
   }
   const bareModule = /^import\s+([\w.]+)/.exec(trimmed)?.[1];
   if (bareModule === void 0 || bareModule.length === 0) return void 0;
   return { $MODULE: { abstract_content: bareModule } };
+}
+function joinPythonModule(module) {
+  if (module.startsWith(".")) return module;
+  return module.replace(/\./g, " ");
 }
 function synthesizeGoImport(span) {
   const literals = allStringLiterals(span);
@@ -50608,29 +50670,64 @@ function synthesizeRustImport(span) {
   const trimmed = span.replace(/;\s*$/, "").trim();
   const braceIdx = trimmed.indexOf("{");
   if (braceIdx !== -1) {
-    const modulePath2 = trimmed.slice(0, braceIdx).replace(/^use\s+/, "").replace(/::\s*$/, "");
-    const items = trimmed.slice(braceIdx + 1).split(",").map((item) => item.trim()).filter((item) => item.length > 0);
-    const symbol2 = items[items.length - 1];
-    if (modulePath2.length === 0 || symbol2 === void 0 || symbol2.length === 0) return void 0;
+    const prefix = trimmed.slice(0, braceIdx).replace(/^use\s+/, "").replace(/::\s*$/, "");
+    const items = trimmed.slice(braceIdx + 1).split(",").map((item2) => item2.trim()).filter((item2) => item2.length > 0);
+    const item = items[items.length - 1];
+    if (prefix.length === 0 || item === void 0 || item.length === 0) return void 0;
+    const split2 = splitRustPath(stripRustAlias(item));
+    if (split2 === void 0) return void 0;
+    const module = split2.module.length === 0 ? prefix : `${prefix}::${split2.module}`;
     return {
-      $MODULE: { abstract_content: modulePath2.replace(/::/g, " ") },
-      $SYMBOL: { abstract_content: symbol2 }
+      $MODULE: { abstract_content: module.replace(/::/g, " ") },
+      $SYMBOL: { abstract_content: split2.symbol }
     };
   }
-  const withoutKeyword = trimmed.replace(/^use\s+/, "");
-  const lastSep = withoutKeyword.lastIndexOf("::");
-  if (lastSep === -1) return void 0;
-  const modulePath = withoutKeyword.slice(0, lastSep);
-  const symbol = withoutKeyword.slice(lastSep + 2);
-  if (modulePath.length === 0 || symbol.length === 0) return void 0;
+  const withoutKeyword = stripRustAlias(trimmed.replace(/^use\s+/, ""));
+  const split = splitRustPath(withoutKeyword);
+  if (split === void 0 || split.module.length === 0) return void 0;
   return {
-    $MODULE: { abstract_content: modulePath.replace(/::/g, " ") },
-    $SYMBOL: { abstract_content: symbol }
+    $MODULE: { abstract_content: split.module.replace(/::/g, " ") },
+    $SYMBOL: { abstract_content: split.symbol }
   };
+}
+function stripRustAlias(path6) {
+  return path6.replace(/\s+as\s+[A-Za-z_]\w*$/, "");
+}
+function splitRustPath(path6) {
+  const lastSep = path6.lastIndexOf("::");
+  if (lastSep === -1) return path6.length === 0 ? void 0 : { module: "", symbol: path6 };
+  const module = path6.slice(0, lastSep);
+  const symbol = path6.slice(lastSep + 2);
+  if (symbol.length === 0) return void 0;
+  return { module, symbol };
 }
 function synthesizePhpImport(span) {
   const trimmed = span.replace(/;\s*$/, "").trim();
-  const path6 = /^use\s+(\S+)$/.exec(trimmed)?.[1];
+  const braceIdx = trimmed.indexOf("{");
+  if (braceIdx !== -1) {
+    const prefix = trimmed.slice(0, braceIdx).replace(/^use\s+/, "").replace(/\\\s*$/, "");
+    const items = trimmed.slice(braceIdx + 1).split(",").map((item) => item.trim()).filter((item) => item.length > 0);
+    const symbol2 = items[items.length - 1];
+    if (prefix.length === 0 || symbol2 === void 0 || symbol2.length === 0) return void 0;
+    return {
+      $MODULE: { abstract_content: prefix.replace(/\\/g, " ") },
+      $SYMBOL: { abstract_content: symbol2 }
+    };
+  }
+  const body = trimmed.replace(/^use\s+/, "").replace(/^(?:function|const)\s+/, "");
+  const aliasStripped = body.replace(/\s+as\s+[A-Za-z_]\w*$/, "");
+  if (aliasStripped !== body) {
+    const firstSep = aliasStripped.indexOf("\\");
+    if (firstSep === -1) return void 0;
+    const modulePath2 = aliasStripped.slice(0, firstSep);
+    const symbol2 = aliasStripped.slice(firstSep + 1);
+    if (modulePath2.length === 0 || symbol2.length === 0) return void 0;
+    return {
+      $MODULE: { abstract_content: modulePath2.replace(/\\/g, " ") },
+      $SYMBOL: { abstract_content: symbol2.replace(/\\/g, " ") }
+    };
+  }
+  const path6 = /^(\S+)$/.exec(body)?.[1];
   if (path6 === void 0) return void 0;
   const lastSep = path6.lastIndexOf("\\");
   if (lastSep === -1) return void 0;
@@ -50662,7 +50759,7 @@ function synthesizeCsharpImport(span) {
       $MODULE: { abstract_content: aliasModule.replace(/\./g, " ") }
     };
   }
-  const plainModule = /^using\s+(.+)$/.exec(trimmed)?.[1];
+  const plainModule = /^using\s+(?:static\s+)?(.+)$/.exec(trimmed)?.[1];
   if (plainModule === void 0 || plainModule.length === 0) return void 0;
   return { $MODULE: { abstract_content: plainModule.replace(/\./g, " ") } };
 }
@@ -50674,6 +50771,8 @@ function synthesizeRubyImport(span) {
   return { $MODULE: { abstract_content: module } };
 }
 function synthesizeEnv(span) {
+  const destructured = /^(?:const|let|var)\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span.trim())?.[1];
+  if (destructured !== void 0) return { $NAME: { abstract_content: destructured } };
   const arg = firstArgument(span);
   if (arg !== void 0) return { $NAME: { abstract_content: arg } };
   const member = /\.([A-Za-z_$][\w$]*)\s*$/.exec(span.trim())?.[1];
@@ -50806,7 +50905,7 @@ function firstArgument(span) {
   return argumentList(span)?.[0];
 }
 function calleeIdentifier(span) {
-  const open = findOpener(span);
+  const open = callOpener(span);
   if (open !== void 0 && span[open] === "(") {
     const callee = /([A-Za-z_$][\w$]*)\s*$/.exec(span.slice(0, open))?.[1];
     if (callee !== void 0) return callee;

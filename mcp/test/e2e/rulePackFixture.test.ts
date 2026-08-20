@@ -76,6 +76,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(here, '..', '..', '..');
 const FIXTURE = resolve(here, '..', 'fixtures', 'surface', 'apps');
 const ANNOTATION_FIXTURE = resolve(here, '..', 'fixtures', 'surface', 'annotations');
+const FRAMEWORK_FIXTURE = resolve(here, '..', 'fixtures', 'surface', 'frameworks');
 const SCRIPTS_DIR = resolve(ROOT, 'scripts');
 const RULES_PATH = resolve(ROOT, 'configs', 'semgrep', 'routes.yml');
 
@@ -126,7 +127,15 @@ const BASE_ROUTES = [
   // ---- Django. The computed path survives as a route and is flagged, never
   // resolved; the regex route is flagged too, because a regex is not a URL.
   // Nothing from py-django/helpers.py, whose local `path()` helper is bait.
-  'django ANY django/api/',
+  //
+  // `django/api/` is deliberately ABSENT. It is the fixture's
+  // `path("django/api/", include("api.urls"))` — a mount point, not an
+  // endpoint: Django serves what the included module declares, and the prefix
+  // itself normally is not one of them. It used to be reported as an ordinary
+  // route at `confidence: medium`, `path_partial: false`, i.e. handed on as a
+  // path we verified. Nothing is lost by the exclusion — mount resolution is
+  // Node-only, so the included module's routes were never prefixed with it
+  // either way. See the `pattern-not` on `guardian-route-django`.
   'django ANY django/orders/',
   'django ANY django/orders/<int:order_id>/',
   // Python raw string, kept whole. `stripQuotes` removes only a MATCHED pair,
@@ -337,7 +346,8 @@ const EXPECTED_IMPORT_LANGUAGES = [
  * becomes a regression test.
  */
 const EXPECTED_SHADOW = [
-  'ANY /django/api',
+  // No `ANY /django/api`: the `include()` mount point is no longer reported as
+  // a route at all, so it cannot be an undocumented one. See EXPECTED_ROUTES.
   'ANY /django/orders',
   'ANY /django/orders/{}',
   'ANY /flask/health',
@@ -411,7 +421,8 @@ async function isInstalled(bin: string): Promise<boolean> {
  * Resolved once, at collection time, so `it.skipIf` can report a skip as a
  * skip rather than each test deciding for itself and returning early.
  */
-const FIXTURE_PRESENT = existsSync(FIXTURE) && existsSync(ANNOTATION_FIXTURE);
+const FIXTURE_PRESENT =
+  existsSync(FIXTURE) && existsSync(ANNOTATION_FIXTURE) && existsSync(FRAMEWORK_FIXTURE);
 const SEMGREP_INSTALLED = await isInstalled('semgrep');
 const SEMGREP_AVAILABLE = FIXTURE_PRESENT && SEMGREP_INSTALLED;
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
@@ -1028,6 +1039,369 @@ describe('E2E — annotation route rules against the auditor fixture', () => {
         expect(entry?.status, `${language} coverage status`).toBe('ok');
         expect(entry?.unreadable_matches, `${language} unreadable_matches`).toBe(0);
       }
+    },
+    6 * 60_000,
+  );
+});
+
+/* ---- the framework fixture ----------------------------------------------
+ *
+ * A THIRD tree, `test/fixtures/surface/frameworks/`, with the same finding
+ * behind it as the annotations tree above: it was written by an auditor who
+ * did not write the rules, so every file is the syntax the framework's own
+ * documentation uses rather than the syntax some rule was built around. It is
+ * their corpus, kept intact — the `L01`/`P10`/`G07`/`F01` markers in the
+ * fixture files are theirs, and each one names a form the pack was asked
+ * about. The only addition is `js/mount3/`, which exists because the
+ * three-argument mount fix has no observable effect anywhere else in the tree.
+ *
+ * `fp/` is the adversarial half: ordinary non-route code shaped like routes.
+ * It is scanned in the SAME run as everything else, deliberately, so that a
+ * widening anywhere in the pack which starts fabricating decoy routes fails
+ * the one equality below, rather than needing a separate test somebody
+ * forgets to re-run after a rule change.
+ *
+ * What this tree pins that the other two do not:
+ *   - fluent chains — `app.get(a, h).post(b, h)`, Hono's canonical style, and
+ *     Laravel's `Route::middleware(...)->get(...)` — where Semgrep reports two
+ *     matches whose spans share a left edge;
+ *   - `app.use(prefix, middleware, router)`, end to end through
+ *     `resolveNodeMounts`;
+ *   - the frameworks that were entirely invisible: chi, `mux.Handle`,
+ *     qualified actix/Rocket attributes, Laravel's fluent/resource/match forms;
+ *   - that ordinary `Map`, Web Storage and HTTP-client calls are NOT routes.
+ */
+
+/**
+ * Every route the framework fixture declares.
+ *
+ * Read against the fixture sources, not pasted from a run. The rows worth
+ * knowing the reason for:
+ *
+ * `[partial]` on the koa/hono/fastify rows is `resolvers/node.ts`, not a rule:
+ * any JS/TS route in a file that is neither a mounting file nor mounted
+ * anywhere is flagged partial, which is correct — nothing in the tree says
+ * where those apps are served. `js/express5.js` IS a mounting file, so its own
+ * routes count as attached to the app and stay resolved.
+ *
+ * `mount3/orders.js:9 … /api/v2/list` is the three-argument mount assertion.
+ * It resolves only if `guardian-mount-express` matched
+ * `app.use('/api/v2', requireAuth, ordersRouter)` AND `synthesizeMount` read
+ * the LAST argument as `$ROUTER`. Before the fix it read `/list [partial]`.
+ *
+ * `go/routes.go:35 chi GET /x` is a KNOWN under-resolution, pinned so it
+ * cannot change silently: it is the inner route of
+ * `r.Route("/chi/sub", func(r chi.Router) { r.Get("/x", …) })` and its served
+ * path is `/chi/sub/x`. Mount resolution is Node-only, so there is nowhere for
+ * a Go prefix to be applied; gin's `r.Group("/api/v1")` row above it
+ * (`/items`) has the same shape and has read this way for as long as that rule
+ * has existed.
+ *
+ * `py/flask_app.py:17` and `:21` are `fastapi`, not `flask`, and that is a
+ * decided mislabel rather than an oversight: Flask 2.x's verb shortcut is the
+ * same syntax as FastAPI's, and separating them needs to know what `app` was
+ * constructed from. See the note above `guardian-route-flask` in
+ * `configs/semgrep/routes.yml`. The endpoint is right; only the label is not.
+ *
+ * `php/routes.php:21`/`:22` (`photos`, `books`) are ANY at the RESOURCE BASE
+ * path: `Route::resource` expands to seven endpoints and only the base follows
+ * from the line itself.
+ *
+ * The four `fp/` rows are the decoys that survive, and each is undecidable
+ * rather than untried. `Route::get('not/a/leading/slash', 'x')` on a class
+ * that merely happens to be called `Route` is indistinguishable from Laravel's
+ * facade; Ruby's `get 'config/value'` is indistinguishable from a Sinatra
+ * route because that is exactly what a Sinatra route looks like. Requiring a
+ * `do … end` block or a second argument was tried and measured: it left
+ * `post 'queue/name', payload` matching anyway and made every real Sinatra
+ * route match TWICE, once bare and once with its block. They are pinned so
+ * that "still four" is asserted rather than assumed — a fifth fails here.
+ *
+ * ZERO rows from `fp/decoys.js` and `fp/decoys.go`, which is the point this
+ * fixture arrived with. Before the change `cache.get('/etc/passwd')`,
+ * `cache.delete('/tmp/session')`, `storage.get('/prefs')`,
+ * `api.get('/external/thing', {…})`, `http.post('/webhook/out', body)` and
+ * `reg.GET("/cache/key", nil)` were all reported as routes — the five JS ones
+ * at `confidence: high` with `path_partial: false`.
+ */
+const EXPECTED_FRAMEWORK_ROUTES = [
+  // ---- C#: attribute + minimal API. Unchanged by this work, and here as the
+  // regression guard for the `using static` import fix in the same file.
+  'cs/OrdersController.cs:14 aspnet GET all',
+  'cs/OrdersController.cs:18 aspnet GET <inherited> [partial]',
+  'cs/OrdersController.cs:23 aspnet POST submit',
+  'cs/OrdersController.cs:27 aspnet GET quick',
+  'cs/OrdersController.cs:31 aspnet PUT {id:int} [partial]',
+  'cs/OrdersController.cs:35 aspnet DELETE {id} [partial]',
+  'cs/OrdersController.cs:39 aspnet PATCH {id}/status',
+  'cs/Program.cs:7 aspnet-minimal GET /minimal/health',
+  'cs/Program.cs:10 aspnet-minimal POST /minimal/orders',
+  'cs/Program.cs:14 aspnet-minimal GET /stats',
+  // ---- the decoys that survive; see the note above.
+  'fp/decoys.php:3 laravel GET not/a/leading/slash',
+  'fp/decoys.rb:2 rails GET config/value',
+  'fp/decoys.rb:3 rails DELETE /tmp/cache-entry',
+  'fp/decoys.rb:4 rails POST queue/name',
+  // ---- Go. `:20` is `mux.Handle` with an `http.StripPrefix` value, invisible
+  // before this change; `:33`/`:34` are chi, a whole router that contributed
+  // nothing because its verbs are TitleCase.
+  'go/routes.go:16 net-http ANY /go/health',
+  'go/routes.go:18 net-http ANY GET /go/items/{id} [partial]',
+  'go/routes.go:20 net-http ANY /go/static/',
+  'go/routes.go:22 net-http ANY /go/legacy',
+  'go/routes.go:26 gin GET /gin/ping',
+  'go/routes.go:29 gin POST /items',
+  'go/routes.go:33 chi GET /chi/items',
+  'go/routes.go:34 chi POST /chi/items',
+  'go/routes.go:35 chi GET /x',
+  'go/routes.go:39 gin GET /echo/items',
+  // ---- Spring. Unchanged here; the annotations tree pins it in depth.
+  'java/OrderController.java:9 spring ANY /api/orders',
+  'java/OrderController.java:13 spring GET /list',
+  'java/OrderController.java:17 spring GET /detail',
+  'java/OrderController.java:21 spring GET <inherited> [partial]',
+  'java/OrderController.java:25 spring POST /create',
+  'java/OrderController.java:29 spring DELETE {"/a", "/b"} [partial]',
+  'java/OrderController.java:33 spring ANY /legacy',
+  'java/OrderController.java:37 spring PUT /{id}',
+  'java/OrderController.java:40 spring PATCH /{id}/status',
+  // ---- Express/Fastify/Koa/Hono. Line 21 carries BOTH chain routes, and
+  // koa-hono.js:10 carries both halves of the multi-line Hono chain.
+  'js/express5.js:10 express GET /health',
+  'js/express5.js:14 express GET /api/${V}/ping [partial]',
+  'js/express5.js:21 express GET /chain-a',
+  'js/express5.js:21 express POST /chain-b',
+  'js/express5.js:33 express ANY /any',
+  'js/fastify.js:5 express GET /f/health [partial]',
+  'js/fastify.js:15 express POST /f/orders [partial]',
+  'js/koa-hono.js:6 express GET /koa/items [partial]',
+  'js/koa-hono.js:10 express GET /hono/a [partial]',
+  'js/koa-hono.js:10 express POST /hono/b [partial]',
+  'mount3/orders.js:9 express GET /api/v2/list',
+  // ---- Laravel. `:13` is the fluent (authenticated) route, `:21`/`:22` the
+  // resource bases, `:28` the two-verb `Route::match` whose path is its SECOND
+  // argument.
+  'php/routes.php:10 laravel GET /orders',
+  'php/routes.php:13 laravel GET /orders/secure',
+  'php/routes.php:17 laravel GET /dashboard',
+  'php/routes.php:21 laravel ANY photos',
+  'php/routes.php:22 laravel ANY books',
+  'php/routes.php:25 laravel POST /orders',
+  'php/routes.php:28 laravel ANY /either',
+  'php/wp.php:6 wp-rest ANY /wp-json/guardian/v1/things',
+  'php/wp.php:16 wp-rest ANY /items/(?P<id>\\d+) [partial]',
+  // ---- Python. There is deliberately NO row for `py/urls.py:11`
+  // (`path("api/", include(…))`) — a mount point, not an endpoint.
+  'py/fastapi_app.py:8 fastapi GET /fa/health',
+  'py/fastapi_app.py:13 fastapi POST /fa/items',
+  'py/fastapi_app.py:18 fastapi GET /fa/items/{item_id}',
+  'py/flask_app.py:7 flask ANY /health',
+  'py/flask_app.py:12 flask ANY /items',
+  'py/flask_app.py:17 fastapi GET /items/<int:item_id>',
+  'py/flask_app.py:21 fastapi POST /items',
+  'py/flask_app.py:26 flask ANY /bp-items',
+  'py/flask_app.py:35 flask ANY /cbv',
+  'py/urls.py:7 django ANY orders/',
+  'py/urls.py:9 django ANY r"^legacy/(?P<slug>[\\w-]+)/$" [partial]',
+  'py/urls.py:13 django ANY admin/',
+  'py/urls_qualified.py:5 django ANY qualified/',
+  'py/urls_qualified.py:6 django ANY r"^qual/$" [partial]',
+  // ---- Ruby. `resources :orders` is NOT here; see FRAMEWORK_SCOPE_DECISIONS.
+  'rb/routes.rb:8 rails GET /rails/orders',
+  'rb/routes.rb:10 rails GET rails/orders/:id',
+  'rb/routes.rb:16 rails GET /ping',
+  'rb/sinatra.rb:4 rails GET /sin/health',
+  'rb/sinatra.rb:8 rails POST /sin/items',
+  // ---- Rust. `actix.rs:16` is `#[actix_web::get]` and `axum_rocket.rs:21` is
+  // `#[rocket::get]` — the qualified spellings, neither matched before.
+  'rs/actix.rs:8 actix GET /rust/health',
+  'rs/actix.rs:12 actix POST /rust/items',
+  'rs/actix.rs:16 actix GET /rust/qualified',
+  'rs/actix.rs:30 actix PUT /rust/items/{id}',
+  'rs/actix.rs:33 actix PATCH /rust/items/{id}/status',
+  'rs/actix.rs:36 actix DELETE /rust/items/{id}',
+  'rs/axum_rocket.rs:21 actix GET /rocket/health',
+  // ---- NestJS. Unchanged; the annotations tree pins it in depth.
+  'ts/nest-alt.ts:6 nestjs GET arrow [partial]',
+  'ts/nest-alt.ts:10 nestjs GET oneline [partial]',
+  'ts/users.controller.ts:10 nestjs GET <inherited> [partial]',
+  'ts/users.controller.ts:16 nestjs POST <inherited> [partial]',
+  'ts/users.controller.ts:23 nestjs GET :id [partial]',
+  'ts/users.controller.ts:30 nestjs PUT :id [partial]',
+  'ts/users.controller.ts:36 nestjs PATCH :id/status [partial]',
+  'ts/users.controller.ts:42 nestjs DELETE <inherited> [partial]',
+  "ts/users.controller.ts:48 nestjs GET ['alias-a', 'alias-b'] [partial]",
+].sort();
+
+/**
+ * Environment variables the same run must find, as a whole set.
+ *
+ * `STRIPE_KEY` (`const { STRIPE_KEY, SENTRY_DSN } = process.env`), `TWO_ARG`
+ * (`GetEnvironmentVariable(name, target)`) and `LARAVEL_ENV` (Laravel's own
+ * `env()` helper) are the three forms this change added; each was invisible,
+ * and the first two are how a modern config module and a scoped .NET read are
+ * ordinarily written.
+ *
+ * `SENTRY_DSN` is deliberately ABSENT: a destructuring statement yields ONE
+ * Semgrep match, bound to the first name — the same limitation the ESM
+ * named-import rule carries and documents. Pinning its absence is what stops
+ * that quietly becoming a surprise. `$_SERVER['HTTP_HOST']` is absent too: a
+ * request header is not configuration.
+ */
+const EXPECTED_FRAMEWORK_ENV = [
+  'APP_ENV',
+  'APP_KEY',
+  'BARE_VAR',
+  'DATABASE_URL',
+  'HARD_VAR',
+  'LARAVEL_ENV',
+  'NO_DEFAULT_VAR',
+  'ONE_ARG',
+  'PORT',
+  'REDIS_URL',
+  'SOFT_VAR',
+  'STRIPE_KEY',
+  'TWO_ARG',
+  'WITH_DEFAULT',
+].sort();
+
+/**
+ * Path text that must never appear, whatever else changes.
+ *
+ * Every entry is either a decoy the pack DID report before this change or a
+ * form whose absence is a decision. This is not redundant with the set
+ * equality above: the equality says "these 88 rows and no others", while this
+ * says WHY a particular string would be a defect, so a failure names the
+ * fabrication instead of showing an 88-row diff.
+ */
+const FRAMEWORK_DECOYS = [
+  '/etc/passwd', // Map.get with a path-shaped key
+  '/tmp/session', // Map.delete
+  '/external/thing', // an axios-style client called with an options object
+  '/webhook/out', // an HTTP client bound to the name `http`
+  '/prefs', // a one-argument Web Storage read
+  '/cache/key', // a Go struct that merely happens to have a GET method
+];
+
+/**
+ * Forms present in the corpus that this pack reports NOTHING for, on purpose.
+ * Asserted as absences so each stays a decision rather than drifting into an
+ * unnoticed gap — and so that adding a rule for one of them is a deliberate
+ * edit here, not a silent set-equality failure someone re-baselines.
+ *
+ *   `resources :orders` (rb/routes.rb) — Rails' most idiomatic form, seven
+ *     endpoints from one line. Not matched: unlike `Route::resource`, whose
+ *     first argument is the base path and therefore genuinely served, the Rails
+ *     form names a MODEL and the URLs come from Rails' pluralisation and
+ *     nesting rules. Reporting `/orders` would be inference, not extraction,
+ *     and reporting `orders` (the symbol as written) would be a phantom path.
+ *     The consequence is real and worth stating plainly: a conventional Rails
+ *     app is substantially under-reported by this pack.
+ *   `axum` (rs/axum_rocket.rs) — registers through `Router::new().route(...)`,
+ *     a method chain, not an attribute; it needs a rule of a different shape
+ *     rather than another alternative on the actix ones.
+ *   `fastify.route({ method, url })` and `fastify.register(plugin, { prefix })`
+ *     — the object-literal forms, where neither path nor prefix is a positional
+ *     argument.
+ *   `router.route('/widgets').get(h).post(h)` — Express's other chaining idiom;
+ *     the path is on `.route()` and the verbs are on calls that carry none.
+ *   JAX-RS / Quarkus (java/JaxRsResource.java) — an entire framework family.
+ *
+ * Two more gaps exist in the corpus and are NOT in the list below, because the
+ * string each would assert the absence of is legitimately served by a
+ * different framework in the same tree: `fastify.route({ url: '/f/orders' })`
+ * (the same path as the `fastify.post` on the line above it) and Flask's
+ * `app.add_url_rule('/legacy', …)` (the same string as Spring's `/legacy`).
+ * They are recorded here rather than asserted, since an assertion on either
+ * would fail for the wrong reason.
+ */
+const FRAMEWORK_SCOPE_DECISIONS = [
+  'orders', // Rails `resources :orders` — the model name, not a path
+  'users', // Rails `resources :users, only: [...]`
+  '/axum/health', // axum's Router::new().route(...)
+  '/axum/items',
+  '/widgets', // Express router.route('/widgets').get(...).post(...)
+  '/jaxrs/items', // JAX-RS @Path
+  // Django `path("api/", include("app.api.urls"))` — a mount point, not an
+  // endpoint. Exact equality, not a substring: `api/` occurs inside plenty of
+  // paths that ARE endpoints (`/api/orders`, `/api/v2/list`) and matching those
+  // would fail this for the opposite of the reason it exists.
+  'api/',
+];
+
+describe('E2E — framework rules and decoys against the auditor corpus', () => {
+  it.skipIf(!SEMGREP_AVAILABLE)(
+    'matches every framework form the corpus declares, and none of its decoys',
+    async () => {
+      // Outside any `test/` path — see the module comment.
+      const work = makeTempDir('guardian-frameworks-');
+      cpSync(FRAMEWORK_FIXTURE, work, { recursive: true });
+
+      const ctx = makeContext();
+      const tool = TOOLS.find((t) => t.name === 'map_attack_surface');
+      if (!tool) throw new Error('map_attack_surface is not registered');
+
+      const result = okResult<SurfaceResult>(
+        await tool.handler({ project_path: work, force: true }, ctx),
+      );
+      expect(result.tools_run.map((t) => `${t.name}:${t.status}`)).toContain('semgrep:ok');
+      const snapshotId = result.snapshot_id;
+      expect(snapshotId).not.toBeNull();
+      if (snapshotId === null) return;
+      const snapshot = ctx.storage.surface.getById(snapshotId)?.snapshot;
+      if (!snapshot) throw new Error('snapshot was not persisted');
+
+      const actual = snapshot.routes
+        .filter((r) => r.provenance === 'code')
+        .map(describeAnnotationRoute)
+        .sort();
+      expect(actual).toEqual(EXPECTED_FRAMEWORK_ROUTES);
+
+      // A fluent chain is the one shape where two DIFFERENT routes share a
+      // file AND a line, so the duplicate check has to be on the whole row —
+      // `/chain-a` reported twice is what this catches.
+      expect(new Set(actual).size, 'two rules reported the same declaration').toBe(actual.length);
+
+      for (const decoy of FRAMEWORK_DECOYS) {
+        expect(
+          snapshot.routes
+            .filter((r) => r.path_resolved.includes(decoy))
+            .map(describeAnnotationRoute),
+          `fabricated route containing ${decoy}`,
+        ).toEqual([]);
+      }
+
+      for (const gap of FRAMEWORK_SCOPE_DECISIONS) {
+        expect(
+          snapshot.routes.filter((r) => r.path_resolved === gap).map(describeAnnotationRoute),
+          `${gap} is a documented scope decision; adding a rule for it means editing this list`,
+        ).toEqual([]);
+      }
+
+      // Not one route out of either decoy file. Asserted at FILE level as well
+      // as by path, because the failure mode is a rule widening that fabricates
+      // something none of the path strings above happens to name.
+      const fromDecoyFiles = snapshot.routes
+        .filter((r) => /decoys\.(js|go|py)$/.test(r.file.replace(/\\/g, '/')))
+        .map(describeAnnotationRoute);
+      expect(fromDecoyFiles, 'routes fabricated out of non-route JS/Go/Python code').toEqual([]);
+
+      expect(snapshot.env_vars.map((e) => e.name).sort()).toEqual(EXPECTED_FRAMEWORK_ENV);
+
+      // Every language readable. `unreadable_matches > 0` is what the three
+      // uncovered PHP `use` forms produced before the recovery fix, and it
+      // means "routes here could not be read" — it must be zero everywhere.
+      for (const entry of snapshot.coverage) {
+        expect(entry.status, `${entry.language} coverage status`).toBe('ok');
+        expect(entry.unreadable_matches, `${entry.language} unreadable_matches`).toBe(0);
+      }
+
+      // The recovery step must not report a partial failure. Before the PHP
+      // group / alias / `use function` branches existed this read `failed`,
+      // with five matches "MISSING from the surface".
+      expect(result.tools_run.map((t) => `${t.name}:${t.status}`)).toContain(
+        'semgrep-metavar-recovery:ok',
+      );
     },
     6 * 60_000,
   );
