@@ -26,7 +26,7 @@
  * `buildPackList` (below) is where every `--config=` value gets assembled,
  * and it always appends every local `configs/semgrep/bugfix-*.yml` pack —
  * one hand-authored file per language, each covering the same six bug
- * classes for its language (fourteen rules for JS/TS, design of record:
+ * classes for its language (thirteen rules for JS/TS, design of record:
  * docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md; ten for
  * Python, docs/superpowers/specs/2026-08-18-bugfix-rules-python-design.md;
  * ten for Go, docs/superpowers/specs/2026-08-18-bugfix-rules-go-design.md —
@@ -342,7 +342,7 @@ registerToolModule(makeScanTool({
         'Java bug rules; optional language packs, off by default; other languages still ' +
         'registry-only)',
     description: 'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus local, always-on ' +
-        'JS/TS, Python, Go and Java rule packs: `configs/semgrep/bugfix-js.yml` (fourteen rules), ' +
+        'JS/TS, Python, Go and Java rule packs: `configs/semgrep/bugfix-js.yml` (thirteen rules), ' +
         '`configs/semgrep/bugfix-py.yml` (ten rules), `configs/semgrep/bugfix-go.yml` (nine ' +
         'rules) and `configs/semgrep/bugfix-java.yml` (eight rules), each covering all six subcategories ' +
         'below for its language — race_condition, null_safety, off_by_one, memory_leak, ' +
@@ -355,12 +355,37 @@ registerToolModule(makeScanTool({
         "These are Semgrep OSS pattern rules: they match syntax, not " +
         'dataflow, so this finds the shapes bugs take, not bugs proven by analysis — a null ' +
         'dereference two functions from its guard is invisible to them. The heuristic-tier ' +
-        'rules (WARNING/INFO) produce false positives by construction — `floating-mutation` ' +
-        "matches on the method name alone, so it can't tell a real mutation like " +
-        "`repo.save()` from an unrelated call that just shares the name, like `ctx.save()` " +
-        "(Canvas 2D's synchronous state-stack push, nothing to do with persistence) — both " +
-        "fire identically. That's why it isn't ERROR and why `severity_min` exists to " +
-        'filter it out. Go is where the registry pack leaves the biggest hole among the ' +
+        'rules (WARNING/INFO) produce false positives by construction, which is what ' +
+        '`severity_min` exists to filter. The JS/TS pack was audited in 1.8.1 against ~600 ' +
+        'lines written by someone who had not written the rules: ~40 false positives across 14 ' +
+        'rules, including `unchecked-find` firing at ERROR on every Mongoose query and every ' +
+        'jQuery `.find()` (nine reproductions, zero true positives) and `floating-mutation` ' +
+        'firing on `res.send(rows)` and on `void repo.save(a)` — the fix its own message ' +
+        'prescribes. `unchecked-find` now requires a literal callback argument, and ' +
+        '`floating-mutation` requires the receiver name to look like a persistence boundary as ' +
+        'well as the method name. A follow-up scan against this repo OWN `mcp/src` (183 files ' +
+        'of TypeScript nobody wrote as a fixture) then measured the wave: it confirmed the ' +
+        '`floating-mutation` fix (20 findings to 0), caught a regression the wave introduced ' +
+        '(`unchecked-match` 0 to 13 — the new `exec` branch had not inherited the ' +
+        'optional-chaining exclusion the `match` branch had; now fixed), DELETED ' +
+        '`catch-returns-null` (25 findings on `mcp/src`, every one correct code, on top of zero ' +
+        'true positives in the audit corpus — INFO is not a tier for a rule that has never been ' +
+        'right), and moved `empty-catch` and `empty-promise-catch` from ERROR to WARNING (45 ' +
+        'findings on `mcp/src`, all 45 deliberate comment-documented fail-open; they are marked, ' +
+        'with a comment Semgrep cannot read, and ES2019 optional catch binding removed the ' +
+        'identifier a naming convention would attach to — 41 of the 42 are written `catch {`). ' +
+        'That leaves ONE rule at `high` (`index-at-length`, which finds nothing on `mcp/src`), so ' +
+        'a caller who wants this pack fixed by `create_fix_pr` must ask for `severity_min: ' +
+        '"medium"`. What the JS/TS pack still cannot do, stated ' +
+        'rather than implied: `unchecked-find` is ' +
+        'blind to a named predicate (`users.find(byId).name`); `floating-mutation` is blind to a ' +
+        'repository whose variable is not named like one, and to a captured-but-never-awaited ' +
+        'promise; `loop-lte-length` does not cover while/do-while or a cached length; ' +
+        '`unchecked-match` still collides with a non-string `.match()`; and the ' +
+        'listener/subscribe rules cannot tell a cleanup that removes nothing from one that ' +
+        'works, nor see a second uncleaned registration beside a cleaned one, nor reach any ' +
+        'lifecycle that is not `useEffect` (componentDidMount, ngOnInit, onMounted, ' +
+        'useLayoutEffect). Go is where the registry pack leaves the biggest hole among the ' +
         'languages it partially covers: p/r2c-bug-scan ' +
         'ships 5 Go rules and only 2 land in a bug class, both integer-overflow, so ' +
         'error_handling, race_condition, null_safety, memory_leak and edge_case were all empty ' +

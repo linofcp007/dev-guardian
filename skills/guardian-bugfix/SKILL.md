@@ -62,7 +62,7 @@ rules:
 Análogo para Python (`AttributeError`), Go (`nil pointer`), etc.
 
 Para JS/TS, a ferramenta `bug_hunt` já corre por default um pack próprio,
-`configs/semgrep/bugfix-js.yml` — catorze regras hand-authored, cada uma com
+`configs/semgrep/bugfix-js.yml` — treze regras hand-authored, cada uma com
 um par de fixtures (uma que tem de disparar, uma parecida que não pode) —
 cobrindo seis classes: race conditions (`floating-mutation`, uma chamada que
 muta estado sem `await` dentro de função `async` — declarações, arrow
@@ -73,6 +73,131 @@ cases (`reduce` sem valor inicial, `parseInt` sem radix). "Broken happy
 paths" fica de fora como padrão: é uma categoria de consequência, não uma
 forma sintática — `floating-mutation` cobre a sua forma concreta mais comum
 e mais nada a cobre.
+
+#### A auditoria de 1.8.1, e os tiers que dela resultaram
+
+O pack saiu na 1.6.0 e nunca tinha sido lido por ninguém além de quem o
+escreveu. Uma auditoria independente escreveu ~600 linhas de JS/TS contra o
+**texto** das regras — não contra a intenção delas — e encontrou ~40 falsos
+positivos em 14 regras. A causa não foi uma coleção de enganos separados: era
+estrutural. **Todas as fixtures tinham sido escritas por quem escreveu a
+regra**, por isso cada uma testava a intenção do autor em vez daquilo a que o
+padrão de facto se liga. Três exemplos do que isso escondia:
+
+- `$A.find(...).$PROP` liga-se a **qualquer** método chamado `find`, e `$PROP`
+  casa chamadas de método e não só leituras de propriedade. Nove reproduções,
+  **zero verdadeiros positivos**: em qualquer backend Node com Mongoose ou com
+  o driver do Mongo, e em qualquer página com jQuery, disparava em ERROR em
+  praticamente todas as queries e aconselhava `?.` — conselho errado para um
+  objeto Query, exatamente como a regra Java que aconselhava `getOrDefault`
+  numa `List`.
+- `floating-mutation` disparava em `res.send(rows)`, a linha mais comum de uma
+  app Express, e em `void repo.save(a)` — **a correção que a sua própria
+  mensagem prescreve**. 12 de 15 disparos eram falsos. Uma regra cuja correção
+  prescrita não a cala ensina as pessoas a ignorá-la.
+- `loop-lte-length` dizia a um ciclo que nunca indexa nada que "a última
+  iteração lê `$A[$A.length]`". A mensagem era uma afirmação sobre código que
+  não existia.
+
+O que mudou nas três: a `unchecked-find` exige agora que o argumento seja um
+**callback literal**, que é a única coisa que separa `Array#find` de uma Query
+Mongoose (objeto), de um seletor jQuery (string) ou do `find(fn, ctx,
+notSetValue)` do Immutable (três argumentos), sem inferência de tipos; a
+`floating-mutation` exige que **o nome do recetor** também pareça uma fronteira
+de persistência, e exclui `void`, `Promise.all`, continuação com
+`.catch`/`.then`/`.finally` e capturar-para-esperar-depois; e a
+`loop-lte-length` casa agora a **leitura** fora de alcance em vez do cabeçalho
+do ciclo, o que torna a mensagem verdadeira por construção e ainda apanha o
+corpo sem chavetas, que era invisível.
+
+#### O self-scan, e as duas coisas que ele decidiu e o corpus não podia
+
+Depois da auditoria, o pack foi corrido contra o **próprio `mcp/src` deste
+repositório** — 183 ficheiros de TypeScript real que ninguém escreveu como
+fixture, escolhidos nem por quem escreveu as regras nem pelo auditor. É uma
+verificação barata, não precisa de fixture nenhuma, e apanhou duas coisas que
+36 ablações em dois eixos não apanharam — porque "a cláusula está viva" e "não
+reduz verdadeiros positivos" são **ambas verdadeiras** para uma cláusula que só
+acrescenta falsos positivos:
+
+- a `floating-mutation` passou de **20 findings a 0**. A correção a funcionar
+  exatamente como pretendido, em código que nenhum de nós escolheu;
+- a `unchecked-match` passou de **0 a 13** — uma regressão introduzida pela
+  própria ronda de auditoria: o ramo `exec` novo não herdou a exclusão de
+  optional chaining que o ramo `match` já tinha. Comprou um verdadeiro positivo
+  e abriu duas formas de falso positivo; os 13 eram todos `exec(...)?.[1]`,
+  código correto. Corrigido, com os near-misses em
+  `misses/unchecked-match.ts`.
+
+E decidiu duas coisas que o raciocínio sozinho não tinha decidido:
+
+**A `catch-returns-null` foi apagada.** 25 findings em `mcp/src`, todos código
+correto — o helper de `JSON.parse` seguro, um `readdirSync` com fallback `[]`,
+um `getJson` com fallback `[]` — somados aos cinco do corpus da auditoria e a
+zero verdadeiros positivos em qualquer dos dois. `INFO` não é um tier para uma
+regra que nunca teve razão: é uma maneira mais silenciosa de continuar errada,
+e continua a custar a quem lê o output. Devolver um valor vazio de um catch é
+um idioma documentado de JavaScript, não uma forma de defeito, e não existe
+discriminador sintático entre o idioma e um erro perdido.
+
+**A `empty-catch` e a `empty-promise-catch` passaram de `ERROR` a `WARNING`.**
+Produzem **45 findings em `mcp/src` e os 45 são fail-open deliberado e
+documentado por comentário** — `catch { }` com um comentário a dizer que o
+processo já morreu, que o handle já estava fechado, que a limpeza é best-effort.
+Estavam em ERROR com o argumento de que um erro engolido **sem marcação** é um
+bug seja qual for a intenção. O self-scan refuta a **premissa**, não a
+conclusão: estão marcados. Estão marcados com um **comentário**, que o Semgrep
+não lê. Uma declaração de intenção que a regra não consegue reconhecer é
+exatamente o critério.
+
+É o mesmo raciocínio que mantém a `empty-catch` **do Java** em `ERROR`, e não
+uma contradição dele: a regra Java passa o critério porque **consegue** ler o
+marcador de intenção do seu ecossistema — a convenção Checkstyle/IntelliJ de
+chamar ao binding `ignore`/`ignored`/`expected`. JS/TS não tem equivalente com
+o mesmo peso, e a razão é estrutural e não cultural: **o optional catch binding
+do ES2019 tirou o identificador a que uma convenção de nomes se agarraria.** 41
+dos 42 estão escritos `catch {`, sem nada para nomear. O ecossistema marca a
+intenção com um comentário (ilegível aqui) ou com o `allowEmptyCatch` do
+`no-empty` do ESLint, que é configuração de projeto e não um marcador no
+código. O mais próximo que **é** legível por máquina passou a ser honrado na
+mesma — um binding chamado `_`/`_e`/`_err` (o `caughtErrorsIgnorePattern` do
+ESLint e a convenção do underscore do TypeScript) ou uma das três palavras do
+Checkstyle — para que dar um caso por deliberado não obrigue a `// nosemgrep`.
+Medido e dito em vez de insinuado: **removeu zero dos 42.**
+
+**Uma regra está em `ERROR`: a `index-at-length`. Onze estão em `WARNING`, uma
+em `INFO`.** O critério é o mesmo do pack Java, aplicado a frio:
+
+> **Aquilo que a regra emite é sempre um bug?**
+
+Passa uma: a `index-at-length`, porque uma **leitura** em `a[a.length]` é
+incondicionalmente `undefined` — um facto sobre a AST e não uma guarda — e
+porque produz **zero** findings em `mcp/src`, que é o número certo para uma
+regra tão estreita.
+
+Isto tem consequências a jusante, e são as mesmas do pack Java: o parser mapeia
+ERROR → `high`, WARNING → `medium`, INFO → `info`, e o `create_fix_pr` assume
+`severity_min: high`. Com uma regra em ERROR, o pack JS/TS quase não contribui
+para o conjunto de fix-PR **por omissão** — e é esse o objetivo: uma corrida
+por omissão não pode abrir um PR a reescrever 45 handlers de fail-open
+deliberado. Quem quer estes bugs corrigidos pede `severity_min: "medium"`. O
+`bug_hunt` em si não filtra nada, por isso nada desaparece de um scan.
+
+Limitações medidas e **aceites**, nesta ronda, cada uma reproduzida contra o
+corpus da auditoria:
+
+| # | Dir | Regra | Código em que erra | Porque fica |
+| --- | --- | --- | --- | --- |
+| 1 | FP | `empty-catch`, `empty-promise-catch` | Fail-open deliberado marcado por **comentário**: `catch { }` com "// já morreu", "// best effort". **45 em 45** no `mcp/src` deste repositório | O Semgrep não lê comentários, e o optional catch binding do ES2019 tirou o identificador a que uma convenção de nomes se agarraria. É a razão declarada de ambas terem descido a `WARNING`; a saída `_`/`ignored` existe mas removeu zero dos 42. |
+| 2 | **FN** | `unchecked-find` | Predicado **nomeado**: `users.find(byId).name` | Um argumento que é só um identificador é exatamente o que uma variável de query Mongoose também é. Aceitar identificadores reabre as nove reproduções. |
+| 3 | **FN** | `floating-mutation` | Repositório cuja variável não tem nome de repositório; `const p = repo.save(a)` nunca esperado | O preço de não acusar todas as rotas Express do mundo, e de tratar capturar a promise como ato deliberado. |
+| 4 | **FN** | `loop-lte-length` | `while` / `do-while`, `i < a.length + 1`, comprimento em cache (`const n = a.length`), acesso por método (`s.charAt(i)`) | Formas diferentes de AST; a de cache exige dataflow. A forma em cache é a que se escreve em hot paths, e é a lacuna mais cara desta lista. |
+| 5 | FP | `unchecked-match` | Colisão de nome: `matcher.match(url)[0]` num objeto que devolve `string[]` | O único discriminador seria exigir um literal regex como argumento, e isso cala também `s.match(re)[1]` e a fixture que constrói o padrão a partir de config. Medido: custa mais verdadeiros positivos do que remove falsos. |
+| 6 | FP | `unchecked-match`, `unchecked-find`, `reduce-without-initial` | Guarda a montante: `if (!re.test(s)) return '';`, `if (users.some(p))`, `if (xs.length === 0) return 0;` | É dataflow. É a razão declarada de estas três estarem em `WARNING`. |
+| 7 | **FN** | `listener-without-cleanup`, `subscribe-without-unsubscribe` | Cleanup que **não remove nada** (`return () => {};`); e um segundo registo por limpar ao lado de um limpo no mesmo efeito | O `pattern-not-inside` não se consegue tornar relativo à **ocorrência** que está a julgar, só ao nó que a contém. A ordem exigida fecha a supressão por ramo, mas não esta. |
+| 8 | **FN** | `listener-without-cleanup`, `subscribe-without-unsubscribe` | Ciclos de vida que não são `useEffect`: `componentDidMount`, `ngOnInit`, `onMounted`, `onMount`, `useLayoutEffect`; e `emitter.on(...)` | Sem a âncora do `useEffect` as duas regras disparariam em **todos** os registos de listener e subscrições de qualquer codebase — provado por mutação: apagar a cláusula produz 5 falsos positivos nas fixtures. |
+| 9 | FP | `empty-catch` | Catch cujo corpo é só um **comentário** a explicar o ignore deliberado | Comentários não são nós da AST. A saída é o `// nosemgrep` do próprio Semgrep. |
+| 10 | **FN** | `interval-without-clear` | Cleanup registado por callback que a regra não segue: `registry.add(() => clearInterval(t))` a uma profundidade que a elipse de bloco não alcança | Alargar a elipse alcançaria também closures sem relação e apagaria a regra. |
 
 Para Python, o `bug_hunt` corre também por default
 `configs/semgrep/bugfix-py.yml` — dez regras hand-authored, cada uma com o seu
@@ -489,9 +614,11 @@ fiável para elas continua a ser o raciocínio guiado por modelo desta própria
 skill — ficheiro a ficheiro pelas zonas críticas (secção 1) e os padrões e
 fixes da secção 4 abaixo.
 
-Mesmo em JS/TS, estas catorze regras não substituem esse raciocínio: apanham
+Mesmo em JS/TS, estas treze regras não substituem esse raciocínio: apanham
 formas sintáticas, não motivos. Usa-as como primeira passada — não como
-veredicto final.
+veredicto final. E lê a tabela de limitações aceites do pack JS/TS acima antes
+de concluir que uma classe está coberta: `while`, comprimentos em cache,
+`ngOnInit` e um cleanup que não limpa nada continuam a ser trabalho teu.
 
 #### Dynamically (correr)
 

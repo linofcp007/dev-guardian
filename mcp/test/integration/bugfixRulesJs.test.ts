@@ -85,7 +85,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -103,7 +103,13 @@ function semgrepAvailable(): boolean {
 }
 const AVAILABLE = semgrepAvailable();
 
-interface SemgrepResult { check_id: string; path: string }
+interface SemgrepResult {
+  check_id: string;
+  path: string;
+  /** Semgrep's own tier. `extra.severity` is optional in the schema, so it is
+   *  narrowed rather than asserted at every use. */
+  extra?: { severity?: string };
+}
 
 interface SemgrepRun {
   readonly rows: SemgrepResult[];
@@ -179,6 +185,24 @@ function fixtureFiles(dir: string): string[] {
     .sort();
 }
 
+/**
+ * Every `- id:` the rule file DECLARES, read out of the YAML text rather than
+ * out of a list maintained here. Left-hand side of the "what the file
+ * declares must equal what the fixtures exercise" invariant below — the
+ * family-wide catch for a rule that silently fails to LOAD (a `RuleParseError`
+ * branch, an unquoted `?`/`:` producing `Invalid YAML`, an uppercase accented
+ * letter tripping Semgrep's locale codec). All of those look identical to
+ * "this rule found nothing" in the JSON output; none of them says so.
+ */
+function declaredRuleIds(): string[] {
+  const declared: string[] = [];
+  for (const line of readFileSync(RULES, 'utf8').split('\n')) {
+    const id = /^\s*-\s+id:\s*(\S+)\s*$/.exec(line)?.[1];
+    if (id !== undefined) declared.push(id);
+  }
+  return declared.sort();
+}
+
 interface FileExpectation {
   /** The distinct rule id(s) this file must produce, deduplicated. */
   readonly ids: readonly string[];
@@ -200,25 +224,30 @@ interface FileExpectation {
  * fails loudly, and a stale entry for a deleted file does too.
  */
 const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
-  'catch-returns-null.ts': {
-    ids: ['bugfix-js-error-handling-catch-returns-null'],
-    count: 3, // findUser, findUserOrUndefined, findAllUsers
-  },
   'empty-promise-catch.ts': {
     ids: ['bugfix-js-error-handling-empty-promise-catch'],
     count: 3, // fireAndIgnore, fireAndIgnoreNamed, fireAndIgnoreArrowWithParam
   },
-  'error-handling.ts': { ids: ['bugfix-js-error-handling-empty-catch'], count: 1 },
+  'error-handling.ts': {
+    ids: ['bugfix-js-error-handling-empty-catch'],
+    count: 4, // bound, optional-binding, +finally, optional-binding +finally
+  },
   'index-at-length.ts': { ids: ['bugfix-js-off-by-one-index-at-length'], count: 1 },
   'interval-without-clear.ts': {
     ids: ['bugfix-js-memory-leak-interval-without-clear'],
-    count: 2, // startPolling, startsPollingWithoutClearing (unrelatedCleanup does not fire)
+    // startPolling, startsPollingWithoutClearing, startsUnclearablePolling
+    // (no handle), startsPollingLet, RefPoller, Leaky.start.
+    // unrelatedCleanup does not fire.
+    count: 6,
   },
   'listener-without-cleanup.ts': {
     ids: ['bugfix-js-memory-leak-listener-without-cleanup'],
-    count: 1,
+    count: 4, // two-arg, options object, boolean capture, early-return branch
   },
-  'off-by-one.ts': { ids: ['bugfix-js-off-by-one-loop-lte-length'], count: 1 },
+  'off-by-one.ts': {
+    ids: ['bugfix-js-off-by-one-loop-lte-length'],
+    count: 2, // block body and braceless body
+  },
   'parseint-without-radix.ts': { ids: ['bugfix-js-edge-case-parseint-without-radix'], count: 1 },
   'race-condition.ts': {
     ids: ['bugfix-js-race-condition-floating-mutation'],
@@ -227,14 +256,86 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'reduce-without-initial.ts': { ids: ['bugfix-js-edge-case-reduce-without-initial'], count: 1 },
   'subscribe-without-unsubscribe.ts': {
     ids: ['bugfix-js-memory-leak-subscribe-without-unsubscribe'],
-    count: 1,
+    count: 2, // Watcher, BranchWatcher (cleanup returned from the other branch)
   },
-  'unchecked-env.ts': { ids: ['bugfix-js-null-safety-unchecked-env'], count: 1 },
-  'unchecked-find.ts': { ids: ['bugfix-js-null-safety-unchecked-find'], count: 1 },
+  'unchecked-env.ts': {
+    ids: ['bugfix-js-null-safety-unchecked-env'],
+    count: 3, // dot + method, bracket + method, dot + property
+  },
+  'unchecked-find.ts': {
+    ids: ['bugfix-js-null-safety-unchecked-find'],
+    count: 4, // expression body, block body, three-parameter predicate, findLast
+  },
   'unchecked-match.ts': {
     ids: ['bugfix-js-null-safety-unchecked-match'],
-    count: 2, // firstGroup, firstGroupFromConfig — see the module comment
+    count: 3, // firstGroup, firstGroupFromConfig (see the module comment), exec
   },
+};
+
+/**
+ * The severity tier each rule is DESIGNED to carry. Nothing pinned this
+ * before: `extra.severity` was not read anywhere in the suite, so changing
+ * ANY rule's tier — including promoting one to ERROR — was a mutation the
+ * whole pack passed green.
+ *
+ * The criterion is a question about the OUTPUT, not the pattern: **is what
+ * the rule EMITS always a bug?** Not "is the shape it looks for usually
+ * wrong". A rule whose correctness depends on having recognised a guard —
+ * or a DECLARATION OF INTENT — emits a false positive every time it meets
+ * one it cannot read, and no exclusion list closes that.
+ *
+ * Applied cold, and then re-applied against 183 files of this repo's own
+ * `mcp/src` (real TypeScript nobody wrote as a fixture), exactly ONE of
+ * thirteen clears the bar:
+ *
+ *  - `index-at-length`, at ERROR: a READ at `a[a.length]` is
+ *    unconditionally `undefined`. That is a fact about the AST, and the one
+ *    shape that isn't (the append `a[a.length] = x`) is excluded
+ *    structurally. It produces ZERO findings on `mcp/src`, which is the
+ *    right number for a rule this narrow.
+ *
+ * `empty-catch` and `empty-promise-catch` were at ERROR on the reasoning
+ * that an unmarked silent swallow is a bug whatever the author meant. The
+ * self-scan refuted the premise rather than the conclusion: they produce
+ * **45 findings on `mcp/src` and all 45 are deliberate, comment-documented
+ * fail-open** — an empty `catch` holding only the words "ESRCH: already
+ * dead", or "already closed, or never fully opened". They ARE marked, with
+ * a comment, which Semgrep cannot read. That is a declaration of intent the rule
+ * cannot recognise, which is the criterion, so both are WARNING. This is
+ * the same reasoning that keeps the JAVA empty-catch at ERROR, not a
+ * contradiction of it: that rule can read its ecosystem's intent marker
+ * (the Checkstyle `ignore`/`ignored`/`expected` binding name) and this one
+ * cannot, because ES2019 optional catch binding removed the identifier a
+ * naming convention would attach to — 41 of those 42 are written `catch {`.
+ *
+ * `parseint-without-radix` sits at INFO; everything else at WARNING.
+ *
+ * Note what moved and why it matters downstream: the Semgrep parser maps
+ * ERROR → `high`, WARNING → `medium`, INFO → `info`
+ * (`src/runners/scannerParsers/semgrep.ts`), and `create_fix_pr` defaults
+ * `severity_min` to `high`. With one rule at ERROR the pack contributes
+ * almost nothing to the DEFAULT fix-PR set — which is the point: a default
+ * run must not open a PR rewriting 45 deliberate fail-open handlers.
+ * `bug_hunt` itself defaults to no filter, so nothing disappears from a
+ * scan.
+ *
+ * Asserted exhaustively in BOTH directions: every id here must be seen at
+ * exactly this tier, and every id seen must appear here.
+ */
+const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
+  'bugfix-js-off-by-one-index-at-length': 'ERROR',
+  'bugfix-js-edge-case-parseint-without-radix': 'INFO',
+  'bugfix-js-error-handling-empty-catch': 'WARNING',
+  'bugfix-js-error-handling-empty-promise-catch': 'WARNING',
+  'bugfix-js-off-by-one-loop-lte-length': 'WARNING',
+  'bugfix-js-race-condition-floating-mutation': 'WARNING',
+  'bugfix-js-edge-case-reduce-without-initial': 'WARNING',
+  'bugfix-js-null-safety-unchecked-find': 'WARNING',
+  'bugfix-js-null-safety-unchecked-match': 'WARNING',
+  'bugfix-js-null-safety-unchecked-env': 'WARNING',
+  'bugfix-js-memory-leak-listener-without-cleanup': 'WARNING',
+  'bugfix-js-memory-leak-interval-without-clear': 'WARNING',
+  'bugfix-js-memory-leak-subscribe-without-unsubscribe': 'WARNING',
 };
 
 describe('bugfix-js rules', () => {
@@ -276,8 +377,30 @@ describe('bugfix-js rules', () => {
         expect(ids(fileRows)).toEqual(expected.ids);
         expect(fileRows.length).toBe(expected.count);
       }
+      // The TOTAL, on top of the per-file counts, and not redundant: the
+      // loop above only visits files that HAVE an expectation, so a finding
+      // landing in a file nobody registered — or attributed to no file at
+      // all — moves no per-file number.
+      expect(rows.length).toBe(
+        Object.values(EXPECTED_HITS_BY_FILE).reduce((n, e) => n + e.count, 0),
+      );
     },
   );
+
+  /**
+   * The family-wide catch for a rule that fails to LOAD rather than to
+   * match. Compares the ids the fixtures exercise against the `- id:`
+   * entries parsed out of the YAML itself, rather than against a list
+   * maintained by hand beside it — so a rule added without a fixture, or a
+   * rule that silently stops loading, both fail here. (`semgrep --validate`
+   * and the locale-codec byte check run over every pack in
+   * `semgrepPacks.test.ts`; what they cannot do is the fixture-to-rule
+   * mapping, which is why this lives here.)
+   */
+  it.skipIf(!AVAILABLE)('every rule the YAML declares is exercised by a hit fixture', () => {
+    const { rows } = run(resolve(FIXTURES, 'hits'));
+    expect(ids(rows)).toEqual(declaredRuleIds());
+  });
 
   it.skipIf(!AVAILABLE)('fires NOTHING in EACH near-miss fixture file', () => {
     // Equivalent to the old directory-wide "toEqual([])" — a union of sets
@@ -298,6 +421,23 @@ describe('bugfix-js rules', () => {
       expect(grouped[file] ?? []).toEqual([]);
     }
   });
+
+  it.skipIf(!AVAILABLE)('reports each rule at its DESIGNED severity tier', () => {
+    const { rows } = run(resolve(FIXTURES, 'hits'));
+    const seen = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const id = row.check_id.split('.').pop() ?? row.check_id;
+      const severity = row.extra?.severity;
+      if (severity === undefined) throw new Error(`no severity on ${id}`);
+      const set = seen.get(id);
+      if (set) set.add(severity);
+      else seen.set(id, new Set([severity]));
+    }
+    for (const [id, tier] of Object.entries(EXPECTED_SEVERITY)) {
+      expect([id, [...(seen.get(id) ?? [])]]).toEqual([id, [tier]]);
+    }
+    expect([...seen.keys()].sort()).toEqual(Object.keys(EXPECTED_SEVERITY).sort());
+  });
 });
 
 /**
@@ -310,7 +450,6 @@ describe('bugfix-js rules', () => {
 const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-js-error-handling-empty-catch': 'error_handling',
   'bugfix-js-error-handling-empty-promise-catch': 'error_handling',
-  'bugfix-js-error-handling-catch-returns-null': 'error_handling',
   'bugfix-js-off-by-one-loop-lte-length': 'off_by_one',
   'bugfix-js-off-by-one-index-at-length': 'off_by_one',
   'bugfix-js-null-safety-unchecked-find': 'null_safety',
@@ -325,7 +464,7 @@ const EXPECTED_CLASS: Readonly<Record<string, string>> = {
 };
 
 describe('every rule id classifies as its own class', () => {
-  it('maps all fourteen', () => {
+  it('maps all thirteen', () => {
     for (const [id, cls] of Object.entries(EXPECTED_CLASS)) {
       expect(mapSubcategory(id, undefined)).toBe(cls);
     }
