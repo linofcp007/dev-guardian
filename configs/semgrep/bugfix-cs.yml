@@ -95,19 +95,51 @@
 #                  já libertado classifica como memory_leak, em silencio.
 #
 # ---------------------------------------------------------------------------
-# OS TIERS. Este pack tem a melhor proporção da série — 2 em 11 em ERROR —, e
-# isso nao é generosidade. O critério do §4 do design é uma pergunta sobre o
-# OUTPUT: "aquilo que a regra EMITE é sempre um bug?". Uma regra cuja correção
-# depende de ter reconhecido uma GUARDA falha sempre que encontra uma guarda
-# que ninguém enumerou, e a guarda pode estar a um método de distância.
+# OS TIERS. UMA regra em doze fica em ERROR, e isso nao é severidade a menos.
+# O critério do §4 do design é uma pergunta sobre o OUTPUT: "aquilo que a
+# regra EMITE é sempre um bug?". Uma regra cuja correção depende de ter
+# reconhecido uma GUARDA falha sempre que encontra uma guarda que ninguém
+# enumerou, e a guarda pode estar a um método de distância.
 #
-# As duas regras deste ficheiro que passam nessa barra sao as duas de
-# error_handling, por razões diferentes. A `empty-catch` passa como no pack de
-# Java: a sua válvula de escape nao é uma guarda, é uma DECLARACAO DE INTENCAO
-# escrita no nome da variável, que a própria regra le. A
-# `rethrow-loses-stacktrace` passa por uma razao que nenhuma outra regra da
-# série teve: a forma CORRETA do código que ela assinala (`throw;`) é um NO DE
-# AST DIFERENTE. Nao há guarda para reconhecer porque nao há nada a guardar.
+# A regra que passa nessa barra é a `rethrow-loses-stacktrace`, por uma razao
+# que nenhuma outra regra da série teve: a forma CORRETA do código que ela
+# assinala (`throw;`) é um NO DE AST DIFERENTE. Nao há guarda para reconhecer
+# porque nao há nada a guardar.
+#
+# A `empty-catch` esteve em ERROR ao lado dela, portada do pack de Java com o
+# mesmo argumento: a válvula de escape nao seria uma guarda mas uma DECLARACAO
+# DE INTENCAO escrita no nome da variável, que a própria regra le. Medida
+# contra código externo, a premissa cai, e cai em C# de forma mais completa do
+# que em qualquer outra linguagem da série. Corpus: `dotnet/runtime`, ramo
+# principal do dia, `src/libraries/*/src/**`, 11 800 ficheiros varridos,
+# nenhum deles escrito ou escolhido por quem escreveu estas regras.
+#
+#   402 findings em 233 ficheiros.
+#   374 deles — 93 % — estao escritos `catch (Tipo) { }` ou `catch { }`: NAO
+#     TEM IDENTIFICADOR NENHUM a que uma convenção de nomes se possa agarrar.
+#     É o mesmo buraco estrutural que o optional catch binding do ES2019 abriu
+#     em JS/TS, só que aqui as duas grafias sem nome sempre existiram.
+#   28 ligam um nome, e NENHUM deles é `ignore`, `ignored` ou `expected`
+#     (os mais frequentes sao `ex` com 15 e `e` com 5).
+#   Uma sonda com a regex invertida confirma-o pelo outro lado: `ignore` /
+#     `ignored` / `expected` aparecem em ZERO catches vazios nos 11 800
+#     ficheiros. A convenção nao tem adesão nenhuma em C#; é a de Java.
+#   140 dos 402 trazem um COMENTARIO explicativo dentro do catch vazio — um
+#     bloco só com comentário é vazio para a AST —, e mais 46 trazem-no na
+#     linha imediatamente antes do `try`. Amostra de cerca de 45 lidos um a
+#     um: a esmagadora maioria é deliberada.
+#
+# E HA UM ORACULO INDEPENDENTE, como para a `rethrow-loses-stacktrace`: o
+# compilador. `catch (FormatException ignored) { }` — a grafia que a mensagem
+# desta regra prescreve — emite **CS0168, "The variable 'ignored' is declared
+# but never used"**. `catch (FormatException) { }` e `catch { }` compilam sem
+# um aviso. A saída de emergencia da regra é exatamente a grafia que o
+# compilador de C# desaconselha, o que explica os 0 em 11 800 sem recorrer a
+# gosto ou a cultura. Medido com `dotnet build` em `mcr.microsoft.com/dotnet/
+# sdk:8.0`.
+#
+# A exclusão por nome fica onde está — é a única forma de silenciar um caso em
+# código em vez de com `// nosemgrep` —, mas nao sustenta um tier.
 #
 # CONSEQUENCIA: o parser do Semgrep mapeia ERROR -> `high` e WARNING ->
 # `medium`, e o `create_fix_pr` tem `severity_min` a `high` por omissao. Quem
@@ -190,6 +222,12 @@ rules:
   # declarar a intenção, e um `catch { }` nu ainda menos — quem quer a isenção
   # escreve o nome.
   #
+  # E É POR ISSO QUE ESTA REGRA ESTA EM WARNING e nao em ERROR: em
+  # `dotnet/runtime`, 374 dos 402 findings estao escritos numa dessas duas
+  # grafias sem nome, e a grafia com nome que a regra premeia emite CS0168 no
+  # compilador. Quem escreve C# idiomático nao tem como usar a isenção. O
+  # bloco OS TIERS, no cabeçalho, tem os números e o oráculo.
+  #
   - id: bugfix-cs-error-handling-empty-catch
     pattern-either:
       - patterns:
@@ -207,8 +245,9 @@ rules:
       Catch vazio. A exceção foi apanhada e deitada fora sem log, sem rethrow e
       sem tratamento, por isso a falha desaparece e o código segue como se nada
       fosse. Registe no logger, trate, ou relance com `throw;`. Se o silencio
-      for mesmo deliberado, declare-o no nome: `catch (FormatException ignored)`.
-    severity: ERROR
+      for mesmo deliberado, declare-o no nome: `catch (FormatException ignored)`
+      — note que o compilador emite CS0168 para um binding por usar.
+    severity: WARNING
     languages: [csharp]
 
   # ---------------------------------------------------------------------------

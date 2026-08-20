@@ -8,6 +8,70 @@ version bump.
 
 ## [Unreleased]
 
+### Changed — `error-handling-empty-catch` drops to WARNING in Java and C#, measured
+
+`bugfix-java.yml` and `bugfix-cs.yml` shipped this rule at `ERROR` on one
+premise: **an empty catch that does not declare intent is a bug whatever the
+author meant**, because the rule *reads* the intent — the Checkstyle / IntelliJ
+`ignore` / `ignored` / `expected` binding name — so what it emits afterwards is
+unmarked. Neither pack had ever tested that premise, because the ablation
+harness reports its real-code axis as `N/A` for both: this repository contains
+no Java and no C#. Three other languages had tested it and all three refuted it
+(JS/TS 42 of 42 deliberate, PHP 10 of 10, Ruby's convention at 2.7 %), and the
+PHP design recorded the gap as open rather than closing it.
+
+Both are now measured against external corpora, and **both premises fail**.
+
+**Java — OpenJDK (`openjdk/jdk` @ `e296cefb`, `src/*/share/classes`, 12 593
+files scanned): 1589 findings in 770 files.** 903 of them — **56.8 %** — carry
+an explanatory comment *inside* the empty catch, which is why they fire at all:
+a comment-only block is empty to the AST. In the corpus's own words: `// ignore`,
+`// Expected or ignored`, `// swallow, since it should never happen`, `// no op`,
+`// Ignoring exception causes specified default to be returned`. Another 27
+declare intent in a name the rule does not carry — `cannotHappen` ×13, **`_`
+×10** (Java 21's *unnamed variable*, which means precisely "unused binding", the
+same erosion ES2019 caused in JS/TS arriving from the other direction), `unused`
+×2. An inverted-regex probe puts the recognised spelling at **139**, so the
+convention the whole tier rested on covers **8.0 %** (139 of 1728) of the
+corpus's empty catches. 45 findings were read one by one; about 39 were
+deliberate — the Swing `PropertyVetoException` idiom, `close()` in a `finally`,
+parse and reflection probes, try-the-next-provider loops. **Java's pack is now
+0 of 8 at ERROR.**
+
+**C# — `dotnet/runtime` (@ `6ecee4dd`, `src/libraries/*/src/**`, 11 800 files
+scanned): 402 findings in 233 files**, and here the refutation is structural
+rather than statistical. **374 of them — 93 % — are written `catch (Type) { }`
+or `catch { }`: spellings with no identifier for a naming convention to attach
+to.** Only 28 bind a name and not one uses the exempt vocabulary (`ex` ×15, `e`
+×5). The inverted-regex probe finds `ignore` / `ignored` / `expected` **zero
+times in 11 800 files**.
+
+**The compiler is the oracle again, and this time it refutes a design
+decision.** `dotnet build` on `mcr.microsoft.com/dotnet/sdk:8.0` emits **CS0168,
+"The variable 'ignored' is declared but never used"** for
+`catch (FormatException ignored) { }` — the exact spelling this rule's own
+message prescribes — while `catch (FormatException) { }` and `catch { }` compile
+clean. The escape hatch is the one spelling C# warns you off, which explains the
+zero without appealing to taste. `CA2200` and `CA2002` confirmed this pack's
+fixtures; `CS0168` contradicts its severity, and that is worth exactly as much.
+**C#'s pack is now 1 of 12 at ERROR** — `rethrow-loses-stacktrace`, whose
+correct form really is a different AST node.
+
+**What this changes downstream.** The Semgrep parser maps `ERROR → high` and
+`WARNING → medium`, and `create_fix_pr` defaults `severity_min` to `high`. The
+**Java pack now contributes nothing at all to a default fix-PR run** and C#
+contributes one rule; ask for `severity_min: "medium"`. `bug_hunt` does not
+filter by default, so **nothing disappears from a scan** — only the fix PR is
+affected. Patterns and recall are untouched: only the tier moved, and
+`EXPECTED_SEVERITY` in both integration tests pins every rule exhaustively in
+both directions, so the flips failed the tests before the YAML was edited.
+
+The naming exemption stays in both rules. It is still the only way to silence
+one case in code rather than with `// nosemgrep`; it simply is not evidence that
+the rule is precise, and it no longer carries a tier. It was **not** widened to
+`_`, `cannotHappen` or `unused` — every word added is another way for a real
+swallow to escape by being well named.
+
 ### Added — a C# bug-finding rule pack, in the language where the registry is at zero
 
 `configs/semgrep/bugfix-cs.yml`: **twelve** hand-authored rules across all six
@@ -23,12 +87,13 @@ are asserted to have *fired*, and for `p/r2c-bug-scan` that control is a
 **Python** file inside a C# fixture tree: there is no C# rule for a C# control
 to trip.
 
-**Two of the twelve sit at `ERROR`, the best ratio in the series**, and the
-reason is structural rather than generous. C# contains one defect —
-`throw ex;` inside a `catch` — whose *correct* form, `throw;`, is a **different
-AST node**. There is no guard to recognise because there is nothing to guard,
-which is the only way to clear the severity criterion in an engine without
-dataflow.
+**One of the twelve sits at `ERROR`**, and the reason is structural rather than
+generous. C# contains one defect — `throw ex;` inside a `catch` — whose
+*correct* form, `throw;`, is a **different AST node**. There is no guard to
+recognise because there is nothing to guard, which is the only way to clear the
+severity criterion in an engine without dataflow. (`empty-catch` shipped at
+`ERROR` beside it in the first cut of this pack and was demoted in the same
+release once it was measured — see the entry above.)
 
 **A compiler as an independent oracle, which no round in this series has had
 before.** `dotnet build` emits `CA2200` for `throw ex;` inside a catch, and it

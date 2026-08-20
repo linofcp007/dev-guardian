@@ -295,13 +295,31 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
  * enumerated, and no exclusion list closes that, because the guard can always
  * be one method away.
  *
- * Both of Task 1's rules clear that bar, which is unusual and worth saying
- * why. `empty-catch` clears it the way the Java rule does: its escape hatch is
- * not a guard but a DECLARATION OF INTENT the rule itself reads. And
- * `rethrow-loses-stacktrace` clears it for a reason no other rule in the
- * series has — the CORRECT form of the code it flags (`throw;`) is a
- * DIFFERENT AST NODE, so there is no guard to recognise, because there is
+ * ONE rule clears that bar: `rethrow-loses-stacktrace`, for a reason no other
+ * rule in the series has — the CORRECT form of the code it flags (`throw;`) is
+ * a DIFFERENT AST NODE, so there is no guard to recognise, because there is
  * nothing to guard.
+ *
+ * `empty-catch` used to clear it too, the way the Java rule did: its escape
+ * hatch is not a guard but a DECLARATION OF INTENT the rule itself reads. It
+ * was ported from Java with that argument and never measured, because axis 3
+ * of the ablation harness was `N/A` for both packs. Measured now, on
+ * `dotnet/runtime` (`src/libraries/<lib>/src/**`, 11 800 files scanned, code
+ * nobody here wrote or picked), the argument fails on C#'s own syntax: 402
+ * findings in 233 files, of which **374 (93%) are written `catch (Type) { }`
+ * or `catch { }`** — spellings with no identifier for a naming convention to
+ * attach to, the same structural hole ES2019 optional catch binding opened in
+ * JS/TS. Only 28 bind a name at all, and none of them uses `ignore`,
+ * `ignored` or `expected` (`ex` ×15, `e` ×5). An inverted-regex probe finds
+ * the exempt spelling **0 times in 11 800 files**.
+ *
+ * The compiler says why, and it is the same independent oracle that found the
+ * `finally` hole in this pack: `catch (FormatException ignored) { }` — the
+ * exact spelling this rule's own message prescribes — emits **CS0168, "The
+ * variable 'ignored' is declared but never used"**, while `catch
+ * (FormatException) { }` and `catch { }` compile clean. The escape hatch is a
+ * spelling C# warns on, which is why nobody in .NET writes it. 140 of the 402
+ * carry an explanatory comment inside the (AST-empty) catch instead.
  *
  * Pinned here because nothing else pins it. The tier is not cosmetic: the
  * Semgrep parser maps ERROR -> `high` and WARNING -> `medium`
@@ -310,7 +328,15 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
  * the default fix-PR set at all.
  */
 const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
-  'bugfix-cs-error-handling-empty-catch': 'ERROR',
+  // `empty-catch` moved ERROR -> WARNING when it was finally measured against
+  // an external corpus. On `dotnet/runtime` (11 800 files) it produces 402
+  // findings, and 374 of them — 93% — are written `catch (Type) { }` or
+  // `catch { }`, spellings with NO identifier for the ignore/ignored/expected
+  // exemption to attach to. The inverted-regex probe finds the exempt spelling
+  // ZERO times in the whole corpus, and `dotnet build` explains why: the
+  // prescribed `catch (FormatException ignored) { }` emits CS0168 for an
+  // unused binding, while both nameless spellings compile clean.
+  'bugfix-cs-error-handling-empty-catch': 'WARNING',
   'bugfix-cs-error-handling-rethrow-loses-stacktrace': 'ERROR',
   // The four race_condition rules are all WARNING, and every one fails the
   // ERROR test for the same reason: what they emit is correct code whenever a

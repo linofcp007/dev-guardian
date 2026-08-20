@@ -59,23 +59,145 @@ For `rethrow-loses-stacktrace` the compiler is more than a gate — it is an
 **independent oracle**. `dotnet build` emits `CA2200` at exactly the 8 sites the
 rule fires on and nowhere else. The hit/miss split was not graded by its author.
 
-## 4. Two severity tiers, and C# has the best ratio in the series
+## 4. Two severity tiers, and one rule of twelve clears the bar
 
 Unchanged: **`ERROR`** where what the rule *emits* is always a bug;
 **`WARNING`** where it is usually a bug but has legitimate uses. The deciding
 question is what the rule emits, not what class of defect it targets.
 
-**2 ERROR of 12.** For scale: Java 1 of 8, JS/TS 1 of 13, Python + Go 2 of 19.
+**1 ERROR of 12.** For scale: Java 0 of 8, JS/TS 1 of 13, Python + Go 2 of 19,
+PHP 0 of 6.
 
 (An earlier draft of this document said eleven and then enumerated twelve in
 this very section. The arithmetic was mine; the pack has twelve `- id:` entries
 and no rule is missing.)
 
-That is not generosity. C# contains one defect — `throw ex;` inside a `catch` —
-whose *correct* form (`throw;`) is a **different AST node**. That is the only
-shape that clears §4 in an engine without dataflow: there is no guard to
-recognise, because there is nothing to guard. Everywhere else, correctness
-depends on a guard the rule cannot see, and the tier follows.
+C# contains one defect — `throw ex;` inside a `catch` — whose *correct* form
+(`throw;`) is a **different AST node**. That is the only shape in this pack
+that clears §4 in an engine without dataflow: there is no guard to recognise,
+because there is nothing to guard. Everywhere else, correctness depends on a
+guard the rule cannot see, and the tier follows.
+
+`empty-catch` shipped at `ERROR` beside it, ported from Java with Java's
+argument. §4a is the round that measured that argument.
+
+## 4a. The `empty-catch` premise, measured against `dotnet/runtime`
+
+The premise, stated the way Java's design states it: *an empty catch that does
+not declare intent is a bug whatever the author meant*, because the rule reads
+the intent — the Checkstyle / IntelliJ `ignore` / `ignored` / `expected`
+binding name — and what it emits afterwards is *unmarked*. It shipped
+unmeasured, because axis 3 of the ablation harness is `N/A` for this pack:
+there is no C# in this repository to scan.
+
+**Corpus.** `github.com/dotnet/runtime` at `6ecee4dd`, shallow sparse clone of
+`src/libraries/*/src/**` — 11 802 `.cs` files of product source (no tests),
+written and picked by nobody here. Semgrep 1.164.0 scanned **11 800**;
+`paths.scanned > 0` was asserted before any count was read.
+
+**Raw count: 402 findings in 233 files.**
+
+**The spelling is the whole answer, and it is decisive.**
+
+| spelling | count | share | has a name to declare intent in? |
+| --- | ---: | ---: | --- |
+| `catch (Type) { }` — no identifier | 219 | 54.5 % | **no** |
+| `catch { }` — bare | 153 | 38.1 % | **no** |
+| `catch (Type v) { }` | 28 | 7.0 % | yes |
+
+**374 of 402 — 93 % — are written in a spelling with nothing to name.** This is
+the structural hole ES2019 optional catch binding opened in JS/TS, except that
+in C# both nameless spellings have existed since 1.0 and are the idiomatic
+ones. Of the 28 that do bind a name, **not one** uses the exempt vocabulary:
+`ex` ×15, `e` ×5, `exception` ×2, then singletons (`tie`, `jse`, `qex`, `hex`,
+`se`, `exc`).
+
+**The inverted-regex probe closes it from the other side: `ignore` / `ignored`
+/ `expected` appear in ZERO empty catches across 11 800 files.** Java's
+equivalent probe found 139. The convention is not weakly adopted in C#; it is
+not adopted at all.
+
+A zero is exactly the shape this repo has five recorded ways of producing by
+accident, so **the probe carries a positive control**: run against a
+three-method file holding `catch (FormatException ignored) { }`,
+`catch (FormatException expected) { }` and `catch (FormatException e) { }`, it
+reports `paths.scanned: 1` and fires on the first two and not the third. The
+zero is a measurement, not a silent failure.
+
+**And the compiler says why — the same independent oracle that found this
+pack's `finally` hole.** Built with `dotnet build` on
+`mcr.microsoft.com/dotnet/sdk:8.0`:
+
+```csharp
+try { int.Parse("x"); } catch (FormatException ignored) { }  // warning CS0168
+try { int.Parse("x"); } catch (FormatException) { }          // clean
+try { int.Parse("x"); } catch { }                            // clean
+```
+
+`CS0168: The variable 'ignored' is declared but never used`. **The escape hatch
+this rule's own message prescribes is a spelling the C# compiler warns on**,
+and both spellings it does not cover compile clean. That is not a cultural
+preference to be argued with; it is the language telling its users to write the
+form the rule cannot exempt. Recording that an oracle *refutes* a design
+decision is worth as much as recording that one confirms it — §3 already says
+so about `CA5394`.
+
+**Intent is declared anyway, where Semgrep cannot see it.** 140 of the 402
+carry an explanatory comment *inside* the empty catch — a comment-only block is
+empty to the AST, which is why they fire — and another 46 carry one on the line
+immediately before the `try`. A further 35 use a `when` exception filter, a
+machine-readable narrowing the rule ignores.
+
+**Read individually: about 45, spread across a systematic sample of all 402 and
+a second pass over the 229 that carry no comment at all.** Roughly 42 are
+deliberate. Comment-marked, in the corpus's own words: `// Swallow exceptions
+on dispose` (`Microsoft.Extensions.Logging/src/LoggerFactory.cs:288`), `//
+Obtaining this information is best effort and should not throw`
+(`System.Diagnostics.FileVersionInfo/.../FileVersionInfo.Unix.cs:63`), `// the
+process could be gone`
+(`System.Diagnostics.Process/.../ProcessManager.SunOS.cs:188`), `// Ignore any
+errors, encoding will remain null`
+(`System.Configuration.ConfigurationManager/.../MgmtConfigurationRecord.cs:1041`),
+`// Suppress the exception, treat the store as empty`
+(`System.Security.Cryptography/.../OpenSslDirectoryBasedStoreProvider.cs:402`),
+`// never fail...` (`System.Private.Xml/.../XmlSubtreeReader.cs:563`).
+Deliberate by shape rather than by prose: a delegate fan-out that must not let
+one subscriber kill the rest
+(`System.Management/.../ManagementOperationWatcher.cs:429`), a cleanup
+`File.Delete` before a rethrow
+(`System.Private.CoreLib/.../SharedMemoryManager.Unix.cs:565`), a logging call
+inside `catch (ObjectDisposedException)`
+(`System.Net.Sockets/.../SocketAsyncEventArgs.cs:1045`), a method whose *name*
+declares it (`LoadAssemblyFromStringNoThrow`,
+`System.Runtime.Serialization.Formatters/.../FormatterServices.cs:305`), a
+`catch (OutOfMemoryException) when (!throwOnFail)` whose filter is the
+declaration (`System.Private.CoreLib/.../GenericCache.cs:210`), and a
+documented API contract — `GetDirectoryContents` returns
+`NotFoundDirectoryContents` and its XML doc says so
+(`Microsoft.Extensions.FileProviders.Physical/src/PhysicalFileProvider.cs:326`).
+The genuine swallows: `System.ComponentModel.TypeConverter/.../MemberDescriptor.cs:336`
+(`catch (Exception) { }` leaves the attribute list half-filled),
+`System.Management/.../ManagementOperationWatcher.cs:183` (a partial copy of a
+sink table, silently), and `System.Net.Sockets/src/System/Net/Sockets/Socket.cs:1713`
+(the endpoint is left stale).
+
+**The verdict: `WARNING`.** C# is the *strongest* refutation in the series, not
+a marginal one. Java's convention at least exists at 8 %; C#'s is at 0 %, on
+11 800 files, for a reason the compiler will state on request. A declaration of
+intent the rule cannot recognise is exactly what `WARNING` means, and here the
+rule cannot recognise 93 % of the syntax it fires on.
+
+The exemption clause stays in the rule. It is still the only way to silence one
+case in code rather than with `// nosemgrep`, and its near-miss fixture
+(`IgnoredNameWithFinally`) is what distinguishes the one-regex assembly from the
+copied-regex one. It simply does not carry a tier. The message now says CS0168
+out loud, so anyone taking the advice knows what they are trading.
+
+**The tier is pinned, and the pin was demonstrated rather than assumed:** with
+the YAML at `WARNING`, putting `'ERROR'` back into `EXPECTED_SEVERITY` fails
+`reports each rule at its DESIGNED severity tier`, and restoring `'WARNING'`
+passes. Recall is untouched — the patterns did not move, only the tier — so the
+`hits/EmptyCatch.cs` count of 8 is unchanged.
 
 ## 5. The twelve rules
 
@@ -103,14 +225,18 @@ live type names. A third: `disposed` matches `memory_leak` before
   so plainly: `dotnet build` warns on this by default as `CA2200`. It earns its
   place because dev-guardian scans without building, and because a compiler
   warning that scrolls past is not a tracked, fingerprinted, baselined finding.
-- **empty-catch** (ERROR) — Java's rule, and it needs **six** patterns, not
-  one: three catch spellings × two try shapes. C# has two spellings Java does
-  not (`catch (Exception) { }` with no identifier, and a bare `catch { }`), and
-  a single-branch port loses both. The `ignore`/`ignored`/`expected` naming
-  exemption applies to the two branches that bind a name, written as one
-  `metavariable-regex` over a nested `pattern-either` rather than copied into
-  each. `try { ... } catch (...) { }` **does not parse** — there is no "any
-  catch" wildcard. The × 2 is the `finally` amendment below.
+- **empty-catch** (**WARNING**, demoted in §4a) — Java's rule, and it needs
+  **six** patterns, not one: three catch spellings × two try shapes. C# has two
+  spellings Java does not (`catch (Exception) { }` with no identifier, and a
+  bare `catch { }`), and a single-branch port loses both. The
+  `ignore`/`ignored`/`expected` naming exemption applies to the two branches
+  that bind a name, written as one `metavariable-regex` over a nested
+  `pattern-either` rather than copied into each. `try { ... } catch (...) { }`
+  **does not parse** — there is no "any catch" wildcard. The × 2 is the
+  `finally` amendment below.
+  **The two nameless spellings are also why this rule is not `ERROR`:** they
+  are 93 % of what it emits on real .NET code and they have nowhere to declare
+  intent, and the one spelling that does emits `CS0168`. §4a has the numbers.
 
 #### Amendment, measured after Task 1 shipped: the try shape is a DIMENSION
 
