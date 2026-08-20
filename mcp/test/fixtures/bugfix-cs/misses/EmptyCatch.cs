@@ -75,6 +75,28 @@ public sealed class EmptyCatch
         try { Parse(p); } finally { }
     }
 
+    // THE `finally` DIMENSION, from the correct side. The rule now enumerates
+    // three catch spellings x two try shapes, and the naming exemption has to
+    // reach the new cells too — otherwise widening the rule quietly revokes
+    // the only escape hatch it has whenever someone adds a finalizer.
+    //
+    // This is the discriminating case for how that exemption is WIRED, not
+    // just that it exists: the `metavariable-regex` is written once, over a
+    // nested `pattern-either` of both named try shapes, rather than copied
+    // into each. Copy it and this file still passes; drop it from one copy
+    // and only this method fires.
+    public void IgnoredNameWithFinally(string p)
+    {
+        try { Parse(p); } catch (FormatException ignored) { } finally { Cleanup(); }
+    }
+
+    // A catch that logs, under a `finally`. The new branches must not fire on
+    // a non-empty catch just because a finalizer follows it.
+    public void LogsWithFinally(string p)
+    {
+        try { Parse(p); } catch (FormatException ex) { Log(ex); } finally { Cleanup(); }
+    }
+
     private static void Parse(string p) => int.Parse(p);
 
     private static void Log(Exception ex) => Console.Error.WriteLine(ex.Message);

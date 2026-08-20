@@ -54,5 +54,31 @@ public sealed class EmptyCatch
         try { Parse(p); } catch (FormatException expectedly) { }
     }
 
+    // THE `finally` DIMENSION. A try statement with a finalizer is a
+    // different AST node, so every branch above is blind to it — measured,
+    // and it silenced the whole rule on this shape when the pack first
+    // shipped. An empty catch is exactly as swallowed with a `finally`
+    // attached; the finalizer runs and the exception still disappears.
+    //
+    // The two dimensions are independent, so the rule is the CROSS PRODUCT:
+    // three catch spellings x two try shapes. One method per new cell, so
+    // deleting any one of them moves a number.
+    public void NamedSwallowWithFinally(string p)
+    {
+        try { Parse(p); } catch (FormatException ex) { } finally { Cleanup(); }
+    }
+
+    public void UnnamedSwallowWithFinally(string p)
+    {
+        try { Parse(p); } catch (FormatException) { } finally { Cleanup(); }
+    }
+
+    public void BareSwallowWithFinally(string p)
+    {
+        try { Parse(p); } catch { } finally { Cleanup(); }
+    }
+
     private static void Parse(string p) => int.Parse(p);
+
+    private static void Cleanup() { }
 }

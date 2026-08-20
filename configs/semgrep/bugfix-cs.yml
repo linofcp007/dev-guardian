@@ -37,21 +37,31 @@
 #   "qualquer catch". Por isso a regra de catch vazio tem tres ramos.
 # - Um `catch ($E $V) { ... }` sem `try` faz parse e nao casa nada — silencioso.
 #
-# - UM `finally` FINAL TORNA O `try` INVISIVEL. Medido nesta ronda, e nao
+# - UM `finally` FINAL TORNA O `try` INVISIVEL, e por isso a FORMA DO TRY é
+#   uma DIMENSAO das duas regras deste ficheiro, nao um detalhe. Medido, e nao
 #   estava no design: o padrao `try { ... } catch (...) { ... }` NAO casa um
-#   `try { ... } catch (...) { ... } finally { ... }`. As duas regras deste
-#   ficheiro perdem esse caso — e o oráculo independente confirma que é um
-#   falso negativo e nao um falso positivo evitado: o `dotnet build` emite
-#   CA2200 num `throw ex;` cujo catch tem um `finally` a seguir, e o Semgrep
-#   nao emite nada.
+#   `try { ... } catch (...) { ... } finally { ... }`, e o padrao com
+#   `finally` só casa esse. Os dois sao DISJUNTOS — nenhum contém o outro —,
+#   por isso a correção é enumerar ambos e nao alargar um.
 #
-#   NAO É UM DEFEITO DESTE PORT. O pack de Java, já despachado, tem exatamente
-#   o mesmo buraco, medido no mesmo dia: um `catch (E e) { }` seguido de
-#   `finally { ... }` é invisível para a `bugfix-java-error-handling-empty-catch`
-#   enquanto o mesmo catch sem `finally`, no ficheiro ao lado, dispara. Isto
-#   está registado aqui em vez de corrigido porque a correção muda a forma das
-#   duas regras e das contagens de todas as fixtures da ronda; é trabalho de
-#   uma tarefa própria, em todos os packs ao mesmo tempo.
+#   Foi o ORACULO INDEPENDENTE que o apanhou, e é o melhor argumento que este
+#   pack tem para ter um: o `dotnet build` emitia CA2200 num `throw ex;` cujo
+#   catch tinha um `finally` a seguir e o Semgrep nao emitia nada. Um falso
+#   negativo, confirmado por uma segunda opiniao, e nao um falso positivo
+#   evitado de propósito. Sem o CA2200 tinha passado — as fixtures originais
+#   nao tinham a forma, e uma fixture que nao tem a forma nunca a testa.
+#
+#   Custo da correção: 3 ramos em vez de 1 na `empty-catch` (tres grafias de
+#   catch x duas formas de try) e um `pattern-either` de dois
+#   `pattern-inside` na `rethrow-loses-stacktrace`. O `try { ... } finally
+#   { ... }` SEM catch continua a nao casar nada, medido — o `finally { }`
+#   vazio nao é confundido com um catch vazio.
+#
+#   ESTAVA NA FAMILIA, e a família é mais estreita do que parecia: o pack de
+#   JS/TS e o de Python fecharam o mesmo buraco na véspera (o de Python pela
+#   mesma via, um produto cartesiano de {handler} x {try, try+finally,
+#   try+else}). O de Java ainda o tem, e é de lá que este port o herdou; está
+#   a ser corrigido em separado.
 #
 # ---------------------------------------------------------------------------
 # CINCO CARACTERES SAO PROIBIDOS NESTE FICHEIRO, incluindo nos comentários: o A
@@ -122,14 +132,15 @@ rules:
   # nenhum outro, e zero vezes na fixture de misses. A divisao hits/misses nao
   # foi avaliada por quem escreveu a regra.
   #
-  # FORA DAS FIXTURES OS DOIS DIVERGEM, nos dois sentidos, e vale mais a pena
-  # dize-lo do que deixar o acordo perfeito sugerir que sao equivalentes:
-  #   - `throw ex;` num catch com `finally` a seguir: o CA2200 dispara, esta
-  #     regra nao (ver o aviso do `finally` no cabeçalho).
+  # FORA DAS FIXTURES OS DOIS AINDA DIVERGEM, e vale mais a pena dize-lo do
+  # que deixar o acordo perfeito sugerir que sao equivalentes:
   #   - `throw ex;` dentro de um lambda declarado no catch: esta regra dispara,
   #     o CA2200 nao — o analisador do Roslyn ignora funções anónimas porque o
   #     lançamento pode acontecer fora do contexto do catch. Continua a
   #     reescrever a stack trace, por isso o falso negativo é do CA2200.
+  #
+  # A divergencia no OUTRO sentido — o `finally` — era nossa e está fechada.
+  # Ver o cabeçalho: foi o CA2200 que a encontrou.
   #
   # O `pattern-inside` e a unificação de `$V` sao ambos indispensáveis, e cada
   # um tem a sua near-miss: sem o `pattern-inside` dispara em
@@ -139,7 +150,9 @@ rules:
   - id: bugfix-cs-error-handling-rethrow-loses-stacktrace
     patterns:
       - pattern: throw $V;
-      - pattern-inside: try { ... } catch ($E $V) { ... }
+      - pattern-either:
+          - pattern-inside: try { ... } catch ($E $V) { ... }
+          - pattern-inside: try { ... } catch ($E $V) { ... } finally { ... }
     message: >-
       `throw ex;` dentro de um catch reinicia a stack trace no ponto do
       relançamento, por isso o frame que realmente falhou desaparece do log.
@@ -158,24 +171,38 @@ rules:
   # ferramenta de C#. Medido: `e`, `ex`, `ignoreMe` e `expectedly` continuam a
   # disparar — a regra ganha vocabulário, nao perde força.
   #
-  # TRES RAMOS, e nao um. O C# tem duas grafias que o Java nao tem —
-  # `catch (Exception) { }` sem identificador e um `catch { }` nu — e um port
-  # de ramo único perde as duas: 1 hit em vez de 5. Nao se pode resolver com um
-  # wildcard porque `try { ... } catch (...) { }` nao faz parse.
+  # SEIS PADROES, e nao um. Sao duas dimensões independentes multiplicadas:
+  # tres grafias de catch x duas formas de try.
   #
-  # Só o primeiro ramo liga um nome, por isso só ele leva a exclusão por nome.
-  # Isso é correto e nao um descuido: um `catch (Exception) { }` sem
-  # identificador nao tem onde declarar a intenção, e um `catch { }` nu ainda
-  # menos — quem quer a isenção escreve o nome.
+  #   grafias: `catch (E v) { }`, `catch (E) { }` sem identificador, `catch { }`
+  #            nu. As duas últimas nao existem em Java, e um port de ramo único
+  #            perde-as: 1 hit em vez de 8. Nao há wildcard que resolva —
+  #            `try { ... } catch (...) { }` nao faz parse.
+  #   try:     com e sem `finally`. Nós diferentes da AST, disjuntos, medidos.
+  #
+  # A `metavariable-regex` é escrita UMA vez, sobre um `pattern-either`
+  # interno com as duas formas de try nomeadas, em vez de copiada para cada
+  # uma. A near-miss `IgnoredNameWithFinally` é o que distingue as duas
+  # montagens: com a regex copiada e uma das cópias em falta, só ela dispara.
+  #
+  # Só as grafias com nome levam a exclusão, e isso é correto e nao um
+  # descuido: um `catch (Exception) { }` sem identificador nao tem onde
+  # declarar a intenção, e um `catch { }` nu ainda menos — quem quer a isenção
+  # escreve o nome.
+  #
   - id: bugfix-cs-error-handling-empty-catch
     pattern-either:
       - patterns:
-          - pattern: try { ... } catch ($E $V) { }
+          - pattern-either:
+              - pattern: try { ... } catch ($E $V) { }
+              - pattern: try { ... } catch ($E $V) { } finally { ... }
           - metavariable-regex:
               metavariable: $V
               regex: ^(?!(ignore|ignored|expected)$)
       - pattern: try { ... } catch ($E) { }
+      - pattern: try { ... } catch ($E) { } finally { ... }
       - pattern: try { ... } catch { }
+      - pattern: try { ... } catch { } finally { ... }
     message: >-
       Catch vazio. A exceção foi apanhada e deitada fora sem log, sem rethrow e
       sem tratamento, por isso a falha desaparece e o código segue como se nada

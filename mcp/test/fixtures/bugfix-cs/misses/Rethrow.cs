@@ -68,7 +68,41 @@ public sealed class Rethrow
         if (pending is not null) { throw pending; }
     }
 
+    // 6. The correct bare rethrow, under a try that HAS a `finally`. This is
+    //    the near-miss for the new `finally` shape specifically: widening the
+    //    rule to see a finalizer must not cost it the ability to tell
+    //    `throw ex;` from `throw;` under that same finalizer.
+    public void BareRethrowWithFinally(string p)
+    {
+        try { Parse(p); }
+        catch (FormatException ex) { Log(ex); throw; }
+        finally { Cleanup(); }
+    }
+
+    // 7. Wrapping, under a `finally`.
+    public void WrapInNewWithFinally(string p)
+    {
+        try { Parse(p); }
+        catch (FormatException ex) { throw new AppEx("parse failed", ex); }
+        finally { Cleanup(); }
+    }
+
+    // 8. Captured in a catch that has a `finally`, thrown OUTSIDE the whole
+    //    statement. The near-miss for the new `pattern-inside` branch's
+    //    SCOPE: a second `pattern-inside` is a second way for the rule to
+    //    leak out of the catch, so it gets the same test the first one has.
+    public void ThrowOutsideCatchWithFinally(string p)
+    {
+        Exception? pending = null;
+        try { Parse(p); }
+        catch (FormatException ex) { pending = ex; }
+        finally { Cleanup(); }
+        if (pending is not null) { throw pending; }
+    }
+
     private static AppEx Wrap(Exception ex) => new AppEx("wrapped", ex);
+
+    private static void Cleanup() { }
 
     private static void Parse(string p) => int.Parse(p);
 

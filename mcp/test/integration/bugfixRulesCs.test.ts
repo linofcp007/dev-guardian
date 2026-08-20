@@ -132,20 +132,30 @@ interface FileExpectation {
  */
 const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'EmptyCatch.cs': {
-    // Five over three branches: one named catch, one with no identifier, one
-    // bare `catch`, plus two names that only LOOK like the intent markers.
-    // Branch 2 and branch 3 are the two C# spellings Java has no equivalent
-    // of, and a single-branch port scores 1 here instead of 5 — which is the
-    // only reason this count is pinned rather than the id set alone.
+    // Eight = three catch spellings x two try shapes, minus one: the five
+    // no-finally sites (one named, one with no identifier, one bare, plus two
+    // names that only LOOK like the intent markers) and three `finally`
+    // twins, one per spelling.
+    //
+    // Branches 2 and 3 are the C# spellings Java has no equivalent of, and a
+    // single-branch port scores 1 here instead of 8. The `finally` dimension
+    // is worth another 3: a try statement with a finalizer is a different AST
+    // node, so the rule was blind to it entirely until it enumerated both
+    // shapes. Neither gap is visible in the id set — only in this count.
     ids: ['bugfix-cs-error-handling-empty-catch'],
-    count: 5,
+    count: 8,
   },
   'Rethrow.cs': {
-    // Eight, and each one is also a CA2200 site under `dotnet build`. The
+    // Nine, and each one is also a CA2200 site under `dotnet build`. The
     // count is cross-checked against an independent oracle, which no other
     // fixture in this series has: see the file header.
+    //
+    // It was eight until the `finally` shape was closed, and the ninth is the
+    // one the oracle found: CA2200 fired on a `throw ex;` whose catch had a
+    // finalizer and this rule did not. That disagreement is what a second
+    // opinion is FOR, and it is the only reason the gap was not shipped.
     ids: ['bugfix-cs-error-handling-rethrow-loses-stacktrace'],
-    count: 8,
+    count: 9,
   },
 };
 
