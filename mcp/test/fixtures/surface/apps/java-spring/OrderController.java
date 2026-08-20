@@ -47,12 +47,12 @@ public class OrderController {
         return "legacy";
     }
 
-    // KNOWN LIMITATION, pinned deliberately: the named-argument annotation form
-    // is NOT matched, so no route is reported for this method. `@GetMapping
-    // ($PATH, ...)` would be the obvious fix and Semgrep rejects it outright as
-    // "Invalid pattern for Java". If a future Semgrep starts matching this, the
-    // E2E route set below changes and the limitation note in routes.yml and
-    // CHANGELOG.md needs deleting — which is exactly why it is pinned here.
+    // The named-argument annotation form, and the reason the limitation note
+    // that used to sit here was wrong. `@GetMapping($PATH, ...)` is indeed
+    // rejected as "Invalid pattern for Java" — but only because the ellipsis
+    // follows a bare metavariable. `@GetMapping(value = $PATH, ...)` parses
+    // cleanly and binds $PATH to the literal alone, whatever order the
+    // arguments are written in. Reported as GET /named.
     @GetMapping(value = "/named", produces = "application/json")
     public String named() {
         return "named";

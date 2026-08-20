@@ -34,6 +34,13 @@ export interface SemgrepDockerOptions {
    * container cannot see host paths.
    */
   configs?: string[];
+  /**
+   * Pass `--metrics=off`. Only ever valid when `configs` does NOT contain
+   * `auto`: Semgrep refuses outright ("Cannot create auto config when metrics
+   * are off"), so the two are mutually exclusive by the tool's own design,
+   * not by ours. `scan_sast`'s `local_only` mode sets both together.
+   */
+  metricsOff?: boolean;
 }
 
 /**
@@ -58,6 +65,7 @@ export function buildSemgrepDockerArgs(opts: SemgrepDockerOptions): string[] {
   ];
   for (const config of opts.configs ?? ['auto']) args.push(`--config=${config}`);
   if (opts.hasCsproj) args.push('--config=p/csharp');
+  if (opts.metricsOff) args.push('--metrics=off');
   args.push('--json', '--quiet', '--output', containerOut);
   if (opts.autoFix) args.push('--autofix');
   args.push('/src');

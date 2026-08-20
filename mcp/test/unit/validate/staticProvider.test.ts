@@ -95,6 +95,39 @@ describe('validateStatically — the positive direction', () => {
     expect(v?.evidence.some((e) => /anonymous/i.test(e.detail))).toBe(true);
   });
 
+  it('names the route with a readable path, not simply the first in the file', () => {
+    // A NestJS / ASP.NET controller conventionally opens with its index
+    // action — `@Get()`, `[HttpGet]` — whose path is the class-level prefix
+    // and is therefore extracted as an EMPTY own-path (see INHERITED_PATH in
+    // surface/extract.ts). Naming the first route in the file would make
+    // every such controller's evidence line the one route it cannot print.
+    const v = validateStatically(input({
+      snapshot: {
+        ...input().snapshot,
+        routes: [
+          route({ path_raw: '', path_resolved: '', path_partial: true, confidence: 'low' }),
+          route({ method: 'GET', path_raw: ':id', path_resolved: ':id', path_partial: true }),
+        ],
+      },
+    }))[0];
+    expect(v?.evidence.some((e) => e.detail.includes('via GET :id'))).toBe(true);
+  });
+
+  it('says what it knows when the only reaching route has no path of its own', () => {
+    // The empty path interpolated raw produced `via GET  (src/routes.ts)` —
+    // two spaces where a path should be, which reads as a broken template
+    // rather than as a fact about the route.
+    const v = validateStatically(input({
+      snapshot: {
+        ...input().snapshot,
+        routes: [route({ path_raw: '', path_resolved: '', path_partial: true, confidence: 'low' })],
+      },
+    }))[0];
+    const detail = v?.evidence[0]?.detail ?? '';
+    expect(detail).toContain('via GET (path inherited from the controller)');
+    expect(detail).not.toMatch(/ {2}/);
+  });
+
   it('says nothing about anonymous exposure when no DAST scan supplied one', () => {
     // Guards the wrong implementation that reports "not anonymously exposed"
     // when it simply does not know — the inverse of the truth.

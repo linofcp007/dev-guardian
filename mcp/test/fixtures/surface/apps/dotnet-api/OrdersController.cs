@@ -10,7 +10,12 @@ public class OrdersController : ControllerBase
     [HttpGet("/aspnet/orders")]
     public IActionResult List() => Ok();
 
-    // No argument: nothing to capture, so no route is reported for it.
+    // No argument: nothing to capture, and this is what `dotnet new webapi`
+    // emits. Reported with an EMPTY own-path at path_partial: true — the path
+    // is the class-level [Route("api/orders")], which no resolver here
+    // follows. Reporting nothing (what this comment used to describe) meant a
+    // whole controller written this way mapped to zero routes. See
+    // ../../annotations/ for the fixture that measures this properly.
     [HttpGet]
     public IActionResult Index()
     {

@@ -157,12 +157,37 @@ export function extractSurface(semgrepJson) {
     }
     return { routes, mounts };
 }
+/**
+ * The metadata key a route rule sets to declare that its framework's
+ * annotation carries NO path of its own, so there is no metavariable to
+ * capture and none is bound: `@Get()`, `[HttpGet]`, `@GetMapping`. The served
+ * path is entirely the class-level prefix (`@Controller('users')`,
+ * `[Route("api/[controller]")]`, a class `@RequestMapping`), which no resolver
+ * in this codebase can follow today — see the "annotation with no path of its
+ * own" section of `configs/semgrep/routes.yml` for why a companion `mount`
+ * rule would make that worse rather than better.
+ *
+ * Exported so `test/unit/surface/rulePack.test.ts` can hold the flag and the
+ * rules in lock-step, the same way FOCUS_METADATA_KEY is: a route rule that
+ * binds no path and does NOT declare this yields nothing at all — it matches
+ * perfectly and `toRoute` drops it, which is exactly how three whole
+ * annotation families went missing from the inventory without an error
+ * anywhere.
+ */
+export const INHERITED_PATH_KEY = 'guardian_path';
+export const INHERITED_PATH = 'inherited';
 function toRoute(metadata, metavars, file, line) {
     // Namespaced frameworks (WordPress) capture $NS + $ROUTE instead of $PATH,
     // because Semgrep cannot concatenate metavariables into a third one. Keep
     // them as separate fields; the WP resolver composes the served path.
     const namespace = stripQuotes(metavar(metavars, '$NS'));
-    const path = stripQuotes(metavar(metavars, '$PATH') ?? metavar(metavars, '$ROUTE'));
+    const captured = stripQuotes(metavar(metavars, '$PATH') ?? metavar(metavars, '$ROUTE'));
+    // An empty own-path, not a missing route. `isLiteralPath('')` is false, so
+    // the record below comes out `path_partial: true` at 'low' confidence
+    // through the ordinary path — the endpoint is inventoried and its full URL
+    // is declared unknown, which is the truth. The alternative that was in
+    // place until now is that the route does not exist.
+    const path = captured ?? (str(metadata, INHERITED_PATH_KEY) === INHERITED_PATH ? '' : undefined);
     if (path === undefined)
         return null;
     // A capture that is code, not a path, is kept but never presented as

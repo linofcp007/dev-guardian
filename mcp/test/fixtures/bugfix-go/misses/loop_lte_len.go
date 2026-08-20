@@ -44,3 +44,52 @@ func sumToLenMinusOne(xs []int) int {
 	}
 	return sum
 }
+
+// --- Written by the AUDITOR, and the reason the body requirement exists.
+// --- Every function below is a CORRECT n+1 loop: the array being indexed has
+// --- len(xs)+1 slots on purpose, so `i <= len(xs)` is exactly right and
+// --- `i < len(xs)` would be the bug. The shipped Go rule required nothing of
+// --- the body, so 4 of 4 fired at ERROR — every DP seed, prefix-sum array
+// --- and split enumeration in a Go codebase. The Python rule had carried the
+// --- fix since it shipped; it was never applied here.
+// ---
+// --- All four are DISCRIMINATING: delete `<... $XS[$I] ...>` from the body
+// --- and all four fire.
+
+func dpSeed(xs []int) []int {
+	dp := make([]int, len(xs)+1)
+	for i := 0; i <= len(xs); i++ {
+		dp[i] = i
+	}
+	return dp
+}
+
+func prefixSums(xs []int) []int {
+	ps := make([]int, len(xs)+1)
+	for i := 0; i <= len(xs); i++ {
+		if i > 0 {
+			ps[i] = ps[i-1] + xs[i-1]
+		}
+	}
+	return ps
+}
+
+func allSplits(xs []int) [][2][]int {
+	out := make([][2][]int, 0, len(xs)+1)
+	for i := 0; i <= len(xs); i++ {
+		out = append(out, [2][]int{xs[:i], xs[i:]})
+	}
+	return out
+}
+
+func insertPositions(xs []int, v int) [][]int {
+	var out [][]int
+	for i := 0; i <= len(xs); i++ {
+		ys := make([]int, 0, len(xs)+1)
+		ys = append(ys, xs[:i]...)
+		ys = append(ys, v)
+		ys = append(ys, xs[i:]...)
+		out = append(out, ys)
+	}
+	return out
+}

@@ -1,7 +1,12 @@
 # Local bug-finding Semgrep rules — Python — design of record
 
 **Date:** 2026-08-18
-**Status:** approved, then corrected by measurement (§8)
+**Status:** approved, then corrected by measurement (§8), then **partly
+superseded by the 2026-08 audit** — still ten rules, but severity was
+re-assigned across the whole pack by what each rule EMITS rather than by bug
+class, leaving `none-deref-match` as the only `ERROR`, and six rules were
+re-worked to close ~22 measured false positives. See `CHANGELOG.md` and the
+rule comments in `configs/semgrep/bugfix-py.yml`.
 **Second in the per-language sequence**, after JS/TS shipped in 1.6.0.
 
 ## 1. Why this exists, and why it is smaller than the JS/TS set

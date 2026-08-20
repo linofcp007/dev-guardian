@@ -8,7 +8,212 @@ version bump.
 
 ## [Unreleased]
 
+### Action required — the SAST rules this plugin installs were never actually run
+
+**Until this release, `scan_sast` did not load the rules `init_project` writes
+into your project.** It ran `semgrep --config=auto`, and `--config=auto` does
+not pick up a project's `.semgrep.yml`. Measured on semgrep 1.164.0, against a
+project containing the shipped pack and one line of
+`<?php echo $_GET['name'];`:
+
+| Command                   | Findings | Files scanned |
+| ------------------------- | -------- | ------------- |
+| `--config=<the pack>`     | 1        | 2             |
+| `--config=auto`           | 0        | 2             |
+
+So the thirteen security rules `init_project` installs as `.semgrep.yml` had no
+consumer anywhere in the product. **The shipped pre-commit hook had the same
+gap** — it also passed only `--config=auto` — so a project that installed our
+hooks was not running our rules either.
+
+This is why the `wp-unescaped-output` note below matters twice: that rule was
+dead for two entirely independent reasons, and fixing the pattern in b51a2dc
+could not have helped, because nothing loaded the file it lives in.
+
+Both are fixed. `scan_sast` now passes the project's own config — from
+`.dev-guardian/configs.json` where there is one, falling back to `.semgrep.yml`
+/ `.semgrep.yaml` — and `configs/pre-commit/pre-commit-config.yaml` now passes
+`--config=.semgrep.yml` alongside `--config=auto`. **If you already installed
+our pre-commit hook, re-run `init_project` with `refresh=true` to pick up the
+corrected hook config**, or add the flag by hand.
+
+A guard comes with it, because loading a file the user owns is a new risk: a
+`--config` Semgrep cannot load aborts the *whole* run (`paths.scanned: []`,
+exit 7), not just that pack. Every candidate is parsed and shape-checked
+first, and one that would abort the scan is dropped **and named in
+`tools_run`** rather than passed through. A rule that merely fails to compile
+is a different case — exit 2, everything still scanned — and now counts as a
+real scan that lost one rule instead of flipping the whole result to `failed`.
+
+### Privacy — the default SAST mode sends telemetry to Semgrep Inc
+
+`SECURITY.md` said "Local-only, no telemetry" without qualification. That was
+wrong, and it is corrected there.
+
+`--config=auto` fetches its ruleset from the Semgrep registry and reports usage
+metrics to Semgrep Inc. **as a condition of doing so**: passing `--metrics=off`
+alongside it fails outright with `Cannot create auto config when metrics are
+off`. Every default `scan_sast` run has therefore sent telemetry, and could not
+have done otherwise. dev-guardian neither adds to that data nor sees it; what
+Semgrep collects is documented at <https://semgrep.dev/docs/metrics>.
+
+New in this release: **`scan_sast(local_only: true)`** drops the registry,
+passes `--metrics=off`, and runs only rules already on disk — your project's
+`.semgrep.yml` plus anything added with `register_custom_rules`. Nothing leaves
+the machine, at the cost of the registry's rules. When the project has no local
+rules it reports the scan as **skipped** rather than as a clean result, because
+zero findings from zero rules is not a clean bill of health. That mode only
+became coherent rather than empty once the project's own config started being
+loaded, which is why the two arrived together.
+
+### Action required — projects initialised before b51a2dc are running a dead XSS rule
+
+**If you ran `init_project` before b51a2dc, your `.semgrep.yml` contains a
+WordPress cross-site-scripting rule, `wp-unescaped-output`, that has never
+matched anything.** Its pattern was `echo $_GET[$X]`, which is not valid PHP, so
+Semgrep could not compile it; with `--quiet` the failure went to a JSON `errors`
+array instead of stderr and nothing surfaced it. Every scan since has been
+reporting zero WordPress XSS findings from a rule that could not have produced
+one — a clean result that meant nothing. The rule was fixed in b51a2dc, and
+because `init_project` never touched a config it had already copied, **the fix
+has not reached any existing project.**
+
+To get it, run `init_project` with `refresh` — as a dry run first:
+
+```text
+init_project(project_path=".", refresh=true, apply=false)   # show me what would change
+init_project(project_path=".", refresh=true, apply=true)    # do it
+```
+
+Your own edits are safe. `apply=true` overwrites only a file you have never
+touched; anything you customised is left exactly as it is and the new baseline
+is written beside it as `.semgrep.yml.new` for you to merge. If you would rather
+not run the tool at all, copying `configs/semgrep/base.yml` over your
+`.semgrep.yml` by hand gets you the same rules.
+
+This applies to all four baseline configs `init_project` installs
+(`.gitleaks.toml`, `renovate.json`, `.semgrep.yml`, `.pre-commit-config.yaml`),
+not just the Semgrep one — the same gap existed for every one of them.
+
+### Removed
+
+- **`bugfix-go-edge-case-append-discarded` is deleted.** The Go pack goes from
+  ten rules to **nine**. The rule matched `append(xs, 1)` in *statement*
+  position, which the Go spec's *Expression statements* section forbids and the
+  compiler rejects outright:
+
+  ```text
+  ./main.go:4:2: append(xs, 1) (value of type []int) is not used
+  ```
+
+  Its true-positive set was therefore **empty in any project that compiles**,
+  and everything it emitted in a real repository was a false positive — three
+  were measured: `for _, v := range append(xs, 0)`, `ch <- append(xs, 1)` and
+  `return &box{items: append(xs, 1)}` (the `$T{<... append ...>}` exclusion does
+  not reach inside a `&T{...}`, and `&Foo{Items: append(...)}` is far more
+  common than the bare form the fixture tested). Its own hit fixture,
+  `mcp/test/fixtures/bugfix-go/hits/append_discarded.go`, did not compile, and
+  had not for two releases.
+
+  It was deleted rather than redesigned. The bug that *does* compile —
+  `func addItem(xs []int) { xs = append(xs, 1) }`, where the caller's slice is
+  unchanged — is only a bug when the reassigned slice never escapes the
+  function, which is a dataflow property: every escape route (return, channel
+  send, struct-field store, closure capture, pointer write, passing it on)
+  would need its own exclusion clause, and this repo's Java round is the
+  recorded evidence that an exclusion list of that shape eats real bugs before
+  it stops emitting false ones. `staticcheck` and `ineffassign` already cover
+  it with actual dataflow.
+
+  **Every Go fixture in the pack is now compiled** with
+  `docker run --rm -v "<dir>:/w" -w //w golang:1.22-alpine go build ./...` (and
+  `gofmt -l`) as part of the change process. That check is what caught this,
+  and it should have existed from the start.
+
+- **`bugfix-js-error-handling-catch-returns-null` is gone.** It matched
+  `try { ... } catch { return null|undefined|[]; }`. Two independent corpora
+  now say the same thing: five instances of textbook-correct code and zero true
+  positives on the auditor's probes, and **25 findings on this repo's own
+  `mcp/src`, every one of them correct code** — the safe-`JSON.parse` helper, a
+  `readdirSync` with a `[]` fallback, `runtimeMeta.getJson` with a `[]`
+  fallback. Returning an empty value from a catch is a documented JavaScript
+  idiom, not a defect shape, and there is no syntactic difference between the
+  idiom and a genuine swallow — every candidate narrowing was measured and
+  silences the rule's own hit fixture too. It had been demoted to INFO earlier
+  in this same Unreleased block; that was the wrong call. INFO is not a tier for
+  a rule that has never been right, it is a quieter way to keep being wrong, and
+  it still costs everyone who reads the output. The rule and its three fixtures
+  are deleted. The JS/TS pack is now **thirteen** rules.
+
 ### Added
+
+- **Configuration-drift detection for the configs `init_project` installs.**
+  `init_project` copied four baseline configs into a project and then never
+  looked at them again — an existing target was skipped as `already_exists`,
+  which is the right call, since the user owns and edits those files, but it
+  meant a fix to a shipped config could never reach anyone who had already run
+  init. Nothing recorded what had been copied, so nothing could notice. The
+  `wp-unescaped-output` incident above is what that costs.
+
+  Four parts:
+
+  - **A provenance stamp.** `init_project` now records each file it copies in
+    `.dev-guardian/configs.json` — target, source, plugin version, and a content
+    hash at copy time — and stamps a comment header into the file itself where
+    the format allows one. The manifest is the mechanism and the header is an
+    affordance on top, because `renovate.json` is JSON and a `//` line would
+    break the parser Renovate reads it with. It is a separate directory from
+    `.guardian/`, which `gitignoreGuard` adds to `.gitignore` on every server
+    start: a provenance record has to be committed alongside the configs it
+    describes, or a teammate's clone and CI learn nothing.
+
+  - **A drift advisory on the scan path.** Every scan tool now checks the
+    manifest and emits at most **one** line into `warnings`. It is never a
+    finding, never an error, and cannot move a scan's status or the CI exit
+    code. Silence is the default: a user who edited their own config — the
+    common case, and the intended one — is told nothing, because a warning that
+    fires on almost every project is a warning nobody reads. Only two states
+    speak, and they are worded differently because their remedies differ: *we
+    shipped a newer baseline and your copy is unchanged* (a fix may be missing,
+    here is how to get it), and *both sides moved* (the refresh will need a
+    merge).
+
+  - **`init_project(refresh=true)`.** Opt-in, never a default. With
+    `apply=false` it reports the per-file action and writes nothing. With
+    `apply=true` it updates a file you have provably never touched, and for
+    anything else — edited, diverged, or of unknown provenance — writes the new
+    baseline as `<name>.dev-guardian-<version>.new` beside your file and leaves
+    yours closed. **No flag overwrites a modified file.** "Unknown provenance"
+    is treated as modified on purpose: an old copy of ours and a config you
+    wrote by hand are indistinguishable from the bytes, and the costs of
+    guessing wrong are not symmetric.
+
+    The delivered file is not called `<name>.new`, because that name is not
+    ours — a user can be keeping their own `.semgrep.yml.new`, and writing over
+    it is the same data loss the rule above exists to prevent. It carries
+    `dev-guardian` and the plugin version, and even then a path that already
+    exists and is not recorded as our own previous delivery is **refused**
+    (`alongside_blocked`) rather than overwritten. Re-running a refresh while a
+    delivery is still unmerged reports `pending_merge` and rewrites nothing:
+    the user's half-finished merge lives in that file.
+
+  - **Graceful degradation for projects with no manifest.** They get no warning
+    at all rather than a wrong one — with nothing recorded, "an old copy of
+    ours" cannot be told apart from "a file you wrote that happens to share the
+    name". Two adoption paths close that: plain `init_project` now records
+    provenance for any skipped file that is byte-identical to what we ship, and
+    `refresh` adopts the rest as it delivers to them. That gap is precisely why
+    the note at the top of this release exists in plain words.
+
+  The hash is taken over a canonical form — CRLF/CR normalised to LF, leading
+  BOM dropped, trailing newlines at EOF trimmed, our own header stripped — not
+  over raw bytes. A byte hash gets the answer wrong on this project's own
+  platform pair: git's `core.autocrlf` rewrites line endings on checkout, so the
+  identical commit would read as "the user edited their copy" on Windows and
+  "they did not" on Linux, and a false *local edit* silences the one state that
+  matters. Trailing whitespace inside a line, indentation and comment text all
+  still count as changes; erring toward "this changed" costs only a silent
+  `local_edit`.
 
 - **Java bug rules** — `configs/semgrep/bugfix-java.yml`, eight hand-authored
   Semgrep rules covering all six `bug_hunt` subcategories for Java: empty
@@ -55,22 +260,46 @@ version bump.
   JSON `errors` array instead: the old form reported the dead PHP rule as a bare
   "Command failed: semgrep --config …" four times without naming it once.
 
-### Removed
+### Changed
 
-- **`bugfix-js-error-handling-catch-returns-null` is gone.** It matched
-  `try { ... } catch { return null|undefined|[]; }`. Two independent corpora
-  now say the same thing: five instances of textbook-correct code and zero true
-  positives on the auditor's probes, and **25 findings on this repo's own
-  `mcp/src`, every one of them correct code** — the safe-`JSON.parse` helper, a
-  `readdirSync` with a `[]` fallback, `runtimeMeta.getJson` with a `[]`
-  fallback. Returning an empty value from a catch is a documented JavaScript
-  idiom, not a defect shape, and there is no syntactic difference between the
-  idiom and a genuine swallow — every candidate narrowing was measured and
-  silences the rule's own hit fixture too. It had been demoted to INFO earlier
-  in this same Unreleased block; that was the wrong call. INFO is not a tier for
-  a rule that has never been right, it is a quieter way to keep being wrong, and
-  it still costs everyone who reads the output. The rule and its three fixtures
-  are deleted. The JS/TS pack is now **thirteen** rules.
+- **Severity re-assigned across the Python and Go bug packs, by what each rule
+  EMITS rather than by bug class.** Both packs' headers defined the criterion
+  correctly — *is what the rule emits always a bug?* — and then assigned the
+  tier by the class the bug belongs to, which put five Python rules and seven Go
+  rules at `ERROR`. Applied cold, the criterion leaves **one per pack**:
+  `bugfix-py-null-safety-none-deref-match` (an accessor glued straight onto the
+  result of `re.match`, where there is no guard to recognise) and
+  `bugfix-go-error-handling-empty-err-block` (an error branch with a literally
+  empty body). The other seventeen are `WARNING`. The headers are fixed too.
+
+  This matters operationally: the Semgrep parser maps `ERROR` → `high` and
+  `WARNING` → `medium`, and `create_fix_pr` defaults `severity_min` to `high`,
+  so the two packs now contribute almost nothing to the *default* fix-PR set and
+  a caller who wants those bugs fixed has to ask for `severity_min: "medium"`.
+  `bug_hunt` itself still defaults to no filter, so nothing disappears from a
+  scan.
+
+  `EXPECTED_SEVERITY` now pins every tier exhaustively in both directions in
+  `bugfixRulesPy.test.ts` and `bugfixRulesGo.test.ts`. Before this, **no test
+  read `extra.severity` at all** — any tier could have been changed with a green
+  suite.
+
+- **A real-bugs corpus per pack, written by the auditor rather than by the
+  rules' author** — `mcp/test/fixtures/bugfix-{py,go}/hits/real_bugs.{py,go}`,
+  33 and 14 defects, at least one for **every** rule in each pack. Each sits
+  next to the guard shape its rule's exclusions match — a leaked HTTP response
+  in the same function as a correctly closed one, a discarded error beside a
+  `sync.Map.Load`, an unguarded assertion on a *different* variable inside a
+  type switch, an un-awaited coroutine beside an awaited one — so that widening
+  any exclusion by one step turns the file red. A minimal per-rule hit fixture
+  carries no guard shapes for an exclusion to catch on, which is how a wave of
+  false-positive work can delete recall and still go green; the Java pack
+  learned that with a fixture that went from 6 findings to 1 unnoticed.
+
+  Both test files also gained the Java pack's two structural invariants: the
+  **total** finding count (a finding landing in an unregistered file moves no
+  per-file number) and **every declared `- id:` must be exercised by a hit
+  fixture**, parsed out of the YAML rather than from a hand-maintained list.
 
 ### Fixed
 
@@ -244,6 +473,193 @@ version bump.
   file moves no per-file number, and a rule that fails to LOAD (a
   `RuleParseError` branch, an unquoted `:` producing `Invalid YAML`) is
   indistinguishable in Semgrep's output from a rule that found nothing.
+
+- **Python and Go bug rules: ~60 false positives closed, and the false
+  negatives the fixes exposed.** Both packs shipped without an audit (1.7.0 and
+  1.8.0) and were measured against a corpus written by someone who did not write
+  the rules. Every clause below was ablated on both axes — deleting it has to
+  turn a test red *and* must not increase the true-positive count.
+
+  Python:
+
+  - `none-deref-dict-get` bound **anything** with a one-argument `.get`, so
+    `User.objects.get(user_id).delete()` (Django's `Manager.get` *raises*; it
+    never returns `None`), `queue.Queue.get(True)`, an import-time registry
+    keyed by an enum, and three HTTP clients all fired at `ERROR` — and the
+    advice printed on the Django line, "pass a default", is advice
+    `Manager.get` does not accept. The receiver *substring* allow-list also made
+    real dict bugs invisible: a Flask/Django `session` **is** a dict. It now
+    keys on the **key** — a string literal that is not a URL or path — which
+    discriminates without guessing receiver names. Eight false positives to
+    zero, and `session.get("user_id")` / `client_config.get("timeout")` now
+    fire. Cost: a lookup with a variable key is a false negative.
+  - `get-without-doesnotexist` recognised only handlers with no `as` binding, no
+    tuple and no `else`, so **6 of 6** correctly guarded shapes fired. The
+    exclusions now filter the caught type through **nested formulas** inside
+    `pattern-not-inside` (a rule-level `metavariable-regex` cannot see it —
+    negated patterns export no bindings), and they are scoped to the `try`
+    **body**, which fixes the whole-node defect: an unguarded `.objects.get()`
+    inside the `except` arm was silenced by the guard protecting the *other*
+    arm, and now fires.
+  - `except-pass` and `bare-except` were **silenced outright** by adding a
+    `finally:` or an `else:` to the same swallowing `try`, and `except (A, B):
+    pass` was silent while the `as` form fired. Nine and three try-shape
+    branches respectively close both. `bare-except` no longer fires on
+    cleanup-then-`raise`, the dominant legitimate use (3 of the auditor's 4
+    functions). `except ImportError: pass` — the optional-dependency probe — is
+    excluded, and it is the only type carve-out, because `except
+    FileNotFoundError: pass` is best-effort cleanup and a swallowed load in the
+    same syntax.
+  - `queryset-n-plus-one`: `$O.$REL.$FIELD` bound **any** two-deep chain, so
+    `book.title.strip()`, `user.email.lower()`, `ev.created_at.isoformat()` and
+    `line.amount.quantize(2)` all fired, each advised to add
+    `.select_related("title")`. The finding is now the chain rather than the
+    loop, which is what lets `pattern-not-inside: $O.$REL.$FIELD(...)` remove
+    them (at loop scope it was a measured no-op). The anchor widened to any
+    `<... $M.objects ...>` queryset, so `.exclude(...)` and `.only(...)` now
+    fire — and `select_related`/`prefetch_related` became *real* exclusions,
+    which is what makes those near-misses discriminating: they used to be silent
+    only because any chained call broke the `.all()` anchor, so they would have
+    stayed green against a deliberately broken rule.
+  - `range-len-plus-one` fired on `d[len(d)] = v`, the standard
+    index-a-dict-by-its-own-size idiom, in *assignment target* position; and
+    `range(0, len(x) + 1)` was invisible.
+  - `open-without-context` fired on five kinds of ownership transfer — a factory
+    that returns the handle, `stack.enter_context(...)`, `contextlib.closing`,
+    a `yield`, a pooled handle — and on a module-level log handle.
+  - `toctou-exists-open` knew two exact function names. It now covers
+    `os.path.isfile`, `os.access`, `pathlib.Path.exists()` and the very common
+    negated guard, and it no longer fires on a test-then-**write**, where the
+    check guards against clobbering and the advice does not apply.
+  - `none-deref-match` knew only `.group(...)`. `.groups()`, `.groupdict()`,
+    `.start()`, `.end()`, `.span()` and subscripting blow up identically.
+  - `asyncio-not-awaited` fired on `yield asyncio.sleep(1)`.
+
+  Go:
+
+  - `off-by-one-loop-lte-len` required **nothing** of the loop body — the fix
+    the Python rule has carried since it shipped was never applied here — so
+    every DP seed, prefix-sum array, split enumeration and insert-position loop
+    in a Go codebase fired at `ERROR`: **4 of 4** correct `n+1` loops in the
+    corpus. Requiring `<... $XS[$I] ...>` takes that to zero with the true
+    positive intact. Unlike the analogous Java tightening, the discrimination is
+    clean here, because `dp[i]` is not `xs[i]`.
+  - `err-discarded` assumed the second return value is an error. `sync.Map.Load`
+    alone made it fire across most concurrent Go; `strings.CutPrefix` and
+    `utf8.DecodeRune` return `(string, bool)` and `(rune, int)`. A short
+    standard-library deny-list closes those. A project function returning
+    `(T, bool)` is still indistinguishable, which is why it is `WARNING`.
+  - `body-not-closed` was anchored to `http.Get` alone, so `client.Do(req)` —
+    what every real client uses — plus `http.Post`, `http.PostForm`,
+    `http.Head` and `http.DefaultClient.Get` leaked silently. It also fired on
+    three *correct* closes: the errcheck-safe
+    `defer func() { _ = resp.Body.Close() }()`, an explicit non-deferred close,
+    and `defer closeQuietly(resp.Body)`. Ownership transfer (`return resp, nil`)
+    is excluded too.
+  - `lock-without-defer` was **redesigned around the bug** instead of the idiom.
+    It fired on the two shapes where a `defer` would *be* the bug — a
+    fine-grained critical section, and `for { mu.Lock(); …; mu.Unlock() }` — and
+    on a file lock, because `$MU.Lock()` binds any receiver. It now looks for a
+    `return` *between* the `Lock` and the `Unlock`, which is the actual defect,
+    and gained an `RLock`/`RUnlock` branch that was entirely missing.
+  - `nil-map-write` could not see the classic: `c := &config{}` leaves every map
+    field nil and `c.Labels["env"] = "prod"` panics. It also fired on a correct
+    init through a pointer (`json.Unmarshal(b, &m)`).
+  - `type-assert-no-ok` fired on a `v.(fmt.Stringer)` inside a `switch v.(type)`
+    arm that proves it safe. The rule file claimed that exclusion was
+    unnecessary; what did not work was the spelling — `switch $V.(type) { ... }`
+    is a Go syntax error as a pattern, and `case $C:` makes it compile.
+  - `err-blank-assign` fired on `var _ io.Writer = newWriter()`, the
+    compile-time interface assertion, and on `_ = copy(dst, src)`.
+  - `empty-err-block` fired on `if p != nil { }` for a `*os.File`, because
+    `$ERR` bound any identifier.
+
+- **Dead clauses removed, measured by ablation rather than by reading.** In Go:
+  `err-discarded`'s `$X, _ := $F(...)` branch (the `=` branch matches the same
+  set — the redundancy this file's own header documented for `append` and never
+  applied here); one of `type-assert-no-ok`'s two mutually redundant
+  `pattern-not-inside` clauses; `lock-without-defer`'s trailing `...`;
+  `err-blank-assign`'s `var _ $T = $F(...)`; `err-discarded`'s `strings.Cut`
+  (three return values, so it never matched); and three of
+  `body-not-closed`'s seven close exclusions, which the bare
+  `$RESP.Body.Close()` statement already covers inside a `defer func(){}()`. In
+  Python: `queryset-n-plus-one`'s second `pattern-inside` anchor. Every
+  remaining clause in both packs is now live on both axes, and where a live
+  clause had no fixture behind it — five `except-pass` try-shape branches, three
+  `re` accessors, `http.PostForm`/`http.Head`, the `yield` handle transfer, the
+  negated `isfile` guard, three write modes — a fixture was added rather than
+  the clause deleted.
+
+- **The three annotation route families now match the form their framework
+  documents.** `configs/semgrep/routes.yml`'s 16 annotation-based route rules
+  each demanded an argument that the canonical form does not supply, so the
+  most ordinary controller in each framework lost routes — silently, because a
+  route this pack does not match produces no error anywhere and simply never
+  enters the attack surface.
+
+  Measured on a corpus written by an auditor who did not write the rules
+  (`mcp/test/fixtures/surface/annotations/`, 52 endpoints): **18 of 52** were
+  reported before this change. ASP.NET 5 of 15 — a controller scaffolded by
+  `dotnet new webapi`, whose actions carry a bare `[HttpGet]` and whose path
+  lives on the class `[Route("api/[controller]")]`, mapped to **zero routes**,
+  i.e. "this C# API exposes nothing". NestJS 6 of 12: `@Get()` and `@Post()`,
+  the forms docs.nestjs.com uses for index and create actions, matched
+  nothing. Spring 7 of 25: only a lone string literal matched, so
+  `@GetMapping(value = "/x", produces = "…")`, `@GetMapping(path = "/x")` and
+  a bare `@GetMapping` were all absent. All 52 are reported now.
+
+  - **Spring's named-argument forms are matched, and the note in the previous
+    release saying they could not be is withdrawn.** `@GetMapping($PATH, ...)`
+    is indeed rejected as "Invalid pattern for Java" — but only because the
+    ellipsis follows a bare metavariable. `@GetMapping(value = $PATH, ...)`
+    parses cleanly and binds `$PATH` to the path literal alone, whatever order
+    the arguments are written in.
+  - **The six Spring rules are now `focus-metavariable: $PATH`.** A named
+    argument need not be the first one, and the recovery path that rebuilds
+    captures from byte offsets reads the FIRST argument: measured with the
+    focus removed, `@PutMapping(produces = "application/json", value = "/x")`
+    reports as `PUT produces = "application/json" [partial]` on a redacting
+    Semgrep while a Semgrep that emits metavariables reports `/x`. Nothing is
+    fabricated (the extractor refuses that text as a path), but the answer
+    would depend on the reader's Semgrep version, which nothing else in this
+    pack does.
+  - **ASP.NET reads a `[Route("…")]` companion attribute** on a method whose
+    verb attribute carries no path, in either attribute order (Semgrep matches
+    both with one alternative). The bare rules exclude that shape with a
+    `pattern-not`, so such a method is reported once, at the path `[Route]`
+    names, rather than twice.
+  - **A bare annotation is reported with an empty own-path, flagged
+    `path_partial` at 'low' confidence** — the endpoint exists, and its full
+    URL, being the class-level prefix, is honestly unknown. Such a rule
+    captures nothing, so it declares `metadata.guardian_path: inherited`,
+    which `surface/extract.ts` reads to build the record and
+    `surface/recoverMetavars.ts` reads to hand the match back unscanned (a new
+    `noCaptures` counter, so it is neither counted as recovered nor as
+    unreadable — the latter would flip the language's `coverage` to "routes
+    here could not be read" when nothing was lost).
+
+    A companion `mount` rule for `@Controller('users')` was considered and
+    rejected: nothing consumes a mount for these frameworks
+    (`resolvers/node.ts` resolves one only through an import binding its
+    `$ROUTER` in the same file, and a controller class is not imported into
+    its own file), and `resolveNodeMounts` treats any route declared in a
+    file that mounts something as attached to the app directly — so adding
+    one would flip every route in that controller from honestly partial to
+    confidently wrong, at its un-prefixed path, which `scan_dast` would then
+    send requests to. Resolving class-level prefixes is a follow-up in
+    `resolvers/node.ts`, not a rule-pack change.
+  - **Two new invariants in `mcp/test/unit/surface/rulePack.test.ts`.** A route
+    rule that binds no `$PATH` must declare the flag (without it the rule
+    matches perfectly and yields nothing — the defect above, as a test), and a
+    rule whose pattern spans a declaration must either focus `$PATH` or
+    capture no path at all, so no declaration-spanning span is ever scanned for
+    a path.
+  - **50 ablations, zero dead clauses.** Every alternative and operator added
+    here was removed on its own and the fixture set checked: each removal loses
+    exactly the endpoints it should, and removing an ASP.NET `pattern-not`
+    duplicates exactly one endpoint. The decoy corpus is unchanged
+    (14 matches before and after), and the old and new packs differ over the
+    whole corpus by 36 added matches, 0 removed.
 
 - **`wp-unescaped-output` stops flagging `echo (int) $_GET['id'];`, and now
   matches the subscript rather than the statement.** A cast is not a call, and
