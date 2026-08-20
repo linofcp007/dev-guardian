@@ -1,0 +1,185 @@
+# dev-guardian Semgrep config bugfix-cs.
+# Bugs de implementação em C#. É a linguagem mais vazia de toda a sequência, e
+# desta vez o número é ZERO: o `p/r2c-bug-scan` reporta `paths.scanned = 0`
+# nestas fixtures porque não traz UMA regra de C#, e o `p/csharp` e o
+# `p/security-audit` varrem os ficheiros e não encontram nada. Cada regra deste
+# ficheiro é aditiva por medição, com controlo positivo, e não por suposição.
+# As medições estão em
+# docs/superpowers/specs/2026-08-20-bugfix-rules-csharp-design.md.
+#
+# Cada regra tem um par de fixtures em
+# mcp/test/fixtures/bugfix-cs/{hits,misses}/: um ficheiro que tem de disparar a
+# regra, outro parecido que NAO pode. O ficheiro misses/ é a especificação do
+# que é código correto — se ele disparar, a regra é que está errada. E todas as
+# fixtures COMPILAM: `dotnet build` com `0 Error(s)`. A ronda de Go despachou
+# uma regra cuja fixture de hit não era Go compilável, o que punha o conjunto
+# de verdadeiros positivos a zero em qualquer projeto que construa.
+#
+# ---------------------------------------------------------------------------
+# ESCREVA SEMPRE `var` NUM PADRAO DE C#. É a sexta forma de falha silenciosa
+# desta série e a PRIMEIRA que o `paths.scanned` nao apanha.
+#
+# `$T $V = ...` só casa declarações com tipo EXPLICITO. `var x = ...` é outro
+# nó, e é como quase todo o C# se escreve. Medido na sondagem:
+# `foreach ($T $X in $C)` encontrou 0 de 5 bugs reais; `foreach (var $X in $C)`
+# encontrou os cinco. O scan corre, os ficheiros sao varridos, os erros sao
+# zero, e a resposta é 0. Uma regra portada do pack de Java por analogia
+# textual nao encontra nada com todos os indicadores verdes.
+#
+# OUTRAS ARMADILHAS MEDIDAS:
+#
+# - `metavariable-regex` está ancorada no INICIO. `regex: "Async$"` nao casou
+#   nada em `GetDataAsync`, sem erro e sem aviso. Use `".*Async"`. O
+#   `^(?!...$)` deste ficheiro funciona por já estar ancorado no início.
+# - Um `pattern-either` cujo ramo só tem `metavariable-type` carrega ZERO
+#   regras no ficheiro inteiro. Repita o termo positivo em todos os ramos.
+# - `try { ... } catch (...) { }` NAO faz parse: nao existe um wildcard de
+#   "qualquer catch". Por isso a regra de catch vazio tem tres ramos.
+# - Um `catch ($E $V) { ... }` sem `try` faz parse e nao casa nada — silencioso.
+#
+# - UM `finally` FINAL TORNA O `try` INVISIVEL. Medido nesta ronda, e nao
+#   estava no design: o padrao `try { ... } catch (...) { ... }` NAO casa um
+#   `try { ... } catch (...) { ... } finally { ... }`. As duas regras deste
+#   ficheiro perdem esse caso — e o oráculo independente confirma que é um
+#   falso negativo e nao um falso positivo evitado: o `dotnet build` emite
+#   CA2200 num `throw ex;` cujo catch tem um `finally` a seguir, e o Semgrep
+#   nao emite nada.
+#
+#   NAO É UM DEFEITO DESTE PORT. O pack de Java, já despachado, tem exatamente
+#   o mesmo buraco, medido no mesmo dia: um `catch (E e) { }` seguido de
+#   `finally { ... }` é invisível para a `bugfix-java-error-handling-empty-catch`
+#   enquanto o mesmo catch sem `finally`, no ficheiro ao lado, dispara. Isto
+#   está registado aqui em vez de corrigido porque a correção muda a forma das
+#   duas regras e das contagens de todas as fixtures da ronda; é trabalho de
+#   uma tarefa própria, em todos os packs ao mesmo tempo.
+#
+# ---------------------------------------------------------------------------
+# CINCO CARACTERES SAO PROIBIDOS NESTE FICHEIRO, incluindo nos comentários: o A
+# maiúsculo com acento agudo (U+00C1), o I maiúsculo com acento agudo (U+00CD),
+# e mais tres que o português nao usa (U+00CF, U+00D0, U+00DD). Em português,
+# na prática, sao dois — e é por isso que este bloco escreve "NAO" e "SAO" sem
+# acento.
+#
+# Porque: o carregador de configuração do Semgrep descodifica este ficheiro com
+# o codec do LOCALE e nao em UTF-8. Num locale cp1252 (Windows) os bytes 0x81,
+# 0x8D, 0x8F, 0x90 e 0x9D nao existem na tabela, e sao exatamente os segundos
+# bytes UTF-8 desses cinco caracteres. UM deles num comentário derruba o
+# ficheiro inteiro, e o scan devolve `results: 0`, `paths.scanned: 0` e
+# `errors: 0` — quem leia só os findings ve um scan limpo. O
+# `semgrepPacks.test.ts` apanha isto em todos os packs, por duas vias.
+#
+# Todas as outras maiúsculas acentuadas do português passam, medidas uma a uma:
+# A-til, A-grave, A-circunflexo, E-agudo, E-circunflexo, O-agudo,
+# O-circunflexo, O-til, U-agudo e C-cedilha. E todas as minúsculas passam.
+#
+# ---------------------------------------------------------------------------
+# TRES PALAVRAS SAO PROIBIDAS NOS IDS, e nao as duas do pack de Java:
+#
+#   `unchecked`  — a regex de error_handling casa-a, e em C# é uma palavra
+#                  reservada, por isso é um nome plausível para uma regra.
+#   `concurren`  — a regex de race_condition casa-a e corre PRIMEIRO no
+#                  if-chain; em C# é um fragmento de nome de tipo vivo
+#                  (`ConcurrentDictionary`, `ConcurrentBag`).
+#   `disposed`   — a regex de memory_leak casa-a e corre ANTES de
+#                  error_handling, por isso um id sobre a exceção de um objeto
+#                  já libertado classifica como memory_leak, em silencio.
+#
+# ---------------------------------------------------------------------------
+# OS TIERS. Este pack tem a melhor proporção da série — 2 em 11 em ERROR —, e
+# isso nao é generosidade. O critério do §4 do design é uma pergunta sobre o
+# OUTPUT: "aquilo que a regra EMITE é sempre um bug?". Uma regra cuja correção
+# depende de ter reconhecido uma GUARDA falha sempre que encontra uma guarda
+# que ninguém enumerou, e a guarda pode estar a um método de distância.
+#
+# As duas regras deste ficheiro que passam nessa barra sao as duas de
+# error_handling, por razões diferentes. A `empty-catch` passa como no pack de
+# Java: a sua válvula de escape nao é uma guarda, é uma DECLARACAO DE INTENCAO
+# escrita no nome da variável, que a própria regra le. A
+# `rethrow-loses-stacktrace` passa por uma razao que nenhuma outra regra da
+# série teve: a forma CORRETA do código que ela assinala (`throw;`) é um NO DE
+# AST DIFERENTE. Nao há guarda para reconhecer porque nao há nada a guardar.
+#
+# CONSEQUENCIA: o parser do Semgrep mapeia ERROR -> `high` e WARNING ->
+# `medium`, e o `create_fix_pr` tem `severity_min` a `high` por omissao. Quem
+# quiser as regras em WARNING corrigidas tem de pedir `severity_min: "medium"`.
+# O `bug_hunt` nao filtra por omissao, por isso nada desaparece de um scan.
+# ---------------------------------------------------------------------------
+rules:
+  # ERROR, e é a única regra desta série cuja forma correta nao é uma guarda
+  # mas outro nó da AST. `throw ex;` dentro de um `catch (E ex)` reescreve
+  # Exception.StackTrace a partir do ponto do relançamento: o frame que
+  # realmente falhou desaparece antes de alguém o registar. `throw;` preserva-o.
+  #
+  # ESTA REGRA DUPLICA A TOOLCHAIN, NAO O REGISTRY, e o design di-lo sem
+  # rodeios: o `dotnet build` avisa disto por omissao como CA2200. Ganha o seu
+  # lugar por duas razões — o dev-guardian varre sem construir (nao precisa do
+  # SDK, das dependencias restauradas nem de um projeto que compile), e um
+  # aviso de compilador que passa a correr no ecra nao é um finding com
+  # fingerprint, baseline e histórico.
+  #
+  # E é por isso que esta é a única regra do pack com um ORACULO INDEPENDENTE.
+  # Medido: o CA2200 dispara exatamente nos 8 sítios da fixture de hits e em
+  # nenhum outro, e zero vezes na fixture de misses. A divisao hits/misses nao
+  # foi avaliada por quem escreveu a regra.
+  #
+  # FORA DAS FIXTURES OS DOIS DIVERGEM, nos dois sentidos, e vale mais a pena
+  # dize-lo do que deixar o acordo perfeito sugerir que sao equivalentes:
+  #   - `throw ex;` num catch com `finally` a seguir: o CA2200 dispara, esta
+  #     regra nao (ver o aviso do `finally` no cabeçalho).
+  #   - `throw ex;` dentro de um lambda declarado no catch: esta regra dispara,
+  #     o CA2200 nao — o analisador do Roslyn ignora funções anónimas porque o
+  #     lançamento pode acontecer fora do contexto do catch. Continua a
+  #     reescrever a stack trace, por isso o falso negativo é do CA2200.
+  #
+  # O `pattern-inside` e a unificação de `$V` sao ambos indispensáveis, e cada
+  # um tem a sua near-miss: sem o `pattern-inside` dispara em
+  # `ThrowOutsideCatch`, onde a exceção é guardada no catch e relançada FORA
+  # dele; sem a unificação de `$V` dispararia no `throw;` correto que está na
+  # linha seguinte ao bug, dentro do mesmo statement, em `FirstOfTwo`.
+  - id: bugfix-cs-error-handling-rethrow-loses-stacktrace
+    patterns:
+      - pattern: throw $V;
+      - pattern-inside: try { ... } catch ($E $V) { ... }
+    message: >-
+      `throw ex;` dentro de um catch reinicia a stack trace no ponto do
+      relançamento, por isso o frame que realmente falhou desaparece do log.
+      Use `throw;` para relançar preservando a origem, ou
+      `throw new MinhaExcecao(mensagem, ex)` para embrulhar sem perder nada.
+    severity: ERROR
+    languages: [csharp]
+
+  # ERROR, pela mesma razao que no pack de Java: a válvula de escape nao é uma
+  # guarda. O Semgrep casa a AST e os comentários nao estao lá, por isso um
+  # catch documentado como ignorado de propósito é byte a byte igual a um que
+  # engole a falha em silencio — o comentário nunca podia ser a válvula. O NOME
+  # pode, e já é a convenção dos linters standard: `ignore` e `expected` do
+  # Checkstyle, `ignored` do IntelliJ. O Roslyn nao tem equivalente por
+  # omissao, por isso o vocabulário é herdado do pack de Java e nao de uma
+  # ferramenta de C#. Medido: `e`, `ex`, `ignoreMe` e `expectedly` continuam a
+  # disparar — a regra ganha vocabulário, nao perde força.
+  #
+  # TRES RAMOS, e nao um. O C# tem duas grafias que o Java nao tem —
+  # `catch (Exception) { }` sem identificador e um `catch { }` nu — e um port
+  # de ramo único perde as duas: 1 hit em vez de 5. Nao se pode resolver com um
+  # wildcard porque `try { ... } catch (...) { }` nao faz parse.
+  #
+  # Só o primeiro ramo liga um nome, por isso só ele leva a exclusão por nome.
+  # Isso é correto e nao um descuido: um `catch (Exception) { }` sem
+  # identificador nao tem onde declarar a intenção, e um `catch { }` nu ainda
+  # menos — quem quer a isenção escreve o nome.
+  - id: bugfix-cs-error-handling-empty-catch
+    pattern-either:
+      - patterns:
+          - pattern: try { ... } catch ($E $V) { }
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^(?!(ignore|ignored|expected)$)
+      - pattern: try { ... } catch ($E) { }
+      - pattern: try { ... } catch { }
+    message: >-
+      Catch vazio. A exceção foi apanhada e deitada fora sem log, sem rethrow e
+      sem tratamento, por isso a falha desaparece e o código segue como se nada
+      fosse. Registe no logger, trate, ou relance com `throw;`. Se o silencio
+      for mesmo deliberado, declare-o no nome: `catch (FormatException ignored)`.
+    severity: ERROR
+    languages: [csharp]

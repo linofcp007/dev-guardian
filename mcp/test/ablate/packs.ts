@@ -42,6 +42,7 @@ export const PACKS: readonly PackSpec[] = [
   { name: 'bugfix-py', config: config('bugfix-py'), fixtures: fixtures('bugfix-py'), hitsSubdir: 'hits' },
   { name: 'bugfix-go', config: config('bugfix-go'), fixtures: fixtures('bugfix-go'), hitsSubdir: 'hits' },
   { name: 'bugfix-java', config: config('bugfix-java'), fixtures: fixtures('bugfix-java'), hitsSubdir: 'hits' },
+  { name: 'bugfix-cs', config: config('bugfix-cs'), fixtures: fixtures('bugfix-cs'), hitsSubdir: 'hits' },
   { name: 'base', config: config('base'), fixtures: fixtures('base'), hitsSubdir: 'hits' },
 ];
 
