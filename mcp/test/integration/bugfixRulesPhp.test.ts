@@ -177,6 +177,34 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     ids: ['bugfix-php-null-safety-loose-null-compare'],
     count: 6,
   },
+  'real_bugs.php': {
+    // THE REAL-BUGS CORPUS — six defects over all SIX rules, so every rule in
+    // the pack has corpus coverage. The Java round left three rules at zero
+    // and that was the riskiest gap in that pack.
+    //
+    // It exists to give the ablation its second axis. Everything else in hits/
+    // is one minimal instantiation per rule, written by whoever wrote the
+    // rule: that proves a rule fires, but it cannot prove an exclusion added
+    // later did not eat a real bug, because a minimal fixture carries no guard
+    // shapes for an exclusion to catch on. Every defect here sits BESIDE the
+    // guard shape its rule's exclusions match — an atomic `@mkdir` next to the
+    // check-then-act, an `isset()` on another property next to the unguarded
+    // read, a strict `< $n` loop next to the inclusive one, a `$ignored` catch
+    // next to the swallow.
+    //
+    // Those neighbours are marked `// excluded:` in the file. A reveal on one
+    // of them under ablation is the clause working; a reveal on a `// BUG:`
+    // line is the defect axis 2 exists for.
+    ids: [
+      'bugfix-php-edge-case-strpos-truthiness',
+      'bugfix-php-error-handling-empty-catch',
+      'bugfix-php-null-safety-json-decode-deref',
+      'bugfix-php-null-safety-loose-null-compare',
+      'bugfix-php-off-by-one-loop-lte-count',
+      'bugfix-php-race-condition-toctou-file',
+    ],
+    count: 6,
+  },
   'off_by_one.php': {
     // THIRTEEN, and the breakdown is the point: the rule has two branches
     // (the count in the condition, and the count hoisted into a local) and
@@ -369,6 +397,38 @@ describe('bugfix-php rules', () => {
     }
   });
 
+  /**
+   * THE FIFTH GOVERNING RULE OF THIS SERIES, AND IT IS NEW THIS ROUND.
+   *
+   * > Run the WHOLE PACK against the prescribed-fix file, not each rule
+   * > against its own.
+   *
+   * `fixed/fixed.php` holds every bug in `hits/` rewritten with the fix its
+   * OWN message prescribes. The entire pack is run over it and asserted to
+   * find nothing.
+   *
+   * Per-rule checking is not enough, and the difference is not theoretical:
+   * the `error-suppression-operator` candidate passed every per-rule check in
+   * the probe and was killed HERE. `toctou-file`'s own message prescribes
+   * "act first and inspect the return value", whose idiomatic PHP is
+   * `@mkdir(...)` / `@unlink(...)` — so in the file where every bug carries
+   * the fix its own rule asked for, that candidate fired three times, all
+   * three on ANOTHER rule's prescribed fix.
+   *
+   * **One rule firing on another rule's prescribed fix is not a tuning
+   * problem**, and no per-rule check can see it. A pack that fails this test
+   * tells its user to make a change it will then complain about.
+   */
+  it.skipIf(!AVAILABLE)('finds NOTHING in the whole-pack prescribed-fix file', () => {
+    const fixedDir = resolve(FIXTURES, 'fixed');
+    const { rows, scanned } = run(RULES, fixedDir);
+    // `paths.scanned` first: a zero here would make the zero below meaningless
+    // in exactly the way this repo has recorded nine separate times.
+    expect(scanned).toBe(fixtureFiles(fixedDir).length);
+    expect(scanned).toBeGreaterThan(0);
+    expect(rows.map((r) => `${basename(r.path)}: ${r.check_id}`)).toEqual([]);
+  });
+
   it.skipIf(!AVAILABLE)('reports each rule at its DESIGNED severity tier', () => {
     const { rows } = run(RULES, resolve(FIXTURES, 'hits'));
     const seen = new Map<string, Set<string>>();
@@ -423,4 +483,148 @@ describe('every rule id classifies as its own class', () => {
       expect(id).not.toContain('dangling');
     }
   });
+});
+
+/**
+ * DESIGN OF RECORD §1: no local rule may re-report what the registry packs
+ * already find. For PHP the answer has three shapes, and one of them cannot be
+ * proved at all — which is said here rather than papered over.
+ *
+ * Measured, and reproduced by these tests:
+ *
+ *   | pack               | on the hit fixtures       | positive control          |
+ *   | ------------------ | ------------------------- | ------------------------- |
+ *   | p/r2c-bug-scan     | paths.scanned = 0         | control_r2c.py (Python)   |
+ *   | p/php              | scanned = N, 0 findings   | vulnerable.php, 9 hits    |
+ *   | p/security-audit   | scanned = N, 0 findings   | NONE — 0 on the control   |
+ *
+ * `p/r2c-bug-scan` SHIPS NO PHP RULES AT ALL. It does not merely find nothing —
+ * it scans nothing, reporting `paths.scanned = 0`. So for that pack a zero
+ * finding count is not evidence of anything, and no PHP control could rescue
+ * it either, because there is no PHP rule for a PHP control to trip. The only
+ * way to distinguish "additive" from "never ran" is to prove the pack is alive
+ * in a language it does cover, which is why there is a PYTHON file in a PHP
+ * fixture tree. A Go-round defect was a control directory nothing enumerated,
+ * deleted silently, leaving the test skipping while the suite stayed green —
+ * so the controls are asserted to have RUN, not merely to have been clean.
+ *
+ * `p/security-audit` HAS NO POSITIVE CONTROL, and this is now the SECOND
+ * language in which that has been measured rather than assumed. It finds
+ * nothing on twelve classic PHP vulnerabilities — eval of `$_GET`, `system()`
+ * of `$_GET`, concatenated SQL through PDO and mysqli, reflected XSS, local
+ * file inclusion, `unserialize()` of a cookie, MD5 of a password, open
+ * redirect, path traversal, an insecure cookie — while `p/php` fires NINE
+ * times on the same file. Treat it as a property of that pack, not a quirk of
+ * one language: the same was measured in C#.
+ *
+ * What is left for that pack is weaker but not nothing: `paths.scanned > 0`
+ * proves it HAS PHP rules and enumerated our files, since a pack with no rules
+ * for a language reports 0 — which is exactly how `p/r2c-bug-scan` behaves two
+ * paragraphs up. That is asserted below, and labelled as the weaker claim it
+ * is.
+ *
+ * `base.yml`'s own PHP rules are not here because they are all SECURITY —
+ * `php-eval`, `php-sql-injection-direct`, `wp-unescaped-output` — and intersect
+ * none of the six.
+ */
+const REGISTRY_PACKS = ['p/r2c-bug-scan', 'p/php', 'p/security-audit'] as const;
+
+function registryRunOrNull(config: string, dir: string): SemgrepRun | null {
+  if (!AVAILABLE) return null;
+  try {
+    return run(config, dir);
+  } catch {
+    return null;
+  }
+}
+
+const HITS_DIR = resolve(FIXTURES, 'hits');
+const CONTROL_DIR = resolve(FIXTURES, 'control');
+
+/** Run once at module load, not inside a test: a registry scan takes far
+ *  longer than vitest's 10s per-test timeout allows. */
+const ON_HITS = new Map<string, SemgrepRun | null>(
+  REGISTRY_PACKS.map((p) => [p, registryRunOrNull(p, HITS_DIR)]),
+);
+const R2C_ON_CONTROL = registryRunOrNull('p/r2c-bug-scan', CONTROL_DIR);
+const PHP_ON_CONTROL = registryRunOrNull('p/php', CONTROL_DIR);
+const AUDIT_ON_CONTROL = registryRunOrNull('p/security-audit', CONTROL_DIR);
+
+describe('no local PHP rule duplicates the registry packs', () => {
+  it.runIf(REQUIRE_SEMGREP)('every registry pack must be reachable when the flag is set', () => {
+    for (const pack of REGISTRY_PACKS) {
+      expect([pack, ON_HITS.get(pack) ?? null]).not.toEqual([pack, null]);
+    }
+    // Asserted too, and deliberately: without this the control fixtures could
+    // be deleted and this whole describe block would go on passing, with the
+    // control tests merely SKIPPING. That exact hole shipped in the Go round.
+    expect(R2C_ON_CONTROL).not.toBeNull();
+    expect(PHP_ON_CONTROL).not.toBeNull();
+    expect(AUDIT_ON_CONTROL).not.toBeNull();
+  });
+
+  it.skipIf(R2C_ON_CONTROL === null)(
+    'positive control: p/r2c-bug-scan is LIVE — proved in Python, because it has no PHP rules',
+    () => {
+      // One, not two: the pack has no PHP rules, so it enumerates only the
+      // Python file in a directory holding one of each.
+      expect(R2C_ON_CONTROL?.scanned).toBe(1);
+      expect(R2C_ON_CONTROL?.rows.length).toBeGreaterThan(0);
+    },
+  );
+
+  it.skipIf(PHP_ON_CONTROL === null)('positive control: p/php is LIVE for PHP', () => {
+    expect(PHP_ON_CONTROL?.scanned).toBe(1);
+    expect(PHP_ON_CONTROL?.rows.length).toBeGreaterThan(0);
+  });
+
+  it.skipIf(AUDIT_ON_CONTROL === null)(
+    'p/security-audit has NO positive control — it finds nothing on the vulnerable file either',
+    () => {
+      // Pinned as a measured fact rather than left as a gap in the comments.
+      // It DID enumerate both control files, so this is "found nothing", not
+      // "never ran" — and it is the second language in which that has been
+      // measured. If this ever becomes non-zero the pack has gained something
+      // and the claim below can be strengthened from `scanned > 0` to a real
+      // additivity proof.
+      expect(AUDIT_ON_CONTROL?.scanned).toBe(2);
+      expect(AUDIT_ON_CONTROL?.rows.length).toBe(0);
+    },
+  );
+
+  it.skipIf(ON_HITS.get('p/r2c-bug-scan') === null)(
+    'p/r2c-bug-scan scans ZERO PHP files — the pack has no PHP rules at all',
+    () => {
+      // Pinned as an equality rather than "found nothing", because the two are
+      // different facts and only this one explains why the Python control has
+      // to exist. If this ever becomes non-zero the pack has gained PHP rules
+      // and the whole overlap question must be re-measured.
+      expect(ON_HITS.get('p/r2c-bug-scan')?.scanned).toBe(0);
+      expect(ON_HITS.get('p/r2c-bug-scan')?.rows.length).toBe(0);
+    },
+  );
+
+  it.skipIf(ON_HITS.get('p/security-audit') === null)(
+    'p/security-audit DID look at every hit fixture — the weaker liveness claim, stated as such',
+    () => {
+      // No positive control exists for this pack (see the block comment), so
+      // this is the strongest available evidence that its zero below means
+      // "found nothing" rather than "never ran": a pack with no rules for a
+      // language reports scanned = 0, as p/r2c-bug-scan does above.
+      expect(ON_HITS.get('p/security-audit')?.scanned).toBe(fixtureFiles(HITS_DIR).length);
+    },
+  );
+
+  for (const pack of ['p/php', 'p/security-audit'] as const) {
+    it.skipIf(ON_HITS.get(pack) === null)(
+      `${pack} finds NOTHING in any hit fixture — every local rule is additive`,
+      () => {
+        expect(ON_HITS.get(pack)?.scanned).toBe(fixtureFiles(HITS_DIR).length);
+        const grouped = rowsByFile(ON_HITS.get(pack)?.rows ?? []);
+        for (const file of fixtureFiles(HITS_DIR)) {
+          expect(grouped[file] ?? []).toEqual([]);
+        }
+      },
+    );
+  }
 });

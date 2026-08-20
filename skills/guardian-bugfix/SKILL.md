@@ -589,6 +589,54 @@ falso negativo.
 remover de um Dictionary durante a enumeração está documentado como seguro
 desde o .NET Core 3.0, por isso esse ramo dispararia em código correto.
 
+### PHP, e a primeira ronda medida contra codigo real desde o inicio
+
+Para PHP, o `bug_hunt` corre também por default `configs/semgrep/bugfix-php.yml`
+— **seis** regras hand-authored, cada uma com o seu par de fixtures: `i <=
+count($a)` (incluindo a forma com o `count()` içado para um local), TOCTOU
+entre um `file_exists`/`is_dir`/`is_writable` e a mutação a seguir, catch
+vazio, a veracidade de `strpos()`, dereference de `json_decode()` sem
+verificação de null, e comparação solta com `null`.
+
+**Esta é a primeira ronda da série medida contra um corpus externo real desde
+o início** — WordPress 6.9, 1467 ficheiros varridos —, e esse eixo mudou quatro
+veredictos. Seis candidatas morreram por medição e não por argumento: uma regra
+do operador `@` com **420** ocorrências (e que disparava sobre a correção
+prescrita por outra regra, o que é fatal por si só), grupos de `preg_match` com
+132, `in_array` solto com 117, `foreach` por referência com 46 — todas as
+amostradas latentes e não vivas, ou seja estilo e não bugs —, uma regra de fuga
+de `fopen` **inexprimível** (com as exclusões de escape passa a 0 de 3 hits,
+porque um handle vazado é sempre *usado* por alguma coisa; sem elas dispara
+sobre as 4 formas corretas), e uma cujo bug **não existe em PHP**: modificar um
+array durante o `foreach` — o `foreach` itera uma cópia, confirmado no
+interpretador.
+
+**O `memory_leak` é uma classe VAZIA neste pack, e é dito em vez de implicado.**
+Seguir recursos exige análise de escape que o Semgrep OSS não tem. É pior do
+que a classe magra do C#, e a alternativa era enviar uma regra que não
+encontrava nada.
+
+**Zero das seis estão em `ERROR`, e a razão acusa dois packs já enviados.** A
+candidata mais próxima era a `empty-catch`, e o código real refutou-a: as
+**dez** ocorrências dela no WordPress são todas silêncios deliberados com
+comentário a explicar — `//Do nothing` no PHPMailer, um parágrafo inteiro no
+php-ai-client — e o Semgrep não lê comentários. Java e C# enviam esta regra em
+`ERROR` sobre a premissa de que um engolir não declarado é bug independentemente
+da intenção; nenhum dos dois mediu essa premissa contra código externo, porque
+não tinham corpus. O PHP é a terceira linguagem a testá-la e a primeira com
+dados.
+
+**Três armadilhas de PHP que valem por si:**
+
+- **Um nome de tipo qualificado num padrão não casa nada, em silêncio.**
+  `catch (\RuntimeException $E)` encontrou **zero** ocorrências de código que
+  diz exatamente isso. Ligue o tipo a uma metavariável.
+- **`?->` e `->` são o mesmo nó da AST.** Um `pattern-not: $V?->$M` não exclui
+  o idioma seguro — apaga a regra. A única saída é um guarda de *texto*.
+- **O `catch (\Foo) { }` sem variável do PHP 8 é inalcançável** por qualquer
+  padrão de AST. Importa porque é assim que o PHP moderno declara silêncio
+  deliberado: o buraco é também uma auto-isenção.
+
 ### Os tiers, e porque é que o teu fix PR de Java pode vir vazio
 
 **Sete das oito regras estão em `WARNING`. Só a `empty-catch` está em `ERROR`.**

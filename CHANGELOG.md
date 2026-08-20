@@ -8,6 +8,122 @@ version bump.
 
 ## [Unreleased]
 
+### Added — a PHP bug-finding rule pack, and the first round measured against real code from the start
+
+`configs/semgrep/bugfix-php.yml`: **six** hand-authored rules, always on in
+`bug_hunt`, each with a hits/misses fixture pair. Rule counts are now 13 JS/TS,
+10 Python, 9 Go, 8 Java, 12 C# and **6 PHP**.
+
+**`memory_leak` is an EMPTY class in this pack, and that is stated rather than
+implied.** Resource tracking — `fopen`/`curl` handles — needs escape analysis
+Semgrep OSS does not have, and both ends of the dial were measured: with the
+escape exclusions the rule finds **0 of 3** hits, because a leaked handle is
+always *used* by something and `$F(..., $H, ...)` swallows every true positive;
+without them it fires on **4 of 4** correct shapes. The six that ship are
+off-by-one, TOCTOU, empty catch, `strpos()` truthiness, `json_decode()`
+dereference and loose null comparison.
+
+**This is the first round in the series measured against an external corpus
+from the start** — WordPress 6.9, 1467 files scanned — and that axis changed
+four verdicts. Six candidates were killed by measurement rather than by
+argument: an error-suppression (`@`) rule at **420** findings, `preg_match`
+groups at 132, loose `in_array` at 117, `foreach`-by-reference at 46 (every
+sampled one latent rather than live — a style rule, not a bug rule), an
+`fopen` leak rule that is inexpressible, and one whose bug **does not exist in
+PHP**: `foreach` iterates a copy, confirmed in the interpreter.
+
+**A fifth governing rule, and it is new: run the WHOLE PACK against the
+prescribed-fix file, not each rule against its own.** The `@`-suppression
+candidate passed every per-rule check and was killed only here. `toctou-file`'s
+own message prescribes "act first and inspect the return value", whose
+idiomatic PHP is `@mkdir(...)` / `@unlink(...)` — so in the file where every
+bug is rewritten with the fix its own message asked for, that candidate fired
+three times, all three on another rule's prescribed fix. One rule firing on
+another rule's prescribed fix is not a tuning problem, and no per-rule check
+can see it. `mcp/test/fixtures/bugfix-php/fixed/fixed.php` is scanned with the
+whole pack and asserted to produce zero findings.
+
+**ZERO of the six sit at `ERROR`, and the reason indicts two packs already
+shipped.** For scale: Java 1 of 8, JS/TS 1 of 13, Python + Go 2 of 19, C# 2 of
+12. C# reached `ERROR` twice because one defect (`throw ex;`) has a correct
+form that is a *different AST node*, so there is no guard to recognise. No PHP
+candidate has that property. The closest was `empty-catch` — which **Java and
+C# both ship at `ERROR`** — and real code refuted it: all **ten** WordPress
+findings are deliberate empty catches carrying an explanatory comment
+(`//Do nothing` in PHPMailer, `// Do nothing if we cannot memzero` in
+sodium_compat, a full paragraph in php-ai-client), and Semgrep cannot read
+comments. Neither Java nor C# measured that premise against external code,
+because a real corpus was unavailable for both. **Recorded here rather than
+acted on**: re-tiering those two packs is a separate change with its own
+fixture counts.
+
+**PHP is strictly easier than C# or Java in one place, and it is the round's
+free win.** Both of those packs needed an enumerated `metavariable-type` list
+to keep the off-by-one rule off domain objects carrying a `.Count`/`.length`
+member. In PHP that false positive cannot arise: `count()` is a **global
+function** and `$obj->count()` is a method call, a different node. Verified
+against a class carrying both a `->length` property and a `->count()` method
+inside `<=` loops — silent on both. No type list is present and none should be
+added. What the verification *did* turn up is that `$F($A)` also matches a
+**static** call (`Ruler::count($xs)`), so the anchored function-name regex is
+load-bearing for a second reason, and the near-miss fixture carries that shape.
+
+**Traps, measured, and all of them stated in the pack:**
+
+- **A fully-qualified type name in a PHP pattern matches nothing, silently.**
+  `catch (\RuntimeException $E)` found **zero** occurrences of source reading
+  exactly that. Every gate stays green, `paths.scanned` is healthy, `errors` is
+  empty, and the answer is nothing — the PHP twin of C#'s `var` trap. Bind the
+  type to a metavariable.
+- **The `metavariable-regex` on the catch variable is not redundant: it
+  suppresses a CRASH.** Without it, `catch ($E $V)` breaks the Semgrep matcher
+  on any file containing a PHP 8 non-capturing `catch (T) { }` — `Internal
+  matching error ... NoTokenLocation` — and matches elsewhere in the file
+  survive, so it reads as partial success. One correction to the design of
+  record: the process exits **0**, not 2, which makes the failure quieter still.
+- **`?->` and `->` are the same AST node.** A `pattern-not: $V?->$M` does not
+  exclude the safe idiom, it deletes the rule. The only escape is a
+  `pattern-not-regex` — a *text* guard on an AST rule, a deliberate exception
+  to `base.yml`'s own advice, annotated as such.
+- **The PHP 8 non-capturing catch is unmatchable** by any AST pattern. That
+  matters beyond recall: it is how modern PHP declares deliberate silence, so
+  the gap is also a self-exemption.
+- **The try shape is a dimension.** `try{}catch(){}` and
+  `try{}catch(){}finally{}` are disjoint nodes; the no-finally pattern alone
+  scores 5 of the 6 fixture sites. Enumerated before the rule was written, not
+  after — this hole shipped in Java and cost a separate fix round.
+- **Prefer `for (...) ...` to `for (...) { ... }`.** The statement ellipsis
+  matches the braced body, the brace-less body *and* the `for(): ... endfor;`
+  alternative syntax. Free recall, and both alternative bodies carry fixtures.
+- **Two more YAML routes to `paths.scanned = 0`**, plus an environmental one:
+  an unquoted ternary (` : ` parses as a mapping), a `\R` inside a
+  double-quoted scalar, and a **long Windows path**, which reports
+  `Failed to obtain target files from semgrep-core` and points nowhere near the
+  cause.
+
+**Registry baseline, every control asserted to have fired.** `p/r2c-bug-scan`
+reports `paths.scanned = 0` on the PHP fixtures — it ships **no PHP rules at
+all** — so its control is a **Python** file inside a PHP fixture tree, the only
+way to tell "additive" from "never ran". `p/php` is live and PHP-aware: 0
+findings on the fixtures, **9** on twelve classic vulnerable shapes.
+`p/security-audit` finds nothing on the vulnerable control either — **no
+positive control exists for it**, now measured in two languages (C# and PHP),
+so the only claim made about it is `paths.scanned > 0`, and that is labelled as
+the weaker claim it is.
+
+**Ablation:** 50 clauses across all 6 rules, **50/50 live, 0 DEAD**, axis 0
+6/6 rules fire on `hits/`. Three clauses are flagged on axis 2 and all three
+are explained in the pack rather than left for a reader to rediscover: the
+`empty-catch` naming exemption (whose removal reveals the `$ignored` catch that
+`real_bugs.php` marks `// excluded:` on purpose — the clause working, which is
+what that near-miss is there to show), the strpos function-name filter (whose
+removal reveals that rule's own false positives on *other* rules' fixtures),
+and the `pattern-inside: $V = json_decode(...)`, which is a positive term
+rather than an exclusion. Axis 3 is registered `N/A` in
+`mcp/test/ablate/packs.ts` with the reason — this repo holds no PHP outside the
+fixture tree — and was run by hand against the WordPress corpus with
+`--real-code`.
+
 ### Added — a C# bug-finding rule pack, in the language where the registry is at zero
 
 `configs/semgrep/bugfix-cs.yml`: **twelve** hand-authored rules across all six

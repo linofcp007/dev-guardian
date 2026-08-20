@@ -441,16 +441,24 @@ registerToolModule(
     name: 'bug_hunt',
     title:
       'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python, Go, ' +
-      'Java and C# bug rules; optional language packs, off by default; other languages still ' +
-      'registry-only)',
+      'Java, C# and PHP bug rules; optional language packs, off by default; other languages ' +
+      'still registry-only)',
     description:
       'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus local, always-on ' +
-      'JS/TS, Python, Go, Java and C# rule packs: `configs/semgrep/bugfix-js.yml` (thirteen rules), ' +
-      '`configs/semgrep/bugfix-py.yml` (ten rules), `configs/semgrep/bugfix-go.yml` (nine ' +
-      'rules), `configs/semgrep/bugfix-java.yml` (eight rules) and `configs/semgrep/bugfix-cs.yml` ' +
-      '(twelve rules), each covering all six subcategories ' +
+      'JS/TS, Python, Go, Java, C# and PHP rule packs: `configs/semgrep/bugfix-js.yml` (thirteen ' +
+      'rules), `configs/semgrep/bugfix-py.yml` (ten rules), `configs/semgrep/bugfix-go.yml` (nine ' +
+      'rules), `configs/semgrep/bugfix-java.yml` (eight rules), `configs/semgrep/bugfix-cs.yml` ' +
+      '(twelve rules) and `configs/semgrep/bugfix-php.yml` (six rules), each covering the six ' +
+      'subcategories ' +
       'below for its language — race_condition, null_safety, off_by_one, memory_leak, ' +
-      'error_handling, edge_case. `commands/guardian-fix.md` also ' +
+      'error_handling, edge_case — EXCEPT the PHP pack, where `memory_leak` is EMPTY and stated ' +
+      'as such: resource tracking (fopen/curl handles) needs escape analysis Semgrep OSS does ' +
+      'not have, and both ends of the dial were measured — with the escape exclusions the rule ' +
+      'finds nothing at all, without them it fires on correct code. The PHP pack is also the ' +
+      'first measured against an external corpus (WordPress 6.9, 1467 files) from the start, ' +
+      'and ZERO of its six rules sit at ERROR: the closest candidate, `empty-catch`, produced ' +
+      'ten findings there and every one is a deliberate empty catch carrying an explanatory ' +
+      'comment, which Semgrep cannot read. `commands/guardian-fix.md` also ' +
       'names "broken happy paths" as a bug-hunting focus; that is not a syntactic pattern, ' +
       'so only its commonest concrete form is covered (an un-awaited mutating call inside ' +
       'an async function — rule `floating-mutation`, the race_condition entry, covering async ' +

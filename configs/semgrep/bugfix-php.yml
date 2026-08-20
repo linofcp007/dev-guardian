@@ -234,6 +234,15 @@ rules:
   # design: o processo sai com codigo 0, nao 2, o que torna a falha ainda mais
   # silenciosa do que estava escrito.
   #
+  # A `metavariable-regex` DA FLAG NO EIXO 2 DA ABLAÇAO, e é o caso em que o
+  # eixo 2 esta a ver o clause a FUNCIONAR e nao a falhar. Remove-la revela um
+  # finding em `hits/real_bugs.php`, e esse finding é o `catch (... $ignored)`
+  # que a fixture marca `// excluded:` de proposito — um silencio deliberado
+  # posto ao lado do engolir, para que uma exclusao larga de mais tivesse onde
+  # aparecer. Uma revelação numa linha `// excluded:` é o clause a fazer o seu
+  # trabalho; uma revelação numa linha `// BUG:` é o defeito para que o eixo 2
+  # existe.
+  #
   # A FORMA DO TRY É UMA DIMENSAO, e os dois ramos existem por medição:
   # `try{}catch(){}` apanha 5 das 6, e o sexto site — o que tem `finally` — so
   # aparece com o segundo ramo. Nenhum dos dois nos contem o outro.
