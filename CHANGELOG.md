@@ -8,6 +8,84 @@ version bump.
 
 ## [Unreleased]
 
+### Added — one Rust rule, and one rule is the whole answer
+
+`configs/semgrep/bugfix-rs.yml`: **exactly one** hand-authored rule, always on
+in `bug_hunt`, with a hits/misses fixture pair. Rule counts are now 13 JS/TS,
+10 Python, 9 Go, 8 Java, 12 C# and **1 Rust**.
+
+**This is not partial Rust coverage and must not be read as one.** The rule is
+`bugfix-rs-race-condition-blocking-sleep-in-async` — a `std::thread::sleep`
+inside an `async fn`, which blocks the executor *thread* and stalls every other
+task scheduled on it. That is what dev-guardian finds in Rust. Everything else
+is somebody else's job, and the file header says so at length so that the next
+reader does not mistake a one-rule pack for abandoned work.
+
+**Twelve of thirteen candidates were measured and killed**, which is why. Four
+of the six bug classes are **compile errors** in Rust — `E0502` for
+modify-during-iteration, `E0515` for use-after-free, `E0373`/`E0503` for a data
+race on shared state, `E0599` for a null dereference. Not rare: impossible in
+code that compiles. For the rest the answer is `cargo clippy`, whose type-aware
+lints beat every Semgrep equivalent measured — default already catches
+`await_holding_lock`, `-W clippy::pedantic` adds `float_cmp` and
+`future_not_send`, and the `restriction` group adds `unwrap_used`,
+`mem_forget`, `indexing_slicing`. The docs now say that to Rust users
+explicitly rather than implying a gap dev-guardian intends to fill.
+
+**Two candidates that passed their own fixtures were killed by real code**, and
+this is the strongest evidence the rule-pack series has produced for the
+real-code ablation axis: `mem-forget` scored **43 findings and zero true
+positives** on ~1200 files of the actual Rust standard library, and
+`unwrap-in-drop` flags `if !thread::panicking() { r.unwrap(); }` — the
+canonical mitigation its own message prescribes. Both would have shipped under
+a C#-style round, where that axis was permanently `N/A` for want of a corpus.
+The ablation harness now accepts a Rust corpus for that axis, via
+`GUARDIAN_RUST_SRC`.
+
+**`WARNING`, not `ERROR`, and the call went against the probe's reading.** The
+argument for `ERROR` was that the nearest legitimate shape — a deliberately
+blocking helper — is not written as an `async fn`. True but incomplete: handing
+the blocking work to another thread *is* written inside an `async fn`, and
+`thread::spawn`, `tokio::task::spawn_blocking` (the fix the rule's own message
+prescribes), `async_std::task::spawn_blocking`, `rt.spawn_blocking` and
+`thread::Builder::new().spawn` all fired before the exclusion existed. The rule
+excludes them by call *name* rather than by path — anchoring on the path let
+the `async_std` spelling and the method call straight through — **and** by
+closure rather than by name alone, because a name-only exclusion swallowed
+`tokio::spawn(async move { … })`, which keeps the work on the executor and is a
+genuine bug. Both halves have a fixture that fails without them: the two shapes
+are symmetric, one bug per half. But a name list never closes, so correctness
+still depends on a wrapper the matcher cannot enumerate. That is the `WARNING`
+condition of the severity criterion word for word. The rule's one declared
+false negative points the same way: a bare `async` block in a *sync* `fn` —
+`tokio::spawn(async move { … })` in `main` — is not matched, because the anchor
+is `async fn`.
+
+**A measured Semgrep trap, running in two opposite directions in one pattern.**
+`async fn $F(...) -> $R { ... }` is the NARROW form: `-> $R` requires a written
+return type, so it found **2 of 4** bugs with `paths.scanned` healthy and zero
+errors — C#'s `var` trap in a second language. For *paths* it inverts: the
+engine resolves `use` declarations, so the fully-qualified
+`std::thread::sleep(...)` matches all three spellings (`std::thread::sleep`,
+`thread::sleep`, and a bare `sleep`) while the short `thread::sleep(...)`
+matches only one. Both directions are pinned by the fixture's finding count.
+A third member of the same family was found by the ablation harness rather than
+by reading: the `move` on a closure is **ignored, symmetrically** —
+`$F(|| { … })` matches `f(move || { … })` *and* vice versa — so enumerating
+both spellings produces a mutually redundant pair in which each half reads
+`DEAD` alone and removing both is a regression. The harness's pair pass named
+it; the rule now writes one spelling and the near-miss fixture keeps both.
+
+**Nothing ships for Ruby, also by measurement.** Semgrep's Ruby frontend erases
+`&.` and the `..`/`...` distinction — `x&.a.b` and `x.a.b` produce
+byte-identical ASTs — so every nil-safety and off-by-one rule matches the
+correct code and the buggy code identically, in the language whose signature
+runtime error is `NoMethodError` on nil. Five further candidates passed their
+fixtures at 0 false positives and were killed by 1244 files of real Ruby.
+RuboCop and the registry's `p/ruby` are the honest answer, and the docs say so.
+The full measurement is in
+`docs/superpowers/specs/2026-08-20-bugfix-rules-rust-and-ruby-decision.md`.
+
 ### Added — a C# bug-finding rule pack, in the language where the registry is at zero
 
 `configs/semgrep/bugfix-cs.yml`: **twelve** hand-authored rules across all six

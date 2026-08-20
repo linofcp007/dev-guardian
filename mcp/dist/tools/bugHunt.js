@@ -339,15 +339,25 @@ export function mapSubcategory(ruleId, existing) {
 registerToolModule(makeScanTool({
     name: 'bug_hunt',
     title: 'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python, Go, ' +
-        'Java and C# bug rules; optional language packs, off by default; other languages still ' +
-        'registry-only)',
+        'Java and C# bug rules, plus ONE Rust rule; optional language packs, off by default; ' +
+        'other languages still registry-only)',
     description: 'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus local, always-on ' +
         'JS/TS, Python, Go, Java and C# rule packs: `configs/semgrep/bugfix-js.yml` (thirteen rules), ' +
         '`configs/semgrep/bugfix-py.yml` (ten rules), `configs/semgrep/bugfix-go.yml` (nine ' +
         'rules), `configs/semgrep/bugfix-java.yml` (eight rules) and `configs/semgrep/bugfix-cs.yml` ' +
         '(twelve rules), each covering all six subcategories ' +
         'below for its language — race_condition, null_safety, off_by_one, memory_leak, ' +
-        'error_handling, edge_case. `commands/guardian-fix.md` also ' +
+        'error_handling, edge_case. Rust is NOT one of those languages: ' +
+        '`configs/semgrep/bugfix-rs.yml` holds exactly ONE rule, ' +
+        '`blocking-sleep-in-async` (a `std::thread::sleep` inside an `async fn`, which blocks ' +
+        'the executor thread and stalls every other task on it), and covers one of the six ' +
+        'subcategories, race_condition. It is not partial Rust coverage and must not be ' +
+        'reported as such: four of the six classes are COMPILE ERRORS in Rust (E0502, E0515, ' +
+        'E0373, E0599) and for the rest the answer is `cargo clippy` — default already catches ' +
+        '`await_holding_lock`, `-W clippy::pedantic` adds more, and the `restriction` group ' +
+        'adds `unwrap_used`, `mem_forget`, `indexing_slicing`. Tell Rust users to configure ' +
+        'clippy; dev-guardian adds exactly the one rule clippy has no equivalent for. ' +
+        '`commands/guardian-fix.md` also ' +
         'names "broken happy paths" as a bug-hunting focus; that is not a syntactic pattern, ' +
         'so only its commonest concrete form is covered (an un-awaited mutating call inside ' +
         'an async function — rule `floating-mutation`, the race_condition entry, covering async ' +
@@ -618,11 +628,14 @@ registerToolModule(makeScanTool({
         'redundant" — measured (exact rule-id duplication): 22% overall, but only ~9% for the ' +
         'JS/TS packs specifically (up to 40-43% for Java/Go) — most of what they add, especially ' +
         'for JS/TS, is net-new security scanning, not duplicate coverage. Beyond the local ' +
-        'JS/TS, Python, Go and Java packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
+        'JS/TS, Python, Go, Java and C# packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
         'registry pack reaching these six classes, and only for Python and Go — Java, C#, ' +
-        'PHP, Ruby and Rust get none of them from the registry; C#, PHP, Ruby and Rust have ' +
-        'none yet from a local pack either (Java does — `configs/semgrep/bugfix-java.yml`, ' +
-        'described above). On any of those languages, a quiet or security-only result (with or ' +
+        'PHP, Ruby and Rust get none of them from the registry. Locally, Java and C# now have ' +
+        'full packs (described above), Rust has exactly one rule and no more, and PHP and Ruby ' +
+        'have nothing at all — Ruby by measurement rather than backlog: Semgrep\'s Ruby ' +
+        'frontend erases `&.` and the `..`/`...` distinction, so a nil-safety or off-by-one ' +
+        'rule matches the CORRECT code identically, and RuboCop plus the registry\'s p/ruby is ' +
+        'the honest answer there. On any of those languages, a quiet or security-only result (with or ' +
         'without the language packs) is not evidence of a bug-free project; pair with ' +
         "`scan_sast` or the guardian-bugfix skill's manual review. " +
         'Findings are categorised as `bug`, with subcategories (race_condition, null_safety, ' +
