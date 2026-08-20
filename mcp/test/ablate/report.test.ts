@@ -1,0 +1,144 @@
+/**
+ * Unit tests for the ablation report's coverage semantics.
+ *
+ * The defect these exist for was never a wrong measurement -- every clause the
+ * harness ablated got the right verdict. It was the SUMMARY: a pack whose
+ * rules included some with no ablatable clause reported `52/52 live, 0 DEAD`,
+ * and 52/52 reads as "the whole pack was checked". A rule with a bare
+ * `pattern:` has nothing to remove, so it appeared in no list at all -- not
+ * even under `skipped`.
+ *
+ * So what is asserted here is what the reader can conclude from the page:
+ * the headline names how much of the pack it covers, every rule is on it, and
+ * a rule that fires on nothing is impossible to miss.
+ */
+
+import { describe, expect, it } from 'vitest';
+import { renderPackReport, renderSummary } from './report.js';
+import type { PackReport, RuleVerdict } from './harness.js';
+
+function ruleVerdict(over: Partial<RuleVerdict> & { ruleId: string }): RuleVerdict {
+  return {
+    enumeratedClauses: 3,
+    ablatedClauses: 3,
+    noClausesReason: undefined,
+    hitsFindings: 4,
+    firesOnHits: 'PASS',
+    ...over,
+  };
+}
+
+const CLAUSELESS: RuleVerdict = ruleVerdict({
+  ruleId: 'pack-race-condition-static-random',
+  enumeratedClauses: 0,
+  ablatedClauses: 0,
+  noClausesReason: 'a bare `pattern` with no `patterns:` group and no `pattern-either:`',
+  hitsFindings: 3,
+});
+
+function report(over: Partial<PackReport> = {}): PackReport {
+  const rules = over.rules ?? [ruleVerdict({ ruleId: 'pack-one' }), CLAUSELESS];
+  return {
+    pack: 'pack',
+    configPath: '/repo/configs/semgrep/pack.yml',
+    configSha256: 'abc123',
+    ruleCount: rules.length,
+    rulesWithClauses: rules.filter((r) => r.enumeratedClauses > 0).length,
+    rules,
+    clauseCount: rules.reduce((n, r) => n + r.ablatedClauses, 0),
+    skipped: [],
+    collapsed: [],
+    fixtureCorpus: '/repo/mcp/test/fixtures/pack',
+    realCorpus: null,
+    baselineFixtures: 7,
+    baselineHits: 7,
+    baselineReal: null,
+    verdicts: [],
+    pairs: [],
+    seconds: 1,
+    ...over,
+  };
+}
+
+describe('renderPackReport coverage', () => {
+  it('names how many RULES the clause count covers, not just the clauses', () => {
+    const text = renderPackReport(report());
+    expect(text).toMatch(/coverage\s+3 clause\(s\) across 1 of 2 rules/);
+    expect(text).toMatch(/1 rule\(s\) have no ablatable clauses/);
+    // The shape the old report had, and the reason this test exists.
+    expect(text).not.toMatch(/^axis 1 live\s+3\/3 pass$/m);
+  });
+
+  it('shows the measured count against the declared one when they differ', () => {
+    // Under `--filter`, and whenever a clause is collapsed or skipped, fewer
+    // clauses are measured than the pack declares. A bare "3 clauses" would
+    // read as the whole pack again.
+    const rules = [
+      ruleVerdict({ ruleId: 'pack-one', enumeratedClauses: 9, ablatedClauses: 3 }),
+      CLAUSELESS,
+    ];
+    const text = renderPackReport(report({ rules }));
+    expect(text).toMatch(/coverage\s+3 of 9 clause\(s\) across 1 of 2 rules/);
+  });
+
+  it('lists every rule, clauseless ones included, with the reason attached', () => {
+    const text = renderPackReport(report());
+    expect(text).toMatch(/RULE COVERAGE \(2\)/);
+    expect(text).toContain('pack-one');
+    expect(text).toContain('pack-race-condition-static-random');
+    expect(text).toContain('no ablatable clauses');
+    expect(text).toContain('a bare `pattern` with no `patterns:` group');
+  });
+
+  it('leaves a clauseless rule out of the axis 1-3 denominators', () => {
+    // Rounding it in would report a pass the harness never measured; leaving
+    // it out silently is what produced the misleading headline. It is named
+    // in its own line instead.
+    const text = renderPackReport(report());
+    expect(text).toMatch(/axis 1 live\s+3\/3 clauses pass/);
+    expect(text).toMatch(/axes 1-3 are properties of a CLAUSE/);
+  });
+
+  it('flags a rule that fires on nothing, clauses or no clauses', () => {
+    const silent = ruleVerdict({
+      ruleId: 'pack-ported-by-analogy',
+      enumeratedClauses: 0,
+      ablatedClauses: 0,
+      noClausesReason: 'a bare `pattern`',
+      hitsFindings: 0,
+      firesOnHits: 'FAIL',
+    });
+    const text = renderPackReport(report({ rules: [ruleVerdict({ ruleId: 'pack-one' }), silent] }));
+    expect(text).toMatch(/axis 0 fires on hits\/\s+1\/2 rules fire, 1 FIRING ON NOTHING/);
+    expect(text).toContain('FIRES ON NOTHING');
+    expect(text).toMatch(/1 rule\(s\) FIRE ON NOTHING in hits\//);
+    expect(text).toContain('pack-ported-by-analogy');
+    // No clause was flagged, so the old "nothing to act on" line must not be
+    // the last word on the page.
+    expect(text).not.toContain('Nothing to act on.');
+  });
+
+  it('reports axis 0 as N/A rather than a pass when there is no hits corpus', () => {
+    const rules = [
+      ruleVerdict({ ruleId: 'r1', hitsFindings: 0, firesOnHits: 'N/A' }),
+      ruleVerdict({ ruleId: 'r2', hitsFindings: 0, firesOnHits: 'N/A' }),
+    ];
+    const text = renderPackReport(report({ rules }));
+    expect(text).toMatch(/axis 0 fires on hits\/\s+N\/A -- this pack has no hits\/ fixture corpus/);
+    expect(text).toContain('hits n/a');
+  });
+});
+
+describe('renderSummary', () => {
+  it('carries rule coverage and silent rules into the cross-pack table', () => {
+    const text = renderSummary([report({ pack: 'alpha' })]);
+    expect(text).toContain('pack         rules covered silent clauses');
+    expect(text).toMatch(/alpha\s+2\s+1\s+0\s+3/);
+  });
+
+  it('prints n/a for silent rules when the pack has no hits corpus', () => {
+    const rules = [ruleVerdict({ ruleId: 'r1', hitsFindings: 0, firesOnHits: 'N/A' })];
+    const text = renderSummary([report({ pack: 'beta', rules })]);
+    expect(text).toMatch(/beta\s+1\s+1\s+n\/a/);
+  });
+});
