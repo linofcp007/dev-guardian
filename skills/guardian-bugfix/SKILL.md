@@ -91,25 +91,45 @@ apanhados. Para essa classe, leia o código.
 A N+1 de querysets Django exige o queryset dentro do próprio cabeçalho do
 `for` — `qs = Book.objects.all()` seguido de `for book in qs:` fica
 silencioso, e essa forma ligada a variável é provavelmente a mais comum na
-prática. O TOCTOU só reage a `os.path.exists`: `os.path.isfile`,
-`os.path.isdir` e `pathlib.Path(p).exists()` ficam todos silenciosos. E o
-dereference de `dict.get(...)` exclui clientes HTTP pela SUBSTRING do nome
-do receiver, não pelo nome — qualquer receiver cujo nome CONTENHA `requests`,
-`session`, `client`, `httpx`, `aiohttp` ou `urllib` é ignorado, por isso
-`session_data`, `clients` e `urllib_cache` também são falsos negativos, não
-só um dicionário chamado exatamente `client`.
+prática. Desde a auditoria de 2026-08, o corpo do ciclo tem de atravessar
+uma relação com um ATRIBUTO (`book.author.name`); se o campo relacionado for
+um método (`book.author.get_name()`) fica silencioso — foi o preço de deixar
+de acusar `book.title.strip()`, `user.email.lower()` e
+`ev.created_at.isoformat()`, que são uma query cada e disparavam todos.
 
-Mais duas exclusões que produzem falsos negativos, e que interessam sobretudo
-a si enquanto leitor do código: o `.objects.get()` só é marcado quando não
-está guardado, e um `except Exception:` largo conta como guarda — por isso um
-`get()` dentro de `except Exception: pass` fica silencioso aqui, embora seja
-pior do que um `get()` sem guarda nenhuma (o engolir do erro é apanhado à
-parte pela regra `except-pass`, mas nada liga as duas observações). E os
-ficheiros abertos sem context manager nunca são marcados quando o destino é
-um atributo: `self.handle = open(path)` é ignorado de propósito, porque o
-`close()` costuma viver noutro método, fora do alcance de uma regra
-sintática. Uma classe que nunca fecha mesmo o handle passa despercebida — e é
-essa a forma mais comum de um leak de ficheiro de longa duração.
+O dereference de `dict.get(...)` deixou de excluir clientes HTTP pela
+SUBSTRING do nome do receiver e passou a exigir que a CHAVE seja um literal
+de string — o que distingue um lookup de dicionário de `User.objects.get(pk)`,
+de `queue.Queue.get(True)` e de `pool.get(url)` sem adivinhar nomes.
+Consequência: `cfg.get(key).strip()`, com a chave numa variável, é um falso
+negativo.
+
+O TOCTOU cobre `os.path.exists`, `os.path.isfile`, `os.access`, o `.exists()`
+de um `pathlib.Path` e a guarda NEGADA (`if not exists(p): return`); só reage
+a modos de LEITURA, porque testar antes de escrever protege contra
+sobreposição e não contra um ficheiro que desapareceu.
+
+O dereference de `re.match(...)` cobre `.group()`, `.groups()`,
+`.groupdict()`, `.start()`, `.end()`, `.span()` e o subscrito — mas só a
+forma de módulo. A forma com padrão compilado (`PAT.match(t).group(1)`), que
+a documentação do `re` recomenda, fica silenciosa: ligar o receptor ao
+`re.compile(...)` que o produziu é dataflow entre instruções.
+
+Mais uma exclusão que produz falso negativo: os ficheiros abertos sem context
+manager nunca são marcados quando o destino é um atributo
+(`self.handle = open(path)`), porque o `close()` costuma viver noutro método,
+nem quando o handle sai do scope (devolvido, `yield`, entregue a um
+`ExitStack`, guardado numa coleção). Uma classe que nunca fecha mesmo o handle
+passa despercebida — e é essa a forma mais comum de um leak de ficheiro de
+longa duração.
+
+**Severidade.** Depois da auditoria de 2026-08, das dez regras Python só
+`null-safety-none-deref-match` é `ERROR`. O critério é o que a regra EMITE,
+não a classe de bug: se a correção depender de a regra ter reconhecido uma
+guarda, ela emite um falso positivo na primeira guarda que ninguém enumerou.
+Como `create_fix_pr` usa `severity_min: high` por omissão, quem quiser bugs
+Python num fix-PR tem de pedir `severity_min: "medium"`; o `bug_hunt` não
+filtra nada.
 
 Duas ressalvas a levar a sério antes de confiar num resultado limpo: isto é
 Semgrep OSS, que casa sintaxe, não faz dataflow — um null deref a duas
@@ -123,14 +143,23 @@ por isso não é `ERROR` e o `severity_min` de `bug_hunt` existe precisamente
 para os filtrar.
 
 Para Go, o `bug_hunt` corre também por default
-`configs/semgrep/bugfix-go.yml` — dez regras hand-authored, cada uma com o seu
-par de fixtures — cobrindo as mesmas seis classes: erro descartado com `_`,
-retorno atribuído a `_`, ramo `if err != nil` vazio, type assertion sem a
-forma `, ok`, `for i := 0; i <= len(xs)`, corpo de resposta HTTP nunca
-fechado, ticker nunca parado, `Lock()` sem `defer Unlock()`, resultado de
-`append` descartado, e escrita em mapa nil. É a linguagem com o maior buraco
-no registo: o `p/r2c-bug-scan` só tem 5 regras Go e apenas 2 caem numa classe
-de bug.
+`configs/semgrep/bugfix-go.yml` — **nove** regras hand-authored, cada uma com
+o seu par de fixtures — cobrindo as mesmas seis classes: segundo valor de
+retorno descartado com `_`, retorno atribuído a `_`, ramo `if err != nil`
+vazio, type assertion sem a forma `, ok`, `for i := 0; i <= len(xs)` a indexar
+a MESMA slice, corpo de resposta HTTP nunca fechado, ticker nunca parado,
+`Unlock()` saltado por um `return` antecipado, e escrita em mapa nil. É a
+linguagem com o maior buraco no registo: o `p/r2c-bug-scan` só tem 5 regras Go
+e apenas 2 caem numa classe de bug.
+
+Eram dez. A regra `edge-case-append-discarded` foi **apagada** em 2026-08:
+procurava `append(xs, 1)` em posição de instrução, que a spec do Go proíbe
+(*Expression statements*) e o compilador rejeita, por isso o seu conjunto de
+verdadeiros positivos era vazio em qualquer projeto que compile — tudo o que
+ela emitia num repositório real era falso positivo. Para o bug que de facto
+existe e compila (`xs = append(xs, v)` sobre um parâmetro, sem o resultado
+sair da função), leia o código ou corra `staticcheck`/`ineffassign`, que têm
+o dataflow que uma regra sintática não tem.
 
 Não cobrem goroutines que ficam penduradas, nem a captura da variável do
 ciclo. A segunda foi construída e verificada a funcionar, e depois excluída de
@@ -138,13 +167,20 @@ propósito: o Go 1.22 passou a dar a cada iteração a sua própria variável, e
 Semgrep não lê o `go.mod` para saber que versão o módulo declara — em código
 moderno acusaria a forma correta. Para essas duas classes, leia o código.
 
-Mais duas lacunas medidas nas próprias regras: a `lock-without-defer` casa
-pelos nomes literais `Lock()`/`Unlock()`, não `RLock()`/`RUnlock()`, por isso
-um read-lock de `sync.RWMutex` sem `defer` — um idioma comum em Go — fica
-totalmente fora do seu alcance. E a `nil-map-write` só apanha um mapa
-declarado localmente com `var`: um mapa nil que chega como parâmetro de
-função, campo de struct, ou valor de retorno entra em panic da mesma forma ao
-escrever e não é coberto — provavelmente a forma mais comum na prática real.
+Lacunas medidas nas próprias regras. A `nil-map-write` apanha o mapa
+declarado com `var` e o campo de mapa de um struct criado com `&T{}` — o
+clássico — mas não um mapa nil que chega como PARÂMETRO nem um devolvido por
+um construtor: nenhum dos dois é sempre um bug, porque depende do chamador.
+A `type-assert-no-ok` continua a acusar `var s, ok = v.(string)`: o padrão
+`var $X, $OK = ...` não casa nada no parser Go do Semgrep 1.164, verificado
+como padrão positivo isolado. E a `err-discarded` não distingue uma função do
+próprio projeto que devolva `(T, bool)` de um erro descartado — a
+biblioteca padrão está coberta por um deny-list curto (`sync.Map`,
+`strings.Cut*`, `utf8.Decode*`), o resto do mundo não.
+
+**Severidade.** Das nove regras Go só `error-handling-empty-err-block` é
+`ERROR`, pelo mesmo critério aplicado ao pack Python: um ramo de erro
+literalmente vazio não tem guarda nenhuma a reconhecer.
 
 Para Java, o `bug_hunt` corre também por default
 `configs/semgrep/bugfix-java.yml` — oito regras hand-authored, cada uma com o

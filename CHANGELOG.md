@@ -95,6 +95,41 @@ This applies to all four baseline configs `init_project` installs
 (`.gitleaks.toml`, `renovate.json`, `.semgrep.yml`, `.pre-commit-config.yaml`),
 not just the Semgrep one — the same gap existed for every one of them.
 
+### Removed
+
+- **`bugfix-go-edge-case-append-discarded` is deleted.** The Go pack goes from
+  ten rules to **nine**. The rule matched `append(xs, 1)` in *statement*
+  position, which the Go spec's *Expression statements* section forbids and the
+  compiler rejects outright:
+
+  ```text
+  ./main.go:4:2: append(xs, 1) (value of type []int) is not used
+  ```
+
+  Its true-positive set was therefore **empty in any project that compiles**,
+  and everything it emitted in a real repository was a false positive — three
+  were measured: `for _, v := range append(xs, 0)`, `ch <- append(xs, 1)` and
+  `return &box{items: append(xs, 1)}` (the `$T{<... append ...>}` exclusion does
+  not reach inside a `&T{...}`, and `&Foo{Items: append(...)}` is far more
+  common than the bare form the fixture tested). Its own hit fixture,
+  `mcp/test/fixtures/bugfix-go/hits/append_discarded.go`, did not compile, and
+  had not for two releases.
+
+  It was deleted rather than redesigned. The bug that *does* compile —
+  `func addItem(xs []int) { xs = append(xs, 1) }`, where the caller's slice is
+  unchanged — is only a bug when the reassigned slice never escapes the
+  function, which is a dataflow property: every escape route (return, channel
+  send, struct-field store, closure capture, pointer write, passing it on)
+  would need its own exclusion clause, and this repo's Java round is the
+  recorded evidence that an exclusion list of that shape eats real bugs before
+  it stops emitting false ones. `staticcheck` and `ineffassign` already cover
+  it with actual dataflow.
+
+  **Every Go fixture in the pack is now compiled** with
+  `docker run --rm -v "<dir>:/w" -w //w golang:1.22-alpine go build ./...` (and
+  `gofmt -l`) as part of the change process. That check is what caught this,
+  and it should have existed from the start.
+
 ### Added
 
 - **Configuration-drift detection for the configs `init_project` installs.**
@@ -210,7 +245,164 @@ not just the Semgrep one — the same gap existed for every one of them.
   JSON `errors` array instead: the old form reported the dead PHP rule as a bare
   "Command failed: semgrep --config …" four times without naming it once.
 
+### Changed
+
+- **Severity re-assigned across the Python and Go bug packs, by what each rule
+  EMITS rather than by bug class.** Both packs' headers defined the criterion
+  correctly — *is what the rule emits always a bug?* — and then assigned the
+  tier by the class the bug belongs to, which put five Python rules and seven Go
+  rules at `ERROR`. Applied cold, the criterion leaves **one per pack**:
+  `bugfix-py-null-safety-none-deref-match` (an accessor glued straight onto the
+  result of `re.match`, where there is no guard to recognise) and
+  `bugfix-go-error-handling-empty-err-block` (an error branch with a literally
+  empty body). The other seventeen are `WARNING`. The headers are fixed too.
+
+  This matters operationally: the Semgrep parser maps `ERROR` → `high` and
+  `WARNING` → `medium`, and `create_fix_pr` defaults `severity_min` to `high`,
+  so the two packs now contribute almost nothing to the *default* fix-PR set and
+  a caller who wants those bugs fixed has to ask for `severity_min: "medium"`.
+  `bug_hunt` itself still defaults to no filter, so nothing disappears from a
+  scan.
+
+  `EXPECTED_SEVERITY` now pins every tier exhaustively in both directions in
+  `bugfixRulesPy.test.ts` and `bugfixRulesGo.test.ts`. Before this, **no test
+  read `extra.severity` at all** — any tier could have been changed with a green
+  suite.
+
+- **A real-bugs corpus per pack, written by the auditor rather than by the
+  rules' author** — `mcp/test/fixtures/bugfix-{py,go}/hits/real_bugs.{py,go}`,
+  33 and 14 defects, at least one for **every** rule in each pack. Each sits
+  next to the guard shape its rule's exclusions match — a leaked HTTP response
+  in the same function as a correctly closed one, a discarded error beside a
+  `sync.Map.Load`, an unguarded assertion on a *different* variable inside a
+  type switch, an un-awaited coroutine beside an awaited one — so that widening
+  any exclusion by one step turns the file red. A minimal per-rule hit fixture
+  carries no guard shapes for an exclusion to catch on, which is how a wave of
+  false-positive work can delete recall and still go green; the Java pack
+  learned that with a fixture that went from 6 findings to 1 unnoticed.
+
+  Both test files also gained the Java pack's two structural invariants: the
+  **total** finding count (a finding landing in an unregistered file moves no
+  per-file number) and **every declared `- id:` must be exercised by a hit
+  fixture**, parsed out of the YAML rather than from a hand-maintained list.
+
 ### Fixed
+
+- **Python and Go bug rules: ~60 false positives closed, and the false
+  negatives the fixes exposed.** Both packs shipped without an audit (1.7.0 and
+  1.8.0) and were measured against a corpus written by someone who did not write
+  the rules. Every clause below was ablated on both axes — deleting it has to
+  turn a test red *and* must not increase the true-positive count.
+
+  Python:
+
+  - `none-deref-dict-get` bound **anything** with a one-argument `.get`, so
+    `User.objects.get(user_id).delete()` (Django's `Manager.get` *raises*; it
+    never returns `None`), `queue.Queue.get(True)`, an import-time registry
+    keyed by an enum, and three HTTP clients all fired at `ERROR` — and the
+    advice printed on the Django line, "pass a default", is advice
+    `Manager.get` does not accept. The receiver *substring* allow-list also made
+    real dict bugs invisible: a Flask/Django `session` **is** a dict. It now
+    keys on the **key** — a string literal that is not a URL or path — which
+    discriminates without guessing receiver names. Eight false positives to
+    zero, and `session.get("user_id")` / `client_config.get("timeout")` now
+    fire. Cost: a lookup with a variable key is a false negative.
+  - `get-without-doesnotexist` recognised only handlers with no `as` binding, no
+    tuple and no `else`, so **6 of 6** correctly guarded shapes fired. The
+    exclusions now filter the caught type through **nested formulas** inside
+    `pattern-not-inside` (a rule-level `metavariable-regex` cannot see it —
+    negated patterns export no bindings), and they are scoped to the `try`
+    **body**, which fixes the whole-node defect: an unguarded `.objects.get()`
+    inside the `except` arm was silenced by the guard protecting the *other*
+    arm, and now fires.
+  - `except-pass` and `bare-except` were **silenced outright** by adding a
+    `finally:` or an `else:` to the same swallowing `try`, and `except (A, B):
+    pass` was silent while the `as` form fired. Nine and three try-shape
+    branches respectively close both. `bare-except` no longer fires on
+    cleanup-then-`raise`, the dominant legitimate use (3 of the auditor's 4
+    functions). `except ImportError: pass` — the optional-dependency probe — is
+    excluded, and it is the only type carve-out, because `except
+    FileNotFoundError: pass` is best-effort cleanup and a swallowed load in the
+    same syntax.
+  - `queryset-n-plus-one`: `$O.$REL.$FIELD` bound **any** two-deep chain, so
+    `book.title.strip()`, `user.email.lower()`, `ev.created_at.isoformat()` and
+    `line.amount.quantize(2)` all fired, each advised to add
+    `.select_related("title")`. The finding is now the chain rather than the
+    loop, which is what lets `pattern-not-inside: $O.$REL.$FIELD(...)` remove
+    them (at loop scope it was a measured no-op). The anchor widened to any
+    `<... $M.objects ...>` queryset, so `.exclude(...)` and `.only(...)` now
+    fire — and `select_related`/`prefetch_related` became *real* exclusions,
+    which is what makes those near-misses discriminating: they used to be silent
+    only because any chained call broke the `.all()` anchor, so they would have
+    stayed green against a deliberately broken rule.
+  - `range-len-plus-one` fired on `d[len(d)] = v`, the standard
+    index-a-dict-by-its-own-size idiom, in *assignment target* position; and
+    `range(0, len(x) + 1)` was invisible.
+  - `open-without-context` fired on five kinds of ownership transfer — a factory
+    that returns the handle, `stack.enter_context(...)`, `contextlib.closing`,
+    a `yield`, a pooled handle — and on a module-level log handle.
+  - `toctou-exists-open` knew two exact function names. It now covers
+    `os.path.isfile`, `os.access`, `pathlib.Path.exists()` and the very common
+    negated guard, and it no longer fires on a test-then-**write**, where the
+    check guards against clobbering and the advice does not apply.
+  - `none-deref-match` knew only `.group(...)`. `.groups()`, `.groupdict()`,
+    `.start()`, `.end()`, `.span()` and subscripting blow up identically.
+  - `asyncio-not-awaited` fired on `yield asyncio.sleep(1)`.
+
+  Go:
+
+  - `off-by-one-loop-lte-len` required **nothing** of the loop body — the fix
+    the Python rule has carried since it shipped was never applied here — so
+    every DP seed, prefix-sum array, split enumeration and insert-position loop
+    in a Go codebase fired at `ERROR`: **4 of 4** correct `n+1` loops in the
+    corpus. Requiring `<... $XS[$I] ...>` takes that to zero with the true
+    positive intact. Unlike the analogous Java tightening, the discrimination is
+    clean here, because `dp[i]` is not `xs[i]`.
+  - `err-discarded` assumed the second return value is an error. `sync.Map.Load`
+    alone made it fire across most concurrent Go; `strings.CutPrefix` and
+    `utf8.DecodeRune` return `(string, bool)` and `(rune, int)`. A short
+    standard-library deny-list closes those. A project function returning
+    `(T, bool)` is still indistinguishable, which is why it is `WARNING`.
+  - `body-not-closed` was anchored to `http.Get` alone, so `client.Do(req)` —
+    what every real client uses — plus `http.Post`, `http.PostForm`,
+    `http.Head` and `http.DefaultClient.Get` leaked silently. It also fired on
+    three *correct* closes: the errcheck-safe
+    `defer func() { _ = resp.Body.Close() }()`, an explicit non-deferred close,
+    and `defer closeQuietly(resp.Body)`. Ownership transfer (`return resp, nil`)
+    is excluded too.
+  - `lock-without-defer` was **redesigned around the bug** instead of the idiom.
+    It fired on the two shapes where a `defer` would *be* the bug — a
+    fine-grained critical section, and `for { mu.Lock(); …; mu.Unlock() }` — and
+    on a file lock, because `$MU.Lock()` binds any receiver. It now looks for a
+    `return` *between* the `Lock` and the `Unlock`, which is the actual defect,
+    and gained an `RLock`/`RUnlock` branch that was entirely missing.
+  - `nil-map-write` could not see the classic: `c := &config{}` leaves every map
+    field nil and `c.Labels["env"] = "prod"` panics. It also fired on a correct
+    init through a pointer (`json.Unmarshal(b, &m)`).
+  - `type-assert-no-ok` fired on a `v.(fmt.Stringer)` inside a `switch v.(type)`
+    arm that proves it safe. The rule file claimed that exclusion was
+    unnecessary; what did not work was the spelling — `switch $V.(type) { ... }`
+    is a Go syntax error as a pattern, and `case $C:` makes it compile.
+  - `err-blank-assign` fired on `var _ io.Writer = newWriter()`, the
+    compile-time interface assertion, and on `_ = copy(dst, src)`.
+  - `empty-err-block` fired on `if p != nil { }` for a `*os.File`, because
+    `$ERR` bound any identifier.
+
+- **Dead clauses removed, measured by ablation rather than by reading.** In Go:
+  `err-discarded`'s `$X, _ := $F(...)` branch (the `=` branch matches the same
+  set — the redundancy this file's own header documented for `append` and never
+  applied here); one of `type-assert-no-ok`'s two mutually redundant
+  `pattern-not-inside` clauses; `lock-without-defer`'s trailing `...`;
+  `err-blank-assign`'s `var _ $T = $F(...)`; `err-discarded`'s `strings.Cut`
+  (three return values, so it never matched); and three of
+  `body-not-closed`'s seven close exclusions, which the bare
+  `$RESP.Body.Close()` statement already covers inside a `defer func(){}()`. In
+  Python: `queryset-n-plus-one`'s second `pattern-inside` anchor. Every
+  remaining clause in both packs is now live on both axes, and where a live
+  clause had no fixture behind it — five `except-pass` try-shape branches, three
+  `re` accessors, `http.PostForm`/`http.Head`, the `yield` handle transfer, the
+  negated `isfile` guard, three write modes — a fixture was added rather than
+  the clause deleted.
 
 - **The three annotation route families now match the form their framework
   documents.** `configs/semgrep/routes.yml`'s 16 annotation-based route rules

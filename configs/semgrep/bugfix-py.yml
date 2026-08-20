@@ -19,93 +19,299 @@
 # if-chain para desempatar é uma dependência que esta linguagem não precisa
 # de assumir.
 #
-# Duas severidades: ERROR quando o padrão é sempre um bug, independentemente
-# da intenção; WARNING quando é normalmente um bug mas tem usos legítimos.
+# SEVERIDADE — o critério, aplicado ao que a regra EMITE e não à classe de
+# bug a que pertence. A pergunta é uma só: **o que esta regra emite é SEMPRE
+# um bug?** Não "a forma que ela procura costuma estar errada". Se a
+# correção depender de a regra ter reconhecido uma guarda, então ela emite um
+# falso positivo sempre que encontrar uma forma de guarda que ninguém
+# enumerou — e nenhuma lista de exclusões fecha isso, porque a guarda pode
+# estar sempre a uma linha de distância. Só nesse caso é ERROR.
+#
+# A versão anterior deste cabeçalho definia o critério corretamente e depois
+# atribuía a severidade por CLASSE de bug ("null-safety é sempre grave"), o
+# que pôs cinco regras em ERROR. Aplicado a frio, o critério deixa UMA:
+# `null-safety-none-deref-match`, cuja única saída é um acessor colado ao
+# resultado de `re.match`, onde não existe guarda nenhuma a reconhecer. O
+# rácio (1 em 10) é o resultado honesto de um matcher sintático sem
+# dataflow, tal como no pack Java (1 em 8). A justificação de cada uma está
+# no comentário da própria regra.
+#
+# O tier não é cosmético: o parser do Semgrep mapeia ERROR -> `high` e
+# WARNING -> `medium` (src/runners/scannerParsers/semgrep.ts), e o
+# `create_fix_pr` usa `severity_min: high` por omissão. `bug_hunt` não filtra
+# nada, por isso um scan continua a mostrar tudo.
 rules:
-  - id: bugfix-py-error-handling-bare-except
-    pattern: |
-      try:
-          ...
-      except:
-          ...
-    message: >-
-      `except:` sem tipo apanha tudo, incluindo SystemExit e
-      KeyboardInterrupt, por isso engole sinais de paragem além de erros
-      reais. Apanhe a exceção concreta, ou pelo menos `except Exception:`.
-    severity: ERROR
-    languages: [python]
-
-  # Cinco branches, e cada uma é necessária: `except $E:` NÃO casa
-  # `except $E as $V:`, e um corpo que é literalmente `...` não é
-  # exprimível como padrão AST — `...` em posição de padrão é sempre o
-  # operador de elipse do Semgrep, nunca o literal Ellipsis. A única forma
-  # de o apanhar é ligar o corpo a um metavariable e testar o TEXTO com
-  # metavariable-regex. Ambas as coisas foram medidas, não assumidas.
+  # Três formas de `try`, e as três são precisas: o padrão `try/except` NÃO
+  # casa um `try` que tenha `finally:` ou `else:`, por isso acrescentar
+  # qualquer um deles ao MESMO `try` que engole silenciava a regra por
+  # completo. Medido contra p11_try_shapes.py do auditor: 1 de 3 antes, 3 de
+  # 3 depois.
   #
-  # Um corpo com mais do que uma instrução (`pass` seguido de outra coisa)
-  # não casa nenhuma branch, e é isso que se quer: já não é um handler
-  # vazio. Confirmado com fixture própria em misses/except_pass.py.
-  - id: bugfix-py-error-handling-except-pass
-    pattern-either:
-      - pattern: |
-          try:
-              ...
-          except $E:
-              pass
-      - pattern: |
-          try:
-              ...
-          except $E as $V:
-              pass
-      - pattern: |
+  # A exclusão do re-raise é o que separa o bug do idioma. `except: ...;
+  # raise` é limpeza-e-relança: nada é engolido, e o `except:` largo é
+  # deliberado precisamente porque tem de apanhar TUDO para poder limpar.
+  # Medido no corpus do auditor: 3 das 4 funções eram esta forma e as três
+  # disparavam.
+  #
+  # WARNING e não ERROR: o que a regra emite depende de ela ter reconhecido a
+  # guarda `raise`. Uma limpeza que relança através de um helper
+  # (`_reraise()`), ou de um `raise` dentro de um `if`, é código correto que
+  # dispara. Não é "sempre um bug".
+  - id: bugfix-py-error-handling-bare-except
+    patterns:
+      - pattern-either:
+          - pattern: |
+              try:
+                  ...
+              except:
+                  ...
+          - pattern: |
+              try:
+                  ...
+              except:
+                  ...
+              finally:
+                  ...
+          - pattern: |
+              try:
+                  ...
+              except:
+                  ...
+              else:
+                  ...
+      - pattern-not: |
           try:
               ...
           except:
-              pass
-      - patterns:
-          - pattern-either:
-              - pattern: |
-                  try:
-                      ...
-                  except $E:
-                      $BODY
-              - pattern: |
-                  try:
-                      ...
-                  except $E as $V:
-                      $BODY
-          - metavariable-regex:
-              metavariable: $BODY
-              regex: ^\.\.\.$
+              ...
+              raise
+              ...
+      - pattern-not: |
+          try:
+              ...
+          except:
+              ...
+              raise
+              ...
+          finally:
+              ...
+      - pattern-not: |
+          try:
+              ...
+          except:
+              ...
+              raise
+              ...
+          else:
+              ...
+    message: >-
+      `except:` sem tipo apanha tudo, incluindo SystemExit e
+      KeyboardInterrupt, por isso engole sinais de paragem além de erros
+      reais, e o corpo não relança. Apanhe a exceção concreta, ou pelo menos
+      `except Exception:`; se a intenção for limpar e continuar a propagar,
+      termine o handler com `raise`.
+    severity: WARNING
+    languages: [python]
+
+  # Nove branches: {handler tipado sem `as`, handler tipado com `as`, `except:`
+  # nu} x {try simples, try com finally, try com else}. As três dimensões
+  # foram medidas, não assumidas:
+  #
+  #   - `except ($E, ...):` casa a forma de UM tipo E a forma em tuplo. Antes
+  #     usava-se `except $E:`, que não casa tuplo nenhum, por isso
+  #     `except (ValueError, TypeError): pass` era silencioso enquanto a
+  #     versão com `as` disparava — acrescentar um segundo tipo à lista
+  #     silenciava a regra.
+  #   - `except ($E, ...) as $V:` NÃO casa a forma de um só tipo com `as`;
+  #     `except $E as $V:` casa as duas. Medido.
+  #   - o `finally:` / `else:` fazem parte do mesmo nó Try, por isso um
+  #     padrão sem eles não casa. Mesma medição que a regra anterior.
+  #
+  # O corpo liga-se a `$BODY` e testa-se por TEXTO, cobrindo `pass` e `...`
+  # numa só regex: um corpo que é literalmente `...` não é exprimível como
+  # padrão AST (`...` em posição de padrão é sempre o operador de elipse do
+  # Semgrep, nunca o literal Ellipsis), e `$BODY` liga tanto uma instrução
+  # `pass` como a expressão Ellipsis. Um corpo com mais do que uma instrução
+  # não casa nenhuma branch, e é isso que se quer: já não é um handler vazio.
+  #
+  # ImportError/ModuleNotFoundError estão excluídos e são a ÚNICA exclusão
+  # por tipo. `try: import x / except ImportError: pass` é a sonda de
+  # dependência opcional: não existe outra razão para a escrever, ao
+  # contrário de `except FileNotFoundError: pass`, que tanto é limpeza
+  # best-effort como um load falhado engolido — e essas duas não se
+  # distinguem sintaticamente. É por isso que a regra fica em WARNING em vez
+  # de ganhar uma lista de tipos "inofensivos" adivinhada.
+  - id: bugfix-py-error-handling-except-pass
+    patterns:
+      - pattern-either:
+          - pattern: |
+              try:
+                  ...
+              except ($E, ...):
+                  $BODY
+          - pattern: |
+              try:
+                  ...
+              except ($E, ...):
+                  $BODY
+              finally:
+                  ...
+          - pattern: |
+              try:
+                  ...
+              except ($E, ...):
+                  $BODY
+              else:
+                  ...
+          - pattern: |
+              try:
+                  ...
+              except $E as $V:
+                  $BODY
+          - pattern: |
+              try:
+                  ...
+              except $E as $V:
+                  $BODY
+              finally:
+                  ...
+          - pattern: |
+              try:
+                  ...
+              except $E as $V:
+                  $BODY
+              else:
+                  ...
+          - pattern: |
+              try:
+                  ...
+              except:
+                  $BODY
+          - pattern: |
+              try:
+                  ...
+              except:
+                  $BODY
+              finally:
+                  ...
+          - pattern: |
+              try:
+                  ...
+              except:
+                  $BODY
+              else:
+                  ...
+      - metavariable-regex:
+          metavariable: $BODY
+          regex: ^(pass|\.\.\.)$
+      - pattern-not:
+          patterns:
+            - pattern: |
+                try:
+                    ...
+                except ($E, ...):
+                    ...
+            - metavariable-regex:
+                metavariable: $E
+                regex: ^(ImportError|ModuleNotFoundError)$
+      - pattern-not:
+          patterns:
+            - pattern: |
+                try:
+                    ...
+                except ($E, ...):
+                    ...
+                finally:
+                    ...
+            - metavariable-regex:
+                metavariable: $E
+                regex: ^(ImportError|ModuleNotFoundError)$
+      - pattern-not:
+          patterns:
+            - pattern: |
+                try:
+                    ...
+                except ($E, ...):
+                    ...
+                else:
+                    ...
+            - metavariable-regex:
+                metavariable: $E
+                regex: ^(ImportError|ModuleNotFoundError)$
     message: >-
       Erro engolido em silêncio. O corpo do `except` é apenas `pass` (ou
       `...`), por isso a falha desaparece sem log, sem re-raise e sem
-      tratamento.
-    severity: ERROR
+      tratamento. Se o silêncio for mesmo a intenção, escreva-o à vista com
+      `contextlib.suppress(...)`.
+    severity: WARNING
     languages: [python]
 
-  # Três exclusões, não uma. As três formas de guardar são código correto e
-  # as três dispararam com a versão de uma exclusão só:
-  #   - except User.DoesNotExist       (a forma do modelo)
-  #   - except ObjectDoesNotExist      (import de django.core.exceptions)
-  #   - except Exception               (largo, mas apanha o miss na mesma)
+  # As exclusões usam FÓRMULAS ANINHADAS dentro do `pattern-not-inside` — um
+  # `patterns:` com o padrão e a `metavariable-regex` que filtra o TIPO
+  # apanhado. Isso é o que torna a regra específica em vez de "qualquer
+  # try/except silencia": uma `metavariable-regex` no nível da regra não
+  # serve, porque um padrão negado não exporta ligações. Medido: aceite pelo
+  # Semgrep 1.164 e as quatro cláusulas passam a distinguir
+  # `except User.DoesNotExist:` de `except ValueError:`.
+  #
+  # A versão anterior tinha três exclusões que só reconheciam handlers SEM
+  # `as`, sem tuplo e sem `else`. As seis formas corretas do corpus do
+  # auditor disparavam todas — `except User.DoesNotExist as exc:` é pelo
+  # menos tão comum como a forma nua.
+  #
+  # `except (..., $E, ...):` casa handler de um só tipo E tuplo em qualquer
+  # posição; `except $E as $V:` casa as formas com `as` (incluindo o tuplo
+  # com `as`, onde `$E` liga o tuplo inteiro e a regex o atravessa). Medido
+  # uma a uma.
+  #
+  # O CORPO do `try` está no padrão da exclusão (`<... $M.objects.get(...)
+  # ...>`), e não `...`, e isso é a correção do defeito de nó-inteiro: um
+  # `pattern-not-inside` exclui tudo o que caia dentro do nó que casou, e o
+  # nó de um `try` inclui o corpo do `except`. Exigir que o `get` do MESMO
+  # `$M` esteja no corpo do `try` faz com que um `.objects.get()` NÃO
+  # guardado dentro do braço `except` continue a disparar. Medido: a função
+  # `unguarded_in_except` do corpus estava silenciosa e passou a disparar.
+  #
+  # WARNING (mantido): a correção depende de a regra reconhecer a guarda, e
+  # há formas que não reconhece — `get_object_or_404`, um helper próprio, um
+  # decorador que apanha DoesNotExist.
   - id: bugfix-py-error-handling-get-without-doesnotexist
     patterns:
       - pattern: $M.objects.get(...)
+      - pattern-not-inside:
+          patterns:
+            - pattern: |
+                try:
+                    <... $M.objects.get(...) ...>
+                except (..., $E, ...):
+                    ...
+            - metavariable-regex:
+                metavariable: $E
+                regex: ^.*(DoesNotExist|Exception).*$
+      - pattern-not-inside:
+          patterns:
+            - pattern: |
+                try:
+                    <... $M.objects.get(...) ...>
+                except $E as $V:
+                    ...
+            - metavariable-regex:
+                metavariable: $E
+                regex: ^.*(DoesNotExist|Exception).*$
+      - pattern-not-inside:
+          patterns:
+            - pattern: |
+                try:
+                    <... $M.objects.get(...) ...>
+                except (..., $E, ...):
+                    ...
+                else:
+                    ...
+            - metavariable-regex:
+                metavariable: $E
+                regex: ^.*(DoesNotExist|Exception).*$
       - pattern-not-inside: |
-          try:
-              ...
-          except $X.DoesNotExist:
-              ...
-      - pattern-not-inside: |
-          try:
-              ...
-          except ObjectDoesNotExist:
-              ...
-      - pattern-not-inside: |
-          try:
-              ...
-          except Exception:
+          with contextlib.suppress(...):
               ...
     message: >-
       `.objects.get()` sem guardar o miss. O Django levanta DoesNotExist em
@@ -114,36 +320,89 @@ rules:
     severity: WARNING
     languages: [python]
 
+  # A ÚNICA regra em ERROR deste ficheiro, e a única que passa o critério a
+  # frio: o que ela emite é um `.group()`/`.groups()`/`[...]` colado ao
+  # resultado de `re.match/search/fullmatch`. Não existe guarda nenhuma para
+  # a regra reconhecer — o dereference é incondicional sobre o valor de
+  # retorno, e esse valor é None sempre que o padrão não casa. Guardar o
+  # match numa variável antes de o usar já não casa o padrão.
+  #
+  # Os acessores foram medidos contra o corpus: `.groups()`, `.groupdict()`,
+  # `.start()`, `.end()`, `.span()` e o subscrito `[...]` rebentam
+  # exatamente da mesma maneira e estavam todos silenciosos.
+  #
+  # LIMITAÇÃO conhecida e deliberada: a forma com padrão compilado
+  # (`PAT.match(text).group(1)`), que a documentação do `re` recomenda, NÃO
+  # é apanhada. Ligá-la exigiria `$P.match(...)`, e `$P` liga qualquer
+  # recetor com um método `match` — o que traria de volta exatamente o
+  # defeito que a `none-deref-dict-get` teve de fechar. Amarrar `$P` ao
+  # `re.compile(...)` que o produziu é dataflow entre instruções, fora do
+  # Semgrep OSS.
   - id: bugfix-py-null-safety-none-deref-match
-    pattern-either:
-      - pattern: re.match(...).group(...)
-      - pattern: re.search(...).group(...)
-      - pattern: re.fullmatch(...).group(...)
+    patterns:
+      - pattern-either:
+          - pattern: re.match(...)
+          - pattern: re.search(...)
+          - pattern: re.fullmatch(...)
+      - pattern-either:
+          - pattern-inside: $RE.group(...)
+          - pattern-inside: $RE.groups(...)
+          - pattern-inside: $RE.groupdict(...)
+          - pattern-inside: $RE.start(...)
+          - pattern-inside: $RE.end(...)
+          - pattern-inside: $RE.span(...)
+          - pattern-inside: $RE[$I]
     message: >-
-      `.group()` direto no resultado de re.match/search/fullmatch. Quando o
-      padrão não casa, o retorno é None e isto é um AttributeError em
-      produção. Guarde o match numa variável e teste-a antes.
+      Acesso direto ao resultado de re.match/search/fullmatch. Quando o
+      padrão não casa, o retorno é None e isto é um AttributeError (ou
+      TypeError, no subscrito) em produção. Guarde o match numa variável e
+      teste-a antes.
     severity: ERROR
     languages: [python]
 
-  # A exclusão por nome do receiver não é cosmética: `requests.get(url).json()`
-  # é sintaticamente idêntico a um lookup de dicionário e NÃO devolve None.
-  # Sem ela a regra dispara em todo o código que fala HTTP — medido, não
-  # suposto. O custo é conhecido e está nas limitações do design: um cliente
-  # HTTP com outro nome é falso positivo, um dicionário chamado `client` é
-  # falso negativo.
+  # A lista de recetores permitidos que aqui esteve era um teste de
+  # SUBSTRING sobre o texto do recetor, e falhava nas duas direções ao mesmo
+  # tempo: `$D` ligava tudo o que tivesse um `.get` de um argumento —
+  # `User.objects.get(pk)`, `queue.Queue.get(True)`, `pool.get(url)` — e ao
+  # mesmo tempo silenciava dicionários reais só porque o nome continha
+  # `session` ou `client` (uma sessão de Flask/Django É um dicionário).
+  # Oito falsos positivos em ERROR, e a mensagem mandava passar um default
+  # que o `Manager.get` do Django nem sequer aceita.
+  #
+  # A discriminação que funciona é a CHAVE, não o recetor: um lookup de
+  # dicionário usa um literal de string; a ORM usa um kwarg (`pk=`) ou uma
+  # variável, a `queue.Queue` usa um bool/timeout, e um registry usa um enum.
+  # A regex exclui ainda literais que começam por `/` ou `http`, que é o que
+  # distingue `client.get("/users")` (HTTP) de `client.get("timeout")`
+  # (dicionário) sem precisar de saber o nome do recetor. Medido contra o
+  # corpus: 8 falsos positivos -> 0, e os dois falsos negativos que a lista
+  # de recetores criava (`session.get("user_id")`,
+  # `client_config.get("timeout")`) passaram a disparar.
+  #
+  # CUSTO conhecido: um lookup com chave em variável (`cfg.get(key).strip()`)
+  # deixa de ser apanhado. É o preço de não ter tipos.
+  #
+  # WARNING e não ERROR: as duas exclusões de guarda (`if k in d:` e
+  # `assert k in d`) são exatamente o caso em que a correção depende de a
+  # regra reconhecer a guarda, e há mais formas do que estas duas.
   - id: bugfix-py-null-safety-none-deref-dict-get
     patterns:
       - pattern: $D.get($K).$M(...)
       - metavariable-regex:
-          metavariable: $D
-          regex: ^(?!.*(requests|session|client|httpx|aiohttp|urllib)).*$
+          metavariable: $K
+          regex: ^["'](?!/|https?:)[^"']*["']$
+      - pattern-not-inside: |
+          if $K in $D:
+              <... $D.get($K).$M(...) ...>
+      - pattern-not-inside: |
+          assert $K in $D
+          ...
     message: >-
       Método chamado diretamente sobre `.get()` de um dicionário. `.get()`
       devolve None quando a chave não existe, por isso isto é um
       AttributeError na primeira chave em falta. Passe um default
       (`.get(k, ...)`) ou teste o resultado.
-    severity: ERROR
+    severity: WARNING
     languages: [python]
 
   # O índice TEM de subscrever a mesma sequência de onde veio o len(). Uma
@@ -151,36 +410,87 @@ rules:
   # falsos positivos contra as near-miss — alegação vazia, porque nenhuma
   # near-miss continha sequer `range(len(x) + 1)`. Medido depois: a forma
   # solta dispara em `for i in range(len(a) + 1): dp[i] = i`, o idioma
-  # normal de semear um array de DP com n+1 posições, onde o índice
-  # subscreve OUTRO array, do tamanho certo. Isso é código correto, e a
-  # severidade deste ficheiro define ERROR como "sempre um bug,
-  # independentemente da intenção".
+  # normal de semear um array de DP com n+1 posições.
+  #
+  # A forma com início explícito (`range(0, len(x) + 1)`) é uma branch à
+  # parte porque a aridade do `range` faz parte do padrão. Medida: estava
+  # silenciosa.
+  #
+  # `$X[len($X)]` em posição de ATRIBUIÇÃO não é um IndexError, é o idioma
+  # `d[len(d)] = v` — indexar um dicionário pela sua própria dimensão atual.
+  # Dois dos quatro disparos do corpus eram isso. A exclusão apanha-os porque
+  # o alcance do `pattern-not-inside` (a atribuição inteira) contém o
+  # subscrito que casou.
+  #
+  # WARNING e não ERROR, e o contra-exemplo é o mesmo que o pack Java já
+  # tinha registado: `for i in range(len(xs) + 1): out.append(xs[i] if i <
+  # len(xs) else -1)` é código correto, e a expressão profunda `<... $X[$I]
+  # ...>` desce até dentro do condicional e dispara na mesma. Medido, não
+  # deduzido.
   - id: bugfix-py-off-by-one-range-len-plus-one
-    pattern-either:
-      - pattern: |
-          for $I in range(len($X) + 1):
-              <... $X[$I] ...>
-      - pattern: $X[len($X)]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              for $I in range(len($X) + 1):
+                  <... $X[$I] ...>
+          - pattern: |
+              for $I in range(0, len($X) + 1):
+                  <... $X[$I] ...>
+          - pattern: $X[len($X)]
+      - pattern-not-inside: $X[len($X)] = $V
     message: >-
       Off-by-one. `range(len(x) + 1)` itera uma posição a mais do que a
       sequência tem, e `x[len(x)]` está sempre fora dos limites — ambos são
       IndexError. Queria provavelmente `range(len(x))` e `x[len(x) - 1]`.
-    severity: ERROR
+    severity: WARNING
     languages: [python]
 
-  # A exclusão de targets que são atributos (`self.handle = open(...)`) é
-  # deliberada: nesse caso o close() vive noutro método, fora do alcance de
-  # uma regra sintática, por isso disparar ali seria um palpite. Sem a
-  # exclusão a regra dispara na classe Writer da fixture de near-miss, que é
-  # código correto.
+  # `pattern-inside: def ...` é o que tira do caminho o handle de módulo
+  # (`LOGFILE = open("/tmp/app.log", "a")`), fechado por `atexit` ou pelo
+  # fim do processo — não há `close()` no mesmo scope porque não há scope.
+  #
+  # As restantes exclusões são todas TRANSFERÊNCIA DE POSSE: o handle sai da
+  # função (return, yield), é entregue a um `ExitStack`/`closing` que o
+  # fecha, ou é guardado numa coleção que outro código fecha. Nesses casos
+  # fechar aqui seria o bug. Cinco das seis funções corretas do corpus do
+  # auditor disparavam; a exclusão de atributo (`self.handle = open(...)`)
+  # já existia e é a sexta.
   - id: bugfix-py-memory-leak-open-without-context
     patterns:
+      - pattern-inside: |
+          def $FN(...):
+              ...
       - pattern: $F = open(...)
       - pattern-not: $S.$A = open(...)
       - pattern-not-inside: |
           $F = open(...)
           ...
           $F.close()
+      - pattern-not-inside: |
+          $F = open(...)
+          ...
+          return $F
+      - pattern-not-inside: |
+          $F = open(...)
+          ...
+          yield $F
+      - pattern-not-inside: |
+          $F = open(...)
+          ...
+          $S.enter_context($F)
+      - pattern-not-inside: |
+          $F = open(...)
+          ...
+          with contextlib.closing($F) as $H:
+              ...
+      - pattern-not-inside: |
+          $F = open(...)
+          ...
+          $C[$K] = $F
+      - pattern-not-inside: |
+          $F = open(...)
+          ...
+          $C.append($F)
     message: >-
       Ficheiro aberto sem context manager e sem close() no mesmo scope. O
       descritor fica preso até o garbage collector o apanhar, o que em
@@ -195,18 +505,17 @@ rules:
   # A regra geral ("chamada a qualquer função definida com async def no
   # mesmo ficheiro") não é exprimível em Semgrep OSS: ver §8 do design.
   #
-  # As quatro exclusões são pattern-not-INSIDE, não pattern-not. Uma chamada e
-  # o `await`/`return`/atribuição que a envolve nunca partilham o mesmo span,
+  # As exclusões são pattern-not-INSIDE, não pattern-not. Uma chamada e o
+  # `await`/`return`/atribuição que a envolve nunca partilham o mesmo span,
   # por isso um pattern-not seria um no-op silencioso — a mesma armadilha
   # que o design do JS/TS documenta.
   #
-  # A quarta exclusão, aninhamento noutra chamada, existe porque uma
-  # corotina passada como argumento a outra chamada está a ser entregue a
-  # algo que a vai agendar ou aguardar — `asyncio.create_task(asyncio.sleep(1))`
-  # é exatamente a forma que a mensagem desta regra recomenda escrever, e sem
-  # esta exclusão a regra disparava nela própria. Medido: leva os três falsos
-  # positivos (`tg.create_task(...)`, `acc.append(...)`,
-  # `asyncio.create_task(...)`) a zero, mantendo os quatro hits intactos.
+  # A exclusão de aninhamento noutra chamada existe porque uma corotina
+  # passada como argumento a outra chamada está a ser entregue a algo que a
+  # vai agendar ou aguardar. `yield $ANY` foi acrescentada depois de medir o
+  # corpus do auditor: um gerador assíncrono que faz `yield asyncio.sleep(1)`
+  # entrega a corotina a quem consome o gerador, e era o único falso
+  # positivo que restava.
   - id: bugfix-py-race-condition-asyncio-not-awaited
     patterns:
       - pattern-either:
@@ -216,6 +525,7 @@ rules:
           - pattern: asyncio.wait_for(...)
       - pattern-not-inside: await $ANY
       - pattern-not-inside: return $ANY
+      - pattern-not-inside: yield $ANY
       - pattern-not-inside: $V = $ANY
       - pattern-not-inside: $F(..., asyncio.$P(...), ...)
     message: >-
@@ -226,46 +536,129 @@ rules:
     severity: WARNING
     languages: [python]
 
-  # A forma em sequência (`...` antes e depois), não o operador de expressão
-  # profunda `<... ... ...>`. O `<...>` só desce dentro de UMA instrução, por
-  # isso apanhava `if exists(p): return open(p).read()` mas perdia
-  # `if exists(p): log(...); return open(p).read()` — e essa segunda forma é
-  # pelo menos tão comum como a primeira. Medido contra sete casos: a forma
-  # em sequência apanha as duas e continua silenciosa quando o open() está
-  # depois do bloco, no `else`, ou sobre outra variável.
+  # A guarda está em `pattern-inside` e o achado é o `open()`, não o `if`
+  # inteiro. Essa granularidade é o que permite excluir os modos de ESCRITA
+  # com um `pattern-not` — um `pattern-not` só cancela um achado com o MESMO
+  # alcance, e com o `if` inteiro como alcance nenhuma exclusão sobre a
+  # chamada chegaria lá.
+  #
+  # A forma em sequência (`...` antes e depois do open dentro do corpo do
+  # `if`), não o operador de expressão profunda `<... ... ...>`. O `<...>` só
+  # desce dentro de UMA instrução, por isso apanhava `if exists(p): return
+  # open(p).read()` mas perdia `if exists(p): log(...); return open(p).read()`
+  # — e essa segunda forma é pelo menos tão comum. O `...` da sequência
+  # percorre só a lista de instruções do CORPO, não o `else`, o que é o que
+  # mantém `open_in_else` silencioso.
+  #
+  # Seis guardas, não uma. `os.path.isfile`, `os.access` e o `.exists()` de
+  # um `pathlib.Path` são pelo menos tão comuns como `os.path.exists`, e as
+  # três estavam silenciosas. A guarda NEGADA (`if not os.path.exists(p):
+  # return ""` seguido do open no corpo da função) é a forma mais comum de
+  # todas e leva duas branches, uma por função de teste.
+  #
+  # Escrever não é TOCTOU do mesmo tipo: `if exists(p): rename(p, p+".bak");
+  # open(p, "w")` testa para NÃO estragar, e o conselho da mensagem (abrir
+  # direto e apanhar FileNotFoundError) não se aplica. Os modos de escrita
+  # estão excluídos.
   - id: bugfix-py-race-condition-toctou-exists-open
-    pattern: |
-      if os.path.exists($P):
-          ...
-          open($P, ...)
-          ...
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              if os.path.exists($P):
+                  ...
+                  open($P, ...)
+                  ...
+          - pattern-inside: |
+              if os.path.isfile($P):
+                  ...
+                  open($P, ...)
+                  ...
+          - pattern-inside: |
+              if os.access($P, ...):
+                  ...
+                  open($P, ...)
+                  ...
+          - pattern-inside: |
+              if not os.path.exists($P):
+                  ...
+              ...
+              open($P, ...)
+              ...
+          - pattern-inside: |
+              if not os.path.isfile($P):
+                  ...
+              ...
+              open($P, ...)
+              ...
+          - pattern-inside: |
+              if $P.exists():
+                  ...
+                  $P.open(...)
+                  ...
+      - pattern-either:
+          - pattern: open($P, ...)
+          - pattern: $P.open(...)
+      - pattern-not: open($P, "w", ...)
+      - pattern-not: open($P, "wb", ...)
+      - pattern-not: open($P, "a", ...)
+      - pattern-not: open($P, "ab", ...)
+      - pattern-not: open($P, "x", ...)
     message: >-
       Race entre o teste e o uso (TOCTOU): o ficheiro pode desaparecer entre
-      o `os.path.exists()` e o `open()`. Abra diretamente e apanhe
+      o teste de existência e o `open()`. Abra diretamente e apanhe
       `FileNotFoundError` em vez de testar antes.
     severity: WARNING
     languages: [python]
 
-  # Cobre `.all()` e `.filter(...)`: a versão só com `.all()` não apanhava a
-  # forma mais comum. O segundo pattern usa o operador de expressão profunda
-  # `<... ...>` para exigir que o corpo do ciclo atravesse uma relação —
-  # iterar um queryset só é N+1 se alguma coisa lá dentro for buscar o
-  # objeto relacionado.
+  # O achado é a CADEIA `$O.$REL.$FIELD`, não o ciclo inteiro, e isso é a
+  # correção do defeito central: `$O.$REL.$FIELD` liga qualquer cadeia de
+  # dois níveis a partir da variável do ciclo, incluindo um campo simples
+  # seguido de um método de str/datetime/Decimal — `book.title.strip()`,
+  # `user.email.lower()`, `ev.created_at.isoformat()`. Quatro de quatro
+  # ciclos corretos do corpus disparavam, cada um aconselhado a acrescentar
+  # `.select_related("title")`.
   #
-  # Limitação conhecida e medida: só casa ciclos `for`. A mesma N+1 escrita
-  # como list comprehension não é apanhada.
+  # Com o achado ao nível da expressão, `pattern-not-inside:
+  # $O.$REL.$FIELD(...)` remove exatamente essas: a cadeia que é a parte
+  # chamada de uma chamada está DENTRO da chamada. Com o ciclo inteiro como
+  # alcance a mesma cláusula não removia nada — medido, era um no-op.
+  # CUSTO: uma N+1 cujo campo relacionado é um método (`book.author.name()`)
+  # deixa de ser apanhada.
+  #
+  # A âncora passou de `.all()`/`.filter(...)` para a expressão profunda
+  # `<... $M.objects ...>` na posição do iterável, o que apanha qualquer
+  # queryset encadeado — `.exclude(...)`, `.order_by(...)`, `.only(...)` —
+  # e não só as duas formas enumeradas. É a ÚNICA cláusula de âncora: um
+  # segundo `pattern-inside: for $O in $QS:` esteve aqui e era redundante,
+  # porque a âncora dos objects já liga `$O`. Medido por ablação.
+  #
+  # As exclusões de `select_related`/`prefetch_related` são o que torna as
+  # near-miss DISCRIMINANTES. Antes, `selected` e `prefetched` estavam
+  # silenciosas porque QUALQUER chamada encadeada partia a âncora
+  # `$M.objects.all()` — `.only("title")` era igualmente silencioso, ou seja,
+  # as fixtures ficavam verdes contra uma regra deliberadamente partida.
+  # Agora `.only(...)` dispara e `.select_related(...)` não, e apagar a
+  # exclusão põe as near-miss a vermelho.
+  #
+  # LIMITAÇÃO medida: a exclusão não compara o NOME da relação com o
+  # argumento do `select_related`, porque `$REL` liga um identificador e o
+  # argumento é um literal de string — não unificam. Logo
+  # `.select_related("publisher")` sobre um corpo `book.author.name` fica
+  # silencioso. Continua a ser um silêncio pela razão certa (há um
+  # select_related) em vez de por acidente.
   - id: bugfix-py-edge-case-queryset-n-plus-one
     patterns:
-      - pattern-either:
-          - pattern: |
-              for $O in $M.objects.all():
-                  ...
-          - pattern: |
-              for $O in $M.objects.filter(...):
-                  ...
-      - pattern: |
-          for $O in $QS:
-              <... $O.$REL.$FIELD ...>
+      - pattern-inside: |
+          for $O in <... $M.objects ...>:
+              ...
+      - pattern: $O.$REL.$FIELD
+      - pattern-not-inside: $O.$REL.$FIELD(...)
+      - pattern-not-inside: |
+          for $O in <... $Q.select_related(...) ...>:
+              ...
+      - pattern-not-inside: |
+          for $O in <... $Q.prefetch_related(...) ...>:
+              ...
     message: >-
       Provável N+1: o queryset é iterado e o corpo do ciclo atravessa uma
       relação, por isso cada volta faz a sua própria query. Acrescente

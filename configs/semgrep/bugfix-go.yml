@@ -11,98 +11,270 @@
 # a regra, outro parecido que NÃO pode. O ficheiro misses/ é a especificação
 # do que é código correto — se ele disparar, a regra é que está errada.
 #
+# TODAS as fixtures Go TÊM DE COMPILAR, e isso é verificado, não presumido:
+# `docker run --rm -v "<dir>:/w" -w //w golang:1.22-alpine go build ./...`.
+# A regra `edge-case-append-discarded`, que aqui esteve durante duas
+# releases, procurava `append(xs, 1)` em posição de instrução — que a secção
+# *Expression statements* da spec do Go proíbe. O compilador rejeita-a
+# (`append(xs, 1) (value of type []int) is not used`), por isso o conjunto de
+# verdadeiros positivos da regra era VAZIO em qualquer projeto que compile e
+# tudo o que ela emitia num repositório real era falso positivo — três,
+# medidos: `for _, v := range append(xs, 0)`, `ch <- append(xs, 1)` e
+# `return &box{items: append(xs, 1)}`. Foi apagada. Ver CHANGELOG.
+#
 # Os ids seguem bugfix-go-<classe>-<nome>, em que <classe> tem de ser um dos
 # seis tokens que o mapSubcategory reconhece por regex sobre o id em
 # minúsculas. Nenhum id usa a palavra `unchecked`.
 #
 # NÃO acrescentar cláusulas de exclusão "defensivas" sem medir primeiro: duas
-# que pareciam obrigatórias foram medidas e não faziam nada (§8 do design).
+# que pareciam obrigatórias foram medidas e não faziam nada (§8 do design). E
+# não deixar cláusulas mortas: ablação nos DOIS eixos — apagar a cláusula tem
+# de pôr um teste a vermelho, E não pode reduzir a contagem de verdadeiros
+# positivos.
+#
+# SEVERIDADE — o critério aplicado ao que a regra EMITE, não à classe de bug.
+# **O que esta regra emite é SEMPRE um bug?** Se a correção depender de a
+# regra ter reconhecido uma guarda, não é ERROR: ela emitirá um falso
+# positivo na primeira forma de guarda que ninguém enumerou, e nenhuma lista
+# de exclusões fecha isso. O cabeçalho anterior definia isto e depois
+# atribuía a severidade por classe, o que pôs sete regras em ERROR. A frio
+# sobra UMA: `error-handling-empty-err-block`, cuja saída é um ramo de erro
+# literalmente vazio — não há guarda nenhuma a reconhecer. A justificação
+# está no comentário de cada regra.
 rules:
+  # UMA branch, não duas. O `$X, _ := $F(...)` que aqui esteve era morto: o
+  # Semgrep casa `$X, _ = $F(...)` também na forma `:=` — medido com as duas
+  # como padrões positivos isolados, o conjunto de resultados é idêntico. É
+  # exatamente a redundância que o cabeçalho desta ficheiro já documentava
+  # para o `append` e que nunca tinha sido aplicada aqui.
+  #
   # Sem exclusões para mapa/canal/type-assertion, e isso é deliberado:
   # `$F(...)` exige uma CHAMADA de função, e `v, _ := m["k"]`, `v, _ := <-ch`
   # e `s, _ := x.(string)` não são chamadas, por isso as formas idiomáticas
-  # com ok-bool nunca casaram. Medido com uma variante larga e outra estreita
-  # lado a lado contra Go idiomático: resultado idêntico.
+  # com ok-bool nunca casaram.
+  #
+  # As exclusões que existem são um deny-list curto e medido de funções da
+  # biblioteca padrão cujo SEGUNDO valor de retorno não é um erro: o
+  # `sync.Map` devolve `(any, bool)`, `strings.CutPrefix/CutSuffix` devolvem
+  # `(string, bool)`, `utf8.Decode*` devolve `(rune, int)`. O `sync.Map.Load`
+  # sozinho fazia esta regra disparar em quase todo o Go concorrente.
+  #
+  # `strings.Cut` NAO está na lista, e a ablação é a razão: devolve TRES
+  # valores, por isso `$X, _ = $F(...)` nunca o casa e a cláusula era morta.
+  #
+  # WARNING e não ERROR, e o resíduo é a razão: uma função DO PRÓPRIO
+  # PROJETO que devolva `(T, bool)` — `f, _ := lookup(reg, "x")` — é
+  # indistinguível de um erro descartado sem tipos, e um `n, _ :=
+  # strconv.Atoi(s)` com zero como fallback deliberado também dispara. Dois
+  # dos quatro disparos que sobram no corpus do auditor são isso.
   - id: bugfix-go-error-handling-err-discarded
-    pattern-either:
-      - pattern: $X, _ := $F(...)
+    patterns:
       - pattern: $X, _ = $F(...)
+      - pattern-not: $X, _ = $M.Load(...)
+      - pattern-not: $X, _ = $M.LoadAndDelete(...)
+      - pattern-not: $X, _ = $M.LoadOrStore(...)
+      - pattern-not: $X, _ = strings.CutPrefix(...)
+      - pattern-not: $X, _ = strings.CutSuffix(...)
+      - pattern-not: $X, _ = utf8.DecodeRune(...)
+      - pattern-not: $X, _ = utf8.DecodeRuneInString(...)
+      - pattern-not: $X, _ = utf8.DecodeLastRune(...)
+      - pattern-not: $X, _ = utf8.DecodeLastRuneInString(...)
     message: >-
-      Erro descartado com `_`. O segundo valor de retorno é o erro e está a ser
-      deitado fora, por isso a falha segue silenciosa e o valor devolvido pode
-      ser o zero-value em vez de dados reais.
-    severity: ERROR
+      Segundo valor de retorno descartado com `_`. Em Go esse valor é
+      normalmente o erro, e deitá-lo fora deixa a falha seguir silenciosa com
+      o zero-value no lugar de dados reais. Se for mesmo um `ok bool`,
+      confirme-o — e se for um erro, trate-o.
+    severity: WARNING
     languages: [go]
 
-  # WARNING e não ERROR: `_ = os.Remove(tmp)` num caminho de limpeza é
-  # deliberado e vai disparar. É o preço de apanhar os casos em que não é.
+  # `var _ = ...` é a asserção de satisfação de interface em tempo de
+  # compilação — um idioma universal em Go que não descarta erro nenhum,
+  # porque nada corre — e é a forma que aparece no topo de metade dos
+  # ficheiros de uma biblioteca. UMA cláusula chega para as duas formas:
+  # `var _ $T = $F(...)` foi medida à parte e era morta, porque a forma sem
+  # tipo já casa `var _ io.Writer = newWriter()`.
+  # `copy`, `len` e `cap` são builtins que não devolvem erro. Medido: as
+  # exclusões levam o corpus de 5 disparos a 1.
+  #
+  # `_ = $X.Close()` é a sexta, e a justificação não é conveniência: a forma
+  # que todos os guias de estilo prescrevem, `defer x.Close()`, descarta o
+  # erro IMPLICITAMENTE e ninguém lhe chama bug. Disparar na versão explícita
+  # enquanto a implícita passa era incoerente — `_ =` ali é intenção
+  # declarada, não intenção esquecida. Continua a disparar em
+  # `_ = tx.Commit()`, `_ = os.Remove(...)` e em tudo o resto.
+  #
+  # O que sobra é deliberado e é o preço conhecido: `_ = os.Remove(tmp)` num
+  # caminho de limpeza vai disparar. É a razão de a regra ser WARNING.
   - id: bugfix-go-error-handling-err-blank-assign
-    pattern: _ = $F(...)
+    patterns:
+      - pattern: _ = $F(...)
+      - pattern-not: var _ = $F(...)
+      - pattern-not: _ = copy(...)
+      - pattern-not: _ = len(...)
+      - pattern-not: _ = cap(...)
+      - pattern-not: _ = $X.Close()
     message: >-
       Retorno atribuído a `_`. Se for um erro, foi descartado de propósito —
       confirme que é mesmo essa a intenção e não um `if err != nil` esquecido.
     severity: WARNING
     languages: [go]
 
+  # A ÚNICA regra em ERROR deste ficheiro, e a única que passa o critério a
+  # frio: o que ela emite é um ramo de erro com o corpo LITERALMENTE vazio. O
+  # erro foi testado e deitado fora — não há guarda nenhuma para a regra
+  # reconhecer, nem intenção legítima a distinguir. É pior do que não testar:
+  # o código diz que trata a falha e não trata.
+  #
+  # A `metavariable-regex` fechou o único falso positivo: `$ERR` ligava
+  # qualquer coisa, por isso `if p != nil { }` sobre um `*os.File` disparava.
+  # CUSTO conhecido: um erro chamado `e` deixa de ser apanhado.
   - id: bugfix-go-error-handling-empty-err-block
-    pattern: |
-      if $ERR != nil {
-      }
+    patterns:
+      - pattern: |
+          if $ERR != nil {
+          }
+      - metavariable-regex:
+          metavariable: $ERR
+          regex: ^.*[eE][rR][rR].*$
     message: >-
       Ramo de erro vazio. O erro foi testado e depois deitado fora, o que é
       pior do que não o testar: o código diz que trata a falha e não trata.
     severity: ERROR
     languages: [go]
 
-  # Duas cláusulas, e mais nenhuma. A exclusão do type switch parece
-  # obrigatória e não é: `v.(type)` dentro de um `switch` nunca casa
-  # `$V.($T)`. As tentativas de a escrever nem sequer compilavam — em Go o
-  # type switch é `switch v := x.(type)`, não `switch x.(T)`. Medido: com e
-  # sem a exclusão o resultado é o mesmo, e as fixtures de near-miss cobrem
-  # as duas formas.
+  # Duas cláusulas, e as duas foram medidas — mas não são as mesmas de antes.
+  # As duas originais (`:=` e `=`) eram MUTUAMENTE REDUNDANTES: medidas como
+  # padrões positivos isolados, `$X, $OK := $V.($T)` e `$X, $OK = $V.($T)`
+  # casam exatamente o mesmo conjunto, e apagar qualquer uma delas não mudava
+  # um único resultado. Sobra uma.
+  #
+  # A exclusão do type switch, que o comentário anterior dizia ser
+  # desnecessária, é necessária: `switch v.(type) { case fmt.Stringer:
+  # return v.(fmt.Stringer).String() }` é código correto e disparava. O que
+  # não compilava era a forma `switch $V.(type) { ... }` — o `...` sozinho
+  # como corpo de um switch é erro de sintaxe em Go. Com um `case $C:`
+  # explícito compila e exclui. Está ancorada em `$V`, por isso uma asserção
+  # sobre OUTRA variável dentro do mesmo switch continua a disparar.
+  #
+  # LIMITAÇÃO medida e não fechável aqui: `var s, ok = v.(string)` continua a
+  # disparar. O padrão `var $X, $OK = $V.($T)` não casa NADA no parser Go do
+  # Semgrep 1.164 — verificado como padrão positivo isolado, zero resultados
+  # num ficheiro que contém exatamente essa linha.
+  #
+  # WARNING e não ERROR: a correção depende inteiramente de a regra
+  # reconhecer a guarda (`, ok`, type switch, errors.As), e a forma `var`
+  # acima é a prova de que há guardas que ela não reconhece.
   - id: bugfix-go-null-safety-type-assert-no-ok
     patterns:
       - pattern: $V.($T)
       - pattern-not-inside: $X, $OK := $V.($T)
-      - pattern-not-inside: $X, $OK = $V.($T)
+      - pattern-not-inside: |
+          switch $V.(type) {
+          case $C:
+            ...
+          }
     message: >-
       Type assertion sem a forma `, ok`. Se o valor não for do tipo esperado
       isto entra em panic; `v, ok := x.(T)` devolve o zero-value e um booleano
       em vez de rebentar.
-    severity: ERROR
+    severity: WARNING
     languages: [go]
 
+  # O corpo TEM de indexar a mesma slice de onde veio o `len()`. Esta é a
+  # correção que a regra Python já tinha e que nunca chegou ao Go: sem ela,
+  # todo o `i <= len(xs)` disparava em ERRO, e os quatro ciclos n+1 corretos
+  # do corpus do auditor — semente de DP, somas de prefixos, enumeração de
+  # pontos de corte, posições de inserção — disparavam os quatro. Todo o
+  # array de DP e toda a soma de prefixos de um repositório Go, em ERROR.
+  #
+  # A medição confirmou que a discriminação é limpa em Go, ao contrário do
+  # que aconteceu no Java: ali o contra-exemplo era `b[i] = (i < a.length) ?
+  # a[i] : -1`, com o `a[i]` guardado dentro do ternário, e a forma de
+  # expressão profunda encontrava-o na mesma. Aqui `dp[i]` não é `xs[i]`, por
+  # isso ligar `$XS` à mesma slice do `len($XS)` chega. 4 falsos positivos ->
+  # 0, e o verdadeiro positivo mantém-se.
+  #
+  # WARNING e não ERROR pela razão que o Java mediu: um índice GUARDADO
+  # dentro do corpo (`if i < len(xs) { sum += xs[i] }`) é código correto e a
+  # expressão profunda desce lá dentro e dispara. Medido aqui também.
   - id: bugfix-go-off-by-one-loop-lte-len
     pattern: |
       for $I := 0; $I <= len($XS); $I++ {
-        ...
+        <... $XS[$I] ...>
       }
     message: >-
       Off-by-one. `i <= len(xs)` corre uma posição para lá do fim e o índice
       `len(xs)` está sempre fora dos limites — é um panic de index out of
       range. Queria provavelmente `i < len(xs)`.
-    severity: ERROR
+    severity: WARNING
     languages: [go]
 
-  # Ambas ancoram na chamada isolada e excluem com pattern-not-inside sobre a
-  # sequência de statements. A alternativa óbvia — um `pattern` positivo a
-  # terminar em `...` emparelhado com `pattern-not` — foi medida e dispara no
-  # seu próprio near-miss: o `...` final gera muitos spans sobrepostos e o
-  # `pattern-not` só cancela um deles.
+  # A âncora era `http.Get` e mais nada, o que deixava passar a forma
+  # DOMINANTE: `client.Do(req)` é o que todo o cliente real usa — qualquer
+  # coisa que ponha headers, timeouts ou contextos. `http.Post`,
+  # `http.PostForm`, `http.Head` e `http.DefaultClient.*` estavam igualmente
+  # silenciosos. Medido no corpus: três fugas reais invisíveis.
+  #
+  # `$C.Do($REQ)` liga qualquer recetor, mas a forma de atribuição a DOIS
+  # valores já é o filtro: um `Do` que devolva outra coisa (o `singleflight`
+  # devolve três valores, o `sync.Once.Do` não devolve nada) não casa.
+  #
+  # QUATRO exclusões de fecho, e foram quatro por ablação, não por desenho.
+  # A versão intermédia tinha sete — uma por forma correta que a versão
+  # anterior tratava como fuga — e três eram mortas: a chamada nua
+  # `$RESP.Body.Close()` na sequência de instruções já casa o fecho dentro de
+  # um closure `defer func(){...}()`, com e sem `_ =`. Medido uma a uma:
+  # apagar qualquer uma das três não muda um único resultado.
+  #
+  # O que sobra: `defer resp.Body.Close()`, o fecho explícito não-deferido (e
+  # por extensão o que está dentro de um closure), a entrega a um helper
+  # (`defer closeQuietly(resp.Body)`), e a transferência de posse — a
+  # resposta é devolvida e quem a recebe fecha.
+  #
+  # WARNING e não ERROR: são quatro formas de "isto está fechado" e há mais —
+  # um helper que receba a resposta inteira, um `httputil.DumpResponse`
+  # seguido de fecho noutra função. A correção depende de as reconhecer.
   - id: bugfix-go-memory-leak-body-not-closed
     patterns:
-      - pattern: $RESP, $ERR := http.Get(...)
+      - pattern-either:
+          - pattern: $RESP, $ERR := http.Get(...)
+          - pattern: $RESP, $ERR := http.Post(...)
+          - pattern: $RESP, $ERR := http.PostForm(...)
+          - pattern: $RESP, $ERR := http.Head(...)
+          - pattern: $RESP, $ERR := http.DefaultClient.$M(...)
+          - pattern: $RESP, $ERR := $C.Do($REQ)
       - pattern-not-inside: |
-          $RESP, $ERR := http.Get(...)
+          $RESP, $ERR := $CALL
           ...
           defer $RESP.Body.Close()
+      - pattern-not-inside: |
+          $RESP, $ERR := $CALL
+          ...
+          $RESP.Body.Close()
+      - pattern-not-inside: |
+          $RESP, $ERR := $CALL
+          ...
+          defer $F($RESP.Body)
+      - pattern-not-inside: |
+          $RESP, $ERR := $CALL
+          ...
+          return $RESP, ...
     message: >-
       Corpo da resposta HTTP nunca fechado. Sem `defer resp.Body.Close()` a
       ligação não volta ao pool e o ficheiro fica aberto — em código que corre
       em ciclo, esgota os descritores.
-    severity: ERROR
+    severity: WARNING
     languages: [go]
 
+  # Duas exclusões acrescentadas depois de medir, não três: o ticker parado
+  # explicitamente no único caminho de saída, e a transferência de posse
+  # (`return t`) — um construtor que devolve o ticker para quem o chama o
+  # parar. As duas eram código correto e disparavam.
+  #
+  # A terceira, para `defer func() { t.Stop() }()`, foi escrita e medida
+  # MORTA: a chamada nua `$T.Stop()` na sequência de instruções já casa o
+  # `Stop()` dentro do closure. É a mesma descoberta que reduziu as sete
+  # exclusões de fecho da `body-not-closed` a quatro.
   - id: bugfix-go-memory-leak-ticker-not-stopped
     patterns:
       - pattern: $T := time.NewTicker(...)
@@ -110,6 +282,14 @@ rules:
           $T := time.NewTicker(...)
           ...
           defer $T.Stop()
+      - pattern-not-inside: |
+          $T := time.NewTicker(...)
+          ...
+          $T.Stop()
+      - pattern-not-inside: |
+          $T := time.NewTicker(...)
+          ...
+          return $T
     message: >-
       Ticker nunca parado. O runtime continua a disparar o canal depois de a
       função sair, e nem o ticker nem a goroutine associada são libertados.
@@ -117,69 +297,96 @@ rules:
     severity: WARNING
     languages: [go]
 
+  # REDESENHADA à volta do bug em vez do idioma. A versão anterior procurava
+  # `Lock()` sem `defer Unlock()`, o que disparava nos dois casos em que o
+  # `defer` SERIA o bug: a secção crítica fina, em que deferir manteria o
+  # lock durante a chamada lenta que se segue, e o `for { mu.Lock(); ...;
+  # mu.Unlock() }`, em que o conselho da mensagem seguraria o lock durante a
+  # função inteira. Ambos código correto, ambos a disparar.
+  #
+  # O bug real não é "não há defer" — é um `return` ENTRE o Lock e o Unlock,
+  # que salta o Unlock e deixa todos os outros acessos bloqueados para
+  # sempre. É isso que o padrão exige agora, e o `...` atravessa blocos
+  # aninhados, por isso o `return` dentro de um `if` conta (medido). Efeito:
+  # 3 falsos positivos -> 0, verdadeiro positivo mantido.
+  #
+  # A branch `RLock`/`RUnlock` fecha o falso negativo do mesmo bug num
+  # `sync.RWMutex`, que estava invisível.
+  #
+  # O `...` final da exclusão anterior foi apagado — era morto — e a própria
+  # exclusão deixou de ser precisa: um `defer $MU.Unlock()` faz com que não
+  # haja Unlock explícito depois do return, por isso o padrão positivo já não
+  # casa.
   - id: bugfix-go-race-condition-lock-without-defer
-    patterns:
-      - pattern: $MU.Lock()
-      - pattern-not-inside: |
+    pattern-either:
+      - pattern: |
           $MU.Lock()
           ...
-          defer $MU.Unlock()
+          return ...
           ...
+          $MU.Unlock()
+      - pattern: |
+          $MU.RLock()
+          ...
+          return ...
+          ...
+          $MU.RUnlock()
     message: >-
-      `Lock()` sem `defer Unlock()`. Um unlock só no caminho feliz é um unlock
-      que qualquer `return` antecipado ou panic salta — e a partir daí todos os
-      outros acessos bloqueiam para sempre.
+      `Unlock()` saltado por um `return` antecipado. O lock é adquirido, há um
+      caminho de saída antes do `Unlock()`, e a partir daí todos os outros
+      acessos bloqueiam para sempre. Use `defer mu.Unlock()` logo a seguir ao
+      `Lock()`, ou feche a secção crítica num closure.
     severity: WARNING
     languages: [go]
 
-  # Cinco cláusulas, e cada uma foi medida à parte. A sexta que aqui esteve —
-  # `pattern-not-inside: $X := append($XS, ...)` — era morta: o Semgrep trata
-  # `$X = append(...)` como cobrindo também a forma `:=`, por isso a cláusula
-  # `=` sozinha já exclui `ys := append(xs, 1)`. Removê-la não muda um único
-  # resultado. Multi-value return e composite literal (slice ou mapa) não
-  # eram cobertos pelas três exclusões originais — medido: `return append(xs,
-  # 1), nil`, `return 0, append(xs, 1)`, `return [][]int{append(xs, 1)}` e
-  # `return map[string][]int{"k": append(xs, 1)}` disparavam ERRO em código
-  # correto. As aspas na última cláusula são obrigatórias: sem elas o segundo
-  # `:` de um literal de mapa faz o parser YAML ler uma mapping e o ficheiro
-  # inteiro falha a carregar — isso é um erro de YAML, não de padrão Semgrep.
-  # A forma `<... ... ...>` (deep expression) é a que funciona: enumerar as
-  # formas (`$T{..., append(...), ...}` e a variante com `$KEY:`) deixa o caso
-  # de literal de mapa a disparar na mesma. Medido: zero falsos positivos nas
-  # quatro formas, e `append(xs, 1)` isolado continua a disparar.
-  - id: bugfix-go-edge-case-append-discarded
-    patterns:
-      - pattern: append($XS, ...)
-      - pattern-not-inside: $X = append($XS, ...)
-      - pattern-not-inside: return append($XS, ...)
-      - pattern-not-inside: $F(..., append($XS, ...), ...)
-      - pattern-not-inside: return ..., append($XS, ...), ...
-      - pattern-not-inside: "$T{<... append($XS, ...) ...>}"
-    message: >-
-      Resultado de `append` descartado. O `append` pode realocar o array de
-      suporte, por isso o valor devolvido é a única referência fiável aos
-      dados — descartá-lo perde tudo o que foi acrescentado.
-    severity: ERROR
-    languages: [go]
-
-  # A exclusão original só reconhecia `make(...)` literal, por isso qualquer
-  # outra inicialização correta — `cfg = defaults()`, `m = src` — disparava
-  # ERRO. Medido: excluir QUALQUER reatribuição a `$M`, não só `make(...)`,
-  # silencia construtor, aliasing e composite literal, e mantém o disparo em
-  # `neverInitialised` (nunca reatribuído antes da escrita).
+  # Duas branches, e a segunda é a forma que mais rebenta em produção. A
+  # âncora `var $M map[$K]$V` não vê nada do que acontece através de um campo
+  # de struct: `c := &config{}` deixa TODOS os campos de mapa a nil, e
+  # `c.Labels["env"] = "prod"` entra em panic. É o clássico, e estava
+  # invisível.
+  #
+  # A exclusão do endereço (`$F(..., &$M, ...)`) fecha o falso positivo
+  # medido: `json.Unmarshal(b, &m)` preenche o mapa através do ponteiro, por
+  # isso a escrita a seguir é correta e disparava em ERRO.
+  #
+  # LIMITAÇÕES conhecidas e deliberadas, ambas por não serem SEMPRE um bug:
+  # `m := buildMap(); m["k"] = 1` depende de o construtor devolver nil, e
+  # `func f(m map[string]int) { m["k"] = 1 }` depende do chamador. Nenhuma
+  # das duas é decidível aqui.
+  #
+  # WARNING e não ERROR: a correção depende de a regra reconhecer a
+  # inicialização, e as formas são muitas — reatribuição, endereço, um
+  # helper `ensure()`, um `sync.Once`.
   - id: bugfix-go-edge-case-nil-map-write
-    patterns:
-      - pattern: |
-          var $M map[$K]$V
-          ...
-          $M[$IDX] = $X
-      - pattern-not-inside: |
-          var $M map[$K]$V
-          ...
-          $M = $ANY
-          ...
+    pattern-either:
+      - patterns:
+          - pattern: |
+              var $M map[$K]$V
+              ...
+              $M[$IDX] = $X
+          - pattern-not-inside: |
+              var $M map[$K]$V
+              ...
+              $M = $ANY
+              ...
+          - pattern-not-inside: |
+              var $M map[$K]$V
+              ...
+              $F(..., &$M, ...)
+              ...
+      - patterns:
+          - pattern: |
+              $C := &$T{}
+              ...
+              $C.$FLD[$IDX] = $X
+          - pattern-not-inside: |
+              $C := &$T{}
+              ...
+              $C.$FLD = $ANY
+              ...
     message: >-
-      Escrita num mapa nil. Um `var m map[K]V` sem `make` é nil: ler dele é
+      Escrita num mapa nil. Um `var m map[K]V` sem `make` é nil, e um campo de
+      mapa num struct criado com literal vazio (`&T{}`) também: ler deles é
       legal e devolve o zero-value, mas escrever entra em panic.
-    severity: ERROR
+    severity: WARNING
     languages: [go]

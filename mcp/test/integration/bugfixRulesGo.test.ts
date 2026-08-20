@@ -23,7 +23,7 @@
 
 import { afterAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, readdirSync } from 'node:fs';
+import { cpSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mapSubcategory } from '../../src/tools/bugHunt.js';
@@ -42,7 +42,13 @@ function semgrepAvailable(): boolean {
 }
 const AVAILABLE = semgrepAvailable();
 
-interface SemgrepResult { check_id: string; path: string }
+interface SemgrepResult {
+  check_id: string;
+  path: string;
+  /** Semgrep's own tier. `extra.severity` is optional in the schema, so it is
+   *  narrowed rather than asserted at every use. */
+  extra?: { severity?: string };
+}
 
 interface SemgrepRun {
   readonly rows: SemgrepResult[];
@@ -85,13 +91,59 @@ function fixtureFiles(dir: string): string[] {
   return readdirSync(dir).filter((name) => name.endsWith('.go')).sort();
 }
 
+/**
+ * Every `- id:` the rule file DECLARES, read out of the YAML text rather than
+ * out of a list maintained here. It is the left-hand side of the invariant
+ * below: what the file declares must equal what the fixtures exercise.
+ */
+function declaredRuleIds(): string[] {
+  const declared: string[] = [];
+  for (const line of readFileSync(RULES, 'utf8').split('\n')) {
+    const id = /^\s*-\s+id:\s*(\S+)\s*$/.exec(line)?.[1];
+    if (id !== undefined) declared.push(id);
+  }
+  return declared.sort();
+}
+
 interface FileExpectation {
   readonly ids: readonly string[];
   readonly count: number;
 }
 
+/** Every rule the pack declares. Spelled once, used by `real_bugs.go`. */
+const ALL_RULES = [
+  'bugfix-go-edge-case-nil-map-write',
+  'bugfix-go-error-handling-empty-err-block',
+  'bugfix-go-error-handling-err-blank-assign',
+  'bugfix-go-error-handling-err-discarded',
+  'bugfix-go-memory-leak-body-not-closed',
+  'bugfix-go-memory-leak-ticker-not-stopped',
+  'bugfix-go-null-safety-type-assert-no-ok',
+  'bugfix-go-off-by-one-loop-lte-len',
+  'bugfix-go-race-condition-lock-without-defer',
+] as const;
+
 const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
-  'append_discarded.go': { ids: ['bugfix-go-edge-case-append-discarded'], count: 1 },
+  /**
+   * THE REAL-BUGS CORPUS, written by the AUDITOR rather than by the rules'
+   * author. Fourteen defects, at least one per rule, each placed NEXT TO the
+   * guard shape its rule's exclusions match — a leak beside a correct close, a
+   * discarded error beside a `sync.Map.Load`, an assertion on a different
+   * variable inside a type switch, a leaked ticker beside a stopped one, a
+   * discarded error beside the Close idiom, an off-by-one beside a correct n+1
+   * DP seed.
+   *
+   * It exists because a minimal per-rule hit fixture carries no guard shapes
+   * for an exclusion to catch on, so a wave of false-positive work can delete
+   * recall and still go green. The Java pack learned that the hard way (wave 4
+   * took one of its fixtures from 6 findings to 1 with a green suite).
+   *
+   * Six of the fourteen belong to `body-not-closed`, and that is the shape of
+   * the fix: the shipped rule was anchored to `http.Get` alone, so
+   * `client.Do(req)`, `http.Post`, `http.PostForm`, `http.Head` and
+   * `http.DefaultClient.Get` — everything a real client uses — leaked silently.
+   */
+  'real_bugs.go': { ids: [...ALL_RULES], count: 14 },
   'body_not_closed.go': { ids: ['bugfix-go-memory-leak-body-not-closed'], count: 1 },
   'empty_err_block.go': { ids: ['bugfix-go-error-handling-empty-err-block'], count: 1 },
   'err_blank_assign.go': { ids: ['bugfix-go-error-handling-err-blank-assign'], count: 1 },
@@ -101,6 +153,42 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'nil_map_write.go': { ids: ['bugfix-go-edge-case-nil-map-write'], count: 1 },
   'ticker_not_stopped.go': { ids: ['bugfix-go-memory-leak-ticker-not-stopped'], count: 1 },
   'type_assert_no_ok.go': { ids: ['bugfix-go-null-safety-type-assert-no-ok'], count: 1 },
+};
+
+/**
+ * The severity tier each rule is DESIGNED to carry, and the criterion applied
+ * to the OUTPUT rather than to the bug class: **is what the rule EMITS always
+ * a bug?** Not "is the shape it looks for usually wrong" — a rule whose
+ * correctness depends on having recognised a guard emits a false positive
+ * every time it meets a guard shape nobody enumerated, and no exclusion list
+ * closes that, because the guard can always be one line away.
+ *
+ * Eight of the nine are `WARNING` on that test, and only `empty-err-block`
+ * survives at `ERROR`: its output is an error branch with a literally empty
+ * body, where there is no guard to recognise and no legitimate intent to
+ * distinguish. The pack's header used to define this criterion correctly and
+ * then assign the tier by bug CLASS, which is how seven rules ended up at
+ * ERROR; the 2026-08 audit applied it cold.
+ *
+ * Pinned here because nothing pinned it before — no test read
+ * `extra.severity`, so any tier could be changed with a green suite. The tier
+ * is not cosmetic: the Semgrep parser maps ERROR -> `high` and WARNING ->
+ * `medium` (`src/runners/scannerParsers/semgrep.ts`), and `create_fix_pr`
+ * defaults `severity_min` to `high`. With eight of nine at WARNING the Go pack
+ * contributes almost nothing to the DEFAULT fix-PR set, and a caller who wants
+ * Go bugs fixed has to ask: `severity_min: "medium"`. `bug_hunt` itself
+ * defaults to no filter, so nothing disappears from a scan.
+ */
+const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
+  'bugfix-go-error-handling-empty-err-block': 'ERROR',
+  'bugfix-go-error-handling-err-discarded': 'WARNING',
+  'bugfix-go-error-handling-err-blank-assign': 'WARNING',
+  'bugfix-go-null-safety-type-assert-no-ok': 'WARNING',
+  'bugfix-go-off-by-one-loop-lte-len': 'WARNING',
+  'bugfix-go-memory-leak-body-not-closed': 'WARNING',
+  'bugfix-go-memory-leak-ticker-not-stopped': 'WARNING',
+  'bugfix-go-race-condition-lock-without-defer': 'WARNING',
+  'bugfix-go-edge-case-nil-map-write': 'WARNING',
 };
 
 describe('bugfix-go rules', () => {
@@ -130,11 +218,56 @@ describe('bugfix-go rules', () => {
       const grouped = rowsByFile(rows);
       for (const [file, expected] of Object.entries(EXPECTED_HITS_BY_FILE)) {
         const fileRows = grouped[file] ?? [];
-        expect(ids(fileRows)).toEqual(expected.ids);
+        expect(ids(fileRows)).toEqual([...expected.ids].sort());
         expect(fileRows.length).toBe(expected.count);
       }
+      // The TOTAL, on top of the per-file counts, and not redundant: the loop
+      // above only visits files that HAVE an expectation, so a finding landing
+      // in a file nobody registered would not move any per-file number.
+      expect(rows.length).toBe(
+        Object.values(EXPECTED_HITS_BY_FILE).reduce((n, e) => n + e.count, 0),
+      );
     },
   );
+
+  /**
+   * The trap family: a `pattern-either` branch with no positive term
+   * (`RuleParseError`), an unquoted `?` in an exclusion (`Invalid YAML`), and
+   * an UPPERCASE ACCENTED LETTER in a Portuguese comment all share one
+   * signature — fewer rules load than the file declares, and nothing in the
+   * findings says so. The third bit this very round: Semgrep's config loader
+   * decodes the rule file with the LOCALE codec, so on a Windows cp1252 locale
+   * the second byte of `Á` (U+00C1 -> 0xC3 0x81) is undefined and one letter
+   * takes the whole file down, reporting `results: 0`, `paths.scanned: 0` and
+   * `errors: 0`.
+   *
+   * The total-hits assertion above is the family-wide catch, but only while
+   * EVERY rule has a hit fixture behind it. This closes that, comparing the ids
+   * the fixtures exercise against the `- id:` entries parsed out of the YAML
+   * itself rather than a hand-maintained list. (`semgrep --validate` and the
+   * locale-codec byte check run over every pack in `semgrepPacks.test.ts`.)
+   */
+  it.skipIf(!AVAILABLE)('every rule the YAML declares is exercised by a hit fixture', () => {
+    const { rows } = run(RULES, resolve(FIXTURES, 'hits'));
+    expect(ids(rows)).toEqual(declaredRuleIds());
+  });
+
+  it.skipIf(!AVAILABLE)('reports each rule at its DESIGNED severity tier', () => {
+    const { rows } = run(RULES, resolve(FIXTURES, 'hits'));
+    const seen = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const id = row.check_id.split('.').pop() ?? row.check_id;
+      const severity = row.extra?.severity;
+      if (severity === undefined) throw new Error(`no severity on ${id}`);
+      const set = seen.get(id);
+      if (set) set.add(severity);
+      else seen.set(id, new Set([severity]));
+    }
+    for (const [id, tier] of Object.entries(EXPECTED_SEVERITY)) {
+      expect([id, [...(seen.get(id) ?? [])]]).toEqual([id, [tier]]);
+    }
+    expect([...seen.keys()].sort()).toEqual(Object.keys(EXPECTED_SEVERITY).sort());
+  });
 
   it.skipIf(!AVAILABLE)('fires NOTHING in EACH near-miss fixture', () => {
     const missesDir = resolve(FIXTURES, 'misses');
@@ -158,7 +291,6 @@ const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-go-null-safety-type-assert-no-ok': 'null_safety',
   'bugfix-go-off-by-one-loop-lte-len': 'off_by_one',
   'bugfix-go-race-condition-lock-without-defer': 'race_condition',
-  'bugfix-go-edge-case-append-discarded': 'edge_case',
   'bugfix-go-edge-case-nil-map-write': 'edge_case',
 };
 

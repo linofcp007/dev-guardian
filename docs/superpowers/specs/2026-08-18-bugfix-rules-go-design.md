@@ -1,7 +1,13 @@
 # Local bug-finding Semgrep rules — Go — design of record
 
 **Date:** 2026-08-18
-**Status:** approved
+**Status:** approved — **partly superseded by the 2026-08 audit.** The pack now
+ships **nine** rules, not ten: `append-discarded` (§ below) was deleted because
+it matched `append(xs, 1)` in statement position, which the Go spec forbids and
+the compiler rejects, so its true-positive set was empty in any project that
+compiles. Severity was also re-assigned across the whole pack by what each rule
+EMITS rather than by bug class, leaving `empty-err-block` as the only `ERROR`.
+See `CHANGELOG.md` and the rule comments in `configs/semgrep/bugfix-go.yml`.
 **Third in the per-language sequence**, after JS/TS (1.6.0) and Python (1.7.0).
 
 ## 1. Why Go is the biggest hole in the sequence so far
