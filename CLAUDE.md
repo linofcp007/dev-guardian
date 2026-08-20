@@ -63,12 +63,18 @@ previous ones:
 2. **keeps true positives** — removing it must not *reveal* findings in
    `hits/`. `pattern-not-inside` excludes the whole node it matched, so a
    guard written for an `if` also swallowed the `else` arm, where the bug was.
-3. **no added noise on real code** — scan a corpus nobody wrote as a fixture
-   (`mcp/src`, for the JS/TS pack) and compare. If removing the clause *lowers*
-   the count, the clause was adding those findings. This is the axis that
-   caught `unchecked-match` going 0 → 13 false positives on our own
+3. **no rise in the real-code count** — scan a corpus nobody wrote as a
+   fixture (`mcp/src`, for the JS/TS pack) and compare. If removing the clause
+   *lowers* the count, the clause was adding those findings. This is the axis
+   that caught `unchecked-match` going 0 → 13 false positives on our own
    TypeScript; axes 1 and 2 both passed, because "live" and "keeps true
    positives" are both true of a clause that only *adds* false positives.
+
+Axes 2 and 3 are attributions, not proofs, and both flag more than the defect
+they were built for. Axis 2 fires whenever a `hits/` fixture deliberately
+carries the excluded near-miss beside the bug — the `real_bugs` files do, and
+annotate it. Axis 3 fires for any clause whose removal makes the rule match
+less, which includes a *working* positive branch. Read the lines it prints.
 
 Axis 3 needs a real-code corpus in a language the pack matches, so it is a
 property of the invocation — registered per pack in

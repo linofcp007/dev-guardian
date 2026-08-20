@@ -63,11 +63,13 @@ function detail(v: ClauseVerdict): string[] {
   } else if (v.noAddedNoise === 'FAIL') {
     out.push(`  axis 3  RAISES the real-code count by ${String(v.addedByClause.length)} --`);
     out.push('          these findings exist only because of this clause. Read them.');
-    out.push('          Structurally, only a WIDENING clause can land here, so a');
-    out.push('          positive branch of a rule that legitimately fires on real code');
-    out.push('          will too: the verdict is an attribution, not a proof that the');
-    out.push('          findings are false. The regression this axis exists for looked');
-    out.push('          exactly like this (0 -> 13 on mcp/src) and all 13 were false.');
+    out.push('          Only a clause whose removal makes the rule match LESS can land');
+    out.push('          here: a positive `pattern-either` branch, or a constraint nested');
+    out.push('          INSIDE a `pattern-not`, where dropping it widens the exclusion.');
+    out.push('          So a working branch of a rule that legitimately fires on real');
+    out.push('          code lands here too -- the verdict is an attribution, not a');
+    out.push('          proof that the findings are false. The regression this axis');
+    out.push('          exists for looked the same (0 -> 13 on mcp/src) and all 13 were.');
     out.push(...sample(v.addedByClause));
   } else {
     out.push(`  axis 3  does not raise the real-code count (${signed(v.realDelta ?? 0)} when removed)`);
