@@ -75,11 +75,57 @@ no passo 5, a tool `review_pr` (scan do diff antes de merge) e a tool
 utilizador pedir explicitamente um workflow CI, é preciso escrevê-lo de raiz —
 não copiar de um template, porque não existe nenhum neste repositório.
 
-Antes de copiar qualquer ficheiro, verifica se já existe. Se sim, perguntar:
+Não copies os ficheiros à mão: chama `init_project`, que já faz tudo isto e —
+ao contrário de um `cp` — deixa registo do que copiou.
 
-- Substituir (backup do antigo como `.bak`)
-- Fazer merge (se o template é compatível com o que está)
-- Ignorar (manter o existente)
+### 4a. Proveniência: o que fica registado
+
+Cada ficheiro copiado é registado em `.dev-guardian/configs.json` (destino,
+origem, versão do plugin e hash do conteúdo no momento da cópia), e leva um
+cabeçalho de comentário quando o formato permite. `renovate.json` é JSON e não
+aceita comentários, por isso é o manifesto — e não o cabeçalho — o mecanismo
+verdadeiro; o cabeçalho é só uma conveniência para quem abre o ficheiro.
+
+Este manifesto **é para ir para o commit**, ao contrário de `.guardian/`, que
+está no `.gitignore`: é o que permite que o clone de um colega e a CI saibam de
+que baseline vem cada config.
+
+`init_project` nunca substitui um ficheiro que já exista — mas, se o conteúdo
+for byte a byte igual ao que distribuímos, adota-o no manifesto (não escreve
+nada no ficheiro do utilizador). É assim que um projeto anterior a este
+mecanismo passa a ser verificável.
+
+### 4b. Configs desatualizadas: `refresh`
+
+Uma correção a uma config distribuída não chegava a quem já tinha corrido o
+init. Foi exatamente o que aconteceu com a regra `wp-unescaped-output` do
+`base.yml`, que não conseguia dar match em nada e foi corrigida em `b51a2dc`.
+
+A partir do registo de proveniência, qualquer scan compara os hashes e emite
+**uma linha de aviso** — nunca um finding, nunca um erro, nunca bloqueante —
+apenas em dois casos: distribuímos uma baseline mais recente e a cópia do
+utilizador não mudou, ou mudaram os dois lados. Se o utilizador editou a sua
+cópia e nós não mexemos na nossa, não se diz nada: é o caso esperado.
+
+Para resolver, sempre nesta ordem:
+
+```text
+init_project(project_path=".", refresh=true, apply=false)   # mostra o que mudaria
+init_project(project_path=".", refresh=true, apply=true)    # aplica
+```
+
+O que `apply=true` faz, por ficheiro:
+
+| Situação                                     | Ação                                          |
+| -------------------------------------------- | --------------------------------------------- |
+| Não existe no projeto                        | Cria                                          |
+| Existe e nunca foi tocado desde a instalação | Atualiza no sítio                             |
+| Existe e foi editado, ou divergiu            | Escreve `<nome>.new` ao lado; não toca no teu |
+| Proveniência desconhecida (sem manifesto)    | Igual ao anterior — nunca se adivinha         |
+
+**Nenhuma flag substitui um ficheiro modificado.** Se aparecer um `.new`, o
+passo seguinte é do utilizador: fazer o merge à mão e apagar o `.new` — o aviso
+desaparece quando o `.new` deixar de existir.
 
 ### 5. Hook de pre-commit
 
@@ -115,8 +161,10 @@ Estado atual do projeto:
 Próximos passos sugeridos:
   1. Corre `guardian deps` para atualizar dependências vulneráveis
   2. Liga Renovate no GitHub: github.com/apps/renovate (1 clique)
-  3. Faz commit dos ficheiros gerados:
-     git add .pre-commit-config.yaml .gitleaks.toml renovate.json .semgrep.yml
+  3. Faz commit dos ficheiros gerados (o manifesto vai junto — é o que
+     permite avisar-te quando uma config distribuída for corrigida):
+     git add .pre-commit-config.yaml .gitleaks.toml renovate.json .semgrep.yml \
+             .dev-guardian/configs.json
      git commit -m "chore: setup dev-guardian"
 ```
 

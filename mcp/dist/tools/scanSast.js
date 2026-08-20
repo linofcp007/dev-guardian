@@ -5,25 +5,65 @@
  * Invokes Semgrep directly (no shell script), writing the JSON report to
  * `.guardian/reports/sast-<short-scan-id>/sast.json`. Bandit, if installed
  * and Python sources are detected, is run in the same pass.
+ *
+ * ---- The project's own rules are part of the scan --------------------
+ *
+ * `init_project` installs `configs/semgrep/base.yml` into a project as
+ * `.semgrep.yml` and calls it the baseline SAST config. This tool used to run
+ * `--config=auto` and nothing else, and `--config=auto` does not load it —
+ * measured on semgrep 1.164.0 against a project holding that pack plus one
+ * line of `<?php echo $_GET['name'];`, `--config=auto` reports 0 findings
+ * where `--config=<the file>` reports 1. Thirteen shipped security rules had
+ * no consumer anywhere in the product, which is how `wp-unescaped-output`
+ * managed to be dead twice over for independent reasons.
+ *
+ * `platform/projectSemgrepConfig.ts` resolves those configs (from the
+ * provenance manifest, falling back to the conventional filenames) and
+ * refuses any that Semgrep could not load, because a `--config` that fails to
+ * resolve aborts the WHOLE run — `paths.scanned: []`, exit 7 — not just that
+ * pack. `test/e2e/projectRulesFixture.test.ts` is the end-to-end proof that
+ * the rules `init_project` installs are the rules this tool runs.
+ *
+ * ---- Telemetry, and `local_only` -------------------------------------
+ *
+ * `--config=auto` fetches its rule set from the Semgrep registry and **sends
+ * usage metrics to Semgrep Inc. as a condition of doing so**: passing
+ * `--metrics=off` alongside it fails outright with "Cannot create auto config
+ * when metrics are off". So every default scan this tool has ever run
+ * reported telemetry, and it could not have done otherwise.
+ *
+ * That is a defensible default and an indefensible silent one in a security
+ * tool, so it is stated in the tool description, the README and the skill.
+ * `local_only: true` is the alternative — no registry, `--metrics=off`, and
+ * only rules already on disk. It became a coherent mode rather than an empty
+ * one the moment the project's own `.semgrep.yml` started being loaded.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { z } from 'zod';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { securityCodeScanParser } from '../runners/scannerParsers/securityCodeScan.js';
 import { runProcess } from '../runners/processRunner.js';
-import { buildSemgrepDockerArgs, DEFAULT_SEMGREP_IMAGE, } from '../runners/dockerScanner.js';
+import { buildSemgrepDockerArgs, DEFAULT_SEMGREP_IMAGE, toContainerPath, } from '../runners/dockerScanner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
 import { resolveCustomSemgrepConfigs } from '../platform/customRules.js';
+import { inspectProjectSemgrepConfigs, } from '../platform/projectSemgrepConfig.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.js';
 import { makeScanTool, } from './scanToolFactory.js';
 registerToolModule(makeScanTool({
     name: 'scan_sast',
     title: 'SAST scan (Semgrep)',
-    description: 'Static analysis with Semgrep against the project (config=auto). ' +
-        'Also runs Bandit when Python files are present and the CLI is installed. ' +
-        'Output JSON is written to .guardian/reports/sast-<scan>/ and parsed into Findings.',
+    description: 'Static analysis with Semgrep against the project. Runs the Semgrep registry ruleset ' +
+        "(--config=auto), the project's own rules (.semgrep.yml, or whatever " +
+        '.dev-guardian/configs.json records as its target) and any rules added with ' +
+        'register_custom_rules. Also runs Bandit when Python files are present and the CLI is ' +
+        'installed. Output JSON is written to .guardian/reports/sast-<scan>/ and parsed into ' +
+        'Findings. PRIVACY: --config=auto downloads rules from the Semgrep registry and sends ' +
+        'usage metrics to Semgrep Inc.; Semgrep refuses to build an auto config with metrics ' +
+        'off, so this is unavoidable in the default mode. Pass local_only=true for a scan that ' +
+        'contacts nothing and runs with --metrics=off, using only rules already on disk.',
     scan_type: 'sast',
     category: 'security',
     inputSchema: {
@@ -32,6 +72,14 @@ registerToolModule(makeScanTool({
         auto_fix: AutoFix,
         allow_dirty: AllowDirty,
         force: Force,
+        local_only: z
+            .boolean()
+            .optional()
+            .describe("Run only rules already on disk (the project's own Semgrep config plus anything " +
+            'registered with register_custom_rules), skip the Semgrep registry, and pass ' +
+            '--metrics=off so no telemetry leaves the machine. Fewer rules than the default. ' +
+            'When the project has no local rules the scan is reported as skipped rather than ' +
+            'as a clean result. Default: false.'),
     },
     invoke: async (input, ctx) => {
         const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'sast');
@@ -40,18 +88,52 @@ registerToolModule(makeScanTool({
         const parser_inputs = [];
         const autoFix = input.auto_fix === true;
         // --- Semgrep -----------------------------------------------------
-        const semgrepBin = await scannerAvailable('semgrep');
         // C# / .NET signal: when csproj exists, also pin p/csharp rule pack.
         const hasCsproj = anyCsprojInProject(ctx.projectPath);
         const outFile = join(reportDir, 'sast.json');
-        if (semgrepBin) {
-            const args = ['--config=auto'];
-            if (hasCsproj)
-                args.push('--config=p/csharp');
-            // The project's own registered rules (register_custom_rules). Vanished
-            // paths are dropped by the resolver, because a --config that fails to
-            // resolve aborts the WHOLE semgrep run, not just that pack.
-            for (const cfg of resolveCustomSemgrepConfigs(ctx.plugin)) {
+        const localOnly = input.local_only === true;
+        // The project's OWN rules: the pack `init_project` installed, plus
+        // anything `register_custom_rules` added. Both resolvers drop paths that
+        // no longer exist, because a --config that fails to resolve aborts the
+        // WHOLE semgrep run (`paths.scanned: []`, exit 7), not just that pack;
+        // `inspectProjectSemgrepConfigs` additionally refuses a file whose
+        // CONTENTS would do the same, which is newly load-bearing now that a
+        // file the user owns and edits is on this list.
+        const projectRules = inspectProjectSemgrepConfigs(ctx.projectPath);
+        const localConfigs = [
+            ...projectRules.usable.map((c) => c.path),
+            ...resolveCustomSemgrepConfigs(ctx.plugin),
+        ];
+        // A dropped config means the user's own rules silently stopped running.
+        // Carried into `tools_run.reason` on success as well as on failure.
+        const configNotes = projectRules.unusable.map((u) => `${u.target} not loaded (${u.reason})`);
+        // local_only with nothing on disk to run is not a clean scan, it is no
+        // scan at all. Saying so beats reporting zero findings from zero rules.
+        const nothingToRun = localOnly && localConfigs.length === 0;
+        const semgrepBin = nothingToRun ? null : await scannerAvailable('semgrep');
+        if (nothingToRun) {
+            tools_run.push({
+                name: 'semgrep',
+                status: 'skipped',
+                reason: 'local_only=true but this project has no local Semgrep rules — no .semgrep.yml, ' +
+                    'nothing registered with register_custom_rules. Run init_project, or drop ' +
+                    'local_only to use the Semgrep registry.',
+            });
+            missing_tools.push('semgrep');
+        }
+        else if (semgrepBin) {
+            const args = [];
+            if (localOnly) {
+                // Only ever safe once --config=auto is gone: Semgrep refuses to
+                // build an auto config with metrics off.
+                args.push('--metrics=off');
+            }
+            else {
+                args.push('--config=auto');
+                if (hasCsproj)
+                    args.push('--config=p/csharp');
+            }
+            for (const cfg of localConfigs) {
                 args.push(`--config=${cfg}`);
             }
             args.push('--json', '--quiet', '--output', outFile);
@@ -70,15 +152,31 @@ registerToolModule(makeScanTool({
             if (raw) {
                 parser_inputs.push({ parser: semgrepParser, input: raw });
             }
-            // exit 0 = no findings; exit 1 = findings present; both are OK.
-            const ok = result.outcome === 'completed' || result.exitCode === 1;
+            // exit 0 = no findings; exit 1 = findings present; exit 2 = errors
+            // were raised but the scan still ran. The third case only became
+            // reachable when we started loading the user's own rules: one rule of
+            // theirs that fails to compile must cost that rule, not the whole
+            // scan's status and its coverage rating with it. Measured: a rule with
+            // an uncompilable pattern gives exit 2 with `paths.scanned` non-empty,
+            // where a config Semgrep cannot load at all gives exit 7 and scans
+            // nothing — so the scanned list, not the exit code, is what separates
+            // "lost a rule" from "lost the scan".
+            const ok = result.outcome === 'completed' ||
+                result.exitCode === 1 ||
+                (result.exitCode === 2 && semgrepScannedFiles(raw));
             const semgrepRun = { name: 'semgrep', status: ok ? 'ok' : 'failed' };
+            const notes = [...configNotes];
+            if (result.exitCode === 2) {
+                notes.push('semgrep raised rule errors (exit 2) — at least one rule did not load');
+            }
             if (!ok && result.stderr) {
                 // Surface the first stderr line for diagnostics. Held as a local
                 // rather than re-indexed off the end of the array, which needed an
                 // assertion to restate what `push` had just guaranteed.
-                semgrepRun.reason = result.stderr.split(/\r?\n/)[0] ?? 'unknown';
+                notes.push(result.stderr.split(/\r?\n/)[0] ?? 'unknown');
             }
+            if (notes.length > 0)
+                semgrepRun.reason = notes.join('; ');
             tools_run.push(semgrepRun);
         }
         else {
@@ -91,12 +189,23 @@ registerToolModule(makeScanTool({
             const dockerBin = await scannerAvailable('docker');
             if (dockerBin) {
                 const image = process.env['GUARDIAN_SEMGREP_IMAGE'] || DEFAULT_SEMGREP_IMAGE;
+                // The container cannot see host paths, so a project config has to be
+                // named by where it sits inside the /src mount. Registered custom
+                // rules are deliberately absent: they can point anywhere on the host,
+                // including outside the project, and a path the container cannot
+                // resolve would abort the whole containerised run.
+                const dockerConfigs = localOnly ? [] : ['auto'];
+                for (const cfg of projectRules.usable) {
+                    dockerConfigs.push(toContainerPath(ctx.projectPath, cfg.path));
+                }
                 const args = buildSemgrepDockerArgs({
                     projectPath: ctx.projectPath,
                     outFileHost: outFile,
-                    hasCsproj,
+                    hasCsproj: hasCsproj && !localOnly,
                     autoFix,
                     image,
+                    configs: dockerConfigs,
+                    metricsOff: localOnly,
                 });
                 const result = await runProcess({
                     command: 'docker',
@@ -253,5 +362,36 @@ function csprojReferencesScs(projectPath) {
         }
     }
     return false;
+}
+/**
+ * Did Semgrep actually look at any files?
+ *
+ * `paths.scanned` is what separates the two failure shapes that share an
+ * angry exit code. A rule whose pattern will not compile exits 2 with a
+ * populated `scanned` list — every file was analysed, one rule was lost. A
+ * `--config` Semgrep cannot load at all exits 7 with `scanned: []` — nothing
+ * was analysed and a "0 findings" result would be a lie. Reading the report
+ * is the only way to tell them apart.
+ *
+ * Takes the raw report text `readJsonSafe` returns; never throws, and answers
+ * `false` for anything it cannot make sense of, so an unparseable report can
+ * never be mistaken for a successful scan.
+ */
+function semgrepScannedFiles(raw) {
+    if (raw === null)
+        return false;
+    try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed !== 'object' || parsed === null)
+            return false;
+        const paths = parsed['paths'];
+        if (typeof paths !== 'object' || paths === null)
+            return false;
+        const scanned = paths['scanned'];
+        return Array.isArray(scanned) && scanned.length > 0;
+    }
+    catch {
+        return false;
+    }
 }
 //# sourceMappingURL=scanSast.js.map
