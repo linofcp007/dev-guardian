@@ -18,6 +18,20 @@ import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
 afterAll(cleanupTempDirs);
 
 /**
+ * Vitest per-test timeout for the `runScans` block below, overriding the 10s
+ * default in `vitest.config.ts`.
+ *
+ * Every tool handler in this file is mocked, so nothing here is doing real
+ * scanner work — but `runScans` still creates and removes a real temp
+ * directory per call, and the "removes its ephemeral temp directory" test
+ * makes two full pipeline runs. Measured well under a second idle; measured
+ * at 10.018s, and therefore FAILED as "Test timed out in 10000ms", on a
+ * full-suite run with other work on the machine. An 18-millisecond overshoot
+ * of a shared default is a report about the machine, not about `runScans`.
+ */
+const RUN_SCANS_SUITE_TIMEOUT_MS = 60_000;
+
+/**
  * `runScans.ts`'s ephemeral directory lives under the SAME shared OS
  * `tmpdir()` every other process on the machine uses — including, in this
  * project's own suite, a real (unmocked) CLI subprocess invocation from
@@ -361,4 +375,4 @@ describe('runScans', () => {
 
     expect(result.findings.map((f) => f.fingerprint).sort()).toEqual(['fp-dast-1', 'fp-sast-1']);
   });
-});
+}, RUN_SCANS_SUITE_TIMEOUT_MS);

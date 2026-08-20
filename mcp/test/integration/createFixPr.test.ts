@@ -1,3 +1,38 @@
+/**
+ * `create_fix_pr` driven end to end against a real git repo, a real npm
+ * registry and the real scanners. Nothing here is mocked except `gh` (see
+ * the stub in `beforeEach`), and that is the point: the tool's whole job is
+ * to apply a fix and then PROVE it worked, and a proof against a fake
+ * scanner proves nothing.
+ *
+ * ---- Where the runtime goes, and why the timeouts look the way they do ---
+ *
+ * This file takes ~2 minutes on an idle machine, ~3.5 under a loaded one,
+ * and that is not accidental overhead — it is network round-trips the tests
+ * genuinely make. Measured by instrumenting `runProcess` (2026-08-20,
+ * Windows, idle, 132s total for the file):
+ *
+ *   semgrep --config auto --json     x3   24.8s   (the verification re-scan)
+ *   semgrep --config auto --autofix  x3   23.8s   (the fix itself)
+ *   npm audit --json                x11   19.9s   (deps_audit, before+after)
+ *   npm install --package-lock-only  x6   11.4s   (the deps fix itself)
+ *   npm install --silent (setup)     x6  ~16s     (setupLodashRepo)
+ *   trivy fs                        x11    4.1s
+ *   git + gh                          -   ~6s
+ *
+ * So ~95 of those ~132 seconds are round-trips to the Semgrep rule registry
+ * and to the npm registry. `--config auto` refetches its rules on EVERY
+ * invocation — measured 7.4s warm, standalone, on a two-file project — and
+ * this file invokes it six times.
+ *
+ * The per-test timeouts were 30s and 45s against tests measuring 8–18s
+ * idle, i.e. a margin of 2–3x. That is not a margin at all once other
+ * vitest files are competing for the same CPU and the same network: one
+ * case was reported at 29.4s against its 30s bound. `REGISTRY_BACKED_
+ * TIMEOUT_MS` below is sized against the MEASURED worst case (18.1s) with a
+ * margin load cannot close, and it bounds a genuine hang, nothing else — no
+ * test in this file asserts anything by reaching it.
+ */
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -13,11 +48,46 @@ import type { Finding } from '../../src/types.js';
 import '../../src/registerAll.js';
 import { okResult } from '../helpers/toolResult.js';
 import { rmDir } from '../helpers/tempDir.js';
+import { isInstalled } from '../helpers/toolchain.js';
 
 // execFileSync (unlike execa/runProcess, which shell out through
 // cross-spawn) does not resolve npm's Windows .cmd shim on its own — same
 // reason this file already spells out 'gh.cmd' below rather than just 'gh'.
 const NPM_BIN = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+/** See the module comment for the measurements this number comes from. */
+const REGISTRY_BACKED_TIMEOUT_MS = 120_000;
+
+/* ------------------------------------------------------------------ */
+/* Toolchain availability — same technique as rulePackFixture.test.ts  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Resolved once, at collection time, so `it.skipIf` can report a skip as a
+ * skip — this repo's established discipline everywhere else (see
+ * `rulePackFixture.test.ts`'s header) and, until now, the one place it was
+ * missing.
+ *
+ * Three tests below need a real, TRIVY-sourced CVE record and not merely a
+ * finding that happens to mention lodash. Without trivy on PATH they FAILED
+ * rather than skipped, which is why a Linux container run of this file reads
+ * as behavioural failures when it is really an unmet environment dependency.
+ * Measured directly with trivy removed from PATH: the `risk_score` test
+ * fails on `expect(active_cves).toBeGreaterThan(0)`, because `active_cves`
+ * is read from the `cves` table (`storage.cves.listActive`) and only trivy's
+ * parser ever writes a row there — `npm audit` findings do not land in it.
+ * The other two need the scan differential to genuinely PASS against the
+ * scanner that reported the target, which is what makes `outcome:
+ * 'pr_created'` reachable at all.
+ *
+ * `gh` is deliberately NOT gated: `beforeEach` puts a stub `gh` on PATH that
+ * shadows any real one, so every `gh`-touching test here passes with the
+ * real `gh` uninstalled — confirmed by running this file with `gh`, `trivy`
+ * and `semgrep` all removed from PATH, where only the trivy-dependent test
+ * above failed.
+ */
+const TRIVY_INSTALLED = await isInstalled('trivy');
+const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
 let repo: string; let binDir: string; let ghLog: string; let originDir: string | null;
 
@@ -225,6 +295,20 @@ function installGhStubThatReportsAnExistingPr(): void {
 }
 
 describe('create_fix_pr', () => {
+  // Present in every run so the gate itself is visible; only EXECUTED when
+  // the caller has asked for it. Without this, "trivy is missing" and "trivy
+  // ran and agreed" are indistinguishable in the suite output — the exact
+  // failure mode `rulePackFixture.test.ts`'s header describes, and the reason
+  // that discipline exists in this repo at all.
+  it.runIf(REQUIRE_SEMGREP)('GUARDIAN_REQUIRE_SEMGREP=1 — this suite must be runnable end to end', () => {
+    expect(
+      TRIVY_INSTALLED,
+      'GUARDIAN_REQUIRE_SEMGREP=1 but trivy is not on PATH, so the three tests that need a ' +
+        'real trivy-sourced CVE record (C1/I5, final review I1, final-review.md C1) would ' +
+        'have been skipped.',
+    ).toBe(true);
+  });
+
   it('is registered', () => {
     expect(TOOLS.find((t) => t.name === 'create_fix_pr')).toBeTruthy();
   });
@@ -307,7 +391,7 @@ describe('create_fix_pr', () => {
       c as never,
     );
     expect(atMedium).toMatchObject({ ok: true, groups: [{ key: 'semgrep' }] });
-  }, 45_000);
+  }, REGISTRY_BACKED_TIMEOUT_MS);
 
   it('drives a real selected group through the worktree and cleans up, whatever the fix outcome', async () => {
     // The strongest form of the "no worktree survives" property: unlike the
@@ -340,7 +424,7 @@ describe('create_fix_pr', () => {
     // already-kept branch — see createFixPr.ts's own module comment, I1 —
     // which cannot happen here.)
     expect(ghLogContents()).toBe('');
-  }, 45_000);
+  }, REGISTRY_BACKED_TIMEOUT_MS);
 
   it('never lets gh create a PR with apply:true either, and still cleans up, whatever the fix outcome', async () => {
     // Complements the apply:false test above with the orthogonal gate:
@@ -363,7 +447,7 @@ describe('create_fix_pr', () => {
 
     expect(worktreeCount()).toBe(1);
     expect(ghLogContents()).not.toMatch(/pr create/);
-  }, 45_000);
+  }, REGISTRY_BACKED_TIMEOUT_MS);
 
   it('refuses cleanly when project_path does not exist at all (a different code path from "exists but is not a git repo")', async () => {
     const mod = TOOLS.find((t) => t.name === 'create_fix_pr');
@@ -404,9 +488,9 @@ describe('create_fix_pr', () => {
     const branches = execFileSync('git', ['-C', repo, 'branch', '--list'], { encoding: 'utf8' });
     expect(branches).not.toContain(groups[0]?.branch);
     expect(worktreeCount()).toBe(1);
-  }, 30_000);
+  }, REGISTRY_BACKED_TIMEOUT_MS);
 
-  it('C1/I5: opens a real pull request whose diff excludes dev-guardian\'s own scan report', async () => {
+  it.skipIf(!TRIVY_INSTALLED)('C1/I5: opens a real pull request whose diff excludes dev-guardian\'s own scan report', async () => {
     const c = ctx();
     setupLodashRepo();
     addOriginRemote();
@@ -446,9 +530,9 @@ describe('create_fix_pr', () => {
     ).trim().split('\n').filter((l) => l.length > 0);
     expect(changed).toContain('package.json');
     expect(changed.some((f) => f.startsWith('.guardian'))).toBe(false);
-  }, 30_000);
+  }, REGISTRY_BACKED_TIMEOUT_MS);
 
-  it('final review I1: a repeat run after a PR was created reports pr_exists, not worktree_failed', async () => {
+  it.skipIf(!TRIVY_INSTALLED)('final review I1: a repeat run after a PR was created reports pr_exists, not worktree_failed', async () => {
     // Same fixture as C1/I5 above, continued past `pr_created`: KEEPS_BRANCH
     // deliberately leaves the branch behind once a PR exists — correctly, it
     // is what the PR points at — so a repeat run's `createWorktree` collides
@@ -524,7 +608,7 @@ describe('create_fix_pr', () => {
     expect(
       execFileSync('git', ['-C', repo, 'branch', '--list'], { encoding: 'utf8' }),
     ).toContain(branch);
-  }, 45_000);
+  }, REGISTRY_BACKED_TIMEOUT_MS);
 
   it('I3: does not repoint the server\'s global "latest scan" view at the verification worktree', async () => {
     const c = ctx();
@@ -548,9 +632,9 @@ describe('create_fix_pr', () => {
     expect(afterLatest?.scan_id).toBe(beforeLatest?.scan_id);
     expect(afterLatest?.project_path).toBe(repo);
     expect(afterOpenCount).toBe(beforeOpenCount);
-  }, 30_000);
+  }, REGISTRY_BACKED_TIMEOUT_MS);
 
-  it('final-review.md C1: a dry run does not change what risk_score reports either — not just getLatest/listOpen', async () => {
+  it.skipIf(!TRIVY_INSTALLED)('final-review.md C1: a dry run does not change what risk_score reports either — not just getLatest/listOpen', async () => {
     // task-7-review.md I3 (the test directly above) fixed getLatest() and
     // listOpen(), both queried by scans.getLatestStmt / findings.listOpen*
     // Stmt. risk_score does NOT read getLatest() for its CVE source, though:
@@ -587,7 +671,7 @@ describe('create_fix_pr', () => {
 
     const after = await riskScoreTool?.handler({}, c as never);
     expect(after).toEqual(before);
-  }, 30_000);
+  }, REGISTRY_BACKED_TIMEOUT_MS);
 
   it('I5: a deps target whose scanner deps_audit never covers at all (wpscan) is never judged resolved just because trivy ran fine', async () => {
     // The review's own "worse than reported" case: deps_audit does not
@@ -627,7 +711,7 @@ describe('create_fix_pr', () => {
     // because it only ever checked whether trivy ran.
     expect(res.groups[0]).toMatchObject({ outcome: 'verification_failed', scan: null });
     expect(res.groups[0]?.note).toContain('wpscan');
-  }, 30_000);
+  }, REGISTRY_BACKED_TIMEOUT_MS);
 });
 
 describe('buildPrBody (task-7-review.md M7)', () => {

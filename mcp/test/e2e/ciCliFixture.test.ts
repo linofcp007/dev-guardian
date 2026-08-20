@@ -52,30 +52,66 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it, beforeAll } from 'vitest';
 
 import { detectOs } from '../../src/platform/osDetect.js';
+import { isInstalled, PROBE_TIMEOUT_MS } from '../helpers/toolchain.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 // mcp/test/e2e -> mcp/test -> mcp -> repo root
 const REPO_ROOT = resolve(here, '..', '..', '..');
 const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 
-const FAST_TIMEOUT_MS = 10_000;
-const SCAN_TIMEOUT_MS = 150_000;
+/**
+ * Wall-clock ceiling on a CLI SUBPROCESS that is not expected to reach a real
+ * scanner — a usage error, a help screen, a refusal. Every such run measures
+ * well under two seconds on an idle machine; this is a hang-breaker, and
+ * nothing in this file asserts anything by reaching it.
+ *
+ * It was 10_000, and that was tight enough to be an assertion by accident:
+ * with three other vitest suites competing for the CPU, the crash-on-boot
+ * test below took 10.03s and `spawnSync` killed the CLI, so `r.status` came
+ * back `null` and the test failed on `expect(r.status).toBe(3)` — a load
+ * measurement wearing the costume of a behavioural failure. Reproduced
+ * deliberately (60 busy processes) before this change. 45s is far past
+ * anything these runs legitimately take and still finite.
+ */
+const FAST_TIMEOUT_MS = 45_000;
+
+/**
+ * Wall-clock ceiling on a CLI subprocess that DOES run the real pipeline —
+ * semgrep, gitleaks and Trivy over a two-file fixture — and on the vitest
+ * hook or test that awaits it. Also a hang-breaker; nothing asserts anything
+ * by reaching it.
+ *
+ * It was 150_000, and that was crossed: with three other vitest files
+ * running and 60 busy processes on the box, the shared `beforeAll` scan of
+ * the "real, clean fixture" block below was killed by `spawnSync`, and its
+ * four dependent tests then failed on an empty stdout, a missing SARIF file
+ * and a null exit status — three behavioural-looking failures from one
+ * exhausted timer. The same scan measures 17.8s as a lone subprocess on a
+ * machine already at 90% CPU, so the honest reading of that 150s is not
+ * "the scan got slow" but "eight suites' worth of scanners were queued
+ * behind each other".
+ *
+ * Ten minutes is far past anything a healthy run of this fixture takes. The
+ * only cost of it being large is how long a genuinely hung CLI takes to be
+ * reported — which is the right side to err on: a ceiling that fires on a
+ * busy machine reports the machine, and teaches the reader to disregard the
+ * suite.
+ */
+const SCAN_TIMEOUT_MS = 600_000;
+
+/**
+ * Vitest per-test timeout for the `--start-command` block, whose tests each
+ * spawn a CLI subprocess that itself spawns an application. Must stay above
+ * `FAST_TIMEOUT_MS` so a subprocess that genuinely hangs is reported by
+ * `spawnSync`'s own timeout — which names the CLI — rather than by vitest
+ * killing the test around it, which names nothing.
+ */
+const START_COMMAND_SUITE_TIMEOUT_MS = 60_000;
 
 /* ------------------------------------------------------------------ */
 /* Toolchain availability — same technique as rulePackFixture.test.ts  */
 /* ------------------------------------------------------------------ */
 
-async function isInstalled(bin: string): Promise<boolean> {
-  try {
-    const r = await execa(detectOs() === 'win32' ? 'where' : 'which', [bin], {
-      reject: false,
-      timeout: 2_000,
-    });
-    return r.exitCode === 0;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * The directory holding `bin`'s executable, or `null` if it can't be
@@ -86,9 +122,13 @@ async function isInstalled(bin: string): Promise<boolean> {
  */
 async function resolveBinDir(bin: string): Promise<string | null> {
   try {
+    // Same probe, and the same reason for the same generous ceiling as
+    // `isInstalled`: this result gates `it.skipIf(... || !SEMGREP_DIR)`, so a
+    // probe that times out on a busy machine silently skips a test that had
+    // everything it needed. See `test/helpers/toolchain.ts`.
     const r = await execa(detectOs() === 'win32' ? 'where' : 'which', [bin], {
       reject: false,
-      timeout: 2_000,
+      timeout: PROBE_TIMEOUT_MS,
     });
     if (r.exitCode !== 0) return null;
     const first = r.stdout.split(/\r?\n/)[0]?.trim();
@@ -657,7 +697,6 @@ describe('dev-guardian scan — starting the application (--start-command)', () 
     // unhandled-rejection-shaped crash.
     const dir = makeBareDir('guardian-ci-cli-startapp-crash-');
     try {
-      const started = Date.now();
       const r = runCli(
         [
           'scan',
@@ -672,13 +711,33 @@ describe('dev-guardian scan — starting the application (--start-command)', () 
         ],
         FAST_TIMEOUT_MS,
       );
-      expect(r.status).toBe(3);
+      // "Not hanging" is proven by the two assertions below TOGETHER, and no
+      // longer by a stopwatch.
+      //
+      // The CLI's own health-check budget for a started application is
+      // APP_START_TIMEOUT_MS — 60 seconds (`cli/dev-guardian.mjs`). The wrong
+      // implementation, the one that polls the health url without ever
+      // noticing the process underneath it died, spends all 60 of them. This
+      // subprocess is killed at FAST_TIMEOUT_MS (45s) — comfortably short of
+      // that — so that implementation cannot produce a status of 3 here at
+      // all; `spawnSync` returns `null`. And a run that DID wait the budget
+      // out would report "timed out after 60000ms", never the exit code,
+      // since those two messages come from mutually exclusive branches of
+      // `waitForHealthy`.
+      //
+      // What replaced: `expect(Date.now() - started).toBeLessThan(5_000)`,
+      // measured at 1711ms alone and 5772ms under concurrent load — a number
+      // that says more about the machine than about the CLI. The 45s/60s gap
+      // above carries the same meaning with a margin load cannot close. See
+      // appRunner.test.ts's `expectSettlesPromptly` for the same property
+      // asserted the same way at the module boundary.
+      expect(
+        r.status,
+        `expected exit 3. A null status means spawnSync killed the CLI at FAST_TIMEOUT_MS ` +
+          `(${FAST_TIMEOUT_MS}ms), which for this fixture means it never noticed the crash and ` +
+          `sat on its own 60s health-check budget instead. stderr:\n${r.stderr}`,
+      ).toBe(3);
       expect(r.stderr).toMatch(/exit(ed)? code 9/i);
-      // "Fast" pinned as a real number: this must fail in roughly the time a
-      // process takes to spawn and exit, nowhere near the 60s default health
-      // timeout — see appRunner.test.ts's equivalent unit-level assertion
-      // for the same property at the module boundary.
-      expect(Date.now() - started).toBeLessThan(5_000);
     } finally {
       rmDir(dir);
     }
@@ -747,7 +806,7 @@ describe('dev-guardian scan — starting the application (--start-command)', () 
       rmDir(dir);
     }
   }, SCAN_TIMEOUT_MS + 10_000);
-});
+}, START_COMMAND_SUITE_TIMEOUT_MS);
 
 /* ------------------------------------------------------------------ */
 /* dev-guardian scan — against a real, clean fixture (real scanners)   */

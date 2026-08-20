@@ -6,6 +6,21 @@ import type { ProbeRequest } from '../../../src/dast/types.js';
 let server: Server;
 let origin = '';
 
+/**
+ * How many requests the server has actually been asked to handle on
+ * `/slow`, counted the moment the handler is entered.
+ *
+ * This is the observable the cancellation test below asserts on. It exists
+ * because "did the worker keep issuing live requests after the caller
+ * cancelled" is a fact about the TARGET — how many requests reached it —
+ * and the target can simply be asked. The test used to infer it from the
+ * clock instead (`Date.now() - start < 1000`, reasoning that a worker still
+ * spinning would have to sit through `/slow`'s 2000ms delay), which is a
+ * proxy for the real property and one a loaded machine can falsify without
+ * anything being wrong.
+ */
+let slowHits = 0;
+
 beforeAll(async () => {
   server = createServer((req, res) => {
     const url = req.url ?? '/';
@@ -20,6 +35,7 @@ beforeAll(async () => {
       return;
     }
     if (url === '/slow') {
+      slowHits += 1;
       setTimeout(() => {
         res.writeHead(200);
         res.end('late');
@@ -156,17 +172,23 @@ describe('executeProbes', () => {
     // spinning through the queue after the scan was supposedly cancelled.
     const outer = new AbortController();
     const reqs = [req('/slow'), req('/slow'), req('/slow')];
+    // Snapshotted rather than reset to zero: `/slow` is shared with the two
+    // `executeProbe` tests above, and vitest runs the tests in a file
+    // sequentially, so the baseline is whatever they already left behind.
+    const hitsBefore = slowHits;
     const pending = executeProbes(reqs, { ...OPTS, concurrency: 1, signal: outer.signal });
     // Let request #1 actually start before cancelling out from under it.
     await new Promise((resolve) => setTimeout(resolve, 50));
     outer.abort();
-    const start = Date.now();
     const results = await pending;
-    // A worker that kept spinning would run #2 and/or #3 into the /slow
-    // route's real 2000ms server delay; stopping promptly finishes in low
-    // milliseconds. 1000ms is a loose bound that only a spinning worker
-    // could cross.
-    expect(Date.now() - start).toBeLessThan(1000);
+    // THE assertion: the target was contacted exactly once — for request #1,
+    // which was already in flight when the abort fired. A worker that kept
+    // spinning through the queue would have issued #2 and #3 as real HTTP
+    // requests, and this counter would read three. Not inferred from how
+    // long anything took: `await pending` cannot resolve until the worker
+    // loop has finished, so by the time this line runs, a spinning worker
+    // has necessarily already been counted.
+    expect(slowHits - hitsBefore).toBe(1);
     expect(results.map((r) => r.outcome)).toEqual(['cancelled', 'cancelled', 'cancelled']);
     expect(results.every((r) => r.status === null)).toBe(true);
   });

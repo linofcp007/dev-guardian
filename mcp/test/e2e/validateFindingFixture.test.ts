@@ -44,14 +44,12 @@
  * because Semgrep's default ignore list skips those.
  */
 
-import { execa } from 'execa';
 import { cpSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';
-import { detectOs } from '../../src/platform/osDetect.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { Storage } from '../../src/storage/index.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
@@ -62,6 +60,7 @@ import type { Finding } from '../../src/types.js';
 import type { FindingValidation } from '../../src/validate/types.js';
 import { okResult } from '../helpers/toolResult.js';
 import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+import { isInstalled } from '../helpers/toolchain.js';
 
 afterAll(cleanupTempDirs);
 
@@ -116,17 +115,6 @@ const REACHABLE_BY_LANGUAGE: { fingerprint: string; file: string; root: string }
 const PY_ORPHAN_FINGERPRINT = 'e2e-py-orphan-1';
 const PY_ORPHAN_FILE = 'py-django/helpers.py';
 
-async function isInstalled(bin: string): Promise<boolean> {
-  try {
-    const r = await execa(detectOs() === 'win32' ? 'where' : 'which', [bin], {
-      reject: false,
-      timeout: 2_000,
-    });
-    return r.exitCode === 0;
-  } catch {
-    return false;
-  }
-}
 
 /** Resolved once at collection time so `it.skipIf` reports a skip as a skip. */
 const FIXTURE_PRESENT = existsSync(FIXTURE);

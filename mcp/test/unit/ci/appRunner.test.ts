@@ -110,17 +110,21 @@ setInterval(() => {}, 60000);
  * "detects a crash before it wastes the full timeout" test. No grandchild:
  * irrelevant to what that test checks.
  *
- * Reports ITS OWN exit timestamp to `argv[1]` first, written just before
- * `process.exit` — that test's own comment explains why: measuring
- * "promptness" from this timestamp, rather than from when the test called
- * `startApp`, is what keeps that assertion from also counting OS/Node
- * child-process spawn time, which this script has no control over.
+ * It used to also write its own exit timestamp to `argv[1]`, so that test
+ * could measure "promptness" from the child's exit rather than from the call
+ * to `startApp` (which would also have counted OS/Node spawn time). That
+ * test no longer measures an interval at all — see
+ * `expectSettlesPromptly` — so the timestamp had no remaining reader and is
+ * gone with it.
+ *
+ * `process.exit(7)` as the literal source matters for the assertion that
+ * reads this: `startApp`'s errors echo the command they started, which for
+ * a `-e` command includes this text. `/exit(ed)? code 7/` cannot match
+ * `process.exit(7)`, so the assertion still has to come from the error
+ * message proper and not from the echoed command — the vacuity trap
+ * CRASHES_WITH_MESSAGE_SCRIPT's comment below describes at length.
  */
-const CRASHES_IMMEDIATELY_SCRIPT = `
-const { writeFileSync } = require('node:fs');
-writeFileSync(process.argv[1], String(Date.now()));
-process.exit(7);
-`;
+const CRASHES_IMMEDIATELY_SCRIPT = `process.exit(7);`;
 
 /**
  * Writes a distinctive line to stderr, then exits nonzero — for the
@@ -228,27 +232,99 @@ async function getFreePort(): Promise<number> {
 }
 
 /**
- * Asserts `elapsedMs` is well under `timeoutMs` — the property the two
- * "rejects/cancels promptly" tests below actually guard (coordinator
- * review, test-stability round): that a fast-path rejection (a detected
- * crash, an aborted wait) genuinely short-circuits the health-check
- * deadline, rather than silently regressing into waiting it out. Coverage
- * instrumentation is not free — `npm run test:coverage` measured a real
- * ~2046ms for the crash-detection test's own fast path, comfortably past a
- * literal `2_000` budget those two tests originally used, reproduced
- * independently by two reviewers (6 of 7 runs, then 1 of 2). A bigger
- * literal (`3_000`, `5_000`, …) would still eventually fail the same way on
- * a slower or more heavily loaded machine — a CI runner under load being
- * exactly where it would next go off — so the budget is derived from each
- * test's OWN configured `timeoutMs` instead: HALF of it. Half is
- * comfortably above any realistic fast-path completion time (even the
- * measured 2046ms, against a 5s deadline, is ~41% of it) while staying
- * sharply distinguishable from the regression being guarded against, which
- * would land at essentially 100% of `timeoutMs`, not 50% — so this remains
- * a discriminating assertion, not a loosened one.
+ * The health-check budget the two "rejects/cancels promptly" tests hand to
+ * `startApp`, and the window the fast path is actually allowed to take.
+ *
+ * Both tests guard the same wrong implementation: one where a fast path (a
+ * detected crash, an aborted wait) stops short-circuiting the health-check
+ * deadline and silently starts waiting it out instead. What separates right
+ * from wrong there is a RATIO — "came back while the deadline was still far
+ * away" — never an absolute duration. The previous version of this helper
+ * asserted the absolute one (`elapsedMs < timeoutMs / 2`, i.e. 2500ms
+ * against a 5s `timeoutMs`) and that is why it kept failing on green code:
+ * a ~200ms fast path on an idle machine, but 2789ms and 2835ms on two
+ * reported runs, and 4379ms reproduced here on purpose with 60 busy
+ * processes on the box, before anything in this file was touched. Nothing
+ * in `appRunner.ts` was slow in any of those runs — the event loop simply
+ * was not scheduled — and no absolute bound survives that. A bigger literal
+ * only moves the load level at which it goes off, which is the same bug
+ * with a longer fuse.
+ *
+ * So the two constants are deliberately more than an order of magnitude
+ * apart in each direction, and the assertion sits between them:
+ *
+ *   - `WAITED_OUT_TIMEOUT_MS` (2 minutes) is not a duration either test
+ *     intends to spend. It is the duration the WRONG implementation would
+ *     spend — set far enough out that no amount of machine load can be
+ *     mistaken for having reached it.
+ *   - `PROMPT_BUDGET_MS` (8 seconds) is what the fast path gets: ~40x the
+ *     ~200ms it takes idle, comfortably past the worst load-inflated sample
+ *     above, and 15x short of what the regression would produce.
+ *
+ * `expectSettlesPromptly` RACES the promise against that budget instead of
+ * measuring elapsed time afterwards. Two reasons: a regression then fails
+ * with a sentence naming the cause rather than a bare number comparison,
+ * and it fails in 8 seconds instead of hanging for the full two minutes.
  */
-function expectWellUnderDeadline(elapsedMs: number, timeoutMs: number): void {
-  expect(elapsedMs).toBeLessThan(timeoutMs / 2);
+const WAITED_OUT_TIMEOUT_MS = 120_000;
+const PROMPT_BUDGET_MS = 8_000;
+
+/**
+ * Vitest per-test timeout for this whole file, overriding the 10s default in
+ * `vitest.config.ts`. Every test here spawns at least one real `node`
+ * process and most spawn two; measured 0.9–1.4s each on an idle machine but
+ * 5.1–8.8s each with 60 busy processes competing, i.e. already brushing that
+ * 10s default before `PROMPT_BUDGET_MS` is added on top of it. The number
+ * bounds a genuine hang, nothing else — no test here asserts anything by
+ * reaching it.
+ */
+const SUITE_TIMEOUT_MS = 60_000;
+
+/**
+ * Awaits `promise`, failing with a specific diagnosis if it has not settled
+ * within `PROMPT_BUDGET_MS`. Returns whatever it settled with, for the
+ * caller to assert on.
+ */
+async function expectSettlesPromptly<T>(what: string, promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const watchdog = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new Error(
+          `${what} had still not settled ${PROMPT_BUDGET_MS}ms in, against a ` +
+            `${WAITED_OUT_TIMEOUT_MS}ms health-check budget. The fast path settles this in ` +
+            `milliseconds; being this late means it fell through to waiting the deadline out, ` +
+            `which is the regression this test exists to catch.`,
+        ),
+      );
+    }, PROMPT_BUDGET_MS);
+  });
+  try {
+    return await Promise.race([promise, watchdog]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** `error.message` without an `as Error` cast — see this file's own
+ *  `readPidPair` comment on why the no-`any`/no-assertion rule binds tests. */
+function messageOf(e: unknown): string {
+  return e instanceof Error ? e.message : `not an Error: ${String(e)}`;
+}
+
+/**
+ * Turns a promise that is REQUIRED to reject into one that resolves with the
+ * rejection reason, so it can be raced and then asserted on. A resolution is
+ * itself a failure and is converted into one here rather than silently
+ * passing through as a value.
+ */
+function rejectionOf(promise: Promise<unknown>, what: string): Promise<unknown> {
+  return promise.then(
+    () => {
+      throw new Error(`expected ${what} to reject, but it resolved`);
+    },
+    (e: unknown) => e,
+  );
 }
 
 /** `process.kill(pid, 0)` sends no signal — it is a pure existence check,
@@ -454,51 +530,37 @@ describe('startApp', () => {
     // syntax error) would look exactly like a hang for the FULL timeout
     // instead of failing fast with a specific reason.
     //
-    // The rejection MESSAGE alone (asserted below) already proves the right
-    // code path fired: waitForHealthy only ever produces an "exited ...
-    // (exit code N)" message from the exit-detection branch, and only ever
-    // produces "timed out after ...ms" from the deadline branch — the two
-    // are mutually exclusive, so matching this regex is already a
-    // load-independent, state-transition-level proof that the crash was
-    // noticed rather than waited out. What it does NOT prove on its own is
-    // PROMPTNESS: an implementation that checks the exit state only once,
-    // right before giving up on the deadline, would produce this exact
-    // message too, just after nearly the whole `timeoutMs` budget — that
-    // wrong shape is what the timing assertion below exists to catch.
-    const exitedAtFile = join(workDir, 'exited-at.txt');
-    const timeoutMs = 5_000;
-    await expect(
-      startApp({
-        command: ['node', '-e', CRASHES_IMMEDIATELY_SCRIPT, exitedAtFile],
-        cwd: workDir,
-        healthUrl: 'http://127.0.0.1:1/',
-        timeoutMs,
-      }),
-    ).rejects.toThrow(/exit(ed)? code 7/i);
-    const rejectedAt = Date.now();
-    // Measured from the CHILD's OWN reported exit time (see
-    // CRASHES_IMMEDIATELY_SCRIPT), NOT from `started`/`Date.now()` before
-    // `startApp` was even called — that was this assertion's ORIGINAL
-    // shape, and it is the reason this test flaked under parallel suite
-    // load despite already using expectWellUnderDeadline (task report:
-    // failures observed from 2562ms up to 4449ms against this same 2500ms
-    // budget). "Since started" necessarily includes OS/Node child-process
-    // SPAWN time — starting a whole new `node -e ...` interpreter, before a
-    // single byte of it has run — and that quantity has no relationship to
-    // `timeoutMs` at all: confirmed directly (task report) that spawn-to-exit
-    // alone climbs from a ~45ms solo baseline to a low-hundreds-of-ms median
-    // (and occasional 700ms+ outliers) under the same multi-suite load that
-    // produced the failures above, while the interval measured HERE — from
-    // the child's actual exit to startApp's rejection, i.e. everything
-    // `waitForHealthy`'s own polling loop is actually responsible for —
-    // stayed under ~220ms across dozens of samples under that identical
-    // load. The sibling "aborted signal" test below already uses
-    // `expectWellUnderDeadline` safely for exactly this reason: its own
-    // measurement window starts AFTER the process is already confirmed
-    // running (`waitForPidfile`), so it was never polluted by spawn time
-    // either — the pattern itself was never the problem, only which
-    // interval this ONE call site fed it.
-    expectWellUnderDeadline(rejectedAt - Number(readFileSync(exitedAtFile, 'utf8')), timeoutMs);
+    // Two independent facts are asserted, and neither is a stopwatch.
+    //
+    // WHICH BRANCH FIRED — the rejection message. `waitForHealthy` only ever
+    // produces an "exited ... (exit code N)" message from the exit-detection
+    // branch, and only ever produces "timed out after ...ms" from the
+    // deadline branch. They are mutually exclusive, so matching this regex is
+    // a load-independent, state-transition-level proof that the crash was
+    // NOTICED rather than waited out.
+    //
+    // THAT IT WAS PROMPT — the ratio between `WAITED_OUT_TIMEOUT_MS` and
+    // `PROMPT_BUDGET_MS`, not an elapsed number. The message alone does not
+    // settle promptness: an implementation that checks the exit state only
+    // once, right before giving up on the deadline, produces this exact
+    // message too, just after nearly the whole budget. With the budget set
+    // two minutes out, that implementation cannot settle inside 8 seconds,
+    // and this one cannot fail to — see the constants' own comment for the
+    // measurements behind both numbers.
+    const settled = await expectSettlesPromptly(
+      'startApp against an application that crashes on boot',
+      rejectionOf(
+        startApp({
+          command: ['node', '-e', CRASHES_IMMEDIATELY_SCRIPT],
+          cwd: workDir,
+          healthUrl: 'http://127.0.0.1:1/',
+          timeoutMs: WAITED_OUT_TIMEOUT_MS,
+        }),
+        'startApp',
+      ),
+    );
+    expect(settled).toBeInstanceOf(Error);
+    expect(messageOf(settled)).toMatch(/exit(ed)? code 7/i);
   });
 
   it('a startup failure surfaces the app’s own output for diagnosis', async () => {
@@ -549,11 +611,20 @@ describe('startApp', () => {
     // captured independently is still exactly right despite the stream
     // being ~28,000x larger than what the tail retains.
     const pidfile = join(workDir, 'pids.json');
+    // Both ceilings here are hang-breakers around a fixture that writes
+    // 110 MB, and both were tight enough to fire on green code: the test
+    // measures ~1.2s idle but 8.25s with 60 busy processes on the box, a
+    // ~7x inflation, against a vitest timeout of 20s and a health budget of
+    // 30s. Neither is an assertion — nothing here is proven by reaching one
+    // — so both moved out of reach of the machine, and the health budget
+    // stays BELOW the vitest one deliberately: if the write really does
+    // outrun everything, the failure should read "timed out after 60000ms"
+    // from the module under test, not a bare "test timed out" from vitest.
     const error = await startApp({
       command: ['node', '-e', HUGE_OUTPUT_THEN_EXIT_SCRIPT, pidfile],
       cwd: workDir,
       healthUrl: 'http://127.0.0.1:1/',
-      timeoutMs: 30_000,
+      timeoutMs: 60_000,
     }).then(
       () => {
         throw new Error('expected startApp to reject');
@@ -562,7 +633,7 @@ describe('startApp', () => {
     );
 
     expect(error).toBeInstanceOf(Error);
-    const message = (error as Error).message;
+    const message = messageOf(error);
     // The fixture's own pidfile write happens before any of the 110 MB is
     // written, so its presence alone already proves the process was real
     // and started — the assertions below are about what happened to it
@@ -577,7 +648,7 @@ describe('startApp', () => {
     // through, AND proves the 4 KB tail correctly kept the actual last
     // bytes of a vastly larger stream, not a stale or corrupted fragment.
     expect(message).toMatch(/MARKER-END-OF-OUTPUT-7f3a9c/);
-  }, 20_000);
+  }, 90_000);
 
   it('stop() leaves nothing running, and is safe to call twice', async () => {
     const port = await getFreePort();
@@ -642,34 +713,34 @@ describe('startApp', () => {
     // version would ignore the abort below and only stop waiting once the
     // full (deliberately generous) `timeoutMs` elapsed.
     const pidfile = join(workDir, 'pids.json');
-    const timeoutMs = 30_000;
     const controller = new AbortController();
-    const pending = startApp({
-      command: ['node', '-e', NEVER_ANSWERS_SCRIPT, pidfile],
-      cwd: workDir,
-      healthUrl: 'http://127.0.0.1:1/',
-      timeoutMs,
-      signal: controller.signal,
-    });
-    const settled = pending.then(
-      () => {
-        throw new Error('expected startApp to reject');
-      },
-      (e: unknown) => e,
+    const settled = rejectionOf(
+      startApp({
+        command: ['node', '-e', NEVER_ANSWERS_SCRIPT, pidfile],
+        cwd: workDir,
+        healthUrl: 'http://127.0.0.1:1/',
+        timeoutMs: WAITED_OUT_TIMEOUT_MS,
+        signal: controller.signal,
+      }),
+      'startApp',
     );
 
+    // Waits for the fixture to be genuinely RUNNING first, so the abort
+    // below cancels a real in-progress wait rather than racing the spawn.
     const pids = await waitForPidfile(pidfile);
-    const abortedAt = Date.now();
     controller.abort();
 
-    const error = await settled;
+    // The ABORT, not the health-check budget, is what ended this. Proven the
+    // same two ways as the crash test above: the message can only come from
+    // the abort branch, and settling inside PROMPT_BUDGET_MS is something an
+    // implementation that ignored `signal` — and therefore sat on the full
+    // WAITED_OUT_TIMEOUT_MS — could not do.
+    const error = await expectSettlesPromptly(
+      'startApp after the caller aborted the health-check wait',
+      settled,
+    );
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(/cancelled/i);
-    // The ABORT, not the 30s timeoutMs, must be what ended this — pinned as
-    // a real elapsed-time number, not just inferred from the message. See
-    // expectWellUnderDeadline's own comment for why the budget is derived
-    // from `timeoutMs` rather than a literal.
-    expectWellUnderDeadline(Date.now() - abortedAt, timeoutMs);
+    expect(messageOf(error)).toMatch(/cancelled/i);
 
     // Same load-bearing shape as the timeout test: an abort must kill what
     // was already spawned, including the grandchild, not merely reject.
@@ -702,4 +773,4 @@ describe('startApp', () => {
       await app.stop();
     }
   });
-});
+}, SUITE_TIMEOUT_MS);
