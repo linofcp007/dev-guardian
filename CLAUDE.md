@@ -83,11 +83,11 @@ a clause, and is the only one that reaches a rule with no clauses at all:
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
 Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
 `patterns:` group and no `pattern-either:`, and a `patterns:` group holding
-nothing but positive terms. **30 of the 136 rules** across the nine packs are
+nothing but positive terms. **30 of the 135 rules** across the nine packs are
 one of those — 24 bare and 6 positive-only — and they used to appear
 **nowhere** in the report: not in the clause list, not under `skipped`. So
-`52/52 live, 0 DEAD` read as "the pack was checked" when it covered 11 rules of
-12. The capability was never missing — there is genuinely nothing to ablate.
+`44/44 live, 0 DEAD` read as "the pack was checked" when it covered 10 rules of
+11. The capability was never missing — there is genuinely nothing to ablate.
 The *reporting* was dishonest, in exactly the way axis 3 refuses to be when it
 prints `N/A`.
 
@@ -97,14 +97,14 @@ prints `N/A`.
 | `bugfix-py` | 10 | 10 | 0 |
 | `bugfix-go` | 9 | 8 | 1 |
 | `bugfix-java` | 8 | 7 | 1 |
-| `bugfix-cs` | 12 | 11 | 1 |
+| `bugfix-cs` | 11 | 10 | 1 |
 | `bugfix-php` | 6 | 6 | 0 |
 | `bugfix-rs` | 1 | 1 | 0 |
 | `base` | 13 | 7 | 6 |
 | `routes` | 64 | 44 | 20 |
 
 The report therefore leads with a coverage line naming both halves —
-`52 clause(s) across 11 of 12 rules; 1 rule(s) have no ablatable clauses (axis
+`44 clause(s) across 10 of 11 rules; 1 rule(s) have no ablatable clauses (axis
 0 only)` — lists **every** rule under `RULE COVERAGE` with its clause count and
 its `hits/` count, and names each clauseless rule with the reason it has none.
 `npm run ablate -- <pack> --list` does the same without scanning.
@@ -136,9 +136,15 @@ Axis 3 needs a real-code corpus in a language the pack matches, so it is a
 property of the invocation — registered per pack in
 [`mcp/test/ablate/packs.ts`](mcp/test/ablate/packs.ts), overridable with
 `--real-code=<dir>` / `--no-real-code`, and reported as `N/A` (never silently
-skipped) where none exists. Axis 0 needs a `hits/` corpus on the same terms and
-reports `N/A` for the whole pack where the fixture root has no `hits/`
-subdirectory.
+skipped) where none exists. Two packs read theirs from an environment variable
+because the corpus cannot live in this tree — `GUARDIAN_RUST_SRC` and
+`GUARDIAN_CS_SRC`; unset means `N/A`, set-but-missing **throws**. The C# one
+was added after the fact and immediately deleted a rule: `as-cast-deref` fired
+6490 times on `dotnet/runtime` with no true positives, having passed axes 0, 1
+and 2 on its author's own fixtures throughout.
+
+Axis 0 needs a `hits/` corpus on the same terms and reports `N/A` for the whole
+pack where the fixture root has no `hits/` subdirectory.
 
 **Invariants worth knowing before you change it.**
 

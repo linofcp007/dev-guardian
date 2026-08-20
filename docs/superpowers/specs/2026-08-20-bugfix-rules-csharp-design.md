@@ -1,7 +1,8 @@
 # Local bug-finding Semgrep rules — C# — design of record
 
 **Date:** 2026-08-20
-**Status:** approved
+**Status:** approved; **amended 2026-08-21** — `as-cast-deref` deleted and
+ablation axis 3 wired up for the pack. See §4b and §8.
 **Fifth in the per-language sequence**, after JS/TS (1.6.0), Python (1.7.0),
 Go (1.8.0) and Java (merged, unreleased).
 
@@ -59,18 +60,18 @@ For `rethrow-loses-stacktrace` the compiler is more than a gate — it is an
 **independent oracle**. `dotnet build` emits `CA2200` at exactly the 8 sites the
 rule fires on and nowhere else. The hit/miss split was not graded by its author.
 
-## 4. Two severity tiers, and one rule of twelve clears the bar
+## 4. Two severity tiers, and one rule of eleven clears the bar
 
 Unchanged: **`ERROR`** where what the rule *emits* is always a bug;
 **`WARNING`** where it is usually a bug but has legitimate uses. The deciding
 question is what the rule emits, not what class of defect it targets.
 
-**1 ERROR of 12.** For scale: Java 0 of 8, JS/TS 1 of 13, Python + Go 2 of 19,
+**1 ERROR of 11.** For scale: Java 0 of 8, JS/TS 1 of 13, Python + Go 2 of 19,
 PHP 0 of 6.
 
-(An earlier draft of this document said eleven and then enumerated twelve in
-this very section. The arithmetic was mine; the pack has twelve `- id:` entries
-and no rule is missing.)
+(It was 1 of 12 when this document was approved. An earlier draft before that
+said eleven and then enumerated twelve in this very section; the arithmetic was
+mine. The pack is now genuinely eleven — see §4b.)
 
 C# contains one defect — `throw ex;` inside a `catch` — whose *correct* form
 (`throw;`) is a **different AST node**. That is the only shape in this pack
@@ -87,8 +88,9 @@ The premise, stated the way Java's design states it: *an empty catch that does
 not declare intent is a bug whatever the author meant*, because the rule reads
 the intent — the Checkstyle / IntelliJ `ignore` / `ignored` / `expected`
 binding name — and what it emits afterwards is *unmarked*. It shipped
-unmeasured, because axis 3 of the ablation harness is `N/A` for this pack:
-there is no C# in this repository to scan.
+unmeasured, because axis 3 of the ablation harness was `N/A` for this pack:
+there is no C# in this repository to scan. (That is no longer true — see §4b
+and §9 — and the corpus below is the one axis 3 now uses.)
 
 **Corpus.** `github.com/dotnet/runtime` at `6ecee4dd`, shallow sparse clone of
 `src/libraries/*/src/**` — 11 802 `.cs` files of product source (no tests),
@@ -199,7 +201,102 @@ the YAML at `WARNING`, putting `'ERROR'` back into `EXPECTED_SEVERITY` fails
 passes. Recall is untouched — the patterns did not move, only the tier — so the
 `hits/EmptyCatch.cs` count of 8 is unchanged.
 
-## 5. The twelve rules
+## 4b. `as-cast-deref`, deleted against the same corpus — and the axis that would have caught it
+
+Amendment, 2026-08-21. §8 below used to record ablation **axis 3** as
+permanently `N/A` for this round, and §5 flagged `as-cast-deref` as the rule
+where that would bite: its positive pattern is `$V.$M`, the broadest in the
+pack. Both were right. A corpus was obtained and the rule did not survive it.
+
+**Corpus.** The same one §4a used: `dotnet/runtime` at `6ecee4dd`, shallow
+sparse clone of the `src/libraries` product source, **11 800 `.cs` files
+scanned** (`paths.scanned` asserted before any count was read). The control
+rules reproduce §4a exactly — `empty-catch` 402, `lock-on-shared-instance` 322
+— so the measurement below is on the same footing.
+
+**Raw count: 6490 findings in 818 files across 101 assemblies**, roughly one
+per two files and sixteen times `empty-catch`. The count is not the argument.
+Two measurements are.
+
+### The rule's premise is not expressible in Semgrep's C# frontend
+
+`o as T` and `(T)o` are **the same node**. Two probes, on one 8-method file:
+
+- `pattern: var $V = $O as $T;` and `pattern: var $V = ($T)$O;` fire on
+  **exactly the same seven sites**, line for line, whichever spelling the
+  source uses — as do the bare expression forms `$O as $T` and `($T)$O`.
+- `patterns:` combining `pattern: var $V = $O as $T;` with
+  `pattern-not: var $V = ($T)$O;` returns **zero**. The negation annihilates
+  every match, which is what happens when both describe one node.
+
+There is no spelling that catches the `as` and lets the direct cast through.
+And that distinction was the whole rule: its own message said so — "the `as`
+returns null when the cast fails, that is the difference from a direct cast".
+A direct cast throws `InvalidCastException` **at the cast site** and never
+yields null, so on top of one the rule accuses a defect that cannot occur.
+
+By textual attribution over the corpus — walk up from each finding to the
+nearest declaration of the dereferenced receiver — **4385 of 6490 findings
+(67.6 %) come from a direct cast** and only **1122 (17.3 %) from an `as`**
+(429 from some other assignment form, 554 unresolved).
+
+### The `as` share was not right either
+
+**75 findings read by hand**, in four batches: 20 spread across the twenty
+largest assemblies with no filter at all; then 15 and 20 more restricted to the
+`as`-derived subset, one per assembly across 35 different assemblies; then 20
+drawn from the findings most likely to be genuine (below). **Zero live bugs.**
+
+The guards real C# uses are not the eleven in the exclusion list:
+
+| shape | why the clause misses it | example |
+| --- | --- | --- |
+| `if (null != x) { … }` | reversed operands are a different node | `System.Data.OleDb/src/OleDbConnectionFactory.cs:123` |
+| multi-statement then-block | `if ($V != null) { <… $V.$M …>; }` requires a block of **one** statement | `System.Private.Xml/.../XPathDocumentNavigator.cs:474` |
+| `while (x != null) { … }` | no `while` clause | `System.Private.Xml.Linq/.../Extensions.cs:369` |
+| `&&`/`\|\|` chain of 3+ terms | associates left, so `$V != null` is never the direct left operand | `System.IO.Pipes/src/System/IO/Pipes/PipeSecurity.cs:55` |
+| `if (x is null \|\| …) { throw …; }` | no `is null` disjunction clause | `System.Speech/src/Result/SemanticValue.cs:41` |
+| `Debug.Assert(x != null)` | assertion is not in the list | `System.Resources.Extensions/.../PreserializedResourceWriter.cs:247` |
+| `ContractUtils.Requires(x != null, …)` | project helper, invisible | `System.Linq.Expressions/src/System/Dynamic/DynamicObject.cs:466` |
+| a `[DoesNotReturn]` throw helper | `ThrowHelper.Throw…(…)` is a call, not a `throw` | `System.Private.CoreLib/src/System/Array.cs:215` |
+| reassignment in the null branch | the variable is provably non-null by the deref | `System.DirectoryServices.AccountManagement/.../SAMQuerySet.cs:341` |
+
+The multi-statement one is the largest, and it is the exact failure the design
+warned about in §9: *"a near-miss derived from an exclusion can prove that
+exclusion exists, but never that it is the right width, because it was chosen
+to be caught by it."* Every guard in `misses/AsCast.cs` was written as
+`if (s != null) { return s.Length; }` — a single statement — which is the only
+width the clause has.
+
+A deliberately generous filter — the receiver's name appears in **no** null
+test, pattern test, assertion, `?.`, `??` or reassignment anywhere between its
+declaration and 40 lines past the finding — leaves **70 of 6490, 1.1 %**.
+Reading those 20 leaves five variables carrying the genuine shape
+(`System.Configuration.ConfigurationManager/.../ConfigurationElementCollection.cs:292`,
+`System.DirectoryServices.Protocols/.../LdapConnection.Windows.cs:43`,
+`System.Private.Xml/.../XmlQueryTypeFactory.cs:1725`,
+`System.Runtime.Caching/.../MemoryCache.cs:120`,
+`Microsoft.CSharp/.../Tree/MethodInfo.cs:38`), every one of them latent and
+dependent on an invariant the surrounding code holds, none a live defect.
+
+### Verdict: deleted
+
+`WARNING` is not a tier for a rule that has never been right; it is a quieter
+way to keep being wrong, and it costs everyone who reads the output. The same
+call, on the same reasoning, retired `catch-returns-null` from the JS/TS pack.
+
+**Axes 0, 1 and 2 all passed, throughout.** Nine hits, fifteen near-misses, the
+largest `misses/` file in the pack, all green, all written from the shape of
+the pattern exactly as §9 prescribed. None of it could see either defect,
+because all of it was written by the person who wrote the rule. That is the
+case for axis 3 in one sentence.
+
+Deleted with it: `hits/AsCast.cs`, `misses/AsCast.cs`, and the as-cast entry in
+`hits/RealBugs.cs` (now 12 defects over 11 rules). A deletion note in
+`configs/semgrep/bugfix-cs.yml` records both probes, so the rule cannot come
+back without a way to tell an `as` from a cast.
+
+## 5. The eleven rules
 
 Ids follow `bugfix-cs-<class-token>-<name>`, because `mapSubcategory` classifies
 by regex over the lowercased id. All 17 candidate ids were run through the
@@ -308,14 +405,13 @@ C# supports this class better than any language in the series so far.
   Note the inversion in §7: disposing an `HttpClient` per call *is* the bug, so
   this rule *wants* to fire inside a `using`, and does.
 
-### `null_safety` — 2 rules, WARNING, both needing Java's full exclusion battery
+### `null_safety` — 1 rule, WARNING
 
-- **as-cast-deref** — a dereference of `x as T` without a null guard. 2 of 2
-  hits, no false positives across 12 correct shapes; two of those are free,
-  because `if (o is string s)` is a different node and `o as string ?? "d"` does
-  not match the bare-`as` initialiser. But its positive pattern is `$V.$M`,
-  meaning every later use of `$V` in scope is a candidate, and the guard list is
-  one conjunction and one ternary short of Java's twenty-six.
+It was 2. **as-cast-deref** — a dereference of `x as T` without a null guard —
+scored 2 of 2 hits and no false positives across 12 correct shapes at design
+time, and its positive pattern `$V.$M` was flagged right here as the broadest
+in the pack. It is **deleted**: §4b has the measurement. The remaining rule:
+
 - **ordefault-deref** — a dereference of `FirstOrDefault()` and friends. 4 of 4,
   no false positives across 12 correct shapes. Carries one unfixable class: on a
   sequence of *value* types `FirstOrDefault()` returns `default(T)`, never null,
@@ -394,6 +490,10 @@ C# adds a sixth, and it is the first that **`paths.scanned` does not catch**.
   shipping a rule that flags `using var`.
 - **Semgrep OSS matches syntax, not dataflow.** A null three methods away is
   invisible.
+- **`null_safety` is down to one rule.** `as-cast-deref` was deleted against
+  `dotnet/runtime` (§4b): Semgrep's C# frontend puts `o as T` and `(T)o` on the
+  same node, so the rule's distinguishing premise is not expressible here at
+  all. No narrowing recovers it — the two spellings cannot be told apart.
 - **`ordefault-deref` cannot see generic arguments**, so a value-type sequence
   is either a false positive or, with the deny-list, a false negative. Both
   spellings are stated rather than implied.
@@ -410,6 +510,10 @@ C# adds a sixth, and it is the first that **`paths.scanned` does not catch**.
 - **These rules complement the registry packs, they do not replace them** — and
   here that is nearly vacuous, since the registry has no C# bug rules at all.
 - **They do not replace the model-driven `/guardian-fix` path.**
+- **Ablation axis 3 is opt-in, not automatic.** It runs for this pack only when
+  `GUARDIAN_CS_SRC` names a C# tree; unset, the report prints `N/A`. That is a
+  verdict rather than a silent skip, but it is still a gap somebody has to
+  close deliberately before a rule change here is measured against real code.
 
 ## 9. Testing
 
@@ -430,28 +534,56 @@ Three additions this round, each of which cost a shipped defect elsewhere:
   failed this.
 - **`dotnet build` over every fixture**, per §3.
 
-### The one axis this round cannot run, stated rather than left silent
+### The axis this round could not run, and now can — `GUARDIAN_CS_SRC`
 
-The ablation harness grades every clause on three axes. **Axis 3 — "does
-removing this clause *lower* the finding count on code nobody wrote as a
-fixture?" — is `N/A` for the whole C# round, and will stay that way.** It needs
-a real-code corpus in a language the pack matches, and this repo contains no C#
-at all: `mcp/src` is TypeScript, which is why the JS/TS pack is the only one
-that has ever had axis 3.
+*Amended 2026-08-21. What this section said, and what happened next, are both
+kept: the prediction was right and the compensation was not enough.*
 
-That is worth naming because axis 3 is not redundant with the other two. It is
+**What it said.** The ablation harness grades every clause on three axes.
+**Axis 3 — "does removing this clause *lower* the finding count on code nobody
+wrote as a fixture?" — was `N/A` for the whole C# round, and this section said
+it would stay that way.** It needs a real-code corpus in a language the pack
+matches, and this repo contains no C# at all: `mcp/src` is TypeScript, which is
+why the JS/TS pack was for a long time the only one that ever had axis 3.
+
+That was worth naming because axis 3 is not redundant with the other two. It is
 the axis that caught `unchecked-match` going 0 → 13 false positives on this
 repo's own TypeScript **while axes 1 and 2 both passed** — "live" and "keeps
 true positives" are both true of a clause that only *adds* false positives.
-For this round, nothing measures rule width against code that was not written
-to be measured.
 
-**Where it bites: `as-cast-deref` in Task 4.** Its positive pattern is `$V.$M`,
-the broadest in the pack — every later use of `$V` in scope is a candidate —
-and axis 3 is exactly the axis that would have shown how wide. The
-compensation is a deliberately oversized `misses/` corpus there, written **from
-the shape of the pattern** rather than from the exclusions already in the rule:
-a near-miss derived from an exclusion can prove that exclusion exists, but
-never that it is the right *width*, because it was chosen to be caught by it.
-That distinction is what the JS round learned expensively, and it is the only
-substitute available here.
+**Where it said it would bite: `as-cast-deref` in Task 4.** Its positive
+pattern is `$V.$M`, the broadest in the pack — every later use of `$V` in scope
+is a candidate — and axis 3 is exactly the axis that would have shown how wide.
+The compensation was a deliberately oversized `misses/` corpus there, written
+**from the shape of the pattern** rather than from the exclusions already in
+the rule: a near-miss derived from an exclusion can prove that exclusion
+exists, but never that it is the right *width*, because it was chosen to be
+caught by it.
+
+**It bit exactly there, and the compensation did not hold.** §4b has the
+measurement: 6490 findings on 11 800 files of `dotnet/runtime`, no true
+positives in a 75-finding hand-read sample, and the rule deleted. The oversized
+`misses/` file was fifteen near-misses and all fifteen passed — but every `if`
+guard in it was written as a **single-statement** block, so it certified a
+clause whose real width is one statement wide. Written from the shape of the
+pattern, by the person who wrote the pattern, and still blind in the same
+direction. That is the limit of a fixture corpus, stated as plainly as the
+round can state it: *the compensation for axis 3 is not a substitute for axis
+3.*
+
+**Axis 3 now runs for this pack.** `mcp/test/ablate/packs.ts` reads the corpus
+path from `GUARDIAN_CS_SRC`, on the same terms as the Rust pack's
+`GUARDIAN_RUST_SRC`:
+
+- **unset** → axis 3 reports `N/A` for the pack, printed, never silently
+  skipped;
+- **set to a path that does not exist** → it **throws**. A typo'd corpus that
+  quietly becomes "not measured" is the failure mode this whole harness exists
+  to prevent.
+
+Any tree of real C# works. What produced §4a and §4b:
+`git clone --filter=blob:none --no-checkout --depth 1` of `dotnet/runtime`,
+then a non-cone sparse checkout of each library area's `src` subtree (tests
+excluded). Keep it at a **short** path: on a long Windows path semgrep-core
+scans zero files and says `Failed to obtain target files`, which points nowhere
+near its cause.

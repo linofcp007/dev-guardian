@@ -200,22 +200,11 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     ],
     count: 8,
   },
-  'AsCast.cs': {
-    // Nine, and only TWO of them are the plain shape. The other seven are
-    // guaranteed NREs sitting right next to a guard that does not protect
-    // them — the `else` arm, a ternary's ruled-out arm, a disjunction that
-    // proves nothing, a guard on a different variable.
-    //
-    // They are in hits/ rather than misses/ because of what ablation axis 2
-    // measures: removing a clause must not REVEAL a finding here. An
-    // exclusion that swallows a real bug is invisible unless that bug is in
-    // this file. Measured: writing the two `if` exclusions with the obvious
-    // `if ($V != null) { ... }` spelling closes every correct case in misses/
-    // AND swallows two of these. Axis 3, which would have measured the same
-    // width on real code, is unavailable all round.
-    ids: ['bugfix-cs-null-safety-as-cast-deref'],
-    count: 9,
-  },
+  // `AsCast.cs` used to sit here, hits and misses both, with nine findings and
+  // the largest misses/ file in the pack. Both are gone with the rule: see the
+  // deletion note in `configs/semgrep/bugfix-cs.yml`. Nine hits and fifteen
+  // near-misses, all of them green, all of them written by the rule's author,
+  // and the rule had no true positives at all on 11 800 files of real C#.
   'OrDefault.cs': {
     // Four: one per enumerated LINQ method plus a chained receiver.
     ids: ['bugfix-cs-null-safety-ordefault-deref'],
@@ -239,7 +228,7 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     count: 9,
   },
   'RealBugs.cs': {
-    // THE REAL-BUGS CORPUS — 13 defects over all TWELVE rules, so every rule
+    // THE REAL-BUGS CORPUS — 12 defects over all ELEVEN rules, so every rule
     // in the pack has corpus coverage. The Java round left three rules at zero
     // and that was the riskiest gap in that pack.
     //
@@ -251,22 +240,24 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     // would sit in real code — inside a `try`, in a constructor, under a
     // `finally`, next to a guard on a different variable.
     //
-    // It carries extra weight this round: ablation axis 3, which measures a
-    // clause's width on code nobody wrote as a fixture, is N/A for the whole
-    // C# pack because this repo holds no C# outside this tree.
+    // AND IT ALREADY EARNED ITS KEEP, twice, both times over `as-cast-deref`.
+    // Written with that entry dereferencing in BOTH arms of the guard it did
+    // not fire, and finding out why exposed a residual of the else-arm
+    // swallow. Then axis 3 — which this pack could not run at all, for want of
+    // a C# corpus — deleted the rule outright, and this file lost the entry.
     //
-    // AND IT ALREADY EARNED ITS KEEP. Written with the as-cast entry
-    // dereferencing in BOTH arms of the guard, it did not fire, and finding
-    // out why exposed a residual of the else-arm swallow that reasoning had
-    // missed: when the THEN arm also dereferences, the exclusion matches the
-    // whole `if` and takes the else arm with it. Narrower than the original
-    // hole, but real, and now stated in the rule.
+    // THAT IS THE LIMIT OF WHAT A FILE LIKE THIS CAN DO, and it is worth
+    // stating where somebody adding to it will read it. Every defect here was
+    // chosen by someone who had already read the rules, so it probes the
+    // shapes the rules were written for. `as-cast-deref` passed axes 0, 1 and
+    // 2 on this corpus and on its own fixtures, and was wrong about 6490
+    // findings on 11 800 files of C# nobody here wrote. Axis 3 now runs for
+    // this pack via `GUARDIAN_CS_SRC`; see `mcp/test/ablate/packs.ts`.
     ids: [
       'bugfix-cs-edge-case-modify-during-iteration',
       'bugfix-cs-error-handling-empty-catch',
       'bugfix-cs-error-handling-rethrow-loses-stacktrace',
       'bugfix-cs-memory-leak-httpclient-per-call',
-      'bugfix-cs-null-safety-as-cast-deref',
       'bugfix-cs-null-safety-ordefault-deref',
       'bugfix-cs-off-by-one-loop-lte-count',
       'bugfix-cs-off-by-one-loop-lte-length',
@@ -275,7 +266,7 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
       'bugfix-cs-race-condition-lock-on-shared-instance',
       'bugfix-cs-race-condition-static-random',
     ],
-    count: 13,
+    count: 12,
   },
   'HttpClient.cs': {
     // Four: a constructor assignment, a plain per-call local, `using var`,
@@ -356,11 +347,15 @@ const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
   'bugfix-cs-off-by-one-loop-lte-length': 'WARNING',
   'bugfix-cs-off-by-one-loop-lte-count': 'WARNING',
   'bugfix-cs-memory-leak-httpclient-per-call': 'WARNING',
-  // null_safety and edge_case. All WARNING, and these three are the clearest
-  // illustration of the §4 criterion in the pack: their correctness depends
-  // ENTIRELY on having recognised a guard, and a guard can always be one
-  // method away, outside any syntactic matcher's reach.
-  'bugfix-cs-null-safety-as-cast-deref': 'WARNING',
+  // null_safety and edge_case. Both WARNING, and the clearest illustration of
+  // the §4 criterion in the pack: their correctness depends ENTIRELY on having
+  // recognised a guard, and a guard can always be one method away, outside any
+  // syntactic matcher's reach.
+  //
+  // It was three. `as-cast-deref` was the third, and WARNING did not save it —
+  // on 11 800 files of real C# it produced 6490 findings and no true
+  // positives, so the tier was buying nothing but a quieter way to be wrong.
+  // Deleted; the reasoning is in the pack, above where the rule used to be.
   'bugfix-cs-null-safety-ordefault-deref': 'WARNING',
   'bugfix-cs-edge-case-modify-during-iteration': 'WARNING',
 };
@@ -470,7 +465,6 @@ const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-cs-off-by-one-loop-lte-length': 'off_by_one',
   'bugfix-cs-off-by-one-loop-lte-count': 'off_by_one',
   'bugfix-cs-memory-leak-httpclient-per-call': 'memory_leak',
-  'bugfix-cs-null-safety-as-cast-deref': 'null_safety',
   'bugfix-cs-null-safety-ordefault-deref': 'null_safety',
   'bugfix-cs-edge-case-modify-during-iteration': 'edge_case',
 };

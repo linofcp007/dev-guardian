@@ -345,7 +345,7 @@ registerToolModule(makeScanTool({
         'JS/TS, Python, Go, Java, C# and PHP rule packs: `configs/semgrep/bugfix-js.yml` (thirteen ' +
         'rules), `configs/semgrep/bugfix-py.yml` (ten rules), `configs/semgrep/bugfix-go.yml` (nine ' +
         'rules), `configs/semgrep/bugfix-java.yml` (eight rules), `configs/semgrep/bugfix-cs.yml` ' +
-        '(twelve rules) and `configs/semgrep/bugfix-php.yml` (six rules), each covering the six ' +
+        '(eleven rules) and `configs/semgrep/bugfix-php.yml` (six rules), each covering the six ' +
         'subcategories ' +
         'below for its language — race_condition, null_safety, off_by_one, memory_leak, ' +
         'error_handling, edge_case — EXCEPT the PHP pack, where `memory_leak` is EMPTY and stated ' +
@@ -355,7 +355,14 @@ registerToolModule(makeScanTool({
         'first measured against an external corpus (WordPress 6.9, 1467 files) from the start, ' +
         'and ZERO of its six rules sit at ERROR: the closest candidate, `empty-catch`, produced ' +
         'ten findings there and every one is a deliberate empty catch carrying an explanatory ' +
-        'comment, which Semgrep cannot read. Rust is NOT one of those languages: ' +
+        'comment, which Semgrep cannot read. The C# pack was TWELVE rules until ' +
+        '`null-safety-as-cast-deref` was DELETED for the same kind of reason, on the same ' +
+        'kind of evidence: 6490 findings on dotnet/runtime (11 800 files, against 402 for ' +
+        'empty-catch on that corpus) and no true positives in a 75-finding hand-read ' +
+        "sample. 67.6% of them were not about `as` at all — Semgrep's C# frontend puts " +
+        "`o as T` and `(T)o` on the SAME node, so the rule's premise (an `as` yields null " +
+        'where a cast throws) is not expressible in this engine. Rust is NOT one of those ' +
+        'languages: ' +
         '`configs/semgrep/bugfix-rs.yml` holds exactly ONE rule, ' +
         '`blocking-sleep-in-async` (a `std::thread::sleep` inside an `async fn`, which blocks ' +
         'the executor thread and stalls every other task on it), and covers one of the six ' +

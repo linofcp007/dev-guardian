@@ -526,13 +526,22 @@ aplicar-se a todo o pack.
 ### C#, a linguagem em que o registo está mesmo a zero
 
 Para C#, o `bug_hunt` corre também por default `configs/semgrep/bugfix-cs.yml`
-— **doze** regras hand-authored, cada uma com o seu par de fixtures —, nas
+— **onze** regras hand-authored, cada uma com o seu par de fixtures —, nas
 mesmas seis classes: `throw ex;` dentro de um catch, catch vazio, `async void`
 fora de um event handler, bloqueio numa Task com `.Result`/`.Wait()`, `Random`
 estático, `lock (this)` ou num literal de string, `i <= a.Length`,
-`i <= xs.Count`, `new HttpClient()` por chamada, dereference de um `as` sem
-guarda, dereference de `FirstOrDefault()`, e remoção de uma coleção durante o
-`foreach` sobre ela própria.
+`i <= xs.Count`, `new HttpClient()` por chamada, dereference de
+`FirstOrDefault()`, e remoção de uma coleção durante o `foreach` sobre ela
+própria.
+
+**Eram doze.** A `as-cast-deref` — dereference de um `as` sem guarda — foi
+apagada depois de medida contra o `dotnet/runtime`: 6490 findings em 11 800
+ficheiros, contra 402 da `empty-catch` no mesmo corpus, e nenhum verdadeiro
+positivo numa amostra de 75 lida a mão. O frontend de C# do Semgrep põe
+`o as T` e `(T)o` no **mesmo nó**, por isso 67,6 % dos findings nem sequer
+eram sobre um `as` — e a premissa da regra ("o `as` devolve null onde um cast
+direto lança") não é exprimível neste motor. A nota de eliminação está no topo
+do pack.
 
 **O registo está a zero, e isso foi medido com controlos positivos e não
 assumido.** O `p/r2c-bug-scan` não traz regra nenhuma de C#: apontado às
@@ -541,7 +550,7 @@ fixtures reporta `paths.scanned = 0`, e por isso o controlo positivo desse pack
 forma de distinguir "aditivo" de "nunca correu". O `p/csharp` e o
 `p/security-audit` varrem todos os ficheiros e não encontram nada.
 
-**Uma das doze está em `ERROR`**, e a razão é estrutural: o C# tem um defeito —
+**Uma das onze está em `ERROR`**, e a razão é estrutural: o C# tem um defeito —
 `throw ex;` dentro de um `catch` — cuja forma *correta*, `throw;`, é **outro nó
 da AST**. Não há guarda para reconhecer porque não há nada a guardar, que é a
 única maneira de passar o critério do §4 num motor sem dataflow.
@@ -587,9 +596,7 @@ um falso positivo sem solução nas duas direções: numa sequência de tipos **
 valor** o `FirstOrDefault()` devolve `default(T)` e nunca null, por isso
 `List<int>.FirstOrDefault().ToString()` é código correto e dispara — e a
 deny-list de membros que fecharia esse caso passa a perder
-`List<Cliente>.FirstOrDefault().ToString()`, que é uma NRE a sério. A
-`as-cast-deref` perde o ramo `else` quando o ramo `então` **também**
-dereferencia.
+`List<Cliente>.FirstOrDefault().ToString()`, que é uma NRE a sério.
 
 **A `off_by_one` mantém o falso positivo sentinela do pack de Java**: um ciclo
 que preenche `new int[a.Length + 1]` continua a disparar. O aperto óbvio foi

@@ -18,10 +18,14 @@
 // Its counts are asserted like any other fixture, so every future exclusion
 // has to prove it does not eat a real bug before it can be merged.
 //
-// AND IT CARRIES EXTRA WEIGHT THIS ROUND, because ablation axis 3 — the one
-// that measures a clause's width against code nobody wrote as a fixture — is
-// N/A for the whole C# pack: this repo contains no C# outside this tree. This
-// file and the guard-adjacent hits in AsCast.cs are the compensation.
+// IT USED TO CARRY EXTRA WEIGHT because ablation axis 3 — the one that
+// measures a clause's width against code nobody wrote as a fixture — was N/A
+// for the whole C# pack: this repo contains no C# outside this tree. It is no
+// longer the only compensation. Axis 3 now runs for this pack against a corpus
+// named by `GUARDIAN_CS_SRC`, and the first thing it measured deleted a rule —
+// `as-cast-deref`, 6490 findings and no true positives on `dotnet/runtime`.
+// Its entry in this file went with it. A fixture corpus written here can only
+// probe the shapes its author thought of; that is what axis 3 is for.
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -127,43 +131,6 @@ public sealed class OrderService
             Log(ex);
         }
         return total;
-    }
-
-    // as-cast-deref: guarded use INSIDE the `if`, unguarded use AFTER it. This
-    // is the commonest real spelling of the defect — the author added the
-    // guard for the logging line and then forgot that the return is reached
-    // whether or not the cast succeeded.
-    //
-    // It is also the shape that proves the guard exclusion does not OVER-REACH:
-    // the exclusion matches this `if` (its then-block does dereference), and
-    // `pattern-not-inside` excludes everything inside the matched node — so
-    // the return firing is what shows the exclusion stops at the `if`.
-    //
-    // ANNOTATED FOR THE ABLATION, because this method makes axis 2 flag a
-    // clause that is doing its job. Ablating
-    // `pattern-not-inside: if ($V != null) { <... $V.$M ...>; }` reveals ONE
-    // finding in hits/ — line 155, the GUARDED `Console.WriteLine` below,
-    // which is correct code sitting deliberately next to the bug. CLAUDE.md
-    // names this exact case: axis 2 fires whenever a hits/ fixture carries the
-    // excluded near-miss beside the bug, which the real-bugs files do. It is
-    // an attribution, not a defect. Do not "fix" it by deleting the clause.
-    //
-    // WHAT THIS FILE MEASURED AND THE RULE CANNOT DO, found by writing this
-    // corpus rather than by reasoning: if the else arm ALSO dereferences while
-    // the then arm does, the else arm is swallowed, because the exclusion has
-    // then matched the whole `if` including its else. That is a narrower
-    // residual of the same hole the then-block scoping closed — it needs the
-    // guarded arm to dereference too, where the original swallowed the else
-    // arm unconditionally. Stated in the rule comment; not fixturable here,
-    // because a fixture that does not fire cannot be asserted in hits/.
-    public string Describe(object raw)
-    {
-        var order = raw as Order;
-        if (order != null)
-        {
-            Console.WriteLine(order.Reference);
-        }
-        return order.Reference;
     }
 
     // ordefault-deref behind a guard on a DIFFERENT collection. The guard

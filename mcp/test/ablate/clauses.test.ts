@@ -256,7 +256,11 @@ describe('the rule inventory', () => {
       'bugfix-py': { rules: 10, withClauses: 10 },
       'bugfix-go': { rules: 9, withClauses: 8 },
       'bugfix-java': { rules: 8, withClauses: 7 },
-      'bugfix-cs': { rules: 12, withClauses: 11 },
+      // 11 since `null-safety-as-cast-deref` was deleted: it fired 6490 times
+      // on 11 800 files of dotnet/runtime with no true positives, and this
+      // pack is where the missing axis 3 was recorded as permanent. See
+      // `packs.ts` and the deletion note in the pack.
+      'bugfix-cs': { rules: 11, withClauses: 10 },
       routes: { rules: 64, withClauses: 44 },
     };
     for (const [name, want] of Object.entries(expected)) {

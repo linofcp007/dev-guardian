@@ -9,8 +9,10 @@
  * it is TypeScript, so the JS/TS pack is the only one whose corpus can be a
  * committed path.
  *
- * The Rust pack's corpus is the one exception, and it is opt-in rather than
- * absent. Rust's standard library source is ~1400 `.rs` files nobody wrote as
+ * Two packs are the exception, and both are opt-in rather than absent: Rust
+ * and C#, each reading a corpus path from an environment variable.
+ *
+ * Rust's standard library source is ~1400 `.rs` files nobody wrote as
  * a fixture, it is free (`rustup component add rust-src`, or copied out of
  * `<toolchain>/lib/rustlib/src/rust/library` in the `rust:1.79-alpine`
  * image after adding the component), and in the Rust probe it is what turned
@@ -36,6 +38,26 @@
  * `unwrap-in-drop`, which are about ownership and `Drop`, and the standard
  * library is saturated with both. A future async rule wanting real axis-3
  * evidence needs a corpus of async Rust, which this is not.
+ *
+ * **C#, `GUARDIAN_CS_SRC`, and why it is here at all.** The C# round shipped
+ * with axis 3 recorded as permanently `N/A` — the design of record said so in
+ * as many words — because this repo holds no C#. It shipped
+ * `null-safety-as-cast-deref` under that gap, and the first axis-3 corpus the
+ * pack ever had **deleted the rule**: 6490 findings on `dotnet/runtime`
+ * (`src/libraries` product source, 11 800 files), against 402 for
+ * `empty-catch` on the same corpus, and no true positives in a 75-finding
+ * hand-read sample. 67.6 %
+ * of them were not even about `as` — Semgrep's C# frontend puts `o as T` and
+ * `(T)o` on the SAME node, so the rule's own premise ("`as` yields null where
+ * a cast throws") is not expressible in this engine at all. Axes 0, 1 and 2
+ * passed throughout, on fixtures written by the rule's own author.
+ *
+ * Any tree of real C# will do. What produced that measurement:
+ * `git clone --filter=blob:none --no-checkout --depth 1` of `dotnet/runtime`,
+ * then a NON-CONE sparse checkout of the `src/libraries` product-source glob
+ * (each area's `src` subtree, tests excluded). Keep it at a SHORT path —
+ * semgrep-core scans zero files with `Failed to obtain target files` on a long
+ * Windows path, and that message points nowhere near its cause.
  *
  * `base.yml` does contain JS/TS rules and would accept `mcp/src` as a corpus;
  * it is left off by default only because nobody has read that baseline yet.
@@ -64,26 +86,43 @@ export const MCP_SRC = { label: 'mcp/src', dir: resolve(REPO_ROOT, 'mcp', 'src')
 /** Env var naming the Rust standard-library source tree, for axis 3. */
 export const RUST_SRC_ENV = 'GUARDIAN_RUST_SRC';
 
+/** Env var naming a tree of real C# source, for axis 3. */
+export const CS_SRC_ENV = 'GUARDIAN_CS_SRC';
+
 /**
- * Axis-3 corpus for the Rust pack, or `undefined` when the env var is unset —
- * in which case the harness prints axis 3 as `N/A` for the pack, which is a
- * verdict rather than a silent skip. A path that is set but missing is an
- * error, not an N/A: see the file header.
+ * An opt-in axis-3 corpus read from an environment variable.
+ *
+ * Unset (or empty), the corpus is `undefined` and the harness prints axis 3 as
+ * `N/A` for the pack — a verdict, printed, rather than a silent skip. Set to a
+ * path that does not exist it THROWS, because a typo'd corpus that quietly
+ * becomes "not measured" is the exact shape of failure this harness exists to
+ * prevent.
  */
-export function rustStdlibCorpus(): RealCorpus | undefined {
-  const dir = process.env[RUST_SRC_ENV];
+function envCorpus(envVar: string, label: string, hint: string): RealCorpus | undefined {
+  const dir = process.env[envVar];
   if (dir === undefined || dir.trim() === '') return undefined;
   const abs = resolve(dir.trim());
   if (!existsSync(abs)) {
     throw new Error(
-      `${RUST_SRC_ENV} is set to ${abs}, which does not exist. Unset it to run ` +
-        `bugfix-rs with axis 3 as N/A, or point it at a rust-src library tree.`,
+      `${envVar} is set to ${abs}, which does not exist. Unset it to run with ` +
+        `axis 3 as N/A, or point it at ${hint}.`,
     );
   }
-  return { label: 'rust-src (standard library)', dir: abs };
+  return { label, dir: abs };
+}
+
+/** Axis-3 corpus for the Rust pack. See `envCorpus` and the file header. */
+export function rustStdlibCorpus(): RealCorpus | undefined {
+  return envCorpus(RUST_SRC_ENV, 'rust-src (standard library)', 'a rust-src library tree');
+}
+
+/** Axis-3 corpus for the C# pack. See `envCorpus` and the file header. */
+export function csharpCorpus(): RealCorpus | undefined {
+  return envCorpus(CS_SRC_ENV, 'C# corpus (GUARDIAN_CS_SRC)', 'a tree of real C# source');
 }
 
 const RUST_STDLIB = rustStdlibCorpus();
+const CSHARP_SRC = csharpCorpus();
 
 export const PACKS: readonly PackSpec[] = [
   {
@@ -96,7 +135,13 @@ export const PACKS: readonly PackSpec[] = [
   { name: 'bugfix-py', config: config('bugfix-py'), fixtures: fixtures('bugfix-py'), hitsSubdir: 'hits' },
   { name: 'bugfix-go', config: config('bugfix-go'), fixtures: fixtures('bugfix-go'), hitsSubdir: 'hits' },
   { name: 'bugfix-java', config: config('bugfix-java'), fixtures: fixtures('bugfix-java'), hitsSubdir: 'hits' },
-  { name: 'bugfix-cs', config: config('bugfix-cs'), fixtures: fixtures('bugfix-cs'), hitsSubdir: 'hits' },
+  {
+    name: 'bugfix-cs',
+    config: config('bugfix-cs'),
+    fixtures: fixtures('bugfix-cs'),
+    hitsSubdir: 'hits',
+    realCode: CSHARP_SRC,
+  },
   // Axis 3 is N/A: this repo holds no PHP outside this fixture tree. The PHP
   // pack WAS measured against a real corpus — WordPress 6.9, 1467 files, and
   // that measurement changed four verdicts (design of record §1) — but the

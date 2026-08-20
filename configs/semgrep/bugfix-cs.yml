@@ -564,112 +564,65 @@ rules:
     languages: [csharp]
 
   # ---------------------------------------------------------------------------
-  # null_safety — duas regras, e a primeira tem a bateria de guardas maior do
-  # pack. As duas ficam em WARNING, e sao a ilustração mais limpa do critério
-  # do §4: a correção delas depende INTEIRAMENTE de ter reconhecido uma guarda,
-  # e uma guarda pode estar a um método de distancia.
+  # null_safety — UMA regra. Eram duas: a `as-cast-deref` foi apagada depois de
+  # medida contra código real, e a nota de baixo diz porque. A que fica
+  # continua em WARNING pelo §4 — a correção dela depende inteiramente de ter
+  # reconhecido uma guarda, e uma guarda pode estar a um método de distancia.
   # ---------------------------------------------------------------------------
 
-  # `x as T` devolve null quando o cast falha — é a diferença toda entre o `as`
-  # e um cast direto, que lança. Dereferenciar sem verificar transforma uma
-  # incompatibilidade de tipos numa NullReferenceException longe da causa.
+  # ---------------------------------------------------------------------
+  # APAGADA (corpus dotnet/runtime): bugfix-cs-null-safety-as-cast-deref.
   #
-  # A FORMA POSITIVA NAO PODE SER A SEQUENCIA. Medido:
+  # Casava `var $V = $O as $T;` seguido de `$V.$M`. Disparou 6490 vezes nos
+  # 11 800 ficheiros de `src/libraries/*/src` do `dotnet/runtime` — quase uma
+  # por cada dois ficheiros, e dezasseis vezes mais do que a `empty-catch`
+  # (402) no mesmo corpus. O numero nao é o argumento; o que estava lá dentro
+  # é.
   #
-  #     var $V = $O as $T;
-  #     ...
-  #     $V.$M
+  # A PREMISSA DA REGRA NAO E EXPRIMIVEL NESTE MOTOR. O frontend de C# do
+  # Semgrep representa `o as T` e `(T)o` no MESMO NO, e isso verifica-se em
+  # dois passos:
   #
-  # NAO FAZ PARSE — `Invalid pattern for C#: Parse_error`. Felizmente é das
-  # falhas seguras: levanta RuleParseError e sai com 2. O que funciona é
-  # `pattern: $V.$M` com `pattern-inside` na declaração seguida de `...`.
+  #   - `pattern: var $V = $O as $T;` e `pattern: var $V = ($T)$O;` casam
+  #     EXATAMENTE os mesmos sitios, linha a linha, nas duas grafias;
+  #   - `patterns:` com `pattern: var $V = $O as $T;` mais
+  #     `pattern-not: var $V = ($T)$O;` devolve ZERO — o `pattern-not`
+  #     aniquila todos os matches do `pattern`, que é o que acontece quando os
+  #     dois descrevem o mesmo no.
   #
-  # E ISSO TORNA ESTA A REGRA MAIS LARGA DO PACK: uma vez que `var s = o as
-  # string;` está no escopo, TODOS os usos posteriores de `s` sao candidatos. A
-  # lista de guardas faz o trabalho todo. Sem ela: 12 matches na fixture de
-  # código correto; com ela: 2, que sao os dois bugs.
+  # Nao existe grafia que apanhe o `as` e deixe passar o cast direto. E a
+  # distinção era a regra INTEIRA: a propria mensagem dizia-o — "o `as`
+  # devolve null quando o cast falha, é essa a diferença para um cast direto".
+  # Um cast direto LANCA `InvalidCastException` no sitio do cast e nunca
+  # devolve null, por isso em cima de um cast direto a regra acusa um defeito
+  # que nao pode existir. Medido por atribuição textual no corpus: 4385 dos
+  # 6490 achados (67,6 %) vem de um cast direto e so 1122 (17,3 %) de um `as`.
   #
-  # O ESCOPO DA EXCLUSAO E TUDO, e este é o ponto onde o pack de Java se
-  # enganou durante quatro waves. A grafia óbvia,
+  # E OS 17,3 % TAMBEM NAO ERAM VERDADEIROS POSITIVOS. Lidos 75 achados a mao,
+  # espalhados por dezenas de assemblies: as guardas que o C# real usa nao sao
+  # as onze da lista de exclusoes. `null != x`, `while (x != null)`,
+  # `x is null || ...`, `Debug.Assert(x != null)`,
+  # `ContractUtils.Requires(x != null, ...)`, uma reatribuição no ramo nulo,
+  # um helper `[DoesNotReturn]`, uma cadeia `&&`/`||` de tres ou mais termos
+  # (que associa a esquerda, e por isso o `$V != null && <... $V.$M ...>` nao
+  # casa) e — a maior de todas — QUALQUER `if (x != null) { ... }` com MAIS DE
+  # UMA INSTRUCAO no bloco, porque `if ($V != null) { <... $V.$M ...>; }` exige
+  # um bloco de UMA instrução e as fixtures de misses/ so tinham dessas. Um
+  # filtro generoso — "o nome da variavel nao aparece em nenhum teste de
+  # nulidade em volta" — deixa 70 achados de 6490 (1,1 %), e ao le-los sobram
+  # cinco variaveis com a forma genuina, todas latentes e nenhuma um bug vivo.
   #
-  #     pattern-not-inside: "if ($V != null) { ... }"
+  # WARNING nao é tier para uma regra que nunca esteve certa; é uma maneira
+  # mais silenciosa de continuar errada, e custa a toda a gente que leia a
+  # saida. Foi o mesmo raciocinio que apagou a `catch-returns-null` do pack de
+  # JS/TS. A regra e as duas fixtures (hits/AsCast.cs, misses/AsCast.cs)
+  # foram-se, e a entrada de as-cast do RealBugs.cs com elas.
   #
-  # fecha os casos corretos E ENGOLE O RAMO `else`, porque o
-  # `pattern-not-inside` exclui o NO INTEIRO que casou, ramo `else` incluído —
-  # e no `else` de uma guarda de nao-nulidade o deref é uma NRE GARANTIDA.
-  # Medido nas fixtures desta ronda: essa grafia perde dois bugs reais. A
-  # grafia que se usa aqui limita a exclusão ao BLOCO ENTAO,
-  #
-  #     pattern-not-inside: "if ($V != null) { <... $V.$M ...>; }"
-  #
-  # fecha exatamente os mesmos casos corretos e mantém os dois bugs. As sete
-  # NREs garantidas ao lado de guardas estao em hits/AsCast.cs de propósito: o
-  # eixo 2 da ablação mede "tirar esta clausula nao pode REVELAR findings em
-  # hits/", e uma exclusão que come um bug real só é visível se o bug estiver
-  # lá.
-  #
-  # RESIDUO DO MESMO BURACO, MEDIDO E DECLARADO. A limitação do bloco-entao
-  # fecha o caso geral mas nao o caso em que O RAMO ENTAO TAMBEM DEREFERENCIA:
-  # aí a exclusão casa mesmo o `if` inteiro, e o `pattern-not-inside` leva o
-  # ramo `else` atrás. Ou seja, `if (x != null) { usa(x.A); } else { usa(x.A); }`
-  # perde o segundo `usa`. E muito mais estreito do que o original — que engolia
-  # o ramo `else` SEMPRE, dereferenciasse o ramo entao ou nao — mas nao é zero.
-  #
-  # Foi o corpus de bugs reais que o encontrou, e nao o raciocínio: a entrada de
-  # as-cast do RealBugs.cs escrita com os dois ramos a dereferenciar nao
-  # disparou, e foi preciso perceber porque. Nao tem fixture, porque uma
-  # fixture que nao dispara nao pode ser afirmada em hits/.
-  #
-  # A ABLACAO SINALIZA O `pattern-inside` DESTA REGRA NO EIXO 2, E E UM FALSO
-  # ALARME — dito aqui para ninguém o "corrigir". O eixo 2 pergunta "tirar esta
-  # clausula revela findings em hits/?", e assume que a clausula é uma
-  # EXCLUSAO. Esta nao é: é a ANCORA POSITIVA da regra. Sem ela o `$V.$M`
-  # passa a casar todos os acessos a membro do corpus (+135), e 58 deles caem
-  # em ficheiros de hits/ de OUTRAS regras — `StaticRandom.cs`, `EmptyCatch.cs`,
-  # `Rethrow.cs`, que nao tem um único `as` lá dentro. Sao lixo, e nao
-  # verdadeiros positivos que a clausula estivesse a esconder. Verificado
-  # ficheiro a ficheiro, e é exatamente o que o CLAUDE.md avisa: os eixos 2 e 3
-  # sao ATRIBUICOES, nao provas, e sinalizam mais do que o defeito para que
-  # foram feitos.
-  #
-  # TRES FORMAS CORRETAS SAO GRATIS e nao levam clausula nenhuma, medido: `?.`
-  # é outro nó, `o is string s` é outro nó, e `o as string ?? "d"` nao é um
-  # inicializador `as` simples. Estao em misses/ marcadas como tal, para
-  # ninguém as ler como prova de que a regra é precisa.
-  - id: bugfix-cs-null-safety-as-cast-deref
-    patterns:
-      - pattern: $V.$M
-      - pattern-inside: |
-          var $V = $O as $T;
-          ...
-      - pattern-not-inside: "if ($V != null) { <... $V.$M ...>; }"
-      - pattern-not-inside: "if ($V is not null) { <... $V.$M ...>; }"
-      - pattern-not-inside: |
-          if ($V == null) { return ...; }
-          ...
-      - pattern-not-inside: |
-          if ($V is null) { return ...; }
-          ...
-      - pattern-not-inside: |
-          if ($V == null) { throw ...; }
-          ...
-      - pattern-not-inside: |
-          if ($V == null) { continue; }
-          ...
-      - pattern-not-inside: |
-          ArgumentNullException.ThrowIfNull($V);
-          ...
-      - pattern-not-inside: "$V != null && <... $V.$M ...>"
-      - pattern-not-inside: "$V == null || <... $V.$M ...>"
-      - pattern-not-inside: "$V != null ? <... $V.$M ...> : ..."
-      - pattern-not-inside: "$V == null ? ... : <... $V.$M ...>"
-    message: >-
-      Dereferencia do resultado de um `as` sem verificar o nulo. O `as` devolve
-      null quando o cast falha — é essa a diferença para um cast direto —, por
-      isso isto lança NullReferenceException longe da causa. Use
-      `if (x is T y)`, ou verifique o nulo antes.
-    severity: WARNING
-    languages: [csharp]
+  # NAO A VOLTE A POR sem uma forma de separar o `as` do cast direto neste
+  # motor. Enquanto os dois forem o mesmo no, a regra nao pode ser escrita. O
+  # eixo 3 da ablação — o que teria dito isto antes de a regra sair — passou a
+  # estar disponivel para este pack, via `GUARDIAN_CS_SRC`.
+  # ---------------------------------------------------------------------
 
   # `FirstOrDefault()` e companhia devolvem `default(T)` numa sequencia vazia —
   # null para um tipo de referencia. A razao inteira para escolher a variante
