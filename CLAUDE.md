@@ -221,6 +221,13 @@ Enforced by the compiler where possible, by review where not:
   `errors: 0`** — indistinguishable from a clean project. Rule messages in this
   repo are written in Portuguese, which is what makes this a live hazard.
 
+  **Rule comments are Portuguese too**, not just the messages — measured, not
+  asserted: six of the seven `bugfix-*` packs are roughly half Portuguese by
+  comment line, and the outlier is `bugfix-js`, the first one written. Two
+  independent implementers overruled a plan of mine that said otherwise, and
+  both were right. Write comments in Portuguese and keep docs, commits and
+  identifiers in English.
+
   **Only those characters.** `Ã À Â É Ê Ó Ô Õ Ú Ç` are all fine and every
   lowercase accented letter is fine — the broad version of this rule ("no
   uppercase accented letters") is wrong for ten of the twelve accented capitals
