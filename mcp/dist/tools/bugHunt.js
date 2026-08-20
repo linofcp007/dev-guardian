@@ -338,13 +338,14 @@ export function mapSubcategory(ruleId, existing) {
 }
 registerToolModule(makeScanTool({
     name: 'bug_hunt',
-    title: 'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python, Go and ' +
-        'Java bug rules; optional language packs, off by default; other languages still ' +
+    title: 'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python, Go, ' +
+        'Java and C# bug rules; optional language packs, off by default; other languages still ' +
         'registry-only)',
     description: 'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus local, always-on ' +
-        'JS/TS, Python, Go and Java rule packs: `configs/semgrep/bugfix-js.yml` (thirteen rules), ' +
+        'JS/TS, Python, Go, Java and C# rule packs: `configs/semgrep/bugfix-js.yml` (thirteen rules), ' +
         '`configs/semgrep/bugfix-py.yml` (ten rules), `configs/semgrep/bugfix-go.yml` (nine ' +
-        'rules) and `configs/semgrep/bugfix-java.yml` (eight rules), each covering all six subcategories ' +
+        'rules), `configs/semgrep/bugfix-java.yml` (eight rules) and `configs/semgrep/bugfix-cs.yml` ' +
+        '(twelve rules), each covering all six subcategories ' +
         'below for its language — race_condition, null_safety, off_by_one, memory_leak, ' +
         'error_handling, edge_case. `commands/guardian-fix.md` also ' +
         'names "broken happy paths" as a bug-hunting focus; that is not a syntactic pattern, ' +

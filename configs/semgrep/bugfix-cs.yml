@@ -1,0 +1,794 @@
+# dev-guardian Semgrep config bugfix-cs.
+# Bugs de implementação em C#. É a linguagem mais vazia de toda a sequência, e
+# desta vez o número é ZERO: o `p/r2c-bug-scan` reporta `paths.scanned = 0`
+# nestas fixtures porque não traz UMA regra de C#, e o `p/csharp` e o
+# `p/security-audit` varrem os ficheiros e não encontram nada. Cada regra deste
+# ficheiro é aditiva por medição, com controlo positivo, e não por suposição.
+# As medições estão em
+# docs/superpowers/specs/2026-08-20-bugfix-rules-csharp-design.md.
+#
+# Cada regra tem um par de fixtures em
+# mcp/test/fixtures/bugfix-cs/{hits,misses}/: um ficheiro que tem de disparar a
+# regra, outro parecido que NAO pode. O ficheiro misses/ é a especificação do
+# que é código correto — se ele disparar, a regra é que está errada. E todas as
+# fixtures COMPILAM: `dotnet build` com `0 Error(s)`. A ronda de Go despachou
+# uma regra cuja fixture de hit não era Go compilável, o que punha o conjunto
+# de verdadeiros positivos a zero em qualquer projeto que construa.
+#
+# ---------------------------------------------------------------------------
+# ESCREVA SEMPRE `var` NUM PADRAO DE C#. É a sexta forma de falha silenciosa
+# desta série e a PRIMEIRA que o `paths.scanned` nao apanha.
+#
+# `$T $V = ...` só casa declarações com tipo EXPLICITO. `var x = ...` é outro
+# nó, e é como quase todo o C# se escreve. Medido na sondagem:
+# `foreach ($T $X in $C)` encontrou 0 de 5 bugs reais; `foreach (var $X in $C)`
+# encontrou os cinco. O scan corre, os ficheiros sao varridos, os erros sao
+# zero, e a resposta é 0. Uma regra portada do pack de Java por analogia
+# textual nao encontra nada com todos os indicadores verdes.
+#
+# OUTRAS ARMADILHAS MEDIDAS:
+#
+# - `metavariable-regex` está ancorada no INICIO. `regex: "Async$"` nao casou
+#   nada em `GetDataAsync`, sem erro e sem aviso. Use `".*Async"`. O
+#   `^(?!...$)` deste ficheiro funciona por já estar ancorado no início.
+# - Um `pattern-either` cujo ramo só tem `metavariable-type` carrega ZERO
+#   regras no ficheiro inteiro. Repita o termo positivo em todos os ramos.
+# - `try { ... } catch (...) { }` NAO faz parse: nao existe um wildcard de
+#   "qualquer catch". Por isso a regra de catch vazio tem tres ramos.
+# - Um `catch ($E $V) { ... }` sem `try` faz parse e nao casa nada — silencioso.
+#
+# - UM `finally` FINAL TORNA O `try` INVISIVEL, e por isso a FORMA DO TRY é
+#   uma DIMENSAO das duas regras deste ficheiro, nao um detalhe. Medido, e nao
+#   estava no design: o padrao `try { ... } catch (...) { ... }` NAO casa um
+#   `try { ... } catch (...) { ... } finally { ... }`, e o padrao com
+#   `finally` só casa esse. Os dois sao DISJUNTOS — nenhum contém o outro —,
+#   por isso a correção é enumerar ambos e nao alargar um.
+#
+#   Foi o ORACULO INDEPENDENTE que o apanhou, e é o melhor argumento que este
+#   pack tem para ter um: o `dotnet build` emitia CA2200 num `throw ex;` cujo
+#   catch tinha um `finally` a seguir e o Semgrep nao emitia nada. Um falso
+#   negativo, confirmado por uma segunda opiniao, e nao um falso positivo
+#   evitado de propósito. Sem o CA2200 tinha passado — as fixtures originais
+#   nao tinham a forma, e uma fixture que nao tem a forma nunca a testa.
+#
+#   Custo da correção: 3 ramos em vez de 1 na `empty-catch` (tres grafias de
+#   catch x duas formas de try) e um `pattern-either` de dois
+#   `pattern-inside` na `rethrow-loses-stacktrace`. O `try { ... } finally
+#   { ... }` SEM catch continua a nao casar nada, medido — o `finally { }`
+#   vazio nao é confundido com um catch vazio.
+#
+#   ESTAVA NA FAMILIA, e a família é mais estreita do que parecia: o pack de
+#   JS/TS e o de Python fecharam o mesmo buraco na véspera (o de Python pela
+#   mesma via, um produto cartesiano de {handler} x {try, try+finally,
+#   try+else}). O de Java ainda o tem, e é de lá que este port o herdou; está
+#   a ser corrigido em separado.
+#
+# ---------------------------------------------------------------------------
+# CINCO CARACTERES SAO PROIBIDOS NESTE FICHEIRO, incluindo nos comentários: o A
+# maiúsculo com acento agudo (U+00C1), o I maiúsculo com acento agudo (U+00CD),
+# e mais tres que o português nao usa (U+00CF, U+00D0, U+00DD). Em português,
+# na prática, sao dois — e é por isso que este bloco escreve "NAO" e "SAO" sem
+# acento.
+#
+# Porque: o carregador de configuração do Semgrep descodifica este ficheiro com
+# o codec do LOCALE e nao em UTF-8. Num locale cp1252 (Windows) os bytes 0x81,
+# 0x8D, 0x8F, 0x90 e 0x9D nao existem na tabela, e sao exatamente os segundos
+# bytes UTF-8 desses cinco caracteres. UM deles num comentário derruba o
+# ficheiro inteiro, e o scan devolve `results: 0`, `paths.scanned: 0` e
+# `errors: 0` — quem leia só os findings ve um scan limpo. O
+# `semgrepPacks.test.ts` apanha isto em todos os packs, por duas vias.
+#
+# Todas as outras maiúsculas acentuadas do português passam, medidas uma a uma:
+# A-til, A-grave, A-circunflexo, E-agudo, E-circunflexo, O-agudo,
+# O-circunflexo, O-til, U-agudo e C-cedilha. E todas as minúsculas passam.
+#
+# ---------------------------------------------------------------------------
+# TRES PALAVRAS SAO PROIBIDAS NOS IDS, e nao as duas do pack de Java:
+#
+#   `unchecked`  — a regex de error_handling casa-a, e em C# é uma palavra
+#                  reservada, por isso é um nome plausível para uma regra.
+#   `concurren`  — a regex de race_condition casa-a e corre PRIMEIRO no
+#                  if-chain; em C# é um fragmento de nome de tipo vivo
+#                  (`ConcurrentDictionary`, `ConcurrentBag`).
+#   `disposed`   — a regex de memory_leak casa-a e corre ANTES de
+#                  error_handling, por isso um id sobre a exceção de um objeto
+#                  já libertado classifica como memory_leak, em silencio.
+#
+# ---------------------------------------------------------------------------
+# OS TIERS. Este pack tem a melhor proporção da série — 2 em 11 em ERROR —, e
+# isso nao é generosidade. O critério do §4 do design é uma pergunta sobre o
+# OUTPUT: "aquilo que a regra EMITE é sempre um bug?". Uma regra cuja correção
+# depende de ter reconhecido uma GUARDA falha sempre que encontra uma guarda
+# que ninguém enumerou, e a guarda pode estar a um método de distância.
+#
+# As duas regras deste ficheiro que passam nessa barra sao as duas de
+# error_handling, por razões diferentes. A `empty-catch` passa como no pack de
+# Java: a sua válvula de escape nao é uma guarda, é uma DECLARACAO DE INTENCAO
+# escrita no nome da variável, que a própria regra le. A
+# `rethrow-loses-stacktrace` passa por uma razao que nenhuma outra regra da
+# série teve: a forma CORRETA do código que ela assinala (`throw;`) é um NO DE
+# AST DIFERENTE. Nao há guarda para reconhecer porque nao há nada a guardar.
+#
+# CONSEQUENCIA: o parser do Semgrep mapeia ERROR -> `high` e WARNING ->
+# `medium`, e o `create_fix_pr` tem `severity_min` a `high` por omissao. Quem
+# quiser as regras em WARNING corrigidas tem de pedir `severity_min: "medium"`.
+# O `bug_hunt` nao filtra por omissao, por isso nada desaparece de um scan.
+# ---------------------------------------------------------------------------
+rules:
+  # ERROR, e é a única regra desta série cuja forma correta nao é uma guarda
+  # mas outro nó da AST. `throw ex;` dentro de um `catch (E ex)` reescreve
+  # Exception.StackTrace a partir do ponto do relançamento: o frame que
+  # realmente falhou desaparece antes de alguém o registar. `throw;` preserva-o.
+  #
+  # ESTA REGRA DUPLICA A TOOLCHAIN, NAO O REGISTRY, e o design di-lo sem
+  # rodeios: o `dotnet build` avisa disto por omissao como CA2200. Ganha o seu
+  # lugar por duas razões — o dev-guardian varre sem construir (nao precisa do
+  # SDK, das dependencias restauradas nem de um projeto que compile), e um
+  # aviso de compilador que passa a correr no ecra nao é um finding com
+  # fingerprint, baseline e histórico.
+  #
+  # E é por isso que esta é a única regra do pack com um ORACULO INDEPENDENTE.
+  # Medido: o CA2200 dispara exatamente nos 8 sítios da fixture de hits e em
+  # nenhum outro, e zero vezes na fixture de misses. A divisao hits/misses nao
+  # foi avaliada por quem escreveu a regra.
+  #
+  # FORA DAS FIXTURES OS DOIS AINDA DIVERGEM, e vale mais a pena dize-lo do
+  # que deixar o acordo perfeito sugerir que sao equivalentes:
+  #   - `throw ex;` dentro de um lambda declarado no catch: esta regra dispara,
+  #     o CA2200 nao — o analisador do Roslyn ignora funções anónimas porque o
+  #     lançamento pode acontecer fora do contexto do catch. Continua a
+  #     reescrever a stack trace, por isso o falso negativo é do CA2200.
+  #
+  # A divergencia no OUTRO sentido — o `finally` — era nossa e está fechada.
+  # Ver o cabeçalho: foi o CA2200 que a encontrou.
+  #
+  # O `pattern-inside` e a unificação de `$V` sao ambos indispensáveis, e cada
+  # um tem a sua near-miss: sem o `pattern-inside` dispara em
+  # `ThrowOutsideCatch`, onde a exceção é guardada no catch e relançada FORA
+  # dele; sem a unificação de `$V` dispararia no `throw;` correto que está na
+  # linha seguinte ao bug, dentro do mesmo statement, em `FirstOfTwo`.
+  - id: bugfix-cs-error-handling-rethrow-loses-stacktrace
+    patterns:
+      - pattern: throw $V;
+      - pattern-either:
+          - pattern-inside: try { ... } catch ($E $V) { ... }
+          - pattern-inside: try { ... } catch ($E $V) { ... } finally { ... }
+    message: >-
+      `throw ex;` dentro de um catch reinicia a stack trace no ponto do
+      relançamento, por isso o frame que realmente falhou desaparece do log.
+      Use `throw;` para relançar preservando a origem, ou
+      `throw new MinhaExcecao(mensagem, ex)` para embrulhar sem perder nada.
+    severity: ERROR
+    languages: [csharp]
+
+  # ERROR, pela mesma razao que no pack de Java: a válvula de escape nao é uma
+  # guarda. O Semgrep casa a AST e os comentários nao estao lá, por isso um
+  # catch documentado como ignorado de propósito é byte a byte igual a um que
+  # engole a falha em silencio — o comentário nunca podia ser a válvula. O NOME
+  # pode, e já é a convenção dos linters standard: `ignore` e `expected` do
+  # Checkstyle, `ignored` do IntelliJ. O Roslyn nao tem equivalente por
+  # omissao, por isso o vocabulário é herdado do pack de Java e nao de uma
+  # ferramenta de C#. Medido: `e`, `ex`, `ignoreMe` e `expectedly` continuam a
+  # disparar — a regra ganha vocabulário, nao perde força.
+  #
+  # SEIS PADROES, e nao um. Sao duas dimensões independentes multiplicadas:
+  # tres grafias de catch x duas formas de try.
+  #
+  #   grafias: `catch (E v) { }`, `catch (E) { }` sem identificador, `catch { }`
+  #            nu. As duas últimas nao existem em Java, e um port de ramo único
+  #            perde-as: 1 hit em vez de 8. Nao há wildcard que resolva —
+  #            `try { ... } catch (...) { }` nao faz parse.
+  #   try:     com e sem `finally`. Nós diferentes da AST, disjuntos, medidos.
+  #
+  # A `metavariable-regex` é escrita UMA vez, sobre um `pattern-either`
+  # interno com as duas formas de try nomeadas, em vez de copiada para cada
+  # uma. A near-miss `IgnoredNameWithFinally` é o que distingue as duas
+  # montagens: com a regex copiada e uma das cópias em falta, só ela dispara.
+  #
+  # Só as grafias com nome levam a exclusão, e isso é correto e nao um
+  # descuido: um `catch (Exception) { }` sem identificador nao tem onde
+  # declarar a intenção, e um `catch { }` nu ainda menos — quem quer a isenção
+  # escreve o nome.
+  #
+  - id: bugfix-cs-error-handling-empty-catch
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: try { ... } catch ($E $V) { }
+              - pattern: try { ... } catch ($E $V) { } finally { ... }
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^(?!(ignore|ignored|expected)$)
+      - pattern: try { ... } catch ($E) { }
+      - pattern: try { ... } catch ($E) { } finally { ... }
+      - pattern: try { ... } catch { }
+      - pattern: try { ... } catch { } finally { ... }
+    message: >-
+      Catch vazio. A exceção foi apanhada e deitada fora sem log, sem rethrow e
+      sem tratamento, por isso a falha desaparece e o código segue como se nada
+      fosse. Registe no logger, trate, ou relance com `throw;`. Se o silencio
+      for mesmo deliberado, declare-o no nome: `catch (FormatException ignored)`.
+    severity: ERROR
+    languages: [csharp]
+
+  # ---------------------------------------------------------------------------
+  # race_condition — quatro regras, todas WARNING. O C# suporta esta classe
+  # melhor do que qualquer linguagem da série até aqui, e as quatro ficam em
+  # WARNING pela mesma razao: aquilo que emitem é código correto sempre que
+  # existe uma guarda que a regra nao consegue ver. `async void` está certo num
+  # event handler; `.Wait()` está certo quando nada acima de nós segura um
+  # contexto; um `static Random` está certo num programa de uma só thread;
+  # `lock (this)` está certo se mais ninguém trancar a instancia. Nenhuma
+  # dessas condições é visível a um matcher sintático.
+  # ---------------------------------------------------------------------------
+
+  # `async void` fora de um event handler. O método nao devolve Task nenhuma,
+  # por isso a máquina de estados gerada pelo compilador nao tem onde pousar a
+  # exceção: um throw depois do primeiro `await` é relançado no
+  # SynchronizationContext capturado — ou, sem contexto, numa thread do pool —
+  # e derruba o processo. Quem chama nao pode esperar por ele, nao o pode
+  # observar e nao o pode apanhar.
+  #
+  # A EXCLUSAO E A CONVENCAO DOS EVENT HANDLERS, `(object sender, TArgs e)`, e
+  # a forma como está escrita foi MEDIDA e CONTRARIA O DESIGN. O design dizia
+  # que um `pattern-not` com o nome `EventArgs` literal fechava os dois
+  # handlers da fixture correta. Nao fecha:
+  #
+  #   - `pattern-not: async void $M(object $S, EventArgs $E) { ... }` fecha
+  #     APENAS o handler tipado exatamente com `EventArgs`. O handler com
+  #     `ElapsedArgs`, derivado, continuava a disparar.
+  #   - `metavariable-type: EventArgs` no parametro TAMBEM nao o fecha: nao é
+  #     sensível a subtipos aqui. Medido, nao suposto.
+  #   - ligar o tipo a uma metavariável — `(object $S, $T $E)` — fecha os dois.
+  #
+  # E isto importa porque o caso derivado é o caso NORMAL: `ElapsedEventArgs`,
+  # `PropertyChangedEventArgs`, `MouseEventArgs` e todas as instanciações de
+  # `EventHandler<T>` sao subclasses, e nao `EventArgs`. A versao do design
+  # deixava passar praticamente todos os handlers reais.
+  #
+  # CUSTO, dito em vez de escondido: qualquer `async void $M(object, X)` fica
+  # excluído, com X seja o que for. E aceitável porque essa assinatura de dois
+  # parametros com `object` a abrir E a convenção de handler do .NET, mas um
+  # `async void Processa(object payload, Config c)` também escapa.
+  - id: bugfix-cs-race-condition-async-void
+    patterns:
+      - pattern: async void $M(...) { ... }
+      - pattern-not: async void $M(object $S, $T $E) { ... }
+    message: >-
+      `async void` fora de um event handler. O método nao devolve Task, por
+      isso quem chama nao consegue esperar por ele nem apanhar a exceção — um
+      throw depois do primeiro `await` sobe pela via de exceção nao tratada e
+      derruba o processo. Devolva `Task`.
+    severity: WARNING
+    languages: [csharp]
+
+  # Bloquear numa Task. Faz deadlock sempre que a continuação precisa do
+  # contexto que a chamada bloqueante está a segurar — o clássico pendurar do
+  # ASP.NET e do WinForms — e embrulha a exceção numa AggregateException, por
+  # isso o `catch` escrito para o tipo real deixa de casar.
+  #
+  # QUATRO RAMOS, e a regra SO existe nesta forma. Esta é a regra que a fixture
+  # de misses DESENHOU, em vez de apenas verificar depois. A versao ingénua,
+  # `$V.Result` / `$V.Wait()` sem tipo, dispara em QUATRO trechos de código
+  # correto, todos medidos:
+  #
+  #   - um POCO com uma propriedade `bool Result` — `Result` é um bom nome para
+  #     o resultado de uma validação;
+  #   - `Match.Result(string)`, que é um METODO REAL da BCL (expande um padrao
+  #     de substituição). Este é o que mais ensina: prova que `$V.Result` casa
+  #     o RECETOR DE UMA CHAMADA e nao só a leitura de uma propriedade, por
+  #     isso a superfície de falsos positivos é maior do que "objetos com uma
+  #     propriedade Result";
+  #   - `SemaphoreSlim.Wait()`, bloqueio correto e intencional;
+  #   - `CountdownEvent.Wait()`, que nem sequer tem forma assíncrona.
+  #
+  # `metavariable-type: Task` mata os quatro — e mata também
+  # `GetAsync().Result`, que é a grafia MAIS COMUM do bug. Daí os dois ramos de
+  # recuperação por NOME, `$F(...).Result` e `$F(...).Wait()` com
+  # `metavariable-regex: ".*Async"`. Note-se `.*Async` e nao `Async$`: a regex
+  # está ancorada no INICIO, e `"Async$"` nao casou nada em `GetDataAsync`, sem
+  # erro e sem aviso.
+  #
+  # O `$F` liga o nome PONTUADO INTEIRO, medido: `_source.LoadAsync(2).Result`
+  # casa `.*Async` como um só token, por isso estes ramos nao precisam de um
+  # gémeo qualificado como as regras de mapa do pack de Java precisam.
+  #
+  # DOIS FALSOS NEGATIVOS MEDIDOS, declarados em vez de implícitos:
+  #
+  #   1. A FORMA EM DOIS PASSOS: `var t = GetAsync(); t.Result`. O
+  #      `metavariable-type: Task` NAO resolve através de `var` mais um
+  #      inicializador que seja uma CHAMADA — embora resolva através de `var`
+  #      mais um `new` (medido: `var t = new Task<int>(...)` dispara). E por
+  #      isso que as fixtures de hit usam `Task<int> t = ...` explícito.
+  #   2. `Task.Run(() => 1).Result`. O nome `Run` nao casa `.*Async` e o
+  #      recetor nao é uma variável tipada, por isso escapa aos quatro ramos.
+  #      Precisaria de um ramo literal próprio, que nao foi acrescentado.
+  #   3. O RECETOR PONTUADO: `_source.Pending.Wait()`, em que a Task é uma
+  #      propriedade de outro objeto. O `metavariable-type` resolve um local,
+  #      um parametro ou um campo simples, mas nao um acesso a membro
+  #      pontuado. Medido na própria fixture de hits, que por isso usa um
+  #      campo `Task` direto. Repare-se na assimetria com os ramos por nome,
+  #      onde `$F` liga o nome pontuado inteiro sem dificuldade: é o
+  #      `metavariable-type` que nao resolve, nao o padrao que nao casa.
+  #
+  # Nenhum dos tres está em misses/. Sao bugs a sério que a regra nao apanha, e
+  # uma fixture de miss a afirmar zero fa-los-ia passar por decisao.
+  - id: bugfix-cs-race-condition-blocking-on-task
+    pattern-either:
+      - patterns:
+          - pattern: $V.Result
+          - metavariable-type:
+              metavariable: $V
+              type: Task
+      - patterns:
+          - pattern: $V.Wait()
+          - metavariable-type:
+              metavariable: $V
+              type: Task
+      - patterns:
+          - pattern: $F(...).Result
+          - metavariable-regex:
+              metavariable: $F
+              regex: ".*Async"
+      - patterns:
+          - pattern: $F(...).Wait()
+          - metavariable-regex:
+              metavariable: $F
+              regex: ".*Async"
+    message: >-
+      Bloqueio numa Task com `.Result` ou `.Wait()`. Faz deadlock quando a
+      continuação precisa do contexto que esta chamada segura, e embrulha a
+      exceção numa AggregateException, por isso o catch escrito para o tipo
+      real deixa de apanhar. Use `await`.
+    severity: WARNING
+    languages: [csharp]
+
+  # `Random` tem estado interno mutável e está documentado como nao sendo
+  # thread-safe. Duas threads dentro de `Next()` ao mesmo tempo corrompem esse
+  # estado, e o sintoma nao é uma exceção — é uma sequencia de valores iguais,
+  # ou uma sequencia de zeros. E o tipo de defeito que chega a produção e
+  # depois nao se reproduz numa thread só.
+  #
+  # UM SO PADRAO, e foi medido que chega: `static $T $F = new Random(...)` casa
+  # `static readonly Random` e `static Random` porque o Semgrep casa
+  # modificadores por SUBCONJUNTO. Um segundo ramo com o tipo escrito por
+  # extenso seria uma clausula morta.
+  #
+  # E O UNICO SITIO DESTE FICHEIRO ONDE `$T` ESTA CERTO E `var` ESTARIA ERRADO:
+  # em C# um campo nao pode ser declarado `var`, por isso a forma explícita nao
+  # é aqui a forma estreita — é a única que existe. A regra do `var` aplica-se
+  # a locais e a `foreach`, nao a campos.
+  #
+  # NAO HA ORACULO PARA ESTA REGRA, e convém dize-lo porque há um candidato que
+  # parece um: o CA5394 ("Do not use insecure randomness") dispara nas duas
+  # fixtures de hit — e também nos QUATRO sítios corretos da fixture de misses,
+  # incluindo o `Random.Shared`. Nao está a medir a mesma coisa: o CA5394 é
+  # sobre previsibilidade criptográfica, esta regra é sobre uma corrida entre
+  # threads. Um `Random.Shared` é seguro para esta regra e continua inseguro
+  # para o CA5394. Tratá-lo como segunda opiniao seria ler concordancia onde
+  # nao existe sequer o mesmo assunto.
+  - id: bugfix-cs-race-condition-static-random
+    pattern: static $T $F = new Random(...);
+    message: >-
+      `Random` estático partilhado entre threads. O `Random` nao é thread-safe:
+      chamadas concorrentes a `Next()` corrompem o estado interno e produzem
+      sequencias repetidas ou zeros. Use `Random.Shared` (.NET 6+) ou uma
+      instancia por thread.
+    severity: WARNING
+    languages: [csharp]
+
+  # Trancar num monitor que outro código também consegue trancar. O
+  # `lock (this)` expõe o monitor a quem tenha uma referencia para o objeto,
+  # sem que a assinatura do tipo o diga em lado nenhum. O `lock ("literal")` é
+  # pior: os literais de string sao INTERNADOS, por isso o monitor é partilhado
+  # por todo o código do processo que tranque no mesmo texto — incluindo código
+  # noutro assembly que nunca ouviu falar desta classe. Os dois sao deadlocks a
+  # espera de um segundo participante.
+  #
+  # Volume baixo e sem falsos positivos: um `lock` num campo `object` privado,
+  # que é a forma correta, nao casa nenhum dos dois ramos. Um campo `static
+  # readonly object` também nao — o que torna o `lock (this)` errado nao é ser
+  # partilhado, é ser ALCANCAVEL de fora.
+  #
+  # SEGUNDO ORACULO INDEPENDENTE, e é a segunda regra do pack a ter um. O
+  # analisador CA2002 ("Do not lock on objects with weak identity") acerta nos
+  # mesmos dois sítios da fixture de hits e em zero da de misses. Nao vem
+  # ligado por omissao — é preciso `AnalysisMode=All` —, por isso nao serve de
+  # gate, mas serve de segunda opiniao, que é para o que os oráculos deste pack
+  # existem. Concordancia exata nas duas direções.
+  - id: bugfix-cs-race-condition-lock-on-shared-instance
+    pattern-either:
+      - pattern: lock (this) { ... }
+      - pattern: lock ("...") { ... }
+    message: >-
+      `lock` num monitor que código externo também alcança. Com `lock (this)`
+      qualquer detentor da referencia tranca o mesmo monitor; com um literal de
+      string o monitor é partilhado por todo o processo, porque os literais sao
+      internados. Tranque num `private readonly object` dedicado.
+    severity: WARNING
+    languages: [csharp]
+
+  # ---------------------------------------------------------------------------
+  # off_by_one — duas regras, e a lista de tipos é o que as separa de um
+  # gerador de falsos positivos.
+  # ---------------------------------------------------------------------------
+
+  # `i <= a.Length` corre uma posição para lá do fim, e o índice `a.Length`
+  # está sempre fora dos limites.
+  #
+  # O `metavariable-type` é o que impede a regra de disparar num objeto de
+  # domínio com um `int Length` — um segmento tem comprimento, e o ciclo
+  # inclusivo pode estar certo porque conta estacas em vez de indexar. Sem a
+  # restrição de tipo, a regra dispara nesse ciclo correto: é EXATAMENTE o
+  # defeito que o pack de Java despachou e depois teve de fechar, reproduzido
+  # aqui de propósito antes de a regra ser escrita.
+  #
+  # `var` NO PADRAO, e nao `$T $I`: `for (var i = 0; ...)` é como o C# se
+  # escreve, e a forma com tipo explícito só casaria `for (int i = 0; ...)`.
+  # A restrição de tipo aplica-se ao RECETOR `$A`, que é outra coisa.
+  #
+  # FALSO POSITIVO CONHECIDO, HERDADO E MANTIDO DE PROPOSITO: um ciclo que
+  # preenche `new int[a.Length + 1]` continua a disparar. O array de destino
+  # tem mesmo `a.Length + 1` posições, por isso `i <= a.Length` está certo. O
+  # aperto óbvio — exigir que o corpo indexe o MESMO array do limite — foi
+  # medido na ronda de Java e rejeitado: trocava este falso positivo por um
+  # falso negativo em todos os ciclos que leem `a[i]` para escrever noutro
+  # lado. A medição é transportada, nao repetida.
+  - id: bugfix-cs-off-by-one-loop-lte-length
+    patterns:
+      - pattern: for (var $I = 0; $I <= $A.Length; $I++) { ... }
+      - metavariable-type:
+          metavariable: $A
+          types: ["$T[]", "string"]
+    message: >-
+      Off-by-one. `i <= a.Length` corre uma posição para lá do fim, e o índice
+      `a.Length` está sempre fora dos limites — é uma
+      IndexOutOfRangeException. Provavelmente queria `i < a.Length`.
+    severity: WARNING
+    languages: [csharp]
+
+  # O mesmo defeito na propriedade `.Count` das coleções.
+  #
+  # SEIS TIPOS ENUMERADOS, e a enumeração é obrigatória e nao preguiça:
+  # MEDIDO, o `metavariable-type` NAO É SENSIVEL A SUBTIPOS. Um recetor
+  # declarado `List<int>` nao casa `ICollection<$T>`, e um declarado
+  # `ICollection<int>` nao casa `List<$T>`, apesar de a List implementar a
+  # interface. Cada tipo da lista é uma afirmação independente, e por isso cada
+  # um tem a sua própria fixture de hit: um tipo sem fixture podia ser apagado,
+  # ou podia nunca ter funcionado, sem nenhum número se mexer.
+  #
+  # A mesma medição está por trás da exclusão da regra `async-void` mais acima,
+  # onde `EventArgs` nao cobria `ElapsedArgs`. E a mesma propriedade do motor
+  # vista de dois ângulos: aqui obriga a enumerar, lá obrigou a ligar o tipo a
+  # uma metavariável.
+  #
+  # NAO COBERTO, e dito em vez de implícito: um recetor tipado por uma
+  # interface ou classe que nao esteja nesta lista — `IReadOnlyCollection<T>`,
+  # `Queue<T>`, `Stack<T>`, `SortedDictionary<K,V>`, ou um tipo próprio com um
+  # `Count`. A alternativa era largar a restrição de tipo, e isso traz de volta
+  # o objeto de domínio com um `int Count`, que é pior.
+  - id: bugfix-cs-off-by-one-loop-lte-count
+    patterns:
+      - pattern: for (var $I = 0; $I <= $A.Count; $I++) { ... }
+      - metavariable-type:
+          metavariable: $A
+          types:
+            - "List<$T>"
+            - "IList<$T>"
+            - "ICollection<$T>"
+            - "IReadOnlyList<$T>"
+            - "Dictionary<$K, $V>"
+            - "HashSet<$T>"
+    message: >-
+      Off-by-one. `i <= xs.Count` corre uma posição para lá do fim, e o índice
+      `xs.Count` está sempre fora dos limites — é uma
+      ArgumentOutOfRangeException. Provavelmente queria `i < xs.Count`.
+    severity: WARNING
+    languages: [csharp]
+
+  # ---------------------------------------------------------------------------
+  # memory_leak — uma regra só, e o design diz porque: a regra do IDisposable
+  # NAO E EXPRIMIVEL. O frontend de C# do Semgrep APAGA o modificador `using`
+  # de uma using-declaration, confirmado por `dump-ast`, por comportamento e
+  # pelo span do match. O idioma recomendado pela Microsoft fica byte a byte
+  # igual a uma fuga, e a única exclusão que o distinguiria apaga a regra. Uma
+  # regra a menos é melhor do que uma regra que acusa `using var`.
+  # ---------------------------------------------------------------------------
+
+  # Um `HttpClient` novo por chamada esgota o intervalo de portos efémeros: cada
+  # cliente descartado deixa o socket em TIME_WAIT durante o timeout do sistema,
+  # por isso um serviço com carga fica sem portos enquanto cada chamada
+  # individual parece correta.
+  #
+  # A INVERSAO, e é o que torna esta regra diferente de todas as outras que
+  # tocam em IDisposable: descartar por chamada E o bug. Esta regra QUER
+  # disparar dentro de um `using`, e dispara. Quanto mais arrumada a
+  # eliminação, mais garantido o socket perdido.
+  #
+  # `pattern-not-inside` NO CAMPO ESTATICO, e nao `pattern-inside` no método.
+  # Medido, e a diferença custa um verdadeiro positivo inteiro: com
+  # `pattern-inside: $R $M(...) { ... }` os CONSTRUTORES ficam silenciosamente
+  # de fora, por isso `_client = new HttpClient()` num construtor — que é
+  # precisamente onde este defeito costuma viver numa classe de serviço —
+  # escapava. A exclusão pelo campo estático nao tem esse ponto cego: nomeia a
+  # forma correta em vez de tentar delimitar onde a errada pode aparecer.
+  - id: bugfix-cs-memory-leak-httpclient-per-call
+    patterns:
+      - pattern: new HttpClient(...)
+      - pattern-not-inside: static $T $F = new HttpClient(...);
+    message: >-
+      `new HttpClient()` por chamada. Cada instancia descartada deixa o socket
+      em TIME_WAIT, por isso sob carga o serviço esgota os portos efémeros —
+      e descartar num `using` nao resolve, agrava. Use uma instancia estática
+      de longa duração ou o `IHttpClientFactory`.
+    severity: WARNING
+    languages: [csharp]
+
+  # ---------------------------------------------------------------------------
+  # null_safety — duas regras, e a primeira tem a bateria de guardas maior do
+  # pack. As duas ficam em WARNING, e sao a ilustração mais limpa do critério
+  # do §4: a correção delas depende INTEIRAMENTE de ter reconhecido uma guarda,
+  # e uma guarda pode estar a um método de distancia.
+  # ---------------------------------------------------------------------------
+
+  # `x as T` devolve null quando o cast falha — é a diferença toda entre o `as`
+  # e um cast direto, que lança. Dereferenciar sem verificar transforma uma
+  # incompatibilidade de tipos numa NullReferenceException longe da causa.
+  #
+  # A FORMA POSITIVA NAO PODE SER A SEQUENCIA. Medido:
+  #
+  #     var $V = $O as $T;
+  #     ...
+  #     $V.$M
+  #
+  # NAO FAZ PARSE — `Invalid pattern for C#: Parse_error`. Felizmente é das
+  # falhas seguras: levanta RuleParseError e sai com 2. O que funciona é
+  # `pattern: $V.$M` com `pattern-inside` na declaração seguida de `...`.
+  #
+  # E ISSO TORNA ESTA A REGRA MAIS LARGA DO PACK: uma vez que `var s = o as
+  # string;` está no escopo, TODOS os usos posteriores de `s` sao candidatos. A
+  # lista de guardas faz o trabalho todo. Sem ela: 12 matches na fixture de
+  # código correto; com ela: 2, que sao os dois bugs.
+  #
+  # O ESCOPO DA EXCLUSAO E TUDO, e este é o ponto onde o pack de Java se
+  # enganou durante quatro waves. A grafia óbvia,
+  #
+  #     pattern-not-inside: "if ($V != null) { ... }"
+  #
+  # fecha os casos corretos E ENGOLE O RAMO `else`, porque o
+  # `pattern-not-inside` exclui o NO INTEIRO que casou, ramo `else` incluído —
+  # e no `else` de uma guarda de nao-nulidade o deref é uma NRE GARANTIDA.
+  # Medido nas fixtures desta ronda: essa grafia perde dois bugs reais. A
+  # grafia que se usa aqui limita a exclusão ao BLOCO ENTAO,
+  #
+  #     pattern-not-inside: "if ($V != null) { <... $V.$M ...>; }"
+  #
+  # fecha exatamente os mesmos casos corretos e mantém os dois bugs. As sete
+  # NREs garantidas ao lado de guardas estao em hits/AsCast.cs de propósito: o
+  # eixo 2 da ablação mede "tirar esta clausula nao pode REVELAR findings em
+  # hits/", e uma exclusão que come um bug real só é visível se o bug estiver
+  # lá.
+  #
+  # RESIDUO DO MESMO BURACO, MEDIDO E DECLARADO. A limitação do bloco-entao
+  # fecha o caso geral mas nao o caso em que O RAMO ENTAO TAMBEM DEREFERENCIA:
+  # aí a exclusão casa mesmo o `if` inteiro, e o `pattern-not-inside` leva o
+  # ramo `else` atrás. Ou seja, `if (x != null) { usa(x.A); } else { usa(x.A); }`
+  # perde o segundo `usa`. E muito mais estreito do que o original — que engolia
+  # o ramo `else` SEMPRE, dereferenciasse o ramo entao ou nao — mas nao é zero.
+  #
+  # Foi o corpus de bugs reais que o encontrou, e nao o raciocínio: a entrada de
+  # as-cast do RealBugs.cs escrita com os dois ramos a dereferenciar nao
+  # disparou, e foi preciso perceber porque. Nao tem fixture, porque uma
+  # fixture que nao dispara nao pode ser afirmada em hits/.
+  #
+  # A ABLACAO SINALIZA O `pattern-inside` DESTA REGRA NO EIXO 2, E E UM FALSO
+  # ALARME — dito aqui para ninguém o "corrigir". O eixo 2 pergunta "tirar esta
+  # clausula revela findings em hits/?", e assume que a clausula é uma
+  # EXCLUSAO. Esta nao é: é a ANCORA POSITIVA da regra. Sem ela o `$V.$M`
+  # passa a casar todos os acessos a membro do corpus (+135), e 58 deles caem
+  # em ficheiros de hits/ de OUTRAS regras — `StaticRandom.cs`, `EmptyCatch.cs`,
+  # `Rethrow.cs`, que nao tem um único `as` lá dentro. Sao lixo, e nao
+  # verdadeiros positivos que a clausula estivesse a esconder. Verificado
+  # ficheiro a ficheiro, e é exatamente o que o CLAUDE.md avisa: os eixos 2 e 3
+  # sao ATRIBUICOES, nao provas, e sinalizam mais do que o defeito para que
+  # foram feitos.
+  #
+  # TRES FORMAS CORRETAS SAO GRATIS e nao levam clausula nenhuma, medido: `?.`
+  # é outro nó, `o is string s` é outro nó, e `o as string ?? "d"` nao é um
+  # inicializador `as` simples. Estao em misses/ marcadas como tal, para
+  # ninguém as ler como prova de que a regra é precisa.
+  - id: bugfix-cs-null-safety-as-cast-deref
+    patterns:
+      - pattern: $V.$M
+      - pattern-inside: |
+          var $V = $O as $T;
+          ...
+      - pattern-not-inside: "if ($V != null) { <... $V.$M ...>; }"
+      - pattern-not-inside: "if ($V is not null) { <... $V.$M ...>; }"
+      - pattern-not-inside: |
+          if ($V == null) { return ...; }
+          ...
+      - pattern-not-inside: |
+          if ($V is null) { return ...; }
+          ...
+      - pattern-not-inside: |
+          if ($V == null) { throw ...; }
+          ...
+      - pattern-not-inside: |
+          if ($V == null) { continue; }
+          ...
+      - pattern-not-inside: |
+          ArgumentNullException.ThrowIfNull($V);
+          ...
+      - pattern-not-inside: "$V != null && <... $V.$M ...>"
+      - pattern-not-inside: "$V == null || <... $V.$M ...>"
+      - pattern-not-inside: "$V != null ? <... $V.$M ...> : ..."
+      - pattern-not-inside: "$V == null ? ... : <... $V.$M ...>"
+    message: >-
+      Dereferencia do resultado de um `as` sem verificar o nulo. O `as` devolve
+      null quando o cast falha — é essa a diferença para um cast direto —, por
+      isso isto lança NullReferenceException longe da causa. Use
+      `if (x is T y)`, ou verifique o nulo antes.
+    severity: WARNING
+    languages: [csharp]
+
+  # `FirstOrDefault()` e companhia devolvem `default(T)` numa sequencia vazia —
+  # null para um tipo de referencia. A razao inteira para escolher a variante
+  # `OrDefault` em vez de `First()` é a sequencia PODER estar vazia, por isso
+  # dereferenciar o resultado logo a seguir contradiz a escolha do método.
+  #
+  # ESTA REGRA NAO TEM CLAUSULAS DE EXCLUSAO, e isso é um resultado e nao um
+  # esquecimento: as formas corretas ficam caladas por serem nós diferentes.
+  # A fixture de misses continua a existir como rede de regressao, e diz lá
+  # dentro que nao prova precisao nenhuma.
+  #
+  # UMA CLASSE DE FALSOS POSITIVOS QUE NAO TEM SOLUCAO, nas duas direções, dita
+  # em vez de escondida. Numa sequencia de tipos POR VALOR o `FirstOrDefault()`
+  # devolve `default(T)` e NUNCA null, por isso
+  # `List<int>.FirstOrDefault().ToString()` é código correto e esta regra
+  # dispara nele. Medido, e a saída óbvia nao serve:
+  #
+  #   - uma deny-list de membros (`ToString`, `Year`, ...) fecharia essa
+  #     instancia, mas passa a perder `List<Cliente>.FirstOrDefault().ToString()`,
+  #     que é uma NRE a sério;
+  #   - e continua a nao fechar `List<DateTime>.FirstOrDefault().Year`, porque
+  #     a lista de membros de todos os tipos por valor nao é enumerável.
+  #
+  # O que resolveria era inferir o argumento genérico do recetor, e isso nao
+  # está disponível. Fica o falso positivo, declarado.
+  - id: bugfix-cs-null-safety-ordefault-deref
+    pattern-either:
+      - pattern: $X.FirstOrDefault(...).$M
+      - pattern: $X.SingleOrDefault(...).$M
+      - pattern: $X.LastOrDefault(...).$M
+    message: >-
+      Dereferencia direta de `FirstOrDefault()`. Numa sequencia vazia devolve
+      null, e escolher a variante `OrDefault` é precisamente admitir que ela
+      pode estar vazia. Verifique o nulo, use `?.`, ou chame `First()` se a
+      sequencia nao puder mesmo estar vazia.
+    severity: WARNING
+    languages: [csharp]
+
+  # ---------------------------------------------------------------------------
+  # edge_case — uma regra, e é a que carrega a única falta de solidez que esta
+  # série já despachou uma vez. Aqui ela nao chega a existir, porque a fixture
+  # que a apanha foi escrita antes da clausula.
+  # ---------------------------------------------------------------------------
+
+  # Remover de uma coleção enquanto um `foreach` a enumera invalida o
+  # enumerador: o `MoveNext()` seguinte lança InvalidOperationException,
+  # "Collection was modified; enumeration operation may not execute."
+  #
+  # `foreach (var $X in $COLL)`, e nao `foreach ($T $X in $COLL)`. Medido na
+  # sondagem desta ronda: a forma com tipo explícito encontrou 0 de 5 bugs
+  # reais, a forma com `var` encontrou os cinco. E a sexta forma de falha
+  # silenciosa da série e a primeira que o `paths.scanned` nao apanha.
+  #
+  # QUATRO TIPOS ENUMERADOS e nao cinco: o `Dictionary` foi DEIXADO DE FORA de
+  # propósito. Remover de um Dictionary durante a enumeração está DOCUMENTADO
+  # COMO SEGURO desde o .NET Core 3.0, por isso um ramo de Dictionary
+  # dispararia em código correto. Há uma fixture em misses/ só para o manter
+  # fora.
+  #
+  # O METODO DE REMOCAO LIGA-SE A `$RM`, em vez de os padrões repetirem
+  # `Remove`. Medido, e custa um falso positivo inteiro: com as exclusões a
+  # nomear `Remove` literalmente enquanto o padrao positivo também aceitava
+  # `RemoveAt`, um `RemoveAt(0); break;` correto passava a disparar, porque
+  # exclusão nenhuma o conseguia ver.
+  #
+  # A FALTA DE SOLIDEZ DA WAVE 4 DO JAVA, PORTADA JA CORRIGIDA. As exclusões de
+  # saída fecham os falsos positivos de "remove e sai do ciclo" — e sozinhas
+  # ENGOLEM UM BUG REAL: um `Remove` dentro de um ramo de `switch` seguido de
+  # `break`, onde o `break` sai do SWITCH e nao do ciclo, por isso a iteração
+  # continua sobre um enumerador invalidado. Medido nesta ronda: só com as
+  # exclusões de saída sao 7 findings e o bug do switch desaparece; com a
+  # reinclusao sao 8 e os falsos positivos continuam fechados.
+  #
+  # A DIRECAO DO ANINHAMENTO E QUE FAZ O TRABALHO: o `switch` tem de estar
+  # DENTRO do `foreach`. Contenção léxica simples — "algures dentro de um
+  # switch" — reativaria a regra num `foreach` escrito dentro de um `case`,
+  # onde o `break` sai mesmo do ciclo e o código está correto. Essa forma tem a
+  # sua própria near-miss.
+  #
+  # O C# NAO TEM `break` ETIQUETADO, por isso as duas exclusões de `break $L`
+  # do pack de Java nao portam e nao estao aqui. O equivalente em C# seria um
+  # `goto`, que ninguém escreve e que nenhuma fixture cobre — acrescentá-lo
+  # seria uma clausula morta.
+  - id: bugfix-cs-edge-case-modify-during-iteration
+    patterns:
+      - pattern: $COLL.$RM(...)
+      - metavariable-regex:
+          metavariable: $RM
+          regex: ^(Remove|RemoveAt)$
+      # O `metavariable-pattern` liga o recetor ANTES de o tipar. No pack de
+      # Java era preciso um `pattern-either` de `$F` e `this.$F` aqui, porque
+      # lá o `metavariable-type` nao resolvia um campo qualificado — o
+      # `cache.get(k)` disparava e o `this.cache.get(k)` era invisível, na
+      # mesma classe e no mesmo campo.
+      #
+      # EM C# ISSO NAO ACONTECE, medido nesta ronda: o ramo `this.$F` foi
+      # ablado e nao mexeu um único finding, porque o `$F` sozinho já liga E
+      # TIPA `this._items`. A fixture `OverThisField` continua em hits/ a
+      # provar que a forma qualificada é apanhada — o que desapareceu foi a
+      # clausula redundante, nao a cobertura.
+      - metavariable-pattern:
+          metavariable: $COLL
+          patterns:
+            - pattern: $F
+            - metavariable-type:
+                metavariable: $F
+                types: ["List<$T>", "IList<$T>", "ICollection<$T>", "HashSet<$T>"]
+      - pattern-inside: "foreach (var $X in $COLL) { ... }"
+      - pattern-not-inside: |
+          $COLL.$RM(...);
+          return ...;
+      - pattern-not-inside: |
+          $COLL.$RM(...);
+          $S1;
+          return ...;
+      - pattern-not-inside: |
+          $COLL.$RM(...);
+          throw ...;
+      - pattern-not-inside: |
+          $COLL.$RM(...);
+          $S1;
+          throw ...;
+      # O `break` SIMPLES só sai do ciclo FORA de um `switch`. Os dois
+      # primeiros ramos sao reinclusões e nao repetem o termo positivo, porque
+      # um `pattern-inside` já é positivo por si; o terceiro TEM de o repetir,
+      # senao é uma regra inválida — um ramo só com termos negativos nao
+      # carrega regra nenhuma.
+      - pattern-either:
+          - pattern-inside: |
+              foreach (var $X in $COLL) {
+                ...
+                switch ($S) {
+                  case $C:
+                    ...
+                }
+                ...
+              }
+          - pattern-inside: |
+              foreach (var $X in $COLL) {
+                ...
+                switch ($S) {
+                  default:
+                    ...
+                }
+                ...
+              }
+          - patterns:
+              - pattern: $COLL.$RM(...)
+              - pattern-not-inside: |
+                  $COLL.$RM(...);
+                  break;
+              - pattern-not-inside: |
+                  $COLL.$RM(...);
+                  $S1;
+                  break;
+    message: >-
+      Remoção da coleção durante o `foreach` sobre ela própria. Invalida o
+      enumerador e o `MoveNext()` seguinte lança InvalidOperationException.
+      Itere sobre uma cópia (`.ToList()`) ou use `RemoveAll(...)`.
+    severity: WARNING
+    languages: [csharp]

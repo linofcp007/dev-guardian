@@ -92,21 +92,47 @@ live type names. A third: `disposed` matches `memory_leak` before
 ### `error_handling` — 2 rules
 
 - **rethrow-loses-stacktrace** (ERROR) — `throw ex;` inside `catch (E ex)`,
-  which resets the stack trace to the rethrow point. Fires 8 of 8, including
+  which resets the stack trace to the rethrow point. Fires 9 of 9, including
   nested inside an `if`, inside a `for`, and under an exception filter; and in
   the first of two catch clauses while the second's correct bare `throw;` on the
   next line stays silent — the `$V` unification is load-bearing and was measured
-  as such. Silent on all five correct shapes.
+  as such. Silent on all eight correct shapes.
+  **The ninth site is a `finally` case and it was found by the oracle, not by
+  the author** — see the amendment at the end of this section.
   **It duplicates the toolchain, not the registry**, and the design should say
   so plainly: `dotnet build` warns on this by default as `CA2200`. It earns its
   place because dev-guardian scans without building, and because a compiler
   warning that scrolls past is not a tracked, fingerprinted, baselined finding.
-- **empty-catch** (ERROR) — Java's rule, and it needs **three** branches, not
-  one. C# has two spellings Java does not: `catch (Exception) { }` with no
-  identifier, and a bare `catch { }`. Measured: a single-branch port loses both.
-  The `ignore`/`ignored`/`expected` naming exemption carries over to the one
-  branch that binds a name. `try { ... } catch (...) { }` **does not parse** —
-  there is no "any catch" wildcard.
+- **empty-catch** (ERROR) — Java's rule, and it needs **six** patterns, not
+  one: three catch spellings × two try shapes. C# has two spellings Java does
+  not (`catch (Exception) { }` with no identifier, and a bare `catch { }`), and
+  a single-branch port loses both. The `ignore`/`ignored`/`expected` naming
+  exemption applies to the two branches that bind a name, written as one
+  `metavariable-regex` over a nested `pattern-either` rather than copied into
+  each. `try { ... } catch (...) { }` **does not parse** — there is no "any
+  catch" wildcard. The × 2 is the `finally` amendment below.
+
+#### Amendment, measured after Task 1 shipped: the try shape is a DIMENSION
+
+A try statement **with a finalizer is a different AST node**, and the patterns
+are disjoint in both directions: `try { ... } catch (...) { ... }` matches only
+the no-`finally` form, and the `finally` spelling matches only the other. Neither
+contains the other, so the fix is to enumerate both, not to widen one. A
+`try { ... } finally { ... }` with **no** catch still matches nothing — measured,
+so an empty `finally { }` is not mistaken for an empty catch.
+
+Both rules in §5's `error_handling` pair were blind to it. **CA2200 is what
+found it**, which is the strongest argument in this document for §3's claim that
+an independent oracle is worth more than a second fixture: the original fixtures
+did not carry the shape, and a fixture that does not carry a shape can never
+test it. The rule and the oracle now agree on all 9 sites and on 0 sites in
+`misses/`.
+
+This was **not** a defect of the C# port. It came from the Java pack, which is
+where the port took its shape from. JS/TS and Python had already closed the same
+hole — Python by exactly this cross product, {handler} × {try, try+finally,
+try+else} — so the family was two packs, not five, and C# is now the third fixed.
+`bugfix-java` is being corrected separately.
 
 ### `race_condition` — 4 rules, WARNING
 
@@ -277,3 +303,29 @@ Three additions this round, each of which cost a shipped defect elsewhere:
   prescribes and confirm the rule goes silent. Three rules across four packs
   failed this.
 - **`dotnet build` over every fixture**, per §3.
+
+### The one axis this round cannot run, stated rather than left silent
+
+The ablation harness grades every clause on three axes. **Axis 3 — "does
+removing this clause *lower* the finding count on code nobody wrote as a
+fixture?" — is `N/A` for the whole C# round, and will stay that way.** It needs
+a real-code corpus in a language the pack matches, and this repo contains no C#
+at all: `mcp/src` is TypeScript, which is why the JS/TS pack is the only one
+that has ever had axis 3.
+
+That is worth naming because axis 3 is not redundant with the other two. It is
+the axis that caught `unchecked-match` going 0 → 13 false positives on this
+repo's own TypeScript **while axes 1 and 2 both passed** — "live" and "keeps
+true positives" are both true of a clause that only *adds* false positives.
+For this round, nothing measures rule width against code that was not written
+to be measured.
+
+**Where it bites: `as-cast-deref` in Task 4.** Its positive pattern is `$V.$M`,
+the broadest in the pack — every later use of `$V` in scope is a candidate —
+and axis 3 is exactly the axis that would have shown how wide. The
+compensation is a deliberately oversized `misses/` corpus there, written **from
+the shape of the pattern** rather than from the exclusions already in the rule:
+a near-miss derived from an exclusion can prove that exclusion exists, but
+never that it is the right *width*, because it was chosen to be caught by it.
+That distinction is what the JS round learned expensively, and it is the only
+substitute available here.

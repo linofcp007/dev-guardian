@@ -519,6 +519,76 @@ falso positivo e vai continuar a ser. Preferir WARNING a uma lista de exclusões
 sem fim é a decisão que daí resulta, e essa decisão passou entretanto a
 aplicar-se a todo o pack.
 
+### C#, a linguagem em que o registo está mesmo a zero
+
+Para C#, o `bug_hunt` corre também por default `configs/semgrep/bugfix-cs.yml`
+— **doze** regras hand-authored, cada uma com o seu par de fixtures —, nas
+mesmas seis classes: `throw ex;` dentro de um catch, catch vazio, `async void`
+fora de um event handler, bloqueio numa Task com `.Result`/`.Wait()`, `Random`
+estático, `lock (this)` ou num literal de string, `i <= a.Length`,
+`i <= xs.Count`, `new HttpClient()` por chamada, dereference de um `as` sem
+guarda, dereference de `FirstOrDefault()`, e remoção de uma coleção durante o
+`foreach` sobre ela própria.
+
+**O registo está a zero, e isso foi medido com controlos positivos e não
+assumido.** O `p/r2c-bug-scan` não traz regra nenhuma de C#: apontado às
+fixtures reporta `paths.scanned = 0`, e por isso o controlo positivo desse pack
+é um ficheiro **Python** dentro de uma árvore de fixtures de C# — é a única
+forma de distinguir "aditivo" de "nunca correu". O `p/csharp` e o
+`p/security-audit` varrem todos os ficheiros e não encontram nada.
+
+**Duas das doze estão em `ERROR`**, a melhor proporção da série, e a razão é
+estrutural: o C# tem um defeito — `throw ex;` dentro de um `catch` — cuja forma
+*correta*, `throw;`, é **outro nó da AST**. Não há guarda para reconhecer
+porque não há nada a guardar, que é a única maneira de passar o critério do §4
+num motor sem dataflow.
+
+**Um oráculo independente, e é o primeiro da série.** O `dotnet build` emite
+`CA2200` para `throw ex;` dentro de um catch, e dispara exatamente nos mesmos
+nove sítios da fixture de hits e em zero da de misses — a divisão hits/misses
+não foi avaliada por quem escreveu a regra. Foi o `CA2200` que apanhou o buraco
+do `finally`: um `try/catch/finally` é outro nó da AST, e as duas regras de
+`error_handling` eram cegas a ele. O `CA2002` faz o mesmo pela regra do `lock`.
+Já o `CA5394` **não** serve de oráculo para a regra do `Random` — dispara
+também em todos os sítios corretos, porque é sobre previsibilidade
+criptográfica e não sobre uma corrida entre threads. Confirmar que um oráculo
+*não* é oráculo vale tanto como confirmar que é.
+
+**O `memory_leak` é carregado por uma única regra, e isso é uma decisão.** A
+regra do `IDisposable` **não é exprimível**: o frontend de C# do Semgrep apaga
+o modificador `using` de uma using-declaration — confirmado por `dump-ast`, por
+comportamento e pelo span do match —, o que torna o idioma recomendado pela
+Microsoft byte a byte igual a uma fuga. Uma regra a menos é melhor do que uma
+regra que acusa `using var`.
+
+**Escreva sempre `var` num padrão de C#.** `$T $V = ...` só casa declarações
+com tipo explícito. Medido: `foreach ($T $X in $C)` encontrou 0 de 5 bugs
+reais; `foreach (var $X in $C)` encontrou os cinco. É a única forma de falha
+silenciosa da série que o `paths.scanned` **não** apanha — o scan corre, os
+ficheiros são varridos, os erros são zero, e a resposta é 0.
+
+**Falsos negativos declarados**, porque a alternativa é fingir que não existem:
+a `blocking-on-task` não vê `var t = GetAsync(); t.Result` (o
+`metavariable-type` não resolve através de `var` mais uma *chamada*, embora
+resolva através de `var` mais um `new`), não vê `Task.Run(...).Result`, e não
+vê um recetor pontuado como `_source.Pending.Wait()`. A `ordefault-deref` tem
+um falso positivo sem solução nas duas direções: numa sequência de tipos **por
+valor** o `FirstOrDefault()` devolve `default(T)` e nunca null, por isso
+`List<int>.FirstOrDefault().ToString()` é código correto e dispara — e a
+deny-list de membros que fecharia esse caso passa a perder
+`List<Cliente>.FirstOrDefault().ToString()`, que é uma NRE a sério. A
+`as-cast-deref` perde o ramo `else` quando o ramo `então` **também**
+dereferencia.
+
+**A `off_by_one` mantém o falso positivo sentinela do pack de Java**: um ciclo
+que preenche `new int[a.Length + 1]` continua a disparar. O aperto óbvio foi
+medido na ronda de Java e rejeitado porque trocava este falso positivo por um
+falso negativo.
+
+**O `Dictionary` está deliberadamente fora** da `modify-during-iteration`:
+remover de um Dictionary durante a enumeração está documentado como seguro
+desde o .NET Core 3.0, por isso esse ramo dispararia em código correto.
+
 ### Os tiers, e porque é que o teu fix PR de Java pode vir vazio
 
 **Sete das oito regras estão em `WARNING`. Só a `empty-catch` está em `ERROR`.**
