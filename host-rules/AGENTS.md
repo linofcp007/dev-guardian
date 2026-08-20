@@ -53,6 +53,9 @@ cache that avoids re-running unchanged scans.
 
 **Ops**
 - "bootstrap project" → `init_project`
+- "my dev-guardian configs are out of date" / a scan warned about config drift →
+  `init_project` with `refresh=true` (`apply=false` first — it reports what would
+  change; `apply=true` never overwrites a config the user edited)
 - "install scanners" → `install_toolchain`
 - "which scanners are installed?" → `check_toolchain`
 - "detect stack" → `detect_stack`

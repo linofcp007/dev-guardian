@@ -25,11 +25,36 @@ repos:
       - id: gitleaks
 
   # === SAST ===
+  #
+  # `--config=.semgrep.yml` is not optional here. `--config=auto` fetches the
+  # Semgrep registry ruleset and does NOT load a project's own `.semgrep.yml`
+  # — measured on semgrep 1.164.0, a project holding that file plus one line of
+  # `<?php echo $_GET['name'];` reports 1 finding with `--config=<the file>`
+  # and 0 with `--config=auto`. Without the second flag this hook runs none of
+  # the rules `init_project` installed alongside it.
+  #
+  # The two files arrive together (both are in the `standard` and `paranoid`
+  # profiles) and are meant to stay together: if you delete `.semgrep.yml`,
+  # delete this flag too, or every commit fails with "unable to find a config".
+  #
+  # PRIVACY: `--config=auto` downloads rules from the Semgrep registry and
+  # sends usage metrics to Semgrep Inc. on every run — so, here, on every
+  # commit. Semgrep refuses to build an auto config with metrics off ("Cannot
+  # create auto config when metrics are off"), so the two cannot be combined.
+  # For a hook that contacts nothing, drop `--config=auto` and add
+  # `--metrics=off`; you keep your own rules and lose the registry's.
   - repo: https://github.com/returntocorp/semgrep
     rev: v1.78.0
     hooks:
       - id: semgrep
-        args: ['--config=auto', '--error', '--quiet', '--skip-unknown-extensions']
+        args:
+          [
+            '--config=auto',
+            '--config=.semgrep.yml',
+            '--error',
+            '--quiet',
+            '--skip-unknown-extensions',
+          ]
 
   # === Python ===
   - repo: https://github.com/astral-sh/ruff-pre-commit

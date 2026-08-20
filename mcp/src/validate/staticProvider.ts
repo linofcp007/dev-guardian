@@ -504,10 +504,10 @@ function buildReachableEvidence(
   exposedFiles: ReadonlySet<string>,
 ): ValidationEvidence[] {
   const evidence: ValidationEvidence[] = [];
-  const nearestRoute = routesByFile.get(nearestFile)?.[0];
+  const nearestRoute = mostInformative(routesByFile.get(nearestFile));
   if (nearestRoute !== undefined) {
     evidence.push({
-      detail: `reachable in ${hopWord(hops)} via ${nearestRoute.method} ${nearestRoute.path_resolved} (${nearestFile})`,
+      detail: `reachable in ${hopWord(hops)} via ${routeLabel(nearestRoute)} (${nearestFile})`,
     });
   }
 
@@ -532,9 +532,43 @@ function exposedEvidence(
 ): ValidationEvidence | null {
   const exposedFile = reachingRoots.find((root) => exposedFiles.has(root));
   if (exposedFile === undefined) return null;
-  const route = routesByFile.get(exposedFile)?.[0];
-  const label = route === undefined ? exposedFile : `${route.method} ${route.path_resolved} (${exposedFile})`;
+  const route = mostInformative(routesByFile.get(exposedFile));
+  const label = route === undefined ? exposedFile : `${routeLabel(route)} (${exposedFile})`;
   return { detail: `${label} is confirmed anonymously exposed by a live scan` };
+}
+
+/**
+ * Which of a file's routes to name in an evidence line: the first with a path
+ * we can actually print, else simply the first.
+ *
+ * "The first route in the file" was the rule until bare annotations started
+ * being extracted — and a NestJS or ASP.NET controller conventionally opens
+ * with its index action, i.e. exactly the route whose path is unknown. Naming
+ * that one turned an evidence line that used to read `GET :id` into
+ * `GET (path inherited from the controller)` for every such controller. Both
+ * are true; one of them tells the reader where to look. Nothing else depends
+ * on the choice — the verdict, the hop count and the route COUNTS are
+ * computed from the whole set, not from this pick.
+ */
+function mostInformative(routes: readonly RouteRecord[] | undefined): RouteRecord | undefined {
+  if (routes === undefined) return undefined;
+  return routes.find((r) => r.path_resolved !== '') ?? routes[0];
+}
+
+/**
+ * `METHOD path`, for a human reading an evidence line.
+ *
+ * A route extracted from a bare `@Get()` / `[HttpGet]` / `@GetMapping` has an
+ * EMPTY `path_resolved` by design — the annotation carries no path and the
+ * served URL is the class-level prefix, which nothing here resolves (see
+ * `INHERITED_PATH` in surface/extract.ts). Interpolated raw, that produced
+ * `reachable in 3 hops via GET  (users.controller.ts)`: two spaces where the
+ * path should be, which reads as a bug in this line rather than as a fact
+ * about the route. Say what is actually known instead.
+ */
+function routeLabel(route: RouteRecord): string {
+  if (route.path_resolved !== '') return `${route.method} ${route.path_resolved}`;
+  return `${route.method} (path inherited from the controller)`;
 }
 
 function hopWord(hops: number): string {

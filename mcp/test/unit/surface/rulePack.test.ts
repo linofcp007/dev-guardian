@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { INHERITED_PATH, INHERITED_PATH_KEY } from '../../../src/surface/extract.js';
 import { FOCUS_METADATA_KEY, FOCUS_PATH } from '../../../src/surface/recoverMetavars.js';
 
 const PACK_PATH = join(__dirname, '../../../../configs/semgrep/routes.yml');
@@ -53,6 +54,34 @@ function patternsOf(rule: Rule): string[] {
     }
     if (node === null || typeof node !== 'object') return;
     for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (key === 'pattern' && typeof value === 'string') found.push(value);
+      else walk(value);
+    }
+  };
+  if (typeof rule.pattern === 'string') found.push(rule.pattern);
+  walk(rule.patterns ?? rule['pattern-either'] ?? []);
+  return found;
+}
+
+/**
+ * The `pattern:` strings a rule MATCHES on, ignoring everything under a
+ * `pattern-not*` operator.
+ *
+ * A negative pattern names metavariables the rule deliberately does not want
+ * to see — the ASP.NET bare rules exclude `[HttpGet] [Route($ROUTE_PATH)]`
+ * that way — so counting those as "this rule captures a path" reads the rule
+ * backwards.
+ */
+function positivePatternsOf(rule: Rule): string[] {
+  const found: string[] = [];
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child);
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (key.startsWith('pattern-not')) continue;
       if (key === 'pattern' && typeof value === 'string') found.push(value);
       else walk(value);
     }
@@ -176,8 +205,18 @@ describe('configs/semgrep/routes.yml', () => {
     // pattern would bind nothing readable on a redacting Semgrep while binding
     // correctly on an old one — the two versions would disagree about the verb.
     // Declaring the verb per rule is what makes them agree.
+    //
+    // One rule is exempt from the `metadata.method` half, by name rather than
+    // by a predicate: @RequestMapping carries its verb in a `method =`
+    // attribute this pack does not read, so it has no verb to declare and is
+    // reported as ANY — the truth, and the same on every Semgrep version
+    // because nothing about it is captured. Naming it keeps the exemption
+    // from spreading: a NEW focused rule that forgets its verb still fails.
+    const VERBLESS_FOCUSED = new Set(['guardian-route-spring-request']);
     for (const rule of rules().filter((r) => r.metadata?.[FOCUS_METADATA_KEY] !== undefined)) {
-      expect(rule.metadata?.method, `${rule.id} declares no metadata.method`).toBeDefined();
+      if (!VERBLESS_FOCUSED.has(String(rule.id))) {
+        expect(rule.metadata?.method, `${rule.id} declares no metadata.method`).toBeDefined();
+      }
       expect(guardedMetavars(rule), `${rule.id} still guards $METHOD`).not.toContain('$METHOD');
       expect(patternsOf(rule).join('\n'), `${rule.id} still binds $METHOD`).not.toContain(
         '$METHOD',
@@ -235,16 +274,83 @@ describe('configs/semgrep/routes.yml', () => {
     // on the literal text `{ ... }`. Sniffing for that exact string passed green
     // when the same rule was written `{ $BODY }` — a spelling difference Semgrep
     // treats as equivalent — and fabricated exactly as before.
+    // Restated once more, for the bare-annotation rules. There are now TWO
+    // ways a rule can be safe, not one, and the difference is worth being
+    // exact about because the second one looks like the defect:
+    //
+    //   focused   — Semgrep narrows the reported span to the path literal, so
+    //               "the span is the value" and there is nothing else in it.
+    //   inherited — the rule captures NO path (`@Get()`, `[HttpGet]`,
+    //               `@GetMapping` take no argument), declares
+    //               `guardian_path: inherited`, and recoverMetavars.ts hands
+    //               the match straight back without reading the span at all.
+    //
+    // What must hold is the property both of those satisfy: no
+    // declaration-spanning span is ever SCANNED. A rule that spans a
+    // declaration and does neither is the fabrication defect, so it fails
+    // here — which is what the equality below is for.
     const spansDeclaration = new Set<string>();
-    const focusedFrameworks = new Set<string>();
+    const focusedRules = new Set<string>();
+    const inheritedRules = new Set<string>();
+    const scannedSpans: string[] = [];
     for (const rule of rules().filter((r) => r.metadata?.guardian_kind === 'route')) {
+      const id = String(rule.id);
       const framework = String(rule.metadata?.framework);
-      if (patternsOf(rule).some(hasBracedBody)) spansDeclaration.add(framework);
-      if (rule.metadata?.[FOCUS_METADATA_KEY] !== undefined) focusedFrameworks.add(framework);
+      const focused = rule.metadata?.[FOCUS_METADATA_KEY] !== undefined;
+      const inherited = rule.metadata?.[INHERITED_PATH_KEY] !== undefined;
+      if (focused) focusedRules.add(id);
+      if (inherited) inheritedRules.add(id);
+      if (patternsOf(rule).some(hasBracedBody)) {
+        spansDeclaration.add(framework);
+        if (!focused && !inherited) scannedSpans.push(id);
+      }
     }
     expect(spansDeclaration.size).toBeGreaterThan(0);
-    expect([...spansDeclaration].sort()).toEqual(['actix', 'aspnet', 'nestjs']);
-    expect([...focusedFrameworks].sort()).toEqual([...spansDeclaration].sort());
+    expect([...spansDeclaration].sort()).toEqual(['actix', 'aspnet', 'nestjs', 'spring']);
+    expect(scannedSpans, 'declaration-spanning rules that are neither focused nor path-less')
+      .toEqual([]);
+    // Neither escape hatch is a free-for-all: a rule cannot claim both (they
+    // are contradictory — one says "the span IS the path", the other says
+    // "there is no path"), and the counts are pinned so that quietly adding
+    // one to an existing rule shows up here.
+    expect([...focusedRules].filter((id) => inheritedRules.has(id))).toEqual([]);
+    expect(focusedRules.size, 'focused route rules').toBe(21);
+    expect(inheritedRules.size, 'path-less route rules').toBe(16);
+  });
+
+  it('makes every path-less route rule declare it, since one that does not yields nothing', () => {
+    // The defect this whole change is about, as an invariant.
+    //
+    // A route rule that binds no $PATH and no $ROUTE matches perfectly and
+    // then produces NOTHING: extract.ts's `toRoute` returns null, no route
+    // enters the snapshot, no error is raised anywhere. That is how three
+    // whole annotation families — every NestJS bare decorator, every bare
+    // ASP.NET attribute, every bare Spring mapping — were absent from the
+    // inventory while the rules that were supposed to find them sat in this
+    // file looking correct.
+    //
+    // So the two directions must travel together: a rule that captures no
+    // path declares `guardian_path: inherited` (and extract.ts emits an
+    // empty own-path flagged partial), and a rule that declares it captures
+    // no path (or the flag would be shadowed by a real capture and mean
+    // nothing).
+    for (const rule of rules().filter((r) => r.metadata?.guardian_kind === 'route')) {
+      const declared = rule.metadata?.[INHERITED_PATH_KEY];
+      const text = patternsOf(rule).join('\n');
+      const capturesPath = text.includes('$PATH') || text.includes('$ROUTE');
+      if (declared !== undefined) {
+        expect(declared, `${rule.id}: unknown ${INHERITED_PATH_KEY} value`).toBe(INHERITED_PATH);
+        // `pattern-not` may name a path metavariable — the ASP.NET bare rules
+        // exclude the `[HttpGet] [Route("x")]` shape that way — so the check
+        // is on what the rule MATCHES, not on every metavariable it mentions.
+        expect(
+          positivePatternsOf(rule).join('\n').includes('$PATH'),
+          `${rule.id} declares ${INHERITED_PATH_KEY} but still binds $PATH`,
+        ).toBe(false);
+      } else {
+        expect(capturesPath, `${rule.id} binds no path and declares no flag`).toBe(true);
+      }
+    }
   });
 
   it('constrains $PATH to a literal on exactly the two rules that need it', () => {

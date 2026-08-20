@@ -129,12 +129,70 @@
 # its own verb — so the reason actix was once collapsed into a single
 # `$METHOD`-binding rule no longer holds.
 #
-# The other ten families are deliberately NOT focused. Their spans already begin
-# at the call or annotation that matched, their recovery is verified
+# Spring joined the focused set for a second, independent reason — a named
+# annotation argument, not a foreign leading attribute. See the Java section.
+#
+# The remaining nine families are deliberately NOT focused. Their spans already
+# begin at the call or annotation that matched, their recovery is verified
 # slot-for-slot against 1.86.0 (60 captures, zero disagreements), and several of
 # them capture `$METHOD` as a metavariable, which focusing would throw away.
-# Uniformity is not worth re-opening ten working families; focusing them all is
+# Uniformity is not worth re-opening nine working families; focusing them all is
 # a possible future simplification, not a pending fix.
+#
+# ---- An annotation with no path of its own --------------------------------
+#
+# `@Get()`, `[HttpGet]` and `@GetMapping` are each their framework's OWN
+# documented form for the endpoint whose path is entirely the class-level
+# prefix — NestJS's index and create actions, `dotnet new webapi`'s scaffold,
+# spring.io's guides. Each was matched by nothing: every route rule here
+# demanded an argument the canonical form does not supply, so a C# controller
+# written the framework's way reported zero routes, and 3 of 7 endpoints
+# vanished from a NestJS controller — silently, since a route this pack misses
+# produces no error anywhere.
+#
+# Such a rule cannot bind $PATH: there is no argument, and inventing an empty
+# capture would be a value Semgrep never reported. So it declares
+# `metadata.guardian_path: inherited` instead, which is read in two places:
+#
+#   extract.ts        emits the route with an empty own-path, `path_partial:
+#                     true` and 'low' confidence — the endpoint is inventoried,
+#                     its full URL is honestly declared unknown.
+#   recoverMetavars.ts has nothing to recover and says so, rather than counting
+#                     the match as unreadable (which would flip the language's
+#                     `coverage` to `unreadable`, i.e. "routes here could not be
+#                     read", when nothing was lost).
+#
+# Three consequences worth stating, because each was a decision:
+#
+#   1. These are SEPARATE rules, never an extra alternative inside the path
+#      rule for the same verb. Semgrep never reports which alternative fired,
+#      so one rule could not tell the extractor whether the path is missing or
+#      simply not literal; `focus-metavariable: $PATH` would also have nothing
+#      to narrow to on the bare alternative. Separation is also what contains a
+#      parse error: a lone `@GetMapping` pattern IS one ("Invalid pattern for
+#      Java"), and in a shared rule it would silently zero the path forms too —
+#      the failure mode that cost the five NestJS rules their entire family
+#      once already.
+#   2. Reporting the endpoint with an empty path beats reporting a MOUNT rule
+#      for `@Controller('users')` / `[Route("api/[controller]")]`, which is the
+#      obvious alternative and is actively harmful today. Nothing consumes a
+#      mount for these frameworks: resolvers/node.ts's `buildPrefixIndex`
+#      resolves a mount only through an IMPORT that binds its `$ROUTER` in the
+#      same file, and a controller class is not imported into its own file, so
+#      the mount would be inert — except for one side effect that is not inert
+#      at all. `resolveNodeMounts` treats any route declared in a file that
+#      MOUNTS something as attached to the app directly and stops flagging it
+#      partial (node.ts's `mountingFiles` check). Adding a NestJS mount rule
+#      would therefore flip every route in that controller from honestly
+#      partial to confidently WRONG — reported at its un-prefixed path, which
+#      the next tool in this series would then send HTTP requests to. Resolving
+#      class-level prefixes needs work in resolvers/node.ts (and an equivalent
+#      for java/csharp, which have no resolver at all); it is a follow-up, and
+#      until then an inherited-path route is the honest record.
+#   3. A path the framework supplies through a SECOND annotation is read where
+#      one exists: ASP.NET's `[HttpGet]` + `[Route("named")]` is matched by the
+#      path rule, and the bare rule excludes that shape with a `pattern-not` so
+#      the endpoint is reported once. NestJS and Spring have no such form.
 #
 # ---- Do NOT add a $PATH literal guard to a route rule ----------------------
 #
@@ -398,6 +456,88 @@ rules:
           @Delete($PATH, ...)
           $M(...) { ... }
       - focus-metavariable: $PATH
+
+  # NestJS, bare decorator: `@Get()` with no argument at all. See the
+  # "annotation with no path of its own" section in the header for why these
+  # are five SEPARATE rules that capture nothing, rather than an alternative
+  # added to the five above.
+  #
+  # Measured on 1.164.0 against the auditor's corpus: `@Get()` matches the bare
+  # form and ONLY the bare form — `@Get('')`, `@Get(':id')` and
+  # `@Get(['a','b'])` all go to the path rule above, so no endpoint is reported
+  # twice. `@Post( )`, an intervening decorator (`@Post()` + `@HttpCode(201)`
+  # + the method), an `async` method, and an arrow-property handler
+  # (`@Get() handle = () => 'x'`) all match; a method CALLED `Get`
+  # (`this.svc.Get()`) does not.
+  - id: guardian-route-nestjs-get-bare
+    languages: [typescript]
+    severity: INFO
+    message: NestJS route (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: nestjs
+      confidence: low
+      method: GET
+      guardian_path: inherited
+    pattern: |
+      @Get()
+      $M(...) { ... }
+
+  - id: guardian-route-nestjs-post-bare
+    languages: [typescript]
+    severity: INFO
+    message: NestJS route (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: nestjs
+      confidence: low
+      method: POST
+      guardian_path: inherited
+    pattern: |
+      @Post()
+      $M(...) { ... }
+
+  - id: guardian-route-nestjs-put-bare
+    languages: [typescript]
+    severity: INFO
+    message: NestJS route (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: nestjs
+      confidence: low
+      method: PUT
+      guardian_path: inherited
+    pattern: |
+      @Put()
+      $M(...) { ... }
+
+  - id: guardian-route-nestjs-patch-bare
+    languages: [typescript]
+    severity: INFO
+    message: NestJS route (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: nestjs
+      confidence: low
+      method: PATCH
+      guardian_path: inherited
+    pattern: |
+      @Patch()
+      $M(...) { ... }
+
+  - id: guardian-route-nestjs-delete-bare
+    languages: [typescript]
+    severity: INFO
+    message: NestJS route (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: nestjs
+      confidence: low
+      method: DELETE
+      guardian_path: inherited
+    pattern: |
+      @Delete()
+      $M(...) { ... }
 
   # ---------- Python ----------
   - id: guardian-route-flask
@@ -753,16 +893,51 @@ rules:
   # method= attribute is a separate argument we do not read), so it declares
   # no metadata.method and is reported as ANY — which is the truth.
   #
-  # KNOWN LIMITATION — single-argument annotations only. The named-argument
-  # form, which is common in real Spring code, is NOT matched:
+  # THREE alternatives per verb, because Spring spells one path three ways and
+  # only the first was ever matched:
   #
-  #   @GetMapping(value = "/x", produces = "application/json")   0 matches
+  #   @GetMapping("/list")                            positional
+  #   @GetMapping(value = "/detail", produces = "…")  named `value`
+  #   @GetMapping(path = "/create")                   named `path`
   #
-  # It cannot be fixed by adding `, ...` here: `@GetMapping($PATH, ...)` is
-  # rejected outright by Semgrep as "Invalid pattern for Java", which would
-  # take the whole rule (and its single-argument matches) with it. Measured on
-  # 1.164.0. Those routes are absent from the inventory rather than reported at
-  # a guessed path.
+  # The pack's previous comment recorded the named forms as an unfixable
+  # limitation, on the strength of `@GetMapping($PATH, ...)` being rejected as
+  # "Invalid pattern for Java". That measurement is correct and the conclusion
+  # drawn from it was not: the ellipsis is rejected only where the FIRST
+  # argument is a bare metavariable. `@GetMapping(value = $PATH, ...)` parses
+  # cleanly on 1.164.0 and binds $PATH to the path literal alone. Measured on
+  # the auditor's corpus, the named forms were 4 of an 8-mapping controller's
+  # routes, every one of them carrying `produces`/`consumes`/`method` — i.e.
+  # exactly the mappings a production controller writes.
+  #
+  # ---- and why these six are now FOCUSED ----
+  #
+  # Because a named argument is not necessarily the FIRST argument, and the
+  # unfocused recovery path (recoverMetavars.ts's `routePath`) reads the first
+  # one. Argument order is free in Java:
+  #
+  #   @PutMapping(produces = "application/json", value = "/reordered")
+  #
+  # Measured end to end with the focus removed from this exact rule, on this
+  # project's own (redacting) Semgrep, that method is reported as
+  #
+  #   spring PUT produces = "application/json" [partial]
+  #
+  # and `@PutMapping(path = "/put-path")` as `path = "/put-path" [partial]`.
+  # So the failure is NOT a fabricated URL — `isLiteralPath` rejects both, the
+  # embedded space and quotes seeing to that, and the route survives flagged
+  # partial with its raw text visible, which is the design working. It is the
+  # other failure this pack cares about: the path is LOST on one Semgrep
+  # version and read correctly on another, since a Semgrep that emits
+  # `extra.metavars` binds $PATH to `"/reordered"` whatever the order. A rule
+  # whose answer depends on the reader's Semgrep version is the thing the
+  # header's last paragraph promises does not exist here.
+  #
+  # `focus-metavariable: $PATH` removes the question the same way it does for
+  # the three attribute families: Semgrep narrows the REPORTED RANGE to the
+  # literal it bound by name, so recovery is "the span is the value" and both
+  # versions agree. Measured across all four forms of all six annotations,
+  # reordered case included.
   - id: guardian-route-spring-get
     languages: [java]
     severity: INFO
@@ -772,7 +947,13 @@ rules:
       framework: spring
       confidence: medium
       method: GET
-    pattern: "@GetMapping($PATH)"
+      guardian_focus: path
+    patterns:
+      - pattern-either:
+          - pattern: "@GetMapping($PATH)"
+          - pattern: "@GetMapping(value = $PATH, ...)"
+          - pattern: "@GetMapping(path = $PATH, ...)"
+      - focus-metavariable: $PATH
 
   - id: guardian-route-spring-post
     languages: [java]
@@ -783,7 +964,13 @@ rules:
       framework: spring
       confidence: medium
       method: POST
-    pattern: "@PostMapping($PATH)"
+      guardian_focus: path
+    patterns:
+      - pattern-either:
+          - pattern: "@PostMapping($PATH)"
+          - pattern: "@PostMapping(value = $PATH, ...)"
+          - pattern: "@PostMapping(path = $PATH, ...)"
+      - focus-metavariable: $PATH
 
   - id: guardian-route-spring-put
     languages: [java]
@@ -794,7 +981,13 @@ rules:
       framework: spring
       confidence: medium
       method: PUT
-    pattern: "@PutMapping($PATH)"
+      guardian_focus: path
+    patterns:
+      - pattern-either:
+          - pattern: "@PutMapping($PATH)"
+          - pattern: "@PutMapping(value = $PATH, ...)"
+          - pattern: "@PutMapping(path = $PATH, ...)"
+      - focus-metavariable: $PATH
 
   - id: guardian-route-spring-patch
     languages: [java]
@@ -805,7 +998,13 @@ rules:
       framework: spring
       confidence: medium
       method: PATCH
-    pattern: "@PatchMapping($PATH)"
+      guardian_focus: path
+    patterns:
+      - pattern-either:
+          - pattern: "@PatchMapping($PATH)"
+          - pattern: "@PatchMapping(value = $PATH, ...)"
+          - pattern: "@PatchMapping(path = $PATH, ...)"
+      - focus-metavariable: $PATH
 
   - id: guardian-route-spring-delete
     languages: [java]
@@ -816,7 +1015,13 @@ rules:
       framework: spring
       confidence: medium
       method: DELETE
-    pattern: "@DeleteMapping($PATH)"
+      guardian_focus: path
+    patterns:
+      - pattern-either:
+          - pattern: "@DeleteMapping($PATH)"
+          - pattern: "@DeleteMapping(value = $PATH, ...)"
+          - pattern: "@DeleteMapping(path = $PATH, ...)"
+      - focus-metavariable: $PATH
 
   - id: guardian-route-spring-request
     languages: [java]
@@ -826,7 +1031,112 @@ rules:
       guardian_kind: route
       framework: spring
       confidence: medium
-    pattern: "@RequestMapping($PATH)"
+      guardian_focus: path
+    patterns:
+      - pattern-either:
+          - pattern: "@RequestMapping($PATH)"
+          - pattern: "@RequestMapping(value = $PATH, ...)"
+          - pattern: "@RequestMapping(path = $PATH, ...)"
+      - focus-metavariable: $PATH
+
+  # Spring, bare annotation: `@GetMapping` with no argument list, the form
+  # `spring.io`'s own guides use for a collection endpoint whose path is the
+  # class-level @RequestMapping. See the header for why these six capture
+  # nothing rather than being folded into the six above.
+  #
+  # The trailing declaration is not optional: a lone `@GetMapping` pattern is
+  # "Invalid pattern for Java: Stdlib.Parsing.Parse_error", and — this being a
+  # rule of its own — that error would take only this rule down rather than the
+  # path rules with it. That separation is itself deliberate; see the header.
+  #
+  # Measured: matches `@GetMapping`, `@GetMapping()` (empty parens) and a bare
+  # annotation preceded by an unrelated one (`@Deprecated`); does NOT match any
+  # of the three path forms above, so no mapping is reported twice. A bare
+  # annotation on a CLASS does not match either — `$RET $M(...) { ... }` is a
+  # method declaration — which is correct: a class-level bare @RequestMapping
+  # declares no route of its own.
+  - id: guardian-route-spring-get-bare
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: low
+      method: GET
+      guardian_path: inherited
+    pattern: |
+      @GetMapping
+      $RET $M(...) { ... }
+
+  - id: guardian-route-spring-post-bare
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: low
+      method: POST
+      guardian_path: inherited
+    pattern: |
+      @PostMapping
+      $RET $M(...) { ... }
+
+  - id: guardian-route-spring-put-bare
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: low
+      method: PUT
+      guardian_path: inherited
+    pattern: |
+      @PutMapping
+      $RET $M(...) { ... }
+
+  - id: guardian-route-spring-patch-bare
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: low
+      method: PATCH
+      guardian_path: inherited
+    pattern: |
+      @PatchMapping
+      $RET $M(...) { ... }
+
+  - id: guardian-route-spring-delete-bare
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: low
+      method: DELETE
+      guardian_path: inherited
+    pattern: |
+      @DeleteMapping
+      $RET $M(...) { ... }
+
+  - id: guardian-route-spring-request-bare
+    languages: [java]
+    severity: INFO
+    message: Spring MVC mapping (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: spring
+      confidence: low
+      guardian_path: inherited
+    pattern: |
+      @RequestMapping
+      $RET $M(...) { ... }
 
   # Three alternatives — static, wildcard and plain — deliberately each with a
   # SINGLE metavariable, matching the brief's own `import $P;` notation.
@@ -881,6 +1191,20 @@ rules:
   # Attribute routing, focused on $PATH — see the header. `[Produces("…")]`,
   # `[Roles("HttpGet(")]` and a commented-out `// [HttpGet("/orders/legacy")]`
   # above the live attribute are all ignored, because nothing is searched for.
+  #
+  # TWO alternatives per verb. The second covers the form where the verb
+  # attribute carries no path and a separate `[Route("…")]` on the same method
+  # does:
+  #
+  #   [HttpPost]
+  #   [Route("submit")]
+  #   public IActionResult Submit() { … }
+  #
+  # Attribute ORDER does not matter — measured on 1.164.0, the same alternative
+  # matches `[Route("before")] [HttpPut]`, so there is no reversed twin to
+  # write. The bare rules further down exclude exactly this shape with a
+  # `pattern-not`, so a method carrying both attributes is reported once, at the
+  # path `[Route]` names, rather than twice.
   - id: guardian-route-aspnet-attribute-get
     languages: [csharp]
     severity: INFO
@@ -892,9 +1216,14 @@ rules:
       method: GET
       guardian_focus: path
     patterns:
-      - pattern: |
-          [HttpGet($PATH, ...)]
-          $RET $M(...) { ... }
+      - pattern-either:
+          - pattern: |
+              [HttpGet($PATH, ...)]
+              $RET $M(...) { ... }
+          - pattern: |
+              [HttpGet]
+              [Route($PATH, ...)]
+              $RET $M(...) { ... }
       - focus-metavariable: $PATH
 
   - id: guardian-route-aspnet-attribute-post
@@ -908,9 +1237,14 @@ rules:
       method: POST
       guardian_focus: path
     patterns:
-      - pattern: |
-          [HttpPost($PATH, ...)]
-          $RET $M(...) { ... }
+      - pattern-either:
+          - pattern: |
+              [HttpPost($PATH, ...)]
+              $RET $M(...) { ... }
+          - pattern: |
+              [HttpPost]
+              [Route($PATH, ...)]
+              $RET $M(...) { ... }
       - focus-metavariable: $PATH
 
   - id: guardian-route-aspnet-attribute-put
@@ -924,9 +1258,14 @@ rules:
       method: PUT
       guardian_focus: path
     patterns:
-      - pattern: |
-          [HttpPut($PATH, ...)]
-          $RET $M(...) { ... }
+      - pattern-either:
+          - pattern: |
+              [HttpPut($PATH, ...)]
+              $RET $M(...) { ... }
+          - pattern: |
+              [HttpPut]
+              [Route($PATH, ...)]
+              $RET $M(...) { ... }
       - focus-metavariable: $PATH
 
   - id: guardian-route-aspnet-attribute-patch
@@ -940,9 +1279,14 @@ rules:
       method: PATCH
       guardian_focus: path
     patterns:
-      - pattern: |
-          [HttpPatch($PATH, ...)]
-          $RET $M(...) { ... }
+      - pattern-either:
+          - pattern: |
+              [HttpPatch($PATH, ...)]
+              $RET $M(...) { ... }
+          - pattern: |
+              [HttpPatch]
+              [Route($PATH, ...)]
+              $RET $M(...) { ... }
       - focus-metavariable: $PATH
 
   - id: guardian-route-aspnet-attribute-delete
@@ -956,10 +1300,125 @@ rules:
       method: DELETE
       guardian_focus: path
     patterns:
-      - pattern: |
-          [HttpDelete($PATH, ...)]
-          $RET $M(...) { ... }
+      - pattern-either:
+          - pattern: |
+              [HttpDelete($PATH, ...)]
+              $RET $M(...) { ... }
+          - pattern: |
+              [HttpDelete]
+              [Route($PATH, ...)]
+              $RET $M(...) { ... }
       - focus-metavariable: $PATH
+
+  # ASP.NET, bare attribute: `[HttpGet]` with the path on the class-level
+  # `[Route("api/[controller]")]`. This is what `dotnet new webapi` emits and
+  # what the ASP.NET docs use for an index action; before these five rules a
+  # controller written that way reported ZERO routes — an entire C# API
+  # described as exposing nothing. See the header for why they capture nothing.
+  #
+  # `[HttpGet]` and `[HttpGet()]` are the same pattern to Semgrep (measured:
+  # each matches both spellings), so the empty-parens form needs no alternative
+  # of its own. A combined attribute list (`[ApiExplorerSettings(…), HttpPatch]`)
+  # matches, as does an expression-bodied or `async Task<…>` action.
+  #
+  # The `pattern-not` is what keeps a `[HttpGet]` + `[Route("named")]` method
+  # from being reported twice — once at "named" by the path rule above and once
+  # here with no path at all. Removing it is visible as a duplicated endpoint in
+  # the annotations fixture, not as a silent extra.
+  - id: guardian-route-aspnet-attribute-get-bare
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET attribute route (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: aspnet
+      confidence: low
+      method: GET
+      guardian_path: inherited
+    patterns:
+      - pattern: |
+          [HttpGet]
+          $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpGet]
+          [Route($ROUTE_PATH, ...)]
+          $RET $M(...) { ... }
+
+  - id: guardian-route-aspnet-attribute-post-bare
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET attribute route (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: aspnet
+      confidence: low
+      method: POST
+      guardian_path: inherited
+    patterns:
+      - pattern: |
+          [HttpPost]
+          $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpPost]
+          [Route($ROUTE_PATH, ...)]
+          $RET $M(...) { ... }
+
+  - id: guardian-route-aspnet-attribute-put-bare
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET attribute route (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: aspnet
+      confidence: low
+      method: PUT
+      guardian_path: inherited
+    patterns:
+      - pattern: |
+          [HttpPut]
+          $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpPut]
+          [Route($ROUTE_PATH, ...)]
+          $RET $M(...) { ... }
+
+  - id: guardian-route-aspnet-attribute-patch-bare
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET attribute route (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: aspnet
+      confidence: low
+      method: PATCH
+      guardian_path: inherited
+    patterns:
+      - pattern: |
+          [HttpPatch]
+          $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpPatch]
+          [Route($ROUTE_PATH, ...)]
+          $RET $M(...) { ... }
+
+  - id: guardian-route-aspnet-attribute-delete-bare
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET attribute route (path inherited from the controller)
+    metadata:
+      guardian_kind: route
+      framework: aspnet
+      confidence: low
+      method: DELETE
+      guardian_path: inherited
+    patterns:
+      - pattern: |
+          [HttpDelete]
+          $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpDelete]
+          [Route($ROUTE_PATH, ...)]
+          $RET $M(...) { ... }
 
   # `using $SYMBOL = $MODULE;` (aliased) gives a clean, real bound name.
   # Plain `using $MODULE;` binds no $SYMBOL — a `using` directive brings a

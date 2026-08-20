@@ -1,0 +1,448 @@
+/**
+ * Installing and re-syncing the baseline configs, with provenance.
+ *
+ * ---- The one rule everything else is arranged around ------------------
+ *
+ * **The user owns their copy.** Nothing here overwrites a file the user has
+ * touched, under any flag, ever. `init_project` copies these configs into the
+ * project precisely so they can be edited; a tool that silently reverts those
+ * edits to ship a rule fix would be trading a dead Semgrep rule for lost work,
+ * which is a worse bug than the one it set out to fix.
+ *
+ * That gives three writing behaviours, and the plan below is just the
+ * bookkeeping needed to pick between them:
+ *
+ *   - the file is absent → `create` it (this is plain `init_project`);
+ *   - the file is present and provably untouched since we wrote it →
+ *     `update_in_place` is safe, because there is nothing of theirs to lose;
+ *   - anything else → `write_alongside`: the new baseline lands as
+ *     `<target>.new` and their file is not opened for writing at all.
+ *
+ * "Anything else" deliberately includes *provenance unknown* — a project that
+ * predates the manifest. An old copy of ours and a config the user wrote by
+ * hand that happens to share a filename are indistinguishable from the bytes,
+ * and the cost of guessing wrong is asymmetric: a needless `.new` file is
+ * noise, a clobbered hand-written config is data loss.
+ *
+ * ---- Why `write_alongside` updates the manifest, and what that means ---
+ *
+ * After delivering `<target>.new` the entry records the *delivered* source
+ * hash and version, and points `delivered_as` at the file. The user's own
+ * hash is re-recorded as whatever it is now. That combination reads as
+ * `pending_merge` for as long as the `.new` file exists, and falls silent
+ * once they merge and delete it.
+ *
+ * The alternative — leaving the entry untouched so the advisory keeps firing
+ * until the merge is provably done — cannot work: a merged file keeps the
+ * user's customisations, so it will never equal our baseline, and the warning
+ * would be permanent and unclearable. A warning nobody can clear is a warning
+ * everybody filters. The trade-off accepted here is that deleting the `.new`
+ * without merging it also silences the notice; the user asked for the
+ * refresh, was handed the file, and acted on it.
+ */
+
+import { copyFileSync, existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { hashConfigFile } from './hash.js';
+import { buildProvenanceHeader, commentPrefixFor } from './header.js';
+import {
+  emptyManifest,
+  findManifestEntry,
+  readManifest,
+  upsertManifestEntry,
+  writeManifest,
+  type ConfigManifest,
+  type ConfigManifestEntry,
+} from './manifest.js';
+
+/** One baseline config a profile installs. */
+export interface ConfigFileSpec {
+  /** Path relative to `configs/`, POSIX separators. */
+  source: string;
+  /** Path relative to the project root. */
+  target: string;
+  /** Human-readable justification, surfaced in `init_project`'s response. */
+  reason: string;
+}
+
+export type RefreshAction =
+  /** Not in the project yet — write it. */
+  | 'create'
+  /** Nothing to deliver: same baseline, or their edits with no newer baseline. */
+  | 'up_to_date'
+  /** Provably untouched since we wrote it, and we shipped newer — safe to replace. */
+  | 'update_in_place'
+  /** Edited, diverged, or of unknown provenance — deliver beside the file. */
+  | 'write_alongside'
+  /** We had something to deliver, but the delivery path is already taken. */
+  | 'alongside_blocked'
+  /** A previous delivery is still sitting there unmerged. Nothing is touched. */
+  | 'pending_merge'
+  /** Already identical to what we ship; only the manifest record is missing. */
+  | 'adopt'
+  /** The shipped baseline is unreachable. A broken install, not user drift. */
+  | 'source_missing';
+
+export interface RefreshPlanItem {
+  target: string;
+  source: string;
+  action: RefreshAction;
+  /** Why this action, in one phrase, for the tool response. */
+  reason: string;
+  /** Set for `write_alongside`: the relative path written next to the target. */
+  alongside_path?: string;
+}
+
+export interface RefreshInput {
+  projectPath: string;
+  /** Absolute path to the plugin's `configs/`. */
+  configsDir: string;
+  currentVersion: string;
+  files: ConfigFileSpec[];
+  /** `false` is a dry run: the plan is computed, nothing is written. */
+  apply: boolean;
+}
+
+export interface RefreshOutcome {
+  applied: boolean;
+  plan: RefreshPlanItem[];
+}
+
+/**
+ * Name for a baseline delivered next to a file we must not overwrite.
+ *
+ * ---- Why not a plain `<target>.new` ----------------------------------
+ *
+ * Because `.new` is not ours. A user can perfectly well be keeping their own
+ * `.semgrep.yml.new`, and writing over it to deliver a baseline is the same
+ * data loss `write_alongside` exists to prevent — the asymmetry (a needless
+ * extra file is noise; a clobbered file is gone) does not stop applying just
+ * because the suffix looks like scratch space. Two things follow:
+ *
+ *   - the name carries `dev-guardian` and the plugin version, so it is not a
+ *     name anyone else would land on by accident, and two deliveries from
+ *     different releases are told apart on sight rather than overwriting each
+ *     other;
+ *   - and even so, a path that already exists and is NOT recorded in the
+ *     manifest as our own previous delivery is refused, not overwritten.
+ *     `alongside_blocked` reports it and leaves both files alone.
+ */
+function alongsideName(target: string, version: string): string {
+  return `${target}.dev-guardian-${version}.new`;
+}
+
+export function refreshConfigs(input: RefreshInput): RefreshOutcome {
+  let manifest: ConfigManifest = readManifest(input.projectPath) ?? emptyManifest();
+  let manifestTouched = false;
+  const plan: RefreshPlanItem[] = [];
+
+  for (const file of input.files) {
+    const srcPath = join(input.configsDir, file.source);
+    const srcHash = hashConfigFile(srcPath);
+    if (srcHash === null) {
+      plan.push({
+        ...ids(file),
+        action: 'source_missing',
+        reason: `shipped baseline not found at configs/${file.source}`,
+      });
+      continue;
+    }
+
+    const dstPath = join(input.projectPath, file.target);
+    const entry = findManifestEntry(manifest, file.target);
+
+    if (!existsSync(dstPath)) {
+      plan.push({ ...ids(file), action: 'create', reason: file.reason });
+      if (!input.apply) continue;
+      if (installFile({ srcPath, dstPath, source: file.source, version: input.currentVersion })) {
+        manifest = upsertManifestEntry(
+          manifest,
+          record(file, input.currentVersion, srcHash, srcHash, 'copied'),
+        );
+        manifestTouched = true;
+      }
+      continue;
+    }
+
+    const dstHash = hashConfigFile(dstPath);
+    if (dstHash === null) {
+      plan.push({
+        ...ids(file),
+        action: 'up_to_date',
+        reason: 'file present but unreadable — left alone',
+      });
+      continue;
+    }
+
+    if (entry === null) {
+      // Provenance unknown. Identical content is the one case where it is not
+      // a guess: nobody hand-writes a byte-for-byte copy of our baseline.
+      if (dstHash === srcHash) {
+        plan.push({
+          ...ids(file),
+          action: 'adopt',
+          reason: 'already identical to the shipped baseline — recording provenance',
+        });
+        if (!input.apply) continue;
+        manifest = upsertManifestEntry(
+          manifest,
+          record(file, input.currentVersion, srcHash, dstHash, 'adopted'),
+        );
+        manifestTouched = true;
+        continue;
+      }
+      const delivery = deliverAlongside({
+        input,
+        file,
+        srcPath,
+        srcHash,
+        dstHash,
+        manifest,
+        reason:
+          'this file predates provenance tracking — an older copy of ours and your own config ' +
+          'are indistinguishable, so it is never overwritten',
+      });
+      plan.push(delivery.item);
+      if (delivery.manifest !== null) {
+        manifest = delivery.manifest;
+        manifestTouched = true;
+      }
+      continue;
+    }
+
+    // A delivery already made and not yet merged outranks everything below.
+    // Re-running the refresh must not rewrite that file: the user may have
+    // started merging INTO it, which would make a second delivery a clobber of
+    // their work — the same mistake, one directory along. It also keeps a
+    // stream of `.new` files from piling up for someone who is simply not
+    // ready to merge yet. `detectConfigDrift` gives `pending_merge` the same
+    // precedence, so the advisory and the plan say the same thing.
+    if (entry.delivered_as !== undefined && existsSync(join(input.projectPath, entry.delivered_as))) {
+      plan.push({
+        ...ids(file),
+        action: 'pending_merge',
+        reason:
+          `${entry.delivered_as} is still waiting to be merged into ${file.target}. Merge it ` +
+          'and delete it, then run the refresh again.',
+        alongside_path: entry.delivered_as,
+      });
+      continue;
+    }
+
+    const oursMoved = srcHash !== entry.source_sha256;
+    const theirsMoved = dstHash !== entry.target_sha256;
+
+    if (!oursMoved) {
+      plan.push({
+        ...ids(file),
+        action: 'up_to_date',
+        reason: theirsMoved
+          ? 'your copy is edited; the shipped baseline has not changed since install'
+          : 'identical to the shipped baseline',
+      });
+      continue;
+    }
+
+    if (!theirsMoved) {
+      plan.push({
+        ...ids(file),
+        action: 'update_in_place',
+        reason: `untouched since install (plugin v${entry.plugin_version}) — safe to update`,
+      });
+      if (!input.apply) continue;
+      if (installFile({ srcPath, dstPath, source: file.source, version: input.currentVersion })) {
+        manifest = upsertManifestEntry(
+          manifest,
+          record(file, input.currentVersion, srcHash, srcHash, entry.provenance),
+        );
+        manifestTouched = true;
+      }
+      continue;
+    }
+
+    const delivery = deliverAlongside({
+      input,
+      file,
+      srcPath,
+      srcHash,
+      dstHash,
+      manifest,
+      reason: 'changed on both sides since install — merge required, your file is untouched',
+    });
+    plan.push(delivery.item);
+    if (delivery.manifest !== null) {
+      manifest = delivery.manifest;
+      manifestTouched = true;
+    }
+  }
+
+  if (input.apply && manifestTouched) writeManifest(input.projectPath, manifest);
+  return { applied: input.apply, plan };
+}
+
+/**
+ * Records provenance for a config already sitting in the project that is
+ * byte-identical to the shipped baseline.
+ *
+ * Used by plain `init_project` on the files it skips as `already_exists`, so
+ * a project that predates the manifest picks one up simply by running init
+ * again — no new flag, no writes to any file the user owns. Deliberately
+ * silent about files that merely *look* like ours: see the `entry === null`
+ * branch above for why identical content is the only safe signal.
+ */
+export function adoptIdenticalConfigs(input: {
+  projectPath: string;
+  configsDir: string;
+  currentVersion: string;
+  files: ConfigFileSpec[];
+}): string[] {
+  let manifest: ConfigManifest = readManifest(input.projectPath) ?? emptyManifest();
+  const adopted: string[] = [];
+  for (const file of input.files) {
+    if (findManifestEntry(manifest, file.target) !== null) continue;
+    const srcHash = hashConfigFile(join(input.configsDir, file.source));
+    const dstHash = hashConfigFile(join(input.projectPath, file.target));
+    if (srcHash === null || dstHash === null || srcHash !== dstHash) continue;
+    manifest = upsertManifestEntry(
+      manifest,
+      record(file, input.currentVersion, srcHash, dstHash, 'adopted'),
+    );
+    adopted.push(file.target);
+  }
+  if (adopted.length > 0) writeManifest(input.projectPath, manifest);
+  return adopted;
+}
+
+/**
+ * Writes a config into the project, stamping the provenance header where the
+ * format has comment syntax. Returns whether the write landed.
+ *
+ * JSON targets are copied byte-for-byte: `renovate.json` is read by Renovate's
+ * own strict JSON parser, so a `//` line would break the tool the file
+ * configures. That single exception is the reason the manifest, not the
+ * header, is the provenance mechanism.
+ */
+export function installFile(input: {
+  srcPath: string;
+  dstPath: string;
+  source: string;
+  version: string;
+  /**
+   * Path whose extension decides the comment syntax. Needed because a
+   * delivered baseline is written to `<target>.dev-guardian-<version>.new`,
+   * whose own extension is `.new` and says nothing about the format inside.
+   */
+  formatHint?: string;
+}): boolean {
+  try {
+    mkdirSync(dirname(input.dstPath), { recursive: true });
+    const prefix = commentPrefixFor(input.formatHint ?? input.dstPath);
+    if (prefix === null) {
+      copyFileSync(input.srcPath, input.dstPath);
+      return true;
+    }
+    const header = buildProvenanceHeader({
+      source: input.source,
+      pluginVersion: input.version,
+      prefix,
+    });
+    writeFileSync(input.dstPath, header + readFileSync(input.srcPath, 'utf8'), 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ids(file: ConfigFileSpec): { target: string; source: string } {
+  return { target: file.target, source: file.source };
+}
+
+function record(
+  file: ConfigFileSpec,
+  version: string,
+  sourceHash: string,
+  targetHash: string,
+  provenance: ConfigManifestEntry['provenance'],
+): ConfigManifestEntry {
+  return {
+    target: file.target,
+    source: file.source,
+    plugin_version: version,
+    source_sha256: sourceHash,
+    target_sha256: targetHash,
+    recorded_at: new Date().toISOString(),
+    provenance,
+  };
+}
+
+/**
+ * Delivers the baseline beside a file we must not overwrite, and reports what
+ * happened.
+ *
+ * Two outcomes. Normally the file lands at
+ * `<target>.dev-guardian-<version>.new` and the manifest records the delivery,
+ * so the drift advisory reads `pending_merge` until the user merges and
+ * deletes it. But if something is already sitting at that path and the
+ * manifest does not say we put it there, nothing is written: `alongside_blocked`
+ * names the path and leaves both files untouched. Overwriting a file we did
+ * not create is the data loss this whole branch exists to avoid, and a name
+ * that merely looks like scratch space is not proof of ownership.
+ *
+ * `manifest` comes back `null` when nothing was written — a dry run, a failed
+ * write, or a blocked path — so the caller records no delivery that did not
+ * happen.
+ */
+function deliverAlongside(args: {
+  input: RefreshInput;
+  file: ConfigFileSpec;
+  srcPath: string;
+  srcHash: string;
+  dstHash: string;
+  manifest: ConfigManifest;
+  reason: string;
+}): { item: RefreshPlanItem; manifest: ConfigManifest | null } {
+  const { input, file, manifest } = args;
+  const relativeNew = alongsideName(file.target, input.currentVersion);
+  const newPath = join(input.projectPath, relativeNew);
+  const existing = findManifestEntry(manifest, file.target);
+  const oursAlready = existing?.delivered_as === relativeNew;
+
+  if (existsSync(newPath) && !oursAlready) {
+    return {
+      item: {
+        ...ids(file),
+        action: 'alongside_blocked',
+        reason:
+          `a newer baseline is ready for ${file.target}, but ${relativeNew} already exists and ` +
+          'was not written by dev-guardian — nothing was overwritten. Move or delete that file ' +
+          'and run the refresh again.',
+        alongside_path: relativeNew,
+      },
+      manifest: null,
+    };
+  }
+
+  const item: RefreshPlanItem = {
+    ...ids(file),
+    action: 'write_alongside',
+    reason: args.reason,
+    alongside_path: relativeNew,
+  };
+  if (!input.apply) return { item, manifest: null };
+
+  const written = installFile({
+    srcPath: args.srcPath,
+    dstPath: newPath,
+    source: file.source,
+    version: input.currentVersion,
+    formatHint: file.target,
+  });
+  if (!written) return { item, manifest: null };
+
+  const entry: ConfigManifestEntry = {
+    ...record(file, input.currentVersion, args.srcHash, args.dstHash, existing?.provenance ?? 'adopted'),
+    delivered_as: relativeNew,
+    delivered_at: new Date().toISOString(),
+  };
+  return { item, manifest: upsertManifestEntry(manifest, entry) };
+}

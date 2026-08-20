@@ -8,6 +8,93 @@ version bump.
 
 ## [Unreleased]
 
+### Action required — the SAST rules this plugin installs were never actually run
+
+**Until this release, `scan_sast` did not load the rules `init_project` writes
+into your project.** It ran `semgrep --config=auto`, and `--config=auto` does
+not pick up a project's `.semgrep.yml`. Measured on semgrep 1.164.0, against a
+project containing the shipped pack and one line of
+`<?php echo $_GET['name'];`:
+
+| Command                   | Findings | Files scanned |
+| ------------------------- | -------- | ------------- |
+| `--config=<the pack>`     | 1        | 2             |
+| `--config=auto`           | 0        | 2             |
+
+So the thirteen security rules `init_project` installs as `.semgrep.yml` had no
+consumer anywhere in the product. **The shipped pre-commit hook had the same
+gap** — it also passed only `--config=auto` — so a project that installed our
+hooks was not running our rules either.
+
+This is why the `wp-unescaped-output` note below matters twice: that rule was
+dead for two entirely independent reasons, and fixing the pattern in b51a2dc
+could not have helped, because nothing loaded the file it lives in.
+
+Both are fixed. `scan_sast` now passes the project's own config — from
+`.dev-guardian/configs.json` where there is one, falling back to `.semgrep.yml`
+/ `.semgrep.yaml` — and `configs/pre-commit/pre-commit-config.yaml` now passes
+`--config=.semgrep.yml` alongside `--config=auto`. **If you already installed
+our pre-commit hook, re-run `init_project` with `refresh=true` to pick up the
+corrected hook config**, or add the flag by hand.
+
+A guard comes with it, because loading a file the user owns is a new risk: a
+`--config` Semgrep cannot load aborts the *whole* run (`paths.scanned: []`,
+exit 7), not just that pack. Every candidate is parsed and shape-checked
+first, and one that would abort the scan is dropped **and named in
+`tools_run`** rather than passed through. A rule that merely fails to compile
+is a different case — exit 2, everything still scanned — and now counts as a
+real scan that lost one rule instead of flipping the whole result to `failed`.
+
+### Privacy — the default SAST mode sends telemetry to Semgrep Inc
+
+`SECURITY.md` said "Local-only, no telemetry" without qualification. That was
+wrong, and it is corrected there.
+
+`--config=auto` fetches its ruleset from the Semgrep registry and reports usage
+metrics to Semgrep Inc. **as a condition of doing so**: passing `--metrics=off`
+alongside it fails outright with `Cannot create auto config when metrics are
+off`. Every default `scan_sast` run has therefore sent telemetry, and could not
+have done otherwise. dev-guardian neither adds to that data nor sees it; what
+Semgrep collects is documented at <https://semgrep.dev/docs/metrics>.
+
+New in this release: **`scan_sast(local_only: true)`** drops the registry,
+passes `--metrics=off`, and runs only rules already on disk — your project's
+`.semgrep.yml` plus anything added with `register_custom_rules`. Nothing leaves
+the machine, at the cost of the registry's rules. When the project has no local
+rules it reports the scan as **skipped** rather than as a clean result, because
+zero findings from zero rules is not a clean bill of health. That mode only
+became coherent rather than empty once the project's own config started being
+loaded, which is why the two arrived together.
+
+### Action required — projects initialised before b51a2dc are running a dead XSS rule
+
+**If you ran `init_project` before b51a2dc, your `.semgrep.yml` contains a
+WordPress cross-site-scripting rule, `wp-unescaped-output`, that has never
+matched anything.** Its pattern was `echo $_GET[$X]`, which is not valid PHP, so
+Semgrep could not compile it; with `--quiet` the failure went to a JSON `errors`
+array instead of stderr and nothing surfaced it. Every scan since has been
+reporting zero WordPress XSS findings from a rule that could not have produced
+one — a clean result that meant nothing. The rule was fixed in b51a2dc, and
+because `init_project` never touched a config it had already copied, **the fix
+has not reached any existing project.**
+
+To get it, run `init_project` with `refresh` — as a dry run first:
+
+```text
+init_project(project_path=".", refresh=true, apply=false)   # show me what would change
+init_project(project_path=".", refresh=true, apply=true)    # do it
+```
+
+Your own edits are safe. `apply=true` overwrites only a file you have never
+touched; anything you customised is left exactly as it is and the new baseline
+is written beside it as `.semgrep.yml.new` for you to merge. If you would rather
+not run the tool at all, copying `configs/semgrep/base.yml` over your
+`.semgrep.yml` by hand gets you the same rules.
+
+This applies to all four baseline configs `init_project` installs
+(`.gitleaks.toml`, `renovate.json`, `.semgrep.yml`, `.pre-commit-config.yaml`),
+not just the Semgrep one — the same gap existed for every one of them.
+
 ### Removed
 
 - **`bugfix-go-edge-case-append-discarded` is deleted.** The Go pack goes from
@@ -44,6 +131,74 @@ version bump.
   and it should have existed from the start.
 
 ### Added
+
+- **Configuration-drift detection for the configs `init_project` installs.**
+  `init_project` copied four baseline configs into a project and then never
+  looked at them again — an existing target was skipped as `already_exists`,
+  which is the right call, since the user owns and edits those files, but it
+  meant a fix to a shipped config could never reach anyone who had already run
+  init. Nothing recorded what had been copied, so nothing could notice. The
+  `wp-unescaped-output` incident above is what that costs.
+
+  Four parts:
+
+  - **A provenance stamp.** `init_project` now records each file it copies in
+    `.dev-guardian/configs.json` — target, source, plugin version, and a content
+    hash at copy time — and stamps a comment header into the file itself where
+    the format allows one. The manifest is the mechanism and the header is an
+    affordance on top, because `renovate.json` is JSON and a `//` line would
+    break the parser Renovate reads it with. It is a separate directory from
+    `.guardian/`, which `gitignoreGuard` adds to `.gitignore` on every server
+    start: a provenance record has to be committed alongside the configs it
+    describes, or a teammate's clone and CI learn nothing.
+
+  - **A drift advisory on the scan path.** Every scan tool now checks the
+    manifest and emits at most **one** line into `warnings`. It is never a
+    finding, never an error, and cannot move a scan's status or the CI exit
+    code. Silence is the default: a user who edited their own config — the
+    common case, and the intended one — is told nothing, because a warning that
+    fires on almost every project is a warning nobody reads. Only two states
+    speak, and they are worded differently because their remedies differ: *we
+    shipped a newer baseline and your copy is unchanged* (a fix may be missing,
+    here is how to get it), and *both sides moved* (the refresh will need a
+    merge).
+
+  - **`init_project(refresh=true)`.** Opt-in, never a default. With
+    `apply=false` it reports the per-file action and writes nothing. With
+    `apply=true` it updates a file you have provably never touched, and for
+    anything else — edited, diverged, or of unknown provenance — writes the new
+    baseline as `<name>.dev-guardian-<version>.new` beside your file and leaves
+    yours closed. **No flag overwrites a modified file.** "Unknown provenance"
+    is treated as modified on purpose: an old copy of ours and a config you
+    wrote by hand are indistinguishable from the bytes, and the costs of
+    guessing wrong are not symmetric.
+
+    The delivered file is not called `<name>.new`, because that name is not
+    ours — a user can be keeping their own `.semgrep.yml.new`, and writing over
+    it is the same data loss the rule above exists to prevent. It carries
+    `dev-guardian` and the plugin version, and even then a path that already
+    exists and is not recorded as our own previous delivery is **refused**
+    (`alongside_blocked`) rather than overwritten. Re-running a refresh while a
+    delivery is still unmerged reports `pending_merge` and rewrites nothing:
+    the user's half-finished merge lives in that file.
+
+  - **Graceful degradation for projects with no manifest.** They get no warning
+    at all rather than a wrong one — with nothing recorded, "an old copy of
+    ours" cannot be told apart from "a file you wrote that happens to share the
+    name". Two adoption paths close that: plain `init_project` now records
+    provenance for any skipped file that is byte-identical to what we ship, and
+    `refresh` adopts the rest as it delivers to them. That gap is precisely why
+    the note at the top of this release exists in plain words.
+
+  The hash is taken over a canonical form — CRLF/CR normalised to LF, leading
+  BOM dropped, trailing newlines at EOF trimmed, our own header stripped — not
+  over raw bytes. A byte hash gets the answer wrong on this project's own
+  platform pair: git's `core.autocrlf` rewrites line endings on checkout, so the
+  identical commit would read as "the user edited their copy" on Windows and
+  "they did not" on Linux, and a false *local edit* silences the one state that
+  matters. Trailing whitespace inside a line, indentation and comment text all
+  still count as changes; erring toward "this changed" costs only a silent
+  `local_edit`.
 
 - **Java bug rules** — `configs/semgrep/bugfix-java.yml`, eight hand-authored
   Semgrep rules covering all six `bug_hunt` subcategories for Java: empty
@@ -248,6 +403,77 @@ version bump.
   `re` accessors, `http.PostForm`/`http.Head`, the `yield` handle transfer, the
   negated `isfile` guard, three write modes — a fixture was added rather than
   the clause deleted.
+
+- **The three annotation route families now match the form their framework
+  documents.** `configs/semgrep/routes.yml`'s 16 annotation-based route rules
+  each demanded an argument that the canonical form does not supply, so the
+  most ordinary controller in each framework lost routes — silently, because a
+  route this pack does not match produces no error anywhere and simply never
+  enters the attack surface.
+
+  Measured on a corpus written by an auditor who did not write the rules
+  (`mcp/test/fixtures/surface/annotations/`, 52 endpoints): **18 of 52** were
+  reported before this change. ASP.NET 5 of 15 — a controller scaffolded by
+  `dotnet new webapi`, whose actions carry a bare `[HttpGet]` and whose path
+  lives on the class `[Route("api/[controller]")]`, mapped to **zero routes**,
+  i.e. "this C# API exposes nothing". NestJS 6 of 12: `@Get()` and `@Post()`,
+  the forms docs.nestjs.com uses for index and create actions, matched
+  nothing. Spring 7 of 25: only a lone string literal matched, so
+  `@GetMapping(value = "/x", produces = "…")`, `@GetMapping(path = "/x")` and
+  a bare `@GetMapping` were all absent. All 52 are reported now.
+
+  - **Spring's named-argument forms are matched, and the note in the previous
+    release saying they could not be is withdrawn.** `@GetMapping($PATH, ...)`
+    is indeed rejected as "Invalid pattern for Java" — but only because the
+    ellipsis follows a bare metavariable. `@GetMapping(value = $PATH, ...)`
+    parses cleanly and binds `$PATH` to the path literal alone, whatever order
+    the arguments are written in.
+  - **The six Spring rules are now `focus-metavariable: $PATH`.** A named
+    argument need not be the first one, and the recovery path that rebuilds
+    captures from byte offsets reads the FIRST argument: measured with the
+    focus removed, `@PutMapping(produces = "application/json", value = "/x")`
+    reports as `PUT produces = "application/json" [partial]` on a redacting
+    Semgrep while a Semgrep that emits metavariables reports `/x`. Nothing is
+    fabricated (the extractor refuses that text as a path), but the answer
+    would depend on the reader's Semgrep version, which nothing else in this
+    pack does.
+  - **ASP.NET reads a `[Route("…")]` companion attribute** on a method whose
+    verb attribute carries no path, in either attribute order (Semgrep matches
+    both with one alternative). The bare rules exclude that shape with a
+    `pattern-not`, so such a method is reported once, at the path `[Route]`
+    names, rather than twice.
+  - **A bare annotation is reported with an empty own-path, flagged
+    `path_partial` at 'low' confidence** — the endpoint exists, and its full
+    URL, being the class-level prefix, is honestly unknown. Such a rule
+    captures nothing, so it declares `metadata.guardian_path: inherited`,
+    which `surface/extract.ts` reads to build the record and
+    `surface/recoverMetavars.ts` reads to hand the match back unscanned (a new
+    `noCaptures` counter, so it is neither counted as recovered nor as
+    unreadable — the latter would flip the language's `coverage` to "routes
+    here could not be read" when nothing was lost).
+
+    A companion `mount` rule for `@Controller('users')` was considered and
+    rejected: nothing consumes a mount for these frameworks
+    (`resolvers/node.ts` resolves one only through an import binding its
+    `$ROUTER` in the same file, and a controller class is not imported into
+    its own file), and `resolveNodeMounts` treats any route declared in a
+    file that mounts something as attached to the app directly — so adding
+    one would flip every route in that controller from honestly partial to
+    confidently wrong, at its un-prefixed path, which `scan_dast` would then
+    send requests to. Resolving class-level prefixes is a follow-up in
+    `resolvers/node.ts`, not a rule-pack change.
+  - **Two new invariants in `mcp/test/unit/surface/rulePack.test.ts`.** A route
+    rule that binds no `$PATH` must declare the flag (without it the rule
+    matches perfectly and yields nothing — the defect above, as a test), and a
+    rule whose pattern spans a declaration must either focus `$PATH` or
+    capture no path at all, so no declaration-spanning span is ever scanned for
+    a path.
+  - **50 ablations, zero dead clauses.** Every alternative and operator added
+    here was removed on its own and the fixture set checked: each removal loses
+    exactly the endpoints it should, and removing an ASP.NET `pattern-not`
+    duplicates exactly one endpoint. The decoy corpus is unchanged
+    (14 matches before and after), and the old and new packs differ over the
+    whole corpus by 36 added matches, 0 removed.
 
 - **`wp-unescaped-output` stops flagging `echo (int) $_GET['id'];`, and now
   matches the subscript rather than the statement.** A cast is not a call, and
