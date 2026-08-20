@@ -157,6 +157,34 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     ids: ['bugfix-cs-error-handling-rethrow-loses-stacktrace'],
     count: 9,
   },
+  'AsyncVoid.cs': {
+    // Two: a no-parameter fire-and-forget and a `static` one. The second is
+    // there to keep modifier-subset matching measured — the pattern names
+    // `async void` and nothing else, and it matches `static async void`
+    // because Semgrep matches modifiers by subset.
+    ids: ['bugfix-cs-race-condition-async-void'],
+    count: 2,
+  },
+  'BlockingOnTask.cs': {
+    // Six, laid out one-or-two per branch across the rule's four branches.
+    // This is the rule where a per-branch count matters most: the four
+    // branches exist because the one-line version produced four separate
+    // false positives on real, correct code, and each branch is the narrow
+    // recovery of one shape the tightening cost.
+    ids: ['bugfix-cs-race-condition-blocking-on-task'],
+    count: 6,
+  },
+  'StaticRandom.cs': {
+    // Two: `static readonly` and plain `static`, for the same
+    // modifier-subset reason as AsyncVoid.
+    ids: ['bugfix-cs-race-condition-static-random'],
+    count: 2,
+  },
+  'LockShared.cs': {
+    // Two: `lock (this)` and `lock ("literal")`, one per branch.
+    ids: ['bugfix-cs-race-condition-lock-on-shared-instance'],
+    count: 2,
+  },
 };
 
 /**
@@ -184,6 +212,17 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
 const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
   'bugfix-cs-error-handling-empty-catch': 'ERROR',
   'bugfix-cs-error-handling-rethrow-loses-stacktrace': 'ERROR',
+  // The four race_condition rules are all WARNING, and every one fails the
+  // ERROR test for the same reason: what they emit is correct code whenever a
+  // guard the rule cannot see is present. `async void` is right in an event
+  // handler; `.Wait()` is right when nothing above you holds a context;
+  // a `static Random` is right in a single-threaded program; `lock (this)` is
+  // right if nothing else ever locks the instance. None of those is visible to
+  // a syntactic matcher.
+  'bugfix-cs-race-condition-async-void': 'WARNING',
+  'bugfix-cs-race-condition-blocking-on-task': 'WARNING',
+  'bugfix-cs-race-condition-static-random': 'WARNING',
+  'bugfix-cs-race-condition-lock-on-shared-instance': 'WARNING',
 };
 
 describe('bugfix-cs rules', () => {
@@ -284,6 +323,10 @@ describe('bugfix-cs rules', () => {
 const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-cs-error-handling-empty-catch': 'error_handling',
   'bugfix-cs-error-handling-rethrow-loses-stacktrace': 'error_handling',
+  'bugfix-cs-race-condition-async-void': 'race_condition',
+  'bugfix-cs-race-condition-blocking-on-task': 'race_condition',
+  'bugfix-cs-race-condition-static-random': 'race_condition',
+  'bugfix-cs-race-condition-lock-on-shared-instance': 'race_condition',
 };
 
 describe('every rule id classifies as its own class', () => {
