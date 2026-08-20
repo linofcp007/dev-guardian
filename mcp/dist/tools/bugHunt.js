@@ -339,15 +339,23 @@ export function mapSubcategory(ruleId, existing) {
 registerToolModule(makeScanTool({
     name: 'bug_hunt',
     title: 'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python, Go, ' +
-        'Java and C# bug rules, plus ONE Rust rule; optional language packs, off by default; ' +
-        'other languages still registry-only)',
+        'Java, C# and PHP bug rules, plus ONE Rust rule; optional language packs, off by ' +
+        'default; other languages still registry-only)',
     description: 'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus local, always-on ' +
-        'JS/TS, Python, Go, Java and C# rule packs: `configs/semgrep/bugfix-js.yml` (thirteen rules), ' +
-        '`configs/semgrep/bugfix-py.yml` (ten rules), `configs/semgrep/bugfix-go.yml` (nine ' +
-        'rules), `configs/semgrep/bugfix-java.yml` (eight rules) and `configs/semgrep/bugfix-cs.yml` ' +
-        '(twelve rules), each covering all six subcategories ' +
+        'JS/TS, Python, Go, Java, C# and PHP rule packs: `configs/semgrep/bugfix-js.yml` (thirteen ' +
+        'rules), `configs/semgrep/bugfix-py.yml` (ten rules), `configs/semgrep/bugfix-go.yml` (nine ' +
+        'rules), `configs/semgrep/bugfix-java.yml` (eight rules), `configs/semgrep/bugfix-cs.yml` ' +
+        '(twelve rules) and `configs/semgrep/bugfix-php.yml` (six rules), each covering the six ' +
+        'subcategories ' +
         'below for its language — race_condition, null_safety, off_by_one, memory_leak, ' +
-        'error_handling, edge_case. Rust is NOT one of those languages: ' +
+        'error_handling, edge_case — EXCEPT the PHP pack, where `memory_leak` is EMPTY and stated ' +
+        'as such: resource tracking (fopen/curl handles) needs escape analysis Semgrep OSS does ' +
+        'not have, and both ends of the dial were measured — with the escape exclusions the rule ' +
+        'finds nothing at all, without them it fires on correct code. The PHP pack is also the ' +
+        'first measured against an external corpus (WordPress 6.9, 1467 files) from the start, ' +
+        'and ZERO of its six rules sit at ERROR: the closest candidate, `empty-catch`, produced ' +
+        'ten findings there and every one is a deliberate empty catch carrying an explanatory ' +
+        'comment, which Semgrep cannot read. Rust is NOT one of those languages: ' +
         '`configs/semgrep/bugfix-rs.yml` holds exactly ONE rule, ' +
         '`blocking-sleep-in-async` (a `std::thread::sleep` inside an `async fn`, which blocks ' +
         'the executor thread and stalls every other task on it), and covers one of the six ' +
@@ -615,8 +623,8 @@ registerToolModule(makeScanTool({
         'else-arm bug — pattern-not-inside excludes the whole node it matched — but on the ' +
         'TEMPORAL axis rather than the branch axis, and not fixable without dataflow; and (10) ' +
         'the same two rules on a guard held in a LOCAL BOOLEAN, the recall mirror of (8). ' +
-        'JS/TS, Python, Go and Java only: no other language has ' +
-        'a local rule pack yet, so C#, PHP, Ruby and Rust get only the ' +
+        'JS/TS, Python, Go, Java, C# and PHP only: Rust has a single rule and no other ' +
+        'language has a local rule pack yet, so Ruby gets only the ' +
         'registry coverage described below, same as before these packs existed. The local ' +
         'packs degrade rather than failing the whole scan if one is ever hand-edited into a bad ' +
         'state — a YAML syntax error drops just that file and retries with everything else, a ' +
@@ -639,11 +647,11 @@ registerToolModule(makeScanTool({
         'redundant" — measured (exact rule-id duplication): 22% overall, but only ~9% for the ' +
         'JS/TS packs specifically (up to 40-43% for Java/Go) — most of what they add, especially ' +
         'for JS/TS, is net-new security scanning, not duplicate coverage. Beyond the local ' +
-        'JS/TS, Python, Go, Java and C# packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
+        'JS/TS, Python, Go, Java, C# and PHP packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
         'registry pack reaching these six classes, and only for Python and Go — Java, C#, ' +
-        'PHP, Ruby and Rust get none of them from the registry. Locally, Java and C# now have ' +
-        'full packs (described above), Rust has exactly one rule and no more, and PHP and Ruby ' +
-        'have nothing at all — Ruby by measurement rather than backlog: Semgrep\'s Ruby ' +
+        'PHP, Ruby and Rust get none of them from the registry. Locally, Java, C# and PHP now ' +
+        'have full packs (described above), Rust has exactly one rule and no more, and Ruby ' +
+        'has nothing at all — by measurement rather than backlog: Semgrep\'s Ruby ' +
         'frontend erases `&.` and the `..`/`...` distinction, so a nil-safety or off-by-one ' +
         'rule matches the CORRECT code identically, and RuboCop plus the registry\'s p/ruby is ' +
         'the honest answer there. On any of those languages, a quiet or security-only result (with or ' +

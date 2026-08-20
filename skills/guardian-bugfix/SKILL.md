@@ -600,6 +600,56 @@ falso negativo.
 remover de um Dictionary durante a enumeração está documentado como seguro
 desde o .NET Core 3.0, por isso esse ramo dispararia em código correto.
 
+### PHP, e a primeira ronda medida contra codigo real desde o inicio
+
+Para PHP, o `bug_hunt` corre também por default `configs/semgrep/bugfix-php.yml`
+— **seis** regras hand-authored, cada uma com o seu par de fixtures: `i <=
+count($a)` (incluindo a forma com o `count()` içado para um local), TOCTOU
+entre um `file_exists`/`is_dir`/`is_writable` e a mutação a seguir, catch
+vazio, a veracidade de `strpos()`, dereference de `json_decode()` sem
+verificação de null, e comparação solta com `null`.
+
+**Esta é a primeira ronda da série medida contra um corpus externo real desde
+o início** — WordPress 6.9, 1467 ficheiros varridos —, e esse eixo mudou quatro
+veredictos. Seis candidatas morreram por medição e não por argumento: uma regra
+do operador `@` com **420** ocorrências (e que disparava sobre a correção
+prescrita por outra regra, o que é fatal por si só), grupos de `preg_match` com
+132, `in_array` solto com 117, `foreach` por referência com 46 — todas as
+amostradas latentes e não vivas, ou seja estilo e não bugs —, uma regra de fuga
+de `fopen` **inexprimível** (com as exclusões de escape passa a 0 de 3 hits,
+porque um handle vazado é sempre *usado* por alguma coisa; sem elas dispara
+sobre as 4 formas corretas), e uma cujo bug **não existe em PHP**: modificar um
+array durante o `foreach` — o `foreach` itera uma cópia, confirmado no
+interpretador.
+
+**O `memory_leak` é uma classe VAZIA neste pack, e é dito em vez de implicado.**
+Seguir recursos exige análise de escape que o Semgrep OSS não tem. É pior do
+que a classe magra do C#, e a alternativa era enviar uma regra que não
+encontrava nada.
+
+**Zero das seis estão em `ERROR`, e a razão acusa dois packs já enviados.** A
+candidata mais próxima era a `empty-catch`, e o código real refutou-a: as
+**dez** ocorrências dela no WordPress são todas silêncios deliberados com
+comentário a explicar — `//Do nothing` no PHPMailer, um parágrafo inteiro no
+php-ai-client — e o Semgrep não lê comentários. Java e C# enviavam esta regra em
+`ERROR` sobre a premissa de que um engolir não declarado é bug independentemente
+da intenção; à data nenhum dos dois tinha medido essa premissa contra código
+externo, porque não tinham corpus. O PHP é a terceira linguagem a testá-la e a
+primeira com dados. Os dois foram medidos entretanto — OpenJDK e
+`dotnet/runtime` — e a premissa caiu nos dois: a regra está hoje em `WARNING`
+em Java e em C#, o que deixa o Java a 0 de 8 em `ERROR` e o C# a 1 de 12.
+
+**Três armadilhas de PHP que valem por si:**
+
+- **Um nome de tipo qualificado num padrão não casa nada, em silêncio.**
+  `catch (\RuntimeException $E)` encontrou **zero** ocorrências de código que
+  diz exatamente isso. Ligue o tipo a uma metavariável.
+- **`?->` e `->` são o mesmo nó da AST.** Um `pattern-not: $V?->$M` não exclui
+  o idioma seguro — apaga a regra. A única saída é um guarda de *texto*.
+- **O `catch (\Foo) { }` sem variável do PHP 8 é inalcançável** por qualquer
+  padrão de AST. Importa porque é assim que o PHP moderno declara silêncio
+  deliberado: o buraco é também uma auto-isenção.
+
 ### Rust: uma regra, e uma regra é a resposta toda
 
 Para Rust, o `bug_hunt` corre também por default `configs/semgrep/bugfix-rs.yml`
@@ -766,20 +816,21 @@ ninguém tinha examinado.
 | 3 | FP | `off-by-one-loop-lte-length` | `i <= a.length` com o corpo protegido por `i < a.length`, ou que nunca indexa `a` | O aperto óbvio foi **tentado e rejeitado** (medição acima): troca este falso positivo por um falso negativo num bug real sem resolver o caso principal. Os patterns ficaram; o tier desceu. |
 | 4 | FP | `error-handling-printstacktrace-only` | `printStackTrace()` como fallback quando foi o próprio logger que lançou | O único sítio onde a chamada está certa; já é `WARNING`; estreito demais para codificar. |
 | 5 | FP | `map-get-deref`, `optional-get-no-ispresent`, `modify-during-iteration` | **Duas ou mais** instruções entre a guarda (ou a remoção) e a saída: `if (!m.containsKey(k)) { log(); metric(); return ""; }`, `items.remove(s); log(s); n++; break;` | Preço deliberado. A alternativa — uma reticência de statement — casa em profundidade e engole `if (!m.containsKey(k)) { if (strict) { return ""; } }` e `items.remove(s); if (done) { break; }`, que são bugs reais. Um falso negativo que esconde um bug é pior do que este falso positivo. |
-| 6 | FP | as mesmas três | Guarda delegada a um método helper: `if (!present(o)) { return d; }` | Exige análise interprocedimental, que o Semgrep OSS não faz. É a razão declarada de as três estarem em `WARNING` — e, generalizada, a razão de sete das oito regras do pack estarem lá. |
+| 6 | FP | as mesmas três | Guarda delegada a um método helper: `if (!present(o)) { return d; }` | Exige análise interprocedimental, que o Semgrep OSS não faz. É a razão declarada de as três estarem em `WARNING` — e, generalizada, a razão de as oito regras do pack estarem lá. |
 | 7 | FP | `map-get-deref` | Chave garantida fora das formas enumeradas: mapa preenchido num inicializador estático, ou mapeamento total sobre um enum declarado como `Map` | A garantia não está no caminho sintático que chega ao `get`. Excluir "qualquer mapa que alguma vez recebeu um `put`" apagaria a regra. |
 | 8 | FP | `map-get-deref`, `optional-get-no-ispresent` | Guarda guardada num **booleano local**: `boolean present = m.containsKey(k); if (!present) { return ""; }` | É dataflow, não sintaxe. O Semgrep OSS não liga o valor do local ao teste que o produziu. |
 | 9 | **FN** | `map-get-deref`, `optional-get-no-ispresent` | Garantia **invalidada** depois da guarda, dentro da região que a exclusão cobre: `if (m.containsKey(k)) { m.remove(k); return m.get(k).trim(); }`, `if (o.isPresent()) { o = Optional.empty(); return o.get(); }`, `m.put(k,"v"); m.remove(k); m.get(k).trim();`, `while (m.containsKey(k)) { m.remove(k); … }` | Cinco reproduções medidas, todas exceções garantidas, todas em silêncio. Mesma causa que o bug do ramo `else` — **o `pattern-not-inside` exclui o nó inteiro que casou** — mas no eixo **temporal** em vez do eixo dos ramos. A limitação ao ramo guardado corrigiu o eixo dos ramos; o eixo da sequência dentro desse ramo nunca foi examinado. Saber que `m.remove(k)` invalida `m.containsKey(k)` é dataflow, por isso é linha e não cláusula. A exclusão do `keySet()` herda-a. |
 | 10 | **FN** | `map-get-deref`, `optional-get-no-ispresent` | Deref guardado por um **booleano local**: `boolean present = m.containsKey(k); if (present) { m.get(k).trim(); }` | O espelho da linha 8, que regista a mesma forma como falso positivo quando o booleano guarda uma saída antecipada. As duas direções são a mesma capacidade em falta (dataflow, não sintaxe), e ter só metade escrita durante seis rondas é a assimetria de que fala o preâmbulo. |
 | 11 | FP | `map-get-deref` | As duas formas vizinhas do `keySet()` que a exclusão não alcança: `for (Map.Entry<K,V> e : m.entrySet()) { … m.get(e.getKey()) … }` e o keySet copiado para um local antes do ciclo | Na primeira a chave é `e.getKey()` e não a variável do ciclo; na segunda o cabeçalho já não menciona `keySet()`. A cláusula unifica o mapa **e** a chave de propósito, e alargá-la exige desistir de uma das unificações — os dois bugs reais que ficariam engolidos estão fixados como `b13` e `b14`. Das cinco formas corretas medidas, a cláusula fecha três. |
 
-**Isto é só para JS/TS, Python, Go e Java.** Para as restantes linguagens desta secção —
-C#, PHP, Ruby, Rust — a situação anterior mantém-se: o
+**Isto é só para JS/TS, Python, Go e Java.** C#, PHP e Rust têm as suas próprias
+limitações declaradas nas secções acima. Para a linguagem que resta —
+Ruby — a situação anterior mantém-se: o
 pack que corre por default (`p/r2c-bug-scan`) só cobre estas classes para
 Python e Go, os packs de linguagem opcionais (`p/javascript`, `p/typescript`,
 etc., ligados via `include_language_packs`) são packs de segurança e não
-acrescentam nenhuma, e nenhuma tem ainda um pack local próprio. O caminho
-fiável para elas continua a ser o raciocínio guiado por modelo desta própria
+acrescentam nenhuma, e não tem ainda um pack local próprio. O caminho
+fiável para ela continua a ser o raciocínio guiado por modelo desta própria
 skill — ficheiro a ficheiro pelas zonas críticas (secção 1) e os padrões e
 fixes da secção 4 abaixo.
 
