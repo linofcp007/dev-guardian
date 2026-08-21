@@ -26,6 +26,7 @@ import { runProcess } from '../../src/runners/processRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 
 import type { PluginContext } from '../../src/context.js';
+import type { Severity } from '../../src/types.js';
 import { resolveVersion } from '../../src/platform/version.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
@@ -118,6 +119,36 @@ function seedFindings(plugin: PluginContext, scanId: string, n: number): void {
         category: 'security',
         title: `f${i}`,
         file_path: `src/file${i}.ts`,
+        line_start: i + 1,
+      }),
+    })),
+  );
+  plugin.storage.scans.finalize({
+    scan_id: scanId,
+    status: 'completed',
+    tools_run: [],
+    missing_tools: [],
+  });
+}
+
+/** Like `seedFindings`, but the caller names each finding's severity — for
+ *  the tools whose whole behaviour under test is a severity floor. */
+function seedSeverities(plugin: PluginContext, scanId: string, severities: Severity[]): void {
+  plugin.storage.scans.insert({
+    scan_id: scanId,
+    scan_type: 'sast',
+    project_path: '/p',
+    tree_hash: 'h',
+  });
+  plugin.storage.findings.bulkInsert(
+    severities.map((severity, i) => ({
+      scan_id: scanId,
+      ...makeFinding({
+        tool: 'mock',
+        severity,
+        category: 'security',
+        title: `sev${i}`,
+        file_path: `src/sev${i}.ts`,
         line_start: i + 1,
       }),
     })),
@@ -493,5 +524,58 @@ describe('create_github_issues', () => {
       | { ok: true }
       | { ok: false; error: { code: string } };
     expect(r.ok).toBe(false);
+  });
+
+  it('says what severity_min and max_issues filtered out, instead of an unexplained short plan', async () => {
+    // Same defect as create_fix_pr's: severity_min defaults to `high` (and
+    // the default was not even stated in the schema), max_issues to 10, and
+    // the result reported only the survivors. A caller whose findings are
+    // all `medium` got `candidates: 0` and no way to tell that from a clean
+    // project.
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedSeverities(plugin, 'S1', ['critical', 'high', 'medium', 'medium', 'low']);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/gh');
+
+    const r = (await getTool('create_github_issues').handler(
+      { project_path: project, dry_run: true, max_issues: 1 },
+      plugin,
+    )) as {
+      ok: true;
+      candidates: number;
+      filtered: {
+        considered: number;
+        candidates: number;
+        excluded: number;
+        by_reason: { below_severity_min: number; over_max_issues: number };
+        below_severity_min: { suggested_severity_min: string | null };
+      };
+      filtered_reason: string | null;
+    };
+
+    expect(r.candidates).toBe(1);
+    expect(r.filtered).toMatchObject({
+      considered: 5,
+      candidates: 1,
+      excluded: 4,
+      by_reason: { below_severity_min: 3, over_max_issues: 1 },
+    });
+    expect(r.filtered.below_severity_min.suggested_severity_min).toBe('medium');
+    expect(String(r.filtered_reason)).toContain('2 medium, 1 low');
+    expect(String(r.filtered_reason)).toContain('max_issues');
+  });
+
+  it('leaves filtered_reason null when nothing was filtered at all', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedSeverities(plugin, 'S2', ['critical', 'high']);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/gh');
+
+    const r = (await getTool('create_github_issues').handler(
+      { project_path: project, dry_run: true },
+      plugin,
+    )) as { ok: true; filtered: { excluded: number }; filtered_reason: string | null };
+    expect(r.filtered.excluded).toBe(0);
+    expect(r.filtered_reason).toBeNull();
   });
 });

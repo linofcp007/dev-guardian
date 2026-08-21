@@ -186,8 +186,9 @@ ERROR → `high`, WARNING → `medium`, INFO → `info`, e o `create_fix_pr` ass
 `severity_min: high`. Com uma regra em ERROR, o pack JS/TS quase não contribui
 para o conjunto de fix-PR **por omissão** — e é esse o objetivo: uma corrida
 por omissão não pode abrir um PR a reescrever 45 handlers de fail-open
-deliberado. Quem quer estes bugs corrigidos pede `severity_min: "medium"`. O
-`bug_hunt` em si não filtra nada, por isso nada desaparece de um scan.
+deliberado. O `bug_hunt` em si não filtra nada, por isso nada desaparece de um
+scan. Baixar o `severity_min` do `create_fix_pr` **não** traz estes bugs para
+um fix-PR — ver «O `create_fix_pr` e os packs locais» mais abaixo.
 
 Limitações medidas e **aceites**, nesta ronda, cada uma reproduzida contra o
 corpus da auditoria:
@@ -258,9 +259,10 @@ longa duração.
 `null-safety-none-deref-match` é `ERROR`. O critério é o que a regra EMITE,
 não a classe de bug: se a correção depender de a regra ter reconhecido uma
 guarda, ela emite um falso positivo na primeira guarda que ninguém enumerou.
-Como `create_fix_pr` usa `severity_min: high` por omissão, quem quiser bugs
-Python num fix-PR tem de pedir `severity_min: "medium"`; o `bug_hunt` não
-filtra nada.
+Como `create_fix_pr` usa `severity_min: high` por omissão, o pack de Python
+quase não contribui para um fix-PR; o `bug_hunt` não filtra nada. Baixar o
+`severity_min` também não chega — ver «O `create_fix_pr` e os packs locais»
+mais abaixo.
 
 Duas ressalvas a levar a sério antes de confiar num resultado limpo: isto é
 Semgrep OSS, que casa sintaxe, não faz dataflow — um null deref a duas
@@ -782,15 +784,45 @@ os patterns ficaram como estavam e só o tier mudou.
 `high` e `WARNING` → `medium`. O `bug_hunt` **não filtra por omissão**, por
 isso nada desaparece de um scan. Mas o `create_fix_pr` tem `severity_min` a
 `high` por omissão — portanto, com as oito em `WARNING`, **o pack de Java não
-contribui de todo para o conjunto de fixes por omissão**. Se pediste um fix PR
-de Java e veio vazio, é isto. Pede explicitamente:
+contribui de todo para o conjunto de fixes por omissão**. Essa omissão **não
+foi alterada**: baixá-la abriria PRs a partir de regras heurísticas por
+construção.
+
+### O `create_fix_pr` e os packs locais: o `severity_min` não é o obstáculo
+
+Versões anteriores desta skill diziam, em três sítios, que bastava pedir
+`severity_min: "medium"` para o `create_fix_pr` apanhar os packs de Java, de
+JS/TS e de Python. **Está errado, e nenhum `severity_min` o resolve.**
+
+O `create_fix_pr` só aplica correções que o *próprio scanner* emitiu — exige
+`fix_available`, que para o Semgrep significa que a regra traz um `fix:` e a
+saída traz `extra.fix`. **Nenhuma regra de nenhum dos nove packs deste repo
+tem `fix:`.** Medido: `bugfix-js.yml` sobre as suas próprias fixtures `hits/`
+dá **39 findings, 13 ficheiros, zero com `fix` ou `fixed_lines`**. Logo
+`fix_available` é `false` em todos, e são excluídos em **qualquer** patamar de
+severidade.
+
+O que mudou é que o tool passou a dizê-lo. Uma corrida devolve agora
+`filtered` (contagens por motivo) e `filtered_reason` (uma linha), e sugere um
+`severity_min` mais baixo **apenas** quando baixá-lo recuperaria mesmo alguma
+coisa — nunca para findings sem `fix_available`, onde a sugestão custaria uma
+segunda corrida a descobrir que não mudou nada:
 
 ```jsonc
-{ "severity_min": "medium" }   // create_fix_pr, para apanhar o pack de Java
+// create_fix_pr, num projeto cujos findings vêm todos dos packs locais
+{
+  "groups": [],
+  "filtered": {
+    "considered": 40, "candidates": 0, "excluded": 40,
+    "by_reason": { "no_fix_available": 40, "below_severity_min": 0, "no_fix_source": 0 }
+  },
+  "filtered_reason": "40 of 40 open finding(s) were excluded; 0 remain as fix candidate(s). Excluded: 40 with no scanner-produced fix (fix_available=false — this tool only applies a fix the scanner itself emitted, and most rule packs emit none)."
+}
 ```
 
-Essa omissão do `create_fix_pr` **não foi alterada**: afeta os quatro packs de
-linguagem e é uma decisão à parte.
+Para estes bugs, o caminho é o `bug_hunt` (que não filtra nada) e uma correção
+escrita à mão, ou o `suggest_fix`. O `create_fix_pr` continua a servir o que
+serve: upgrades de dependências e regras Semgrep que trazem autofix.
 
 A `stream-not-closed` só reconhece `new FileInputStream(...)` — e só por esse
 nome simples: um `new java.io.FileInputStream(...)` totalmente qualificado não
