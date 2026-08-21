@@ -90,14 +90,25 @@
  * `test/e2e/rulePackFixture.test.ts` and the surface tools address them by
  * name, so the harness takes `hitsSubdir: '.'` (the fixture root) instead.
  *
- * **The decoy baseline is 8, not 0**, and four of those are `guardian_kind:
+ * **The decoy baseline is 9, not 0**, and four of those are `guardian_kind:
  * route`. Every one is undecidable rather than untried, and the e2e test
  * enumerates them: `Route::get('not/a/leading/slash')` on a class that merely
  * happens to be called `Route` is indistinguishable from Laravel's facade, and
  * Ruby's `get 'config/value'` is exactly what a Sinatra route looks like. The
- * other four are an `app.use('/static', express.static(...))` mount, which is
- * a real mount, and three ordinary imports in the decoy files. So the number is
+ * other five are an `app.use('/static', express.static(...))` mount, which is
+ * a real mount, and four ordinary imports in the decoy files. So the number is
  * printed and pinned, never gated at zero.
+ *
+ * It was 8 until five decoys were added for the guards that the first full run
+ * reported DEAD — three chi exclusions, `guardian-mount-express`'s `$PREFIX`
+ * regex and `guardian-route-express`'s one-argument `pattern-not`. All five
+ * are load-bearing and all five had no fixture that reached them; the decoys
+ * are in `frameworks/fp/decoys.{go,js}`, marked `F07`, `F08` and `F31`-`F33`.
+ * **Not one of them moved this number**, which is the point of them: on the
+ * shipped pack every one is excluded by the guard it exists for, and each
+ * becomes a finding only when that guard is ablated. The +1 is a single
+ * ordinary `require('cors')` the `app.use` decoy needs to be plausible code —
+ * an import, like the three that were already here.
  *
  * **Axis 3 is `mcp/src`, and it is nearly all vacuous.** Measured: 830 baseline
  * findings, and they belong to exactly TWO of the pack's 64 rules --

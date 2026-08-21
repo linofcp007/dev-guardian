@@ -185,7 +185,7 @@ describe('renderPackReport coverage', () => {
  * shape of the only registration in the repo that uses them.
  *
  * Both assertions are about a number that is NOT zero and must not read as a
- * failure. The decoy tree produces eight baseline findings, four of them
+ * failure. The decoy tree produces nine baseline findings, four of them
  * routes, and each is documented as undecidable rather than untried; a report
  * that hid the number would let a fifth appear unnoticed, and a report that
  * gated on zero would be a standing red line nobody reads.
@@ -198,9 +198,9 @@ describe('renderPackReport corpora that are not named hits/ and misses/', () => 
 
   it('prints the decoy baseline as a pinned number rather than a target of zero', () => {
     const text = renderPackReport(
-      report({ decoyCorpus: ['frameworks/fp'], baselineDecoys: 8, hitsCorpus: 'the fixture root' }),
+      report({ decoyCorpus: ['frameworks/fp'], baselineDecoys: 9, hitsCorpus: 'the fixture root' }),
     );
-    expect(text).toMatch(/decoy corpus\s+frameworks\/fp\s+\(8 baseline findings, excluded from hits/);
+    expect(text).toMatch(/decoy corpus\s+frameworks\/fp\s+\(9 baseline findings, excluded from hits/);
     expect(text).toContain('a pinned number, not a target of zero');
   });
 

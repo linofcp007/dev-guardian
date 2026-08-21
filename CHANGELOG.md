@@ -25,10 +25,26 @@ version bump.
   hand-probed and are load-bearing — without them `app.use(cors(), router)`
   reports a mount at prefix `cors()` and Express's settings getter
   `app.get('/title')` reports as a route at full confidence. The decoy tree's
-  baseline is **pinned at 8, not gated at 0**: four of those are routes that
+  baseline is **pinned, not gated at 0**: four of those are routes that
   are genuinely undecidable. Axis 3 runs on `mcp/src` and reaches only 2 of the
   64 rules, so the report now prints each rule's real-code baseline and marks
   the other 62 `real 0 -- axis 3 vacuous here`.
+
+- **Five decoys for the `routes.yml` guards nothing was measuring.** Of the 38
+  DEAD clauses above, five were hand-probed and found load-bearing: all three
+  `guardian-route-go-chi` exclusions, `guardian-mount-express`'s `$PREFIX`
+  literal regex and `guardian-route-express`'s one-argument `pattern-not`.
+  They read DEAD because no fixture reached them, so the fix is a fixture and
+  never a deletion — the corpus's only Go decoy was SCREAMING-case `reg.GET`,
+  which the *gin* rule absorbs before chi is consulted, and the three JS decoys
+  the pack's header credits to the express guard are on its `$APP` denylist
+  too, so the denylist always decided first. `frameworks/fp/decoys.go` gains a
+  TitleCase `Get` in each of its three excluded forms (`F31`-`F33`) and
+  `decoys.js` a one-argument read on a receiver the denylist misses plus an
+  `app.use` whose first argument is a call (`F07`, `F08`). All five clauses now
+  read **live**; not one of the decoys is reported by the shipped pack, and the
+  decoy baseline moves 8 → 9 only for the ordinary `require('cors')` the
+  `app.use` decoy needs to be plausible code.
 
 - **`create_fix_pr` now says what it filtered out.** `severity_min` defaults to
   `high`, and 1.9.0 took the Semgrep `ERROR` tier — the only tier the parser

@@ -275,16 +275,22 @@ name. So the registration in `packs.ts` maps them instead:
 `decoySubdirs: ['frameworks/fp']` subtracts the decoy tree from it. Both knobs
 exist for this pack; `--hits=` and `--decoys=` are their ad-hoc equivalents.
 
-**The decoy baseline is 8, and pinning it at 8 is the point.** Four of those
+**The decoy baseline is 9, and pinning it is the point.** Four of those
 are `guardian_kind: route` and every one is *undecidable*, not untried:
 `Route::get('not/a/leading/slash')` on a class that merely happens to be called
 `Route` is indistinguishable from Laravel's facade, and Ruby's
 `get 'config/value'` is exactly what a Sinatra route looks like — requiring a
 `do … end` block was tried and made every real Sinatra route match twice. The
-other four are one real `app.use('/static', express.static(…))` mount and three
+other five are one real `app.use('/static', express.static(…))` mount and four
 ordinary imports in the decoy files. The harness **prints** the number and
 never gates on zero: a gate that is permanently red teaches the reader to skip
 the line, and what actually matters is that a fifth route would move it.
+
+It read 8 until the five decoys below were written. **None of the five moved
+it** — that is what they are for: each is excluded by the guard it exercises,
+so it contributes nothing until that guard is ablated. The +1 is one ordinary
+`require('cors')` that the `app.use` decoy needs in order to be code someone
+would really write.
 
 **Why this pack matters more than its rule count suggests.** It is the only
 pack whose errors send HTTP requests to invented paths — the next tool in the
@@ -331,22 +337,35 @@ mind, because on this pack they dominate:**
     Flask's bare alternative and Rails' `$METHOD $PATH` read DEAD.
   - **A guard with no adversarial fixture in its own language.** Five were
     hand-probed and **every one turned out load-bearing**, so the fix is a
-    fixture and never a deletion:
+    fixture and never a deletion. **All five fixtures now exist**, in
+    `frameworks/fp/decoys.go` (`F31`–`F33`) and `decoys.js` (`F07`, `F08`), and
+    all five clauses read **live**:
 
-    | DEAD clause | the decoy no fixture carries | what it reports without the guard |
+    | clause | the decoy the corpus was missing | what it reports without the guard |
     | --- | --- | --- |
-    | `go-chi` `pattern-not: $R.$METHOD($PATH)` | `reg.Get("/cache/one-arg")` | chi route `/cache/one-arg` |
+    | `go-chi` `pattern-not: $R.$METHOD($PATH)` | `keys.Get("/cache/one-arg")` | chi route `/cache/one-arg` |
     | `go-chi` `pattern-not: $R.$METHOD($PATH, nil)` | `reg.Get("/cache/key", nil)` | chi route `/cache/key` |
-    | `go-chi` `$PATH` literal regex | `reg.Get(cacheKey, handler)` | chi route on a computed path |
-    | `mount-express` `$PREFIX` literal regex | `app.use(cors(), router)` | a mount at prefix `cors()` |
-    | `route-express` `pattern-not: $APP.$METHOD($PATH)` | `app.get('/title')` | a route at `confidence: high`, `path_partial: false` |
+    | `go-chi` `$PATH` literal regex | `reg.Get(cacheKey, defaultEntry)` | chi route on a computed path |
+    | `mount-express` `$PREFIX` literal regex | `app.use(cors(), apiRouter)` | a mount at prefix `cors()` |
+    | `route-express` `pattern-not: $APP.$METHOD($PATH)` | `config.get('/site/title')` | a route at `confidence: high`, `path_partial: false` |
 
     All three chi guards read DEAD for one reason: the only Go decoy in the
     corpus, `reg.GET(…)`, is SCREAMING-case, so the *gin* rule absorbs it and
-    the TitleCase rule's guards are never exercised. Express's settings getter
-    is the same shape — the three decoys the pack's own header credits to that
+    the TitleCase rule's guards are never exercised. The express one is the
+    same shape — the three decoys the pack's own header credits to that
     `pattern-not` (`cache.get`, `cache.delete`, `storage.get`) are all on the
-    `$APP` denylist too, so the guard's unique job is invisible.
+    `$APP` denylist too, so the denylist decides first and the guard's unique
+    job is invisible. Note the last row: the decoy is **not** `app.get('/title')`,
+    the settings getter the rule's own comment names. A near-miss written from
+    the clause proves only that the clause matches itself, and nobody names an
+    Express setting `/title`; the shape that guard really stands between the
+    surface and is an ordinary one-argument `Map` read on a receiver the
+    denylist does not cover, so that is what the fixture carries.
+
+    The third chi decoy's second argument is deliberately **not** `nil`: with
+    `nil` there the row above it excludes the line first and the `$PATH` regex
+    never decides anything, which would have left it DEAD for a second reason
+    after being given a fixture for the first.
 
 The pair pass re-ablated **30 same-rule DEAD pairs** and found **5 MOVES** —
 four of them the actix `#[verb]` + `#[actix_web::verb]` pair (one per verb
@@ -358,6 +377,17 @@ pattern at all, which is the structural guard doing its job.
 **Nothing was deleted.** Every DEAD verdict here is a fixture to write or a
 redundancy to document, and the run's own value was axis 0 plus the two
 hand-probes above.
+
+**Follow-up** (same pack sha256, five decoys added to `frameworks/fp/`): the
+five clauses in the table above go DEAD → **live**, measured by re-running the
+two rules they belong to rather than the pack —
+`npm run ablate -- routes --filter=go-chi` and `--filter=express`, 4 and 6
+clauses, minutes instead of the ~73 a full `routes` run costs. The counts in
+the axis table are the first full run's and were not re-measured; on a fresh
+full run the DEAD count drops by those five, to 33. Every other verdict in
+those two rules is unchanged, and the surface e2e still reports **zero** routes
+out of either decoy file — the decoys have to be silent on the shipped pack and
+loud only with the guard removed, or they are measuring something else.
 
 ## TypeScript conventions
 
