@@ -60,6 +60,36 @@
 #    graça e tem a sua própria fixture para não morrer sem se dar por isso.
 #
 # ---------------------------------------------------------------------------
+# A RONDA DO CORPUS EXTERNO. Este pack levou nove rondas de correções e todas
+# elas foram feitas a ler fixtures. A única coisa que alguma vez foi medida
+# contra código que ninguém aqui escreveu — a `empty-catch` nos 12 593
+# ficheiros do OpenJDK — refutou a premissa em que assentava o tier dela. A
+# ronda seguinte apontou as OITO regras ao mesmo corpus e a um segundo, o
+# Spring Framework (4 754 ficheiros), e leu os findings um a um:
+#
+#   | regra                     | JDK antes | JDK depois | Spring |
+#   | ------------------------- | --------- | ---------- | ------ |
+#   | empty-catch               | 1589      | 1589       | 193    |
+#   | printstacktrace-only      |   78      |   78       |   0    |
+#   | map-get-deref             |   43      |   43       |  12    |
+#   | optional-get-no-ispresent |   26      |   11       |   0    |
+#   | stream-not-closed         |   12      |    4       |   0    |
+#   | modify-during-iteration   |    1      |    1       |   0    |
+#   | off-by-one-loop-lte-length|    0      |    0       |   0    |
+#   | static-dateformat         |    0      |    0       |   0    |
+#
+# Das quatro regras que a ronda mexeu, DUAS foram apertadas e DUAS alargadas —
+# e as duas alargadas são a razão para não ler esta tabela como "menos é
+# melhor". A `static-dateformat` estava cega ao único formatter estático
+# partilhado que os dois corpora tinham, um bug a sério; a `off-by-one` estava
+# cega a `++i`, a `i += 1` e a `for (var i = 0;`. As duas apertadas fecharam
+# formas de guarda que nenhuma fixture continha: oito try-with-resources de
+# dois recursos e quinze guardas de Optional.
+#
+# O corpus está registado no harness de ablação em `GUARDIAN_JAVA_SRC`, por
+# isso o eixo 3 deixou de ser N/A para este pack.
+#
+# ---------------------------------------------------------------------------
 # OS TIERS, e a consequência prática que ninguém quer descobrir sozinho.
 #
 # AS OITO REGRAS ESTAO EM WARNING. Nenhuma em ERROR. Não é desleixo: é o
@@ -260,6 +290,32 @@ rules:
   # definição — foi exatamente esse o argumento usado para descer o
   # `optional-get-no-ispresent`, e aplicá-lo a uma regra e não à outra era a
   # inconsistência.
+  #
+  # O QUE A RONDA DO CORPUS EXTERNO MEDIU, e é a leitura mais dura que esta
+  # regra já levou: 43 findings em 12 593 ficheiros do OpenJDK e 12 em 4 754 do
+  # Spring Framework. Os 55 foram lidos um a um e NENHUM é um defeito vivo. Os
+  # 55 dividem-se por famílias que o Semgrep OSS não pode fechar, e todas já
+  # estão registadas como limitação: o mapa total, populado no construtor ou
+  # num inicializador estático para todas as chaves de um enum (o maior grupo,
+  # e é onde caem os 7 do Spring); a presença garantida por um método
+  # (`addNode(u); … edges.get(u)`); a chave que vem de um `keySet()` iterado
+  # com lambda ou stream em vez de for-each; a chave filtrada por
+  # `.filter($M::containsKey)`; e a invariante entre dois objetos.
+  #
+  # NENHUMA cláusula NOVA FOI ESCRITA POR CAUSA DISTO, e a decisão é
+  # deliberada. As duas famílias sintaticamente fecháveis — o `keySet()` com
+  # lambda e o filtro por referência de método — valem 7 dos 55, e as formas
+  # que as fechariam não conseguem unificar a CHAVE, que é exatamente a
+  # unificação que a cláusula do for-each tem e que impede a exclusão de engolir
+  # os bugs vizinhos `b13` e `b14`. Trocar 7 falsos positivos por uma exclusão
+  # cega é o negócio que esta série passou nove rondas a desfazer.
+  #
+  # O QUE ISTO NÃO PROVA: os dois corpora são bibliotecas maduras, em que um
+  # mapa dereferenciado é quase sempre um mapa que a própria classe preencheu
+  # por inteiro. Código de aplicação, com mapas indexados por entrada externa,
+  # é outra distribuição e não foi medido. Por isso a regra fica — em WARNING,
+  # com a medição escrita — e a evidência que decide a sua vida ou morte é um
+  # terceiro corpus de Java de aplicação.
   - id: bugfix-java-null-safety-map-get-deref
     patterns:
       - pattern-either:
@@ -531,6 +587,15 @@ rules:
   #     `!isPresent()` e sobre `isEmpty()`, com e sem uma instrução interposta;
   #   * as três formas ternárias, com o `get()` no ramo que a condição prova
   #     seguro;
+  #   * o ramo `else` de um `if ($O.isEmpty())`, com ou sem chavetas, com a
+  #     condição pura ou em DISJUNÇÃO (`o.isEmpty() || X`), e portanto também a
+  #     cadeia `else if` — em Java `else if (C) A else B` é um `if` aninhado com
+  #     bloco dos dois lados. A CONJUNÇÃO (`X && o.isEmpty()`) não prova nada e
+  #     continua a disparar;
+  #   * `assert $O.isPresent();` e `assert $O.isPresent() : msg;`, que são uma
+  #     intenção declarada na AST e não uma guarda de runtime — as asserções
+  #     estão desligadas por omissão. Um assert sobre OUTRO Optional, ou
+  #     `assert $O.isEmpty()`, continuam a disparar;
   #   * `$O.filter(...).isPresent()`;
   #   * `Optional<T> o = Optional.of(...)`, que não pode estar vazio —
   #     `ofNullable` pode, e continua a disparar.
@@ -570,6 +635,58 @@ rules:
       - pattern-not-inside: "if (... && $O.isPresent()) { ... $O.get(); ... }"
       - pattern-not-inside: "if (... && $O.isPresent()) { <... $O.get() ...>; }"
       - pattern-not-inside: while ($O.isPresent()) { ... }
+      # --- o ramo `else` de um teste de VAZIO -------------------------------
+      #
+      # A regra reconhecia `if (isPresent()) { get() }` e a saida antecipada
+      # sobre `isEmpty()`, e não reconhecia a dual das duas: o `else` de um
+      # `if (o.isEmpty())`. MEDIDO em 12 593 ficheiros do OpenJDK: NOVE dos 26
+      # findings eram esta forma, a maior família da regra no corpus. É o
+      # idioma normal desde o Java 11, quando `isEmpty()` entrou —
+      # `if (o.isEmpty()) { ... } else { … o.get() … }` — e cobre também a
+      # cadeia `else if`, porque em Java `else if (C) A else B` É um `if`
+      # aninhado com bloco dos dois lados.
+      #
+      # A DISJUNÇÃO na condição prova o mesmo e tem cláusula própria:
+      # de `!(o.isEmpty() || X)` sai `!o.isEmpty()`, portanto presente no
+      # `else`. A CONJUNÇÃO não prova nada — de `!(X && o.isEmpty())` não sai
+      # coisa nenhuma sobre o Optional — e continua a disparar, o que é
+      # medido na fixture e não suposto.
+      #
+      # O ramo THEN continua a disparar quando é lá que está o `get()`: aí o
+      # Optional está provado VAZIO e o `get()` lança de certeza. O que estas
+      # cláusulas exigem é que o `get()` esteja no `else`. O risco que sobra é
+      # o mesmo das cláusulas de `isPresent()` acima — se AMBOS os ramos
+      # tiverem um `get()`, o nó inteiro é excluído e o do ramo errado
+      # desaparece com ele. É a limitação do `pattern-not-inside`, já
+      # registada, e não uma nova.
+      - pattern-not-inside: "if ($O.isEmpty()) { ... } else { ... $O.get(); ... }"
+      - pattern-not-inside: "if ($O.isEmpty()) { ... } else { <... $O.get() ...>; }"
+      - pattern-not-inside: "if ($O.isEmpty() || ...) { ... } else { ... $O.get(); ... }"
+      - pattern-not-inside: "if ($O.isEmpty() || ...) { ... } else { <... $O.get() ...>; }"
+      # --- `assert isPresent()`, uma DECLARAÇÃO DE INTENÇÃO na AST ----------
+      #
+      # SEIS dos 26 findings do OpenJDK são `assert o.isPresent();` seguido de
+      # `o.get()`, e é o idioma da própria biblioteca standard para dizer "esta
+      # invariante é minha e eu verifiquei-a". Ao contrário de um comentário,
+      # está na AST e o Semgrep lê-o; é o mesmo estatuto que a `empty-catch` dá
+      # ao nome `ignored`, e a mesma honestidade: as asserções estão DESLIGADAS
+      # por omissão em produção, por isso isto não é uma guarda de runtime, é
+      # uma intenção declarada. A regra existe para dizer "não verificou"; aqui
+      # verificou, na única forma que o estilo do ficheiro oferece.
+      #
+      # UMA cláusula, e não duas. A intuição — `assert C;` e `assert C : msg;`
+      # são nós de AST diferentes, logo precisam de um padrão cada — está
+      # errada e foi medida: o `: ...` casa a MENSAGEM AUSENTE, por isso a
+      # forma com mensagem cobre as duas. O par chegou a estar escrito aqui e a
+      # ablação deu a de cima INERTE. Sétima ocorrência desta classe de defeito
+      # na série, e a segunda apanhada antes de sair.
+      #
+      # Medido: um assert sobre OUTRO Optional continua a disparar, e
+      # `assert o.isEmpty();` seguido de `o.get()` também — esse prova o
+      # contrário.
+      - pattern-not-inside: |
+          assert $O.isPresent() : ...;
+          ...
       # --- guarda como EXPRESSÃO, não como condição de um `if` ---------------
       #
       # Mesmo defeito e mesma correção que na regra do mapa: as cláusulas de
@@ -704,10 +821,37 @@ rules:
   # Ou seja: troca um falso positivo por um falso negativo e não resolve o caso
   # principal. Não foi aplicado. Os patterns ficam exatamente como estão e só o
   # tier muda — e muda porque o que a regra emite não é sempre um bug.
+  # O INCREMENTO E O CORPO SÃO RETICÊNCIAS, e as duas entraram por medição na
+  # ronda do corpus externo. A sintaxe opcional de um padrão FILTRA: escrever
+  # `$I++` no cabeçalho é escrever "e o incremento é exatamente esta forma", e
+  # a regra ficava cega a `++$I` e a `$I += 1`. É o mesmo defeito que o pack de
+  # C# apanhou (`i++` casava, `++i` não) e a mesma classe que fez lá um
+  # `foreach ($T $X in $C)` encontrar 0 de 5 bugs. `$I <= $A.length` com o
+  # índice a começar em zero é o bug seja qual for o incremento, por isso o
+  # incremento não tem de ser enumerado.
+  #
+  # O corpo escrito como `...` de statement em vez de `{ ... }` fecha a forma
+  # SEM CHAVETAS de uma vez — medido: `{ ... }` não casa
+  # `for (...) s += i;`, e o corpo como reticência casa as duas.
+  #
+  # O ramo do `var` é um segundo ramo porque `int` é literal no padrão:
+  # `for (var i = 0; i <= a.length; i++)` era invisível. Medido nas quatro
+  # combinações (int/var vezes com/sem chavetas) e nas três formas de
+  # incremento; `$I < $A.length` e `int $I = 1` continuam silenciosos, que é o
+  # que as near-misses asseridas provam.
+  #
+  # MEDIDO NO CORPUS EXTERNO, e é a razão por que alargar aqui não tem custo:
+  # ZERO cabeçalhos `<= ....length` em 12 593 ficheiros do OpenJDK e em 4 754
+  # do Spring Framework. A forma não aparece em Java maduro de todo, por isso
+  # a regra não tem findings reais para perder precisão — o que tinha eram
+  # falsos negativos.
   - id: bugfix-java-off-by-one-loop-lte-length
     patterns:
-      - pattern: |
-          for (int $I = 0; $I <= $A.length; $I++) { ... }
+      - pattern-either:
+          - pattern: |
+              for (int $I = 0; $I <= $A.length; ...) ...
+          - pattern: |
+              for (var $I = 0; $I <= $A.length; ...) ...
       - metavariable-type:
           metavariable: $A
           type: "$T[]"
@@ -719,40 +863,53 @@ rules:
     languages: [java]
 
   # WARNING e não ERROR: um stream fechado num `finally` está correto e esta
-  # regra não o vê. A exclusão nomeia o recurso porque `try (...) { ... }` não
-  # é um padrão Java válido — medido, não suposto.
+  # regra não o vê.
   #
-  # A segunda exclusão é a forma do Java 9: um recurso já declarado e
-  # efetivamente final pode ser nomeado direto no cabeçalho, `try (in) { ... }`,
-  # e o stream É fechado. A declaração fica FORA do `try`, por isso um
-  # `pattern-not-inside` sobre o corpo do `try` não lhe chega — o que funciona
-  # é a exclusão sobre a SEQUÊNCIA. Medido: o `$V` fica mesmo ligado nas duas
+  # A ANCORA POSITIVA É UMA SEQUÊNCIA, e essa é a correção da ronda do corpus
+  # externo. A regra tinha aqui um par de `pattern-not-inside` a nomear o
+  # recurso — `try ($T2 $V2 = new FileInputStream(...)) { ... }`, com e sem
+  # finalizador — porque `try (...) { ... }` NÃO é um padrão Java válido
+  # (medido: `Invalid pattern for Java`, tal como `try ($...RES)` e
+  # `try (...; $R; ...)`). Isso fecha o cabeçalho de UM recurso e mais nenhum:
+  # um cabeçalho com DOIS recursos é outro nó, e o stream continuava a ser
+  # acusado apesar de estar fechado. MEDIDO em 12 593 ficheiros do OpenJDK:
+  # 12 findings, dos quais OITO eram try-with-resources de dois recursos —
+  # `try (FileInputStream fis = ...; BufferedInputStream bis = new
+  # BufferedInputStream(fis))`, que é como se abre um ficheiro em Java quando
+  # se quer um buffer. Dois terços da regra eram esse falso positivo.
+  #
+  # Enumerar os comprimentos não era caminho: com `$X` a casar um recurso
+  # inteiro são duas cláusulas para dois recursos, três para três, e vezes
+  # duas com finalizador. O que funciona é exigir que a declaração esteja numa
+  # SEQUÊNCIA DE INSTRUÇÕES — `pattern-inside` de `decl;` seguido de `...`.
+  # Um recurso no cabeçalho de um `try` não está numa sequência de instruções,
+  # por isso nenhuma forma de cabeçalho casa, com qualquer número de recursos e
+  # com ou sem finalizador. Medido: continua a disparar quando a declaração é a
+  # ÚLTIMA instrução do bloco e quando é a única instrução de um bloco aninhado
+  # (o `...` casa zero instruções), e as duas exclusões de cabeçalho que aqui
+  # estavam passaram a ser inertes — foram apagadas, não mantidas por via das
+  # dúvidas. O `pattern-inside` é um termo positivo, por isso a regra continua
+  # a ser válida com ele a substituir o `pattern` como ancora de contexto.
+  #
+  # As duas exclusões que SOBRAM são a forma do Java 9: um recurso já
+  # declarado e efetivamente final pode ser nomeado direto no cabeçalho,
+  # `try (in) { ... }`, e o stream É fechado. A declaração fica FORA do `try`,
+  # numa sequência de instruções, por isso a ancora positiva alcança-a e é
+  # preciso excluí-la explicitamente. Medido: o `$V` fica mesmo ligado nas duas
   # pontas, um `leaked` continua a disparar na mesma função onde um `managed`
   # é fechado assim.
   #
-  # O `finally` DUPLICA as duas exclusões, e aqui o defeito corre ao contrário
-  # do que corre nas duas regras de error_handling. Nelas a forma do `try` está
-  # no padrão POSITIVO, por isso uma forma não coberta silencia a regra; aqui
-  # está numa EXCLUSÃO, por isso uma forma não coberta faz a regra acusar
-  # código correto. Um `try` com finalizador é um nó diferente, nenhuma das
-  # duas exclusões lhe chegava, e um stream declarado no cabeçalho de recursos
-  # É fechado independentemente do que esteja pendurado no statement. Medido em
-  # misses/StreamNotClosed.java: quatro falsos positivos em WARNING sobre
-  # código que fecha o stream — as duas formas de recurso (declarado no
-  # cabeçalho e a forma do Java 9) vezes as duas com `finally` (com e sem
-  # `catch`). Zero depois.
-  #
-  # O `catch` sozinho foi medido na mesma corrida e NÃO é buraco: as duas
-  # exclusões já casavam `try (r = ...) { ... } catch (...) { ... }`. O
+  # O `finally` DUPLICA a exclusão do Java 9 porque um `try` com finalizador é
+  # um nó de AST diferente. O `catch` sozinho foi medido e NÃO é buraco: o
   # emparelhamento de `try` do Semgrep é insensível a cláusulas `catch` a mais
   # e sensível à presença do finalizador, e as duas formas estão pinadas em
   # separado na fixture para o dia em que isso deixe de ser verdade.
   - id: bugfix-java-memory-leak-stream-not-closed
     patterns:
       - pattern: $T $V = new FileInputStream(...);
-      - pattern-not-inside: try ($T2 $V2 = new FileInputStream(...)) { ... }
-      - pattern-not-inside: |
-          try ($T2 $V2 = new FileInputStream(...)) { ... } finally { ... }
+      - pattern-inside: |
+          $T $V = new FileInputStream(...);
+          ...
       - pattern-not-inside: |
           $T $V = new FileInputStream(...);
           ...
@@ -793,10 +950,30 @@ rules:
   # estão sincronizados é análise do programa inteiro, que o Semgrep OSS não
   # faz. Já estava documentado como falso positivo não corrigível; o tier passa
   # agora a dizer a mesma coisa.
+  #
+  # A DECLARAÇÃO SEPARADA DA ATRIBUIÇÃO é o segundo ramo, e entrou por
+  # medição. O ramo de cima exige o inicializador na própria declaração; a
+  # outra metade do idioma escreve `private static final SimpleDateFormat F;`
+  # e atribui num bloco `static { ... }`, normalmente porque a seguir chama
+  # `setTimeZone(...)`. MEDIDO: zero ocorrências em 12 593 ficheiros do
+  # OpenJDK, UMA em 4 754 do Spring Framework — e essa uma é um bug a sério,
+  # um formatter estático partilhado formatado sem lock nenhum
+  # (`AbstractMockHttpServletRequestBuilder`). A única candidata dos dois
+  # corpora era invisível para a regra. Um campo `static SimpleDateFormat` é
+  # partilhado independentemente do sítio onde é atribuído, por isso o ramo
+  # não precisa de ver o `new`.
+  #
+  # Medido no que o ramo NÃO casa, em vez de suposto: a forma COM
+  # inicializador (fica para o primeiro ramo, sem duplicar o finding), um
+  # campo de instância `final SimpleDateFormat`, um campo de instância sem
+  # inicializador e um método estático que DEVOLVE um `SimpleDateFormat`.
+  # Locais não entram: uma variável local não pode ser `static`.
   - id: bugfix-java-race-condition-static-dateformat
-    pattern: >-
-      static java.text.SimpleDateFormat $N =
-      new java.text.SimpleDateFormat(...);
+    pattern-either:
+      - pattern: >-
+          static java.text.SimpleDateFormat $N =
+          new java.text.SimpleDateFormat(...);
+      - pattern: static java.text.SimpleDateFormat $N;
     message: >-
       `SimpleDateFormat` num campo estático. A classe não é thread-safe e um
       campo estático é a definição de partilhado — sob concorrência devolve

@@ -255,7 +255,12 @@ describe('the rule inventory', () => {
       'bugfix-js': { rules: 13, withClauses: 12 },
       'bugfix-py': { rules: 10, withClauses: 10 },
       'bugfix-go': { rules: 9, withClauses: 8 },
-      'bugfix-java': { rules: 8, withClauses: 7 },
+      // 8 of 8 since the external-corpus round: `static-dateformat` was the
+      // pack's one clauseless rule, a bare `pattern:`, and it became a
+      // `pattern-either` when a second branch was added for the declaration
+      // that has no initializer — the shape of the ONE genuine race either
+      // corpus contained, which the rule could not see.
+      'bugfix-java': { rules: 8, withClauses: 8 },
       // 11 since `null-safety-as-cast-deref` was deleted: it fired 6490 times
       // on 11 800 files of dotnet/runtime with no true positives, and this
       // pack is where the missing axis 3 was recorded as permanent. See

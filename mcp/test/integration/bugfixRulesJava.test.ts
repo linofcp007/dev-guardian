@@ -137,7 +137,7 @@ interface FileExpectation {
  *   | rule                          | corpus defects |
  *   | ----------------------------- | -------------- |
  *   | `null-safety-map-get-deref`   | 11             |
- *   | `null-safety-optional-get`    |  6             |
+ *   | `null-safety-optional-get`    | 10             |
  *   | `edge-case-modify-during-iteration` | 6        |
  *   | `off-by-one-loop-lte-length`  |  4             |
  *   | `race-condition-static-dateformat` | 1         |
@@ -167,6 +167,19 @@ interface FileExpectation {
  * adding one, which is why they carry near-misses in `misses/` and no corpus
  * entry: there is no shape here that the shipping rule did not already miss.
  *
+ * The external-corpus round then went the other way on the same rule and
+ * DELETED both of them, along with the two that shipped at 35b4b58, replacing
+ * all four with one positive `pattern-inside`: the declaration has to sit in a
+ * statement sequence, which no try header of any length does. Removing an
+ * exclusion cannot eat a real bug, so that needs no corpus entry; what it CAN
+ * do is cost recall, and the two new entries in `hits/StreamNotClosed.java`
+ * measure exactly that — the declaration as the last statement of a method,
+ * and as the only statement of a nested block.
+ *
+ * `optional-get` did gain six guard exclusions in the same round, so it gained
+ * four corpus entries with them: F9 to F12 in `ElseArm.java`, each the
+ * neighbouring shape where the guard proves the opposite.
+ *
  * `modify-during-iteration` was at zero until wave 7 and was the OPPOSITE of
  * low-risk: eight exclusion clauses over a seven-branch receiver enumeration, the
  * file's only nested re-inclusion, and the rule whose
@@ -177,18 +190,27 @@ interface FileExpectation {
  */
 const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'ElseArm.java': {
-    // Eight, and this number is the whole point of wave 6. Every method is a
+    // Twelve. The first eight are the whole point of wave 6: every method is a
     // guaranteed NPE or NoSuchElementException whose dereference sits on the
-    // branch the guard proves is UNSAFE: the `else` arm of an `if` guard (map
+    // branch the guard proves is UNSAFE — the `else` arm of an `if` guard (map
     // containsKey, map != null, Optional isPresent, Optional conjunction), the
     // arm of a ternary the condition rules out (both polarities, map and
     // Optional), plus one unguarded control. Measured against the shipped rule
     // at 3392a0d: 1 of 8. Against b30499d, before wave 4: 6 of 8.
+    //
+    // F9-F12 came with the external-corpus round, which added four `else`-arm
+    // clauses and two `assert isPresent()` clauses to `optional-get`. Both are
+    // guard exclusions, so both fall under the rule this file enforces: a new
+    // exclusion has to prove it does not eat a real bug. Each of the four is
+    // the shape ADJACENT to one of them where the guard proves the opposite —
+    // the THEN arm of `isEmpty()`, the `else` of a CONJUNCTION with
+    // `isEmpty()` (which proves nothing), an assert on a DIFFERENT Optional,
+    // and `assert o.isEmpty()`.
     ids: [
       'bugfix-java-null-safety-map-get-deref',
       'bugfix-java-null-safety-optional-get-no-ispresent',
     ],
-    count: 8,
+    count: 12,
   },
   'RealBugs.java': {
     // Fourteen, spread over four rules, each one chosen to be the defect that a
@@ -276,8 +298,27 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     ids: ['bugfix-java-null-safety-optional-get-no-ispresent'],
     count: 1,
   },
-  'LoopLteLength.java': { ids: ['bugfix-java-off-by-one-loop-lte-length'], count: 1 },
-  'StreamNotClosed.java': { ids: ['bugfix-java-memory-leak-stream-not-closed'], count: 1 },
+  'LoopLteLength.java': {
+    // Five. One was the shipped count, and the other four are forms the rule
+    // was BLIND to: `++i`, `i += 1`, a braceless body, and `for (var i = 0;`.
+    // Optional syntax written out in a pattern acts as a filter — spelling the
+    // increment `$I++` excluded the other two spellings of the same loop, and
+    // spelling the body `{ ... }` excluded the braceless one. Same defect the
+    // C# pack found in `i++` vs `++i`. Measured on 12 593 OpenJDK and 4 754
+    // Spring files: ZERO `<= ....length` loop headers of any spelling, so the
+    // widening costs no precision there — what it buys back is recall.
+    ids: ['bugfix-java-off-by-one-loop-lte-length'],
+    count: 5,
+  },
+  'StreamNotClosed.java': {
+    // Three. One is the shipped leak; the other two measure the recall cost of
+    // the `pattern-inside` statement-sequence anchor that replaced the
+    // try-header exclusions — the declaration as the LAST statement of a
+    // method, and as the only statement of a nested block. Both need the
+    // anchor's trailing `...` to match zero statements, and both leak.
+    ids: ['bugfix-java-memory-leak-stream-not-closed'],
+    count: 3,
+  },
   'ModifyDuringIteration.java': {
     // Sixteen, for the same reason as MapGetDeref: one function per
     // enumerated receiver type (List, ArrayList, LinkedList, Set, HashSet,
@@ -295,14 +336,21 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     count: 16,
   },
   'StaticDateFormat.java': {
-    // Three: `static final`, plain `static`, and a fully-qualified
-    // `java.text.SimpleDateFormat`. The rule ships a single pattern written
-    // with the qualified name — measured, it matches the short forms too
-    // whenever an import lets Semgrep resolve them, while the short pattern
-    // never matched the qualified one, so the qualified field was invisible
-    // for as long as the short pattern was the only one.
+    // Four: `static final`, plain `static`, a fully-qualified
+    // `java.text.SimpleDateFormat`, and a declaration with NO initializer,
+    // assigned in a `static { ... }` block. The first three all go through a
+    // single pattern written with the qualified name — measured, it matches
+    // the short forms too whenever an import lets Semgrep resolve them, while
+    // the short pattern never matched the qualified one, so the qualified
+    // field was invisible for as long as the short pattern was the only one.
+    //
+    // The fourth needed a branch of its own and came from the external-corpus
+    // round: zero occurrences in 12 593 OpenJDK files, exactly ONE across
+    // 4 754 Spring Framework files, and that one is a live race the rule could
+    // not see — a shared static formatter used with no lock at all. The single
+    // candidate the two corpora had between them.
     ids: ['bugfix-java-race-condition-static-dateformat'],
-    count: 3,
+    count: 4,
   },
 };
 
@@ -401,8 +449,8 @@ describe('bugfix-java rules', () => {
       // The TOTAL, asserted on top of the per-file counts, and not redundant:
       // the loop above only visits files that have an expectation, so a finding
       // landing in a file nobody registered — or in no file at all — would not
-      // move any per-file number. 79 = 45 from the eight per-rule fixtures plus
-      // the 34 of the real-bugs corpus.
+      // move any per-file number. 90 = 52 from the eight per-rule fixtures plus
+      // the 38 of the real-bugs corpus.
       expect(rows.length).toBe(
         Object.values(EXPECTED_HITS_BY_FILE).reduce((n, e) => n + e.count, 0),
       );

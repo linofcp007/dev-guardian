@@ -67,4 +67,48 @@ public class ElseArm {
     String f8(Map<String, String> m, String k) {
         return m.get(k).trim();
     }
+
+    // F9..F12 arrived with the external-corpus round, which added the `else`
+    // arm of an `isEmpty()` test and `assert isPresent()` to the exclusions.
+    // Both are guard exclusions, so both are exactly what this file exists to
+    // fence: each of the four is the shape ADJACENT to a new exclusion where
+    // the guard proves the OPPOSITE, and each must keep firing.
+
+    // F9: optional, THEN arm of isEmpty — proven EMPTY exactly where it is
+    // read, and the new `else`-arm clauses must not reach it.
+    //
+    // The obvious spelling of this — `if (o.isEmpty()) { return o.get(); }` —
+    // does NOT belong here, because it does not fire and never did: the
+    // early-exit exclusion `if ($O.isEmpty()) { return ...; }` matches the
+    // whole `if` node, so the `get()` inside its own exit branch is excluded
+    // with it. Measured against the shipped rule and against this one, and it
+    // is the same false negative for `!isPresent()` and for `!containsKey`.
+    // It is recorded as a limitation, not fixtured as a hit.
+    String f9(Optional<String> o) {
+        if (o.isEmpty()) { System.out.println(o.get()); }
+        else { System.out.println("present"); }
+        return "d";
+    }
+
+    // F10: optional, else arm of a CONJUNCTION with isEmpty. `!(flag &&
+    // o.isEmpty())` proves nothing about the Optional, so this is a genuine
+    // NoSuchElementException and the disjunction clause must not reach it.
+    String f10(Optional<String> o, boolean flag) {
+        if (flag && o.isEmpty()) { return "empty"; }
+        else { return o.get(); }
+    }
+
+    // F11: assert on a DIFFERENT Optional. The exclusion unifies the receiver;
+    // break the unification and the read is unguarded.
+    String f11(Optional<String> o, Optional<String> other) {
+        assert other.isPresent();
+        return o.get();
+    }
+
+    // F12: assert of the NEGATION — the invariant declared is that it is
+    // empty, and the read below it throws every time.
+    String f12(Optional<String> o) {
+        assert o.isEmpty();
+        return o.get();
+    }
 }

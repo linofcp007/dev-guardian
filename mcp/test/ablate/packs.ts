@@ -9,8 +9,8 @@
  * it is TypeScript, so the JS/TS pack is the only one whose corpus can be a
  * committed path.
  *
- * Two packs are the exception, and both are opt-in rather than absent: Rust
- * and C#, each reading a corpus path from an environment variable.
+ * Three packs are the exception, and all three are opt-in rather than absent:
+ * Rust, C# and Java, each reading a corpus path from an environment variable.
  *
  * Rust's standard library source is ~1400 `.rs` files nobody wrote as
  * a fixture, it is free (`rustup component add rust-src`, or copied out of
@@ -69,6 +69,37 @@
  * to configure here; it is stated so that a future corpus is chosen knowing
  * that a bigger one is not automatically a better one.
  *
+ * **Java, `GUARDIAN_JAVA_SRC`.** The Java pack shipped eight rules and took
+ * nine fix waves without ever being pointed at code nobody here wrote, save
+ * one hand-run measurement of `empty-catch`. What the first real round found
+ * is why this entry exists rather than being a nicety:
+ * `memory-leak-stream-not-closed` scored 12 findings on the OpenJDK and EIGHT
+ * of them were two-resource try-with-resources headers — code that closes its
+ * stream — because the exclusions named a single-resource header and a
+ * two-resource one is a different node. `optional-get-no-ispresent` scored 26
+ * and 15 were two guard shapes nobody had enumerated. In the other direction,
+ * `race-condition-static-dateformat` was blind to the ONE genuine race either
+ * corpus contained, and `off-by-one-loop-lte-length` was blind to `++i`,
+ * `i += 1` and `for (var i = 0;`. None of that is visible from fixtures.
+ *
+ * What produced those numbers: `git clone --filter=blob:none --no-checkout
+ * --depth 1` of `openjdk/jdk`, then a NON-CONE sparse checkout of
+ * `/src/<module>/share/classes/**` — 12 596 files, 12 593 of which Semgrep
+ * scans. A second corpus of `spring-projects/spring-framework`
+ * (`/spring-<module>/src/main/java/**`, 5 212 files) is worth having beside it
+ * and is not interchangeable with it: the two corpora disagree on five rules
+ * of eight. Any tree of real Java will do. Keep it at a SHORT path, for the
+ * same reason as the C# one.
+ *
+ * KNOW WHAT THESE CORPORA ARE WEAK AT. Both are mature, heavily reviewed
+ * LIBRARY code, where a map is nearly always populated in full by the class
+ * that reads it. `null-safety-map-get-deref` scores 43 on the JDK and 12 on
+ * Spring, and a hand-read of all 55 found no live defect — but every one of
+ * the 55 is a map the same class fills, which is not how application code
+ * keyed on external input behaves. That measurement is a reason to distrust
+ * the rule, not yet a reason to delete it; the corpus that would settle it is
+ * a body of application Java, which neither of these is.
+ *
  * `base.yml` does contain JS/TS rules and would accept `mcp/src` as a corpus;
  * it is left off by default only because nobody has read that baseline yet.
  * Turn it on with `--real-code=../mcp/src` when someone is ready to triage
@@ -98,6 +129,9 @@ export const RUST_SRC_ENV = 'GUARDIAN_RUST_SRC';
 
 /** Env var naming a tree of real C# source, for axis 3. */
 export const CS_SRC_ENV = 'GUARDIAN_CS_SRC';
+
+/** Env var naming a tree of real Java source, for axis 3. */
+export const JAVA_SRC_ENV = 'GUARDIAN_JAVA_SRC';
 
 /**
  * An opt-in axis-3 corpus read from an environment variable.
@@ -131,8 +165,14 @@ export function csharpCorpus(): RealCorpus | undefined {
   return envCorpus(CS_SRC_ENV, 'C# corpus (GUARDIAN_CS_SRC)', 'a tree of real C# source');
 }
 
+/** Axis-3 corpus for the Java pack. See `envCorpus` and the file header. */
+export function javaCorpus(): RealCorpus | undefined {
+  return envCorpus(JAVA_SRC_ENV, 'Java corpus (GUARDIAN_JAVA_SRC)', 'a tree of real Java source');
+}
+
 const RUST_STDLIB = rustStdlibCorpus();
 const CSHARP_SRC = csharpCorpus();
+const JAVA_SRC = javaCorpus();
 
 export const PACKS: readonly PackSpec[] = [
   {
@@ -144,7 +184,13 @@ export const PACKS: readonly PackSpec[] = [
   },
   { name: 'bugfix-py', config: config('bugfix-py'), fixtures: fixtures('bugfix-py'), hitsSubdir: 'hits' },
   { name: 'bugfix-go', config: config('bugfix-go'), fixtures: fixtures('bugfix-go'), hitsSubdir: 'hits' },
-  { name: 'bugfix-java', config: config('bugfix-java'), fixtures: fixtures('bugfix-java'), hitsSubdir: 'hits' },
+  {
+    name: 'bugfix-java',
+    config: config('bugfix-java'),
+    fixtures: fixtures('bugfix-java'),
+    hitsSubdir: 'hits',
+    realCode: JAVA_SRC,
+  },
   {
     name: 'bugfix-cs',
     config: config('bugfix-cs'),

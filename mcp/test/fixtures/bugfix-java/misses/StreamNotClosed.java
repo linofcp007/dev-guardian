@@ -56,5 +56,41 @@ public class StreamNotClosed {
         try (in) { in.read(); } catch (IOException e) { cleanup(); } finally { cleanup(); }
     }
 
+    // The four below are the MULTI-RESOURCE hole, and they are the reason the
+    // rule stopped excluding try headers by naming them and started anchoring
+    // on a statement sequence instead. A try-with-resources header with two
+    // resources is a different AST node from one with a single resource, and
+    // the exclusions that shipped here named exactly one — so
+    // `try (FileInputStream fis = ...; BufferedInputStream bis = new
+    // BufferedInputStream(fis))`, which is how a Java file gets read with a
+    // buffer, was reported as a leak. MEASURED on 12 593 OpenJDK files: 8 of
+    // the rule's 12 findings were this shape. Enumerating the lengths was
+    // tried and abandoned — two clauses for two resources, three for three,
+    // doubled again by the finalizer — and `try (...)`, `try ($...RES)` and
+    // `try (...; $R; ...)` are all `Invalid pattern for Java`.
+    //
+    // All four are DISCRIMINATING for the `pattern-inside` anchor: delete it
+    // and every one fires. A resource in a try header is not a statement in a
+    // statement sequence, so no header of any length reaches the rule.
+    void twoResources(String path) throws IOException {
+        try (FileInputStream in = new FileInputStream(path);
+             java.io.BufferedInputStream bis = new java.io.BufferedInputStream(in)) { bis.read(); }
+    }
+    void threeResources(String path) throws IOException {
+        try (java.io.Reader r = new java.io.StringReader("x");
+             FileInputStream in = new FileInputStream(path);
+             java.io.BufferedInputStream bis = new java.io.BufferedInputStream(in)) { bis.read(); r.read(); }
+    }
+    void twoResourcesFinally(String path) throws IOException {
+        try (FileInputStream in = new FileInputStream(path);
+             java.io.BufferedInputStream bis = new java.io.BufferedInputStream(in)) { bis.read(); }
+        finally { cleanup(); }
+    }
+    void twoResourcesCatch(String path) {
+        try (FileInputStream in = new FileInputStream(path);
+             java.io.BufferedInputStream bis = new java.io.BufferedInputStream(in)) { bis.read(); }
+        catch (IOException e) { cleanup(); }
+    }
+
     void cleanup() { }
 }

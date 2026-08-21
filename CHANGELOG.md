@@ -8,6 +8,152 @@ version bump.
 
 ## [Unreleased]
 
+### Changed
+
+- **`bugfix-java` audited against real Java for the first time.** It was the
+  only pack in the series never measured against code nobody here wrote: eight
+  rules, nine fix waves, every one of them found by reading fixtures. The one
+  thing that *had* been measured — `empty-catch` on the OpenJDK — refuted the
+  premise its `ERROR` tier stood on. This round pointed all eight rules at
+  **12 593 OpenJDK files** (`openjdk/jdk`, `src/<module>/share/classes`) and at
+  **4 754 Spring Framework files** (`spring-*/src/main/java`), and read the
+  findings one by one. Four rules of eight changed, **in both directions**, and
+  the pack still declares eight rules with the same ids.
+
+  | rule | JDK before | JDK after | Spring |
+  | --- | --- | --- | --- |
+  | `error-handling-empty-catch` | 1589 | 1589 | 193 |
+  | `error-handling-printstacktrace-only` | 78 | 78 | 0 |
+  | `null-safety-map-get-deref` | 43 | 43 | 12 |
+  | `null-safety-optional-get-no-ispresent` | 26 | **11** | 0 |
+  | `memory-leak-stream-not-closed` | 12 | **4** | 0 |
+  | `edge-case-modify-during-iteration` | 1 | 1 | 0 |
+  | `off-by-one-loop-lte-length` | 0 | 0 | 0 |
+  | `race-condition-static-dateformat` | 0 | 0 | 0 |
+
+- **`memory-leak-stream-not-closed` (Java) was two-thirds false positive, and
+  the cause was the shape of its exclusions rather than their content.** Eight
+  of its twelve OpenJDK findings were **two-resource try-with-resources
+  headers** — `try (FileInputStream fis = ...; BufferedInputStream bis = new
+  BufferedInputStream(fis))`, which is simply how a file gets read with a
+  buffer. The rule excluded try headers by naming the resource, and a header
+  with two resources is a different AST node. Enumerating the lengths was
+  measured and rejected (two clauses for two resources, three for three, doubled
+  again by the finalizer), and `try (...)`, `try ($...RES)` and
+  `try (...; $R; ...)` are all `Invalid pattern for Java`. The rule now anchors
+  positively on a **statement sequence** instead: a resource in a try header is
+  not a statement, so no header of any length reaches it. Four exclusion clauses
+  became two. Of the four findings that remain, **two are genuine descriptor
+  leaks** (`COFFFileParser`, `Commands`) and two are the documented
+  helper-closes and `finally`-closes limitations.
+
+- **`null-safety-optional-get-no-ispresent` (Java) 26 → 11 on the OpenJDK**, and
+  the fifteen closed were two shapes, not fifteen. Nine were the **`else` arm of
+  an `if (o.isEmpty())`** — the way the check has been written since Java 11,
+  and the exact dual of the `isPresent()` guard the rule already honoured; the
+  four new clauses cover the bare condition and the disjunction, and therefore
+  also the `else if` chain. Six were **`assert o.isPresent();`**, which is the
+  JDK's own way of writing down an invariant it established elsewhere: unlike a
+  comment it is in the AST, and it is an intention rather than a runtime guard,
+  since assertions are off by default. The neighbouring shapes that must keep
+  firing are pinned as F9–F12 in `hits/ElseArm.java`: the THEN arm of
+  `isEmpty()`, the `else` of a **conjunction** with `isEmpty()` (which proves
+  nothing), an assert on a *different* Optional, and `assert o.isEmpty()`.
+
+- **`race-condition-static-dateformat` (Java) was blind to the only real race
+  either corpus contained.** Zero candidates in 12 593 OpenJDK files, exactly
+  one across 4 754 Spring files — a `private static final SimpleDateFormat`
+  declared with no initializer and assigned in a `static { … }` block, formatted
+  later with no lock at all. The rule demanded the `new` on the declaration
+  itself. A second pattern branch matches the split declaration; measured
+  silent on an instance field, an uninitialized instance field, and a static
+  method whose *return type* is `SimpleDateFormat`.
+
+- **`off-by-one-loop-lte-length` (Java) was blind to `++i`, `i += 1`, a
+  braceless body and `for (var i = 0;`.** Optional syntax spelled out in a
+  pattern acts as a **filter**: writing the increment `$I++` excluded the other
+  two spellings of the same loop, and writing the body `{ ... }` excluded the
+  braceless one. Same defect the C# pack found in `i++` versus `++i`. The
+  increment and the body are now ellipses and `var` has its own branch. It costs
+  no precision to widen here: **zero** `<= ....length` loop headers of any
+  spelling exist in either corpus, so what the rule had was false negatives and
+  nothing else.
+
+- **`bugfix-java` is registered with the ablation harness's axis 3**, reading a
+  corpus path from `GUARDIAN_JAVA_SRC` on the same terms as `GUARDIAN_RUST_SRC`
+  and `GUARDIAN_CS_SRC`: unset prints `N/A`, set-but-missing **throws**. Making
+  `static-dateformat` a `pattern-either` also took the pack from 7 of 8 rules
+  with ablatable clauses to 8 of 8. Two things were caught by ablating the new
+  clauses before they shipped, and both are the classes this series keeps
+  meeting: an **inert clause** — `assert $O.isPresent();` written beside
+  `assert $O.isPresent() : ...;` on the assumption that they are different AST
+  nodes, which they are, except that `: ...` also matches the *absent* message,
+  so the first covered nothing the second did not (seventh occurrence in the
+  series, second caught before release) — and **four fixtures that proved
+  nothing**, because they were written with an early exit in the then-arm and
+  the pre-existing early-exit clause silenced them before any new clause was
+  consulted. All four `else`-arm clauses read `DEAD` against them. The
+  replacements have a non-exit then-arm, which is also what the nine OpenJDK
+  findings looked like, and each maps to exactly one clause.
+
+### Known gaps
+
+Every row of the Java **Accepted limitations** table under 1.9.0 was
+reproduced against the shipped pack before anything was decided. Rows (2),
+(3), (5), (6), (7) and (8) stand unchanged. Row (1) is now **half** the
+limitation it was: a stream closed by a `finally` or by a helper still reports,
+but the multi-resource try-with-resources that dominated it does not. Row (4)
+reproduces and is **rare**: not one of the 78 OpenJDK
+`printstacktrace-only` findings was the deliberate-fallback shape. What the
+round added:
+
+- **A false negative on the branch axis, in the early-exit exclusions
+  themselves.** `if (o.isEmpty()) { return o.get(); }` is silent, and so are
+  `if (!o.isPresent()) { throw new IllegalStateException(o.get()); }` and
+  `if (!m.containsKey(k)) { return m.get(k).trim(); }`. All three are
+  guaranteed throws, all three read the value inside the very branch the guard
+  proves is unsafe, and all three are swallowed because `pattern-not-inside`
+  excludes the whole `if` node — including the exit branch the clause was
+  written to describe. Same root cause as row (9), on the branch axis rather
+  than the temporal one, and not fixable in Semgrep OSS. Predates this round
+  and is unchanged by it; measured against both packs.
+- **`null-safety-map-get-deref` scored 55 findings across the two corpora
+  (43 + 12) and a hand-read of all 55 found no live defect.** They fall into
+  families Semgrep OSS cannot close, and every one is already a documented
+  limitation: the total map filled in a constructor or a static initializer for
+  every key of an enum (the largest group, and all 7 Spring sites); presence
+  established by a method (`addNode(u); … edges.get(u)`); a key from a
+  `keySet()` walked with a lambda or a stream rather than a for-each; a key
+  filtered by `.filter($M::containsKey)`; and an invariant held between two
+  objects. **No clause was written for any of it.** The two families that are
+  syntactically closable — the `keySet()` lambda and the method-reference
+  filter — are worth 7 of 55, and neither closing form can unify the **key**,
+  which is precisely the unification that keeps the existing for-each clause
+  from swallowing `b13` and `b14`. What this does not settle: both corpora are
+  mature *library* code, where a dereferenced map is nearly always one the
+  reading class filled itself. Application Java, keyed on external input, is a
+  different distribution and was not measured. The rule stays, at `WARNING`,
+  with the measurement written down; a third corpus of application Java is the
+  evidence that decides it.
+- **The eleven `optional-get` findings that remain on the OpenJDK** are four
+  shapes, all of them enumerable and none of them closed: a ternary whose
+  condition is a conjunction of two `isPresent()` calls, a ternary whose
+  condition is `isEmpty() || …`, `if (!o.isEmpty())` (the double negative), and
+  an `else if` chain whose `else` is another `if` statement rather than a
+  block. Each is worth one to three findings; the stopping point is a judgement
+  about clause count, not a claim that they are unreachable.
+- **`empty-catch` re-measured identically**: 1589 findings in 770 OpenJDK
+  files, 56 % of them carrying an explanatory comment inside the catch, and the
+  caught-variable names are `e` (890), `ex` (158), `ioe` (44) — with
+  `cannotHappen` at 13 and `_` at 10 still outside the three names the rule
+  recognises. Nothing changed; the rule is precise about what it matches and
+  silent about whether it is a defect, which is why it is `WARNING`.
+- **`edge-case-modify-during-iteration` scored 1 finding in 17 347 files**, too
+  few to say anything about. `off-by-one-loop-lte-length` and
+  `race-condition-static-dateformat` scored 0 on the OpenJDK because the shapes
+  are absent from it, not because the rules are broken — verified by grep in
+  both directions.
+
 ### Fixed
 
 - **Ablation axis 3 was measuring noise and charging it to the wrong clause.**
