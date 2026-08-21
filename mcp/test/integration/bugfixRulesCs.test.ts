@@ -186,19 +186,30 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     count: 2,
   },
   'LoopLte.cs': {
-    // Eight over two rules: two `.Length` receivers (array, string) and SIX
-    // `.Count` receivers, one per enumerated type.
+    // Fourteen over two rules: FOUR `.Length` sites and TEN `.Count` sites.
     //
-    // The six are not padding. `metavariable-type` is NOT subtype-aware —
-    // measured: a receiver declared `List<int>` does not match
-    // `ICollection<$T>`, and vice versa — so each type in the rule's list is
-    // an independent claim. A type with no fixture behind it could be
-    // deleted, or could silently never have worked, without a number moving.
+    // Eight of them are one per enumerated receiver type, and those are not
+    // padding. `metavariable-type` is NOT subtype-aware — measured: a receiver
+    // declared `List<int>` does not match `ICollection<$T>`, and vice versa —
+    // so each type in the rule's list is an independent claim. A type with no
+    // fixture behind it could be deleted, or could silently never have worked,
+    // without a number moving. `Collection<$T>` and `ObservableCollection<$T>`
+    // joined the `.Count` list on 2026-08-21 and brought a fixture each.
+    //
+    // FOUR MORE ARE THE SPELLING DIMENSIONS, and they are the reason the count
+    // moved. Both rules used to read one spelling of each of two independent
+    // dimensions of an ordinary C# `for` loop — `i++` but not `++i`, a braced
+    // body but not a braceless one — and the fixtures carried only the
+    // spelling the pattern already had, so neither false negative could ever
+    // show up as a number. Found by probing the shipped rules against a file
+    // written from the SHAPE of the bug in every idiomatic spelling, after
+    // both `.Count` and `edge-case` scored zero on 11 800 files of real C#.
+    // Widening cost zero findings on that same corpus.
     ids: [
       'bugfix-cs-off-by-one-loop-lte-count',
       'bugfix-cs-off-by-one-loop-lte-length',
     ],
-    count: 8,
+    count: 14,
   },
   // `AsCast.cs` used to sit here, hits and misses both, with nine findings and
   // the largest misses/ file in the pack. Both are gone with the rule: see the
@@ -224,8 +235,15 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     // was a regression — CLAUDE.md's third cause of DEAD, mutual redundancy,
     // caught by the harness re-ablating DEAD siblings in pairs. One switch of
     // each label kind makes each branch independently measurable.
+    //
+    // ELEVEN, not nine, since 2026-08-21: `Collection<$T>` and
+    // `ObservableCollection<$T>` joined the type list, one fixture each. Both
+    // were probed against the shipped rule first and neither fired — the same
+    // absence of subtype-awareness that made the original four an enumeration.
+    // `ObservableCollection<T>` is the likeliest real-world site of this whole
+    // defect and the corpus that produced the rule's zero contains none of it.
     ids: ['bugfix-cs-edge-case-modify-during-iteration'],
-    count: 9,
+    count: 11,
   },
   'RealBugs.cs': {
     // THE REAL-BUGS CORPUS — 12 defects over all ELEVEN rules, so every rule

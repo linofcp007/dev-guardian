@@ -179,6 +179,21 @@ rules:
   # `ThrowOutsideCatch`, onde a exceção é guardada no catch e relançada FORA
   # dele; sem a unificação de `$V` dispararia no `throw;` correto que está na
   # linha seguinte ao bug, dentro do mesmo statement, em `FirstOfTwo`.
+  #
+  # ZERO EM 11 800 FICHEIROS DE `dotnet/runtime`, E ESTA CERTO — verificado em
+  # 2026-08-21 com um ORACULO INDEPENDENTE em vez de uma suposição, porque um
+  # zero tem duas leituras opostas. A regra espelha o `CA2200` do compilador e
+  # o `dotnet/runtime` constrói limpo, por isso o zero era o esperado; o que
+  # nao se pode fazer é aceitar isso sem medir. Duas medições:
+  #
+  #   1. a regra continua a disparar 10 vezes nas suas próprias fixtures
+  #      (9 em `hits/Rethrow.cs` + 1 em `hits/RealBugs.cs`);
+  #   2. um varrimento textual do corpus, com contagem de chavetas e sem
+  #      Semgrep nenhum, encontra 201 `throw <identificador>;` e ZERO em que o
+  #      identificador seja o da variavel do `catch` que o envolve. O mesmo
+  #      varrimento sobre as fixtures encontra os 10 — controlo positivo.
+  #
+  # A regra e o oraculo concordam. §4c do desenho tem os números.
   - id: bugfix-cs-error-handling-rethrow-loses-stacktrace
     patterns:
       - pattern: throw $V;
@@ -462,9 +477,35 @@ rules:
   # defeito que o pack de Java despachou e depois teve de fechar, reproduzido
   # aqui de propósito antes de a regra ser escrita.
   #
-  # `var` NO PADRAO, e nao `$T $I`: `for (var i = 0; ...)` é como o C# se
-  # escreve, e a forma com tipo explícito só casaria `for (int i = 0; ...)`.
-  # A restrição de tipo aplica-se ao RECETOR `$A`, que é outra coisa.
+  # `var` NO PADRAO, e nao `$T $I`. A restrição de tipo aplica-se ao RECETOR
+  # `$A`, que é outra coisa.
+  #
+  # E o `var` do PADRAO é um CURINGA do tipo declarado, medido em 2026-08-21
+  # contra a auditoria dos zeros: `for (var $I = 0; ...)` casa
+  # `for (int i = 0; ...)` tal e qual. Isto importa porque era a suspeita
+  # número um quando a regra do `.Count` deu ZERO em 11 800 ficheiros de
+  # `dotnet/runtime` — o C# real escreve `for (int i = 0; ...)`, quase nunca
+  # `for (var i = 0; ...)`, e se o padrao fosse literal a regra estaria cega
+  # com todos os indicadores verdes. Nao estava. A sondagem esta em
+  # docs/superpowers/specs/2026-08-20-bugfix-rules-csharp-design.md §4c.
+  #
+  # DUAS DIMENSOES QUE AS FIXTURES NAO TINHAM, medidas na mesma sondagem e
+  # fechadas aqui. Ambas as regras de off_by_one liam UMA grafia de cada:
+  #
+  #   incremento: `$I++` casa, `++$I` NAO casava. Sao nós diferentes e o
+  #               `pattern-either` é a única correção — um `$INC` livre
+  #               tambem apanharia `$I--` e `$I += 2`.
+  #   corpo:      `{ ... }` NAO casa um corpo sem chavetas
+  #               (`for (...) s += xs[i];`). O corpo em `...` casa os dois.
+  #
+  # Nenhuma das quatro grafias em falta era exótica, e nenhuma tinha fixture —
+  # uma fixture que nao tem a forma nunca a testa. Custo medido do
+  # alargamento: ZERO findings novos nos mesmos 11 800 ficheiros.
+  #
+  # CONTINUA DE FORA, dito em vez de implícito: `for (i = 0; ...)` com o `i`
+  # declarado antes do ciclo (é outro nó, precisava de um terceiro ramo) e um
+  # recetor em cadeia (`h.Items.Length`), que o `metavariable-type` nao
+  # resolve.
   #
   # FALSO POSITIVO CONHECIDO, HERDADO E MANTIDO DE PROPOSITO: um ciclo que
   # preenche `new int[a.Length + 1]` continua a disparar. O array de destino
@@ -475,7 +516,9 @@ rules:
   # lado. A medição é transportada, nao repetida.
   - id: bugfix-cs-off-by-one-loop-lte-length
     patterns:
-      - pattern: for (var $I = 0; $I <= $A.Length; $I++) { ... }
+      - pattern-either:
+          - pattern: for (var $I = 0; $I <= $A.Length; $I++) ...
+          - pattern: for (var $I = 0; $I <= $A.Length; ++$I) ...
       - metavariable-type:
           metavariable: $A
           types: ["$T[]", "string"]
@@ -501,6 +544,15 @@ rules:
   # vista de dois ângulos: aqui obriga a enumerar, lá obrigou a ligar o tipo a
   # uma metavariável.
   #
+  # OITO TIPOS: os seis do desenho original mais `Collection<$T>` e
+  # `ObservableCollection<$T>`, acrescentados em 2026-08-21. Sondados um a um,
+  # os dois nao disparavam — pela mesma falta de sensibilidade a subtipos que
+  # obriga a enumerar —, e ambos sao tipos da BCL com `Count` e indexador, nao
+  # objetos de domínio: acrescenta-los nao afrouxa nada, sao mais duas
+  # afirmações independentes, cada uma com a sua fixture.
+  # `ObservableCollection<T>` é o tipo de coleção de qualquer projeto WPF ou
+  # MAUI, que é precisamente o C# que nao esta em `dotnet/runtime`.
+  #
   # NAO COBERTO, e dito em vez de implícito: um recetor tipado por uma
   # interface ou classe que nao esteja nesta lista — `IReadOnlyCollection<T>`,
   # `Queue<T>`, `Stack<T>`, `SortedDictionary<K,V>`, ou um tipo próprio com um
@@ -508,7 +560,9 @@ rules:
   # o objeto de domínio com um `int Count`, que é pior.
   - id: bugfix-cs-off-by-one-loop-lte-count
     patterns:
-      - pattern: for (var $I = 0; $I <= $A.Count; $I++) { ... }
+      - pattern-either:
+          - pattern: for (var $I = 0; $I <= $A.Count; $I++) ...
+          - pattern: for (var $I = 0; $I <= $A.Count; ++$I) ...
       - metavariable-type:
           metavariable: $A
           types:
@@ -518,6 +572,8 @@ rules:
             - "IReadOnlyList<$T>"
             - "Dictionary<$K, $V>"
             - "HashSet<$T>"
+            - "Collection<$T>"
+            - "ObservableCollection<$T>"
     message: >-
       Off-by-one. `i <= xs.Count` corre uma posição para lá do fim, e o índice
       `xs.Count` está sempre fora dos limites — é uma
@@ -727,9 +783,28 @@ rules:
           metavariable: $COLL
           patterns:
             - pattern: $F
+            # SEIS TIPOS: os quatro do desenho original mais `Collection<$T>`
+            # e `ObservableCollection<$T>`, acrescentados em 2026-08-21 pela
+            # mesma medição que os acrescentou a `loop-lte-count`. Ambos
+            # invalidam o enumerador exatamente como a `List<T>`, e o
+            # `ObservableCollection<T>` é o caso mais provável do mundo real:
+            # remover de dentro de um `foreach` sobre a coleção ligada a um
+            # ecra e um erro classico de WPF/MAUI.
             - metavariable-type:
                 metavariable: $F
-                types: ["List<$T>", "IList<$T>", "ICollection<$T>", "HashSet<$T>"]
+                types:
+                  - "List<$T>"
+                  - "IList<$T>"
+                  - "ICollection<$T>"
+                  - "HashSet<$T>"
+                  - "Collection<$T>"
+                  - "ObservableCollection<$T>"
+      # O `var` do `foreach` tambem é um CURINGA do tipo do elemento, medido
+      # em 2026-08-21: este `pattern-inside` casa `foreach (string x in xs)`
+      # tal e qual. A regra nao esta cega as grafias com tipo explícito, e o
+      # ZERO que deu em 11 800 ficheiros de `dotnet/runtime` é o defeito a nao
+      # existir la — ha 3978 `foreach` no corpus, quatro deles removem da
+      # coleção que enumeram, e os quatro saem do ciclo logo a seguir. §4c.
       - pattern-inside: "foreach (var $X in $COLL) { ... }"
       - pattern-not-inside: |
           $COLL.$RM(...);

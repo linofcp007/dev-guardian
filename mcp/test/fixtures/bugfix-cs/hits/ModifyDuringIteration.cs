@@ -1,18 +1,19 @@
-// HITS for bugfix-cs-edge-case-modify-during-iteration: eight sites.
+// HITS for bugfix-cs-edge-case-modify-during-iteration: eleven sites.
 //
 // Removing from a collection while a `foreach` is enumerating it invalidates
 // the enumerator: the next `MoveNext()` throws InvalidOperationException,
 // "Collection was modified; enumeration operation may not execute."
 //
-// Sites 1-4 are one per ENUMERATED RECEIVER TYPE. metavariable-type is not
-// subtype-aware, so each type in the rule's list is an independent claim and a
-// type without a fixture could be deleted, or could never have worked, with no
-// number moving. Same reasoning as loop-lte-count.
+// Sites 1-4 and 10-11 are one per ENUMERATED RECEIVER TYPE. metavariable-type
+// is not subtype-aware, so each type in the rule's list is an independent claim
+// and a type without a fixture could be deleted, or could never have worked,
+// with no number moving. Same reasoning as loop-lte-count.
 //
 // SITE 8 IS THE ONE THAT MATTERS. It is the bug Java's fourth wave swallowed,
 // ported here rather than rediscovered.
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 
 namespace Guardian.Fixtures.Hits;
 
@@ -117,5 +118,27 @@ public sealed class ModifyDuringIteration
                     break;
             }
         }
+    }
+
+    // 10. `Collection<T>`, added 2026-08-21. Written from the SHAPE — a
+    //     foreach over a collection that removes from itself — and not from
+    //     the rule's type list: probed against the shipped rule, this exact
+    //     method did not fire, because metavariable-type is not subtype-aware
+    //     and `Collection<T>` was not enumerated. `Collection<T>` is the type
+    //     the framework design guidelines tell you to expose from a public
+    //     API, so it is not an exotic receiver.
+    public void OverCollection(Collection<int> xs)
+    {
+        foreach (var x in xs) { if (x > 1) { xs.Remove(x); } }
+    }
+
+    // 11. `ObservableCollection<T>`, the same measurement and the likeliest
+    //     real-world site of this defect: removing from the collection bound
+    //     to a WPF/MAUI view while a `foreach` walks it. That C# does not
+    //     exist in `dotnet/runtime`, which is why the corpus count for this
+    //     rule stayed at zero either way.
+    public void OverObservableCollection(ObservableCollection<int> xs)
+    {
+        foreach (var x in xs) { if (x > 1) { xs.Remove(x); } }
     }
 }
