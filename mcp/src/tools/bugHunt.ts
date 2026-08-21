@@ -29,14 +29,24 @@
  * classes for its language (thirteen rules for JS/TS, design of record:
  * docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md; ten for
  * Python, docs/superpowers/specs/2026-08-18-bugfix-rules-python-design.md;
- * ten for Go, docs/superpowers/specs/2026-08-18-bugfix-rules-go-design.md —
+ * nine for Go, docs/superpowers/specs/2026-08-18-bugfix-rules-go-design.md —
  * Go is where the registry pack leaves the biggest hole among the languages
  * it partially covers (5 Go rules, only 2 land in a bug class), and the
  * design doc's §8 records a fourth exclusion clause that shipped dead and
- * was removed; eight for Java,
+ * was removed, as was the tenth rule, `edge-case-append-discarded`, whose
+ * true-positive set is empty in any project that compiles; eight for Java,
  * docs/superpowers/specs/2026-08-19-bugfix-rules-java-design.md — Java is
- * the emptiest of the four: p/r2c-bug-scan ships 4 Java rules and NONE of
- * them land in a bug class, all four being equality/comparison style)
+ * emptier still: p/r2c-bug-scan ships 4 Java rules and NONE of
+ * them land in a bug class, all four being equality/comparison style;
+ * eleven for C#,
+ * docs/superpowers/specs/2026-08-20-bugfix-rules-csharp-design.md, the
+ * language where the registry is at zero — p/r2c-bug-scan ships no C# rules
+ * at all; six for PHP,
+ * docs/superpowers/specs/2026-08-20-bugfix-rules-php-design.md; and exactly
+ * ONE for Rust,
+ * docs/superpowers/specs/2026-08-20-bugfix-rules-rust-and-ruby-decision.md —
+ * one rule is the whole answer there, not partial coverage, and Ruby ships
+ * nothing at all, both by measurement)
  * — resolved to absolute paths via `resolveBugfixRules`
  * (`../platform/configsDir.js`). Unlike `include_language_packs` below, this
  * is ON BY DEFAULT: a local file cannot 404, so it is also what keeps
@@ -485,7 +495,7 @@ registerToolModule(
       'dataflow, so this finds the shapes bugs take, not bugs proven by analysis — a null ' +
       'dereference two functions from its guard is invisible to them. The heuristic-tier ' +
       'rules (WARNING/INFO) produce false positives by construction, which is what ' +
-      '`severity_min` exists to filter. The JS/TS pack was audited in 1.8.1 against ~600 ' +
+      '`severity_min` exists to filter. The JS/TS pack was audited in 1.9.0 against ~600 ' +
       'lines written by someone who had not written the rules: ~40 false positives across 14 ' +
       'rules, including `unchecked-find` firing at ERROR on every Mongoose query and every ' +
       'jQuery `.find()` (nine reproductions, zero true positives) and `floating-mutation` ' +

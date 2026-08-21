@@ -74,7 +74,7 @@ paths" fica de fora como padrão: é uma categoria de consequência, não uma
 forma sintática — `floating-mutation` cobre a sua forma concreta mais comum
 e mais nada a cobre.
 
-#### A auditoria de 1.8.1, e os tiers que dela resultaram
+#### A auditoria de 1.9.0, e os tiers que dela resultaram
 
 O pack saiu na 1.6.0 e nunca tinha sido lido por ninguém além de quem o
 escreveu. Uma auditoria independente escreveu ~600 linhas de JS/TS contra o
@@ -644,7 +644,7 @@ da intenção; à data nenhum dos dois tinha medido essa premissa contra código
 externo, porque não tinham corpus. O PHP é a terceira linguagem a testá-la e a
 primeira com dados. Os dois foram medidos entretanto — OpenJDK e
 `dotnet/runtime` — e a premissa caiu nos dois: a regra está hoje em `WARNING`
-em Java e em C#, o que deixa o Java a 0 de 8 em `ERROR` e o C# a 1 de 12.
+em Java e em C#, o que deixa o Java a 0 de 8 em `ERROR` e o C# a 1 de 11.
 
 **Três armadilhas de PHP que valem por si:**
 

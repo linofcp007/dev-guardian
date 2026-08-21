@@ -8,643 +8,404 @@ version bump.
 
 ## [Unreleased]
 
-### Fixed — the three C# rules that found NOTHING on 11 800 files: two were right, two were missing ordinary spellings
-
-Same corpus that deleted `as-cast-deref` below, read from the other end.
-`rethrow-loses-stacktrace`, `off-by-one-loop-lte-count` and
-`edge-case-modify-during-iteration` scored **0** on `dotnet/runtime` (11 800
-files, `paths.scanned` asserted first), next to `lock-on-shared-instance` 322
-— reproducing the earlier round exactly. **A zero has two readings
-and they are opposite** — the bug is absent, or the rule is silently broken —
-and this series has nine recorded ways for Semgrep to report success while
-matching nothing. Each was probed with a file carrying the exact bug in every
-idiomatic spelling. Still **eleven** rules; the pack gained no rules and lost
-none.
-
-- **`rethrow-loses-stacktrace` — correct, and confirmed independently.** It
-  mirrors the compiler's `CA2200` and `dotnet/runtime` builds clean, which is
-  exactly the kind of benign explanation that gets assumed instead of checked.
-  The rule still fires 10 times on its own fixtures, and a brace-depth textual
-  oracle with no Semgrep in it finds **201 `throw <ident>;` statements in the
-  corpus and 0 that rethrow the caught variable** — while finding all 10
-  fixture sites, as its positive control. Two methods, same answer.
-- **`off-by-one-loop-lte-count` and `-lte-length` — correct, but each read one
-  spelling of two dimensions.** The prime suspect was `var`: real C# writes
-  `for (int i = 0; …)`, and the pack's own header warns that `$T $V` does not
-  match `var`. **The reverse does not hold** — `var` in a pattern is a wildcard
-  for the declared type, so `for (var $I = 0; …)` matches `for (int i = 0; …)`
-  exactly. Two other dimensions did bite, and **neither had a fixture, so
-  neither could ever have moved a number**: `i++` matched and **`++i` did not**
-  (a different node), and `{ … }` did not match a **braceless** body. Both are
-  ordinary C#; `dotnet/runtime` writes `++i` in a `<=` header itself. Closed
-  with a two-branch `pattern-either` on the increment and an ellipsis body,
-  on both rules.
-- **`edge-case-modify-during-iteration` — correct.** Its `foreach (var $X in
-  $COLL)` anchor is a wildcard too: it matches `foreach (string x in xs)`. The
-  probe fired on all fourteen spellings carrying an enumerated receiver, and
-  stayed correctly silent on the `Dictionary` case.
-- **Receiver types added, on the same measurement**: `Collection<T>` and
-  `ObservableCollection<T>`, to `loop-lte-count` (six types → eight) and
-  `modify-during-iteration` (four → six). `metavariable-type` is not
-  subtype-aware, so each type is an independent claim — probed one at a time,
-  firing on neither. `ObservableCollection<T>` is the likeliest real-world site
-  of the iteration bug and is exactly the C# a corpus of `dotnet/runtime`
-  contains none of. Six new hit fixtures and three new near-misses, one per
-  newly covered spelling, each written from the shape of the bug rather than
-  from the clause.
-
-**The widening cost zero findings on the same 11 800 files** — shipped pack
-against widened pack, compared per rule, every delta 0 — and the three zeros
-stay zero, which is now a measurement rather than a silence. The
-independent checks say why: the corpus holds **seven** `for` headers comparing
-`<=` against a `.Count` — three 1-based and correct, three SIMD stride loops
-where the `.Count` is a *vector width* on the left of the comparison, and one
-0-based loop that is correct anyway because it needs `Count + 1` tries to
-generate a free name and never uses `i` as an index; and **3978 `foreach`
-loops, 4 of which remove from the collection they enumerate, all four leaving
-the loop immediately**.
-
-**And a caveat this corpus needed and did not have**: these counts are noisy.
-`empty-catch` came back 407 in one run and 402 in the next — the *same pack*
-over the *same corpus* — because semgrep-core's per-rule timeout is not
-deterministic, and it gives up on a handful of very large files
-(`WMIGenerator.cs`, `XmlTextReaderImpl.cs`, `Sve.cs`, `CharUnicodeInfoData.cs`,
-`XmlCharType.cs`). Thirteen timeouts versus eighteen accounts for all five
-findings, exactly. `paths.scanned` reads 11 800 either way, so it is necessary
-and **not sufficient**: the timeouts live in `errors`. A count from this pack is
-comparable only to a count from the same run, which is why everything above is
-an A/B compared per rule rather than a before-and-after of a total.
-
-**The same noise reaches ablation axis 3, and that is the more serious half.**
-The pack was ablated with `GUARDIAN_CS_SRC` pointed at the corpus — the first
-time axis 3 has run for it. Axes 0, 1 and 2 are clean and stable in every run:
-**11/11 rules fire, 0 DEAD, 0 SUPPRESSING**, and both new `pattern-either`
-branches came back `live`, which is the harness confirming the new fixtures
-reach them. Axis 3 did not hold up: two runs of the *same pack* over the *same
-corpus* disagreed on **6 of the 12 clauses they both measured**, and all **14
-findings** the harness attributed to clauses of `modify-during-iteration` were
-`empty-catch` findings in `WMIGenerator.cs` and `XmlILOptimizerVisitor.cs` —
-two of the timing-out files, and a different rule entirely, which is
-structurally impossible as an attribution. Axis 3 compares whole-corpus totals
-across separately executed scans, and the jitter (±5) is bigger than the deltas
-it reports (2-3). Documented, not changed: the fix is to scope the comparison
-to the ablated rule's own findings, and the axis-3 verdicts other packs already
-carry were computed the present way.
-
-Recorded in the design of record's new §4c, with one thing it found unasked:
-`loop-lte-length` was *not* one of the zeros — it scores 2, and **both are
-false positives** of a shape §8 did not list, the sentinel iteration that runs
-one past the end on purpose and guards the extra pass inside the body. 0 of 2
-is not 0 of 75, and the only available tightening is the one Java measured and
-rejected, so the rule stands and the limitation is now written down.
-
-### Removed — `bugfix-cs-null-safety-as-cast-deref`, deleted by the first real-code corpus the C# pack ever had
-
-`configs/semgrep/bugfix-cs.yml` is **eleven** rules, not twelve. The rule
-matched `var $V = $O as $T;` followed by `$V.$M` and fired **6490 times** on
-`dotnet/runtime` (`src/libraries/*/src`, 11 800 `.cs` files, `paths.scanned`
-asserted before any count was read). For scale, on the same corpus
-`empty-catch` fires 402 times and `lock-on-shared-instance` 322.
-
-**The count is not the argument.** Two measurements are:
-
-- **The rule's premise is not expressible in this engine.** Semgrep's C#
-  frontend puts `o as T` and `(T)o` on the **same node**. `pattern: var $V =
-  $O as $T;` and `pattern: var $V = ($T)$O;` match exactly the same sites,
-  line for line; and a `patterns:` group combining the first with
-  `pattern-not:` the second returns **zero**, because the negation annihilates
-  every match. There is no spelling that catches the `as` and lets the direct
-  cast through. That distinction *was* the rule — a direct cast throws
-  `InvalidCastException` at the cast site and never yields null, so on top of
-  one the rule accuses a defect that cannot occur. By textual attribution over
-  the corpus, **4385 of the 6490 findings (67.6 %) come from a direct cast**
-  and only 1122 (17.3 %) from an `as`.
-- **The remaining 17.3 % were not true positives either.** 75 findings read by
-  hand across dozens of assemblies, zero live bugs. Real C# guards are not the
-  eleven in the exclusion list: `null != x`, `while (x != null)`,
-  `x is null || …`, `Debug.Assert(x != null)`, `ContractUtils.Requires(…)`, a
-  reassignment in the null branch, a `[DoesNotReturn]` helper, any `&&`/`||`
-  chain of three or more terms (it associates left, so `$V != null && <… $V.$M
-  …>` never matches), and — the largest — **any `if (x != null) { … }` whose
-  block holds more than one statement**, because `if ($V != null) { <… $V.$M
-  …>; }` requires a single-statement block and every `misses/` fixture had one.
-  A deliberately generous filter ("the name is not in any null test anywhere
-  nearby") leaves **70 of 6490 findings, 1.1 %**, and reading those leaves five
-  variables with the genuine shape, all latent, none a live bug.
-
-**Axes 0, 1 and 2 all passed, throughout, on fixtures written by the rule's own
-author** — nine hits and fifteen near-misses, the largest `misses/` file in the
-pack, written from the shape of the pattern exactly as the design prescribed.
-None of that could see either defect. `WARNING` is not a tier for a rule that
-has never been right; it is a quieter way to keep being wrong. Same reasoning
-that deleted `catch-returns-null` from the JS/TS pack.
-
-Gone with it: `hits/AsCast.cs`, `misses/AsCast.cs`, and the as-cast entry in
-`hits/RealBugs.cs` (now 12 defects over 11 rules). A deletion note in the pack
-records the two probes, so nobody re-adds it without a way to tell `as` from a
-cast.
-
-### Added — ablation axis 3 for the C# pack, via `GUARDIAN_CS_SRC`
-
-The C# round shipped with axis 3 — "does removing this clause *lower* the
-finding count on code nobody wrote as a fixture?" — recorded as **permanently
-`N/A`**, because this repo holds no C#. The rule above shipped under that gap
-and did not survive first contact with a corpus.
-
-`mcp/test/ablate/packs.ts` now reads a C# corpus path from `GUARDIAN_CS_SRC`,
-on the same terms as `GUARDIAN_RUST_SRC`: unset, axis 3 prints `N/A` for the
-pack, loudly; **set to a path that does not exist, it throws** rather than
-degrading to a silent "not measured". The design of record's §8 and §9 no
-longer say the axis is unavailable for the round.
-
-### Added — a PHP bug-finding rule pack, and the first round measured against real code from the start
-
-`configs/semgrep/bugfix-php.yml`: **six** hand-authored rules, always on in
-`bug_hunt`, each with a hits/misses fixture pair. Rule counts are now 13 JS/TS,
-10 Python, 9 Go, 8 Java, 11 C#, **6 PHP** and 1 Rust.
-
-**`memory_leak` is an EMPTY class in this pack, and that is stated rather than
-implied.** Resource tracking — `fopen`/`curl` handles — needs escape analysis
-Semgrep OSS does not have, and both ends of the dial were measured: with the
-escape exclusions the rule finds **0 of 3** hits, because a leaked handle is
-always *used* by something and `$F(..., $H, ...)` swallows every true positive;
-without them it fires on **4 of 4** correct shapes. The six that ship are
-off-by-one, TOCTOU, empty catch, `strpos()` truthiness, `json_decode()`
-dereference and loose null comparison.
-
-**This is the first round in the series measured against an external corpus
-from the start** — WordPress 6.9, 1467 files scanned — and that axis changed
-four verdicts. Six candidates were killed by measurement rather than by
-argument: an error-suppression (`@`) rule at **420** findings, `preg_match`
-groups at 132, loose `in_array` at 117, `foreach`-by-reference at 46 (every
-sampled one latent rather than live — a style rule, not a bug rule), an
-`fopen` leak rule that is inexpressible, and one whose bug **does not exist in
-PHP**: `foreach` iterates a copy, confirmed in the interpreter.
-
-**A fifth governing rule, and it is new: run the WHOLE PACK against the
-prescribed-fix file, not each rule against its own.** The `@`-suppression
-candidate passed every per-rule check and was killed only here. `toctou-file`'s
-own message prescribes "act first and inspect the return value", whose
-idiomatic PHP is `@mkdir(...)` / `@unlink(...)` — so in the file where every
-bug is rewritten with the fix its own message asked for, that candidate fired
-three times, all three on another rule's prescribed fix. One rule firing on
-another rule's prescribed fix is not a tuning problem, and no per-rule check
-can see it. `mcp/test/fixtures/bugfix-php/fixed/fixed.php` is scanned with the
-whole pack and asserted to produce zero findings.
-
-**ZERO of the six sit at `ERROR`, and the reason indicts two packs already
-shipped.** For scale, as those packs stood when this one was written: Java 1 of
-8, JS/TS 1 of 13, Python + Go 2 of 19, C# 2 of 12. C# reached `ERROR` twice
-because one defect (`throw ex;`) has a correct
-form that is a *different AST node*, so there is no guard to recognise. No PHP
-candidate has that property. The closest was `empty-catch` — which **Java and
-C# both shipped at `ERROR`** — and real code refuted it: all **ten** WordPress
-findings are deliberate empty catches carrying an explanatory comment
-(`//Do nothing` in PHPMailer, `// Do nothing if we cannot memzero` in
-sodium_compat, a full paragraph in php-ai-client), and Semgrep cannot read
-comments. Neither Java nor C# had measured that premise against external code,
-because a real corpus was unavailable for both. **Recorded here rather than
-acted on in this entry**: the re-tiering is a separate change with its own
-corpora and fixture counts, and it landed — see the `empty-catch` entry below,
-which drops the rule to `WARNING` in both, leaving Java at **0 of 8** and C# at
-**1 of 12**.
-
-**PHP is strictly easier than C# or Java in one place, and it is the round's
-free win.** Both of those packs needed an enumerated `metavariable-type` list
-to keep the off-by-one rule off domain objects carrying a `.Count`/`.length`
-member. In PHP that false positive cannot arise: `count()` is a **global
-function** and `$obj->count()` is a method call, a different node. Verified
-against a class carrying both a `->length` property and a `->count()` method
-inside `<=` loops — silent on both. No type list is present and none should be
-added. What the verification *did* turn up is that `$F($A)` also matches a
-**static** call (`Ruler::count($xs)`), so the anchored function-name regex is
-load-bearing for a second reason, and the near-miss fixture carries that shape.
-
-**Traps, measured, and all of them stated in the pack:**
-
-- **A fully-qualified type name in a PHP pattern matches nothing, silently.**
-  `catch (\RuntimeException $E)` found **zero** occurrences of source reading
-  exactly that. Every gate stays green, `paths.scanned` is healthy, `errors` is
-  empty, and the answer is nothing — the PHP twin of C#'s `var` trap. Bind the
-  type to a metavariable.
-- **The `metavariable-regex` on the catch variable is not redundant: it
-  suppresses a CRASH.** Without it, `catch ($E $V)` breaks the Semgrep matcher
-  on any file containing a PHP 8 non-capturing `catch (T) { }` — `Internal
-  matching error ... NoTokenLocation` — and matches elsewhere in the file
-  survive, so it reads as partial success. One correction to the design of
-  record: the process exits **0**, not 2, which makes the failure quieter still.
-- **`?->` and `->` are the same AST node.** A `pattern-not: $V?->$M` does not
-  exclude the safe idiom, it deletes the rule. The only escape is a
-  `pattern-not-regex` — a *text* guard on an AST rule, a deliberate exception
-  to `base.yml`'s own advice, annotated as such.
-- **The PHP 8 non-capturing catch is unmatchable** by any AST pattern. That
-  matters beyond recall: it is how modern PHP declares deliberate silence, so
-  the gap is also a self-exemption.
-- **The try shape is a dimension.** `try{}catch(){}` and
-  `try{}catch(){}finally{}` are disjoint nodes; the no-finally pattern alone
-  scores 5 of the 6 fixture sites. Enumerated before the rule was written, not
-  after — this hole shipped in Java and cost a separate fix round.
-- **Prefer `for (...) ...` to `for (...) { ... }`.** The statement ellipsis
-  matches the braced body, the brace-less body *and* the `for(): ... endfor;`
-  alternative syntax. Free recall, and both alternative bodies carry fixtures.
-- **Two more YAML routes to `paths.scanned = 0`**, plus an environmental one:
-  an unquoted ternary (` : ` parses as a mapping), a `\R` inside a
-  double-quoted scalar, and a **long Windows path**, which reports
-  `Failed to obtain target files from semgrep-core` and points nowhere near the
-  cause.
-
-**Registry baseline, every control asserted to have fired.** `p/r2c-bug-scan`
-reports `paths.scanned = 0` on the PHP fixtures — it ships **no PHP rules at
-all** — so its control is a **Python** file inside a PHP fixture tree, the only
-way to tell "additive" from "never ran". `p/php` is live and PHP-aware: 0
-findings on the fixtures, **9** on twelve classic vulnerable shapes.
-`p/security-audit` finds nothing on the vulnerable control either — **no
-positive control exists for it**, now measured in two languages (C# and PHP),
-so the only claim made about it is `paths.scanned > 0`, and that is labelled as
-the weaker claim it is.
-
-**Ablation:** 50 clauses across all 6 rules, **50/50 live, 0 DEAD**, axis 0
-6/6 rules fire on `hits/`. Three clauses are flagged on axis 2 and all three
-are explained in the pack rather than left for a reader to rediscover: the
-`empty-catch` naming exemption (whose removal reveals the `$ignored` catch that
-`real_bugs.php` marks `// excluded:` on purpose — the clause working, which is
-what that near-miss is there to show), the strpos function-name filter (whose
-removal reveals that rule's own false positives on *other* rules' fixtures),
-and the `pattern-inside: $V = json_decode(...)`, which is a positive term
-rather than an exclusion. Axis 3 is registered `N/A` in
-`mcp/test/ablate/packs.ts` with the reason — this repo holds no PHP outside the
-fixture tree — and was run by hand against the WordPress corpus with
-`--real-code`.
-
-### Added — one Rust rule, and one rule is the whole answer
-
-`configs/semgrep/bugfix-rs.yml`: **exactly one** hand-authored rule, always on
-in `bug_hunt`, with a hits/misses fixture pair. Rule counts are now 13 JS/TS,
-10 Python, 9 Go, 8 Java, 11 C# and **1 Rust**.
-
-**This is not partial Rust coverage and must not be read as one.** The rule is
-`bugfix-rs-race-condition-blocking-sleep-in-async` — a `std::thread::sleep`
-inside an `async fn`, which blocks the executor *thread* and stalls every other
-task scheduled on it. That is what dev-guardian finds in Rust. Everything else
-is somebody else's job, and the file header says so at length so that the next
-reader does not mistake a one-rule pack for abandoned work.
-
-**Twelve of thirteen candidates were measured and killed**, which is why. Four
-of the six bug classes are **compile errors** in Rust — `E0502` for
-modify-during-iteration, `E0515` for use-after-free, `E0373`/`E0503` for a data
-race on shared state, `E0599` for a null dereference. Not rare: impossible in
-code that compiles. For the rest the answer is `cargo clippy`, whose type-aware
-lints beat every Semgrep equivalent measured — default already catches
-`await_holding_lock`, `-W clippy::pedantic` adds `float_cmp` and
-`future_not_send`, and the `restriction` group adds `unwrap_used`,
-`mem_forget`, `indexing_slicing`. The docs now say that to Rust users
-explicitly rather than implying a gap dev-guardian intends to fill.
-
-**Two candidates that passed their own fixtures were killed by real code**, and
-this is the strongest evidence the rule-pack series has produced for the
-real-code ablation axis: `mem-forget` scored **43 findings and zero true
-positives** on ~1200 files of the actual Rust standard library, and
-`unwrap-in-drop` flags `if !thread::panicking() { r.unwrap(); }` — the
-canonical mitigation its own message prescribes. Both would have shipped under
-a C#-style round, where that axis was permanently `N/A` for want of a corpus.
-The ablation harness now accepts a Rust corpus for that axis, via
-`GUARDIAN_RUST_SRC`.
-
-**`WARNING`, not `ERROR`, and the call went against the probe's reading.** The
-argument for `ERROR` was that the nearest legitimate shape — a deliberately
-blocking helper — is not written as an `async fn`. True but incomplete: handing
-the blocking work to another thread *is* written inside an `async fn`, and
-`thread::spawn`, `tokio::task::spawn_blocking` (the fix the rule's own message
-prescribes), `async_std::task::spawn_blocking`, `rt.spawn_blocking` and
-`thread::Builder::new().spawn` all fired before the exclusion existed. The rule
-excludes them by call *name* rather than by path — anchoring on the path let
-the `async_std` spelling and the method call straight through — **and** by
-closure rather than by name alone, because a name-only exclusion swallowed
-`tokio::spawn(async move { … })`, which keeps the work on the executor and is a
-genuine bug. Both halves have a fixture that fails without them: the two shapes
-are symmetric, one bug per half. But a name list never closes, so correctness
-still depends on a wrapper the matcher cannot enumerate. That is the `WARNING`
-condition of the severity criterion word for word. The rule's one declared
-false negative points the same way: a bare `async` block in a *sync* `fn` —
-`tokio::spawn(async move { … })` in `main` — is not matched, because the anchor
-is `async fn`.
-
-**A measured Semgrep trap, running in two opposite directions in one pattern.**
-`async fn $F(...) -> $R { ... }` is the NARROW form: `-> $R` requires a written
-return type, so it found **2 of 4** bugs with `paths.scanned` healthy and zero
-errors — C#'s `var` trap in a second language. For *paths* it inverts: the
-engine resolves `use` declarations, so the fully-qualified
-`std::thread::sleep(...)` matches all three spellings (`std::thread::sleep`,
-`thread::sleep`, and a bare `sleep`) while the short `thread::sleep(...)`
-matches only one. Both directions are pinned by the fixture's finding count.
-A third member of the same family was found by the ablation harness rather than
-by reading: the `move` on a closure is **ignored, symmetrically** —
-`$F(|| { … })` matches `f(move || { … })` *and* vice versa — so enumerating
-both spellings produces a mutually redundant pair in which each half reads
-`DEAD` alone and removing both is a regression. The harness's pair pass named
-it; the rule now writes one spelling and the near-miss fixture keeps both.
-
-**Nothing ships for Ruby, also by measurement.** Semgrep's Ruby frontend erases
-`&.` and the `..`/`...` distinction — `x&.a.b` and `x.a.b` produce
-byte-identical ASTs — so every nil-safety and off-by-one rule matches the
-correct code and the buggy code identically, in the language whose signature
-runtime error is `NoMethodError` on nil. Five further candidates passed their
-fixtures at 0 false positives and were killed by 1244 files of real Ruby.
-RuboCop and the registry's `p/ruby` are the honest answer, and the docs say so.
-The full measurement is in
-`docs/superpowers/specs/2026-08-20-bugfix-rules-rust-and-ruby-decision.md`.
-
-### Changed — `error-handling-empty-catch` drops to WARNING in Java and C#, measured
-
-`bugfix-java.yml` and `bugfix-cs.yml` shipped this rule at `ERROR` on one
-premise: **an empty catch that does not declare intent is a bug whatever the
-author meant**, because the rule *reads* the intent — the Checkstyle / IntelliJ
-`ignore` / `ignored` / `expected` binding name — so what it emits afterwards is
-unmarked. Neither pack had ever tested that premise, because the ablation
-harness reports its real-code axis as `N/A` for both: this repository contains
-no Java and no C#. Three other languages had tested it and all three refuted it
-(JS/TS 42 of 42 deliberate, PHP 10 of 10, Ruby's convention at 2.7 %), and the
-PHP design recorded the gap as open rather than closing it.
-
-Both are now measured against external corpora, and **both premises fail**.
-
-**Java — OpenJDK (`openjdk/jdk` @ `e296cefb`, `src/*/share/classes`, 12 593
-files scanned): 1589 findings in 770 files.** 903 of them — **56.8 %** — carry
-an explanatory comment *inside* the empty catch, which is why they fire at all:
-a comment-only block is empty to the AST. In the corpus's own words: `// ignore`,
-`// Expected or ignored`, `// swallow, since it should never happen`, `// no op`,
-`// Ignoring exception causes specified default to be returned`. Another 27
-declare intent in a name the rule does not carry — `cannotHappen` ×13, **`_`
-×10** (Java 21's *unnamed variable*, which means precisely "unused binding", the
-same erosion ES2019 caused in JS/TS arriving from the other direction), `unused`
-×2. An inverted-regex probe puts the recognised spelling at **139**, so the
-convention the whole tier rested on covers **8.0 %** (139 of 1728) of the
-corpus's empty catches. 45 findings were read one by one; about 39 were
-deliberate — the Swing `PropertyVetoException` idiom, `close()` in a `finally`,
-parse and reflection probes, try-the-next-provider loops. **Java's pack is now
-0 of 8 at ERROR.**
-
-**C# — `dotnet/runtime` (@ `6ecee4dd`, `src/libraries/*/src/**`, 11 800 files
-scanned): 402 findings in 233 files**, and here the refutation is structural
-rather than statistical. **374 of them — 93 % — are written `catch (Type) { }`
-or `catch { }`: spellings with no identifier for a naming convention to attach
-to.** Only 28 bind a name and not one uses the exempt vocabulary (`ex` ×15, `e`
-×5). The inverted-regex probe finds `ignore` / `ignored` / `expected` **zero
-times in 11 800 files**.
-
-**The compiler is the oracle again, and this time it refutes a design
-decision.** `dotnet build` on `mcr.microsoft.com/dotnet/sdk:8.0` emits **CS0168,
-"The variable 'ignored' is declared but never used"** for
-`catch (FormatException ignored) { }` — the exact spelling this rule's own
-message prescribes — while `catch (FormatException) { }` and `catch { }` compile
-clean. The escape hatch is the one spelling C# warns you off, which explains the
-zero without appealing to taste. `CA2200` and `CA2002` confirmed this pack's
-fixtures; `CS0168` contradicts its severity, and that is worth exactly as much.
-**C#'s pack is now 1 of 12 at ERROR** — `rethrow-loses-stacktrace`, whose
-correct form really is a different AST node.
-
-**What this changes downstream.** The Semgrep parser maps `ERROR → high` and
-`WARNING → medium`, and `create_fix_pr` defaults `severity_min` to `high`. The
-**Java pack now contributes nothing at all to a default fix-PR run** and C#
-contributes one rule; ask for `severity_min: "medium"`. `bug_hunt` does not
-filter by default, so **nothing disappears from a scan** — only the fix PR is
-affected. Patterns and recall are untouched: only the tier moved, and
-`EXPECTED_SEVERITY` in both integration tests pins every rule exhaustively in
-both directions, so the flips failed the tests before the YAML was edited.
-
-The naming exemption stays in both rules. It is still the only way to silence
-one case in code rather than with `// nosemgrep`; it simply is not evidence that
-the rule is precise, and it no longer carries a tier. It was **not** widened to
-`_`, `cannotHappen` or `unused` — every word added is another way for a real
-swallow to escape by being well named.
-
-### Added — a C# bug-finding rule pack, in the language where the registry is at zero
-
-`configs/semgrep/bugfix-cs.yml`: **eleven** hand-authored rules across all six
-bug subcategories, always on in `bug_hunt`, each with a hits/misses fixture
-pair. Rule counts are now 13 JS/TS, 10 Python, 9 Go, 8 Java and **11 C#**.
-It was twelve when this entry was written; `null-safety-as-cast-deref` was
-deleted before release — see the `Removed` entry above.
-
-**The registry gap is total, and it was measured with positive controls rather
-than assumed.** `p/r2c-bug-scan` reports `paths.scanned = 0` on the C#
-fixtures — it ships **no C# rules at all** — and `p/csharp` and
-`p/security-audit` scan every file and find nothing. Because a pack that never
-ran is indistinguishable from a clean result, the proof carries controls that
-are asserted to have *fired*, and for `p/r2c-bug-scan` that control is a
-**Python** file inside a C# fixture tree: there is no C# rule for a C# control
-to trip.
-
-**One of the eleven sits at `ERROR`**, and the reason is structural rather than
-generous. C# contains one defect — `throw ex;` inside a `catch` — whose
-*correct* form, `throw;`, is a **different AST node**. There is no guard to
-recognise because there is nothing to guard, which is the only way to clear the
-severity criterion in an engine without dataflow. (`empty-catch` shipped at
-`ERROR` beside it in the first cut of this pack and was demoted in the same
-release once it was measured — see the entry above.)
-
-**A compiler as an independent oracle, which no round in this series has had
-before.** `dotnet build` emits `CA2200` for `throw ex;` inside a catch, and it
-fires at exactly the nine sites the rule fires on and zero in the near-miss
-fixture — so the hit/miss split was not graded by the rule's own author.
-`CA2002` does the same for the `lock` rule. Recorded just as deliberately:
-`CA5394` is **not** an oracle for the `Random` rule, because it fires on all
-four correct sites too — it is about cryptographic predictability, not a data
-race. Confirming that an oracle is not an oracle is worth as much as
-confirming that one is.
-
-**The oracle immediately earned its place.** It found that a trailing
-`finally` made both `error_handling` rules silent: a `try/catch/finally` is a
-different AST node, and the two shapes are disjoint, so neither pattern
-subsumes the other. `CA2200` fired on a `throw ex;` whose catch had a
-finalizer and Semgrep did not. The same hole was found and fixed in
-`bugfix-java.yml` in this release.
-
-**Java's wave-4 unsoundness was ported already corrected, not rediscovered.**
-Adding the loop-exit exclusions to `modify-during-iteration` closes five false
-positives *and* deletes a real bug — a `Remove` inside a `switch` arm followed
-by `break`, where the `break` leaves the switch rather than the loop. Measured
-here: exclusions alone give 7 findings and lose it; with the
-switch-inside-foreach re-inclusion, 9 and the false positives stay closed. The
-same discipline caught the `as-cast-deref` else-arm swallow *before* it
-shipped, by writing the guard-adjacent bugs as **hits** rather than misses —
-the only place ablation can see an exclusion eating a true positive. (That
-rule is gone now, for a defect none of those axes could see; the technique
-stands.)
-
-**Stated limitations, all measured:**
-
-- `memory_leak` is carried by a single rule. The `IDisposable` one is **not
-  expressible**: Semgrep's C# frontend erases the `using` modifier from a
-  using-declaration, making the Microsoft-recommended idiom byte-identical to
-  a leak. A rule that flags `using var` is worse than no rule.
-- `blocking-on-task` misses `var t = GetAsync(); t.Result` (`metavariable-type`
-  does not resolve through `var` plus a *call* initialiser, though it does
-  through `var` plus a `new`), `Task.Run(...).Result`, and a dotted receiver
-  such as `_source.Pending.Wait()`.
-- `ordefault-deref` cannot see generic arguments, so a value-type sequence is
-  an unfixable false positive in one direction or a false negative in the
-  other; both spellings are stated rather than implied.
-- `off_by_one` keeps Java's sentinel false positive (`new int[a.Length + 1]`),
-  whose obvious tightening was measured in the Java round and rejected for
-  trading a false positive for a false negative.
-- `.Count` covers six enumerated receiver types; anything outside that list is
-  not matched, because `metavariable-type` is **not subtype-aware** — a
-  receiver declared `List<int>` does not match `ICollection<$T>`.
-- `Dictionary` is deliberately excluded from `modify-during-iteration`:
-  removal during enumeration has been documented safe since .NET Core 3.0.
-- These rules match syntax, not dataflow, and they complement the registry
-  packs rather than replacing them — though here that is close to vacuous,
-  since the registry has no C# bug rules at all. They do not replace the
-  model-driven `/guardian-fix` path.
-
-Every clause is ablated on both available axes — live, and does not suppress a
-true positive — with one row per clause. Axis 3, which measures a clause's
-width against code nobody wrote as a fixture, is `N/A` for the whole C# round
-because this repo holds no C# outside the fixture tree; the real-bugs corpus
-and the guard-adjacent hits are the compensation, and the gap is stated rather
-than left silent. All twelve rules pass the prescribed-fix check: the fix each
-message advises, applied to the code the rule fired on, silences it.
-
-
-### Action required — the SAST rules this plugin installs were never actually run
-
-**Until this release, `scan_sast` did not load the rules `init_project` writes
-into your project.** It ran `semgrep --config=auto`, and `--config=auto` does
-not pick up a project's `.semgrep.yml`. Measured on semgrep 1.164.0, against a
-project containing the shipped pack and one line of
-`<?php echo $_GET['name'];`:
-
-| Command                   | Findings | Files scanned |
-| ------------------------- | -------- | ------------- |
-| `--config=<the pack>`     | 1        | 2             |
-| `--config=auto`           | 0        | 2             |
-
-So the thirteen security rules `init_project` installs as `.semgrep.yml` had no
-consumer anywhere in the product. **The shipped pre-commit hook had the same
-gap** — it also passed only `--config=auto` — so a project that installed our
-hooks was not running our rules either.
-
-This is why the `wp-unescaped-output` note below matters twice: that rule was
-dead for two entirely independent reasons, and fixing the pattern in b51a2dc
-could not have helped, because nothing loaded the file it lives in.
-
-Both are fixed. `scan_sast` now passes the project's own config — from
-`.dev-guardian/configs.json` where there is one, falling back to `.semgrep.yml`
-/ `.semgrep.yaml` — and `configs/pre-commit/pre-commit-config.yaml` now passes
-`--config=.semgrep.yml` alongside `--config=auto`. **If you already installed
-our pre-commit hook, re-run `init_project` with `refresh=true` to pick up the
-corrected hook config**, or add the flag by hand.
-
-A guard comes with it, because loading a file the user owns is a new risk: a
-`--config` Semgrep cannot load aborts the *whole* run (`paths.scanned: []`,
-exit 7), not just that pack. Every candidate is parsed and shape-checked
-first, and one that would abort the scan is dropped **and named in
-`tools_run`** rather than passed through. A rule that merely fails to compile
-is a different case — exit 2, everything still scanned — and now counts as a
-real scan that lost one rule instead of flipping the whole result to `failed`.
-
-### Privacy — the default SAST mode sends telemetry to Semgrep Inc
-
-`SECURITY.md` said "Local-only, no telemetry" without qualification. That was
-wrong, and it is corrected there.
-
-`--config=auto` fetches its ruleset from the Semgrep registry and reports usage
-metrics to Semgrep Inc. **as a condition of doing so**: passing `--metrics=off`
-alongside it fails outright with `Cannot create auto config when metrics are
-off`. Every default `scan_sast` run has therefore sent telemetry, and could not
-have done otherwise. dev-guardian neither adds to that data nor sees it; what
-Semgrep collects is documented at <https://semgrep.dev/docs/metrics>.
-
-New in this release: **`scan_sast(local_only: true)`** drops the registry,
-passes `--metrics=off`, and runs only rules already on disk — your project's
-`.semgrep.yml` plus anything added with `register_custom_rules`. Nothing leaves
-the machine, at the cost of the registry's rules. When the project has no local
-rules it reports the scan as **skipped** rather than as a clean result, because
-zero findings from zero rules is not a clean bill of health. That mode only
-became coherent rather than empty once the project's own config started being
-loaded, which is why the two arrived together.
-
-### Action required — projects initialised before b51a2dc are running a dead XSS rule
-
-**If you ran `init_project` before b51a2dc, your `.semgrep.yml` contains a
-WordPress cross-site-scripting rule, `wp-unescaped-output`, that has never
-matched anything.** Its pattern was `echo $_GET[$X]`, which is not valid PHP, so
-Semgrep could not compile it; with `--quiet` the failure went to a JSON `errors`
-array instead of stderr and nothing surfaced it. Every scan since has been
-reporting zero WordPress XSS findings from a rule that could not have produced
-one — a clean result that meant nothing. The rule was fixed in b51a2dc, and
-because `init_project` never touched a config it had already copied, **the fix
-has not reached any existing project.**
-
-To get it, run `init_project` with `refresh` — as a dry run first:
-
-```text
-init_project(project_path=".", refresh=true, apply=false)   # show me what would change
-init_project(project_path=".", refresh=true, apply=true)    # do it
-```
-
-Your own edits are safe. `apply=true` overwrites only a file you have never
-touched; anything you customised is left exactly as it is and the new baseline
-is written beside it as `.semgrep.yml.new` for you to merge. If you would rather
-not run the tool at all, copying `configs/semgrep/base.yml` over your
-`.semgrep.yml` by hand gets you the same rules.
-
-This applies to all four baseline configs `init_project` installs
-(`.gitleaks.toml`, `renovate.json`, `.semgrep.yml`, `.pre-commit-config.yaml`),
-not just the Semgrep one — the same gap existed for every one of them.
+## [1.9.0] - 2026-08-21
+
+The release where the rule packs were measured against code nobody here wrote.
+Three new languages ship (C# 11 rules, PHP 6, Rust 1), **three rules are deleted**
+for having no measurable true-positive rate, roughly **130 false positives** are
+closed across the four packs that already existed, and the `ERROR` tier drops
+from **20 rules of 34 to 4 of 58**. What you may have to act on is directly
+below; everything after it can be read at leisure.
+
+### Action required
+
+- **If you ran `init_project` before this release, your configs are stale and
+  your pre-commit hook does not load them.** Two independent defects, one
+  remedy:
+
+  1. **`scan_sast` never ran the rules `init_project` installs.** It passed
+     `semgrep --config=auto`, and `--config=auto` does not pick up a project's
+     `.semgrep.yml`. Measured on semgrep 1.164.0 against a project holding the
+     shipped pack and one line of `<?php echo $_GET['name'];` —
+     `--config=<the pack>`: **1 finding, 2 files scanned**; `--config=auto`:
+     **0 findings, 2 files scanned**. So the thirteen security rules
+     `init_project` writes as `.semgrep.yml` had no consumer anywhere in the
+     product, and the shipped pre-commit hook had the same gap: it also passed
+     only `--config=auto`.
+  2. **The `.semgrep.yml` you were given contains a dead XSS rule.**
+     `wp-unescaped-output`'s pattern was `echo $_GET[$X]`, which is not valid
+     PHP, so Semgrep could not compile it; with `--quiet` the failure went to a
+     JSON `errors` array instead of stderr and nothing surfaced it. Every scan
+     since has reported zero WordPress XSS findings from a rule that could not
+     have produced one. It was fixed in b51a2dc, and because `init_project`
+     never touched a config it had already copied, **that fix has not reached
+     any existing project**.
+
+  Both are fixed in the product; the copy in *your* project needs a refresh:
+
+  ```text
+  init_project(project_path=".", refresh=true, apply=false)   # show me what would change
+  init_project(project_path=".", refresh=true, apply=true)    # do it
+  ```
+
+  **Your own edits are safe.** `apply=true` overwrites only a file you have
+  provably never touched; anything you customised — or anything of unknown
+  provenance, which is treated as modified on purpose — is left exactly as it
+  is, with the new baseline written beside it as
+  `<name>.dev-guardian-1.9.0.new` for you to merge. This applies to all four
+  configs `init_project` installs (`.gitleaks.toml`, `renovate.json`,
+  `.semgrep.yml`, `.pre-commit-config.yaml`), not just the Semgrep one. If you
+  would rather not run the tool at all, copying `configs/semgrep/base.yml` over
+  your `.semgrep.yml` by hand gets you the same rules, and adding
+  `--config=.semgrep.yml` to your hook config by hand gets you the other half.
+
+- **A default `create_fix_pr` run now returns far less, and for Java it returns
+  nothing at all.** That is deliberate, measured, and reversible with one
+  argument: `severity_min: "medium"`. See *Changed* immediately below.
+  `bug_hunt` applies no severity filter by default, so **nothing disappears
+  from a scan** — only the fix PR is affected. Java is not a regression against
+  any released version: the Java pack ships for the first time here, and ships
+  at `WARNING`.
+
+- **The default `scan_sast` mode has always sent telemetry to Semgrep Inc.**,
+  and `SECURITY.md` said otherwise. See *Privacy*.
+
+### Changed
+
+- **The `ERROR` tier was re-derived from what a rule EMITS, and it emptied
+  out.** The criterion was always written correctly in the pack headers — *is
+  what the rule emits always a bug?* — and then applied to the bug **class**
+  instead. Applied cold, a rule whose correctness depends on having recognised
+  a **guard** cannot clear it: it emits a false positive the first time it meets
+  a guard shape nobody enumerated, and no exclusion list ever closes that,
+  because the guard can be one method away where a syntactic matcher cannot
+  follow. The length of the exclusion list is evidence *for* the demotion.
+
+  | pack | rules | `ERROR` at 1.8.0 | `ERROR` now |
+  | --- | --- | --- | --- |
+  | `bugfix-js` | 13 | 8 of 14 | 1 — `off-by-one-index-at-length` |
+  | `bugfix-py` | 10 | 5 of 10 | 1 — `null-safety-none-deref-match` |
+  | `bugfix-go` | 9 | 7 of 10 | 1 — `error-handling-empty-err-block` |
+  | `bugfix-java` | 8 | *unreleased* | 0 |
+  | `bugfix-cs` | 11 | *new* | 1 — `error-handling-rethrow-loses-stacktrace` |
+  | `bugfix-php` | 6 | *new* | 0 |
+  | `bugfix-rs` | 1 | *new* | 0 |
+  | **total** | **58** | **20 of 34** | **4** |
+
+  The four survivors are the four with no guard to recognise: a read at
+  `a[a.length]` is unconditionally `undefined`; an accessor glued straight onto
+  `re.match`; a literally empty error branch; and `throw ex;` in a `catch`,
+  whose *correct* form `throw;` is a **different AST node**.
+
+  **Downstream, and this is the whole reason it is in Action required.** The
+  Semgrep parser maps `ERROR → high`, `WARNING → medium`, `INFO → info`, and
+  `create_fix_pr` defaults `severity_min` to `high`. So the Java pack now
+  contributes **nothing** to a default fix-PR run, and every other pack
+  contributes at most one rule. Ask for `severity_min: "medium"` to get the
+  rest. `create_fix_pr`'s own default was deliberately **not** changed: it
+  affects all seven packs and is a separate decision. Every tier in every pack
+  is now pinned exhaustively in both directions by `EXPECTED_SEVERITY` in the
+  per-pack integration tests — before this release **no test read
+  `extra.severity` at all**, so any tier could have been changed with a green
+  suite, and each of these flips was made RED first.
+
+- **`error-handling-empty-catch` drops to `WARNING` in Java and C#, and the
+  premise it rested on was refuted in both.** Both packs carried it at `ERROR`
+  on the claim that the rule can *read* its ecosystem's declaration of intent —
+  the Checkstyle / IntelliJ `ignore` / `ignored` / `expected` binding name — so
+  what it emits afterwards is an **unmarked** silent swallow. Neither pack had
+  ever tested that claim, because this repository contains no Java and no C#.
+  Three other languages had tested it and all three refuted it (JS/TS 42 of 42
+  deliberate, PHP 10 of 10, Ruby's convention at 2.7 %). Now measured against
+  external corpora:
+
+  - **OpenJDK** (`openjdk/jdk` @ `e296cefb`, `src/*/share/classes`, 12 593 files
+    scanned): **1589 findings in 770 files**, of which **903 — 56.8 %** carry an
+    explanatory comment *inside* the empty catch, which is precisely why they
+    fire at all: a comment-only block is empty to the AST. Another 27 declare
+    intent in a name the rule does not carry — `cannotHappen` ×13, **`_` ×10**
+    (Java 21's *unnamed variable*, meaning exactly "unused binding"), `unused`
+    ×2. An inverted-regex probe puts the recognised spelling at **139**, so the
+    convention the whole tier rested on covers **8.0 %** (139 of 1728) of the
+    corpus's empty catches. 45 findings read one by one: about 39 deliberate.
+  - **`dotnet/runtime`** (@ `6ecee4dd`, `src/libraries/*/src/**`, 11 800 files
+    scanned): **402 findings in 233 files**, and here the refutation is
+    structural rather than statistical. **374 — 93 % — are written
+    `catch (Type) { }` or `catch { }`**: spellings with no identifier for a
+    naming convention to attach to. Only 28 bind a name and not one uses the
+    exempt vocabulary (`ex` ×15, `e` ×5). The inverted-regex probe finds
+    `ignore` / `ignored` / `expected` **zero times in 11 800 files**.
+  - **The compiler is the oracle, and it contradicts the rule's own advice.**
+    `dotnet build` on `mcr.microsoft.com/dotnet/sdk:8.0` emits **CS0168, "The
+    variable 'ignored' is declared but never used"** for
+    `catch (FormatException ignored) { }` — the exact spelling this rule's
+    message prescribes — while `catch (FormatException) { }` and `catch { }`
+    compile clean. The escape hatch is the one spelling C# warns you off, which
+    explains the zero without appealing to taste.
+
+  The naming exemption stays in both rules: it is still the only way to silence
+  one case in code rather than with `// nosemgrep`. It simply is not evidence
+  that the rule is precise, and it no longer carries a tier. It was **not**
+  widened to `_`, `cannotHappen` or `unused` — every word added is another way
+  for a real swallow to escape by being well named. Patterns and recall are
+  untouched; only the tier moved.
+
+- **`scan_sast` now loads the project's own rules**, from
+  `.dev-guardian/configs.json` where there is one, falling back to
+  `.semgrep.yml` / `.semgrep.yaml` — and `configs/pre-commit/pre-commit-config.yaml`
+  now passes `--config=.semgrep.yml` alongside `--config=auto`. A guard comes
+  with it, because loading a file the user owns is a new risk: a `--config`
+  Semgrep cannot load aborts the **whole** run (`paths.scanned: []`, exit 7),
+  not just that pack, so every candidate is parsed and shape-checked first and
+  one that would abort the scan is dropped **and named in `tools_run`** rather
+  than passed through. A rule that merely fails to compile is a different case
+  — exit 2, everything still scanned — and now counts as a real scan that lost
+  one rule instead of flipping the whole result to `failed`.
+
+- **Every scan tool now emits at most one config-drift line into `warnings`.**
+  It is never a finding, never an error, and cannot move a scan's status or the
+  CI exit code. **Silence is the default**: a user who edited their own config —
+  the common case, and the intended one — is told nothing, because a warning
+  that fires on almost every project is a warning nobody reads. Only two states
+  speak, worded differently because their remedies differ: *we shipped a newer
+  baseline and your copy is unchanged* (a fix may be missing, here is how to get
+  it), and *both sides moved* (the refresh will need a merge). A project with no
+  provenance manifest gets no warning at all rather than a wrong one.
+
+- **`map_attack_surface` stops fabricating routes, which changes what
+  `scan_dast` will send requests to.** `guardian-route-express` matched any
+  two-token method call whose first argument was a `/`-leading string, so
+  `cache.get('/etc/passwd')`, `cache.delete(...)`, `storage.get(...)`, an
+  axios-style `api.get(..., {timeout: 1})` and `http.post('/webhook/out', body)`
+  were all reported as routes at `confidence: high`, `path_partial: false`. That
+  inverts the bias `extract.ts` states — emitting a path we did not read is
+  worse than emitting nothing. Three guards, each ablated on both axes: reject a
+  one-argument call (no framework registers a route without a handler, and
+  Express's own one-argument form is the settings getter), reject a two-argument
+  call whose second argument is an object literal (a handler never is), and a
+  short `$APP` denylist of Node core modules, HTTP clients and Web Storage
+  globals for `http.post`, which is syntactically identical to a real route.
+  Decoy routes went **10 to 4**, and the four that remain are undecidable rather
+  than untried, and pinned as such.
 
 ### Removed
 
-- **`bugfix-go-edge-case-append-discarded` is deleted.** The Go pack goes from
-  ten rules to **nine**. The rule matched `append(xs, 1)` in *statement*
-  position, which the Go spec's *Expression statements* section forbids and the
-  compiler rejects outright:
+Three rules are deleted. None was deleted for firing too much; each was deleted
+because nobody could produce a true positive for it.
 
-  ```text
-  ./main.go:4:2: append(xs, 1) (value of type []int) is not used
-  ```
+- **`bugfix-cs-null-safety-as-cast-deref`** — the C# pack is **eleven** rules,
+  not twelve. It matched `var $V = $O as $T;` followed by `$V.$M` and fired
+  **6490 times** on `dotnet/runtime` (`src/libraries/*/src`, 11 800 `.cs` files,
+  `paths.scanned` asserted before any count was read). For scale, on the same
+  corpus `empty-catch` fires 402 times and `lock-on-shared-instance` 322. **The
+  count is not the argument; two measurements are.**
+  - **The rule's premise is not expressible in this engine.** Semgrep's C#
+    frontend puts `o as T` and `(T)o` on the **same node**. `pattern: var $V =
+    $O as $T;` and `pattern: var $V = ($T)$O;` match exactly the same sites,
+    line for line, and a `patterns:` group combining the first with
+    `pattern-not:` the second returns **zero**, because the negation annihilates
+    every match. There is no spelling that catches the `as` and lets the direct
+    cast through — and that distinction *was* the rule, since a direct cast
+    throws `InvalidCastException` at the cast site and never yields null. By
+    textual attribution over the corpus, **4385 of the 6490 findings (67.6 %)
+    come from a direct cast** and only 1122 (17.3 %) from an `as`.
+  - **The remaining 17.3 % were not true positives either.** 75 findings read by
+    hand across dozens of assemblies: **zero live bugs**. Real C# guards are not
+    the eleven in the exclusion list: `null != x`, `while (x != null)`,
+    `x is null || …`, `Debug.Assert(x != null)`, a reassignment in the null
+    branch, a `[DoesNotReturn]` helper, any `&&`/`||` chain of three or more
+    terms (it associates left, so `$V != null && <… $V.$M …>` never matches),
+    and — the largest — **any `if (x != null) { … }` whose block holds more than
+    one statement**, because the exclusion requires a single-statement block and
+    every `misses/` fixture had one. A deliberately generous filter ("the name is
+    not in any null test anywhere nearby") leaves **70 of 6490 findings, 1.1 %**,
+    and reading those leaves five variables with the genuine shape, all latent,
+    none a live bug.
 
-  Its true-positive set was therefore **empty in any project that compiles**,
-  and everything it emitted in a real repository was a false positive — three
-  were measured: `for _, v := range append(xs, 0)`, `ch <- append(xs, 1)` and
-  `return &box{items: append(xs, 1)}` (the `$T{<... append ...>}` exclusion does
-  not reach inside a `&T{...}`, and `&Foo{Items: append(...)}` is far more
-  common than the bare form the fixture tested). Its own hit fixture,
-  `mcp/test/fixtures/bugfix-go/hits/append_discarded.go`, did not compile, and
-  had not for two releases.
+  Ablation axes 0, 1 and 2 all passed throughout, on nine hits and fifteen
+  near-misses written by the rule's own author — the largest `misses/` file in
+  the pack. None of that could see either defect. Gone with it: `hits/AsCast.cs`,
+  `misses/AsCast.cs`, and the as-cast entry in `hits/RealBugs.cs` (now 12 defects
+  over 11 rules). A deletion note in the pack records both probes, so nobody
+  re-adds it without a way to tell `as` from a cast.
 
-  It was deleted rather than redesigned. The bug that *does* compile —
-  `func addItem(xs []int) { xs = append(xs, 1) }`, where the caller's slice is
-  unchanged — is only a bug when the reassigned slice never escapes the
-  function, which is a dataflow property: every escape route (return, channel
-  send, struct-field store, closure capture, pointer write, passing it on)
-  would need its own exclusion clause, and this repo's Java round is the
-  recorded evidence that an exclusion list of that shape eats real bugs before
-  it stops emitting false ones. `staticcheck` and `ineffassign` already cover
-  it with actual dataflow.
+- **`bugfix-go-edge-case-append-discarded`** — the Go pack goes from ten rules
+  to **nine**. It matched `append(xs, 1)` in *statement* position, which the Go
+  spec's *Expression statements* section forbids and the compiler rejects
+  outright (`append(xs, 1) (value of type []int) is not used`). Its
+  true-positive set was therefore **empty in any project that compiles**, and
+  everything it emitted in a real repository was a false positive — three
+  measured: `for _, v := range append(xs, 0)`, `ch <- append(xs, 1)` and
+  `return &box{items: append(xs, 1)}`. Its own hit fixture did not compile, and
+  had not for two releases. Deleted rather than redesigned: the bug that *does*
+  compile is only a bug when the reassigned slice never escapes the function,
+  which is a dataflow property, and `staticcheck` / `ineffassign` already cover
+  it with actual dataflow. **Every Go fixture in the pack is now compiled** with
+  `go build ./...` (and `gofmt -l`) in `golang:1.22-alpine` as part of the change
+  process; that check is what caught this.
 
-  **Every Go fixture in the pack is now compiled** with
-  `docker run --rm -v "<dir>:/w" -w //w golang:1.22-alpine go build ./...` (and
-  `gofmt -l`) as part of the change process. That check is what caught this,
-  and it should have existed from the start.
-
-- **`bugfix-js-error-handling-catch-returns-null` is gone.** It matched
-  `try { ... } catch { return null|undefined|[]; }`. Two independent corpora
-  now say the same thing: five instances of textbook-correct code and zero true
-  positives on the auditor's probes, and **25 findings on this repo's own
-  `mcp/src`, every one of them correct code** — the safe-`JSON.parse` helper, a
-  `readdirSync` with a `[]` fallback, `runtimeMeta.getJson` with a `[]`
+- **`bugfix-js-error-handling-catch-returns-null`** — the JS/TS pack is now
+  **thirteen** rules. It matched `try { … } catch { return null|undefined|[]; }`.
+  Two independent corpora say the same thing: five instances of textbook-correct
+  code and zero true positives on the auditor's probes, and **25 findings on this
+  repo's own `mcp/src`, every one of them correct code** — the safe-`JSON.parse`
+  helper, a `readdirSync` with a `[]` fallback, `runtimeMeta.getJson` with a `[]`
   fallback. Returning an empty value from a catch is a documented JavaScript
   idiom, not a defect shape, and there is no syntactic difference between the
   idiom and a genuine swallow — every candidate narrowing was measured and
-  silences the rule's own hit fixture too. It had been demoted to INFO earlier
-  in this same Unreleased block; that was the wrong call. INFO is not a tier for
-  a rule that has never been right, it is a quieter way to keep being wrong, and
-  it still costs everyone who reads the output. The rule and its three fixtures
-  are deleted. The JS/TS pack is now **thirteen** rules.
+  silences the rule's own hit fixture too. It had been demoted to `INFO` earlier
+  in this same cycle; that was the wrong call. **`INFO` is not a tier for a rule
+  that has never been right, it is a quieter way to keep being wrong**, and it
+  still costs everyone who reads the output.
 
 ### Added
+
+- **A C# bug pack — `configs/semgrep/bugfix-cs.yml`, eleven rules** across all
+  six `bug_hunt` subcategories, always on, each with a hits/misses fixture pair.
+  **The registry gap here is total, and it was measured with positive controls
+  rather than assumed**: `p/r2c-bug-scan` reports `paths.scanned = 0` on the C#
+  fixtures — it ships **no C# rules at all** — and `p/csharp` and
+  `p/security-audit` scan every file and find nothing. Because a pack that never
+  ran is indistinguishable from a clean result, that control is a **Python** file
+  inside a C# fixture tree: there is no C# rule for a C# control to trip.
+  - **A compiler as an independent oracle, which no round in this series had
+    before.** `dotnet build` emits `CA2200` for `throw ex;` inside a catch, at
+    exactly the nine sites the rule fires on and zero in the near-miss fixture,
+    so the hit/miss split was not graded by the rule's own author; `CA2002` does
+    the same for the `lock` rule. Recorded just as deliberately: **`CA5394` is
+    not an oracle** for the `Random` rule, because it fires on all four correct
+    sites too — it is about cryptographic predictability, not a data race.
+    Confirming that an oracle is not an oracle is worth as much as confirming
+    that one is.
+  - **The oracle immediately earned its place**, finding that a trailing
+    `finally` made both `error_handling` rules silent: a `try/catch/finally` is
+    a different AST node and the two shapes are disjoint, so neither pattern
+    subsumes the other. `CA2200` fired on a `throw ex;` whose catch had a
+    finalizer and Semgrep did not. The same hole was found and fixed in
+    `bugfix-java.yml` in this release.
+  - Stated limitations, all measured: `memory_leak` is carried by a single rule
+    (the `IDisposable` one is **not expressible** — Semgrep's C# frontend erases
+    the `using` modifier from a using-declaration, making the
+    Microsoft-recommended idiom byte-identical to a leak, and a rule that flags
+    `using var` is worse than no rule); `blocking-on-task` misses
+    `var t = GetAsync(); t.Result`, `Task.Run(...).Result` and a dotted receiver;
+    `ordefault-deref` cannot see generic arguments; `off_by_one` keeps Java's
+    sentinel false positive; `.Count` covers eight enumerated receiver types and
+    nothing outside them, because `metavariable-type` is **not subtype-aware**;
+    and `Dictionary` is deliberately excluded from `modify-during-iteration`,
+    removal during enumeration having been documented safe since .NET Core 3.0.
+
+- **A PHP bug pack — `configs/semgrep/bugfix-php.yml`, six rules**, always on,
+  each with a hits/misses fixture pair: off-by-one, TOCTOU, empty catch,
+  `strpos()` truthiness, `json_decode()` dereference and loose null comparison.
+  **This is the first round in the series measured against an external corpus
+  from the start** — WordPress 6.9, 1467 files scanned — and that axis changed
+  four verdicts. Six candidates were killed by measurement rather than by
+  argument: an error-suppression (`@`) rule at **420** findings, `preg_match`
+  groups at 132, loose `in_array` at 117, `foreach`-by-reference at 46 (every
+  sampled one latent rather than live — a style rule, not a bug rule), an
+  `fopen` leak rule that is inexpressible, and one whose bug **does not exist in
+  PHP**: `foreach` iterates a copy, confirmed in the interpreter.
+  - **`memory_leak` is an EMPTY class in this pack, and that is stated rather
+    than implied.** Both ends of the dial were measured: with the escape
+    exclusions the rule finds **0 of 3** hits, because a leaked handle is always
+    *used* by something and `$F(..., $H, ...)` swallows every true positive;
+    without them it fires on **4 of 4** correct shapes.
+  - **A fifth governing rule for the series, and it is new: run the WHOLE PACK
+    against the prescribed-fix file, not each rule against its own.** The
+    `@`-suppression candidate passed every per-rule check and was killed only
+    here. `toctou-file`'s own message prescribes "act first and inspect the
+    return value", whose idiomatic PHP is `@mkdir(...)` / `@unlink(...)` — so in
+    the file where every bug is rewritten with the fix its own message asked for,
+    that candidate fired three times, all three on another rule's prescribed fix.
+    One rule firing on another rule's prescribed fix is not a tuning problem, and
+    no per-rule check can see it.
+  - **PHP is strictly easier than C# or Java in one place, and it is the round's
+    free win.** Both of those packs needed an enumerated `metavariable-type` list
+    to keep the off-by-one rule off domain objects carrying a `.Count`/`.length`
+    member. In PHP that false positive cannot arise: `count()` is a **global
+    function** and `$obj->count()` is a method call, a different node. Verified
+    against a class carrying both a `->length` property and a `->count()` method
+    inside `<=` loops — silent on both. No type list is present and none should
+    be added.
+  - Traps, measured, all stated in the pack: **a fully-qualified type name in a
+    PHP pattern matches nothing, silently** (`catch (\RuntimeException $E)` found
+    **zero** occurrences of source reading exactly that — the PHP twin of C#'s
+    `var` trap; bind the type to a metavariable); the `metavariable-regex` on the
+    catch variable **suppresses a CRASH** rather than being redundant (without
+    it, `catch ($E $V)` breaks the matcher on any file containing a PHP 8
+    non-capturing `catch (T) { }` — `Internal matching error … NoTokenLocation`
+    — while matches elsewhere in the file survive, and the process exits **0**);
+    **`?->` and `->` are the same AST node**, so a `pattern-not: $V?->$M` does not
+    exclude the safe idiom, it deletes the rule; **the PHP 8 non-capturing catch
+    is unmatchable** by any AST pattern, which is also a self-exemption, since it
+    is how modern PHP declares deliberate silence; **the try shape is a
+    dimension** (`try{}catch(){}` and `try{}catch(){}finally{}` are disjoint
+    nodes, and the no-finally pattern alone scores 5 of 6 fixture sites —
+    enumerated before the rule was written this time, not after); and prefer
+    `for (...) ...` to `for (...) { ... }`, since the statement ellipsis matches
+    the braced body, the brace-less body **and** the `for(): … endfor;`
+    alternative syntax.
+
+- **A Rust pack of exactly one rule — `configs/semgrep/bugfix-rs.yml` — and one
+  rule is the whole answer.** `bugfix-rs-race-condition-blocking-sleep-in-async`
+  matches a `std::thread::sleep` inside an `async fn`, which blocks the executor
+  *thread* and stalls every other task scheduled on it. **This is not partial
+  Rust coverage and must not be read as one**; the file header says so at length
+  so the next reader does not mistake it for abandoned work.
+  - **Twelve of thirteen candidates were measured and killed.** Four of the six
+    bug classes are **compile errors** in Rust — `E0502` for
+    modify-during-iteration, `E0515` for use-after-free, `E0373`/`E0503` for a
+    data race on shared state, `E0599` for a null dereference. Not rare:
+    impossible in code that compiles. For the rest the answer is `cargo clippy`,
+    whose type-aware lints beat every Semgrep equivalent measured — default
+    already catches `await_holding_lock`, `-W clippy::pedantic` adds `float_cmp`
+    and `future_not_send`, and the `restriction` group adds `unwrap_used`,
+    `mem_forget`, `indexing_slicing`. The docs now tell Rust users that
+    explicitly rather than implying a gap dev-guardian intends to fill.
+  - **Two candidates that passed their own fixtures were killed by real code**,
+    and this is the strongest evidence the series has produced for the real-code
+    ablation axis: `mem-forget` scored **43 findings and zero true positives** on
+    ~1200 files of the actual Rust standard library, and `unwrap-in-drop` flags
+    `if !thread::panicking() { r.unwrap(); }` — the canonical mitigation its own
+    message prescribes. Both would have shipped under a C#-style round, where
+    that axis was permanently `N/A` for want of a corpus.
+  - **A measured Semgrep trap running in two opposite directions in one
+    pattern.** `async fn $F(...) -> $R { ... }` is the NARROW form: `-> $R`
+    requires a written return type, so it found **2 of 4** bugs with
+    `paths.scanned` healthy and zero errors. For *paths* it inverts: the engine
+    resolves `use` declarations, so the fully-qualified `std::thread::sleep(...)`
+    matches all three spellings while the short `thread::sleep(...)` matches only
+    one.
+  - The rule is `WARNING`, against the probe's reading, because handing blocking
+    work to another thread *is* written inside an `async fn`:
+    `thread::spawn`, `tokio::task::spawn_blocking` (the fix the rule's own
+    message prescribes), `async_std::task::spawn_blocking`, `rt.spawn_blocking`
+    and `thread::Builder::new().spawn` all fired before the exclusion existed. It
+    excludes them by call *name* rather than by path, **and** by closure rather
+    than by name alone, because a name-only exclusion swallowed
+    `tokio::spawn(async move { … })`, which keeps the work on the executor and is
+    a genuine bug. A name list never closes, which is the `WARNING` condition
+    word for word.
+
+- **Nothing ships for Ruby, also by measurement.** Semgrep's Ruby frontend
+  erases `&.` and the `..`/`...` distinction — `x&.a.b` and `x.a.b` produce
+  byte-identical ASTs — so every nil-safety and off-by-one rule matches the
+  correct code and the buggy code identically, in the language whose signature
+  runtime error is `NoMethodError` on nil. Five further candidates passed their
+  fixtures at 0 false positives and were killed by 1244 files of real Ruby.
+  RuboCop and the registry's `p/ruby` are the honest answer, and the docs say so.
+  The full measurement is in
+  `docs/superpowers/specs/2026-08-20-bugfix-rules-rust-and-ruby-decision.md`.
+
+- **`scan_sast(local_only: true)`** drops the registry, passes `--metrics=off`,
+  and runs only rules already on disk — your project's `.semgrep.yml` plus
+  anything added with `register_custom_rules`. Nothing leaves the machine, at the
+  cost of the registry's rules. When the project has no local rules it reports
+  the scan as **skipped** rather than as a clean result, because zero findings
+  from zero rules is not a clean bill of health. That mode only became coherent
+  rather than empty once the project's own config started being loaded, which is
+  why the two arrived together.
 
 - **Configuration-drift detection for the configs `init_project` installs.**
   `init_project` copied four baseline configs into a project and then never
@@ -652,11 +413,8 @@ not just the Semgrep one — the same gap existed for every one of them.
   which is the right call, since the user owns and edits those files, but it
   meant a fix to a shipped config could never reach anyone who had already run
   init. Nothing recorded what had been copied, so nothing could notice. The
-  `wp-unescaped-output` incident above is what that costs.
-
-  Four parts:
-
-  - **A provenance stamp.** `init_project` now records each file it copies in
+  `wp-unescaped-output` incident above is what that costs. Four parts:
+  - **A provenance stamp.** `init_project` records each file it copies in
     `.dev-guardian/configs.json` — target, source, plugin version, and a content
     hash at copy time — and stamps a comment header into the file itself where
     the format allows one. The manifest is the mechanism and the header is an
@@ -665,182 +423,156 @@ not just the Semgrep one — the same gap existed for every one of them.
     `.guardian/`, which `gitignoreGuard` adds to `.gitignore` on every server
     start: a provenance record has to be committed alongside the configs it
     describes, or a teammate's clone and CI learn nothing.
+  - **`init_project(refresh=true)`**, opt-in, never a default — see *Action
+    required* for the semantics. **No flag overwrites a modified file.** The
+    delivered file is not called `<name>.new`, because that name is not ours: a
+    user can be keeping their own `.semgrep.yml.new`, and writing over it is the
+    same data loss the rule exists to prevent. Even the versioned path is
+    **refused** (`alongside_blocked`) rather than overwritten if it exists and is
+    not recorded as our own previous delivery, and re-running a refresh while a
+    delivery is still unmerged reports `pending_merge` and rewrites nothing.
+  - **Graceful degradation for projects with no manifest**, plus two adoption
+    paths that close the gap: plain `init_project` now records provenance for any
+    skipped file that is byte-identical to what we ship, and `refresh` adopts the
+    rest as it delivers to them.
+  - The hash is taken over a **canonical form** — CRLF/CR normalised to LF,
+    leading BOM dropped, trailing newlines trimmed, our own header stripped — not
+    over raw bytes. A byte hash gets the answer wrong on this project's own
+    platform pair: git's `core.autocrlf` rewrites line endings on checkout, so the
+    identical commit would read as "the user edited their copy" on Windows and
+    "they did not" on Linux, and a false *local edit* silences the one state that
+    matters.
 
-  - **A drift advisory on the scan path.** Every scan tool now checks the
-    manifest and emits at most **one** line into `warnings`. It is never a
-    finding, never an error, and cannot move a scan's status or the CI exit
-    code. Silence is the default: a user who edited their own config — the
-    common case, and the intended one — is told nothing, because a warning that
-    fires on almost every project is a warning nobody reads. Only two states
-    speak, and they are worded differently because their remedies differ: *we
-    shipped a newer baseline and your copy is unchanged* (a fix may be missing,
-    here is how to get it), and *both sides moved* (the refresh will need a
-    merge).
+- **An ablation harness for the rule packs — `npm run ablate -- <pack|all>`**,
+  in `mcp/test/ablate/`. Ablation — delete one clause, re-run the pack, see
+  whether the result moves — is how every one of the six do-nothing exclusion
+  clauses in this series was found; it had been written from scratch three times
+  in a scratchpad and thrown away three times. Four verdicts, each added after a
+  defect escaped the previous ones:
+  - **axis 0, fires on `hits/` at all** — a property of the *rule*, and the only
+    one that reaches a rule with no clauses. A rule that matches nothing is the
+    sixth silent-failure mode: in C#, `foreach ($T $X in $C)` found **0 of 5**
+    real bugs where `foreach (var $X in $C)` found all five, with
+    `paths.scanned` healthy, zero errors and every gate green.
+  - **axis 1, live** — removing the clause changes the result somewhere.
+  - **axis 2, keeps true positives** — removal must not *reveal* findings in
+    `hits/`, since `pattern-not-inside` excludes the whole node it matched and a
+    guard written for an `if` also swallowed the `else` arm, where the bug was.
+  - **axis 3, no rise in the real-code count** — scan a corpus nobody wrote as a
+    fixture and compare. This is the axis that caught `unchecked-match` going
+    0 → 13 false positives on our own TypeScript while axes 1 and 2 both passed,
+    and the axis that deleted `as-cast-deref` once C# finally had a corpus. It is
+    a property of the invocation, registered per pack, overridable with
+    `--real-code=<dir>` / `--no-real-code`, and reported as `N/A` — never a
+    silent skip — where none exists. Two packs read theirs from an environment
+    variable because the corpus cannot live in this tree, `GUARDIAN_RUST_SRC` and
+    `GUARDIAN_CS_SRC`: unset means `N/A`, **set-but-missing throws**.
 
-  - **`init_project(refresh=true)`.** Opt-in, never a default. With
-    `apply=false` it reports the per-file action and writes nothing. With
-    `apply=true` it updates a file you have provably never touched, and for
-    anything else — edited, diverged, or of unknown provenance — writes the new
-    baseline as `<name>.dev-guardian-<version>.new` beside your file and leaves
-    yours closed. **No flag overwrites a modified file.** "Unknown provenance"
-    is treated as modified on purpose: an old copy of ours and a config you
-    wrote by hand are indistinguishable from the bytes, and the costs of
-    guessing wrong are not symmetric.
+  **The report leads with a coverage line, because the fractions lied.**
+  `44/44 live, 0 DEAD` read as "the pack was checked" while covering 10 rules of
+  11. Axes 1–3 are properties of a *clause*, and two rule shapes have none — a
+  bare `pattern:`/`pattern-regex:` with no `patterns:` group and no
+  `pattern-either:`, and a `patterns:` group holding nothing but positive terms.
+  **30 of the 135 rules across the nine packs** are one of those, and they used
+  to appear nowhere in the report, not even under `skipped`. The capability was
+  never missing — there is genuinely nothing to ablate; the *reporting* was
+  dishonest, in exactly the way axis 3 refuses to be when it prints `N/A`. Every
+  rule is now listed under `RULE COVERAGE` with its clause count and its `hits/`
+  count, and each clauseless rule is named with the reason it has none.
 
-    The delivered file is not called `<name>.new`, because that name is not
-    ours — a user can be keeping their own `.semgrep.yml.new`, and writing over
-    it is the same data loss the rule above exists to prevent. It carries
-    `dev-guardian` and the plugin version, and even then a path that already
-    exists and is not recorded as our own previous delivery is **refused**
-    (`alongside_blocked`) rather than overwritten. Re-running a refresh while a
-    delivery is still unmerged reports `pending_merge` and rewrites nothing:
-    the user's half-finished merge lives in that file.
-
-  - **Graceful degradation for projects with no manifest.** They get no warning
-    at all rather than a wrong one — with nothing recorded, "an old copy of
-    ours" cannot be told apart from "a file you wrote that happens to share the
-    name". Two adoption paths close that: plain `init_project` now records
-    provenance for any skipped file that is byte-identical to what we ship, and
-    `refresh` adopts the rest as it delivers to them. That gap is precisely why
-    the note at the top of this release exists in plain words.
-
-  The hash is taken over a canonical form — CRLF/CR normalised to LF, leading
-  BOM dropped, trailing newlines at EOF trimmed, our own header stripped — not
-  over raw bytes. A byte hash gets the answer wrong on this project's own
-  platform pair: git's `core.autocrlf` rewrites line endings on checkout, so the
-  identical commit would read as "the user edited their copy" on Windows and
-  "they did not" on Linux, and a false *local edit* silences the one state that
-  matters. Trailing whitespace inside a line, indentation and comment text all
-  still count as changes; erring toward "this changed" costs only a silent
-  `local_edit`.
-
-- **Java bug rules** — `configs/semgrep/bugfix-java.yml`, eight hand-authored
-  Semgrep rules covering all six `bug_hunt` subcategories for Java: empty
-  catch, catch that only calls `printStackTrace()`, dereference of
-  `map.get()`, `Optional.get()` without `isPresent()`,
-  `for (int i = 0; i <= a.length; i++)`, a stream opened outside
-  try-with-resources, `SimpleDateFormat` in a static field, and removal from a
-  collection during a for-each over it. Java is the emptiest language in the
-  registry: of `p/r2c-bug-scan`'s 4 Java rules, **none** lands in a bug class.
+  Four invariants, each of which cost something to learn: **the pack is never
+  written to** (read once, hashed, variants go to a temp dir — byte-identical
+  after a crash or a Ctrl-C, with no restore path that can itself fail, and the
+  on-disk hash re-checked before every ablation); **clauses are named by body
+  text, never by line number** (all 86 `- pattern-not-inside:` first lines in
+  `bugfix-java.yml` are identical, so a line-numbered verdict is unattributable
+  once a comment edit shifts the file — which is exactly how a previous
+  hand-rolled run was lost); **`paths.scanned == 0` is an exception, not a
+  result**; and **a round-trip control runs first**, re-serialising and scanning
+  the unmodified pack before anything is ablated, so the run aborts rather than
+  measure the serialiser. Exit code is 1 when any clause is flagged or any rule
+  fires on nothing.
 
 - **Cross-pack invariants for every Semgrep rule file** —
   `mcp/test/integration/semgrepPacks.test.ts`. The locale-codec byte check and
   `semgrep --validate` now run over **every** pack in `configs/semgrep/`,
-  discovered by reading the directory rather than from a list, so the C#, PHP,
-  Ruby and Rust packs still to come are covered by existing on disk. Both checks
-  were moved out of the Java-specific test rather than duplicated; what stays
-  there is the one thing a cross-pack test cannot know — that the rule ids its
-  fixtures exercise equal the `- id:` entries in that YAML.
-
-  The banned set is **exactly** `U+00C1`, `U+00CD`, `U+00CF`, `U+00D0`,
-  `U+00DD`, the characters whose UTF-8 encoding contains a byte cp1252 leaves
-  undefined; in Portuguese only the first two occur. `Ã À Â É Ê Ó Ô Õ Ú Ç` and
-  every lowercase accented letter are fine, and the rule is recorded that way in
-  `CLAUDE.md` — the broad form, "no uppercase accented letters", is wrong for
-  ten of the twelve accented capitals Portuguese uses.
-
-  A **positive control** copies a real pack to a temp directory, injects one
-  A-acute, and asserts the byte scan names the character, that `--validate`
-  refuses it, and that a real scan then returns `results: 0`,
-  `paths.scanned: 0`, `errors: 0`. Asserting that every pack is clean proves
-  nothing if the check has quietly stopped working.
-
-- **Fixture coverage for `base.yml`** — `mcp/test/integration/baseRules.test.ts`
-  and a hits/misses pair per rule under `mcp/test/fixtures/base/`, asserting the
-  exact rule-id set, the raw non-deduplicated finding count and `paths.scanned`
-  per file. Every line in `misses/` was checked against a *deliberately broken*
-  variant of the rule it is a near-miss for — a case-insensitive AWS regex, a
-  `Math.random` with no call, a `$O.write($X)` with an unconstrained receiver,
-  an `$X.eval(...)` that also matches PyTorch's `model.eval()`, a
-  `wp-unescaped-output` with its `metavariable-regex` deleted — so that each one
-  is silent for a reason belonging to the rule rather than by coincidence. The
-  scan is run through `spawnSync`, not `execFileSync`, because `--quiet` leaves
-  stderr **empty** for a rule that failed to compile and puts the id in the
-  JSON `errors` array instead: the old form reported the dead PHP rule as a bare
-  "Command failed: semgrep --config …" four times without naming it once.
-
-### Changed
-
-- **Severity re-assigned across the Python and Go bug packs, by what each rule
-  EMITS rather than by bug class.** Both packs' headers defined the criterion
-  correctly — *is what the rule emits always a bug?* — and then assigned the
-  tier by the class the bug belongs to, which put five Python rules and seven Go
-  rules at `ERROR`. Applied cold, the criterion leaves **one per pack**:
-  `bugfix-py-null-safety-none-deref-match` (an accessor glued straight onto the
-  result of `re.match`, where there is no guard to recognise) and
-  `bugfix-go-error-handling-empty-err-block` (an error branch with a literally
-  empty body). The other seventeen are `WARNING`. The headers are fixed too.
-
-  This matters operationally: the Semgrep parser maps `ERROR` → `high` and
-  `WARNING` → `medium`, and `create_fix_pr` defaults `severity_min` to `high`,
-  so the two packs now contribute almost nothing to the *default* fix-PR set and
-  a caller who wants those bugs fixed has to ask for `severity_min: "medium"`.
-  `bug_hunt` itself still defaults to no filter, so nothing disappears from a
-  scan.
-
-  `EXPECTED_SEVERITY` now pins every tier exhaustively in both directions in
-  `bugfixRulesPy.test.ts` and `bugfixRulesGo.test.ts`. Before this, **no test
-  read `extra.severity` at all** — any tier could have been changed with a green
-  suite.
+  discovered by reading the directory rather than from a list, so packs still to
+  come are covered by existing on disk. The banned set is **exactly** `U+00C1`,
+  `U+00CD`, `U+00CF`, `U+00D0`, `U+00DD` — the characters whose UTF-8 encoding
+  contains a byte cp1252 leaves undefined, of which only the first two occur in
+  Portuguese; the broad form of the rule, "no uppercase accented letters", is
+  wrong for ten of the twelve accented capitals Portuguese uses. A **positive
+  control** copies a real pack to a temp directory, injects one A-acute, and
+  asserts the byte scan names the character, that `--validate` refuses it, and
+  that a real scan then returns `results: 0`, `paths.scanned: 0`, `errors: 0` —
+  asserting that every pack is clean proves nothing if the check has quietly
+  stopped working.
 
 - **A real-bugs corpus per pack, written by the auditor rather than by the
-  rules' author** — `mcp/test/fixtures/bugfix-{py,go}/hits/real_bugs.{py,go}`,
-  33 and 14 defects, at least one for **every** rule in each pack. Each sits
-  next to the guard shape its rule's exclusions match — a leaked HTTP response
-  in the same function as a correctly closed one, a discarded error beside a
-  `sync.Map.Load`, an unguarded assertion on a *different* variable inside a
-  type switch, an un-awaited coroutine beside an awaited one — so that widening
-  any exclusion by one step turns the file red. A minimal per-rule hit fixture
-  carries no guard shapes for an exclusion to catch on, which is how a wave of
-  false-positive work can delete recall and still go green; the Java pack
-  learned that with a fixture that went from 6 findings to 1 unnoticed.
+  rules' author** — `mcp/test/fixtures/bugfix-*/hits/real_bugs.*`, with at least
+  one defect for **every** rule in each pack, and counts asserted per file plus a
+  total. Each defect sits next to the guard shape its rule's exclusions match — a
+  leaked HTTP response in the same function as a correctly closed one, a
+  discarded error beside a `sync.Map.Load`, an unguarded assertion on a
+  *different* variable inside a type switch, an un-awaited coroutine beside an
+  awaited one — so that widening any exclusion by one step turns the file red. A
+  minimal per-rule hit fixture carries no guard shapes for an exclusion to catch
+  on, which is how a wave of false-positive work can delete recall and still go
+  green; the Java pack learned that with a fixture that went from 6 findings to 1
+  unnoticed.
 
-  Both test files also gained the Java pack's two structural invariants: the
-  **total** finding count (a finding landing in an unregistered file moves no
-  per-file number) and **every declared `- id:` must be exercised by a hit
-  fixture**, parsed out of the YAML rather than from a hand-maintained list.
+- **Fixture coverage for `base.yml`** — `mcp/test/integration/baseRules.test.ts`
+  and a hits/misses pair per rule, asserting the exact rule-id set, the raw
+  non-deduplicated finding count and `paths.scanned` per file. Every line in
+  `misses/` was checked against a *deliberately broken* variant of the rule it is
+  a near-miss for, so each one is silent for a reason belonging to the rule rather
+  than by coincidence. The scan runs through `spawnSync`, not `execFileSync`,
+  because `--quiet` leaves stderr **empty** for a rule that failed to compile and
+  puts the id in the JSON `errors` array instead: the old form reported the dead
+  PHP rule as a bare "Command failed: semgrep --config …" four times without
+  naming it once.
 
 ### Fixed
 
-- **A `finally` clause silenced two of the Java pack's rules outright — the
-  third pack in a row with the identical hole.** A Java `try` statement *with*
-  a finalizer is a different AST node, so `try { … } catch ($E $V) { … }` never
-  matched a `try/catch/finally`: attaching `finally { cleanup(); }` to a
-  swallowing catch made `error-handling-empty-catch` (the pack's only `ERROR`
-  rule) and `error-handling-printstacktrace-only` report nothing at all.
-  Measured per fixture, before → after: **3 of 6 → 6 of 6** in each. Both rules
-  now carry the two try shapes as a `pattern-either`, which is the shape the
-  JS/TS and Python packs already measured — JS closed the same `finally` hole
-  in `empty-catch`, Python needed *three* shapes because it also has `else:`.
+- **The JS/TS pack, read by someone who did not write it: ~40 false positives
+  across 14 rules.** `configs/semgrep/bugfix-js.yml` shipped in 1.6.0 and had
+  never been read by anybody but its author; every fixture behind it had been
+  written by that author too, so each one tested the author's INTENT rather than
+  what the pattern binds to. Three were catastrophic on real codebases:
+  - **`null-safety-unchecked-find` had zero true positives.**
+    `$A.find(...).$PROP` binds to any method named `find`, and `$PROP` matches
+    method calls, not just property reads. In any Node backend on Mongoose or the
+    Mongo driver, or any page using jQuery, it fired at **ERROR** on essentially
+    every query — `User.find({}).sort(…)`, `collection.find({}).toArray()`,
+    `$('#root').find('.item').addClass(…)` — and advised `?.`, which is wrong
+    advice for a Query object. Nine reproductions, none of them a bug. It now
+    requires the single argument to be a **literal callback**, the only thing
+    that separates `Array#find` from a Mongoose query (an object), a jQuery
+    selector (a string) or Immutable's `find(fn, ctx, notSetValue)` (three
+    arguments), with no type inference available.
+  - **`race-condition-floating-mutation` was wrong 12 times out of 15**,
+    including on `res.send(rows)` — the most common line in an Express app — and
+    on `void repo.save(a)`, **the fix its own message prescribes**. A rule whose
+    prescribed fix does not silence it teaches people to ignore it.
+  - **`off-by-one-loop-lte-length` told loops that never index anything that they
+    read past the end.** `<= .length` is correct whenever a loop counts
+    boundaries rather than elements, and the rule fired at ERROR on all of them.
+    It now matches the out-of-range **read** and uses the loop only as context,
+    which makes the message true by construction.
 
-  `memory-leak-stream-not-closed` has it too, and in the **opposite
-  direction**: there the try shape lives in an *exclusion*, so a shape the
-  exclusion cannot match does not silence the rule, it makes the rule accuse
-  correct code. Neither exclusion reached a try-with-resources that also has a
-  `finally`, so **four correct shapes fired at WARNING on streams that are
-  closed** — `try (r = …) { … } finally { … }`, the same with a `catch`, and
-  both again in the Java 9 `try (r) { … }` form. Zero now.
+  Also closed: a `finally` clause silenced `empty-catch` outright; the listener
+  rule's pattern took exactly two arguments, so `{ passive: true }`,
+  `{ once: true }`, `{ signal }` and the legacy boolean third argument were
+  invisible; the interval rule required `const $T =`, so `setInterval(tick, 1000)`
+  with no handle captured — an interval nobody can ever clear, the strongest form
+  of the bug — was silent; that rule's exclusions keyed on the shape of the
+  CONTAINER rather than on whether the timer was cleared; an early `return` of a
+  cleanup suppressed the leak in the branch AFTER it; `unchecked-env` missed
+  bracket access and property reads; `unchecked-match` missed `RegExp#exec`; and
+  `reduce-without-initial` fired on array literals, which cannot be empty.
 
-  What was **measured and is not a hole**, rather than assumed from reading the
-  patterns: a try-with-resources header, a second `catch` clause, and — the
-  sibling shape Python's audit found broken — **multi-catch**. `catch (A | B e)
-  { }` already matched, and `$V` still binds the name, so the Checkstyle
-  `ignore`/`ignored`/`expected` escape hatch still applies to it; Java's
-  multi-catch is not the false negative that `except (ValueError, TypeError):
-  pass` was, where the metavariable did not bind a tuple. All three are pinned
-  by fixtures now, in both directions, because "already matched" is a
-  measurement with a date on it.
-
-  The cost of the two new exclusion clauses was measured rather than asserted:
-  `pattern-not-inside` excludes the whole node it matched, so a *second*,
-  unmanaged stream opened inside a try-with-resources body stays invisible —
-  which was already true of the two clauses that shipped, so the new ones make
-  an existing blind spot consistent instead of adding one. No stated limitation
-  changed: `open(); try { … } finally { close(); }` still fires, still for the
-  reason the rule is `WARNING`.
-
-- **The JS/TS pack, measured against this repo's own `mcp/src`** — 183 files of
-  TypeScript nobody wrote as a fixture, chosen by neither the rule author nor
+- **The JS/TS pack, then measured against this repo's own `mcp/src`** — 183 files
+  of TypeScript nobody wrote as a fixture, chosen by neither the rule author nor
   the auditor. The check is cheap, needs no fixture, and caught two things that
   36 two-axis ablations did not, because "the clause is live" and "it does not
   reduce true positives" are **both true of a clause that only adds false
@@ -855,1010 +587,443 @@ not just the Semgrep one — the same gap existed for every one of them.
   | `error-handling-empty-promise-catch` | 3 | 3 | 3, now WARNING |
   | total | 90 | 83 | 45 |
 
-  The `floating-mutation` column is the audit wave working exactly as intended
-  on code none of us picked. The `unchecked-match` column is a **regression the
+  The `floating-mutation` column is the audit wave working exactly as intended on
+  code none of us picked. The `unchecked-match` column is a **regression the
   audit wave introduced**: its new `RegExp#exec` branch did not inherit the
   optional-chaining exclusion the `match` branch already had, so guarded
   `exec(...)?.[1]` started firing — 13 of them, all correct, against the single
-  true positive the branch was added for. Fixed with a second `pattern-not`
-  mirroring the existing one, and pinned by two near-misses that came from the
-  self-scan rather than from any probe corpus.
-
-- **`empty-catch` and `empty-promise-catch` move ERROR → WARNING.** They produce
-  **45 findings on `mcp/src` and all 45 are deliberate, comment-documented
-  fail-open** — an empty `catch` whose comment says the process is already dead,
-  the handle already closed, the cleanup best-effort. They were at ERROR on the
-  reasoning that an *unmarked* silent swallow is a bug whatever the author
-  meant. The self-scan refutes the premise, not the conclusion: they **are**
-  marked, with a comment, which Semgrep cannot read. A declaration of intent the
-  rule cannot recognise is the severity criterion exactly.
-
-  This is the same reasoning that keeps the **Java** empty-catch at ERROR, not a
-  contradiction of it: that rule can read its ecosystem's intent marker — the
-  Checkstyle/IntelliJ convention of naming the binding `ignore`/`ignored`/
-  `expected`. JS/TS has no equivalent of comparable standing, and the reason is
+  true positive the branch was added for. The 45 remaining `empty-catch` findings
+  are **all deliberate, comment-documented fail-open**, which Semgrep cannot read
+  — the measurement that moved both rules to `WARNING`. JS/TS has no
+  machine-readable intent marker of comparable standing, and the reason is
   structural rather than cultural: **ES2019 optional catch binding removed the
-  identifier a naming convention would attach to.** 41 of those 42 are written
-  `catch {`, with nothing to name; the ecosystem marks intent with a comment, or
-  with ESLint's `no-empty` `allowEmptyCatch` switch, which is project
-  configuration rather than an in-code marker. The nearest thing that *is*
-  machine-readable is honoured anyway, so one case can be marked deliberate in
-  code instead of with `// nosemgrep`: a binding named `_`/`_e`/`_err`
-  (ESLint's `caughtErrorsIgnorePattern`, TypeScript's leading-underscore
-  convention) or one of the three Checkstyle words. Stated rather than implied:
-  **it removed zero of the 42.** `empty-promise-catch` gets no escape hatch at
-  all, because `.catch(() => {})` has no binding to name.
+  identifier a naming convention would attach to**, and 41 of those 42 are
+  written `catch {`, with nothing to name. The `_`/`_e`/`_err` escape hatch is
+  honoured anyway so one case can be marked in code instead of with
+  `// nosemgrep`, and stated rather than implied: **it removed zero of the 42.**
 
-  **One rule in the pack is now at ERROR** — `index-at-length`, which produces
-  zero findings on `mcp/src`, the right number for a rule that narrow. Eleven
-  are WARNING and one INFO. A default `create_fix_pr` run therefore takes almost
-  nothing from this pack, which is the point: it must not open a PR rewriting 45
-  deliberate fail-open handlers.
-
-- **The JS/TS bug pack, audited against code written by someone who did not
-  write the rules.** `configs/semgrep/bugfix-js.yml` shipped in 1.6.0 and had
-  never been read by anybody but its author; every fixture behind it had been
-  written by that author too, so each one tested the author's INTENT rather
-  than what the pattern binds to. An independent auditor wrote ~600 lines of
-  JS/TS against the rule TEXTS and found **~40 false positives across 14
-  rules**. Three were catastrophic on real codebases:
-
-  - **`null-safety-unchecked-find` had zero true positives.**
-    `$A.find(...).$PROP` binds to any method named `find`, and `$PROP` matches
-    method calls, not just property reads. In any Node backend on Mongoose or
-    the Mongo driver, or any page using jQuery, it fired at **ERROR** on
-    essentially every query — `User.find({}).sort(…)`, `User.find({}).lean()`,
-    `collection.find({}).toArray()`, `$('#root').find('.item').addClass(…)`,
-    `repo.find({}).length` — and advised `?.`, which is wrong advice for a
-    Query object. Nine reproductions, none of them a bug. It now requires the
-    single argument to be a **literal callback**, which is the only thing that
-    separates `Array#find` from a Mongoose query (an object), a jQuery
-    selector (a string) or Immutable's `find(fn, ctx, notSetValue)` (three
-    arguments), with no type inference available. `findLast` added.
-  - **`race-condition-floating-mutation` was wrong 12 times out of 15**,
-    including on `res.send(rows)` — the most common line in an Express app —
-    and on `void repo.save(a)`, **the fix its own message prescribes**. A rule
-    whose prescribed fix does not silence it teaches people to ignore it. The
-    receiver is now constrained by name as well as the method, and `void`,
-    `Promise.all`/`allSettled`, `.catch`/`.then`/`.finally` continuation and
-    capture-then-await are excluded, one clause per near-miss function.
-  - **`off-by-one-loop-lte-length` told loops that never index anything that
-    they read past the end.** `<= .length` is correct whenever a loop counts
-    boundaries rather than elements (1-based iteration, insertion slots, string
-    prefixes), and the rule fired at ERROR on all of them. It now matches the
-    out-of-range **read** and uses the loop only as context, which makes the
-    message true by construction — and picks up the braceless loop body that
-    the old block-shaped pattern could not see.
-
-  Also fixed: a `finally` clause silenced `empty-catch` outright; the listener
-  rule's pattern took exactly two arguments, so `{ passive: true }`,
-  `{ capture: true }`, `{ once: true }`, `{ signal }` and the legacy boolean
-  third argument were all invisible; the interval rule required `const $T =`,
-  so `setInterval(tick, 1000)` with no handle captured — an interval nobody can
-  ever clear, the strongest form of the bug — was silent, along with `let t =`,
-  `this.t =` and `ref.current =`; the same rule's exclusions keyed on the shape
-  of the CONTAINER rather than on whether the timer was cleared, so an arrow
-  function calling `clearInterval(t)` two lines later still fired while the
-  byte-identical body in a `function` declaration was correctly silent; an
-  early `return` of a cleanup suppressed the listener/subscription leak in the
-  branch AFTER it; `unchecked-env` missed bracket access and property reads
-  (`process.env['KEY'].trim()`, `process.env.KEY.length`); `unchecked-match`
-  missed `RegExp#exec`; and `reduce-without-initial` fired on array literals,
-  which cannot be empty.
-
-- **Every JS/TS rule's severity tier is now pinned by a test, and five tiers
-  changed.** Nothing read `extra.severity` anywhere in the suite, so changing
-  any rule's tier — including promoting one to ERROR — was a mutation the whole
-  pack passed green. `EXPECTED_SEVERITY` in `bugfixRulesJs.test.ts` asserts all
-  fourteen exhaustively, in both directions. The tiers were re-derived from the
-  criterion the Java pack settled on, asked of the OUTPUT rather than the
-  pattern: **is what the rule emits always a bug?** Three of fourteen clear it
-  and stay at ERROR (`empty-catch`, `empty-promise-catch`, `index-at-length` —
-  the last because a *read* at `a[a.length]` is unconditionally `undefined`,
-  which is a fact about the AST rather than a guard). `catch-returns-null`,
-  `loop-lte-length`, `unchecked-find`, `unchecked-match` and
-  `listener-without-cleanup` move to WARNING or INFO. This also settles a
-  split that had no principle behind it: `listener-without-cleanup` (ERROR) and
-  `subscribe-without-unsubscribe` (WARNING) are structurally identical rules
-  and are now on the same tier.
-
-  **This changes what a default `create_fix_pr` run does.** ERROR maps to
-  `high`, WARNING to `medium`, INFO to `info`, and `create_fix_pr` defaults to
-  `severity_min: "high"` — so the JS/TS pack now contributes three rules to the
-  default fix-PR set, and a caller who wants the rest must ask for
-  `severity_min: "medium"`. `bug_hunt` itself applies no filter, so nothing
-  disappears from a scan.
-
-- **`error-handling-catch-returns-null` had its CLAIM corrected rather than its
-  pattern.** On the auditor's corpus it produced five instances of
-  textbook-correct code and zero true positives: `safeJsonParse`, an
-  optional-dependency `require` probe, a `new URL()` validity check, a lookup
-  typed `| null`, and a config reader returning `[]`. Returning an empty value
-  from a catch is idiomatic JavaScript with a documented contract, and there is
-  no syntactic difference between those and a genuine swallow — every candidate
-  narrowing was measured and silences the pack's own hit fixture too. So the
-  rule dropped to INFO, and its message stopped saying "log and/or rethrow":
-  that advice was **circular**, because adding the log made the rule go quiet
-  while the stated complaint (an empty value the caller cannot distinguish from
-  a real result) was untouched. `hits/catch-returns-null-idioms.ts` now pins
-  those five idioms as hits, with the trade written down, so re-promoting the
-  tier turns the severity assertion red with that file as the evidence.
-
-- **The JS/TS near-miss corpus is now written by the auditor, not the rule
-  author.** Eight new `misses/` files, credited in-file, reproducing every
-  false-positive class above; plus `hits/` fixtures for every newly-covered
-  shape. Each was RED before the corresponding rule change. Every clause added
-  in this wave was then ablated on both axes — deleted to confirm a test goes
-  red, and checked against the true-positive count to confirm it eats no real
-  bugs — which removed **six clauses that turned out to be dead**: three
-  optional-catch-binding branches (Semgrep's matcher already ignores the
-  binding, so `catch ($E) { }` was matching `catch { }` all along, contrary to
-  the audit's reading of the pattern text), an AbortSignal exclusion that the
-  cleanup clause already covered, an expression-bodied-arrow exclusion that the
-  pre-existing `return $O.$M(...)` clause already covered, and two
-  returned-cleanup variants in the interval rule. It also caught a near-miss
-  that this wave itself had silently disarmed: `misses/race-condition.ts`'s
-  `bulkSave` exists to prove the verb list's trailing `$` anchor is
-  load-bearing, and the new receiver constraint made it stop proving that, so
-  its receiver was renamed. Two heuristics in one rule can each hide the
-  other's regression unless the near-miss clears every constraint but the one
-  it is aimed at.
-
-- **`bugfixRulesJs.test.ts` gained the total-count and declared-rules
-  assertions** the Java suite already had: a finding landing in an unregistered
-  file moves no per-file number, and a rule that fails to LOAD (a
-  `RuleParseError` branch, an unquoted `:` producing `Invalid YAML`) is
-  indistinguishable in Semgrep's output from a rule that found nothing.
-
-- **Python and Go bug rules: ~60 false positives closed, and the false
-  negatives the fixes exposed.** Both packs shipped without an audit (1.7.0 and
-  1.8.0) and were measured against a corpus written by someone who did not write
-  the rules. Every clause below was ablated on both axes — deleting it has to
-  turn a test red *and* must not increase the true-positive count.
-
-  Python:
-
+- **Python and Go: ~60 false positives closed, and the false negatives the fixes
+  exposed.** Both packs shipped without an audit (1.7.0 and 1.8.0). Every clause
+  below was ablated on both axes — deleting it has to turn a test red *and* must
+  not increase the true-positive count.
   - `none-deref-dict-get` bound **anything** with a one-argument `.get`, so
     `User.objects.get(user_id).delete()` (Django's `Manager.get` *raises*; it
-    never returns `None`), `queue.Queue.get(True)`, an import-time registry
-    keyed by an enum, and three HTTP clients all fired at `ERROR` — and the
-    advice printed on the Django line, "pass a default", is advice
-    `Manager.get` does not accept. The receiver *substring* allow-list also made
-    real dict bugs invisible: a Flask/Django `session` **is** a dict. It now
-    keys on the **key** — a string literal that is not a URL or path — which
-    discriminates without guessing receiver names. Eight false positives to
-    zero, and `session.get("user_id")` / `client_config.get("timeout")` now
-    fire. Cost: a lookup with a variable key is a false negative.
+    never returns `None`), `queue.Queue.get(True)` and three HTTP clients all
+    fired at `ERROR` — and the advice printed on the Django line, "pass a
+    default", is advice `Manager.get` does not accept. The receiver *substring*
+    allow-list also made real dict bugs invisible: a Flask/Django `session` **is**
+    a dict. It now keys on the **key** — a string literal that is not a URL or
+    path. Eight false positives to zero, and `session.get("user_id")` now fires;
+    the cost is a lookup with a variable key.
   - `get-without-doesnotexist` recognised only handlers with no `as` binding, no
     tuple and no `else`, so **6 of 6** correctly guarded shapes fired. The
     exclusions now filter the caught type through **nested formulas** inside
     `pattern-not-inside` (a rule-level `metavariable-regex` cannot see it —
-    negated patterns export no bindings), and they are scoped to the `try`
-    **body**, which fixes the whole-node defect: an unguarded `.objects.get()`
-    inside the `except` arm was silenced by the guard protecting the *other*
-    arm, and now fires.
+    negated patterns export no bindings), scoped to the `try` **body**, which
+    also fixes the whole-node defect that silenced an unguarded `.objects.get()`
+    in the `except` arm.
   - `except-pass` and `bare-except` were **silenced outright** by adding a
     `finally:` or an `else:` to the same swallowing `try`, and `except (A, B):
-    pass` was silent while the `as` form fired. Nine and three try-shape
-    branches respectively close both. `bare-except` no longer fires on
-    cleanup-then-`raise`, the dominant legitimate use (3 of the auditor's 4
-    functions). `except ImportError: pass` — the optional-dependency probe — is
-    excluded, and it is the only type carve-out, because `except
-    FileNotFoundError: pass` is best-effort cleanup and a swallowed load in the
-    same syntax.
+    pass` was silent while the `as` form fired. `bare-except` no longer fires on
+    cleanup-then-`raise`, the dominant legitimate use.
   - `queryset-n-plus-one`: `$O.$REL.$FIELD` bound **any** two-deep chain, so
-    `book.title.strip()`, `user.email.lower()`, `ev.created_at.isoformat()` and
-    `line.amount.quantize(2)` all fired, each advised to add
-    `.select_related("title")`. The finding is now the chain rather than the
-    loop, which is what lets `pattern-not-inside: $O.$REL.$FIELD(...)` remove
-    them (at loop scope it was a measured no-op). The anchor widened to any
-    `<... $M.objects ...>` queryset, so `.exclude(...)` and `.only(...)` now
-    fire — and `select_related`/`prefetch_related` became *real* exclusions,
-    which is what makes those near-misses discriminating: they used to be silent
-    only because any chained call broke the `.all()` anchor, so they would have
-    stayed green against a deliberately broken rule.
-  - `range-len-plus-one` fired on `d[len(d)] = v`, the standard
-    index-a-dict-by-its-own-size idiom, in *assignment target* position; and
-    `range(0, len(x) + 1)` was invisible.
-  - `open-without-context` fired on five kinds of ownership transfer — a factory
-    that returns the handle, `stack.enter_context(...)`, `contextlib.closing`,
-    a `yield`, a pooled handle — and on a module-level log handle.
-  - `toctou-exists-open` knew two exact function names. It now covers
-    `os.path.isfile`, `os.access`, `pathlib.Path.exists()` and the very common
-    negated guard, and it no longer fires on a test-then-**write**, where the
-    check guards against clobbering and the advice does not apply.
-  - `none-deref-match` knew only `.group(...)`. `.groups()`, `.groupdict()`,
-    `.start()`, `.end()`, `.span()` and subscripting blow up identically.
-  - `asyncio-not-awaited` fired on `yield asyncio.sleep(1)`.
+    `book.title.strip()`, `user.email.lower()` and `line.amount.quantize(2)` all
+    fired, each advised to add `.select_related("title")`. The finding is now the
+    chain rather than the loop, and `select_related`/`prefetch_related` became
+    *real* exclusions — they used to be silent only because any chained call
+    broke the `.all()` anchor, so they would have stayed green against a
+    deliberately broken rule.
+  - Also: `range-len-plus-one` on `d[len(d)] = v` in *assignment target*
+    position; `open-without-context` on five kinds of ownership transfer;
+    `toctou-exists-open` knowing exactly two function names;
+    `none-deref-match` knowing only `.group(...)`; `asyncio-not-awaited` on
+    `yield asyncio.sleep(1)`.
+  - `off-by-one-loop-lte-len` (Go) required **nothing** of the loop body — the
+    fix the Python rule has carried since it shipped was never applied here — so
+    every DP seed, prefix-sum array and insert-position loop fired at `ERROR`:
+    **4 of 4** correct `n+1` loops in the corpus. Requiring `<... $XS[$I] ...>`
+    takes that to zero with the true positive intact.
+  - `err-discarded` (Go) assumed the second return value is an error.
+    `sync.Map.Load` alone made it fire across most concurrent Go;
+    `strings.CutPrefix` and `utf8.DecodeRune` return `(string, bool)` and
+    `(rune, int)`. `body-not-closed` was anchored to `http.Get` alone, so
+    `client.Do(req)` — what every real client uses — plus `http.Post`,
+    `http.PostForm`, `http.Head` and `http.DefaultClient.Get` leaked silently,
+    while three *correct* closes fired. `lock-without-defer` was **redesigned
+    around the bug** instead of the idiom: it fired on the two shapes where a
+    `defer` would *be* the bug, and now looks for a `return` *between* the `Lock`
+    and the `Unlock`, gaining the `RLock`/`RUnlock` branch that was entirely
+    missing. `nil-map-write` could not see the classic `c := &config{}` followed
+    by `c.Labels["env"] = "prod"`. `err-blank-assign` fired on
+    `var _ io.Writer = newWriter()`, the compile-time interface assertion.
+  - **Dead clauses removed, measured by ablation rather than by reading**: in Go,
+    `err-discarded`'s `$X, _ := $F(...)` branch, one of `type-assert-no-ok`'s two
+    mutually redundant `pattern-not-inside` clauses, `lock-without-defer`'s
+    trailing `...`, `err-blank-assign`'s `var _ $T = $F(...)`, `err-discarded`'s
+    `strings.Cut` (three return values, so it never matched), and three of
+    `body-not-closed`'s seven close exclusions; in Python,
+    `queryset-n-plus-one`'s second `pattern-inside` anchor. Where a live clause
+    had no fixture behind it, a **fixture was added rather than the clause
+    deleted**.
 
-  Go:
-
-  - `off-by-one-loop-lte-len` required **nothing** of the loop body — the fix
-    the Python rule has carried since it shipped was never applied here — so
-    every DP seed, prefix-sum array, split enumeration and insert-position loop
-    in a Go codebase fired at `ERROR`: **4 of 4** correct `n+1` loops in the
-    corpus. Requiring `<... $XS[$I] ...>` takes that to zero with the true
-    positive intact. Unlike the analogous Java tightening, the discrimination is
-    clean here, because `dp[i]` is not `xs[i]`.
-  - `err-discarded` assumed the second return value is an error. `sync.Map.Load`
-    alone made it fire across most concurrent Go; `strings.CutPrefix` and
-    `utf8.DecodeRune` return `(string, bool)` and `(rune, int)`. A short
-    standard-library deny-list closes those. A project function returning
-    `(T, bool)` is still indistinguishable, which is why it is `WARNING`.
-  - `body-not-closed` was anchored to `http.Get` alone, so `client.Do(req)` —
-    what every real client uses — plus `http.Post`, `http.PostForm`,
-    `http.Head` and `http.DefaultClient.Get` leaked silently. It also fired on
-    three *correct* closes: the errcheck-safe
-    `defer func() { _ = resp.Body.Close() }()`, an explicit non-deferred close,
-    and `defer closeQuietly(resp.Body)`. Ownership transfer (`return resp, nil`)
-    is excluded too.
-  - `lock-without-defer` was **redesigned around the bug** instead of the idiom.
-    It fired on the two shapes where a `defer` would *be* the bug — a
-    fine-grained critical section, and `for { mu.Lock(); …; mu.Unlock() }` — and
-    on a file lock, because `$MU.Lock()` binds any receiver. It now looks for a
-    `return` *between* the `Lock` and the `Unlock`, which is the actual defect,
-    and gained an `RLock`/`RUnlock` branch that was entirely missing.
-  - `nil-map-write` could not see the classic: `c := &config{}` leaves every map
-    field nil and `c.Labels["env"] = "prod"` panics. It also fired on a correct
-    init through a pointer (`json.Unmarshal(b, &m)`).
-  - `type-assert-no-ok` fired on a `v.(fmt.Stringer)` inside a `switch v.(type)`
-    arm that proves it safe. The rule file claimed that exclusion was
-    unnecessary; what did not work was the spelling — `switch $V.(type) { ... }`
-    is a Go syntax error as a pattern, and `case $C:` makes it compile.
-  - `err-blank-assign` fired on `var _ io.Writer = newWriter()`, the
-    compile-time interface assertion, and on `_ = copy(dst, src)`.
-  - `empty-err-block` fired on `if p != nil { }` for a `*os.File`, because
-    `$ERR` bound any identifier.
-
-- **Dead clauses removed, measured by ablation rather than by reading.** In Go:
-  `err-discarded`'s `$X, _ := $F(...)` branch (the `=` branch matches the same
-  set — the redundancy this file's own header documented for `append` and never
-  applied here); one of `type-assert-no-ok`'s two mutually redundant
-  `pattern-not-inside` clauses; `lock-without-defer`'s trailing `...`;
-  `err-blank-assign`'s `var _ $T = $F(...)`; `err-discarded`'s `strings.Cut`
-  (three return values, so it never matched); and three of
-  `body-not-closed`'s seven close exclusions, which the bare
-  `$RESP.Body.Close()` statement already covers inside a `defer func(){}()`. In
-  Python: `queryset-n-plus-one`'s second `pattern-inside` anchor. Every
-  remaining clause in both packs is now live on both axes, and where a live
-  clause had no fixture behind it — five `except-pass` try-shape branches, three
-  `re` accessors, `http.PostForm`/`http.Head`, the `yield` handle transfer, the
-  negated `isfile` guard, three write modes — a fixture was added rather than
-  the clause deleted.
-
-- **The three annotation route families now match the form their framework
-  documents.** `configs/semgrep/routes.yml`'s 16 annotation-based route rules
-  each demanded an argument that the canonical form does not supply, so the
-  most ordinary controller in each framework lost routes — silently, because a
-  route this pack does not match produces no error anywhere and simply never
-  enters the attack surface.
-
-  Measured on a corpus written by an auditor who did not write the rules
-  (`mcp/test/fixtures/surface/annotations/`, 52 endpoints): **18 of 52** were
-  reported before this change. ASP.NET 5 of 15 — a controller scaffolded by
-  `dotnet new webapi`, whose actions carry a bare `[HttpGet]` and whose path
-  lives on the class `[Route("api/[controller]")]`, mapped to **zero routes**,
-  i.e. "this C# API exposes nothing". NestJS 6 of 12: `@Get()` and `@Post()`,
-  the forms docs.nestjs.com uses for index and create actions, matched
-  nothing. Spring 7 of 25: only a lone string literal matched, so
-  `@GetMapping(value = "/x", produces = "…")`, `@GetMapping(path = "/x")` and
-  a bare `@GetMapping` were all absent. All 52 are reported now.
-
-  - **Spring's named-argument forms are matched, and the note in the previous
-    release saying they could not be is withdrawn.** `@GetMapping($PATH, ...)`
-    is indeed rejected as "Invalid pattern for Java" — but only because the
-    ellipsis follows a bare metavariable. `@GetMapping(value = $PATH, ...)`
-    parses cleanly and binds `$PATH` to the path literal alone, whatever order
-    the arguments are written in.
-  - **The six Spring rules are now `focus-metavariable: $PATH`.** A named
-    argument need not be the first one, and the recovery path that rebuilds
-    captures from byte offsets reads the FIRST argument: measured with the
-    focus removed, `@PutMapping(produces = "application/json", value = "/x")`
-    reports as `PUT produces = "application/json" [partial]` on a redacting
-    Semgrep while a Semgrep that emits metavariables reports `/x`. Nothing is
-    fabricated (the extractor refuses that text as a path), but the answer
-    would depend on the reader's Semgrep version, which nothing else in this
-    pack does.
-  - **ASP.NET reads a `[Route("…")]` companion attribute** on a method whose
-    verb attribute carries no path, in either attribute order (Semgrep matches
-    both with one alternative). The bare rules exclude that shape with a
-    `pattern-not`, so such a method is reported once, at the path `[Route]`
-    names, rather than twice.
-  - **A bare annotation is reported with an empty own-path, flagged
-    `path_partial` at 'low' confidence** — the endpoint exists, and its full
-    URL, being the class-level prefix, is honestly unknown. Such a rule
-    captures nothing, so it declares `metadata.guardian_path: inherited`,
-    which `surface/extract.ts` reads to build the record and
-    `surface/recoverMetavars.ts` reads to hand the match back unscanned (a new
-    `noCaptures` counter, so it is neither counted as recovered nor as
-    unreadable — the latter would flip the language's `coverage` to "routes
-    here could not be read" when nothing was lost).
-
-    A companion `mount` rule for `@Controller('users')` was considered and
-    rejected: nothing consumes a mount for these frameworks
-    (`resolvers/node.ts` resolves one only through an import binding its
-    `$ROUTER` in the same file, and a controller class is not imported into
-    its own file), and `resolveNodeMounts` treats any route declared in a
-    file that mounts something as attached to the app directly — so adding
-    one would flip every route in that controller from honestly partial to
-    confidently wrong, at its un-prefixed path, which `scan_dast` would then
-    send requests to. Resolving class-level prefixes is a follow-up in
-    `resolvers/node.ts`, not a rule-pack change.
-  - **Two new invariants in `mcp/test/unit/surface/rulePack.test.ts`.** A route
-    rule that binds no `$PATH` must declare the flag (without it the rule
-    matches perfectly and yields nothing — the defect above, as a test), and a
-    rule whose pattern spans a declaration must either focus `$PATH` or
-    capture no path at all, so no declaration-spanning span is ever scanned for
-    a path.
-  - **50 ablations, zero dead clauses.** Every alternative and operator added
-    here was removed on its own and the fixture set checked: each removal loses
-    exactly the endpoints it should, and removing an ASP.NET `pattern-not`
-    duplicates exactly one endpoint. The decoy corpus is unchanged
-    (14 matches before and after), and the old and new packs differ over the
-    whole corpus by 36 added matches, 0 removed.
-
-- **`wp-unescaped-output` stops flagging `echo (int) $_GET['id'];`, and now
-  matches the subscript rather than the statement.** A cast is not a call, and
-  Semgrep sees straight through the cast node — `$SUPER[...]` binds to the
-  subscript inside it and `metavariable-regex` reads the text of the subscript,
-  not of the cast. So the standard safe way to emit a numeric request parameter
-  in WordPress was an ERROR-severity finding, in all eleven PHP cast spellings
-  and in every branch of the rule.
-
-  The first fix was a `pattern-not-regex` over the matched text. It was wrong in
-  a way worth recording, because a text guard suppresses everything the match
-  covers and the match was a whole statement:
-
-  - **Recall.** Of nine real-XSS lines carrying a cast somewhere in the same
-    statement, two fired. `printf("%d %s", (int) $_GET['id'], $_GET['name']);`
-    and all four polarities of `echo $f ? (int) $_GET['a'] : $_GET['b'];` were
-    silent — the branches that match at statement level have the widest
-    suppression window of all.
-  - **A suppression vector.** `pattern-not-regex` reads source text, so
-    `echo 'use (int)$_GET for numbers: ' . $_GET['x'];` turned the rule off with
-    no cast executed anywhere. In a security pack that is not a documented
-    trade; it is a switch any helpful — or hostile — string literal can carry.
-
-  The rule is now a `pattern-either` of `pattern-inside` SCOPES plus a narrow
-  `pattern: $SUPER[...]`, so a finding points at the offending subscript and one
-  statement can report one operand while staying quiet about another. The cast
-  guard is six `pattern-not-inside` clauses, which can only remove the operand
-  actually wrapped in a cast; six entries cover all eleven spellings because
-  int/integer, float/double/real, bool/boolean and string/binary collapse to the
-  same node. Enumerating them is legitimate because PHP's cast set is closed by
-  the language, unlike a list of escaping functions. Measured: eleven real-XSS
-  lines fire, the seven safe casts stay silent, a trailing `//` comment with the
-  same spelling never suppressed anything, and `echo (int) $_GET['a'] .
-  $_GET['b'];` — recorded as an accepted loss one commit earlier — fires again.
-
-- **The pinned `wp-unescaped-output` false positive is gone, and both halves of
-  its recorded justification were wrong.** `echo esc_html($a . $_GET['b']) . "x";`
-  was recorded as unfixable because `echo` lowers to a call node, so any
-  exclusion naming the escaping call names the echo too. True of the AST, false
-  of the filter: `metavariable-regex` matches the **source text** of the
-  metavariable, which is `echo`/`print`/`<?=` for the language constructs and an
-  identifier for a real call. Requiring identifier shape of `$F` costs nothing —
-  12/12 true positives kept, both false positives gone, `errors: 0`. The
-  measurement in the old comment was wrong too: the two exclusions said to take
-  the rule "to zero findings, true positives included" actually took it from 12
-  to 8. `mcp/test/fixtures/base/known-false-positives/` is deleted.
-
-- **`wp-unescaped-output` sees eight more shapes of real XSS.** Measured against
-  a reviewer's probe of fourteen, six fired. Now thirteen do: comma-separated
-  `echo`, nested subscript (`$_GET['user']['name']`), a ternary operand,
-  `printf`, an interpolated string used as a concatenation operand, and
-  `$_SERVER` / `$_COOKIE` — `$_SERVER['PHP_SELF']` being the canonical reflected
-  XSS in PHP, which the old `GET|POST|REQUEST` regex could not reach. The
-  fourteenth needs data flow (a heredoc assigned to a variable, echoed later)
-  and is recorded as a limitation rather than guessed at.
-
-- **A superglobal used as an array KEY no longer fires.**
-  `echo $labels[$_GET['lang']] . "</b>";` is ordinary i18n code — the lookup
-  table is the developer's and the request only picks the element — and the
-  narrowed anchor introduced it as an ERROR-tier false positive, five findings
-  on correct code. Twelve of the fourteen scopes bind `$SUPER` themselves, so
-  the comma, `printf` and ternary lookups were never at risk; the two
-  CONCATENATION scopes do not, which left the narrow `pattern: $SUPER[...]`
-  free to match a subscript in index position. Guarded by
-  `pattern-not-inside: $ARR[$SUPER[...]]`, which tells the two apart by what is
-  INSIDE the brackets rather than by nesting depth — so
-  `echo $_GET['user']['name'];`, whose index is a literal, still fires, and
-  there is a fixture saying so. `isset()` needs a clause of its own because
-  Semgrep does not model it as a call; a matching `empty()` clause was proposed,
-  measured to move nothing at all — `$G(...)` already covers it, because
-  `empty` IS a call node — and dropped rather than kept for symmetry.
-
-- **`wp-unescaped-output`'s "inside any call = handled" is now written down.**
-  Not a regression — the old operand patterns needed a direct operand, so none
-  of these ever fired — but a far stronger claim than "an escaper handles it",
-  and it was implied rather than stated. Measured silent: `wp_unslash()`,
-  `stripslashes()`, `trim()`, `sprintf()`, `implode()`, `nl2br()`,
-  `str_replace()`, `strtoupper()`, `strrev()`, none of which escape HTML. The
-  sharpest case is WordPress's own idiom — `echo wp_unslash($_GET['x']);` is
-  textbook XSS and is syntactically indistinguishable from the correct
-  `echo esc_html(wp_unslash($_GET['x']));`. Enumerating the non-escapers is the
-  open-set problem inverted, so the limitation stays and is named instead, in
-  the rule comment and the test header. The other half of the same trade is
-  pinned rather than described: a PARENTHESISED operand
-  (`echo "x" . ($_GET['h']);`) fires now, where the old operand patterns could
-  not reach it.
-
-- **`yaml.load(stream=f, Loader=yaml.SafeLoader)` was an ERROR on safe code.**
-  The `Loader=` exclusions were written `yaml.load($X, Loader=...)`, which
-  requires a POSITIONAL first argument; passing the stream by keyword is legal
-  Python and perfectly safe. Widened to `yaml.load(..., Loader=...)`. Measured
-  on the reviewer's probe: seven findings, exactly the seven unsafe spellings,
-  all eight safe forms silent, no recall lost.
-
-- **`wp-unescaped-output`'s message now names the `$_SERVER` keys that carry
-  risk** — `PHP_SELF`, `REQUEST_URI`, `QUERY_STRING`, `PATH_INFO` and the
-  `HTTP_*` family. All twelve keys still fire and that is deliberate: an
-  allowlist would have to rule on `SERVER_NAME` and `HTTP_HOST`, which an
-  attacker can influence on a misconfigured vhost. But a developer told "XSS"
-  about `$_SERVER['DOCUMENT_ROOT']` concludes the rule is wrong and stops
-  reading it on `PHP_SELF` too, so the message says which is which.
-
-- **`py-yaml-load` caught one unsafe spelling in six.** The rule was
-  `pattern: yaml.load($X)`, a one-argument match — but what makes the call safe
-  is the **loader class**, not the arity. `Loader=yaml.Loader`,
-  `Loader=yaml.UnsafeLoader`, the positional `yaml.load(f, yaml.Loader)`,
-  `yaml.unsafe_load` and `yaml.full_load` all executed arbitrary code unseen.
-  All six now fire and the safe forms stay silent, excluded by loader name in
-  both the keyword and positional position and for both the pure-Python and
-  libyaml classes.
-
-- **`pattern-inside: print $A . $B;` was dead by fixture** — correct, live
-  against real code, and deletable with the suite still green, inside the very
-  branch of work that audits for clauses nobody measures. Pinned by a hit rather
-  than removed.
-
-- **The load-failure invariant is stated rather than accidental.** Ablating the
-  only `pattern:` of `py-yaml-load` produced `scanned=0` with **neither** a
-  `RuleParseError` **nor** an `Invalid YAML` — a fifth spelling of the silent
-  failure family, caught only because the id-set assertion pins the exact set of
-  ids the `hits/` fixtures produce. `baseRules.test.ts` now says so in a comment
-  and adds a count comparison beside the set comparison, which also catches a
-  `- id:` written twice.
-
-- **`php-sql-injection-direct`'s reach is written down.** It targets
-  `mysql_query`, removed in PHP 7, and `mysqli_query`; the canonical WordPress
-  form `$wpdb->query("..." . $id)` is a different API surface and is left to a
-  rule of its own rather than bolted onto this id.
-
-- **The Java rules no longer fire on correct Java.** The first two review
-  sweeps found 19 findings on correct code across five of the eight rules; all
-  19 are gone, and every one is pinned by a near-miss fixture. A third and a
-  fourth sweep are recorded below.
+- **Java: the pack no longer fires on correct Java, and the exclusions that
+  closed those false positives no longer eat real bugs.** Seven review sweeps,
+  the last four of which are the interesting ones. The first two found **19**
+  findings on correct code across five of the eight rules; a fourth found **16**
+  more plus a false negative; the sixth and seventh closed the `keySet()` and
+  conjunction-chain classes below. All are gone, every one pinned by a near-miss
+  fixture, and so are the two recall regressions that closing them introduced.
   - `null-safety-optional-get-no-ispresent` was never about `Optional`:
     `$O.get()` matched **any** zero-argument `get()`, so `AtomicInteger.get()`,
-    `ThreadLocal.get()` and `Supplier.get()` all fired at ERROR. Restricted by
-    declared type, and the early-exit guard shapes
-    (`return`/`throw`/`continue`/`break` under `!isPresent()` or `isEmpty()`)
-    are now recognised alongside `if (isPresent())`.
-  - `null-safety-map-get-deref` was never about `Map`: `$M.get($K).$METHOD(...)`
+    `ThreadLocal.get()` and `Supplier.get()` all fired at ERROR.
+    `null-safety-map-get-deref` was never about `Map`: `$M.get($K).$METHOD(...)`
     matched **any** one-argument `get` chained with a method, so
     `list.get(0).trim()` fired at ERROR and advised `getOrDefault`, a method
-    `List` does not have. Restricted to `Map`, `HashMap`, `TreeMap`,
-    `LinkedHashMap` and `ConcurrentHashMap` — which also *gains* the
-    `HashMap`-, `TreeMap`- and `var`-declared receivers the old rule matched
-    only by accident.
-  - `memory-leak-stream-not-closed` now recognises Java 9's
-    `try (alreadyDeclared) { ... }` resource form, which closes the stream.
-  - `edge-case-modify-during-iteration` is re-anchored on the `remove` call
-    (the finding now points at the mutation, not the loop header) and no longer
-    fires on the find-remove-`return`/`break` idiom, where no
-    `ConcurrentModificationException` is possible, nor on
-    `CopyOnWriteArrayList`, which iterates a snapshot by design.
-  - `error-handling-empty-catch` honours the Checkstyle / IntelliJ naming
-    convention: an exception variable named `ignore`, `ignored` or `expected`
-    is a deliberate ignore. Every other name still fires.
-  - `null-safety-optional-get-no-ispresent` no longer fires on a **ternary**
-    guard. All three forms were firing at ERROR on correct code —
-    `o.isPresent() ? o.get() : d`, `!o.isPresent() ? d : o.get()` and
-    `o.isEmpty() ? d : o.get()` — because a ternary is a conditional
-    *expression*, a different AST node from an `if` statement, so none of the
-    statement-shaped exclusions reached it. Twelve guard shapes are now
-    recognised, up from nine.
-  - `null-safety-optional-get-no-ispresent` no longer fires on
-    `if (o.filter(p).isPresent()) { … o.get() … }`. `filter` on an empty
-    `Optional` returns empty, so a present filter result proves the original is
-    present; the `isPresent()` exclusion missed it only because it binds the
-    receiver to exactly `$O`, and here the receiver is `o.filter(p)`.
-- **A fourth review sweep found 16 more findings on correct Java, plus one
-  false negative that hid a real bug.** All 17 are gone. The near-miss fixtures
-  behind them deliberately vary the *shape* — an extra statement, a compound
-  condition, a different exit, a label, a chained call, a different declared
-  receiver type — rather than instantiating each exclusion pattern minimally,
-  which is what made the previous round's "every clause is live" measurement
-  true and uninformative.
+    `List` does not have. Both are restricted by declared type now.
+  - **`map-get-deref` shipped with no guard exclusion at all**, so the canonical
+    Java guard `if (m.containsKey(k)) { … m.get(k).trim() … }` fired at ERROR on
+    already-guarded code. It now excludes the measured shapes that prove the key
+    present, including **iteration over the map's own `keySet()`** — the
+    commonest map-iteration idiom in Java — with the clause unifying **both** the
+    map iterated and the key passed to `get`, so iterating one map while
+    dereferencing another still fires.
+  - **`pattern-not-inside` excludes the whole node it matched, and that was a
+    shipped regression before it was a lesson.** `if ($M.containsKey($K)) { ... }`
+    matches the entire **if-else statement**, so both arms were excluded. On a
+    file of eight guaranteed `NullPointerException`s / `NoSuchElementException`s
+    — the dereference in the `else` arm of the guard, or in the ternary arm the
+    condition rules out — **6 fired before the guard wave, 1 after, 8 now**.
+    Every guard exclusion is now scoped to the arm the guard actually proves.
   - **`edge-case-modify-during-iteration` was hiding a real
-    `ConcurrentModificationException`.** A `remove()` inside a `switch`
-    followed by `break;` was excluded by the paired `remove(); break;` clause —
-    but that `break` leaves the *switch*, not the loop, so the for-each calls
-    `next()` again on a mutated collection. The plain-`break` exclusion now
-    applies only outside a `switch`; `return`, `throw` and a **labelled**
-    `break` do leave the method or the loop from inside one and stay excluded
-    everywhere. Fixed regardless of the false positives below, because a false
-    negative that hides a real bug is worse than a false positive.
-  - `null-safety-map-get-deref` had **no guard exclusion at all**, so the
-    canonical Java guard `if (m.containsKey(k)) { … m.get(k).trim() … }` fired
-    at ERROR and advised `getOrDefault` on already-guarded code. It now
-    excludes the measured shapes that prove the key present: the inline
-    `containsKey` and `get() != null` tests, alone or as either operand of a
-    conjunction; all four ternary polarities; an early
-    `return`/`throw`/`continue` under `!containsKey` or `get() == null`; and
-    population by `put`, `putIfAbsent`, `computeIfAbsent` or
-    `if (!containsKey) { put(); }`. A **disjunction** is deliberately not
-    excluded — `a || m.containsKey(k)` proves nothing inside the body.
-  - `edge-case-modify-during-iteration` no longer fires when one statement sits
-    between the removal and its exit (`list.remove(s); removed = 1; break;`),
-    nor on a **labelled** `break`, nor on `remove(); throw …;`.
-  - `null-safety-optional-get-no-ispresent` no longer fires on a **compound**
-    guard (`if (a.isPresent() && b.isPresent())` fired twice, at the exact
-    point where both were proven present), on a `while (o.isPresent())` guard,
-    on an early exit with one statement before it
-    (`if (!o.isPresent()) { log(); return ""; }`), or on an
-    `Optional<T> o = Optional.of(…)` construction, which cannot be empty —
-    `ofNullable` can, and still fires.
-  - `off-by-one-loop-lte-length` restricts its array metavariable to an
-    **array type**. `$A.length` matched any `int` field named `length`, so a
-    domain object's deliberately inclusive `for (int i = 0; i <= seg.length;
-    i++)` fired at ERROR on a loop with no array in it. Measured, the
-    restriction costs no recall: parameter, local, field, `this.`-qualified
-    field and `var`-inferred local arrays are all still matched.
-  - **Two recall gaps closed.** `map-get-deref` and `modify-during-iteration`
-    now bind the receiver through a `metavariable-pattern` accepting a bare
-    name **or** a `this.`-qualified one, so `this.cache.get(k).trim()` is seen
-    where `cache.get(k).trim()` already was — same class, same field, same bug.
-    And `race-condition-static-dateformat` now ships a single **fully-qualified**
-    pattern, so a `static final java.text.SimpleDateFormat` field in a file
-    with no import is seen; measured across four import shapes, the qualified
-    pattern matches the short forms too whenever an import lets Semgrep resolve
-    them, while the short pattern never matched the qualified one — so the
-    short branch was inert and was deleted.
-  - **Two inert clauses deleted, found by ablating every clause alone.** The
-    two `switch` re-inclusion disjuncts each repeated
-    `- pattern: $COLL.remove(...)` next to their `pattern-inside`, copied from
-    the third disjunct where it *is* load-bearing. It is not load-bearing
-    there: `pattern-inside` is already a positive term and the enclosing
-    conjunction already anchors on the removal, so the repeat changed nothing —
-    measured, identical findings with and without it. Sixth occurrence of this
-    defect class in the rule-pack series, and the first caught before shipping.
-  - **The exit-terminated exclusions are bounded on purpose.** Across
-    `map-get-deref`, `optional-get-no-ispresent` and
-    `modify-during-iteration`, they tolerate exactly **one** statement between
-    the guard (or the removal) and the exit rather than a statement ellipsis.
-    Measured: the ellipsis matches *deep*, so
-    `if (!m.containsKey(k)) { if (strict) { return ""; } }` and
-    `items.remove(s); if (done) { break; }` both stop firing — and both are
-    real bugs. The price is accepted false positive (5) below.
-- **A fifth review sweep found that closing the false positives had opened a
-  FALSE NEGATIVE, and the harness went green through all of it.** Wave 4's
-  guard exclusions silenced the branch the guard proves is *unsafe*. On a file
-  of eight guaranteed `NullPointerException`s / `NoSuchElementException`s —
-  the dereference in the `else` arm of the guard, or in the ternary arm the
-  condition rules out — **6 fired before wave 4, 1 after, 8 now.**
-  - **`pattern-not-inside` excludes the whole node it matched.**
-    `if ($M.containsKey($K)) { ... }` matches the entire **if-else statement**,
-    and `"$M.containsKey($K) ? ... : ..."` the entire **conditional
-    expression**, so both arms were excluded. Every guard exclusion in
-    `map-get-deref` and `optional-get-no-ispresent` is now **scoped to the arm
-    the guard actually proves**: the deep expression operator inside the
-    guarded ternary arm, and a dereference requirement inside the `if` body
-    (two clauses per shape — one reaching a multi-statement or nested body, one
-    reaching the braceless form).
-  - **A REAL-BUGS CORPUS, so this class of regression cannot recur silently.**
-    `mcp/test/fixtures/bugfix-java/hits/RealBugs.java` (14 defects at the
-    wave-7 count) and `hits/ElseArm.java` (8) were written by the reviewer, not by the rule
-    author, and their counts are asserted per file plus a total. Every future
-    exclusion now has to prove — while it is being ablated — that it does not
-    eat a real bug, not merely that it silences the shape it was written for.
-  - **Both rules honour a guard used as an EXPRESSION, not only as the
-    condition of an `if`.** `return m.containsKey(k) && m.get(k).isEmpty();`
-    and `return o.isPresent() && o.get().isEmpty();` are the normal way to
-    write "absent or blank" in Java and fired on correct code; so did the same
-    guard assigned to a local.
-  - **The negative-first disjunction is now excluded.** `m.get(k) == null || …`,
-    `!m.containsKey(k) || …`, `!o.isPresent() || …` and `o.isEmpty() || …` are
-    the De Morgan duals of the conjunction already excluded, `||`
-    short-circuits identically, and all four fired on correct code.
-    `force || m.containsKey(k)` still fires and always will — it proves
-    nothing — and `b8` in `hits/RealBugs.java` measures that every run.
-  - **`map-get-deref` now excludes `while (m.containsKey(k))`.** The `Optional`
-    rule had excluded its `while` counterpart since the first wave; the map
-    rule had none, so a correct drain loop fired.
-  - **The `switch` re-inclusion in `edge-case-modify-during-iteration` was
-    lexical, not scoped.** `pattern-inside: switch ($S) { case $C: ... }`
-    re-armed the rule on any removal anywhere inside a case — including one
-    inside a **loop** written in that case, where a plain `break` exits the
-    loop and the code is correct. A `switch` dispatching a command with a
-    search-and-remove loop in one arm fired three times. Both disjuncts now
-    nest the `switch` **inside the for-each over that collection**, so the
-    clause tests the nesting ORDER; the two `switch` hit fixtures still fire,
-    and ablating either disjunct drops exactly one of them.
-  - **Nine clauses came back INERT on the first ablation** — the braceless half
-    of each pair, covered by its twin because the only near-miss for that guard
-    shape was a braced one. Nine near-miss functions were added rather than
-    nine clauses deleted, since the braceless guard is real Java that fires
-    without them. Final ablation: 34 exclusion clauses, all live, none moving
-    the real-bugs count.
-- **A sixth review sweep closed the last false-positive class and made the
-  silent-rule-failure family self-enforcing.** The merge was approved with these
-  four follow-ups.
-  - **`map-get-deref` no longer fires on iteration over the map's own
-    `keySet()`.** `for (String k : m.keySet()) { … m.get(k).trim() … }` is the
-    commonest map-iteration idiom in Java: the loop header binds the key **from
-    the map itself**, so presence is guaranteed on every syntactic path reaching
-    the dereference — the same standard by which `containsKey` is accepted as a
-    guard — and it was not in the accepted-limitations table either. The clause
-    unifies **both** metavariables, the map iterated with the map dereferenced
-    and the loop variable with the key passed to `get`, and `b13` / `b14` in
-    `hits/RealBugs.java` break one unification each and must keep firing.
-    Measured over the five correct-code shapes the reviewer wrote: it closes the
-    plain loop, the `this.`-qualified loop and the loop whose dereference is
-    nested inside an `if`; the `entrySet()` form and the form that copies the
-    key set to a local first remain, and are now **accepted limitation (11)**
-    rather than an implication.
-
-    **One clause, not the braced/braceless pair every `if` guard carries**, and
-    that was measured in four forms first: the deref-requiring pair and the
-    plain `for (…) { … }` both close the braced shapes and leave the braceless
-    one firing, while writing the body as a bare statement ellipsis closes both
-    at once. A pair would have been half inert, which is the defect class this
-    series has now caught six times. Nor is it scoped to a branch: a for-each
-    has no `else` arm, the whole body runs with the key present, so excluding
-    the whole node is exactly right here — the arm-scoping lesson does not transfer.
+    `ConcurrentModificationException`.** A `remove()` inside a `switch` followed
+    by `break;` was excluded by the paired `remove(); break;` clause — but that
+    `break` leaves the *switch*, not the loop, so the for-each calls `next()`
+    again on a mutated collection. The plain-`break` exclusion now applies only
+    outside a `switch`, and the `switch` re-inclusion nests the `switch`
+    **inside the for-each over that collection**, so the clause tests the nesting
+    ORDER rather than matching lexically anywhere inside a `case`.
+  - **A `finally` clause silenced two of the pack's rules outright — the third
+    pack in a row with the identical hole.** A Java `try` *with* a finalizer is a
+    different AST node, so attaching `finally { cleanup(); }` to a swallowing
+    catch made `empty-catch` and `printstacktrace-only` report nothing at all:
+    **3 of 6 → 6 of 6** in each. `memory-leak-stream-not-closed` had it in the
+    **opposite direction** — there the try shape lives in an *exclusion*, so
+    **four correct shapes fired at WARNING on streams that are closed**. Zero
+    now.
   - **The accepted-limitations table had nine rows and every one was a false
-    positive.** That asymmetry is the shape of the defect the previous two waves
-    were about: nobody was looking in the recall direction, so nothing was ever
-    written down there. Every row now states its direction, and three rows are
-    new — the **invalidated-guarantee** false-negative class (9), five measured
-    guaranteed throws where the guard's guarantee is destroyed *inside the
-    region the exclusion covers*, which is the fifth sweep's whole-node bug on the
-    **temporal** axis instead of the branch axis; the local-boolean guard (10),
-    agreed in review five waves ago and never written down; and the two
-    `keySet()` residue shapes (11).
-  - **The real-bugs corpus covered 4 of the 8 rules, and the gap was the
-    riskiest one.** Measured: `map-get-deref` 9, `optional-get` 6,
-    `loop-lte-length` 4, `static-dateformat` 1, and **nothing** for
-    `modify-during-iteration` — the rule carrying eight exclusion clauses over a
-    seven-branch receiver enumeration and the file's only nested re-inclusion, and the rule whose exclusion swallowed a real
-    `ConcurrentModificationException` in wave 4. Its real bugs lived only in
-    `hits/ModifyDuringIteration.java`, written by the rule's own author, which
-    is exactly the artefact the corpus exists to compensate for.
-    `hits/IterationBugs.java` adds six reviewer-written CMEs — a `switch` under
-    an `if`, a `switch` in an inner loop, a `switch` in a `try`, a braced `case`
-    block, two statements between removal and `break`, a removal in a nested
-    `if`. The integration test now **states** which rules the corpus covers and
-    which it does not: the three it does not (`empty-catch`,
-    `printstacktrace-only`, `stream-not-closed`) are the three that carry no
-    guard exclusions, so they are low-risk by construction — a decision now,
-    not an accident.
-  - **Three silent-failure modes are now caught by one enforced invariant.** A
-    `pattern-either` branch with no positive term (`RuleParseError`), an
-    unquoted `?` (`Invalid YAML file`) and `... <... e ...> ...` inside a block
-    have each shipped through this file, and all three print a successful scan.
-    They are one family: **fewer rules load than the file declares, exit 0.**
-    The total-hits assertion that came with the real-bugs corpus is already the
-    family-wide catch, but only
-    while every rule has a hit fixture, which nothing stated. Two assertions
-    close it: the set of rule ids the `hits/` fixtures exercise must equal the
-    `- id:` entries parsed out of the YAML itself, and
-    `semgrep --validate --quiet` must exit 0 with **both** streams empty — which
-    also catches a clause-level compile failure that happens not to change any
-    finding, the one thing no finding-count assertion can see. Measured against
-    all three traps: exit 2, 5 and 2.
-  - **Accepted false positive (9) was falsified by its own instance.** Its
-    justification — an extra last-but-one-operand clause "removes one of two
-    findings, the line still fires" — was measured on
-    `flag && a.isPresent() && b.isPresent() && a.get().equals(b.get())`, a line
-    carrying **two** `get()` calls. On the far commoner single-`get()` chain
-    that clause silences the line outright. The row was rewritten here and then
-    **deleted** in the next sweep, once re-measurement showed the conclusion was
-    wrong too and the clause was applied.
-- **A seventh review sweep applied the clause the sixth had deferred, and
-  deleted the row that argued against it.** One item, and the smallest diff of
-  any sweep, but it retires the longest-standing wrong answer in the pack.
-  - **Both null-safety rules now honour an expression guard used in a CHAIN.**
-    `flag && m.containsKey(k) && m.get(k).isEmpty()`,
-    `flag && o.isPresent() && o.get().isEmpty()`, and the `||` duals, are
-    ordinary correct Java — a feature flag or a cheap test short-circuiting in
-    front of the guard — and all of them fired. Seven clauses, one per
-    expression guard the two rules already excluded at two operands
-    (`containsKey &&`, `get() != null &&`, `!containsKey ||`, `get() == null ||`,
-    `isPresent() &&`, `!isPresent() ||`, `isEmpty() ||`). Measured: nine
-    near-miss shapes silenced, hit fixtures unmoved at 69, and each of the seven
-    ablates live on its own shape.
-  - **`$X` matches the whole left-nested subtree, and that is the finding.** A
-    Java conjunction nests to the left — `a && b && c` is `(a && b) && c` — so
-    `$X && GUARD && DEREF` matches a chain of **any length** whose last-but-one
-    operand is the guard. One clause per guard is therefore enough, and a second
-    clause "for longer chains" would be inert; the four-operand shapes are
-    closed by the same clause as the three-operand ones.
-  - **Accepted false positive (9) is deleted rather than reworded.** It had
-    carried two successive justifications, and both were reasoning about
-    variables that do not control the outcome: the first measured "removes one
-    of two findings" on a line that happened to carry two `get()` calls, the
-    second generalised to "one clause leaves 4+ operand chains firing" when
-    chain length is not the discriminator at all. A row recording a deferred
-    decision on a false premise is worse than no row, because it reads as
-    considered. The remaining rows renumber; the reasoning is now in the rule
-    file, next to the clauses, where the next person will hit it.
-  - **What still fires, and is pinned.** Six new corpus entries (`b15`–`b20`)
-    cover the three ways a chain can look like a guard without being one: a
-    chain guarding a **different** key or Optional; a **positive-first**
-    disjunction, where the dereference runs precisely when the test was false;
-    and a **negated** guard in a conjunction, where the value is proven absent
-    at the point it is read. Also still firing, and no longer a table row: a
-    chain whose guard is not the last-but-one operand because it guards two
-    different things at once.
-  - **A fourth member of the silent-rule-failure family, found by walking into
-    it.** Semgrep's config loader decodes the rule file with the **locale**
-    codec, not UTF-8. On a Windows cp1252 locale the bytes `0x81`, `0x8D`,
-    `0x8F`, `0x90` and `0x9D` are undefined, and they are exactly the second
-    UTF-8 byte of five characters (U+00C1, U+00CD, U+00CF, U+00D0, U+00DD), so
-    **one** of them in a Portuguese comment takes the entire file down — while
-    lowercase is always fine (`á` is `0xC3 0xA1`), which is why this pack's
-    prose has always worked. It presents exactly like the other three: the scan
-    returns `results: 0`, `paths.scanned: 0` and `errors: 0`, so a caller
-    reading only the findings sees a clean scan. Both wave-6/7 guards caught it
-    — the `paths.scanned` assertion and `semgrep --validate` — which is the
-    first time that machinery has caught a trap nobody had seen before. The
-    rule file now says so in its header, and the comment cannot spell the
-    offending characters, because spelling them breaks the file that describes
-    them. The rule is stated **narrowly and measured**: only two of the twelve
-    accented capitals Portuguese uses are affected, and the first version of the
-    warning — "no uppercase accented letters" — was wrong by excess, which is
-    the same defect this sweep set out to fix. All six packs in
-    `configs/semgrep/` are clean of those bytes today.
+    positive.** That asymmetry is the shape of the defect the last sweeps were
+    about: nobody was looking in the recall direction, so nothing was ever
+    written down there, and a wave could close a false positive, silently delete
+    recall, and still go green. Every row now states its **direction**, and the
+    recall-side rows are new — the **invalidated-guarantee** class (a guarantee
+    the guard establishes and the code then *destroys* inside the region the
+    exclusion covers, which is the whole-node problem on the **temporal** axis
+    instead of the branch axis; five measured reproductions, every one a
+    guaranteed throw, every one silent) and the local-boolean guard.
+  - **One row left the table, which is the other half of the lesson.** The
+    conjunction-chain false positive sat there for four waves under two
+    successive justifications, and both were reasoning about variables that did
+    not control the outcome. Re-measured, it was not a limitation at all, and the
+    clause that closes it costs nothing: `flag && m.containsKey(k) &&
+    m.get(k).isEmpty()` and its `||` duals are ordinary correct Java, and a Java
+    conjunction nests to the left, so **one clause per guard covers a chain of
+    any length**. A row here is an assertion with no test behind it — unlike
+    every other claim in these packs — so a row that has never been re-measured
+    is exactly as trustworthy as the day someone wrote it, and no more.
 
+- **The three C# rules that found NOTHING on 11 800 files: two were right, two
+  were reading one spelling.** `rethrow-loses-stacktrace`,
+  `off-by-one-loop-lte-count` and `edge-case-modify-during-iteration` scored
+  **0** on `dotnet/runtime` next to `lock-on-shared-instance` 322. **A zero has
+  two readings and they are opposite** — the bug is absent, or the rule is
+  silently broken — and this series has nine recorded ways for Semgrep to report
+  success while matching nothing. Each was probed with a file carrying the exact
+  bug in every idiomatic spelling.
+  - **`rethrow-loses-stacktrace` — correct, and confirmed independently.** A
+    brace-depth textual oracle with no Semgrep in it finds **201
+    `throw <ident>;` statements in the corpus and 0 that rethrow the caught
+    variable**, while finding all 10 fixture sites as its positive control.
+  - **The two off-by-one rules — correct, but each read one spelling of two
+    dimensions.** The prime suspect was `var`, and **the reverse of the pack's
+    own warning does not hold**: `var` in a *pattern* is a wildcard for the
+    declared type, so `for (var $I = 0; …)` matches `for (int i = 0; …)` exactly.
+    Two other dimensions did bite, and **neither had a fixture, so neither could
+    ever have moved a number**: `i++` matched and **`++i` did not** (a different
+    node), and `{ … }` did not match a **braceless** body. Both are ordinary C#;
+    `dotnet/runtime` writes `++i` in a `<=` header itself. Closed with a
+    two-branch `pattern-either` and an ellipsis body on both rules.
+  - **Receiver types added on the same measurement**: `Collection<T>` and
+    `ObservableCollection<T>`, to `loop-lte-count` (six types → eight) and
+    `modify-during-iteration` (four → six). `metavariable-type` is not
+    subtype-aware, so each type is an independent claim, probed one at a time.
+    **The widening cost zero findings on the same 11 800 files** — shipped pack
+    against widened pack, compared per rule, every delta 0 — and the three zeros
+    stay zero, which is now a measurement rather than a silence.
 
-### Changed
+- **A caveat this corpus needed and did not have: these counts are noisy.**
+  `empty-catch` came back 407 in one run and 402 in the next — the *same pack*
+  over the *same corpus* — because semgrep-core's per-rule timeout is not
+  deterministic and it gives up on a handful of very large files. Thirteen
+  timeouts versus eighteen accounts for all five findings, exactly.
+  `paths.scanned` reads 11 800 either way, so it is necessary and **not
+  sufficient**: the timeouts live in `errors`. A count from this pack is
+  comparable only to a count from the same run, which is why every C# number
+  above is an A/B compared per rule rather than a before-and-after of a total.
+  **The same noise reaches ablation axis 3**, and there it is worse: two runs of
+  the same pack over the same corpus disagreed on 6 of the 12 clauses they both
+  measured, and all 14 findings the harness attributed to clauses of
+  `modify-during-iteration` were `empty-catch` findings in two of the timing-out
+  files — a different rule entirely, which is structurally impossible as an
+  attribution. Axis 3 compares whole-corpus totals across separately executed
+  scans, and the jitter (±5) is bigger than the deltas it reports (2–3).
+  Documented, not changed: the fix is to scope the comparison to the ablated
+  rule's own findings, and the axis-3 verdicts other packs already carry were
+  computed the present way.
 
-- **BREAKING for `create_fix_pr` users: seven of the eight Java rules are now
-  `WARNING`. Only `error-handling-empty-catch` remains `ERROR`.** Nothing
-  disappears from a **scan** — `bug_hunt` does not filter by default — but
-  `create_fix_pr` defaults `severity_min` to `high`, so **the Java pack now
-  contributes almost nothing to the default fix-PR set.** If a Java fix PR
-  comes back empty, this is why; ask for the findings explicitly with
-  `severity_min: "medium"`.
-
-  `create_fix_pr`'s own default was deliberately **not** changed. It affects
-  all four language packs and is a separate decision.
-
-  **The criterion, restated as a question about the output.** The tier rule
-  used to be phrased about the *pattern* — "`ERROR` where the pattern is a bug
-  regardless of intent" — which invites an argument about how good the pattern
-  is, and this pack lost that argument four times. It is now:
-
-  > **Is what the rule EMITS always a bug?**
-
-  A rule whose correctness depends on having recognised a **guard** emits a
-  false positive every single time it meets a guard shape nobody enumerated,
-  and no exclusion list ever closes that, because the guard can always be one
-  method away where a syntactic matcher cannot follow. The length of the
-  exclusion list is evidence *for* the demotion, not against it.
-
-  **`empty-catch` is the only rule that clears the bar**, for the one reason
-  available: its escape hatch is not a guard at all but a *declaration of
-  intent that the rule itself reads* — the Checkstyle / IntelliJ `ignore` /
-  `ignored` / `expected` convention. What it emits after honouring that is an
-  **unmarked** silent swallow, which is a bug whatever the author meant. One
-  rule in eight is the honest result for a syntactic matcher with no dataflow,
-  not a failure of the pack.
-
-  Demoted this round, each with its reasoning written into the rule's own
-  comment: `null-safety-map-get-deref` (26 guard exclusions, every one added
-  because correct code was firing at `ERROR`),
-  `edge-case-modify-during-iteration` (correctness depends entirely on having
-  recognised the exit; two statements between removal and exit is enough to
-  accuse correct code), `race-condition-static-dateformat` (a shared formatter
-  behind `synchronized` access is correct, and proving *all* accesses are
-  synchronized is whole-program analysis — the old "flagging it is defensible
-  anyway" was a **product** argument, not the criterion), and
-  `off-by-one-loop-lte-length`.
-
-  **`loop-lte-length` was measured before it was demoted**, because if the
-  obvious tightening had worked the rule could have stayed at `ERROR` honestly.
-  Requiring the body to actually index the array — `<... $A[$I] ...>` — fixes
-  the inclusive loop that never indexes `a`, does **not** fix the sentinel loop
-  that fills a longer array (`b[i] = (i < a.length) ? a[i] : -1` is correct, and
-  the already-guarded `a[i]` sits right there inside the ternary), and **loses**
-  a real bug where the out-of-bounds index is passed to a helper
-  (`sum += at(a, i)`). A false positive traded for a false negative without
-  fixing the main case, so the patterns were left exactly as they were and only
-  the tier moved. Recorded in the design of record §8 so it does not have to be
-  rediscovered.
-
-  `null-safety-optional-get-no-ispresent` was demoted a round earlier by
-  precisely this argument; applying it to that rule and not to its twin
-  `map-get-deref` was the inconsistency this closes.
-
-  The tier of every Java rule is pinned by the integration test, and this change
-  was made **RED first** — the four flips failed `EXPECTED_SEVERITY` before the
-  YAML was touched, which is the whole point of having pinned it.
-
-### Known gaps
-
-- **No `Integer ==` rule.** Expressing it needs type inference Semgrep OSS does
-  not have; the attempt fired on `v == null` and on primitive comparison.
-- `stream-not-closed` only recognises `new FileInputStream(...)`, and only by
-  that simple name: `FileOutputStream`, `FileReader`, `Socket` and every other
-  closeable leak identically and are not covered, and neither is a
-  fully-qualified `new java.io.FileInputStream(...)` (measured).
-- `static-dateformat` only recognises `SimpleDateFormat`, so a shared
-  `Calendar` or `Matcher` in a static field is not covered. It is no longer
-  blind to the fully-qualified declaration; `stream-not-closed` is now the only
-  rule in the pack with that gap.
-- `map-get-deref` has no dataflow, so a key whose presence is established
-  outside the guard and population shapes the rule enumerates is still flagged
-  — a map filled in a static initialiser, or a total enum mapping declared as a
-  `Map`. A map populated by `put` / `putIfAbsent` / `computeIfAbsent` above the
-  read is no longer flagged.
-- `map-get-deref` does not cover an `EnumMap`: the receiver enumeration is by
-  declared type, and `EnumMap` is not in it.
-- `modify-during-iteration` only matches the enhanced-for form.
-- **Declared-type restriction costs recall.** `metavariable-type` matches the
-  exact declared type with **no subtyping** — measured: `type: List` does not
-  match a `CopyOnWriteArrayList`, which is exactly what makes the enumeration
-  work. So `map-get-deref` is silent on a map behind a project interface or a
-  generic type parameter (`<M extends Map<K,V>> ... m.get(k).f()`) — a raw
-  `Map` still fires — and `modify-during-iteration` is silent on a `Deque`, a
-  `Queue`, a `SortedSet` or a project collection type.
-- **The empty-catch naming escape hatch cuts both ways.** A genuinely swallowed
-  exception escapes the rule simply by being named `ignored`. And in the other
-  direction — which matters more now that `empty-catch` is the only rule left at
-  `ERROR` — the JUnit expected-exception idiom (call the code, `throw new
-  AssertionError` if it did not throw, empty `catch`) fires at `ERROR` when the
-  caught variable is named `e`, and is silent when it is named `expected`. The
-  test idiom has to use the conventional name.
-- `optional-get-no-ispresent` recognises exactly these guard shapes:
-  `if (o.isPresent())` alone or as either operand of a **conjunction**, in the
-  condition of an `if`, with the `get()` in the **then** branch, braced or
-  braceless — the `else` arm still fires, and so does the ternary arm the
-  condition rules out;
-  `while (o.isPresent())`; the same test used as an **expression**
-  (`return o.isPresent() && o.get().isEmpty();`) and the negative-first
-  disjunctions `!o.isPresent() || …` and `o.isEmpty() || …`; each of those three
-  again as a **chain**, with something short-circuiting in front of the guard
-  (`flag && o.isPresent() && o.get()…`), for a conjunction of any length —
-  a positive-first disjunction and a **negated** guard still fire, and are bugs;
-  an early `return`/`throw`/`continue`/`break` under
-  `!isPresent()` or `isEmpty()`, with or without one statement before the exit;
-  the three ternary forms, with the `get()` in the guarded arm;
-  `if (o.filter(p).isPresent())`; and an
-  `Optional<T> o = Optional.of(…)` construction. It misses **any guard that
-  reaches the check through another method** — the concrete case is a guard
-  delegated to a helper, `if (!present(o)) { return d; }`, which needs
-  interprocedural analysis Semgrep OSS does not do — and it deliberately does
-  not treat `a.isPresent() || b` as a guard, since that proves
-  nothing inside the body. Enumerated rather than summarised: the summary that
-  stood here ("inline against the same `Optional` variable") was falsifiable,
-  and was falsified by a compound condition, a multi-statement exit, a `while`
-  and an `Optional.of`; the next version of it, which said "as either operand of
-  a conjunction" without saying **where**, was falsified in turn by four
-  expression-form guards; and the version after that, which said "exactly two
-  operands is the shape excluded", was falsified by the chain clauses, since the
-  count of operands was never what decided it. The rule is `WARNING` precisely
-  because this class of miss has no end.
-
-- **`base.yml`'s `wp-unescaped-output` had never worked**, found by the
-  cross-pack test on its first run. `pattern: echo $_GET[$X]` does not parse as
-  PHP (`Stdlib.Parsing.Parse_error`), so the WordPress XSS rule could not match
-  anything — measured against a file containing a real `echo $_GET['name'];`:
-  `results: 0`, `errors: 1`, exit 2. Quarantined for one wave, then **fixed**:
-  see the entry below. The quarantine machinery in `semgrepPacks.test.ts` went
-  with its last entry rather than staying behind as an empty map.
+- **`routes.yml`: sixteen annotation route rules that never matched the form
+  their framework documents.** Each demanded an argument the canonical form does
+  not supply, so the most ordinary controller in each framework lost routes —
+  silently, because a route this pack does not match produces no error anywhere
+  and simply never enters the attack surface. Measured on a corpus written by an
+  auditor who did not write the rules (52 endpoints): **18 of 52** were reported
+  before this change. **ASP.NET 5 of 15** — a controller scaffolded by
+  `dotnet new webapi`, whose actions carry a bare `[HttpGet]` and whose path
+  lives on the class `[Route("api/[controller]")]`, mapped to **zero routes**,
+  i.e. "this C# API exposes nothing". **NestJS 6 of 12**: `@Get()` and `@Post()`,
+  the forms docs.nestjs.com uses for index and create actions, matched nothing.
+  **Spring 7 of 25**. All 52 are reported now.
+  - **Spring's named-argument forms are matched, and the note in the previous
+    release saying they could not be is withdrawn.** `@GetMapping($PATH, ...)` is
+    indeed rejected as "Invalid pattern for Java" — but only because the ellipsis
+    follows a bare metavariable. `@GetMapping(value = $PATH, ...)` parses cleanly
+    and binds `$PATH` to the path literal alone, whatever order the arguments are
+    written in. The six Spring rules are now `focus-metavariable: $PATH`, because
+    the recovery path that rebuilds captures from byte offsets reads the FIRST
+    argument.
+  - **A bare annotation is reported with an empty own-path, flagged
+    `path_partial` at 'low' confidence** — the endpoint exists, and its full URL,
+    being the class-level prefix, is honestly unknown. A companion `mount` rule
+    was considered and **rejected**: nothing consumes a mount for these
+    frameworks, and adding one would flip every route in that controller from
+    honestly partial to confidently wrong, at its un-prefixed path, which
+    `scan_dast` would then send requests to.
+  - Frameworks that were invisible and are not now: `app.use(prefix, middleware,
+    router)` (which cost every route in the mounted file its resolved path), chi
+    entirely, `mux.Handle`, qualified `#[actix_web::get]` / `#[rocket::get]`,
+    Laravel's fluent / resource / match forms, destructured `process.env` reads,
+    the two-argument .NET env overload, and Laravel's `env()` helper. A fluent
+    chain reported the first path twice and lost the second — `routePath`
+    anchored on the first `(` and now anchors on the call that CLOSES at the end
+    of the span, which fixes Hono's canonical style and Laravel's fluent chain in
+    one.
 
 - **`base.yml` audited rule by rule, and three of the thirteen were doing
   nothing.** The pack `init_project` copies into a user's project as
   `.semgrep.yml` is the only rule file here that ships to somebody else's
-  repository, and it had **no fixture coverage of any kind**. All thirteen rules
-  were run against hand-written vulnerable code and against the correct code
-  that most resembles it; the ten not listed here fire on the bug and are silent
-  on the near-miss, measured.
-  - `wp-unescaped-output` rewritten and fixture-backed. It now covers the whole
-    echoed/printed expression, string interpolation, and a superglobal as a
-    literal operand of a concatenation the statement emits — twelve shapes, one
-    fixture each. It carries **no list of escaping functions**: what it emits is
-    a superglobal in the raw on an output path, so anything that passes through
-    a call — `esc_html()`, `wp_kses()`, `intval()`, or a house escaper nobody
-    could have enumerated — stops matching without needing to be predicted.
-    `pattern-inside: echo $A . $B;` is what keeps the concatenation branch off
-    `echo esc_html($a . $_GET['b']);`, which is correct code the looser scope
-    flags. The `metavariable-regex` on `$SUPER` is load-bearing rather than
-    decorative: `$SUPER[...]` alone matches **any** array access, so without it
-    every `echo $row['title'];` in every WordPress template becomes an
-    ERROR-tier finding — pinned by near-miss fixtures that fire when it is
-    deleted.
-
-    It ships with **one known false positive**, pinned by line in
-    `mcp/test/fixtures/base/known-false-positives/` rather than described in a
-    comment: a superglobal concatenated *inside* an escaping call that is
-    itself an operand of a concatenation the echo emits
-    (`echo esc_html($a . $_GET['b']) . "x";`). It is not removable in Semgrep
-    OSS syntax — `echo` is a CALL node in the PHP AST, so
-    `pattern-not-inside: $F($C . $D)` excludes the echo along with the escaper
-    and takes the rule to zero on everything. The alternative is to anchor the
-    concatenation branch at a bounded set of depths, which trades this for a
-    silent recall cliff at the first echo with one more term than somebody
-    enumerated; in a security pack the missed XSS is the worse failure.
+  repository, and it had **no fixture coverage of any kind**.
+  - `wp-unescaped-output` had never worked (see *Action required*) and is
+    rewritten: a `pattern-either` of `pattern-inside` SCOPES plus a narrow
+    `pattern: $SUPER[...]`, so a finding points at the offending subscript and one
+    statement can report one operand while staying quiet about another. It now
+    sees eight more shapes of real XSS — comma-separated `echo`, nested
+    subscript, a ternary operand, `printf`, an interpolated string as a
+    concatenation operand, and `$_SERVER` / `$_COOKIE`, `$_SERVER['PHP_SELF']`
+    being the canonical reflected XSS in PHP, which the old `GET|POST|REQUEST`
+    regex could not reach.
+  - **The first fix for its cast false positive was a `pattern-not-regex`, and it
+    was wrong in a way worth recording.** A text guard suppresses everything the
+    match covers, and the match was a whole statement: of nine real-XSS lines
+    carrying a cast somewhere in the same statement, **two fired** — and worse,
+    `echo 'use (int)$_GET for numbers: ' . $_GET['x'];` turned the rule off with
+    no cast executed anywhere. **In a security pack that is not a documented
+    trade; it is a switch any helpful — or hostile — string literal can carry.**
+    The cast guard is now six `pattern-not-inside` clauses, which can only remove
+    the operand actually wrapped in a cast; six entries cover all eleven
+    spellings because int/integer, float/double/real, bool/boolean and
+    string/binary collapse to the same node, and enumerating them is legitimate
+    because PHP's cast set is closed by the language.
   - `js-eval-of-user-input` matched `new Function($X)`, the **one-argument**
     form. The canonical Function constructor names its parameters first and
-    passes the body last, so the shape the rule was written for is the shape
-    real code least often has: measured, 0 findings on
+    passes the body last, so the shape the rule was written for is the shape real
+    code least often has: measured, **0 findings** on
     `new Function('a', 'b', body)`. Now `new Function(...)`.
   - `js-document-write` saw `document.write` and not `document.writeln`.
+  - `py-yaml-load` caught one unsafe spelling in six. The rule was
+    `pattern: yaml.load($X)`, a one-argument match — but what makes the call safe
+    is the **loader class**, not the arity. `Loader=yaml.Loader`,
+    `Loader=yaml.UnsafeLoader`, the positional `yaml.load(f, yaml.Loader)`,
+    `yaml.unsafe_load` and `yaml.full_load` all executed arbitrary code unseen.
+    Separately, `yaml.load(stream=f, Loader=yaml.SafeLoader)` was an ERROR on
+    safe code, because the `Loader=` exclusions required a POSITIONAL first
+    argument.
 
-  Neither of the last two would have been caught by `--validate`: both compiled
-  perfectly and matched nothing. The assertion that catches the whole family is
-  the one comparing the rule ids the fixtures exercise against the `- id:`
-  entries parsed out of the YAML — a rule with no hit fixture behind it is a
-  rule nobody has measured.
+  Neither of the two dead JS rules would have been caught by `--validate`: both
+  compiled perfectly and matched nothing. The assertion that catches that whole
+  family is the one comparing the rule ids the fixtures exercise against the
+  `- id:` entries parsed out of the YAML — **a rule with no hit fixture behind it
+  is a rule nobody has measured.**
+
+- **Semgrep's per-user settings file was making a third of the test suite fail
+  under concurrent load, and it read as a broken rule pack.** Semgrep keeps one
+  settings file per USER and every invocation reads it and then WRITES it back.
+  The write path is careful (`mkstemp` + `os.replace`, with a comment in
+  Semgrep's own source saying this exists to avoid concurrent-write races); the
+  **read** path is not — `get_default_contents` does an `os.access` check and
+  then `self.path.open()` with no `try`, so on Windows another process's
+  `os.replace` landing in that window makes the open fail with
+  `PermissionError: [Errno 13]`, which nothing catches. Semgrep dies with a
+  Python traceback and the test reports `Command failed: semgrep --config …`.
+  Measured: **3 failures in 288 invocations at 24-way concurrency, and 0 in 288
+  with per-worker isolation in place** — the mechanism behind "42 test files
+  failed / 86 passed" during three concurrent agent runs, and behind those same
+  files passing instantly when run alone. Note what it is **not**: capping
+  vitest's worker count lowers the collision *rate* and leaves the defect with a
+  longer fuse. Only the test environment is redirected; `mcp/src` deliberately
+  does not do this, because overriding a user's Semgrep settings location from
+  inside a scanner would discard their login state, which is theirs to manage.
+
+- **Four tests asserted the stopwatch rather than the property**, and failed on
+  green code when the machine was busy. Each was reproduced deliberately (60 CPU
+  burners on a 24-core box) before anything was changed, then re-run under the
+  same load. `expectWellUnderDeadline` asserted 2500ms against a 5s budget for a
+  fast path that takes ~200ms idle, reproduced at 4379ms; it is replaced by a
+  race against a budget wide enough that only the regression can lose. "A worker
+  does not keep issuing live requests after the caller cancels" was inferred from
+  `Date.now() - start < 1000` and is now observed at the target, which counts
+  `/slow` hits and asserts exactly one. `createFixPr.test.ts` was diagnosed
+  rather than trimmed: instrumenting `runProcess` shows **~95s of the file's 132s
+  is network round-trips** — six `semgrep --config auto` invocations (48.6s; it
+  refetches the registry every time), eleven `npm audit` (19.9s) and twelve
+  `npm install` runs — so its per-test timeouts were 2–3× a measured 8–18s, which
+  is no margin at all.
+
+- **The `fixprWorktree` flake was a whole-temp-dir sweep, not a deletion
+  failure.** Seven misfires under full-suite parallelism, never one in isolation;
+  the retry hardening shipped in 1.7.2 could not have helped, because nothing was
+  failing to delete. `createWorktree` builds its directory with
+  `mkdtempSync(join(tmpdir(), WORKTREE_DIR_PREFIX))` — the OS temp dir and a
+  prefix shared with every caller — and two tests snapshot every directory with
+  that prefix before and after a call and compare with `toEqual`, while a sibling
+  test file drives real `create_fix_pr` runs using the same prefix and holds one
+  for ~20s. `TMPDIR`/`TEMP`/`TMP` now point at a per-file sandbox, which
+  `os.tmpdir()` re-reads on every call, so both the worktrees and the sweeps
+  looking for them are confined where no sibling can reach.
+
+### Privacy
+
+- **`SECURITY.md` said "Local-only, no telemetry" without qualification. That
+  was wrong**, and it is corrected there. `--config=auto` fetches its ruleset
+  from the Semgrep registry and reports usage metrics to Semgrep Inc. **as a
+  condition of doing so**: passing `--metrics=off` alongside it fails outright
+  with `Cannot create auto config when metrics are off`. Every default
+  `scan_sast` run has therefore sent telemetry, and could not have done
+  otherwise. dev-guardian neither adds to that data nor sees it; what Semgrep
+  collects is documented at <https://semgrep.dev/docs/metrics>. Use
+  `scan_sast(local_only: true)` for a run that sends nothing.
+
+### Known gaps
+
+Measured against the shipped rules, not inferred.
+
+- **No `Integer ==` rule in Java or C#.** Expressing it needs type inference
+  Semgrep OSS does not have; the attempt fired on `v == null` and on primitive
+  comparison.
+- `stream-not-closed` (Java) only recognises `new FileInputStream(...)`, and only
+  by that simple name: `FileOutputStream`, `FileReader`, `Socket` and every other
+  closeable leak identically, as does a fully-qualified
+  `new java.io.FileInputStream(...)` (measured).
+- `static-dateformat` (Java) only recognises `SimpleDateFormat`, so a shared
+  `Calendar` or `Matcher` in a static field is not covered. It is no longer blind
+  to the fully-qualified declaration.
+- `map-get-deref` (Java) has no dataflow, so a key whose presence is established
+  outside the guard and population shapes the rule enumerates is still flagged —
+  a map filled in a static initialiser, or a total enum mapping declared as a
+  `Map` — and it does not cover an `EnumMap`, the receiver enumeration being by
+  declared type. `modify-during-iteration` only matches the enhanced-for form.
+- **Declared-type restriction costs recall, and that is what makes it work.**
+  `metavariable-type` matches the exact declared type with **no subtyping** —
+  measured: `type: List` does not match a `CopyOnWriteArrayList`. So
+  `map-get-deref` is silent on a map behind a project interface or a generic type
+  parameter, and `modify-during-iteration` is silent on a `Deque`, a `Queue`, a
+  `SortedSet` or a project collection type.
+- **The empty-catch naming escape hatch cuts both ways.** A genuinely swallowed
+  exception escapes the rule by being named `ignored`; and in the other
+  direction, the JUnit expected-exception idiom fires when the caught variable is
+  named `e` and is silent when it is named `expected`.
+- `optional-get-no-ispresent` (Java) misses **any guard that reaches the check
+  through another method** — `if (!present(o)) { return d; }` needs
+  interprocedural analysis Semgrep OSS does not do — and deliberately does not
+  treat `a.isPresent() || b` as a guard, since that proves nothing inside the
+  body. The enumeration of the guard shapes it *does* recognise lives in the rule
+  file; the summary that used to stand here was falsified four times running, and
+  the rule is `WARNING` precisely because this class of miss has no end.
+- `wp-unescaped-output` (base) treats **inside any call as handled**, which is a
+  far stronger claim than "an escaper handles it": `wp_unslash()`,
+  `stripslashes()`, `trim()`, `sprintf()`, `implode()`, `nl2br()`,
+  `str_replace()` are all measured silent and none of them escapes HTML. The
+  sharpest case is WordPress's own idiom — `echo wp_unslash($_GET['x']);` is
+  textbook XSS and is syntactically indistinguishable from the correct
+  `echo esc_html(wp_unslash($_GET['x']));`. Enumerating the non-escapers is the
+  open-set problem inverted, so the limitation is named instead of closed. It
+  also cannot follow data flow: a heredoc assigned to a variable and echoed later
+  is not matched.
+- `php-sql-injection-direct` (base) targets `mysql_query`, removed in PHP 7, and
+  `mysqli_query`; the canonical WordPress form `$wpdb->query("..." . $id)` is a
+  different API surface and is left to a rule of its own.
+- `routes.yml` is **not registered with the ablation harness**: it has no
+  `hits/` + `misses/` fixture pair, so axes 0, 1 and 2 have nothing to measure
+  against, and 20 of its 64 rules have no ablatable clause, so registering it
+  would need fixtures before the report said anything about two thirds of it.
+- **Resolving class-level route prefixes** (`@Controller('users')` and
+  `[Route("api/[controller]")]`) is a follow-up in `resolvers/node.ts`, not a
+  rule-pack change. Until then those endpoints are honestly `path_partial`.
 
 ### Accepted limitations
 
 Reproduced against the review fixtures that exist today, and kept rather than
-fixed. **Every row states its DIRECTION**, because for six waves this table had
-nine rows and all nine were false positives — the shape of the defect the last
-two waves were about. Nobody was looking in the recall direction, so nothing was
-ever written down there, and a wave could close a false positive, silently
-delete recall, and still go green. Rows (9) and (10) are the first entries on
-the other side; the real-bugs corpus in `hits/` is the machinery that keeps them
-honest.
+fixed. **Every row states its DIRECTION**, because for six waves the Java table
+had nine rows and all nine were false positives.
 
-One row also **left** this table, which is the other half of the lesson. The
-conjunction-chain false positive sat here for four waves under two successive
-justifications, and both were reasoning about variables that did not control the
-outcome; re-measured, it was not a limitation at all, just an unexamined
-metavariable, and the clause that closes it costs nothing. A row here is an
-assertion with no test behind it — unlike every other claim in this pack, which
-has a fixture that fails when it goes stale — so a row that has never been
-re-measured is exactly as trustworthy as the day someone wrote it, and no more.
-
-- **(1)** *False positive.* `memory-leak-stream-not-closed` on
+- **(1)** *False positive.* `memory-leak-stream-not-closed` (Java) on
   `open(); try { … } finally { close(); }` — already the rule's stated
   limitation, and already why it is `WARNING`.
-- **(2)** *False positive.* `race-condition-static-dateformat` on a `static final
-  SimpleDateFormat` whose every access goes through a `synchronized` method —
-  proving *all* accesses are synchronized is whole-program analysis, which
-  Semgrep OSS does not do. This entry used to end "and a shared formatter
-  serialises every caller anyway"; that is a **product** argument rather than
-  the tier criterion, and it is why the rule sat at `ERROR` for four rounds
-  while carrying a documented un-fixable false positive. The finding stays; the
-  tier is now `WARNING`.
-- **(3)** *False positive.* `off-by-one-loop-lte-length` on `i <= a.length` where the body guards
-  with `i < a.length`, or never indexes `a` — the obvious tightening was tried
-  and rejected (it trades this false positive for a false negative on a real
-  bug without fixing the main case), so the patterns stayed and the tier moved.
-- **(4)** *False positive.* `error-handling-printstacktrace-only` on `printStackTrace()` as the
-  fallback when the logger itself threw — the one place the call is right;
-  already `WARNING`; too narrow to encode.
-- **(5)** *False positive.* `null-safety-map-get-deref`, `null-safety-optional-get-no-ispresent`
-  and `edge-case-modify-during-iteration` where **two or more** statements sit
-  between the guard (or the removal) and the exit —
-  `if (!m.containsKey(k)) { log(); metric(); return ""; }`,
-  `items.remove(s); log(s); n++; break;`. The deliberate price of bounding the
-  exclusions instead of using a statement ellipsis: the ellipsis matches deep
-  and would swallow `if (!m.containsKey(k)) { if (strict) { return ""; } }` and
-  `items.remove(s); if (done) { break; }`, which are real bugs. A false
-  negative that hides a bug is worse than this false positive.
-- **(6)** *False positive.* The same three rules on any guard reached **through a helper
-  method** — `if (!present(o)) { return d; }` — which needs interprocedural
-  analysis Semgrep OSS does not do. Already the stated reason
-  `optional-get-no-ispresent` is `WARNING`.
-- **(7)** *False positive.* `null-safety-map-get-deref` on a key whose presence is established
-  outside the shapes the rule enumerates: a map filled in a static initialiser,
-  or a total enum mapping declared as a `Map`. Excluding "any map that ever
-  received a `put`" anywhere in the file would erase the rule.
-- **(8)** *False positive.* `null-safety-map-get-deref` and `null-safety-optional-get-no-ispresent`
-  on a guard held in a **local boolean** —
-  `boolean present = m.containsKey(k); if (!present) { return ""; }` — which is
-  dataflow rather than syntax, and outside Semgrep OSS.
-- **(9)** *False **negative** — the invalidated-guarantee class.* A guarantee
-  the guard establishes and the code then **destroys**, inside the very region
-  the exclusion covers. Five measured reproductions, every one a guaranteed
-  throw, every one silent:
+- **(2)** *False positive.* `race-condition-static-dateformat` (Java) on a
+  `static final SimpleDateFormat` whose every access goes through a
+  `synchronized` method — proving *all* accesses are synchronized is
+  whole-program analysis. This row used to end "and a shared formatter serialises
+  every caller anyway"; that is a **product** argument rather than the tier
+  criterion, and it is why the rule sat at `ERROR` for four rounds while carrying
+  a documented un-fixable false positive.
+- **(3)** *False positive.* `off-by-one-loop-lte-length` (Java, C#) on
+  `i <= a.length` where the body guards with `i < a.length`, or never indexes
+  `a`. The obvious tightening — requiring `<... $A[$I] ...>` — was measured and
+  **rejected**: it fixes the inclusive loop that never indexes, does **not** fix
+  the sentinel loop that fills a longer array, and **loses** a real bug where the
+  out-of-bounds index is passed to a helper. A false positive traded for a false
+  negative without fixing the main case. The C# pack inherits the row, and adds
+  one of its own: `loop-lte-length` scores 2 on `dotnet/runtime` and **both are
+  false positives** of the sentinel shape.
+- **(4)** *False positive.* `error-handling-printstacktrace-only` (Java) on
+  `printStackTrace()` as the fallback when the logger itself threw — the one
+  place the call is right; too narrow to encode.
+- **(5)** *False positive.* The three Java guard rules where **two or more**
+  statements sit between the guard (or the removal) and the exit. The deliberate
+  price of bounding the exclusions instead of using a statement ellipsis: the
+  ellipsis matches deep and would swallow
+  `if (!m.containsKey(k)) { if (strict) { return ""; } }` and
+  `items.remove(s); if (done) { break; }`, which are real bugs. **A false
+  negative that hides a bug is worse than this false positive.**
+- **(6)** *False positive.* The same three rules on any guard reached **through
+  a helper method**, which needs interprocedural analysis.
+- **(7)** *False positive.* `map-get-deref` on a key whose presence is
+  established outside the shapes the rule enumerates. Excluding "any map that
+  ever received a `put`" anywhere in the file would erase the rule.
+- **(8)** *False positive.* `map-get-deref` and `optional-get-no-ispresent` on a
+  guard held in a **local boolean** — dataflow rather than syntax.
+- **(9)** *False **negative** — the invalidated-guarantee class.* A guarantee the
+  guard establishes and the code then **destroys**, inside the very region the
+  exclusion covers. Five measured reproductions, every one a guaranteed throw,
+  every one silent:
 
   ```java
   if (m.containsKey(k)) { m.remove(k); return m.get(k).trim(); }
@@ -1868,42 +1033,24 @@ re-measured is exactly as trustworthy as the day someone wrote it, and no more.
   while (m.containsKey(k)) { m.remove(k); … m.get(k).trim() … }
   ```
 
-  Same root cause as the `else`-arm bug of the fifth sweep — **`pattern-not-inside` excludes
-  the whole node it matched** — but on the **temporal** axis instead of the
-  branch axis. That sweep scoped every guard exclusion to the arm the guard proves,
-  which fixed the branch axis; the sequence axis inside that arm was never
-  examined, and the guard shapes are exactly the ones that carry it: an
-  exclusion that covers a block covers every statement in the block, including
-  the ones that undo the guarantee. Not fixable in Semgrep OSS — knowing that
-  `m.remove(k)` invalidates `m.containsKey(k)` is dataflow — so this is a row
-  and not a clause. The `keySet()` exclusion added in wave 7 inherits it
-  unchanged: `for (String k : m.keySet()) { m.remove(k); m.get(k).trim(); }` is
-  silent for the same reason.
-- **(10)** *False **negative**.* `null-safety-map-get-deref` and
-  `null-safety-optional-get-no-ispresent` where the deref is guarded by a
-  **local boolean** holding the test —
-  `boolean present = m.containsKey(k); if (present) { m.get(k).trim(); }`. The
-  mirror of row (8), which records the same shape as an accepted false
-  positive when the boolean guards an early exit. Both directions are the same
-  missing capability (this is dataflow, not syntax), and having only the
-  false-positive half written down for six waves is precisely the asymmetry
-  this section's preamble is about. Agreed in review and undocumented until
-  wave 7.
-- **(11)** *False positive.* `null-safety-map-get-deref` on the two
-  `keySet()`-adjacent iteration idioms the wave-7 exclusion does **not** reach,
-  measured rather than assumed:
+  Same root cause as the `else`-arm bug — `pattern-not-inside` excludes the whole
+  node it matched — but on the **temporal** axis instead of the branch axis. Not
+  fixable in Semgrep OSS, so this is a row and not a clause.
+- **(10)** *False **negative**.* The same two rules where the deref is guarded by
+  a **local boolean** holding the test — the mirror of row (8). Both directions
+  are the same missing capability, and having only the false-positive half
+  written down for six waves is precisely the asymmetry this section is about.
+- **(11)** *False positive.* `map-get-deref` on the two `keySet()`-adjacent
+  idioms the exclusion does **not** reach, measured rather than assumed:
   `for (Map.Entry<K,V> e : m.entrySet()) { … m.get(e.getKey()) … }`, where the
   key is `e.getKey()` and not the loop variable, and the key set copied to a
-  local first — `Set<String> keys = m.keySet(); for (String k : keys) { …
-  m.get(k) … }` — where the loop header no longer mentions `keySet()` at all.
-  Both are correct Java and both still fire. The exclusion unifies the map
-  **and** the key on purpose; widening it to reach these two means giving up one
-  of those unifications, and the two neighbouring real bugs that would then be
-  swallowed are pinned as `b13` and `b14` in `hits/RealBugs.java`. Stated
-  explicitly rather than left implied: of the five correct-code shapes the
-  reviewer measured, the clause closes three — the plain `keySet()` loop, the
-  `this.`-qualified one, and the one with the dereference nested inside an `if`
-  — and these two remain.
+  local first. The exclusion unifies the map **and** the key on purpose; widening
+  it means giving up one of those unifications, and the two neighbouring real
+  bugs that would then be swallowed are pinned as `b13` and `b14` in
+  `hits/RealBugs.java`.
+- **(12)** *Undecidable.* Four decoy "routes" in the attack-surface corpus still
+  report. They are undecidable from syntax rather than untried, and are pinned as
+  such so a later widening cannot quietly add a fifth.
 
 ## [1.8.0] - 2026-08-18
 
