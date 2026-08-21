@@ -25,7 +25,7 @@ import {
   scopeOf,
   worstFloor,
 } from './axis3.js';
-import { SemgrepFailure, isAbortError, parseScan } from './semgrep.js';
+import { SemgrepFailure, isAbortError, outside, parseScan, under } from './semgrep.js';
 import type { Finding, ScanResult } from './semgrep.js';
 
 function f(ruleId: string, file: string, line: number): Finding {
@@ -227,5 +227,70 @@ describe('parseScan', () => {
     expect(() => parseScan(doc({ paths: { scanned: [] } }), '/corpus', '/corpus')).toThrow(
       SemgrepFailure,
     );
+  });
+});
+
+/**
+ * The hits corpus, for a pack whose fixture directories are not called `hits/`
+ * and `misses/`.
+ *
+ * `routes.yml` is that pack: its true positives are three sibling trees under
+ * one root and its decoys are one subdirectory inside the third, and the
+ * directories cannot be renamed because `test/e2e/rulePackFixture.test.ts` and
+ * the surface tools address them by name. So the hits set is the ROOT minus the
+ * decoy trees, which is `outside(under(all, '.'), ['frameworks/fp'])`.
+ *
+ * Getting either half wrong is a silent wrong answer rather than an error:
+ * drop `outside` and axis 2 defends the four undecidable decoy routes as if
+ * they were true positives; drop `under` and a pack with a real `misses/`
+ * sibling starts counting its near-misses as hits.
+ */
+describe('under and outside', () => {
+  const at = (file: string): Finding => ({
+    ruleId: 'guardian-route-rails',
+    file,
+    line: 1,
+    col: 1,
+    endLine: 1,
+    endCol: 2,
+  });
+  const corpus = [
+    at('apps/py-flask/app.py'),
+    at('annotations/spring/OrderController.java'),
+    at('frameworks/rb/routes.rb'),
+    at('frameworks/fp/decoys.rb'),
+    at('hits/a.js'),
+    at('misses/b.js'),
+  ];
+
+  it('takes a named subdirectory by prefix, and only whole segments', () => {
+    expect(under(corpus, 'hits').map((f) => f.file)).toEqual(['hits/a.js']);
+    // `frameworks` must not swallow a sibling that merely starts the same way.
+    expect(under(corpus, 'frameworks').map((f) => f.file)).toEqual([
+      'frameworks/rb/routes.rb',
+      'frameworks/fp/decoys.rb',
+    ]);
+  });
+
+  it("treats '.' as the fixture root -- every finding, not none of them", () => {
+    // The failure this pins is the one that would ship silently: `'.'` handled
+    // as an ordinary prefix yields `./`, which matches nothing, and a hits
+    // corpus of zero makes axis 0 report all 64 rules as firing on nothing.
+    expect(under(corpus, '.')).toHaveLength(corpus.length);
+  });
+
+  it('subtracts decoy trees, leaving the rest of the root intact', () => {
+    const hits = outside(under(corpus, '.'), ['frameworks/fp']);
+    expect(hits.map((f) => f.file)).toEqual([
+      'apps/py-flask/app.py',
+      'annotations/spring/OrderController.java',
+      'frameworks/rb/routes.rb',
+      'hits/a.js',
+      'misses/b.js',
+    ]);
+  });
+
+  it('is the identity when no decoy tree is registered', () => {
+    expect(outside(corpus, [])).toEqual(corpus);
   });
 });

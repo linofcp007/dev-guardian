@@ -10,12 +10,17 @@
  *   5. Cache hit? → return existing scan_id flagged as cached
  *   6. Insert scans(running)
  *   7. Invoke the scanner (the tool-specific bit)
- *   8. Apply parsers, filter by severity_min, persist findings/CVEs
+ *   8. Apply parsers, persist findings/CVEs
  *   9. Finalize scans → completed / failed / cancelled / output_too_large
- *  10. Build and return ScanResult
+ *  10. Filter by severity_min, then build and return ScanResult
  *
  * Steps 1–6 and 8–10 are common — this factory implements them. Only step
  * 7 (and the bits inside `config.invoke`) is tool-specific.
+ *
+ * **`severity_min` filters the response, never the history.** Step 8 stores
+ * everything the scan found and step 10 shows the caller the slice they
+ * asked for; the order used to be the other way round, which threw the rest
+ * away. See the comment above `bulkInsert` for what that cost.
  *
  * The factory is single-tenant per process: concurrent calls for the same
  * tree_hash are serialised by SQLite's transactions, but the runtime
@@ -37,6 +42,7 @@ import {
 } from '../runners/scannerParsers/index.js';
 import { getScanLimiter } from '../runners/concurrencyLimiter.js';
 import { runShellScript, type ShellRunResult } from '../runners/shellRunner.js';
+import { describeShortfallTiers, severityShortfall } from '../severity/breakdown.js';
 import { filterFindings } from '../severity/filter.js';
 import { SEVERITY_ORDER } from '../types.js';
 import type {
@@ -47,6 +53,7 @@ import type {
   ScanResult,
   ScanType,
   Severity,
+  SeverityFilterDisclosure,
   ToolResult,
   ToolRun,
 } from '../types.js';
@@ -206,7 +213,7 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
       freshThreshold: fresh,
     });
     if (cached) {
-      return cachedResult(plugin, cached.scan_id, warnings);
+      return cachedResult(plugin, cached.scan_id, warnings, input.severity_min);
     }
   }
 
@@ -301,10 +308,25 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
   // before anything counts, persists, or filters the findings.
   if (invocation.dedupeFindings) findings = invocation.dedupeFindings(findings);
 
-  // Severity floor.
-  findings = filterFindings(findings, input.severity_min);
-
   // Persist findings + CVEs (best-effort; one transaction per repo).
+  //
+  // ---- Why the severity floor is NOT applied before this ---------------
+  //
+  // It used to be, and the filtered findings were therefore never written.
+  // A caller passing `severity_min: 'high'` did not merely fail to SEE the
+  // medium findings: they did not exist in the history. So a `set_baseline`
+  // captured from that scan silently omitted them, `diff_scans` compared
+  // against data that was never recorded, the next UNFILTERED scan reported
+  // them as `new` — the opposite of true, they had been there all along —
+  // and the trend showed an improvement that never happened.
+  //
+  // `cves` on the very next line was already upserted unfiltered, so the two
+  // halves of a `deps` scan disagreed with each other about the same
+  // vulnerability: a medium CVE below the floor kept its `cves` row (and its
+  // place in `guardian://cves/active`) while its Finding was dropped.
+  //
+  // The floor is a property of the REQUEST. History records the TREE. The
+  // filtering now happens once, below, on the response only.
   if (findings.length > 0) {
     plugin.storage.findings.bulkInsert(
       findings.map((f) => ({ ...f, scan_id: scanId })),
@@ -331,7 +353,21 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
   if (invocation.error !== undefined) finalize.error = invocation.error;
   // Persist extras into scans.meta so resources (compliance/status, etc.)
   // can read them without forcing a re-run.
-  if (invocation.extras !== undefined) finalize.meta = invocation.extras;
+  //
+  // `severity_min` rides along in the same object. Now that the floor no
+  // longer touches what is stored, a later reader of this scan row needs it
+  // to answer a question the findings alone cannot: "this scan found nothing
+  // above high" and "this scan was FILTERED at high" produce the same reply
+  // count and are otherwise indistinguishable. It goes in `meta` — the
+  // existing `TEXT NOT NULL DEFAULT '{}'` JSON column from schema v1 — and
+  // not a new column: every reader of `meta` (riskScore, sbomDiff,
+  // licenseCompatibility, the dotnet/wp resources, the dashboard snapshot)
+  // picks named keys out of it, so an extra key is inert for all of them and
+  // no migration is needed. No tool puts `severity_min` in `extras`, so
+  // there is nothing to collide with.
+  const meta: Record<string, unknown> = { ...(invocation.extras ?? {}) };
+  if (input.severity_min !== undefined) meta['severity_min'] = input.severity_min;
+  if (Object.keys(meta).length > 0) finalize.meta = meta;
   plugin.storage.scans.finalize(finalize);
 
   if (status === 'cancelled') {
@@ -346,9 +382,13 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     );
   }
 
-  // Build the ScanResult response.
-  const counts = countBySeverity(findings);
-  const top = topFindings(findings, 10);
+  // Build the ScanResult response. THIS is where the severity floor lands:
+  // it shapes the view, never the history persisted above.
+  const visible = filterFindings(findings, input.severity_min);
+  const counts = countBySeverity(visible);
+  const top = topFindings(visible, 10);
+  const floor = severityFloorNotice(findings, input.severity_min, scanId);
+  if (floor?.warning) warnings.push(floor.warning);
 
   // Coverage: did the scanners that were supposed to run actually run? A
   // "0 findings" result is only trustworthy at coverage 'full'. When a primary
@@ -376,6 +416,7 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     top_findings: top,
     warnings,
     coverage,
+    ...(floor ? { severity_filter: floor.disclosure } : {}),
   };
 
   const payload: Record<string, unknown> = {
@@ -426,18 +467,35 @@ function configDriftAdvisory(plugin: PluginContext, projectPath: string): string
   }
 }
 
+/**
+ * A cache hit, shaped exactly like a fresh run of the same call.
+ *
+ * `severityMin` is THIS call's floor, not the cached scan's: the stored
+ * findings are the whole tree (see the persistence comment above), so the
+ * view is re-derived per caller. Without that, a cache hit ignored the floor
+ * the caller had just passed and answered with everything.
+ *
+ * One case it cannot repair: a scan row written by a version of this file
+ * that filtered before persisting holds only the above-floor subset, and
+ * nothing here can tell that apart from a tree with nothing else in it.
+ * Those rows age out of the 5-minute cache window immediately; they persist
+ * in history.
+ */
 function cachedResult(
   plugin: PluginContext,
   scanId: string,
   warnings: string[],
+  severityMin?: Severity,
 ): ToolResult<Record<string, unknown>> {
   const record = plugin.storage.scans.getById(scanId);
   if (!record) {
     return failDomain('unknown_scan_id', `Cached scan ${scanId} could not be loaded.`);
   }
-  const findings = plugin.storage.findings.listByScan(scanId);
-  const counts = countBySeverity(findings);
-  const top = topFindings(findings, 10);
+  const stored = plugin.storage.findings.listByScan(scanId);
+  const visible = filterFindings(stored, severityMin);
+  const counts = countBySeverity(visible);
+  const top = topFindings(visible, 10);
+  const floor = severityFloorNotice(stored, severityMin, scanId);
 
   // Re-derive coverage from the persisted tools_run/missing_tools so a cached
   // scan carries the same honest signal as a fresh one.
@@ -446,7 +504,8 @@ function cachedResult(
     record.tools_run,
     record.missing_tools,
   );
-  const allWarnings = coverageWarning ? [coverageWarning, ...warnings] : warnings;
+  const allWarnings = coverageWarning ? [coverageWarning, ...warnings] : [...warnings];
+  if (floor?.warning) allWarnings.push(floor.warning);
 
   const payload: ScanResult = {
     ...record,
@@ -456,8 +515,50 @@ function cachedResult(
     top_findings: top,
     warnings: allWarnings,
     coverage,
+    ...(floor ? { severity_filter: floor.disclosure } : {}),
   };
   return { ok: true, ...(payload as unknown as Record<string, unknown>) };
+}
+
+/**
+ * The `severity_filter` block for a response, plus the warning that goes
+ * with it — or `null` when no floor was passed and there is nothing to say.
+ *
+ * `warning` is null when the floor withheld nothing: a caller who passes
+ * `severity_min: 'high'` against a project with only criticals should not be
+ * told anything happened, because nothing did.
+ *
+ * `all` must be the UNFILTERED findings of the scan; the whole point is to
+ * describe the gap between those and what the response carries.
+ */
+function severityFloorNotice(
+  all: readonly Finding[],
+  min: Severity | undefined,
+  scanId: string,
+): { disclosure: SeverityFilterDisclosure; warning: string | null } | null {
+  if (min === undefined) return null;
+  const shortfall = severityShortfall(all, min);
+  const disclosure: SeverityFilterDisclosure = {
+    severity_min: min,
+    withheld: shortfall.total,
+    withheld_by_severity: shortfall.by_severity,
+    suggested_severity_min: shortfall.suggested_severity_min,
+    recovered_by_suggestion: shortfall.recovered_by_suggestion,
+  };
+  if (shortfall.total === 0) return { disclosure, warning: null };
+
+  const suggestion =
+    shortfall.suggested_severity_min === null
+      ? ''
+      : ` Pass severity_min "${shortfall.suggested_severity_min}" to see ` +
+        `${shortfall.recovered_by_suggestion} of them.`;
+  return {
+    disclosure,
+    warning:
+      `severity_min "${min}" filtered this response only: ${shortfall.total} finding(s) ` +
+      `(${describeShortfallTiers(shortfall)}) are recorded in scan ${scanId} and are not ` +
+      `shown here. Baselines and diffs against this scan include them.${suggestion}`,
+  };
 }
 
 function countBySeverity(findings: Finding[]): FindingsCountBySeverity {

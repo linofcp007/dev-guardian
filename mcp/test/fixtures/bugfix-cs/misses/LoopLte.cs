@@ -100,6 +100,62 @@ public sealed class LoopLte
         return total;
     }
 
+    // DISCRIMINATING for the SENTINEL-LOOP exclusion added 2026-08-21, and it
+    // is the only near-miss here that came from real code rather than from
+    // imagination: axis 3 of the ablation found that the `$I++` branch of the
+    // LENGTH rule produced exactly two findings on 11 800 files of
+    // `dotnet/runtime`, and that both were this shape.
+    //
+    // The loop runs one past the end ON PURPOSE. The extra position is not an
+    // index — the body compares `i` against the bound first and takes the
+    // end branch, which is how you flush a trailing token without duplicating
+    // the flush after the loop. `ConfigPathUtility.IsValid` is this method,
+    // near enough to copy.
+    //
+    // It carries the `<` comparison in the `i++` spelling; SentinelSwitch
+    // below carries `==` in the `++i` spelling. The pairing is CROSSED on
+    // purpose: the exclusion is a `pattern-not` holding a two-branch
+    // increment `pattern-either` and a two-branch comparison
+    // `pattern-either`, so a single near-miss covering one cell of that 2x2
+    // would leave three clauses with nothing to prove them and they would
+    // read DEAD. Two crossed cells reach all four. Mutation-tested: delete
+    // any ONE of the four branches and exactly one of these two methods
+    // fires.
+    public bool SentinelTernary(char[] xs)
+    {
+        var start = -1;
+        for (var i = 0; i <= xs.Length; i++)
+        {
+            var ch = i < xs.Length ? xs[i] : ';';
+            if (ch == ';')
+            {
+                if (i == start + 1) { return false; }
+                start = i;
+            }
+        }
+
+        return true;
+    }
+
+    // DISCRIMINATING for the same exclusion, in the other two cells of the
+    // 2x2: the `==` comparison and the `++i` increment. Modelled on
+    // `XslNumber.ParseFormat`, the second of the two real sites.
+    public int SentinelSwitch(char[] xs)
+    {
+        var tokens = 0;
+        var startOfToken = 0;
+        for (var i = 0; i <= xs.Length; ++i)
+        {
+            if (i == xs.Length || xs[i] == ',')
+            {
+                tokens += i - startOfToken;
+                startOfToken = i;
+            }
+        }
+
+        return tokens;
+    }
+
     // DOCUMENTARY, not discriminating, and worth labelling so a reader does
     // not assume every near-miss carries the same weight. A `foreach` has no
     // `var $I = 0; $I <= $A.Length; $I++` header at all — it is a

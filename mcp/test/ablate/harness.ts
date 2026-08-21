@@ -103,7 +103,7 @@ import { join } from 'node:path';
 import { writeFileSync } from 'node:fs';
 import { AblationError, ablate, ablateAll, enumerateClauses, roundTrip } from './clauses.js';
 import type { Clause, SkippedClause } from './clauses.js';
-import { SemgrepFailure, findingsMissingFrom, sameFindings, scan, under } from './semgrep.js';
+import { SemgrepFailure, findingsMissingFrom, outside, sameFindings, scan, under } from './semgrep.js';
 import type { Finding, ScanResult } from './semgrep.js';
 import {
   axis3Verdict,
@@ -129,10 +129,34 @@ export interface PackSpec {
   readonly config: string;
   /** Absolute path to the fixture root holding `hits/` and `misses/`. */
   readonly fixtures: string;
-  /** Subdirectory of `fixtures` whose findings are true positives. */
+  /**
+   * Subdirectory of `fixtures` whose findings are true positives, or `'.'` for
+   * the fixture root itself. See {@link under} for why `'.'` exists.
+   */
   readonly hitsSubdir: string;
+  /**
+   * Subdirectories of `fixtures` holding DECOYS: code written to look like
+   * what the pack matches without being it. Subtracted from the hits corpus,
+   * so nothing in them can read as a suppressed true positive on axis 2, and
+   * their baseline count is printed on its own line.
+   *
+   * The count is printed rather than gated because a non-zero decoy baseline
+   * is not automatically a defect. `routes.yml`'s decoy tree produces eight
+   * baseline matches, four of them `guardian_kind: route`, and all four are
+   * documented as UNDECIDABLE in `test/e2e/rulePackFixture.test.ts`: a
+   * `Route::get('not/a/leading/slash')` on a class that merely happens to be
+   * named `Route` is indistinguishable from Laravel's facade, and Ruby's
+   * `get 'config/value'` is exactly what a Sinatra route looks like. A gate at
+   * zero would be a standing failure that teaches the reader to ignore it.
+   */
+  readonly decoySubdirs?: readonly string[];
   /** Axis 3 corpus. Absent = axis 3 is N/A for this pack. */
   readonly realCode?: RealCorpus;
+}
+
+/** How the hits corpus is named in the log and the report. */
+export function hitsLabel(spec: PackSpec): string {
+  return spec.hitsSubdir === '.' ? 'the fixture root' : `${spec.hitsSubdir}/`;
 }
 
 /**
@@ -235,6 +259,20 @@ export interface RuleVerdict {
   readonly hitsFindings: number;
   /** Axis 0. PASS = fires at least once in hits/. N/A = no hits corpus. */
   readonly firesOnHits: Verdict;
+  /**
+   * Baseline findings this rule produced on the REAL corpus, or null when the
+   * pack has none. Zero here means every axis-3 verdict on this rule's clauses
+   * compared an empty set against an empty set: a PASS that measured nothing.
+   *
+   * It is on the page because a multi-language pack makes that the common
+   * case, not the exception. `mcp/src` is TypeScript, so it exercises exactly
+   * two of `routes.yml`'s 64 rules; the other 62 would otherwise print the
+   * same `does not raise ...'s real-code count (+0, floor 0)` line as a rule
+   * the corpus genuinely tested. Same principle as the `N/A` axis 3 prints
+   * when a pack has no corpus at all -- the difference between "measured and
+   * clean" and "not measured" must survive to the reader.
+   */
+  readonly realFindings: number | null;
 }
 
 export interface PackReport {
@@ -249,6 +287,12 @@ export interface PackReport {
   readonly skipped: readonly SkippedClause[];
   readonly collapsed: readonly CollapsedClause[];
   readonly fixtureCorpus: string;
+  /** How the hits corpus is named on the page: `hits/`, or `the fixture root`. */
+  readonly hitsCorpus: string;
+  /** Decoy subdirectories subtracted from the hits corpus. Empty for most packs. */
+  readonly decoyCorpus: readonly string[];
+  /** Baseline findings inside `decoyCorpus`. Reported, never gated -- see `PackSpec`. */
+  readonly baselineDecoys: number | null;
   readonly realCorpus: string | null;
   readonly baselineFixtures: number;
   readonly baselineHits: number;
@@ -342,8 +386,18 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
 
   // Axis 0 needs a `hits/` corpus the way axis 3 needs a real-code one, and
   // reports N/A on the same terms when there is none rather than passing
-  // every rule by default. `routes.yml` is the pack that would land here.
+  // every rule by default.
   const hitsCorpus = existsSync(join(spec.fixtures, spec.hitsSubdir));
+  const hits = hitsLabel(spec);
+  const decoys = spec.decoySubdirs ?? [];
+
+  // The hits corpus is `hitsSubdir` MINUS the decoy trees. Both halves matter
+  // and both are wrong on their own: without the first, a pack with a
+  // `misses/` sibling counts its near-misses as true positives; without the
+  // second, `routes.yml` would count the four undecidable decoy routes as
+  // suppressible true positives and axis 2 would defend them.
+  const hitsOf = (findings: readonly Finding[]): Finding[] =>
+    outside(under(findings, spec.hitsSubdir), decoys);
 
   const withClauses = inventory.rules.filter((r) => r.clauseCount > 0).length;
   options.log(`pack        ${spec.name}`);
@@ -354,7 +408,8 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
       ` (${String(withClauses)} with ablatable clauses, ` +
       `${String(inventory.rules.length - withClauses)} with none)`,
   );
-  options.log(`fixtures    ${spec.fixtures}`);
+  options.log(`fixtures    ${spec.fixtures}  (hits: ${hits})`);
+  if (decoys.length > 0) options.log(`decoys      ${decoys.join(', ')} -- excluded from hits`);
   options.log(`real code   ${real === undefined ? '(none -- axis 3 is N/A for this pack)' : real.label}`);
 
   // ---- Control: the pack as it sits on disk, then the same pack parsed and
@@ -371,7 +426,11 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
         `Every ablation would be measuring the YAML serialiser, not the rules.`,
     );
   }
-  const baselineHits = under(baselineFixtures, spec.hitsSubdir);
+  const baselineHits = hitsOf(baselineFixtures);
+  const baselineDecoys =
+    decoys.length === 0
+      ? null
+      : under(baselineFixtures, spec.hitsSubdir).length - baselineHits.length;
 
   // ---- The real corpus gets the same control, and it doubles as the noise
   // floor. Two scans of the same rules over the same code: `spec.config` as it
@@ -398,7 +457,8 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
   const packFloor = worstFloor(floorByRule);
 
   options.log(`baseline    ${String(baselineFixtures.length)} findings on fixtures ` +
-    `(${String(baselineHits.length)} in ${spec.hitsSubdir}/)` +
+    `(${String(baselineHits.length)} in ${hits})` +
+    (baselineDecoys === null ? '' : `, ${String(baselineDecoys)} in the decoy tree(s)`) +
     (real === undefined ? '' : `, ${String(baselineReal.length)} on ${real.label}`));
   options.log(`control     round-trip of the unmodified pack reproduces the on-disk result exactly`);
   if (real !== undefined) {
@@ -497,6 +557,8 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
   }
   const hitsPerRule = new Map<string, number>();
   for (const f of baselineHits) hitsPerRule.set(f.ruleId, (hitsPerRule.get(f.ruleId) ?? 0) + 1);
+  const realPerRule = new Map<string, number>();
+  for (const f of baselineReal) realPerRule.set(f.ruleId, (realPerRule.get(f.ruleId) ?? 0) + 1);
 
   // A finding's rule id is the last dot-segment of Semgrep's `check_id`. If
   // that stops lining up with the pack's `- id:` values -- a rule id
@@ -504,35 +566,36 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
   // axis 0 becomes noise indistinguishable from the defect it hunts.
   if (baselineHits.length > 0 && !baselineHits.some((f) => inventory.ruleIds.includes(f.ruleId))) {
     throw new Error(
-      `none of the ${String(baselineHits.length)} baseline findings in ${spec.hitsSubdir}/ ` +
+      `none of the ${String(baselineHits.length)} baseline findings in ${hits} ` +
         `carry a rule id this pack declares (got e.g. \`${baselineHits[0]?.ruleId ?? ''}\`). ` +
         `Axis 0 would report every rule as firing on nothing. Aborting.`,
     );
   }
 
   const ruleVerdicts: RuleVerdict[] = inventory.rules.map((r) => {
-    const hits = hitsPerRule.get(r.ruleId) ?? 0;
+    const hitCount = hitsPerRule.get(r.ruleId) ?? 0;
     return {
       ruleId: r.ruleId,
       enumeratedClauses: r.clauseCount,
       ablatedClauses: ablatedPerRule.get(r.ruleId) ?? 0,
       noClausesReason: r.noClausesReason,
-      hitsFindings: hits,
-      firesOnHits: !hitsCorpus ? 'N/A' : hits > 0 ? 'PASS' : 'FAIL',
+      hitsFindings: hitCount,
+      firesOnHits: !hitsCorpus ? 'N/A' : hitCount > 0 ? 'PASS' : 'FAIL',
+      realFindings: real === undefined ? null : (realPerRule.get(r.ruleId) ?? 0),
     };
   });
   const silent = ruleVerdicts.filter((r) => r.firesOnHits === 'FAIL');
   options.log(
     `axis 0      ` +
       (!hitsCorpus
-        ? `N/A -- ${spec.hitsSubdir}/ does not exist under the fixture root, so ` +
+        ? `N/A -- ${hits} does not exist under the fixture root, so ` +
           `"does this rule fire at all?" cannot be asked here`
         : `${String(ruleVerdicts.length - silent.length)}/${String(ruleVerdicts.length)} rules ` +
-          `fire at least once in ${spec.hitsSubdir}/` +
+          `fire at least once in ${hits}` +
           (silent.length === 0 ? '' : `, ${String(silent.length)} FIRE ON NOTHING`)),
   );
   for (const r of silent) {
-    options.log(`  SILENT  ${spec.name} :: ${r.ruleId} -- 0 findings in ${spec.hitsSubdir}/`);
+    options.log(`  SILENT  ${spec.name} :: ${r.ruleId} -- 0 findings in ${hits}`);
   }
   options.log('');
 
@@ -577,10 +640,7 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
       if (fixturesMoved) movedIn.push('fixtures');
       if (realMoved && real !== undefined) movedIn.push(real.label);
 
-      const revealedInHits = findingsMissingFrom(
-        under(ablatedFixtures, spec.hitsSubdir),
-        baselineHits,
-      );
+      const revealedInHits = findingsMissingFrom(hitsOf(ablatedFixtures), baselineHits);
       const addedByClause = real === undefined ? [] : findingsMissingFrom(baseForRule, ablatedForRule);
       const floor = floorByRule.get(clause.ruleId) ?? 0;
 
@@ -705,6 +765,9 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
     skipped,
     collapsed,
     fixtureCorpus: spec.fixtures,
+    hitsCorpus: hits,
+    decoyCorpus: decoys,
+    baselineDecoys,
     realCorpus: real?.label ?? null,
     baselineFixtures: baselineFixtures.length,
     baselineHits: baselineHits.length,

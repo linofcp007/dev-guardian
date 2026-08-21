@@ -186,6 +186,11 @@ bounded too — the latest scan plus two deltas, no multi-week trend
 - Don't run `wp_audit` without WP-CLI — `install_toolchain tools=["wp-cli"]`.
 - Don't run `scan_dast` before `map_attack_surface` — it refuses with
   `no_surface_snapshot` and has no route inventory to probe.
+- Don't read a scan's `severity_min` as "the rest was not found". It filters
+  the response only: the scan records everything it saw, so a baseline taken
+  from a filtered scan is complete and `diff_scans` against it will not call
+  the below-floor findings new. Read `severity_filter` on the result for how
+  many were held back and which floor recovers them.
 - Don't read a clean `scan_dast` result as "no injection vulnerabilities" —
   the own engine sends no injection payloads at all; that class is delegated
   to an opt-in nuclei pass whose default templates test the origin, not this
@@ -199,7 +204,14 @@ bounded too — the latest scan plus two deltas, no multi-week trend
   and a Semgrep rule with no `fix:` field can't be autofixed either; only
   `deps_update_plan` bumps and Semgrep `--autofix` are in reach. And it
   won't open a PR unless you pass `apply: true` — the default run is a
-  dry run that proves the fix and reports it, nothing more.
+  dry run that proves the fix and reports it, nothing more. When it acts on
+  fewer findings than you expected, read `filtered` / `filtered_reason` on
+  the result rather than guessing: they count every open finding it skipped,
+  split by reason (below `severity_min`, no scanner-produced fix, no
+  requested source), and name a lower `severity_min` only when one would
+  genuinely recover something. `create_github_issues` reports the same two
+  fields for its own `severity_min` (default `high`) and `max_issues`
+  (default 10).
 - Three more `create_fix_pr` limits worth knowing before you rely on it:
   maven and gradle bumps are out of reach (inherited from
   `deps_update_plan`'s own ecosystem gap); a second hit of the same rule
