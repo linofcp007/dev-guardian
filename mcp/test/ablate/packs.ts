@@ -74,9 +74,57 @@
  * Turn it on with `--real-code=../mcp/src` when someone is ready to triage
  * whatever it reports.
  *
- * `routes.yml` is deliberately absent: it is a route-inventory pack with no
- * `hits/` + `misses/` fixture pair, so axes 1 and 2 have nothing to measure
- * against. Give it a fixture corpus and it belongs here like the rest.
+ * **`routes.yml`, and why its registration looks nothing like the others.**
+ * It was left out of this file on the grounds that it had no `hits/` +
+ * `misses/` fixture pair. It does have one; the directories are simply older
+ * than the convention and named for what they are:
+ *
+ *   hits    `mcp/test/fixtures/surface/` -- `apps/` (whole sample
+ *           applications), `annotations/` (each framework's own documented
+ *           declaration style) and `frameworks/` (an auditor's corpus of every
+ *           form the pack claims). Files that MUST produce routes.
+ *   misses  `frameworks/fp/` -- five decoy files of ordinary code shaped like
+ *           routes. Registered as `decoySubdirs`, i.e. subtracted from hits.
+ *
+ * They are not renamed to `hits/` and `misses/` because
+ * `test/e2e/rulePackFixture.test.ts` and the surface tools address them by
+ * name, so the harness takes `hitsSubdir: '.'` (the fixture root) instead.
+ *
+ * **The decoy baseline is 9, not 0**, and four of those are `guardian_kind:
+ * route`. Every one is undecidable rather than untried, and the e2e test
+ * enumerates them: `Route::get('not/a/leading/slash')` on a class that merely
+ * happens to be called `Route` is indistinguishable from Laravel's facade, and
+ * Ruby's `get 'config/value'` is exactly what a Sinatra route looks like. The
+ * other five are an `app.use('/static', express.static(...))` mount, which is
+ * a real mount, and four ordinary imports in the decoy files. So the number is
+ * printed and pinned, never gated at zero.
+ *
+ * It was 8 until five decoys were added for the guards that the first full run
+ * reported DEAD — three chi exclusions, `guardian-mount-express`'s `$PREFIX`
+ * regex and `guardian-route-express`'s one-argument `pattern-not`. All five
+ * are load-bearing and all five had no fixture that reached them; the decoys
+ * are in `frameworks/fp/decoys.{go,js}`, marked `F07`, `F08` and `F31`-`F33`.
+ * **Not one of them moved this number**, which is the point of them: on the
+ * shipped pack every one is excluded by the guard it exists for, and each
+ * becomes a finding only when that guard is ablated. The +1 is a single
+ * ordinary `require('cors')` the `app.use` decoy needs to be plausible code —
+ * an import, like the three that were already here.
+ *
+ * **Axis 3 is `mcp/src`, and it is nearly all vacuous.** Measured: 830 baseline
+ * findings, and they belong to exactly TWO of the pack's 64 rules --
+ * `guardian-import-esm` (824) and `guardian-env-node` (6). Those two are worth
+ * the corpus on their own: `guardian-import-esm` fires 824 times on 190 files
+ * of this repo's own TypeScript, so a clause of it that starts matching more
+ * has a large, sensitive baseline to move. For the other 62 rules axis 3
+ * compares an empty set against an empty set and passes by construction. That
+ * is the same weakness `GUARDIAN_RUST_SRC` carries above, and the fix is the
+ * same one: state it, and make the report say so per rule --
+ * `RuleVerdict.realFindings` puts `real 0 -- axis 3 vacuous here` on the
+ * coverage line of every rule the corpus never reached. The alternative
+ * considered and rejected was axis 3 `N/A` for the whole pack, which would
+ * have been cheaper (the corpus costs ~23s per clause, roughly doubling the
+ * run) and would have thrown away the only real-code evidence available for
+ * the highest-volume rule in the repo.
  */
 
 import { existsSync } from 'node:fs';
@@ -168,6 +216,17 @@ export const PACKS: readonly PackSpec[] = [
     realCode: RUST_STDLIB,
   },
   { name: 'base', config: config('base'), fixtures: fixtures('base'), hitsSubdir: 'hits' },
+  // The route-inventory pack. See the file header for the corpus mapping, the
+  // pinned decoy baseline and why axis 3 is `mcp/src` despite reaching only
+  // two of its 64 rules.
+  {
+    name: 'routes',
+    config: config('routes'),
+    fixtures: fixtures('surface'),
+    hitsSubdir: '.',
+    decoySubdirs: ['frameworks/fp'],
+    realCode: MCP_SRC,
+  },
 ];
 
 export function packByName(name: string): PackSpec | undefined {

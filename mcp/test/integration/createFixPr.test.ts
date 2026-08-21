@@ -207,6 +207,17 @@ function ctx() {
  * the seeding pattern already used by `ciRunScans.test.ts` / `metaTools.test.ts`.
  */
 function seedFinding(c: ReturnType<typeof ctx>, projectPath: string, finding: Finding): void {
+  seedFindings(c, projectPath, [finding]);
+}
+
+/**
+ * The plural form — and it is not a convenience. `listOpenForProject` reads
+ * the LATEST completed scan only, so seeding N findings by calling
+ * `seedFinding` N times creates N scans and the tool sees exactly one
+ * finding: the last. Any test about counts across several findings has to
+ * put them in one scan, which is also what a real scan does.
+ */
+function seedFindings(c: ReturnType<typeof ctx>, projectPath: string, findings: Finding[]): void {
   const scanId = randomUUID();
   c.storage.scans.insert({
     scan_id: scanId,
@@ -214,7 +225,7 @@ function seedFinding(c: ReturnType<typeof ctx>, projectPath: string, finding: Fi
     project_path: projectPath,
     tree_hash: 'deadbeef',
   });
-  c.storage.findings.bulkInsert([{ ...finding, scan_id: scanId }]);
+  c.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
   c.storage.scans.finalize({ scan_id: scanId, status: 'completed', tools_run: [], missing_tools: [] });
 }
 
@@ -392,6 +403,76 @@ describe('create_fix_pr', () => {
     );
     expect(atMedium).toMatchObject({ ok: true, groups: [{ key: 'semgrep' }] });
   }, REGISTRY_BACKED_TIMEOUT_MS);
+
+  it('says what the severity floor filtered out, instead of returning an unexplained empty result', async () => {
+    // The defect this closes: `severity_min` defaults to `high`, the 1.9.0
+    // audit took the ERROR tier (the only tier that maps to `high`) from 20
+    // rules of 34 to 4 of 58, and a default run on a project whose findings
+    // are all `medium` came back with `groups: []` and nothing at all saying
+    // 40 findings had been filtered. Selects no group, so no worktree, no
+    // scanner and no registry round-trip — this is a report about the
+    // findings, produced before any of that would have run.
+    const c = ctx();
+    seedFindings(c, repo, [
+      ...Array.from({ length: 3 }, (_unused, i) =>
+        semgrepFinding({ severity: 'medium', fingerprint: `fp-med-${i}` }),
+      ),
+      semgrepFinding({ severity: 'low', fingerprint: 'fp-low-1' }),
+    ]);
+    const mod = TOOLS.find((t) => t.name === 'create_fix_pr');
+
+    const res = await mod?.handler({ project_path: repo, sources: ['semgrep'] }, c as never);
+    expect(res).toMatchObject({
+      ok: true,
+      groups: [],
+      filtered: {
+        considered: 4,
+        candidates: 0,
+        excluded: 4,
+        by_reason: { below_severity_min: 4, no_fix_available: 0, no_fix_source: 0 },
+        below_severity_min: { suggested_severity_min: 'medium', recovered_by_suggestion: 3 },
+      },
+    });
+    if (!res) throw new Error('create_fix_pr tool not found');
+    const reason = okResult<{ filtered_reason: string | null }>(res).filtered_reason;
+    expect(reason).toBeTypeOf('string');
+    expect(String(reason)).toContain('3 medium, 1 low');
+    expect(String(reason)).toContain('severity_min "medium"');
+  });
+
+  it('reports the breakdown on a partial run too, not only an empty one', async () => {
+    // A run that acts on 1 of 3 is nearly as opaque as one that acts on 0.
+    const c = ctx();
+    seedFindings(c, repo, [
+      semgrepFinding({ fingerprint: 'fp-high-1' }),
+      semgrepFinding({ severity: 'medium', fingerprint: 'fp-med-a' }),
+      semgrepFinding({ fix_available: false, fingerprint: 'fp-nofix-a' }),
+    ]);
+    const mod = TOOLS.find((t) => t.name === 'create_fix_pr');
+
+    const res = await mod?.handler({ project_path: repo, sources: ['semgrep'] }, c as never);
+    if (!res) throw new Error('create_fix_pr tool not found');
+    const payload = okResult<{ filtered: unknown; filtered_reason: string | null }>(res);
+    expect(payload.filtered).toMatchObject({
+      considered: 3,
+      candidates: 1,
+      excluded: 2,
+      by_reason: { below_severity_min: 1, no_fix_available: 1, no_fix_source: 0 },
+    });
+    expect(String(payload.filtered_reason)).toContain('no scanner-produced fix');
+  }, REGISTRY_BACKED_TIMEOUT_MS);
+
+  it('accounts for every finding even when nothing was excluded', async () => {
+    const c = ctx();
+    const mod = TOOLS.find((t) => t.name === 'create_fix_pr');
+    const res = await mod?.handler({ project_path: repo, sources: ['semgrep'] }, c as never);
+    if (!res) throw new Error('create_fix_pr tool not found');
+    // filtered_reason is null iff nothing was excluded — the same contract
+    // deferred_reason already keeps with deferred.
+    const payload = okResult<{ filtered: unknown; filtered_reason: string | null }>(res);
+    expect(payload.filtered_reason).toBeNull();
+    expect(payload.filtered).toMatchObject({ considered: 0, candidates: 0, excluded: 0 });
+  });
 
   it('drives a real selected group through the worktree and cleans up, whatever the fix outcome', async () => {
     // The strongest form of the "no worktree survives" property: unlike the

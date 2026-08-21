@@ -120,6 +120,34 @@ export interface ScanRecord {
 
 export type FindingsCountBySeverity = Record<Severity, number>;
 
+/**
+ * What a `severity_min` floor withheld from ONE response — never from the
+ * scan's history.
+ *
+ * `severity_min` is a property of the request, not of the tree that was
+ * scanned, so the findings counted here ARE persisted under this scan's
+ * `scan_id` and every history reader (`diff_scans`, `set_baseline`,
+ * `regression_alert`, `report_export`) sees them. This block exists so the
+ * caller can tell a thin response apart from a clean project, which is the
+ * only difference the two have from the outside.
+ *
+ * A structural flattening of `severity/breakdown.ts`'s `SeverityShortfall`
+ * plus the floor that produced it — declared here rather than imported so
+ * `types.ts` keeps its zero imports.
+ */
+export interface SeverityFilterDisclosure {
+  /** The floor the caller passed. */
+  severity_min: Severity;
+  /** How many findings this response withholds. Zero when none fell below. */
+  withheld: number;
+  /** Per-tier counts of the withheld findings; every tier present, zeroes included. */
+  withheld_by_severity: FindingsCountBySeverity;
+  /** Smallest step down from the floor that recovers anything. Null when nothing was withheld. */
+  suggested_severity_min: Severity | null;
+  /** How many of `withheld` that suggestion actually recovers — never assumed to be all. */
+  recovered_by_suggestion: number;
+}
+
 export interface ScanResult extends ScanRecord {
   findings_count_by_severity: FindingsCountBySeverity;
   top_findings: Finding[];
@@ -130,6 +158,13 @@ export interface ScanResult extends ScanRecord {
    * tools_run/missing_tools; see `tools/scanCoverage.ts`.
    */
   coverage?: ScanCoverage;
+  /**
+   * Present whenever `severity_min` was passed. `findings_count_by_severity`
+   * and `top_findings` above describe the FILTERED view; this describes what
+   * that view left out, and the scan's stored findings are the union of the
+   * two.
+   */
+  severity_filter?: SeverityFilterDisclosure;
 }
 
 export interface Cve {

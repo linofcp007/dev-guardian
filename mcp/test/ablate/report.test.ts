@@ -32,6 +32,7 @@ function ruleVerdict(over: Partial<RuleVerdict> & { ruleId: string }): RuleVerdi
     noClausesReason: undefined,
     hitsFindings: 4,
     firesOnHits: 'PASS',
+    realFindings: null,
     ...over,
   };
 }
@@ -57,6 +58,9 @@ function report(over: Partial<PackReport> = {}): PackReport {
     skipped: [],
     collapsed: [],
     fixtureCorpus: '/repo/mcp/test/fixtures/pack',
+    hitsCorpus: 'hits/',
+    decoyCorpus: [],
+    baselineDecoys: null,
     realCorpus: null,
     baselineFixtures: 7,
     baselineHits: 7,
@@ -172,6 +176,51 @@ describe('renderPackReport coverage', () => {
     const text = renderPackReport(report({ rules }));
     expect(text).toMatch(/axis 0 fires on hits\/\s+N\/A -- this pack has no hits\/ fixture corpus/);
     expect(text).toContain('hits n/a');
+  });
+});
+
+/**
+ * The corpus lines a pack gets when its fixtures predate the `hits/` +
+ * `misses/` convention -- which is every one of `routes.yml`'s, so this is the
+ * shape of the only registration in the repo that uses them.
+ *
+ * Both assertions are about a number that is NOT zero and must not read as a
+ * failure. The decoy tree produces nine baseline findings, four of them
+ * routes, and each is documented as undecidable rather than untried; a report
+ * that hid the number would let a fifth appear unnoticed, and a report that
+ * gated on zero would be a standing red line nobody reads.
+ */
+describe('renderPackReport corpora that are not named hits/ and misses/', () => {
+  it('names the hits corpus it actually measured, not the convention', () => {
+    const text = renderPackReport(report({ hitsCorpus: 'the fixture root', baselineHits: 403 }));
+    expect(text).toContain('403 in the fixture root');
+  });
+
+  it('prints the decoy baseline as a pinned number rather than a target of zero', () => {
+    const text = renderPackReport(
+      report({ decoyCorpus: ['frameworks/fp'], baselineDecoys: 9, hitsCorpus: 'the fixture root' }),
+    );
+    expect(text).toMatch(/decoy corpus\s+frameworks\/fp\s+\(9 baseline findings, excluded from hits/);
+    expect(text).toContain('a pinned number, not a target of zero');
+  });
+
+  it('says on the rule line when the real corpus never reached a rule at all', () => {
+    // Axis 3 compares the ablated rule's OWN findings, so a rule with no
+    // baseline on the corpus passes by comparing nothing to nothing. That is
+    // 62 of `routes.yml`'s 64 rules against `mcp/src`, and it must not print
+    // the same as a rule the corpus genuinely exercised.
+    const rules = [
+      ruleVerdict({ ruleId: 'guardian-import-esm', realFindings: 824 }),
+      ruleVerdict({ ruleId: 'guardian-route-rails', realFindings: 0 }),
+    ];
+    const text = renderPackReport(report({ rules, realCorpus: 'mcp/src' }));
+    expect(text).toContain('guardian-import-esm  real 824');
+    expect(text).toContain('guardian-route-rails  real 0 -- axis 3 vacuous here');
+  });
+
+  it('says nothing about real-code counts when the pack has no corpus', () => {
+    const text = renderPackReport(report());
+    expect(text).not.toContain('axis 3 vacuous here');
   });
 });
 

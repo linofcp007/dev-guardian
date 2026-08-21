@@ -9,18 +9,40 @@
  * match).
  *
  * dry_run lists what would be created without making API calls.
+ *
+ * **Two filters, neither of them silent any more (`filtered` /
+ * `filtered_reason`).** `severity_min` defaults to `high` and `max_issues`
+ * to 10, and the result used to report only the survivors — so a project
+ * whose findings are all `medium` produced `candidates: 0`, exactly what a
+ * project with nothing to file produces. Same defect, and the same fix, as
+ * `create_fix_pr`'s: every finding in the scan is accounted for, and the
+ * suggested floor names how many it would actually recover rather than
+ * leaving the caller to assume it recovers all of them. Neither default is
+ * changed; both are now stated in the schema, which they were not.
  */
 import { z } from 'zod';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
 import { scannerAvailable } from './scanHelpers.js';
+import { describeShortfallTiers, lowestExcludedSeverity, severityShortfall, } from '../severity/breakdown.js';
 import { SEVERITY_ORDER } from '../types.js';
 import { registerToolModule } from './index.js';
 const inputSchema = {
     project_path: ProjectPath,
-    severity_min: z.enum(['info', 'low', 'medium', 'high', 'critical']).optional(),
-    max_issues: z.number().int().min(1).max(50).optional(),
+    severity_min: z
+        .enum(['info', 'low', 'medium', 'high', 'critical'])
+        .optional()
+        .describe('Minimum severity a finding must have to be filed. Default: high — what this drops is ' +
+        'reported in `filtered`, never silently.'),
+    max_issues: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .optional()
+        .describe('Cap on issues filed in one run, highest severity first. Default: 10 — findings beyond ' +
+        'the cap are counted in `filtered`, never silently dropped.'),
     labels: z.array(z.string()).optional(),
     dry_run: z.boolean().optional(),
 };
@@ -29,7 +51,9 @@ const tool = {
     title: 'Create GitHub issues for top findings',
     description: 'Use the local `gh` CLI to open one issue per top finding. Uses the developer\'s existing ' +
         'GitHub auth, no API keys handled here, no GitHub Actions involved. Title encodes the ' +
-        'finding fingerprint for idempotency. Pass dry_run=true to preview.',
+        'finding fingerprint for idempotency. Pass dry_run=true to preview. severity_min defaults to ' +
+        'high and max_issues to 10; every finding those two dropped is counted in `filtered` and ' +
+        'summarised in `filtered_reason`, so a short plan is never unexplained.',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -58,10 +82,14 @@ async function handler(input, ctx) {
     }
     const all = ctx.storage.findings.listByScan(latest.scan_id);
     const sevFloor = SEVERITY_ORDER[sevMin];
-    const top = all
+    const aboveFloor = all
         .filter((f) => SEVERITY_ORDER[f.severity] >= sevFloor)
-        .sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity])
-        .slice(0, max);
+        .sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity]);
+    const top = aboveFloor.slice(0, max);
+    // Computed here, from the same three arrays the slicing above used, so
+    // the account cannot drift from what was actually filed.
+    const belowFloor = severityShortfall(all, sevMin);
+    const overMax = aboveFloor.length - top.length;
     const plans = [];
     for (const f of top) {
         const title = buildTitle(f);
@@ -92,14 +120,51 @@ async function handler(input, ctx) {
         }
         plans.push(plan);
     }
+    const filtered = {
+        considered: all.length,
+        candidates: plans.length,
+        excluded: all.length - plans.length,
+        by_reason: { below_severity_min: belowFloor.total, over_max_issues: overMax },
+        below_severity_min: belowFloor,
+    };
     return {
         ok: true,
         applied: !dryRun,
         severity_min: sevMin,
         max_issues: max,
         candidates: plans.length,
+        filtered,
+        filtered_reason: describeFiltered(filtered, sevMin, max),
         plans,
     };
+}
+/**
+ * One line beside the structured `filtered`, on the same contract
+ * `create_fix_pr` keeps: `null` iff nothing was excluded, and a severity
+ * suggestion only where a lower floor genuinely recovers something.
+ */
+function describeFiltered(filtered, severityMin, maxIssues) {
+    if (filtered.excluded === 0)
+        return null;
+    const parts = [];
+    if (filtered.by_reason.below_severity_min > 0) {
+        parts.push(`${filtered.by_reason.below_severity_min} below severity_min "${severityMin}" ` +
+            `(${describeShortfallTiers(filtered.below_severity_min)})`);
+    }
+    if (filtered.by_reason.over_max_issues > 0) {
+        parts.push(`${filtered.by_reason.over_max_issues} beyond max_issues (${maxIssues}), lowest severity first`);
+    }
+    const head = `${filtered.excluded} of ${filtered.considered} finding(s) in this scan were excluded; ` +
+        `${filtered.candidates} filed. Excluded: ${parts.join('; ')}.`;
+    const suggested = filtered.below_severity_min.suggested_severity_min;
+    if (suggested === null)
+        return head;
+    const lowest = lowestExcludedSeverity(filtered.below_severity_min);
+    const rest = lowest !== null && lowest !== suggested
+        ? `, or "${lowest}" for all ${filtered.below_severity_min.total}`
+        : '';
+    return (`${head} Pass severity_min "${suggested}" to include ` +
+        `${filtered.below_severity_min.recovered_by_suggestion} of them${rest}.`);
 }
 function buildTitle(f) {
     const tag = `[guardian:${f.fingerprint.slice(0, 12)}]`;

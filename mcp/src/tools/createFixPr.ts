@@ -83,6 +83,21 @@
  * compromise design §6's actual boundary, which is stated in terms of what
  * "leaves the machine" (commit, push, `gh pr create`), not in terms of `gh`
  * being touched at all.
+ *
+ * **Nothing is filtered silently (`filtered` / `filtered_reason`).** The
+ * default `severity_min` is `high`, and the 1.9.0 audit took the `ERROR`
+ * tier — the only Semgrep tier the parser maps to `high` — from 20 rules of
+ * 34 to 4 of 58. A default run against a project whose findings all come
+ * from the local packs therefore selects nothing, and used to say so only by
+ * returning `groups: []`, indistinguishable from a project with nothing to
+ * fix. The floor is not the bug and has NOT been lowered: `floating-mutation`
+ * matches on a method name alone and cannot tell `repo.save()` from Canvas
+ * 2D's `ctx.save()`, so a lower default would open pull requests rewriting
+ * code that was never wrong. What was missing was the account of what the
+ * floor (and the other two gates) removed, which `fixpr/exclusions.ts` now
+ * produces — reported whenever ANYTHING was excluded, not only when
+ * everything was: a run that fixes 2 of 42 is nearly as opaque as one that
+ * fixes 0.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -91,6 +106,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { applyGroup } from '../fixpr/apply.js';
 import { buildGroups, selectGroups } from '../fixpr/candidates.js';
+import { describeExclusions, summariseExclusions } from '../fixpr/exclusions.js';
 import { branchName, deleteLocalBranch, existsOutcome, openPr, prExists, type PrOutcome } from '../fixpr/pr.js';
 import { deriveTestCommand, TEST_MANIFESTS } from '../fixpr/testCommand.js';
 import type { FixGroup, FixSource, ScanVerdict, TestVerdict, UpgradeStep } from '../fixpr/types.js';
@@ -177,7 +193,10 @@ const tool: ToolModule = {
     'commands and Semgrep --autofix — inside an isolated git worktree, prove them with a scan ' +
     'differential and a (lazy) test differential, and open one pull request per ecosystem or ' +
     'scanner. apply defaults to false: candidates, the worktree, the fix, and both differentials ' +
-    'always run; only commit/push/gh pr create sit behind apply=true.',
+    'always run; only commit/push/gh pr create sit behind apply=true. Every open finding that did ' +
+    'NOT become a candidate is accounted for in `filtered` (counts per reason: below severity_min, ' +
+    'no scanner-produced fix, no requested source covers it) and in the one-line `filtered_reason` ' +
+    '— an empty `groups` is never left unexplained.',
   inputSchema: {
     project_path: ProjectPath,
     // .describe() override, not the shared SeverityMin as-is (M8): that
@@ -253,6 +272,13 @@ async function handler(
   const upgradeSteps = sources.includes('deps') ? await fetchUpgradeSteps(projectPath, ctx) : [];
 
   const groups = buildGroups({ findings: allFindings, upgradeSteps, sources, severityMin });
+  // Every open finding this run did NOT turn into a candidate, and why —
+  // computed from `groups`, i.e. BEFORE `max_prs` defers any of them, so the
+  // two "not acted on" reports stay disjoint: `filtered` is about findings
+  // that never became candidates, `deferred` about candidate groups the cap
+  // held back. See `fixpr/exclusions.ts` for why silence here was a defect.
+  const filtered = summariseExclusions({ findings: allFindings, groups, severityMin });
+  const filtered_reason = describeExclusions(filtered, severityMin, sources);
   const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
 
   const results: GroupResult[] = [];
@@ -291,6 +317,8 @@ async function handler(
     project_path: projectPath,
     severity_min: severityMin,
     sources,
+    filtered,
+    filtered_reason,
     groups: results,
     deferred,
     deferred_reason,
