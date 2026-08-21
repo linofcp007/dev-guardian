@@ -1111,6 +1111,29 @@ describe('E2E — annotation route rules against the auditor fixture', () => {
  * `api.get('/external/thing', {…})`, `http.post('/webhook/out', body)` and
  * `reg.GET("/cache/key", nil)` were all reported as routes — the five JS ones
  * at `confidence: high` with `path_partial: false`.
+ *
+ * Five more decoys (`F07`, `F08` in `decoys.js`; `F31`–`F33` in `decoys.go`)
+ * arrived later and for a different reason: the ablation harness reported the
+ * guards that stop them as DEAD, and every one turned out load-bearing when
+ * probed by hand. They read DEAD because **nothing in the corpus reached
+ * them**, not because they do nothing —
+ *
+ *   - all three chi guards, because the only Go decoy was `reg.GET(…)` in
+ *     SCREAMING case, which the *gin* rule absorbs before the TitleCase rule
+ *     is consulted at all;
+ *   - `guardian-route-express`'s one-argument `pattern-not`, because the three
+ *     decoys the pack's own header credits to it (`cache.get`, `cache.delete`,
+ *     `storage.get`) are on the `$APP` denylist too, so the denylist decides
+ *     first and the arity guard never gets to;
+ *   - `guardian-mount-express`'s `$PREFIX` regex, because the one `app.use`
+ *     decoy carried a literal `/static` prefix.
+ *
+ * Each new one is therefore the shape the guard is *for* and nothing else's
+ * job: a one-argument read on a receiver the denylist does not cover, a
+ * TitleCase `Get` in each of its three excluded forms, and an `app.use` whose
+ * first argument is a call. All five must stay silent on the shipped pack and
+ * become findings the moment their guard is removed — that second half is the
+ * harness's, and it is what the fixtures exist to give it.
  */
 const EXPECTED_FRAMEWORK_ROUTES = [
   // ---- C#: attribute + minimal API. Unchanged by this work, and here as the
@@ -1268,7 +1291,18 @@ const FRAMEWORK_DECOYS = [
   '/external/thing', // an axios-style client called with an options object
   '/webhook/out', // an HTTP client bound to the name `http`
   '/prefs', // a one-argument Web Storage read
-  '/cache/key', // a Go struct that merely happens to have a GET method
+  '/cache/key', // a Go struct that merely happens to have GET and Get methods
+  // The four below are the guard-specific decoys (F07, F31-F33) described
+  // above EXPECTED_FRAMEWORK_ROUTES. `app.use(cors(), apiRouter)` (F08) has no
+  // entry here on purpose: what it would fabricate is a MOUNT at prefix
+  // `cors()`, and a mount is not a row in `snapshot.routes` — it is consumed
+  // to resolve one. Nothing in `decoys.js` declares a route for it to be
+  // applied to, so an assertion on the string would pass whether the guard
+  // works or not, which is worse than no assertion. The harness is what
+  // measures that one; see `mcp/test/ablate/packs.ts`.
+  '/cache/one-arg', // a one-argument TitleCase `Get`
+  'cacheKey', // a TitleCase `Get` on a computed key — the identifier as written
+  '/site/title', // a one-argument read on a receiver the $APP denylist misses
 ];
 
 /**
