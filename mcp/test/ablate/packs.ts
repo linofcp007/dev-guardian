@@ -59,6 +59,16 @@
  * semgrep-core scans zero files with `Failed to obtain target files` on a long
  * Windows path, and that message points nowhere near its cause.
  *
+ * **A corpus this size does not finish.** Roughly a dozen `dotnet/runtime`
+ * files are big enough to trip semgrep-core's per-rule timeout, and three
+ * timeouts on one file make it drop that file for every rule still to run.
+ * `paths.scanned` reads 11 800 regardless. The whole-corpus total therefore
+ * moves between identical runs — 793 and 798, measured — which is why axis 3
+ * compares one rule at a time on the files every scan finished, and prints
+ * both the excluded-file count and the measured floor. See `axis3.ts`. Nothing
+ * to configure here; it is stated so that a future corpus is chosen knowing
+ * that a bigger one is not automatically a better one.
+ *
  * `base.yml` does contain JS/TS rules and would accept `mcp/src` as a corpus;
  * it is left off by default only because nobody has read that baseline yet.
  * Turn it on with `--real-code=../mcp/src` when someone is ready to triage

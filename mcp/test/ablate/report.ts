@@ -64,8 +64,10 @@ function detail(v: ClauseVerdict): string[] {
   if (v.noAddedNoise === 'N/A') {
     out.push('  axis 3  N/A -- this pack has no real-code corpus registered');
   } else if (v.noAddedNoise === 'FAIL') {
-    out.push(`  axis 3  RAISES the real-code count by ${String(v.addedByClause.length)} --`);
-    out.push('          these findings exist only because of this clause. Read them.');
+    out.push(`  axis 3  RAISES ${v.clause.ruleId}'s real-code count by ${String(v.addedByClause.length)} --`);
+    out.push(`          measured on this rule's OWN findings (floor ${String(v.realFloor ?? 0)},`);
+    out.push(`          ${String(v.realExcludedFiles ?? 0)} file(s) excluded as not finished by every scan).`);
+    out.push('          These findings exist only because of this clause. Read them.');
     out.push('          Only a clause whose removal makes the rule match LESS can land');
     out.push('          here: a positive `pattern-either` branch, or a constraint nested');
     out.push('          INSIDE a `pattern-not`, where dropping it widens the exclusion.');
@@ -74,8 +76,19 @@ function detail(v: ClauseVerdict): string[] {
     out.push('          proof that the findings are false. The regression this axis');
     out.push('          exists for looked the same (0 -> 13 on mcp/src) and all 13 were.');
     out.push(...sample(v.addedByClause));
+  } else if (v.noAddedNoise === 'INCONCLUSIVE') {
+    out.push(`  axis 3  INCONCLUSIVE -- ${String(v.addedByClause.length)} finding(s) moved, but this`);
+    out.push(`          rule's own noise floor is ${String(v.realFloor ?? 0)}: two scans of the IDENTICAL`);
+    out.push('          pack over this corpus already disagreed by that much, so a delta');
+    out.push('          this size is not evidence of anything. Not a pass either. Fix the');
+    out.push('          floor first -- a quieter machine, a longer `--timeout`, or a');
+    out.push('          smaller corpus -- and re-run before reading anything into it.');
+    out.push(...sample(v.addedByClause));
   } else {
-    out.push(`  axis 3  does not raise the real-code count (${signed(v.realDelta ?? 0)} when removed)`);
+    out.push(
+      `  axis 3  does not raise ${v.clause.ruleId}'s real-code count ` +
+        `(${signed(v.realDelta ?? 0)} when removed, floor ${String(v.realFloor ?? 0)})`,
+    );
   }
   return out;
 }
@@ -129,6 +142,7 @@ export function renderPackReport(report: PackReport): string {
   const dead = report.verdicts.filter((v) => v.live === 'FAIL');
   const suppressing = report.verdicts.filter((v) => v.keepsTruePositives === 'FAIL');
   const noisy = report.verdicts.filter((v) => v.noAddedNoise === 'FAIL');
+  const inconclusive = report.verdicts.filter((v) => v.noAddedNoise === 'INCONCLUSIVE');
   const silent = report.rules.filter(ruleFlagged);
   const hitsNA = report.rules.every((r) => r.firesOnHits === 'N/A');
 
@@ -146,8 +160,39 @@ export function renderPackReport(report: PackReport): string {
   lines.push(`fixture corpus  ${report.fixtureCorpus}  (${String(report.baselineFixtures)} baseline findings, ${String(report.baselineHits)} in hits/)`);
   lines.push(
     `real corpus     ${report.realCorpus ?? '(none -- axis 3 N/A)'}` +
-      (report.baselineReal === null ? '' : `  (${String(report.baselineReal)} baseline findings)`),
+      (report.baselineReal === null
+        ? ''
+        : `  (${String(report.baselineReal)} baseline findings, ` +
+          `${String(report.baselineRealComparable ?? 0)} comparable)`),
   );
+  if (report.realCorpus !== null) {
+    // `paths.scanned` reads full on a run that abandoned rules on its slowest
+    // files; the count that moves lives in `errors`. These two lines are the
+    // part of the measurement that the `paths.scanned` gate cannot see.
+    lines.push(
+      `excluded files  ${String(report.realExcludedFiles ?? 0)}  ` +
+        `(a rule was abandoned on them for time or memory, so no scan is comparable there)`,
+    );
+    lines.push(
+      `noise floor     ${String(report.realNoiseFloor ?? 0)}  ` +
+        (report.realNoiseFloor === 0
+          ? '(two scans of the identical pack agreed on every rule --'
+          : '(two scans of the identical pack DISAGREED --'),
+    );
+    lines.push(
+      `                 axis 3 can resolve a per-rule delta of ` +
+        `${String((report.realNoiseFloor ?? 0) + 1)} or more)`,
+    );
+    for (const n of report.realNoisyRules) {
+      lines.push(`  NOISY         ${n.ruleId} -- control scans differ by ${String(n.drift)}`);
+    }
+    if ((report.realUnscopedAborts ?? 0) > 0) {
+      lines.push(
+        `  WARNING       ${String(report.realUnscopedAborts ?? 0)} abort(s) named no file; nothing could be` +
+          ` excluded for them`,
+      );
+    }
+  }
   lines.push(`wall clock      ${report.seconds.toFixed(1)}s`);
   lines.push('');
   lines.push(
@@ -160,10 +205,16 @@ export function renderPackReport(report: PackReport): string {
   lines.push(
     report.realCorpus === null
       ? `axis 3 no rise in real-code count  N/A -- no real-code corpus for this pack`
-      : `axis 3 no rise in real-code count  ${String(report.clauseCount - noisy.length - errored.length)}/${String(report.clauseCount)} clauses pass, ${String(noisy.length)} RAISING the count`,
+      : `axis 3 no rise in real-code count  ${String(report.clauseCount - noisy.length - inconclusive.length - errored.length)}/${String(report.clauseCount)} clauses pass, ${String(noisy.length)} RAISING the count` +
+        (inconclusive.length === 0 ? '' : `, ${String(inconclusive.length)} INCONCLUSIVE`),
   );
   lines.push('     (axes 1-3 are properties of a CLAUSE. Rules with none are');
   lines.push('      covered by axis 0 alone -- see RULE COVERAGE below.)');
+  if (report.realCorpus !== null) {
+    lines.push("     (axis 3 compares the ABLATED RULE'S OWN findings, not the pack");
+    lines.push('      total: a clause of rule A cannot move rule B\'s count, and the');
+    lines.push('      pack total is dominated by timeout jitter elsewhere.)');
+  }
   if (errored.length > 0) lines.push(`errors                          ${String(errored.length)}`);
   lines.push('');
 
@@ -215,14 +266,19 @@ export function renderPackReport(report: PackReport): string {
     lines.push('');
   }
 
-  if (flagged.length === 0 && errored.length === 0) {
+  if (flagged.length === 0 && errored.length === 0 && inconclusive.length === 0) {
     lines.push('Every clause is live, suppresses nothing in hits/, and raises no count');
     lines.push('on real code.' + (silent.length === 0 ? ' Nothing to act on.' : ''));
   } else {
     lines.push(rule());
-    lines.push(`FLAGGED CLAUSES (${String(flagged.length + errored.length)})`);
+    lines.push(
+      `FLAGGED CLAUSES (${String(flagged.length + inconclusive.length + errored.length)})` +
+        (inconclusive.length === 0
+          ? ''
+          : ` -- ${String(inconclusive.length)} of them INCONCLUSIVE, which is not a finding`),
+    );
     lines.push(rule());
-    for (const v of [...flagged, ...errored]) {
+    for (const v of [...flagged, ...inconclusive, ...errored]) {
       lines.push('');
       lines.push(...detail(v));
     }
@@ -270,12 +326,16 @@ export function renderSummary(reports: readonly PackReport[]): string {
   lines.push('`rules` counts every rule; `covered` is the rules with at least one');
   lines.push('ablatable clause, so `rules - covered` were reached by axis 0 alone.');
   lines.push('`silent` is rules that fire on nothing in hits/ -- always act on those.');
+  lines.push('`floor` is the per-rule disagreement between two scans of the IDENTICAL');
+  lines.push('pack over the real corpus: the size below which a `raise` means nothing.');
+  lines.push('A `raise` is always larger than the floor; anything smaller is `noise`.');
   lines.push('');
-  lines.push('pack         rules covered silent clauses  dead    suppress raise errors  secs');
+  lines.push('pack         rules covered silent clauses  dead    suppress raise noise floor errors  secs');
   for (const r of reports) {
     const dead = r.verdicts.filter((v) => v.live === 'FAIL').length;
     const supp = r.verdicts.filter((v) => v.keepsTruePositives === 'FAIL').length;
     const noisy = r.verdicts.filter((v) => v.noAddedNoise === 'FAIL').length;
+    const inconc = r.verdicts.filter((v) => v.noAddedNoise === 'INCONCLUSIVE').length;
     const errs = r.verdicts.filter((v) => v.live === 'ERROR').length;
     const silent = r.rules.filter(ruleFlagged).length;
     const hitsNA = r.rules.every((v) => v.firesOnHits === 'N/A');
@@ -288,7 +348,9 @@ export function renderSummary(reports: readonly PackReport[]): string {
         String(r.clauseCount).padStart(8, ' '),
         String(dead).padStart(6, ' '),
         String(supp).padStart(12, ' '),
-        String(noisy).padStart(6, ' '),
+        (r.realCorpus === null ? 'n/a' : String(noisy)).padStart(6, ' '),
+        (r.realCorpus === null ? 'n/a' : String(inconc)).padStart(6, ' '),
+        (r.realNoiseFloor === null ? 'n/a' : String(r.realNoiseFloor)).padStart(6, ' '),
         String(errs).padStart(7, ' '),
         r.seconds.toFixed(0).padStart(6, ' '),
       ].join(''),

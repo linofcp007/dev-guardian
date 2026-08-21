@@ -11,11 +11,19 @@
  * So what is asserted here is what the reader can conclude from the page:
  * the headline names how much of the pack it covers, every rule is on it, and
  * a rule that fires on nothing is impossible to miss.
+ *
+ * The axis-3 block below is the same class of assertion for the same class of
+ * defect. Axis 3 once printed `+2` on a corpus whose two identical scans
+ * disagreed by 5, which reads as a finding and was not one. So the page has to
+ * carry the floor, the number of files nobody could measure, and the fact that
+ * the comparison is scoped to one rule -- and a delta inside the floor has to
+ * come out as `INCONCLUSIVE` rather than as either verdict.
  */
 
 import { describe, expect, it } from 'vitest';
 import { renderPackReport, renderSummary } from './report.js';
-import type { PackReport, RuleVerdict } from './harness.js';
+import type { ClauseVerdict, PackReport, RuleVerdict } from './harness.js';
+import type { Finding } from './semgrep.js';
 
 function ruleVerdict(over: Partial<RuleVerdict> & { ruleId: string }): RuleVerdict {
   return {
@@ -53,11 +61,49 @@ function report(over: Partial<PackReport> = {}): PackReport {
     baselineFixtures: 7,
     baselineHits: 7,
     baselineReal: null,
+    baselineRealComparable: null,
+    realExcludedFiles: null,
+    realNoiseFloor: null,
+    realNoisyRules: [],
+    realUnscopedAborts: null,
     verdicts: [],
     pairs: [],
     seconds: 1,
     ...over,
   };
+}
+
+function clauseVerdict(over: Partial<ClauseVerdict> & { ruleId: string }): ClauseVerdict {
+  const { ruleId, ...rest } = over;
+  return {
+    clause: {
+      ruleId,
+      kind: 'pattern-not-inside',
+      path: 'rules[0].patterns[1]',
+      body: '{"pattern-not-inside":"if ($X) { ... }"}',
+      hash: 'aaaabbbbcccc',
+      occurrence: 1,
+      occurrences: 1,
+      address: [],
+    },
+    live: 'PASS',
+    movedIn: ['fixtures'],
+    fixtureDelta: -1,
+    keepsTruePositives: 'PASS',
+    revealedInHits: [],
+    noAddedNoise: 'PASS',
+    realDelta: 0,
+    addedByClause: [],
+    realFloor: 0,
+    realExcludedFiles: 0,
+    error: undefined,
+    seconds: 1,
+    ...rest,
+  };
+}
+
+function finding(over: Partial<Finding> = {}): Finding {
+  return { ruleId: 'pack-one', file: 'a/b.cs', line: 1, col: 1, endLine: 2, endCol: 2, ...over };
 }
 
 describe('renderPackReport coverage', () => {
@@ -126,6 +172,92 @@ describe('renderPackReport coverage', () => {
     const text = renderPackReport(report({ rules }));
     expect(text).toMatch(/axis 0 fires on hits\/\s+N\/A -- this pack has no hits\/ fixture corpus/);
     expect(text).toContain('hits n/a');
+  });
+});
+
+describe('renderPackReport axis 3', () => {
+  const withCorpus = (over: Partial<PackReport> = {}): PackReport =>
+    report({
+      realCorpus: 'C# corpus (GUARDIAN_CS_SRC)',
+      baselineReal: 798,
+      baselineRealComparable: 793,
+      realExcludedFiles: 10,
+      realNoiseFloor: 0,
+      realNoisyRules: [],
+      realUnscopedAborts: 0,
+      ...over,
+    });
+
+  it('prints the noise floor and the excluded files, not just the totals', () => {
+    // `paths.scanned` reads full on a run that abandoned rules on its slowest
+    // files, so these two numbers are the only place the reader learns that
+    // the count is not over the whole corpus.
+    const text = renderPackReport(withCorpus());
+    expect(text).toMatch(/real corpus\s+C# corpus .+798 baseline findings, 793 comparable/);
+    expect(text).toMatch(/excluded files\s+10/);
+    expect(text).toMatch(/noise floor\s+0/);
+    expect(text).toContain('axis 3 can resolve a per-rule delta of 1 or more');
+  });
+
+  it('says axis 3 is scoped to the ablated rule, where the reader will see it', () => {
+    const text = renderPackReport(withCorpus());
+    expect(text).toContain("axis 3 compares the ABLATED RULE'S OWN findings");
+  });
+
+  it('names the rules whose two control scans disagreed', () => {
+    const text = renderPackReport(
+      withCorpus({ realNoiseFloor: 5, realNoisyRules: [{ ruleId: 'pack-one', drift: 5 }] }),
+    );
+    expect(text).toContain('two scans of the identical pack DISAGREED');
+    expect(text).toMatch(/NOISY\s+pack-one -- control scans differ by 5/);
+    expect(text).toContain('axis 3 can resolve a per-rule delta of 6 or more');
+  });
+
+  it('reports a delta under the floor as INCONCLUSIVE, never as a pass', () => {
+    // The whole point of the floor: `+2` against an error of +-5 is worse than
+    // no verdict, so it must not read like one in either direction.
+    const v = clauseVerdict({
+      ruleId: 'pack-one',
+      noAddedNoise: 'INCONCLUSIVE',
+      addedByClause: [finding(), finding({ line: 9 })],
+      realDelta: -2,
+      realFloor: 5,
+    });
+    const text = renderPackReport(withCorpus({ verdicts: [v], realNoiseFloor: 5 }));
+    expect(text).toMatch(/axis 3 no rise in real-code count\s+2\/3 clauses pass, 0 RAISING the count, 1 INCONCLUSIVE/);
+    expect(text).toContain('1 of them INCONCLUSIVE, which is not a finding');
+    expect(text).toContain('axis 3  INCONCLUSIVE -- 2 finding(s) moved');
+    expect(text).not.toContain('Nothing to act on.');
+  });
+
+  it('attributes a real FAIL to the ablated rule by name', () => {
+    const v = clauseVerdict({
+      ruleId: 'pack-one',
+      noAddedNoise: 'FAIL',
+      addedByClause: [finding(), finding({ line: 9 })],
+      realDelta: -2,
+      realFloor: 0,
+      realExcludedFiles: 10,
+    });
+    const text = renderPackReport(withCorpus({ verdicts: [v] }));
+    expect(text).toContain("axis 3  RAISES pack-one's real-code count by 2");
+    expect(text).toContain('10 file(s) excluded as not finished by every scan');
+  });
+
+  it('still prints N/A -- never a silent skip -- with no corpus', () => {
+    const v = clauseVerdict({
+      ruleId: 'pack-one',
+      noAddedNoise: 'N/A',
+      realDelta: null,
+      realFloor: null,
+      realExcludedFiles: null,
+      live: 'FAIL',
+      movedIn: [],
+    });
+    const text = renderPackReport(report({ verdicts: [v] }));
+    expect(text).toMatch(/axis 3 no rise in real-code count\s+N\/A -- no real-code corpus for this pack/);
+    expect(text).toContain('axis 3  N/A -- this pack has no real-code corpus registered');
+    expect(text).not.toContain('noise floor');
   });
 });
 

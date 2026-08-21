@@ -24,19 +24,29 @@
  *     suppressed the `else` arm, where the bug was.
  *
  *  3. NO ADDED NOISE ON REAL CODE. Scan a corpus nobody wrote as a fixture --
- *     for the JS/TS pack, this repo's own `mcp/src` -- and compare before and
- *     after. If removing the clause LOWERS the count, the clause was adding
- *     those findings to real code. This is the newest axis and it caught what
- *     the other two could not: a wave added a `RegExp#exec` branch to
+ *     for the JS/TS pack, this repo's own `mcp/src` -- and compare THE ABLATED
+ *     RULE'S OWN findings before and after, on the files both scans finished.
+ *     If removing the clause LOWERS that count, the clause was adding those
+ *     findings to real code. This is the newest axis and it caught what the
+ *     other two could not: a wave added a `RegExp#exec` branch to
  *     `unchecked-match` and forgot the `?.` exclusion its sibling branch had,
  *     taking that rule from 0 to 13 false positives on our own TypeScript.
  *     Axes 1 and 2 BOTH passed -- "the clause is live" and "it does not
  *     reduce true positives" are both true of a clause that only adds false
  *     positives.
  *
+ *     Both scopings are load-bearing and both were bought with a defect. The
+ *     axis originally subtracted whole-corpus totals, which cannot attribute
+ *     anything -- 14 findings were once reported against clauses of
+ *     `modify-during-iteration` and every one of them belonged to
+ *     `empty-catch` -- and jitters by more than the deltas it reports. See
+ *     `axis3.ts`, which holds the measurements and the reasoning.
+ *
  * Axis 3 is a property of the invocation, not of the code: a pack gets a real
  * corpus if one exists in a language it matches (see `packs.ts`). Where none
- * does, axis 3 reports N/A rather than being quietly skipped.
+ * does, axis 3 reports N/A rather than being quietly skipped. Where one exists
+ * but is too noisy to resolve a clause's delta, the clause reads INCONCLUSIVE
+ * -- also never a pass.
  *
  * ---- Axis 0, and the rules the other three axes cannot see ---------------
  *
@@ -64,6 +74,18 @@
  * N/A for the whole pack, on the same principle as axis 3: never a silent
  * skip.
  *
+ * ---- The noise floor -----------------------------------------------------
+ *
+ * `paths.scanned` cannot see the thing that makes real-code counts move. It
+ * counts files OPENED, not files finished, and semgrep-core's per-rule timeout
+ * abandons rules on the slowest files without touching it. So the real corpus
+ * is scanned TWICE at baseline -- once with the pack on disk, once with the
+ * round-trip of it that every ablated variant descends from, which is the same
+ * rules in different bytes. Any per-rule disagreement between those two is
+ * measurement error by construction, it is printed as the pack's noise floor,
+ * and no clause delta at or below its rule's floor is allowed to become a
+ * verdict. Measured floor on every corpus here so far: 0.
+ *
  * ---- Byte-identity of the pack ------------------------------------------
  *
  * The strongest available guarantee that the pack is unchanged after a run,
@@ -82,7 +104,17 @@ import { writeFileSync } from 'node:fs';
 import { AblationError, ablate, ablateAll, enumerateClauses, roundTrip } from './clauses.js';
 import type { Clause, SkippedClause } from './clauses.js';
 import { SemgrepFailure, findingsMissingFrom, sameFindings, scan, under } from './semgrep.js';
-import type { Finding } from './semgrep.js';
+import type { Finding, ScanResult } from './semgrep.js';
+import {
+  axis3Verdict,
+  comparable,
+  comparableAll,
+  noiseFloorByRule,
+  noisyRules,
+  scopeOf,
+  worstFloor,
+} from './axis3.js';
+import type { Axis3Scope } from './axis3.js';
 
 export interface RealCorpus {
   /** Short name printed in the report, e.g. `mcp/src`. */
@@ -103,7 +135,13 @@ export interface PackSpec {
   readonly realCode?: RealCorpus;
 }
 
-export type Verdict = 'PASS' | 'FAIL' | 'N/A' | 'ERROR';
+/**
+ * `INCONCLUSIVE` is only ever produced by axis 3, and only when the corpus's
+ * own measured noise floor swallows the delta. It is deliberately not a pass:
+ * the run still exits non-zero, because "we could not tell" is a result the
+ * reader has to see.
+ */
+export type Verdict = 'PASS' | 'FAIL' | 'N/A' | 'ERROR' | 'INCONCLUSIVE';
 
 export interface ClauseVerdict {
   readonly clause: Clause;
@@ -116,12 +154,24 @@ export interface ClauseVerdict {
   /** PASS = removing it revealed nothing in `hits/`. */
   readonly keepsTruePositives: Verdict;
   readonly revealedInHits: readonly Finding[];
-  /** PASS = removing it did not lower the real-code count. */
+  /**
+   * PASS = removing it did not lower THIS RULE'S real-code count.
+   * INCONCLUSIVE = it moved, but by no more than the rule's noise floor.
+   */
   readonly noAddedNoise: Verdict;
-  /** Signed change in real-code count, or null when axis 3 is N/A. */
+  /**
+   * Signed change in this rule's real-code count on the comparable files, or
+   * null when axis 3 is N/A. Not the pack's total: a clause cannot move a
+   * count that belongs to another rule, and the pack total is dominated by
+   * timeout jitter in rules the clause has nothing to do with.
+   */
   readonly realDelta: number | null;
-  /** Real-code findings the clause is responsible for adding. */
+  /** Real-code findings of this clause's own rule that the clause adds. */
   readonly addedByClause: readonly Finding[];
+  /** This rule's measured noise floor; a delta must clear it to be a verdict. */
+  readonly realFloor: number | null;
+  /** Files some scan in this comparison did not finish, so both sides drop them. */
+  readonly realExcludedFiles: number | null;
   readonly error: string | undefined;
   readonly seconds: number;
 }
@@ -202,7 +252,21 @@ export interface PackReport {
   readonly realCorpus: string | null;
   readonly baselineFixtures: number;
   readonly baselineHits: number;
+  /** Every baseline finding on the real corpus, comparable or not. */
   readonly baselineReal: number | null;
+  /** Of those, the ones on files the baseline scans finished. */
+  readonly baselineRealComparable: number | null;
+  /** Files excluded from every axis-3 comparison in this run's baseline. */
+  readonly realExcludedFiles: number | null;
+  /**
+   * The worst per-rule disagreement between two baseline scans of the SAME
+   * rules over the same corpus. 0 means axis 3 can resolve a delta of 1.
+   */
+  readonly realNoiseFloor: number | null;
+  /** The rules that disagreed, if any, worst first. Empty when the floor is 0. */
+  readonly realNoisyRules: readonly { readonly ruleId: string; readonly drift: number }[];
+  /** Aborts that named no file, so nothing could be excluded for them. */
+  readonly realUnscopedAborts: number | null;
   readonly verdicts: readonly ClauseVerdict[];
   readonly pairs: readonly PairVerdict[];
   readonly seconds: number;
@@ -262,10 +326,19 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
   const scanFixtures = (cfg: string): readonly Finding[] =>
     scan({ bin: options.semgrepBin, config: cfg, target: fixtures, root: fixtures }).findings;
   const real = spec.realCode;
-  const scanReal = (cfg: string): readonly Finding[] =>
+  const EMPTY_SCAN: ScanResult = {
+    findings: [],
+    scanned: 0,
+    errors: [],
+    abortedFiles: [],
+    unscopedAborts: 0,
+  };
+  // The whole ScanResult, not just the findings: axis 3 needs `abortedFiles`
+  // to know which files this scan may be compared on at all.
+  const scanReal = (cfg: string): ScanResult =>
     real === undefined
-      ? []
-      : scan({ bin: options.semgrepBin, config: cfg, target: real.dir, root: real.dir }).findings;
+      ? EMPTY_SCAN
+      : scan({ bin: options.semgrepBin, config: cfg, target: real.dir, root: real.dir });
 
   // Axis 0 needs a `hits/` corpus the way axis 3 needs a real-code one, and
   // reports N/A on the same terms when there is none rather than passing
@@ -299,12 +372,77 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
     );
   }
   const baselineHits = under(baselineFixtures, spec.hitsSubdir);
-  const baselineReal = scanReal(configPath);
+
+  // ---- The real corpus gets the same control, and it doubles as the noise
+  // floor. Two scans of the same rules over the same code: `spec.config` as it
+  // sits on disk, and the round-trip in the temp dir that every ablated
+  // variant descends from. They must agree per rule once the unfinished files
+  // are out; whatever they do not agree about is the measurement error, and
+  // no clause delta below it is allowed to become a verdict.
+  //
+  // Unlike the fixture control this does NOT abort on a disagreement. On a
+  // large corpus a disagreement is expected to be timeouts, which is a
+  // property of the machine rather than of the pack; aborting would make the
+  // harness unusable on exactly the corpora it is most needed for. It is
+  // measured, printed, and folded into the verdicts instead.
+  const controlReal = scanReal(spec.config);
+  const baselineRealScan = scanReal(configPath);
+  const baselineScope = scopeOf([controlReal, baselineRealScan]);
+  const baselineReal = baselineRealScan.findings;
+  const floorByRule = noiseFloorByRule(
+    controlReal.findings,
+    baselineReal,
+    inventory.ruleIds,
+    baselineScope,
+  );
+  const packFloor = worstFloor(floorByRule);
 
   options.log(`baseline    ${String(baselineFixtures.length)} findings on fixtures ` +
     `(${String(baselineHits.length)} in ${spec.hitsSubdir}/)` +
     (real === undefined ? '' : `, ${String(baselineReal.length)} on ${real.label}`));
   options.log(`control     round-trip of the unmodified pack reproduces the on-disk result exactly`);
+  if (real !== undefined) {
+    const comparableBaseline = comparableAll(baselineReal, baselineScope).length;
+    options.log(
+      `real scope  ${String(comparableBaseline)}/${String(baselineReal.length)} baseline findings comparable; ` +
+        `${String(baselineScope.excludedFiles)} file(s) excluded (a rule was abandoned on them for time or memory)`,
+    );
+    options.log(
+      `noise floor ${String(packFloor)} -- two scans of the identical pack over ${real.label} ` +
+        (packFloor === 0
+          ? 'agreed on every rule'
+          : `disagreed by up to ${String(packFloor)} finding(s) on one rule; ` +
+            `any clause delta at or below its rule's floor reads INCONCLUSIVE`),
+    );
+    for (const n of noisyRules(floorByRule)) {
+      options.log(`  NOISY   ${n.ruleId} -- control scans differ by ${String(n.drift)} finding(s)`);
+    }
+    if (baselineScope.unscopedAborts > 0) {
+      options.log(
+        `  WARNING ${String(baselineScope.unscopedAborts)} abort(s) named no file, so nothing could be ` +
+          `excluded for them. Axis 3 on this run is weaker than its floor suggests.`,
+      );
+    }
+  }
+
+  // Axis 3 is now scoped BY RULE ID, so if a real-code finding's rule id stops
+  // lining up with the pack's `- id:` values, every clause compares an empty
+  // set against an empty set and the axis passes everything by construction --
+  // the same silent all-clear the axis-0 guard below refuses on the fixture
+  // corpus. It has to be asked separately because the corpora are different
+  // and Semgrep derives `check_id` from the config PATH, which differs between
+  // the on-disk pack and the temp-dir variants.
+  if (
+    real !== undefined &&
+    baselineReal.length > 0 &&
+    !baselineReal.some((f) => inventory.ruleIds.includes(f.ruleId))
+  ) {
+    throw new Error(
+      `none of the ${String(baselineReal.length)} baseline findings on ${real.label} ` +
+        `carry a rule id this pack declares (got e.g. \`${baselineReal[0]?.ruleId ?? ''}\`). ` +
+        `Axis 3 would compare empty sets and pass every clause. Aborting.`,
+    );
+  }
 
   const selected = options.filter === undefined
     ? inventory.clauses
@@ -422,8 +560,19 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
       const ablatedFixtures = scanFixtures(configPath);
       const ablatedReal = scanReal(configPath);
 
+      // Both real-code comparisons -- axis 1's and axis 3's -- are made on the
+      // ablated rule's own findings, over the files every scan in the
+      // comparison finished. Axis 1 needs it as much as axis 3 does: a clause
+      // of rule A cannot move rule B's findings, so an unscoped comparison
+      // turns any timeout jitter anywhere in the pack into "this clause is
+      // live". That is what made two runs of the same pack disagree on 6 of 12
+      // clause verdicts.
+      const scope: Axis3Scope = scopeOf([controlReal, baselineRealScan, ablatedReal]);
+      const baseForRule = comparable(baselineReal, clause.ruleId, scope);
+      const ablatedForRule = comparable(ablatedReal.findings, clause.ruleId, scope);
+
       const fixturesMoved = !sameFindings(baselineFixtures, ablatedFixtures);
-      const realMoved = real !== undefined && !sameFindings(baselineReal, ablatedReal);
+      const realMoved = real !== undefined && !sameFindings(baseForRule, ablatedForRule);
       const movedIn: string[] = [];
       if (fixturesMoved) movedIn.push('fixtures');
       if (realMoved && real !== undefined) movedIn.push(real.label);
@@ -432,7 +581,8 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
         under(ablatedFixtures, spec.hitsSubdir),
         baselineHits,
       );
-      const addedByClause = real === undefined ? [] : findingsMissingFrom(baselineReal, ablatedReal);
+      const addedByClause = real === undefined ? [] : findingsMissingFrom(baseForRule, ablatedForRule);
+      const floor = floorByRule.get(clause.ruleId) ?? 0;
 
       verdict = {
         clause,
@@ -441,9 +591,11 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
         fixtureDelta: ablatedFixtures.length - baselineFixtures.length,
         keepsTruePositives: revealedInHits.length === 0 ? 'PASS' : 'FAIL',
         revealedInHits,
-        noAddedNoise: real === undefined ? 'N/A' : addedByClause.length === 0 ? 'PASS' : 'FAIL',
-        realDelta: real === undefined ? null : ablatedReal.length - baselineReal.length,
+        noAddedNoise: real === undefined ? 'N/A' : axis3Verdict(addedByClause.length, floor),
+        realDelta: real === undefined ? null : ablatedForRule.length - baseForRule.length,
         addedByClause,
+        realFloor: real === undefined ? null : floor,
+        realExcludedFiles: real === undefined ? null : scope.excludedFiles,
         error: undefined,
         seconds: (Date.now() - clauseStarted) / 1000,
       };
@@ -464,6 +616,8 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
         noAddedNoise: 'ERROR',
         realDelta: null,
         addedByClause: [],
+        realFloor: null,
+        realExcludedFiles: null,
         error: message,
         seconds: (Date.now() - clauseStarted) / 1000,
       };
@@ -498,16 +652,21 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
           write(ablateAll(source, [a, b]));
           const ablatedFixtures = scanFixtures(configPath);
           const ablatedReal = scanReal(configPath);
+          // Same scoping as the single-clause pass, and for the same reason:
+          // both clauses belong to `ruleId`, so nothing outside it is evidence.
+          const scope: Axis3Scope = scopeOf([controlReal, baselineRealScan, ablatedReal]);
+          const baseForRule = comparable(baselineReal, ruleId, scope);
+          const ablatedForRule = comparable(ablatedReal.findings, ruleId, scope);
           const moved =
             !sameFindings(baselineFixtures, ablatedFixtures) ||
-            (real !== undefined && !sameFindings(baselineReal, ablatedReal));
+            (real !== undefined && !sameFindings(baseForRule, ablatedForRule));
           pair = {
             ruleId,
             a,
             b,
             outcome: moved ? 'MOVES' : 'INERT',
             fixtureDelta: ablatedFixtures.length - baselineFixtures.length,
-            realDelta: real === undefined ? null : ablatedReal.length - baselineReal.length,
+            realDelta: real === undefined ? null : ablatedForRule.length - baseForRule.length,
             error: undefined,
           };
         } catch (err) {
@@ -550,6 +709,12 @@ export function runPack(spec: PackSpec, options: RunOptions): PackReport {
     baselineFixtures: baselineFixtures.length,
     baselineHits: baselineHits.length,
     baselineReal: real === undefined ? null : baselineReal.length,
+    baselineRealComparable:
+      real === undefined ? null : comparableAll(baselineReal, baselineScope).length,
+    realExcludedFiles: real === undefined ? null : baselineScope.excludedFiles,
+    realNoiseFloor: real === undefined ? null : packFloor,
+    realNoisyRules: real === undefined ? [] : noisyRules(floorByRule),
+    realUnscopedAborts: real === undefined ? null : baselineScope.unscopedAborts,
     verdicts,
     pairs,
     seconds: (Date.now() - started) / 1000,
@@ -575,10 +740,16 @@ function progressLine(pack: string, index: number, total: number, v: ClauseVerdi
       : [
           v.live === 'PASS' ? 'live' : 'DEAD',
           v.keepsTruePositives === 'PASS' ? 'keeps-tp' : 'SUPPRESSES-TP',
-          v.noAddedNoise === 'N/A' ? 'real-n/a' : v.noAddedNoise === 'PASS' ? 'no-real-rise' : 'RAISES-REAL',
+          v.noAddedNoise === 'N/A'
+            ? 'real-n/a'
+            : v.noAddedNoise === 'PASS'
+              ? 'no-real-rise'
+              : v.noAddedNoise === 'INCONCLUSIVE'
+                ? 'REAL-UNDER-FLOOR'
+                : 'RAISES-REAL',
         ].join(' ');
   return (
-    `${counter} ${overallVerdict(v).padEnd(4, ' ')} ${flags.padEnd(32, ' ')} ` +
+    `${counter} ${overallVerdict(v).padEnd(5, ' ')} ${flags.padEnd(36, ' ')} ` +
     `${pack} :: ${v.clause.ruleId} :: [${v.clause.hash}] ${short(v.clause.body, 80)}`
   );
 }
@@ -592,9 +763,18 @@ export function ruleFlagged(r: RuleVerdict): boolean {
   return r.firesOnHits === 'FAIL';
 }
 
+/**
+ * `NOISE` is its own outcome rather than a pass or a flag. The clause moved
+ * the real-code count by no more than the corpus's own measured error, so the
+ * honest report is that this run could not tell -- and the run still exits
+ * non-zero, because a measurement that cannot resolve its own deltas needs
+ * fixing (a quieter machine, a longer `--timeout`, a smaller corpus) before
+ * its passes mean anything either.
+ */
 export function overallVerdict(v: ClauseVerdict): string {
   if (v.live === 'ERROR') return 'ERR';
   if (v.live === 'FAIL' || v.keepsTruePositives === 'FAIL' || v.noAddedNoise === 'FAIL') return 'FLAG';
+  if (v.noAddedNoise === 'INCONCLUSIVE') return 'NOISE';
   return 'ok';
 }
 

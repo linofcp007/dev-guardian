@@ -18,9 +18,12 @@
  *
  * Semgrep is located from `--semgrep=`, then `GUARDIAN_SEMGREP`, then PATH.
  *
- * Exit code is 1 when any clause is flagged or errored, or any RULE fires on
- * nothing in `hits/` (axis 0); 0 when every clause passes axes 1-3 and every
- * rule passes axis 0 -- so it can gate a release check if anyone wants it to,
+ * Exit code is 1 when any clause is flagged, errored or INCONCLUSIVE, or any
+ * RULE fires on nothing in `hits/` (axis 0); 0 when every clause passes axes
+ * 1-3 and every rule passes axis 0. Inconclusive counts as a failure on
+ * purpose: it means the real corpus was noisier than the deltas being
+ * measured, so the run's passes are not evidence either --
+ * so it can gate a release check if anyone wants it to,
  * without being wired into the test suite. A rule with no ablatable clauses
  * is reported, never counted against the pack: there is nothing in it to
  * ablate, which is a fact about the rule and not a defect.
