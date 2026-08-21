@@ -8,6 +8,96 @@ version bump.
 
 ## [Unreleased]
 
+### Fixed — the three C# rules that found NOTHING on 11 800 files: two were right, two were missing ordinary spellings
+
+Same corpus that deleted `as-cast-deref` below, read from the other end.
+`rethrow-loses-stacktrace`, `off-by-one-loop-lte-count` and
+`edge-case-modify-during-iteration` scored **0** on `dotnet/runtime` (11 800
+files, `paths.scanned` asserted first), next to `lock-on-shared-instance` 322
+— reproducing the earlier round exactly. **A zero has two readings
+and they are opposite** — the bug is absent, or the rule is silently broken —
+and this series has nine recorded ways for Semgrep to report success while
+matching nothing. Each was probed with a file carrying the exact bug in every
+idiomatic spelling. Still **eleven** rules; the pack gained no rules and lost
+none.
+
+- **`rethrow-loses-stacktrace` — correct, and confirmed independently.** It
+  mirrors the compiler's `CA2200` and `dotnet/runtime` builds clean, which is
+  exactly the kind of benign explanation that gets assumed instead of checked.
+  The rule still fires 10 times on its own fixtures, and a brace-depth textual
+  oracle with no Semgrep in it finds **201 `throw <ident>;` statements in the
+  corpus and 0 that rethrow the caught variable** — while finding all 10
+  fixture sites, as its positive control. Two methods, same answer.
+- **`off-by-one-loop-lte-count` and `-lte-length` — correct, but each read one
+  spelling of two dimensions.** The prime suspect was `var`: real C# writes
+  `for (int i = 0; …)`, and the pack's own header warns that `$T $V` does not
+  match `var`. **The reverse does not hold** — `var` in a pattern is a wildcard
+  for the declared type, so `for (var $I = 0; …)` matches `for (int i = 0; …)`
+  exactly. Two other dimensions did bite, and **neither had a fixture, so
+  neither could ever have moved a number**: `i++` matched and **`++i` did not**
+  (a different node), and `{ … }` did not match a **braceless** body. Both are
+  ordinary C#; `dotnet/runtime` writes `++i` in a `<=` header itself. Closed
+  with a two-branch `pattern-either` on the increment and an ellipsis body,
+  on both rules.
+- **`edge-case-modify-during-iteration` — correct.** Its `foreach (var $X in
+  $COLL)` anchor is a wildcard too: it matches `foreach (string x in xs)`. The
+  probe fired on all fourteen spellings carrying an enumerated receiver, and
+  stayed correctly silent on the `Dictionary` case.
+- **Receiver types added, on the same measurement**: `Collection<T>` and
+  `ObservableCollection<T>`, to `loop-lte-count` (six types → eight) and
+  `modify-during-iteration` (four → six). `metavariable-type` is not
+  subtype-aware, so each type is an independent claim — probed one at a time,
+  firing on neither. `ObservableCollection<T>` is the likeliest real-world site
+  of the iteration bug and is exactly the C# a corpus of `dotnet/runtime`
+  contains none of. Six new hit fixtures and three new near-misses, one per
+  newly covered spelling, each written from the shape of the bug rather than
+  from the clause.
+
+**The widening cost zero findings on the same 11 800 files** — shipped pack
+against widened pack, compared per rule, every delta 0 — and the three zeros
+stay zero, which is now a measurement rather than a silence. The
+independent checks say why: the corpus holds **seven** `for` headers comparing
+`<=` against a `.Count` — three 1-based and correct, three SIMD stride loops
+where the `.Count` is a *vector width* on the left of the comparison, and one
+0-based loop that is correct anyway because it needs `Count + 1` tries to
+generate a free name and never uses `i` as an index; and **3978 `foreach`
+loops, 4 of which remove from the collection they enumerate, all four leaving
+the loop immediately**.
+
+**And a caveat this corpus needed and did not have**: these counts are noisy.
+`empty-catch` came back 407 in one run and 402 in the next — the *same pack*
+over the *same corpus* — because semgrep-core's per-rule timeout is not
+deterministic, and it gives up on a handful of very large files
+(`WMIGenerator.cs`, `XmlTextReaderImpl.cs`, `Sve.cs`, `CharUnicodeInfoData.cs`,
+`XmlCharType.cs`). Thirteen timeouts versus eighteen accounts for all five
+findings, exactly. `paths.scanned` reads 11 800 either way, so it is necessary
+and **not sufficient**: the timeouts live in `errors`. A count from this pack is
+comparable only to a count from the same run, which is why everything above is
+an A/B compared per rule rather than a before-and-after of a total.
+
+**The same noise reaches ablation axis 3, and that is the more serious half.**
+The pack was ablated with `GUARDIAN_CS_SRC` pointed at the corpus — the first
+time axis 3 has run for it. Axes 0, 1 and 2 are clean and stable in every run:
+**11/11 rules fire, 0 DEAD, 0 SUPPRESSING**, and both new `pattern-either`
+branches came back `live`, which is the harness confirming the new fixtures
+reach them. Axis 3 did not hold up: two runs of the *same pack* over the *same
+corpus* disagreed on **6 of the 12 clauses they both measured**, and all **14
+findings** the harness attributed to clauses of `modify-during-iteration` were
+`empty-catch` findings in `WMIGenerator.cs` and `XmlILOptimizerVisitor.cs` —
+two of the timing-out files, and a different rule entirely, which is
+structurally impossible as an attribution. Axis 3 compares whole-corpus totals
+across separately executed scans, and the jitter (±5) is bigger than the deltas
+it reports (2-3). Documented, not changed: the fix is to scope the comparison
+to the ablated rule's own findings, and the axis-3 verdicts other packs already
+carry were computed the present way.
+
+Recorded in the design of record's new §4c, with one thing it found unasked:
+`loop-lte-length` was *not* one of the zeros — it scores 2, and **both are
+false positives** of a shape §8 did not list, the sentinel iteration that runs
+one past the end on purpose and guards the extra pass inside the body. 0 of 2
+is not 0 of 75, and the only available tightening is the one Java measured and
+rejected, so the rule stands and the limitation is now written down.
+
 ### Removed — `bugfix-cs-null-safety-as-cast-deref`, deleted by the first real-code corpus the C# pack ever had
 
 `configs/semgrep/bugfix-cs.yml` is **eleven** rules, not twelve. The rule

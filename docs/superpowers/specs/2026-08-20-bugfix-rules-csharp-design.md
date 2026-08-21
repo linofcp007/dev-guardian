@@ -296,6 +296,275 @@ Deleted with it: `hits/AsCast.cs`, `misses/AsCast.cs`, and the as-cast entry in
 `configs/semgrep/bugfix-cs.yml` records both probes, so the rule cannot come
 back without a way to tell an `as` from a cast.
 
+## 4c. The three rules that scored ZERO on the same corpus
+
+Amendment, 2026-08-21. §4b measured the pack's loudest rule and deleted it.
+This section measures the three quietest. Same corpus, same commit
+(`6ecee4dd`), **11 800 files scanned**, `paths.scanned` asserted before any
+count was read. `lock-on-shared-instance` reproduces §4a and §4b **exactly** at
+322. Three of the eleven rules found **nothing at all**:
+
+| rule | corpus count |
+| --- | --- |
+| `error-handling-rethrow-loses-stacktrace` | 0 |
+| `off-by-one-loop-lte-count` | 0 |
+| `edge-case-modify-during-iteration` | 0 |
+
+**A zero has two readings and they are opposite**: the bug does not occur in
+that codebase, or the rule is silently broken. §7 records the sixth way Semgrep
+reports success while matching nothing; the series is at **nine** now, and
+three of them load the pack correctly and match the *wrong thing* — so a zero
+is not evidence of anything until somebody asks which one it is.
+
+**All three are correct.** Two of them were nevertheless found to be missing
+ordinary spellings of their own bug, which is a different defect and is fixed
+here.
+
+### First, a caveat this corpus needs and did not have: the counts are noisy
+
+`empty-catch` came back **407** here against the **402** §4a recorded, and the
+temptation is to write that off as a Semgrep version bump. It is not. **It is
+timeouts, and they are not deterministic.** semgrep-core gives up per rule ×
+file, and on this corpus it gives up on a handful of very large files —
+`CharUnicodeInfoData.cs`, `Sve.cs`, `Sve.PlatformNotSupported.cs`,
+`XmlCharType.cs`, `XmlTextReaderImpl.cs`, `WMIGenerator.cs`. Two runs of the
+**same pack over the same corpus** timed out 13 times and 18 times, and the
+five extra were `WMIGenerator.cs` (3 `empty-catch` findings) and two more rules
+on `XmlTextReaderImpl.cs` (2 more) — **exactly** the 407 → 402 difference. The
+run with more timeouts is the one that lands back on §4a's number.
+
+So a corpus count from this pack carries roughly **±1 % of run-to-run noise**,
+concentrated entirely in whichever rules happen to match inside those six
+files. Two consequences, both of which this section relies on:
+
+- **`paths.scanned` is necessary and not sufficient.** It reads 11 800 in both
+  runs; the timeouts are in `errors`, not in `paths`. Anyone comparing counts
+  across runs has to read the timeout list too.
+- **A count is only comparable to a count from the same run.** Every claim
+  below is an A/B of the shipped pack against the widened pack, run separately,
+  compared **per rule** — not a before-and-after of a total.
+
+### Method: probe each rule with the bug it targets, spelled every way
+
+For each rule, a file written from the **shape of the defect** in every
+idiomatic C# spelling, scanned with the shipped pack, at a short path (a long
+Windows path makes semgrep-core scan zero files and blame the target list).
+Attribution is per method, so a spelling that does not fire names itself.
+
+### `rethrow-loses-stacktrace`: correct, and the zero is confirmed independently
+
+The benign explanation was known in advance — the rule mirrors the compiler's
+`CA2200` and `dotnet/runtime` builds clean — and a known benign explanation is
+exactly the kind that gets assumed instead of checked. Two measurements:
+
+1. **The rule still fires on its own fixtures**: 10 findings, 9 in
+   `hits/Rethrow.cs` and 1 in `hits/RealBugs.cs`. Not broken, not unloaded.
+2. **An independent oracle over the corpus, with no Semgrep in it**: a
+   brace-depth scan for `throw <identifier>;` where the identifier is the one
+   bound by the enclosing `catch`. It finds **201 `throw <ident>;` statements
+   in the corpus and 0 that rethrow the caught variable**. The same oracle over
+   the fixtures finds all 10 — the positive control that makes the zero mean
+   something.
+
+The rule and a scan written on a different principle agree. **Zero is the
+corpus, not the rule.** Recorded here so nobody re-opens it.
+
+### `off-by-one-loop-lte-count`: correct, but it read one spelling of two dimensions
+
+**The prime suspicion was `var`.** The pattern is
+`for (var $I = 0; $I <= $A.Count; $I++)`, and real C# writes
+`for (int i = 0; ...)` almost exclusively — the pack's own header block says
+*always write `var` in a C# pattern* because `$T $V` does not match `var`. If
+the reverse also held, the rule would be blind to nearly every `for` loop ever
+written, with every indicator green. **It does not: `var` in the pattern is a
+wildcard for the declared type, and `for (var $I = 0; ...)` matches
+`for (int i = 0; ...)` exactly.** Measured, and now recorded in the rule.
+
+Seventeen spellings of the same loop were probed and the shipped rule fired on
+**eight**. Two other dimensions did bite, and **neither had a fixture, so
+neither could ever have shown up as a number**:
+
+| dimension | matched | did not match |
+| --- | --- | --- |
+| increment | `i++` | **`++i`** — a different node |
+| body | `{ … }` | **braceless** `for (…) s += xs[i];` |
+
+Both missing spellings are ordinary C#; `dotnet/runtime` writes `++i` in a
+`<=` loop header itself (`PerformanceCounterLib.cs:574`). A free `$INC`
+metavariable covers both increments but also `i--` and `i += 2`, so the fix is
+a two-branch `pattern-either`; an ellipsis body covers braced and braceless in
+one. Applied to **both** off-by-one rules, since they share the shape. After
+it, fourteen of the seventeen fire.
+
+Two receiver types were added on the same measurement — `Collection<T>` and
+`ObservableCollection<T>`, probed one at a time and firing on neither. That is
+the §5 non-subtype-awareness again, not a new fact; both are BCL collections
+with `Count` and an indexer, so enumerating them loosens nothing. Each brought
+its own fixture.
+
+**Still out, and stated rather than implied**: `for (i = 0; …)` with `i`
+declared above the loop, and a chained receiver (`h.Items.Count`), which
+`metavariable-type` does not resolve.
+
+**And the corpus count is still 0 after all of it.** Shipped pack against
+widened pack, both over the same 11 800 files, compared per rule:
+
+| rule | shipped | widened | delta |
+| --- | ---: | ---: | ---: |
+| `off-by-one-loop-lte-count` | 0 | 0 | 0 |
+| `off-by-one-loop-lte-length` | 2 | 2 | 0 |
+| `edge-case-modify-during-iteration` | 0 | 0 | 0 |
+| `rethrow-loses-stacktrace` | 0 | 0 | 0 |
+| every other rule in the pack | — | — | 0 |
+
+The only number that moved between the two runs is `empty-catch`, 407 → 402,
+which is the timeout noise above and not a rule anything here touches. **Four
+newly covered spellings, two newly enumerated types, and not one new finding on
+real code.**
+
+The independent check says why. A text grep for a
+`for` header comparing `<=` against any `.Count` finds **seven** in the whole
+corpus, and every one is accounted for:
+
+- **three are 1-based** (`PerformanceCounterLib.cs:574`,
+  `MetadataAggregator.cs:174`, `CertificatePolicy.cs:167`), where an inclusive
+  bound is exactly right;
+- **three are SIMD stride loops** in `BitArray.cs` (848, 870, 893) where the
+  `.Count` is `Vector512<byte>.Count` — a **vector width on the left-hand side**
+  of the comparison, bounded by `_bitLength`. Not a collection bound at all,
+  and the reason a grep is a worklist rather than an oracle;
+- **one is 0-based**, `System.Data.Common/.../XMLSchema.cs:103`, and it is
+  **correct anyway** — it generates candidate names and needs `Count + 1` tries
+  to guarantee a free one, and never uses `i` as an index.
+
+So the widening left nothing on the table, and the one shape it cannot reach —
+a chained receiver, `table.Columns.Count`, on a `DataColumnCollection` — would
+have bought a false positive rather than a bug. **Zero is the corpus.**
+
+### `edge-case-modify-during-iteration`: correct, same type-list widening
+
+The suspicion here was the `foreach` anchor —
+`pattern-inside: foreach (var $X in $COLL)` — for the same reason. **Also a
+wildcard: it matches `foreach (string x in xs)` verbatim.**
+
+Sixteen spellings probed, and the shipped rule fired on **twelve**: `var` and
+explicit element type in the header; receiver as parameter, field,
+`this.`-qualified field, property, `var` local with a `new` initialiser and
+explicitly-typed local; removal bare, guarded, and nested two blocks deep; both
+`Remove` and `RemoveAt`. Of the four it missed, one is a `for`/`RemoveAt` index
+loop — a different shape, not this rule's — and one is the `Dictionary` case,
+which is **correct** and deliberately excluded.
+
+The other two were the **only** real gap, and it is the type list:
+`Collection<T>` and `ObservableCollection<T>`, now added, with a fixture each
+plus a near-miss holding the claim that the exit exclusions still apply to a
+newly enumerated type — a type list and an exclusion list are independent, and
+nothing about adding a type says the exclusions still reach it.
+`ObservableCollection<T>` is the likeliest real-world site of this entire
+defect and is exactly the C# a corpus of `dotnet/runtime` contains none of.
+
+The independent oracle again: a brace-tracked, deliberately **type-blind and
+exit-blind** scan for a `foreach` whose body removes from the collection it
+enumerates. Over the corpus: **3978 `foreach` loops, 4 self-mutating**, and all
+four are correct —
+
+- `TrackedCollection.cs:178` and `:186` — `Remove(el); return true;`
+- `VoiceSynthesis.cs:518` — `Remove(lexicon); return;`
+- `ConfigurationElementCollection.cs:776` — `Items.RemoveAt(index);` inside a
+  `switch` arm, but the loop `return`s immediately after the switch, and
+  `Items` is an `ArrayList`.
+
+The first three are the exit exclusions doing their job. The fourth is worth
+naming as a **latent false positive**: it is the switch-arm shape the
+re-inclusion deliberately reopens, and the `return` that makes it safe sits
+*after* the switch where no exit exclusion can see it. It is silent today only
+because `ArrayList` is not an enumerated type. The re-inclusion is still right
+— it is there because the alternative swallowed a real bug in Java's wave 4 —
+but the trade has a cost and this is the first real-code instance of it.
+
+### The new near-misses were mutation-tested, and one of them is documentary
+
+Three near-misses came with the widening, and §9's warning applies to them as
+much as to any other: a fixture written by the person who wrote the pattern
+proves what its author expected, not what the rule does. So each was checked by
+**mutating the rule and watching**, not by reading it:
+
+- `InBoundsPreIncrement` — flip the `<=` to `<` in the **`++$I` branch alone**
+  and it fires while `InBounds` stays silent. **Discriminating**, and it has to
+  exist, because a `pattern-either` gives each branch its own copy of the `<=`
+  and a near-miss over one spelling is blind to a mutation in the other.
+- `InBoundsNoBraces` — **documentary**, and it was written expecting not to be.
+  Once the body is `...`, braced and braceless go through the *same* pattern, so
+  no single-clause mutation fires it without also firing `InBounds`. Relabelled
+  in the fixture rather than left to look like evidence.
+- `NewTypeThenBreak` — **not uniquely discriminating today**, for the good
+  reason: the exit exclusions unify `$COLL` structurally, so they reach a newly
+  enumerated type for free. It holds that claim against the day somebody writes
+  a type-dependent exclusion, which is the day nobody would think to check.
+
+Two of three are weaker than they look. That is not an argument for deleting
+them; it is an argument for **labelling** them, which is what §4b's post-mortem
+concluded when fifteen green near-misses certified a clause one statement wide.
+
+### And the same noise reaches ABLATION AXIS 3, which is worse
+
+The ablation was run over the widened pack with `GUARDIAN_CS_SRC` pointed at the
+corpus — the first time axis 3 has actually run for this pack. **Axes 0, 1 and 2
+are clean and stable: 11/11 rules fire, 0 DEAD, 0 SUPPRESSING, in every run.**
+Both new `pattern-either` branches came back `live`, which is the harness
+confirming that the new fixtures reach them.
+
+**Axis 3 did not survive contact with the timeouts.** Two runs of the *same
+pack* over the *same corpus*, one full and one `--filter`ed to
+`modify-during-iteration`, disagreed on **6 of the 12 clauses they both
+measured** — `ok` becoming `FLAG` and back. Nothing was edited between them; the
+config hash is identical in both reports.
+
+Reading the flagged lines, as the report tells you to, says why immediately.
+Every one of the **14 findings** the harness attributed to a clause of
+`modify-during-iteration` is a **`bugfix-cs-error-handling-empty-catch`
+finding**, in `WMIGenerator.cs` (12) and `XmlILOptimizerVisitor.cs` (2). Not one
+belongs to the rule being ablated. **A clause of one rule cannot conjure
+findings of another** — and those two files are on the timeout list above.
+
+So axis 3, as invoked here, compares **whole-corpus totals across separately
+executed scans**, and the timeout jitter (±5) is larger than the deltas it
+reports (2 to 3). Consequences:
+
+- **Every axis-3 flag on this pack with a delta inside the noise floor is
+  unreadable**, including all five on `modify-during-iteration`. The 16 flags
+  from the full run should be read as *at most* an upper bound.
+- The one flag that is *structurally* real regardless of noise is
+  `loop-lte-length`'s `$I++` branch: that branch accounts for both of the
+  rule's real-code findings, and the section below shows both are false
+  positives. Attribution and verdict agree there for a reason that does not
+  depend on the count being stable.
+- **The harness is not wrong, its input is** — axis 3's own text says the
+  verdict "is an attribution, not a proof", and printing the findings is what
+  made this diagnosable in one read. What it needs on a corpus like this is for
+  the comparison to be **scoped to the ablated rule's own findings** (a clause
+  of rule X can only move rule X), or for the timing-out files to be excluded
+  from the corpus. Recorded rather than changed here: the axis-3 verdicts other
+  packs already carry were computed the present way, and re-basing them is not
+  this task's call.
+
+### What the same scan says about `loop-lte-length`, unasked
+
+`loop-lte-length` was not one of the zeros; it scored **2**, and both are false
+positives of a shape §8 does not list. `ConfigPathUtility.cs:26` and
+`XslNumber.cs:151` both run one position past the end **on purpose**, and both
+guard the extra iteration inside the body — `examine < configPath.Length ? … :
+SeparatorChar` and `idx == formatString.Length || …`. The loop is a
+sentinel-iteration idiom, not an off-by-one.
+
+Two findings, both wrong, is a 0-precision measurement, and §4b deleted a rule
+for that. It is **not** being acted on here, for two reasons worth writing
+down: n=2 is not 6490, and the tightening that would close it — require the
+body to index the bounded receiver — is the one Java measured and rejected
+because it trades a false positive for a false negative in every loop that
+reads `a[i]` to write somewhere else. Recorded in §8 as a limitation so the
+next corpus can settle it.
+
 ## 5. The eleven rules
 
 Ids follow `bugfix-cs-<class-token>-<name>`, because `mapSubcategory` classifies
@@ -397,6 +666,12 @@ C# supports this class better than any language in the series so far.
   `.Count`. Untyped, `.Length` fires on a domain object with an `int Length`
   field, which is the exact Java defect reproduced; `metavariable-type` with
   `"$T[]"`, `string` and `List` closes it. `metavariable-type` works in C#.
+  Amended 2026-08-21 (§4c): both rules read `i++` but not `++i`, and a braced
+  body but not a braceless one. Two spellings of ordinary C#, no fixture behind
+  either, so neither gap could move a number. Both closed — a two-branch
+  `pattern-either` on the increment and an ellipsis body — at a cost of zero
+  new findings on 11 800 files. `loop-lte-count`'s type list went from six to
+  eight with `Collection<T>` and `ObservableCollection<T>`.
 
 ### `memory_leak` — 1 rule, WARNING
 
@@ -428,7 +703,12 @@ in the pack. It is **deleted**: §4b has the measurement. The remaining rule:
   positives *and swallows a real bug*, where `break` leaves a `switch` rather
   than the loop. **Drop the `Dictionary.Keys` branch** — removing from a
   `Dictionary` during enumeration has been documented safe since .NET Core 3.0,
-  so that branch would fire on correct code.
+  so that branch would fire on correct code. Amended 2026-08-21 (§4c): the type
+  list went from four to six with `Collection<T>` and `ObservableCollection<T>`.
+  The `foreach (var $X in $COLL)` anchor was probed and is a wildcard — it
+  matches `foreach (string x in xs)` — so the type list was the only gap. The
+  corpus count stays 0, and an independent, type-blind and exit-blind oracle
+  agrees: 3978 `foreach` loops, 4 self-mutating, all 4 correct.
 
 ### Three candidates killed at the probe, which is what §2's third rule is for
 
@@ -505,8 +785,29 @@ C# adds a sixth, and it is the first that **`paths.scanned` does not catch**.
   `new int[a.Length + 1]`. Java measured the obvious tightening and rejected it
   because it traded a false positive for a false negative; that measurement is
   carried forward rather than repeated.
+- **`loop-lte-length` has a second false-positive shape, measured and not
+  closed** — the SENTINEL ITERATION, where the loop runs one past the end on
+  purpose and guards the extra pass inside the body (`i < a.Length ? a[i] :
+  terminator`, or `if (i == a.Length || …)`). It is not the sentinel-array
+  bullet above: no second array is allocated. Both of the rule's two findings
+  on 11 800 files of `dotnet/runtime` are this shape — `ConfigPathUtility.cs:26`
+  and `XslNumber.cs:151` — so its measured precision on real code is **0 of 2**.
+  §4b deleted a rule for 0 of 75; this one is left standing because n=2 is not a
+  sample and the only tightening available is the one Java rejected. It is the
+  first thing to re-measure on the next C# corpus. §4c has the reasoning.
+- **`loop-lte-count` and `edge-case-modify-during-iteration` do not cover every
+  receiver** — eight and six enumerated types respectively, and
+  `metavariable-type` is not subtype-aware, so `Queue<T>`, `Stack<T>`,
+  `SortedDictionary<K,V>`, `IReadOnlyCollection<T>` and any project's own
+  collection are invisible. `loop-lte-count` also misses `for (i = 0; …)` with
+  `i` declared above the loop, and a chained receiver (`h.Items.Count`). All
+  measured, all deliberate: the alternative is dropping the type restriction,
+  which brings back the domain object with an `int Count`.
 - **`rethrow-loses-stacktrace` duplicates a compiler warning** (`CA2200`), not a
-  registry rule. Stated in §5.
+  registry rule. Stated in §5. Its corpus count is **0**, and that is the
+  corpus rather than the rule: an independent brace-depth oracle finds 201
+  `throw <ident>;` statements in 11 800 files and none that rethrow the caught
+  variable, while finding all 10 of the rule's own fixture sites. §4c.
 - **These rules complement the registry packs, they do not replace them** — and
   here that is nearly vacuous, since the registry has no C# bug rules at all.
 - **They do not replace the model-driven `/guardian-fix` path.**
@@ -514,6 +815,17 @@ C# adds a sixth, and it is the first that **`paths.scanned` does not catch**.
   `GUARDIAN_CS_SRC` names a C# tree; unset, the report prints `N/A`. That is a
   verdict rather than a silent skip, but it is still a gap somebody has to
   close deliberately before a rule change here is measured against real code.
+- **And on `dotnet/runtime`, axis 3 is not reproducible** (§4c). semgrep-core's
+  per-rule timeout is nondeterministic on six very large files, which moves the
+  whole-corpus total by about ±5 between identical runs — larger than the
+  deltas axis 3 reports. Measured: two runs of the same pack over the same
+  corpus disagreed on **6 of 12** clause verdicts, and all 14 findings the
+  harness attributed to clauses of `modify-during-iteration` were
+  `empty-catch` findings in two of those files, which is structurally
+  impossible as an attribution. **Axes 0, 1 and 2 are unaffected and stable.**
+  Until axis 3 scopes its comparison to the ablated rule's own findings, or the
+  corpus drops the timing-out files, an axis-3 flag on this pack is a prompt to
+  read the printed findings, never a result on its own.
 
 ## 9. Testing
 

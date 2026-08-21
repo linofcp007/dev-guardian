@@ -31,6 +31,42 @@ public sealed class LoopLte
         return s;
     }
 
+    // DISCRIMINATING for the `<=` operator IN THE PRE-INCREMENT BRANCH, added
+    // 2026-08-21 with that branch, and MUTATION-TESTED rather than asserted:
+    // flip the `<=` to `<` in the `++$I` branch alone and this fires while
+    // InBounds above stays silent. Measured, both directions.
+    //
+    // That is the whole point of it. The rule is now a `pattern-either` of two
+    // increment spellings and EACH BRANCH CARRIES ITS OWN COPY of the `<=`, so
+    // a near-miss written over one spelling is blind to a mutation in the
+    // other — the same reason FencePosts and FencePostsByCount below are two
+    // methods rather than one.
+    public int InBoundsPreIncrement(int[] xs)
+    {
+        var s = 0;
+        for (var i = 0; i < xs.Length; ++i) { s += xs[i]; }
+        return s;
+    }
+
+    // DOCUMENTARY, not discriminating, and labelled so because the mutation
+    // test says so rather than because it looks that way. The body of both
+    // branches went from `{ ... }` to `...` on 2026-08-21 so that a braceless
+    // single-statement body matches — and once it does, the braced and
+    // braceless spellings go through the SAME pattern, so no single-clause
+    // mutation fires this one without also firing InBounds. It was written
+    // expecting to discriminate; it does not, and saying so is cheaper than
+    // leaving a reader to assume every near-miss here carries equal weight.
+    //
+    // What it does pin is worth one method: the correct half-open loop stays
+    // silent in the spelling the widening newly reaches. A widening that went
+    // one step further and dropped the bound comparison would fire here.
+    public int InBoundsNoBraces(int[] xs)
+    {
+        var s = 0;
+        for (var i = 0; i < xs.Length; i++) s += xs[i];
+        return s;
+    }
+
     // DISCRIMINATING for the BOUND EXPRESSION, and it catches a mutation
     // InBounds cannot: widen the bound to `$I <= $BOUND` (any expression
     // rather than `$A.Length`) and this fires while InBounds does not. The

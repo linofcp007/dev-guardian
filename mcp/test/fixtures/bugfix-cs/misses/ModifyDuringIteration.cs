@@ -6,6 +6,7 @@
 // lives — see hits/ site 8, and read the two files together.
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 
 namespace Guardian.Fixtures.Misses;
@@ -56,6 +57,24 @@ public sealed class ModifyDuringIteration
     public void RemoveAtThenBreak(List<int> xs)
     {
         foreach (var x in xs) { if (x > 1) { xs.RemoveAt(0); break; } }
+    }
+
+    // THE EXIT EXCLUSIONS ON A NEWLY ENUMERATED TYPE. `ObservableCollection<T>`
+    // joined the type list on 2026-08-21, and a type list and an exclusion list
+    // are independent: nothing about adding a type says the exclusions still
+    // reach it. They unify `$COLL` structurally rather than by type, so they
+    // do — but that is a claim, and this is the fixture that holds it. Written
+    // for `ObservableCollection` rather than for `Collection` because it is the
+    // one a real WPF codebase would carry.
+    //
+    // NOT UNIQUELY DISCRIMINATING TODAY, and said rather than left to be
+    // assumed: because the exclusions are type-blind, no single-clause mutation
+    // fires this without also firing ThenBreak above. It earns its place the
+    // day someone writes a type-dependent exclusion, which is exactly the day
+    // nobody would think to check.
+    public void NewTypeThenBreak(ObservableCollection<int> xs)
+    {
+        foreach (var x in xs) { if (x > 1) { xs.Remove(x); break; } }
     }
 
     // THE OPPOSITE NESTING, and the reason the re-inclusion in the rule is
