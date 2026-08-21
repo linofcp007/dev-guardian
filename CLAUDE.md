@@ -40,6 +40,7 @@ npm run ablate -- all                          # every registered pack
 npm run ablate -- bugfix-js                    # one pack
 npm run ablate -- bugfix-java --filter=map-get # one rule, while iterating
 npm run ablate -- bugfix-js --list             # enumerate clauses, no scanning
+npm run ablate -- routes                       # the 64-rule route pack, ~80 min
 ```
 
 Semgrep is found via `--semgrep=<path>`, then `GUARDIAN_SEMGREP`, then `PATH`.
@@ -150,8 +151,26 @@ was added after the fact and immediately deleted a rule: `as-cast-deref` fired
 6490 times on `dotnet/runtime` with no true positives, having passed axes 0, 1
 and 2 on its author's own fixtures throughout.
 
+**A pack can have a corpus that reaches almost none of it, and that reads as a
+pass.** Axis 3 compares the ablated rule's *own* findings, so a rule the corpus
+never triggers passes by comparing an empty set against an empty set.
+`routes.yml` makes this the common case rather than the exception: `mcp/src` is
+TypeScript, and of the pack's 64 rules exactly **two** ever fire on it —
+`guardian-import-esm` (824 findings) and `guardian-env-node` (6). The corpus is
+registered anyway, because 824 findings on 190 files of our own code is the
+most sensitive real-code baseline in the repo and the alternative was `N/A` for
+the whole pack. What keeps that honest is the coverage line: every rule carries
+its real-code baseline, and a rule with none prints
+`real 0 -- axis 3 vacuous here` instead of the same `+0, floor 0` a genuinely
+measured rule gets.
+
 Axis 0 needs a `hits/` corpus on the same terms and reports `N/A` for the whole
-pack where the fixture root has no `hits/` subdirectory.
+pack where the fixture root has no `hits/` subdirectory. Two knobs exist for a
+corpus whose directories predate that convention, and both are `routes.yml`'s:
+`hitsSubdir: '.'` makes the fixture **root** the hits corpus, and
+`decoySubdirs` names trees inside it that are near-misses rather than true
+positives, subtracting them. Their baseline finding count is **printed and
+pinned, never gated at zero** — see the routes section below.
 
 **Axis 3 compares one rule, on the files every scan finished, against a
 measured floor.** All three halves of that sentence are repairs, and the
@@ -237,10 +256,108 @@ the deltas being measured, the run's *passes* are not evidence either.
 Having no ablatable clauses is reported, never counted against a pack: it is a
 fact about the rule, not a defect in it.
 
-`routes.yml` is unregistered: it has no `hits/` + `misses/` fixture pair, so
-axes 0, 1 and 2 all have nothing to measure against. Twenty of its 64 rules
-have no ablatable clause, so registering it would need fixtures before the
-report said anything about two thirds of the pack.
+### `routes.yml` — registered, and the one pack whose corpus is named differently
+
+It was unregistered for a long time on the grounds that it had no `hits/` +
+`misses/` fixture pair. It has one; the directories are simply older than the
+convention and named for what they hold, and they cannot be renamed because
+`mcp/test/e2e/rulePackFixture.test.ts` and the surface tools address them by
+name. So the registration in `packs.ts` maps them instead:
+
+| harness role | directory | what it holds |
+| --- | --- | --- |
+| fixture root | `mcp/test/fixtures/surface/` | everything below, scanned in one pass |
+| hits | `apps/`, `annotations/`, `frameworks/` | files that **must** produce routes |
+| decoys | `frameworks/fp/` | ordinary code shaped like routes |
+| real code | `mcp/src` | axis 3 — see the caveat below |
+
+`hitsSubdir: '.'` makes the fixture **root** the hits corpus and
+`decoySubdirs: ['frameworks/fp']` subtracts the decoy tree from it. Both knobs
+exist for this pack; `--hits=` and `--decoys=` are their ad-hoc equivalents.
+
+**The decoy baseline is 8, and pinning it at 8 is the point.** Four of those
+are `guardian_kind: route` and every one is *undecidable*, not untried:
+`Route::get('not/a/leading/slash')` on a class that merely happens to be called
+`Route` is indistinguishable from Laravel's facade, and Ruby's
+`get 'config/value'` is exactly what a Sinatra route looks like — requiring a
+`do … end` block was tried and made every real Sinatra route match twice. The
+other four are one real `app.use('/static', express.static(…))` mount and three
+ordinary imports in the decoy files. The harness **prints** the number and
+never gates on zero: a gate that is permanently red teaches the reader to skip
+the line, and what actually matters is that a fifth route would move it.
+
+**Why this pack matters more than its rule count suggests.** It is the only
+pack whose errors send HTTP requests to invented paths — the next tool in the
+series probes whatever path it is handed, so a fabricated path emitted with
+`path_partial: false` reads as one that was verified (`mcp/src/surface/extract.ts`
+says so in its own header). A rule that quietly matches nothing is the other
+half of the same problem, and this pack has shipped it twice: chi entirely
+invisible, and `mux.Handle` never matching.
+
+**First full run** (sha256 `2634d21b…`, 4382 s wall clock, noise floor 0):
+
+| axis | result |
+| --- | --- |
+| 0 fires on hits/ | **64/64 rules fire.** Nothing silent, in any of the nine languages |
+| 1 live | 74/112 pass, **38 DEAD** |
+| 2 keeps true positives | 96/112 pass, 16 "suppressing" |
+| 3 no rise on `mcp/src` | 110/112 pass, 2 "raising" |
+
+Axis 0 is the headline and it is clean — which is the one result that could
+not be got any other way, since a route rule that matches nothing produces no
+error anywhere. **Read the other three with their known false-alarm modes in
+mind, because on this pack they dominate:**
+
+- **All 16 axis-2 flags are the guard working.** Every one is a verb whitelist
+  (`^(get|post|put|patch|delete)$`, `^Map(Get|…)$`) or a disambiguating
+  `pattern-not`; removing it *widens* the rule, so new findings appear in
+  files that are hits. Not one is a suppressed true positive. Axis 2 was built
+  for narrowing clauses in a findings pack, where a reveal means a bug came
+  back; in a route pack a reveal usually means a fabrication came back.
+- **Both axis-3 flags are working positive branches** — `guardian-import-esm`'s
+  named-import alternative (824 of the 830 baseline findings on `mcp/src`) and
+  `guardian-env-node`'s `process.env.$NAME` (6 of 6). Removing a branch makes
+  the rule match less; the axis reports it, and the report says so.
+- **38 DEAD is not 38 dead clauses.** Almost all of them are one of the two
+  non-deletable causes: a missing fixture, or redundancy with a sibling. Two
+  patterns account for most of the count and neither was known before the run:
+  - **Semgrep collapses spellings a reader thinks are distinct.** `$MUX.Handle`
+    also matches `http.Handle`; `import { $S } from "m"` also matches a default
+    import — the pack's own header had *measured* that and the verdict simply
+    confirms it, hand-probed on a file whose only statement is
+    `import def from "./m.js"`; `import $MODULE;` covers `import static …` and
+    `import … .*`; `#[actix_web::post(…)]` and `#[post(…)]` are the same node
+    once the `use` is resolved. `f($X, ...)` covers `f($X)` — which is why
+    Flask's bare alternative and Rails' `$METHOD $PATH` read DEAD.
+  - **A guard with no adversarial fixture in its own language.** Five were
+    hand-probed and **every one turned out load-bearing**, so the fix is a
+    fixture and never a deletion:
+
+    | DEAD clause | the decoy no fixture carries | what it reports without the guard |
+    | --- | --- | --- |
+    | `go-chi` `pattern-not: $R.$METHOD($PATH)` | `reg.Get("/cache/one-arg")` | chi route `/cache/one-arg` |
+    | `go-chi` `pattern-not: $R.$METHOD($PATH, nil)` | `reg.Get("/cache/key", nil)` | chi route `/cache/key` |
+    | `go-chi` `$PATH` literal regex | `reg.Get(cacheKey, handler)` | chi route on a computed path |
+    | `mount-express` `$PREFIX` literal regex | `app.use(cors(), router)` | a mount at prefix `cors()` |
+    | `route-express` `pattern-not: $APP.$METHOD($PATH)` | `app.get('/title')` | a route at `confidence: high`, `path_partial: false` |
+
+    All three chi guards read DEAD for one reason: the only Go decoy in the
+    corpus, `reg.GET(…)`, is SCREAMING-case, so the *gin* rule absorbs it and
+    the TitleCase rule's guards are never exercised. Express's settings getter
+    is the same shape — the three decoys the pack's own header credits to that
+    `pattern-not` (`cache.get`, `cache.delete`, `storage.get`) are all on the
+    `$APP` denylist too, so the guard's unique job is invisible.
+
+The pair pass re-ablated **30 same-rule DEAD pairs** and found **5 MOVES** —
+four of them the actix `#[verb]` + `#[actix_web::verb]` pair (one per verb
+except GET, whose fixture carries both spellings) and one the Go
+`import "$MODULE"` + grouped-`import` pair. One pair ERRORed by construction:
+removing both `guardian-import-rust` alternatives leaves the rule with no
+pattern at all, which is the structural guard doing its job.
+
+**Nothing was deleted.** Every DEAD verdict here is a fixture to write or a
+redundancy to document, and the run's own value was axis 0 plus the two
+hand-probes above.
 
 ## TypeScript conventions
 

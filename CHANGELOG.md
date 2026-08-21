@@ -10,6 +10,26 @@ version bump.
 
 ### Added
 
+- **`configs/semgrep/routes.yml` is under the ablation harness**, the last pack
+  that was not. It was excluded for having no `hits/` + `misses/` fixture pair;
+  it has one, under older names — `mcp/test/fixtures/surface/` is the hits
+  corpus and `frameworks/fp/` the decoys — so the harness gained
+  `hitsSubdir: '.'` (the fixture root) and `decoySubdirs` rather than the
+  fixtures being renamed out from under the surface e2e tests. First full run
+  over its **112 clauses in 64 rules**: **axis 0 is 64/64 — every rule fires**,
+  which is the check this pack most needed, having twice shipped a rule that
+  matched nothing. 38 clauses read DEAD and **none was deleted**: they are
+  Semgrep collapsing spellings a reader thinks are distinct (`$MUX.Handle`
+  matches `http.Handle`; `#[actix_web::post]` and `#[post]` are one node) or a
+  guard whose adversarial fixture does not exist. Two of the latter were
+  hand-probed and are load-bearing — without them `app.use(cors(), router)`
+  reports a mount at prefix `cors()` and Express's settings getter
+  `app.get('/title')` reports as a route at full confidence. The decoy tree's
+  baseline is **pinned at 8, not gated at 0**: four of those are routes that
+  are genuinely undecidable. Axis 3 runs on `mcp/src` and reaches only 2 of the
+  64 rules, so the report now prints each rule's real-code baseline and marks
+  the other 62 `real 0 -- axis 3 vacuous here`.
+
 - **`create_fix_pr` now says what it filtered out.** `severity_min` defaults to
   `high`, and 1.9.0 took the Semgrep `ERROR` tier — the only tier the parser
   maps to `high` — from 20 rules of 34 to 4 of 58. A default run against a

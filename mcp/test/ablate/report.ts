@@ -132,7 +132,17 @@ function ruleLine(r: RuleVerdict): string {
       : r.ablatedClauses === r.enumeratedClauses
         ? `${String(r.ablatedClauses)} clause(s) ablated`
         : `${String(r.ablatedClauses)}/${String(r.enumeratedClauses)} clause(s) ablated`;
-  return `  ${axis0.padEnd(17, ' ')} ${clauses.padEnd(24, ' ')} ${r.ruleId}`;
+  // `real 0` is the load-bearing half of this column. Axis 3 compares the
+  // ablated rule's OWN findings, so a rule the real corpus never triggers
+  // passes it by comparing nothing to nothing -- printed identically to a rule
+  // the corpus genuinely exercised unless the baseline is on the page.
+  const real =
+    r.realFindings === null
+      ? ''
+      : r.realFindings === 0
+        ? '  real 0 -- axis 3 vacuous here'
+        : `  real ${String(r.realFindings)}`;
+  return `  ${axis0.padEnd(17, ' ')} ${clauses.padEnd(24, ' ')} ${r.ruleId}${real}`;
 }
 
 export function renderPackReport(report: PackReport): string {
@@ -157,7 +167,23 @@ export function renderPackReport(report: PackReport): string {
       `${String(report.ruleCount - report.rulesWithClauses)} with none)`,
   );
   lines.push(`coverage        ${coverageSentence(report)}`);
-  lines.push(`fixture corpus  ${report.fixtureCorpus}  (${String(report.baselineFixtures)} baseline findings, ${String(report.baselineHits)} in hits/)`);
+  lines.push(
+    `fixture corpus  ${report.fixtureCorpus}  (${String(report.baselineFixtures)} baseline ` +
+      `findings, ${String(report.baselineHits)} in ${report.hitsCorpus})`,
+  );
+  if (report.decoyCorpus.length > 0) {
+    // Reported, never gated. A decoy tree whose baseline is not zero is the
+    // normal case for a pack whose near-misses are genuinely undecidable --
+    // `routes.yml`'s four surviving decoy routes are each pinned and explained
+    // in test/e2e/rulePackFixture.test.ts. What matters is that the number is
+    // on the page, so a rule widening that turns 4 into 5 is visible here as
+    // well as in the e2e suite.
+    lines.push(
+      `decoy corpus    ${report.decoyCorpus.join(', ')}  ` +
+        `(${String(report.baselineDecoys ?? 0)} baseline findings, excluded from hits;` +
+        ` a pinned number, not a target of zero)`,
+    );
+  }
   lines.push(
     `real corpus     ${report.realCorpus ?? '(none -- axis 3 N/A)'}` +
       (report.baselineReal === null
