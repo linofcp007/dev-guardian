@@ -199,7 +199,14 @@ bounded too — the latest scan plus two deltas, no multi-week trend
   and a Semgrep rule with no `fix:` field can't be autofixed either; only
   `deps_update_plan` bumps and Semgrep `--autofix` are in reach. And it
   won't open a PR unless you pass `apply: true` — the default run is a
-  dry run that proves the fix and reports it, nothing more.
+  dry run that proves the fix and reports it, nothing more. When it acts on
+  fewer findings than you expected, read `filtered` / `filtered_reason` on
+  the result rather than guessing: they count every open finding it skipped,
+  split by reason (below `severity_min`, no scanner-produced fix, no
+  requested source), and name a lower `severity_min` only when one would
+  genuinely recover something. `create_github_issues` reports the same two
+  fields for its own `severity_min` (default `high`) and `max_issues`
+  (default 10).
 - Three more `create_fix_pr` limits worth knowing before you rely on it:
   maven and gradle bumps are out of reach (inherited from
   `deps_update_plan`'s own ecosystem gap); a second hit of the same rule

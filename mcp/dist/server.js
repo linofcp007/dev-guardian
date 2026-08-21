@@ -46129,18 +46129,60 @@ function findLatest(ctx, type) {
   return row ? ctx.storage.scans.getById(row.scan_id) : null;
 }
 
+// src/severity/breakdown.ts
+var HIGHEST_FIRST = [...SEVERITIES].sort(
+  (a2, b) => SEVERITY_ORDER[b] - SEVERITY_ORDER[a2]
+);
+function severityShortfall(items, min) {
+  const by_severity = {
+    critical: 0,
+    high: 0,
+    medium: 0,
+    low: 0,
+    info: 0
+  };
+  const floor = SEVERITY_ORDER[min];
+  let total = 0;
+  for (const item of items) {
+    if (SEVERITY_ORDER[item.severity] >= floor) continue;
+    by_severity[item.severity] += 1;
+    total += 1;
+  }
+  for (const severity of HIGHEST_FIRST) {
+    const count2 = by_severity[severity];
+    if (count2 > 0) {
+      return { total, by_severity, suggested_severity_min: severity, recovered_by_suggestion: count2 };
+    }
+  }
+  return { total, by_severity, suggested_severity_min: null, recovered_by_suggestion: 0 };
+}
+function describeShortfallTiers(shortfall) {
+  return HIGHEST_FIRST.filter((severity) => shortfall.by_severity[severity] > 0).map((severity) => `${shortfall.by_severity[severity]} ${severity}`).join(", ");
+}
+function lowestExcludedSeverity(shortfall) {
+  for (let i2 = HIGHEST_FIRST.length - 1; i2 >= 0; i2 -= 1) {
+    const severity = HIGHEST_FIRST[i2];
+    if (severity !== void 0 && shortfall.by_severity[severity] > 0) return severity;
+  }
+  return null;
+}
+
 // src/tools/createGithubIssues.ts
 var inputSchema14 = {
   project_path: ProjectPath,
-  severity_min: external_exports.enum(["info", "low", "medium", "high", "critical"]).optional(),
-  max_issues: external_exports.number().int().min(1).max(50).optional(),
+  severity_min: external_exports.enum(["info", "low", "medium", "high", "critical"]).optional().describe(
+    "Minimum severity a finding must have to be filed. Default: high \u2014 what this drops is reported in `filtered`, never silently."
+  ),
+  max_issues: external_exports.number().int().min(1).max(50).optional().describe(
+    "Cap on issues filed in one run, highest severity first. Default: 10 \u2014 findings beyond the cap are counted in `filtered`, never silently dropped."
+  ),
   labels: external_exports.array(external_exports.string()).optional(),
   dry_run: external_exports.boolean().optional()
 };
 var tool24 = {
   name: "create_github_issues",
   title: "Create GitHub issues for top findings",
-  description: "Use the local `gh` CLI to open one issue per top finding. Uses the developer's existing GitHub auth, no API keys handled here, no GitHub Actions involved. Title encodes the finding fingerprint for idempotency. Pass dry_run=true to preview.",
+  description: "Use the local `gh` CLI to open one issue per top finding. Uses the developer's existing GitHub auth, no API keys handled here, no GitHub Actions involved. Title encodes the finding fingerprint for idempotency. Pass dry_run=true to preview. severity_min defaults to high and max_issues to 10; every finding those two dropped is counted in `filtered` and summarised in `filtered_reason`, so a short plan is never unexplained.",
   inputSchema: inputSchema14,
   handler: async (input, ctx) => handler24(input, ctx)
 };
@@ -46170,7 +46212,10 @@ async function handler24(input, ctx) {
   }
   const all = ctx.storage.findings.listByScan(latest.scan_id);
   const sevFloor = SEVERITY_ORDER[sevMin];
-  const top = all.filter((f) => SEVERITY_ORDER[f.severity] >= sevFloor).sort((a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity]).slice(0, max);
+  const aboveFloor = all.filter((f) => SEVERITY_ORDER[f.severity] >= sevFloor).sort((a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity]);
+  const top = aboveFloor.slice(0, max);
+  const belowFloor = severityShortfall(all, sevMin);
+  const overMax = aboveFloor.length - top.length;
   const plans = [];
   for (const f of top) {
     const title = buildTitle(f);
@@ -46199,14 +46244,43 @@ async function handler24(input, ctx) {
     }
     plans.push(plan);
   }
+  const filtered = {
+    considered: all.length,
+    candidates: plans.length,
+    excluded: all.length - plans.length,
+    by_reason: { below_severity_min: belowFloor.total, over_max_issues: overMax },
+    below_severity_min: belowFloor
+  };
   return {
     ok: true,
     applied: !dryRun,
     severity_min: sevMin,
     max_issues: max,
     candidates: plans.length,
+    filtered,
+    filtered_reason: describeFiltered(filtered, sevMin, max),
     plans
   };
+}
+function describeFiltered(filtered, severityMin, maxIssues) {
+  if (filtered.excluded === 0) return null;
+  const parts = [];
+  if (filtered.by_reason.below_severity_min > 0) {
+    parts.push(
+      `${filtered.by_reason.below_severity_min} below severity_min "${severityMin}" (${describeShortfallTiers(filtered.below_severity_min)})`
+    );
+  }
+  if (filtered.by_reason.over_max_issues > 0) {
+    parts.push(
+      `${filtered.by_reason.over_max_issues} beyond max_issues (${maxIssues}), lowest severity first`
+    );
+  }
+  const head = `${filtered.excluded} of ${filtered.considered} finding(s) in this scan were excluded; ${filtered.candidates} filed. Excluded: ${parts.join("; ")}.`;
+  const suggested = filtered.below_severity_min.suggested_severity_min;
+  if (suggested === null) return head;
+  const lowest = lowestExcludedSeverity(filtered.below_severity_min);
+  const rest = lowest !== null && lowest !== suggested ? `, or "${lowest}" for all ${filtered.below_severity_min.total}` : "";
+  return `${head} Pass severity_min "${suggested}" to include ${filtered.below_severity_min.recovered_by_suggestion} of them${rest}.`;
 }
 function buildTitle(f) {
   const tag = `[guardian:${f.fingerprint.slice(0, 12)}]`;
@@ -54289,6 +54363,68 @@ function countFingerprints(group) {
   return group.candidates.reduce((total, candidate) => total + candidate.fingerprints.length, 0);
 }
 
+// src/fixpr/exclusions.ts
+function summariseExclusions(input) {
+  const covered = new Set(
+    input.groups.flatMap((group) => group.candidates.flatMap((candidate) => candidate.fingerprints))
+  );
+  const by_reason = {
+    no_fix_available: 0,
+    below_severity_min: 0,
+    no_fix_source: 0
+  };
+  const belowFloor = [];
+  let candidates2 = 0;
+  for (const finding2 of input.findings) {
+    if (covered.has(finding2.fingerprint)) {
+      candidates2 += 1;
+    } else if (!finding2.fix_available) {
+      by_reason.no_fix_available += 1;
+    } else if (!passes(finding2.severity, input.severityMin)) {
+      by_reason.below_severity_min += 1;
+      belowFloor.push(finding2);
+    } else {
+      by_reason.no_fix_source += 1;
+    }
+  }
+  return {
+    considered: input.findings.length,
+    candidates: candidates2,
+    excluded: input.findings.length - candidates2,
+    by_reason,
+    below_severity_min: severityShortfall(belowFloor, input.severityMin)
+  };
+}
+function describeExclusions(exclusions, severityMin, sources) {
+  if (exclusions.excluded === 0) return null;
+  const parts = [];
+  const { no_fix_available, below_severity_min, no_fix_source } = exclusions.by_reason;
+  if (below_severity_min > 0) {
+    parts.push(
+      `${below_severity_min} below severity_min "${severityMin}" (${describeShortfallTiers(exclusions.below_severity_min)})`
+    );
+  }
+  if (no_fix_available > 0) {
+    parts.push(
+      `${no_fix_available} with no scanner-produced fix (fix_available=false \u2014 this tool only applies a fix the scanner itself emitted, and most rule packs emit none)`
+    );
+  }
+  if (no_fix_source > 0) {
+    parts.push(
+      `${no_fix_source} that no requested source can act on (sources: ${sources.join(", ")})`
+    );
+  }
+  const head = `${exclusions.excluded} of ${exclusions.considered} open finding(s) were excluded; ${exclusions.candidates} remain as fix candidate(s). Excluded: ${parts.join("; ")}.`;
+  return head + severityHint(exclusions.below_severity_min);
+}
+function severityHint(shortfall) {
+  const suggested = shortfall.suggested_severity_min;
+  if (suggested === null) return "";
+  const lowest = lowestExcludedSeverity(shortfall);
+  const rest = lowest !== null && lowest !== suggested ? `, or "${lowest}" for all ${shortfall.total}` : "";
+  return ` Pass severity_min "${suggested}" to include ${shortfall.recovered_by_suggestion} of them${rest}.`;
+}
+
 // src/fixpr/pr.ts
 var EXCLUDE_GUARDIAN_DIR = ":!.guardian";
 var BRANCH_PREFIX = "dev-guardian/fix-";
@@ -54731,7 +54867,7 @@ var KEEPS_BRANCH = /* @__PURE__ */ new Set([
 var tool42 = {
   name: "create_fix_pr",
   title: "Apply scanner-produced fixes and open a pull request",
-  description: "Apply fixes the scanners themselves already produced \u2014 deps_update_plan pinned upgrade commands and Semgrep --autofix \u2014 inside an isolated git worktree, prove them with a scan differential and a (lazy) test differential, and open one pull request per ecosystem or scanner. apply defaults to false: candidates, the worktree, the fix, and both differentials always run; only commit/push/gh pr create sit behind apply=true.",
+  description: "Apply fixes the scanners themselves already produced \u2014 deps_update_plan pinned upgrade commands and Semgrep --autofix \u2014 inside an isolated git worktree, prove them with a scan differential and a (lazy) test differential, and open one pull request per ecosystem or scanner. apply defaults to false: candidates, the worktree, the fix, and both differentials always run; only commit/push/gh pr create sit behind apply=true. Every open finding that did NOT become a candidate is accounted for in `filtered` (counts per reason: below severity_min, no scanner-produced fix, no requested source covers it) and in the one-line `filtered_reason` \u2014 an empty `groups` is never left unexplained.",
   inputSchema: {
     project_path: ProjectPath,
     // .describe() override, not the shared SeverityMin as-is (M8): that
@@ -54774,6 +54910,8 @@ async function handler42(input, ctx) {
   const allFindings = ctx.storage.findings.listOpenForProject(projectPath);
   const upgradeSteps = sources.includes("deps") ? await fetchUpgradeSteps(projectPath, ctx) : [];
   const groups = buildGroups({ findings: allFindings, upgradeSteps, sources, severityMin });
+  const filtered = summariseExclusions({ findings: allFindings, groups, severityMin });
+  const filtered_reason = describeExclusions(filtered, severityMin, sources);
   const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
   const results = [];
   for (const group of selected) {
@@ -54801,6 +54939,8 @@ async function handler42(input, ctx) {
     project_path: projectPath,
     severity_min: severityMin,
     sources,
+    filtered,
+    filtered_reason,
     groups: results,
     deferred,
     deferred_reason

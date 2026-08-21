@@ -8,6 +8,46 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- **`create_fix_pr` now says what it filtered out.** `severity_min` defaults to
+  `high`, and 1.9.0 took the Semgrep `ERROR` tier — the only tier the parser
+  maps to `high` — from 20 rules of 34 to 4 of 58. A default run against a
+  project whose findings all come from the local packs therefore selected
+  nothing, and said so only by returning `groups: []`, which is exactly what a
+  project with nothing to fix returns. Two new fields close that: `filtered`
+  (structured — `considered`, `candidates`, `excluded`, counts per reason, and
+  a per-tier breakdown of the severity floor's own share) and `filtered_reason`
+  (one line, `null` iff nothing was excluded, on the same contract
+  `deferred_reason` already keeps with `deferred`). Reported whenever
+  *anything* was excluded, not only when everything was — a run that fixes 2 of
+  42 is nearly as opaque as one that fixes 0.
+
+  **No default changed and no rule's severity changed.** The `high` floor is
+  correct: lowering it would open pull requests from rules that are heuristic
+  by construction — `floating-mutation` matches on a method name alone and
+  cannot tell `repo.save()` from Canvas 2D's `ctx.save()`. The silence was the
+  bug.
+
+  The report also corrects a piece of advice this repo had been giving in three
+  places. `create_fix_pr` requires `fix_available`, which for Semgrep means the
+  rule carries a `fix:` — and **no rule in any of the nine packs here does**
+  (measured: `bugfix-js` over its own `hits/` fixtures gives 39 findings across
+  13 files, zero carrying `fix` or `fixed_lines`). So "pass `severity_min:
+  medium` to get the Java/JS/Python pack into a fix PR" was never going to
+  work at any floor. The suggestion is therefore emitted **only** for findings
+  a lower floor genuinely recovers, never for `fix_available: false` ones,
+  where it would have cost a second run to discover it changed nothing.
+  `skills/guardian-bugfix/SKILL.md` is corrected accordingly.
+
+- **`create_github_issues` reports the same two fields**, for the same defect:
+  its `severity_min` also defaults to `high` (a default that was not stated in
+  the schema at all until now) and `max_issues` to 10, and the result listed
+  only the survivors — so a scan of nothing but `medium` findings produced
+  `candidates: 0`, indistinguishable from a clean one. `filtered.by_reason`
+  separates the severity floor from the cap. Neither default changed; both are
+  now documented in the input schema.
+
 ### Fixed
 
 - **Ablation axis 3 was measuring noise and charging it to the wrong clause.**
