@@ -86,6 +86,20 @@ version bump.
 
 ### Fixed
 
+- **`bugfix-cs` `off-by-one-loop-lte-length` no longer fires on a sentinel
+  loop.** Both of the rule's findings on 11 800 files of `dotnet/runtime` were
+  loops that run one position past the end **on purpose** and guard the extra
+  pass inside the body — `ConfigPathUtility.cs:26` and `XslNumber.cs:151`, a
+  measured precision of 0 of 2. The new exclusion is **not** the tightening
+  Java measured and rejected (require the body to index the bounded receiver,
+  which trades a false positive for a false negative in every loop that reads
+  `a[i]` to write elsewhere): it asks whether the body **re-compares the index
+  against the bound**, which is what makes a sentinel loop one. Corpus count
+  2 → 0, all five `hits/` unchanged, two crossed near-misses added and each of
+  the four new clauses mutation-tested to fire exactly one of them.
+  `loop-lte-count` deliberately did **not** get the same exclusion: it produces
+  zero findings on the same corpus, so nothing measures it there.
+
 - **`severity_min` was deleting findings, not hiding them.** The shared scan
   pipeline (`tools/scanToolFactory.ts` — twelve tools) applied the severity
   floor *before* `bulkInsert`, so a caller who passed `severity_min: "high"`

@@ -205,6 +205,17 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     // written from the SHAPE of the bug in every idiomatic spelling, after
     // both `.Count` and `edge-case` scored zero on 11 800 files of real C#.
     // Widening cost zero findings on that same corpus.
+    //
+    // STILL FOURTEEN after the sentinel-loop exclusion of 2026-08-21, and that
+    // is the point of saying so here. The LENGTH rule gained a `pattern-not`
+    // that drops a loop whose body re-compares the index against the bound —
+    // the shape of both of its real-code findings on `dotnet/runtime`, both
+    // false positives, now zero. It moves nothing in this file. What it does
+    // move is `misses/LoopLte.cs`, which gained `SentinelTernary` and
+    // `SentinelSwitch`: two near-misses crossed over the exclusion's 2x2 of
+    // increment spelling x comparison spelling, so each of its four new
+    // clauses has one and only one fixture that fires when it is deleted.
+    // Design §4d has the mutation table.
     ids: [
       'bugfix-cs-off-by-one-loop-lte-count',
       'bugfix-cs-off-by-one-loop-lte-length',

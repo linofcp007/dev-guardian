@@ -565,6 +565,296 @@ because it trades a false positive for a false negative in every loop that
 reads `a[i]` to write somewhere else. Recorded in §8 as a limitation so the
 next corpus can settle it.
 
+> **Amendment, 2026-08-21.** Both deferrals above are now closed. Axis 3 was
+> rewritten to compare one rule at a time on the files every scan finished,
+> against a measured noise floor — the repair this section asked for. The
+> eleven flags that survive that rewrite are triaged one by one in §4d, and the
+> sentinel-loop false positive is fixed there rather than merely recorded.
+
+## 4d. The eleven surviving axis-3 flags, read
+
+Axis 3 was rewritten after §4c: it now compares **the ablated rule's own
+findings**, on the files every scan finished, against a per-rule noise floor
+measured by scanning the pack twice. On `bugfix-cs` over `dotnet/runtime` that
+takes the old harness's 15 flags down to **11**. Two runs of the new harness
+agree on all eleven; the counts move by a few (780 vs 792 comparable findings,
+28 vs 16 excluded files) because the timeout set is not stable, but no verdict
+does. Nobody had read the eleven. This section does.
+
+### They are all the same shape, and that is a fact about the pack
+
+Every one of the eleven is a **positive `pattern-either` branch**. Not one is a
+constraint nested inside a `pattern-not`. That is not a coincidence and it is
+not eleven defects:
+
+> Axis 3 flags a clause whose removal makes its own rule match **less** — i.e.
+> the clause was **adding** those findings. A positive branch that matches
+> anything on the corpus does exactly that, by construction.
+
+Five of this pack's eleven rules are a `pattern-either` of disjoint positive
+branches with no exclusions at all. Every branch of those rules that fires on
+`dotnet/runtime` therefore arrives flagged, and a pack with zero false
+positives would produce the same eleven signals.
+
+**Measured, not argued.** Each flagged branch was extracted into a standalone
+rule and scanned over the same 11 800 files. The per-branch counts are additive
+and reconstruct each rule's total to within the timeout jitter:
+
+| rule | branch | branch alone | harness delta |
+| --- | --- | --- | --- |
+| `empty-catch` | `catch ($E $V) { }` + `finally`, with the regex | 28 | 25 |
+| `empty-catch` | `catch ($E $V) { }` | 23 | 20 |
+| `empty-catch` | `catch ($E $V) { } finally` | 5 | 5 |
+| `empty-catch` | `catch ($E) { }` | 214 | 202 / 208 |
+| `empty-catch` | `catch ($E) { } finally` | 15 | 15 |
+| `empty-catch` | `catch { }` | 145 | 142 |
+| `empty-catch` | `catch { } finally` | 8 | 8 |
+| `blocking-on-task` | `$V.Result`, `$V: Task` | 52 | 47 / 52 |
+| `lock-on-shared-instance` | `lock (this)` | 322 | 321 / 322 |
+| `off-by-one-lte-length` | `for (…; $I++)` | 2 | 2 |
+| `ordefault-deref` | `$X.FirstOrDefault(…).$M` | 1 | 1 |
+
+`23 + 5 = 28` for the composite branch, and `28 + 214 + 15 + 145 + 8 = 410`
+against a whole-rule total of 407 on the same scan: the branches **partition**
+the rule's output and the residue is files abandoned for time. The attribution
+is exact.
+
+### The verdicts
+
+| # | rule | clause | reading | evidence | action |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `empty-catch` | named branch + regex (28) | positive branch | 26 of 28 are `when`-filtered catches; see below | comment |
+| 2 | `empty-catch` | `catch ($E $V) { }` (23) | positive branch | 21 of 23 `when`-filtered | comment |
+| 3 | `empty-catch` | `catch ($E $V) { } finally` (5) | positive branch | 5 of 5 `when`-filtered | comment |
+| 4 | `empty-catch` | `catch ($E) { }` (214) | positive branch | the §4a population; 7 filtered | comment |
+| 5 | `empty-catch` | `catch ($E) { } finally` (15) | positive branch | 1 filtered | comment |
+| 6 | `empty-catch` | `catch { }` (145) | positive branch | 0 filtered — no binding to filter on | comment |
+| 7 | `empty-catch` | `catch { } finally` (8) | positive branch | 0 filtered | comment |
+| 8 | `blocking-on-task` | `$V.Result` (52) | positive branch **+ FP class** | 52 of 52 are already-complete tasks | declared, not narrowable |
+| 9 | `lock-on-shared-instance` | `lock (this)` (322) | positive branch | 7 read, all CA2002 sites | comment; volume claim corrected |
+| 10 | `off-by-one-lte-length` | `$I++` (2) | positive branch **+ FP class** | 2 of 2 sentinel loops | **narrowed; count now 0** |
+| 11 | `ordefault-deref` | `FirstOrDefault` (1) | positive branch **+ FP class** | 1 of 1, a value-type receiver | declared, not narrowable |
+
+### `empty-catch`: the 28 named catches explain themselves
+
+§4a measured that 28 of the 402 findings bind an identifier and that **none** is
+`ignore`, `ignored` or `expected`, and concluded that the naming convention has
+no adoption in C#. Correct, and incomplete. Reading them:
+
+**26 of the 28 are `catch (Type v) when (<filter>) { }`.**
+
+```csharp
+// FileSystemInfoHelper.cs:54
+catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+// Http3Connection.cs:586
+catch (QuicException ex) when (ex.QuicError == QuicError.StreamAborted) { }
+// BufferedFileStreamStrategy.cs:124
+catch (Exception e) when (!disposing && FileStreamHelpers.IsIoRelatedException(e)) { }
+```
+
+The identifier is not there by convention — **the filter needs it**. That is
+why none of them is called `ignored`, and why §4a's CS0168 oracle does not
+apply to them either: the variable *is* used. The two that remain are the only
+empty catches in 11 800 files that bind a name and use it for nothing.
+
+Two consequences, both recorded in the rule:
+
+- **C# has a declaration of intent that Java does not, and it is stronger than
+  a name.** An exception filter enumerates, in compiler-checked code, exactly
+  which exceptions are being swallowed. The rule does not read it, and Semgrep
+  matches `catch ($E $V) { }` against a filtered catch as though the filter
+  were not there — which is how all 26 reach the report.
+- **It is deliberately not excluded.** The rule settled this question when it
+  dropped from ERROR to WARNING: §4a found the 402 to be overwhelmingly
+  deliberate and kept reporting them, because deliberate and silent is still
+  silent. A filter says *which* exception is swallowed; it does not make the
+  failure visible anywhere. Excluding the filtered subset would apply to a
+  subset the criterion the tier already rejected for the whole.
+
+The other four branches are §4a's population unchanged — 374 of 402 written
+`catch (Type) { }` or `catch { }`, with no binding for any convention to attach
+to. 7 of the 214 and 1 of the 15 carry a filter with no binding
+(`catch (ArgumentException) when (IsSafeDnsString(targetHost)) { }`); the bare
+branches carry none, as they cannot.
+
+### `blocking-on-task`: 52 of 52, and the population was read whole
+
+The rule's four branches do not carry equal weight on real code. `$V.Result`
+with `metavariable-type: Task` produces all 52 findings; `.Wait()` by type and
+both `.*Async`-by-name branches produce **zero**. All 52 were read — the
+population, not a sample — and every one is a `.Result` on a task already known
+to be complete at that point, where `.Result` cannot block and cannot deadlock:
+
+| shape | count |
+| --- | --- |
+| `if (t.IsCompletedSuccessfully)` / `IsCompleted` / the XML helper `IsSuccess()`, statement or ternary | ~20 |
+| `case TaskStatus.RanToCompletion:` in a switch over the status | ~10 |
+| `_parseText_dummyTask.Result` — a cached already-completed task | 9 |
+| `Debug.Assert(t.Status == TaskStatus.RanToCompletion)` immediately above | 4 |
+| an `await` of the same task on the preceding line | 4 |
+| `Task.FromResult(…)`, `RunSynchronously`, `Wait(timeout)` with the result tested first | 5 |
+
+**Not narrowable, for the same reason `as-cast-deref` was deleted.** The premise
+that separates the two cases — *is this task already complete here?* — is a
+dataflow property, not an AST node. The nine `_parseText_dummyTask` sites prove
+it alone: there is no guard to recognise, the task was born complete in another
+file. A guard-shaped exclusion would reach perhaps half, cost six clauses, and
+each would need its own fixture or read `DEAD` in the next ablation.
+
+**And the rule stays, with the corpus declared partial.** `dotnet/runtime` is
+the .NET async plumbing itself; the "fast path when the task is already
+complete" idiom is what that code does all day, which makes it the worst
+possible place to measure this rule. The `.Result` that actually deadlocks
+lives in *application* code — an ASP.NET controller, a WinForms handler — and
+this corpus has none. "52 of 52 false on a corpus biased against the rule" is
+what was measured. "The rule does not work" would be more than was measured.
+
+### `lock-on-shared-instance`: the volume claim was wrong
+
+The rule's comment said "volume baixo e sem falsos positivos". The second half
+holds; the first was never measured and is false. **322 findings**, the
+second-largest count in the pack, all attributed to the `lock (this)` branch —
+the string-literal branch produces zero, which was expected and is now measured.
+
+Seven read one by one (`DbConnectionFactory` ×2, `DbConnectionPoolGroup` ×4,
+`CacheEntry.CacheEntryTokens`): all are `lock (this)` on types whose reference
+leaves the type — pools handed to factories, cache entries handed to expiration
+callbacks. All are CA2002 sites, and CA2002 is this rule's existing independent
+oracle. None is a deadlock happening; all are a deadlock waiting for a second
+participant, which is the defect and the reason for the WARNING tier.
+
+The volume **is** the defect, not noise to filter. `lock (this)` is an old
+idiom and a fifteen-year-old codebase has hundreds. The rule has no clause to
+tighten, and tightening by volume would trade a measured defect for silence.
+
+### `ordefault-deref`: the declared false positive, confirmed
+
+One finding in 11 800 files, and it is exactly the value-type class §5 already
+declares as unsolvable. `Microsoft.Extensions.Logging/src/Logger.cs:213` writes
+`logger.ScopeLoggers?.FirstOrDefault().ExternalScopeProvider`, and
+`ScopeLogger` is an `internal readonly struct` (`LoggerInformation.cs:46`), so
+`FirstOrDefault()` yields `default(ScopeLogger)` and never null. The next line
+null-checks the provider. Correct code. `SingleOrDefault` and `LastOrDefault`
+produce zero.
+
+### `off-by-one-lte-length`: the sentinel loop, closed
+
+§4c found both of this branch's findings to be sentinel loops and deferred the
+fix, on the grounds that the only tightening in view was the one Java measured
+and rejected. **A different tightening exists and it was not the rejected one.**
+
+Java's rejected tightening required the body to **index** the bounded receiver,
+which trades a false positive for a false negative in every loop that reads
+`a[i]` to write somewhere else. The exclusion added here requires no indexing
+at all: it binds the body to `$BODY` and asks whether the body **compares `$I`
+against `$A.Length` again**. That is precisely what separates a sentinel loop
+from an off-by-one — a real off-by-one does not re-test the bound, because if
+it did it would not run off the end.
+
+```yaml
+- pattern-not:
+    patterns:
+      - pattern-either:
+          - pattern: for (var $I = 0; $I <= $A.Length; $I++) $BODY
+          - pattern: for (var $I = 0; $I <= $A.Length; ++$I) $BODY
+      - metavariable-pattern:
+          metavariable: $BODY
+          pattern-either:
+            - pattern: $I < $A.Length
+            - pattern: $I == $A.Length
+```
+
+Only the two comparison spellings with a real site behind them are listed.
+`$A.Length == $I` and `$I >= $A.Length` are not there: a clause with no
+evidence reads `DEAD` in the next ablation, which is the harness working.
+
+**Two near-misses, crossed on purpose.** The exclusion is a 2×2 — two increment
+spellings × two comparison spellings — and one near-miss would cover one cell
+and leave three clauses unproven. `misses/LoopLte.cs` gains `SentinelTernary`
+(`<`, `i++`, modelled on `ConfigPathUtility.IsValid`) and `SentinelSwitch`
+(`==`, `++i`, modelled on `XslNumber.ParseFormat`). Mutation-tested, delete one
+branch at a time:
+
+| mutation | fires | on hits |
+| --- | --- | --- |
+| none (shipped) | neither sentinel | 5 |
+| drop `$I++` inside the `pattern-not` | `SentinelTernary` | 5 |
+| drop `++$I` inside the `pattern-not` | `SentinelSwitch` | 5 |
+| drop `$I < $A.Length` | `SentinelTernary` | 5 |
+| drop `$I == $A.Length` | `SentinelSwitch` | 5 |
+| drop the whole `pattern-not` | both | 5 |
+
+Each of the four new clauses is independently live, and none of them touches a
+true positive — the five `hits/` findings are the same five before and after.
+
+**Both directions re-measured.** `hits/` 74 findings, unchanged, `LoopLte.cs`
+still 14 over the two rules and `RealBugs.cs` still 1 for this one. `misses/` 0,
+with two more near-misses in it. On `dotnet/runtime`, `loop-lte-length` goes
+**2 → 0** and no other rule's count moves. Scan wall time is unchanged at ~101s,
+so the `metavariable-pattern` costs nothing measurable at this corpus size.
+
+The body pattern changed from `...` to `$BODY` to give the exclusion something
+to bind. That is not a narrowing: `$BODY` still matches both the braced and the
+braceless spelling, verified on all five hit fixtures including
+`InBoundsNoBraces`.
+
+**And the exclusion's body metavariable is `$GUARDED`, not `$BODY`, for a
+reason the harness surfaced.** The ablation identifies a clause by the **text**
+of its body — deliberately, because CLAUDE.md records a run that had to be
+thrown away when 86 identical first lines made a verdict unattributable. With
+`$BODY` on both sides, the `pattern-not` repeats the two positive patterns
+character for character, and the 50-clause report came out with **four rows
+carrying two hashes**: `[22]`/`[26]` and `[23]`/`[27]`. All four read `ok`, so
+nothing was mis-decided — but a `FLAG` on one of them could not have been
+attributed to either. Renaming the inner binding breaks the tie without
+touching the match: the `pattern-not` still matches the same loop node, `$I`
+and `$A` still unify outward, and the body is the same node under another name.
+Re-verified end to end — `semgrep --validate` 11 rules, `hits/` 74 with
+`lte-length` at the same five sites, `misses/` 0, the six-way mutation table
+unchanged, and the corpus still 796 with `lte-length` at 0.
+
+**The repetition itself cannot be removed**, which was measured rather than
+assumed. Two formulations with no repetition at all — `pattern-not` *inside*
+the `metavariable-pattern`, with and without a positive anchor — exclude
+nothing: there `pattern-not` means "the bound node **is not** exactly this",
+not "does not **contain** this", and both sentinels went on firing.
+
+**`loop-lte-count` is deliberately left alone.** It produces zero findings on
+the same 11 800 files, so there is no measurement behind the same exclusion
+there. This pack is additive **by measurement**; adding it for symmetry would
+add a supposition whose cost is a false negative nobody has measured.
+
+### The ablation re-run on the fixed pack
+
+50 clauses (up from 44), and the numbers say the fix cost nothing:
+
+```text
+axis 0 fires on hits/              11/11 rules fire, 0 FIRING ON NOTHING
+axis 1 live                        50/50 clauses pass, 0 DEAD
+axis 2 keeps true positives        50/50 clauses pass, 0 SUPPRESSING
+axis 3 no rise in real-code count  40/50 clauses pass, 10 RAISING the count
+```
+
+All six new clauses read `ok live keeps-tp no-real-rise`. The surviving ten are
+the original eleven minus `off-by-one-lte-length`'s `$I++` branch, which is the
+one the fix retired — every other verdict is byte-for-byte what it was.
+
+### Whole-pack counts on `dotnet/runtime`, before and after
+
+| rule | before | after |
+| --- | --- | --- |
+| `error-handling-empty-catch` | 407 | 407 |
+| `race-condition-lock-on-shared-instance` | 322 | 322 |
+| `race-condition-blocking-on-task` | 52 | 52 |
+| `race-condition-async-void` | 7 | 7 |
+| `race-condition-static-random` | 4 | 4 |
+| `memory-leak-httpclient-per-call` | 3 | 3 |
+| `null-safety-ordefault-deref` | 1 | 1 |
+| `off-by-one-loop-lte-length` | **2** | **0** |
+| `error-handling-rethrow-loses-stacktrace` | 0 | 0 |
+| `off-by-one-loop-lte-count` | 0 | 0 |
+| `edge-case-modify-during-iteration` | 0 | 0 |
+
 ## 5. The eleven rules
 
 Ids follow `bugfix-cs-<class-token>-<name>`, because `mapSubcategory` classifies
@@ -603,6 +893,10 @@ live type names. A third: `disposed` matches `memory_leak` before
   **The two nameless spellings are also why this rule is not `ERROR`:** they
   are 93 % of what it emits on real .NET code and they have nowhere to declare
   intent, and the one spelling that does emits `CS0168`. §4a has the numbers.
+  **And §4d finishes the account of the other 7 %:** 26 of the 28 named
+  findings are `catch (T v) when (…) { }`, where the identifier exists because
+  the *filter* needs it. Semgrep matches the unfiltered pattern against a
+  filtered catch, and the filter is deliberately not an exclusion.
 
 #### Amendment, measured after Task 1 shipped: the try shape is a DIMENSION
 
@@ -672,6 +966,12 @@ C# supports this class better than any language in the series so far.
   `pattern-either` on the increment and an ellipsis body — at a cost of zero
   new findings on 11 800 files. `loop-lte-count`'s type list went from six to
   eight with `Collection<T>` and `ObservableCollection<T>`.
+  Amended again 2026-08-21 (§4d): **`loop-lte-length` gained a sentinel-loop
+  exclusion** — the body is bound to `$BODY` and the match is dropped if the
+  body re-compares `$I` against `$A.Length`. It closed the rule's only two
+  findings on real code, both false positives, without touching any of its five
+  `hits/`. `loop-lte-count` did not get it: zero findings there, so no
+  measurement to add it on.
 
 ### `memory_leak` — 1 rule, WARNING
 
@@ -785,16 +1085,32 @@ C# adds a sixth, and it is the first that **`paths.scanned` does not catch**.
   `new int[a.Length + 1]`. Java measured the obvious tightening and rejected it
   because it traded a false positive for a false negative; that measurement is
   carried forward rather than repeated.
-- **`loop-lte-length` has a second false-positive shape, measured and not
-  closed** — the SENTINEL ITERATION, where the loop runs one past the end on
-  purpose and guards the extra pass inside the body (`i < a.Length ? a[i] :
-  terminator`, or `if (i == a.Length || …)`). It is not the sentinel-array
-  bullet above: no second array is allocated. Both of the rule's two findings
-  on 11 800 files of `dotnet/runtime` are this shape — `ConfigPathUtility.cs:26`
-  and `XslNumber.cs:151` — so its measured precision on real code is **0 of 2**.
-  §4b deleted a rule for 0 of 75; this one is left standing because n=2 is not a
-  sample and the only tightening available is the one Java rejected. It is the
-  first thing to re-measure on the next C# corpus. §4c has the reasoning.
+- **`loop-lte-length`'s SENTINEL ITERATION false positive is CLOSED** — the
+  loop that runs one past the end on purpose and guards the extra pass inside
+  the body (`i < a.Length ? a[i] : terminator`, or `if (i == a.Length || …)`).
+  It was both of the rule's findings on 11 800 files of `dotnet/runtime`
+  (`ConfigPathUtility.cs:26`, `XslNumber.cs:151`), a precision of 0 of 2. The
+  exclusion added 2026-08-21 does **not** require the body to index the
+  receiver — the tightening Java rejected — but that it re-compare `$I` against
+  `$A.Length`, which is what makes a sentinel loop a sentinel loop. Count on
+  the corpus is now 0, `hits/` unchanged at 5. Two crossed near-misses and a
+  six-way mutation test in §4d. **`loop-lte-count` deliberately did not get the
+  same exclusion**: it produces zero findings on the same corpus, so there is
+  no measurement behind it there.
+- **`blocking-on-task` has a false-positive class that cannot be narrowed** —
+  `.Result` on a task that is already complete. All 52 of the rule's findings on
+  `dotnet/runtime` are this, read whole rather than sampled. The premise that
+  separates them from a real deadlock is a dataflow property, and nine of the
+  52 have no syntactic guard at all (a cached completed task). The corpus is
+  also biased against this rule: it is the .NET async plumbing itself, and the
+  `.Result` that deadlocks lives in application code the corpus does not
+  contain. §4d.
+- **`empty-catch` cannot see an exception filter** — Semgrep matches
+  `catch ($E $V) { }` against `catch (Exception ex) when (…) { }` as though the
+  filter were not there, and **26 of the 28 named findings** on
+  `dotnet/runtime` are filtered catches. A filter is a stronger declaration of
+  intent than the name convention the rule reads, and it is deliberately not an
+  exclusion — see §4d for why the WARNING tier already settled that question.
 - **`loop-lte-count` and `edge-case-modify-during-iteration` do not cover every
   receiver** — eight and six enumerated types respectively, and
   `metavariable-type` is not subtype-aware, so `Queue<T>`, `Stack<T>`,
