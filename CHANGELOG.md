@@ -232,6 +232,77 @@ round added:
 
 ### Fixed
 
+- **The Bash guardrail matched text where it should have matched commands, and
+  four families of false positive came out of that.** Every one of the twelve
+  pattern rules in `mcp/src/hooks/bashGuard.ts` was a regex run against the
+  whole command string. Measured over **25 071 distinct shell commands** taken
+  from this machine's own Claude Code transcripts (342 sessions), **23 of the
+  27 non-`rm` warnings were wrong**, and one of them was a *block*:
+
+  | defect | example from the corpus | rules affected |
+  | --- | --- | --- |
+  | matched across a separator | `git push origin main && git worktree remove … --force` | 8 of 12 (every rule carrying a `[^\n]*` span) |
+  | matched inside quotes | `echo 'git push --force 2>&1'` | all 12 |
+  | matched inside a heredoc body | `git commit -F - <<'EOF' … EOF` | all 12, plus the `rm` tokeniser |
+  | matched a word, not a command | `apt-get install -y git sudo pipx` | `sudo` |
+
+  The heredoc one is the sharp end: a real commit was **denied** as
+  `rm -rf ~` because its message contained a lone `~` on a line, and the
+  `rm` tokeniser split on `;`, `|` and `&` but **never on newlines** — so
+  an `rm -rf ./.playwright-mcp` three lines earlier swept the whole commit
+  message up as its target list.
+
+  The obvious repair — dropping `&` from the character classes — is the wrong
+  trade. A genuine force-push is very often `git push --force 2>&1 | tee log`,
+  and `2>&1` contains `&`; narrowing on the character buys a false positive
+  back with a false negative, which for a guardrail is the worse direction. So
+  `bashGuard.ts` now **segments before it matches**: a small quote-aware,
+  escape-aware, heredoc-aware scan yields statements (split on `&&`, `||`,
+  `;`, newline, a background `&`, `(`, `)` and backticks) each holding its
+  pipeline members as words. A statement **keeps its pipeline**, because
+  `curl … | sh` is one hazard spanning a pipe — splitting on `|` would have
+  silently disarmed `remote-pipe-to-shell` and `powershell-iex-download`, the
+  two block rules that need the pipe to match at all.
+
+- **No block rule was narrowed, and three now reach further.** Quoted spans
+  stop being matchable, so `sh -c '…'`, `bash -c '…'` (including behind
+  `docker exec … bash -c`), `su … -c '…'` and `eval …` are re-entered and
+  assessed as commands in their own right, to depth 3. That is strictly more
+  than the old text matching had: `bash -c 'rm -rf /'`, `eval "rm -rf /"`,
+  `(cd /tmp && rm -rf /)` and `sudo -u www-data rm -rf /` were **all missed
+  before** and all block now. Every block rule is pinned by a test three ways
+  — alone, as the second statement after `echo hi &&`, and on the second line
+  of a script — and the pin list is checked against `BASH_RULES` so a rule
+  added without one fails the suite.
+
+- **Splitting on newlines also recovered 86 recursive force-deletes the guard
+  had been blind to.** `rm -rf "$WORK"` on line four of a script was invisible,
+  because the old tokeniser required `rm` to be the first token of a
+  `;|&`-delimited segment and a multi-line script has no such separator. On the
+  25 071-command corpus: `rm-rf-broad` 177 → 262, and every one of the 86 new
+  findings was hand-checked back to a real `rm -rf`. Total warnings therefore
+  go **up**, 203 → 266, while the non-`rm` rules go from 4 true positives out
+  of 27 firings to **4 out of 4**. `git rm -r --cached` is correctly not one
+  of them.
+
+- **Auditing the twelve rules also found `disk-overwrite` half asleep.** Its
+  `\b` sat in front of the whole alternation, and a leading `\b` before `>`
+  demands a word character immediately to its left — so the redirect branch
+  matched `cat x>/dev/sda` and never the `cat x > /dev/sda` anybody actually
+  writes. Each alternative anchors itself now; `> /dev/null` and
+  `> /dev/stdout` are untouched, and the corpus count did not move.
+
+- **`sudo` is decided on command position now**, like `rm` already was:
+  `apt-get install -y git sudo pipx` installs a package, and a commit message
+  that mentions sudo runs nothing. `find … | xargs sudo rm -f` and
+  `env FOO=1 sudo systemctl restart nginx` still warn, because `xargs`, `env`,
+  `timeout`, `nice` and friends are walked through to the real command word.
+
+  Shared, unchanged, between the `PreToolUse(Bash)` hook and
+  `dev-guardian check --bash`; still dependency-free, still fail-open, and
+  still not a shell parser — command substitution inside double quotes
+  (`echo "$(rm -rf /)"`) stays invisible, exactly as it was.
+
 - **`bugfix-cs` `off-by-one-loop-lte-length` no longer fires on a sentinel
   loop.** Both of the rule's findings on 11 800 files of `dotnet/runtime` were
   loops that run one position past the end **on purpose** and guard the extra
