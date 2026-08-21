@@ -8,6 +8,24 @@ version bump.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ablation axis 3 was measuring noise and charging it to the wrong clause.**
+  1.9.0 shipped this as a known defect; it is fixed here. The axis compared
+  whole-corpus totals across separate scans, and on `dotnet/runtime` that made
+  four clauses in **four different rules** each read "raises the count by 8" —
+  the same 8 findings every time, all in `Task.cs`, belonging to three *other*
+  rules. The same run flagged one clause and cleared its byte-identical twin.
+  The mechanism: Semgrep names the rule in its timeout message, which makes
+  `(rule, file)` look like the unit, but `--timeout-threshold` drops the **whole
+  file** for every rule still to run and names none of them. Axis 3 now compares
+  only the ablated rule's own findings, on files every scan finished, and
+  measures a per-rule noise floor rather than assuming one; a delta that does not
+  clear its floor reads `INCONCLUSIVE` instead of passing. Proven with two full
+  C# runs under deliberately different machine load — 28 excluded files against
+  16 — with all 44 verdicts identical. C# flags go 15 → 11; the four cleared are
+  recorded as *unmeasured*, not vindicated.
+
 ## [1.9.0] - 2026-08-21
 
 The release where the rule packs were measured against code nobody here wrote.
