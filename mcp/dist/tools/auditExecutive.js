@@ -118,17 +118,23 @@ async function handler(input, ctx) {
         subScanIds[name] = summary.scan_id ?? null;
     }
     // Severity floor: re-apply at the aggregate level so audit_executive's own
-    // counts match what the model asked for.
+    // counts match what the model asked for. The floor stops at the RESPONSE —
+    // `aggregateFindings` stays whole for the delta and the snapshot below,
+    // the same rule `scanToolFactory.ts` follows for the sub-scans this rolls
+    // up. See that file's `bulkInsert` comment.
     const filteredAggregate = filterFindings(aggregateFindings, inp.severity_min);
     const aggregate_counts = countBySeverity(filteredAggregate);
     const top_findings = topFindings(filteredAggregate, 10);
-    // Delta vs previous audit scan, when one exists.
+    // Delta vs previous audit scan, when one exists. Compared unfiltered on
+    // BOTH sides: the previous audit row holds whatever its own call found,
+    // and measuring a filtered present against an unfiltered past reports
+    // every below-floor finding as `resolved`.
     const previousAudit = findPreviousAudit(ctx, auditScanId);
     let deltas;
     if (previousAudit) {
         const prevFindings = ctx.storage.findings.listByScan(previousAudit);
         const prevFingerprints = new Set(prevFindings.map((f) => f.fingerprint));
-        const curFingerprints = new Set(filteredAggregate.map((f) => f.fingerprint));
+        const curFingerprints = new Set(aggregateFindings.map((f) => f.fingerprint));
         let newCount = 0;
         let resolvedCount = 0;
         for (const fp of curFingerprints)
@@ -144,12 +150,15 @@ async function handler(input, ctx) {
         };
     }
     // Persist a snapshot of the aggregated findings on the audit row so
-    // diff_scans can run against the audit scan_id directly.
-    if (filteredAggregate.length > 0) {
+    // diff_scans can run against the audit scan_id directly. UNFILTERED, for
+    // exactly that reason: a `severity_min` on this call is a request for a
+    // thinner report, not for a baseline that forgets everything below the
+    // floor. The sub-scan rows already hold the same findings in full.
+    if (aggregateFindings.length > 0) {
         ctx.storage.findings.bulkInsert(
         // Re-key under the audit scan_id; INSERT OR IGNORE handles the cases
         // where a finding already exists on the audit row (unlikely but safe).
-        filteredAggregate.map((f) => ({ ...f, scan_id: auditScanId })));
+        aggregateFindings.map((f) => ({ ...f, scan_id: auditScanId })));
     }
     // Coverage roll-up: the aggregate "0 critical" is only trustworthy when
     // every sub-scan actually ran its scanners. Take the worst coverage across
@@ -187,6 +196,17 @@ async function handler(input, ctx) {
             };
         }),
         missing_tools: [...aggregateMissing],
+        // `sub_scan_ids` was computed above and never written — the insert-time
+        // placeholder `{}` was all the row ever carried. It is written here
+        // because `severity_min` has to go on the same row (the audit findings
+        // are now stored unfiltered, so nothing else distinguishes "found
+        // nothing above high" from "filtered at high") and `finalize`'s
+        // `COALESCE(?, meta)` replaces the whole JSON blob rather than merging
+        // into it.
+        meta: {
+            sub_scan_ids: subScanIds,
+            ...(inp.severity_min !== undefined ? { severity_min: inp.severity_min } : {}),
+        },
     });
     return {
         ok: true,

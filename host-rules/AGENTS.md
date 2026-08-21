@@ -186,6 +186,11 @@ bounded too — the latest scan plus two deltas, no multi-week trend
 - Don't run `wp_audit` without WP-CLI — `install_toolchain tools=["wp-cli"]`.
 - Don't run `scan_dast` before `map_attack_surface` — it refuses with
   `no_surface_snapshot` and has no route inventory to probe.
+- Don't read a scan's `severity_min` as "the rest was not found". It filters
+  the response only: the scan records everything it saw, so a baseline taken
+  from a filtered scan is complete and `diff_scans` against it will not call
+  the below-floor findings new. Read `severity_filter` on the result for how
+  many were held back and which floor recovers them.
 - Don't read a clean `scan_dast` result as "no injection vulnerabilities" —
   the own engine sends no injection payloads at all; that class is delegated
   to an opt-in nuclei pass whose default templates test the origin, not this
