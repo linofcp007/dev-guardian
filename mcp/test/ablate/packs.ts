@@ -91,6 +91,18 @@
  * of eight. Any tree of real Java will do. Keep it at a SHORT path, for the
  * same reason as the C# one.
  *
+ * SIZE THE CORPUS TO THE RUN, because this pack has 169 clauses and every one
+ * costs a full corpus scan. The whole OpenJDK tree scans in ~180s, so a full
+ * `npm run ablate -- bugfix-java` over it is an eight-hour run and will not
+ * survive whatever kills long jobs on the machine. The round that registered
+ * this env var used `src/java.base` — 3 118 files, ~47s a scan, 327 baseline
+ * findings across five of the eight rules — and drove it one rule at a time
+ * with `--filter`. That is a real trade: `stream-not-closed` and
+ * `modify-during-iteration` score ZERO on `java.base`, so axis 3 is close to
+ * vacuous for them there in exactly the way it is for the Rust async rule. The
+ * whole tree is the right corpus for reading findings; a module of it is the
+ * right corpus for a clause sweep.
+ *
  * KNOW WHAT THESE CORPORA ARE WEAK AT. Both are mature, heavily reviewed
  * LIBRARY code, where a map is nearly always populated in full by the class
  * that reads it. `null-safety-map-get-deref` scores 43 on the JDK and 12 on
