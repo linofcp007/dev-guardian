@@ -24,6 +24,29 @@
  * which is where every fixture in this repo lives. `harness.ts` copies the
  * fixtures out to a temp dir for that reason; this gate is what would catch
  * it if someone removed the copy.
+ *
+ * ---- And why `paths.scanned` is NOT sufficient --------------------------
+ *
+ * `paths.scanned` counts the files semgrep-core OPENED, not the files it
+ * finished. Its per-rule timeout (`--timeout`, 5s by default) abandons one
+ * rule on one file and carries on; after `--timeout-threshold` of those (3 by
+ * default) it drops the WHOLE FILE for every rule still to run, including
+ * rules that would have finished in milliseconds. None of that moves
+ * `paths.scanned` -- it stays at the full count -- and none of it is an error
+ * in the sense the gate above tests for. It lands in `errors[]` as
+ * `type: "Timeout"` entries carrying a `rule_id` and a `path`.
+ *
+ * Measured on `dotnet/runtime` (11 800 C# files) with `bugfix-cs.yml`: the
+ * same pack over the same tree returned 793 findings on one run and 798 on
+ * the next, `paths.scanned` 11 800 both times and `errors` empty of anything
+ * fatal. The five that moved were all `empty-catch` findings in the two files
+ * that crossed the timeout threshold on the slower run -- `WMIGenerator.cs`
+ * and `XmlTextReaderImpl.cs` -- and `empty-catch` never appeared in a timeout
+ * message, because it was one of the rules dropped WITH the file. That is why
+ * {@link ScanResult.abortedFiles} is a set of FILES and not of (rule, file)
+ * pairs: the rules a threshold drop takes down are exactly the ones that go
+ * unnamed. Excluding those files from both sides of a comparison took the two
+ * runs to 793 and 793, differing in nothing.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -45,6 +68,19 @@ export interface ScanResult {
   readonly scanned: number;
   /** `errors[].message` from the JSON, surfaced but not fatal on its own. */
   readonly errors: readonly string[];
+  /**
+   * Files this scan did NOT finish: at least one rule was abandoned on them
+   * for time or memory. Same normalisation as {@link Finding.file}, so the two
+   * can be compared directly. Nondeterministic between runs by construction --
+   * that is the point of collecting it.
+   */
+  readonly abortedFiles: readonly string[];
+  /**
+   * Aborts that named no file. Nothing can be excluded for these, so a scan
+   * with any of them is not comparable to another scan at all; the harness
+   * reports it rather than pretending the count is clean.
+   */
+  readonly unscopedAborts: number;
 }
 
 export class SemgrepFailure extends Error {}
@@ -54,6 +90,30 @@ interface RawResult {
   readonly path?: unknown;
   readonly start?: { readonly line?: unknown; readonly col?: unknown };
   readonly end?: { readonly line?: unknown; readonly col?: unknown };
+}
+
+interface RawError {
+  readonly type?: unknown;
+  readonly message?: unknown;
+  readonly path?: unknown;
+}
+
+/**
+ * Errors that mean "this file was not fully analysed", as opposed to "this
+ * file does not parse". Parse failures (`Syntax error`, `PartialParsing`) are
+ * a deterministic property of the file and repeat identically on every run, so
+ * they need no exclusion; timeouts and memory caps are a property of the
+ * machine's mood and do not.
+ *
+ * Matched on the error `type` rather than on the message, and by substring
+ * rather than by an exact list, because the message wording has changed across
+ * Semgrep releases and the abort types have not: `Timeout`,
+ * `Timeout during interfile analysis`, `Out of memory`,
+ * `Out of memory during interfile analysis`, `Maximum file size exceeded`.
+ */
+export function isAbortError(type: string): boolean {
+  const t = type.toLowerCase();
+  return t.includes('timeout') || t.includes('memory');
 }
 
 function num(value: unknown): number {
@@ -158,6 +218,16 @@ export function scan(req: ScanRequest): ScanResult {
     throw new SemgrepFailure(`semgrep did not emit JSON (first 500 chars): ${stdout.slice(0, 500)}`);
   }
 
+  return parseScan(parsed, root, req.target);
+}
+
+/**
+ * The pure half of {@link scan}: everything from Semgrep's JSON document to a
+ * {@link ScanResult}, with no process to spawn. Separate so the
+ * `paths.scanned` gate and the abort accounting can be unit-tested without
+ * Semgrep installed -- the abort accounting is what axis 3 now rests on.
+ */
+export function parseScan(parsed: unknown, root: string, target: string): ScanResult {
   const doc = parsed as {
     results?: unknown;
     paths?: { scanned?: unknown };
@@ -176,20 +246,32 @@ export function scan(req: ScanRequest): ScanResult {
 
   if (scannedList.length === 0) {
     throw new SemgrepFailure(
-      `semgrep scanned 0 files under ${req.target} -- the config loaded nothing, ` +
+      `semgrep scanned 0 files under ${target} -- the config loaded nothing, ` +
         `the target has no files in the pack's languages, or the path is on an ` +
         `ignore list. This is never a valid ablation measurement.` +
         (errors.length > 0 ? `\nsemgrep errors: ${errors.join(' | ')}` : ''),
     );
   }
 
+  const rel = (path: string): string => relative(root, path).split(sep).join('/');
+
+  const aborted = new Set<string>();
+  let unscopedAborts = 0;
+  for (const raw of rawErrors) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const e = raw as RawError;
+    if (!isAbortError(stringify(e.type))) continue;
+    const path = stringify(e.path);
+    if (path === '') unscopedAborts += 1;
+    else aborted.add(rel(path));
+  }
+
   const findings: Finding[] = rawResults.map((raw) => {
     const r = raw as RawResult;
     const checkId = stringify(r.check_id);
-    const path = stringify(r.path);
     return {
       ruleId: checkId.split('.').pop() ?? checkId,
-      file: relative(root, path).split(sep).join('/'),
+      file: rel(stringify(r.path)),
       line: num(r.start?.line),
       col: num(r.start?.col),
       endLine: num(r.end?.line),
@@ -197,7 +279,13 @@ export function scan(req: ScanRequest): ScanResult {
     };
   });
 
-  return { findings, scanned: scannedList.length, errors };
+  return {
+    findings,
+    scanned: scannedList.length,
+    errors,
+    abortedFiles: [...aborted].sort(),
+    unscopedAborts,
+  };
 }
 
 /** Findings whose relative path starts with `<subdir>/`. */

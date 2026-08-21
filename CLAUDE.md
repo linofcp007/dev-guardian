@@ -48,9 +48,11 @@ it is developer tooling that must never reach `dist/`, and because
 `tsconfig.test.json` already type-checks that tree at full strictness. It is
 **not** a vitest test (`vitest.config.ts` only collects `*.test.ts`): a full
 run is tens of minutes, and the report is the product. Its pure half — clause
-enumeration and removal, and the report's coverage arithmetic — *is*
-unit-tested, in [`mcp/test/ablate/clauses.test.ts`](mcp/test/ablate/clauses.test.ts)
-and [`mcp/test/ablate/report.test.ts`](mcp/test/ablate/report.test.ts).
+enumeration and removal, the report's coverage arithmetic, and axis 3's
+comparison and noise floor — *is* unit-tested, in
+[`mcp/test/ablate/clauses.test.ts`](mcp/test/ablate/clauses.test.ts),
+[`mcp/test/ablate/report.test.ts`](mcp/test/ablate/report.test.ts) and
+[`mcp/test/ablate/axis3.test.ts`](mcp/test/ablate/axis3.test.ts).
 
 **What it is for.** Six exclusion clauses that did nothing at all have shipped
 across the rule-pack series. Every one was written by someone sure it was
@@ -73,11 +75,14 @@ a clause, and is the only one that reaches a rule with no clauses at all:
    `hits/`. `pattern-not-inside` excludes the whole node it matched, so a
    guard written for an `if` also swallowed the `else` arm, where the bug was.
 3. **no rise in the real-code count** — scan a corpus nobody wrote as a
-   fixture (`mcp/src`, for the JS/TS pack) and compare. If removing the clause
-   *lowers* the count, the clause was adding those findings. This is the axis
+   fixture (`mcp/src`, for the JS/TS pack) and compare **the ablated rule's
+   own findings, on the files every scan finished**. If removing the clause
+   *lowers* that count, the clause was adding those findings. This is the axis
    that caught `unchecked-match` going 0 → 13 false positives on our own
    TypeScript; axes 1 and 2 both passed, because "live" and "keeps true
    positives" are both true of a clause that only *adds* false positives.
+   Both scopings in that first sentence were bought with a defect — see
+   "Axis 3 compares one rule" below, and do not widen them back.
 
 **Read the coverage line, not the axis fractions.** Axes 1–3 are properties of
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
@@ -129,8 +134,10 @@ Probe the shape by hand before deleting anything.
 Axes 2 and 3 are attributions, not proofs, and both flag more than the defect
 they were built for. Axis 2 fires whenever a `hits/` fixture deliberately
 carries the excluded near-miss beside the bug — the `real_bugs` files do, and
-annotate it. Axis 3 fires for any clause whose removal makes the rule match
-less, which includes a *working* positive branch. Read the lines it prints.
+annotate it. Axis 3 fires for any clause whose removal makes its own rule match
+less, which includes a *working* positive branch. Read the lines it prints —
+they now all carry the ablated rule's id, so a line that names another rule is
+a harness bug rather than a finding.
 
 Axis 3 needs a real-code corpus in a language the pack matches, so it is a
 property of the invocation — registered per pack in
@@ -145,6 +152,50 @@ and 2 on its author's own fixtures throughout.
 
 Axis 0 needs a `hits/` corpus on the same terms and reports `N/A` for the whole
 pack where the fixture root has no `hits/` subdirectory.
+
+**Axis 3 compares one rule, on the files every scan finished, against a
+measured floor.** All three halves of that sentence are repairs, and the
+report prints all three. Axis 3 used to subtract **whole-corpus totals across
+two separate scans**, which is invalid twice over — measured on `bugfix-cs.yml`
+over `dotnet/runtime`:
+
+- **A clause of rule A cannot move rule B's count.** All **14 findings** once
+  attributed to clauses of `modify-during-iteration` were `empty-catch`
+  findings. They were not evidence about the clause; they were whatever else
+  had drifted between the two scans, landing on whichever clause was under the
+  knife. So the comparison is now filtered to `f.ruleId === clause.ruleId`,
+  for **axis 1's real-code half as well as axis 3's** — an unscoped axis 1
+  turns drift anywhere in the pack into "this clause is live", which is how two
+  runs of the same pack came to disagree on **6 of 12** clause verdicts.
+- **The totals jitter by more than the deltas.** 793 findings on one run and
+  798 on the next, same pack, same corpus. Axis 3 reports deltas of 2 and 3.
+  `+2` against a measurement error of ±5 is worse than no verdict.
+- **The jitter is timeouts, and it is excluded by FILE, not by (rule, file).**
+  Semgrep names the rule in `Timeout when running <rule> on <file>`, but
+  `--timeout-threshold` (3 by default) then drops the **whole file for every
+  rule still to run**, and names none of them. All five findings that moved
+  above belonged to `empty-catch`, which appears in no timeout message on
+  either run: it went down *with* `WMIGenerator.cs` and `XmlTextReaderImpl.cs`.
+  Excluding the union of timeout-affected files across both scans took 793 vs
+  798 to **793 vs 793, differing in nothing**. Excluding pairs would not have.
+- **The floor is measured, never assumed.** The real corpus is scanned twice at
+  baseline — the pack on disk, and the round-trip of it every ablated variant
+  descends from, i.e. the same rules in different bytes. Any per-rule
+  disagreement is measurement error by construction; it prints as
+  `noise floor`, and a clause delta that does not clear its rule's floor reads
+  **`INCONCLUSIVE`**, which is not a pass and exits non-zero. Measured floor on
+  `mcp/src` and on `dotnet/runtime`: **0** — so axis 3 can resolve a per-rule
+  delta of 1.
+
+The blind spot this leaves has a printed size: a clause whose only real-code
+effect is inside a file that times out is invisible to axis 3. The report says
+how many files that is (`excluded files`) on every run.
+
+`--timeout` is deliberately **not** pinned. The timeout set is unstable at the
+default (28 timeout errors and 10 affected files on one run, 9 and 3 on the
+next), and a value large enough to make it stable was never established — the
+exclusion was measured to be sufficient instead, which is the claim the harness
+actually makes.
 
 **Invariants worth knowing before you change it.**
 
@@ -164,14 +215,25 @@ pack where the fixture root has no `hits/` subdirectory.
   error strings does not cover the set. The **sixth** mode is not one of these
   and this gate cannot see it: the rule loads, `paths.scanned` is healthy,
   `errors` is empty, and the rule simply matches nothing. Only axis 0 catches
-  that one.
+  that one. **Necessary, and not sufficient** — the gate is also blind to a
+  scan that opened every file and *finished* only some of them:
+  `paths.scanned` counts files opened, and semgrep-core's per-rule timeout
+  abandons rules without touching it. That count read 11 800 on both of the
+  two `dotnet/runtime` runs that disagreed by five findings. What moved was in
+  `errors`, which is why `ScanResult` now carries `abortedFiles`.
 - **A round-trip control runs first.** Removal goes through the YAML AST, so
   the unmodified pack is re-serialised and scanned before anything is ablated;
   if it does not reproduce the on-disk result exactly, the run aborts rather
-  than measure the serialiser.
+  than measure the serialiser. The **real** corpus gets the same control and
+  does **not** abort on a disagreement — there, a disagreement is the machine's
+  timeouts rather than the serialiser, so it becomes the printed noise floor.
+  That is the one place the two controls differ, and it is deliberate: aborting
+  would make the harness unusable on the large corpora it is most needed for.
 
-Exit code is 1 when any clause is flagged **or any rule fires on nothing in
-`hits/`**, 0 when every clause passes axes 1–3 and every rule passes axis 0.
+Exit code is 1 when any clause is flagged, **is `INCONCLUSIVE`**, or any rule
+fires on nothing in `hits/`; 0 when every clause passes axes 1–3 and every rule
+passes axis 0. `INCONCLUSIVE` gates on purpose: if the corpus is noisier than
+the deltas being measured, the run's *passes* are not evidence either.
 Having no ablatable clauses is reported, never counted against a pack: it is a
 fact about the rule, not a defect in it.
 
