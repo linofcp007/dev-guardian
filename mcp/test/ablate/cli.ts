@@ -76,11 +76,20 @@ function parse(argv: readonly string[]): Options {
   if (adHocConfig !== undefined) {
     const fixtures = flagValue(argv, 'fixtures');
     if (fixtures === undefined) throw new UsageError('--config requires --fixtures');
+    // `--hits=.` makes the fixture ROOT the hits corpus, and `--decoys=a,b`
+    // subtracts decoy trees from it. Both exist for a corpus whose directories
+    // predate the `hits/` + `misses/` convention -- see `packs.ts` on routes.
+    const decoyFlag = flagValue(argv, 'decoys');
+    const decoySubdirs =
+      decoyFlag === undefined
+        ? undefined
+        : decoyFlag.split(',').map((d) => d.trim()).filter((d) => d !== '');
     const spec: PackSpec = {
       name: flagValue(argv, 'name') ?? 'scratch',
       config: resolve(adHocConfig),
       fixtures: resolve(fixtures),
       hitsSubdir: flagValue(argv, 'hits') ?? 'hits',
+      ...(decoySubdirs === undefined ? {} : { decoySubdirs }),
       ...(realCode === undefined ? {} : { realCode }),
     };
     return { packs: [spec], semgrepBin, filter, listOnly, jsonOut };

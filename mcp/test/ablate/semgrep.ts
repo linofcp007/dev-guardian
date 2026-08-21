@@ -288,8 +288,36 @@ export function parseScan(parsed: unknown, root: string, target: string): ScanRe
   };
 }
 
-/** Findings whose relative path starts with `<subdir>/`. */
+/**
+ * Findings whose relative path starts with `<subdir>/`, or EVERY finding when
+ * `subdir` is `'.'` -- the fixture root itself.
+ *
+ * `'.'` exists for one pack and is not a convenience. `routes.yml`'s corpus
+ * predates this harness by a long way and has no `hits/` directory: its true
+ * positives are three sibling trees (`apps/`, `annotations/`, `frameworks/`)
+ * and its decoys are ONE subdirectory inside the third. Renaming them to fit
+ * the convention was not available -- `test/e2e/rulePackFixture.test.ts` and
+ * the surface tools address those directories by name -- so the hits corpus is
+ * the whole root minus the decoys. See {@link outside} and `PackSpec.decoySubdirs`.
+ */
 export function under(findings: readonly Finding[], subdir: string): Finding[] {
+  if (subdir === '.') return [...findings];
   const prefix = `${subdir}/`;
   return findings.filter((f) => f.file.startsWith(prefix));
+}
+
+/**
+ * The complement of {@link under} over several subdirectories at once:
+ * findings that are under NONE of them.
+ *
+ * Used to subtract a decoy tree from the hits corpus. Kept separate from
+ * `under` rather than folded into it as a "hits selector" because the two
+ * answer different questions and the axis-2 reveal check needs both: the hits
+ * set is `outside(under(all, hitsSubdir), decoySubdirs)`, and a finding that
+ * leaves the first set for the second is not a suppressed true positive.
+ */
+export function outside(findings: readonly Finding[], subdirs: readonly string[]): Finding[] {
+  if (subdirs.length === 0) return [...findings];
+  const prefixes = subdirs.map((d) => `${d}/`);
+  return findings.filter((f) => !prefixes.some((p) => f.file.startsWith(p)));
 }
