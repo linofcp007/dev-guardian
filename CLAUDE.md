@@ -89,8 +89,8 @@ a clause, and is the only one that reaches a rule with no clauses at all:
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
 Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
 `patterns:` group and no `pattern-either:`, and a `patterns:` group holding
-nothing but positive terms. **30 of the 135 rules** across the nine packs are
-one of those — 24 bare and 6 positive-only — and they used to appear
+nothing but positive terms. **29 of the 135 rules** across the nine packs are
+one of those — 23 bare and 6 positive-only — and they used to appear
 **nowhere** in the report: not in the clause list, not under `skipped`. So
 `44/44 live, 0 DEAD` read as "the pack was checked" when it covered 10 rules of
 11. The capability was never missing — there is genuinely nothing to ablate.
@@ -102,7 +102,7 @@ prints `N/A`.
 | `bugfix-js` | 13 | 12 | 1 |
 | `bugfix-py` | 10 | 10 | 0 |
 | `bugfix-go` | 9 | 8 | 1 |
-| `bugfix-java` | 8 | 7 | 1 |
+| `bugfix-java` | 8 | 8 | 0 |
 | `bugfix-cs` | 11 | 10 | 1 |
 | `bugfix-php` | 6 | 6 | 0 |
 | `bugfix-rs` | 1 | 1 | 0 |
@@ -144,12 +144,19 @@ Axis 3 needs a real-code corpus in a language the pack matches, so it is a
 property of the invocation — registered per pack in
 [`mcp/test/ablate/packs.ts`](mcp/test/ablate/packs.ts), overridable with
 `--real-code=<dir>` / `--no-real-code`, and reported as `N/A` (never silently
-skipped) where none exists. Two packs read theirs from an environment variable
-because the corpus cannot live in this tree — `GUARDIAN_RUST_SRC` and
-`GUARDIAN_CS_SRC`; unset means `N/A`, set-but-missing **throws**. The C# one
-was added after the fact and immediately deleted a rule: `as-cast-deref` fired
-6490 times on `dotnet/runtime` with no true positives, having passed axes 0, 1
-and 2 on its author's own fixtures throughout.
+skipped) where none exists. Three packs read theirs from an environment
+variable because the corpus cannot live in this tree — `GUARDIAN_RUST_SRC`,
+`GUARDIAN_CS_SRC` and `GUARDIAN_JAVA_SRC`; unset means `N/A`, set-but-missing
+**throws**. The C# one was added after the fact and immediately deleted a rule:
+`as-cast-deref` fired 6490 times on `dotnet/runtime` with no true positives,
+having passed axes 0, 1 and 2 on its author's own fixtures throughout. The Java
+one was added after nine fix waves of fixture-reading and changed four rules of
+eight in its first round, in both directions: two narrowed (eight of
+`stream-not-closed`'s twelve OpenJDK findings were two-resource
+try-with-resources headers, and fifteen of `optional-get`'s twenty-six were two
+guard shapes nobody had enumerated) and two widened (`static-dateformat` was
+blind to the one genuine race either corpus held, and `off-by-one` to `++i`,
+`i += 1` and `for (var i = 0;`).
 
 **A pack can have a corpus that reaches almost none of it, and that reads as a
 pass.** Axis 3 compares the ablated rule's *own* findings, so a rule the corpus

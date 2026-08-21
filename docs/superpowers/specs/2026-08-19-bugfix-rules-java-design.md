@@ -675,7 +675,7 @@ practice the rule is: write the accented word in lower case.
 - **`stream-not-closed` matches the simple constructor name only.** A
   fully-qualified `new java.io.FileInputStream(...)` is invisible to it.
 
-Eleven more shapes were reproduced and **ruled not fixable** rather than left
+Twelve more shapes were reproduced and **ruled not fixable** rather than left
 unstated. The list is exhaustive against the review fixtures that exist today,
 not against all Java.
 
@@ -690,17 +690,18 @@ was not a limitation at all, only an unexamined `$X`.
 
 | # | Dir | Rule | Code it gets wrong | Why it stays |
 | --- | --- | --- | --- | --- |
-| 1 | FP | `stream-not-closed` | `open(); try { … } finally { close(); }` | The pre-Java-7 idiom, and already the rule's stated reason for being `WARNING`. |
+| 1 | FP | `stream-not-closed` | `open(); try { … } finally { close(); }`, and a stream handed to a helper that closes it | The pre-Java-7 idiom, and already the rule's stated reason for being `WARNING`. **Narrowed in §11:** the multi-resource try-with-resources that accounted for 8 of this rule's 12 OpenJDK findings is no longer part of this row — only the `finally` and helper forms are, and they are 2 of the 4 findings that remain. |
 | 2 | FP | `race-condition-static-dateformat` | a `static final SimpleDateFormat` whose every access goes through a `synchronized` method | Proving *all* accesses are synchronized is whole-program analysis, which Semgrep OSS does not do. This row used to end "a shared formatter also serialises every caller, so flagging it is defensible" — that is a **product** argument, not §4's criterion, and it is why the rule sat at `ERROR` for four rounds while carrying a documented, un-fixable false positive. The criterion wins: the finding stays, the tier is now `WARNING`. |
 | 3 | FP | `off-by-one-loop-lte-length` | `i <= a.length` where the body guards with `i < a.length`, or never indexes `a` | The obvious tightening was **tried and rejected** — measurement immediately below the table. It trades this false positive for a false negative without fixing the main case, so the patterns were left alone and only the tier moved. |
-| 4 | FP | `printstacktrace-only` | `printStackTrace()` as the fallback when the logger itself threw | The one place the call is right; already `WARNING`; too narrow to encode. |
+| 4 | FP | `printstacktrace-only` | `printStackTrace()` as the fallback when the logger itself threw | The one place the call is right; already `WARNING`; too narrow to encode. **Measured in §11 and rare:** reproduced on a probe, but not one of the 78 OpenJDK findings was this shape. |
 | 5 | FP | `map-get-deref`, `optional-get-no-ispresent`, `modify-during-iteration` | **two or more** statements between the guard (or the removal) and the exit: `if (!m.containsKey(k)) { log(); metric(); return ""; }`, `items.remove(s); log(s); n++; break;` | The deliberate price of bounding the exclusions. A statement ellipsis matches deep and swallows guards that do not cover every path, which are real bugs; a false negative that hides a bug is worse than this. |
 | 6 | FP | the same three | a guard reached **through a helper method**: `if (!present(o)) { return d; }` | Needs interprocedural analysis, which Semgrep OSS does not do. Already the stated reason `optional-get-no-ispresent` is `WARNING`. |
-| 7 | FP | `map-get-deref` | a key guaranteed present outside the enumerated shapes: a map filled in a static initialiser, a total enum mapping declared as a `Map` | The guarantee is not on the syntactic path reaching the `get`. Excluding "any map that ever received a `put` anywhere in the file" would erase the rule. |
+| 7 | FP | `map-get-deref` | a key guaranteed present outside the enumerated shapes: a map filled in a static initialiser or a constructor, a total enum mapping declared as a `Map`, a key from a `keySet()` walked with a lambda or a stream, a key filtered by `.filter($M::containsKey)` | The guarantee is not on the syntactic path reaching the `get`. Excluding "any map that ever received a `put` anywhere in the file" would erase the rule. **Measured in §11:** this row is the whole of the rule's real-code output — 55 findings across two corpora, 0 live defects, no clause written. |
 | 8 | FP | `map-get-deref`, `optional-get-no-ispresent` | a guard held in a **local boolean**: `boolean present = m.containsKey(k); if (!present) { return ""; }` | Dataflow, not syntax. Semgrep OSS does not connect the local's value to the test that produced it, and no pattern shape reaches it. |
 | 9 | **FN** | `map-get-deref`, `optional-get-no-ispresent` | the **invalidated-guarantee** class: a guarantee the guard establishes and the code then destroys, inside the region the exclusion covers — `if (m.containsKey(k)) { m.remove(k); return m.get(k).trim(); }`, `if (o.isPresent()) { o = Optional.empty(); return o.get(); }`, `if (m.containsKey(k)) { m.clear(); … m.get(k) … }`, `m.put(k,"v"); m.remove(k); m.get(k).trim();`, `while (m.containsKey(k)) { m.remove(k); … m.get(k) … }` | Five measured reproductions, all guaranteed throws, all silent. Same root cause as the wave-6 `else`-arm bug — **`pattern-not-inside` excludes the whole node it matched** — but on the **temporal** axis instead of the branch axis. Wave 6 scoped every guard exclusion to the arm the guard proves and fixed the branch axis; the sequence axis *inside* that arm was never examined, and an exclusion covering a block covers every statement in it, including the ones that undo the guarantee. Knowing that `m.remove(k)` invalidates `m.containsKey(k)` is dataflow, so this is a row and not a clause. The wave-7 `keySet()` exclusion inherits it unchanged. |
 | 10 | **FN** | `map-get-deref`, `optional-get-no-ispresent` | a deref guarded by a **local boolean**: `boolean present = m.containsKey(k); if (present) { m.get(k).trim(); }` | The mirror of row 8, which records the same shape as an accepted false positive when the boolean guards an early exit. Both directions are the same missing capability — dataflow, not syntax — and having only the false-positive half written down for six waves is the asymmetry this table's preamble is about. Agreed in review and undocumented until wave 7. |
 | 11 | FP | `map-get-deref` | the two `keySet()`-adjacent idioms the wave-7 exclusion does not reach: `for (Map.Entry<K,V> e : m.entrySet()) { … m.get(e.getKey()) … }`, and the key set copied to a local first, `Set<String> keys = m.keySet(); for (String k : keys) { … m.get(k) … }` | In the first the key is `e.getKey()` and not the loop variable; in the second the loop header no longer mentions `keySet()`. The clause unifies the map **and** the key on purpose, and widening it to reach these means giving up one unification — the two real bugs that would then be swallowed are pinned as `b13` and `b14` in `hits/RealBugs.java`. Of the five correct-code shapes measured, the clause closes three and these two remain. |
+| 12 | **FN** | `map-get-deref`, `optional-get-no-ispresent` | a read inside the exit branch of an early-exit guard: `if (o.isEmpty()) { return o.get(); }`, `if (!o.isPresent()) { throw new IllegalStateException(o.get()); }`, `if (!m.containsKey(k)) { return m.get(k).trim(); }` | Three measured reproductions, all guaranteed throws, all silent, and all of them predating §11 rather than caused by it. The early-exit clause has to match the whole `if` to recognise the exit, and `pattern-not-inside` then excludes everything in it — including the branch the clause was written to describe. Row 9 on the **branch** axis instead of the temporal one. Not expressible in Semgrep OSS; recorded in `hits/ElseArm.java` beside F9 so the obvious spelling of that fixture is not written twice. |
 
 ### The `loop-lte-length` tightening: measured, then rejected
 
@@ -943,3 +944,228 @@ three — clean scan, no findings, no errors — and was caught by the `paths.sc
 and `--validate` assertions added in waves 6 and 7. That is the first time the
 family-wide machinery has caught a member nobody had seen before, which is the
 only evidence that a general catch is general.
+
+## 11. The external-corpus round
+
+Nine waves of correction, every one of them found by reading fixtures. §4a is
+the exception that proves the point: the one measurement this pack ever took
+against code nobody here wrote — `empty-catch` on the OpenJDK — refuted the
+premise the `ERROR` tier stood on. This round pointed **all eight rules** at
+that corpus and at a second one, and read the findings.
+
+**The corpora.** `openjdk/jdk` at `5ad2eb84b52c`, non-cone sparse checkout of
+`/src/<module>/share/classes/**`: 12 596 files, 12 593 of which Semgrep scans.
+`spring-projects/spring-framework` at `main`, `/spring-<module>/src/main/java/**`:
+5 212 files, 4 754 scanned (Semgrep's default ignore list drops paths with a
+`test` segment, which is the whole `spring-test` module). The second is not
+decoration, and the two disagree on five rules of eight:
+`printstacktrace-only`, `optional-get`, `stream-not-closed` and
+`modify-during-iteration` all score zero on Spring after scoring on the JDK,
+and `static-dateformat`'s only candidate in either corpus is a Spring file.
+
+| rule | JDK before | JDK after | Spring | read |
+| --- | --- | --- | --- | --- |
+| `error-handling-empty-catch` | 1589 | 1589 | 193 | 20 |
+| `error-handling-printstacktrace-only` | 78 | 78 | 0 | 20 |
+| `null-safety-map-get-deref` | 43 | 43 | 12 | **55 (all)** |
+| `null-safety-optional-get-no-ispresent` | 26 | **11** | 0 | **26 (all)** |
+| `memory-leak-stream-not-closed` | 12 | **4** | 0 | **12 (all)** |
+| `edge-case-modify-during-iteration` | 1 | 1 | 0 | 1 (all) |
+| `off-by-one-loop-lte-length` | 0 | 0 | 0 | — |
+| `race-condition-static-dateformat` | 0 | 0 | 0 | — |
+
+### Two rules narrowed
+
+**`stream-not-closed` was two-thirds false positive, and the cause was the
+SHAPE of its exclusions rather than their content.** Eight of the twelve OpenJDK
+findings were **two-resource try-with-resources headers** —
+`try (FileInputStream fis = ...; BufferedInputStream bis = new
+BufferedInputStream(fis))`, which is simply how a file is read with a buffer.
+The rule excluded try headers by naming the resource, and a header with two
+resources is a different AST node from one with a single resource. Wave 10 and
+earlier added four such clauses; every one of them named exactly one resource,
+so the hole was never visible from a fixture.
+
+Enumerating the lengths was measured and rejected: `$X` does match a whole
+resource, so `try ($X; $R) { … }` and `try ($R; $X) { … }` cover two, three
+patterns cover three, and the finalizer doubles all of it. And `try (...)`,
+`try ($...RES)` and `try (...; $R; ...)` are each `Invalid pattern for Java`.
+
+What works is a positive anchor: `pattern-inside` of `decl;` followed by a
+statement ellipsis. **A resource in a try header is not a statement in a
+statement sequence**, so no header of any length reaches the rule, with or
+without a finalizer. Four exclusion clauses became two — the Java 9
+already-declared-resource form still needs its own pair, because that
+declaration IS in a statement sequence. Measured recall cost: none. The
+trailing `...` matches zero statements, so a declaration that is the last
+statement of a method, or the only statement of a nested block, still fires;
+both are now pinned in `hits/StreamNotClosed.java`.
+
+Of the four findings that remain, **two are genuine descriptor leaks** —
+`COFFFileParser.parse` memory-maps the channel and never closes the stream, and
+`Commands.java:2121` closes it on the happy path only — and two are the
+documented `finally` and helper-closes limitations, rows 1 and 6.
+
+**`optional-get-no-ispresent`: 26 → 11, and the fifteen closed were two shapes.**
+
+Nine were the **`else` arm of an `if (o.isEmpty())`**. That is how the check has
+been written since Java 11 introduced `isEmpty()`, and it is the exact dual of
+the `isPresent()` guard the rule already honoured — the rule knew
+`if (isPresent()) { get() }` and the early exit on `isEmpty()`, and not the
+third member of the family. Four clauses cover it: the bare condition and the
+disjunction (`o.isEmpty() || X`, which proves the same thing in the `else`),
+each in the braced and braceless spellings. The `else if` chain comes free,
+because in Java `else if (C) A else B` is an `if` nested in the `else` with a
+block on both sides. The **conjunction** (`X && o.isEmpty()`) proves nothing and
+is deliberately left firing.
+
+Six were **`assert o.isPresent();`**, the JDK's own way of writing down an
+invariant established elsewhere. Excluding it is the same call the pack already
+makes for `catch (Exception ignored)`: an intention the rule can actually read,
+because unlike a comment it is in the AST. It is stated honestly in the rule —
+assertions are off by default, so this is not a runtime guard — and the shapes
+that must keep firing are fixtured: an assert on a *different* Optional, and
+`assert o.isEmpty()`.
+
+**The eleven that remain** are shapes nobody closed, and the stopping point is a
+judgement about clause count rather than a claim of impossibility: a ternary
+whose condition is a conjunction of two `isPresent()` calls (2), a ternary whose
+condition is `isEmpty() || …` (3), `if (!o.isEmpty())` (1), an `else if` chain
+whose `else` is another `if` rather than a block (1), a guard reached through a
+method that never returns (2, row 6), and two invariants held across objects.
+
+### Two rules widened, which is the half a false-positive audit usually misses
+
+**`race-condition-static-dateformat` was blind to the only real race either
+corpus contained.** Zero candidates in 12 593 OpenJDK files; exactly one across
+4 754 Spring files — and it is a live defect:
+`AbstractMockHttpServletRequestBuilder` holds a `private static final
+SimpleDateFormat` declared with **no initializer**, assigned in a `static { … }`
+block so that `setTimeZone` can be called on it, and formatted later with no
+lock at all. The rule demanded the `new` on the declaration itself. A second
+branch matches the split declaration; a `static SimpleDateFormat` field is
+shared wherever it is assigned, so the branch does not need to see the `new`.
+Measured silent on an instance field, an uninitialized instance field, and a
+static method whose *return type* is `SimpleDateFormat`; locals cannot be
+`static` at all.
+
+That branch also took the pack from 7 of 8 rules with ablatable clauses to 8 of
+8: `static-dateformat` was its one bare `pattern:`.
+
+**`off-by-one-loop-lte-length` was blind to `++i`, `i += 1`, a braceless body
+and `for (var i = 0;`.** This is the trap the C# round named: **optional syntax
+written out in a pattern acts as a filter**. Spelling the increment `$I++`
+excluded the other two spellings of the same loop; spelling the body `{ ... }`
+excluded the braceless one; `int` is literal, so `var` had no branch. The
+increment and the body are now ellipses, and `var` has a branch. Widening costs
+nothing measurable here: **zero** `<= ....length` loop headers of any spelling
+exist in 17 347 files of real Java, so what the rule had was false negatives and
+only false negatives. Row 3's rejected tightening is untouched and still stands.
+
+### The rule that was measured and deliberately left alone
+
+`map-get-deref` scored **55 findings across the two corpora, and a hand-read of
+all 55 found no live defect.** They fall into families Semgrep OSS cannot close,
+every one already a row in §8: the total map filled in a constructor or a static
+initializer for every key of an enum (the largest group, and all seven Spring
+sites — `DateTimeFormatterRegistrar` fills its `EnumMap` from `Type.values()`);
+presence established by a method (`addNode(u); … edges.get(u)` in
+`jdeps/Graph`); a key from a `keySet()` walked with a lambda or a stream rather
+than a for-each; a key filtered by `.filter($M::containsKey)`; and an invariant
+held between two objects.
+
+**No clause was written for any of it, and that is the finding.** The two
+families that are syntactically closable — the `keySet()` lambda and the
+method-reference filter — are worth 7 of 55, and neither closing form can unify
+the **key**, which is exactly the unification that keeps the existing for-each
+clause from swallowing `b13` and `b14` (row 11). Trading 7 false positives for a
+blind exclusion is the bargain this series spent nine waves undoing.
+
+Deleting the rule was considered on the C# precedent, where `as-cast-deref`
+scored 6490 with no true positives and was removed. It is **not** the same case.
+`as-cast-deref` died because its premise was not expressible in the engine —
+Semgrep's C# frontend puts `o as T` and `(T)o` on the same node, so two thirds
+of its findings were not about `as` at all. Every one of these 55 is exactly
+`map.get(k).method()` on a declared map. What fails is the inference, not the
+match.
+
+What the measurement does **not** settle: both corpora are mature *library*
+code, where a dereferenced map is nearly always one the reading class filled
+itself. Application Java, keyed on external input, is a different distribution
+and was not measured. So the rule stays, at `WARNING`, with 0/55 written down
+where the next round will find it, and the evidence that decides its life or
+death is a third corpus of application Java.
+
+### A new false negative, on the branch axis
+
+Reproducing rows 1 to 8 before deciding anything turned up one that no row
+covers. **The early-exit exclusions swallow a read inside their own exit
+branch:**
+
+```java
+if (o.isEmpty())        { return o.get(); }                            // silent
+if (!o.isPresent())     { throw new IllegalStateException(o.get()); }  // silent
+if (!m.containsKey(k))  { return m.get(k).trim(); }                    // silent
+```
+
+All three are guaranteed throws. All three are excluded because
+`pattern-not-inside` removes the whole `if` node — including the exit branch the
+clause exists to describe. Same root cause as row 9, on the **branch** axis
+rather than the temporal one, and not fixable in Semgrep OSS: the clause has to
+match the `if` to recognise the exit, and matching it excludes its contents. It
+predates this round and is unchanged by it. It is written into
+`hits/ElseArm.java` beside F9, so that the obvious spelling of that fixture is
+not written by someone who then wonders why it never fires.
+
+### What the ablation caught before any of this shipped
+
+Two of the six new clauses were wrong, and neither was visible from reading
+them.
+
+**One was inert.** `assert $O.isPresent();` was written beside
+`assert $O.isPresent() : ...;` on the reasoning that a Java assert with a
+message is a different AST node from one without — which is true, and
+irrelevant, because `: ...` also matches the **absent** message. The
+message-carrying pattern covers both spellings; the other covered nothing.
+Seventh occurrence of the inert-clause defect in this series, second one caught
+before release. The pack now carries one clause and the fixture pair says which
+of the two functions is discriminating and which is documentary.
+
+**Four fixtures proved nothing.** The `else`-arm near-misses were first written
+in the obvious spelling — `if (o.isEmpty()) { return "d"; } else { … o.get() …
+}` — and all four new clauses came back `DEAD` against them. The cause is that
+the pre-existing early-exit clause, `if ($O.isEmpty()) { return ...; }` followed
+by a statement ellipsis, matches the whole `if` and silences those functions
+before any `else`-arm clause is consulted. The fixtures were measuring a clause
+that shipped four waves ago.
+
+That is also *why* the nine OpenJDK findings existed: every one of them has a
+then-arm that is **not** an exit — a nested `if` in `Runtime.compareTo`, a
+`throw` reached through a chain in `CommandOutputControl`, an assignment. The
+replacements have a non-exit then-arm and a multi-statement `else` where the
+clause needs one, and each of the four now maps to exactly one clause. The
+original four are kept, relabelled documentary, because "the commonest spelling
+is covered, by an older clause" is worth pinning too.
+
+The general form is the one wave 8 already stated about limitation rows, applied
+to fixtures: **a near-miss that was already silent is a test that can never
+fail.** The only way to tell one from a real near-miss is to delete the clause
+and watch.
+
+### What generalises
+
+1. **A fixture cannot show you a shape it does not contain.** Every false
+   positive closed here was a form of correct Java that no `misses/` file had —
+   a two-resource try header, an `isEmpty()` else arm, an `assert`. Nine waves
+   of careful fixture-reading found none of them, because reading fixtures tells
+   you about the fixtures.
+2. **An audit that only looks for false positives finds half the defects.** Two
+   of the four rules this round changed were widened, and one of those two was
+   blind to the single genuine defect either corpus contained. The counts went
+   *up* on those rules, which is the direction a false-positive audit is not
+   looking in.
+3. **Zero findings is not evidence of anything on its own.** `off-by-one` and
+   `static-dateformat` both scored 0 on the OpenJDK. For the first, a grep
+   confirmed the shape is absent from the corpus; for the second, a grep found a
+   candidate the rule could not see. Same number, opposite conclusions, and only
+   the grep distinguishes them.

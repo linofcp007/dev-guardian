@@ -366,4 +366,111 @@ public class OptionalGet {
         if (o.filter(s -> !s.isEmpty()).isPresent()) { return o.get(); }
         return "d";
     }
+
+    // ---- the `else` arm of an isEmpty() test ----------------------------
+    //
+    // The four `else`-arm clauses came from the OpenJDK measurement: nine of
+    // the rule's 26 findings there were this shape, the largest family it had.
+    // Since Java 11 this is how the check is written, and the rule knew only
+    // the `isPresent()` dual of it.
+    //
+    // WHAT THE THEN-ARM IS MATTERS, and the first version of this block got it
+    // wrong in a way only ablation showed. Written with an early exit in the
+    // then-arm — `if (o.isEmpty()) { return "d"; } else { … o.get() … }` —
+    // all four functions were ALREADY silent, under the pre-existing
+    // `if ($O.isEmpty()) { return ...; }` early-exit clause, and every one of
+    // the four new clauses read DEAD. Those four fixtures are kept below as
+    // DOCUMENTARY, because they record which clause actually covers the
+    // commonest spelling; the four DISCRIMINATING ones are here, with a
+    // then-arm that is not an exit, which is also what the nine OpenJDK
+    // findings looked like (a nested `if`, an assignment, a log call).
+    //
+    // One clause each, measured by removing them one at a time:
+    //   * discriminatingBlock   -> `{ ... $O.get(); ... }`
+    //   * discriminatingBraceless -> `{ <... $O.get() ...>; }`
+    //   * discriminatingDisjunctionBlock / …Braceless -> the `|| ...` pair
+    // Remove one and exactly one of them fires. Without a multi-statement
+    // `else` the first of each pair reads DEAD, because the second covers a
+    // single-statement block on its own.
+    //
+    // The conjunction — `if (flag && o.isEmpty())` — is deliberately NOT here:
+    // it proves nothing about the Optional in the `else`, it is pinned as a
+    // real bug in hits/ElseArm.java, and if it ever stops firing that is the
+    // file that says so.
+    String discriminatingBlock(Optional<String> o) {
+        String out = "d";
+        if (o.isEmpty()) { System.out.println("absent"); }
+        else { System.out.println("present"); out = o.get().trim(); }
+        return out;
+    }
+    String discriminatingBraceless(Optional<String> o) {
+        String out = "d";
+        if (o.isEmpty()) { System.out.println("absent"); }
+        else out = o.get().trim();
+        return out;
+    }
+    String discriminatingDisjunctionBlock(Optional<String> o, boolean force) {
+        String out = "d";
+        if (o.isEmpty() || force) { System.out.println("absent"); }
+        else { System.out.println("present"); out = o.get().trim(); }
+        return out;
+    }
+    String discriminatingDisjunctionBraceless(Optional<String> o, boolean force) {
+        String out = "d";
+        if (o.isEmpty() || force) { System.out.println("absent"); }
+        else out = o.get().trim();
+        return out;
+    }
+
+    // DOCUMENTARY, and it is worth saying which clause each one really needs.
+    // All four have an early exit in the then-arm, so the early-exit clause
+    // matches the whole `if` and silences them before any `else`-arm clause is
+    // consulted. They prove that the commonest spelling is covered; they prove
+    // nothing about the clauses added for it.
+    String elseArmIsEmpty(Optional<String> o) {
+        if (o.isEmpty()) {
+            System.out.println("absent");
+            return "d";
+        } else {
+            System.out.println("present");
+            return o.get().trim();
+        }
+    }
+    String elseArmBraceless(Optional<String> o) {
+        if (o.isEmpty()) { return "d"; } else return o.get();
+    }
+    String elseArmDisjunction(Optional<String> o, boolean force) {
+        if (o.isEmpty() || force) { return "d"; } else { return o.get().trim(); }
+    }
+    String elseIfChain(Optional<String> o, boolean fast) {
+        if (fast) { return "f"; }
+        else if (o.isEmpty()) { return "d"; }
+        else { return o.get().toUpperCase(); }
+    }
+
+    // ---- `assert isPresent()` ------------------------------------------
+    //
+    // ONE clause, not two, and that was measured rather than assumed. `assert
+    // C;` and `assert C : msg;` are different AST nodes, so the obvious
+    // reading is that each needs a pattern — but `: ...` matches the ABSENT
+    // message, so the form WITH a message covers both. The pair was written,
+    // ablated, and the message-less half came back INERT; it was deleted.
+    // assertIsPresent is therefore DOCUMENTARY and assertIsPresentWithMessage
+    // is DISCRIMINATING: remove the clause and both fire.
+    //
+    // This is the OpenJDK's own way of writing down an invariant it has
+    // already established elsewhere — six of the 26 findings there were
+    // exactly this — and unlike a comment it is in the tree for the rule to
+    // read. It is an intention, not a runtime guard: assertions are off by
+    // default. The counterparts that must still fire — an assert on a
+    // DIFFERENT Optional, and `assert o.isEmpty()` — are pinned in
+    // hits/ElseArm.java.
+    String assertIsPresent(Optional<String> o) {
+        assert o.isPresent();
+        return o.get().trim();
+    }
+    String assertIsPresentWithMessage(Optional<String> o) {
+        assert o.isPresent() : "resolved above";
+        return o.get().trim();
+    }
 }
