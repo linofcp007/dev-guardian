@@ -145,6 +145,32 @@
 # `medium`, e o `create_fix_pr` tem `severity_min` a `high` por omissao. Quem
 # quiser as regras em WARNING corrigidas tem de pedir `severity_min: "medium"`.
 # O `bug_hunt` nao filtra por omissao, por isso nada desaparece de um scan.
+#
+# ---------------------------------------------------------------------------
+# O EIXO 3 DA ABLACAO SINALIZA TODOS OS RAMOS POSITIVOS VIVOS DESTE PACK, e
+# quem ler o relatório sem saber disto conta onze defeitos onde nao ha nenhum.
+# Triado a 2026-08-21, os onze, um a um, com as linhas lidas — §4b do desenho.
+#
+# O eixo 3 diz "esta clausula ACRESCENTA findings ao seu próprio rule em código
+# real". Um ramo de um `pattern-either` que casa alguma coisa faz exatamente
+# isso, por construção: é para isso que la esta. Cinco das onze regras deste
+# pack sao `pattern-either` de ramos positivos disjuntos, sem exclusao nenhuma,
+# por isso CADA ramo que dispare em `dotnet/runtime` chega ao relatório
+# sinalizado. Medido: as contagens por ramo sao aditivas e reconstroem o total
+# da regra ao finding (a `empty-catch` parte-se em 28 + 214 + 15 + 145 + 8).
+# Um pack sem falso positivo nenhum daria os mesmos onze sinais.
+#
+# O QUE ISTO NAO QUER DIZER: que os findings estejam certos. O sinal é uma
+# ATRIBUICAO, e a leitura é que decide. Dos onze, tres carregam populações de
+# falsos positivos e estao anotadas na regra respetiva:
+#
+#   `blocking-on-task`, ramo `$V.Result`  — 52 de 52 sao Tasks ja completas.
+#   `ordefault-deref`, ramo `FirstOrDefault` — 1 de 1, e é o tipo por valor.
+#   `off-by-one-lte-length`, ramo `$I++` — 2 de 2 eram ciclos sentinela, e
+#       essa fechou-se: a exclusao esta na regra e a contagem foi a zero.
+#
+# As outras oito sao a regra a trabalhar. O que separa os dois casos nao é o
+# verdicto, é ler os ficheiros.
 # ---------------------------------------------------------------------------
 rules:
   # ERROR, e é a única regra desta série cuja forma correta nao é uma guarda
@@ -242,6 +268,43 @@ rules:
   # grafias sem nome, e a grafia com nome que a regra premeia emite CS0168 no
   # compilador. Quem escreve C# idiomático nao tem como usar a isenção. O
   # bloco OS TIERS, no cabeçalho, tem os números e o oráculo.
+  #
+  # OS SETE SINAIS DO EIXO 3 SAO OS SETE RAMOS DESTA REGRA, e nao ha oitavo:
+  # a regra é um `pattern-either` de ramos positivos disjuntos e todos disparam
+  # em `dotnet/runtime`, por isso todos sao atribuídos. Medido a 2026-08-21,
+  # ramo a ramo, no corpus inteiro:
+  #
+  #   `catch ($E $V) { }`             23   |  `catch ($E) { }`            214
+  #   `catch ($E $V) { } finally`      5   |  `catch ($E) { } finally`     15
+  #   (o ramo composto com a regex)   28   |  `catch { }`                 145
+  #                                        |  `catch { } finally`           8
+  #
+  # 28 + 214 + 15 + 145 + 8 = 410, e o total da regra no mesmo varrimento é
+  # 407: os ramos particionam a saída e a diferença sao ficheiros que o Semgrep
+  # abandonou por tempo entre varrimentos. Nao ha aqui clausula a acrescentar
+  # ruído — ha uma regra a fazer o que diz.
+  #
+  # E OS 28 COM NOME EXPLICAM-SE, o que o bloco OS TIERS mediu mas nao soube
+  # ler: **26 dos 28 sao `catch (Tipo v) when (<filtro>) { }`**. O nome nao
+  # esta la por convenção nenhuma — esta la porque o FILTRO precisa dele
+  # (`when (ex is IOException or UnauthorizedAccessException)`). Por isso é que
+  # nenhum se chama `ignore`/`ignored`/`expected`, e por isso é que nenhum
+  # emite CS0168: a variável é usada. Os dois restantes sao os únicos catches
+  # vazios do corpus que ligam um nome e nao o usam para nada.
+  #
+  # E O C# TEM ENTAO UMA DECLARACAO DE INTENCAO QUE O JAVA NAO TEM, mais forte
+  # do que um nome: o filtro enumera, em código e verificado pelo compilador,
+  # exatamente que exceções estao a ser engolidas. A regra NAO O LE, e o
+  # Semgrep casa `catch ($E $V) { }` com um catch filtrado como se o filtro nao
+  # existisse — medido, é assim que os 26 chegam aqui.
+  #
+  # DELIBERADAMENTE NAO EXCLUIDO. A regra ja decidiu esta questao quando desceu
+  # de ERROR para WARNING: os 402 sao na esmagadora maioria deliberados e a
+  # regra reporta-os na mesma, porque deliberado e silencioso continua a ser
+  # silencioso — um filtro diz QUE exceção se engole, nao diz que a falha
+  # aparece em lado nenhum. Excluir os filtrados seria aplicar a um subconjunto
+  # o critério que o tier ja rejeitou para o conjunto. Fica medido e escrito
+  # para o próximo leitor nao voltar a abrir.
   #
   - id: bugfix-cs-error-handling-empty-catch
     pattern-either:
@@ -367,6 +430,45 @@ rules:
   #
   # Nenhum dos tres está em misses/. Sao bugs a sério que a regra nao apanha, e
   # uma fixture de miss a afirmar zero fa-los-ia passar por decisao.
+  #
+  # ---------------------------------------------------------------------------
+  # 52 DE 52 SAO FALSOS POSITIVOS EM `dotnet/runtime`, e a população foi lida
+  # INTEIRA e nao por amostragem. Eixo 3 da ablação, 2026-08-21. Os quatro
+  # ramos da regra nao pesam o mesmo em código real: o `$V.Result` com
+  # `metavariable-type: Task` produz os 52, e os outros tres — `.Wait()` por
+  # tipo, `.Result` e `.Wait()` por nome `.*Async` — produzem ZERO. A saída da
+  # regra neste corpus é um ramo só, e esse ramo nao acertou uma vez.
+  #
+  # SAO TODOS A MESMA COISA: um `.Result` sobre uma Task que ja se sabe
+  # completa naquele ponto. Nao ha deadlock possível — o `.Result` de uma Task
+  # completa devolve o valor sem bloquear nada. As formas contadas:
+  #
+  #   `if (t.IsCompletedSuccessfully)` / `IsCompleted` / o helper `IsSuccess()`
+  #     do XML, e as mesmas em ternário  .................... cerca de 20
+  #   `case TaskStatus.RanToCompletion:` num switch sobre o estado  ..... ~10
+  #   `_parseText_dummyTask.Result`, uma Task-cache ja concluída  ......... 9
+  #   `Debug.Assert(t.Status == TaskStatus.RanToCompletion)` antes  ....... 4
+  #   um `await` da mesma Task na instrução anterior  ..................... 4
+  #   `Task.FromResult(...)`, `RunSynchronously`, `Wait(timeout)` com o
+  #     resultado testado antes  .......................................... 5
+  #
+  # NAO ESTREITAVEL, e a razao é a mesma que apagou a `as-cast-deref`: a
+  # premissa que distingue os dois casos — "esta Task ja esta completa AQUI?" —
+  # é uma propriedade de fluxo de dados e nao um no da AST. As nove do
+  # `_parseText_dummyTask` provam-no sozinhas: nao ha guarda nenhuma a
+  # reconhecer, a Task ja nasceu completa noutro ficheiro. Uma exclusao por
+  # guarda apanharia talvez metade, custaria seis clausulas, e cada uma delas
+  # precisaria da sua fixture ou lia-se DEAD na ablação seguinte.
+  #
+  # E A REGRA FICA, com o corpus declarado como PARCIAL e nao como veredicto.
+  # `dotnet/runtime` é a canalização assíncrona do próprio .NET: o idioma
+  # "caminho rápido quando a Task ja esta completa" é o que aquele código faz
+  # todo o dia, e é o pior sitio possível para medir esta regra. O `.Result`
+  # que faz deadlock a sério esta em código de APLICACAO — um controlador
+  # ASP.NET, um handler de WinForms — que este corpus nao tem. Dizer "52 de 52
+  # falsos num corpus enviesado" é o que se mediu; dizer "a regra nao serve"
+  # seria dizer mais do que se mediu.
+  # ---------------------------------------------------------------------------
   - id: bugfix-cs-race-condition-blocking-on-task
     pattern-either:
       - patterns:
@@ -439,10 +541,32 @@ rules:
   # noutro assembly que nunca ouviu falar desta classe. Os dois sao deadlocks a
   # espera de um segundo participante.
   #
-  # Volume baixo e sem falsos positivos: um `lock` num campo `object` privado,
-  # que é a forma correta, nao casa nenhum dos dois ramos. Um campo `static
-  # readonly object` também nao — o que torna o `lock (this)` errado nao é ser
-  # partilhado, é ser ALCANCAVEL de fora.
+  # Sem falsos positivos: um `lock` num campo `object` privado, que é a forma
+  # correta, nao casa nenhum dos dois ramos. Um campo `static readonly object`
+  # também nao — o que torna o `lock (this)` errado nao é ser partilhado, é ser
+  # ALCANCAVEL de fora.
+  #
+  # MAS O VOLUME NAO E BAIXO, e isso esteve escrito aqui ate 2026-08-21 como se
+  # fosse: sao **322 findings** em 11 800 ficheiros de `dotnet/runtime`, a
+  # segunda maior contagem do pack a seguir a `empty-catch`. O eixo 3 da
+  # ablação atribuiu-os todos ao ramo `lock (this)`; o ramo do literal de
+  # string produz ZERO no mesmo corpus, o que era de esperar e agora esta
+  # medido em vez de suposto.
+  #
+  # LIDOS, SAO O QUE A REGRA DIZ QUE SAO. Amostra de sete, uma a uma:
+  # `DbConnectionFactory` (2), `DbConnectionPoolGroup` (4) e
+  # `CacheEntry.CacheEntryTokens` trancam `this` em tipos cuja referencia sai
+  # do tipo — pools entregues a fabricas, entradas de cache entregues a
+  # callbacks de expiração. Sao exatamente o CA2002, e o CA2002 é o oráculo
+  # independente que esta regra ja tinha. Nenhum é um deadlock a acontecer; sao
+  # todos um deadlock a espera de um segundo participante, que é a definição do
+  # defeito e a razao do tier WARNING.
+  #
+  # O VOLUME E O DEFEITO, entao, e nao ruído a filtrar: `lock (this)` é um
+  # idioma antigo, e uma base de código com quinze anos tem-no as centenas. O
+  # que nao se pode fazer é ler 322 como se fosse um problema da regra — ela
+  # nao tem clausula nenhuma para apertar, e apertar por volume seria trocar um
+  # defeito medido por silencio.
   #
   # SEGUNDO ORACULO INDEPENDENTE, e é a segunda regra do pack a ter um. O
   # analisador CA2002 ("Do not lock on objects with weak identity") acerta nos
@@ -514,14 +638,63 @@ rules:
   # medido na ronda de Java e rejeitado: trocava este falso positivo por um
   # falso negativo em todos os ciclos que leem `a[i]` para escrever noutro
   # lado. A medição é transportada, nao repetida.
+  #
+  # O CICLO SENTINELA, e este foi MEDIDO AQUI em 2026-08-21 pelo eixo 3 da
+  # ablação. O ramo `$I++` desta regra produzia DOIS findings em 11 800
+  # ficheiros de `dotnet/runtime` e os DOIS eram falsos positivos, da mesma
+  # forma — um ciclo que corre de propósito uma posição para lá do fim e cujo
+  # CORPO volta a comparar o indice com o limite antes de indexar:
+  #
+  #   ConfigPathUtility.cs:26   `ch = examine < configPath.Length
+  #                              ? configPath[examine] : SeparatorChar;`
+  #   XslNumber.cs:151          `if (idx == formatString.Length || ...)`
+  #
+  # E o idioma de "mais uma iteração para fechar o ultimo token": a posição
+  # `a.Length` existe para correr o ramo do fim, e nunca chega a indexar. Zero
+  # verdadeiros positivos na população inteira, nao numa amostra dela.
+  #
+  # A EXCLUSAO LIGA O CORPO A `$BODY` e pergunta-lhe se ele compara `$I` com
+  # `$A.Length`. Nao é o aperto rejeitado na ronda de Java — esse exigia que o
+  # corpo INDEXASSE o mesmo array, e trocava um falso positivo por falsos
+  # negativos em todos os ciclos que leem `a[i]` para escrever noutro lado.
+  # Este nao exige indexação nenhuma: exige uma segunda comparação com o mesmo
+  # limite, que é o que distingue um ciclo sentinela de um off-by-one. Um bug
+  # a sério nao volta a testar o limite; se voltasse, nao passava do fim.
+  #
+  # DUAS GRAFIAS DE COMPARACAO, uma por sitio real, e cada uma com a sua
+  # near-miss em misses/ — `SentinelTernary` (`<`, `$I++`) e `SentinelSwitch`
+  # (`==`, `++$I`), cruzadas de propósito para que cada um dos quatro ramos
+  # novos se meça sozinho. As restantes grafias (`$A.Length == $I`,
+  # `$I >= $A.Length`) NAO estao aqui: nao ha um sitio real por trás delas e
+  # uma clausula sem prova le-se DEAD na ablação seguinte.
+  #
+  # O CORPO PASSOU DE `...` A `$BODY`, e isso NAO estreita nada: o `$BODY`
+  # continua a casar as duas grafias de corpo, com e sem chavetas. Medido nas
+  # cinco fixtures de hit, `InBoundsNoBraces` incluida, antes e depois.
+  #
+  # A REGRA DO `.Count` FICA COMO ESTA, e isso é uma decisao e nao um
+  # esquecimento: ela produz ZERO findings nos mesmos 11 800 ficheiros, por
+  # isso nao ha medição nenhuma que sustente a mesma exclusao la. O pack é
+  # aditivo POR MEDICAO — acrescentar a exclusao por simetria seria acrescentar
+  # uma suposição, e o custo dela é um falso negativo que ninguém mediu.
   - id: bugfix-cs-off-by-one-loop-lte-length
     patterns:
       - pattern-either:
-          - pattern: for (var $I = 0; $I <= $A.Length; $I++) ...
-          - pattern: for (var $I = 0; $I <= $A.Length; ++$I) ...
+          - pattern: for (var $I = 0; $I <= $A.Length; $I++) $BODY
+          - pattern: for (var $I = 0; $I <= $A.Length; ++$I) $BODY
       - metavariable-type:
           metavariable: $A
           types: ["$T[]", "string"]
+      - pattern-not:
+          patterns:
+            - pattern-either:
+                - pattern: for (var $I = 0; $I <= $A.Length; $I++) $BODY
+                - pattern: for (var $I = 0; $I <= $A.Length; ++$I) $BODY
+            - metavariable-pattern:
+                metavariable: $BODY
+                pattern-either:
+                  - pattern: $I < $A.Length
+                  - pattern: $I == $A.Length
     message: >-
       Off-by-one. `i <= a.Length` corre uma posição para lá do fim, e o índice
       `a.Length` está sempre fora dos limites — é uma
@@ -704,6 +877,20 @@ rules:
   #
   # O que resolveria era inferir o argumento genérico do recetor, e isso nao
   # está disponível. Fica o falso positivo, declarado.
+  #
+  # E CONFIRMADO EM CODIGO REAL a 2026-08-21, pelo eixo 3: a regra produz UM
+  # finding em 11 800 ficheiros de `dotnet/runtime`, atribuído ao ramo
+  # `FirstOrDefault`, e esse um é precisamente esta classe.
+  # `Microsoft.Extensions.Logging/src/Logger.cs:213` escreve
+  # `logger.ScopeLoggers?.FirstOrDefault().ExternalScopeProvider`, e o
+  # `ScopeLogger` de `LoggerInformation.cs:46` é um `internal readonly struct`.
+  # O `FirstOrDefault()` devolve `default(ScopeLogger)`, nunca null, e a linha
+  # seguinte testa o `ExternalScopeProvider` por nulo. Código correto.
+  #
+  # A população inteira da regra neste corpus é esse um, por isso nao ha aqui
+  # nem prova de precisao nem prova do contrário — ha a confirmação de que o
+  # falso positivo declarado acima é o que a regra encontra quando encontra
+  # alguma coisa. Os ramos `SingleOrDefault` e `LastOrDefault` produzem zero.
   - id: bugfix-cs-null-safety-ordefault-deref
     pattern-either:
       - pattern: $X.FirstOrDefault(...).$M
