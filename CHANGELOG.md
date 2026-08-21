@@ -30,7 +30,80 @@ version bump.
   64 rules, so the report now prints each rule's real-code baseline and marks
   the other 62 `real 0 -- axis 3 vacuous here`.
 
+- **`create_fix_pr` now says what it filtered out.** `severity_min` defaults to
+  `high`, and 1.9.0 took the Semgrep `ERROR` tier — the only tier the parser
+  maps to `high` — from 20 rules of 34 to 4 of 58. A default run against a
+  project whose findings all come from the local packs therefore selected
+  nothing, and said so only by returning `groups: []`, which is exactly what a
+  project with nothing to fix returns. Two new fields close that: `filtered`
+  (structured — `considered`, `candidates`, `excluded`, counts per reason, and
+  a per-tier breakdown of the severity floor's own share) and `filtered_reason`
+  (one line, `null` iff nothing was excluded, on the same contract
+  `deferred_reason` already keeps with `deferred`). Reported whenever
+  *anything* was excluded, not only when everything was — a run that fixes 2 of
+  42 is nearly as opaque as one that fixes 0.
+
+  **No default changed and no rule's severity changed.** The `high` floor is
+  correct: lowering it would open pull requests from rules that are heuristic
+  by construction — `floating-mutation` matches on a method name alone and
+  cannot tell `repo.save()` from Canvas 2D's `ctx.save()`. The silence was the
+  bug.
+
+  The report also corrects a piece of advice this repo had been giving in three
+  places. `create_fix_pr` requires `fix_available`, which for Semgrep means the
+  rule carries a `fix:` — and **no rule in any of the nine packs here does**
+  (measured: `bugfix-js` over its own `hits/` fixtures gives 39 findings across
+  13 files, zero carrying `fix` or `fixed_lines`). So "pass `severity_min:
+  medium` to get the Java/JS/Python pack into a fix PR" was never going to
+  work at any floor. The suggestion is therefore emitted **only** for findings
+  a lower floor genuinely recovers, never for `fix_available: false` ones,
+  where it would have cost a second run to discover it changed nothing.
+  `skills/guardian-bugfix/SKILL.md` is corrected accordingly.
+
+- **`create_github_issues` reports the same two fields**, for the same defect:
+  its `severity_min` also defaults to `high` (a default that was not stated in
+  the schema at all until now) and `max_issues` to 10, and the result listed
+  only the survivors — so a scan of nothing but `medium` findings produced
+  `candidates: 0`, indistinguishable from a clean one. `filtered.by_reason`
+  separates the severity floor from the cap. Neither default changed; both are
+  now documented in the input schema.
+
 ### Fixed
+
+- **`severity_min` was deleting findings, not hiding them.** The shared scan
+  pipeline (`tools/scanToolFactory.ts` — twelve tools) applied the severity
+  floor *before* `bulkInsert`, so a caller who passed `severity_min: "high"`
+  did not merely fail to see the medium findings: they were never written to
+  SQLite. Everything downstream inherited the hole. A `set_baseline` taken
+  from that scan silently omitted them; `diff_scans` compared against data
+  that was never recorded; the next **unfiltered** scan reported them as
+  `new`, which is the opposite of true — they had been there all along; and
+  the trend showed an improvement that never happened. The floor now shapes
+  the response only, and the scan row records the whole tree.
+
+  **The two halves of a `deps` scan already disagreed with each other.**
+  `cves.bulkUpsert` on the very next line ran on the *unfiltered* array, so a
+  medium CVE below the floor kept its `cves` row — and its place in
+  `guardian://cves/active` — while the matching Finding was dropped. Trivy,
+  npm-audit and WPScan all emit the pair. The two are now consistent because
+  both are stored whole.
+
+  Two more instances of the same shape, found while checking the downstream
+  consumers: `audit_executive` persisted its *filtered* aggregate onto the
+  parent `audit` row that `diff_scans` reads, and measured its `deltas`
+  filtered-present against unfiltered-past (so every below-floor finding
+  counted as `resolved`); `scan_skill` filtered before the `bulkInsert` its
+  own comment justifies with "so status / trend / diff / report_export see
+  it". Both now store what they found.
+
+  No default changed — `severity_min` is still include-all on every tool that
+  takes it, and `create_fix_pr` / `create_github_issues` keep their `high`
+  default (those select what to act on; they never persisted a scan).
+
+- **A cache hit ignored the floor the caller had just passed.** Now that the
+  stored set is the whole tree, `severity_min` is re-applied per call, so a
+  cached reply is shaped like a fresh one. Previously the cached path returned
+  whatever the *first* call had stored, in both directions.
 
 - **Ablation axis 3 was measuring noise and charging it to the wrong clause.**
   1.9.0 shipped this as a known defect; it is fixed here. The axis compared

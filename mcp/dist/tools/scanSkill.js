@@ -103,7 +103,12 @@ async function handler(input, ctx, callMeta) {
             analyzeOpts.signal = callMeta.signal;
         const report = await analyzeSkill(ingest.files, analyzeOpts);
         const findings = filterFindings(report.findings, inp.severity_min);
-        // Persist as a scan so status / trend / diff / report_export see it.
+        // Persist as a scan so status / trend / diff / report_export see it —
+        // which is exactly why what is stored is `report.findings`, not the
+        // filtered `findings`. `severity_min` thins THIS reply; a baseline or a
+        // diff taken against this scan must still know what the audit found.
+        // Same rule, same reason as `scanToolFactory.ts`'s own `bulkInsert` —
+        // see the comment there.
         const scanId = randomUUID();
         const treeHash = hashFiles(ingest.files.map((f) => `${f.relPath}:${f.bytes}`));
         ctx.storage.scans.insert({
@@ -111,9 +116,10 @@ async function handler(input, ctx, callMeta) {
             scan_type: 'skill_audit',
             project_path: target,
             tree_hash: treeHash,
+            ...(inp.severity_min !== undefined ? { meta: { severity_min: inp.severity_min } } : {}),
         });
-        if (findings.length > 0) {
-            ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
+        if (report.findings.length > 0) {
+            ctx.storage.findings.bulkInsert(report.findings.map((f) => ({ ...f, scan_id: scanId })));
         }
         const reportPaths = [];
         if (inp.write_reports !== false) {
