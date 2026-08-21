@@ -39062,7 +39062,9 @@ async function runShellScript(options) {
 
 // src/schemas.ts
 var ProjectPath = external_exports.string().min(1).optional().describe("Absolute or relative path to the target project. Defaults to the current working directory.");
-var SeverityMin = external_exports.enum(SEVERITIES).optional().describe("Filter findings to this minimum severity or above. Default: include all.");
+var SeverityMin = external_exports.enum(SEVERITIES).optional().describe(
+  "Filter the RESPONSE to this minimum severity or above. Default: include all. The scan still records every finding it made, so baselines, diff_scans and the trend are unaffected by this floor; `severity_filter` on the result counts what the response left out."
+);
 var Force = external_exports.boolean().optional().default(false).describe("Bypass the tree-hash cache and force a fresh scan.");
 var AutoFix = external_exports.boolean().optional().default(false).describe("Apply scanner auto-fixes where supported (Semgrep --autofix, Trivy where applicable).");
 var AllowDirty = external_exports.boolean().optional().default(false).describe("Allow auto-fix to run even when the working tree has uncommitted changes.");
@@ -39467,6 +39469,44 @@ function getScanLimiter() {
   return limiter;
 }
 
+// src/severity/breakdown.ts
+var HIGHEST_FIRST = [...SEVERITIES].sort(
+  (a2, b) => SEVERITY_ORDER[b] - SEVERITY_ORDER[a2]
+);
+function severityShortfall(items, min) {
+  const by_severity = {
+    critical: 0,
+    high: 0,
+    medium: 0,
+    low: 0,
+    info: 0
+  };
+  const floor = SEVERITY_ORDER[min];
+  let total = 0;
+  for (const item of items) {
+    if (SEVERITY_ORDER[item.severity] >= floor) continue;
+    by_severity[item.severity] += 1;
+    total += 1;
+  }
+  for (const severity of HIGHEST_FIRST) {
+    const count2 = by_severity[severity];
+    if (count2 > 0) {
+      return { total, by_severity, suggested_severity_min: severity, recovered_by_suggestion: count2 };
+    }
+  }
+  return { total, by_severity, suggested_severity_min: null, recovered_by_suggestion: 0 };
+}
+function describeShortfallTiers(shortfall) {
+  return HIGHEST_FIRST.filter((severity) => shortfall.by_severity[severity] > 0).map((severity) => `${shortfall.by_severity[severity]} ${severity}`).join(", ");
+}
+function lowestExcludedSeverity(shortfall) {
+  for (let i2 = HIGHEST_FIRST.length - 1; i2 >= 0; i2 -= 1) {
+    const severity = HIGHEST_FIRST[i2];
+    if (severity !== void 0 && shortfall.by_severity[severity] > 0) return severity;
+  }
+  return null;
+}
+
 // src/severity/filter.ts
 function passes(severity, min) {
   if (!min) return true;
@@ -39717,7 +39757,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
       freshThreshold: fresh
     });
     if (cached2) {
-      return cachedResult(plugin, cached2.scan_id, warnings);
+      return cachedResult(plugin, cached2.scan_id, warnings, input.severity_min);
     }
   }
   const scanId = randomUUID();
@@ -39795,7 +39835,6 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
     cves.push(...out.cves);
   }
   if (invocation.dedupeFindings) findings = invocation.dedupeFindings(findings);
-  findings = filterFindings(findings, input.severity_min);
   if (findings.length > 0) {
     plugin.storage.findings.bulkInsert(
       findings.map((f) => ({ ...f, scan_id: scanId }))
@@ -39813,7 +39852,9 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
   };
   if (invocation.report_paths[0] !== void 0) finalize.report_dir = invocation.report_paths[0];
   if (invocation.error !== void 0) finalize.error = invocation.error;
-  if (invocation.extras !== void 0) finalize.meta = invocation.extras;
+  const meta = { ...invocation.extras ?? {} };
+  if (input.severity_min !== void 0) meta["severity_min"] = input.severity_min;
+  if (Object.keys(meta).length > 0) finalize.meta = meta;
   plugin.storage.scans.finalize(finalize);
   if (status === "cancelled") {
     return failDomain("cancelled", "Scan was cancelled by the host.");
@@ -39825,8 +39866,11 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
       { report_paths: invocation.report_paths }
     );
   }
-  const counts = countBySeverity(findings);
-  const top = topFindings(findings, 10);
+  const visible = filterFindings(findings, input.severity_min);
+  const counts = countBySeverity(visible);
+  const top = topFindings(visible, 10);
+  const floor = severityFloorNotice(findings, input.severity_min, scanId);
+  if (floor?.warning) warnings.push(floor.warning);
   const { coverage, warning: coverageWarning } = assessCoverage(
     config2.scan_type,
     invocation.tools_run,
@@ -39848,7 +39892,8 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
     findings_count_by_severity: counts,
     top_findings: top,
     warnings,
-    coverage
+    coverage,
+    ...floor ? { severity_filter: floor.disclosure } : {}
   };
   const payload = {
     ...result,
@@ -39869,20 +39914,23 @@ function configDriftAdvisory(plugin, projectPath) {
     return null;
   }
 }
-function cachedResult(plugin, scanId, warnings) {
+function cachedResult(plugin, scanId, warnings, severityMin) {
   const record3 = plugin.storage.scans.getById(scanId);
   if (!record3) {
     return failDomain("unknown_scan_id", `Cached scan ${scanId} could not be loaded.`);
   }
-  const findings = plugin.storage.findings.listByScan(scanId);
-  const counts = countBySeverity(findings);
-  const top = topFindings(findings, 10);
+  const stored = plugin.storage.findings.listByScan(scanId);
+  const visible = filterFindings(stored, severityMin);
+  const counts = countBySeverity(visible);
+  const top = topFindings(visible, 10);
+  const floor = severityFloorNotice(stored, severityMin, scanId);
   const { coverage, warning: coverageWarning } = assessCoverage(
     record3.scan_type,
     record3.tools_run,
     record3.missing_tools
   );
-  const allWarnings = coverageWarning ? [coverageWarning, ...warnings] : warnings;
+  const allWarnings = coverageWarning ? [coverageWarning, ...warnings] : [...warnings];
+  if (floor?.warning) allWarnings.push(floor.warning);
   const payload = {
     ...record3,
     cached: true,
@@ -39890,9 +39938,27 @@ function cachedResult(plugin, scanId, warnings) {
     findings_count_by_severity: counts,
     top_findings: top,
     warnings: allWarnings,
-    coverage
+    coverage,
+    ...floor ? { severity_filter: floor.disclosure } : {}
   };
   return { ok: true, ...payload };
+}
+function severityFloorNotice(all, min, scanId) {
+  if (min === void 0) return null;
+  const shortfall = severityShortfall(all, min);
+  const disclosure = {
+    severity_min: min,
+    withheld: shortfall.total,
+    withheld_by_severity: shortfall.by_severity,
+    suggested_severity_min: shortfall.suggested_severity_min,
+    recovered_by_suggestion: shortfall.recovered_by_suggestion
+  };
+  if (shortfall.total === 0) return { disclosure, warning: null };
+  const suggestion = shortfall.suggested_severity_min === null ? "" : ` Pass severity_min "${shortfall.suggested_severity_min}" to see ${shortfall.recovered_by_suggestion} of them.`;
+  return {
+    disclosure,
+    warning: `severity_min "${min}" filtered this response only: ${shortfall.total} finding(s) (${describeShortfallTiers(shortfall)}) are recorded in scan ${scanId} and are not shown here. Baselines and diffs against this scan include them.${suggestion}`
+  };
 }
 function countBySeverity(findings) {
   const out = {
@@ -43685,7 +43751,7 @@ async function handler10(input, ctx) {
   if (previousAudit) {
     const prevFindings = ctx.storage.findings.listByScan(previousAudit);
     const prevFingerprints = new Set(prevFindings.map((f) => f.fingerprint));
-    const curFingerprints = new Set(filteredAggregate.map((f) => f.fingerprint));
+    const curFingerprints = new Set(aggregateFindings.map((f) => f.fingerprint));
     let newCount = 0;
     let resolvedCount = 0;
     for (const fp of curFingerprints) if (!prevFingerprints.has(fp)) newCount += 1;
@@ -43696,11 +43762,11 @@ async function handler10(input, ctx) {
       resolved_findings: resolvedCount
     };
   }
-  if (filteredAggregate.length > 0) {
+  if (aggregateFindings.length > 0) {
     ctx.storage.findings.bulkInsert(
       // Re-key under the audit scan_id; INSERT OR IGNORE handles the cases
       // where a finding already exists on the audit row (unlikely but safe).
-      filteredAggregate.map((f) => ({ ...f, scan_id: auditScanId }))
+      aggregateFindings.map((f) => ({ ...f, scan_id: auditScanId }))
     );
   }
   const aggregateMissing = /* @__PURE__ */ new Set();
@@ -43734,7 +43800,18 @@ async function handler10(input, ctx) {
         ...reason !== void 0 ? { reason } : {}
       };
     }),
-    missing_tools: [...aggregateMissing]
+    missing_tools: [...aggregateMissing],
+    // `sub_scan_ids` was computed above and never written — the insert-time
+    // placeholder `{}` was all the row ever carried. It is written here
+    // because `severity_min` has to go on the same row (the audit findings
+    // are now stored unfiltered, so nothing else distinguishes "found
+    // nothing above high" from "filtered at high") and `finalize`'s
+    // `COALESCE(?, meta)` replaces the whole JSON blob rather than merging
+    // into it.
+    meta: {
+      sub_scan_ids: subScanIds,
+      ...inp.severity_min !== void 0 ? { severity_min: inp.severity_min } : {}
+    }
   });
   return {
     ok: true,
@@ -46127,44 +46204,6 @@ function findLatest(ctx, type) {
   const history = ctx.storage.scans.listHistory(50);
   const row = history.find((s) => s.scan_type === type && s.status === "completed");
   return row ? ctx.storage.scans.getById(row.scan_id) : null;
-}
-
-// src/severity/breakdown.ts
-var HIGHEST_FIRST = [...SEVERITIES].sort(
-  (a2, b) => SEVERITY_ORDER[b] - SEVERITY_ORDER[a2]
-);
-function severityShortfall(items, min) {
-  const by_severity = {
-    critical: 0,
-    high: 0,
-    medium: 0,
-    low: 0,
-    info: 0
-  };
-  const floor = SEVERITY_ORDER[min];
-  let total = 0;
-  for (const item of items) {
-    if (SEVERITY_ORDER[item.severity] >= floor) continue;
-    by_severity[item.severity] += 1;
-    total += 1;
-  }
-  for (const severity of HIGHEST_FIRST) {
-    const count2 = by_severity[severity];
-    if (count2 > 0) {
-      return { total, by_severity, suggested_severity_min: severity, recovered_by_suggestion: count2 };
-    }
-  }
-  return { total, by_severity, suggested_severity_min: null, recovered_by_suggestion: 0 };
-}
-function describeShortfallTiers(shortfall) {
-  return HIGHEST_FIRST.filter((severity) => shortfall.by_severity[severity] > 0).map((severity) => `${shortfall.by_severity[severity]} ${severity}`).join(", ");
-}
-function lowestExcludedSeverity(shortfall) {
-  for (let i2 = HIGHEST_FIRST.length - 1; i2 >= 0; i2 -= 1) {
-    const severity = HIGHEST_FIRST[i2];
-    if (severity !== void 0 && shortfall.by_severity[severity] > 0) return severity;
-  }
-  return null;
 }
 
 // src/tools/createGithubIssues.ts
@@ -49915,10 +49954,13 @@ async function handler38(input, ctx, callMeta) {
       scan_id: scanId,
       scan_type: "skill_audit",
       project_path: target,
-      tree_hash: treeHash
+      tree_hash: treeHash,
+      ...inp.severity_min !== void 0 ? { meta: { severity_min: inp.severity_min } } : {}
     });
-    if (findings.length > 0) {
-      ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
+    if (report.findings.length > 0) {
+      ctx.storage.findings.bulkInsert(
+        report.findings.map((f) => ({ ...f, scan_id: scanId }))
+      );
     }
     const reportPaths = [];
     if (inp.write_reports !== false) {

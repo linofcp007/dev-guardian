@@ -50,6 +50,41 @@ version bump.
 
 ### Fixed
 
+- **`severity_min` was deleting findings, not hiding them.** The shared scan
+  pipeline (`tools/scanToolFactory.ts` — twelve tools) applied the severity
+  floor *before* `bulkInsert`, so a caller who passed `severity_min: "high"`
+  did not merely fail to see the medium findings: they were never written to
+  SQLite. Everything downstream inherited the hole. A `set_baseline` taken
+  from that scan silently omitted them; `diff_scans` compared against data
+  that was never recorded; the next **unfiltered** scan reported them as
+  `new`, which is the opposite of true — they had been there all along; and
+  the trend showed an improvement that never happened. The floor now shapes
+  the response only, and the scan row records the whole tree.
+
+  **The two halves of a `deps` scan already disagreed with each other.**
+  `cves.bulkUpsert` on the very next line ran on the *unfiltered* array, so a
+  medium CVE below the floor kept its `cves` row — and its place in
+  `guardian://cves/active` — while the matching Finding was dropped. Trivy,
+  npm-audit and WPScan all emit the pair. The two are now consistent because
+  both are stored whole.
+
+  Two more instances of the same shape, found while checking the downstream
+  consumers: `audit_executive` persisted its *filtered* aggregate onto the
+  parent `audit` row that `diff_scans` reads, and measured its `deltas`
+  filtered-present against unfiltered-past (so every below-floor finding
+  counted as `resolved`); `scan_skill` filtered before the `bulkInsert` its
+  own comment justifies with "so status / trend / diff / report_export see
+  it". Both now store what they found.
+
+  No default changed — `severity_min` is still include-all on every tool that
+  takes it, and `create_fix_pr` / `create_github_issues` keep their `high`
+  default (those select what to act on; they never persisted a scan).
+
+- **A cache hit ignored the floor the caller had just passed.** Now that the
+  stored set is the whole tree, `severity_min` is re-applied per call, so a
+  cached reply is shaped like a fresh one. Previously the cached path returned
+  whatever the *first* call had stored, in both directions.
+
 - **Ablation axis 3 was measuring noise and charging it to the wrong clause.**
   1.9.0 shipped this as a known defect; it is fixed here. The axis compared
   whole-corpus totals across separate scans, and on `dotnet/runtime` that made

@@ -15,7 +15,10 @@ export const ProjectPath = z
 export const SeverityMin = z
     .enum(SEVERITIES)
     .optional()
-    .describe('Filter findings to this minimum severity or above. Default: include all.');
+    .describe('Filter the RESPONSE to this minimum severity or above. Default: include all. ' +
+    'The scan still records every finding it made, so baselines, diff_scans and the ' +
+    'trend are unaffected by this floor; `severity_filter` on the result counts what ' +
+    'the response left out.');
 export const Force = z
     .boolean()
     .optional()
