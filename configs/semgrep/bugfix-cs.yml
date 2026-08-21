@@ -672,6 +672,25 @@ rules:
   # continua a casar as duas grafias de corpo, com e sem chavetas. Medido nas
   # cinco fixtures de hit, `InBoundsNoBraces` incluida, antes e depois.
   #
+  # E DENTRO DO `pattern-not` A METAVARIAVEL CHAMA-SE `$GUARDED`, e a troca de
+  # nome nao é estetica. A ablação IDENTIFICA cada clausula pelo TEXTO do
+  # corpo, de propósito — o CLAUDE.md conta a ronda que foi deitada fora porque
+  # 86 primeiras linhas iguais tornaram um verdicto inatribuivel. Com `$BODY`
+  # nos dois sitios, o `pattern-not` repete letra por letra os dois padrões
+  # positivos, e o relatório saía com QUATRO linhas e DUAS hashes: medido, as
+  # entradas [22]/[26] e [23]/[27] da corrida de 50 clausulas. Os dois pares
+  # deram `ok`, por isso nada ficou mal decidido — mas um FLAG numa delas nao
+  # se conseguiria atribuir. `$GUARDED` desfaz o empate e nao muda o casamento:
+  # o `pattern-not` casa o MESMO no do ciclo, o `$I` e o `$A` continuam a
+  # unificar com os de fora, e o corpo é o mesmo no com outro nome. Verificado
+  # nas fixtures, 5 hits e 0 misses antes e depois.
+  #
+  # A REPETICAO EM SI NAO SE EVITA, e foi medido. Duas formulações sem
+  # repeticao nenhuma — `pattern-not` DENTRO do `metavariable-pattern`, com e
+  # sem ancora positiva — nao excluem coisa nenhuma: ali o `pattern-not`
+  # significa "o no ligado nao E exatamente isto", e nao "nao CONTEM isto", por
+  # isso os dois ciclos sentinela continuavam a disparar.
+  #
   # A REGRA DO `.Count` FICA COMO ESTA, e isso é uma decisao e nao um
   # esquecimento: ela produz ZERO findings nos mesmos 11 800 ficheiros, por
   # isso nao ha medição nenhuma que sustente a mesma exclusao la. O pack é
@@ -688,10 +707,10 @@ rules:
       - pattern-not:
           patterns:
             - pattern-either:
-                - pattern: for (var $I = 0; $I <= $A.Length; $I++) $BODY
-                - pattern: for (var $I = 0; $I <= $A.Length; ++$I) $BODY
+                - pattern: for (var $I = 0; $I <= $A.Length; $I++) $GUARDED
+                - pattern: for (var $I = 0; $I <= $A.Length; ++$I) $GUARDED
             - metavariable-pattern:
-                metavariable: $BODY
+                metavariable: $GUARDED
                 pattern-either:
                   - pattern: $I < $A.Length
                   - pattern: $I == $A.Length

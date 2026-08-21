@@ -798,10 +798,46 @@ to bind. That is not a narrowing: `$BODY` still matches both the braced and the
 braceless spelling, verified on all five hit fixtures including
 `InBoundsNoBraces`.
 
+**And the exclusion's body metavariable is `$GUARDED`, not `$BODY`, for a
+reason the harness surfaced.** The ablation identifies a clause by the **text**
+of its body — deliberately, because CLAUDE.md records a run that had to be
+thrown away when 86 identical first lines made a verdict unattributable. With
+`$BODY` on both sides, the `pattern-not` repeats the two positive patterns
+character for character, and the 50-clause report came out with **four rows
+carrying two hashes**: `[22]`/`[26]` and `[23]`/`[27]`. All four read `ok`, so
+nothing was mis-decided — but a `FLAG` on one of them could not have been
+attributed to either. Renaming the inner binding breaks the tie without
+touching the match: the `pattern-not` still matches the same loop node, `$I`
+and `$A` still unify outward, and the body is the same node under another name.
+Re-verified end to end — `semgrep --validate` 11 rules, `hits/` 74 with
+`lte-length` at the same five sites, `misses/` 0, the six-way mutation table
+unchanged, and the corpus still 796 with `lte-length` at 0.
+
+**The repetition itself cannot be removed**, which was measured rather than
+assumed. Two formulations with no repetition at all — `pattern-not` *inside*
+the `metavariable-pattern`, with and without a positive anchor — exclude
+nothing: there `pattern-not` means "the bound node **is not** exactly this",
+not "does not **contain** this", and both sentinels went on firing.
+
 **`loop-lte-count` is deliberately left alone.** It produces zero findings on
 the same 11 800 files, so there is no measurement behind the same exclusion
 there. This pack is additive **by measurement**; adding it for symmetry would
 add a supposition whose cost is a false negative nobody has measured.
+
+### The ablation re-run on the fixed pack
+
+50 clauses (up from 44), and the numbers say the fix cost nothing:
+
+```text
+axis 0 fires on hits/              11/11 rules fire, 0 FIRING ON NOTHING
+axis 1 live                        50/50 clauses pass, 0 DEAD
+axis 2 keeps true positives        50/50 clauses pass, 0 SUPPRESSING
+axis 3 no rise in real-code count  40/50 clauses pass, 10 RAISING the count
+```
+
+All six new clauses read `ok live keeps-tp no-real-rise`. The surviving ten are
+the original eleven minus `off-by-one-lte-length`'s `$I++` branch, which is the
+one the fix retired — every other verdict is byte-for-byte what it was.
 
 ### Whole-pack counts on `dotnet/runtime`, before and after
 
