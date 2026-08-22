@@ -1,9 +1,37 @@
 # Go bug-finding Semgrep rules — Implementation Plan
 
+<!-- The Go fixtures quoted below are gofmt output, which is tab-indented by
+     definition. Respacing them would misrecord what was written, so MD010 is
+     switched off for this file instead of the code being altered. -->
+<!-- markdownlint-disable MD010 -->
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship `configs/semgrep/bugfix-go.yml` — ten hand-authored Semgrep rules
 covering all six `bug_hunt` bug subcategories for Go.
+
+> **Boxes reconciled against the code on 2026-08-22, not ticked during
+> execution.** Nothing here was ticked while the work was done; every box was
+> checked afterwards against the pack, the fixtures, the harness and the git
+> history, so the ticks are an audit. Steps whose only product was a transient
+> run — "Expected: FAIL", a mutation pasted into a task report — are ticked on
+> the artefact they were meant to leave behind (the clause, the discriminating
+> fixture, the assertion, the commit), never on the run itself, which leaves no
+> trace.
+>
+> **This plan is not current, and is kept as the record of what was intended.**
+> The pack shipped ten rules and has **nine**: `edge-case-append-discarded` was
+> deleted because its hit fixture was not valid Go, so its true-positive set was
+> empty in any project that compiles — see the Status line of
+> [the design of record](../specs/2026-08-18-bugfix-rules-go-design.md). The
+> audit round of 2026-08-20 then rewrote most of the rules quoted below
+> (`err-discarded`, `err-blank-assign`, `body-not-closed`, `lock-without-defer`,
+> `nil-map-write`), deleted eight clauses the ablation harness measured as dead,
+> and dropped every tier to WARNING except `error-handling-empty-err-block` — so
+> the `severity:` lines below are as-planned, not as-shipped. The pack was also
+> registered with the ablation harness and given an opt-in axis-3 corpus
+> (`GUARDIAN_GO_SRC`, `mcp/test/ablate/packs.ts`), neither of which existed when
+> this was written.
 
 **Architecture:** A plain Semgrep YAML rule file beside `bugfix-js.yml` and
 `bugfix-py.yml`, with a hit fixture and a near-miss fixture per rule, and an
@@ -64,6 +92,7 @@ it, especially §8, which records what measurement changed and which two
 ### Task 1: Rule file, test harness, and the three `error_handling` rules
 
 **Files:**
+
 - Create: `configs/semgrep/bugfix-go.yml`
 - Create: `mcp/test/fixtures/bugfix-go/hits/err_discarded.go`
 - Create: `mcp/test/fixtures/bugfix-go/misses/err_discarded.go`
@@ -74,6 +103,7 @@ it, especially §8, which records what measurement changed and which two
 - Create: `mcp/test/integration/bugfixRulesGo.test.ts`
 
 **Interfaces:**
+
 - Consumes: `mapSubcategory(ruleId: string, existing: string | undefined): string | undefined`
   from `../../src/tools/bugHunt.js`; `makeTempDir(prefix: string): string` and
   `cleanupTempDirs(): void` from `../helpers/tempDir.js`.
@@ -85,7 +115,7 @@ it, especially §8, which records what measurement changed and which two
   `run(config: string, dir: string): SemgrepRun` helper returning
   `{ rows: SemgrepResult[]; scanned: number }`.
 
-- [ ] **Step 1: Write the three hit fixtures**
+- [x] **Step 1: Write the three hit fixtures**
 
 `mcp/test/fixtures/bugfix-go/hits/err_discarded.go`:
 
@@ -126,7 +156,7 @@ func swallowError(path string) {
 }
 ```
 
-- [ ] **Step 2: Write the three near-miss fixtures**
+- [x] **Step 2: Write the three near-miss fixtures**
 
 `mcp/test/fixtures/bugfix-go/misses/err_discarded.go`. The last three functions
 are the load-bearing part: Go uses `x, _ :=` idiomatically where the discarded
@@ -191,7 +221,7 @@ func handleError(path string) error {
 }
 ```
 
-- [ ] **Step 3: Write the test harness with only the Task 1 expectations**
+- [x] **Step 3: Write the test harness with only the Task 1 expectations**
 
 Create `mcp/test/integration/bugfixRulesGo.test.ts`. Read
 `mcp/test/integration/bugfixRulesPy.test.ts` first — this mirrors it, and its
@@ -366,7 +396,7 @@ describe('every rule id classifies as its own class', () => {
 });
 ```
 
-- [ ] **Step 4: Run the test to verify it fails**
+- [x] **Step 4: Run the test to verify it fails**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -377,7 +407,7 @@ npx vitest run test/integration/bugfixRulesGo.test.ts
 
 Expected: FAIL — `configs/semgrep/bugfix-go.yml` does not exist yet.
 
-- [ ] **Step 5: Write the rule file with the three `error_handling` rules**
+- [x] **Step 5: Write the rule file with the three `error_handling` rules**
 
 ```yaml
 # dev-guardian Semgrep config bugfix-go.
@@ -437,7 +467,7 @@ rules:
     languages: [go]
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -449,7 +479,7 @@ npx vitest run test/integration/bugfixRulesGo.test.ts
 Expected: PASS, **no skips**. Each of the three hit fixtures at count 1;
 `scanned` equal to 3 on both sides; zero findings across the near-misses.
 
-- [ ] **Step 7: Prove the near-miss half is real, not vacuous**
+- [x] **Step 7: Prove the near-miss half is real, not vacuous**
 
 Two mutations, both required, both pasted into the report:
 
@@ -464,7 +494,7 @@ Two mutations, both required, both pasted into the report:
 The second is the one that matters: it demonstrates the three idiomatic
 near-miss functions are load-bearing rather than decorative.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add configs/semgrep/bugfix-go.yml mcp/test/fixtures/bugfix-go mcp/test/integration/bugfixRulesGo.test.ts
@@ -476,6 +506,7 @@ git commit -m "feat(bugfix-rules): the three Go error_handling rules"
 ### Task 2: `null_safety` (1 rule) and `off_by_one` (1 rule)
 
 **Files:**
+
 - Modify: `configs/semgrep/bugfix-go.yml` (append two rules)
 - Create: `mcp/test/fixtures/bugfix-go/hits/type_assert_no_ok.go`
 - Create: `mcp/test/fixtures/bugfix-go/misses/type_assert_no_ok.go`
@@ -484,12 +515,13 @@ git commit -m "feat(bugfix-rules): the three Go error_handling rules"
 - Modify: `mcp/test/integration/bugfixRulesGo.test.ts`
 
 **Interfaces:**
+
 - Consumes: `configs/semgrep/bugfix-go.yml` holding the three `error_handling`
   rules; the test's `EXPECTED_HITS_BY_FILE` and `EXPECTED_CLASS` maps.
 - Produces: ids `bugfix-go-null-safety-type-assert-no-ok` and
   `bugfix-go-off-by-one-loop-lte-len`.
 
-- [ ] **Step 1: Write the two hit fixtures**
+- [x] **Step 1: Write the two hit fixtures**
 
 `mcp/test/fixtures/bugfix-go/hits/type_assert_no_ok.go`:
 
@@ -515,7 +547,7 @@ func sumPastEnd(xs []int) int {
 }
 ```
 
-- [ ] **Step 2: Write the two near-miss fixtures**
+- [x] **Step 2: Write the two near-miss fixtures**
 
 `mcp/test/fixtures/bugfix-go/misses/type_assert_no_ok.go`. Both type-switch
 forms are included because they *look* like they need excluding and do not —
@@ -571,7 +603,7 @@ func sumRange(xs []int) int {
 }
 ```
 
-- [ ] **Step 3: Register the expectations**
+- [x] **Step 3: Register the expectations**
 
 Add to `EXPECTED_HITS_BY_FILE`:
 
@@ -587,7 +619,7 @@ Add to `EXPECTED_CLASS`:
   'bugfix-go-off-by-one-loop-lte-len': 'off_by_one',
 ```
 
-- [ ] **Step 4: Run the test to verify it fails**
+- [x] **Step 4: Run the test to verify it fails**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -599,7 +631,7 @@ npx vitest run test/integration/bugfixRulesGo.test.ts
 Expected: FAIL — the two new hit fixtures produce no findings, and
 `mapSubcategory` is asserted for ids no rule defines.
 
-- [ ] **Step 5: Append the two rules**
+- [x] **Step 5: Append the two rules**
 
 ```yaml
   # Duas cláusulas, e mais nenhuma. A exclusão do type switch parece
@@ -633,7 +665,7 @@ Expected: FAIL — the two new hit fixtures produce no findings, and
     languages: [go]
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -645,7 +677,13 @@ npx vitest run test/integration/bugfixRulesGo.test.ts
 Expected: PASS, no skips. Five hit fixtures, five near-misses, `scanned` = 5
 on both sides.
 
-- [ ] **Step 7: Prove the type-switch near-misses are not decorative**
+- [x] **Step 7: Prove the type-switch near-misses are not decorative**
+
+> **Half superseded.** The comma-ok exclusions are load-bearing, but not
+> independently: the ablation harness later read the two `pattern-not-inside`
+> clauses as a **mutually redundant pair** — each alone measured DEAD, removing
+> both was a regression — and one of them was deleted. That pattern is now
+> written into `CLAUDE.md`; a two-clause mutation cannot see it.
 
 `switchPlain` and `switchBound` are in the fixture precisely because the design
 claims they need no exclusion. Verify that claim rather than trusting it:
@@ -656,7 +694,7 @@ are load-bearing — while `switchPlain` and `switchBound` must stay silent,
 proving the type-switch exclusion really is unnecessary. Restore and confirm
 GREEN. Paste both outputs.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add configs/semgrep/bugfix-go.yml mcp/test/fixtures/bugfix-go mcp/test/integration/bugfixRulesGo.test.ts
@@ -668,6 +706,7 @@ git commit -m "feat(bugfix-rules): Go null_safety and off_by_one rules"
 ### Task 3: `memory_leak` (2 rules)
 
 **Files:**
+
 - Modify: `configs/semgrep/bugfix-go.yml` (append two rules)
 - Create: `mcp/test/fixtures/bugfix-go/hits/body_not_closed.go`
 - Create: `mcp/test/fixtures/bugfix-go/misses/body_not_closed.go`
@@ -676,11 +715,12 @@ git commit -m "feat(bugfix-rules): Go null_safety and off_by_one rules"
 - Modify: `mcp/test/integration/bugfixRulesGo.test.ts`
 
 **Interfaces:**
+
 - Consumes: `configs/semgrep/bugfix-go.yml` holding five rules; the test's two maps.
 - Produces: ids `bugfix-go-memory-leak-body-not-closed` and
   `bugfix-go-memory-leak-ticker-not-stopped`.
 
-- [ ] **Step 1: Write the two hit fixtures**
+- [x] **Step 1: Write the two hit fixtures**
 
 `mcp/test/fixtures/bugfix-go/hits/body_not_closed.go`:
 
@@ -714,7 +754,7 @@ func tickLeaking() {
 }
 ```
 
-- [ ] **Step 2: Write the two near-miss fixtures**
+- [x] **Step 2: Write the two near-miss fixtures**
 
 `mcp/test/fixtures/bugfix-go/misses/body_not_closed.go`:
 
@@ -749,7 +789,7 @@ func tickStopping() {
 }
 ```
 
-- [ ] **Step 3: Register the expectations**
+- [x] **Step 3: Register the expectations**
 
 Add to `EXPECTED_HITS_BY_FILE`:
 
@@ -765,7 +805,7 @@ Add to `EXPECTED_CLASS`:
   'bugfix-go-memory-leak-ticker-not-stopped': 'memory_leak',
 ```
 
-- [ ] **Step 4: Run the test to verify it fails**
+- [x] **Step 4: Run the test to verify it fails**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -776,7 +816,7 @@ npx vitest run test/integration/bugfixRulesGo.test.ts
 
 Expected: FAIL — the two new hit fixtures produce no findings.
 
-- [ ] **Step 5: Append the two rules**
+- [x] **Step 5: Append the two rules**
 
 Both anchor on the single call and exclude with `pattern-not-inside` over the
 sequence. The obvious alternative — a positive `pattern` ending in `...` with a
@@ -814,7 +854,7 @@ only one of them.
     languages: [go]
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -825,7 +865,7 @@ npx vitest run test/integration/bugfixRulesGo.test.ts
 
 Expected: PASS, no skips. Seven hit fixtures, seven near-misses.
 
-- [ ] **Step 7: Prove the exclusion operator choice is load-bearing**
+- [x] **Step 7: Prove the exclusion operator choice is load-bearing**
 
 Temporarily rewrite `body-not-closed` in the shape that was measured to fail —
 
@@ -846,7 +886,7 @@ multiple findings on the hit fixture rather than one. Then restore the shipped
 form and show GREEN. Paste both outputs. This is the trap the spec's §8 records,
 and the near-miss is the only thing standing between it and shipping.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add configs/semgrep/bugfix-go.yml mcp/test/fixtures/bugfix-go mcp/test/integration/bugfixRulesGo.test.ts
@@ -858,6 +898,7 @@ git commit -m "feat(bugfix-rules): Go memory_leak rules"
 ### Task 4: `race_condition` (1), `edge_case` (2), and the no-duplication test
 
 **Files:**
+
 - Modify: `configs/semgrep/bugfix-go.yml` (append three rules)
 - Create: `mcp/test/fixtures/bugfix-go/hits/lock_without_defer.go`
 - Create: `mcp/test/fixtures/bugfix-go/misses/lock_without_defer.go`
@@ -868,12 +909,20 @@ git commit -m "feat(bugfix-rules): Go memory_leak rules"
 - Modify: `mcp/test/integration/bugfixRulesGo.test.ts`
 
 **Interfaces:**
+
 - Consumes: `configs/semgrep/bugfix-go.yml` holding seven rules; the test's
   `run(config, dir)` helper, whose first parameter is the config precisely so a
   registry pack name can be passed instead of the local file.
 - Produces: the last three ids, and the no-duplication test.
 
-- [ ] **Step 1: Write the three hit fixtures**
+- [x] **Step 1: Write the three hit fixtures**
+
+> **One fixture of three is gone.** `lock_without_defer.go` and
+> `nil_map_write.go` are still there. `hits/append_discarded.go` was deleted
+> with its rule: `append(xs, 1)` in statement position is not valid Go — the
+> spec forbids it and the compiler rejects it — so the fixture did not compile
+> and the rule's true-positive set was empty in any project that does. See the
+> Status line of the design of record.
 
 `mcp/test/fixtures/bugfix-go/hits/lock_without_defer.go` — the early `return`
 is the point: it skips the `Unlock` entirely.
@@ -916,7 +965,7 @@ func writeToNilMap() {
 }
 ```
 
-- [ ] **Step 2: Write the three near-miss fixtures**
+- [x] **Step 2: Write the three near-miss fixtures**
 
 `mcp/test/fixtures/bugfix-go/misses/lock_without_defer.go`:
 
@@ -986,7 +1035,7 @@ func readFromNilMapIsFine() int {
 }
 ```
 
-- [ ] **Step 3: Register the expectations**
+- [x] **Step 3: Register the expectations**
 
 Add to `EXPECTED_HITS_BY_FILE`:
 
@@ -1004,7 +1053,7 @@ Add to `EXPECTED_CLASS`:
   'bugfix-go-edge-case-nil-map-write': 'edge_case',
 ```
 
-- [ ] **Step 4: Write the no-duplication test**
+- [x] **Step 4: Write the no-duplication test**
 
 Append this `describe` block to `mcp/test/integration/bugfixRulesGo.test.ts`.
 
@@ -1073,7 +1122,7 @@ func widenPermissions(path string) error {
 }
 ```
 
-- [ ] **Step 5: Run the test to verify it fails**
+- [x] **Step 5: Run the test to verify it fails**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -1084,7 +1133,12 @@ npx vitest run test/integration/bugfixRulesGo.test.ts
 
 Expected: FAIL — the three new hit fixtures produce no findings yet.
 
-- [ ] **Step 6: Append the three rules**
+- [x] **Step 6: Append the three rules**
+
+> **Two of the three still ship.** `edge-case-append-discarded` was deleted;
+> `lock-without-defer` and `nil-map-write` were both rewritten in the
+> 2026-08-20 audit round, and the YAML below is the original, not the shipped
+> form.
 
 ```yaml
   - id: bugfix-go-race-condition-lock-without-defer
@@ -1139,7 +1193,7 @@ Expected: FAIL — the three new hit fixtures produce no findings yet.
     languages: [go]
 ```
 
-- [ ] **Step 7: Run the test to verify it passes**
+- [x] **Step 7: Run the test to verify it passes**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -1152,7 +1206,7 @@ Expected: PASS, no skips. **Ten hit fixtures totalling 10 findings** (one each),
 ten near-misses with zero, `scanned` = 10 on both sides, and `p/r2c-bug-scan`
 silent on every hit fixture while firing on the control file.
 
-- [ ] **Step 8: Run the full suite**
+- [x] **Step 8: Run the full suite**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -1164,7 +1218,7 @@ npm test
 
 Expected: lint exit 0; suite green with **0 skipped**. Report both counts.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add configs/semgrep/bugfix-go.yml mcp/test/fixtures/bugfix-go mcp/test/integration/bugfixRulesGo.test.ts
@@ -1176,6 +1230,7 @@ git commit -m "feat(bugfix-rules): Go race_condition and edge_case rules, and th
 ### Task 5: Documentation
 
 **Files:**
+
 - Modify: `README.md` (three language sections: EN, PT, ES)
 - Modify: `skills/guardian-bugfix/SKILL.md`
 - Modify: `mcp/src/tools/bugHunt.ts` (tool `title` and `description`, header comment)
@@ -1183,11 +1238,17 @@ git commit -m "feat(bugfix-rules): Go race_condition and edge_case rules, and th
 - Modify: `mcp/dist/` (rebuilt, staged in the same commit)
 
 **Interfaces:**
+
 - Consumes: nothing at runtime. Every statement must match what Tasks 1-4
   shipped.
 - Produces: no code interface.
 
-- [ ] **Step 1: Verify the rule counts before writing any number**
+- [x] **Step 1: Verify the rule counts before writing any number**
+
+> **The numbers this step prints have moved.** It expected 14, 10, 10; the
+> answer today is 13, 10, 9, one rule deleted from each of the JS/TS and Go
+> packs. The step itself says to use what the command prints rather than the
+> plan, which is why it survives the change.
 
 ```bash
 grep -c "^  - id:" configs/semgrep/bugfix-js.yml configs/semgrep/bugfix-py.yml configs/semgrep/bugfix-go.yml
@@ -1196,7 +1257,7 @@ grep -c "^  - id:" configs/semgrep/bugfix-js.yml configs/semgrep/bugfix-py.yml c
 Expected: 14, 10, 10. Use the numbers this prints, not the numbers in this
 plan — if they disagree, the plan is wrong and you should say so in your report.
 
-- [ ] **Step 2: Update the three README language sections**
+- [x] **Step 2: Update the three README language sections**
 
 Each `bug_hunt` bullet currently ends with a claim that only JS/TS and Python
 have local packs. In each of the three sections, add the Go pack and **its
@@ -1219,7 +1280,7 @@ Spanish, in the ES section:
 Go también tiene el suyo — `configs/semgrep/bugfix-go.yml`, diez reglas hand-authored en las mismas seis clases, y Go es el lenguaje donde el pack del registro deja el mayor hueco: `p/r2c-bug-scan` trae 5 reglas Go y solo 2 caen en una clase de bug, ambas de integer overflow, así que `error_handling` — en el lenguaje donde `if err != nil` ES el modelo de errores — `race_condition`, `null_safety`, `memory_leak` y `edge_case` estaban todas vacías. Sus carencias se dicen en vez de insinuarse: **no hay regla para goroutines colgadas** ni **regla para la captura de la variable del bucle** — esa se construyó, se verificó funcionando y luego se excluyó deliberadamente, porque Go 1.22 pasó a dar a cada iteración su propia variable y Semgrep no lee el `go.mod`, así que en cualquier módulo moderno acusaría código correcto; `body-not-closed` solo reconoce `http.Get`, así que `http.Post` y `client.Do(req)` filtran igual y no se cubren; `lock-without-defer` acepta cualquier `defer mu.Unlock()` en el bloque, así que no distingue un unlock bien colocado de uno diferido en la rama equivocada; y `err-blank-assign` dispara en descartes deliberados como `_ = os.Remove(tmp)` en una limpieza, y por eso es `WARNING`. **JS/TS, Python y Go**: los demás lenguajes aún no tienen pack local.
 ```
 
-- [ ] **Step 3: Update the guardian-bugfix skill**
+- [x] **Step 3: Update the guardian-bugfix skill**
 
 Add after the Python paragraph in `skills/guardian-bugfix/SKILL.md`:
 
@@ -1241,14 +1302,14 @@ Semgrep não lê o `go.mod` para saber que versão o módulo declara — em cód
 moderno acusaria a forma correta. Para essas duas classes, leia o código.
 ```
 
-- [ ] **Step 4: Update the `bug_hunt` tool title and description**
+- [x] **Step 4: Update the `bug_hunt` tool title and description**
 
 In `mcp/src/tools/bugHunt.ts`, the registered tool's `title` and `description`
 name only the JS/TS and Python packs. Update both to name all three, and
 update the file's header comment the same way. Keep the counts consistent with
 what Step 1 printed.
 
-- [ ] **Step 5: Add the CHANGELOG entry**
+- [x] **Step 5: Add the CHANGELOG entry**
 
 Add a new `## [Unreleased]` section at the top of `CHANGELOG.md`:
 
@@ -1282,7 +1343,7 @@ Add a new `## [Unreleased]` section at the top of `CHANGELOG.md`:
 - `err-blank-assign` fires on deliberate discards, which is why it is `WARNING`.
 ```
 
-- [ ] **Step 6: Build, lint, test, and verify markdownlint**
+- [x] **Step 6: Build, lint, test, and verify markdownlint**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -1304,7 +1365,7 @@ issues. `mcp/src/tools/bugHunt.ts` changed, so `mcp/dist/` MUST be rebuilt and
 staged in this commit — the repo is the distribution and Claude Code runs
 `mcp/dist/server.js` directly.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add README.md skills/guardian-bugfix/SKILL.md mcp/src/tools/bugHunt.ts CHANGELOG.md mcp/dist

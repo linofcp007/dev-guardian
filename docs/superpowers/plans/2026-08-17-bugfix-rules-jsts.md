@@ -4,6 +4,27 @@
 
 **Goal:** Fourteen locally-authored Semgrep rules that find JS/TS implementation bugs in the six classes that are expressible, loaded by `bug_hunt` by default, each proven by a fixture that makes it fire and a near-miss that must not.
 
+> **Boxes reconciled against the code on 2026-08-22, not ticked during
+> execution.** Nothing here was ticked while the work was done; every box was
+> checked afterwards against the pack, the fixtures, the harness and the git
+> history, so the ticks are an audit. Steps whose only product was a transient
+> run — "Expected: FAIL", a mutation pasted into a task report — are ticked on
+> the artefact they were meant to leave behind (the rule, the fixture, the
+> assertion, the commit), never on the run itself, which leaves no trace.
+>
+> **This plan is not current, and is kept as the record of what was intended.**
+> The pack shipped fourteen rules and has **thirteen**:
+> `error-handling-catch-returns-null` was deleted in the audit wave of
+> 2026-08-20 for having no measurable true-positive rate, and its fixture went
+> with it. The deletion is recorded in the pack header
+> (`configs/semgrep/bugfix-js.yml`, "DELETED (self-scan)") and in `CHANGELOG.md`;
+> [the design of record](../specs/2026-08-17-bugfix-rules-jsts-design.md) still
+> describes the rule and was never amended. The same wave dropped every tier in
+> the pack to WARNING or INFO except `off-by-one-index-at-length`, so the
+> `severity: ERROR` lines below are as-planned, not as-shipped, and it added the
+> real-code ablation axis (`mcp/src` as the corpus) that caught
+> `unchecked-match` at 0 → 13 false positives.
+
 **Architecture:** One YAML file, `configs/semgrep/bugfix-js.yml`, in the style of the `base.yml` beside it. `bug_hunt` passes it as an additional absolute-path `--config`. Fixtures live in pairs under `mcp/test/fixtures/bugfix-js/`, and one test runs Semgrep against them asserting the **exact set** of rule ids that fire.
 
 **Tech Stack:** Semgrep OSS (syntactic patterns; no taint mode required), TypeScript, vitest. No new runtime dependencies.
@@ -62,7 +83,7 @@ That is deliberate. Writing an untested Semgrep pattern into a plan as though it
 
 - Produces: the rule ids `bugfix-js-error-handling-empty-catch`, `bugfix-js-off-by-one-loop-lte-length`, `bugfix-js-race-condition-floating-mutation`, and the fixture-directory layout every later task extends.
 
-- [ ] **Step 1: Write the fixture pairs first**
+- [x] **Step 1: Write the fixture pairs first**
 
 The hits, `mcp/test/fixtures/bugfix-js/hits/error-handling.ts`:
 
@@ -129,7 +150,7 @@ export async function deliberate(logger: { write(v: string): Promise<void> }): P
 }
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 `mcp/test/integration/bugfixRulesJs.test.ts`:
 
@@ -197,12 +218,17 @@ describe('bugfix-js rules', () => {
 });
 ```
 
-- [ ] **Step 3: Run to verify it fails**
+- [x] **Step 3: Run to verify it fails**
 
 Run (PowerShell): `cd mcp; npx vitest run test/integration/bugfixRulesJs.test.ts`
 Expected: FAIL — the rule file does not exist.
 
-- [ ] **Step 4: Write the three rules**
+- [x] **Step 4: Write the three rules**
+
+> **Tiers superseded (2026-08-20 audit wave).** `empty-catch` and
+> `loop-lte-length` both ship at WARNING now, not ERROR: the wave replaced
+> "is this a bug regardless of intent?" with a criterion measured against real
+> code. See the header of `configs/semgrep/bugfix-js.yml`.
 
 `configs/semgrep/bugfix-js.yml`, header comment in the style of `base.yml`, then:
 
@@ -246,7 +272,7 @@ rules:
     languages: [javascript, typescript]
 ```
 
-- [ ] **Step 5: Run to verify it passes**
+- [x] **Step 5: Run to verify it passes**
 
 Run (PowerShell): `cd mcp; npx vitest run test/integration/bugfixRulesJs.test.ts`
 Expected: PASS, both fixture assertions.
@@ -254,7 +280,7 @@ Expected: PASS, both fixture assertions.
 **If the near-miss test fails, the rule is wrong — not the fixture.** Narrow the
 pattern. The `misses` file is the specification of what correct code looks like.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add configs/semgrep mcp/test
@@ -280,7 +306,13 @@ Each rule below is specified by **what must fire and what must not**. Author the
 pattern, then let the fixture pair prove it. Add each rule's id to the expected
 set in the exact-match test as you go, so the set is always complete.
 
-- [ ] **Step 1: `error_handling`, two more (ERROR)**
+- [x] **Step 1: `error_handling`, two more (ERROR)**
+
+> **Half superseded.** Both rules were written, with their fixtures, and
+> `empty-promise-catch` still ships (at WARNING). `catch-returns-null` was
+> **deleted** in the 2026-08-20 audit wave — no measurable true-positive rate —
+> together with `hits/catch-returns-null.ts`. The deletion note sits where the
+> rule used to be, in `configs/semgrep/bugfix-js.yml`.
 
 `bugfix-js-error-handling-empty-promise-catch` — already folded into Task 1's
 `empty-catch` via `pattern-either`. **Split it into its own rule** so its id is
@@ -294,7 +326,7 @@ Must not: a `catch` that logs *and* returns null; a `catch` that returns a
 typed error result. The near-miss matters because "log then return null" is a
 deliberate pattern.
 
-- [ ] **Step 2: `off_by_one`, one more (ERROR)**
+- [x] **Step 2: `off_by_one`, one more (ERROR)**
 
 `bugfix-js-off-by-one-index-at-length` — `$A[$A.length]`.
 Must fire: `const last = items[items.length];`.
@@ -302,7 +334,7 @@ Must not: `items[items.length] = 4;` — an append. **Read, not write.** This is
 the distinction the rule turns on, and Task 1's `misses/off-by-one.ts` already
 contains the write case, so it will catch a rule that ignores it.
 
-- [ ] **Step 3: `null_safety`, three rules**
+- [x] **Step 3: `null_safety`, three rules**
 
 `bugfix-js-null-safety-unchecked-find` (ERROR) — `$A.find(...).$PROP`.
 Must fire: `users.find((u) => u.id === id).name`.
@@ -322,7 +354,7 @@ Must not: `process.env.API_URL?.trim()`; `(process.env.API_URL ?? '').trim()`.
 classify as `null_safety` only because that branch is tested first. Step 6's
 classification test is what keeps that true.
 
-- [ ] **Step 4: `memory_leak`, three rules**
+- [x] **Step 4: `memory_leak`, three rules**
 
 `bugfix-js-memory-leak-listener-without-cleanup` (ERROR) — a `useEffect` that
 calls `addEventListener` and returns no cleanup.
@@ -338,7 +370,7 @@ Must not: the same followed by a `clearInterval(t)`, and a `useEffect` returning
 inside a `useEffect` with no returned teardown.
 Must fire / must not: mirror the listener rule.
 
-- [ ] **Step 5: `edge_case`, two rules**
+- [x] **Step 5: `edge_case`, two rules**
 
 `bugfix-js-edge-case-reduce-without-initial` (WARNING) — `.reduce($F)` with no
 second argument, which throws on an empty array.
@@ -350,7 +382,13 @@ argument.
 Must fire: `parseInt(raw)`.
 Must not: `parseInt(raw, 10)`; `Number(raw)`.
 
-- [ ] **Step 6: Assert every id classifies as its class**
+- [x] **Step 6: Assert every id classifies as its class**
+
+> **Superseded in one entry.** The test exists and is exhaustive, but it maps
+> **thirteen** ids today, not fourteen: the
+> `bugfix-js-error-handling-catch-returns-null` line below went when the rule
+> did. The `unchecked` collision test it also specifies is unchanged and still
+> guards the ordering in `mapSubcategory`.
 
 Add to `bugfixRulesJs.test.ts`:
 
@@ -396,7 +434,7 @@ describe('every rule id classifies as its own class', () => {
 });
 ```
 
-- [ ] **Step 7: Run everything, then commit**
+- [x] **Step 7: Run everything, then commit**
 
 Run (PowerShell): `cd mcp; npx vitest run test/integration/bugfixRulesJs.test.ts`
 Expected: PASS — fourteen ids on `hits`, **zero** on `misses`, fourteen correct classes.
@@ -425,7 +463,7 @@ export function resolveConfigsDir(): string;
 export function resolveBugfixRules(): string | null;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -480,12 +518,12 @@ describe('bug_hunt config list', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run (PowerShell): `cd mcp; npx vitest run test/unit/platform/configsDir.test.ts test/unit/tools/bugHuntConfigs.test.ts`
 Expected: FAIL — modules/exports not found.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `configsDir.ts` follows `mcp/src/platform/scriptsDir.ts:49`'s **two-candidate
 marker probe** — `semgrep/base.yml` is the marker. Do not count `..` segments;
@@ -495,12 +533,12 @@ In `bugHunt.ts`, extract the pack-list construction into an exported
 `buildPackList` so it is testable without running Semgrep, and append the local
 rules path when `resolveBugfixRules()` returns non-null.
 
-- [ ] **Step 4: Run to verify they pass, then the suite**
+- [x] **Step 4: Run to verify they pass, then the suite**
 
 Run (PowerShell): `cd mcp; npx vitest run test/unit; npm test`
 Expected: PASS.
 
-- [ ] **Step 5: Build and commit**
+- [x] **Step 5: Build and commit**
 
 ```bash
 cd mcp && npm run build
@@ -516,27 +554,27 @@ git commit -m "feat(bugfix-rules): bug_hunt loads the local rules by default"
 
 - Modify: `skills/guardian-bugfix/SKILL.md`, `README.md` (EN/PT/ES), `CHANGELOG.md`, `mcp/src/tools/bugHunt.ts` (description)
 
-- [ ] **Step 1: Make the skill's original promise true**
+- [x] **Step 1: Make the skill's original promise true**
 
 `skills/guardian-bugfix/SKILL.md` was corrected in 1.5.0 to say no such rule
 pack existed. It does now. Update it to name `configs/semgrep/bugfix-js.yml`,
 say which six classes it covers **and that JS/TS is the only language so far**.
 
-- [ ] **Step 2: Update `bug_hunt`'s description**
+- [x] **Step 2: Update `bug_hunt`'s description**
 
 It currently states the JS/TS bug-class gap as a fact, with measurements. That
 is about to be partly false. Rewrite it to say what the local rules now cover,
 that the registry packs still contribute nothing in these classes for JS/TS, and
 that other languages remain uncovered by local rules.
 
-- [ ] **Step 3: README in all three languages, and the CHANGELOG**
+- [x] **Step 3: README in all three languages, and the CHANGELOG**
 
 State plainly: six of the seven named classes; "broken happy paths" is not a
 syntactic shape; Semgrep OSS matches syntax, not dataflow; the heuristic tier
 produces false positives by construction, which is why it is `WARNING`; JS/TS
 only so far.
 
-- [ ] **Step 4: Full verification gate**
+- [x] **Step 4: Full verification gate**
 
 ```bash
 cd mcp; npm run build
@@ -548,7 +586,7 @@ cd ..; npx markdownlint-cli2 "skills/**/*.md" "commands/**/*.md" "README.md"
 PowerShell, because Semgrep cannot be invoked through Bash here. Report the exact
 skip count (**target zero**) and all four coverage numbers against 70/62/72/70.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A

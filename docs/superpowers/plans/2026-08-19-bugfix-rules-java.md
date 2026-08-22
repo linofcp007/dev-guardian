@@ -5,6 +5,29 @@
 **Goal:** Ship `configs/semgrep/bugfix-java.yml` — eight hand-authored Semgrep
 rules covering all six `bug_hunt` bug subcategories for Java.
 
+> **Boxes reconciled against the code on 2026-08-22, not ticked during
+> execution.** Nothing here was ticked while the work was done; every box was
+> checked afterwards against the pack, the fixtures, the harness and the git
+> history, so the ticks are an audit. Steps whose only product was a transient
+> run — "Expected: FAIL", a mutation pasted into a task report — are ticked on
+> the artefact they were meant to leave behind (the clause, the discriminating
+> fixture, the assertion, the commit), never on the run itself, which leaves no
+> trace.
+>
+> **This plan is not current, and is kept as the record of what was intended.**
+> The pack shipped eight rules and has **seven**: `null-safety-map-get-deref`
+> was deleted on 2026-08-22, after 973 findings across Kafka, Elasticsearch and
+> Jenkins yielded five defensible defects in 45 read, and 88% of the
+> Elasticsearch findings carried no guard anywhere near the dereference — §12 of
+> [the design of record](../specs/2026-08-19-bugfix-rules-java-design.md), which
+> the design's own header now points at first. Its two `MapGetDeref.java`
+> fixtures went with it. All seven survivors are WARNING: seven dropped in the
+> review sweeps of 2026-08-19, and `empty-catch` followed on 2026-08-20 when it
+> was measured against the OpenJDK (§4a), so the `severity: ERROR` lines below
+> are as-planned, not as-shipped. `hits/ElseArm.java`, `hits/IterationBugs.java`,
+> `hits/RealBugs.java`, the ablation registration and the `GUARDIAN_JAVA_SRC`
+> axis-3 corpus all postdate this plan.
+
 **Architecture:** A plain Semgrep YAML rule file beside the JS/TS, Python and Go
 packs, with a hit fixture and a near-miss fixture per rule, and an integration
 test asserting the exact rule ids, the raw finding count, and the scanned-file
@@ -57,6 +80,7 @@ it, especially §3 (the new governing rule), §5's killed rule, and §9.
 ### Task 1: Rule file, harness, the two `error_handling` rules, and the resolver test
 
 **Files:**
+
 - Create: `configs/semgrep/bugfix-java.yml`
 - Create: `mcp/test/fixtures/bugfix-java/hits/EmptyCatch.java`
 - Create: `mcp/test/fixtures/bugfix-java/misses/EmptyCatch.java`
@@ -66,6 +90,7 @@ it, especially §3 (the new governing rule), §5's killed rule, and §9.
 - Modify: `mcp/test/unit/platform/configsDir.test.ts`
 
 **Interfaces:**
+
 - Consumes: `mapSubcategory` from `../../src/tools/bugHunt.js`; `makeTempDir` and
   `cleanupTempDirs` from `../helpers/tempDir.js`.
 - Produces: `configs/semgrep/bugfix-java.yml` with one `rules:` list, extended by
@@ -74,7 +99,7 @@ it, especially §3 (the new governing rule), §5's killed rule, and §9.
   `EXPECTED_CLASS: Readonly<Record<string, string>>`, and
   `run(config: string, dir: string): SemgrepRun` returning `{ rows, scanned }`.
 
-- [ ] **Step 1: Update the resolver test FIRST**
+- [x] **Step 1: Update the resolver test FIRST**
 
 This is not housekeeping and it is not optional. `resolveBugfixRules()` globs
 `configs/semgrep/bugfix-*.yml`, and `mcp/test/unit/platform/configsDir.test.ts`
@@ -94,7 +119,7 @@ expected array, in the sorted position it belongs (`go`, `java`, `js`, `py`):
     ]);
 ```
 
-- [ ] **Step 2: Write the two hit fixtures**
+- [x] **Step 2: Write the two hit fixtures**
 
 `mcp/test/fixtures/bugfix-java/hits/EmptyCatch.java`:
 
@@ -116,7 +141,7 @@ public class PrintStackTraceOnly {
 }
 ```
 
-- [ ] **Step 3: Write the two near-miss fixtures**
+- [x] **Step 3: Write the two near-miss fixtures**
 
 `mcp/test/fixtures/bugfix-java/misses/EmptyCatch.java`:
 
@@ -147,7 +172,7 @@ public class PrintStackTraceOnly {
 }
 ```
 
-- [ ] **Step 4: Write the test harness with only the Task 1 expectations**
+- [x] **Step 4: Write the test harness with only the Task 1 expectations**
 
 Create `mcp/test/integration/bugfixRulesJava.test.ts`. Read
 `mcp/test/integration/bugfixRulesGo.test.ts` first — this mirrors it exactly,
@@ -324,7 +349,7 @@ describe('every rule id classifies as its own class', () => {
 });
 ```
 
-- [ ] **Step 5: Run the test to verify it fails**
+- [x] **Step 5: Run the test to verify it fails**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -336,7 +361,12 @@ npx vitest run test/integration/bugfixRulesJava.test.ts test/unit/platform/confi
 Expected: FAIL — `configs/semgrep/bugfix-java.yml` does not exist yet, so both
 the "rule file exists" test and the resolver's exact-array test fail.
 
-- [ ] **Step 6: Write the rule file with the two `error_handling` rules**
+- [x] **Step 6: Write the rule file with the two `error_handling` rules**
+
+> **Tier superseded (2026-08-20).** `empty-catch` ships at WARNING, not
+> ERROR. Measured on the OpenJDK: the premise that an unmarked swallow is a bug
+> whatever the author meant did not survive contact with real code. See §4a of
+> the design of record. `printstacktrace-only` is unchanged at WARNING.
 
 ```yaml
 # dev-guardian Semgrep config bugfix-java.
@@ -380,7 +410,7 @@ rules:
     languages: [java]
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -393,7 +423,7 @@ Expected: PASS, **no skips**. Both hit fixtures at count 1; `scanned` = 2 on
 both sides; zero findings across the near-misses; the resolver returns all four
 packs.
 
-- [ ] **Step 8: Prove the near-miss half is real, not vacuous**
+- [x] **Step 8: Prove the near-miss half is real, not vacuous**
 
 Two mutations, both required, both pasted into the report:
 
@@ -405,7 +435,7 @@ Two mutations, both required, both pasted into the report:
    near-miss methods print AND then do something else. That is the distinction
    the rule turns on, and this proves the fixture tests it.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add configs/semgrep/bugfix-java.yml mcp/test/fixtures/bugfix-java mcp/test/integration/bugfixRulesJava.test.ts mcp/test/unit/platform/configsDir.test.ts
@@ -417,6 +447,7 @@ git commit -m "feat(bugfix-rules): the two Java error_handling rules"
 ### Task 2: `null_safety` (2 rules)
 
 **Files:**
+
 - Modify: `configs/semgrep/bugfix-java.yml` (append two rules)
 - Create: `mcp/test/fixtures/bugfix-java/hits/MapGetDeref.java`
 - Create: `mcp/test/fixtures/bugfix-java/misses/MapGetDeref.java`
@@ -425,12 +456,17 @@ git commit -m "feat(bugfix-rules): the two Java error_handling rules"
 - Modify: `mcp/test/integration/bugfixRulesJava.test.ts`
 
 **Interfaces:**
+
 - Consumes: `configs/semgrep/bugfix-java.yml` holding the two `error_handling`
   rules; the test's `EXPECTED_HITS_BY_FILE` and `EXPECTED_CLASS` maps.
 - Produces: ids `bugfix-java-null-safety-map-get-deref` and
   `bugfix-java-null-safety-optional-get-no-ispresent`.
 
-- [ ] **Step 1: Write the two hit fixtures**
+- [x] **Step 1: Write the two hit fixtures**
+
+> **One fixture of two is gone.** `OptionalGet.java` is still there.
+> `hits/MapGetDeref.java` was deleted on 2026-08-22 with its rule — design of
+> record §12.
 
 `mcp/test/fixtures/bugfix-java/hits/MapGetDeref.java`:
 
@@ -456,7 +492,7 @@ public class OptionalGet {
 }
 ```
 
-- [ ] **Step 2: Write the two near-miss fixtures**
+- [x] **Step 2: Write the two near-miss fixtures**
 
 `mcp/test/fixtures/bugfix-java/misses/MapGetDeref.java` — the third method is
 the subtle one: `m.get(k)` with no dereference is correct and must not fire.
@@ -498,7 +534,10 @@ public class OptionalGet {
 }
 ```
 
-- [ ] **Step 3: Register the expectations**
+- [x] **Step 3: Register the expectations**
+
+> **One entry of two is gone.** `OptionalGet.java` and its class mapping still
+> stand; the `MapGetDeref.java` and `map-get-deref` lines went with the rule.
 
 Add to `EXPECTED_HITS_BY_FILE`:
 
@@ -517,7 +556,7 @@ Add to `EXPECTED_CLASS`:
   'bugfix-java-null-safety-optional-get-no-ispresent': 'null_safety',
 ```
 
-- [ ] **Step 4: Run the test to verify it fails**
+- [x] **Step 4: Run the test to verify it fails**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -528,7 +567,7 @@ npx vitest run test/integration/bugfixRulesJava.test.ts
 
 Expected: FAIL — the two new hit fixtures produce no findings yet.
 
-- [ ] **Step 5: Append the two rules**
+- [x] **Step 5: Append the two rules**
 
 > **SUPERSEDED — the YAML block below is the ORIGINAL plan text and is no
 > longer what ships.** It is kept verbatim because a plan is a record of what
@@ -555,6 +594,12 @@ Expected: FAIL — the two new hit fixtures produce no findings yet.
 >   design.
 > - Step 6's "Four hit fixtures, four near-misses, `scanned` = 4" describes the
 >   two-rule increment this step added, not the finished pack.
+> - **And on 2026-08-22 `map-get-deref` was deleted outright**, which is the
+>   half of this step that no longer exists at all: 973 findings across Kafka,
+>   Elasticsearch and Jenkins, five defensible defects in 45 read, and 88% of
+>   the Elasticsearch findings carrying no guard anywhere near the dereference,
+>   for semantic reasons no `pattern-not-inside` can reach. Design of record
+>   §12. `optional-get-no-ispresent` is the only survivor of this step.
 
 ```yaml
   # Sem cláusula de exclusão para `getOrDefault`, e isso é deliberado: o
@@ -584,7 +629,7 @@ Expected: FAIL — the two new hit fixtures produce no findings yet.
     languages: [java]
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -595,7 +640,12 @@ npx vitest run test/integration/bugfixRulesJava.test.ts
 
 Expected: PASS, no skips. Four hit fixtures, four near-misses, `scanned` = 4.
 
-- [ ] **Step 7: Prove the near-miss discriminates**
+- [x] **Step 7: Prove the near-miss discriminates**
+
+> **Superseded with its rule.** The mutation, the fixture and the role markers
+> were all done — commit `fb2ae3b`, "mark fixture roles" — and all of it was
+> deleted with `map-get-deref` three days later. The fixture-role convention it
+> established survives across the other packs.
 
 Mutate the rule to `pattern: $M.get($K)` — dropping the `.$METHOD(...)` deref
 requirement — re-run, and show the suite going **RED on
@@ -608,7 +658,7 @@ of this pattern, because `getOrDefault` is a different identifier. Say so in
 the file, the way `mcp/test/fixtures/bugfix-go/misses/loop_lte_len.go` does — a
 reader should not have to guess which near-misses carry weight.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add configs/semgrep/bugfix-java.yml mcp/test/fixtures/bugfix-java mcp/test/integration/bugfixRulesJava.test.ts
@@ -620,6 +670,7 @@ git commit -m "feat(bugfix-rules): Java null_safety rules"
 ### Task 3: `off_by_one` (1 rule) and `memory_leak` (1 rule)
 
 **Files:**
+
 - Modify: `configs/semgrep/bugfix-java.yml` (append two rules)
 - Create: `mcp/test/fixtures/bugfix-java/hits/LoopLteLength.java`
 - Create: `mcp/test/fixtures/bugfix-java/misses/LoopLteLength.java`
@@ -628,11 +679,12 @@ git commit -m "feat(bugfix-rules): Java null_safety rules"
 - Modify: `mcp/test/integration/bugfixRulesJava.test.ts`
 
 **Interfaces:**
+
 - Consumes: `configs/semgrep/bugfix-java.yml` holding four rules; the test's maps.
 - Produces: ids `bugfix-java-off-by-one-loop-lte-length` and
   `bugfix-java-memory-leak-stream-not-closed`.
 
-- [ ] **Step 1: Write the two hit fixtures**
+- [x] **Step 1: Write the two hit fixtures**
 
 `mcp/test/fixtures/bugfix-java/hits/LoopLteLength.java`:
 
@@ -660,7 +712,7 @@ public class StreamNotClosed {
 }
 ```
 
-- [ ] **Step 2: Write the two near-miss fixtures**
+- [x] **Step 2: Write the two near-miss fixtures**
 
 `mcp/test/fixtures/bugfix-java/misses/LoopLteLength.java` — three correct forms,
 and `toLenMinusOne` is the one that discriminates a widened bound:
@@ -698,7 +750,7 @@ public class StreamNotClosed {
 }
 ```
 
-- [ ] **Step 3: Register the expectations**
+- [x] **Step 3: Register the expectations**
 
 Add to `EXPECTED_HITS_BY_FILE`:
 
@@ -714,7 +766,7 @@ Add to `EXPECTED_CLASS`:
   'bugfix-java-memory-leak-stream-not-closed': 'memory_leak',
 ```
 
-- [ ] **Step 4: Run the test to verify it fails**
+- [x] **Step 4: Run the test to verify it fails**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -725,7 +777,7 @@ npx vitest run test/integration/bugfixRulesJava.test.ts
 
 Expected: FAIL — the two new hit fixtures produce no findings yet.
 
-- [ ] **Step 5: Append the two rules**
+- [x] **Step 5: Append the two rules**
 
 Note the try-with-resources exclusion names the resource explicitly. The obvious
 form `try (...) { ... }` is **not a valid Java pattern** and does not parse —
@@ -757,7 +809,7 @@ measured during the probe.
     languages: [java]
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -768,7 +820,7 @@ npx vitest run test/integration/bugfixRulesJava.test.ts
 
 Expected: PASS, no skips. Six hit fixtures, six near-misses, `scanned` = 6.
 
-- [ ] **Step 7: Prove both near-misses discriminate**
+- [x] **Step 7: Prove both near-misses discriminate**
 
 Two mutations:
 
@@ -780,7 +832,7 @@ Two mutations:
 
 Restore both, show GREEN, paste all outputs.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add configs/semgrep/bugfix-java.yml mcp/test/fixtures/bugfix-java mcp/test/integration/bugfixRulesJava.test.ts
@@ -792,6 +844,7 @@ git commit -m "feat(bugfix-rules): Java off_by_one and memory_leak rules"
 ### Task 4: `race_condition` (1), `edge_case` (1), and the no-duplication test
 
 **Files:**
+
 - Modify: `configs/semgrep/bugfix-java.yml` (append two rules)
 - Create: `mcp/test/fixtures/bugfix-java/hits/StaticDateFormat.java`
 - Create: `mcp/test/fixtures/bugfix-java/misses/StaticDateFormat.java`
@@ -801,12 +854,13 @@ git commit -m "feat(bugfix-rules): Java off_by_one and memory_leak rules"
 - Modify: `mcp/test/integration/bugfixRulesJava.test.ts`
 
 **Interfaces:**
+
 - Consumes: `configs/semgrep/bugfix-java.yml` holding six rules; the test's
   `run(config, dir)` helper, whose first parameter is the config precisely so a
   registry pack name can be passed instead of the local file.
 - Produces: the last two ids, and the no-duplication test.
 
-- [ ] **Step 1: Write the two hit fixtures**
+- [x] **Step 1: Write the two hit fixtures**
 
 `mcp/test/fixtures/bugfix-java/hits/StaticDateFormat.java` — **both** static
 forms, which is why this file's expected count is 2 and not 1:
@@ -834,7 +888,7 @@ public class ModifyDuringIteration {
 }
 ```
 
-- [ ] **Step 2: Write the two near-miss fixtures**
+- [x] **Step 2: Write the two near-miss fixtures**
 
 `mcp/test/fixtures/bugfix-java/misses/StaticDateFormat.java`. The local instance
 must be written **unqualified**: the probe's first attempt used
@@ -900,7 +954,7 @@ public class Control {
 }
 ```
 
-- [ ] **Step 3: Register the expectations**
+- [x] **Step 3: Register the expectations**
 
 Add to `EXPECTED_HITS_BY_FILE`:
 
@@ -924,7 +978,7 @@ Add to `EXPECTED_CLASS`:
   'bugfix-java-edge-case-modify-during-iteration': 'edge_case',
 ```
 
-- [ ] **Step 4: Write the no-duplication test**
+- [x] **Step 4: Write the no-duplication test**
 
 Append this to `mcp/test/integration/bugfixRulesJava.test.ts`:
 
@@ -978,7 +1032,7 @@ describe('no local Java rule duplicates p/r2c-bug-scan', () => {
 });
 ```
 
-- [ ] **Step 5: Run the test to verify it fails**
+- [x] **Step 5: Run the test to verify it fails**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -989,7 +1043,7 @@ npx vitest run test/integration/bugfixRulesJava.test.ts
 
 Expected: FAIL — the two new hit fixtures produce no findings yet.
 
-- [ ] **Step 6: Append the two rules**
+- [x] **Step 6: Append the two rules**
 
 ```yaml
   # Um único pattern, e o `final` NÃO precisa de ramo próprio: o Semgrep casa
@@ -1019,7 +1073,7 @@ Expected: FAIL — the two new hit fixtures produce no findings yet.
     languages: [java]
 ```
 
-- [ ] **Step 7: Run the test to verify it passes**
+- [x] **Step 7: Run the test to verify it passes**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -1033,7 +1087,7 @@ Expected: PASS, no skips. **Eight hit fixtures totalling 9 findings**
 = 8 on both sides, and `p/r2c-bug-scan` silent on every hit fixture while firing
 on the control.
 
-- [ ] **Step 8: Prove the count assertion catches what the id set cannot**
+- [x] **Step 8: Prove the count assertion catches what the id set cannot**
 
 Narrow the rule to `pattern: static final SimpleDateFormat $N = new SimpleDateFormat(...);`,
 re-run, and show `StaticDateFormat.java`'s count dropping from 2 to 1 —
@@ -1041,7 +1095,7 @@ re-run, and show `StaticDateFormat.java`'s count dropping from 2 to 1 —
 That is exactly why the raw count is asserted alongside the ids. Restore, show
 GREEN, paste both.
 
-- [ ] **Step 9: Run the full suite**
+- [x] **Step 9: Run the full suite**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -1053,7 +1107,7 @@ npm test
 
 Expected: lint exit 0; suite green with **0 skipped**. Report both counts.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add configs/semgrep/bugfix-java.yml mcp/test/fixtures/bugfix-java mcp/test/integration/bugfixRulesJava.test.ts
@@ -1065,6 +1119,7 @@ git commit -m "feat(bugfix-rules): Java race_condition and edge_case rules, and 
 ### Task 5: Documentation
 
 **Files:**
+
 - Modify: `README.md` (three language sections: EN, PT, ES)
 - Modify: `skills/guardian-bugfix/SKILL.md`
 - Modify: `mcp/src/tools/bugHunt.ts` (tool `title`/`description`, header comment)
@@ -1072,11 +1127,17 @@ git commit -m "feat(bugfix-rules): Java race_condition and edge_case rules, and 
 - Modify: `mcp/dist/` (rebuilt, staged in the same commit)
 
 **Interfaces:**
+
 - Consumes: nothing at runtime. Every statement must match what Tasks 1-4
   shipped.
 - Produces: no code interface.
 
-- [ ] **Step 1: Verify the rule counts before writing any number**
+- [x] **Step 1: Verify the rule counts before writing any number**
+
+> **The numbers this step prints have moved.** It expected 14, 10, 10, 8; the
+> answer today is 13, 10, 9, 7 — one rule deleted from each of the JS/TS, Go
+> and Java packs. The step tells the reader to trust the command over the plan,
+> which is why it survives the change.
 
 ```bash
 grep -c "^  - id:" configs/semgrep/bugfix-js.yml configs/semgrep/bugfix-py.yml configs/semgrep/bugfix-go.yml configs/semgrep/bugfix-java.yml
@@ -1085,7 +1146,7 @@ grep -c "^  - id:" configs/semgrep/bugfix-js.yml configs/semgrep/bugfix-py.yml c
 Expected: 14, 10, 10, 8. Use what it prints. If it disagrees with this plan, the
 plan is wrong and you should say so in your report.
 
-- [ ] **Step 2: Update the three README language sections**
+- [x] **Step 2: Update the three README language sections**
 
 Each `bug_hunt` bullet currently ends by naming JS/TS, Python and Go as the
 languages with local packs. Add Java and **its limitations in the same breath**,
@@ -1107,7 +1168,11 @@ Spanish, in the ES section:
 Java también tiene el suyo — `configs/semgrep/bugfix-java.yml`, ocho reglas hand-authored en las mismas seis clases, y Java es el lenguaje más vacío de los cuatro: `p/r2c-bug-scan` trae 4 reglas Java y **ninguna** cae en una clase de bug — todas son de igualdad y comparación — así que todas las subcategorías estaban a cero, en el lenguaje cuyo defecto más famoso es el `NullPointerException`. Sus carencias se dicen en vez de insinuarse: **no hay regla para `Integer ==`**, porque expresarla exige inferencia de tipos que Semgrep OSS no tiene y el intento disparaba en `v == null` y en comparación de primitivos — una regla que señala `v == null` se desinstalaría el primer día; `stream-not-closed` solo reconoce `new FileInputStream(...)`, así que `FileOutputStream`, `FileReader`, `Socket` y los demás closeables filtran igual y no se cubren; `static-dateformat` solo reconoce `SimpleDateFormat`, así que un `Calendar` o un `Matcher` compartidos en un campo estático no se cubren; `map-get-deref` no distingue un mapa que puede tener nulos de uno con claves garantizadas, así que un mapa poblado en la línea anterior se marca igual; y `modify-during-iteration` solo casa la forma for-each, así que un bucle indexado que elimina de la lista que indexa tiene el mismo defecto y se escapa. **JS/TS, Python, Go y Java**: los demás lenguajes aún no tienen pack local.
 ```
 
-- [ ] **Step 3: Update the guardian-bugfix skill**
+- [x] **Step 3: Update the guardian-bugfix skill**
+
+> **Superseded in its numbers.** The skill was updated as written and says
+> `sete regras` today, not `oito`; the `map.get()` clause and the
+> `map-get-deref` limitation paragraph were removed with the rule.
 
 Add after the Go paragraph in `skills/guardian-bugfix/SKILL.md`:
 
@@ -1127,13 +1192,13 @@ compilar, e a tentativa acusava `v == null` e a comparação de primitivos. Para
 essa classe, leia o código.
 ```
 
-- [ ] **Step 4: Update the `bug_hunt` tool title and description**
+- [x] **Step 4: Update the `bug_hunt` tool title and description**
 
 In `mcp/src/tools/bugHunt.ts`, the registered tool's `title` and `description`
 name the JS/TS, Python and Go packs. Add Java to both, and to the file's header
 comment, keeping the counts consistent with what Step 1 printed.
 
-- [ ] **Step 5: Add the CHANGELOG entry**
+- [x] **Step 5: Add the CHANGELOG entry**
 
 Add to the existing `## [Unreleased]` section (or create one at the top):
 
@@ -1160,7 +1225,7 @@ Add to the existing `## [Unreleased]` section (or create one at the top):
 - `modify-during-iteration` only matches the enhanced-for form.
 ```
 
-- [ ] **Step 6: Build, lint, test, markdownlint**
+- [x] **Step 6: Build, lint, test, markdownlint**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -1181,7 +1246,7 @@ Expected: build ok; lint exit 0; suite green with 0 skipped; markdownlint 0
 issues. `bugHunt.ts` changed, so `mcp/dist/` MUST be rebuilt and staged in this
 commit.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add README.md skills/guardian-bugfix/SKILL.md mcp/src/tools/bugHunt.ts CHANGELOG.md mcp/dist
