@@ -1,5 +1,7 @@
 # Design — headless CI scanning from the command line
 
+**Status:** implemented and shipped
+
 Item 5 of 7 in the strix-gap project. Everything this plugin does today needs
 an MCP host and a human in a conversation. This makes the same scans runnable
 from a pipeline, gated against a committed baseline, reporting in the format a
