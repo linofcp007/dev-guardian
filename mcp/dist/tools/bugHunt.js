@@ -354,7 +354,7 @@ registerToolModule(makeScanTool({
     description: 'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus local, always-on ' +
         'JS/TS, Python, Go, Java, C# and PHP rule packs: `configs/semgrep/bugfix-js.yml` (thirteen ' +
         'rules), `configs/semgrep/bugfix-py.yml` (ten rules), `configs/semgrep/bugfix-go.yml` (nine ' +
-        'rules), `configs/semgrep/bugfix-java.yml` (eight rules), `configs/semgrep/bugfix-cs.yml` ' +
+        'rules), `configs/semgrep/bugfix-java.yml` (seven rules), `configs/semgrep/bugfix-cs.yml` ' +
         '(eleven rules) and `configs/semgrep/bugfix-php.yml` (six rules), each covering the six ' +
         'subcategories ' +
         'below for its language — race_condition, null_safety, off_by_one, memory_leak, ' +

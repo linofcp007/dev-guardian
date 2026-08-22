@@ -1,7 +1,15 @@
 # Local bug-finding Semgrep rules — JS/TS — design of record
 
 **Date:** 2026-08-17
-**Status:** approved
+**Status:** approved; **amended 2026-08-21** — `catch-returns-null` was deleted
+and the pack is thirteen rules, not fourteen. It produced **zero true positives
+on two independent corpora**: five idiomatic instances on an auditor's probes,
+and 25 findings on this repo's own `mcp/src`, every one a safe-`JSON.parse`
+helper or a `readdirSync` with a fallback. The reasoning for deleting rather
+than demoting is recorded in the CHANGELOG: a lower tier is not a fix for a rule
+that has never been right, it is a quieter way to keep being wrong. §4 below
+still describes the rule as shipping and is kept as written, because this
+document is the record of what was designed.
 **First of a sequence**, one design per language family. JS/TS is first because it
 is the only stack with **zero** coverage of these classes today, and because the
 rules were empirically shown to fire before this design was written.
