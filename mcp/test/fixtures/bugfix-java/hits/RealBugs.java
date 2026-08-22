@@ -1,6 +1,4 @@
 import java.text.SimpleDateFormat;
-import java.util.Map;
-import java.util.HashMap;
 import java.util.Optional;
 
 /**
@@ -15,9 +13,17 @@ import java.util.Optional;
  * Nothing here is minimal and nothing here is safe. Each method is a defect a
  * tightening plausibly swallows — the short-form SimpleDateFormat that the
  * fully-qualified pattern has to resolve through the import, the four array
- * shapes the `"$T[]"` type restriction has to keep seeing, the disjunction that
- * proves NOTHING and must survive the disjunction exclusions, the guard on a
- * different key or a different Optional than the one dereferenced.
+ * shapes the `"$T[]"` type restriction has to keep seeing, the guard on a
+ * different Optional than the one dereferenced, the positive-first disjunction
+ * that proves NOTHING and must survive the disjunction exclusions.
+ *
+ * B6-B9, B13, B14, B16, B18 and B20 were the MAP half — nine defects fencing
+ * the `keySet()` unifications, the disjunction that proves nothing, the guard
+ * on a different key, and the chain clauses on their map side. They went with
+ * `null-safety-map-get-deref` when the application-corpus round deleted it, and
+ * the count went 20 -> 11 with nothing else moving. What they fenced is NOT
+ * unfenced: every clause shape they measured has an Optional twin still in the
+ * pack, and B15, B17 and B19 below are those twins.
  *
  * The count is asserted per file in bugfixRulesJava.test.ts. Any future
  * exclusion that drops it has eaten a real bug and must justify itself.
@@ -69,37 +75,6 @@ public class RealBugs {
         return sum;
     }
 
-    // B6: unguarded map deref. Must fire.
-    String b6(Map<String, String> m, String k) {
-        return m.get(k).trim();
-    }
-
-    // B7: unguarded map deref on a `this.` field. Must fire.
-    private final HashMap<String, String> cache = new HashMap<>();
-    String b7(String k) {
-        return this.cache.get(k).trim();
-    }
-
-    // B8: a DISJUNCTION that proves nothing — `force` true and the key absent
-    // is an NPE. This is the near-miss for the negative-first `||` exclusions
-    // added in wave 6: `!containsKey || deref` is guard-proving and excluded,
-    // `force || containsKey` is not and must keep firing. The two are
-    // structurally distinguishable, and this pins that they stay so.
-    String b8(Map<String, String> m, String k, boolean force) {
-        if (force || m.containsKey(k)) {
-            return m.get(k).trim();
-        }
-        return "";
-    }
-
-    // B9: containsKey on a DIFFERENT key than the one dereferenced. Must fire.
-    String b9(Map<String, String> m, String k1, String k2) {
-        if (m.containsKey(k1)) {
-            return m.get(k2).trim();
-        }
-        return "";
-    }
-
     // B10: unguarded Optional.get. Must fire.
     String b10(Optional<String> o) {
         return o.get();
@@ -120,34 +95,13 @@ public class RealBugs {
         return "";
     }
 
-    // B13: iterate ONE map's keys and dereference ANOTHER map with them. The
-    // near-miss for the wave-7 `keySet()` exclusion on its map metavariable:
-    // the loop proves nothing about `b`, so this is an NPE on the first key
-    // `a` has and `b` does not. Drop the `$M` unification from that clause —
-    // write it against a fresh metavariable — and this stops firing.
-    void b13(Map<String, String> a, Map<String, String> b) {
-        for (String k : a.keySet()) {
-            System.out.println(b.get(k).trim());
-        }
-    }
-
-    // B14: iterate the map's own keys and dereference a DIFFERENT key. The
-    // near-miss for the same clause on its KEY metavariable: `other` is not
-    // the loop variable and nothing proves it is in the map. Drop the `$K`
-    // unification and this stops firing.
-    void b14(Map<String, String> m, String other) {
-        for (String k : m.keySet()) {
-            System.out.println(k + "=" + m.get(other).trim());
-        }
-    }
-
     // ---- near-misses for the wave-8 CHAIN exclusions ----------------------
     //
-    // The seven chain clauses added in wave 8 each match `$X && GUARD &&
-    // DEREF` (or the `||` dual), and `$X` matches the whole left-nested
-    // subtree — which is deliberately permissive. These six are the shapes
-    // that permissiveness must NOT reach: three ways a chain can look like a
-    // guard without being one. Each is a guaranteed throw.
+    // The chain clauses each match `$X && GUARD && DEREF` (or the `||` dual),
+    // and `$X` matches the whole left-nested subtree — which is deliberately
+    // permissive. These three are the shapes that permissiveness must NOT
+    // reach: three ways a chain can look like a guard without being one. Each
+    // is a guaranteed throw.
 
     // B15: the chain guards a DIFFERENT Optional than the one dereferenced.
     // `a` present says nothing about `b`.
@@ -155,24 +109,14 @@ public class RealBugs {
         return flag && a.isPresent() && b.get().isEmpty();
     }
 
-    // B16: the chain guards a DIFFERENT key than the one dereferenced.
-    boolean b16(Map<String, String> m, String k1, String k2, boolean flag) {
-        return flag && m.containsKey(k1) && m.get(k2).isEmpty();
-    }
-
     // B17: a POSITIVE-first disjunction chain, which proves nothing. `||`
     // short-circuits, so the last operand runs only when everything left of it
     // was FALSE — and here that means `isPresent()` was false, so the `get()`
     // is a guaranteed NoSuchElementException. Only the NEGATIVE-first form is
     // a guard, and this is the structural twin that must stay distinguishable
-    // from it. (`b8` pins the same distinction for the `if`-condition form.)
+    // from it.
     boolean b17(Optional<String> o, boolean flag) {
         return flag || o.isPresent() || o.get().isEmpty();
-    }
-
-    // B18: the map twin of B17.
-    boolean b18(Map<String, String> m, String k, boolean flag) {
-        return flag || m.containsKey(k) || m.get(k).isEmpty();
     }
 
     // B19: a conjunction chain whose guard is NEGATED. `&&` short-circuits, so
@@ -182,10 +126,5 @@ public class RealBugs {
     // negation, and this measures that every run.
     boolean b19(Optional<String> o, boolean flag) {
         return flag && !o.isPresent() && o.get().isEmpty();
-    }
-
-    // B20: the map twin of B19 — the key is proven ABSENT where it is read.
-    boolean b20(Map<String, String> m, String k, boolean flag) {
-        return flag && !m.containsKey(k) && m.get(k).isEmpty();
     }
 }

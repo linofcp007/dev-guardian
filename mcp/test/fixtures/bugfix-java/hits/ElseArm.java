@@ -1,50 +1,34 @@
-import java.util.Map;
 import java.util.Optional;
 
 /**
  * REAL-BUGS CORPUS — written by the REVIEWER, not by the rule author.
  *
- * Every method here is a GUARANTEED NullPointerException or
- * NoSuchElementException: the dereference sits on the branch the guard proves
- * is UNSAFE. All eight must fire.
+ * Every method here is a GUARANTEED NoSuchElementException: the dereference
+ * sits on the branch the guard proves is UNSAFE. All seven must fire.
  *
  * This file is the regression that wave 4 shipped and nothing caught. Closing
- * the guard false positives with `pattern-not-inside: if ($M.containsKey($K))
- * { ... }` scoped the exclusion to the whole IF-ELSE STATEMENT, and the quoted
- * ternary exclusions scoped to the whole CONDITIONAL EXPRESSION — so BOTH arms
- * were excluded, including the one the guard proves is the bug. Measured:
- * before wave 4 this file produced 6 findings; after it, 1. The harness went
- * green through all of it, because it had a hit fixture per rule and near-miss
- * fixtures per exclusion, and nothing that measured a LOSS OF RECALL.
+ * the guard false positives with an unscoped `pattern-not-inside` scoped the
+ * exclusion to the whole IF-ELSE STATEMENT, and the quoted ternary exclusions
+ * scoped to the whole CONDITIONAL EXPRESSION — so BOTH arms were excluded,
+ * including the one the guard proves is the bug. Measured: before wave 4 this
+ * file produced 6 findings; after it, 1. The harness went green through all of
+ * it, because it had a hit fixture per rule and near-miss fixtures per
+ * exclusion, and nothing that measured a LOSS OF RECALL.
  *
  * The fix is to constrain each exclusion to the guarded arm — the deep
  * expression operator in the ternary arm, and a dereference requirement in the
  * `if` body. Whatever a future wave does to those clauses, this count is the
  * thing that must not move.
+ *
+ * F1-F4 and F8 were the MAP half of this file: the `else` arm of `containsKey`
+ * and of `get() != null`, both ternary polarities, and a plain unguarded
+ * `m.get(k).trim()` control. They went with `null-safety-map-get-deref` when
+ * the application-corpus round deleted it, and the count went 12 -> 7 with
+ * nothing else moving. The `if`/ternary arm-scoping they fenced is not gone
+ * from the pack — `optional-get-no-ispresent` carries the same clause shapes
+ * and F5, F6 and F7 below fence them on that side.
  */
 public class ElseArm {
-
-    // F1: map, else arm of containsKey.
-    String f1(Map<String, String> m, String k) {
-        if (m.containsKey(k)) { return "present"; }
-        else { return m.get(k).trim(); }
-    }
-
-    // F2: map, else arm of get() != null.
-    String f2(Map<String, String> m, String k) {
-        if (m.get(k) != null) { return "present"; }
-        else { return m.get(k).trim(); }
-    }
-
-    // F3: map, FALSE arm of the containsKey ternary.
-    String f3(Map<String, String> m, String k) {
-        return m.containsKey(k) ? "present" : m.get(k).trim();
-    }
-
-    // F4: map, TRUE arm of the !containsKey ternary.
-    String f4(Map<String, String> m, String k) {
-        return !m.containsKey(k) ? m.get(k).trim() : "present";
-    }
 
     // F5: optional, else arm of isPresent.
     String f5(Optional<String> o) {
@@ -63,11 +47,6 @@ public class ElseArm {
         else { return o.get(); }
     }
 
-    // F8: control — plain unguarded deref, must fire.
-    String f8(Map<String, String> m, String k) {
-        return m.get(k).trim();
-    }
-
     // F9..F12 arrived with the external-corpus round, which added the `else`
     // arm of an `isEmpty()` test and `assert isPresent()` to the exclusions.
     // Both are guard exclusions, so both are exactly what this file exists to
@@ -82,7 +61,7 @@ public class ElseArm {
     // early-exit exclusion `if ($O.isEmpty()) { return ...; }` matches the
     // whole `if` node, so the `get()` inside its own exit branch is excluded
     // with it. Measured against the shipped rule and against this one, and it
-    // is the same false negative for `!isPresent()` and for `!containsKey`.
+    // was the same false negative for `!isPresent()` and for `!containsKey`.
     // It is recorded as a limitation, not fixtured as a hit.
     String f9(Optional<String> o) {
         if (o.isEmpty()) { System.out.println(o.get()); }

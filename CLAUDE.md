@@ -38,7 +38,7 @@ when you need to know the rule pack was actually exercised.
 cd mcp
 npm run ablate -- all                          # every registered pack
 npm run ablate -- bugfix-js                    # one pack
-npm run ablate -- bugfix-java --filter=map-get # one rule, while iterating
+npm run ablate -- bugfix-java --filter=optional-get # one rule, while iterating
 npm run ablate -- bugfix-js --list             # enumerate clauses, no scanning
 npm run ablate -- routes                       # the 64-rule route pack, ~80 min
 ```
@@ -89,7 +89,7 @@ a clause, and is the only one that reaches a rule with no clauses at all:
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
 Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
 `patterns:` group and no `pattern-either:`, and a `patterns:` group holding
-nothing but positive terms. **29 of the 135 rules** across the nine packs are
+nothing but positive terms. **29 of the 134 rules** across the nine packs are
 one of those — 23 bare and 6 positive-only — and they used to appear
 **nowhere** in the report: not in the clause list, not under `skipped`. So
 `44/44 live, 0 DEAD` read as "the pack was checked" when it covered 10 rules of
@@ -102,7 +102,7 @@ prints `N/A`.
 | `bugfix-js` | 13 | 12 | 1 |
 | `bugfix-py` | 10 | 10 | 0 |
 | `bugfix-go` | 9 | 8 | 1 |
-| `bugfix-java` | 8 | 8 | 0 |
+| `bugfix-java` | 7 | 7 | 0 |
 | `bugfix-cs` | 11 | 10 | 1 |
 | `bugfix-php` | 6 | 6 | 0 |
 | `bugfix-rs` | 1 | 1 | 0 |
@@ -233,8 +233,9 @@ actually makes.
 - **Clauses are named by body text, never by line number.** A previous
   hand-rolled run was discarded because a *comment* was edited while it ran:
   every line shifted, and since all 86 `- pattern-not-inside:` first lines in
-  `bugfix-java.yml` are identical, the one INERT verdict could not be
-  attributed to any clause.
+  `bugfix-java.yml` were identical, the one INERT verdict could not be
+  attributed to any clause. (That file is at 49 such lines now — deleting
+  `null-safety-map-get-deref` took 42 of them — and the hazard is unchanged.)
 - **`paths.scanned == 0` is an exception, not a result.** This repo has five
   recorded ways for Semgrep to scan nothing while printing success and exit 0;
   two of them emit neither `RuleParseError` nor `Invalid YAML`, so matching on

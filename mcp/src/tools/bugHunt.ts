@@ -34,7 +34,7 @@
  * it partially covers (5 Go rules, only 2 land in a bug class), and the
  * design doc's §8 records a fourth exclusion clause that shipped dead and
  * was removed, as was the tenth rule, `edge-case-append-discarded`, whose
- * true-positive set is empty in any project that compiles; eight for Java,
+ * true-positive set is empty in any project that compiles; seven for Java,
  * docs/superpowers/specs/2026-08-19-bugfix-rules-java-design.md — Java is
  * emptier still: p/r2c-bug-scan ships 4 Java rules and NONE of
  * them land in a bug class, all four being equality/comparison style;
@@ -564,59 +564,49 @@ registerToolModule(
       'IS seen — it was not before (measured across four import shapes: the qualified pattern ' +
       'also matches the short forms whenever an import lets Semgrep resolve them, while the ' +
       'short pattern never matched the qualified one, so the short branch was inert and was ' +
-      'deleted); `map-get-deref` cannot tell a nullable map from one whose keys are ' +
-      'guaranteed present by anything other than the guard and population shapes it ' +
-      'enumerates, so a map filled in a static initialiser or a total enum mapping declared ' +
-      'as a `Map` is still flagged; and `modify-during-iteration` only matches the ' +
+      'deleted); and `modify-during-iteration` only matches the ' +
       'enhanced-for form, so an indexed loop removing from the list it indexes has the same ' +
-      'defect and is missed. Two Java rules restrict the receiver by DECLARED type, which buys precision ' +
+      'defect and is missed. `modify-during-iteration` restricts the receiver by DECLARED ' +
+      'type, which buys precision ' +
       'and costs recall: `metavariable-type` matches the exact declared type with no ' +
       'subtyping (measured — `type: List` does NOT match a CopyOnWriteArrayList, which is ' +
-      'precisely what keeps the rule off it), so `map-get-deref`, enumerating Map, HashMap, ' +
-      'TreeMap, LinkedHashMap and ConcurrentHashMap, is silent on a map behind a project ' +
-      'interface or a generic type parameter (`<M extends Map<K,V>> ... m.get(k).f()`), ' +
-      'though a raw `Map` still fires (measured); and `modify-during-iteration`, enumerating ' +
+      'precisely what keeps the rule off it), so the rule, enumerating ' +
       'List, ArrayList, LinkedList, Set, HashSet, LinkedHashSet and Collection, is silent on ' +
-      'a Deque, a Queue, a SortedSet or a project collection type — an EnumMap is outside ' +
-      "map-get-deref's enumeration for the same reason. Both bind the receiver through a " +
+      'a Deque, a Queue, a SortedSet or a project collection type. It binds the receiver ' +
+      'through a ' +
       '`metavariable-pattern` accepting a bare name OR a `this.`-qualified one; before that, ' +
       '`cache.get(k).trim()` fired while `this.cache.get(k).trim()` was invisible — same ' +
-      'class, same field, same bug (measured). `map-get-deref` shipped with NO guard ' +
+      'class, same field, same bug (measured). AN EIGHTH RULE, ' +
+      '`null-safety-map-get-deref`, was DELETED by the application-corpus round and its ' +
+      'reasoning is worth keeping because the same trap will be laid again. It shipped with NO guard ' +
       'exclusion at all, so the canonical Java guard `if (m.containsKey(k)) { ... ' +
       'm.get(k).trim() ... }` fired at ERROR and advised `getOrDefault` on already-guarded ' +
-      'code; it now excludes the measured shapes that prove the key present, and every one of ' +
-      'them is SCOPED TO THE ARM THE GUARD ACTUALLY PROVES: the inline `containsKey` and ' +
-      '`get() != null` tests IN THE CONDITION OF AN `if` (alone or as either operand of a ' +
-      'conjunction) with the dereference in the THEN branch, braced or braceless; ' +
-      '`while (m.containsKey(k))`; the same two tests used as an EXPRESSION rather than as the ' +
-      'condition of anything — `return m.containsKey(k) && m.get(k).isEmpty();`, or assigned to ' +
-      'a local — together with their De Morgan duals `!m.containsKey(k) || ...` and ' +
-      '`m.get(k) == null || ...`, where `||` short-circuits so the right operand only runs when ' +
-      'the key IS present; all four ternary polarities, with the dereference in the guarded arm; ' +
-      'an early return/throw/continue under `!containsKey` or `get() == null`; population by ' +
-      '`put`, `putIfAbsent`, `computeIfAbsent` or `if (!containsKey) { put(); }`; and ITERATION ' +
-      "OVER THE MAP'S OWN keySet() — `for (String k : m.keySet()) { ... m.get(k).trim() ... }`, " +
-      'the commonest map-iteration idiom in Java, where the loop header binds the key FROM THE ' +
-      'MAP ITSELF so presence is guaranteed on every path reaching the dereference. That last ' +
-      'clause unifies the map AND the key, so iterating one map and dereferencing another, or ' +
-      'dereferencing a key other than the loop variable, both still fire and are real bugs; the ' +
-      '`entrySet()` form and a key set copied to a local before the loop are NOT reached and are ' +
-      'accepted false positive (11). Every expression-form guard above is ALSO honoured as a ' +
-      'CHAIN — `flag && m.containsKey(k) && m.get(k).isEmpty()` and the `||` duals — because ' +
-      'the chain clause binds `$X` to the whole LEFT-NESTED subtree, so one clause per guard ' +
-      'covers a conjunction of any length whose last-but-one operand is the guard. What still ' +
-      'fires, and is a real bug: a chain guarding a DIFFERENT key or Optional, a ' +
-      'positive-first disjunction (which proves nothing), and a NEGATED guard, where the value ' +
-      'is proven absent exactly where it is read. The ARM ' +
-      'SCOPING is the whole point and was a shipped regression before it: written unscoped, ' +
-      '`pattern-not-inside: if (m.containsKey(k)) { ... }` matches the entire IF-ELSE statement ' +
-      'and the ternary clauses matched the entire conditional expression, so BOTH arms were ' +
-      'excluded — including the branch the guard proves is a GUARANTEED NullPointerException. ' +
-      'Measured on a file of eight such bugs: six fired before the guard exclusions went in, ' +
-      'one after, eight now. `X || m.containsKey(k)` is still NOT treated as a guard and still ' +
-      'fires — `force` true with the key absent is an NPE — and it is structurally ' +
-      'distinguishable from the negative-first form, which is why excluding one does not ' +
-      'reintroduce the other. `modify-during-iteration` had ' +
+      'code. Ten waves of work then enumerated the guard shapes that prove a key present — ' +
+      'inline `containsKey` and `get() != null` in an `if` condition, the same tests as ' +
+      'expressions and as De Morgan duals, chains, all four ternary polarities, early exits, ' +
+      'population by put/putIfAbsent/computeIfAbsent, and iteration over the map own ' +
+      'keySet() — every one arm-scoped, and each one added because a perfectly correct guard ' +
+      'was firing. The rule was measured on OpenJDK and Spring (55 findings, ZERO live ' +
+      'defects) and KEPT anyway, on the argument that both are LIBRARY code where a ' +
+      'dereferenced map is one the class filled itself, and that application Java was a ' +
+      'different distribution nobody had measured. That was the right call to defer and the ' +
+      'wrong answer: the application corpora were then run — Kafka 224 findings / 3 892 ' +
+      'files, Elasticsearch 749 / 20 485, Jenkins 1 / 1 274 — 45 read by hand and FIVE ' +
+      'defensible defects. What decided it was not the count but the shape of the misses: ' +
+      '88% of the Elasticsearch findings and 97% of the Kafka ones have no guard anywhere ' +
+      'near the dereference. They are correct for SEMANTIC reasons — parallel maps kept in ' +
+      'sync, a map the class filled in another method, a constant key, an API contract — and ' +
+      'no exclusion clause reaches any of that, so narrowing was never available (measured: ' +
+      "the one closable family, Elasticsearch's `containsKey(k) == false` negation style, is " +
+      '34 of 749). Two things the read showed that outlive the rule: it was BLIND to the more ' +
+      'dangerous idiom, `X v = m.get(k); v.foo();`, because the dereference is not chained — ' +
+      'so it flagged the safe derived lookup and missed the risky original beside it; and all ' +
+      'five true positives had ONE shape, a map parsed from external input (HTTP JSON, ' +
+      '/sys/fs/cgroup, JVM output) read with a literal key. That is provenance, not syntax, ' +
+      'and is outside Semgrep OSS — recorded as a candidate for a future rule measured from ' +
+      'scratch, never as a tightening of this one. Deleted on the same criterion as ' +
+      "C#'s `as-cast-deref` and `catch-returns-null`, with one honest difference: this rule's " +
+      'true-positive rate was NOT zero, it was about 1%. `modify-during-iteration` had ' +
       'a false negative worth more than any of its false positives — a `remove()` inside a ' +
       '`switch` followed by `break;` is a real ConcurrentModificationException, because that ' +
       'break leaves the SWITCH and not the loop, and the paired `remove(); break;` exclusion ' +
@@ -631,7 +621,7 @@ registerToolModule(
       'ARRAY TYPE, because `$A.length` otherwise matches any int field named `length` and ' +
       "fired at ERROR on a domain object's deliberately inclusive loop; measured, that costs " +
       'no recall — parameter, local, field, `this.`-qualified field and `var`-inferred local ' +
-      'arrays are all still matched. The exit-terminated exclusions across `map-get-deref`, ' +
+      'arrays are all still matched. The exit-terminated exclusions in ' +
       '`optional-get-no-ispresent` and `modify-during-iteration` tolerate exactly ONE ' +
       'statement between the guard (or the removal) and the exit rather than an arbitrary ' +
       'ellipsis: measured, the ellipsis form matches DEEP, so ' +
@@ -655,7 +645,7 @@ registerToolModule(
       'Checkstyle/IntelliJ convention the ERROR tier rested on covers 8.0% (139/1728) of the ' +
       'corpus empty catches. 45 findings were read individually; about 39 were deliberate. ' +
       'Four languages have now tested that premise and four have refuted it. ' +
-      'READ THIS BEFORE WONDERING WHY A JAVA FIX PR CAME BACK EMPTY: ALL EIGHT of these ' +
+      'READ THIS BEFORE WONDERING WHY A JAVA FIX PR CAME BACK EMPTY: ALL SEVEN of these ' +
       'rules are WARNING, and create_fix_pr defaults severity_min to `high`, so the Java pack ' +
       'contributes NOTHING AT ALL to the DEFAULT fix-PR set — ask for it with ' +
       '`severity_min: "medium"`. bug_hunt itself does not filter by default, so nothing ' +
@@ -671,8 +661,8 @@ registerToolModule(
       'ignore/ignored/expected convention), so what it emits afterwards would be an UNMARKED ' +
       'silent swallow — and the OpenJDK measurement above refutes the "unmarked" half: the ' +
       'mark is a comment, and the name the rule reads covers 8% of real occurrences. ' +
-      'Zero rules in eight is the honest result for a syntactic ' +
-      'matcher with no dataflow, not a failure of the pack. `map-get-deref`, ' +
+      'Zero rules in seven is the honest result for a syntactic ' +
+      'matcher with no dataflow, not a failure of the pack. ' +
       '`modify-during-iteration`, `static-dateformat` and `loop-lte-length` were demoted on ' +
       'that criterion. `loop-lte-length` only after the obvious tightening was MEASURED and ' +
       'rejected: requiring the body to index `a[i]` fixes the loop that never indexes `a`, ' +
@@ -706,12 +696,16 @@ registerToolModule(
       '`if (!present(o)) { return d; }`, which needs interprocedural analysis Semgrep OSS ' +
       'does not do; that shape is a false positive and always will be, which is why the rule ' +
       'is WARNING instead of carrying an ever-longer exclusion list. ' +
-      'Eleven Java limitations are accepted rather than fixed, each reproduced against the ' +
+      'Eight Java limitations are accepted rather than fixed, each reproduced against the ' +
       'review fixtures, and EACH STATES ITS DIRECTION — for six waves this list had nine ' +
       'entries and all nine were false positives, which is the asymmetry that let a wave close ' +
       'a false positive, silently delete recall, and still go green. One entry LEFT the list ' +
       'when it was re-measured: the conjunction-chain false positive was never a limitation, ' +
-      'only an unexamined metavariable. FALSE POSITIVES: (1) `stream-not-closed` on `open(); try {} finally { close(); }` (already ' +
+      'only an unexamined metavariable. THREE MORE left with `map-get-deref` when the ' +
+      'application-corpus round deleted it — the map filled in a static initialiser, the ' +
+      'total enum mapping declared as a `Map`, and the two keySet()-adjacent idioms — and ' +
+      'that is the shape of the whole argument for deleting it: three of eleven accepted ' +
+      'limitations belonged to one rule of eight. FALSE POSITIVES: (1) `stream-not-closed` on `open(); try {} finally { close(); }` (already ' +
       'the stated reason it is WARNING); (2) `static-dateformat` on a static final ' +
       'SimpleDateFormat whose every access goes through a synchronized method (proving ALL ' +
       'accesses are synchronized is whole-program analysis, which Semgrep OSS does not do; ' +
@@ -721,28 +715,23 @@ registerToolModule(
       '`i <= a.length` where the body guards with `i < a.length` or never indexes `a` (the ' +
       'tightening was tried and rejected — see the tier note above); (4) ' +
       '`printstacktrace-only` on the one place the call is right — the fallback when the ' +
-      'logger itself threw; (5) `map-get-deref`, `optional-get-no-ispresent` and ' +
+      'logger itself threw; (5) `optional-get-no-ispresent` and ' +
       '`modify-during-iteration` where TWO OR MORE statements sit between the guard (or the ' +
-      'removal) and the exit — `if (!m.containsKey(k)) { log(); metric(); return ""; }`, ' +
+      'removal) and the exit — `if (o.isEmpty()) { log(); metric(); return ""; }`, ' +
       '`items.remove(s); log(s); n++; break;` — the deliberate price of not using a ' +
-      'deep-matching ellipsis, which would hide real bugs instead; (6) all three of those ' +
+      'deep-matching ellipsis, which would hide real bugs instead; (6) both of those ' +
       'rules on any guard reached THROUGH A HELPER METHOD, `if (!present(o)) { return d; }`, ' +
-      'which needs interprocedural analysis; (7) `map-get-deref` on a key whose presence ' +
-      'is established outside its enumerated shapes — a map filled in a static initialiser, ' +
-      'or a total enum mapping declared as a `Map`; (8) `map-get-deref` and ' +
+      'which needs interprocedural analysis; and (7) ' +
       '`optional-get-no-ispresent` on a guard held in a LOCAL BOOLEAN — ' +
-      '`boolean present = m.containsKey(k); if (!present) { return ""; }` — which is dataflow, ' +
-      'not syntax, and outside Semgrep OSS; and (11) `map-get-deref` on the two ' +
-      'keySet()-adjacent idioms the keySet() exclusion does not reach — `entrySet()`, where ' +
-      'the key is `e.getKey()` and not the loop variable, and a key set copied to a local ' +
-      'before the loop, where the header no longer mentions keySet(). FALSE NEGATIVES, the ' +
-      'direction nobody was writing down for six waves: (9) the INVALIDATED-GUARANTEE class ' +
+      '`boolean present = o.isPresent(); if (!present) { return ""; }` — which is dataflow, ' +
+      'not syntax, and outside Semgrep OSS. FALSE NEGATIVES, the ' +
+      'direction nobody was writing down for six waves: (8) the INVALIDATED-GUARANTEE class ' +
       '— a guarantee the guard establishes and the code then destroys INSIDE the region the ' +
-      'exclusion covers, `if (m.containsKey(k)) { m.remove(k); return m.get(k).trim(); }` and ' +
+      'exclusion covers, `if (o.isPresent()) { clear(o); return o.get(); }` and ' +
       'four more measured shapes, all guaranteed throws, all silent. Same root cause as the ' +
       'else-arm bug — pattern-not-inside excludes the whole node it matched — but on the ' +
-      'TEMPORAL axis rather than the branch axis, and not fixable without dataflow; and (10) ' +
-      'the same two rules on a guard held in a LOCAL BOOLEAN, the recall mirror of (8). ' +
+      'TEMPORAL axis rather than the branch axis, and not fixable without dataflow; and (9) ' +
+      'the same rule on a guard held in a LOCAL BOOLEAN, the recall mirror of (7). ' +
       'JS/TS, Python, Go, Java, C# and PHP only: Rust has a single rule and no other ' +
       'language has a local rule pack yet, so Ruby gets only the ' +
       'registry coverage described below, same as before these packs existed. The local ' +
