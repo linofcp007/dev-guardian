@@ -4,6 +4,26 @@
 
 **Goal:** Ship `configs/semgrep/bugfix-php.yml` — six measured PHP bug-finding rules — with a harness that carries every check this series has paid for.
 
+> **Boxes reconciled against the code on 2026-08-22, not ticked during
+> execution.** Nothing here was ticked while the work was done; every box was
+> checked afterwards against the pack, the fixtures, the harness and the git
+> history, so the ticks are an audit. Steps whose only product was a transient
+> run — "RED", a `php -l`, an ablation report — are ticked on the artefact they
+> were meant to leave behind (the clause, the fixture, the assertion, the
+> measurement written into a rule comment), never on the run itself, which
+> leaves no trace.
+>
+> **This plan is not current, and is kept as the record of what was intended.**
+> This is the least-changed pack in the series: all six rules still ship, at the
+> tiers planned here, with none deleted and none moved. Two things have changed
+> around it. Axis 3 is no longer `N/A` — the pack is registered in
+> `mcp/test/ablate/packs.ts` with an opt-in real-code corpus,
+> `GUARDIAN_PHP_SRC`, pointed at a WordPress tree to keep the numbers
+> comparable with the design of record. And Task 2 Step 5 defers the Java/C#
+> `empty-catch` tier question as "being measured separately": it was measured,
+> and both packs dropped it from ERROR to WARNING, which is the conclusion this
+> round reached first.
+
 **Architecture:** One Semgrep YAML pack, discovered by the existing `resolveBugfixRules()` glob. A fixture tree of hits, misses, a real-bugs corpus and a prescribed-fix file. One integration test mirroring `bugfixRulesCs.test.ts`.
 
 **Tech Stack:** Semgrep 1.164.0 (PowerShell only), TypeScript/vitest, Docker for `php -l`.
@@ -43,21 +63,21 @@ Start with `off-by-one-loop-lte-count` and `race-condition-toctou-file` — the 
 - Create: `mcp/test/integration/bugfixRulesPhp.test.ts`
 - Modify: `mcp/test/unit/platform/configsDir.test.ts`
 
-- [ ] **Step 1: Update `configsDir.test.ts` FIRST**, and watch it fail before the YAML exists. It pins the exact expected array, and forgetting it has bitten every round in this series.
+- [x] **Step 1: Update `configsDir.test.ts` FIRST**, and watch it fail before the YAML exists. It pins the exact expected array, and forgetting it has bitten every round in this series.
 
-- [ ] **Step 2: Write the harness**, mirroring `bugfixRulesCs.test.ts`: exact rule-id set, raw non-deduplicated count and `paths.scanned` per fixture file; `EXPECTED_SEVERITY` exhaustive in both directions; ids checked against the built `mapSubcategory`; distinct rule ids across `hits/` equal to the number of `- id:` entries. Skips when Semgrep is absent, hard-fails under `GUARDIAN_REQUIRE_SEMGREP=1`.
+- [x] **Step 2: Write the harness**, mirroring `bugfixRulesCs.test.ts`: exact rule-id set, raw non-deduplicated count and `paths.scanned` per fixture file; `EXPECTED_SEVERITY` exhaustive in both directions; ids checked against the built `mapSubcategory`; distinct rule ids across `hits/` equal to the number of `- id:` entries. Skips when Semgrep is absent, hard-fails under `GUARDIAN_REQUIRE_SEMGREP=1`.
 
-- [ ] **Step 3: Near-misses first.** For `off-by-one`, the miss file must contain a class with **both** a `->length` property and a `->count()` method inside `<=` loops. The probe measured the rule silent on both, and that is the round's one free win: `count()` is a global function in PHP, so the domain-object false positive that forced `metavariable-type` enumeration in Java and C# cannot arise. **Do not add a type list.** For `toctou`, the miss file carries the atomic idioms — `@mkdir(...) === false && !is_dir()`, `fopen($f,'xb')`, `@unlink` with the return inspected, and `file_exists` used for a *report* rather than as a guard.
+- [x] **Step 3: Near-misses first.** For `off-by-one`, the miss file must contain a class with **both** a `->length` property and a `->count()` method inside `<=` loops. The probe measured the rule silent on both, and that is the round's one free win: `count()` is a global function in PHP, so the domain-object false positive that forced `metavariable-type` enumeration in Java and C# cannot arise. **Do not add a type list.** For `toctou`, the miss file carries the atomic idioms — `@mkdir(...) === false && !is_dir()`, `fopen($f,'xb')`, `@unlink` with the return inspected, and `file_exists` used for a *report* rather than as a guard.
 
-- [ ] **Step 4: RED.**
+- [x] **Step 4: RED.**
 
-- [ ] **Step 5: Write the two rules.** `off-by-one` spans {`count`, `sizeof`, `strlen`, `mb_strlen`} × {`$i++`, `++$i`}, plus a hoisted branch anchored on `$n = count($a);`. `toctou` needs four sibling shapes: `file_exists`→`unlink`, `!is_dir`→`mkdir`, `!file_exists`→`file_put_contents`, `is_writable`→`fopen`.
+- [x] **Step 5: Write the two rules.** `off-by-one` spans {`count`, `sizeof`, `strlen`, `mb_strlen`} × {`$i++`, `++$i`}, plus a hoisted branch anchored on `$n = count($a);`. `toctou` needs four sibling shapes: `file_exists`→`unlink`, `!is_dir`→`mkdir`, `!file_exists`→`file_put_contents`, `is_writable`→`fopen`.
 
-- [ ] **Step 6: GREEN**, `php -l` clean on every fixture, ablate with `npm run ablate -- bugfix-php`.
+- [x] **Step 6: GREEN**, `php -l` clean on every fixture, ablate with `npm run ablate -- bugfix-php`.
 
-- [ ] **Step 7: Keep the sentinel false positive and say so.** `array_fill(0, count($xs)+1, 0)` still fires. Java measured the obvious tightening and rejected it because it traded a false positive for a false negative; carry that forward in the comment rather than re-running it.
+- [x] **Step 7: Keep the sentinel false positive and say so.** `array_fill(0, count($xs)+1, 0)` still fires. Java measured the obvious tightening and rejected it because it traded a false positive for a false negative; carry that forward in the comment rather than re-running it.
 
-- [ ] **Step 8: Commit**, `feat(bugfix-rules):`.
+- [x] **Step 8: Commit**, `feat(bugfix-rules):`.
 
 ---
 
@@ -68,17 +88,22 @@ Start with `off-by-one-loop-lte-count` and `race-condition-toctou-file` — the 
 - Modify: `configs/semgrep/bugfix-php.yml`, `mcp/test/integration/bugfixRulesPhp.test.ts`
 - Create: `mcp/test/fixtures/bugfix-php/{hits,misses}/{empty_catch,strpos}.php`
 
-- [ ] **Step 1: The try shape is a dimension, not a detail.** `try{}catch(){}` and `try{}catch(){}finally{}` are **disjoint** nodes in PHP exactly as in C# — neither contains the other, so enumerate both rather than widening one. This hole shipped in Java and cost a separate fix round; do not reproduce it.
+- [x] **Step 1: The try shape is a dimension, not a detail.** `try{}catch(){}` and `try{}catch(){}finally{}` are **disjoint** nodes in PHP exactly as in C# — neither contains the other, so enumerate both rather than widening one. This hole shipped in Java and cost a separate fix round; do not reproduce it.
 
-- [ ] **Step 2: Near-misses first.** For `strpos`, the miss file must contain `str_contains()`, `str_starts_with()` and `preg_match()` in boolean positions — the probe measured 3 false positives without the function-name filter, so the filter is load-bearing and the fixture must prove it. For `empty-catch`, include the `$ignored` naming exemption **both with and without `finally`**.
+- [x] **Step 2: Near-misses first.** For `strpos`, the miss file must contain `str_contains()`, `str_starts_with()` and `preg_match()` in boolean positions — the probe measured 3 false positives without the function-name filter, so the filter is load-bearing and the fixture must prove it. For `empty-catch`, include the `$ignored` naming exemption **both with and without `finally`**.
 
-- [ ] **Step 3: RED, write, GREEN.**
+- [x] **Step 3: RED, write, GREEN.**
 
-- [ ] **Step 4: Record the two measured limits in the rule comments.** `empty-catch` reaches 6 of 8 spellings; the PHP 8 non-capturing `catch (\Foo) { }` is **unmatchable by any AST pattern** and is therefore invisible — which matters because that is the spelling modern PHP uses to declare deliberate silence. `strpos-truthiness` reaches 7 of 8; the store-then-test form (`$at = strpos(...); if ($at)`) is not covered.
+- [x] **Step 4: Record the two measured limits in the rule comments.** `empty-catch` reaches 6 of 8 spellings; the PHP 8 non-capturing `catch (\Foo) { }` is **unmatchable by any AST pattern** and is therefore invisible — which matters because that is the spelling modern PHP uses to declare deliberate silence. `strpos-truthiness` reaches 7 of 8; the store-then-test form (`$at = strpos(...); if ($at)`) is not covered.
 
-- [ ] **Step 5: Both are WARNING.** The design's §3 explains why `empty-catch` does not clear the ERROR bar in PHP even though Java and C# ship it at ERROR. Do not change those two packs here — that question is being measured separately.
+- [x] **Step 5: Both are WARNING.** The design's §3 explains why `empty-catch` does not clear the ERROR bar in PHP even though Java and C# ship it at ERROR. Do not change those two packs here — that question is being measured separately.
 
-- [ ] **Step 6: Ablate, `php -l`, commit.**
+> **The deferred question was answered.** Both PHP rules are still WARNING, and
+> the separate measurement went the way this round argued: `empty-catch` dropped
+> from ERROR to WARNING in Java (on the OpenJDK) and in C# (402 findings on
+> `dotnet/runtime`) on 2026-08-20. §4a of both design docs carries it.
+
+- [x] **Step 6: Ablate, `php -l`, commit.**
 
 ---
 
@@ -89,13 +114,13 @@ Start with `off-by-one-loop-lte-count` and `race-condition-toctou-file` — the 
 - Modify: `configs/semgrep/bugfix-php.yml`, `mcp/test/integration/bugfixRulesPhp.test.ts`
 - Create: `mcp/test/fixtures/bugfix-php/{hits,misses}/{json_decode,loose_null}.php`
 
-- [ ] **Step 1: `json-decode-deref` needs `isset`/`empty` exclusions to reach zero on real code.** Without them the probe measured 4 false positives on WordPress, all guarded by `isset($res->error)`. With them: 4 of 4 hits, 0 of 6 misses, 0 on 1467 files.
+- [x] **Step 1: `json-decode-deref` needs `isset`/`empty` exclusions to reach zero on real code.** Without them the probe measured 4 false positives on WordPress, all guarded by `isset($res->error)`. With them: 4 of 4 hits, 0 of 6 misses, 0 on 1467 files.
 
-- [ ] **Step 2: The `pattern-not-regex: '\?->'` is the only thing that makes this rule possible.** `?->` and `->` are the same node, so the AST exclusion deletes the rule. Write a comment saying this is a *text* guard on an AST rule and why there is no alternative — `base.yml` documents `pattern-not-regex` as a hazard, and this is a deliberate exception, not an oversight.
+- [x] **Step 2: The `pattern-not-regex: '\?->'` is the only thing that makes this rule possible.** `?->` and `->` are the same node, so the AST exclusion deletes the rule. Write a comment saying this is a *text* guard on an AST rule and why there is no alternative — `base.yml` documents `pattern-not-regex` as a hazard, and this is a deliberate exception, not an oversight.
 
-- [ ] **Step 3: `loose-null-compare` is the weakest rule in the pack and its comment must say so.** WPCS's `WordPress.PHP.StrictComparisons` already covers it, so the additive claim holds only where phpcs+WPCS is absent or outside WordPress. Note `null` in a pattern is case-insensitive, so `NULL` and `Null` are covered.
+- [x] **Step 3: `loose-null-compare` is the weakest rule in the pack and its comment must say so.** WPCS's `WordPress.PHP.StrictComparisons` already covers it, so the additive claim holds only where phpcs+WPCS is absent or outside WordPress. Note `null` in a pattern is case-insensitive, so `NULL` and `Null` are covered.
 
-- [ ] **Step 4: RED, write, GREEN, ablate, `php -l`, commit.**
+- [x] **Step 4: RED, write, GREEN, ablate, `php -l`, commit.**
 
 ---
 
@@ -108,16 +133,25 @@ Start with `off-by-one-loop-lte-count` and `race-condition-toctou-file` — the 
 - Create: `mcp/test/fixtures/bugfix-php/control/vulnerable.php`
 - Modify: `mcp/test/integration/bugfixRulesPhp.test.ts`
 
-- [ ] **Step 1: A real-bugs corpus with at least one entry per rule**, written beside the guard shape each rule's exclusions match. It exists to give the ablation its second axis.
+- [x] **Step 1: A real-bugs corpus with at least one entry per rule**, written beside the guard shape each rule's exclusions match. It exists to give the ablation its second axis.
 
-- [ ] **Step 2: The whole-pack prescribed-fix check — this is the new governing rule and the reason Task 4 exists.** Write every hit rewritten with the fix its own message prescribes into `fixed/fixed.php`, then scan that file with **the entire pack** and assert **zero** findings. Per-rule checking is not enough: the `@`-suppression candidate passed every per-rule check and was killed only here, because `toctou`'s prescribed fix ("act first and inspect the return value") is idiomatically `@mkdir(...)`, so one rule fired on another rule's fix.
+- [x] **Step 2: The whole-pack prescribed-fix check — this is the new governing rule and the reason Task 4 exists.** Write every hit rewritten with the fix its own message prescribes into `fixed/fixed.php`, then scan that file with **the entire pack** and assert **zero** findings. Per-rule checking is not enough: the `@`-suppression candidate passed every per-rule check and was killed only here, because `toctou`'s prescribed fix ("act first and inspect the return value") is idiomatically `@mkdir(...)`, so one rule fired on another rule's fix.
 
-- [ ] **Step 3: The no-duplication proof, with a control asserted to have fired.** `p/r2c-bug-scan` reports `paths.scanned = 0` on PHP — it ships no PHP rules — so for that pack the control is the only thing separating "additive" from "never ran". `p/php` is live and PHP-aware (9 findings on 12 classic vulnerable shapes). **`p/security-audit` has no working positive control** in PHP or C#; assert only `paths.scanned > 0` for it and say why.
+- [x] **Step 3: The no-duplication proof, with a control asserted to have fired.** `p/r2c-bug-scan` reports `paths.scanned = 0` on PHP — it ships no PHP rules — so for that pack the control is the only thing separating "additive" from "never ran". `p/php` is live and PHP-aware (9 findings on 12 classic vulnerable shapes). **`p/security-audit` has no working positive control** in PHP or C#; assert only `paths.scanned > 0` for it and say why.
 
-- [ ] **Step 4: Full ablation**, `npm run ablate -- bugfix-php`, including the new axis 0 (does each rule fire on `hits/` at all). Register the pack in `mcp/test/ablate/packs.ts`. Axis 3 needs a real PHP corpus — WordPress core is what the probe used; wire it if it is obtainable at a short path, or register axis 3 as an explicit `N/A` and say so. Never silently omit it.
+- [x] **Step 4: Full ablation**, `npm run ablate -- bugfix-php`, including the new axis 0 (does each rule fire on `hits/` at all). Register the pack in `mcp/test/ablate/packs.ts`. Axis 3 needs a real PHP corpus — WordPress core is what the probe used; wire it if it is obtainable at a short path, or register axis 3 as an explicit `N/A` and say so. Never silently omit it.
 
-- [ ] **Step 5: Docs.** README (EN/PT/ES), `skills/guardian-bugfix/SKILL.md`, `mcp/src/tools/bugHunt.ts`, `CHANGELOG.md`. Counts become 13 JS/TS, 10 Python, 9 Go, 8 Java, 12 C#, **6 PHP**. **State that `memory_leak` is an empty class in this pack** — `fopen`/`curl` tracking needs escape analysis Semgrep OSS lacks, and the probe measured both ends of the dial: with escape exclusions the rule finds *nothing*, without them it fires on correct code.
+> **Axis 3 was wired, not declared N/A.** The pack is registered in
+> `mcp/test/ablate/packs.ts` with an opt-in corpus read from
+> `GUARDIAN_PHP_SRC` — unset it prints `N/A`, set to a path that does not exist
+> it throws.
 
-- [ ] **Step 6: `npm run build`, `npm run lint`, full `npm test`** with `GUARDIAN_REQUIRE_SEMGREP=1`. Stage `mcp/dist/`. `git status --porcelain` empty. Markdownlint clean.
+- [x] **Step 5: Docs.** README (EN/PT/ES), `skills/guardian-bugfix/SKILL.md`, `mcp/src/tools/bugHunt.ts`, `CHANGELOG.md`. Counts become 13 JS/TS, 10 Python, 9 Go, 8 Java, 12 C#, **6 PHP**. **State that `memory_leak` is an empty class in this pack** — `fopen`/`curl` tracking needs escape analysis Semgrep OSS lacks, and the probe measured both ends of the dial: with escape exclusions the rule finds *nothing*, without them it fires on correct code.
 
-- [ ] **Step 7: Commit.**
+> **Two of those counts have moved since.** Java is **7** (`map-get-deref`
+> deleted on 2026-08-22) and C# is **11** (`as-cast-deref` deleted on
+> 2026-08-21). The PHP numbers are unchanged.
+
+- [x] **Step 6: `npm run build`, `npm run lint`, full `npm test`** with `GUARDIAN_REQUIRE_SEMGREP=1`. Stage `mcp/dist/`. `git status --porcelain` empty. Markdownlint clean.
+
+- [x] **Step 7: Commit.**

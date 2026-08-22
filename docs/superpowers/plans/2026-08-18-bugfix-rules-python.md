@@ -6,6 +6,25 @@
 covering all six bug subcategories for Python — and make `bug_hunt`'s rule-file
 resolver plural so every later language needs no further wiring.
 
+> **Boxes reconciled against the code on 2026-08-22, not ticked during
+> execution.** Nothing here was ticked while the work was done; every box was
+> checked afterwards against the pack, the fixtures, the resolver, the harness
+> and the git history, so the ticks are an audit. Steps whose only product was a
+> transient run — "Expected: FAIL", a mutation pasted into a task report — are
+> ticked on the artefact they were meant to leave behind (the clause, the
+> discriminating fixture, the assertion, the commit), never on the run itself,
+> which leaves no trace.
+>
+> **This plan is not current, and is kept as the record of what was intended.**
+> This is the one pack in the series that still ships exactly the ten rules
+> planned here, and none was deleted — but not as written: the audit round of
+> 2026-08-20 rewrote clauses across the pack and dropped every tier to WARNING
+> except `null-safety-none-deref-match`, so the `severity:` lines below are
+> as-planned, not as-shipped. Three things the plan never mentions arrived
+> later: `hits/real_bugs.py`, registration with the ablation harness
+> (`mcp/test/ablate/packs.ts`), and an opt-in axis-3 real-code corpus
+> (`GUARDIAN_PY_SRC`).
+
 **Architecture:** A plain Semgrep YAML rule file beside the existing
 `bugfix-js.yml`, with a hit/near-miss fixture pair per rule and an integration
 test that asserts the exact rule ids AND the raw finding count per file.
@@ -56,6 +75,7 @@ including one rule that is **not expressible in Semgrep** and was replaced.
 ### Task 1: Rule file, test harness, and the three `error_handling` rules
 
 **Files:**
+
 - Create: `configs/semgrep/bugfix-py.yml`
 - Create: `mcp/test/fixtures/bugfix-py/hits/bare_except.py`
 - Create: `mcp/test/fixtures/bugfix-py/misses/bare_except.py`
@@ -66,6 +86,7 @@ including one rule that is **not expressible in Semgrep** and was replaced.
 - Create: `mcp/test/integration/bugfixRulesPy.test.ts`
 
 **Interfaces:**
+
 - Consumes: `mapSubcategory(ruleId: string, existing: string | undefined): string | undefined`
   from `../../src/tools/bugHunt.js`.
 - Produces: `configs/semgrep/bugfix-py.yml` with a single top-level `rules:` list,
@@ -74,7 +95,7 @@ including one rule that is **not expressible in Semgrep** and was replaced.
   `EXPECTED_HITS_BY_FILE: Readonly<Record<string, { ids: readonly string[]; count: number }>>`
   and `EXPECTED_CLASS: Readonly<Record<string, string>>`.
 
-- [ ] **Step 1: Write the three hit fixtures**
+- [x] **Step 1: Write the three hit fixtures**
 
 `mcp/test/fixtures/bugfix-py/hits/bare_except.py`:
 
@@ -132,7 +153,7 @@ def profile(user_id):
     return User.objects.get(pk=user_id)
 ```
 
-- [ ] **Step 2: Write the three near-miss fixtures**
+- [x] **Step 2: Write the three near-miss fixtures**
 
 These are the specification of what correct code looks like. If one of them
 fires, the rule is wrong — not the fixture.
@@ -203,7 +224,7 @@ def broad(user_id):
         return None
 ```
 
-- [ ] **Step 3: Write the test harness with only the Task 1 expectations**
+- [x] **Step 3: Write the test harness with only the Task 1 expectations**
 
 Create `mcp/test/integration/bugfixRulesPy.test.ts`. This mirrors
 `mcp/test/integration/bugfixRulesJs.test.ts` — read that file first; its module
@@ -383,7 +404,7 @@ describe('every rule id classifies as its own class', () => {
 });
 ```
 
-- [ ] **Step 4: Run the test to verify it fails**
+- [x] **Step 4: Run the test to verify it fails**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -394,7 +415,12 @@ npx vitest run test/integration/bugfixRulesPy.test.ts
 Expected: FAIL — `configs/semgrep/bugfix-py.yml` does not exist yet, so the
 "rule file exists" test fails and the Semgrep runs error.
 
-- [ ] **Step 5: Write the rule file with the three `error_handling` rules**
+- [x] **Step 5: Write the rule file with the three `error_handling` rules**
+
+> **Tiers superseded (2026-08-20 audit round).** All three of these ship at
+> WARNING now, not ERROR. The pack keeps exactly one ERROR —
+> `null-safety-none-deref-match` — so every `severity: ERROR` in this plan is
+> as-planned, not as-shipped.
 
 Create `configs/semgrep/bugfix-py.yml`. The header comment mirrors
 `bugfix-js.yml`'s. **The YAML below is verified** — `except-pass` needs five
@@ -521,7 +547,7 @@ rules:
     languages: [python]
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -534,7 +560,7 @@ Expected: PASS, with **no skipped tests**. `bare_except.py` count 1,
 `except_pass.py` count 4, `get_without_doesnotexist.py` count 1, and zero
 findings across all three near-miss files.
 
-- [ ] **Step 7: Prove the near-miss half is real, not vacuous**
+- [x] **Step 7: Prove the near-miss half is real, not vacuous**
 
 This is the step that separates a proof from a green tick. Temporarily delete
 the three `pattern-not-inside` clauses from
@@ -543,7 +569,7 @@ suite goes **RED** on `misses/get_without_doesnotexist.py`. Then restore them
 and confirm GREEN again. Record the RED output in your task report. If deleting
 the guard leaves the suite green, the test is not testing what it claims.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add configs/semgrep/bugfix-py.yml mcp/test/fixtures/bugfix-py mcp/test/integration/bugfixRulesPy.test.ts
@@ -555,6 +581,7 @@ git commit -m "feat(bugfix-rules): the three Python error_handling rules"
 ### Task 2: `null_safety` (2 rules) and `off_by_one` (1 rule)
 
 **Files:**
+
 - Modify: `configs/semgrep/bugfix-py.yml` (append three rules to the `rules:` list)
 - Create: `mcp/test/fixtures/bugfix-py/hits/none_deref_match.py`
 - Create: `mcp/test/fixtures/bugfix-py/misses/none_deref_match.py`
@@ -565,6 +592,7 @@ git commit -m "feat(bugfix-rules): the three Python error_handling rules"
 - Modify: `mcp/test/integration/bugfixRulesPy.test.ts` (`EXPECTED_HITS_BY_FILE`, `EXPECTED_CLASS`)
 
 **Interfaces:**
+
 - Consumes: `configs/semgrep/bugfix-py.yml` with a `rules:` list holding the three
   `error_handling` rules from Task 1; `bugfixRulesPy.test.ts`'s
   `EXPECTED_HITS_BY_FILE: Readonly<Record<string, { ids: readonly string[]; count: number }>>`
@@ -574,7 +602,7 @@ git commit -m "feat(bugfix-rules): the three Python error_handling rules"
   `bugfix-py-null-safety-none-deref-dict-get`,
   `bugfix-py-off-by-one-range-len-plus-one`.
 
-- [ ] **Step 1: Write the three hit fixtures**
+- [x] **Step 1: Write the three hit fixtures**
 
 `mcp/test/fixtures/bugfix-py/hits/none_deref_match.py`:
 
@@ -615,7 +643,7 @@ def last(values):
     return values[len(values)]
 ```
 
-- [ ] **Step 2: Write the three near-miss fixtures**
+- [x] **Step 2: Write the three near-miss fixtures**
 
 `mcp/test/fixtures/bugfix-py/misses/none_deref_match.py`:
 
@@ -687,7 +715,7 @@ def pairs(values):
     return [(i, values[i]) for i in range(len(values) - 1)]
 ```
 
-- [ ] **Step 3: Register the expectations in the test**
+- [x] **Step 3: Register the expectations in the test**
 
 In `mcp/test/integration/bugfixRulesPy.test.ts`, add these three entries to
 `EXPECTED_HITS_BY_FILE`:
@@ -706,7 +734,7 @@ and these three to `EXPECTED_CLASS`:
   'bugfix-py-off-by-one-range-len-plus-one': 'off_by_one',
 ```
 
-- [ ] **Step 4: Run the test to verify it fails**
+- [x] **Step 4: Run the test to verify it fails**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -719,7 +747,11 @@ Expected: FAIL — the three new hit fixtures produce zero findings because the
 rules do not exist yet, so `ids(rows)` is `[]` against the expected id, and
 `mapSubcategory` is asserted for ids no rule defines.
 
-- [ ] **Step 5: Append the three rules to `configs/semgrep/bugfix-py.yml`**
+- [x] **Step 5: Append the three rules to `configs/semgrep/bugfix-py.yml`**
+
+> **Tiers superseded (2026-08-20 audit round).** See Task 1 Step 5: only
+> `none-deref-match` remained at ERROR; `none-deref-dict-get` and
+> `range-len-plus-one` are WARNING.
 
 ```yaml
   - id: bugfix-py-null-safety-none-deref-match
@@ -778,7 +810,7 @@ rules do not exist yet, so `ids(rows)` is `[]` against the expected id, and
     languages: [python]
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -789,14 +821,14 @@ npx vitest run test/integration/bugfixRulesPy.test.ts
 
 Expected: PASS, no skips. Six hit files now, six near-miss files, all silent.
 
-- [ ] **Step 7: Prove the receiver-name exclusion is load-bearing**
+- [x] **Step 7: Prove the receiver-name exclusion is load-bearing**
 
 Temporarily delete the `metavariable-regex` clause from
 `bugfix-py-null-safety-none-deref-dict-get`, re-run, and confirm **RED** on
 `misses/none_deref_dict_get.py` (the four HTTP functions fire). Restore it,
 confirm GREEN. Record the RED output in your task report.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add configs/semgrep/bugfix-py.yml mcp/test/fixtures/bugfix-py mcp/test/integration/bugfixRulesPy.test.ts
@@ -815,6 +847,7 @@ the sequence pattern matches but reports at the definition line and fires
 identically on `await f(x)`, `return f(x)` and `asyncio.create_task(f(x))`.
 
 **Files:**
+
 - Modify: `configs/semgrep/bugfix-py.yml` (append three rules)
 - Create: `mcp/test/fixtures/bugfix-py/hits/open_without_context.py`
 - Create: `mcp/test/fixtures/bugfix-py/misses/open_without_context.py`
@@ -825,6 +858,7 @@ identically on `await f(x)`, `return f(x)` and `asyncio.create_task(f(x))`.
 - Modify: `mcp/test/integration/bugfixRulesPy.test.ts`
 
 **Interfaces:**
+
 - Consumes: `configs/semgrep/bugfix-py.yml` with six rules; the test's
   `EXPECTED_HITS_BY_FILE` and `EXPECTED_CLASS` maps.
 - Produces: three more ids —
@@ -832,7 +866,7 @@ identically on `await f(x)`, `return f(x)` and `asyncio.create_task(f(x))`.
   `bugfix-py-race-condition-asyncio-not-awaited`,
   `bugfix-py-race-condition-toctou-exists-open`.
 
-- [ ] **Step 1: Write the three hit fixtures**
+- [x] **Step 1: Write the three hit fixtures**
 
 `mcp/test/fixtures/bugfix-py/hits/open_without_context.py`:
 
@@ -888,7 +922,7 @@ def read_after_logging(path):
     return ""
 ```
 
-- [ ] **Step 2: Write the three near-miss fixtures**
+- [x] **Step 2: Write the three near-miss fixtures**
 
 `mcp/test/fixtures/bugfix-py/misses/open_without_context.py` — the `Writer` class
 is the reason attribute targets are excluded: its `close()` lives in another
@@ -995,7 +1029,7 @@ def open_other_path(a, b):
     return ""
 ```
 
-- [ ] **Step 3: Register the expectations in the test**
+- [x] **Step 3: Register the expectations in the test**
 
 Add to `EXPECTED_HITS_BY_FILE`:
 
@@ -1018,7 +1052,7 @@ Add to `EXPECTED_CLASS`:
   'bugfix-py-race-condition-toctou-exists-open': 'race_condition',
 ```
 
-- [ ] **Step 4: Run the test to verify it fails**
+- [x] **Step 4: Run the test to verify it fails**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -1029,7 +1063,7 @@ npx vitest run test/integration/bugfixRulesPy.test.ts
 
 Expected: FAIL — the three new hit fixtures produce no findings.
 
-- [ ] **Step 5: Append the three rules to `configs/semgrep/bugfix-py.yml`**
+- [x] **Step 5: Append the three rules to `configs/semgrep/bugfix-py.yml`**
 
 ```yaml
   # A exclusão de targets que são atributos (`self.handle = open(...)`) é
@@ -1102,7 +1136,7 @@ Expected: FAIL — the three new hit fixtures produce no findings.
     languages: [python]
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -1113,7 +1147,7 @@ npx vitest run test/integration/bugfixRulesPy.test.ts
 
 Expected: PASS, no skips. Nine hit files, nine near-miss files, all silent.
 
-- [ ] **Step 7: Prove the `pattern-not-inside` operators are not no-ops**
+- [x] **Step 7: Prove the `pattern-not-inside` operators are not no-ops**
 
 Change the three `pattern-not-inside` clauses in
 `bugfix-py-race-condition-asyncio-not-awaited` to `pattern-not` (same operands),
@@ -1123,7 +1157,7 @@ returned and assigned forms all start firing, because a call and its enclosing
 both outputs in your task report. This is the exact defect class that shipped
 six times in the JS/TS round; demonstrating it here is the point of the step.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add configs/semgrep/bugfix-py.yml mcp/test/fixtures/bugfix-py mcp/test/integration/bugfixRulesPy.test.ts
@@ -1135,19 +1169,21 @@ git commit -m "feat(bugfix-rules): Python memory_leak and race_condition rules"
 ### Task 4: `edge_case` (1 rule) and the no-duplication test
 
 **Files:**
+
 - Modify: `configs/semgrep/bugfix-py.yml` (append one rule)
 - Create: `mcp/test/fixtures/bugfix-py/hits/queryset_n_plus_one.py`
 - Create: `mcp/test/fixtures/bugfix-py/misses/queryset_n_plus_one.py`
 - Modify: `mcp/test/integration/bugfixRulesPy.test.ts`
 
 **Interfaces:**
+
 - Consumes: `configs/semgrep/bugfix-py.yml` with nine rules; the test's
   `run(config: string, dir: string): SemgrepResult[]` helper, which already takes
   the config as its first parameter precisely so a second config can be scanned.
 - Produces: the tenth id, `bugfix-py-edge-case-queryset-n-plus-one`, and the
   no-duplication test that closes design §2's second governing rule.
 
-- [ ] **Step 1: Write the hit fixture**
+- [x] **Step 1: Write the hit fixture**
 
 `mcp/test/fixtures/bugfix-py/hits/queryset_n_plus_one.py` — both queryset forms,
 because `.filter(...)` is the commoner one and the `.all()`-only pattern misses it:
@@ -1167,7 +1203,7 @@ def active_titles():
     return names
 ```
 
-- [ ] **Step 2: Write the near-miss fixture**
+- [x] **Step 2: Write the near-miss fixture**
 
 `mcp/test/fixtures/bugfix-py/misses/queryset_n_plus_one.py`:
 
@@ -1190,7 +1226,7 @@ def own_field_only():
     return [book.title for book in Book.objects.all()]
 ```
 
-- [ ] **Step 3: Register the expectations in the test**
+- [x] **Step 3: Register the expectations in the test**
 
 Add to `EXPECTED_HITS_BY_FILE`:
 
@@ -1204,7 +1240,7 @@ Add to `EXPECTED_CLASS`:
   'bugfix-py-edge-case-queryset-n-plus-one': 'edge_case',
 ```
 
-- [ ] **Step 4: Write the no-duplication test**
+- [x] **Step 4: Write the no-duplication test**
 
 Append this `describe` block to `mcp/test/integration/bugfixRulesPy.test.ts`.
 It is the second governing rule of the design (§2), and it is the one that does
@@ -1264,7 +1300,7 @@ describe('no local rule duplicates p/r2c-bug-scan', () => {
 });
 ```
 
-- [ ] **Step 5: Run the test to verify it fails**
+- [x] **Step 5: Run the test to verify it fails**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -1277,7 +1313,7 @@ Expected: FAIL — `queryset_n_plus_one.py` produces no findings because the rul
 does not exist yet. The no-duplication test should already pass at this point;
 that is fine and expected.
 
-- [ ] **Step 6: Append the rule to `configs/semgrep/bugfix-py.yml`**
+- [x] **Step 6: Append the rule to `configs/semgrep/bugfix-py.yml`**
 
 ```yaml
   # Cobre `.all()` e `.filter(...)`: a versão só com `.all()` não apanhava a
@@ -1309,7 +1345,7 @@ that is fine and expected.
     languages: [python]
 ```
 
-- [ ] **Step 7: Run the test to verify it passes**
+- [x] **Step 7: Run the test to verify it passes**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -1321,7 +1357,7 @@ npx vitest run test/integration/bugfixRulesPy.test.ts
 Expected: PASS, no skips. Ten hit files totalling **24 findings**, ten near-miss
 files with zero, and `p/r2c-bug-scan` silent on every hit fixture.
 
-- [ ] **Step 8: Run the whole suite**
+- [x] **Step 8: Run the whole suite**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -1332,7 +1368,7 @@ npm test
 
 Expected: PASS. Report the total count in your task report.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add configs/semgrep/bugfix-py.yml mcp/test/fixtures/bugfix-py mcp/test/integration/bugfixRulesPy.test.ts
@@ -1348,6 +1384,7 @@ The resolver returns one path today. It becomes a list of every
 wiring at all — dropping the file in is enough.
 
 **Files:**
+
 - Modify: `mcp/src/platform/configsDir.ts` (`resolveBugfixRules`, and the doc comment above it)
 - Modify: `mcp/src/tools/bugHunt.ts` (`BuildPackListOptions.bugfixRulesPath`, `buildPackList`, the header comment, the tool `title`/`description`)
 - Modify: `mcp/test/unit/platform/configsDir.test.ts` (the `resolveBugfixRules` describe block)
@@ -1356,6 +1393,7 @@ wiring at all — dropping the file in is enough.
 - Modify: `mcp/dist/` (rebuilt, staged in this same commit)
 
 **Interfaces:**
+
 - Consumes: `resolveConfigsDir(): string` from `mcp/src/platform/configsDir.ts`,
   unchanged.
 - Produces:
@@ -1367,7 +1405,12 @@ wiring at all — dropping the file in is enough.
     "resolve for real"; passing `[]` means "omit them", which is what explicit
     `null` used to mean.
 
-- [ ] **Step 1: Write the failing resolver test**
+- [x] **Step 1: Write the failing resolver test**
+
+> **Still there, and grown.** The exact-array assertion below is the shape the
+> test still has, and it is what has caught a missing entry in every later
+> round; it now pins **seven** files (`bugfix-cs`, `-go`, `-java`, `-js`,
+> `-php`, `-py`, `-rs`), not the two listed here.
 
 Replace the whole `describe('resolveBugfixRules', ...)` block in
 `mcp/test/unit/platform/configsDir.test.ts` with this. The exact-array assertion
@@ -1415,7 +1458,7 @@ Add `basename` to the existing `node:path` import in that file:
 import { basename, dirname, join, resolve } from 'node:path';
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 ```bash
 cd mcp
@@ -1425,7 +1468,7 @@ npx vitest run test/unit/platform/configsDir.test.ts
 Expected: FAIL — TypeScript errors, because `resolveBugfixRules()` returns
 `string | null` and `.map`/iteration on it does not type-check.
 
-- [ ] **Step 3: Make the resolver plural**
+- [x] **Step 3: Make the resolver plural**
 
 In `mcp/src/platform/configsDir.ts`, add `readdirSync` to the `node:fs` import:
 
@@ -1477,7 +1520,7 @@ export function resolveBugfixRules(): string[] {
 Also update the file's top doc comment, which names `configs/semgrep/bugfix-js.yml`
 in the singular — change that phrase to `configs/semgrep/bugfix-*.yml`.
 
-- [ ] **Step 4: Run the resolver test to verify it passes**
+- [x] **Step 4: Run the resolver test to verify it passes**
 
 ```bash
 cd mcp
@@ -1486,7 +1529,7 @@ npx vitest run test/unit/platform/configsDir.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Update `buildPackList`**
+- [x] **Step 5: Update `buildPackList`**
 
 In `mcp/src/tools/bugHunt.ts`, replace the `bugfixRulesPath` field in
 `BuildPackListOptions` with:
@@ -1517,7 +1560,7 @@ export function buildPackList(opts: BuildPackListOptions): string[] {
 }
 ```
 
-- [ ] **Step 6: Update the three call-site test files**
+- [x] **Step 6: Update the three call-site test files**
 
 In `mcp/test/unit/tools/bugHuntConfigs.test.ts`:
 
@@ -1629,7 +1672,7 @@ with:
 When you are done, re-run `grep -n "bugfixRules" mcp/test/integration/qualityTools.test.ts`
 and confirm no remaining line interpolates the bare array into a string.
 
-- [ ] **Step 7: Update the `bug_hunt` tool title and description**
+- [x] **Step 7: Update the `bug_hunt` tool title and description**
 
 In `mcp/src/tools/bugHunt.ts`, the registered tool's `title` and `description`
 say "always-on local JS/TS bug rules" and "fourteen hand-authored rules ...
@@ -1653,7 +1696,7 @@ and "fourteen hand-authored rules ... for JS/TS" with:
 Also update the header comment near the top of the file, which names
 `bugfix-js.yml` in the singular and says "fourteen".
 
-- [ ] **Step 8: Build and run the full suite**
+- [x] **Step 8: Build and run the full suite**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
@@ -1665,7 +1708,7 @@ npm test
 
 Expected: PASS, no skips, no TypeScript errors.
 
-- [ ] **Step 9: Verify the bundled path resolves both files**
+- [x] **Step 9: Verify the bundled path resolves both files**
 
 `configsDir.ts` runs at two different depths — bundled into `dist/server.js`, and
 unbundled as its own module in tests. Vitest only ever exercises the unbundled
@@ -1682,7 +1725,7 @@ The second command prints the unbundled answer; for the bundled one, run
 both `--config` values appear. Record what you ran and what it printed in your
 task report — a claim without an output is not evidence.
 
-- [ ] **Step 10: Commit, with `dist/` in the same commit**
+- [x] **Step 10: Commit, with `dist/` in the same commit**
 
 ```bash
 git add mcp/src mcp/test mcp/dist
@@ -1694,6 +1737,7 @@ git commit -m "feat(bugfix-rules): resolve every bugfix-*.yml, not just the JS o
 ### Task 6: Documentation
 
 **Files:**
+
 - Modify: `README.md` (three language sections: EN ~line 38, PT ~line 344, ES ~line 650)
 - Modify: `skills/guardian-bugfix/SKILL.md` (~line 64)
 - Modify: `mcp/src/tools/semgrepConfigFailure.ts` (doc comment only)
@@ -1701,12 +1745,13 @@ git commit -m "feat(bugfix-rules): resolve every bugfix-*.yml, not just the JS o
 - Modify: `mcp/dist/` (rebuilt, staged in this same commit)
 
 **Interfaces:**
+
 - Consumes: nothing at runtime. Every statement below must match what Tasks 1–5
   actually shipped — ten rules, six classes, the file at
   `configs/semgrep/bugfix-py.yml`.
 - Produces: no code interface.
 
-- [ ] **Step 1: Update the three README language sections**
+- [x] **Step 1: Update the three README language sections**
 
 Each of the three `bug_hunt` bullets says the local pack is **JS/TS only** and
 that "no other language has a local pack yet". Both clauses are now false. In
@@ -1733,7 +1778,7 @@ Spanish (~line 650), same position:
 Python tiene también su propio pack — `configs/semgrep/bugfix-py.yml`, diez reglas hand-authored en las mismas seis clases, cada una medida contra las 32 reglas Python que `p/r2c-bug-scan` ya ejecuta y confirmada que dispara donde esas no lo hacen. Sus carencias conocidas se dicen en vez de insinuarse: no hay regla general de "corrutina no esperada" (no es expresable en Semgrep OSS — solo se cubren los cuatro primitivos `asyncio` nombrados, así que un `await` olvidado en un `async def` propio no se detecta), la regla de N+1 de Django casa bucles `for` pero no list comprehensions y no conoce SQLAlchemy ni Peewee, y `none-deref-dict-get` excluye clientes HTTP por el nombre del receptor, así que un cliente con otro nombre es un falso positivo y un diccionario llamado `client` es un falso negativo. **Solo JS/TS y Python**: los demás lenguajes aún no tienen pack local.
 ```
 
-- [ ] **Step 2: Update the guardian-bugfix skill**
+- [x] **Step 2: Update the guardian-bugfix skill**
 
 `skills/guardian-bugfix/SKILL.md` around line 64 tells the model that the JS/TS
 pack exists and, implicitly, that Python has nothing. Add the Python pack
@@ -1755,7 +1800,7 @@ geral não é exprimível em Semgrep OSS, e só os primitivos `asyncio` nomeados
 apanhados. Para essa classe, leia o código.
 ```
 
-- [ ] **Step 3: Update the `semgrepConfigFailure.ts` doc comment**
+- [x] **Step 3: Update the `semgrepConfigFailure.ts` doc comment**
 
 Its comment says a local `--config=` is `configs/semgrep/bugfix-js.yml`, "wired
 in by bugfix-rules-jsts Task 3". There are two such files now. Change the phrase
@@ -1764,7 +1809,7 @@ places it appears there (lines ~19 and ~69). The described behaviour — a
 hand-broken local file degrades exactly like a dead registry pack — is unchanged
 and still correct, so do not restate it.
 
-- [ ] **Step 4: Add the CHANGELOG entry**
+- [x] **Step 4: Add the CHANGELOG entry**
 
 Add a new `## [Unreleased]` section at the top of `CHANGELOG.md` (or extend the
 existing one), matching the style of the 1.6.0 entry:
@@ -1797,7 +1842,7 @@ existing one), matching the style of the 1.6.0 entry:
 - `none-deref-dict-get` excludes HTTP clients by receiver name.
 ```
 
-- [ ] **Step 5: Verify markdownlint is clean**
+- [x] **Step 5: Verify markdownlint is clean**
 
 Run this from the **repo root**, not from `mcp/` — `.markdownlint.jsonc` lives at
 the root and is auto-discovered from the working directory:
@@ -1814,7 +1859,7 @@ long single-line README bullets above are fine — the README already has 96 lin
 over 200 characters. The rules that do bite here are MD032 (lists need blank
 lines around them) and MD031 (fenced blocks need blank lines around them).
 
-- [ ] **Step 6: Build, run the full suite, and commit**
+- [x] **Step 6: Build, run the full suite, and commit**
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\AppData\Roaming\Python\Python314\Scripts;$env:PATH"
