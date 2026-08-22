@@ -27,24 +27,22 @@
  * and it always appends every local `configs/semgrep/bugfix-*.yml` pack —
  * one hand-authored file per language, each covering the same six bug
  * classes for its language (thirteen rules for JS/TS, design of record:
- * docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md; ten for
- * Python, docs/superpowers/specs/2026-08-18-bugfix-rules-python-design.md;
- * nine for Go, docs/superpowers/specs/2026-08-18-bugfix-rules-go-design.md —
+ * the design of record; ten for
+ * Python, the design of record;
+ * nine for Go, the design of record —
  * Go is where the registry pack leaves the biggest hole among the languages
  * it partially covers (5 Go rules, only 2 land in a bug class), and the
  * design doc's §8 records a fourth exclusion clause that shipped dead and
  * was removed, as was the tenth rule, `edge-case-append-discarded`, whose
  * true-positive set is empty in any project that compiles; seven for Java,
- * docs/superpowers/specs/2026-08-19-bugfix-rules-java-design.md — Java is
+ * the design of record — Java is
  * emptier still: p/r2c-bug-scan ships 4 Java rules and NONE of
  * them land in a bug class, all four being equality/comparison style;
  * eleven for C#,
- * docs/superpowers/specs/2026-08-20-bugfix-rules-csharp-design.md, the
  * language where the registry is at zero — p/r2c-bug-scan ships no C# rules
  * at all; six for PHP,
- * docs/superpowers/specs/2026-08-20-bugfix-rules-php-design.md; and exactly
+ * the design of record; and exactly
  * ONE for Rust,
- * docs/superpowers/specs/2026-08-20-bugfix-rules-rust-and-ruby-decision.md —
  * one rule is the whole answer there, not partial coverage, and Ruby ships
  * nothing at all, both by measurement)
  * — resolved to absolute paths via `resolveBugfixRules`

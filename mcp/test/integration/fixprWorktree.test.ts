@@ -1,6 +1,6 @@
 /**
  * Integration tests for `createWorktree` (design doc
- * `docs/superpowers/specs/2026-08-16-create-fix-pr-design.md` §3) against a
+ * the design of record §3) against a
  * REAL throwaway git repository in the system temp directory — a mock proves
  * nothing about `git worktree`'s actual behaviour.
  *

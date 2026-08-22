@@ -1,7 +1,6 @@
 /**
  * `renderDashboard` — the self-contained HTML page behind `dev-guardian
  * dashboard`. See
- * `docs/superpowers/specs/2026-08-15-local-dashboard-design.md` §2, §5.1, §8,
  * §9 for the rules this reproduces.
  *
  * Pure: a `DashboardSnapshot` in, an HTML string out. No storage, no clock,

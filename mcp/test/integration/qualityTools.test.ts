@@ -241,8 +241,7 @@ describe('bug_hunt', () => {
 
   it('the local bugfix-*.yml rules survive and still report findings when BOTH base registry packs fail to download', async () => {
     // This is the design of record's actual reason the local rules are on
-    // by default (docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-
-    // design.md §5): "a local file cannot 404 ... even with the registry
+    // by default (the design of record): "a local file cannot 404 ... even with the registry
     // unreachable, the local rules still run and the tool still reports
     // something true." Provable here with no special-casing: buildPackList
     // puts the local paths in the SAME configuredPacks array the existing

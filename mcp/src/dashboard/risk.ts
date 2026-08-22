@@ -5,7 +5,7 @@
  *
  * Weights, caps, bands and recommendation strings are ported verbatim from
  * the tool this was extracted from — see
- * `docs/superpowers/specs/2026-08-15-local-dashboard-design.md` §3.1. This
+ * the design of record §3.1. This
  * module must not change what the numbers are, only where they are computed.
  *
  * Components (weighted sum, capped at 100):

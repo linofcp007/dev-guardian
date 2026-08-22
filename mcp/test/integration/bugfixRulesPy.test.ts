@@ -5,7 +5,6 @@
  * count. Never "at least one": a rule that starts matching its own
  * near-miss must fail the suite rather than quietly widening (design of
  * record §2 and §6:
- * docs/superpowers/specs/2026-08-18-bugfix-rules-python-design.md).
  *
  * The count is load-bearing alongside the id set, for the reason
  * `bugfixRulesJs.test.ts`'s module comment records at length: a

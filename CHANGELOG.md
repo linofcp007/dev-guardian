@@ -833,7 +833,6 @@ because nobody could produce a true positive for it.
   fixtures at 0 false positives and were killed by 1244 files of real Ruby.
   RuboCop and the registry's `p/ruby` are the honest answer, and the docs say so.
   The full measurement is in
-  `docs/superpowers/specs/2026-08-20-bugfix-rules-rust-and-ruby-decision.md`.
 
 - **`scan_sast(local_only: true)`** drops the registry, passes `--metrics=off`,
   and runs only rules already on disk — your project's `.semgrep.yml` plus
@@ -1677,7 +1676,6 @@ Measured against the shipped rules, not inferred:
   `mcp/test/fixtures/bugfix-js/` — one file that must fire, one near-miss that must not —
   asserted by exact rule-id set *and* raw finding count per file, so a rule that starts
   matching its own near-miss fails the suite instead of quietly widening. Design of record:
-  `docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md`.
   - **Six named classes — "broken happy paths" isn't one of them as a pattern.** It's a
     category of consequence, not a syntactic shape; `floating-mutation` covers its commonest
     concrete form — an un-awaited mutating call inside an `async` function (declarations,

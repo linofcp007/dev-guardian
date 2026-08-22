@@ -1,7 +1,6 @@
 /**
  * Shared types for the local dashboard (`dev-guardian status` /
  * `dev-guardian dashboard`) — see
- * `docs/superpowers/specs/2026-08-15-local-dashboard-design.md`.
  *
  * This file currently carries the risk-score slice (§3.1) and the
  * delta/hotspot slice (§7, §8 of the design). Later tasks extend it with

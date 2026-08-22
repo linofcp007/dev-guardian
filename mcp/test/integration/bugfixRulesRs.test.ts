@@ -10,7 +10,6 @@
  * classes outright (E0502, E0515, E0373, E0599) and `clippy`'s type-aware
  * restriction lints beat every Semgrep equivalent measured for the rest. The
  * decision of record is
- * `docs/superpowers/specs/2026-08-20-bugfix-rules-rust-and-ruby-decision.md`.
  *
  * Why each assertion, unchanged from the C# and Java rounds:
  *

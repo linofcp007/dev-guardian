@@ -4,7 +4,6 @@
  * the EXACT set of rule ids that fired — never "at least one". A rule that
  * starts matching its own near-miss must fail the suite rather than quietly
  * widening (design of record, §2 and §6:
- * docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md).
  *
  * ---- Why the assertion is PER FILE, not one set over the whole directory -
  *

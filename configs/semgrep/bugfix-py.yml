@@ -4,7 +4,6 @@
 # nenhuma cobre bare except, dereference de None, ou off-by-one. Cada regra
 # abaixo foi medida contra o pack existente: nenhuma duplica o que ele já
 # encontra. Detalhe e medições em
-# docs/superpowers/specs/2026-08-18-bugfix-rules-python-design.md.
 #
 # Cada regra tem um par de fixtures em
 # mcp/test/fixtures/bugfix-py/{hits,misses}/: um ficheiro que tem de disparar

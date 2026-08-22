@@ -5,7 +5,6 @@
 # `p/security-audit` varrem os ficheiros e não encontram nada. Cada regra deste
 # ficheiro é aditiva por medição, com controlo positivo, e não por suposição.
 # As medições estão em
-# docs/superpowers/specs/2026-08-20-bugfix-rules-csharp-design.md.
 #
 # Cada regra tem um par de fixtures em
 # mcp/test/fixtures/bugfix-cs/{hits,misses}/: um ficheiro que tem de disparar a
@@ -611,7 +610,6 @@ rules:
   # `dotnet/runtime` — o C# real escreve `for (int i = 0; ...)`, quase nunca
   # `for (var i = 0; ...)`, e se o padrao fosse literal a regra estaria cega
   # com todos os indicadores verdes. Nao estava. A sondagem esta em
-  # docs/superpowers/specs/2026-08-20-bugfix-rules-csharp-design.md §4c.
   #
   # DUAS DIMENSOES QUE AS FIXTURES NAO TINHAM, medidas na mesma sondagem e
   # fechadas aqui. Ambas as regras de off_by_one liam UMA grafia de cada:

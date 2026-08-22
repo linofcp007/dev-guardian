@@ -1,7 +1,7 @@
 /**
  * `create_fix_pr` — orchestrates Tasks 1–6 into the tool that applies fixes
  * the scanners themselves already produced, proves them, and opens a pull
- * request (design doc `docs/superpowers/specs/2026-08-16-create-fix-pr-design.md`).
+ * request (design doc the design of record).
  *
  * Flow: resolve the project path → refuse if not a git repository → read the
  * project's open findings → ask `deps_update_plan` for upgrade steps (when

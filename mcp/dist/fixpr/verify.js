@@ -1,7 +1,6 @@
 /**
  * `judgeScan` / `judgeTests` / `mayOpenPr` — the two differentials that
  * decide whether an applied fix gets a pull request (design doc
- * `docs/superpowers/specs/2026-08-16-create-fix-pr-design.md` §4.1, §4.2).
  * A fix is never applied-and-hoped; it is applied and then proved, twice,
  * and either proof failing means no pull request.
  *

@@ -6,7 +6,7 @@
  * is derived from fields the snapshot already carries (`age_seconds`,
  * `age_days`, `generated_at`), never from `Date.now()`.
  *
- * See docs/superpowers/specs/2026-08-15-local-dashboard-design.md §6 for the
+ * See the design of record §6 for the
  * layout and content rules this reproduces. Column positions there are not
  * load-bearing (this module does not try to right-align to a terminal
  * width); the content rules are, and two of them carry the feature's

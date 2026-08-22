@@ -1,7 +1,6 @@
 /**
  * `deriveTestCommand` — which command proves the project's own tests still
  * pass after a fix has been applied (design doc
- * `docs/superpowers/specs/2026-08-16-create-fix-pr-design.md` §4.2).
  *
  * Pure: manifest CONTENTS in, one of four known commands out, or `null`. No
  * git, no process, no filesystem — `create_fix_pr` reads `TEST_MANIFESTS` off

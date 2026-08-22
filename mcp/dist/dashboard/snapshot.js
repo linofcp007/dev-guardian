@@ -1,7 +1,7 @@
 /**
  * `buildSnapshot` — the single project-scoped query pass behind both
  * dashboard views (`dev-guardian status` and `dev-guardian dashboard`). See
- * `docs/superpowers/specs/2026-08-15-local-dashboard-design.md` §4 (scoping),
+ * the design of record §4 (scoping),
  * §5 (the snapshot), §5.1 (no data) and §7 (the two deltas).
  *
  * This is the ONLY module in the feature that touches storage — `risk.ts`,

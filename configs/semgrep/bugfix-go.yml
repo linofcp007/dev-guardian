@@ -4,7 +4,6 @@
 # ambas de integer overflow. error_handling está vazia — na linguagem em que
 # `if err != nil` É o modelo de erros — e o mesmo vale para race_condition,
 # null_safety, memory_leak e edge_case. Medições em
-# docs/superpowers/specs/2026-08-18-bugfix-rules-go-design.md.
 #
 # Cada regra tem um par de fixtures em
 # mcp/test/fixtures/bugfix-go/{hits,misses}/: um ficheiro que tem de disparar

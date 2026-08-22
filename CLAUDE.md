@@ -18,6 +18,25 @@ quality, deps, observability, performance and compliance. Two halves:
   block. Detection lives in `mcp/src/hooks/{secretScan,bashGuard}.ts` (pure,
   unit-tested) and is shared with the `dev-guardian check` CLI subcommand.
 
+## Where the design docs went
+
+`docs/superpowers/` — thirteen implementation plans and fourteen designs of
+record — was removed from the tree on 2026-08-22. It is **not lost**: 96 commits
+touch those files, so any of them is one command away.
+
+```bash
+git log --oneline --diff-filter=D -- docs/superpowers   # find the removal
+git show <commit>^:docs/superpowers/specs/<name>.md     # read one
+git checkout <commit>^ -- docs/superpowers              # restore the tree
+```
+
+Code comments that used to cite a section by path now say "the design of
+record" instead. The measurements those documents held — why a rule was
+deleted, which tier moved and against what corpus, which clause was measured
+inert — were written into the rule packs' own comments and into `CHANGELOG.md`
+as they were made, so the reasoning survives in the tree even though the
+documents do not.
+
 ## Build & test (always from `mcp/`)
 
 ```bash

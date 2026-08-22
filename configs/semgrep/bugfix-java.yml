@@ -3,7 +3,6 @@
 # o p/r2c-bug-scan traz 4 regras Java e NENHUMA cai numa classe de bug — são
 # todas de igualdade e comparação. As seis subcategorias estavam todas a zero,
 # na linguagem cujo defeito mais famoso é o NullPointerException. Medições em
-# docs/superpowers/specs/2026-08-19-bugfix-rules-java-design.md.
 #
 # Cada regra tem um par de fixtures em
 # mcp/test/fixtures/bugfix-java/{hits,misses}/: um ficheiro que tem de disparar

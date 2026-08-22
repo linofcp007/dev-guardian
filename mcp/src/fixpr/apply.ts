@@ -1,6 +1,6 @@
 /**
  * `applyGroup` — runs a `FixGroup`'s fix commands inside an already-created
- * worktree (design doc `docs/superpowers/specs/2026-08-16-create-fix-pr-design.md`
+ * worktree (design doc the design of record
  * §2 and §4.3).
  *
  * The property this module exists to hold: a command STRING never reaches a

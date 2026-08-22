@@ -3,7 +3,6 @@
 # registo Semgrep não cobrem: p/r2c-bug-scan só cobre race/null/off-by-one/
 # leak/error-handling para Python e Go; os packs por linguagem (p/javascript,
 # p/typescript) são ~100% security, zero nestas classes. Detalhe e medições em
-# docs/superpowers/specs/2026-08-17-bugfix-rules-jsts-design.md.
 #
 # Cada regra tem um par de fixtures em
 # mcp/test/fixtures/bugfix-js/{hits,misses}/: um ficheiro que tem de disparar
