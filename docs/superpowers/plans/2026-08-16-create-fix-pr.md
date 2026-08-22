@@ -4,6 +4,24 @@
 
 **Goal:** Apply the fixes the scanners already produced — `deps_update_plan`'s pinned version bumps and Semgrep's `--autofix` — in an isolated git worktree, prove them with a scan differential and a test differential, and open one pull request per ecosystem or scanner.
 
+> **Checkbox audit — 2026-08-22.** These boxes were ticked retrospectively, by
+> reconciling every step against the shipped code, its tests and `git log`. They
+> were **not** ticked during execution, so they are an audit of the result, not a
+> live record of the run. Steps whose only product is an observation ("run the
+> test, expected: FAIL", "RED first", "commit with this subject") cannot be
+> verified after the fact; each was ticked on the artefact it was meant to leave
+> behind — the named test file, or the named commit in `git log` — never on
+> evidence that anyone watched it go red.
+>
+> **Left unticked: Task 1, Step 3 ("Add the error code").** `'worktree_failed'`
+> is not in `DOMAIN_ERROR_CODES` (`mcp/src/types.ts`). It was added there as this
+> step instructs and then deliberately deleted during the task-7 review: the
+> per-group result shape the feature settled on has no top-level use for it, and
+> the string now names a `GroupOutcome` in `mcp/src/tools/createFixPr.ts`, which
+> documents the removal and its reason. The step is therefore superseded rather
+> than skipped, but the tree does not contain what it describes, so the box stays
+> empty.
+
 **Architecture:** Pure decision modules (`candidates.ts`, `testCommand.ts`) carry everything testable without git, network or scanners. Side-effecting modules (`worktree.ts`, `apply.ts`, `verify.ts`, `pr.ts`) each own one external interaction and go through the existing `runProcess`. The tool wires them together and defaults to not pushing.
 
 **Tech Stack:** TypeScript (ESM, NodeNext), `runProcess` (execa), the local `gh` CLI, vitest. No new runtime dependencies.
@@ -123,7 +141,7 @@ export function buildGroups(input: {
 export function selectGroups(groups: readonly FixGroup[], maxPrs: number): GroupSelection;
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -268,7 +286,7 @@ describe('selectGroups', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd mcp && npx vitest run test/unit/fixpr/candidates.test.ts`
 Expected: FAIL — cannot resolve `../../../src/fixpr/candidates.js`.
@@ -277,18 +295,18 @@ Expected: FAIL — cannot resolve `../../../src/fixpr/candidates.js`.
 
 In `mcp/src/types.ts`, append `'worktree_failed'` to `DOMAIN_ERROR_CODES`. Append; do not reorder — other code compares against these strings.
 
-- [ ] **Step 4: Implement `types.ts` and `candidates.ts`**
+- [x] **Step 4: Implement `types.ts` and `candidates.ts`**
 
 Pairing a finding to an upgrade step: match on `package_name` appearing in the finding's `title` or `message`, and on the finding's `tool` being a dependency scanner (`trivy`, `npm-audit`, `wpscan`). A finding with `fix_available === false` is never a candidate. Semgrep candidates are findings whose `tool === 'semgrep'` and `fix_available === true`; they form a single group keyed `'semgrep'` with `command: null`, because one `--autofix` pass handles all of them.
 
 The hash is `createHash('sha256').update([...fingerprints].sort().join('\n')).digest('hex').slice(0, 12)`.
 
-- [ ] **Step 5: Run to verify it passes, then the suite**
+- [x] **Step 5: Run to verify it passes, then the suite**
 
 Run: `cd mcp && npx vitest run test/unit/fixpr/candidates.test.ts && npm test`
 Expected: PASS.
 
-- [ ] **Step 6: Build and commit**
+- [x] **Step 6: Build and commit**
 
 ```bash
 cd mcp && npm run build
@@ -327,7 +345,7 @@ export function deriveTestCommand(files: Readonly<Record<string, string>>): Deri
 export const TEST_MANIFESTS: readonly string[];
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -401,21 +419,21 @@ describe('deriveTestCommand', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd mcp && npx vitest run test/unit/fixpr/testCommand.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement `testCommand.ts`**
+- [x] **Step 3: Implement `testCommand.ts`**
 
 Precedence: `package.json` → `Cargo.toml` → `go.mod` → `pyproject.toml`. The last test is the load-bearing one: a manifest's *contents* select which known command to run; they never become the command. `npm test` runs whatever `scripts.test` says, which is the project's own business — but that string never reaches our argv.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd mcp && npx vitest run test/unit/fixpr/testCommand.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Build and commit**
+- [x] **Step 5: Build and commit**
 
 ```bash
 cd mcp && npm run build
@@ -451,7 +469,7 @@ export async function createWorktree(opts: {
 }): Promise<{ ok: true; worktree: Worktree } | { ok: false; reason: string }>;
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Tests run against a **real throwaway git repository** created in the system temp
 directory — a mock proves nothing about `git worktree`.
@@ -558,12 +576,12 @@ describe('createWorktree', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd mcp && npx vitest run test/integration/fixprWorktree.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement `worktree.ts`**
+- [x] **Step 3: Implement `worktree.ts`**
 
 `git -C <project> worktree add -b <branch> <mkdtemp path> HEAD`, through `runProcess`.
 `remove()` runs `git -C <project> worktree remove --force <path>` then
@@ -572,12 +590,12 @@ gone afterwards — including when it was already gone, which is what makes it
 idempotent. A removal that leaves the path behind returns
 `{ removed: false, warning }` rather than throwing.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd mcp && npx vitest run test/integration/fixprWorktree.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Build and commit**
+- [x] **Step 5: Build and commit**
 
 ```bash
 cd mcp && npm run build
@@ -619,7 +637,7 @@ export async function applyGroup(opts: {
 }): Promise<ApplyResult>;
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 The runner is injected, so these are unit tests with a fake — the *real* process
 execution is exercised in Task 7's end-to-end test.
@@ -729,24 +747,24 @@ describe('applyGroup', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd mcp && npx vitest run test/unit/fixpr/apply.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement `apply.ts`**
+- [x] **Step 3: Implement `apply.ts`**
 
 Split `upgrade_command` on whitespace into `command` + `args`; `runProcess` is
 `shell: false`, so nothing is ever interpreted. For npm with `lockfileOnly`,
 insert `--package-lock-only`. Semgrep groups run one pass:
 `semgrep --config auto --autofix --quiet` in the worktree.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd mcp && npx vitest run test/unit/fixpr/apply.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Build and commit**
+- [x] **Step 5: Build and commit**
 
 ```bash
 cd mcp && npm run build
@@ -805,7 +823,7 @@ export async function judgeTests(opts: {
 export function mayOpenPr(scan: ScanVerdict, tests: TestVerdict): boolean;
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -949,12 +967,12 @@ describe('mayOpenPr', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd mcp && npx vitest run test/unit/fixpr/verify.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement `verify.ts`**
+- [x] **Step 3: Implement `verify.ts`**
 
 `judgeScan` calls `compareFindings(before, after, Number.MAX_SAFE_INTEGER)` and
 derives its verdict from `delta.new_findings` and set membership. **Do not write
@@ -964,12 +982,12 @@ a second comparator.**
 outcome *or* a non-zero exit it runs the same command in `projectPath` and
 returns `broken_by_fix` only when that second run completed with exit 0.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd mcp && npx vitest run test/unit/fixpr/verify.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Build and commit**
+- [x] **Step 5: Build and commit**
 
 ```bash
 cd mcp && npm run build
@@ -1008,7 +1026,7 @@ export async function openPr(opts: {
 }): Promise<PrOutcome>;
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -1121,12 +1139,12 @@ describe('openPr', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd mcp && npx vitest run test/unit/fixpr/pr.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement `pr.ts`**
+- [x] **Step 3: Implement `pr.ts`**
 
 Order: `prExists` → refuse if `known: false` or `exists: true` → commit in the
 worktree (`git -C <worktree> add -A`, then `commit -m`) → `git -C <worktree> push
@@ -1135,12 +1153,12 @@ worktree (`git -C <worktree> add -A`, then `commit -m`) → `git -C <worktree> p
 `gh pr list --head <branch> --state all --json number --limit 5`.
 The URL is the first stdout line starting with `https://`.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd mcp && npx vitest run test/unit/fixpr/pr.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Build and commit**
+- [x] **Step 5: Build and commit**
 
 ```bash
 cd mcp && npm run build
@@ -1178,7 +1196,7 @@ git commit -m "feat(fixpr): branch, push and open a PR, refusing when existence 
   `ScanVerdict`, the `TestVerdict`, and the `PrOutcome` — or `pr: null` with the
   reason when none was attempted.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Against a real throwaway git repository, with a **stub `gh` on `PATH`**.
 
@@ -1266,12 +1284,12 @@ describe('create_fix_pr', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd mcp && npx vitest run test/integration/createFixPr.test.ts`
 Expected: FAIL — the tool is not registered.
 
-- [ ] **Step 3: Implement `createFixPr.ts`**
+- [x] **Step 3: Implement `createFixPr.ts`**
 
 Flow: resolve the project path → refuse if not a git repo (`isGitRepo` from
 `mcp/src/tools/gitState.ts`) → read findings via `findings.listOpenForProject` →
@@ -1289,12 +1307,12 @@ differential, and the test verdict — including, verbatim when the outcome is
 `not_run`, **"behaviour was not verified: this project declares no test
 command"**.
 
-- [ ] **Step 4: Run to verify it passes, then the suite**
+- [x] **Step 4: Run to verify it passes, then the suite**
 
 Run: `cd mcp && npx vitest run test/integration/createFixPr.test.ts && npm test`
 Expected: PASS.
 
-- [ ] **Step 5: Build and commit**
+- [x] **Step 5: Build and commit**
 
 ```bash
 cd mcp && npm run build
@@ -1310,7 +1328,7 @@ git commit -m "feat(fixpr): the create_fix_pr tool"
 
 - Modify: `README.md` (EN/PT/ES), `CHANGELOG.md`, `host-rules/AGENTS.md` and its paired host files, `commands/` if a slash command is added
 
-- [ ] **Step 1: Measure the tool count and sweep every place it appears**
+- [x] **Step 1: Measure the tool count and sweep every place it appears**
 
 ```bash
 cd mcp && node -e "import('./dist/registerAll.js').then(()=>import('./dist/tools/index.js')).then(m=>console.log(m.TOOLS.length))"
@@ -1322,12 +1340,12 @@ must change. Use no `--include` filter and search across EN/PT/ES — a previous
 sweep on this repo missed files on two axes, language (a Spanish
 "herramientas") and extension (files with no `.md`/`.json`).
 
-- [ ] **Step 2: Document the tool and its boundaries**
+- [x] **Step 2: Document the tool and its boundaries**
 
 In all three README languages, `host-rules/AGENTS.md` and its paired host files:
 what it does, that `apply` defaults to `false`, and the intent→tool mapping entry.
 
-- [ ] **Step 3: CHANGELOG entry carrying the limitations from design §10**
+- [x] **Step 3: CHANGELOG entry carrying the limitations from design §10**
 
 Only what a scanner already produces; `deps_update_plan`'s ecosystem gaps
 (**maven and gradle unsupported**); Semgrep's autofix quality is Semgrep's, and
@@ -1335,7 +1353,7 @@ the scan differential will call a careless rewrite resolved; the test
 differential is only as good as the project's tests; and **`fix_applied` remains
 a dead column — the pull request is the record**.
 
-- [ ] **Step 4: Full verification gate**
+- [x] **Step 4: Full verification gate**
 
 ```bash
 cd mcp && npm run build
@@ -1349,7 +1367,7 @@ The env var does **not** propagate past `&&` in a POSIX shell, so each command
 carries it. Report the exact skip count (**target zero**) and all four coverage
 numbers against 70/62/72/70.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A
