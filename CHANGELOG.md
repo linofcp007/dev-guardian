@@ -8,6 +8,66 @@ version bump.
 
 ## [Unreleased]
 
+### Removed
+
+- **`bugfix-java-null-safety-map-get-deref` deleted. The Java pack goes from
+  eight rules to seven.** The external-corpus round below read all 55 of its
+  OpenJDK + Spring findings, found no live defect, and kept it anyway on one
+  explicit condition, written into the rule itself: both corpora are mature
+  *library* code, where a dereferenced map is nearly always one the reading
+  class filled itself, and the evidence that would decide the rule was a corpus
+  of **application** Java. That corpus was run, and it deleted the rule.
+
+  | corpus | findings | `.java` scanned | per 1000 |
+  | --- | --- | --- | --- |
+  | Jenkins | 1 | 1 274 | 0.8 |
+  | Kafka | 224 | 3 892 | 57.5 |
+  | Elasticsearch | 749 | 20 485 | 36.6 |
+
+  973 new findings, **45 read by hand** — spread across modules and weighted
+  toward the shapes a cheap triage could not explain — and **five** defensible
+  defects (`EnterpriseGeoIpDownloader.java:589`, `GeoIpDownloader.java:160`,
+  `JvmOption.java:63`, `RemotePartitionMetadataStore.java:175`,
+  `OsProbe.java:811`).
+
+  **The count decided nothing; this did.** 88% of the Elasticsearch findings and
+  97% of the Kafka ones have **no guard of any kind anywhere near the
+  dereference**. They are correct for *semantic* reasons — parallel maps kept in
+  sync, a map the class filled in another method, a constant key, an API
+  contract — and no `pattern-not-inside` reaches any of that, so **narrowing was
+  never available**. That was measured before the decision rather than assumed:
+  the one mechanically closable family is Elasticsearch's `containsKey(k) ==
+  false` negation style, which every `!containsKey` exclusion misses, and it is
+  worth **34 of 749** and **zero** on Kafka.
+
+  Two findings that outlive the rule. It was **blind to the more dangerous
+  idiom** — `X v = m.get(k); v.foo();` never matched, because the dereference is
+  not chained, so at `KafkaAdminClient.java:2375` and
+  `AbstractStickyAssignor.java:268` it reported the *derived* lookup (safe,
+  precisely because the earlier one did not throw) and was silent on the
+  original. And **all five true positives have one shape**: a map produced by
+  parsing external input — HTTP JSON, `/sys/fs/cgroup`, JVM output — read with a
+  literal key. That is provenance, not syntax, and it is outside Semgrep OSS;
+  it is recorded as a candidate for a future rule measured from scratch, never
+  as a tightening of this one.
+
+  Same criterion as C#'s `as-cast-deref` and `catch-returns-null`, with one
+  difference recorded on purpose so the precedent stays honest: **this rule's
+  true-positive rate was not zero, it was about 1%.** A user with 5 000 files of
+  Java got roughly 200 findings and perhaps two worth acting on. Counts decide
+  nothing in either direction — `empty-catch` produces 1589 on the OpenJDK and
+  is right nearly every time.
+
+  Also gone: three of the eleven accepted Java limitations, which belonged to
+  this one rule; 42 of the pack's 91 `pattern-not-inside` clauses; and the
+  fixtures `hits/MapGetDeref.java` and `misses/MapGetDeref.java`.
+  `hits/ElseArm.java` drops 12 to 7 and `hits/RealBugs.java` 20 to 11 — measured
+  old pack against new over the whole `hits/` tree as **25 findings removed, 0
+  added, no other file moved**, which is what makes it a deletion and not a
+  regression. Nothing they fenced is unfenced: every clause shape they measured
+  has an `optional-get-no-ispresent` twin still in the pack (`b12`, `b15`,
+  `b17`, `b19`, `F5`-`F7`). Written up in section 12 of the Java design doc.
+
 ### Changed
 
 - **`bugfix-java` audited against real Java for the first time.** It was the
@@ -118,7 +178,10 @@ round added:
   than the temporal one, and not fixable in Semgrep OSS. Predates this round
   and is unchanged by it; measured against both packs.
 - **`null-safety-map-get-deref` scored 55 findings across the two corpora
-  (43 + 12) and a hand-read of all 55 found no live defect.** They fall into
+  (43 + 12) and a hand-read of all 55 found no live defect.** *(This rule has
+  since been DELETED — see the Removed entry above. The paragraph below is the
+  record of the round that kept it, and the condition it set is the one the
+  application-corpus round discharged.)* They fall into
   families Semgrep OSS cannot close, and every one is already a documented
   limitation: the total map filled in a constructor or a static initializer for
   every key of an enum (the largest group, and all 7 Spring sites); presence

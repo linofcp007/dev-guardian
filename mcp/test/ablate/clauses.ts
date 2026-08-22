@@ -290,9 +290,11 @@ function noClausesReason(entryPoints: readonly string[], skippedCount: number): 
 /**
  * Enumerates every ablatable clause in a pack, in source order.
  *
- * Occurrence ordinals are assigned per (rule id, kind, body) so that the five
- * verbatim-identical `pattern-either` branches inside
- * `bugfix-java-null-safety-map-get-deref` stay individually nameable.
+ * Occurrence ordinals are assigned per (rule id, kind, body) so that
+ * verbatim-identical `pattern-either` branches inside one rule stay
+ * individually nameable — the seven receiver branches of
+ * `bugfix-java-edge-case-modify-during-iteration` are the surviving example,
+ * and the five inside `null-safety-map-get-deref` were the original one.
  */
 export function enumerateClauses(source: string): ClauseInventory {
   const doc = parseDocument(source);

@@ -71,7 +71,7 @@
 #   | ------------------------- | --------- | ---------- | ------ |
 #   | empty-catch               | 1589      | 1589       | 193    |
 #   | printstacktrace-only      |   78      |   78       |   0    |
-#   | map-get-deref             |   43      |   43       |  12    |
+#   | map-get-deref (apagada)   |   43      |   43       |  12    |
 #   | optional-get-no-ispresent |   26      |   11       |   0    |
 #   | stream-not-closed         |   12      |    4       |   0    |
 #   | modify-during-iteration   |    1      |    1       |   0    |
@@ -88,6 +88,56 @@
 #
 # O corpus está registado no harness de ablação em `GUARDIAN_JAVA_SRC`, por
 # isso o eixo 3 deixou de ser N/A para este pack.
+#
+# ---------------------------------------------------------------------------
+# A RONDA DO CORPUS DE APLICACAO, e o que ela apagou. A `map-get-deref` ficou
+# no pack depois da ronda acima com uma condição escrita na sua própria
+# cabeça: os 55 findings lidos no JDK e no Spring eram todos falsos positivos,
+# mas os dois corpora são BIBLIOTECAS, em que um mapa dereferenciado é quase
+# sempre um mapa que a própria classe preencheu. A regra ficava até alguém
+# medir Java de APLICACAO. Foi medido:
+#
+#   | corpus         | findings | ficheiros | por 1000 |
+#   | -------------- | -------- | --------- | -------- |
+#   | Jenkins        |      1   |    1 274  |    0,8   |
+#   | Kafka          |    224   |    3 892  |   57,5   |
+#   | Elasticsearch  |    749   |   20 485  |   36,6   |
+#
+# 973 findings novos. 45 lidos um a um, escolhidos de propósito nas formas que
+# a triagem automática NAO explicava. Defeitos defensáveis: CINCO sítios (11
+# linhas). Todos os outros são invariantes que nenhum matcher sintático
+# alcança.
+#
+# O NUMERO QUE DECIDIU, e não é a contagem: 88% dos findings do Elasticsearch e
+# 97% dos do Kafka não têm guarda nenhuma perto do deref. São corretos por
+# razões SEMANTICAS — mapas paralelos mantidos em sincronia, um mapa que a
+# classe preencheu noutro método, chave constante, contrato de API. Não há
+# `pattern-not-inside` que chegue a nada disso, por isso ESTREITAR A REGRA
+# ESTAVA FORA DE QUESTAO, e isso também foi medido em vez de suposto: a única
+# família fechável que apareceu foi o estilo `containsKey(k) == false` do
+# Elasticsearch (as exclusões só cobriam `!containsKey`), e vale 34 dos 749 —
+# 4,5%, e zero no Kafka.
+#
+# DUAS COISAS QUE A LEITURA MOSTROU e que valem mais do que a contagem:
+#
+#   * a regra é CEGA à forma mais perigosa. `X v = m.get(k); v.foo();` não
+#     casa, porque o deref não está encadeado. Em KafkaAdminClient.java:2375 e
+#     AbstractStickyAssignor.java:268 a regra assinala a leitura DERIVADA, que
+#     é segura, e não vê a leitura original ao lado, que é a que arrisca.
+#   * os cinco verdadeiros positivos têm todos a MESMA forma: um mapa vindo de
+#     parsing de entrada externa (JSON de HTTP, /sys/fs/cgroup, output da JVM)
+#     lido com chave literal e sem guarda — EnterpriseGeoIpDownloader.java:589,
+#     GeoIpDownloader.java:160, OsProbe.java:811, JvmOption.java:63,
+#     RemotePartitionMetadataStore.java:175. "Veio de parsing" é proveniência,
+#     não sintaxe, e está fora do Semgrep OSS. Fica registado como candidato a
+#     uma regra FUTURA e MEDIDA DE RAIZ, não como um aperto desta.
+#
+# Apagada, portanto, pelo mesmo critério que apagou a `as-cast-deref` do pack
+# de C# e a `catch-returns-null`, com uma diferença registada de propósito: a
+# taxa de verdadeiros positivos desta NAO era zero, era cerca de 1%. Um
+# utilizador com 5 000 ficheiros de Java recebia ~200 findings e talvez dois
+# valessem a pena. A contagem nunca decide — a `empty-catch` faz 1589 no JDK e
+# está certa quase sempre. O que decide é a taxa, e a taxa é 1%.
 #
 # ---------------------------------------------------------------------------
 # OS TIERS, e a consequência prática que ninguém quer descobrir sozinho.
@@ -228,335 +278,6 @@ rules:
     severity: WARNING
     languages: [java]
 
-  # Sem cláusula de exclusão para `getOrDefault`, e isso é deliberado: o
-  # Semgrep exige o identificador literal `get`, por isso
-  # `m.getOrDefault(k, d).intValue()` nunca casa este padrão. A cláusula que
-  # aqui esteve não excluía nada — medido com e sem ela, zero findings nos
-  # dois casos. O que a regra exige mesmo é o DEREFERENCE: `m.get(k)` sozinho,
-  # devolvido ao chamador, é código correto e não dispara.
-  #
-  # O recetor é restringido pelo TIPO DECLARADO, e sem isso a regra nunca foi
-  # sobre mapas: `$M.get($K).$METHOD(...)` casa QUALQUER `.get(x)` encadeado
-  # com um método, e disparava em ERROR sobre `list.get(0).trim()` a aconselhar
-  # `getOrDefault` — um método que a `List` não tem.
-  #
-  # Cada ramo repete o `pattern` positivo. Um ramo só com `metavariable-type`
-  # não é uma regra válida ("you need at least one positive term") e o Semgrep
-  # continua a imprimir `Scan completed successfully` nesse erro, por isso uma
-  # regra partida é indistinguível de uma regra que não encontrou nada.
-  #
-  # AS GUARDAS. A regra esteve sem UMA ÚNICA exclusão, e o resultado é que a
-  # guarda canónica de Java — `if (m.containsKey(k)) { … m.get(k).trim() … }` —
-  # disparava em ERROR a aconselhar `getOrDefault` sobre código já guardado.
-  # As exclusões abaixo são as formas medidas em que a presença da chave fica
-  # provada no caminho que chega ao deref: guarda inline na condição de um `if`
-  # (simples e em conjunção, com o deref no ramo VERDADEIRO, com e sem
-  # chavetas), `while (containsKey)`, a guarda usada como EXPRESSÃO (conjunção e
-  # disjunção negativa-primeiro), ternário (nas quatro polaridades, com o deref
-  # no ramo guardado), saída antecipada
-  # (`return`/`throw`/`continue`, sobre `!containsKey` e sobre `get() == null`,
-  # cada uma com e sem uma instrução interposta) e as formas de população
-  # que garantem a chave, `put`, `putIfAbsent` e `computeIfAbsent`.
-  #
-  # TODAS ELAS ESTÃO LIMITADAS AO RAMO QUE A GUARDA PROVA, e isso foi uma
-  # regressão publicada antes de ser uma funcionalidade: um `pattern-not-inside`
-  # exclui o NÓ INTEIRO que casou, por isso a forma sem limitação excluía
-  # também o ramo em que a guarda é falsa e o deref é um NPE garantido. Medido
-  # num ficheiro com oito bugs desses: seis disparavam antes das exclusões de
-  # guarda entrarem, um depois, oito agora. O ficheiro é hoje a fixture
-  # `hits/ElseArm.java` e a contagem é asserida.
-  #
-  # As aspas são obrigatórias em todo o ternário e em `!$M.containsKey(...)`:
-  # sem elas o YAML lê o `?` como indicador de chave complexa e o `!` como
-  # tag, e o ficheiro inteiro deixa de carregar — `Invalid YAML file`,
-  # `scanned=0`. É a mesma armadilha do RuleParseError: a corrida parece ter
-  # acontecido.
-  #
-  # CUSTO, medido: o `metavariable-type` casa o tipo declarado EXATO, sem
-  # subtipagem. Um mapa atrás de uma interface do próprio projeto, um `Map`
-  # cru, um `EnumMap` ou um parâmetro de tipo genérico deixam de ser vistos. É
-  # recall trocado por precisão, de propósito.
-  #
-  # WARNING e não ERROR, e é o critério do §4 aplicado a frio — desta vez
-  # contra esta regra, depois de ter sido aplicado contra a
-  # `optional-get-no-ispresent`. Um `m.get(k).f()` só é bug SEM GUARDA, e a
-  # lista de exclusões abaixo — que não pára de crescer a cada ronda de
-  # revisão — é a prova direta de que a regra não
-  # consegue decidir isso: cada uma delas existe porque uma forma de guarda
-  # perfeitamente correta estava a disparar em ERROR. A lista fecha as formas
-  # que alguém já enumerou. Não fecha a próxima, e não fecha nenhuma guarda que
-  # chegue por outro método. Uma regra que precisa de uma lista de exclusões
-  # sem fim para se manter correta em ERROR nunca foi ERROR segundo esta
-  # definição — foi exatamente esse o argumento usado para descer o
-  # `optional-get-no-ispresent`, e aplicá-lo a uma regra e não à outra era a
-  # inconsistência.
-  #
-  # O QUE A RONDA DO CORPUS EXTERNO MEDIU, e é a leitura mais dura que esta
-  # regra já levou: 43 findings em 12 593 ficheiros do OpenJDK e 12 em 4 754 do
-  # Spring Framework. Os 55 foram lidos um a um e NENHUM é um defeito vivo. Os
-  # 55 dividem-se por famílias que o Semgrep OSS não pode fechar, e todas já
-  # estão registadas como limitação: o mapa total, populado no construtor ou
-  # num inicializador estático para todas as chaves de um enum (o maior grupo,
-  # e é onde caem os 7 do Spring); a presença garantida por um método
-  # (`addNode(u); … edges.get(u)`); a chave que vem de um `keySet()` iterado
-  # com lambda ou stream em vez de for-each; a chave filtrada por
-  # `.filter($M::containsKey)`; e a invariante entre dois objetos.
-  #
-  # NENHUMA cláusula NOVA FOI ESCRITA POR CAUSA DISTO, e a decisão é
-  # deliberada. As duas famílias sintaticamente fecháveis — o `keySet()` com
-  # lambda e o filtro por referência de método — valem 7 dos 55, e as formas
-  # que as fechariam não conseguem unificar a CHAVE, que é exatamente a
-  # unificação que a cláusula do for-each tem e que impede a exclusão de engolir
-  # os bugs vizinhos `b13` e `b14`. Trocar 7 falsos positivos por uma exclusão
-  # cega é o negócio que esta série passou nove rondas a desfazer.
-  #
-  # O QUE ISTO NÃO PROVA: os dois corpora são bibliotecas maduras, em que um
-  # mapa dereferenciado é quase sempre um mapa que a própria classe preencheu
-  # por inteiro. Código de aplicação, com mapas indexados por entrada externa,
-  # é outra distribuição e não foi medido. Por isso a regra fica — em WARNING,
-  # com a medição escrita — e a evidência que decide a sua vida ou morte é um
-  # terceiro corpus de Java de aplicação.
-  - id: bugfix-java-null-safety-map-get-deref
-    patterns:
-      - pattern-either:
-          - patterns:
-              - pattern: $M.get($K).$METHOD(...)
-              - metavariable-pattern:
-                  metavariable: $M
-                  patterns:
-                    - pattern-either:
-                        - pattern: $F
-                        - pattern: this.$F
-                    - metavariable-type: {metavariable: $F, type: Map}
-          - patterns:
-              - pattern: $M.get($K).$METHOD(...)
-              - metavariable-pattern:
-                  metavariable: $M
-                  patterns:
-                    - pattern-either:
-                        - pattern: $F
-                        - pattern: this.$F
-                    - metavariable-type: {metavariable: $F, type: HashMap}
-          - patterns:
-              - pattern: $M.get($K).$METHOD(...)
-              - metavariable-pattern:
-                  metavariable: $M
-                  patterns:
-                    - pattern-either:
-                        - pattern: $F
-                        - pattern: this.$F
-                    - metavariable-type: {metavariable: $F, type: TreeMap}
-          - patterns:
-              - pattern: $M.get($K).$METHOD(...)
-              - metavariable-pattern:
-                  metavariable: $M
-                  patterns:
-                    - pattern-either:
-                        - pattern: $F
-                        - pattern: this.$F
-                    - metavariable-type: {metavariable: $F, type: LinkedHashMap}
-          - patterns:
-              - pattern: $M.get($K).$METHOD(...)
-              - metavariable-pattern:
-                  metavariable: $M
-                  patterns:
-                    - pattern-either:
-                        - pattern: $F
-                        - pattern: this.$F
-                    - metavariable-type: {metavariable: $F, type: ConcurrentHashMap}
-      # --- guarda inline, LIMITADA AO RAMO QUE A GUARDA PROVA ----------------
-      #
-      # Cada guarda tem DUAS cláusulas e as duas são precisas: a primeira
-      # (`{ ... deref; ... }`) alcança um corpo com várias instruções e o deref
-      # aninhado num ciclo lá dentro; a segunda (`{ <... deref ...>; }`) alcança
-      # a forma SEM CHAVETAS. Medido em separado: a primeira sozinha deixa
-      # `if (m.containsKey(k)) return m.get(k).trim();` disparar, a segunda
-      # sozinha deixa disparar o deref dentro de um `for` aninhado.
-      - pattern-not-inside: "if ($M.containsKey($K)) { ... $M.get($K).$G(...); ... }"
-      - pattern-not-inside: "if ($M.containsKey($K)) { <... $M.get($K).$G(...) ...>; }"
-      - pattern-not-inside: "if ($M.containsKey($K) && ...) { ... $M.get($K).$G(...); ... }"
-      - pattern-not-inside: "if ($M.containsKey($K) && ...) { <... $M.get($K).$G(...) ...>; }"
-      - pattern-not-inside: "if (... && $M.containsKey($K)) { ... $M.get($K).$G(...); ... }"
-      - pattern-not-inside: "if (... && $M.containsKey($K)) { <... $M.get($K).$G(...) ...>; }"
-      - pattern-not-inside: "if ($M.get($K) != null) { ... $M.get($K).$G(...); ... }"
-      - pattern-not-inside: "if ($M.get($K) != null) { <... $M.get($K).$G(...) ...>; }"
-      - pattern-not-inside: "if ($M.get($K) != null && ...) { ... $M.get($K).$G(...); ... }"
-      - pattern-not-inside: "if ($M.get($K) != null && ...) { <... $M.get($K).$G(...) ...>; }"
-      - pattern-not-inside: "if (... && $M.get($K) != null) { ... $M.get($K).$G(...); ... }"
-      - pattern-not-inside: "if (... && $M.get($K) != null) { <... $M.get($K).$G(...) ...>; }"
-      # --- ciclo guardado ----------------------------------------------------
-      #
-      # A regra do Optional excluía `while ($O.isPresent())` desde a primeira
-      # ronda e esta não tinha contrapartida, por isso o ciclo de esvaziamento
-      # — correto, porque o corpo só corre enquanto a chave lá está — disparava.
-      - pattern-not-inside: while ($M.containsKey($K)) { ... }
-      # --- iteração sobre o PRÓPRIO keySet -----------------------------------
-      #
-      # O cabeçalho do ciclo liga a chave A PARTIR DO PRÓPRIO MAPA, por isso a
-      # presença está garantida em todo o caminho sintático que chega ao deref
-      # — o mesmo critério pelo qual o `containsKey` é aceite como guarda. É o
-      # idioma de iteração de mapas mais comum em Java e não estava excluído.
-      #
-      # UMA cláusula e não um par, ao contrário de todas as guardas de `if`
-      # acima, e isso foi MEDIDO em quatro formas antes de ser escrito:
-      #   * `for ($T $K : $M.keySet()) { ... $M.get($K).$G(...); ... }` e
-      #     `for (...) { <... deref ...>; }` fecham a forma COM chavetas e
-      #     deixam a forma sem chavetas a disparar;
-      #   * `for ($T $K : $M.keySet()) { ... }` fecha as com chavetas e falha
-      #     a sem chavetas pela mesma razão;
-      #   * o corpo escrito como reticência de statement — a forma abaixo —
-      #     fecha as duas de uma vez.
-      # Um par seria portanto meio inerte, e uma cláusula inerte é a classe de
-      # defeito que esta série já apanhou seis vezes.
-      #
-      # Não é preciso limitar ao ramo guardado como no `if`: um for-each não
-      # tem ramo `else`, todo o corpo corre com a chave presente, por isso
-      # excluir o nó inteiro é exatamente o que se quer aqui.
-      #
-      # AS DUAS UNIFICAÇÕES são o que impede isto de ser uma exclusão cega:
-      # `$M` obriga a que o mapa iterado seja o mapa dereferenciado, e `$K` a
-      # que a variável do ciclo seja a chave passada ao `get`. `b13` e `b14`
-      # em hits/RealBugs.java quebram uma unificação cada e continuam a
-      # disparar — são a prova de que a cláusula não engole os dois bugs
-      # vizinhos mais óbvios.
-      #
-      # O QUE FICA DE FORA, medido e deliberado: `for (Map.Entry<K,V> e :
-      # m.entrySet()) { … m.get(e.getKey()) … }`, em que a chave é
-      # `e.getKey()` e não a variável do ciclo, e o keySet copiado para um
-      # local primeiro (`Set<String> keys = m.keySet(); for (String k : keys)`),
-      # em que o cabeçalho já não menciona `keySet()`. Os dois são falsos
-      # positivos aceites, não descuido.
-      - pattern-not-inside: "for ($T $K : $M.keySet()) ..."
-      # --- guarda como EXPRESSÃO, não como condição de um `if` ---------------
-      #
-      # As seis cláusulas de cima são todas `if (...) { ... }` e a documentação
-      # dizia que a regra honrava "uma conjunção de qualquer dos lados", ponto.
-      # Não honrava: `return m.containsKey(k) && m.get(k).isEmpty();` — o modo
-      # normal de escrever "ausente ou vazio" em Java — não é a condição de
-      # nada e disparava.
-      #
-      # A DISJUNÇÃO NEGATIVA-PRIMEIRO é a dual de De Morgan da conjunção e
-      # prova exatamente o mesmo: `||` faz curto-circuito, logo o operando
-      # direito só é avaliado quando o esquerdo foi FALSO, que é precisamente
-      # quando a chave está presente. `X || m.containsKey(k)` NÃO prova nada e
-      # continua a disparar — as duas formas são estruturalmente distintas, por
-      # isso excluir a segunda não reintroduz a primeira, e a fixture `b8` de
-      # hits/RealBugs.java existe para medir isso a cada corrida.
-      - pattern-not-inside: "$M.containsKey($K) && <... $M.get($K).$G(...) ...>"
-      - pattern-not-inside: "$M.get($K) != null && <... $M.get($K).$G(...) ...>"
-      - pattern-not-inside: "!$M.containsKey($K) || <... $M.get($K).$G(...) ...>"
-      - pattern-not-inside: "$M.get($K) == null || <... $M.get($K).$G(...) ...>"
-      # --- a mesma guarda numa CADEIA de operandos ---------------------------
-      #
-      # LEIA ISTO ANTES DE MEXER NAS EXCLUSÕES DE EXPRESSÃO. O `$X` casa a
-      # subárvore INTEIRA aninhada à esquerda, e não um operando. Uma conjunção em
-      # Java aninha à esquerda — `a && b && c` é `(a && b) && c` — por isso
-      # `$X && GUARDA && DEREF` casa uma cadeia de QUALQUER comprimento cuja
-      # penúltima posição seja a guarda. UMA cláusula por guarda chega, e uma
-      # segunda cláusula para "cadeias mais longas" seria inerte. Medido: a
-      # cadeia de quatro operandos é fechada pela mesma cláusula que a de três.
-      #
-      # Isto esteve aqui documentado ao contrário. A tabela de limitações teve
-      # durante várias rondas uma linha a dizer que estas cadeias eram um falso
-      # positivo aceite, com duas justificações sucessivas — "remove um de dois
-      # findings e a linha continua a disparar" e "uma cláusula deixa as cadeias
-      # de 4+ operandos a disparar". A primeira foi medida sobre uma linha com
-      # DOIS `get()`, que é a única razão por que "um de dois" era verdade; a
-      # segunda raciocinava sobre o COMPRIMENTO da cadeia, que não é a variável
-      # que decide nada. As duas estavam erradas pela mesma razão: ninguém tinha
-      # olhado para o que `$X` casa. A linha foi apagada, não reescrita.
-      #
-      # O que continua a disparar, e são bugs a sério (fixadas em `b15`-`b20`
-      # de hits/RealBugs.java): a cadeia que guarda OUTRA chave, a disjunção
-      # POSITIVA-primeiro (que não prova nada — o último operando só corre
-      # quando o `containsKey` foi FALSO), e a guarda NEGADA numa conjunção
-      # (`flag && !m.containsKey(k) && m.get(k)…`), em que a chave está provada
-      # AUSENTE exatamente onde é lida. E a forma em que a guarda não está na
-      # penúltima posição — `a.isPresent() && b.isPresent() && a.get()…` — que
-      # continua a disparar sobre o `a.get()`, agora sem linha na tabela porque
-      # é uma cadeia que guarda duas coisas ao mesmo tempo e não uma questão de
-      # comprimento.
-      - pattern-not-inside: "$X && $M.containsKey($K) && <... $M.get($K).$G(...) ...>"
-      - pattern-not-inside: "$X && $M.get($K) != null && <... $M.get($K).$G(...) ...>"
-      - pattern-not-inside: "$X || !$M.containsKey($K) || <... $M.get($K).$G(...) ...>"
-      - pattern-not-inside: "$X || $M.get($K) == null || <... $M.get($K).$G(...) ...>"
-      # --- ternário (expressão condicional: nó de AST diferente do `if`) -----
-      #
-      # LIMITADO AO RAMO GUARDADO, pela mesma razão que o `if`. A forma que
-      # aqui esteve — `"$M.containsKey($K) ? ... : ..."` — casa o ternário
-      # INTEIRO, e um `pattern-not-inside` exclui tudo o que esteja dentro do
-      # nó que casou. Os dois ramos ficavam excluídos, incluindo aquele em que
-      # a guarda é FALSA e o deref é um NullPointerException garantido.
-      - pattern-not-inside: "$M.containsKey($K) ? <... $M.get($K).$G(...) ...> : ..."
-      - pattern-not-inside: "!$M.containsKey($K) ? ... : <... $M.get($K).$G(...) ...>"
-      - pattern-not-inside: "$M.get($K) != null ? <... $M.get($K).$G(...) ...> : ..."
-      - pattern-not-inside: "$M.get($K) == null ? ... : <... $M.get($K).$G(...) ...>"
-      # --- saída antecipada sobre !containsKey -------------------------------
-      - pattern-not-inside: |
-          if (!$M.containsKey($K)) { return ...; }
-          ...
-      - pattern-not-inside: |
-          if (!$M.containsKey($K)) { $S1; return ...; }
-          ...
-      - pattern-not-inside: |
-          if (!$M.containsKey($K)) { throw ...; }
-          ...
-      - pattern-not-inside: |
-          if (!$M.containsKey($K)) { $S1; throw ...; }
-          ...
-      - pattern-not-inside: |
-          if (!$M.containsKey($K)) { continue; }
-          ...
-      - pattern-not-inside: |
-          if (!$M.containsKey($K)) { $S1; continue; }
-          ...
-      # --- saída antecipada sobre get() == null ------------------------------
-      - pattern-not-inside: |
-          if ($M.get($K) == null) { return ...; }
-          ...
-      - pattern-not-inside: |
-          if ($M.get($K) == null) { $S1; return ...; }
-          ...
-      - pattern-not-inside: |
-          if ($M.get($K) == null) { throw ...; }
-          ...
-      - pattern-not-inside: |
-          if ($M.get($K) == null) { $S1; throw ...; }
-          ...
-      - pattern-not-inside: |
-          if ($M.get($K) == null) { continue; }
-          ...
-      - pattern-not-inside: |
-          if ($M.get($K) == null) { $S1; continue; }
-          ...
-      # --- população que garante a chave -------------------------------------
-      #
-      # As quatro ligam o MESMO mapa e a MESMA chave que o deref lê, por isso
-      # a presença fica provada sem guarda nenhuma. O `put` direto é o que
-      # fecha a limitação que aqui esteve documentada — "um mapa populado
-      # imediatamente acima da leitura continua a ser assinalado" — e o
-      # `if (!containsKey) { put(); }` é o idioma de popular-em-falta, que não
-      # é uma saída antecipada e nenhuma das cláusulas de cima lhe chega.
-      - pattern-not-inside: |
-          $M.putIfAbsent($K, ...);
-          ...
-      - pattern-not-inside: |
-          $M.computeIfAbsent($K, ...);
-          ...
-      - pattern-not-inside: |
-          $M.put($K, ...);
-          ...
-      - pattern-not-inside: |
-          if (!$M.containsKey($K)) { $M.put($K, ...); }
-          ...
-    message: >-
-      Método chamado diretamente sobre `map.get()` sem guarda. O `get` devolve
-      `null` quando a chave não existe, por isso isto é um
-      NullPointerException na primeira chave em falta. Guarde o resultado e
-      teste-o, ou use `getOrDefault`.
-    severity: WARNING
-    languages: [java]
-
   # WARNING e não ERROR, e a razão é o critério do §4 do design aplicado a
   # frio: ERROR é para o padrão que é bug independentemente da intenção. Um
   # `o.get()` não é isso — só é bug quando está SEM GUARDA, e a lista de
@@ -602,7 +323,14 @@ rules:
   #   * qualquer uma das formas de expressão acima numa CADEIA, com outra coisa
   #     a fazer curto-circuito à frente da guarda — `flag && o.isPresent() &&
   #     o.get()…`. Uma cláusula por guarda cobre cadeias de qualquer
-  #     comprimento; a explicação está na secção de cadeias da `map-get-deref`.
+  #     comprimento, porque o `$X` casa a subárvore INTEIRA aninhada à esquerda
+  #     e não um operando: `a && b && c` é `(a && b) && c`, por isso
+  #     `$X && GUARDA && DEREF` alcança uma cadeia de qualquer comprimento cuja
+  #     penúltima posição seja a guarda. Uma segunda cláusula para "cadeias mais
+  #     longas" seria inerte — medido, a de quatro operandos fecha com a mesma
+  #     cláusula que a de três. Isto esteve documentado ao contrário durante
+  #     quatro rondas, com duas justificações sucessivas, e as duas estavam
+  #     erradas porque ninguém tinha olhado para o que o `$X` casa.
   # O que a regra NÃO reconhece, e não é exprimível em Semgrep OSS: qualquer
   # guarda que chegue através de outro método, como `if (!present(o)) { … }`,
   # que exige análise interprocedimental; e uma guarda guardada num booleano
@@ -622,7 +350,7 @@ rules:
       - metavariable-type: {metavariable: $O, type: Optional}
       # --- guarda inline, LIMITADA AO RAMO QUE A GUARDA PROVA ----------------
       #
-      # Duas cláusulas por guarda, exatamente como na `map-get-deref`: a
+      # Duas cláusulas por guarda, e as duas são precisas: a
       # primeira alcança corpos com várias instruções e derefs aninhados, a
       # segunda alcança a forma sem chavetas. E as duas exigem que o deref
       # esteja no ramo VERDADEIRO — a forma anterior, `if ($O.isPresent()) {
@@ -704,7 +432,7 @@ rules:
       # A mesma guarda numa CADEIA. `$X` casa a subárvore inteira aninhada à
       # esquerda, por isso uma cláusula por guarda cobre cadeias de qualquer
       # comprimento — a explicação completa, e o erro de raciocínio que a
-      # atrasou várias rondas, estão na secção equivalente da `map-get-deref`.
+      # atrasou várias rondas, estão na lista de formas reconhecidas acima.
       # Continuam a disparar, e são bugs: a cadeia que guarda OUTRO Optional, a
       # disjunção positiva-primeiro, e a guarda negada
       # (`flag && !o.isPresent() && o.get()`), em que o Optional está provado
@@ -1019,7 +747,7 @@ rules:
   # que não esteja nesta lista (`Deque`, `Queue`, `SortedSet`, uma coleção do
   # próprio projeto).
   #
-  # WARNING e não ERROR, pela mesma razão que a `map-get-deref`: aquilo que a
+  # WARNING e não ERROR, pela mesma razão que as outras: aquilo que a
   # regra emite não é sempre um bug. A correção depende inteiramente de ter
   # reconhecido a FORMA DE SAIR que torna a remoção segura, e as exclusões abaixo
   # cobrem as formas enumeradas — não a seguinte. Bastam DUAS instruções entre

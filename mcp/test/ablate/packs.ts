@@ -105,12 +105,25 @@
  *
  * KNOW WHAT THESE CORPORA ARE WEAK AT. Both are mature, heavily reviewed
  * LIBRARY code, where a map is nearly always populated in full by the class
- * that reads it. `null-safety-map-get-deref` scores 43 on the JDK and 12 on
+ * that reads it. `null-safety-map-get-deref` scored 43 on the JDK and 12 on
  * Spring, and a hand-read of all 55 found no live defect — but every one of
- * the 55 is a map the same class fills, which is not how application code
- * keyed on external input behaves. That measurement is a reason to distrust
- * the rule, not yet a reason to delete it; the corpus that would settle it is
- * a body of application Java, which neither of these is.
+ * the 55 was a map the same class fills, which is not how application code
+ * keyed on external input behaves. That measurement was recorded as a reason
+ * to distrust the rule and NOT yet to delete it, with the corpus that would
+ * settle it named: a body of application Java, which neither of these is.
+ *
+ * That corpus was then run, and it deleted the rule. Kafka (224 findings /
+ * 3 892 files), Elasticsearch (749 / 20 485) and Jenkins (1 / 1 274) — 973
+ * new findings, 45 read by hand, five defensible defects. The number that
+ * decided it was not the count: 88% of the Elasticsearch findings and 97% of
+ * the Kafka ones carry NO guard anywhere near the dereference. They are
+ * correct for semantic reasons — parallel maps kept in sync, a map the class
+ * filled in another method, a constant key, an API contract — and no
+ * `pattern-not-inside` reaches any of that. See the pack header for the full
+ * write-up. The lesson for THIS file is the one the paragraph above already
+ * half-stated: a library corpus and an application corpus are different
+ * distributions, and a rule that passes on one is not measured until it has
+ * seen the other.
  *
  * `base.yml` does contain JS/TS rules and would accept `mcp/src` as a corpus;
  * it is left off by default only because nobody has read that baseline yet.

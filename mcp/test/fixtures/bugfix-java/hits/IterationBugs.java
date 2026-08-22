@@ -6,8 +6,10 @@ import java.util.List;
  * RealBugs.java and ElseArm.java.
  *
  * It exists because the corpus was measured and found to cover 4 of the 8
- * rules — `map-get-deref` 9, `optional-get` 6, `loop-lte-length` 4,
- * `static-dateformat` 1 — and to carry NOTHING for this rule. That was the
+ * rules THEN IN THE PACK — `map-get-deref` 9, `optional-get` 6,
+ * `loop-lte-length` 4, `static-dateformat` 1 — and to carry NOTHING for this
+ * rule. (`map-get-deref` was deleted later, by the application-corpus round;
+ * its nine went with it and the corpus now covers 3 of 7.) That was the
  * riskiest of the four gaps: `modify-during-iteration` carries 37 clauses and
  * the file's only nested re-inclusion, and it is the rule whose exclusion
  * swallowed a real `ConcurrentModificationException` in wave 4. Its real bugs

@@ -126,17 +126,18 @@ interface FileExpectation {
  * `RealBugs.java`, `ElseArm.java` and `IterationBugs.java` close that. They are
  * dense files of defects chosen to sit next to the guard shapes the exclusions
  * match — the `else` arm of a guard, the false arm of a ternary, a disjunction
- * that proves nothing, a guard on a different key, a `switch` whose `break`
- * leaves only the switch. Their counts are asserted like any other, so every
+ * that proves nothing, a guard on a different Optional, a `switch` whose
+ * `break` leaves only the switch. Their counts are asserted like any other, so every
  * future exclusion has to prove it does not eat a real bug before it can be
  * merged.
  *
  * WHICH RULES THE CORPUS COVERS, stated rather than left to accident. Measured
- * over the three corpus files at the wave-7 counts:
+ * over the three corpus files after the application-corpus round deleted
+ * `null-safety-map-get-deref` (it stood at 11 here, and the whole column went
+ * with the rule):
  *
  *   | rule                          | corpus defects |
  *   | ----------------------------- | -------------- |
- *   | `null-safety-map-get-deref`   | 11             |
  *   | `null-safety-optional-get`    | 10             |
  *   | `edge-case-modify-during-iteration` | 6        |
  *   | `off-by-one-loop-lte-length`  |  4             |
@@ -145,7 +146,7 @@ interface FileExpectation {
  *   | `error-handling-printstacktrace-only` | 0      |
  *   | `memory-leak-stream-not-closed` | 0            |
  *
- * Five of eight, and the three at zero are a DECISION, not an oversight: they
+ * Four of seven, and the three at zero are a DECISION, not an oversight: they
  * are the three rules that carry no GUARD exclusions — `empty-catch` has one
  * metavariable-regex, `printstacktrace-only` has none at all, and
  * `stream-not-closed` has four, all four of them the same statement: "this
@@ -190,13 +191,21 @@ interface FileExpectation {
  */
 const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'ElseArm.java': {
-    // Twelve. The first eight are the whole point of wave 6: every method is a
-    // guaranteed NPE or NoSuchElementException whose dereference sits on the
-    // branch the guard proves is UNSAFE — the `else` arm of an `if` guard (map
-    // containsKey, map != null, Optional isPresent, Optional conjunction), the
-    // arm of a ternary the condition rules out (both polarities, map and
-    // Optional), plus one unguarded control. Measured against the shipped rule
-    // at 3392a0d: 1 of 8. Against b30499d, before wave 4: 6 of 8.
+    // Seven, down from twelve. The file is the whole point of wave 6: every
+    // method is a guaranteed NoSuchElementException whose dereference sits on
+    // the branch the guard proves is UNSAFE — the `else` arm of an `if` guard
+    // (Optional isPresent, Optional conjunction) and the arm of a ternary the
+    // condition rules out. Measured against the shipped rule at 3392a0d: 1 of
+    // 8. Against b30499d, before wave 4: 6 of 8.
+    //
+    // The five that left are the MAP half — F1-F4 and F8, the `else` arm of
+    // `containsKey` and of `get() != null`, both ternary polarities, and the
+    // unguarded control. They went with `null-safety-map-get-deref` when the
+    // application-corpus round deleted it. Measured old pack vs new over the
+    // whole hits/ tree: 25 findings removed, ZERO added, and no other file
+    // moved — which is what makes 12 -> 7 a deletion and not a regression.
+    // The arm-scoping those five fenced is still fenced: `optional-get`
+    // carries the same clause shapes and F5-F7 sit on them.
     //
     // F9-F12 came with the external-corpus round, which added four `else`-arm
     // clauses and two `assert isPresent()` clauses to `optional-get`. Both are
@@ -206,44 +215,41 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     // the THEN arm of `isEmpty()`, the `else` of a CONJUNCTION with
     // `isEmpty()` (which proves nothing), an assert on a DIFFERENT Optional,
     // and `assert o.isEmpty()`.
-    ids: [
-      'bugfix-java-null-safety-map-get-deref',
-      'bugfix-java-null-safety-optional-get-no-ispresent',
-    ],
-    count: 12,
+    ids: ['bugfix-java-null-safety-optional-get-no-ispresent'],
+    count: 7,
   },
   'RealBugs.java': {
-    // Fourteen, spread over four rules, each one chosen to be the defect that a
-    // specific tightening plausibly swallows: the short-form
+    // Eleven, down from twenty, spread over three rules, each one chosen to be
+    // the defect that a specific tightening plausibly swallows: the short-form
     // `SimpleDateFormat` the qualified pattern has to resolve through the
-    // import; four array shapes the `"$T[]"` restriction has to keep seeing;
-    // `force || containsKey`, the disjunction that proves NOTHING, which the
-    // wave-6 negative-first `||` exclusions must NOT reach; a guard on a
-    // different key and a guard on a different Optional; and `ofNullable`,
-    // which the `Optional.of` exclusion must not cover.
+    // import; four array shapes the `"$T[]"` restriction has to keep seeing; a
+    // guard on a different Optional; and `ofNullable`, which the `Optional.of`
+    // exclusion must not cover.
     //
-    // `b13` and `b14`, added in wave 7, are the near-misses for the `keySet()`
-    // exclusion, one per metavariable it unifies: `b13` iterates one map's
-    // keys and dereferences ANOTHER map, `b14` iterates the map's own keys and
-    // dereferences a DIFFERENT key. Drop either unification from that clause
-    // and the matching function stops firing — which is the only thing that
-    // distinguishes a scoped exclusion from a blanket one.
+    // `b15`, `b17` and `b19` do that job for the CHAIN exclusions, whose `$X`
+    // matches a whole left-nested subtree and is therefore deliberately
+    // permissive. Three ways a chain can look like a guard without being one:
+    // the chain that guards a DIFFERENT Optional; the POSITIVE-first
+    // disjunction, where the dereference runs precisely when the test was
+    // false; and the NEGATED guard in a conjunction, where the value is proven
+    // absent at the point it is read. Every one is a guaranteed throw.
     //
-    // `b15`-`b20`, added in wave 8, do the same job for the seven CHAIN
-    // exclusions, whose `$X` matches a whole left-nested subtree and is
-    // therefore deliberately permissive. Three ways a chain can look like a
-    // guard without being one, two rules each: the chain that guards a
-    // DIFFERENT key or Optional; the POSITIVE-first disjunction, where the
-    // dereference runs precisely when the test was false; and the NEGATED
-    // guard in a conjunction, where the value is proven absent at the point it
-    // is read. Every one is a guaranteed throw.
+    // The nine that left are the MAP half — `b6`-`b9`, `b13`, `b14`, `b16`,
+    // `b18`, `b20`: the two unguarded controls, `force || containsKey` (the
+    // disjunction that proves NOTHING), the guard on a different key, the two
+    // `keySet()` near-misses that broke one unification each, and the map
+    // twins of the three chain shapes. They went with
+    // `null-safety-map-get-deref` when the application-corpus round deleted
+    // it. Nothing they fenced is now unfenced: every clause shape they
+    // measured has an Optional twin still in the pack, and those twins are
+    // `b12`, `b15`, `b17` and `b19`. Measured old pack vs new over the whole
+    // hits/ tree: 25 removed, ZERO added, no other file moved.
     ids: [
-      'bugfix-java-null-safety-map-get-deref',
       'bugfix-java-null-safety-optional-get-no-ispresent',
       'bugfix-java-off-by-one-loop-lte-length',
       'bugfix-java-race-condition-static-dateformat',
     ],
-    count: 20,
+    count: 11,
   },
   'IterationBugs.java': {
     // Six, all `ConcurrentModificationException`, all in the rule that had
@@ -282,18 +288,6 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     ids: ['bugfix-java-error-handling-printstacktrace-only'],
     count: 6,
   },
-  'MapGetDeref.java': {
-    // Eleven: the rule restricts the receiver by DECLARED type, so it carries
-    // one function per `pattern-either` branch (Map, HashMap, TreeMap,
-    // LinkedHashMap, ConcurrentHashMap), one `this.`-qualified twin per
-    // branch — each branch binds its receiver through a
-    // `metavariable-pattern` that accepts a bare name or a qualified one, and
-    // before that wrapper went in the qualified form was invisible — plus a
-    // `var`-inferred receiver. A branch, or a receiver form, with no fixture
-    // behind it could be deleted without a test moving.
-    ids: ['bugfix-java-null-safety-map-get-deref'],
-    count: 11,
-  },
   'OptionalGet.java': {
     ids: ['bugfix-java-null-safety-optional-get-no-ispresent'],
     count: 1,
@@ -320,7 +314,7 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
     count: 3,
   },
   'ModifyDuringIteration.java': {
-    // Sixteen, for the same reason as MapGetDeref: one function per
+    // Sixteen, and the reason is the receiver enumeration: one function per
     // enumerated receiver type (List, ArrayList, LinkedList, Set, HashSet,
     // LinkedHashSet, Collection), one `this.`-qualified twin each, and two
     // `switch` cases. The enumeration is what keeps the rule off
@@ -408,7 +402,6 @@ const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
   // now contributes NOTHING to a default `create_fix_pr` run.
   'bugfix-java-error-handling-empty-catch': 'WARNING',
   'bugfix-java-error-handling-printstacktrace-only': 'WARNING',
-  'bugfix-java-null-safety-map-get-deref': 'WARNING',
   'bugfix-java-null-safety-optional-get-no-ispresent': 'WARNING',
   'bugfix-java-off-by-one-loop-lte-length': 'WARNING',
   'bugfix-java-memory-leak-stream-not-closed': 'WARNING',
@@ -542,7 +535,6 @@ describe('bugfix-java rules', () => {
 const EXPECTED_CLASS: Readonly<Record<string, string>> = {
   'bugfix-java-error-handling-empty-catch': 'error_handling',
   'bugfix-java-error-handling-printstacktrace-only': 'error_handling',
-  'bugfix-java-null-safety-map-get-deref': 'null_safety',
   'bugfix-java-null-safety-optional-get-no-ispresent': 'null_safety',
   'bugfix-java-off-by-one-loop-lte-length': 'off_by_one',
   'bugfix-java-memory-leak-stream-not-closed': 'memory_leak',

@@ -5,6 +5,14 @@
 **Fourth in the per-language sequence**, after JS/TS (1.6.0), Python (1.7.0) and
 Go (1.8.0).
 
+> **READ SECTION 12 FIRST IF YOU ARE HERE ABOUT `null-safety-map-get-deref`.**
+> That rule was **deleted** by the application-corpus round. Everything sections
+> 1-11 say about it is the record of the rounds that built it, and it is kept
+> deliberately — the reasoning is worth having when the same rule is proposed
+> again — but the pack ships **seven** rules, not eight, and no clause described
+> below is live any more. Every count in sections 4, 5, 8 and 11 is the count of
+> that round.
+
 ## 1. Java is the emptiest of them all
 
 Measured, not assumed. `p/r2c-bug-scan` ships **4 Java rules**. Running every id
@@ -1096,6 +1104,11 @@ and was not measured. So the rule stays, at `WARNING`, with 0/55 written down
 where the next round will find it, and the evidence that decides its life or
 death is a third corpus of application Java.
 
+> **That corpus was run, and it deleted the rule — see section 12.** The
+> paragraph above is the right call recorded at the right time: it named the
+> missing evidence and the condition precisely, and it did not guess the answer.
+> The answer was not the one the "not the same case" paragraph above expected.
+
 ### A new false negative, on the branch axis
 
 Reproducing rows 1 to 8 before deciding anything turned up one that no row
@@ -1169,3 +1182,144 @@ and watch.
    confirmed the shape is absent from the corpus; for the second, a grep found a
    candidate the rule could not see. Same number, opposite conclusions, and only
    the grep distinguishes them.
+
+## 12. The application-corpus round, and the deletion of `map-get-deref`
+
+Section 11 closed by naming exactly one piece of missing evidence: both its
+corpora are mature *library* code, and the rule's entire false-positive
+population was "a map the reading class filled itself", which is a property of
+libraries. The condition it set was a third corpus of **application** Java. This
+is that round.
+
+### The corpora
+
+| corpus | findings | `.java` scanned | per 1000 |
+| --- | --- | --- | --- |
+| Jenkins (`jenkinsci/jenkins`) | 1 | 1 274 | 0.8 |
+| Kafka (`apache/kafka`) | 224 | 3 892 | 57.5 |
+| Elasticsearch (`elastic/elasticsearch`) | 749 | 20 485 | 36.6 |
+
+`paths.scanned` asserted non-zero on all three, per the standing rule that
+`paths.scanned == 0` is an exception and not a result. The Elasticsearch scan is
+the one that matters and it is the one an earlier attempt got wrong: a previous
+run reported "749 findings on 20 485 files" while leaving behind JSON files
+containing `results: 0, paths.scanned: 0`. The number happened to be right and
+the artefact did not support it. It was re-measured from scratch.
+
+**The 70x spread between Jenkins and Kafka is not noise, and half of it is a
+scanning artefact rather than a property of the code.** Semgrep's default ignore
+list drops any path with a `test` segment. Kafka and Jenkins use
+`src/test/java`, so their test code never reaches the scan. Elasticsearch uses
+`src/internalClusterTest/java` and `src/javaRestTest/java`, which match nothing
+in that list — so **510 of its 749 findings (68%) are test and QA code**, almost
+all of it `((Number) response.get("count")).longValue()` on a parsed REST
+response inside an assertion. Split out, the production rates are 13.8/1000 for
+Elasticsearch and 57.6/1000 for Kafka. The remaining spread is real, and it is
+concentration: two files supply 52 of Kafka's 215 production findings, and one
+file supplies 48 of Elasticsearch's 239.
+
+### What 45 findings read by hand showed
+
+Read across both corpora, spread over modules, deliberately weighted toward the
+shapes a cheap textual triage could **not** explain. Five sites are defensible
+defects:
+
+| site | why it is real |
+| --- | --- |
+| `EnterpriseGeoIpDownloader.java:589` | `((Map<String,String>) checksums.get("checksums")).get("md5")` on JSON parsed from a third-party HTTP endpoint. The next three lines validate the `md5` against a regex and throw "Unexpected md5 response" — the author was thinking about malformed responses and still left the outer lookup unguarded |
+| `GeoIpDownloader.java:160`, `:183`, `:185` | `res.get("name").toString()` and `databaseInfo.get("url").toString()` on JSON fetched over HTTP. `md5_hash`, on the line between them, is read with a **cast**, which is null-safe. Three adjacent lines, two idioms, one of them NPEs |
+| `JvmOption.java:63`, `:82` | `finalJvmOptions.get("MaxHeapSize").getMandatoryValue()` — and the very next method, `isMaxHeapSpecified`, reads the same key from the same map into a local and null-checks it. Same map, same key, adjacent methods, one guarded and one not |
+| `RemotePartitionMetadataStore.java:175` | `markInitialized` dereferences `idToRemoteLogMetadataCache.get(partition)` unguarded, while `isInitialized`, the next method down, writes `metadataCache != null &&` for the same lookup. `clearTopicPartition` can `remove()` the entry concurrently, and `close()` replaces the map with `Map.of()` |
+| `OsProbe.java:811` | `cpuStatsMap.get("usage_usec")` on a map parsed from `/sys/fs/cgroup/.../cpu.stat`. Presence is guaranteed only by an `assert`, which is off in production |
+
+Everything else read was correct code. The categories are all already rows in
+section 8: the map the class filled itself with literal keys (the single largest
+cluster in either corpus — `MlConfigSizeUsage.java` alone is 48 findings of
+`accumulators.get("description").add(...)` against a `newJobConfigAccumulators()`
+one method up); parallel maps kept in sync by an algorithm (most of Kafka's
+assignors); a guard through a method; a constant or enum key; an API contract; a
+`containsKey` two levels of nesting away; the `else` arm of a negated
+`containsKey`.
+
+### The measurement that decided it, which is not the count
+
+**88% of the Elasticsearch findings and 97% of the Kafka ones have no guard of
+any kind anywhere near the dereference.** They are correct for *semantic*
+reasons. No `pattern-not-inside` reaches a parallel data structure, a map filled
+in another method, or an API contract — so **narrowing was never available**,
+and that was measured rather than assumed before the decision was taken. The one
+mechanically closable family that showed up is Elasticsearch's house style for
+negation, `containsKey(k) == false`, which every `!containsKey` exclusion in the
+rule misses; it is worth **34 of 749**, and **zero** on Kafka. Closing it would
+have left 715 findings and moved the true-positive rate not at all.
+
+### Two things the read showed that outlive the rule
+
+1. **The rule was blind to the more dangerous idiom.** `X v = m.get(k);
+   v.foo();` does not match, because the dereference is not chained. At
+   `KafkaAdminClient.java:2375` and `AbstractStickyAssignor.java:268` the rule
+   reported the *derived* lookup a few lines below — which is safe precisely
+   because the earlier one did not throw — and was silent on the original. A
+   rule that flags the safe half of a pair and misses the risky half is not
+   measuring what its message claims.
+2. **All five true positives have one shape:** a map produced by *parsing
+   external input* — HTTP JSON, a `/sys` file, JVM output — read with a literal
+   key and no guard. That is **provenance, not syntax**, and it is outside
+   Semgrep OSS. It is recorded here as a candidate for a **future rule measured
+   from scratch**, with its own corpus round and its own fixtures. It is
+   explicitly **not** a tightening of this one: `MlConfigSizeUsage`'s 48
+   findings are literal keys into a `Map` field too, and every one is safe.
+
+### The decision
+
+Deleted, on the same criterion that deleted C#'s `as-cast-deref` and
+`catch-returns-null`. Section 11 argued this was "not the same case" as
+`as-cast-deref`, and on the mechanism it was right — `as-cast-deref` failed
+because Semgrep's C# frontend could not tell `o as T` from `(T)o`, whereas every
+one of these findings really is `map.get(k).method()` on a declared map. The
+mechanism was never the criterion. **The criterion is the rate**, and the rate is
+about **1%**: a user with 5 000 files of Java gets roughly 200 findings and
+perhaps two worth acting on. The count decides nothing in either direction —
+`empty-catch` produces 1589 on the OpenJDK and is right nearly every time.
+
+One difference is recorded on purpose, because flattening it would make the
+precedent wrong: **this rule's true-positive rate was not zero.**
+`as-cast-deref` read 0 of 75; this read 5 of 45, and the 45 were chosen to be
+the most suspicious shapes available. Extrapolating that 11% to the population
+would be dishonest — the clusters not read are visibly false in bulk — but the
+honest number is "about 1%, not 0%", and a future round proposing a
+provenance-aware successor should know the signal exists.
+
+### What moved, measured
+
+- Pack: 8 rules to 7; 91 `pattern-not-inside` clauses to 49. **Three of the
+  eleven accepted limitations in section 8 belonged to this one rule**, which is
+  the whole argument in one line.
+- Fixtures: `hits/MapGetDeref.java` and `misses/MapGetDeref.java` deleted;
+  `hits/ElseArm.java` 12 findings to 7; `hits/RealBugs.java` 20 to 11.
+- Old pack against new over the whole `hits/` tree: **25 findings removed, 0
+  added, and no other file moved.** That is what makes it a deletion rather than
+  a regression, and it is the check to repeat if any of these counts is ever
+  edited by hand.
+- Nothing the deleted fixtures fenced is now unfenced: every clause shape they
+  measured has an `optional-get-no-ispresent` twin still in the pack, and the
+  twins are `b12`, `b15`, `b17`, `b19` and `F5`-`F7`.
+
+### What generalises
+
+These continue section 11's list; renumbered from one, as its own list.
+
+1. **A library corpus and an application corpus are different distributions, and
+   a rule that passes on one is not measured until it has seen the other.**
+   Section 11 said this and then kept the rule on it; the value was in writing
+   the condition down precisely enough that the next round could discharge it.
+2. **"How many findings have no guard nearby?" is the question to ask before
+   "can we narrow this?"** If the answer is most of them, the false positives
+   are semantic and no exclusion clause exists that would help. It is a cheap
+   textual measurement and it settled in minutes what would otherwise have been
+   another wave of clause-writing.
+3. **A rule can be blind to the dangerous half of its own pattern and nobody
+   notices**, because the fixtures are written in the form the rule matches.
+   Every case in `hits/MapGetDeref.java` chained the dereference. The
+   assign-then-dereference form — much the commoner Java idiom — was never in a
+   fixture, so its absence never failed anything.

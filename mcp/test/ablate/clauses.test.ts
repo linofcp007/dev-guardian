@@ -255,12 +255,19 @@ describe('the rule inventory', () => {
       'bugfix-js': { rules: 13, withClauses: 12 },
       'bugfix-py': { rules: 10, withClauses: 10 },
       'bugfix-go': { rules: 9, withClauses: 8 },
-      // 8 of 8 since the external-corpus round: `static-dateformat` was the
-      // pack's one clauseless rule, a bare `pattern:`, and it became a
-      // `pattern-either` when a second branch was added for the declaration
-      // that has no initializer — the shape of the ONE genuine race either
-      // corpus contained, which the rule could not see.
-      'bugfix-java': { rules: 8, withClauses: 8 },
+      // 7 of 7. It was 8 of 8 after the external-corpus round —
+      // `static-dateformat` was the pack's one clauseless rule, a bare
+      // `pattern:`, and it became a `pattern-either` when a second branch was
+      // added for the declaration that has no initializer, the shape of the
+      // ONE genuine race either corpus contained. The eighth rule,
+      // `null-safety-map-get-deref`, was then DELETED by the
+      // application-corpus round: 973 findings across Kafka, Elasticsearch and
+      // Jenkins, 45 read by hand, five defensible defects — and 88%/97% of
+      // them carrying no guard anywhere near the dereference, which is what
+      // made narrowing unavailable. It took 42 of the pack's 91
+      // `pattern-not-inside` clauses with it. See `packs.ts` and section 12 of
+      // the Java design doc.
+      'bugfix-java': { rules: 7, withClauses: 7 },
       // 11 since `null-safety-as-cast-deref` was deleted: it fired 6490 times
       // on 11 800 files of dotnet/runtime with no true positives, and this
       // pack is where the missing axis 3 was recorded as permanent. See
