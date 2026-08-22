@@ -4,6 +4,16 @@
 
 **Goal:** Add a `map_attack_surface` MCP tool that statically extracts an application's externally reachable surface (HTTP routes, env vars, exposed ports) across all 8 supported stacks and persists it as a queryable snapshot.
 
+> **Checkbox audit — 2026-08-22.** These boxes were ticked retrospectively, by
+> reconciling every step against the shipped code, its tests and `git log`. They
+> were **not** ticked during execution, so they are an audit of the result, not a
+> live record of the run. Steps whose only product is an observation ("run the
+> test, expected: FAIL", "RED first", "commit with this subject") cannot be
+> verified after the fact; each was ticked on the artefact it was meant to leave
+> behind — the named test file, or the named commit in `git log` — never on
+> evidence that anyone watched it go red.
+> Nothing in this plan was left unticked.
+
 **Architecture:** A Semgrep rule pack (`configs/semgrep/routes.yml`) is the universal extractor — Semgrep already parses all 8 languages, so a new framework is a YAML entry rather than a new parser. Its JSON output is fed through pure TypeScript modules that map matches to `RouteRecord`s, resolve route prefixes for JS/TS and WordPress, and collect env vars and ports. The result is persisted to a new `surface_snapshots` table and served through two MCP resources. Only the Semgrep invocation touches the outside world; everything downstream is a pure function over data and is unit-tested without Semgrep installed.
 
 **Tech Stack:** TypeScript (ESM, NodeNext), better-sqlite3, zod, vitest, Semgrep.
@@ -66,7 +76,7 @@ The persistence layer, standalone and testable before any extraction exists.
 - Consumes: `DB` and `Statement` from `storage/db.js`; `nowIso`, `parseJsonObject` from `storage/repoUtil.js`; `runMigrations` from `storage/migrations/runner.js`.
 - Produces: the four types below, and `SurfaceRepo` with `insert(input)`, `getLatest()`, `getById(id)`, `getByTreeHash(hash)`, `listRecent(limit)`. `PersistedSurfaceSnapshot` is `{ id, project_path, captured_at, tree_hash, snapshot }`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `mcp/test/unit/storage/surfaceRepo.test.ts`:
 
@@ -168,12 +178,12 @@ describe('SurfaceRepo', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/unit/storage/surfaceRepo.test.ts`
 Expected: FAIL — `Cannot find module '../../../src/storage/surfaceRepo.js'`.
 
-- [ ] **Step 3: Add the types**
+- [x] **Step 3: Add the types**
 
 Append to `mcp/src/types.ts`, directly after the `StackSnapshot` interface:
 
@@ -250,7 +260,7 @@ export interface AttackSurfaceSnapshot {
 }
 ```
 
-- [ ] **Step 4: Write the migration**
+- [x] **Step 4: Write the migration**
 
 Create `mcp/src/storage/migrations/002_attack_surface.sql`:
 
@@ -277,7 +287,7 @@ CREATE INDEX IF NOT EXISTS idx_surface_tree_hash
   ON surface_snapshots(tree_hash);
 ```
 
-- [ ] **Step 5: Write the repository**
+- [x] **Step 5: Write the repository**
 
 Create `mcp/src/storage/surfaceRepo.ts`:
 
@@ -406,7 +416,7 @@ function rowToSnapshot(row: SurfaceRow): PersistedSurfaceSnapshot {
 
 Note `ORDER BY id DESC` rather than `captured_at DESC`: two inserts within the same millisecond would tie on the timestamp, and the "getLatest returns the most recent insert" test would flake.
 
-- [ ] **Step 6: Wire it into the Storage facade**
+- [x] **Step 6: Wire it into the Storage facade**
 
 In `mcp/src/storage/index.ts`, add the import beside the others, the readonly field, and the constructor line:
 
@@ -418,12 +428,12 @@ import { SurfaceRepo } from './surfaceRepo.js';
     this.surface = new SurfaceRepo(db);
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `npm test -- test/unit/storage/surfaceRepo.test.ts test/unit/storage/migrations.test.ts`
 Expected: PASS, including the existing migrations test — `002` must apply cleanly on top of `001`.
 
-- [ ] **Step 8: Build and commit**
+- [x] **Step 8: Build and commit**
 
 ```bash
 npm run build
@@ -474,7 +484,7 @@ Turns raw Semgrep output into `RouteRecord`s and `MountRecord`s. Pure — no fil
 }
 ```
 
-- [ ] **Step 1: Write the fixture**
+- [x] **Step 1: Write the fixture**
 
 Create `mcp/test/fixtures/surface/express.json`:
 
@@ -520,7 +530,7 @@ Create `mcp/test/fixtures/surface/express.json`:
 }
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Create `mcp/test/unit/surface/extract.test.ts`:
 
@@ -661,12 +671,12 @@ describe('languageFromPath', () => {
 });
 ```
 
-- [ ] **Step 3: Run the test to verify it fails**
+- [x] **Step 3: Run the test to verify it fails**
 
 Run: `npm test -- test/unit/surface/extract.test.ts`
 Expected: FAIL — `Cannot find module '../../../src/surface/extract.js'`.
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 Create `mcp/src/surface/extract.ts`:
 
@@ -852,12 +862,12 @@ function metavar(metavars: unknown, name: string): string | undefined {
 }
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `npm test -- test/unit/surface/extract.test.ts`
 Expected: PASS, 10 tests (6 in `extractSurface`, 2 in `extractParams` and `languageFromPath` combined with the namespace cases — count the `it()` blocks in Step 2 rather than trusting this number).
 
-- [ ] **Step 6: Build and commit**
+- [x] **Step 6: Build and commit**
 
 ```bash
 npm run build
@@ -883,7 +893,7 @@ Resolves `app.use('/api', usersRouter)` into a real prefix on the routes defined
 
 **Correlation strategy, and its honest limit:** a mount names a variable (`usersRouter`), not a file. To connect the mount to the routes it governs we need the import that bound that variable, which the rule pack also captures (`guardian_kind: 'import'`, Task 6). The chain is: mount in `app.ts` names `usersRouter` → import in `app.ts` binds `usersRouter` to `./routes/users` → routes in `src/routes/users.ts` get the `/api` prefix. When any link is missing — a dynamically-computed prefix, a re-exported router, a mount whose variable never resolves — the route keeps `path_raw` and gets `path_partial: true`. Guessing would be worse than admitting.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `mcp/test/unit/surface/resolvers/node.test.ts`:
 
@@ -977,12 +987,12 @@ describe('resolveNodeMounts', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/unit/surface/resolvers/node.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `mcp/src/surface/resolvers/node.ts`:
 
@@ -1071,12 +1081,12 @@ export function joinPath(prefix: string, path: string): string {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npm test -- test/unit/surface/resolvers/node.test.ts`
 Expected: PASS, 7 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 npm run build
@@ -1100,7 +1110,7 @@ git commit -m "feat(surface): resolve Express-style router mount prefixes"
 
 `register_rest_route('myplugin/v1', '/items', [...])` serves at `/wp-json/myplugin/v1/items`. Task 2's extractor fills `RouteRecord.namespace` from `$NS` and `path_raw` from `$ROUTE`; this resolver combines them. When `namespace` is absent the route is flagged `path_partial` — we know where it is *not* served, which is all we honestly know.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `mcp/test/unit/surface/resolvers/wordpress.test.ts`:
 
@@ -1170,12 +1180,12 @@ describe('resolveWordpressRoutes', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/unit/surface/resolvers/wordpress.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `mcp/src/surface/resolvers/wordpress.ts`:
 
@@ -1215,12 +1225,12 @@ export function resolveWordpressRoutes(routes: RouteRecord[]): RouteRecord[] {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npm test -- test/unit/surface/resolvers/wordpress.test.ts`
 Expected: PASS, 6 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 npm run build
@@ -1246,7 +1256,7 @@ git commit -m "feat(surface): resolve WordPress REST namespaces to /wp-json path
 
 Env vars come from the same Semgrep run (rules with `guardian_kind: 'env'`), so no extra process. Ports are read directly from `Dockerfile` and compose files, which are trivially parsed and not worth a Semgrep rule.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `mcp/test/unit/surface/collectors/envVars.test.ts`:
 
@@ -1350,12 +1360,12 @@ describe('collectPorts', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npm test -- test/unit/surface/collectors/`
 Expected: FAIL — modules not found.
 
-- [ ] **Step 3: Write `envVars.ts`**
+- [x] **Step 3: Write `envVars.ts`**
 
 Create `mcp/src/surface/collectors/envVars.ts`:
 
@@ -1413,7 +1423,7 @@ function numProp(value: unknown, key: string): number | undefined {
 }
 ```
 
-- [ ] **Step 4: Write `ports.ts`**
+- [x] **Step 4: Write `ports.ts`**
 
 Create `mcp/src/surface/collectors/ports.ts`:
 
@@ -1495,12 +1505,12 @@ function readLines(path: string): string[] {
 }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `npm test -- test/unit/surface/collectors/`
 Expected: PASS, 9 tests.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 npm run build
@@ -1526,7 +1536,7 @@ Data, not code. This is where new framework support lands forever after.
 
 The test validates the pack's structure — that every rule declares the metadata the extractor depends on — without running Semgrep. A rule that forgets `guardian_kind` would be silently dropped at runtime; this test turns that into a build failure.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `mcp/test/unit/surface/rulePack.test.ts`:
 
@@ -1602,12 +1612,12 @@ describe('configs/semgrep/routes.yml', () => {
 npm install --save-dev yaml
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/unit/surface/rulePack.test.ts`
 Expected: FAIL — `ENOENT` on `configs/semgrep/routes.yml`.
 
-- [ ] **Step 3: Write the rule pack**
+- [x] **Step 3: Write the rule pack**
 
 Create `configs/semgrep/routes.yml`. Every rule uses `severity: INFO` and carries `metadata.guardian_kind`. The `mountable: true` flag opts a framework into the Node resolver from Task 3.
 
@@ -1902,12 +1912,12 @@ rules:
     pattern: Environment.GetEnvironmentVariable($NAME)
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npm test -- test/unit/surface/rulePack.test.ts`
 Expected: PASS, 6 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ../configs/semgrep/routes.yml test/unit/surface/rulePack.test.ts package.json package-lock.json
@@ -1932,7 +1942,7 @@ Orchestration: cache check, Semgrep invocation, pipeline, coverage report, persi
 
 The tool is standalone (not built with `makeScanTool`) for the same reason `detect_stack` is: its output is structured metadata, not `Finding`s, and it must not create a row in `scans`.
 
-- [ ] **Step 1: Write the failing integration test**
+- [x] **Step 1: Write the failing integration test**
 
 Create `mcp/test/integration/surfaceTools.test.ts`:
 
@@ -2120,12 +2130,12 @@ describe('map_attack_surface', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/integration/surfaceTools.test.ts`
 Expected: FAIL — `Cannot find module '../../src/tools/mapAttackSurface.js'`.
 
-- [ ] **Step 3: Write the tool**
+- [x] **Step 3: Write the tool**
 
 Create `mcp/src/tools/mapAttackSurface.ts`:
 
@@ -2395,7 +2405,7 @@ function summarize(
 }
 ```
 
-- [ ] **Step 4: Register the tool**
+- [x] **Step 4: Register the tool**
 
 In `mcp/src/registerAll.ts`, add after the `scanSkill` import:
 
@@ -2404,12 +2414,12 @@ In `mcp/src/registerAll.ts`, add after the `scanSkill` import:
 import './tools/mapAttackSurface.js';
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `npm test -- test/integration/surfaceTools.test.ts`
 Expected: PASS, 6 tests. If `toolSurface.test.ts` now fails, that is expected — Task 8 updates the snapshot.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 npm run build
@@ -2433,7 +2443,7 @@ git commit -m "feat(surface): add the map_attack_surface tool"
 - Consumes: `ctx.storage.surface` (Task 1), `registerResourceModule` from `resources/index.js`.
 - Produces: resources `guardian-surface-latest` and `guardian-surface-by-id`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `mcp/test/integration/surfaceTools.test.ts`:
 
@@ -2502,12 +2512,12 @@ describe('guardian://surface resources', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/integration/surfaceTools.test.ts`
 Expected: FAIL — `Cannot find module '../../src/resources/surface.js'`.
 
-- [ ] **Step 3: Write the resources**
+- [x] **Step 3: Write the resources**
 
 Create `mcp/src/resources/surface.ts`:
 
@@ -2571,7 +2581,7 @@ registerResourceModule({
 });
 ```
 
-- [ ] **Step 4: Register the resources**
+- [x] **Step 4: Register the resources**
 
 In `mcp/src/registerAll.ts`, add to the resources block:
 
@@ -2579,13 +2589,13 @@ In `mcp/src/registerAll.ts`, add to the resources block:
 import './resources/surface.js';
 ```
 
-- [ ] **Step 5: Update the tool-surface snapshot**
+- [x] **Step 5: Update the tool-surface snapshot**
 
 Run: `npm test -- test/integration/toolSurface.test.ts`
 
 Read the failure output, then update the expected tool and resource lists in that test to include `map_attack_surface`, `guardian-surface-latest` and `guardian-surface-by-id`. This is a deliberate, reviewed change to the public MCP surface — do not blanket-update a snapshot without reading what changed.
 
-- [ ] **Step 6: Run the full suite, then the coverage gate**
+- [x] **Step 6: Run the full suite, then the coverage gate**
 
 Run: `npm test`
 Expected: PASS — 402 pre-existing tests plus everything this plan added, 0 failures.
@@ -2593,7 +2603,7 @@ Expected: PASS — 402 pre-existing tests plus everything this plan added, 0 fai
 Run: `npm run test:coverage`
 Expected: PASS — no threshold violation (statements 70, branches 62, functions 72, lines 70). This is the only run in the plan that checks coverage. If it fails, the gap is in whichever module this plan added without matching tests.
 
-- [ ] **Step 7: Update the docs**
+- [x] **Step 7: Update the docs**
 
 In `README.md`, in all three language sections:
 
@@ -2605,7 +2615,7 @@ In `CHANGELOG.md`, add an entry under a new version heading describing the tool,
 
 Markdownlint must stay clean for `README.md`: run `npx markdownlint-cli2 README.md` if available.
 
-- [ ] **Step 8: Build and commit**
+- [x] **Step 8: Build and commit**
 
 ```bash
 npm run build
@@ -2617,11 +2627,11 @@ git commit -m "feat(surface): serve attack-surface snapshots as MCP resources"
 
 ## Definition of Done
 
-- [ ] `map_attack_surface` is registered and appears in the tool-surface snapshot.
-- [ ] `configs/semgrep/routes.yml` covers all 8 stacks; uncovered frameworks report `no_rules`.
-- [ ] Prefix resolution works for Express-style mounting and WP REST namespaces.
-- [ ] `surface_snapshots` persists across runs; both resources serve.
-- [ ] A run with Semgrep unavailable persists nothing and explains why.
-- [ ] `npm test` passes with Semgrep absent from the machine; `npm run test:coverage` passes its thresholds.
-- [ ] `mcp/dist/` rebuilt and staged in every commit that touched TypeScript.
-- [ ] README tool/resource counts and CHANGELOG updated.
+- [x] `map_attack_surface` is registered and appears in the tool-surface snapshot.
+- [x] `configs/semgrep/routes.yml` covers all 8 stacks; uncovered frameworks report `no_rules`.
+- [x] Prefix resolution works for Express-style mounting and WP REST namespaces.
+- [x] `surface_snapshots` persists across runs; both resources serve.
+- [x] A run with Semgrep unavailable persists nothing and explains why.
+- [x] `npm test` passes with Semgrep absent from the machine; `npm run test:coverage` passes its thresholds.
+- [x] `mcp/dist/` rebuilt and staged in every commit that touched TypeScript.
+- [x] README tool/resource counts and CHANGELOG updated.
