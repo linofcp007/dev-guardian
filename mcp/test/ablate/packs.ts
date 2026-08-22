@@ -9,8 +9,11 @@
  * it is TypeScript, so the JS/TS pack is the only one whose corpus can be a
  * committed path.
  *
- * Three packs are the exception, and all three are opt-in rather than absent:
- * Rust, C# and Java, each reading a corpus path from an environment variable.
+ * Every other pack is opt-in rather than absent: Rust, C#, Java, Python, Go and
+ * PHP each read a corpus path from an environment variable. Unset, the pack
+ * prints axis 3 as `N/A`; set to a path that does not exist, it THROWS. There
+ * is exactly one code path for all six ({@link envCorpus}), and adding a
+ * seventh means adding an env var and a one-line accessor, not a new idiom.
  *
  * Rust's standard library source is ~1400 `.rs` files nobody wrote as
  * a fixture, it is free (`rustup component add rust-src`, or copied out of
@@ -206,6 +209,15 @@ export const CS_SRC_ENV = 'GUARDIAN_CS_SRC';
 /** Env var naming a tree of real Java source, for axis 3. */
 export const JAVA_SRC_ENV = 'GUARDIAN_JAVA_SRC';
 
+/** Env var naming a tree of real Python source, for axis 3. */
+export const PY_SRC_ENV = 'GUARDIAN_PY_SRC';
+
+/** Env var naming a tree of real Go source, for axis 3. */
+export const GO_SRC_ENV = 'GUARDIAN_GO_SRC';
+
+/** Env var naming a tree of real PHP source, for axis 3. */
+export const PHP_SRC_ENV = 'GUARDIAN_PHP_SRC';
+
 /**
  * An opt-in axis-3 corpus read from an environment variable.
  *
@@ -243,9 +255,27 @@ export function javaCorpus(): RealCorpus | undefined {
   return envCorpus(JAVA_SRC_ENV, 'Java corpus (GUARDIAN_JAVA_SRC)', 'a tree of real Java source');
 }
 
+/** Axis-3 corpus for the Python pack. See `envCorpus` and the file header. */
+export function pythonCorpus(): RealCorpus | undefined {
+  return envCorpus(PY_SRC_ENV, 'Python corpus (GUARDIAN_PY_SRC)', 'a tree of real Python source');
+}
+
+/** Axis-3 corpus for the Go pack. See `envCorpus` and the file header. */
+export function goCorpus(): RealCorpus | undefined {
+  return envCorpus(GO_SRC_ENV, 'Go corpus (GUARDIAN_GO_SRC)', 'a tree of real Go source');
+}
+
+/** Axis-3 corpus for the PHP pack. See `envCorpus` and the file header. */
+export function phpCorpus(): RealCorpus | undefined {
+  return envCorpus(PHP_SRC_ENV, 'PHP corpus (GUARDIAN_PHP_SRC)', 'a WordPress (or any PHP) tree');
+}
+
 const RUST_STDLIB = rustStdlibCorpus();
 const CSHARP_SRC = csharpCorpus();
 const JAVA_SRC = javaCorpus();
+const PYTHON_SRC = pythonCorpus();
+const GO_SRC = goCorpus();
+const PHP_SRC = phpCorpus();
 
 export const PACKS: readonly PackSpec[] = [
   {
@@ -255,8 +285,20 @@ export const PACKS: readonly PackSpec[] = [
     hitsSubdir: 'hits',
     realCode: MCP_SRC,
   },
-  { name: 'bugfix-py', config: config('bugfix-py'), fixtures: fixtures('bugfix-py'), hitsSubdir: 'hits' },
-  { name: 'bugfix-go', config: config('bugfix-go'), fixtures: fixtures('bugfix-go'), hitsSubdir: 'hits' },
+  {
+    name: 'bugfix-py',
+    config: config('bugfix-py'),
+    fixtures: fixtures('bugfix-py'),
+    hitsSubdir: 'hits',
+    realCode: PYTHON_SRC,
+  },
+  {
+    name: 'bugfix-go',
+    config: config('bugfix-go'),
+    fixtures: fixtures('bugfix-go'),
+    hitsSubdir: 'hits',
+    realCode: GO_SRC,
+  },
   {
     name: 'bugfix-java',
     config: config('bugfix-java'),
@@ -271,14 +313,16 @@ export const PACKS: readonly PackSpec[] = [
     hitsSubdir: 'hits',
     realCode: CSHARP_SRC,
   },
-  // Axis 3 is N/A: this repo holds no PHP outside this fixture tree. The PHP
-  // pack WAS measured against a real corpus — WordPress 6.9, 1467 files, and
-  // that measurement changed four verdicts (design of record §1) — but the
-  // corpus is a 60 MB third-party download, not something to vendor here.
-  // Point the harness at one with `--real-code=<dir>` when you have a WordPress
-  // (or any PHP) tree on disk; without it the report prints N/A rather than
-  // pretending the axis ran.
-  { name: 'bugfix-php', config: config('bugfix-php'), fixtures: fixtures('bugfix-php'), hitsSubdir: 'hits' },
+  // `GUARDIAN_PHP_SRC` — a WordPress tree, which is what the PHP design round
+  // measured against and what keeps the numbers in the design of record
+  // comparable. See the file header.
+  {
+    name: 'bugfix-php',
+    config: config('bugfix-php'),
+    fixtures: fixtures('bugfix-php'),
+    hitsSubdir: 'hits',
+    realCode: PHP_SRC,
+  },
   {
     name: 'bugfix-rs',
     config: config('bugfix-rs'),

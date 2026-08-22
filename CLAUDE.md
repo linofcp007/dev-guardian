@@ -144,10 +144,25 @@ Axis 3 needs a real-code corpus in a language the pack matches, so it is a
 property of the invocation — registered per pack in
 [`mcp/test/ablate/packs.ts`](mcp/test/ablate/packs.ts), overridable with
 `--real-code=<dir>` / `--no-real-code`, and reported as `N/A` (never silently
-skipped) where none exists. Three packs read theirs from an environment
-variable because the corpus cannot live in this tree — `GUARDIAN_RUST_SRC`,
-`GUARDIAN_CS_SRC` and `GUARDIAN_JAVA_SRC`; unset means `N/A`, set-but-missing
-**throws**. The C# one was added after the fact and immediately deleted a rule:
+skipped) where none exists. **Every pack has one now**, and all but the JS/TS
+one read a path from an environment variable, because the corpus cannot live in
+this tree — `GUARDIAN_RUST_SRC`, `GUARDIAN_CS_SRC`, `GUARDIAN_JAVA_SRC`,
+`GUARDIAN_PY_SRC`, `GUARDIAN_GO_SRC`, `GUARDIAN_PHP_SRC`; unset means `N/A`,
+set-but-missing **throws**. Measured with the corpora below:
+
+| pack | corpus | files | baseline findings | axis-3 flags |
+| --- | --- | ---: | ---: | ---: |
+| `bugfix-js` | this repo's `mcp/src` | 190 | 45 | 3 |
+| `bugfix-py` | CPython `Lib/` | 5803 | 1078 | several, all positive branches |
+| `bugfix-go` | Go stdlib `src/` | 6515 | 3101 | **1** |
+| `bugfix-php` | WordPress core | 1512 | 40 | 8 |
+| `bugfix-cs` | `dotnet/runtime` | 11800 | ~790 | 10 |
+| `bugfix-java` | OpenJDK + Spring | 17347 | — | 5 |
+| `bugfix-rs` | Rust stdlib | 1201 | 0 | 0 |
+
+The PHP number is a cross-check worth keeping: **40** is exactly the
+10 + 26 + 2 + 2 the PHP probe measured by hand, rule by rule, weeks earlier and
+by a different method. The C# one was added after the fact and immediately deleted a rule:
 `as-cast-deref` fired 6490 times on `dotnet/runtime` with no true positives,
 having passed axes 0, 1 and 2 on its author's own fixtures throughout. The Java
 one was added after nine fix waves of fixture-reading and changed four rules of

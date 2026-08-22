@@ -219,6 +219,20 @@ round added:
 
 ### Added
 
+- **Every rule pack now has a real-code ablation corpus.** Axis 3 — does removing
+  a clause *raise* the finding count on code nobody here wrote — has changed more
+  verdicts than any other check in this series: it deleted the two largest rules
+  ever removed from these packs, killed two Rust candidates that had passed every
+  other check, and caught a JS regression both other axes let through. It had
+  never run on `bugfix-py`, `bugfix-go` or `bugfix-php`. It does now, via
+  `GUARDIAN_PY_SRC`, `GUARDIAN_GO_SRC` and `GUARDIAN_PHP_SRC`, on the same terms
+  as the existing three: unset prints `N/A`, set-but-missing **throws**, never a
+  silent skip. Measured on CPython's `Lib/` (5803 files, 1078 findings), the Go
+  standard library (6515, 3101) and WordPress core (1512, 40) — noise floor 0 on
+  all three, every rule firing on its own fixtures, and **one** axis-3 flag
+  across the whole Go pack. The PHP number is a cross-check: 40 is exactly what
+  the PHP probe measured by hand, rule by rule, by a different method.
+
 - **`configs/semgrep/routes.yml` is under the ablation harness**, the last pack
   that was not. It was excluded for having no `hits/` + `misses/` fixture pair;
   it has one, under older names — `mcp/test/fixtures/surface/` is the hits
