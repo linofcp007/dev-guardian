@@ -6,6 +6,16 @@
 a committed baseline so historical debt does not fail the build, and reported
 as SARIF so findings annotate the pull-request diff.
 
+> **Checkbox audit — 2026-08-22.** These boxes were ticked retrospectively, by
+> reconciling every step against the shipped code, its tests and `git log`. They
+> were **not** ticked during execution, so they are an audit of the result, not a
+> live record of the run. Steps whose only product is an observation ("run the
+> test, expected: FAIL", "RED first", "commit with this subject") cannot be
+> verified after the fact; each was ticked on the artefact it was meant to leave
+> behind — the named test file, or the named commit in `git log` — never on
+> evidence that anyone watched it go red.
+> Nothing in this plan was left unticked.
+
 **Architecture:** The behaviour lives in TypeScript under `mcp/src/ci/`;
 `cli/dev-guardian.mjs` stays a thin argument-parsing shim importing from
 `../mcp/dist/`. Scans run through the existing MCP tool handlers — there is no
@@ -111,7 +121,7 @@ export function newFindings(
 ): Finding[];
 ```
 
-- [ ] **Step 1: Write `mcp/src/ci/types.ts`**
+- [x] **Step 1: Write `mcp/src/ci/types.ts`**
 
 Types only; no test. Later tasks import from it.
 
@@ -162,7 +172,7 @@ export interface ScanStepResult {
 
 Import `ToolRun` from `../types.js`.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Create `mcp/test/unit/ci/baseline.test.ts`:
 
@@ -273,17 +283,17 @@ describe('serialiseBaseline', () => {
 });
 ```
 
-- [ ] **Step 3: Run to verify it fails**
+- [x] **Step 3: Run to verify it fails**
 
 Run: `cd mcp && npx vitest run test/unit/ci/baseline.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 4: Implement `baseline.ts`**
+- [x] **Step 4: Implement `baseline.ts`**
 
 Pure. The doc comment must state why an absent file is not an empty one, in the
 house style of `mcp/src/surface/specDiff.ts`.
 
-- [ ] **Step 5: Run to verify it passes, then the suite, build, commit**
+- [x] **Step 5: Run to verify it passes, then the suite, build, commit**
 
 ```bash
 cd mcp && npm test && npm run build
@@ -326,7 +336,7 @@ export interface GateVerdict {
 export function evaluateGate(input: GateInput): GateVerdict;
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -427,16 +437,16 @@ describe('evaluateGate', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.** Expected: module not found.
+- [x] **Step 2: Run to verify it fails.** Expected: module not found.
 
-- [ ] **Step 3: Implement `gate.ts`**
+- [x] **Step 3: Implement `gate.ts`**
 
 Severity comparison uses `SEVERITY_ORDER` from `../types.js` — do not re-derive
 an ordering. Coverage comes from `computeCoverage(toolsRun, missingTools)` over
 the union of every step's arrays; **do not write a second definition of
 "complete"**. A step with `ran: false` contributes its `reason` as a gap.
 
-- [ ] **Step 4: Run to verify it passes, then suite, build, commit**
+- [x] **Step 4: Run to verify it passes, then suite, build, commit**
 
 ```bash
 cd mcp && npm test && npm run build
@@ -465,7 +475,7 @@ export function renderJson(v: GateVerdict): string;
 export function renderSarif(v: GateVerdict, projectPath: string): string;
 ```
 
-- [ ] **Step 1: Choose and install the schema validator**
+- [x] **Step 1: Choose and install the schema validator**
 
 Add **one devDependency** for JSON-schema validation (`ajv` is the obvious
 choice) and vendor the SARIF 2.1.0 schema JSON into
@@ -477,7 +487,7 @@ GitHub accepts a malformed SARIF file silently and displays nothing, which is
 indistinguishable from a clean scan — the exact failure this validation exists
 to catch.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -552,11 +562,11 @@ describe('renderJson', () => {
 Build the `verdict…` fixtures with `evaluateGate`, not by hand — a hand-built
 `GateVerdict` can hold a combination the gate would never produce.
 
-- [ ] **Step 3: Run to verify it fails.** Expected: module not found.
+- [x] **Step 3: Run to verify it fails.** Expected: module not found.
 
-- [ ] **Step 4: Implement `report.ts`.** Pure, no I/O.
+- [x] **Step 4: Implement `report.ts`.** Pure, no I/O.
 
-- [ ] **Step 5: Run, then suite, build, commit**
+- [x] **Step 5: Run, then suite, build, commit**
 
 ```bash
 cd mcp && npm test && npm run build
@@ -595,7 +605,7 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult>;
 export const SCAN_SEQUENCE: readonly string[];
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 The tool handlers are mocked at the `TOOLS` boundary so this test does not need
 Semgrep — what it verifies is orchestration, not scanning.
@@ -638,9 +648,9 @@ describe('runScans', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.** Expected: module not found.
+- [x] **Step 2: Run to verify it fails.** Expected: module not found.
 
-- [ ] **Step 3: Implement `runScans.ts`**
+- [x] **Step 3: Implement `runScans.ts`**
 
 Build the `PluginContext` the way `mcp/src/server.ts` does — read it first:
 `probeShell(storage.runtimeMeta)`, `resolveScriptsDir()`, and a
@@ -653,7 +663,7 @@ failure.
 implementation uses — but the order test must assert the **literal expected
 array**, not `SCAN_SEQUENCE` itself, or it passes for any order.
 
-- [ ] **Step 4: Run, then suite, build, commit**
+- [x] **Step 4: Run, then suite, build, commit**
 
 ```bash
 cd mcp && npm test && npm run build
@@ -675,7 +685,7 @@ git commit -m "feat(ci): ordered scan pipeline over the existing tool handlers"
 - Consumes: everything from Tasks 1–4, imported from `../mcp/dist/ci/*.js`.
 - Produces: `dev-guardian scan` and `dev-guardian baseline update`.
 
-- [ ] **Step 1: Write the failing e2e**
+- [x] **Step 1: Write the failing e2e**
 
 The CLI is invoked as a **subprocess**, because that is how a user runs it and
 it is the only test that catches a defect in argument dispatch.
@@ -716,9 +726,9 @@ describe('dev-guardian scan', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.** Expected: unknown command `scan`.
+- [x] **Step 2: Run to verify it fails.** Expected: unknown command `scan`.
 
-- [ ] **Step 3: Implement the commands in `cli/dev-guardian.mjs`**
+- [x] **Step 3: Implement the commands in `cli/dev-guardian.mjs`**
 
 Follow the file's existing shape: a `cmdScan(argv)` and `cmdBaseline(argv)`
 beside `cmdMcpConfig` and `cmdCheck`, dispatched from `main`, plus help text.
@@ -732,7 +742,7 @@ repository config file declares one, exit `3` with a message naming the file
 and saying why the key is argv-only. Update the module's header comment to
 document the new commands.
 
-- [ ] **Step 4: Run, then suite, build, commit**
+- [x] **Step 4: Run, then suite, build, commit**
 
 ```bash
 cd mcp && npm test
@@ -770,7 +780,7 @@ export interface RunningApp {
 export async function startApp(opts: StartAppOptions): Promise<RunningApp>;
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Against a real child process — a tiny `node -e` server, not a mock.
 
@@ -798,18 +808,18 @@ describe('startApp', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.** Expected: module not found.
+- [x] **Step 2: Run to verify it fails.** Expected: module not found.
 
-- [ ] **Step 3: Implement `appRunner.ts`**
+- [x] **Step 3: Implement `appRunner.ts`**
 
 `execa` (already a dependency) with `shell: false`. Poll the health URL with
 `fetch`. Kill the process **tree**, not just the direct child — a `npm start`
 spawns a grandchild, and killing only the parent orphans the server.
 
-- [ ] **Step 4: Wire it into `cmdScan`**, with teardown in a `finally` so a
+- [x] **Step 4: Wire it into `cmdScan`**, with teardown in a `finally` so a
 scan that throws still stops the app.
 
-- [ ] **Step 5: Run, then suite, build, commit**
+- [x] **Step 5: Run, then suite, build, commit**
 
 ```bash
 cd mcp && npm test && npm run build
@@ -826,7 +836,7 @@ git commit -m "feat(ci): start the target app for the DAST pass, and always stop
 - Modify: `README.md` (EN/PT/ES), `host-rules/AGENTS.md` and its paired host
   files, `CHANGELOG.md`, `cli/dev-guardian.mjs` help text
 
-- [ ] **Step 1: Measure the tool count and sweep every place it appears**
+- [x] **Step 1: Measure the tool count and sweep every place it appears**
 
 ```bash
 cd mcp && node -e "import('./dist/registerAll.js').then(()=>import('./dist/tools/index.js')).then(m=>console.log(m.TOOLS.length))"
@@ -839,7 +849,7 @@ to an `--include` filter). Use no `--include` filter and check the result by
 hand. This task adds no tool, so the count should be unchanged — **verify that
 rather than assuming it.**
 
-- [ ] **Step 2: Write the pipeline snippet**
+- [x] **Step 2: Write the pipeline snippet**
 
 A copy-pasteable GitHub Actions job in `README.md`, using
 `git clone --depth 1` against a pinned tag, `node cli/dev-guardian.mjs scan
@@ -847,14 +857,14 @@ A copy-pasteable GitHub Actions job in `README.md`, using
 distribution caveat plainly: this is a clone of a plugin repository, not an
 `npx` one-liner, and why.
 
-- [ ] **Step 3: CHANGELOG entry with the limits in the same breath**
+- [x] **Step 3: CHANGELOG entry with the limits in the same breath**
 
 From design §9: the clone-based distribution; no trend history in CI; DAST
 reaches only what the runner can reach; and **SARIF carries findings but not
 the `coverage` signal**, so a consumer reading only the upload cannot tell a
 clean scan from an incomplete one — which is why exit code `2` exists.
 
-- [ ] **Step 4: Full verification gate**
+- [x] **Step 4: Full verification gate**
 
 ```bash
 cd mcp && npm run build && GUARDIAN_REQUIRE_SEMGREP=1 npm test && npm run test:coverage
@@ -865,7 +875,7 @@ Semgrep is installed but **not on PATH** — `%APPDATA%\Roaming\Python\Python314
 Report the exact skip count (**target zero**) and all four coverage numbers
 against 70/62/72/70.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A && git commit -m "docs(ci): document headless scanning and its distribution caveat"

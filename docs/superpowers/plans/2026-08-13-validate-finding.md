@@ -6,6 +6,16 @@
 anything outside the process can reach the file it lives in — reporting the
 verdict and its evidence without suppressing anything or touching severity.
 
+> **Checkbox audit — 2026-08-22.** These boxes were ticked retrospectively, by
+> reconciling every step against the shipped code, its tests and `git log`. They
+> were **not** ticked during execution, so they are an audit of the result, not a
+> live record of the run. Steps whose only product is an observation ("run the
+> test, expected: FAIL", "RED first", "commit with this subject") cannot be
+> verified after the fact; each was ticked on the artefact it was meant to leave
+> behind — the named test file, or the named commit in `git log` — never on
+> evidence that anyone watched it go red.
+> Nothing in this plan was left unticked.
+
 **Architecture:** One tool, three evidence providers sharing one verdict
 envelope; this plan delivers the envelope, its table, the tool, and the `static`
 provider. `static` builds a file-level import graph from the Semgrep rule pack,
@@ -86,7 +96,7 @@ every time.
   `ValidationsRepo` with `upsert(rows)`, `listByProject(projectPath)`,
   `getByFingerprint(projectPath, fingerprint)`.
 
-- [ ] **Step 1: Write `mcp/src/validate/types.ts`**
+- [x] **Step 1: Write `mcp/src/validate/types.ts`**
 
 Types-only file; no test. It exists so Tasks 2–6 agree on names.
 
@@ -130,7 +140,7 @@ export interface FindingValidation {
 }
 ```
 
-- [ ] **Step 2: Write the migration**
+- [x] **Step 2: Write the migration**
 
 `mcp/src/storage/migrations/003_finding_validations.sql`. The runner picks up
 `NNN_name.sql` beside itself — no code change registers it.
@@ -165,7 +175,7 @@ CREATE INDEX IF NOT EXISTS idx_validations_fingerprint
   ON finding_validations(fingerprint);
 ```
 
-- [ ] **Step 3: Write the failing test**
+- [x] **Step 3: Write the failing test**
 
 Create `mcp/test/unit/storage/validationsRepo.test.ts`. Follow the shape of
 `mcp/test/unit/storage/surfaceRepo.test.ts` — read it first for how a repo test
@@ -243,12 +253,12 @@ describe('ValidationsRepo', () => {
 });
 ```
 
-- [ ] **Step 4: Run the test to verify it fails**
+- [x] **Step 4: Run the test to verify it fails**
 
 Run: `cd mcp && npx vitest run test/unit/storage/validationsRepo.test.ts`
 Expected: FAIL — `s.validations` is undefined / module not found.
 
-- [ ] **Step 5: Implement the repo and wire it into `Storage`**
+- [x] **Step 5: Implement the repo and wire it into `Storage`**
 
 Write `mcp/src/storage/validationsRepo.ts` following the prepared-statement
 style of `surfaceRepo.ts` (read it first). `evidence` and `coverage_gaps` are
@@ -258,13 +268,13 @@ UPDATE` so a recomputation replaces rather than accumulates.
 In `mcp/src/storage/index.ts`, add `readonly validations: ValidationsRepo;` and
 construct it beside the existing repos.
 
-- [ ] **Step 6: Run the test, then the suite and build**
+- [x] **Step 6: Run the test, then the suite and build**
 
 ```bash
 cd mcp && npx vitest run test/unit/storage/validationsRepo.test.ts && npm test && npm run build
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add mcp/src/validate mcp/src/storage mcp/test/unit/storage/validationsRepo.test.ts mcp/dist
@@ -307,7 +317,7 @@ export interface ReachResult {
 export function reachFrom(graph: ImportGraph, roots: readonly string[], target: string): ReachResult;
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -392,9 +402,9 @@ describe('reachFrom', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.** Expected: module not found.
+- [x] **Step 2: Run to verify it fails.** Expected: module not found.
 
-- [ ] **Step 3: Implement `importGraph.ts`**
+- [x] **Step 3: Implement `importGraph.ts`**
 
 Breadth-first from the root set so the first time a file is seen is its minimum
 hop count. Keep a `visited` set — the cycle test exists because a naive
@@ -404,9 +414,9 @@ name for a stable tie-break.
 Doc comment must explain *why* the graph is file-level and what it cannot say
 (an import is not a call), in the house style of `surface/specDiff.ts`.
 
-- [ ] **Step 4: Run to verify it passes.** Expected: PASS, 11 tests.
+- [x] **Step 4: Run to verify it passes.** Expected: PASS, 11 tests.
 
-- [ ] **Step 5: Suite, build, commit**
+- [x] **Step 5: Suite, build, commit**
 
 ```bash
 cd mcp && npm test && npm run build
@@ -431,14 +441,14 @@ git commit -m "feat(validate): file-level import graph with hop counts"
   (`$SYMBOL`, `$MODULE`). **Do not invent a new metadata contract** — check how
   `mcp/src/surface/extract.ts` reads import matches and produce the same shape.
 
-- [ ] **Step 1: Read the existing contract before writing any rule**
+- [x] **Step 1: Read the existing contract before writing any rule**
 
 Read `configs/semgrep/routes.yml`'s `guardian-import-esm` (around line 183) and
 the code that consumes it in `mcp/src/surface/extract.ts`. Confirm which
 metavariables are read and whether `module_file` resolution expects a relative
 specifier. Write down what you found — the next steps depend on it.
 
-- [ ] **Step 2: Close the named-import gap in JS/TS**
+- [x] **Step 2: Close the named-import gap in JS/TS**
 
 `guardian-import-esm` matches only `import $SYMBOL from "$MODULE"` and
 `const $SYMBOL = require("$MODULE")`. It misses `import { foo } from "./bar"` and
@@ -446,7 +456,7 @@ specifier. Write down what you found — the next steps depend on it.
 them. This also silently weakened item 1's mount resolution, so it is a
 correction as much as an addition; say so in the rule's comment.
 
-- [ ] **Step 3: Add import rules for the other seven stacks**
+- [x] **Step 3: Add import rules for the other seven stacks**
 
 One rule family per language, `guardian_kind: import`:
 
@@ -463,7 +473,7 @@ needed. **A rule that binds no metavariable, or that Semgrep degrades into
 matching every node in the file, is worse than no rule** — item 1's Rust route
 rules fabricated four routes for every real one exactly that way.
 
-- [ ] **Step 4: Validate every new rule against a real Semgrep run**
+- [x] **Step 4: Validate every new rule against a real Semgrep run**
 
 Semgrep is installed but **not on PATH** — it lives under
 `%APPDATA%\Roaming\Python\Python314\Scripts`. Add it to PATH for the run.
@@ -477,14 +487,14 @@ semgrep --config configs/semgrep/routes.yml --json <fixture-dir> | \
 that made them match nothing on every run, and the suite was green. Report the
 per-`guardian_kind` counts you measured.
 
-- [ ] **Step 5: Extend the fixture and the e2e assertion**
+- [x] **Step 5: Extend the fixture and the e2e assertion**
 
 Add small files to the multi-language fixture so each new language has at least
 one import to match. Extend `rulePackFixture.test.ts` with an assertion on the
 **exact set** of languages that produced an import match — not a count, which
 passes when one rule breaks and another over-matches.
 
-- [ ] **Step 6: Full suite with Semgrep required, then commit**
+- [x] **Step 6: Full suite with Semgrep required, then commit**
 
 ```bash
 cd mcp && GUARDIAN_REQUIRE_SEMGREP=1 npm test && npm run build
@@ -549,7 +559,7 @@ makes `unreachable` unavailable, so an unresolvable edge there costs nothing
 that was ever promised — it must simply be **reported** as unresolved rather
 than silently dropped.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -619,9 +629,9 @@ describe('resolveModuleEdges', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.** Expected: module not found.
+- [x] **Step 2: Run to verify it fails.** Expected: module not found.
 
-- [ ] **Step 3: Implement `moduleEdges.ts`**
+- [x] **Step 3: Implement `moduleEdges.ts`**
 
 `extractModuleEdges` reads `guardian_kind: import` matches and emits one edge
 per match with **no symbol requirement**. `resolveModuleEdges` resolves per
@@ -629,7 +639,7 @@ language against the known project-file set, and **never returns a
 `module_file` that is not in that set** — an edge to a path that does not exist
 is worse than no edge, because a later task counts it as reachability.
 
-- [ ] **Step 4: Persist the edges**
+- [x] **Step 4: Persist the edges**
 
 Add `imports: ResolvedEdge[]` to `AttackSurfaceSnapshot`, to `EMPTY_SNAPSHOT`
 in `surfaceRepo.ts`, and populate it in `buildSnapshot()`. Report the
@@ -641,7 +651,7 @@ the negative verdict depends on knowing about it.
 keeps its own symbol-requiring path; this is a second, wider extraction beside
 it, not a replacement.
 
-- [ ] **Step 5: Run to verify it passes**, then the suite, build, commit
+- [x] **Step 5: Run to verify it passes**, then the suite, build, commit
 
 ```bash
 cd mcp && npm test && npm run build
@@ -682,7 +692,7 @@ export interface StaticProviderInput {
 export function validateStatically(input: StaticProviderInput): FindingValidation[];
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 The load-bearing set is one named test per path that yields `unknown` instead of
 `unreachable`. Each is an opportunity to deprioritise something exploitable.
@@ -850,9 +860,9 @@ describe('validateStatically — unknown, never unreachable', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.** Expected: module not found.
+- [x] **Step 2: Run to verify it fails.** Expected: module not found.
 
-- [ ] **Step 3: Implement `staticProvider.ts`**
+- [x] **Step 3: Implement `staticProvider.ts`**
 
 Gate order for the negative verdict — **all four must hold**, and the first that
 fails decides the `unknown` and names itself in `coverage_gaps`:
@@ -873,7 +883,7 @@ Every function under ~30 lines. The doc comment must state the asymmetry — thi
 module is far better at disproving reachability than proving it — and why each
 gate exists, in the house style.
 
-- [ ] **Step 4: Run to verify it passes**, then suite, build, commit
+- [x] **Step 4: Run to verify it passes**, then suite, build, commit
 
 ```bash
 cd mcp && npx vitest run test/unit/validate/staticProvider.test.ts && npm test && npm run build
@@ -903,7 +913,7 @@ Read `mcp/src/tools/mapAttackSurface.ts` for the house shape of a tool module:
 zod `inputSchema` (a raw shape, not a `ZodObject`), `handler`,
 `registerToolModule(tool)`, `ToolResult<T>` returns.
 
-- [ ] **Step 1: Write the failing integration test**
+- [x] **Step 1: Write the failing integration test**
 
 The refusal paths are the highest-value tests here — each must be a *distinct*
 result, never an empty batch.
@@ -942,9 +952,9 @@ describe('validate_finding', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.** Expected: `validate_finding` not registered.
+- [x] **Step 2: Run to verify it fails.** Expected: `validate_finding` not registered.
 
-- [ ] **Step 3: Implement `validateFinding.ts`**
+- [x] **Step 3: Implement `validateFinding.ts`**
 
 Order of operations, each stop a *distinct* outcome:
 
@@ -973,7 +983,7 @@ rewritten late. State: what it answers, that it requires a prior
 `map_attack_surface` run, that it suppresses nothing and changes no severity,
 and that `unreachable` is unavailable in runtime-resolution stacks.
 
-- [ ] **Step 4: Run to verify it passes**, then suite, build, commit
+- [x] **Step 4: Run to verify it passes**, then suite, build, commit
 
 ```bash
 cd mcp && npm test && npm run build
@@ -993,7 +1003,7 @@ git commit -m "feat(validate): validate_finding orchestrator, persistence and re
 - Modify: `host-rules/AGENTS.md` and its paired host-context files,
   `CHANGELOG.md`, `README.md`
 
-- [ ] **Step 1: Build the fixture and the e2e**
+- [x] **Step 1: Build the fixture and the e2e**
 
 Run the real chain: `map_attack_surface` → `validate_finding` over seeded
 findings, one in the orphan and one in the 3-hop file. Assert the **exact
@@ -1001,7 +1011,7 @@ verdict per finding**, and that the orphan's is `unreachable` while the 3-hop
 file's is `reachable` with `hops === 3`. Both directions measured, not reasoned
 about. `it.skipIf` with `GUARDIAN_REQUIRE_SEMGREP=1`.
 
-- [ ] **Step 2: Measure the tool count and update every place it appears**
+- [x] **Step 2: Measure the tool count and update every place it appears**
 
 ```bash
 cd mcp && node -e "import('./dist/registerAll.js').then(()=>import('./dist/tools/index.js')).then(m=>console.log(m.TOOLS.length))"
@@ -1011,7 +1021,7 @@ grep -rn "5[0-9] tools\|5[0-9] MCP" --include=*.md --include=*.json .. | grep -v
 The previous feature found **ten** files carrying a stale count. Update each to
 the measured number; do not assume.
 
-- [ ] **Step 3: Document the flow and the honest limits**
+- [x] **Step 3: Document the flow and the honest limits**
 
 `host-rules/AGENTS.md` (and every paired host file — this repo keeps them in
 sync) gains `map_attack_surface` → `validate_finding` as an intent mapping.
@@ -1023,7 +1033,7 @@ dynamic import cannot be resolved; reachability is computed from route entry
 points only, so a file reached solely by a CLI or a cron job reads as
 unreachable-by-route, **which is not a claim that the code never runs**.
 
-- [ ] **Step 4: Full verification gate**
+- [x] **Step 4: Full verification gate**
 
 ```bash
 cd mcp && npm run build && GUARDIAN_REQUIRE_SEMGREP=1 npm test && npm run test:coverage
@@ -1033,7 +1043,7 @@ npx markdownlint-cli2 "skills/**/*.md" "commands/**/*.md" "README.md"
 Report the exact skip count — target **zero** — and all four coverage numbers
 against thresholds 70/62/72/70.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A && git commit -m "docs(validate): document validate_finding and its honest limits"

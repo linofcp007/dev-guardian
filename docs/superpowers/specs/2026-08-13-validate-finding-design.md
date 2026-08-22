@@ -1,5 +1,7 @@
 # Design — `validate_finding`, reachability qualification for findings
 
+**Status:** implemented and shipped
+
 Item 4 of 7 in the strix-gap project. `triage_findings` classifies by file
 path; `prioritize_findings` orders by severity and age. Neither knows whether
 the vulnerable code can be reached at all. This tool answers that, using what

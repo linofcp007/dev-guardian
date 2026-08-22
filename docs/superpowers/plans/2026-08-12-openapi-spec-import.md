@@ -4,6 +4,16 @@
 
 **Goal:** Import OpenAPI 3.x and Swagger 2.0 documents found in the repository, and report the difference between what the specs declare and what the code registers — shadow endpoints and dead documentation.
 
+> **Checkbox audit — 2026-08-22.** These boxes were ticked retrospectively, by
+> reconciling every step against the shipped code, its tests and `git log`. They
+> were **not** ticked during execution, so they are an audit of the result, not a
+> live record of the run. Steps whose only product is an observation ("run the
+> test, expected: FAIL", "RED first", "commit with this subject") cannot be
+> verified after the fact; each was ticked on the artefact it was meant to leave
+> behind — the named test file, or the named commit in `git log` — never on
+> evidence that anyone watched it go red.
+> Nothing in this plan was left unticked.
+
 **Architecture:** `map_attack_surface` stays the only entry point. Inside, the Semgrep invocation moves out to its own I/O module, and three new modules are added: spec discovery (I/O), spec import (pure) and spec diffing (pure). Every module that makes a decision is pure and testable with no scanner, no disk and no network — the split that held up across the whole `map_attack_surface` build, while every defect came from a layer that read files and decided at once.
 
 **Tech Stack:** TypeScript (ESM, NodeNext), `yaml` (promoted to a runtime dependency), Node's `node:sqlite`, vitest, Semgrep.
@@ -77,7 +87,7 @@ export function buildToolRun(run: ProcessRunResult, via?: string): ToolRun;
 
 The current implementation takes four positional strings. Moving to an options object is part of the move: four adjacent `string` parameters is a call site waiting to be transposed silently.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `mcp/test/unit/surface/scanSemgrep.test.ts`:
 
@@ -163,25 +173,25 @@ describe('invokeSemgrep', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/unit/surface/scanSemgrep.test.ts`
 Expected: FAIL — `Cannot find module '../../../src/surface/scanSemgrep.js'`.
 
-- [ ] **Step 3: Move the code**
+- [x] **Step 3: Move the code**
 
 Create `mcp/src/surface/scanSemgrep.ts` containing `invokeSemgrep` and `buildToolRun` **exactly as they are today** in `mapAttackSurface.ts:361-425`, with two changes only: the four positional parameters become the `SemgrepRunOptions` object, and both functions are exported. Keep the explanatory comment above `buildToolRun` verbatim — it records why exit 1 is success and cites the three sibling tools that agree.
 
-- [ ] **Step 4: Update the call site**
+- [x] **Step 4: Update the call site**
 
 In `mapAttackSurface.ts`, delete both functions and import from `../surface/scanSemgrep.js`. Pass the options object. Remove imports that are now unused — `copyFileSync`, `buildSemgrepDockerArgs`, `toContainerPath`, `DEFAULT_SEMGREP_IMAGE`, `runProcess`, `ProcessRunResult` — `noUnusedLocals` will name any you miss.
 
-- [ ] **Step 5: Run the full suite — this is the real test of the move**
+- [x] **Step 5: Run the full suite — this is the real test of the move**
 
 Run: `export PATH="$PATH:/c/Users/Administrator/AppData/Roaming/Python/Python314/Scripts" && GUARDIAN_REQUIRE_SEMGREP=1 npm test`
 Expected: PASS, 578 + 6 new = 584. **No existing test may change.** If one does, the move was not behaviour-preserving.
 
-- [ ] **Step 6: Build and commit**
+- [x] **Step 6: Build and commit**
 
 ```bash
 npm run build
@@ -202,7 +212,7 @@ git commit -m "refactor(surface): extract the semgrep invocation from the orches
 
 - Produces: `export type RouteProvenance = 'code' | 'spec';` and a required `provenance: RouteProvenance` on `RouteRecord`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `mcp/test/unit/surface/extract.test.ts`:
 
@@ -233,12 +243,12 @@ it('backfills provenance as code for snapshots written before the field existed'
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npm test -- test/unit/surface/extract.test.ts test/unit/storage/surfaceRepo.test.ts`
 Expected: FAIL — `provenance` is not a property of `RouteRecord`, and `undefined` is not `'code'`.
 
-- [ ] **Step 3: Add the type**
+- [x] **Step 3: Add the type**
 
 In `mcp/src/types.ts`, before `RouteRecord`:
 
@@ -255,7 +265,7 @@ export type RouteProvenance = 'code' | 'spec';
 
 Add to `RouteRecord`: `provenance: RouteProvenance;`
 
-- [ ] **Step 4: Set it at the two construction sites**
+- [x] **Step 4: Set it at the two construction sites**
 
 In `mcp/src/surface/extract.ts`, `toRoute` adds `provenance: 'code'` to the record it builds.
 
@@ -271,7 +281,7 @@ routes: (parsed.routes ?? []).map((r) => ({ provenance: 'code' as const, ...r })
 
 Spread order matters: `provenance` first so a record that *does* carry one keeps it.
 
-- [ ] **Step 5: Keep spec routes out of the language coverage**
+- [x] **Step 5: Keep spec routes out of the language coverage**
 
 In `mapAttackSurface.ts`, `buildCoverage` derives its language set from `routes.map(r => r.language)`. Spec routes carry `language: 'spec'`, which would create a phantom entry reading `status: 'no_rules'` — true and meaningless. Filter at the top of the function:
 
@@ -281,12 +291,12 @@ const codeRoutes = routes.filter((r) => r.provenance === 'code');
 
 and use `codeRoutes` everywhere `routes` is used inside it. `coverage[]` is a per-language report about code; a spec is not a language.
 
-- [ ] **Step 6: Run the suite**
+- [x] **Step 6: Run the suite**
 
 Run: `export PATH="$PATH:/c/Users/Administrator/AppData/Roaming/Python/Python314/Scripts" && GUARDIAN_REQUIRE_SEMGREP=1 npm test`
 Expected: PASS. Test helpers that build a `RouteRecord` literal will fail to typecheck until they add `provenance` — fix each, do not loosen the type.
 
-- [ ] **Step 7: Build and commit**
+- [x] **Step 7: Build and commit**
 
 ```bash
 npm run build
@@ -338,7 +348,7 @@ export interface SpecFileReport {
 }
 ```
 
-- [ ] **Step 1: Promote `yaml` to a runtime dependency**
+- [x] **Step 1: Promote `yaml` to a runtime dependency**
 
 ```bash
 npm uninstall --save-dev yaml && npm install --save yaml
@@ -346,7 +356,7 @@ npm uninstall --save-dev yaml && npm install --save yaml
 
 Verify `yaml` is under `dependencies` in `mcp/package.json` and no longer under `devDependencies`.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Create `mcp/test/unit/surface/specImport.test.ts`:
 
@@ -494,12 +504,12 @@ describe('importSpec — degradation', () => {
 });
 ```
 
-- [ ] **Step 3: Run the test to verify it fails**
+- [x] **Step 3: Run the test to verify it fails**
 
 Run: `npm test -- test/unit/surface/specImport.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 Create `mcp/src/surface/specImport.ts`. The shape:
 
@@ -547,12 +557,12 @@ Remaining behaviours:
 - **An external `$ref` as the path item value** increments `unresolved_refs` and contributes no route.
 - Every returned route: `provenance: 'spec'`, `language: 'spec'`, `confidence: 'high'`, `framework` is the detected format, `file` is the `file` argument, `path_raw` is the template as written, `namespace` unset.
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `npm test -- test/unit/surface/specImport.test.ts`
 Expected: PASS, 17 tests.
 
-- [ ] **Step 6: Build and commit**
+- [x] **Step 6: Build and commit**
 
 ```bash
 npm run build
@@ -612,7 +622,7 @@ export interface SpecDiff {
 }
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `mcp/test/unit/surface/specDiff.test.ts`:
 
@@ -741,12 +751,12 @@ describe('diffSpecRoutes', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/unit/surface/specDiff.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `mcp/src/surface/specDiff.ts`.
 
@@ -791,12 +801,12 @@ The algorithm:
 7. Every partial route on either side → `unmatchable`, with `reason` naming which (`'code route has an unresolved prefix'` / `'spec server url is templated'`).
 8. `spec_only` is the last bucket and the guarded one: a resolvable spec route with no code counterpart is `spec_only` **only if** no partial code route's normalised `path_raw` is a suffix of the spec's normalised path. If one is, the spec route joins `unmatchable` with a reason naming the partial route. Suffix is the right test because a partial route is missing exactly a prefix.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npm test -- test/unit/surface/specDiff.test.ts`
 Expected: PASS, 12 tests.
 
-- [ ] **Step 5: Build and commit**
+- [x] **Step 5: Build and commit**
 
 ```bash
 npm run build
@@ -834,7 +844,7 @@ export const MAX_SPEC_FILES = 20;
 export const MAX_SPEC_BYTES = 5 * 1024 * 1024;
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `mcp/test/unit/surface/specDiscover.test.ts`:
 
@@ -908,21 +918,21 @@ describe('discoverSpecs', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/unit/surface/specDiscover.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `mcp/src/surface/specDiscover.ts`. Walk the project tree with the same exclusion set `computeTreeHash` uses (`mcp/src/treeHash/computeTreeHash.ts:27-45` — import it if it is exported, otherwise copy it and note in a comment that the two must stay aligned). Match a file when its basename is one of `openapi`, `swagger`, `api-docs` with a `.json`, `.yaml` or `.yml` extension, **or** when any parent directory is named `openapi` and the extension matches. Sort results for determinism. Enforce both caps, recording rather than hiding them. `statSync` before `readFileSync` so an oversized file is never read into memory. Never throw: an unreadable file is simply absent.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npm test -- test/unit/surface/specDiscover.test.ts`
 Expected: PASS, 8 tests.
 
-- [ ] **Step 5: Build and commit**
+- [x] **Step 5: Build and commit**
 
 ```bash
 npm run build
@@ -944,7 +954,7 @@ git commit -m "feat(surface): discover OpenAPI and Swagger documents in the proj
 - Consumes: `discoverSpecs` (Task 5), `importSpec` (Task 3), `diffSpecRoutes` (Task 4).
 - Produces: `AttackSurfaceSnapshot` gains `spec_files: SpecFileReport[]` and `spec_diff: SpecDiff | null`; the tool input gains `spec_paths`; the result gains `spec_routes_total`, `spec_files`, `spec_diff_summary` and `shadow_sample`.
 
-- [ ] **Step 1: Write the failing integration tests**
+- [x] **Step 1: Write the failing integration tests**
 
 Append to `mcp/test/integration/surfaceTools.test.ts` — reuse the file's existing mocking of `scannerAvailable`, `runProcess` and `readJsonSafe`, and write real spec files into the temp project directory:
 
@@ -1041,12 +1051,12 @@ describe('map_attack_surface — spec import and diff', () => {
 
 Add `SEMGREP_OUTPUT_WITH_SHADOW` beside the existing `SEMGREP_OUTPUT` constant: the same JSON with a second `guardian-route-express` result for `GET /internal/metrics`.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npm test -- test/integration/surfaceTools.test.ts`
 Expected: FAIL — `spec_diff_summary` is undefined.
 
-- [ ] **Step 3: Add the snapshot fields**
+- [x] **Step 3: Add the snapshot fields**
 
 In `mcp/src/types.ts`, `AttackSurfaceSnapshot` gains:
 
@@ -1060,7 +1070,7 @@ In `mcp/src/types.ts`, `AttackSurfaceSnapshot` gains:
   spec_diff: SpecDiff | null;
 ```
 
-- [ ] **Step 4: Add the input and the pipeline stages**
+- [x] **Step 4: Add the input and the pipeline stages**
 
 Add to the tool's `inputSchema`:
 
@@ -1077,18 +1087,18 @@ In `buildSnapshot`, after the code routes are resolved: discover, import each do
 
 Record discovery caps as a `SpecFileReport` with `status: 'parse_error'` and a reason naming the cap, so a truncated set is visible in the same place a reader is already looking.
 
-- [ ] **Step 5: Extend `summarize`**
+- [x] **Step 5: Extend `summarize`**
 
 Add `spec_routes_total`, `spec_files`, `spec_diff_summary` (counts only, `null` when the diff is null) and `shadow_sample` (first 20 of `code_only`). **`routes_total` keeps counting `provenance === 'code'` only** — a consumer reading it today gets the same number tomorrow.
 
 Full diff lists stay out of the tool result and are served by the existing resources, for the same reason the full route list already is.
 
-- [ ] **Step 6: Run the suite**
+- [x] **Step 6: Run the suite**
 
 Run: `export PATH="$PATH:/c/Users/Administrator/AppData/Roaming/Python/Python314/Scripts" && GUARDIAN_REQUIRE_SEMGREP=1 npm test`
 Expected: PASS. `toolSurface.test.ts` should be unaffected — no tool or resource was added.
 
-- [ ] **Step 7: Build and commit**
+- [x] **Step 7: Build and commit**
 
 ```bash
 npm run build
@@ -1108,7 +1118,7 @@ git commit -m "feat(surface): wire spec import and the spec-vs-code diff into ma
 
 **Interfaces:** none new.
 
-- [ ] **Step 1: Write the fixture spec**
+- [x] **Step 1: Write the fixture spec**
 
 First read `EXPECTED_ROUTES` in `mcp/test/e2e/rulePackFixture.test.ts` — it is the exact set of 64 routes the fixture app tree produces, and every path you document must be copied from it or deliberately absent from it.
 
@@ -1122,7 +1132,7 @@ Comment each of the three intentions inline, naming which assertion depends on w
 
 Note the `servers` block: with none, the base is `/` and the documented paths must match the fixture routes exactly as written.
 
-- [ ] **Step 2: Write the failing e2e assertions**
+- [x] **Step 2: Write the failing e2e assertions**
 
 In `mcp/test/e2e/rulePackFixture.test.ts`, add a test asserting the diff as an **exact set**, in the same style as the existing `EXPECTED_ROUTES`:
 
@@ -1146,12 +1156,12 @@ it.skipIf(!SEMGREP_AVAILABLE)('reports shadow endpoints and dead documentation',
 
 A count assertion is not enough: it passes when one rule breaks and another over-matches.
 
-- [ ] **Step 3: Run the e2e**
+- [x] **Step 3: Run the e2e**
 
 Run: `export PATH="$PATH:/c/Users/Administrator/AppData/Roaming/Python/Python314/Scripts" && GUARDIAN_REQUIRE_SEMGREP=1 npm test -- test/e2e/rulePackFixture.test.ts`
 Expected: FAIL first with the real numbers, then PASS once `EXPECTED_SHADOW` and `EXPECTED_DEAD` are filled from what the tool actually produces — **after** checking each entry is genuinely what the fixture intends. Do not paste the output in without reading it; that is how a wrong expectation becomes a regression test.
 
-- [ ] **Step 4: Update the docs**
+- [x] **Step 4: Update the docs**
 
 `README.md`, all three language sections: `map_attack_surface`'s description gains spec import and the diff. Note that `yaml` is now a runtime dependency if the README lists dependencies.
 
@@ -1159,7 +1169,7 @@ Expected: FAIL first with the real numbers, then PASS once `EXPECTED_SHADOW` and
 
 Markdownlint must stay clean: `npx markdownlint-cli2 README.md CHANGELOG.md`.
 
-- [ ] **Step 5: Full verification**
+- [x] **Step 5: Full verification**
 
 ```bash
 export PATH="$PATH:/c/Users/Administrator/AppData/Roaming/Python/Python314/Scripts"
@@ -1170,7 +1180,7 @@ npm run build
 
 Expected: suite green with zero skipped; coverage above 70/62/72/70; build clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add test/fixtures/surface/apps/openapi.yaml test/e2e/rulePackFixture.test.ts dist/ ../README.md ../CHANGELOG.md
@@ -1181,14 +1191,14 @@ git commit -m "test(surface): end-to-end shadow-endpoint and dead-documentation 
 
 ## Definition of Done
 
-- [ ] OpenAPI 3.x and Swagger 2.0 documents, JSON and YAML, are discovered, parsed and imported.
-- [ ] Spec routes carry `provenance: 'spec'`; code routes `'code'`; pre-existing snapshots read back as `'code'`.
-- [ ] `auth_hint: 'none'` is emitted for `security: []` and never inferred from absence.
-- [ ] All four diff buckets are produced; `unmatchable` is never reported as a finding.
-- [ ] A spec route whose suffix matches a partial code route is not called dead documentation.
-- [ ] No spec, or every spec failing, yields `spec_diff: null` with a reason.
-- [ ] `routes_total` still counts code routes only; `coverage[]` carries no `spec` language.
-- [ ] Discovery caps and unresolved external `$ref`s are reported, never silent.
-- [ ] `scanSemgrep.ts` extracted with every pre-existing test passing unchanged.
-- [ ] Suite green with `GUARDIAN_REQUIRE_SEMGREP=1`; coverage above thresholds.
-- [ ] `mcp/dist/` rebuilt and staged in every commit that touched TypeScript.
+- [x] OpenAPI 3.x and Swagger 2.0 documents, JSON and YAML, are discovered, parsed and imported.
+- [x] Spec routes carry `provenance: 'spec'`; code routes `'code'`; pre-existing snapshots read back as `'code'`.
+- [x] `auth_hint: 'none'` is emitted for `security: []` and never inferred from absence.
+- [x] All four diff buckets are produced; `unmatchable` is never reported as a finding.
+- [x] A spec route whose suffix matches a partial code route is not called dead documentation.
+- [x] No spec, or every spec failing, yields `spec_diff: null` with a reason.
+- [x] `routes_total` still counts code routes only; `coverage[]` carries no `spec` language.
+- [x] Discovery caps and unresolved external `$ref`s are reported, never silent.
+- [x] `scanSemgrep.ts` extracted with every pre-existing test passing unchanged.
+- [x] Suite green with `GUARDIAN_REQUIRE_SEMGREP=1`; coverage above thresholds.
+- [x] `mcp/dist/` rebuilt and staged in every commit that touched TypeScript.

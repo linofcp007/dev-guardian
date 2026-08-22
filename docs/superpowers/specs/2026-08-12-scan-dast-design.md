@@ -1,5 +1,7 @@
 # Design — `scan_dast`, inventory-driven active DAST
 
+**Status:** implemented and shipped
+
 Item 3 of 7 in the strix-gap project. The tool the whole sub-project (items 1
 and 2) exists to feed: `map_attack_surface` builds a static route inventory,
 the OpenAPI import cross-references it against declared specs, and `scan_dast`

@@ -4,6 +4,16 @@
 
 **Goal:** Two read-only views — `dev-guardian status` (one terminal screen) and `dev-guardian dashboard` (a self-contained HTML file) — over the SQLite state dev-guardian already persists for the project you are standing in.
 
+> **Checkbox audit — 2026-08-22.** These boxes were ticked retrospectively, by
+> reconciling every step against the shipped code, its tests and `git log`. They
+> were **not** ticked during execution, so they are an audit of the result, not a
+> live record of the run. Steps whose only product is an observation ("run the
+> test, expected: FAIL", "RED first", "commit with this subject") cannot be
+> verified after the fact; each was ticked on the artefact it was meant to leave
+> behind — the named test file, or the named commit in `git log` — never on
+> evidence that anyone watched it go red.
+> Nothing in this plan was left unticked.
+
 **Architecture:** One query pass, two thin renderers. `snapshot.ts` is the only module that touches storage; `risk.ts`, `delta.ts`, `hotspots.ts`, `renderStatus.ts` and `renderHtml.ts` are pure functions over data. The two views cannot disagree because there is one source, computed once. The CLI stays a shim that resolves a path, builds a snapshot, and renders.
 
 **Tech Stack:** TypeScript (ESM, NodeNext), `node:sqlite` via the existing `Storage` facade, vitest. No new runtime dependencies. The HTML reuses `mcp/src/report/htmlTheme.ts`.
@@ -103,7 +113,7 @@ export const TOOL_CATEGORIES: Readonly<Record<string, string>> = {
 export function scoreRisk(input: RiskInput): RiskAssessment;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `mcp/test/unit/dashboard/risk.test.ts`:
 
@@ -214,12 +224,12 @@ describe('scoreRisk', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd mcp && npx vitest run test/unit/dashboard/risk.test.ts`
 Expected: FAIL — cannot resolve `../../../src/dashboard/risk.js`.
 
-- [ ] **Step 3: Write `types.ts`, then `risk.ts`**
+- [x] **Step 3: Write `types.ts`, then `risk.ts`**
 
 `risk.ts` ports the arithmetic from `mcp/src/tools/riskScore.ts` **verbatim** — the same weights, caps, bands and recommendation strings — with two changes and no others: it reads its inputs from `RiskInput` instead of from `ctx.storage`, and it takes `now` from the input instead of calling `Date.now()`.
 
@@ -237,12 +247,12 @@ function recommendation(score: number, open: number, cves: number, hasBaseline: 
 
 Compliance score: `policies_missing * 3`, plus `6` when `dependency_bot_configured` is false, clamped to `[0, 15]`.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd mcp && npx vitest run test/unit/dashboard/risk.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Write the characterisation test BEFORE touching the tool**
+- [x] **Step 5: Write the characterisation test BEFORE touching the tool**
 
 Create `mcp/test/unit/tools/riskScoreCharacterisation.test.ts`. It seeds an
 in-memory database, calls the `risk_score` handler, and asserts the **whole
@@ -310,7 +320,7 @@ If the asserted numbers do not match what the unmodified tool returns, **change
 the test to match the tool, not the tool to match the test** — the point is to
 pin existing behaviour. Record the real values you observed.
 
-- [ ] **Step 6: Rewire `tools/riskScore.ts` to call `scoreRisk`**
+- [x] **Step 6: Rewire `tools/riskScore.ts` to call `scoreRisk`**
 
 The handler keeps its own queries (`listOpen`, `findLatestOfType`, `cves.listActive`,
 `baselines.getActive`) — its "any project" contract is correct and deliberate for
@@ -319,12 +329,12 @@ a tool with no `project_path` input. It assembles a `RiskInput`, passes
 the result to its existing response: `next_action` → `recommended_next_action`,
 `coverage_caveat` dropped.
 
-- [ ] **Step 7: Run both test files, then the suite**
+- [x] **Step 7: Run both test files, then the suite**
 
 Run: `cd mcp && npx vitest run test/unit/dashboard/risk.test.ts test/unit/tools/riskScoreCharacterisation.test.ts && npm test`
 Expected: PASS. The characterisation test must produce **identical** values before and after Step 6.
 
-- [ ] **Step 8: Build and commit**
+- [x] **Step 8: Build and commit**
 
 ```bash
 cd mcp && npm run build
@@ -369,7 +379,7 @@ export function rankFiles(findings: readonly Finding[], limit: number):
   { hotspots: Hotspot[]; remaining_files: number };
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `mcp/test/unit/dashboard/delta.test.ts`:
 
@@ -498,12 +508,12 @@ describe('rankFiles', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `cd mcp && npx vitest run test/unit/dashboard/delta.test.ts test/unit/dashboard/hotspots.test.ts`
 Expected: FAIL — modules not found.
 
-- [ ] **Step 3: Implement both modules**
+- [x] **Step 3: Implement both modules**
 
 `compareFindings` builds a `Set` of fingerprints per side, derives the three
 counts from set membership, slices `new_findings` to `cap`, and returns a
@@ -514,12 +524,12 @@ the true count, never the sliced length.**
 `file_path` ascending, slices to `limit`, and returns `remaining_files` as the
 number of distinct files beyond the slice.
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `cd mcp && npx vitest run test/unit/dashboard/delta.test.ts test/unit/dashboard/hotspots.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Build and commit**
+- [x] **Step 5: Build and commit**
 
 ```bash
 cd mcp && npm run build
@@ -559,7 +569,7 @@ interface it names to `dashboard/types.ts` in this task: `DashboardSnapshot`,
 `CoverageState`, `ScanSummary`, `FindingsSummary`, `CveSummary`,
 `BaselineState`, `SuppressionState`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `mcp/test/unit/dashboard/snapshot.test.ts`:
 
@@ -719,19 +729,19 @@ describe('buildSnapshot', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd mcp && npx vitest run test/unit/dashboard/snapshot.test.ts`
 Expected: FAIL — `buildSnapshot` not found.
 
-- [ ] **Step 3: Add `listHistoryForProject` to `scansRepo.ts`**
+- [x] **Step 3: Add `listHistoryForProject` to `scansRepo.ts`**
 
 Prepare it beside `listHistoryStmt`, with the identical predicate plus
 `WHERE project_path = ?`, the same `ORDER BY started_at DESC, rowid DESC`, and
 the same `LIMIT ?`. Do **not** change `listHistory` — other callers depend on
 its "any project" contract.
 
-- [ ] **Step 4: Implement `snapshot.ts`**
+- [x] **Step 4: Implement `snapshot.ts`**
 
 It uses `scans.getLatestForProject`, `scans.listHistoryForProject`,
 `findings.listOpenForProject`, `cves.listActive`, `baselines.getActive`,
@@ -753,12 +763,12 @@ Grouping (`by_severity`, `by_category`, `by_tool`) is plain JavaScript over the
 already-fetched findings. `by_severity` is initialised with every severity at
 zero so a missing key never renders as `undefined`.
 
-- [ ] **Step 5: Run to verify it passes, then the suite**
+- [x] **Step 5: Run to verify it passes, then the suite**
 
 Run: `cd mcp && npx vitest run test/unit/dashboard/snapshot.test.ts && npm test`
 Expected: PASS.
 
-- [ ] **Step 6: Build and commit**
+- [x] **Step 6: Build and commit**
 
 ```bash
 cd mcp && npm run build
@@ -791,7 +801,7 @@ export function renderStatus(
 The layout is in the design of record §6. Reproduce it; the exact column
 positions are not load-bearing, the content rules are.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Put the `snap()` factory in `mcp/test/unit/dashboard/snapshotFixture.ts` and
 export it — Task 5 imports the same factory, and two copies would drift.
@@ -961,24 +971,24 @@ describe('renderStatus', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd mcp && npx vitest run test/unit/dashboard/renderStatus.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement `renderStatus.ts`**
+- [x] **Step 3: Implement `renderStatus.ts`**
 
 Follow §6's layout. The colour implementation must satisfy the last-but-two
 test literally: the coloured output with ANSI sequences stripped equals the
 uncoloured output exactly, which means colour is only ever added around text
 that is present either way.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd mcp && npx vitest run test/unit/dashboard/renderStatus.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Build and commit**
+- [x] **Step 5: Build and commit**
 
 ```bash
 cd mcp && npm run build
@@ -1004,7 +1014,7 @@ git commit -m "feat(dashboard): the one-screen terminal view"
 export function renderDashboard(snapshot: DashboardSnapshot): string;
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `mcp/test/unit/dashboard/renderHtml.test.ts`. Reuse the `snap()` factory from
 Task 4 by exporting it from a shared test helper
@@ -1119,12 +1129,12 @@ describe('renderDashboard', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd mcp && npx vitest run test/unit/dashboard/renderHtml.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement `renderHtml.ts`**
+- [x] **Step 3: Implement `renderHtml.ts`**
 
 Compose sections and hand them to `renderHtmlDocument({title, subtitle, sections, lang})`.
 Sections: the risk header with its coverage caveat, the coverage banner when
@@ -1143,12 +1153,12 @@ The interaction script is inline vanilla JS: read the JSON block, build the
 table, wire severity/tool/category/file filters and column sorting. No
 dependencies, no network.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd mcp && npx vitest run test/unit/dashboard/renderHtml.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Build and commit**
+- [x] **Step 5: Build and commit**
 
 ```bash
 cd mcp && npm run build
@@ -1183,7 +1193,7 @@ Every value-taking flag goes through the existing `takeOperand()` helper, so a
 missing operand is a usage error (exit 3) rather than a silent default. Both
 commands accept the help spellings the CLI already routes.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `mcp/test/e2e/dashboardCli.test.ts`, invoking the CLI as a **real subprocess**,
 following the `runCli` pattern already in `mcp/test/e2e/ciCliFixture.test.ts`.
@@ -1260,12 +1270,12 @@ describe('dev-guardian status / dashboard', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd mcp && npx vitest run test/e2e/dashboardCli.test.ts`
 Expected: FAIL — `Unknown command: status`.
 
-- [ ] **Step 3: Implement both commands**
+- [x] **Step 3: Implement both commands**
 
 Add the imports at the top of `cli/dev-guardian.mjs` beside the existing
 `../mcp/dist/...` imports. Each command: parse flags via `takeOperand`, resolve
@@ -1285,12 +1295,12 @@ fail the command that already succeeded.
 Follow item 5's exit discipline: set `process.exitCode` and return; never call
 `process.exit()` after writing to stdout, which truncates on POSIX.
 
-- [ ] **Step 4: Run to verify it passes, then the suite**
+- [x] **Step 4: Run to verify it passes, then the suite**
 
 Run: `cd mcp && npx vitest run test/e2e/dashboardCli.test.ts && npm test`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cli mcp/test
@@ -1306,7 +1316,7 @@ git commit -m "feat(cli): status and dashboard commands"
 - Modify: `commands/guardian-status.md`
 - Modify: `README.md` (EN/PT/ES), `CHANGELOG.md`, `host-rules/AGENTS.md` and its paired host files, `cli/dev-guardian.mjs` help text
 
-- [ ] **Step 1: Rewrite `commands/guardian-status.md`**
+- [x] **Step 1: Rewrite `commands/guardian-status.md`**
 
 It invokes `node cli/dev-guardian.mjs status --project .`, shows that output
 verbatim, and then adds interpretation on top. Two of its current seven
@@ -1319,7 +1329,7 @@ sections need deciding, not carrying forward unchanged:
   command invocations, so the line can only be fabricated. Say nothing rather
   than inviting an invention.
 
-- [ ] **Step 2: Measure the tool count and sweep every place it appears**
+- [x] **Step 2: Measure the tool count and sweep every place it appears**
 
 ```bash
 cd mcp && node -e "import('./dist/registerAll.js').then(()=>import('./dist/tools/index.js')).then(m=>console.log(m.TOOLS.length))"
@@ -1331,7 +1341,7 @@ rather than assuming it.** Use no `--include` filter: a previous sweep on this
 repo missed files on two axes, language (a Spanish "herramientas") and
 extension (files with no `.md`/`.json`).
 
-- [ ] **Step 3: Document the two commands**
+- [x] **Step 3: Document the two commands**
 
 README in all three languages, `host-rules/AGENTS.md` and its paired host files,
 and the CLI `--help` text. State plainly, in each:
@@ -1341,14 +1351,14 @@ and the CLI `--help` text. State plainly, in each:
 - `status` and `dashboard` are **read-only** and always exit 0 when they
   render; they report, they do not gate.
 
-- [ ] **Step 4: CHANGELOG entry carrying the limits from design §12**
+- [x] **Step 4: CHANGELOG entry carrying the limits from design §12**
 
 The snapshot-not-live property; the absent trend; the risk score being a
 heuristic; that coverage is only as honest as `missing_tools`, so a scanner
 that ran and silently produced nothing is indistinguishable from a clean
 result; and that hotspots rank by count, not severity.
 
-- [ ] **Step 5: Full verification gate**
+- [x] **Step 5: Full verification gate**
 
 ```bash
 cd mcp && npm run build && GUARDIAN_REQUIRE_SEMGREP=1 npm test
@@ -1361,7 +1371,7 @@ Note that the env var does **not** propagate past `&&` in a POSIX shell, so
 each command carries it. Report the exact skip count (**target zero**) and all
 four coverage numbers against 70/62/72/70.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A
