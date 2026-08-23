@@ -1,6 +1,6 @@
 {
   "name": "@dev-guardian/mcp-server",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "description": "MCP server for the dev-guardian plugin. Exposes security, quality, bugfix, deps, compliance, observability and performance capabilities as MCP tools and resources via stdio transport.",
   "type": "module",
   "main": "./dist/server.js",

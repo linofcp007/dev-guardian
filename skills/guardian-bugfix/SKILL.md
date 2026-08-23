@@ -763,7 +763,7 @@ os patterns ficaram como estavam e só o tier mudou.
 **Consequência prática, e é a parte que morde.** O parser mapeia `ERROR` →
 `high` e `WARNING` → `medium`. O `bug_hunt` **não filtra por omissão**, por
 isso nada desaparece de um scan. Mas o `create_fix_pr` tem `severity_min` a
-`high` por omissão — portanto, com as oito em `WARNING`, **o pack de Java não
+`high` por omissão — portanto, com as sete em `WARNING`, **o pack de Java não
 contribui de todo para o conjunto de fixes por omissão**. Essa omissão **não
 foi alterada**: baixá-la abriria PRs a partir de regras heurísticas por
 construção.

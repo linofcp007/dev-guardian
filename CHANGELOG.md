@@ -8,326 +8,120 @@ version bump.
 
 ## [Unreleased]
 
-### Removed
+## [1.10.0] - 2026-08-23
 
-- **`bugfix-java-null-safety-map-get-deref` deleted. The Java pack goes from
-  eight rules to seven.** The external-corpus round below read all 55 of its
-  OpenJDK + Spring findings, found no live defect, and kept it anyway on one
-  explicit condition, written into the rule itself: both corpora are mature
-  *library* code, where a dereferenced map is nearly always one the reading
-  class filled itself, and the evidence that would decide the rule was a corpus
-  of **application** Java. That corpus was run, and it deleted the rule.
+The release where a severity floor turned out to be deleting history.
+`severity_min` on a scan was applied **before** the findings were written to
+SQLite, in the shared pipeline twelve tools are built on — so a caller who
+asked for a filtered *view* got a filtered *database*, and every consumer
+downstream inherited the hole. Also here: the Bash guardrail stops matching
+text and starts matching commands (and warnings go **up**, because the same
+defect was hiding 86 recursive force-deletes); `create_fix_pr` and
+`create_github_issues` say what they filtered out, and stop giving advice that
+could never have worked; `bugfix-java` loses a rule after 749 findings on
+Elasticsearch produced five defensible defects. **What you may have to act on
+is directly below; everything after it can be read at leisure.**
 
-  | corpus | findings | `.java` scanned | per 1000 |
-  | --- | --- | --- | --- |
-  | Jenkins | 1 | 1 274 | 0.8 |
-  | Kafka | 224 | 3 892 | 57.5 |
-  | Elasticsearch | 749 | 20 485 | 36.6 |
+### Action required
 
-  973 new findings, **45 read by hand** — spread across modules and weighted
-  toward the shapes a cheap triage could not explain — and **five** defensible
-  defects (`EnterpriseGeoIpDownloader.java:589`, `GeoIpDownloader.java:160`,
-  `JvmOption.java:63`, `RemotePartitionMetadataStore.java:175`,
-  `OsProbe.java:811`).
+- **If you ever ran a scan with `severity_min` set, re-scan and re-baseline.
+  Existing databases cannot be repaired.** The floor was applied before
+  persistence, so findings below it were never written at all. A scan row
+  produced by the old pipeline holds only the above-floor subset and is
+  indistinguishable from a scan of a clean tree — nothing in the schema
+  records that a floor was in force at write time, so no migration can tell
+  the two apart or undo it. The only remedy is to scan again with no floor and
+  re-anchor:
 
-  **The count decided nothing; this did.** 88% of the Elasticsearch findings and
-  97% of the Kafka ones have **no guard of any kind anywhere near the
-  dereference**. They are correct for *semantic* reasons — parallel maps kept in
-  sync, a map the class filled in another method, a constant key, an API
-  contract — and no `pattern-not-inside` reaches any of that, so **narrowing was
-  never available**. That was measured before the decision rather than assumed:
-  the one mechanically closable family is Elasticsearch's `containsKey(k) ==
-  false` negation style, which every `!containsKey` exclusion misses, and it is
-  worth **34 of 749** and **zero** on Kafka.
+  ```text
+  scan_sast(project_path=".")   # or whichever scan you ran — no severity_min
+  set_baseline()                # re-anchor on the fresh, complete scan
+  ```
 
-  Two findings that outlive the rule. It was **blind to the more dangerous
-  idiom** — `X v = m.get(k); v.foo();` never matched, because the dereference is
-  not chained, so at `KafkaAdminClient.java:2375` and
-  `AbstractStickyAssignor.java:268` it reported the *derived* lookup (safe,
-  precisely because the earlier one did not throw) and was silent on the
-  original. And **all five true positives have one shape**: a map produced by
-  parsing external input — HTTP JSON, `/sys/fs/cgroup`, JVM output — read with a
-  literal key. That is provenance, not syntax, and it is outside Semgrep OSS;
-  it is recorded as a candidate for a future rule measured from scratch, never
-  as a tightening of this one.
+  Affected are the twelve tools built on `tools/scanToolFactory.ts` —
+  `scan_sast`, `scan_deps`, `scan_secrets`, `scan_containers`, `scan_iac`,
+  `bug_hunt`, `deps_audit`, `quality_check`, `compliance_check`, `review_pr`,
+  `scan_wordpress`, `security_scan_full` — plus `audit_executive` and
+  `scan_skill`, which each carried their own instance of the same defect. If
+  you never passed `severity_min` to a scan, nothing was lost: the floor is
+  include-all by default on every tool that takes it, and no default changed
+  here.
 
-  Same criterion as C#'s `as-cast-deref` and `catch-returns-null`, with one
-  difference recorded on purpose so the precedent stays honest: **this rule's
-  true-positive rate was not zero, it was about 1%.** A user with 5 000 files of
-  Java got roughly 200 findings and perhaps two worth acting on. Counts decide
-  nothing in either direction — `empty-catch` produces 1589 on the OpenJDK and
-  is right nearly every time.
-
-  Also gone: three of the eleven accepted Java limitations, which belonged to
-  this one rule; 42 of the pack's 91 `pattern-not-inside` clauses; and the
-  fixtures `hits/MapGetDeref.java` and `misses/MapGetDeref.java`.
-  `hits/ElseArm.java` drops 12 to 7 and `hits/RealBugs.java` 20 to 11 — measured
-  old pack against new over the whole `hits/` tree as **25 findings removed, 0
-  added, no other file moved**, which is what makes it a deletion and not a
-  regression. Nothing they fenced is unfenced: every clause shape they measured
-  has an `optional-get-no-ispresent` twin still in the pack (`b12`, `b15`,
-  `b17`, `b19`, `F5`-`F7`). Written up in section 12 of the Java design doc.
-
-### Changed
-
-- **`bugfix-java` audited against real Java for the first time.** It was the
-  only pack in the series never measured against code nobody here wrote: eight
-  rules, nine fix waves, every one of them found by reading fixtures. The one
-  thing that *had* been measured — `empty-catch` on the OpenJDK — refuted the
-  premise its `ERROR` tier stood on. This round pointed all eight rules at
-  **12 593 OpenJDK files** (`openjdk/jdk`, `src/<module>/share/classes`) and at
-  **4 754 Spring Framework files** (`spring-*/src/main/java`), and read the
-  findings one by one. Four rules of eight changed, **in both directions**, and
-  the pack still declares eight rules with the same ids.
-
-  | rule | JDK before | JDK after | Spring |
-  | --- | --- | --- | --- |
-  | `error-handling-empty-catch` | 1589 | 1589 | 193 |
-  | `error-handling-printstacktrace-only` | 78 | 78 | 0 |
-  | `null-safety-map-get-deref` | 43 | 43 | 12 |
-  | `null-safety-optional-get-no-ispresent` | 26 | **11** | 0 |
-  | `memory-leak-stream-not-closed` | 12 | **4** | 0 |
-  | `edge-case-modify-during-iteration` | 1 | 1 | 0 |
-  | `off-by-one-loop-lte-length` | 0 | 0 | 0 |
-  | `race-condition-static-dateformat` | 0 | 0 | 0 |
-
-- **`memory-leak-stream-not-closed` (Java) was two-thirds false positive, and
-  the cause was the shape of its exclusions rather than their content.** Eight
-  of its twelve OpenJDK findings were **two-resource try-with-resources
-  headers** — `try (FileInputStream fis = ...; BufferedInputStream bis = new
-  BufferedInputStream(fis))`, which is simply how a file gets read with a
-  buffer. The rule excluded try headers by naming the resource, and a header
-  with two resources is a different AST node. Enumerating the lengths was
-  measured and rejected (two clauses for two resources, three for three, doubled
-  again by the finalizer), and `try (...)`, `try ($...RES)` and
-  `try (...; $R; ...)` are all `Invalid pattern for Java`. The rule now anchors
-  positively on a **statement sequence** instead: a resource in a try header is
-  not a statement, so no header of any length reaches it. Four exclusion clauses
-  became two. Of the four findings that remain, **two are genuine descriptor
-  leaks** (`COFFFileParser`, `Commands`) and two are the documented
-  helper-closes and `finally`-closes limitations.
-
-- **`null-safety-optional-get-no-ispresent` (Java) 26 → 11 on the OpenJDK**, and
-  the fifteen closed were two shapes, not fifteen. Nine were the **`else` arm of
-  an `if (o.isEmpty())`** — the way the check has been written since Java 11,
-  and the exact dual of the `isPresent()` guard the rule already honoured; the
-  four new clauses cover the bare condition and the disjunction, and therefore
-  also the `else if` chain. Six were **`assert o.isPresent();`**, which is the
-  JDK's own way of writing down an invariant it established elsewhere: unlike a
-  comment it is in the AST, and it is an intention rather than a runtime guard,
-  since assertions are off by default. The neighbouring shapes that must keep
-  firing are pinned as F9–F12 in `hits/ElseArm.java`: the THEN arm of
-  `isEmpty()`, the `else` of a **conjunction** with `isEmpty()` (which proves
-  nothing), an assert on a *different* Optional, and `assert o.isEmpty()`.
-
-- **`race-condition-static-dateformat` (Java) was blind to the only real race
-  either corpus contained.** Zero candidates in 12 593 OpenJDK files, exactly
-  one across 4 754 Spring files — a `private static final SimpleDateFormat`
-  declared with no initializer and assigned in a `static { … }` block, formatted
-  later with no lock at all. The rule demanded the `new` on the declaration
-  itself. A second pattern branch matches the split declaration; measured
-  silent on an instance field, an uninitialized instance field, and a static
-  method whose *return type* is `SimpleDateFormat`.
-
-- **`off-by-one-loop-lte-length` (Java) was blind to `++i`, `i += 1`, a
-  braceless body and `for (var i = 0;`.** Optional syntax spelled out in a
-  pattern acts as a **filter**: writing the increment `$I++` excluded the other
-  two spellings of the same loop, and writing the body `{ ... }` excluded the
-  braceless one. Same defect the C# pack found in `i++` versus `++i`. The
-  increment and the body are now ellipses and `var` has its own branch. It costs
-  no precision to widen here: **zero** `<= ....length` loop headers of any
-  spelling exist in either corpus, so what the rule had was false negatives and
-  nothing else.
-
-- **`bugfix-java` is registered with the ablation harness's axis 3**, reading a
-  corpus path from `GUARDIAN_JAVA_SRC` on the same terms as `GUARDIAN_RUST_SRC`
-  and `GUARDIAN_CS_SRC`: unset prints `N/A`, set-but-missing **throws**. Making
-  `static-dateformat` a `pattern-either` also took the pack from 7 of 8 rules
-  with ablatable clauses to 8 of 8. Two things were caught by ablating the new
-  clauses before they shipped, and both are the classes this series keeps
-  meeting: an **inert clause** — `assert $O.isPresent();` written beside
-  `assert $O.isPresent() : ...;` on the assumption that they are different AST
-  nodes, which they are, except that `: ...` also matches the *absent* message,
-  so the first covered nothing the second did not (seventh occurrence in the
-  series, second caught before release) — and **four fixtures that proved
-  nothing**, because they were written with an early exit in the then-arm and
-  the pre-existing early-exit clause silenced them before any new clause was
-  consulted. All four `else`-arm clauses read `DEAD` against them. The
-  replacements have a non-exit then-arm, which is also what the nine OpenJDK
-  findings looked like, and each maps to exactly one clause.
-
-### Known gaps
-
-Every row of the Java **Accepted limitations** table under 1.9.0 was
-reproduced against the shipped pack before anything was decided. Rows (2),
-(3), (5), (6), (7) and (8) stand unchanged. Row (1) is now **half** the
-limitation it was: a stream closed by a `finally` or by a helper still reports,
-but the multi-resource try-with-resources that dominated it does not. Row (4)
-reproduces and is **rare**: not one of the 78 OpenJDK
-`printstacktrace-only` findings was the deliberate-fallback shape. What the
-round added:
-
-- **A false negative on the branch axis, in the early-exit exclusions
-  themselves.** `if (o.isEmpty()) { return o.get(); }` is silent, and so are
-  `if (!o.isPresent()) { throw new IllegalStateException(o.get()); }` and
-  `if (!m.containsKey(k)) { return m.get(k).trim(); }`. All three are
-  guaranteed throws, all three read the value inside the very branch the guard
-  proves is unsafe, and all three are swallowed because `pattern-not-inside`
-  excludes the whole `if` node — including the exit branch the clause was
-  written to describe. Same root cause as row (9), on the branch axis rather
-  than the temporal one, and not fixable in Semgrep OSS. Predates this round
-  and is unchanged by it; measured against both packs.
-- **`null-safety-map-get-deref` scored 55 findings across the two corpora
-  (43 + 12) and a hand-read of all 55 found no live defect.** *(This rule has
-  since been DELETED — see the Removed entry above. The paragraph below is the
-  record of the round that kept it, and the condition it set is the one the
-  application-corpus round discharged.)* They fall into
-  families Semgrep OSS cannot close, and every one is already a documented
-  limitation: the total map filled in a constructor or a static initializer for
-  every key of an enum (the largest group, and all 7 Spring sites); presence
-  established by a method (`addNode(u); … edges.get(u)`); a key from a
-  `keySet()` walked with a lambda or a stream rather than a for-each; a key
-  filtered by `.filter($M::containsKey)`; and an invariant held between two
-  objects. **No clause was written for any of it.** The two families that are
-  syntactically closable — the `keySet()` lambda and the method-reference
-  filter — are worth 7 of 55, and neither closing form can unify the **key**,
-  which is precisely the unification that keeps the existing for-each clause
-  from swallowing `b13` and `b14`. What this does not settle: both corpora are
-  mature *library* code, where a dereferenced map is nearly always one the
-  reading class filled itself. Application Java, keyed on external input, is a
-  different distribution and was not measured. The rule stays, at `WARNING`,
-  with the measurement written down; a third corpus of application Java is the
-  evidence that decides it.
-- **The eleven `optional-get` findings that remain on the OpenJDK** are four
-  shapes, all of them enumerable and none of them closed: a ternary whose
-  condition is a conjunction of two `isPresent()` calls, a ternary whose
-  condition is `isEmpty() || …`, `if (!o.isEmpty())` (the double negative), and
-  an `else if` chain whose `else` is another `if` statement rather than a
-  block. Each is worth one to three findings; the stopping point is a judgement
-  about clause count, not a claim that they are unreachable.
-- **`empty-catch` re-measured identically**: 1589 findings in 770 OpenJDK
-  files, 56 % of them carrying an explanatory comment inside the catch, and the
-  caught-variable names are `e` (890), `ex` (158), `ioe` (44) — with
-  `cannotHappen` at 13 and `_` at 10 still outside the three names the rule
-  recognises. Nothing changed; the rule is precise about what it matches and
-  silent about whether it is a defect, which is why it is `WARNING`.
-- **`edge-case-modify-during-iteration` scored 1 finding in 17 347 files**, too
-  few to say anything about. `off-by-one-loop-lte-length` and
-  `race-condition-static-dateformat` scored 0 on the OpenJDK because the shapes
-  are absent from it, not because the rules are broken — verified by grep in
-  both directions.
-
-### Added
-
-- **Every rule pack now has a real-code ablation corpus.** Axis 3 — does removing
-  a clause *raise* the finding count on code nobody here wrote — has changed more
-  verdicts than any other check in this series: it deleted the two largest rules
-  ever removed from these packs, killed two Rust candidates that had passed every
-  other check, and caught a JS regression both other axes let through. It had
-  never run on `bugfix-py`, `bugfix-go` or `bugfix-php`. It does now, via
-  `GUARDIAN_PY_SRC`, `GUARDIAN_GO_SRC` and `GUARDIAN_PHP_SRC`, on the same terms
-  as the existing three: unset prints `N/A`, set-but-missing **throws**, never a
-  silent skip. Measured on CPython's `Lib/` (5803 files, 1078 findings), the Go
-  standard library (6515, 3101) and WordPress core (1512, 40) — noise floor 0 on
-  all three, every rule firing on its own fixtures, and **one** axis-3 flag
-  across the whole Go pack. The PHP number is a cross-check: 40 is exactly what
-  the PHP probe measured by hand, rule by rule, by a different method.
-
-- **`configs/semgrep/routes.yml` is under the ablation harness**, the last pack
-  that was not. It was excluded for having no `hits/` + `misses/` fixture pair;
-  it has one, under older names — `mcp/test/fixtures/surface/` is the hits
-  corpus and `frameworks/fp/` the decoys — so the harness gained
-  `hitsSubdir: '.'` (the fixture root) and `decoySubdirs` rather than the
-  fixtures being renamed out from under the surface e2e tests. First full run
-  over its **112 clauses in 64 rules**: **axis 0 is 64/64 — every rule fires**,
-  which is the check this pack most needed, having twice shipped a rule that
-  matched nothing. 38 clauses read DEAD and **none was deleted**: they are
-  Semgrep collapsing spellings a reader thinks are distinct (`$MUX.Handle`
-  matches `http.Handle`; `#[actix_web::post]` and `#[post]` are one node) or a
-  guard whose adversarial fixture does not exist. Two of the latter were
-  hand-probed and are load-bearing — without them `app.use(cors(), router)`
-  reports a mount at prefix `cors()` and Express's settings getter
-  `app.get('/title')` reports as a route at full confidence. The decoy tree's
-  baseline is **pinned, not gated at 0**: four of those are routes that
-  are genuinely undecidable. Axis 3 runs on `mcp/src` and reaches only 2 of the
-  64 rules, so the report now prints each rule's real-code baseline and marks
-  the other 62 `real 0 -- axis 3 vacuous here`.
-
-- **Five decoys for the `routes.yml` guards nothing was measuring.** Of the 38
-  DEAD clauses above, five were hand-probed and found load-bearing: all three
-  `guardian-route-go-chi` exclusions, `guardian-mount-express`'s `$PREFIX`
-  literal regex and `guardian-route-express`'s one-argument `pattern-not`.
-  They read DEAD because no fixture reached them, so the fix is a fixture and
-  never a deletion — the corpus's only Go decoy was SCREAMING-case `reg.GET`,
-  which the *gin* rule absorbs before chi is consulted, and the three JS decoys
-  the pack's header credits to the express guard are on its `$APP` denylist
-  too, so the denylist always decided first. `frameworks/fp/decoys.go` gains a
-  TitleCase `Get` in each of its three excluded forms (`F31`-`F33`) and
-  `decoys.js` a one-argument read on a receiver the denylist misses plus an
-  `app.use` whose first argument is a call (`F07`, `F08`). All five clauses now
-  read **live**; not one of the decoys is reported by the shipped pack, and the
-  decoy baseline moves 8 → 9 only for the ordinary `require('cors')` the
-  `app.use` decoy needs to be plausible code.
-
-- **`create_fix_pr` now says what it filtered out.** `severity_min` defaults to
-  `high`, and 1.9.0 took the Semgrep `ERROR` tier — the only tier the parser
-  maps to `high` — from 20 rules of 34 to 4 of 58. A default run against a
-  project whose findings all come from the local packs therefore selected
-  nothing, and said so only by returning `groups: []`, which is exactly what a
-  project with nothing to fix returns. Two new fields close that: `filtered`
-  (structured — `considered`, `candidates`, `excluded`, counts per reason, and
-  a per-tier breakdown of the severity floor's own share) and `filtered_reason`
-  (one line, `null` iff nothing was excluded, on the same contract
-  `deferred_reason` already keeps with `deferred`). Reported whenever
-  *anything* was excluded, not only when everything was — a run that fixes 2 of
-  42 is nearly as opaque as one that fixes 0.
-
-  **No default changed and no rule's severity changed.** The `high` floor is
-  correct: lowering it would open pull requests from rules that are heuristic
-  by construction — `floating-mutation` matches on a method name alone and
-  cannot tell `repo.save()` from Canvas 2D's `ctx.save()`. The silence was the
-  bug.
-
-  The report also corrects a piece of advice this repo had been giving in three
-  places. `create_fix_pr` requires `fix_available`, which for Semgrep means the
-  rule carries a `fix:` — and **no rule in any of the nine packs here does**
-  (measured: `bugfix-js` over its own `hits/` fixtures gives 39 findings across
-  13 files, zero carrying `fix` or `fixed_lines`). So "pass `severity_min:
-  medium` to get the Java/JS/Python pack into a fix PR" was never going to
-  work at any floor. The suggestion is therefore emitted **only** for findings
-  a lower floor genuinely recovers, never for `fix_available: false` ones,
-  where it would have cost a second run to discover it changed nothing.
-  `skills/guardian-bugfix/SKILL.md` is corrected accordingly.
-
-- **`create_github_issues` reports the same two fields**, for the same defect:
-  its `severity_min` also defaults to `high` (a default that was not stated in
-  the schema at all until now) and `max_issues` to 10, and the result listed
-  only the survivors — so a scan of nothing but `medium` findings produced
-  `candidates: 0`, indistinguishable from a clean one. `filtered.by_reason`
-  separates the severity floor from the cap. Neither default changed; both are
-  now documented in the input schema.
+- **The `PreToolUse(Bash)` guardrail denies six command shapes it used to let
+  through**, because quoted spans stopped being matchable and `sh -c`,
+  `bash -c` (including behind `docker exec`), `su … -c` and `eval` are
+  re-entered and assessed as commands in their own right, to depth 3. A root
+  delete **behind `bash -c`, behind `eval`, inside a subshell, behind
+  `sudo -u`, behind `time`, and backgrounded with `&`** was missed by every
+  released version before this one; all six block now. No block rule was
+  narrowed to get there. Warnings also go **up** (203 → 266 on the measured
+  corpus) while becoming far more accurate — see *Fixed*.
 
 ### Fixed
 
+- **`severity_min` was deleting findings, not hiding them.** The shared scan
+  pipeline (`tools/scanToolFactory.ts`, twelve tools) applied the severity
+  floor *before* `bulkInsert`, so a caller who passed `severity_min: "high"`
+  did not merely fail to see the medium findings: they were never written to
+  SQLite. Everything downstream inherited the hole. A `set_baseline` taken from
+  that scan silently omitted them; `diff_scans` compared against data that was
+  never recorded; the next **unfiltered** scan reported them as `new`, which is
+  the opposite of true — they had been there all along; and the trend showed an
+  improvement that never happened. The floor now shapes the response only, and
+  the scan row records the whole tree.
+
+  **The scan row also records the floor it was asked for.** "This scan found
+  nothing above `high`" and "this scan was *filtered* at `high`" produce the
+  same reply and were otherwise indistinguishable, so `severity_min` now rides
+  along in `scans.meta` — the existing `TEXT NOT NULL DEFAULT '{}'` JSON column
+  from schema v1, not a new column, so there is no migration and every existing
+  reader of `meta` picks named keys out of it and is unaffected. Rows written
+  before this release carry no such key, which is precisely why they cannot be
+  told apart after the fact.
+
+  **The two halves of a `deps` scan already disagreed with each other.**
+  `cves.bulkUpsert` on the very next line ran on the *unfiltered* array, so a
+  medium CVE below the floor kept its `cves` row — and its place in
+  `guardian://cves/active` — while the matching Finding was dropped. Trivy,
+  npm-audit and WPScan all emit the pair. The two are now consistent because
+  both are stored whole.
+
+  Two more instances of the same shape, found while checking the downstream
+  consumers: `audit_executive` persisted its *filtered* aggregate onto the
+  parent `audit` row that `diff_scans` reads, and measured its `deltas`
+  filtered-present against unfiltered-past (so every below-floor finding
+  counted as `resolved`); `scan_skill` filtered before the `bulkInsert` its own
+  comment justifies with "so status / trend / diff / report_export see it".
+  Both now store what they found.
+
+  No default changed — `severity_min` is still include-all on every tool that
+  takes it, and `create_fix_pr` / `create_github_issues` keep their `high`
+  default (those select what to *act on*; they never persisted a scan).
+
+- **A cache hit ignored the floor the caller had just passed.** Now that the
+  stored set is the whole tree, `severity_min` is re-applied per call, so a
+  cached reply is shaped like a fresh one. Previously the cached path returned
+  whatever the *first* call had stored, in both directions.
+
 - **The Bash guardrail matched text where it should have matched commands, and
   four families of false positive came out of that.** Every one of the twelve
-  pattern rules in `mcp/src/hooks/bashGuard.ts` was a regex run against the
-  whole command string. Measured over **25 071 distinct shell commands** taken
-  from this machine's own Claude Code transcripts (342 sessions), **23 of the
-  27 non-`rm` warnings were wrong**, and one of them was a *block*:
+  regex rules in `mcp/src/hooks/bashGuard.ts` ran against the whole command
+  string. Measured over **25 071 distinct shell commands** taken from this
+  machine's own Claude Code transcripts (342 sessions), **23 of the 27
+  non-`rm` warnings were wrong**, and one of them was a *block*:
 
   | defect | example from the corpus | rules affected |
   | --- | --- | --- |
-  | matched across a separator | `git push origin main && git worktree remove … --force` | 8 of 12 (every rule carrying a `[^\n]*` span) |
+  | matched across a separator | `git push origin main && git worktree remove … --force` | 8 of the 12 (every rule carrying a `[^\n]*` span) |
   | matched inside quotes | `echo 'git push --force 2>&1'` | all 12 |
   | matched inside a heredoc body | `git commit -F - <<'EOF' … EOF` | all 12, plus the `rm` tokeniser |
   | matched a word, not a command | `apt-get install -y git sudo pipx` | `sudo` |
 
-  The heredoc one is the sharp end: a real commit was **denied** as
-  `rm -rf ~` because its message contained a lone `~` on a line, and the
-  `rm` tokeniser split on `;`, `|` and `&` but **never on newlines** — so
-  an `rm -rf ./.playwright-mcp` three lines earlier swept the whole commit
-  message up as its target list.
+  The heredoc one is the sharp end: a real commit was **denied** as `rm -rf ~`
+  because its message contained a lone `~` on a line, and the `rm` tokeniser
+  split on `;`, `|` and `&` but **never on newlines** — so an
+  `rm -rf ./.playwright-mcp` three lines earlier swept the whole commit message
+  up as its target list.
 
   The obvious repair — dropping `&` from the character classes — is the wrong
   trade. A genuine force-push is very often `git push --force 2>&1 | tee log`,
@@ -339,18 +133,10 @@ round added:
   pipeline members as words. A statement **keeps its pipeline**, because
   `curl … | sh` is one hazard spanning a pipe — splitting on `|` would have
   silently disarmed `remote-pipe-to-shell` and `powershell-iex-download`, the
-  two block rules that need the pipe to match at all.
-
-- **No block rule was narrowed, and three now reach further.** Quoted spans
-  stop being matchable, so `sh -c '…'`, `bash -c '…'` (including behind
-  `docker exec … bash -c`), `su … -c '…'` and `eval …` are re-entered and
-  assessed as commands in their own right, to depth 3. That is strictly more
-  than the old text matching had: `bash -c 'rm -rf /'`, `eval "rm -rf /"`,
-  `(cd /tmp && rm -rf /)` and `sudo -u www-data rm -rf /` were **all missed
-  before** and all block now. Every block rule is pinned by a test three ways
-  — alone, as the second statement after `echo hi &&`, and on the second line
-  of a script — and the pin list is checked against `BASH_RULES` so a rule
-  added without one fails the suite.
+  two block rules that need the pipe to match at all. Every block rule is
+  pinned by a test three ways — alone, as the second statement after
+  `echo hi &&`, and on the second line of a script — and the pin list is
+  checked against `BASH_RULES`, so a rule added without one fails the suite.
 
 - **Splitting on newlines also recovered 86 recursive force-deletes the guard
   had been blind to.** `rm -rf "$WORK"` on line four of a script was invisible,
@@ -359,15 +145,15 @@ round added:
   25 071-command corpus: `rm-rf-broad` 177 → 262, and every one of the 86 new
   findings was hand-checked back to a real `rm -rf`. Total warnings therefore
   go **up**, 203 → 266, while the non-`rm` rules go from 4 true positives out
-  of 27 firings to **4 out of 4**. `git rm -r --cached` is correctly not one
-  of them.
+  of 27 firings to **4 out of 4**. `git rm -r --cached` is correctly not one of
+  them.
 
-- **Auditing the twelve rules also found `disk-overwrite` half asleep.** Its
-  `\b` sat in front of the whole alternation, and a leading `\b` before `>`
-  demands a word character immediately to its left — so the redirect branch
-  matched `cat x>/dev/sda` and never the `cat x > /dev/sda` anybody actually
-  writes. Each alternative anchors itself now; `> /dev/null` and
-  `> /dev/stdout` are untouched, and the corpus count did not move.
+- **Auditing the rules also found `disk-overwrite` half asleep.** Its `\b` sat
+  in front of the whole alternation, and a leading `\b` before `>` demands a
+  word character immediately to its left — so the redirect branch matched
+  `cat x>/dev/sda` and never the `cat x > /dev/sda` anybody actually writes.
+  Each alternative anchors itself now; `> /dev/null` and `> /dev/stdout` are
+  untouched, and the corpus count did not move.
 
 - **`sudo` is decided on command position now**, like `rm` already was:
   `apt-get install -y git sudo pipx` installs a package, and a commit message
@@ -394,41 +180,6 @@ round added:
   `loop-lte-count` deliberately did **not** get the same exclusion: it produces
   zero findings on the same corpus, so nothing measures it there.
 
-- **`severity_min` was deleting findings, not hiding them.** The shared scan
-  pipeline (`tools/scanToolFactory.ts` — twelve tools) applied the severity
-  floor *before* `bulkInsert`, so a caller who passed `severity_min: "high"`
-  did not merely fail to see the medium findings: they were never written to
-  SQLite. Everything downstream inherited the hole. A `set_baseline` taken
-  from that scan silently omitted them; `diff_scans` compared against data
-  that was never recorded; the next **unfiltered** scan reported them as
-  `new`, which is the opposite of true — they had been there all along; and
-  the trend showed an improvement that never happened. The floor now shapes
-  the response only, and the scan row records the whole tree.
-
-  **The two halves of a `deps` scan already disagreed with each other.**
-  `cves.bulkUpsert` on the very next line ran on the *unfiltered* array, so a
-  medium CVE below the floor kept its `cves` row — and its place in
-  `guardian://cves/active` — while the matching Finding was dropped. Trivy,
-  npm-audit and WPScan all emit the pair. The two are now consistent because
-  both are stored whole.
-
-  Two more instances of the same shape, found while checking the downstream
-  consumers: `audit_executive` persisted its *filtered* aggregate onto the
-  parent `audit` row that `diff_scans` reads, and measured its `deltas`
-  filtered-present against unfiltered-past (so every below-floor finding
-  counted as `resolved`); `scan_skill` filtered before the `bulkInsert` its
-  own comment justifies with "so status / trend / diff / report_export see
-  it". Both now store what they found.
-
-  No default changed — `severity_min` is still include-all on every tool that
-  takes it, and `create_fix_pr` / `create_github_issues` keep their `high`
-  default (those select what to act on; they never persisted a scan).
-
-- **A cache hit ignored the floor the caller had just passed.** Now that the
-  stored set is the whole tree, `severity_min` is re-applied per call, so a
-  cached reply is shaped like a fresh one. Previously the cached path returned
-  whatever the *first* call had stored, in both directions.
-
 - **Ablation axis 3 was measuring noise and charging it to the wrong clause.**
   1.9.0 shipped this as a known defect; it is fixed here. The axis compared
   whole-corpus totals across separate scans, and on `dotnet/runtime` that made
@@ -436,14 +187,314 @@ round added:
   the same 8 findings every time, all in `Task.cs`, belonging to three *other*
   rules. The same run flagged one clause and cleared its byte-identical twin.
   The mechanism: Semgrep names the rule in its timeout message, which makes
-  `(rule, file)` look like the unit, but `--timeout-threshold` drops the **whole
-  file** for every rule still to run and names none of them. Axis 3 now compares
-  only the ablated rule's own findings, on files every scan finished, and
-  measures a per-rule noise floor rather than assuming one; a delta that does not
-  clear its floor reads `INCONCLUSIVE` instead of passing. Proven with two full
-  C# runs under deliberately different machine load — 28 excluded files against
-  16 — with all 44 verdicts identical. C# flags go 15 → 11; the four cleared are
-  recorded as *unmeasured*, not vindicated.
+  `(rule, file)` look like the unit, but `--timeout-threshold` drops the
+  **whole file** for every rule still to run and names none of them. Axis 3 now
+  compares only the ablated rule's own findings, on files every scan finished,
+  and measures a per-rule noise floor rather than assuming one; a delta that
+  does not clear its floor reads `INCONCLUSIVE` instead of passing. Proven with
+  two full C# runs under deliberately different machine load — 28 excluded
+  files against 16 — with all 44 verdicts identical. C# flags go 15 → 11; the
+  four cleared are recorded as *unmeasured*, not vindicated.
+
+### Changed
+
+- **`bugfix-java` was audited against real Java for the first time, and two of
+  its rules turned out to be blind rather than noisy.** It was the only pack in
+  the series never measured against code nobody here wrote: eight rules, nine
+  fix waves, every one of them found by reading fixtures. This round pointed
+  all eight at **12 593 OpenJDK files** (`openjdk/jdk`,
+  `src/<module>/share/classes`) and **4 754 Spring Framework files**
+  (`spring-*/src/main/java`) and read the findings one by one. Four rules
+  changed, **in both directions**.
+
+  | rule | JDK before | JDK after | Spring |
+  | --- | --- | --- | --- |
+  | `error-handling-empty-catch` | 1589 | 1589 | 193 |
+  | `error-handling-printstacktrace-only` | 78 | 78 | 0 |
+  | `null-safety-map-get-deref` *(since deleted)* | 43 | 43 | 12 |
+  | `null-safety-optional-get-no-ispresent` | 26 | **11** | 0 |
+  | `memory-leak-stream-not-closed` | 12 | **4** | 0 |
+  | `edge-case-modify-during-iteration` | 1 | 1 | 0 |
+  | `off-by-one-loop-lte-length` | 0 | 0 | 0 |
+  | `race-condition-static-dateformat` | 0 | 0 | 0 |
+
+  - **`race-condition-static-dateformat` was blind to the only real race
+    either corpus contained.** Zero candidates in 12 593 OpenJDK files, exactly
+    one across 4 754 Spring files — a `private static final SimpleDateFormat`
+    declared with no initializer and assigned in a `static { … }` block,
+    formatted later with no lock at all. The rule demanded the `new` on the
+    declaration itself. A second pattern branch matches the split declaration;
+    measured silent on an instance field, an uninitialized instance field, and
+    a static method whose *return type* is `SimpleDateFormat`.
+
+  - **`off-by-one-loop-lte-length` was blind to `++i`, `i += 1`, a braceless
+    body and `for (var i = 0;`.** Optional syntax spelled out in a pattern acts
+    as a **filter**: writing the increment `$I++` excluded the other two
+    spellings of the same loop, and writing the body `{ ... }` excluded the
+    braceless one — the same defect the C# pack found in `i++` versus `++i`.
+    The increment and the body are ellipses now and `var` has its own branch.
+    Widening costs no precision here: **zero** `<= ….length` loop headers of
+    any spelling exist in either corpus, so what the rule had was false
+    negatives and nothing else.
+
+  - **`memory-leak-stream-not-closed` was two-thirds false positive, and the
+    cause was the shape of its exclusions rather than their content.** Eight of
+    its twelve OpenJDK findings were **two-resource try-with-resources
+    headers** — `try (FileInputStream fis = ...; BufferedInputStream bis = new
+    BufferedInputStream(fis))`, which is simply how a file gets read with a
+    buffer. The rule excluded try headers by naming the resource, and a header
+    with two resources is a different AST node. Enumerating the lengths was
+    measured and rejected (two clauses for two resources, three for three,
+    doubled again by the finalizer), and `try (...)`, `try ($...RES)` and
+    `try (...; $R; ...)` are all `Invalid pattern for Java`. The rule anchors
+    positively on a **statement sequence** now: a resource in a try header is
+    not a statement, so no header of any length reaches it. Four exclusion
+    clauses became two. Of the four findings that remain, **two are genuine
+    descriptor leaks** (`COFFFileParser`, `Commands`) and two are the
+    documented helper-closes and `finally`-closes limitations.
+
+  - **`null-safety-optional-get-no-ispresent` 26 → 11 on the OpenJDK**, and the
+    fifteen closed were two shapes, not fifteen. Nine were the **`else` arm of
+    an `if (o.isEmpty())`** — the way the check has been written since Java 11,
+    and the exact dual of the `isPresent()` guard the rule already honoured;
+    the four new clauses cover the bare condition and the disjunction, and
+    therefore also the `else if` chain. Six were **`assert o.isPresent();`**,
+    the JDK's own way of writing down an invariant established elsewhere:
+    unlike a comment it is in the AST, and it is an intention rather than a
+    runtime guard, since assertions are off by default. The neighbouring shapes
+    that must keep firing are pinned as F9–F12 in `hits/ElseArm.java`: the THEN
+    arm of `isEmpty()`, the `else` of a **conjunction** with `isEmpty()` (which
+    proves nothing), an assert on a *different* Optional, and
+    `assert o.isEmpty()`.
+
+- **`bugfix-java` is registered with the ablation harness's axis 3**, reading a
+  corpus path from `GUARDIAN_JAVA_SRC` on the same terms as `GUARDIAN_RUST_SRC`
+  and `GUARDIAN_CS_SRC`: unset prints `N/A`, set-but-missing **throws**. Making
+  `static-dateformat` a `pattern-either` also took the pack from 7 of 8 rules
+  with ablatable clauses to 8 of 8. Two things were caught by ablating the new
+  clauses before they shipped, and both are classes this series keeps meeting:
+  an **inert clause** — `assert $O.isPresent();` written beside
+  `assert $O.isPresent() : ...;` on the assumption that they are different AST
+  nodes, which they are, except that `: ...` also matches the *absent* message,
+  so the first covered nothing the second did not (seventh occurrence in the
+  series, second caught before release) — and **four fixtures that proved
+  nothing**, because they were written with an early exit in the then-arm and
+  the pre-existing early-exit clause silenced them before any new clause was
+  consulted. All four `else`-arm clauses read `DEAD` against them. The
+  replacements have a non-exit then-arm, which is what the nine OpenJDK
+  findings looked like, and each maps to exactly one clause.
+
+### Removed
+
+- **`bugfix-java-null-safety-map-get-deref` deleted. The Java pack goes from
+  eight rules to seven** (pack totals: JS/TS 13, Python 10, Go 9, Java 7, C# 11,
+  PHP 6, Rust 1 — **57**). The external-corpus round above read all 55 of its
+  OpenJDK + Spring findings, found no live defect, and kept it anyway on one
+  explicit condition written into the rule itself: both corpora are mature
+  *library* code, where a dereferenced map is nearly always one the reading
+  class filled itself, and the evidence that would decide the rule was a corpus
+  of **application** Java. (Those 55 fell into families Semgrep OSS cannot
+  close: an enum-keyed total map filled in a constructor or a static
+  initializer — the largest group, and all 7 Spring sites; presence established
+  by a method call; a key from `keySet()` walked by a lambda or a stream; a key
+  filtered by `.filter($M::containsKey)`; an invariant held between two
+  objects. The two that *are* syntactically closable are worth 7 of 55, and
+  neither closing form can unify the **key**.) That corpus was run, and it
+  deleted the rule.
+
+  | corpus | findings | `.java` scanned | per 1000 |
+  | --- | --- | --- | --- |
+  | Jenkins | 1 | 1 274 | 0.8 |
+  | Kafka | 224 | 3 892 | 57.5 |
+  | Elasticsearch | 749 | 20 485 | 36.6 |
+
+  973 new findings, **45 read by hand** — spread across modules and weighted
+  toward the shapes a cheap triage could not explain — and **five** defensible
+  defects (`EnterpriseGeoIpDownloader.java:589`, `GeoIpDownloader.java:160`,
+  `JvmOption.java:63`, `RemotePartitionMetadataStore.java:175`,
+  `OsProbe.java:811`).
+
+  **The count decided nothing; this did.** 88% of the Elasticsearch findings
+  and 97% of the Kafka ones have **no guard of any kind anywhere near the
+  dereference**. They are correct for *semantic* reasons — parallel maps kept
+  in sync, a map the class filled in another method, a constant key, an API
+  contract — and no `pattern-not-inside` reaches any of that, so **narrowing
+  was never available**. That was measured before the decision rather than
+  assumed: the one mechanically closable family is Elasticsearch's
+  `containsKey(k) == false` negation style, which every `!containsKey`
+  exclusion misses, and it is worth **34 of 749** and **zero** on Kafka.
+
+  Two findings outlive the rule. It was **blind to the more dangerous idiom** —
+  `X v = m.get(k); v.foo();` never matched, because the dereference is not
+  chained, so at `KafkaAdminClient.java:2375` and
+  `AbstractStickyAssignor.java:268` it reported the *derived* lookup (safe,
+  precisely because the earlier one did not throw) and was silent on the
+  original. And **all five true positives have one shape**: a map produced by
+  parsing external input — HTTP JSON, `/sys/fs/cgroup`, JVM output — read with
+  a literal key. That is provenance, not syntax, and it is outside Semgrep OSS;
+  it is recorded as a candidate for a future rule measured from scratch, never
+  as a tightening of this one.
+
+  Same criterion as C#'s `as-cast-deref` and `catch-returns-null`, with one
+  difference recorded on purpose so the precedent stays honest: **this rule's
+  true-positive rate was not zero, it was about 1%.** A user with 5 000 files
+  of Java got roughly 200 findings and perhaps two worth acting on. Counts
+  decide nothing in either direction — `empty-catch` produces 1589 on the
+  OpenJDK and is right nearly every time.
+
+  Also gone: three of the eleven accepted Java limitations, which belonged to
+  this one rule; 42 of the pack's 91 `pattern-not-inside` clauses; and the
+  fixtures `hits/MapGetDeref.java` and `misses/MapGetDeref.java`.
+  `hits/ElseArm.java` drops 12 to 7 and `hits/RealBugs.java` 20 to 11 —
+  measured old pack against new over the whole `hits/` tree as **25 findings
+  removed, 0 added, no other file moved**, which is what makes it a deletion
+  and not a regression. Nothing they fenced is unfenced: every clause shape
+  they measured has an `optional-get-no-ispresent` twin still in the pack
+  (`b12`, `b15`, `b17`, `b19`, `F5`-`F7`). Written up in the Java pack's design
+  of record.
+
+- **`docs/superpowers/` is no longer in the tree** — thirteen implementation
+  plans and fourteen designs of record, 27 files and 1.1 MB, removed at the
+  owner's request. **Nothing is lost**: 96 commits touch those paths, and
+  `CLAUDE.md` now carries the three commands that find, read or restore any of
+  them. The removal was not just a delete: 41 references pointed into that
+  directory from files that stay (all seven rule packs, `mcp/src/dashboard`,
+  `mcp/src/fixpr`, `bugHunt.ts`, two integration tests and this changelog), so
+  20 pointer-only comment lines were dropped and 14 sentences rewritten to say
+  "the design of record" where they used to cite a path and a section number.
+  No measurement moved — a dangling pointer into nothing is the same defect
+  this repo has spent the series removing from its own output.
+
+### Added
+
+- **`create_fix_pr` now says what it filtered out.** `severity_min` defaults to
+  `high`, and 1.9.0 took the Semgrep `ERROR` tier — the only tier the parser
+  maps to `high` — from 20 rules of 34 to 4 of 58. A default run against a
+  project whose findings all come from the local packs therefore selected
+  nothing, and said so only by returning `groups: []`, which is exactly what a
+  project with nothing to fix returns. Two new fields close that: `filtered`
+  (structured — `considered`, `candidates`, `excluded`, counts per reason, and
+  a per-tier breakdown of the severity floor's own share) and `filtered_reason`
+  (one line, `null` iff nothing was excluded, on the same contract
+  `deferred_reason` already keeps with `deferred`). Reported whenever
+  *anything* was excluded, not only when everything was — a run that fixes 2 of
+  42 is nearly as opaque as one that fixes 0.
+
+  **No default changed and no rule's severity changed.** The `high` floor is
+  correct: lowering it would open pull requests from rules that are heuristic
+  by construction — `floating-mutation` matches on a method name alone and
+  cannot tell `repo.save()` from Canvas 2D's `ctx.save()`. The silence was the
+  bug.
+
+- **The same report corrects advice this repo had been giving in three
+  places.** `create_fix_pr` requires `fix_available`, which for Semgrep means
+  the rule carries a `fix:` — and **no rule in any of the nine packs here
+  does** (measured: `bugfix-js` over its own `hits/` fixtures gives 39 findings
+  across 13 files, zero carrying `fix` or `fixed_lines`). So "pass
+  `severity_min: medium` to get the Java/JS/Python pack into a fix PR" was
+  never going to work, at any floor. The suggestion is therefore emitted
+  **only** for findings a lower floor genuinely recovers, never for
+  `fix_available: false` ones, where it would have cost a second run to
+  discover it changed nothing. `skills/guardian-bugfix/SKILL.md` is corrected
+  accordingly.
+
+- **`create_github_issues` reports the same two fields**, for the same defect:
+  its `severity_min` also defaults to `high` (a default that was not stated in
+  the schema at all until now) and `max_issues` to 10, and the result listed
+  only the survivors — so a scan of nothing but `medium` findings produced
+  `candidates: 0`, indistinguishable from a clean one. `filtered.by_reason`
+  separates the severity floor from the cap. Neither default changed; both are
+  documented in the input schema now.
+
+- **Every rule pack now has a real-code ablation corpus.** Axis 3 — does
+  removing a clause *raise* the finding count on code nobody here wrote — has
+  changed more verdicts than any other check in this series: it deleted the two
+  largest rules ever removed from these packs, killed two Rust candidates that
+  had passed every other check, and caught a JS regression both other axes let
+  through. It had never run on `bugfix-py`, `bugfix-go` or `bugfix-php`. It
+  does now, via `GUARDIAN_PY_SRC`, `GUARDIAN_GO_SRC` and `GUARDIAN_PHP_SRC`, on
+  the same terms as the existing three: unset prints `N/A`, set-but-missing
+  **throws**, never a silent skip. Measured on CPython's `Lib/` (5803 files,
+  1078 findings), the Go standard library (6515, 3101) and WordPress core
+  (1512, 40) — noise floor 0 on all three, every rule firing on its own
+  fixtures, and **one** axis-3 flag across the whole Go pack. The PHP number is
+  a cross-check: 40 is exactly what the PHP probe measured by hand, rule by
+  rule, by a different method.
+
+- **`configs/semgrep/routes.yml` is under the ablation harness**, the last pack
+  that was not. It was excluded for having no `hits/` + `misses/` fixture pair;
+  it has one, under older names — `mcp/test/fixtures/surface/` is the hits
+  corpus and `frameworks/fp/` the decoys — so the harness gained
+  `hitsSubdir: '.'` (the fixture root) and `decoySubdirs` rather than the
+  fixtures being renamed out from under the surface e2e tests. First full run
+  over its **112 ablatable clauses across 44 of its 64 rules**: **axis 0 is
+  64/64 — every rule fires**, which is the check this pack most needed, having
+  twice shipped a rule that matched nothing. 38 clauses read DEAD and **none
+  was deleted**: they are Semgrep collapsing spellings a reader thinks are
+  distinct (`$MUX.Handle` matches `http.Handle`; `#[actix_web::post]` and
+  `#[post]` are one node) or a guard whose adversarial fixture does not exist.
+  Two of the latter were hand-probed and are load-bearing — without them
+  `app.use(cors(), router)` reports a mount at prefix `cors()` and Express's
+  settings getter `app.get('/title')` reports as a route at full confidence.
+  The decoy tree's baseline is **pinned, not gated at 0**: four of those are
+  routes that are genuinely undecidable. Axis 3 runs on `mcp/src` and reaches
+  only 2 of the 64 rules, so the report prints each rule's real-code baseline
+  and marks the other 62 `real 0 -- axis 3 vacuous here`.
+
+- **Five decoys for the `routes.yml` guards nothing was measuring.** Of the 38
+  DEAD clauses above, five were hand-probed and found load-bearing: all three
+  `guardian-route-go-chi` exclusions, `guardian-mount-express`'s `$PREFIX`
+  literal regex and `guardian-route-express`'s one-argument `pattern-not`. They
+  read DEAD because no fixture reached them, so the fix is a fixture and never
+  a deletion — the corpus's only Go decoy was SCREAMING-case `reg.GET`, which
+  the *gin* rule absorbs before chi is consulted, and the three JS decoys the
+  pack's header credits to the express guard are on its `$APP` denylist too, so
+  the denylist always decided first. `frameworks/fp/decoys.go` gains a TitleCase
+  `Get` in each of its three excluded forms (`F31`-`F33`) and `decoys.js` a
+  one-argument read on a receiver the denylist misses plus an `app.use` whose
+  first argument is a call (`F07`, `F08`). All five clauses read **live** now;
+  not one of the decoys is reported by the shipped pack, and the decoy baseline
+  moves 8 → 9 only for the ordinary `require('cors')` the `app.use` decoy needs
+  to be plausible code.
+
+### Known gaps
+
+Every row of the Java **Accepted limitations** table under 1.9.0 was reproduced
+against the shipped pack before anything was decided. Rows (2), (3), (5), (6),
+(7) and (8) stand unchanged. Row (1) is now **half** the limitation it was: a
+stream closed by a `finally` or by a helper still reports, but the
+multi-resource try-with-resources that dominated it does not. Row (4)
+reproduces and is **rare**: not one of the 78 OpenJDK `printstacktrace-only`
+findings was the deliberate-fallback shape. What the round added:
+
+- **A false negative on the branch axis, in the early-exit exclusions
+  themselves.** `if (o.isEmpty()) { return o.get(); }` is silent, and so are
+  `if (!o.isPresent()) { throw new IllegalStateException(o.get()); }` and
+  `if (!m.containsKey(k)) { return m.get(k).trim(); }`. All three are
+  guaranteed throws, all three read the value inside the very branch the guard
+  proves is unsafe, and all three are swallowed because `pattern-not-inside`
+  excludes the whole `if` node — including the exit branch the clause was
+  written to describe. Same root cause as row (9), on the branch axis rather
+  than the temporal one, and not fixable in Semgrep OSS. Predates this round
+  and is unchanged by it; measured against both packs.
+- **The eleven `optional-get` findings that remain on the OpenJDK** are four
+  shapes, all of them enumerable and none of them closed: a ternary whose
+  condition is a conjunction of two `isPresent()` calls, a ternary whose
+  condition is `isEmpty() || …`, `if (!o.isEmpty())` (the double negative), and
+  an `else if` chain whose `else` is another `if` statement rather than a
+  block. Each is worth one to three findings; the stopping point is a judgement
+  about clause count, not a claim that they are unreachable.
+- **`empty-catch` re-measured identically**: 1589 findings in 770 OpenJDK
+  files, 56 % of them carrying an explanatory comment inside the catch, and the
+  caught-variable names are `e` (890), `ex` (158), `ioe` (44) — with
+  `cannotHappen` at 13 and `_` at 10 still outside the three names the rule
+  recognises. Nothing changed; the rule is precise about what it matches and
+  silent about whether it is a defect, which is why it is `WARNING`.
+- **`edge-case-modify-during-iteration` scored 1 finding in 17 347 files**, too
+  few to say anything about. `off-by-one-loop-lte-length` and
+  `race-condition-static-dateformat` scored 0 on the OpenJDK because the shapes
+  are absent from it, not because the rules are broken — verified by grep in
+  both directions.
 
 ## [1.9.0] - 2026-08-21
 
