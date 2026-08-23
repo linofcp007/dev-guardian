@@ -52,3 +52,10 @@ build/
 
 # superpowers process scratch (briefs, reports, review packages)
 .superpowers/
+
+# Ad-hoc scratch trees from hand-driven probing. Semgrep and the rule-pack work
+# get probed by making a throwaway directory and scanning it; those are never
+# artefacts of a build, so nothing should ever commit one. A `.scratch-…` tree
+# sat in the repo root for ten days because it was empty — git does not track
+# empty directories, so it showed up in neither `git status` nor `check-ignore`.
+.scratch-*/
