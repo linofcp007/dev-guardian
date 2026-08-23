@@ -8,6 +8,52 @@ version bump.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-08-23
+
+**A maturity marker, not a breaking change. There is no migration work.**
+
+Every tool and resource keeps its name, its inputs and its defaults. Code that
+called `scan_sast` yesterday calls it the same way today. Nothing in
+`.guardian/` needs converting, no config needs rewriting, and 1.10.0 upgrades to
+2.0.0 by updating the plugin. **If you are looking for the list of things you
+must change: there isn't one.** The one action still outstanding is inherited
+from 1.10.0 and is repeated under *Action required* there — a database written
+with `severity_min` set holds an incomplete history and wants a re-scan.
+
+The major is here because the product is no longer the one 1.0.0 described, and
+a version number that never crosses a whole digit stops telling anyone anything.
+What 1.0.0 shipped was a scanner front-end: 50 tools wrapping Semgrep, Trivy,
+gitleaks and friends, with SQLite history and baselines.
+
+Since then, and absent from 1.0.0 entirely:
+
+- **`map_attack_surface`** — a static route inventory across nine languages,
+  cross-referenced against OpenAPI and Postman documents to surface shadow
+  endpoints and dead documentation.
+- **`scan_dast`** — active probing driven by that inventory, against a running
+  application.
+- **`validate_finding`** — reachability qualification, answering whether
+  vulnerable code can be reached at all.
+- **`create_fix_pr`** — grouped, verified fixes in an isolated worktree that is
+  always torn down.
+- **A local dashboard**, a **headless CI CLI** gated against a committed
+  baseline, and **configuration-drift detection** for the files `init_project`
+  installs.
+- **Seven hand-authored bug-finding rule packs — 57 rules** across JS/TS,
+  Python, Go, Java, C#, PHP and Rust, each measured against real code nobody
+  here wrote.
+- **An ablation harness** (`npm run ablate`) that deletes one rule clause at a
+  time and reports three axes, and the **Bash guardrail** that backs the
+  PreToolUse hook and the `dev-guardian check` CLI.
+
+Test files went from 49 to 136.
+
+**What the number does not mean.** The semver contract at the top of this file
+still holds and still governs: the MCP surface and default behaviours follow
+semver, and a breaking change would require a major. This major is not one of
+those. It is the maintainer marking a milestone, and it is recorded here as such
+so that nobody plans a migration that does not exist.
+
 ## [1.10.0] - 2026-08-23
 
 The release where a severity floor turned out to be deleting history.
