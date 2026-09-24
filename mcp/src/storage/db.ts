@@ -34,6 +34,16 @@ import { runMigrations } from './migrations/runner.js';
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 type DatabaseSync = InstanceType<typeof DatabaseSync>;
 
+/**
+ * How long every connection waits for another connection's lock before
+ * failing with `database is locked`. SQLite's own default is 0 — fail at
+ * once — and several processes share one database file in real use (the
+ * plugin's MCP server, a project-level one, the CLI): with 0, 14 of 20
+ * fresh-database opens by 4 concurrent processes failed, and a write lock
+ * held by one server made the next one's startup exit 1.
+ */
+export const BUSY_TIMEOUT_MS = 5000;
+
 /** Result of a write statement — matches better-sqlite3's `RunResult` shape. */
 export interface RunResult {
   changes: number;
@@ -92,6 +102,11 @@ export class GuardianDatabase {
       this.raw = source;
       this.name = '';
     }
+    // First statement on every connection, before anything that can take a
+    // lock (switching a fresh file to WAL does). A PRAGMA rather than the
+    // constructor's `timeout` option, which only exists from Node 22.16 —
+    // on 22.13 an unknown option is silently ignored.
+    this.raw.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   }
 
   prepare<P extends unknown[] = unknown[], R = unknown>(source: string): GuardianStatement<P, R> {
@@ -111,31 +126,64 @@ export class GuardianDatabase {
   /**
    * Wraps `fn` in a transaction and returns a callable, mirroring
    * better-sqlite3's `db.transaction(fn)`. Nesting-aware: the outermost call
-   * uses BEGIN/COMMIT/ROLLBACK, inner calls use SAVEPOINTs — so the repos'
-   * `tx(args)` semantics carry over unchanged.
+   * uses BEGIN IMMEDIATE/COMMIT/ROLLBACK, inner calls use SAVEPOINTs — so the
+   * repos' `tx(args)` semantics carry over unchanged.
+   *
+   * `BEGIN IMMEDIATE`, not a deferred `BEGIN`: a deferred transaction takes
+   * the write lock only at its first write, and if another connection wrote
+   * in between, that upgrade fails with SQLITE_BUSY without ever consulting
+   * the busy timeout. Taking the lock up front is what lets the timeout work.
+   *
+   * On failure, the ORIGINAL error is what the caller sees. SQLite rolls the
+   * whole transaction back by itself on some errors (`RAISE(ROLLBACK)`, a full
+   * disk, I/O errors); an unconditional `ROLLBACK` then throws
+   * `cannot rollback - no transaction is active`, which replaced the error
+   * that explained what went wrong and skipped the depth reset, leaving every
+   * later "transaction" on this connection a deferred SAVEPOINT.
    */
   transaction<Args extends unknown[], R>(fn: (...args: Args) => R): (...args: Args) => R {
     return (...args: Args): R => {
       const depth = this.txDepth;
       const top = depth === 0;
-      this.raw.exec(top ? 'BEGIN' : `SAVEPOINT sp_${depth}`);
+      this.raw.exec(top ? 'BEGIN IMMEDIATE' : `SAVEPOINT sp_${depth}`);
       this.txDepth = depth + 1;
       try {
         const result = fn(...args);
         this.raw.exec(top ? 'COMMIT' : `RELEASE sp_${depth}`);
-        this.txDepth = depth;
         return result;
       } catch (error) {
-        if (top) {
-          this.raw.exec('ROLLBACK');
-        } else {
-          this.raw.exec(`ROLLBACK TO sp_${depth}`);
-          this.raw.exec(`RELEASE sp_${depth}`);
-        }
-        this.txDepth = depth;
+        this.rollbackAfterFailure(top, depth);
         throw error;
+      } finally {
+        this.txDepth = depth;
       }
     };
+  }
+
+  /** Best-effort undo for {@link transaction}; never throws over the caller's error. */
+  private rollbackAfterFailure(top: boolean, depth: number): void {
+    if (this.inTransaction() === false) return; // SQLite already rolled it back
+    try {
+      if (top) {
+        this.raw.exec('ROLLBACK');
+      } else {
+        this.raw.exec(`ROLLBACK TO sp_${depth}`);
+        this.raw.exec(`RELEASE sp_${depth}`);
+      }
+    } catch {
+      // The error that made us roll back is the one worth reporting.
+    }
+  }
+
+  /**
+   * `DatabaseSync#isTransaction` exists from Node 22.16 / 24.0. On 22.13–22.15
+   * it reads `undefined` at runtime (whatever the type declarations say), and
+   * the answer is "unknown": the rollback is then attempted and its own
+   * failure swallowed.
+   */
+  private inTransaction(): boolean | undefined {
+    const flag: unknown = this.raw.isTransaction;
+    return typeof flag === 'boolean' ? flag : undefined;
   }
 
   close(): void {
@@ -264,12 +312,54 @@ export function openDatabaseAtPath(path: string): DB {
 function applyPragmas(db: GuardianDatabase): void {
   // WAL gives concurrent readers + one writer without the classic SQLITE_BUSY
   // storm. Required because the server reads from resources while tools write.
-  db.pragma('journal_mode = WAL');
+  retryWhileBusy(() => db.pragma('journal_mode = WAL'));
   db.pragma('foreign_keys = ON');
   // 64 MB memory map — modest, predictable, fits the largest expected scan.
   db.pragma('mmap_size = 67108864');
   // Synchronous=NORMAL is the documented WAL pairing for durability vs. speed.
   db.pragma('synchronous = NORMAL');
+}
+
+/**
+ * Runs `op`, retrying on SQLITE_BUSY until {@link BUSY_TIMEOUT_MS} has passed.
+ *
+ * For the few statements the busy timeout does not cover. SQLite skips the
+ * busy handler when waiting could deadlock — two connections that both hold
+ * a read lock and both want to upgrade it, which is exactly what several
+ * processes switching one fresh file to WAL at the same moment do. Measured:
+ * with the busy timeout alone, 7 of 20 concurrent fresh opens still failed
+ * `database is locked` on `journal_mode = WAL`. Retrying after the statement
+ * has released its read lock breaks the tie.
+ */
+function retryWhileBusy(op: () => void): void {
+  const deadline = Date.now() + BUSY_TIMEOUT_MS;
+  for (;;) {
+    try {
+      op();
+      return;
+    } catch (error) {
+      if (!isBusyError(error) || Date.now() >= deadline) throw error;
+      sleepSync(20 + Math.floor(Math.random() * 30));
+    }
+  }
+}
+
+/** SQLITE_BUSY (5) or SQLITE_LOCKED (6), including their extended codes. */
+function isBusyError(error: unknown): boolean {
+  const primary = sqliteErrorCode(error);
+  return primary === 5 || primary === 6;
+}
+
+/** The primary SQLite result code of a `node:sqlite` error, if it is one. */
+export function sqliteErrorCode(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null || !('errcode' in error)) return undefined;
+  const code: unknown = error.errcode;
+  // Extended result codes carry the primary code in their low byte.
+  return typeof code === 'number' ? code & 0xff : undefined;
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function ensureDir(dir: string): void {

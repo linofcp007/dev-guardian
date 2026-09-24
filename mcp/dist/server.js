@@ -38125,18 +38125,19 @@ function resolveMigrationsDir() {
   const candidates2 = [here, join3(here, "storage", "migrations"), join3(here, "migrations")];
   for (const dir of candidates2) {
     try {
-      if (existsSync3(dir) && readdirSync(dir).some((f) => /^\d+_.+\.sql$/.test(f))) return dir;
+      if (existsSync3(dir) && readdirSync(dir).some((f) => MIGRATION_FILE.test(f))) return dir;
     } catch {
     }
   }
   return here;
 }
+var MIGRATION_FILE = /^(\d+)_(.+)\.sql$/;
 var MIGRATIONS_DIR = resolveMigrationsDir();
 function runMigrations(db) {
+  const migrations = listMigrations();
   ensureSchemaMetaTable(db);
-  const current = getCurrentVersion(db);
-  const pending = listMigrations().filter((m) => m.version > current);
-  for (const migration of pending) {
+  for (const migration of migrations) {
+    if (migration.version <= getCurrentVersion(db)) continue;
     applyMigration(db, migration);
   }
 }
@@ -38160,34 +38161,44 @@ function setVersion(db, version2) {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`
   ).run(String(version2));
 }
-function listMigrations() {
-  const files = readdirSync(MIGRATIONS_DIR).filter((f) => /^\d+_.+\.sql$/.test(f));
-  return files.map((f) => {
-    const match = /^(\d+)_(.+)\.sql$/.exec(f);
-    if (!match) throw new Error(`Unreachable: regex matched once but not twice for '${f}'`);
+function listMigrations(dir = MIGRATIONS_DIR) {
+  const migrations = [];
+  for (const f of readdirSync(dir)) {
+    const match = MIGRATION_FILE.exec(f);
+    if (!match) continue;
     const versionPart = match[1];
     const namePart = match[2];
-    if (versionPart === void 0 || namePart === void 0) {
-      throw new Error(`Unreachable: capture groups undefined for '${f}'`);
-    }
-    return {
+    if (versionPart === void 0 || namePart === void 0) continue;
+    migrations.push({
       version: Number.parseInt(versionPart, 10),
       name: namePart,
-      filePath: join3(MIGRATIONS_DIR, f)
-    };
-  }).sort((a2, b) => a2.version - b.version);
+      filePath: join3(dir, f)
+    });
+  }
+  migrations.sort((a2, b) => a2.version - b.version);
+  for (let i2 = 1; i2 < migrations.length; i2++) {
+    const prev = migrations[i2 - 1];
+    const cur = migrations[i2];
+    if (prev !== void 0 && cur !== void 0 && prev.version === cur.version) {
+      throw new Error(
+        `Duplicate migration number ${cur.version}: '${prev.name}' and '${cur.name}' in ${dir}. Renumber one of them to the next unused number.`
+      );
+    }
+  }
+  return migrations;
 }
 function applyMigration(db, migration) {
   const sql = readFileSync5(migration.filePath, "utf8");
-  const tx = db.transaction(() => {
+  db.transaction(() => {
+    if (migration.version <= getCurrentVersion(db)) return;
     db.exec(sql);
     setVersion(db, migration.version);
-  });
-  tx();
+  })();
 }
 
 // src/storage/db.ts
 var { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
+var BUSY_TIMEOUT_MS = 5e3;
 var GuardianStatement = class {
   constructor(stmt) {
     this.stmt = stmt;
@@ -38220,6 +38231,7 @@ var GuardianDatabase = class {
       this.raw = source;
       this.name = "";
     }
+    this.raw.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   }
   prepare(source) {
     return new GuardianStatement(this.raw.prepare(source));
@@ -38235,31 +38247,61 @@ var GuardianDatabase = class {
   /**
    * Wraps `fn` in a transaction and returns a callable, mirroring
    * better-sqlite3's `db.transaction(fn)`. Nesting-aware: the outermost call
-   * uses BEGIN/COMMIT/ROLLBACK, inner calls use SAVEPOINTs — so the repos'
-   * `tx(args)` semantics carry over unchanged.
+   * uses BEGIN IMMEDIATE/COMMIT/ROLLBACK, inner calls use SAVEPOINTs — so the
+   * repos' `tx(args)` semantics carry over unchanged.
+   *
+   * `BEGIN IMMEDIATE`, not a deferred `BEGIN`: a deferred transaction takes
+   * the write lock only at its first write, and if another connection wrote
+   * in between, that upgrade fails with SQLITE_BUSY without ever consulting
+   * the busy timeout. Taking the lock up front is what lets the timeout work.
+   *
+   * On failure, the ORIGINAL error is what the caller sees. SQLite rolls the
+   * whole transaction back by itself on some errors (`RAISE(ROLLBACK)`, a full
+   * disk, I/O errors); an unconditional `ROLLBACK` then throws
+   * `cannot rollback - no transaction is active`, which replaced the error
+   * that explained what went wrong and skipped the depth reset, leaving every
+   * later "transaction" on this connection a deferred SAVEPOINT.
    */
   transaction(fn) {
     return (...args) => {
       const depth = this.txDepth;
       const top = depth === 0;
-      this.raw.exec(top ? "BEGIN" : `SAVEPOINT sp_${depth}`);
+      this.raw.exec(top ? "BEGIN IMMEDIATE" : `SAVEPOINT sp_${depth}`);
       this.txDepth = depth + 1;
       try {
         const result = fn(...args);
         this.raw.exec(top ? "COMMIT" : `RELEASE sp_${depth}`);
-        this.txDepth = depth;
         return result;
       } catch (error2) {
-        if (top) {
-          this.raw.exec("ROLLBACK");
-        } else {
-          this.raw.exec(`ROLLBACK TO sp_${depth}`);
-          this.raw.exec(`RELEASE sp_${depth}`);
-        }
-        this.txDepth = depth;
+        this.rollbackAfterFailure(top, depth);
         throw error2;
+      } finally {
+        this.txDepth = depth;
       }
     };
+  }
+  /** Best-effort undo for {@link transaction}; never throws over the caller's error. */
+  rollbackAfterFailure(top, depth) {
+    if (this.inTransaction() === false) return;
+    try {
+      if (top) {
+        this.raw.exec("ROLLBACK");
+      } else {
+        this.raw.exec(`ROLLBACK TO sp_${depth}`);
+        this.raw.exec(`RELEASE sp_${depth}`);
+      }
+    } catch {
+    }
+  }
+  /**
+   * `DatabaseSync#isTransaction` exists from Node 22.16 / 24.0. On 22.13–22.15
+   * it reads `undefined` at runtime (whatever the type declarations say), and
+   * the answer is "unknown": the rollback is then attempted and its own
+   * failure swallowed.
+   */
+  inTransaction() {
+    const flag = this.raw.isTransaction;
+    return typeof flag === "boolean" ? flag : void 0;
   }
   close() {
     this.raw.close();
@@ -38298,10 +38340,34 @@ function resolveFallbackDbPath(projectPath) {
   return join4(tmpdir(), "dev-guardian", shortHash(resolve2(projectPath)), "guardian.db");
 }
 function applyPragmas(db) {
-  db.pragma("journal_mode = WAL");
+  retryWhileBusy(() => db.pragma("journal_mode = WAL"));
   db.pragma("foreign_keys = ON");
   db.pragma("mmap_size = 67108864");
   db.pragma("synchronous = NORMAL");
+}
+function retryWhileBusy(op) {
+  const deadline = Date.now() + BUSY_TIMEOUT_MS;
+  for (; ; ) {
+    try {
+      op();
+      return;
+    } catch (error2) {
+      if (!isBusyError(error2) || Date.now() >= deadline) throw error2;
+      sleepSync(20 + Math.floor(Math.random() * 30));
+    }
+  }
+}
+function isBusyError(error2) {
+  const primary = sqliteErrorCode(error2);
+  return primary === 5 || primary === 6;
+}
+function sqliteErrorCode(error2) {
+  if (typeof error2 !== "object" || error2 === null || !("errcode" in error2)) return void 0;
+  const code = error2.errcode;
+  return typeof code === "number" ? code & 255 : void 0;
+}
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 function ensureDir(dir) {
   if (!existsSync4(dir)) {

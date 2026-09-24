@@ -1,6 +1,27 @@
-import { describe, expect, it } from 'vitest';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
 import { GuardianDatabase as Database } from '../../../src/storage/db.js';
-import { runMigrations } from '../../../src/storage/migrations/runner.js';
+import { listMigrations, runMigrations } from '../../../src/storage/migrations/runner.js';
+import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
+
+describe('listMigrations', () => {
+  it('lists the shipped migrations in version order with unique numbers', () => {
+    const versions = listMigrations().map((m) => m.version);
+    expect(versions).toEqual([...versions].sort((a, b) => a - b));
+    expect(new Set(versions).size).toBe(versions.length);
+  });
+
+  it('refuses two files with the same number instead of silently skipping one', () => {
+    const dir = makeTempDir('guardian-migrations-');
+    writeFileSync(join(dir, '001_first.sql'), 'SELECT 1;');
+    writeFileSync(join(dir, '002_mine.sql'), 'SELECT 1;');
+    writeFileSync(join(dir, '002_theirs.sql'), 'SELECT 1;');
+    expect(() => listMigrations(dir)).toThrow(/Duplicate migration number 2: '(mine|theirs)' and '(mine|theirs)'/);
+  });
+});
 
 describe('migrations runner', () => {
   it('applies initial schema on a brand-new DB', () => {
