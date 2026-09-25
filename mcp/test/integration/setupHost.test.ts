@@ -20,7 +20,10 @@ const CLI = '/plugins/dev-guardian/cli/dev-guardian.mjs';
 function makeHostRules(): string {
   const dir = makeTempDir('hostrules-');
   writeFileSync(join(dir, 'cursor.mdc'), '---\nfor: cursor\n---\nbody: run {{DEV_GUARDIAN_CLI}} status', 'utf8');
-  writeFileSync(join(dir, 'windsurf.md'), '# windsurf', 'utf8');
+  // Frontmatter here too — Windsurf requires it as the file's literal first
+  // bytes exactly like Cursor does (fix round 1, item 1), so the fixture
+  // needs one for the "starts with the frontmatter" test to mean anything.
+  writeFileSync(join(dir, 'windsurf.md'), '---\ntrigger: always_on\n---\nbody: run {{DEV_GUARDIAN_CLI}} status', 'utf8');
   writeFileSync(join(dir, 'copilot-instructions.md'), '# copilot', 'utf8');
   writeFileSync(join(dir, 'clinerules'), '# cline', 'utf8');
   writeFileSync(join(dir, 'AGENTS.md'), '# codex', 'utf8');
@@ -55,15 +58,57 @@ function run(over: Partial<SetupOptions> & Pick<SetupOptions, 'hosts'>) {
 }
 
 describe('setupHost — rules files', () => {
-  it('writes the cursor rules file wrapped in the dev-guardian block, with the CLI placeholder substituted', () => {
+  // Fix round 1, item 1 (CRITICAL): Cursor and Windsurf are OWNED files —
+  // dev-guardian writes them whole, never wrapped in the
+  // `<!-- dev-guardian:begin -->` delimited block the SHARED hosts use.
+  // Wrapping them (this describe block's own ORIGINAL, pre-fix assertions
+  // below, kept only as a comment for context) put that marker BEFORE the
+  // required YAML frontmatter, so `.cursor/rules/dev-guardian.mdc` and
+  // `.windsurf/rules/dev-guardian.md` silently stopped being valid rule
+  // files on every new install: `content.startsWith('---\n')` is the
+  // property that actually matters here, and the old version of this test
+  // never checked it — it asserted `content.toContain('<!-- dev-guardian:
+  // begin -->')`, which the BROKEN shape also satisfies, so the bug shipped
+  // green.
+  it('writes the cursor rules file WHOLE — frontmatter first, no delimited-block markers, CLI placeholder substituted', () => {
     const r = run({ hosts: ['cursor'], registerMcp: false })[0];
     expect(r?.status).toBe('written');
     const content = readFileSync(join(project, '.cursor/rules/dev-guardian.mdc'), 'utf8');
+    expect(content.startsWith('---\n')).toBe(true);
     expect(content).toContain('for: cursor');
     expect(content).toContain(`run ${CLI} status`);
     expect(content).not.toContain('{{DEV_GUARDIAN_CLI}}');
-    expect(content).toContain('<!-- dev-guardian:begin -->');
-    expect(content).toContain('<!-- dev-guardian:end -->');
+    expect(content).not.toContain('<!-- dev-guardian:begin -->');
+    expect(content).not.toContain('<!-- dev-guardian:end -->');
+  });
+
+  it('writes the windsurf rules file WHOLE — frontmatter first, no delimited-block markers, CLI placeholder substituted', () => {
+    const r = run({ hosts: ['windsurf'], registerMcp: false })[0];
+    expect(r?.status).toBe('written');
+    const content = readFileSync(join(project, '.windsurf/rules/dev-guardian.md'), 'utf8');
+    expect(content.startsWith('---\n')).toBe(true);
+    expect(content).toContain('trigger: always_on');
+    expect(content).toContain(`run ${CLI} status`);
+    expect(content).not.toContain('{{DEV_GUARDIAN_CLI}}');
+    expect(content).not.toContain('<!-- dev-guardian:begin -->');
+    expect(content).not.toContain('<!-- dev-guardian:end -->');
+  });
+
+  it('cursor: a differing existing file is overwritten WHOLE, unconditionally — no force needed (nothing else ever writes here)', () => {
+    mkdirSync(join(project, '.cursor', 'rules'), { recursive: true });
+    writeFileSync(join(project, '.cursor/rules/dev-guardian.mdc'), '---\nfor: OLD\n---\nold body', 'utf8');
+    const r = run({ hosts: ['cursor'], registerMcp: false, force: false })[0];
+    expect(r?.status).toBe('merged');
+    const content = readFileSync(join(project, '.cursor/rules/dev-guardian.mdc'), 'utf8');
+    expect(content.startsWith('---\n')).toBe(true);
+    expect(content).toContain('for: cursor');
+    expect(content).not.toContain('old body');
+  });
+
+  it('cursor: is idempotent (already_present) once the exact rendered content is already there', () => {
+    run({ hosts: ['cursor'], registerMcp: false });
+    const r = run({ hosts: ['cursor'], registerMcp: false })[0];
+    expect(r?.status).toBe('already_present');
   });
 
   it('marks claude-desktop rules unsupported', () => {
@@ -112,6 +157,31 @@ describe('setupHost — rules files', () => {
     expect(content).toContain('Never touch prod.');
     expect(content).toContain('# codex v2');
     expect(content).not.toContain('# codex\n');
+  });
+
+  // Fix round 1, item 2: a project that ran an OLDER `mcp-config --write`
+  // (back when it still `copyFileSync`d the whole file) has an AGENTS.md
+  // that is ENTIRELY unmarked dev-guardian text, no markers at all. Without
+  // legacy detection, the "no markers found" branch would append a second,
+  // freshly-wrapped copy underneath it on every future --write.
+  it('a legacy unmarked dev-guardian copy is never duplicated — needs_update without force, replaced (not doubled) with it', () => {
+    writeFileSync(
+      join(project, 'AGENTS.md'),
+      'This repository has the **dev-guardian MCP server** registered. Some old body.\n',
+      'utf8',
+    );
+    const blocked = run({ hosts: ['codex'], registerMcp: false })[0];
+    expect(blocked?.status).toBe('needs_update');
+    expect(readFileSync(join(project, 'AGENTS.md'), 'utf8')).not.toContain('<!-- dev-guardian:begin -->');
+
+    const updated = run({ hosts: ['codex'], registerMcp: false, force: true })[0];
+    expect(updated?.status).toBe('merged');
+    const content = readFileSync(join(project, 'AGENTS.md'), 'utf8');
+    expect(content).toContain('# codex');
+    // The exact regression: the OLD unmarked copy must be GONE, not sitting
+    // beside the new one.
+    expect(content).not.toContain('Some old body.');
+    expect((content.match(/<!-- dev-guardian:begin -->/g) ?? [])).toHaveLength(1);
   });
 
   it('host="all" covers 7 hosts', () => {

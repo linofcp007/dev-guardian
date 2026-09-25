@@ -47,10 +47,16 @@ function readOrNull(path: string): string | null {
 describe('host-rules/* templates match the canonical body byte-for-byte', () => {
   for (const host of ALL_HOSTS) {
     const spec = HOST_SPECS[host];
-    if (!spec.rules) continue;
-    it(`host-rules/${spec.rules.template_file} (${host}) is generated, not hand-edited`, () => {
-      const onDisk = readOrNull(resolve(HOST_RULES_DIR, spec.rules!.template_file));
-      expect(onDisk, `run "npm run build" in mcp/ to regenerate host-rules/${spec.rules!.template_file}`).toBe(
+    // Narrowed (Global Constraint 1: no `!` non-null assertions), not
+    // `spec.rules!` — `rules` is `RulesSpec | null`, and a plain `continue`
+    // both skips claude-desktop (no rules file) and lets every later use of
+    // `rules` in this block narrow to `RulesSpec` for the rest of the loop
+    // body.
+    const rules = spec.rules;
+    if (!rules) continue;
+    it(`host-rules/${rules.template_file} (${host}) is generated, not hand-edited`, () => {
+      const onDisk = readOrNull(resolve(HOST_RULES_DIR, rules.template_file));
+      expect(onDisk, `run "npm run build" in mcp/ to regenerate host-rules/${rules.template_file}`).toBe(
         renderHostRulesFile(host),
       );
       // Shipped templates keep the placeholder UNRESOLVED — installRulesOne
@@ -110,5 +116,18 @@ describe('the canonical body carries every required fix (item 7)', () => {
   it('carries the CLI placeholder, never a hard-coded repo-relative CLI path', () => {
     expect(RULES_BODY).toContain(CLI_PATH_PLACEHOLDER);
     expect(RULES_BODY).not.toMatch(/node cli\/dev-guardian\.mjs/);
+  });
+
+  // Fix round 1, item 8 (escalated from minor by the controller — it is
+  // brief item 6a): the "CI" and "Local dashboard" sections named
+  // `dev-guardian baseline update` / `dev-guardian dashboard` as bare
+  // commands, with no CLI path at all — a target project has no
+  // `dev-guardian` on PATH, only `node <absolute path> baseline update`.
+  // Every dev-guardian CLI invocation in the body must go through the
+  // placeholder, the same as `status`/`scan`/`mcp-config` already did.
+  it('every dev-guardian CLI invocation goes through the placeholder — no bare "dev-guardian <subcommand>" left', () => {
+    expect(RULES_BODY).not.toMatch(/(?<!node )dev-guardian (baseline|dashboard|status|scan|mcp-config)\b/);
+    expect(RULES_BODY).toContain(`${CLI_PATH_PLACEHOLDER} baseline update`);
+    expect(RULES_BODY).toContain(`${CLI_PATH_PLACEHOLDER} dashboard`);
   });
 });

@@ -209,7 +209,7 @@ cache that avoids re-running unchanged scans.
 
 For a pipeline, not a conversation: \`node ${CLI_PATH_PLACEHOLDER} scan\` runs the same
 scan pipeline as the MCP tools, gated against a committed \`.guardian/baseline.json\`;
-\`dev-guardian baseline update\` is the only command that writes it. Exit codes: \`0\`
+\`node ${CLI_PATH_PLACEHOLDER} baseline update\` is the only command that writes it. Exit codes: \`0\`
 pass, \`1\` gate failed, \`2\` incomplete scan (a scanner didn't run — never read as a
 pass), \`3\` usage error. Distribution is \`git clone --depth 1\` at a pinned tag (not
 \`npx\`) plus \`npm ci\` in \`mcp/\` — see the README's "Run scans in CI" section for a
@@ -227,7 +227,7 @@ For a developer at their own laptop, not a CI artifact and not a client
 deliverable: \`node ${CLI_PATH_PLACEHOLDER} status\` prints a one-screen summary
 (risk score and band, open findings/CVEs by severity, both deltas, up to 3
 hotspots ranked by finding count, missing-scanner consequences, active
-suppressions); \`dev-guardian dashboard\` writes the same snapshot as a
+suppressions); \`node ${CLI_PATH_PLACEHOLDER} dashboard\` writes the same snapshot as a
 self-contained \`.guardian/dashboard.html\` (no CDN, no network call of any
 kind), opened automatically only when stdout is a TTY — \`--no-open\`
 suppresses that, \`--out <path>\` relocates the file. Neither runs a scan,

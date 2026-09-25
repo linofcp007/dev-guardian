@@ -173,15 +173,14 @@ function tomlString(value: string): string {
   return `"${escaped}"`;
 }
 
-const TOML_HEADING = /^\[mcp_servers\.dev-guardian\]/m;
 const OUR_TABLE_PATH = `mcp_servers.${SERVER_ID}`;
 
 /** Any top-level TOML table heading (`[a.b.c]`) at the start of a line —
- *  used to find where OUR table (and any of its own sub-tables) ends and
- *  the next, unrelated table begins. Not `g`-scoped as a shared constant:
- *  `RegExp.exec` with the `g` flag is STATEFUL (advances `lastIndex` across
- *  calls), so each caller below constructs its own instance rather than risk
- *  a skipped or repeated match from a shared one used across two scans. */
+ *  used to find every heading that is OURS anywhere in the file. Not
+ *  `g`-scoped as a shared constant: `RegExp.exec` with the `g` flag is
+ *  STATEFUL (advances `lastIndex` across calls), so each caller below
+ *  constructs its own instance rather than risk a skipped or repeated match
+ *  from a shared one used across two scans. */
 function headingRegex(): RegExp {
   return /^\[([^\]]+)\]/gm;
 }
@@ -193,41 +192,73 @@ function isOwnTablePath(path: string): boolean {
   return path === OUR_TABLE_PATH || path.startsWith(`${OUR_TABLE_PATH}.`);
 }
 
+interface TomlSpan {
+  start: number;
+  end: number;
+  path: string;
+}
+
 /**
- * Locates the full span of OUR table — the `[mcp_servers.dev-guardian]`
- * heading through the end of the LAST of its own sub-tables, stopping at the
- * first heading that is not ours (or EOF). Returns `null` when our heading
- * is not present at all.
+ * Locates EVERY span that is ours anywhere in the file — one entry per own
+ * heading found, each running from that heading to the START of the NEXT
+ * heading of any kind (or EOF). Returns `[]` when nothing of ours is
+ * present.
  *
- * This is what makes `[mcp_servers.dev-guardian.env]` (a sub-table, distinct
- * from our own generated `env = {}` SCALAR key) part of the span to remove:
- * the previous implementation only looked for "the next line starting with
- * `[`, ANY heading" to mark the end, so a hand-edited sub-table sitting
- * right after our heading was already (correctly) excluded from the
- * replaced region — but that meant it was never REMOVED either, so a
- * force-update left it sitting next to a freshly written `env = {}`: two
- * conflicting definitions of the same key, invalid TOML. Scanning every
- * heading and absorbing every one that is OURS (not just the first) fixes
- * that without needing a real TOML parser.
+ * Fix round 1, item 3: the previous version (`findOwnTomlSpan`, singular)
+ * stopped scanning the moment it saw the FIRST heading that was not ours,
+ * so it found only a single, CONTIGUOUS span starting at the first own
+ * heading. Two real shapes broke that:
+ *   - a NON-CONTIGUOUS span — `[mcp_servers.dev-guardian]` … `[other]` …
+ *     `[mcp_servers.dev-guardian.env]` — where a sub-table of ours reappears
+ *     AFTER an unrelated table sits between it and the main heading. The old
+ *     code stopped at `[other]` and never even looked past it, so the later
+ *     `.env` sub-table was neither detected nor removed. Verified with
+ *     `python -c "import tomllib..."`: "Cannot declare
+ *     ('mcp_servers','dev-guardian','env') twice".
+ *   - an ORPHAN sub-table with NO main heading at all —
+ *     `[mcp_servers.dev-guardian.env]` alone. The old code's presence check
+ *     (`TOML_HEADING.test`, matching only the exact main heading) missed it
+ *     entirely, so `mergeTomlConfig` took the "no existing entry" branch and
+ *     APPENDED a fresh block on top — two conflicting definitions of the
+ *     same implicitly-created table. Verified: "Cannot overwrite a value".
+ *
+ * Scanning the WHOLE file for every own heading (never stopping at the
+ * first foreign one) and collecting one span per own heading fixes both:
+ * every own heading is found regardless of what sits between it and any
+ * other, and "does an entry already exist" (for `mergeTomlConfig`'s own
+ * needs_update/already_present decision) is now "is this list non-empty",
+ * not "does the exact main heading exist".
  */
-function findOwnTomlSpan(existing: string): { start: number; end: number } | null {
+function findAllOwnTomlSpans(existing: string): TomlSpan[] {
   const re = headingRegex();
+  const headings: Array<{ index: number; path: string }> = [];
   let match: RegExpExecArray | null;
-  let start = -1;
-  let end = existing.length;
   while ((match = re.exec(existing)) !== null) {
     const path = match[1];
     if (path === undefined) continue;
-    if (isOwnTablePath(path)) {
-      if (start === -1) start = match.index;
-      continue; // absorbed into our span; keep scanning for the true end
-    }
-    if (start !== -1) {
-      end = match.index;
-      break;
-    }
+    headings.push({ index: match.index, path });
   }
-  return start === -1 ? null : { start, end };
+  const spans: TomlSpan[] = [];
+  for (let i = 0; i < headings.length; i++) {
+    const heading = headings[i];
+    if (heading === undefined || !isOwnTablePath(heading.path)) continue;
+    const next = headings[i + 1];
+    spans.push({ start: heading.index, end: next ? next.index : existing.length, path: heading.path });
+  }
+  return spans;
+}
+
+/** Removes every given span from `existing`, back-to-front by `start` so
+ *  earlier offsets stay valid while later ones are spliced out — the
+ *  reverse of the order `findAllOwnTomlSpans` returns them in (which is
+ *  file order, front-to-back). */
+function removeTomlSpans(existing: string, spans: TomlSpan[]): string {
+  let result = existing;
+  const byDescendingStart = [...spans].sort((a, b) => b.start - a.start);
+  for (const span of byDescendingStart) {
+    result = result.slice(0, span.start) + result.slice(span.end);
+  }
+  return result;
 }
 
 function buildTomlBlock(entry: ServerEntry): string {
@@ -257,39 +288,52 @@ function normaliseTomlLines(text: string): string {
     .join('\n');
 }
 
-/** Replace the existing `[mcp_servers.dev-guardian]` table — heading through
- *  the end of its own last sub-table — with a freshly built one. */
-function replaceTomlBlock(existing: string, entry: ServerEntry): string {
-  const span = findOwnTomlSpan(existing);
-  if (!span) return `${existing.replace(/\n?$/, '\n')}\n${buildTomlBlock(entry)}`;
-  const before = existing.slice(0, span.start);
-  const tail = existing.slice(span.end);
-  const block = buildTomlBlock(entry);
-  return `${before}${block}${tail.startsWith('\n') ? tail : tail ? `\n${tail}` : ''}`;
-}
-
-/** Merge our server table into a Codex TOML config. */
+/**
+ * Merge our server table into a Codex TOML config.
+ *
+ * Fix round 1, item 3: rebuilt around `findAllOwnTomlSpans` (every own
+ * heading anywhere in the file, not just a single contiguous run starting
+ * at the first one) so that both a non-contiguous span and an orphan
+ * sub-table with no main heading are detected AND fully removed — see that
+ * function's own doc comment for the two concrete failure modes this
+ * replaces. On force, every own span is stripped out first and the fresh
+ * block is appended once at the end — simpler and just as correct as trying
+ * to reconstruct the ORIGINAL position, which non-contiguous spans make
+ * ambiguous anyway (there is no longer one "spot" to put it back).
+ */
 export function mergeTomlConfig(
   existing: string | null,
   entry: ServerEntry,
   force: boolean,
 ): MergeResult {
-  if (existing && TOML_HEADING.test(existing)) {
-    const span = findOwnTomlSpan(existing);
-    const fresh = buildTomlBlock(entry);
-    const currentText = span ? existing.slice(span.start, span.end) : '';
+  const fresh = buildTomlBlock(entry);
+  if (!existing || existing.trim() === '') {
+    return { status: 'written', content: fresh };
+  }
+
+  const spans = findAllOwnTomlSpans(existing);
+  if (spans.length === 0) {
+    const sep = existing.endsWith('\n') ? '\n' : '\n\n';
+    return { status: 'merged', content: `${existing}${sep}${fresh}` };
+  }
+
+  // "Already exactly what we'd write" only has a meaningful reading when
+  // there is exactly ONE own span and it IS the main heading — any extra
+  // span (a stray sub-table, a duplicate) is itself evidence of staleness,
+  // never a match.
+  const onlySpan = spans.length === 1 ? spans[0] : undefined;
+  if (onlySpan !== undefined && onlySpan.path === OUR_TABLE_PATH) {
+    const currentText = existing.slice(onlySpan.start, onlySpan.end);
     if (normaliseTomlLines(currentText) === normaliseTomlLines(fresh)) {
       return { status: 'already_present' };
     }
-    if (!force) return { status: 'needs_update' };
-    return { status: 'merged', content: replaceTomlBlock(existing, entry) };
   }
-  const block = buildTomlBlock(entry);
-  if (!existing || existing.trim() === '') {
-    return { status: 'written', content: block };
-  }
-  const sep = existing.endsWith('\n') ? '\n' : '\n\n';
-  return { status: 'merged', content: `${existing}${sep}${block}` };
+
+  if (!force) return { status: 'needs_update' };
+
+  const remaining = removeTomlSpans(existing, spans).replace(/\s+$/, '');
+  const content = remaining.length === 0 ? fresh : `${remaining}\n\n${fresh}`;
+  return { status: 'merged', content };
 }
 
 /**
@@ -310,6 +354,30 @@ function wrapRulesBlock(rendered: string): string {
 }
 
 /**
+ * Recognises an UNMARKED dev-guardian rules file from BEFORE this task —
+ * every host-specific body prior to item 7's unification opened with some
+ * variant of "…the **dev-guardian MCP server**…registered" (`AGENTS.md`:
+ * "This repository has the **dev-guardian MCP server** registered.";
+ * `copilot-instructions.md`: "This project uses the **dev-guardian MCP
+ * server**"; `clinerules`: "This project has the dev-guardian MCP server
+ * registered."; today's canonical body: "This project has the
+ * **dev-guardian MCP server** registered."), so a single substring survives
+ * across every version, old or new, with or without the bold markers.
+ *
+ * Fix round 1, item 2: without this, a project that ran an OLDER
+ * `mcp-config --write` (back when it still `copyFileSync`d the whole file)
+ * has an `AGENTS.md`/etc. that is ENTIRELY unmarked dev-guardian text — the
+ * "no markers found" branch below used to treat that exactly like foreign
+ * content and blindly APPEND a second, freshly-wrapped copy underneath it:
+ * a ~220-line duplicate sitting beside stale text, forever, on every future
+ * `--write`. Detecting it here routes it through the SAME
+ * needs_update/force-gated path a stale MARKED block already goes through,
+ * so it is reported rather than silently doubled, and only replaced when
+ * the caller explicitly opts in.
+ */
+const LEGACY_UNMARKED_SIGNATURE = /dev-guardian MCP server/;
+
+/**
  * Merge dev-guardian's own rendered rules content into a (possibly
  * user-owned, possibly absent) target file, confined to a delimited block —
  * never a whole-file replace. Mirrors `mergeJsonConfig`/`mergeTomlConfig`'s
@@ -317,11 +385,31 @@ function wrapRulesBlock(rendered: string): string {
  * `needs_update`) for the same reason those two share it: one predictable
  * contract for "did this write happen, and was anything already there."
  *
+ * Only for SHARED files — a host's own general-purpose instructions file
+ * (`AGENTS.md`, `GEMINI.md`, the copilot instructions file, `clinerules`)
+ * that dev-guardian is a GUEST in, alongside whatever else the user or
+ * another tool already put there. Cursor's `.mdc` and Windsurf's rules file
+ * are NOT shared — nothing else writes to `.cursor/rules/dev-guardian.mdc`
+ * or `.windsurf/rules/dev-guardian.md`, and both require YAML frontmatter as
+ * the file's literal first bytes to be recognised at all, which a
+ * `<!-- dev-guardian:begin -->` marker placed before it would break (fix
+ * round 1, item 1 — CRITICAL: this exact mistake disabled the rule on every
+ * new Cursor/Windsurf install). Those two go through `mergeOwnedRulesFile`
+ * instead, which writes the file whole.
+ *
  *   - No existing file (or empty): write just the wrapped block. `written`.
- *   - Existing file, no markers found: APPEND the block — every byte of the
- *     existing file survives untouched, regardless of `force`. This is the
+ *   - Existing file, no markers found, no legacy signature: APPEND the
+ *     block — every byte of the existing (genuinely foreign) content
+ *     survives untouched, regardless of `force`. This is the
  *     non-destructive case `force` no longer needs to gate, because nothing
  *     is ever removed by it.
+ *   - Existing file, no markers found, BUT the legacy signature IS present
+ *     (an older, whole-file dev-guardian install): `needs_update` when
+ *     `force` is off (refuse to touch it, rather than risk duplicating);
+ *     `merged` when `force` is on — the WHOLE file is replaced with the
+ *     freshly wrapped block, the same scope the pre-fix `copyFileSync` had,
+ *     now gated behind an explicit, informed opt-in instead of silent by
+ *     default.
  *   - Existing file, markers found, content already matches: no write.
  *     `already_present` (idempotent, same as the JSON/TOML mergers).
  *   - Existing file, markers found, content differs (template changed, or
@@ -340,8 +428,12 @@ export function mergeRulesBlock(existing: string | null, rendered: string, force
   const beginIdx = existing.indexOf(RULES_BLOCK_BEGIN);
   const endMarkerIdx = existing.indexOf(RULES_BLOCK_END);
   if (beginIdx === -1 || endMarkerIdx === -1 || endMarkerIdx < beginIdx) {
-    // No (valid) existing block: append, preserving all existing content —
-    // safe regardless of `force`, since nothing is ever removed.
+    if (LEGACY_UNMARKED_SIGNATURE.test(existing)) {
+      if (!force) return { status: 'needs_update' };
+      return { status: 'merged', content: block };
+    }
+    // Genuinely foreign content: append, preserving everything — safe
+    // regardless of `force`, since nothing is ever removed.
     const sep = existing.endsWith('\n') ? '\n' : '\n\n';
     return { status: 'merged', content: `${existing}${sep}${block}` };
   }
@@ -357,6 +449,23 @@ export function mergeRulesBlock(existing: string | null, rendered: string, force
   const after = existing.slice(endIdx);
   const afterJoined = after.startsWith('\n') ? after : after ? `\n${after}` : '';
   return { status: 'merged', content: `${before}${block}${afterJoined}` };
+}
+
+/**
+ * Merge dev-guardian's rendered content into a file dev-guardian OWNS
+ * exclusively — Cursor's `.cursor/rules/dev-guardian.mdc` and Windsurf's
+ * `.windsurf/rules/dev-guardian.md` (fix round 1, items 1 and 2). Unlike
+ * `mergeRulesBlock`, there is no delimited-block/legacy-signature dance:
+ * nothing else is ever expected to write to these paths, so the whole file
+ * IS dev-guardian's content, always, and can simply be written or
+ * overwritten outright — including its required leading YAML frontmatter,
+ * which a `<!-- dev-guardian:begin -->` marker placed before it would break.
+ * `force` plays no part here (unlike the JSON/TOML/shared-rules mergers):
+ * there is nothing else in the file whose loss `force` needs to gate.
+ */
+export function mergeOwnedRulesFile(existing: string | null, rendered: string): MergeResult {
+  if (existing === rendered) return { status: 'already_present' };
+  return { status: existing === null ? 'written' : 'merged', content: rendered };
 }
 
 /** Human-readable snippet for `manual` hosts (cline). */

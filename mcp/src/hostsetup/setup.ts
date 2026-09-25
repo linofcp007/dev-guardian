@@ -30,12 +30,29 @@ import {
   buildManualSnippet,
   buildServerEntry,
   mergeJsonConfig,
+  mergeOwnedRulesFile,
   mergeRulesBlock,
   mergeTomlConfig,
   resolveMcpConfigPath,
   type ResolveEnv,
 } from './mcpConfig.js';
 import { substituteCliPath } from './rulesTemplate.js';
+
+/**
+ * Hosts whose rules file dev-guardian owns EXCLUSIVELY — nothing else is
+ * ever expected to write to `.cursor/rules/dev-guardian.mdc` or
+ * `.windsurf/rules/dev-guardian.md`, unlike `AGENTS.md`/`GEMINI.md`/the
+ * copilot instructions file/`clinerules`, which are general-purpose files
+ * dev-guardian is a GUEST in. Fix round 1, item 1 (CRITICAL): both of these
+ * also require YAML frontmatter as the file's literal first bytes to be
+ * recognised by their host at all — wrapping them in a
+ * `<!-- dev-guardian:begin -->` marker (item 6b's delimited-block scheme,
+ * correct for the shared files) put that marker BEFORE the frontmatter,
+ * silently disabling the rule (`alwaysApply`/`trigger`) on every install.
+ * These two route through `mergeOwnedRulesFile` instead, which writes the
+ * whole file — frontmatter first, always.
+ */
+const OWNED_WHOLE_FILE_HOSTS: ReadonlySet<HostName> = new Set(['cursor', 'windsurf']);
 
 export type RulesStatus =
   | 'written'
@@ -137,7 +154,7 @@ export function setupHost(opts: SetupOptions): HostResult[] {
     const spec = HOST_SPECS[host];
     const scope = effectiveScope(spec, opts.scope);
     const rules: RulesResult = opts.installRules
-      ? installRulesOne(spec, opts.hostsDir, opts.projectPath, opts.apply, opts.force, opts.cliPath)
+      ? installRulesOne(host, spec, opts.hostsDir, opts.projectPath, opts.apply, opts.force, opts.cliPath)
       : { status: 'skipped', reason: 'install_rules=false' };
     const skipGlobal = isForceGlobalSkippedUnderAll(spec, requestedAll, opts.scope);
     const mcp: McpResult = !opts.registerMcp
@@ -206,12 +223,20 @@ export function previewMcpConfig(
 
 /**
  * Renders the template at `src` (substituting `{{DEV_GUARDIAN_CLI}}` with
- * `cliPath` — item 6a) and merges it into `dst` as a delimited block (item
- * 6b), never a whole-file overwrite. See `mergeRulesBlock`'s own doc comment
- * in `mcpConfig.ts` for the full written/merged/already_present/needs_update
- * contract this mirrors from the JSON/TOML mergers.
+ * `cliPath` — item 6a) and installs it at `dst`.
+ *
+ * Two different merge strategies, chosen by `host` (fix round 1, item 1):
+ *   - `OWNED_WHOLE_FILE_HOSTS` (Cursor, Windsurf): `mergeOwnedRulesFile`
+ *     writes the file whole, frontmatter first, always — see that
+ *     function's own doc comment in `mcpConfig.ts`.
+ *   - Every other host: `mergeRulesBlock` manages a delimited block inside
+ *     a shared file (item 6b), never a whole-file overwrite — see ITS doc
+ *     comment for the full written/merged/already_present/needs_update
+ *     contract, including the legacy-unmarked-copy detection added in fix
+ *     round 1, item 2.
  */
 function installRulesOne(
+  host: HostName,
   spec: HostSpec,
   hostsDir: string,
   projectPath: string,
@@ -247,7 +272,9 @@ function installRulesOne(
   }
 
   const rendered = substituteCliPath(templateText, cliPath);
-  const merged = mergeRulesBlock(existingText, rendered, force);
+  const merged = OWNED_WHOLE_FILE_HOSTS.has(host)
+    ? mergeOwnedRulesFile(existingText, rendered)
+    : mergeRulesBlock(existingText, rendered, force);
 
   if (merged.status === 'already_present') return { ...base, status: 'already_present' };
   if (merged.status === 'needs_update') {
@@ -258,7 +285,16 @@ function installRulesOne(
     };
   }
 
-  const content = merged.content as string;
+  // Narrowed (Global Constraint 1: no `as` casts standing in for a runtime
+  // check), not `merged.content as string` — `written`/`merged` are the only
+  // two statuses left at this point, and both mergers' own contracts
+  // guarantee `content` is set for them; this makes that guarantee an
+  // explicit, checked one rather than an assumed one.
+  const { content } = merged;
+  if (content === undefined) {
+    return { ...base, status: 'failed', reason: 'internal error: merge produced no content to write' };
+  }
+
   if (!apply) {
     return {
       ...base,
@@ -344,9 +380,23 @@ function registerMcpOne(
       scope,
     };
   }
+  // Narrowed (Global Constraint 1), not `merged.content as string` — see the
+  // identical narrowing in `installRulesOne` above for why: `written`/
+  // `merged` are the only statuses reachable here, and both `mergeJsonConfig`/
+  // `mergeTomlConfig` guarantee `content` is set for them.
+  const { content } = merged;
+  if (content === undefined) {
+    return {
+      status: 'failed',
+      config_path: configPath,
+      key: m.serverKey,
+      scope,
+      reason: 'internal error: merge produced no content to write',
+    };
+  }
   try {
     mkdirSync(dirname(configPath), { recursive: true });
-    writeFileSync(configPath, merged.content as string, 'utf8');
+    writeFileSync(configPath, content, 'utf8');
     return { status: merged.status, config_path: configPath, key: m.serverKey, scope };
   } catch (e) {
     return { status: 'failed', config_path: configPath, key: m.serverKey, scope, reason: (e as Error).message };

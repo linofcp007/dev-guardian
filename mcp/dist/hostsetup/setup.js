@@ -12,8 +12,23 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { ALL_HOSTS, effectiveScope, HOST_SPECS, } from './hostSpecs.js';
-import { buildManualSnippet, buildServerEntry, mergeJsonConfig, mergeRulesBlock, mergeTomlConfig, resolveMcpConfigPath, } from './mcpConfig.js';
+import { buildManualSnippet, buildServerEntry, mergeJsonConfig, mergeOwnedRulesFile, mergeRulesBlock, mergeTomlConfig, resolveMcpConfigPath, } from './mcpConfig.js';
 import { substituteCliPath } from './rulesTemplate.js';
+/**
+ * Hosts whose rules file dev-guardian owns EXCLUSIVELY — nothing else is
+ * ever expected to write to `.cursor/rules/dev-guardian.mdc` or
+ * `.windsurf/rules/dev-guardian.md`, unlike `AGENTS.md`/`GEMINI.md`/the
+ * copilot instructions file/`clinerules`, which are general-purpose files
+ * dev-guardian is a GUEST in. Fix round 1, item 1 (CRITICAL): both of these
+ * also require YAML frontmatter as the file's literal first bytes to be
+ * recognised by their host at all — wrapping them in a
+ * `<!-- dev-guardian:begin -->` marker (item 6b's delimited-block scheme,
+ * correct for the shared files) put that marker BEFORE the frontmatter,
+ * silently disabling the rule (`alwaysApply`/`trigger`) on every install.
+ * These two route through `mergeOwnedRulesFile` instead, which writes the
+ * whole file — frontmatter first, always.
+ */
+const OWNED_WHOLE_FILE_HOSTS = new Set(['cursor', 'windsurf']);
 /** `<plugin>/host-rules` lives next to `<plugin>/scripts`. */
 export function resolveHostRulesDir(scriptsDir) {
     return resolve(scriptsDir, '..', 'host-rules');
@@ -41,7 +56,7 @@ export function setupHost(opts) {
         const spec = HOST_SPECS[host];
         const scope = effectiveScope(spec, opts.scope);
         const rules = opts.installRules
-            ? installRulesOne(spec, opts.hostsDir, opts.projectPath, opts.apply, opts.force, opts.cliPath)
+            ? installRulesOne(host, spec, opts.hostsDir, opts.projectPath, opts.apply, opts.force, opts.cliPath)
             : { status: 'skipped', reason: 'install_rules=false' };
         const skipGlobal = isForceGlobalSkippedUnderAll(spec, requestedAll, opts.scope);
         const mcp = !opts.registerMcp
@@ -86,12 +101,19 @@ export function previewMcpConfig(host, scope, serverJsPath, env) {
 }
 /**
  * Renders the template at `src` (substituting `{{DEV_GUARDIAN_CLI}}` with
- * `cliPath` — item 6a) and merges it into `dst` as a delimited block (item
- * 6b), never a whole-file overwrite. See `mergeRulesBlock`'s own doc comment
- * in `mcpConfig.ts` for the full written/merged/already_present/needs_update
- * contract this mirrors from the JSON/TOML mergers.
+ * `cliPath` — item 6a) and installs it at `dst`.
+ *
+ * Two different merge strategies, chosen by `host` (fix round 1, item 1):
+ *   - `OWNED_WHOLE_FILE_HOSTS` (Cursor, Windsurf): `mergeOwnedRulesFile`
+ *     writes the file whole, frontmatter first, always — see that
+ *     function's own doc comment in `mcpConfig.ts`.
+ *   - Every other host: `mergeRulesBlock` manages a delimited block inside
+ *     a shared file (item 6b), never a whole-file overwrite — see ITS doc
+ *     comment for the full written/merged/already_present/needs_update
+ *     contract, including the legacy-unmarked-copy detection added in fix
+ *     round 1, item 2.
  */
-function installRulesOne(spec, hostsDir, projectPath, apply, force, cliPath) {
+function installRulesOne(host, spec, hostsDir, projectPath, apply, force, cliPath) {
     const rules = spec.rules;
     if (!rules) {
         return {
@@ -120,7 +142,9 @@ function installRulesOne(spec, hostsDir, projectPath, apply, force, cliPath) {
         return { ...base, status: 'failed', reason: e.message };
     }
     const rendered = substituteCliPath(templateText, cliPath);
-    const merged = mergeRulesBlock(existingText, rendered, force);
+    const merged = OWNED_WHOLE_FILE_HOSTS.has(host)
+        ? mergeOwnedRulesFile(existingText, rendered)
+        : mergeRulesBlock(existingText, rendered, force);
     if (merged.status === 'already_present')
         return { ...base, status: 'already_present' };
     if (merged.status === 'needs_update') {
@@ -130,7 +154,15 @@ function installRulesOne(spec, hostsDir, projectPath, apply, force, cliPath) {
             reason: 'the installed rules block differs from the current template; pass --update-mcp to refresh it',
         };
     }
-    const content = merged.content;
+    // Narrowed (Global Constraint 1: no `as` casts standing in for a runtime
+    // check), not `merged.content as string` — `written`/`merged` are the only
+    // two statuses left at this point, and both mergers' own contracts
+    // guarantee `content` is set for them; this makes that guarantee an
+    // explicit, checked one rather than an assumed one.
+    const { content } = merged;
+    if (content === undefined) {
+        return { ...base, status: 'failed', reason: 'internal error: merge produced no content to write' };
+    }
     if (!apply) {
         return {
             ...base,
@@ -206,9 +238,23 @@ function registerMcpOne(host, spec, scope, serverJsPath, env, apply, force) {
             scope,
         };
     }
+    // Narrowed (Global Constraint 1), not `merged.content as string` — see the
+    // identical narrowing in `installRulesOne` above for why: `written`/
+    // `merged` are the only statuses reachable here, and both `mergeJsonConfig`/
+    // `mergeTomlConfig` guarantee `content` is set for them.
+    const { content } = merged;
+    if (content === undefined) {
+        return {
+            status: 'failed',
+            config_path: configPath,
+            key: m.serverKey,
+            scope,
+            reason: 'internal error: merge produced no content to write',
+        };
+    }
     try {
         mkdirSync(dirname(configPath), { recursive: true });
-        writeFileSync(configPath, merged.content, 'utf8');
+        writeFileSync(configPath, content, 'utf8');
         return { status: merged.status, config_path: configPath, key: m.serverKey, scope };
     }
     catch (e) {
