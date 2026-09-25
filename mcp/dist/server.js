@@ -41822,7 +41822,7 @@ async function tryNativeAudit(opts) {
 
 // src/tools/depsUpdatePlan.ts
 init_execa();
-import { existsSync as existsSync17 } from "node:fs";
+import { existsSync as existsSync17, readdirSync as readdirSync6 } from "node:fs";
 import { join as join22 } from "node:path";
 var inputSchema = {
   project_path: ProjectPath,
@@ -41893,7 +41893,7 @@ function detectEcosystems(projectPath) {
 }
 function anyCsproj(projectPath) {
   try {
-    return __require("node:fs").readdirSync(projectPath).some((n2) => n2.endsWith(".csproj") || n2.endsWith(".sln"));
+    return readdirSync6(projectPath).some((n2) => n2.endsWith(".csproj") || n2.endsWith(".sln"));
   } catch {
     return false;
   }
@@ -42246,7 +42246,7 @@ function failDomain2(code, message) {
 }
 
 // src/tools/complianceCheck.ts
-import { readdirSync as readdirSync6, statSync as statSync4 } from "node:fs";
+import { readdirSync as readdirSync7, statSync as statSync4 } from "node:fs";
 import { join as join23 } from "node:path";
 var RISKY_LICENSE_PATTERNS = [
   { pattern: /^AGPL/i, severity: "high" },
@@ -42295,7 +42295,7 @@ function walk2(root, dir, depth, maxDepth, out) {
   if (depth > maxDepth) return;
   let entries;
   try {
-    entries = readdirSync6(dir);
+    entries = readdirSync7(dir);
   } catch {
     return;
   }
@@ -42596,7 +42596,7 @@ function failDomain3(code, message) {
 }
 
 // src/tools/detectStack.ts
-import { existsSync as existsSync19, readdirSync as readdirSync7 } from "node:fs";
+import { existsSync as existsSync19, readdirSync as readdirSync8 } from "node:fs";
 import { join as join25 } from "node:path";
 var SCRIPT_REL_PATH4 = ["detect", "detect-stack.sh"];
 var tool3 = {
@@ -42665,7 +42665,7 @@ function enrichDotnet(snap, projectPath) {
     try {
       const target = rel2 === "" ? projectPath : join25(projectPath, rel2);
       if (!existsSync19(target)) return false;
-      return readdirSync7(target).some((name) => name.endsWith(suffix));
+      return readdirSync8(target).some((name) => name.endsWith(suffix));
     } catch {
       return false;
     }
@@ -42706,7 +42706,7 @@ function anyDeepMatching(root, suffix, maxDepth) {
     if (depth > maxDepth) return false;
     let entries;
     try {
-      entries = readdirSync7(dir);
+      entries = readdirSync8(dir);
     } catch {
       return false;
     }
@@ -42715,7 +42715,7 @@ function anyDeepMatching(root, suffix, maxDepth) {
       const abs = join25(dir, name);
       if (name.endsWith(suffix)) return true;
       try {
-        if (readdirSync7(abs).length >= 0 && walk4(abs, depth + 1)) return true;
+        if (readdirSync8(abs).length >= 0 && walk4(abs, depth + 1)) return true;
       } catch {
       }
     }
@@ -43099,7 +43099,7 @@ function failDomain5(code, message) {
 }
 
 // src/tools/observabilitySetup.ts
-import { existsSync as existsSync22, mkdirSync as mkdirSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync22, mkdirSync as mkdirSync5, readdirSync as readdirSync9, writeFileSync as writeFileSync5 } from "node:fs";
 import { dirname as dirname9, join as join28 } from "node:path";
 var tool5 = {
   name: "observability_setup",
@@ -43182,7 +43182,7 @@ function inferStack(projectPath, ctx) {
     return "java";
   if (existsSync22(join28(projectPath, "Gemfile"))) return "ruby";
   try {
-    const entries = __require("node:fs").readdirSync(projectPath);
+    const entries = readdirSync9(projectPath);
     if (entries.some((n2) => n2.endsWith(".csproj") || n2.endsWith(".sln") || n2 === "global.json"))
       return "dotnet";
   } catch {
@@ -45566,7 +45566,7 @@ function failDomain16(code, message) {
 }
 
 // src/tools/registerCustomRules.ts
-import { existsSync as existsSync28, readdirSync as readdirSync8 } from "node:fs";
+import { existsSync as existsSync28, readdirSync as readdirSync10 } from "node:fs";
 import { join as join35, resolve as resolve5 } from "node:path";
 var inputSchema11 = {
   project_path: ProjectPath,
@@ -45615,7 +45615,7 @@ function autoDiscover(projectPath) {
     const abs = join35(projectPath, dir);
     if (!existsSync28(abs)) continue;
     try {
-      const hasYaml = readdirSync8(abs).some((f) => /\.ya?ml$/.test(f));
+      const hasYaml = readdirSync10(abs).some((f) => /\.ya?ml$/.test(f));
       if (hasYaml) out.push(abs);
     } catch {
     }
@@ -47083,7 +47083,7 @@ function failDomain20(code, message) {
 }
 
 // src/tools/wpVulnCheck.ts
-import { existsSync as existsSync32, mkdirSync as mkdirSync7, writeFileSync as writeFileSync8 } from "node:fs";
+import { existsSync as existsSync32, mkdirSync as mkdirSync7, readFileSync as readFileSync17, writeFileSync as writeFileSync8 } from "node:fs";
 import { randomUUID as randomUUID7 } from "node:crypto";
 import { join as join39 } from "node:path";
 
@@ -47279,7 +47279,7 @@ async function handler26(input, ctx) {
   let raw = null;
   if (existsSync32(outFile)) {
     try {
-      raw = __require("node:fs").readFileSync(outFile, "utf8");
+      raw = readFileSync17(outFile, "utf8");
     } catch {
       raw = null;
     }
@@ -47968,7 +47968,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID11 } from "node:crypto";
-import { existsSync as existsSync34, readFileSync as readFileSync17, readdirSync as readdirSync9, statSync as statSync7 } from "node:fs";
+import { existsSync as existsSync34, readFileSync as readFileSync18, readdirSync as readdirSync11, statSync as statSync7 } from "node:fs";
 import { join as join41, relative as relative2 } from "node:path";
 var PATTERNS = [
   {
@@ -48079,7 +48079,7 @@ async function handler33(input, ctx) {
   for (const file of files) {
     let content;
     try {
-      content = readFileSync17(file, "utf8");
+      content = readFileSync18(file, "utf8");
     } catch {
       continue;
     }
@@ -48141,7 +48141,7 @@ function collectConfigFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     let entries;
     try {
-      entries = readdirSync9(dir);
+      entries = readdirSync11(dir);
     } catch {
       return;
     }
@@ -48167,7 +48167,7 @@ function collectConfigFiles(root, maxDepth) {
 
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
-import { readFileSync as readFileSync18, readdirSync as readdirSync10, statSync as statSync8 } from "node:fs";
+import { readFileSync as readFileSync19, readdirSync as readdirSync12, statSync as statSync8 } from "node:fs";
 import { join as join42, relative as relative3 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
@@ -48208,7 +48208,7 @@ async function handler34(input, ctx) {
   for (const file of projects) {
     let xml;
     try {
-      xml = readFileSync18(file, "utf8");
+      xml = readFileSync19(file, "utf8");
     } catch {
       continue;
     }
@@ -48284,7 +48284,7 @@ function collectCsprojFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     let entries;
     try {
-      entries = readdirSync10(dir);
+      entries = readdirSync12(dir);
     } catch {
       return;
     }
@@ -48308,7 +48308,7 @@ function failDomain24(code, message) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
-import { existsSync as existsSync35, readFileSync as readFileSync19, readdirSync as readdirSync11, statSync as statSync9 } from "node:fs";
+import { existsSync as existsSync35, readFileSync as readFileSync20, readdirSync as readdirSync13, statSync as statSync9 } from "node:fs";
 import { join as join43, relative as relative4 } from "node:path";
 var RULES = [
   {
@@ -48367,7 +48367,7 @@ async function handler35(input, ctx) {
   for (const dir of migrationDirs) {
     let files;
     try {
-      files = readdirSync11(dir).filter((n2) => n2.endsWith(".cs"));
+      files = readdirSync13(dir).filter((n2) => n2.endsWith(".cs"));
     } catch {
       continue;
     }
@@ -48375,7 +48375,7 @@ async function handler35(input, ctx) {
       const abs = join43(dir, fname);
       let content;
       try {
-        content = readFileSync19(abs, "utf8");
+        content = readFileSync20(abs, "utf8");
       } catch {
         continue;
       }
@@ -48438,7 +48438,7 @@ function findMigrationsDirs(root) {
     if (depth > 6) return;
     let entries;
     try {
-      entries = readdirSync11(dir);
+      entries = readdirSync13(dir);
     } catch {
       return;
     }
@@ -49718,8 +49718,8 @@ init_execa();
 import {
   existsSync as existsSync36,
   mkdtempSync,
-  readFileSync as readFileSync20,
-  readdirSync as readdirSync12,
+  readFileSync as readFileSync21,
+  readdirSync as readdirSync14,
   rmSync,
   statSync as statSync10,
   writeFileSync as writeFileSync9
@@ -49999,7 +49999,7 @@ function collectDir(root) {
     if (dir === void 0) break;
     let entries;
     try {
-      entries = readdirSync12(dir);
+      entries = readdirSync14(dir);
     } catch {
       continue;
     }
@@ -50054,7 +50054,7 @@ function rel(root, abs) {
 function readOne(abs, relPath) {
   let raw;
   try {
-    raw = readFileSync20(abs);
+    raw = readFileSync21(abs);
   } catch {
     return null;
   }
@@ -50268,7 +50268,7 @@ function hashFiles(parts) {
 }
 
 // src/tools/mapAttackSurface.ts
-import { readFileSync as readFileSync23 } from "node:fs";
+import { readFileSync as readFileSync24 } from "node:fs";
 import { isAbsolute, join as join49, resolve as resolve7 } from "node:path";
 
 // src/surface/collectors/envVars.ts
@@ -50305,7 +50305,7 @@ function numProp(value, key) {
 }
 
 // src/surface/collectors/ports.ts
-import { existsSync as existsSync37, readFileSync as readFileSync21, realpathSync } from "node:fs";
+import { existsSync as existsSync37, readFileSync as readFileSync22, realpathSync } from "node:fs";
 import { basename as basename3, join as join46 } from "node:path";
 var DOCKERFILES = ["Dockerfile", "dockerfile"];
 var COMPOSE_FILES = [
@@ -50362,7 +50362,7 @@ function collectPorts(projectPath) {
 function readLines(path6) {
   if (!existsSync37(path6)) return [];
   try {
-    return readFileSync21(path6, "utf8").split(/\r?\n/);
+    return readFileSync22(path6, "utf8").split(/\r?\n/);
   } catch {
     return [];
   }
@@ -51358,7 +51358,7 @@ function buildToolRun(run, via) {
 }
 
 // src/surface/specDiscover.ts
-import { readFileSync as readFileSync22, readdirSync as readdirSync13, statSync as statSync11 } from "node:fs";
+import { readFileSync as readFileSync23, readdirSync as readdirSync15, statSync as statSync11 } from "node:fs";
 import { join as join48, relative as relative5, resolve as resolve6, sep as sep2 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
@@ -51399,7 +51399,7 @@ function readCandidates(paths) {
       continue;
     }
     try {
-      const text = readFileSync22(path6, "utf8");
+      const text = readFileSync23(path6, "utf8");
       specs.push({ file: path6, text });
     } catch {
       continue;
@@ -51410,7 +51410,7 @@ function readCandidates(paths) {
 function walk3(root, dir) {
   let entries;
   try {
-    entries = readdirSync13(dir, { withFileTypes: true });
+    entries = readdirSync15(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -51907,7 +51907,7 @@ function readSources(parsed, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path6 of collectAllFiles(parsed)) {
     try {
-      const buffer = readFileSync23(isAbsolute(path6) ? path6 : join49(projectPath, path6));
+      const buffer = readFileSync24(isAbsolute(path6) ? path6 : join49(projectPath, path6));
       const text = buffer.toString("utf8");
       if (Buffer.byteLength(text, "utf8") !== buffer.length) continue;
       sources.set(path6, text);
@@ -54410,7 +54410,7 @@ function collectAnonymousExposures(ctx, projectPath) {
 }
 
 // src/tools/createFixPr.ts
-import { existsSync as existsSync39, readFileSync as readFileSync24 } from "node:fs";
+import { existsSync as existsSync39, readFileSync as readFileSync25 } from "node:fs";
 import { join as join54 } from "node:path";
 
 // src/fixpr/apply.ts
@@ -55316,7 +55316,7 @@ function readManifests(worktreePath) {
     const path6 = join54(worktreePath, name);
     if (!existsSync39(path6)) continue;
     try {
-      files[name] = readFileSync24(path6, "utf8");
+      files[name] = readFileSync25(path6, "utf8");
     } catch {
     }
   }

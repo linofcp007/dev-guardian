@@ -9,7 +9,7 @@
  * API token: read from `api_token` input or `WPSCAN_API_TOKEN` env. When
  * absent, surface a warning about rate limits but proceed.
  */
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -122,7 +122,7 @@ async function handler(input, ctx) {
     let raw = null;
     if (existsSync(outFile)) {
         try {
-            raw = require('node:fs').readFileSync(outFile, 'utf8');
+            raw = readFileSync(outFile, 'utf8');
         }
         catch {
             raw = null;
