@@ -1,5 +1,5 @@
 {
-  "description": "dev-guardian guardrails — secret detection on writes, catastrophic-command blocking on Bash, and a security-posture briefing at session start. Dependency-free and fail-open; tune via .guardian/hooks.config.json or disable with GUARDIAN_HOOKS=off.",
+  "description": "dev-guardian guardrails — secret detection on writes, catastrophic-command blocking on Bash and PowerShell, and a security-posture briefing at session start. Dependency-free and fail-open; tune via .guardian/hooks.config.json (project files may only make it stricter) or disable with GUARDIAN_HOOKS=off.",
   "hooks": {
     "SessionStart": [
       {
@@ -26,7 +26,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|PowerShell",
         "hooks": [
           {
             "type": "command",
