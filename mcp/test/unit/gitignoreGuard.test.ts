@@ -23,11 +23,13 @@ describe('ensureGuardianIgnored', () => {
     expect(ensureGuardianIgnored(dir)).toEqual({ updated: false, reason: 'not_a_repo' });
   });
 
-  it('creates .gitignore when missing', () => {
+  it('creates .gitignore with .guardian/* + the baseline negation when missing', () => {
     const dir = fixture('git-no-gitignore');
     const r = ensureGuardianIgnored(dir);
     expect(r).toEqual({ updated: true, reason: 'created' });
-    expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toContain('.guardian/');
+    const content = readFileSync(join(dir, '.gitignore'), 'utf8');
+    expect(content).toContain('.guardian/*');
+    expect(content).toContain('!.guardian/baseline.json');
   });
 
   it('appends to an existing .gitignore that lacks the entry', () => {
@@ -36,21 +38,73 @@ describe('ensureGuardianIgnored', () => {
     expect(r).toEqual({ updated: true, reason: 'added' });
     const content = readFileSync(join(dir, '.gitignore'), 'utf8');
     expect(content).toContain('node_modules/');
-    expect(content).toContain('.guardian/');
+    expect(content).toContain('.guardian/*');
+    expect(content).toContain('!.guardian/baseline.json');
   });
 
-  it('leaves a .gitignore that already lists .guardian alone', () => {
-    const dir = fixture('git-already');
-    const r = ensureGuardianIgnored(dir);
-    expect(r).toEqual({ updated: false, reason: 'already_present' });
-  });
-
-  it('also recognises /.guardian and bare .guardian without slash', () => {
+  it('leaves a .gitignore that already has the current form alone', () => {
     const dir = fixture('git-empty');
-    writeFileSync(join(dir, '.gitignore'), '.guardian\n');
+    writeFileSync(
+      join(dir, '.gitignore'),
+      'node_modules/\n# dev-guardian outputs\n.guardian/*\n!.guardian/baseline.json\n',
+    );
     expect(ensureGuardianIgnored(dir)).toEqual({ updated: false, reason: 'already_present' });
+  });
 
-    writeFileSync(join(dir, '.gitignore'), '/.guardian\n');
-    expect(ensureGuardianIgnored(dir)).toEqual({ updated: false, reason: 'already_present' });
+  // Regression guard for the defect this file exists to fix: `.guardian/`
+  // (a bare directory pattern) is what every earlier release of this tool
+  // wrote, and git CANNOT re-include a file under an already-excluded
+  // directory — `!.guardian/baseline.json` written anywhere else in the
+  // same file is silently powerless while a `.guardian/`-shaped line
+  // survives. So a repo carrying the old line must be upgraded, not left
+  // "already present": the CI gate's committed `.guardian/baseline.json`
+  // would otherwise stay un-addable forever.
+  describe('upgrades the exact line earlier releases wrote', () => {
+    it.each([
+      ['.guardian', '.guardian\n'],
+      ['.guardian/', '.guardian/\n'],
+      ['/.guardian', '/.guardian\n'],
+      ['/.guardian/', '/.guardian/\n'],
+    ])('replaces bare "%s" with .guardian/* + the baseline negation', (_label, oldLine) => {
+      const dir = fixture('git-empty');
+      writeFileSync(join(dir, '.gitignore'), `node_modules/\n${oldLine}`);
+
+      const r = ensureGuardianIgnored(dir);
+      expect(r).toEqual({ updated: true, reason: 'upgraded' });
+
+      const content = readFileSync(join(dir, '.gitignore'), 'utf8');
+      expect(content).toContain('node_modules/');
+      expect(content).toContain('.guardian/*');
+      expect(content).toContain('!.guardian/baseline.json');
+      // The bare directory-exclude line must be GONE, not merely
+      // supplemented — its mere presence defeats the negation regardless
+      // of where in the file it sits.
+      const lines = content.split(/\r?\n/).map((l) => l.trim());
+      expect(lines).not.toContain(oldLine.trim());
+    });
+
+    it('is idempotent: upgrading twice settles on already_present', () => {
+      const dir = fixture('git-already'); // 'node_modules/\n.guardian/\n' — the old bare line
+      const first = ensureGuardianIgnored(dir);
+      expect(first).toEqual({ updated: true, reason: 'upgraded' });
+
+      const second = ensureGuardianIgnored(dir);
+      expect(second).toEqual({ updated: false, reason: 'already_present' });
+    });
+  });
+
+  it('leaves .guardian/baseline.json re-includable by git (a same-behaviour check-ignore proxy)', () => {
+    // A behavioural pin on WHY .guardian/* was chosen over .guardian/: with
+    // the bare directory form, `!.guardian/baseline.json` can never apply —
+    // the negation line existing at all is not enough, so this asserts the
+    // shape that makes it work rather than re-deriving git's own rule.
+    const dir = fixture('git-no-gitignore');
+    ensureGuardianIgnored(dir);
+    const content = readFileSync(join(dir, '.gitignore'), 'utf8');
+    const lines = content.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith('#'));
+    expect(lines).toContain('.guardian/*');
+    expect(lines).toContain('!.guardian/baseline.json');
+    expect(lines).not.toContain('.guardian/');
+    expect(lines).not.toContain('.guardian');
   });
 });
