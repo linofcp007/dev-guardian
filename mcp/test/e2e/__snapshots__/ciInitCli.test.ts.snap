@@ -18,12 +18,20 @@ exports[`ci-init: snapshot of the rendered templates > bitbucket renders exactly
 #      boundary — it attributes every pre-existing secret to the grafted
 #      boundary commit instead, which moves with every push, so every
 #      finding looks "new" on every run and the gate never passes twice in
-#      a row. Bitbucket's own documented limitation: \`depth: full\` is NOT
-#      honoured on \`pull-requests\` pipelines (Bitbucket ignores it there) —
-#      only the \`default\` (branch push) pipeline below gets a true full
-#      clone; a PR pipeline still gets the last-50-commits default, a
-#      smaller version of the same gap this exists to close, and there is
-#      no config-only way to change that.
+#      a row. Bitbucket's own documented limitation, primary source —
+#      support.atlassian.com/bitbucket-cloud/kb/clone-depth-not-applying-for-pull-request-pipelines/
+#      — quoted rather than guessed: "configuring a clone depth in
+#      pipelines does not take effect for pull request pipelines"; the KB's
+#      own "Cause" section explains why — a PR pipeline's build setup MERGES
+#      the destination branch into the source branch to mimic the
+#      post-merge state, and "the clone depth is not considered for the
+#      merge. Otherwise, the destination branch commits would not be cloned
+#      and no merge would be possible." So only the \`default\` (branch push)
+#      pipeline below is guaranteed a true full clone by this setting; a PR
+#      pipeline's own clone depth is whatever that merge step needs — not a
+#      fixed shallow default this template can name, and not something
+#      \`depth: full\` controls — and there is no config-only way to change
+#      that.
 #   2. Installs curl/git/pipx from Debian's own apt repo — the bookworm
 #      base image does not carry them by default. A .NET project also
 #      needs the .NET SDK for scan_sast's .NET analyzers (the identical
@@ -102,8 +110,8 @@ definitions:
           - git clone --depth 1 --branch "v2.0.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
           - |
             actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
-            if [ "$actual_sha" != "379ad09c0d366b08c230f4696ae4a10ff19b615b" ]; then
-              echo "dev-guardian clone at v2.0.0 resolved to $actual_sha, expected 379ad09c0d366b08c230f4696ae4a10ff19b615b -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+            if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
+              echo "dev-guardian clone at v2.0.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
               exit 1
             fi
           - npm ci --omit=dev --prefix "$DEV_GUARDIAN_HOME/mcp"
@@ -229,7 +237,7 @@ name: dev-guardian
 
 on:
   push:
-    branches: [main]
+    branches: ["main"]
   pull_request:
 
 permissions:
@@ -256,7 +264,17 @@ jobs:
         id: dotnet_probe
         run: |
           set -euo pipefail
-          if ls -- *.csproj *.fsproj *.sln *.slnx >/dev/null 2>&1; then
+          # NOT \`ls -- *.csproj *.fsproj *.sln *.slnx\`: with even one of the
+          # four patterns unmatched, bash still passes its LITERAL, unglobbed
+          # string to \`ls\` (no nullglob here), which then reports that literal
+          # name as inaccessible and exits non-zero — so \`ls\` here would need
+          # ALL FOUR extensions present at once to ever report "found",
+          # exactly backwards from the point of this probe. Reproduced
+          # directly: a directory holding only App.csproj (no .fsproj/.sln/
+          # .slnx) still made the \`ls\` form print "found=false". \`find\` never
+          # errors on an extension nothing matches, and \`-iname\` matches
+          # case-insensitively, like hasRootDotnetSignal's own \`/i\` regex.
+          if find . -maxdepth 1 \\( -iname '*.csproj' -o -iname '*.fsproj' -o -iname '*.sln' -o -iname '*.slnx' \\) | grep -q .; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
@@ -276,8 +294,8 @@ jobs:
           set -euo pipefail
           git clone --depth 1 --branch "v2.0.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
           actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
-          if [ "$actual_sha" != "379ad09c0d366b08c230f4696ae4a10ff19b615b" ]; then
-            echo "dev-guardian clone at v2.0.0 resolved to $actual_sha, expected 379ad09c0d366b08c230f4696ae4a10ff19b615b -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+          if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
+            echo "dev-guardian clone at v2.0.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
             exit 1
           fi
 
@@ -429,8 +447,8 @@ dev-guardian:
     - git clone --depth 1 --branch "v2.0.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
     - |
       actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
-      if [ "$actual_sha" != "379ad09c0d366b08c230f4696ae4a10ff19b615b" ]; then
-        echo "dev-guardian clone at v2.0.0 resolved to $actual_sha, expected 379ad09c0d366b08c230f4696ae4a10ff19b615b -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+      if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
+        echo "dev-guardian clone at v2.0.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
         exit 1
       fi
     - npm ci --omit=dev --prefix "$DEV_GUARDIAN_HOME/mcp"

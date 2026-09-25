@@ -10,7 +10,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,12 +34,36 @@ afterEach(() => {
   for (const d of tempDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-function runCli(args: string[]) {
+// Fix round 2: this repo bumps `.claude-plugin/plugin.json`'s `version`
+// and tags the release SEPARATELY (version committed first, tag pushed
+// later) — for most of that window, `resolveDevGuardianCommitSha` has no
+// answer (neither this checkout's own tags nor the network has the
+// not-yet-existing tag), and every test below would exit 3 for a reason
+// that has nothing to do with what it is testing. `GUARDIAN_CI_INIT_PIN_SHA`
+// (the CLI's own test seam — see its doc comment) sidesteps that: a fixed,
+// obviously-fake-but-correctly-shaped SHA, injected by default here so the
+// whole suite is independent of whether THIS run's `plugin.json` version
+// happens to have a real tag yet. The one test that must exercise REAL
+// resolution (`ci-init: real tag-to-SHA resolution`, below) calls
+// `runCliNoPin` instead, deliberately without this override.
+const PINNED_TEST_SHA = 'a'.repeat(40);
+
+function runCli(args: string[], envOverrides: Record<string, string> = {}) {
   const r = spawnSync(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, NO_COLOR: '1' },
+    env: { ...process.env, NO_COLOR: '1', GUARDIAN_CI_INIT_PIN_SHA: PINNED_TEST_SHA, ...envOverrides },
     timeout: TIMEOUT_MS,
   });
+  return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** `runCli`, but WITHOUT the pinned-SHA test seam — exercises real tag-to-SHA resolution. */
+function runCliNoPin(args: string[]) {
+  // Omitted, not emptied — `''` would still hit the seam in the CLI (it
+  // only checks `!== undefined`) and fail COMMIT_SHA_SHAPE.
+  const { GUARDIAN_CI_INIT_PIN_SHA: _unused, ...restEnv } = process.env;
+  const env = { ...restEnv, NO_COLOR: '1' };
+  const r = spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', env, timeout: TIMEOUT_MS });
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -339,9 +363,56 @@ describe('ci-init fix round 1: bandit always installed; .NET SDK conditional (gi
     };
     const steps = Object.values(doc.jobs).flatMap((j) => j.steps);
     const probe = steps.find((s) => s.id === 'dotnet_probe');
-    expect(probe?.run).toMatch(/\*\.csproj \*\.fsproj \*\.sln \*\.slnx/);
+    expect(probe?.run).toMatch(/find . -maxdepth 1/);
+    expect(probe?.run).toMatch(/-iname '\*\.csproj'/);
+    expect(probe?.run).toMatch(/-iname '\*\.fsproj'/);
+    expect(probe?.run).toMatch(/-iname '\*\.sln'/);
+    expect(probe?.run).toMatch(/-iname '\*\.slnx'/);
     const setup = steps.find((s) => s.uses?.startsWith('actions/setup-dotnet@'));
     expect(setup?.if).toBe("steps.dotnet_probe.outputs.found == 'true'");
+  });
+
+  // Fix round 2: the FIRST version of this probe used
+  // `ls -- *.csproj *.fsproj *.sln *.slnx`, which reports "found" only when
+  // ALL FOUR extensions are present — a directory holding only App.csproj
+  // (no .fsproj/.sln/.slnx) made it print "found=false", the opposite of
+  // correct. A string-matching test would not have caught this: the OLD
+  // script's text still mentioned every extension. Only actually RUNNING
+  // the extracted script against a real directory catches it.
+  describe('github: the .NET probe script, actually executed against real directories', () => {
+    function extractProbeScript(project: string): string {
+      const doc = parseYaml(renderedBody(project, 'github')) as {
+        jobs: Record<string, { steps: Array<{ id?: string; run?: string }> }>;
+      };
+      const steps = Object.values(doc.jobs).flatMap((j) => j.steps);
+      const script = steps.find((s) => s.id === 'dotnet_probe')?.run;
+      if (script === undefined) throw new Error('dotnet_probe step not found in rendered template');
+      return script;
+    }
+
+    function runProbe(project: string, files: string[]): string {
+      for (const f of files) writeFileSync(join(project, f), '', 'utf8');
+      const script = extractProbeScript(project);
+      const outputFile = join(project, '.github_output_test');
+      const result = spawnSync('bash', ['-c', script], {
+        cwd: project,
+        env: { ...process.env, GITHUB_OUTPUT: outputFile },
+        encoding: 'utf8',
+      });
+      expect(result.status, `probe script failed:\n${script}\nstderr: ${result.stderr}`).toBe(0);
+      return readFileSync(outputFile, 'utf8').trim();
+    }
+
+    it.each([
+      ['only a .csproj', ['App.csproj'], 'found=true'],
+      ['only a .fsproj', ['App.fsproj'], 'found=true'],
+      ['only a .sln', ['App.sln'], 'found=true'],
+      ['only a .slnx', ['App.slnx'], 'found=true'],
+      ['no .NET project files at all', [], 'found=false'],
+    ] as const)('%s -> %s', (_label, files, expected) => {
+      const project = makeProject();
+      expect(runProbe(project, [...files])).toBe(expected);
+    });
   });
 
   it.each(['gitlab', 'bitbucket'] as const)('%s: documents the .NET SDK requirement instead of installing it', (target) => {
@@ -379,6 +450,22 @@ describe('ci-init fix round 1: --branch controls the GitHub push trigger (defaul
     expect(r.status).toBe(3);
     expect(r.stderr).toMatch(/--branch/);
   });
+
+  it('fix round 2: a numeric-looking branch name stays a YAML string, never a bare number', () => {
+    // BRANCH_NAME_SHAPE allows an all-digit branch ("123" is a legal git
+    // ref). Rendered unquoted (`branches: [{{BRANCH}}]`), YAML would parse
+    // it as the number 123, not the string "123" — GitHub compares it
+    // against a ref name, so a numeric branch's push trigger would silently
+    // never match. The template quotes the placeholder
+    // (`branches: ["{{BRANCH}}"]`) specifically so this stays a string.
+    const project = makeProject();
+    const r = runCli(['ci-init', 'github', '--project', project, '--branch', '123']);
+    expect(r.status).toBe(0);
+    const body = r.stdout.split('\n').slice(2, -2).join('\n');
+    const doc = parseYaml(body) as { on: { push: { branches: unknown[] } } };
+    expect(doc.on.push.branches).toEqual(['123']);
+    expect(typeof doc.on.push.branches[0]).toBe('string');
+  });
 });
 
 describe('ci-init fix round 1: the dev-guardian clone is verified against its resolved commit SHA', () => {
@@ -389,10 +476,37 @@ describe('ci-init fix round 1: the dev-guardian clone is verified against its re
       version: string;
     };
     expect(body).toMatch(/rev-parse HEAD/);
-    // The expected SHA is a real, resolved 40-hex commit, not a placeholder or the tag itself.
+    // The expected SHA is the pinned test seam's value (deterministic —
+    // see PINNED_TEST_SHA), not a placeholder or the tag itself.
     const shaMatch = /expected ([0-9a-f]{40})/.exec(body);
     expect(shaMatch, body).not.toBeNull();
+    expect(shaMatch?.[1]).toBe(PINNED_TEST_SHA);
     expect(body).toContain(`clone at v${plugin.version}`);
+  });
+});
+
+describe('ci-init fix round 2: real tag-to-SHA resolution (no test-seam override)', () => {
+  // Deliberately uses `runCliNoPin`: this is the ONE test that must exercise
+  // `resolveDevGuardianCommitSha` for real (local-tag lookup, or `git
+  // ls-remote` if this checkout lacks the tag) — every other test in this
+  // file uses the `GUARDIAN_CI_INIT_PIN_SHA` seam instead, on purpose: this
+  // repo bumps `.claude-plugin/plugin.json`'s `version` and tags the
+  // release SEPARATELY, so for most of the time a release branch exists,
+  // NEITHER this checkout's own tags NOR the network has an answer for the
+  // version this exact worktree currently declares — that is an expected,
+  // documented state (see resolveDevGuardianCommitSha's own doc comment),
+  // not a failure of this test, so it skips rather than fails when hit.
+  it('resolves the current release tag to a real commit SHA, or skips cleanly if this checkout is ahead of its own tag and there is no network', (t) => {
+    const project = makeProject();
+    const r = runCliNoPin(['ci-init', 'github', '--project', project]);
+    if (r.status === 3 && /could not resolve/.test(r.stderr)) {
+      t.skip(); // expected pre-tag state — see the module doc comment on resolveDevGuardianCommitSha
+      return;
+    }
+    expect(r.status, r.stderr).toBe(0);
+    const shaMatch = /expected ([0-9a-f]{40})/.exec(r.stdout);
+    expect(shaMatch, r.stdout).not.toBeNull();
+    expect(shaMatch?.[1]).not.toBe(PINNED_TEST_SHA); // genuinely resolved, not the test seam's fake value
   });
 });
 
@@ -411,5 +525,62 @@ describe('ci-init fix round 1: a symlinked .github escaping the project is refus
     expect(r.status).toBe(3);
     expect(r.stderr).toMatch(/resolves outside the project/);
     expect(existsSync(join(outside, 'workflows'))).toBe(false);
+  });
+});
+
+describe('ci-init fix round 2: a leaf symlink at the output path is never followed by --force', () => {
+  // `firstEscapingAncestor` (tested above) only walks ANCESTORS of outPath;
+  // it deliberately does not check outPath itself (see its own doc
+  // comment). Without `--force`, `wx` already refuses any existing path at
+  // that name, symlink or not. `--force` alone switches to plain `'w'`,
+  // which follows a symlink — so these two tests target the leaf itself,
+  // using gitlab's flat `.gitlab-ci.yml` output path (no intermediate
+  // directory needed, unlike github's `.github/workflows/...`).
+
+  it('refuses to overwrite a leaf symlink that resolves outside the project, even with --force', (t) => {
+    const project = makeProject();
+    const outside = mkdtempSync(join(tmpdir(), 'guardian-ci-init-outside-'));
+    tempDirs.push(outside);
+    const outsideTarget = join(outside, 'not-the-pipeline.yml');
+    writeFileSync(outsideTarget, 'do not touch\n');
+    const outPath = join(project, '.gitlab-ci.yml');
+    try {
+      symlinkSync(outsideTarget, outPath, 'file');
+    } catch {
+      t.skip(); // no symlink privilege on this host
+      return;
+    }
+
+    const r = runCli(['ci-init', 'gitlab', '--project', project, '--write', '--force']);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/refusing to overwrite/);
+    expect(r.stderr).toMatch(/resolves outside the project/);
+    // Never followed: the file the link points at is untouched, and the
+    // link itself is still a link (not replaced, not removed).
+    expect(readFileSync(outsideTarget, 'utf8')).toBe('do not touch\n');
+    expect(lstatSync(outPath).isSymbolicLink()).toBe(true);
+  });
+
+  it('--force overwrites a leaf symlink that resolves inside the project by removing the link and writing a plain file', (t) => {
+    const project = makeProject();
+    const insideTarget = join(project, 'real-target.yml');
+    writeFileSync(insideTarget, 'old content\n');
+    const outPath = join(project, '.gitlab-ci.yml');
+    try {
+      symlinkSync(insideTarget, outPath, 'file');
+    } catch {
+      t.skip(); // no symlink privilege on this host
+      return;
+    }
+
+    const r = runCli(['ci-init', 'gitlab', '--project', project, '--write', '--force']);
+    expect(r.status).toBe(0);
+    // The link is gone; outPath is now a plain file holding the rendered
+    // pipeline, not written through the old link.
+    expect(lstatSync(outPath).isSymbolicLink()).toBe(false);
+    expect(readFileSync(outPath, 'utf8')).toMatch(/Generated by `dev-guardian ci-init/);
+    // The old link's target is untouched -- proof the write went to a
+    // fresh file at outPath, never through the link to insideTarget.
+    expect(readFileSync(insideTarget, 'utf8')).toBe('old content\n');
   });
 });

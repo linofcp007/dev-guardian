@@ -87,10 +87,12 @@
 
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -1430,7 +1432,23 @@ const COMMIT_SHA_SHAPE = /^[0-9a-f]{40}$/;
  * (`resolveTagRemotely`). Returns null when NEITHER can — no `git` at all,
  * offline with no local tag either, or an unknown tag — never throws.
  */
+/**
+ * Test seam (fix round 2): `GUARDIAN_CI_INIT_PIN_SHA`, honoured ONLY when
+ * set, skips both the local-tag lookup and the network fallback entirely.
+ * Real, undoctored need for it: this repo bumps `.claude-plugin/
+ * plugin.json`'s `version` and tags the release SEPARATELY — the version
+ * is committed first, the tag comes later — so between those two steps
+ * (which is most of the time a release branch exists at all) neither
+ * `resolveTagLocally` nor `resolveTagRemotely` has an answer, and every
+ * `ci-init` call in the test suite would exit 3 for a reason that has
+ * nothing to do with what the suite is testing. Production `ci-init` never
+ * sets this itself; only a test's own `env` does.
+ */
 function resolveDevGuardianCommitSha(repoUrl, tag) {
+  const pinned = process.env['GUARDIAN_CI_INIT_PIN_SHA'];
+  if (pinned !== undefined) {
+    return COMMIT_SHA_SHAPE.test(pinned) ? pinned : null;
+  }
   return resolveTagLocally(tag) ?? resolveTagRemotely(repoUrl, tag);
 }
 
@@ -1573,14 +1591,16 @@ function ciTemplateVars(plugin, pinned, branch) {
  * `realpathSync` cannot resolve must read as "not inside" rather than
  * crash a usage check.
  */
+/** Whether `candidate` (an absolute, already-resolved path) IS `root` or is inside it. */
+function isWithin(root, candidate) {
+  const rel = relative(root, candidate);
+  return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
+}
+
 function isDevGuardianOwnRepo(projectPath) {
-  const within = (root, candidate) => {
-    const rel = relative(root, candidate);
-    return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
-  };
-  if (within(resolve(ROOT), resolve(projectPath))) return true;
+  if (isWithin(resolve(ROOT), resolve(projectPath))) return true;
   try {
-    return within(realpathSync(ROOT), realpathSync(projectPath));
+    return isWithin(realpathSync(ROOT), realpathSync(projectPath));
   } catch {
     return false;
   }
@@ -1589,6 +1609,14 @@ function isDevGuardianOwnRepo(projectPath) {
 function safeRealpath(p) {
   try {
     return realpathSync(p);
+  } catch {
+    return null;
+  }
+}
+
+function safeLstat(p) {
+  try {
+    return lstatSync(p);
   } catch {
     return null;
   }
@@ -1606,6 +1634,13 @@ function safeRealpath(p) {
  * `workflows/` THROUGH it, and the write would land outside the project
  * entirely. gitlab/bitbucket's flat, root-level output paths have no
  * intermediate ancestor to check at all.
+ *
+ * Does NOT check `outPath` itself — a symlinked LEAF (the pipeline file's
+ * own name already existing as a symlink) is a different hazard, handled
+ * by `refuseEscapingLeafSymlink` right before the write, because a
+ * `--force` overwrite is the only path that can reach it (a plain `wx`
+ * create already refuses ANY existing path at that name, symlink or not,
+ * via `EEXIST` — see `cmdCiInit`).
  */
 function firstEscapingAncestor(projectPath, outPath) {
   const rootReal = safeRealpath(projectPath) ?? resolve(projectPath);
@@ -1616,10 +1651,44 @@ function firstEscapingAncestor(projectPath, outPath) {
     if (!existsSync(current)) continue;
     const real = safeRealpath(current);
     if (real === null) continue;
-    const rel = relative(rootReal, real);
-    if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return current;
+    if (!isWithin(rootReal, real)) return current;
   }
   return null;
+}
+
+/**
+ * Guards `--force` specifically: without it, `writeFileSync(…, { flag:
+ * 'wx' })` already refuses ANY existing path at `outPath` — symlink or
+ * not — with `EEXIST`, never following it. `--force` switches to plain
+ * `'w'`, which DOES follow an existing symlink (no `O_NOFOLLOW`), so a
+ * `dev-guardian.yml` that is itself a symlink pointing OUTSIDE the project
+ * would otherwise have `--force` write the generated pipeline through it
+ * to wherever it points — silently, since nothing about a plain `'w'`
+ * write says whether the path it opened was a symlink at all.
+ *
+ * Returns `{ ok: true }` when `outPath` is not a symlink (nothing to
+ * guard against) or is a symlink that resolves INSIDE the project (in
+ * which case the link itself is removed here, so the subsequent
+ * `writeFileSync` creates a plain file rather than writing through the
+ * old link — matching what `--force` means for every other existing
+ * path: replaced, not followed). Returns `{ ok: false, reason }` when it
+ * is a symlink that resolves outside the project, or is broken (points
+ * nowhere this process can resolve) — refused either way, never "fixed"
+ * by guessing.
+ */
+function refuseEscapingLeafSymlink(projectPath, outPath) {
+  const st = safeLstat(outPath);
+  if (st === null || !st.isSymbolicLink()) return { ok: true };
+  const real = safeRealpath(outPath);
+  const rootReal = safeRealpath(projectPath) ?? resolve(projectPath);
+  if (real === null || !isWithin(rootReal, real)) {
+    return {
+      ok: false,
+      reason: real === null ? 'it is a broken symlink' : 'it is a symlink that resolves outside the project',
+    };
+  }
+  unlinkSync(outPath);
+  return { ok: true };
 }
 
 function cmdCiInit(argv) {
@@ -1680,9 +1749,22 @@ function cmdCiInit(argv) {
   }
   mkdirSync(dirname(outPath), { recursive: true });
 
+  if (args.force) {
+    const leaf = refuseEscapingLeafSymlink(projectPath, outPath);
+    if (!leaf.ok) {
+      return usageError(
+        `ci-init: refusing to overwrite ${outPath} with --force — ${leaf.reason}. Remove it first.`,
+      );
+    }
+  }
+
   // `wx`: atomically fail with EEXIST if the path already exists (including
   // a symlink, dangling or not) — no separate `existsSync` check first,
   // which would leave a TOCTOU window between the check and the write.
+  // (`--force`'s own symlink hazard is handled just above, before this —
+  // by the time this runs with `--force`, `outPath` is either a plain
+  // file/absent, or was just unlinked because it safely resolved inside
+  // the project.)
   try {
     writeFileSync(outPath, rendered, { encoding: 'utf8', flag: args.force ? 'w' : 'wx' });
   } catch (e) {

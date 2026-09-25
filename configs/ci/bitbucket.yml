@@ -15,12 +15,20 @@
 #      boundary — it attributes every pre-existing secret to the grafted
 #      boundary commit instead, which moves with every push, so every
 #      finding looks "new" on every run and the gate never passes twice in
-#      a row. Bitbucket's own documented limitation: `depth: full` is NOT
-#      honoured on `pull-requests` pipelines (Bitbucket ignores it there) —
-#      only the `default` (branch push) pipeline below gets a true full
-#      clone; a PR pipeline still gets the last-50-commits default, a
-#      smaller version of the same gap this exists to close, and there is
-#      no config-only way to change that.
+#      a row. Bitbucket's own documented limitation, primary source —
+#      support.atlassian.com/bitbucket-cloud/kb/clone-depth-not-applying-for-pull-request-pipelines/
+#      — quoted rather than guessed: "configuring a clone depth in
+#      pipelines does not take effect for pull request pipelines"; the KB's
+#      own "Cause" section explains why — a PR pipeline's build setup MERGES
+#      the destination branch into the source branch to mimic the
+#      post-merge state, and "the clone depth is not considered for the
+#      merge. Otherwise, the destination branch commits would not be cloned
+#      and no merge would be possible." So only the `default` (branch push)
+#      pipeline below is guaranteed a true full clone by this setting; a PR
+#      pipeline's own clone depth is whatever that merge step needs — not a
+#      fixed shallow default this template can name, and not something
+#      `depth: full` controls — and there is no config-only way to change
+#      that.
 #   2. Installs curl/git/pipx from Debian's own apt repo — the bookworm
 #      base image does not carry them by default. A .NET project also
 #      needs the .NET SDK for scan_sast's .NET analyzers (the identical

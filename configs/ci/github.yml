@@ -88,7 +88,7 @@ name: dev-guardian
 
 on:
   push:
-    branches: [{{DEFAULT_BRANCH}}]
+    branches: ["{{DEFAULT_BRANCH}}"]
   pull_request:
 
 permissions:
@@ -115,7 +115,17 @@ jobs:
         id: dotnet_probe
         run: |
           set -euo pipefail
-          if ls -- *.csproj *.fsproj *.sln *.slnx >/dev/null 2>&1; then
+          # NOT `ls -- *.csproj *.fsproj *.sln *.slnx`: with even one of the
+          # four patterns unmatched, bash still passes its LITERAL, unglobbed
+          # string to `ls` (no nullglob here), which then reports that literal
+          # name as inaccessible and exits non-zero — so `ls` here would need
+          # ALL FOUR extensions present at once to ever report "found",
+          # exactly backwards from the point of this probe. Reproduced
+          # directly: a directory holding only App.csproj (no .fsproj/.sln/
+          # .slnx) still made the `ls` form print "found=false". `find` never
+          # errors on an extension nothing matches, and `-iname` matches
+          # case-insensitively, like hasRootDotnetSignal's own `/i` regex.
+          if find . -maxdepth 1 \( -iname '*.csproj' -o -iname '*.fsproj' -o -iname '*.sln' -o -iname '*.slnx' \) | grep -q .; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
