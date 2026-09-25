@@ -93,6 +93,46 @@ describe('ensureGuardianIgnored', () => {
     });
   });
 
+  // Coordinator fix round 1: the upgrade path dropped only the bare entry
+  // line, never the `# dev-guardian outputs` HEADER the old code always
+  // wrote directly above it — so upgrading re-appended a second header
+  // below, leaving it duplicated. These reproduce the REAL byte-for-byte
+  // shapes the pre-fix code wrote (a header line immediately followed by
+  // the bare entry), not just a bare entry on its own.
+  describe('upgrades the real legacy header+entry pair the pre-fix code wrote', () => {
+    it('replaces the legacy "created" pair (exact bytes of the old writeFileSync call)', () => {
+      const dir = fixture('git-no-gitignore');
+      // Byte-for-byte what the pre-fix `created` branch wrote:
+      // `${HEADER}\n${ENTRY}\n` with the OLD ENTRY value '.guardian/'.
+      writeFileSync(join(dir, '.gitignore'), '# dev-guardian outputs\n.guardian/\n');
+
+      const r = ensureGuardianIgnored(dir);
+      expect(r).toEqual({ updated: true, reason: 'upgraded' });
+
+      const content = readFileSync(join(dir, '.gitignore'), 'utf8');
+      expect(content).toBe('# dev-guardian outputs\n.guardian/*\n!.guardian/baseline.json\n');
+      expect(content.match(/# dev-guardian outputs/g)).toHaveLength(1);
+    });
+
+    it('replaces the legacy "added" pair (exact bytes of the old appendFileSync call)', () => {
+      const dir = fixture('git-empty'); // '# header\nnode_modules/\n'
+      const priorContent = readFileSync(join(dir, '.gitignore'), 'utf8');
+      // Byte-for-byte what the pre-fix `added` branch appended: suffix
+      // ('' — priorContent already ends in \n) + '\n' + HEADER + '\n' +
+      // the OLD ENTRY '.guardian/' + '\n'.
+      writeFileSync(join(dir, '.gitignore'), `${priorContent}\n# dev-guardian outputs\n.guardian/\n`);
+
+      const r = ensureGuardianIgnored(dir);
+      expect(r).toEqual({ updated: true, reason: 'upgraded' });
+
+      const content = readFileSync(join(dir, '.gitignore'), 'utf8');
+      expect(content).toBe(
+        '# header\nnode_modules/\n# dev-guardian outputs\n.guardian/*\n!.guardian/baseline.json\n',
+      );
+      expect(content.match(/# dev-guardian outputs/g)).toHaveLength(1);
+    });
+  });
+
   it('leaves .guardian/baseline.json re-includable by git (a same-behaviour check-ignore proxy)', () => {
     // A behavioural pin on WHY .guardian/* was chosen over .guardian/: with
     // the bare directory form, `!.guardian/baseline.json` can never apply —

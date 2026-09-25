@@ -22,6 +22,15 @@
  * the directory outright. So `alreadyIgnored` is followed by an upgrade
  * pass whenever any of the old spellings survives, regardless of whether
  * the new block is also already present.
+ *
+ * **The legacy pair, not just the entry.** Both shapes this tool has ever
+ * written (`created`: `${HEADER}\n${ENTRY}\n`; `added`: the same two lines
+ * appended after a blank line) put the `# dev-guardian outputs` HEADER
+ * directly above the bare entry. Dropping only the entry line left the old
+ * header behind, and the new block appended below it duplicated the
+ * header. The upgrade removes a bare entry's paired header too, when it is
+ * the line immediately above it — never any OTHER occurrence of that exact
+ * comment, since nothing else in this file ever writes it.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -50,8 +59,20 @@ export function ensureGuardianIgnored(projectPath) {
         const hasOldPattern = lines.some((l) => OLD_DIRECTORY_PATTERNS.has(l.trim()));
         // Every old bare line is dropped outright — see the module comment on
         // why its mere presence elsewhere in the file defeats the negation,
-        // however the rest of the file reads.
-        const kept = lines.filter((l) => !OLD_DIRECTORY_PATTERNS.has(l.trim()));
+        // however the rest of the file reads. Both `created` and `added` (the
+        // only two shapes any earlier release ever wrote) put the HEADER line
+        // directly above the bare entry — drop that paired header too, or the
+        // block appended below duplicates it.
+        const toDrop = new Set();
+        lines.forEach((line, i) => {
+            if (!OLD_DIRECTORY_PATTERNS.has(line.trim()))
+                return;
+            toDrop.add(i);
+            const prev = lines[i - 1];
+            if (prev !== undefined && prev.trim() === HEADER)
+                toDrop.add(i - 1);
+        });
+        const kept = lines.filter((_, i) => !toDrop.has(i));
         const hasEntry = kept.some((l) => l.trim() === ENTRY);
         const hasNegation = kept.some((l) => l.trim() === BASELINE_NEGATION);
         if (!hasOldPattern && hasEntry && hasNegation) {
