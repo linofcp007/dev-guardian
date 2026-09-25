@@ -32,7 +32,7 @@
  * All raw outputs are persisted under `.guardian/reports/depsaudit-<scan>/`.
  */
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { dotnetScaParser } from '../runners/scannerParsers/dotnetSca.js';
 import { NPM_AUDIT_TOOL_NAME, npmAuditParser } from '../runners/scannerParsers/npmAudit.js';
 import { pipAuditParser } from '../runners/scannerParsers/pipAudit.js';
@@ -150,12 +150,27 @@ registerToolModule(makeScanTool({
                 // packages.lock.json) must never read as a clean scan.
                 const coverage = assessManifestCoverage(ctx.projectPath, raw ?? '');
                 manifestCoverageGaps = coverage.gaps;
-                if (coverage.gaps.length > 0) {
-                    tools_run.push({
-                        name: 'trivy',
-                        status: coverage.sawAnyResults ? 'ok' : 'skipped',
-                        reason: 'no_supported_manifest',
-                    });
+                if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
+                    // PARTIAL: trivy genuinely ran and covered SOME ecosystems (its
+                    // own tools_run status stays 'ok') but not this one. Fix round
+                    // 1, item 4: the gap is named `trivy:<ecosystem>`, never the
+                    // bare 'trivy' — `create_fix_pr`'s own verification
+                    // (`DEPS_AUDIT_MISSING_TOOLS_NAME`) treats a literal 'trivy' in
+                    // `missing_tools` as "trivy did not run at all, nothing it
+                    // found can be re-verified", which would block EVERY
+                    // trivy-sourced fix (e.g. an unrelated npm CVE) just because
+                    // one ecosystem (e.g. NuGet) went uncovered. A pseudo-name that
+                    // matches no `tools_run` entry still forces coverage to
+                    // 'partial' (missing_tools.length > 0), without colliding with
+                    // the exact-string check downstream.
+                    tools_run.push({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' });
+                    missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`));
+                }
+                else if (coverage.gaps.length > 0) {
+                    // FULL SKIP: trivy's own Results were entirely empty — nothing
+                    // it reports can be trusted as re-verified, so the bare 'trivy'
+                    // name is correct here (unchanged from before this fix round).
+                    tools_run.push({ name: 'trivy', status: 'skipped', reason: 'no_supported_manifest' });
                     missing_tools.push('trivy');
                 }
                 else {
@@ -184,27 +199,12 @@ registerToolModule(makeScanTool({
         }
         // pip-audit: NEVER invoked bare — a bare `pip-audit` audits whatever
         // Python is on PATH (the MCP host's own interpreter), not this
-        // project's dependencies. `-r` per requirements file when any exist;
-        // otherwise, for a pyproject.toml-only project, the project directory
-        // itself (pip-audit reads its declared dependencies from there).
-        const requirementsFiles = findRequirementsFiles(ctx.projectPath);
-        const hasPyproject = existsSync(join(ctx.projectPath, 'pyproject.toml'));
-        if (requirementsFiles.length > 0 || hasPyproject) {
-            const outFile = join(reportDir, 'pip-audit.json');
-            const target = requirementsFiles.length > 0
-                ? requirementsFiles.flatMap((f) => ['-r', f])
-                : [ctx.projectPath];
-            await tryNativeAudit({
-                command: 'pip-audit',
-                args: [...target, '--format', 'json', '-o', outFile],
-                outFile,
-                ctx,
-                tools_run,
-                missing_tools,
-                parser: pipAuditParser,
-                parser_inputs,
-            });
-        }
+        // project's dependencies. One invocation PER requirements file (so
+        // each finding is attributed to its REAL source file, fix round 1
+        // item 9 — pip-audit's own JSON output never says which file a
+        // dependency came from when several are combined into one call), or
+        // the project directory for a pyproject.toml-only project.
+        await runPipAudit({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
         // .NET SCA: Trivy cannot cover NuGet at all without a
         // packages.lock.json (trivy.ts's own module comment), so this is the
         // stack's only source of dependency findings, run whenever a
@@ -311,14 +311,13 @@ async function tryNativeAudit(opts) {
         opts.missing_tools?.push(opts.command);
     }
 }
-// --------------------------------------------------------------- pip-audit target
+// --------------------------------------------------------------- pip-audit
 /**
  * `requirements*.txt` at the project root, plus one level into a
  * `requirements/` directory (the common `requirements/base.txt` +
  * `requirements/dev.txt` split) — never a recursive walk, matching this
  * file's other manifest checks (`package.json`, `pyproject.toml`), which are
- * root-level existence checks too. Each one becomes its own `-r` flag on a
- * single `pip-audit` invocation; pip-audit accepts multiple `-r` in one call.
+ * root-level existence checks too.
  */
 function findRequirementsFiles(projectPath) {
     const out = [];
@@ -346,6 +345,118 @@ function findRequirementsFiles(projectPath) {
         }
     }
     return out;
+}
+/**
+ * A real `pip-audit --format json` report has a `dependencies` array — even
+ * an empty one on a clean project. pip-audit exits 1 on a resolution
+ * failure (a Poetry-only `pyproject.toml` it cannot read, a broken
+ * requirements file, a network error reaching PyPI) the SAME way it exits 1
+ * when vulnerabilities are found, and on that failure path the `-o` file is
+ * either never written or contains something that is not this shape (fix
+ * round 1, item 3 / Global Constraint 3: "a scanner that failed is never
+ * reported as ok"). Mirrors `looksLikeNpmAuditReport` above for the same
+ * reason: exit code alone cannot tell a real report apart from a masked
+ * error.
+ */
+function looksLikePipAuditReport(raw) {
+    try {
+        const j = JSON.parse(raw);
+        return !!j && typeof j === 'object' && Array.isArray(j['dependencies']);
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * Runs `pip-audit --format json` once PER requirements file (never bare —
+ * see this file's own module comment), or once against the project
+ * directory for a `pyproject.toml`-only project. One call per file, not one
+ * call with several `-r` flags, so `pipAuditParser` can attribute every
+ * finding to the REAL file it came from (fix round 1, item 9) — pip-audit's
+ * own JSON says nothing about which requirements file a dependency was
+ * read from, so a combined call cannot be attributed at all. The captured
+ * JSON is annotated with `__source_file` before being handed to the parser
+ * (`scanToolFactory.ts` builds one shared `ParserContext` for a whole scan,
+ * so a per-call override cannot go through `ctx` — see `pipAuditParser`'s
+ * own doc comment).
+ *
+ * Aggregated into ONE `tools_run` entry across every file (`ok` if at least
+ * one call produced a real report, `failed` only if every call did not) —
+ * `create_fix_pr` and every other consumer of `tools_run` expect one entry
+ * per named tool, the same pattern `runDotnetSca` already uses for multiple
+ * `.csproj` targets.
+ */
+async function runPipAudit(opts) {
+    const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = opts;
+    const requirementsFiles = findRequirementsFiles(ctx.projectPath);
+    const hasPyproject = existsSync(join(ctx.projectPath, 'pyproject.toml'));
+    if (requirementsFiles.length === 0 && !hasPyproject)
+        return; // nothing to audit — not a gap
+    const bin = await scannerAvailable('pip-audit');
+    if (!bin) {
+        tools_run.push({ name: 'pip-audit', status: 'skipped', reason: 'not_installed' });
+        missing_tools.push('pip-audit');
+        return;
+    }
+    // One "target" per invocation: each requirements file individually, or
+    // the project directory itself when there is no requirements file at all.
+    const targets = requirementsFiles.length > 0
+        ? requirementsFiles.map((f) => ({ arg: f, sourceFile: relative(ctx.projectPath, f) || f }))
+        : [{ arg: ctx.projectPath, sourceFile: 'pyproject.toml' }];
+    let anyOk = false;
+    let anyFailed = false;
+    for (const [i, target] of targets.entries()) {
+        const outFile = join(reportDir, `pip-audit-${i}.json`);
+        const args = requirementsFiles.length > 0
+            ? ['-r', target.arg, '--format', 'json', '-o', outFile]
+            : ['--format', 'json', '-o', outFile, target.arg];
+        const result = await runProcess({
+            command: 'pip-audit',
+            args,
+            cwd: ctx.projectPath,
+            env: ctx.scriptEnv,
+            signal: ctx.signal,
+            onLog: ctx.onLog,
+        });
+        // Exit 0/1 alone is not success — pip-audit exits 1 on a genuine
+        // failure the same way it does on "vulnerabilities found" (item 3).
+        const exitOk = result.outcome === 'completed' || result.exitCode === 0 || result.exitCode === 1;
+        const raw = exitOk ? readJsonSafe(outFile) : null;
+        if (raw && looksLikePipAuditReport(raw)) {
+            anyOk = true;
+            let annotated = raw;
+            try {
+                const parsed = JSON.parse(raw);
+                parsed['__source_file'] = target.sourceFile;
+                annotated = JSON.stringify(parsed);
+            }
+            catch {
+                /* raw already passed looksLikePipAuditReport, so this is unreachable
+                 * in practice; fall back to the unannotated text rather than drop it */
+            }
+            parser_inputs.push({ parser: pipAuditParser, input: annotated });
+        }
+        else {
+            anyFailed = true;
+        }
+    }
+    if (anyOk) {
+        tools_run.push({
+            name: 'pip-audit',
+            status: 'ok',
+            reason: anyFailed ? 'parsed into findings (failed for at least one target)' : 'parsed into findings',
+        });
+        if (anyFailed)
+            missing_tools.push('pip-audit');
+    }
+    else {
+        tools_run.push({
+            name: 'pip-audit',
+            status: 'failed',
+            reason: 'ran but produced no audit report for any target (resolution failure or unsupported project?)',
+        });
+        missing_tools.push('pip-audit');
+    }
 }
 // --------------------------------------------------------------- .NET SCA
 const DOTNET_SKIP_DIRS = new Set(['bin', 'obj', 'node_modules', '.git', '.guardian', 'packages', '.vs']);
@@ -403,12 +514,18 @@ function findDotnetTargets(projectPath) {
 }
 /**
  * Runs `dotnet list <target> package --vulnerable --include-transitive
- * --format json` for every target `findDotnetTargets` finds, restoring each
- * one first (`dotnet list package` requires a resolved `project.assets.json`
- * — restoring runs the project's own MSBuild targets, same trust boundary
- * `deps_update_plan`'s dotnet branch already crosses). A target whose
- * restore fails is one coverage gap, not a whole-scan failure — the other
- * targets still run.
+ * --format json` for every target `findDotnetTargets` finds.
+ *
+ * **Restores only when needed, and never rewrites a tracked lock file** (fix
+ * round 1, item 8 — a scan must not modify the working tree). `dotnet list
+ * package` is tried DIRECTLY first; a project already restored (CI, a dev
+ * machine mid-session) needs no further write at all. Only when that first
+ * attempt fails is `dotnet restore` attempted, and — whenever a
+ * `packages.lock.json` sits next to the target — with `--locked-mode`,
+ * which makes restore FAIL if the lock file is out of date rather than
+ * silently regenerating it in place. A target whose restore fails (private
+ * feed not configured, `--locked-mode` rejecting a stale lock) is one
+ * coverage gap, not a whole-scan failure — the other targets still run.
  */
 async function runDotnetSca(opts) {
     const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = opts;
@@ -421,29 +538,37 @@ async function runDotnetSca(opts) {
         missing_tools.push('dotnet');
         return;
     }
+    const runList = (target) => runProcess({
+        command: 'dotnet',
+        args: ['list', target, 'package', '--vulnerable', '--include-transitive', '--format', 'json'],
+        cwd: ctx.projectPath,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        onLog: ctx.onLog,
+    });
     let anyOk = false;
     let anyFailed = false;
     for (const [i, target] of targets.entries()) {
-        const restore = await runProcess({
-            command: 'dotnet',
-            args: ['restore', target, '--nologo', '--verbosity', 'quiet'],
-            cwd: ctx.projectPath,
-            env: ctx.scriptEnv,
-            signal: ctx.signal,
-            onLog: ctx.onLog,
-        });
-        if (restore.outcome !== 'completed') {
-            anyFailed = true;
-            continue;
+        let list = await runList(target);
+        if (list.outcome !== 'completed') {
+            const hasLockFile = existsSync(join(dirname(target), 'packages.lock.json'));
+            const restoreArgs = ['restore', target, '--nologo', '--verbosity', 'quiet'];
+            if (hasLockFile)
+                restoreArgs.push('--locked-mode');
+            const restore = await runProcess({
+                command: 'dotnet',
+                args: restoreArgs,
+                cwd: ctx.projectPath,
+                env: ctx.scriptEnv,
+                signal: ctx.signal,
+                onLog: ctx.onLog,
+            });
+            if (restore.outcome !== 'completed') {
+                anyFailed = true;
+                continue;
+            }
+            list = await runList(target);
         }
-        const list = await runProcess({
-            command: 'dotnet',
-            args: ['list', target, 'package', '--vulnerable', '--include-transitive', '--format', 'json'],
-            cwd: ctx.projectPath,
-            env: ctx.scriptEnv,
-            signal: ctx.signal,
-            onLog: ctx.onLog,
-        });
         if (list.outcome === 'completed' && list.stdout.trim().length > 0) {
             anyOk = true;
             parser_inputs.push({ parser: dotnetScaParser, input: list.stdout });

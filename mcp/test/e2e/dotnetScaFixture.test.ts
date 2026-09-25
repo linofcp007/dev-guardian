@@ -12,7 +12,9 @@
  * `runProcess`/`scannerAvailable` for every OTHER deps_audit scenario).
  */
 
-import { writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
@@ -81,6 +83,40 @@ describe('deps_audit — .NET SCA (real dotnet, gated)', () => {
       const dotnetFinding = findings.find((f) => f.tool === 'dotnet-list-package');
       expect(dotnetFinding).toBeDefined();
       expect(dotnetFinding?.snippet).toContain('Newtonsoft.Json');
+    },
+    120_000,
+  );
+
+  it.skipIf(!DOTNET_INSTALLED)(
+    'item 8 (fix round 1): a scan never modifies a tracked packages.lock.json',
+    async () => {
+      const project = makeTempDir('dotnet-sca-lockfile-e2e-');
+      writeFileSync(
+        join(project, 'Locked.csproj'),
+        [
+          '<Project Sdk="Microsoft.NET.Sdk">',
+          '  <PropertyGroup>',
+          '    <TargetFramework>net8.0</TargetFramework>',
+          '    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>',
+          '  </PropertyGroup>',
+          '  <ItemGroup><PackageReference Include="Newtonsoft.Json" Version="12.0.1" /></ItemGroup>',
+          '</Project>',
+        ].join('\n'),
+        'utf8',
+      );
+      // Generate the REAL lock file once, the way a developer committing it
+      // would — this is setup, not the thing under test.
+      execFileSync('dotnet', ['restore', '--nologo', '--verbosity', 'quiet'], { cwd: project });
+      const lockPath = join(project, 'packages.lock.json');
+      expect(existsSync(lockPath)).toBe(true);
+      const before = createHash('sha256').update(readFileSync(lockPath)).digest('hex');
+
+      const plugin = makePlugin(project);
+      const r = await getTool('deps_audit').handler({ project_path: project }, plugin);
+      expect(r.ok).toBe(true);
+
+      const after = createHash('sha256').update(readFileSync(lockPath)).digest('hex');
+      expect(after).toBe(before);
     },
     120_000,
   );

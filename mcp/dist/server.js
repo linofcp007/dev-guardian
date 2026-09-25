@@ -3889,49 +3889,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative9, options, skipNormalization) {
+    function resolveComponent(base, relative10, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse5(serialize2(base, options), options);
-        relative9 = parse5(serialize2(relative9, options), options);
+        relative10 = parse5(serialize2(relative10, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative9.scheme) {
-        target.scheme = relative9.scheme;
-        target.userinfo = relative9.userinfo;
-        target.host = relative9.host;
-        target.port = relative9.port;
-        target.path = removeDotSegments(relative9.path || "");
-        target.query = relative9.query;
+      if (!options.tolerant && relative10.scheme) {
+        target.scheme = relative10.scheme;
+        target.userinfo = relative10.userinfo;
+        target.host = relative10.host;
+        target.port = relative10.port;
+        target.path = removeDotSegments(relative10.path || "");
+        target.query = relative10.query;
       } else {
-        if (relative9.userinfo !== void 0 || relative9.host !== void 0 || relative9.port !== void 0) {
-          target.userinfo = relative9.userinfo;
-          target.host = relative9.host;
-          target.port = relative9.port;
-          target.path = removeDotSegments(relative9.path || "");
-          target.query = relative9.query;
+        if (relative10.userinfo !== void 0 || relative10.host !== void 0 || relative10.port !== void 0) {
+          target.userinfo = relative10.userinfo;
+          target.host = relative10.host;
+          target.port = relative10.port;
+          target.path = removeDotSegments(relative10.path || "");
+          target.query = relative10.query;
         } else {
-          if (!relative9.path) {
+          if (!relative10.path) {
             target.path = base.path;
-            if (relative9.query !== void 0) {
-              target.query = relative9.query;
+            if (relative10.query !== void 0) {
+              target.query = relative10.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative9.path[0] === "/") {
-              target.path = removeDotSegments(relative9.path);
+            if (relative10.path[0] === "/") {
+              target.path = removeDotSegments(relative10.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative9.path;
+                target.path = "/" + relative10.path;
               } else if (!base.path) {
-                target.path = relative9.path;
+                target.path = relative10.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative9.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative10.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative9.query;
+            target.query = relative10.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3939,7 +3939,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative9.fragment;
+      target.fragment = relative10.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -41771,12 +41771,12 @@ registerToolModule(
         tools_run.push({ name: "trivy", status: "failed" });
       } else {
         const coverage = assessManifestCoverage(ctx.projectPath, raw ?? "");
-        if (coverage.gaps.length > 0) {
-          tools_run.push({
-            name: "trivy",
-            status: coverage.sawAnyResults ? "ok" : "skipped",
-            reason: "no_supported_manifest"
-          });
+        if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
+          tools_run.push({ name: "trivy", status: "ok", reason: "no_supported_manifest" });
+          missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`));
+          extras["manifest_coverage_gaps"] = coverage.gaps;
+        } else if (coverage.gaps.length > 0) {
+          tools_run.push({ name: "trivy", status: "skipped", reason: "no_supported_manifest" });
           missing_tools.push("trivy");
           extras["manifest_coverage_gaps"] = coverage.gaps;
         } else {
@@ -42622,7 +42622,7 @@ async function diffFiles(base, head, cwd) {
 
 // src/tools/depsAudit.ts
 import { existsSync as existsSync16, readdirSync as readdirSync8, statSync as statSync6 } from "node:fs";
-import { join as join22 } from "node:path";
+import { dirname as dirname8, join as join22, relative as relative4 } from "node:path";
 
 // src/runners/scannerParsers/dotnetSca.ts
 var DOTNET_SCA_TOOL_NAME = "dotnet-list-package";
@@ -42784,14 +42784,40 @@ function composeMessage(pkg, range, tail) {
   return parts.length > 0 ? parts.join(" \xB7 ") : void 0;
 }
 
+// src/deps/versionCompare.ts
+function isCleanVersion(v) {
+  return v !== void 0 && /^v?\d+(\.\d+)*$/i.test(v.trim());
+}
+function compareVersions(a2, b) {
+  const pa = a2.replace(/^v/i, "").split(".").map((n2) => parseInt(n2, 10));
+  const pb = b.replace(/^v/i, "").split(".").map((n2) => parseInt(n2, 10));
+  if (pa.some(Number.isNaN) || pb.some(Number.isNaN)) return a2.localeCompare(b);
+  for (let i2 = 0; i2 < Math.max(pa.length, pb.length); i2 += 1) {
+    const diff = (pa[i2] ?? 0) - (pb[i2] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+function minCleanVersionAbove(installed, candidates2) {
+  if (!isCleanVersion(installed)) return void 0;
+  let best;
+  for (const c3 of candidates2) {
+    if (!isCleanVersion(c3)) continue;
+    if (compareVersions(c3, installed) <= 0) continue;
+    if (best === void 0 || compareVersions(c3, best) < 0) best = c3;
+  }
+  return best;
+}
+
 // src/runners/scannerParsers/pipAudit.ts
 var PIP_AUDIT_TOOL_NAME = "pip-audit";
 var pipAuditParser = {
   name: PIP_AUDIT_TOOL_NAME,
-  parse(input, _ctx = {}) {
+  parse(input, ctx = {}) {
     const root = parseInputAsJson(input);
     const findings = [];
     const cves = [];
+    const filePath = getString(root, "__source_file") ?? ctx.source_file ?? "requirements.txt";
     for (const dep of asArray(getProp(root, "dependencies"))) {
       const name = getString(dep, "name");
       if (!name) continue;
@@ -42804,6 +42830,7 @@ var pipAuditParser = {
         const cveId = aliases.find((a2) => /^CVE-\d/i.test(a2));
         const description = getString(vuln, "description");
         const severity = normalizeSeverity(void 0);
+        const safeFix = minCleanVersionAbove(version2, fixVersions);
         const findingInput = {
           tool: PIP_AUDIT_TOOL_NAME,
           rule_id: id,
@@ -42812,7 +42839,7 @@ var pipAuditParser = {
           subcategory: "dependency",
           title: `${id} in ${name}${version2 ? ` ${version2}` : ""}`,
           fix_available: fixVersions.length > 0,
-          file_path: "requirements.txt",
+          file_path: filePath,
           snippet: `${name}@${version2 ?? ""}`
         };
         if (description !== void 0) findingInput.message = description;
@@ -42820,8 +42847,7 @@ var pipAuditParser = {
         if (cveId) {
           const cve = { cve_id: cveId, package_name: name, severity };
           if (version2 !== void 0) cve.installed_version = version2;
-          const fixed = fixVersions[0];
-          if (fixed !== void 0) cve.fixed_version = fixed;
+          if (safeFix !== void 0) cve.fixed_version = safeFix;
           cves.push(cve);
         }
       }
@@ -42911,12 +42937,11 @@ registerToolModule(
         } else {
           const coverage = assessManifestCoverage(ctx.projectPath, raw ?? "");
           manifestCoverageGaps = coverage.gaps;
-          if (coverage.gaps.length > 0) {
-            tools_run.push({
-              name: "trivy",
-              status: coverage.sawAnyResults ? "ok" : "skipped",
-              reason: "no_supported_manifest"
-            });
+          if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
+            tools_run.push({ name: "trivy", status: "ok", reason: "no_supported_manifest" });
+            missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`));
+          } else if (coverage.gaps.length > 0) {
+            tools_run.push({ name: "trivy", status: "skipped", reason: "no_supported_manifest" });
             missing_tools.push("trivy");
           } else {
             tools_run.push({ name: "trivy", status: "ok" });
@@ -42938,22 +42963,7 @@ registerToolModule(
           parser: npmAuditParser
         });
       }
-      const requirementsFiles = findRequirementsFiles(ctx.projectPath);
-      const hasPyproject = existsSync16(join22(ctx.projectPath, "pyproject.toml"));
-      if (requirementsFiles.length > 0 || hasPyproject) {
-        const outFile = join22(reportDir, "pip-audit.json");
-        const target = requirementsFiles.length > 0 ? requirementsFiles.flatMap((f) => ["-r", f]) : [ctx.projectPath];
-        await tryNativeAudit({
-          command: "pip-audit",
-          args: [...target, "--format", "json", "-o", outFile],
-          outFile,
-          ctx,
-          tools_run,
-          missing_tools,
-          parser: pipAuditParser,
-          parser_inputs
-        });
-      }
+      await runPipAudit({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
       await runDotnetSca({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
       const bot_configured = detectBots(ctx.projectPath);
       return {
@@ -43052,6 +43062,71 @@ function findRequirementsFiles(projectPath) {
   }
   return out;
 }
+function looksLikePipAuditReport(raw) {
+  try {
+    const j = JSON.parse(raw);
+    return !!j && typeof j === "object" && Array.isArray(j["dependencies"]);
+  } catch {
+    return false;
+  }
+}
+async function runPipAudit(opts) {
+  const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = opts;
+  const requirementsFiles = findRequirementsFiles(ctx.projectPath);
+  const hasPyproject = existsSync16(join22(ctx.projectPath, "pyproject.toml"));
+  if (requirementsFiles.length === 0 && !hasPyproject) return;
+  const bin = await scannerAvailable("pip-audit");
+  if (!bin) {
+    tools_run.push({ name: "pip-audit", status: "skipped", reason: "not_installed" });
+    missing_tools.push("pip-audit");
+    return;
+  }
+  const targets = requirementsFiles.length > 0 ? requirementsFiles.map((f) => ({ arg: f, sourceFile: relative4(ctx.projectPath, f) || f })) : [{ arg: ctx.projectPath, sourceFile: "pyproject.toml" }];
+  let anyOk = false;
+  let anyFailed = false;
+  for (const [i2, target] of targets.entries()) {
+    const outFile = join22(reportDir, `pip-audit-${i2}.json`);
+    const args = requirementsFiles.length > 0 ? ["-r", target.arg, "--format", "json", "-o", outFile] : ["--format", "json", "-o", outFile, target.arg];
+    const result = await runProcess({
+      command: "pip-audit",
+      args,
+      cwd: ctx.projectPath,
+      env: ctx.scriptEnv,
+      signal: ctx.signal,
+      onLog: ctx.onLog
+    });
+    const exitOk = result.outcome === "completed" || result.exitCode === 0 || result.exitCode === 1;
+    const raw = exitOk ? readJsonSafe(outFile) : null;
+    if (raw && looksLikePipAuditReport(raw)) {
+      anyOk = true;
+      let annotated = raw;
+      try {
+        const parsed = JSON.parse(raw);
+        parsed["__source_file"] = target.sourceFile;
+        annotated = JSON.stringify(parsed);
+      } catch {
+      }
+      parser_inputs.push({ parser: pipAuditParser, input: annotated });
+    } else {
+      anyFailed = true;
+    }
+  }
+  if (anyOk) {
+    tools_run.push({
+      name: "pip-audit",
+      status: "ok",
+      reason: anyFailed ? "parsed into findings (failed for at least one target)" : "parsed into findings"
+    });
+    if (anyFailed) missing_tools.push("pip-audit");
+  } else {
+    tools_run.push({
+      name: "pip-audit",
+      status: "failed",
+      reason: "ran but produced no audit report for any target (resolution failure or unsupported project?)"
+    });
+    missing_tools.push("pip-audit");
+  }
+}
 var DOTNET_SKIP_DIRS = /* @__PURE__ */ new Set(["bin", "obj", "node_modules", ".git", ".guardian", "packages", ".vs"]);
 function findDotnetTargets(projectPath) {
   let rootEntries = [];
@@ -43098,29 +43173,36 @@ async function runDotnetSca(opts) {
     missing_tools.push("dotnet");
     return;
   }
+  const runList = (target) => runProcess({
+    command: "dotnet",
+    args: ["list", target, "package", "--vulnerable", "--include-transitive", "--format", "json"],
+    cwd: ctx.projectPath,
+    env: ctx.scriptEnv,
+    signal: ctx.signal,
+    onLog: ctx.onLog
+  });
   let anyOk = false;
   let anyFailed = false;
   for (const [i2, target] of targets.entries()) {
-    const restore = await runProcess({
-      command: "dotnet",
-      args: ["restore", target, "--nologo", "--verbosity", "quiet"],
-      cwd: ctx.projectPath,
-      env: ctx.scriptEnv,
-      signal: ctx.signal,
-      onLog: ctx.onLog
-    });
-    if (restore.outcome !== "completed") {
-      anyFailed = true;
-      continue;
+    let list2 = await runList(target);
+    if (list2.outcome !== "completed") {
+      const hasLockFile = existsSync16(join22(dirname8(target), "packages.lock.json"));
+      const restoreArgs = ["restore", target, "--nologo", "--verbosity", "quiet"];
+      if (hasLockFile) restoreArgs.push("--locked-mode");
+      const restore = await runProcess({
+        command: "dotnet",
+        args: restoreArgs,
+        cwd: ctx.projectPath,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        onLog: ctx.onLog
+      });
+      if (restore.outcome !== "completed") {
+        anyFailed = true;
+        continue;
+      }
+      list2 = await runList(target);
     }
-    const list2 = await runProcess({
-      command: "dotnet",
-      args: ["list", target, "package", "--vulnerable", "--include-transitive", "--format", "json"],
-      cwd: ctx.projectPath,
-      env: ctx.scriptEnv,
-      signal: ctx.signal,
-      onLog: ctx.onLog
-    });
     if (list2.outcome === "completed" && list2.stdout.trim().length > 0) {
       anyOk = true;
       parser_inputs.push({ parser: dotnetScaParser, input: list2.stdout });
@@ -43150,6 +43232,9 @@ async function runDotnetSca(opts) {
 init_execa();
 import { existsSync as existsSync17, readFileSync as readFileSync12, readdirSync as readdirSync9 } from "node:fs";
 import { join as join23 } from "node:path";
+function noUnplanned(steps) {
+  return { steps, unplanned: [] };
+}
 var inputSchema = {
   project_path: ProjectPath,
   prefer: external_exports.enum(["security", "patch", "minor", "major"]).optional().describe("Sort entries so this classification appears first. Default: security.")
@@ -43172,7 +43257,7 @@ async function handler(input, ctx) {
   }
   const cves = listActiveCves(ctx, projectPath);
   const ecosystems = detectEcosystems(projectPath);
-  const stepsByEcosystem = await Promise.all(
+  const plansByEcosystem = await Promise.all(
     ecosystems.map(async (eco) => {
       switch (eco) {
         case "npm":
@@ -43180,27 +43265,29 @@ async function handler(input, ctx) {
         case "pip":
           return runPipPlan(projectPath, cves);
         case "composer":
-          return runComposerOutdated(projectPath, cves);
+          return noUnplanned(await runComposerOutdated(projectPath, cves));
         case "cargo":
-          return runCargoOutdated(projectPath, cves);
+          return noUnplanned(await runCargoOutdated(projectPath, cves));
         case "go":
-          return runGoOutdated(projectPath, cves);
+          return noUnplanned(await runGoOutdated(projectPath, cves));
         case "rubygems":
-          return runBundlerOutdated(projectPath, cves);
+          return noUnplanned(await runBundlerOutdated(projectPath, cves));
         case "dotnet":
-          return runDotnetOutdated(projectPath, cves);
+          return noUnplanned(await runDotnetOutdated(projectPath, cves));
         default:
-          return [];
+          return noUnplanned([]);
       }
     })
   );
-  const flat = stepsByEcosystem.flat();
+  const flat = plansByEcosystem.flatMap((p) => p.steps);
+  const unplanned = plansByEcosystem.flatMap((p) => p.unplanned);
   const ordered = orderPlan(flat, inp.prefer ?? "security");
   const summary = summarize(ordered);
   return {
     ok: true,
     plan: ordered,
     summary,
+    unplanned,
     stack_detected: ecosystems,
     unsupported_ecosystems_present: detectUnsupportedEcosystems(projectPath)
   };
@@ -43240,31 +43327,25 @@ function listActiveCves(ctx, projectPath) {
   if (!latest) return out;
   for (const cve of ctx.storage.cves.listActive(latest.scan_id)) {
     const key = cve.package_name.toLowerCase();
-    const candidate = isCleanVersion(cve.fixed_version) ? cve.fixed_version : void 0;
     const existing = out.get(key);
+    const installedForThisCve = cve.installed_version;
+    const candidate = minCleanVersionAbove(installedForThisCve, [cve.fixed_version]);
     if (existing) {
       existing.cveIds.push(cve.cve_id);
-      if (candidate !== void 0 && (existing.fixedVersion === void 0 || compareVersionStrings(candidate, existing.fixedVersion) > 0)) {
+      if (existing.installedVersion === void 0) existing.installedVersion = installedForThisCve;
+      if (candidate !== void 0 && (existing.fixedVersion === void 0 || compareVersions(candidate, existing.fixedVersion) > 0)) {
         existing.fixedVersion = candidate;
       }
     } else {
-      out.set(key, { cveIds: [cve.cve_id], fixedVersion: candidate });
+      out.set(key, {
+        cveIds: [cve.cve_id],
+        fixedVersion: candidate,
+        installedVersion: installedForThisCve,
+        displayName: cve.package_name
+      });
     }
   }
   return out;
-}
-function isCleanVersion(v) {
-  return v !== void 0 && /^v?\d+(\.\d+)*$/i.test(v.trim());
-}
-function compareVersionStrings(a2, b) {
-  const pa = a2.replace(/^v/i, "").split(".").map((n2) => parseInt(n2, 10));
-  const pb = b.replace(/^v/i, "").split(".").map((n2) => parseInt(n2, 10));
-  if (pa.some(Number.isNaN) || pb.some(Number.isNaN)) return a2.localeCompare(b);
-  for (let i2 = 0; i2 < Math.max(pa.length, pb.length); i2 += 1) {
-    const diff = (pa[i2] ?? 0) - (pb[i2] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
 }
 async function runNpmOutdated(projectPath, cves) {
   const result = await execa("npm", ["outdated", "--json"], {
@@ -43272,33 +43353,42 @@ async function runNpmOutdated(projectPath, cves) {
     reject: false,
     timeout: 6e4
   });
-  if (result.stdout.trim().length === 0) return [];
-  let parsed;
-  try {
-    parsed = JSON.parse(result.stdout);
-  } catch {
-    return [];
+  const steps = [];
+  const unplanned = [];
+  let outdatedObj = {};
+  if (result.stdout.trim().length > 0) {
+    try {
+      const parsed = JSON.parse(result.stdout);
+      if (parsed && typeof parsed === "object") outdatedObj = parsed;
+    } catch {
+    }
   }
-  if (!parsed || typeof parsed !== "object") return [];
   const directDeps = readNpmDirectDependencies(projectPath);
-  const out = [];
-  for (const [pkg, raw] of Object.entries(parsed)) {
+  const handled = /* @__PURE__ */ new Set();
+  for (const [pkg, raw] of Object.entries(outdatedObj)) {
     if (!raw || typeof raw !== "object") continue;
     const row = raw;
     const installed = typeof row["current"] === "string" ? row["current"] : "";
     const npmLatest = typeof row["latest"] === "string" ? row["latest"] : "";
     if (!installed) continue;
+    handled.add(pkg.toLowerCase());
     const cve = cves.get(pkg.toLowerCase());
-    const latest = cve?.fixedVersion && cve.fixedVersion || npmLatest;
+    const safeCveVersion = cve ? minCleanVersionAbove(installed, [cve.fixedVersion]) : void 0;
+    const safeNpmLatest = isCleanVersion(npmLatest) && compareVersions(npmLatest, installed) > 0 ? npmLatest : void 0;
+    const latest = safeCveVersion ?? safeNpmLatest;
+    if (cve && !latest) {
+      unplanned.push({
+        package_name: pkg,
+        ecosystem: "npm",
+        cve_ids: cve.cveIds,
+        reason: "active CVE, but no safe upgrade target: the reported fix version is not above the installed version, and npm reports no newer release either"
+      });
+      continue;
+    }
     if (!latest || installed === latest) continue;
     const isTransitive = cve !== void 0 && directDeps.size > 0 && !directDeps.has(pkg);
-    out.push(
-      isTransitive ? buildOverrideStep({
-        package_name: pkg,
-        installed_version: installed,
-        latest_version: latest,
-        cve
-      }) : buildStep({
+    steps.push(
+      isTransitive ? buildOverrideStep({ package_name: pkg, installed_version: installed, latest_version: latest, cve }) : buildStep({
         package_name: pkg,
         installed_version: installed,
         latest_version: latest,
@@ -43308,7 +43398,27 @@ async function runNpmOutdated(projectPath, cves) {
       })
     );
   }
-  return out;
+  for (const [pkgLower, cve] of cves) {
+    if (handled.has(pkgLower)) continue;
+    if (directDeps.has(pkgLower)) continue;
+    const installed = cve.installedVersion;
+    const target = minCleanVersionAbove(installed, [cve.fixedVersion]);
+    if (!installed || !target) {
+      if (installed) {
+        unplanned.push({
+          package_name: cve.displayName,
+          ecosystem: "npm",
+          cve_ids: cve.cveIds,
+          reason: `active CVE on a transitive dependency, but no fix version above the recorded installed version ${installed}`
+        });
+      }
+      continue;
+    }
+    steps.push(
+      buildOverrideStep({ package_name: cve.displayName, installed_version: installed, latest_version: target, cve })
+    );
+  }
+  return { steps, unplanned };
 }
 function readNpmDirectDependencies(projectPath) {
   const out = /* @__PURE__ */ new Set();
@@ -43334,38 +43444,69 @@ function buildOverrideStep(input) {
     classification: "security",
     reason: `Active CVE (${input.cve.cveIds.join(", ")}) on a transitive dependency \u2014 pinned via npm overrides`,
     cve_ids: input.cve.cveIds,
-    // `npm pkg set` only rewrites package.json — no node_modules install, no
-    // script of any kind runs, which is why this step does not also need
-    // --ignore-scripts.
-    upgrade_command: `npm pkg set overrides.${input.package_name}=${input.latest_version}`
+    // Bracket notation (`overrides[name]`), never `overrides.name`: `npm pkg
+    // set` interprets a DOT in a dotted key path as a nested-object
+    // separator, so a package name that itself contains a dot (a real one:
+    // `socket.io-parser`) would silently become `{overrides: {socket:
+    // {"io-parser": ...}}}` instead of the flat key the real package name
+    // is. Bracket notation is npm's own documented way to set a literal key
+    // regardless of what characters it contains, and works identically for
+    // names without a dot too — so it is used unconditionally, not only
+    // when a dot is detected.
+    upgrade_command: `npm pkg set overrides[${input.package_name}]=${input.latest_version}`,
+    // `npm pkg set` only rewrites package.json — the lockfile/node_modules
+    // do not reflect the override until a plain reinstall re-resolves them.
+    follow_up_command: "npm install --ignore-scripts"
   };
 }
 async function runPipPlan(projectPath, cves) {
-  const out = [];
-  for (const file of findPipRequirementsFiles(projectPath)) {
-    for (const pin of parsePinnedRequirements(file.content)) {
-      const step = buildPipSecurityStep({ file: file.relPath, pin, cves });
-      if (step) out.push(step);
+  const steps = [];
+  const unplanned = [];
+  const considerMention = (file, mention) => {
+    const cve = cves.get(mention.name.toLowerCase());
+    if (!cve) return;
+    if (mention.version === void 0) {
+      unplanned.push({
+        package_name: mention.name,
+        ecosystem: "pip",
+        cve_ids: cve.cveIds,
+        reason: mention.unplannableReason ?? "could not determine a pinned version"
+      });
+      return;
     }
+    const step = buildPipSecurityStep({ file, pin: { name: mention.name, version: mention.version }, cves });
+    if (step) {
+      steps.push(step);
+    } else {
+      unplanned.push({
+        package_name: mention.name,
+        ecosystem: "pip",
+        cve_ids: cve.cveIds,
+        reason: `active CVE (${cve.cveIds.join(", ")}), but no fix version above the pinned ${mention.version} is known`
+      });
+    }
+  };
+  for (const file of findPipRequirementsFiles(projectPath)) {
+    for (const mention of parsePinnedRequirements(file.content)) considerMention(file.relPath, mention);
   }
-  for (const pin of parsePyprojectPins(projectPath)) {
-    const step = buildPipSecurityStep({ file: "pyproject.toml", pin, cves });
-    if (step) out.push(step);
-  }
-  return out;
+  for (const mention of parsePyprojectPins(projectPath)) considerMention("pyproject.toml", mention);
+  return { steps, unplanned };
 }
 function buildPipSecurityStep(opts) {
   const cve = opts.cves.get(opts.pin.name.toLowerCase());
-  if (!cve || !cve.fixedVersion || cve.fixedVersion === opts.pin.version) return null;
+  if (!cve) return null;
+  const target = minCleanVersionAbove(opts.pin.version, [cve.fixedVersion]);
+  if (!target) return null;
   return {
     package_name: opts.pin.name,
     installed_version: opts.pin.version,
-    latest_version: cve.fixedVersion,
+    latest_version: target,
     ecosystem: "pip",
     classification: "security",
     reason: `Active CVE (${cve.cveIds.join(", ")}) on the pinned version`,
     cve_ids: cve.cveIds,
-    upgrade_command: `pip-pin ${opts.file} ${opts.pin.name}==${cve.fixedVersion}`
+    file: opts.file,
+    upgrade_command: `pip-pin ${opts.file} ${opts.pin.name}==${target}`
   };
 }
 function findPipRequirementsFiles(projectPath) {
@@ -43398,15 +43539,47 @@ function findPipRequirementsFiles(projectPath) {
 }
 function parsePinnedRequirements(content) {
   const out = [];
-  for (const lineRaw of content.split(/\r?\n/)) {
-    const line = lineRaw.split("#")[0]?.trim() ?? "";
+  for (const rawLine of joinContinuedLines(content)) {
+    let line = rawLine.split("#")[0]?.trim() ?? "";
     if (!line || line.startsWith("-")) continue;
-    const m = /^([A-Za-z0-9._-]+)\s*==\s*([A-Za-z0-9._-]+)$/.exec(line);
-    if (!m) continue;
-    const name = m[1];
-    const version2 = m[2];
-    if (name && version2) out.push({ name, version: version2 });
+    line = line.replace(/\s+--hash=\S+/g, "").trim();
+    const semi = line.indexOf(";");
+    if (semi >= 0) line = line.slice(0, semi).trim();
+    if (!line) continue;
+    const extras = /^([A-Za-z0-9._-]+)\[[^\]]*\](.*)$/.exec(line);
+    const target = extras ? `${extras[1]}${extras[2]}` : line;
+    const exact = /^([A-Za-z0-9._-]+)\s*==\s*([A-Za-z0-9._-]+)$/.exec(target);
+    if (exact) {
+      const [, name, version2] = exact;
+      if (name && version2) out.push({ name, version: version2 });
+      continue;
+    }
+    const range = /^([A-Za-z0-9._-]+)\s*(>=|<=|~=|!=|===|<|>)/.exec(target);
+    if (range?.[1] && range[2]) {
+      out.push({
+        name: range[1],
+        unplannableReason: `non-exact specifier (${range[2]}) \u2014 cannot determine a safe target without inspecting the installed environment`
+      });
+      continue;
+    }
+    const bare = /^[A-Za-z0-9._-]+$/.exec(target);
+    if (bare) {
+      out.push({ name: target, unplannableReason: "no version specifier \u2014 cannot determine an installed version" });
+    }
   }
+  return out;
+}
+function joinContinuedLines(content) {
+  const out = [];
+  let buffer = "";
+  for (const line of content.split(/\r?\n/)) {
+    const continued = /\\\s*$/.test(line);
+    buffer += continued ? line.replace(/\\\s*$/, " ") : line;
+    if (continued) continue;
+    out.push(buffer);
+    buffer = "";
+  }
+  if (buffer) out.push(buffer);
   return out;
 }
 function parsePyprojectPins(projectPath) {
@@ -43563,17 +43736,22 @@ async function runBundlerOutdated(projectPath, cves) {
   return out;
 }
 async function runDotnetOutdated(projectPath, cves) {
-  const restore = await execa("dotnet", ["restore", "--nologo", "--verbosity", "quiet"], {
+  let r = await execa("dotnet", ["list", "package", "--outdated", "--format", "json"], {
     cwd: projectPath,
     reject: false,
-    timeout: 5 * 6e4
+    timeout: 9e4
   });
-  if (restore.exitCode !== 0) return [];
-  const r = await execa(
-    "dotnet",
-    ["list", "package", "--outdated", "--format", "json"],
-    { cwd: projectPath, reject: false, timeout: 9e4 }
-  );
+  if (r.exitCode !== 0) {
+    const restoreArgs = ["restore", "--nologo", "--verbosity", "quiet"];
+    if (existsSync17(join23(projectPath, "packages.lock.json"))) restoreArgs.push("--locked-mode");
+    const restore = await execa("dotnet", restoreArgs, { cwd: projectPath, reject: false, timeout: 5 * 6e4 });
+    if (restore.exitCode !== 0) return [];
+    r = await execa("dotnet", ["list", "package", "--outdated", "--format", "json"], {
+      cwd: projectPath,
+      reject: false,
+      timeout: 9e4
+    });
+  }
   if (r.exitCode === 0 && r.stdout.trim().startsWith("{")) {
     return parseDotnetJson(r.stdout, cves);
   }
@@ -44183,7 +44361,7 @@ import { join as join28 } from "node:path";
 
 // src/configdrift/refresh.ts
 import { copyFileSync, existsSync as existsSync20, mkdirSync as mkdirSync4, writeFileSync as writeFileSync5, readFileSync as readFileSync14 } from "node:fs";
-import { dirname as dirname8, join as join27 } from "node:path";
+import { dirname as dirname9, join as join27 } from "node:path";
 function alongsideName(target, version2) {
   return `${target}.dev-guardian-${version2}.new`;
 }
@@ -44328,7 +44506,7 @@ function adoptIdenticalConfigs(input) {
 }
 function installFile(input) {
   try {
-    mkdirSync4(dirname8(input.dstPath), { recursive: true });
+    mkdirSync4(dirname9(input.dstPath), { recursive: true });
     const prefix = commentPrefixFor(input.formatHint ?? input.dstPath);
     if (prefix === null) {
       copyFileSync(input.srcPath, input.dstPath);
@@ -44553,7 +44731,7 @@ function failDomain5(code, message) {
 
 // src/tools/observabilitySetup.ts
 import { existsSync as existsSync22, mkdirSync as mkdirSync5, readdirSync as readdirSync12, writeFileSync as writeFileSync6 } from "node:fs";
-import { dirname as dirname9, join as join29 } from "node:path";
+import { dirname as dirname10, join as join29 } from "node:path";
 var tool6 = {
   name: "observability_setup",
   title: "Configure logging + metrics scaffolding",
@@ -44587,7 +44765,7 @@ async function handler5(input, ctx) {
         continue;
       }
       try {
-        mkdirSync5(dirname9(abs), { recursive: true });
+        mkdirSync5(dirname10(abs), { recursive: true });
         writeFileSync6(abs, p.contents, "utf8");
         written.push(p);
       } catch (e) {
@@ -49655,7 +49833,7 @@ function countChecksumIssues(meta) {
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID11 } from "node:crypto";
 import { existsSync as existsSync34, readFileSync as readFileSync20, readdirSync as readdirSync15, statSync as statSync10 } from "node:fs";
-import { join as join41, relative as relative4 } from "node:path";
+import { join as join41, relative as relative5 } from "node:path";
 var PATTERNS = [
   {
     id: "dotnet-sql-server-conn",
@@ -49784,7 +49962,7 @@ async function handler33(input, ctx) {
               category: "security",
               subcategory: "secret",
               title: rule.description,
-              file_path: relative4(projectPath, file).replace(/\\/g, "/"),
+              file_path: relative5(projectPath, file).replace(/\\/g, "/"),
               line_start: i2 + 1,
               line_end: i2 + 1,
               snippet: line.length > 200 ? `${line.slice(0, 200)}\u2026` : line,
@@ -49854,7 +50032,7 @@ function collectConfigFiles(root, maxDepth) {
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
 import { readFileSync as readFileSync21, readdirSync as readdirSync16, statSync as statSync11 } from "node:fs";
-import { join as join42, relative as relative5 } from "node:path";
+import { join as join42, relative as relative6 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
   "net9.0": { tfm: "net9.0", status: "sts-current", hint: "STS until May 2026." },
@@ -49902,7 +50080,7 @@ async function handler34(input, ctx) {
     if (tfms.length === 0) continue;
     const statuses = tfms.map((tfm) => SUPPORT[tfm] ?? unknownStatus(tfm));
     rows.push({
-      file: relative5(projectPath, file).replace(/\\/g, "/"),
+      file: relative6(projectPath, file).replace(/\\/g, "/"),
       target_frameworks: tfms,
       statuses
     });
@@ -49995,7 +50173,7 @@ function failDomain23(code, message) {
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
 import { existsSync as existsSync35, readFileSync as readFileSync22, readdirSync as readdirSync17, statSync as statSync12 } from "node:fs";
-import { join as join43, relative as relative6 } from "node:path";
+import { join as join43, relative as relative7 } from "node:path";
 var RULES = [
   {
     id: "efcore-drop-table",
@@ -50079,7 +50257,7 @@ async function handler35(input, ctx) {
                 category: rule.id === "efcore-raw-sql-creds" ? "security" : "bug",
                 subcategory: "migration-risk",
                 title: rule.description,
-                file_path: relative6(projectPath, abs).replace(/\\/g, "/"),
+                file_path: relative7(projectPath, abs).replace(/\\/g, "/"),
                 line_start: i2 + 1,
                 line_end: i2 + 1,
                 snippet: line.length > 200 ? `${line.slice(0, 200)}\u2026` : line,
@@ -51430,7 +51608,7 @@ import {
   writeFileSync as writeFileSync10
 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { basename as basename2, isAbsolute as isAbsolute2, join as join44, relative as relative7 } from "node:path";
+import { basename as basename2, isAbsolute as isAbsolute2, join as join44, relative as relative8 } from "node:path";
 var MAX_FILES = 4e3;
 var MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 var MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -51695,7 +51873,7 @@ async function tryExtract(zipPath, destDir) {
   }
 }
 function isPathWithinRoot(candidate, root) {
-  const rel2 = relative7(root, candidate);
+  const rel2 = relative8(root, candidate);
   return rel2 === "" || !rel2.startsWith("..") && !isAbsolute2(rel2);
 }
 function collectDir(root) {
@@ -53117,7 +53295,7 @@ function buildToolRun(run, via) {
 
 // src/surface/specDiscover.ts
 import { readFileSync as readFileSync25, readdirSync as readdirSync19, statSync as statSync14 } from "node:fs";
-import { join as join48, relative as relative8, resolve as resolve7, sep as sep4 } from "node:path";
+import { join as join48, relative as relative9, resolve as resolve7, sep as sep4 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
 var SPEC_BASENAMES = /* @__PURE__ */ new Set(["openapi", "swagger", "api-docs"]);
@@ -53192,7 +53370,7 @@ function isSpecCandidate(root, dir, name) {
   const ext = name.slice(dot).toLowerCase();
   if (!SPEC_EXTENSIONS.has(ext)) return false;
   if (SPEC_BASENAMES.has(base.toLowerCase())) return true;
-  const relDir = relative8(root, dir);
+  const relDir = relative9(root, dir);
   if (relDir === "") return false;
   return relDir.split(sep4).some((segment) => segment.toLowerCase() === "openapi");
 }
@@ -54709,7 +54887,7 @@ function livenessMessage(target, liveness, timeoutMs) {
 import { join as join51 } from "node:path";
 
 // src/dast/nuclei.ts
-import { dirname as dirname10 } from "node:path";
+import { dirname as dirname11 } from "node:path";
 var DEFAULT_NUCLEI_RATE_LIMIT = 10;
 var ALWAYS_EXCLUDED_TAGS = ["dos", "fuzz"];
 function excludedTags(allowIntrusive) {
@@ -54784,7 +54962,7 @@ async function invokeNuclei(opts) {
     // has no bearing on what gets scanned; `outputPath`'s own directory is
     // used only because it is a real, already-relevant path handed to us,
     // rather than reaching for ambient process state.
-    cwd: dirname10(opts.outputPath),
+    cwd: dirname11(opts.outputPath),
     // An allowlisted environment, and `extendEnv: false` so it REPLACES the
     // parent's rather than being merged over it. Without the second half the
     // first is decorative: execa extends `process.env` by default, and the

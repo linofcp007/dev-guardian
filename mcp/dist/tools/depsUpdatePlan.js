@@ -10,21 +10,44 @@
  *   1. Detect the stack via `latest stack_snapshots` (or `package.json` /
  *      `pyproject.toml` / etc. as a fallback).
  *   2. Per ecosystem:
- *        npm      → `npm outdated --json`, upgraded to the CVE's minimum
- *                    fixed version rather than "latest" when one is active,
- *                    every `npm install` carrying `--ignore-scripts`, and a
- *                    vulnerable TRANSITIVE package getting an `overrides`
- *                    step (`npm pkg set overrides.<pkg>=<version>`) instead;
+ *        npm      → `npm outdated --json` for direct-dependency current/
+ *                    latest, PLUS a sweep of the whole CVE map for anything
+ *                    that listing never surfaces — `npm outdated --json`
+ *                    has listed only DIRECT dependencies since npm 7, so a
+ *                    transitive package never appears in it at all. Every
+ *                    CVE-driven target is the smallest version STRICTLY
+ *                    ABOVE what is currently installed
+ *                    (`../deps/versionCompare.js#minCleanVersionAbove`) —
+ *                    never a scanner's raw "fixed_version" taken on faith,
+ *                    which can be an older release branch's own backport or
+ *                    simply stale. Every `npm install` carries
+ *                    `--ignore-scripts`; a transitive CVE'd package gets an
+ *                    `npm pkg set overrides[<pkg>]=<version>` step (bracket
+ *                    notation — a dotted package name would otherwise
+ *                    become a nested key) with a `follow_up_command` of
+ *                    `npm install --ignore-scripts` to re-resolve the
+ *                    lockfile;
  *        pip      → NEVER runs pip/pip-audit against the host interpreter.
- *                    Reads this project's own `requirements*.txt` exact pins
- *                    (`pkg==version`) and PEP 621 `pyproject.toml`
- *                    dependencies, and proposes a step only for a pin with
- *                    an active CVE and a known fixed version — see
- *                    `runPipPlan`'s own doc comment for why `upgrade_command`
- *                    is not a real, executable command here;
+ *                    Reads this project's own `requirements*.txt` pins
+ *                    (including pip-compile hash-continuation lines,
+ *                    extras and environment markers) and PEP 621
+ *                    `pyproject.toml` dependencies, and proposes a step
+ *                    only for an exact pin with an active CVE and a fix
+ *                    version above the pin — see `runPipPlan`'s own doc
+ *                    comment for why `upgrade_command` is not a real,
+ *                    executable command here, and why the target file is
+ *                    also exposed as a structured `file` field;
  *        composer / cargo / go / rubygems / dotnet → each stack's own
- *                    "outdated" command (unchanged).
+ *                    "outdated" command (dotnet restores only when a direct
+ *                    `dotnet list` attempt fails, and with `--locked-mode`
+ *                    when a `packages.lock.json` exists — a scan must never
+ *                    modify the working tree).
  *      (Other stacks return an empty plan with `unsupported_ecosystems_present`.)
+ *      **Every package with an active CVE that did NOT become a step is
+ *      reported in `unplanned`** (package, ecosystem, cve_ids, reason) —
+ *      never silently dropped: a non-exact pip specifier, a CVE whose only
+ *      reported fix is a downgrade, a transitive npm package with no
+ *      recorded installed version to compare against.
  *   3. Classify each entry as patch / minor / major (by semver diff).
  *   4. Mark entries as `security` when an active CVE exists for the package —
  *      sourced from the latest `deps` / `deps_audit` / `security_full` scan
@@ -37,10 +60,14 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import { z } from 'zod';
+import { compareVersions, isCleanVersion, minCleanVersionAbove } from '../deps/versionCompare.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES } from '../types.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { registerToolModule } from './index.js';
+function noUnplanned(steps) {
+    return { steps, unplanned: [] };
+}
 const inputSchema = {
     project_path: ProjectPath,
     prefer: z
@@ -72,33 +99,35 @@ async function handler(input, ctx) {
     }
     const cves = listActiveCves(ctx, projectPath);
     const ecosystems = detectEcosystems(projectPath);
-    const stepsByEcosystem = await Promise.all(ecosystems.map(async (eco) => {
+    const plansByEcosystem = await Promise.all(ecosystems.map(async (eco) => {
         switch (eco) {
             case 'npm':
                 return runNpmOutdated(projectPath, cves);
             case 'pip':
                 return runPipPlan(projectPath, cves);
             case 'composer':
-                return runComposerOutdated(projectPath, cves);
+                return noUnplanned(await runComposerOutdated(projectPath, cves));
             case 'cargo':
-                return runCargoOutdated(projectPath, cves);
+                return noUnplanned(await runCargoOutdated(projectPath, cves));
             case 'go':
-                return runGoOutdated(projectPath, cves);
+                return noUnplanned(await runGoOutdated(projectPath, cves));
             case 'rubygems':
-                return runBundlerOutdated(projectPath, cves);
+                return noUnplanned(await runBundlerOutdated(projectPath, cves));
             case 'dotnet':
-                return runDotnetOutdated(projectPath, cves);
+                return noUnplanned(await runDotnetOutdated(projectPath, cves));
             default:
-                return [];
+                return noUnplanned([]);
         }
     }));
-    const flat = stepsByEcosystem.flat();
+    const flat = plansByEcosystem.flatMap((p) => p.steps);
+    const unplanned = plansByEcosystem.flatMap((p) => p.unplanned);
     const ordered = orderPlan(flat, inp.prefer ?? 'security');
     const summary = summarize(ordered);
     return {
         ok: true,
         plan: ordered,
         summary,
+        unplanned,
         stack_detected: ecosystems,
         unsupported_ecosystems_present: detectUnsupportedEcosystems(projectPath),
     };
@@ -165,62 +194,48 @@ function listActiveCves(ctx, projectPath) {
         // Trivy's own `FixedVersion` is free text and routinely NOT a single
         // installable version: multi-branch lists ("4.17.12, 5.0.0") and open
         // ranges (">=4.17.11") both appear on real scans (lodash's own CVE
-        // history has both). Only an exact `X.Y.Z`-shaped string is usable as
-        // an `npm install pkg@<version>` target; anything else is treated the
-        // same as "no fix reported" for THIS cve — the id is still recorded
-        // (cve_ids), only the version math ignores it. This is what keeps a
-        // package with several active CVEs, some clean and one messy, from
-        // silently ending up with the messy string as its computed minimum.
-        const candidate = isCleanVersion(cve.fixed_version) ? cve.fixed_version : undefined;
+        // history has both), and a CVE row can simply be STALE (recorded
+        // against an older installed version than what a fresh ecosystem query
+        // reports now). `minCleanVersionAbove` — never a raw `fixed_version`
+        // read verbatim — is what keeps a package with several active CVEs,
+        // some clean and one messy or stale, from silently ending up with a
+        // downgrade as its computed minimum (fix round 1, CRITICAL item 1).
         const existing = out.get(key);
+        const installedForThisCve = cve.installed_version;
+        const candidate = minCleanVersionAbove(installedForThisCve, [cve.fixed_version]);
         if (existing) {
             existing.cveIds.push(cve.cve_id);
+            if (existing.installedVersion === undefined)
+                existing.installedVersion = installedForThisCve;
             // The MINIMUM version that clears every active CVE is the MAXIMUM of
             // each individual CVE's own minimum fix — installing anything less
             // than the highest one leaves that CVE's own fix unmet.
             if (candidate !== undefined &&
-                (existing.fixedVersion === undefined || compareVersionStrings(candidate, existing.fixedVersion) > 0)) {
+                (existing.fixedVersion === undefined || compareVersions(candidate, existing.fixedVersion) > 0)) {
                 existing.fixedVersion = candidate;
             }
         }
         else {
-            out.set(key, { cveIds: [cve.cve_id], fixedVersion: candidate });
+            out.set(key, {
+                cveIds: [cve.cve_id],
+                fixedVersion: candidate,
+                installedVersion: installedForThisCve,
+                displayName: cve.package_name,
+            });
         }
     }
     return out;
 }
-/** `1.2.3`, `1.2`, or `1` — optionally `v`-prefixed — and nothing else. The
- *  only shape of `cves.fixed_version` this module trusts as an installable
- *  target; see `listActiveCves`'s own comment for what real scanner output
- *  otherwise looks like. */
-function isCleanVersion(v) {
-    return v !== undefined && /^v?\d+(\.\d+)*$/i.test(v.trim());
-}
-/**
- * Best-effort numeric-segment comparison (`1.2.3` vs `1.10.0`), used only to
- * pick the HIGHER of two already-known fixed versions for the same package
- * when it carries more than one active CVE. Falls back to string comparison
- * for anything that does not parse as dotted numbers — never throws.
- */
-function compareVersionStrings(a, b) {
-    const pa = a.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10));
-    const pb = b.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10));
-    if (pa.some(Number.isNaN) || pb.some(Number.isNaN))
-        return a.localeCompare(b);
-    for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
-        const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
-        if (diff !== 0)
-            return diff;
-    }
-    return 0;
-}
 // ---------------------------------------------------------------------- runners
 /**
- * npm branch (item 4):
+ * npm branch (item 4, fix round 1 items 1 and 2):
  *   - a package with an active CVE upgrades to the MINIMUM fixed version
  *     (`cves.fixed_version`) rather than `npm outdated`'s own `latest` —
  *     the smallest change that actually resolves the CVE, not whatever is
- *     newest today;
+ *     newest today — and NEVER a downgrade: `minCleanVersionAbove` compares
+ *     against THIS run's own `npm outdated` "current" value, the freshest
+ *     installed-version signal available, not just the (possibly stale)
+ *     value the CVE row was recorded against;
  *   - every `npm install` this plan emits carries `--ignore-scripts` — a
  *     dependency's install/postinstall script must never run just because
  *     this tool proposed a version bump;
@@ -231,8 +246,22 @@ function compareVersionStrings(a, b) {
  *     gets an `overrides` step instead of an `npm install` —
  *     `npm install <transitive>@<version>` does not reliably pin a nested
  *     dependency's resolved version the way `package.json`'s own
- *     `overrides` field does, and `npm pkg set` edits the manifest without
- *     touching `node_modules` or running any script.
+ *     `overrides` field does. `npm pkg set` edits the manifest only, so
+ *     every override step also carries a `follow_up_command`
+ *     (`npm install --ignore-scripts`, no explicit package) to re-resolve
+ *     the lockfile.
+ *
+ * **Driven from the CVE map, not from `npm outdated`'s own listing, for the
+ * transitive case.** `npm outdated --json` has listed ONLY direct
+ * dependencies since npm 7 — a transitive package never appears in it at
+ * all, so a check that only classifies entries FROM that listing (`pkg in
+ * parsed`) can never actually reach the transitive branch against a real
+ * npm install; it only fired in a hand-built mock. Pass 1 below still reads
+ * `npm outdated` for direct-dependency current/latest info; pass 2 sweeps
+ * the WHOLE `cves` map for anything pass 1 did not already handle and that
+ * is not a declared direct dependency, using the CVE row's own recorded
+ * `installed_version` (the only "current version" signal available for a
+ * package no ecosystem-native tool reports at all).
  */
 async function runNpmOutdated(projectPath, cves) {
     const result = await execa('npm', ['outdated', '--json'], {
@@ -240,21 +269,24 @@ async function runNpmOutdated(projectPath, cves) {
         reject: false,
         timeout: 60_000,
     });
-    // `npm outdated` exits 1 when anything is outdated — that is OK.
-    if (result.stdout.trim().length === 0)
-        return [];
-    let parsed;
-    try {
-        parsed = JSON.parse(result.stdout);
+    const steps = [];
+    const unplanned = [];
+    let outdatedObj = {};
+    if (result.stdout.trim().length > 0) {
+        try {
+            const parsed = JSON.parse(result.stdout);
+            if (parsed && typeof parsed === 'object')
+                outdatedObj = parsed;
+        }
+        catch {
+            /* leave outdatedObj empty — pass 2 (CVE-map sweep) still runs */
+        }
     }
-    catch {
-        return [];
-    }
-    if (!parsed || typeof parsed !== 'object')
-        return [];
     const directDeps = readNpmDirectDependencies(projectPath);
-    const out = [];
-    for (const [pkg, raw] of Object.entries(parsed)) {
+    const handled = new Set(); // lowercased names pass 1 already decided
+    // Pass 1: npm outdated's own entries — direct dependencies only, on a
+    // real npm 7+ install (see this function's own doc comment).
+    for (const [pkg, raw] of Object.entries(outdatedObj)) {
         if (!raw || typeof raw !== 'object')
             continue;
         const row = raw;
@@ -262,25 +294,30 @@ async function runNpmOutdated(projectPath, cves) {
         const npmLatest = typeof row['latest'] === 'string' ? row['latest'] : '';
         if (!installed)
             continue;
+        handled.add(pkg.toLowerCase());
         const cve = cves.get(pkg.toLowerCase());
-        // Minimum fixed version wins over npm's own "latest" when fixing a CVE.
-        const latest = (cve?.fixedVersion && cve.fixedVersion) || npmLatest;
+        // The CVE's own minimum fix, checked against THIS run's actual current
+        // version — never the (possibly stale) version the CVE row itself was
+        // recorded against. Falls back to npm's own "latest" when the CVE has
+        // no safe fix version, same as before a CVE ever entered the picture.
+        const safeCveVersion = cve ? minCleanVersionAbove(installed, [cve.fixedVersion]) : undefined;
+        const safeNpmLatest = isCleanVersion(npmLatest) && compareVersions(npmLatest, installed) > 0 ? npmLatest : undefined;
+        const latest = safeCveVersion ?? safeNpmLatest;
+        if (cve && !latest) {
+            unplanned.push({
+                package_name: pkg,
+                ecosystem: 'npm',
+                cve_ids: cve.cveIds,
+                reason: 'active CVE, but no safe upgrade target: the reported fix version is not above the ' +
+                    'installed version, and npm reports no newer release either',
+            });
+            continue;
+        }
         if (!latest || installed === latest)
             continue;
-        // Defaults to `false` (a real `npm install`) whenever `directDeps` is
-        // empty from a package.json read failure — never to `overrides`, which
-        // this module comment's own reproduction shows can silently leave a
-        // vulnerable package completely unfixed when the directness guess is
-        // wrong. `npm install pkg@version` at least attempts a real fix either
-        // way; `overrides` alone (no accompanying install) never does.
         const isTransitive = cve !== undefined && directDeps.size > 0 && !directDeps.has(pkg);
-        out.push(isTransitive
-            ? buildOverrideStep({
-                package_name: pkg,
-                installed_version: installed,
-                latest_version: latest,
-                cve,
-            })
+        steps.push(isTransitive
+            ? buildOverrideStep({ package_name: pkg, installed_version: installed, latest_version: latest, cve: cve })
             : buildStep({
                 package_name: pkg,
                 installed_version: installed,
@@ -290,7 +327,34 @@ async function runNpmOutdated(projectPath, cves) {
                 upgrade_command: `npm install ${pkg}@${latest} --ignore-scripts`,
             }));
     }
-    return out;
+    // Pass 2: transitive CVE'd packages `npm outdated` never lists at all.
+    // Driven entirely from the CVE map — see the module comment above.
+    for (const [pkgLower, cve] of cves) {
+        if (handled.has(pkgLower))
+            continue;
+        if (directDeps.has(pkgLower))
+            continue; // a direct dep npm didn't flag as outdated — nothing to do
+        const installed = cve.installedVersion;
+        const target = minCleanVersionAbove(installed, [cve.fixedVersion]);
+        if (!installed || !target) {
+            // The `cves` table has no ecosystem column, so a package that never
+            // showed up via `npm outdated` and has no recorded installed_version
+            // either might not even BE an npm package — only report it as an npm
+            // gap when there is at least an installed_version on record, i.e.
+            // some scan already attributed it to this tree.
+            if (installed) {
+                unplanned.push({
+                    package_name: cve.displayName,
+                    ecosystem: 'npm',
+                    cve_ids: cve.cveIds,
+                    reason: `active CVE on a transitive dependency, but no fix version above the recorded installed version ${installed}`,
+                });
+            }
+            continue;
+        }
+        steps.push(buildOverrideStep({ package_name: cve.displayName, installed_version: installed, latest_version: target, cve }));
+    }
+    return { steps, unplanned };
 }
 /**
  * The package NAMES this project's own `package.json` declares directly
@@ -339,10 +403,19 @@ function buildOverrideStep(input) {
         classification: 'security',
         reason: `Active CVE (${input.cve.cveIds.join(', ')}) on a transitive dependency — pinned via npm overrides`,
         cve_ids: input.cve.cveIds,
-        // `npm pkg set` only rewrites package.json — no node_modules install, no
-        // script of any kind runs, which is why this step does not also need
-        // --ignore-scripts.
-        upgrade_command: `npm pkg set overrides.${input.package_name}=${input.latest_version}`,
+        // Bracket notation (`overrides[name]`), never `overrides.name`: `npm pkg
+        // set` interprets a DOT in a dotted key path as a nested-object
+        // separator, so a package name that itself contains a dot (a real one:
+        // `socket.io-parser`) would silently become `{overrides: {socket:
+        // {"io-parser": ...}}}` instead of the flat key the real package name
+        // is. Bracket notation is npm's own documented way to set a literal key
+        // regardless of what characters it contains, and works identically for
+        // names without a dot too — so it is used unconditionally, not only
+        // when a dot is detected.
+        upgrade_command: `npm pkg set overrides[${input.package_name}]=${input.latest_version}`,
+        // `npm pkg set` only rewrites package.json — the lockfile/node_modules
+        // do not reflect the override until a plain reinstall re-resolves them.
+        follow_up_command: 'npm install --ignore-scripts',
     };
 }
 /**
@@ -354,50 +427,83 @@ function buildOverrideStep(input) {
  * registry query is used any more: this reads the project's OWN
  * `requirements*.txt` pins (`pkg==version`, the only specifier exact enough
  * to know an "installed" version without inspecting an environment) and
- * proposes a step only for a pin with an active CVE and a known
- * `cves.fixed_version` — the same "plan by editing pins in the target tree"
- * shape a `pyproject.toml`-only project gets from `runDotnetOutdated`'s
- * siblings for their own ecosystems.
+ * proposes a step only for a pin with an active CVE and a known SAFE fixed
+ * version (never a downgrade — `minCleanVersionAbove`, same guard as the
+ * npm branch, fix round 1 item 1).
  *
  * `upgrade_command` is deliberately NOT a real `pip`/`sed` invocation: there
  * is no cross-platform, shell-free, whitespace-only-tokenised command that
  * edits one line of a text file (`fixpr/apply.ts`'s own `toArgv` requires
  * exactly that — see its module comment). It names the file and the pin
- * change in a fixed, parseable shape instead; a literal attempt to execute
- * it fails closed (unknown binary) rather than touching anything. Task 11
- * matches on the structured fields (`package_name`, `ecosystem`,
+ * change in a fixed, human-readable shape instead; a literal attempt to
+ * execute it fails closed (unknown binary) rather than touching anything.
+ * The AUTHORITATIVE target file is the structured `file` field on the step
+ * (fix round 1, item 9) — a path can contain spaces, which the
+ * whitespace-tokenised `upgrade_command` string cannot represent. Task 11
+ * matches on the structured fields (`package_name`, `ecosystem`, `file`,
  * `installed_version`, `latest_version`, `cve_ids`) to perform the actual
  * edit, not on this string.
+ *
+ * **Every requirement mention with an active CVE that could not become a
+ * step is reported in `unplanned`** (fix round 1, item 7) — a non-exact
+ * specifier (`>=`, `~=`, …: no single installed version to compare
+ * against), an unpinned bare name, or an exact pin whose CVE has no safe
+ * fix version above it — never silently dropped.
  */
 async function runPipPlan(projectPath, cves) {
-    const out = [];
-    for (const file of findPipRequirementsFiles(projectPath)) {
-        for (const pin of parsePinnedRequirements(file.content)) {
-            const step = buildPipSecurityStep({ file: file.relPath, pin, cves });
-            if (step)
-                out.push(step);
+    const steps = [];
+    const unplanned = [];
+    const considerMention = (file, mention) => {
+        const cve = cves.get(mention.name.toLowerCase());
+        if (!cve)
+            return; // no active CVE — nothing to plan or report
+        if (mention.version === undefined) {
+            unplanned.push({
+                package_name: mention.name,
+                ecosystem: 'pip',
+                cve_ids: cve.cveIds,
+                reason: mention.unplannableReason ?? 'could not determine a pinned version',
+            });
+            return;
         }
+        const step = buildPipSecurityStep({ file, pin: { name: mention.name, version: mention.version }, cves });
+        if (step) {
+            steps.push(step);
+        }
+        else {
+            unplanned.push({
+                package_name: mention.name,
+                ecosystem: 'pip',
+                cve_ids: cve.cveIds,
+                reason: `active CVE (${cve.cveIds.join(', ')}), but no fix version above the pinned ${mention.version} is known`,
+            });
+        }
+    };
+    for (const file of findPipRequirementsFiles(projectPath)) {
+        for (const mention of parsePinnedRequirements(file.content))
+            considerMention(file.relPath, mention);
     }
-    for (const pin of parsePyprojectPins(projectPath)) {
-        const step = buildPipSecurityStep({ file: 'pyproject.toml', pin, cves });
-        if (step)
-            out.push(step);
-    }
-    return out;
+    for (const mention of parsePyprojectPins(projectPath))
+        considerMention('pyproject.toml', mention);
+    return { steps, unplanned };
 }
 function buildPipSecurityStep(opts) {
     const cve = opts.cves.get(opts.pin.name.toLowerCase());
-    if (!cve || !cve.fixedVersion || cve.fixedVersion === opts.pin.version)
+    if (!cve)
+        return null;
+    const target = minCleanVersionAbove(opts.pin.version, [cve.fixedVersion]);
+    if (!target)
         return null;
     return {
         package_name: opts.pin.name,
         installed_version: opts.pin.version,
-        latest_version: cve.fixedVersion,
+        latest_version: target,
         ecosystem: 'pip',
         classification: 'security',
         reason: `Active CVE (${cve.cveIds.join(', ')}) on the pinned version`,
         cve_ids: cve.cveIds,
-        upgrade_command: `pip-pin ${opts.file} ${opts.pin.name}==${cve.fixedVersion}`,
+        file: opts.file,
+        upgrade_command: `pip-pin ${opts.file} ${opts.pin.name}==${target}`,
     };
 }
 /** `requirements*.txt` at the project root, plus one level into a
@@ -439,25 +545,82 @@ function findPipRequirementsFiles(projectPath) {
     }
     return out;
 }
-/** Lines of the exact shape `pkg==1.2.3` (optionally with inline
- *  whitespace/comment) — the only pip requirement specifier precise enough
- *  to name a single "installed" version without inspecting an environment.
- *  A range (`>=`, `~=`, `<`) or an unpinned name is left alone: there is no
- *  single version to compare a CVE's fixed version against. */
+/**
+ * Every package MENTION in a requirements file — exact `==` pins (returned
+ * with `version` set, the only specifier precise enough to name a single
+ * "installed" version without inspecting an environment) AND range/unpinned
+ * mentions (returned with `unplannableReason` set instead, so an active CVE
+ * on one is reported in `unplanned` rather than silently dropped — fix
+ * round 1, item 7).
+ *
+ * Handles the shapes a real `requirements.txt` uses beyond a bare
+ * `pkg==1.2.3`:
+ *   - pip-compile's hash-pinned, line-continued form
+ *     (`django==4.2.0 \` followed by `    --hash=sha256:...` lines) — a
+ *     trailing backslash joins the logical line, and `--hash=...` tokens
+ *     are stripped before parsing;
+ *   - extras (`celery[redis]==5.3.0`) — the `[redis]` marker is stripped;
+ *     the package identity for CVE matching is `celery`, not the bracketed
+ *     form;
+ *   - environment markers (`pkg==1.0.0; python_version >= "3.8"`) — the
+ *     marker (after `;`) is dropped, the pin itself is still read.
+ */
 function parsePinnedRequirements(content) {
     const out = [];
-    for (const lineRaw of content.split(/\r?\n/)) {
-        const line = lineRaw.split('#')[0]?.trim() ?? '';
+    for (const rawLine of joinContinuedLines(content)) {
+        let line = rawLine.split('#')[0]?.trim() ?? '';
         if (!line || line.startsWith('-'))
             continue; // -r other.txt, --index-url, etc.
-        const m = /^([A-Za-z0-9._-]+)\s*==\s*([A-Za-z0-9._-]+)$/.exec(line);
-        if (!m)
+        line = line.replace(/\s+--hash=\S+/g, '').trim(); // pip-compile hash annotations
+        const semi = line.indexOf(';');
+        if (semi >= 0)
+            line = line.slice(0, semi).trim(); // environment marker
+        if (!line)
             continue;
-        const name = m[1];
-        const version = m[2];
-        if (name && version)
-            out.push({ name, version });
+        // Extras: `celery[redis]==5.3.0` -> name `celery`, rest `==5.3.0`.
+        const extras = /^([A-Za-z0-9._-]+)\[[^\]]*\](.*)$/.exec(line);
+        const target = extras ? `${extras[1]}${extras[2]}` : line;
+        const exact = /^([A-Za-z0-9._-]+)\s*==\s*([A-Za-z0-9._-]+)$/.exec(target);
+        if (exact) {
+            const [, name, version] = exact;
+            if (name && version)
+                out.push({ name, version });
+            continue;
+        }
+        const range = /^([A-Za-z0-9._-]+)\s*(>=|<=|~=|!=|===|<|>)/.exec(target);
+        if (range?.[1] && range[2]) {
+            out.push({
+                name: range[1],
+                unplannableReason: `non-exact specifier (${range[2]}) — cannot determine a safe target without inspecting the installed environment`,
+            });
+            continue;
+        }
+        const bare = /^[A-Za-z0-9._-]+$/.exec(target);
+        if (bare) {
+            out.push({ name: target, unplannableReason: 'no version specifier — cannot determine an installed version' });
+        }
+        // Anything else (a VCS URL, a local path, `-e .`, …) is not a package
+        // mention this module can reason about at all — silently skipped, same
+        // as before.
     }
+    return out;
+}
+/** Joins a pip-compile-style backslash line continuation
+ *  (`django==4.2.0 \` followed by `    --hash=sha256:...`) into one logical
+ *  line, so `parsePinnedRequirements` sees the whole pin on one line. */
+function joinContinuedLines(content) {
+    const out = [];
+    let buffer = '';
+    for (const line of content.split(/\r?\n/)) {
+        const continued = /\\\s*$/.test(line);
+        buffer += continued ? line.replace(/\\\s*$/, ' ') : line;
+        if (continued)
+            continue;
+        out.push(buffer);
+        buffer = '';
+    }
+    if (buffer)
+        out.push(buffer);
     return out;
 }
 /**
@@ -646,24 +809,42 @@ async function runBundlerOutdated(projectPath, cves) {
     }
     return out;
 }
+/**
+ * Restore only when the tree genuinely was not restored already (fix round
+ * 1, item 8: a scan must never modify tracked files). Previously this ran
+ * `dotnet restore` unconditionally, every call — in an environment that
+ * already restored (CI, a dev machine mid-session), that is wasted work at
+ * best; at worst it rewrites a TRACKED `packages.lock.json` in place if the
+ * dependency graph has drifted since the lock file was committed. `dotnet
+ * list package --outdated` is tried directly first; a restore is attempted
+ * only when that fails, and `--locked-mode` is added whenever a
+ * `packages.lock.json` exists so an out-of-date lock FAILS the restore
+ * instead of being silently rewritten.
+ */
 async function runDotnetOutdated(projectPath, cves) {
-    // Restore first (`dotnet list package --outdated` requires resolved
-    // packages). If restore fails (e.g. private feed not configured), skip
-    // the whole dotnet branch rather than failing the whole call.
-    const restore = await execa('dotnet', ['restore', '--nologo', '--verbosity', 'quiet'], {
+    let r = await execa('dotnet', ['list', 'package', '--outdated', '--format', 'json'], {
         cwd: projectPath,
         reject: false,
-        timeout: 5 * 60_000,
+        timeout: 90_000,
     });
-    if (restore.exitCode !== 0)
-        return [];
+    if (r.exitCode !== 0) {
+        const restoreArgs = ['restore', '--nologo', '--verbosity', 'quiet'];
+        if (existsSync(join(projectPath, 'packages.lock.json')))
+            restoreArgs.push('--locked-mode');
+        const restore = await execa('dotnet', restoreArgs, { cwd: projectPath, reject: false, timeout: 5 * 60_000 });
+        if (restore.exitCode !== 0)
+            return []; // private feed not configured, lock out of date, etc. — skip the branch
+        r = await execa('dotnet', ['list', 'package', '--outdated', '--format', 'json'], {
+            cwd: projectPath,
+            reject: false,
+            timeout: 90_000,
+        });
+    }
     // `--format json` is available on .NET 8+; on older SDKs we fall back to
     // parsing the human-readable text output (less precise but functional).
-    const r = await execa('dotnet', ['list', 'package', '--outdated', '--format', 'json'], { cwd: projectPath, reject: false, timeout: 90_000 });
     if (r.exitCode === 0 && r.stdout.trim().startsWith('{')) {
         return parseDotnetJson(r.stdout, cves);
     }
-    // Fallback to text parsing.
     const fallback = await execa('dotnet', ['list', 'package', '--outdated'], { cwd: projectPath, reject: false, timeout: 90_000 });
     if (fallback.exitCode !== 0 || fallback.stdout.trim().length === 0)
         return [];

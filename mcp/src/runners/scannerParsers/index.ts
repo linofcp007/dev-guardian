@@ -26,6 +26,14 @@ export interface ParserContext {
    * paths to project-relative when the scanner reports absolute paths.
    */
   project_path?: string;
+  /**
+   * The source file this invocation's raw output should be attributed to,
+   * for a scanner whose own output carries no per-finding file path at all
+   * (`pipAudit.ts` — pip-audit's JSON never says which requirements file a
+   * dependency came from). Every other parser here already reads its own
+   * per-finding path from the scanner's output and ignores this field.
+   */
+  source_file?: string;
 }
 
 export interface ParserCveInput {

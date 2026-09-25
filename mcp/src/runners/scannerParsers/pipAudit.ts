@@ -15,8 +15,35 @@
  * OSV-sourced data routinely has none), so every finding here defaults to
  * `medium` via `normalizeSeverity(undefined)`, same as every other parser in
  * this module when the scanner itself is silent about severity.
+ *
+ * `file_path` on every finding here defaults to `'requirements.txt'` ONLY
+ * when no source file is known — pip-audit's own JSON says nothing about
+ * which requirements file (or `pyproject.toml`) a dependency came from, so
+ * `depsAudit.ts` runs one pip-audit invocation PER file (fix round 1, item
+ * 9) and attributes each call's output to that file. `scanToolFactory.ts`
+ * builds ONE `ParserContext` for a whole scan and reuses it for every
+ * `parser_inputs` entry, so a per-call `ctx.source_file` cannot vary across
+ * several pip-audit calls in the same scan; `depsAudit.ts` instead embeds a
+ * `__source_file` key in the JSON blob it hands to this parser for each
+ * call, which takes precedence when present. `ctx.source_file` is read as a
+ * fallback for a caller that genuinely only has one invocation to attribute
+ * (kept for API symmetry with the other parsers here, and for direct unit
+ * tests that pass it without going through `depsAudit.ts` at all).
+ *
+ * ---- `fix_versions[0]` is not "the fix" (fix round 1, CRITICAL item 1) ----
+ *
+ * pip-audit lists ONE fix per still-maintained release branch: installed
+ * `2.0.1`, `fix_versions: ["1.11.27", "2.2.9", "3.0.1"]` — `1.11.27` is an
+ * OLDER branch's backport, not an upgrade path for a 2.0.1 install; picking
+ * index 0 blindly proposed `django==1.11.27`, a downgrade labelled
+ * `security`. `minCleanVersionAbove` (`../../deps/versionCompare.js`) picks
+ * the smallest candidate that is genuinely ABOVE the installed version;
+ * `cve.fixed_version` is left unset when no candidate qualifies (an active
+ * CVE with no known safe upgrade is reported by `deps_update_plan` as
+ * `unplanned`, never guessed at).
  */
 
+import { minCleanVersionAbove } from '../../deps/versionCompare.js';
 import type { Finding } from '../../types.js';
 import {
   asArray,
@@ -35,10 +62,11 @@ export const PIP_AUDIT_TOOL_NAME = 'pip-audit';
 
 export const pipAuditParser: ScannerParser = {
   name: PIP_AUDIT_TOOL_NAME,
-  parse(input: unknown, _ctx: ParserContext = {}): ParserOutput {
+  parse(input: unknown, ctx: ParserContext = {}): ParserOutput {
     const root = parseInputAsJson(input);
     const findings: Finding[] = [];
     const cves: ParserCveInput[] = [];
+    const filePath = getString(root, '__source_file') ?? ctx.source_file ?? 'requirements.txt';
 
     for (const dep of asArray(getProp(root, 'dependencies'))) {
       const name = getString(dep, 'name');
@@ -53,6 +81,7 @@ export const pipAuditParser: ScannerParser = {
         const cveId = aliases.find((a) => /^CVE-\d/i.test(a));
         const description = getString(vuln, 'description');
         const severity = normalizeSeverity(undefined);
+        const safeFix = minCleanVersionAbove(version, fixVersions);
 
         const findingInput: Parameters<typeof makeFinding>[0] = {
           tool: PIP_AUDIT_TOOL_NAME,
@@ -62,7 +91,7 @@ export const pipAuditParser: ScannerParser = {
           subcategory: 'dependency',
           title: `${id} in ${name}${version ? ` ${version}` : ''}`,
           fix_available: fixVersions.length > 0,
-          file_path: 'requirements.txt',
+          file_path: filePath,
           snippet: `${name}@${version ?? ''}`,
         };
         if (description !== undefined) findingInput.message = description;
@@ -71,8 +100,12 @@ export const pipAuditParser: ScannerParser = {
         if (cveId) {
           const cve: ParserCveInput = { cve_id: cveId, package_name: name, severity };
           if (version !== undefined) cve.installed_version = version;
-          const fixed = fixVersions[0];
-          if (fixed !== undefined) cve.fixed_version = fixed;
+          // Only a version genuinely ABOVE what is installed is recorded as
+          // the fix — never fix_versions[0], which can be an older branch's
+          // backport (see this module's own doc comment). Left unset when no
+          // candidate qualifies: an unknown fix is not the same as "no fix",
+          // and `deps_update_plan` must not silently invent one.
+          if (safeFix !== undefined) cve.fixed_version = safeFix;
           cves.push(cve);
         }
       }

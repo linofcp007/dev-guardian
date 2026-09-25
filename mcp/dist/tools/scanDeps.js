@@ -74,18 +74,27 @@ registerToolModule(makeScanTool({
         }
         else {
             const coverage = assessManifestCoverage(ctx.projectPath, raw ?? '');
-            if (coverage.gaps.length > 0) {
-                // A manifest Trivy recognises nothing for (e.g. a bare .csproj with
-                // no packages.lock.json) must never read as a clean scan — see
-                // trivy.ts's own module comment. `skipped` when Trivy's whole
-                // Results array was empty (it ran, but covered nothing this
-                // project has); `ok` with a reason when SOME ecosystems were
-                // covered and this one specifically was not.
-                tools_run.push({
-                    name: 'trivy',
-                    status: coverage.sawAnyResults ? 'ok' : 'skipped',
-                    reason: 'no_supported_manifest',
-                });
+            if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
+                // PARTIAL: trivy genuinely ran and covered SOME ecosystems (its
+                // own tools_run status stays 'ok') but not this one. Fix round 1,
+                // item 4: the gap is named `trivy:<ecosystem>`, never the bare
+                // 'trivy' — `create_fix_pr`'s own verification treats a literal
+                // 'trivy' in `missing_tools` as "trivy did not run at all,
+                // nothing it found can be re-verified", which would block EVERY
+                // trivy-sourced fix (e.g. an unrelated npm CVE) just because one
+                // ecosystem (e.g. NuGet) went uncovered. A pseudo-name that
+                // matches no `tools_run` entry still forces coverage to 'partial'
+                // (missing_tools.length > 0), without colliding with the
+                // exact-string check downstream.
+                tools_run.push({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' });
+                missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`));
+                extras['manifest_coverage_gaps'] = coverage.gaps;
+            }
+            else if (coverage.gaps.length > 0) {
+                // FULL SKIP: trivy's own Results were entirely empty — nothing it
+                // reports can be trusted as re-verified, so the bare 'trivy' name
+                // is correct here (unchanged from before this fix round).
+                tools_run.push({ name: 'trivy', status: 'skipped', reason: 'no_supported_manifest' });
                 missing_tools.push('trivy');
                 extras['manifest_coverage_gaps'] = coverage.gaps;
             }
