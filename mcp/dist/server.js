@@ -416,11 +416,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants5);
+          this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -437,10 +437,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants5);
+        this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -501,8 +501,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants5) {
-        this.code = optimizeExpr(this.code, names, constants5);
+      optimizeNames(names, constants4) {
+        this.code = optimizeExpr(this.code, names, constants4);
         return this;
       }
       get names() {
@@ -531,12 +531,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         const { nodes } = this;
         let i2 = nodes.length;
         while (i2--) {
           const n2 = nodes[i2];
-          if (n2.optimizeNames(names, constants5))
+          if (n2.optimizeNames(names, constants4))
             continue;
           subtractNames(names, n2.names);
           nodes.splice(i2, 1);
@@ -589,12 +589,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants5);
-        if (!(super.optimizeNames(names, constants5) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
+        if (!(super.optimizeNames(names, constants4) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants5);
+        this.condition = optimizeExpr(this.condition, names, constants4);
         return this;
       }
       get names() {
@@ -617,10 +617,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants5) {
-        if (!super.optimizeNames(names, constants5))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants5);
+        this.iteration = optimizeExpr(this.iteration, names, constants4);
         return this;
       }
       get names() {
@@ -656,10 +656,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants5) {
-        if (!super.optimizeNames(names, constants5))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants5);
+        this.iterable = optimizeExpr(this.iterable, names, constants4);
         return this;
       }
       get names() {
@@ -701,11 +701,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         var _a, _b;
-        super.optimizeNames(names, constants5);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants5);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants5);
+        super.optimizeNames(names, constants4);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants4);
         return this;
       }
       get names() {
@@ -1006,7 +1006,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants5) {
+    function optimizeExpr(expr, names, constants4) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1021,14 +1021,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n2) {
-        const c3 = constants5[n2.str];
+        const c3 = constants4[n2.str];
         if (c3 === void 0 || names[n2.str] !== 1)
           return n2;
         delete names[n2.str];
         return c3;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c3) => c3 instanceof code_1.Name && names[c3.str] === 1 && constants5[c3.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c3) => c3 instanceof code_1.Name && names[c3.str] === 1 && constants4[c3.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -9131,60 +9131,60 @@ var init_fd_options = __esm({
   "node_modules/execa/lib/arguments/fd-options.js"() {
     init_specific();
     getToStream = (destination, to = "stdin") => {
-      const isWritable2 = true;
+      const isWritable = true;
       const { options, fileDescriptors } = SUBPROCESS_OPTIONS.get(destination);
-      const fdNumber = getFdNumber(fileDescriptors, to, isWritable2);
+      const fdNumber = getFdNumber(fileDescriptors, to, isWritable);
       const destinationStream = destination.stdio[fdNumber];
       if (destinationStream === null) {
-        throw new TypeError(getInvalidStdioOptionMessage(fdNumber, to, options, isWritable2));
+        throw new TypeError(getInvalidStdioOptionMessage(fdNumber, to, options, isWritable));
       }
       return destinationStream;
     };
     getFromStream = (source, from = "stdout") => {
-      const isWritable2 = false;
+      const isWritable = false;
       const { options, fileDescriptors } = SUBPROCESS_OPTIONS.get(source);
-      const fdNumber = getFdNumber(fileDescriptors, from, isWritable2);
+      const fdNumber = getFdNumber(fileDescriptors, from, isWritable);
       const sourceStream = fdNumber === "all" ? source.all : source.stdio[fdNumber];
       if (sourceStream === null || sourceStream === void 0) {
-        throw new TypeError(getInvalidStdioOptionMessage(fdNumber, from, options, isWritable2));
+        throw new TypeError(getInvalidStdioOptionMessage(fdNumber, from, options, isWritable));
       }
       return sourceStream;
     };
     SUBPROCESS_OPTIONS = /* @__PURE__ */ new WeakMap();
-    getFdNumber = (fileDescriptors, fdName, isWritable2) => {
-      const fdNumber = parseFdNumber(fdName, isWritable2);
-      validateFdNumber(fdNumber, fdName, isWritable2, fileDescriptors);
+    getFdNumber = (fileDescriptors, fdName, isWritable) => {
+      const fdNumber = parseFdNumber(fdName, isWritable);
+      validateFdNumber(fdNumber, fdName, isWritable, fileDescriptors);
       return fdNumber;
     };
-    parseFdNumber = (fdName, isWritable2) => {
+    parseFdNumber = (fdName, isWritable) => {
       const fdNumber = parseFd(fdName);
       if (fdNumber !== void 0) {
         return fdNumber;
       }
-      const { validOptions, defaultValue } = isWritable2 ? { validOptions: '"stdin"', defaultValue: "stdin" } : { validOptions: '"stdout", "stderr", "all"', defaultValue: "stdout" };
-      throw new TypeError(`"${getOptionName(isWritable2)}" must not be "${fdName}".
+      const { validOptions, defaultValue } = isWritable ? { validOptions: '"stdin"', defaultValue: "stdin" } : { validOptions: '"stdout", "stderr", "all"', defaultValue: "stdout" };
+      throw new TypeError(`"${getOptionName(isWritable)}" must not be "${fdName}".
 It must be ${validOptions} or "fd3", "fd4" (and so on).
 It is optional and defaults to "${defaultValue}".`);
     };
-    validateFdNumber = (fdNumber, fdName, isWritable2, fileDescriptors) => {
+    validateFdNumber = (fdNumber, fdName, isWritable, fileDescriptors) => {
       const fileDescriptor = fileDescriptors[getUsedDescriptor(fdNumber)];
       if (fileDescriptor === void 0) {
-        throw new TypeError(`"${getOptionName(isWritable2)}" must not be ${fdName}. That file descriptor does not exist.
+        throw new TypeError(`"${getOptionName(isWritable)}" must not be ${fdName}. That file descriptor does not exist.
 Please set the "stdio" option to ensure that file descriptor exists.`);
       }
-      if (fileDescriptor.direction === "input" && !isWritable2) {
-        throw new TypeError(`"${getOptionName(isWritable2)}" must not be ${fdName}. It must be a readable stream, not writable.`);
+      if (fileDescriptor.direction === "input" && !isWritable) {
+        throw new TypeError(`"${getOptionName(isWritable)}" must not be ${fdName}. It must be a readable stream, not writable.`);
       }
-      if (fileDescriptor.direction !== "input" && isWritable2) {
-        throw new TypeError(`"${getOptionName(isWritable2)}" must not be ${fdName}. It must be a writable stream, not readable.`);
+      if (fileDescriptor.direction !== "input" && isWritable) {
+        throw new TypeError(`"${getOptionName(isWritable)}" must not be ${fdName}. It must be a writable stream, not readable.`);
       }
     };
-    getInvalidStdioOptionMessage = (fdNumber, fdName, options, isWritable2) => {
+    getInvalidStdioOptionMessage = (fdNumber, fdName, options, isWritable) => {
       if (fdNumber === "all" && !options.all) {
         return `The "all" option must be true to use "from: 'all'".`;
       }
       const { optionName, optionValue } = getInvalidStdioOption(fdNumber, options);
-      return `The "${optionName}: ${serializeOptionValue(optionValue)}" option is incompatible with using "${getOptionName(isWritable2)}: ${serializeOptionValue(fdName)}".
+      return `The "${optionName}: ${serializeOptionValue(optionValue)}" option is incompatible with using "${getOptionName(isWritable)}: ${serializeOptionValue(fdName)}".
 Please set this option with "pipe" instead.`;
     };
     getInvalidStdioOption = (fdNumber, { stdin, stdout, stderr, stdio }) => {
@@ -9201,7 +9201,7 @@ Please set this option with "pipe" instead.`;
       return { optionName: `stdio[${usedDescriptor}]`, optionValue: stdio[usedDescriptor] };
     };
     getUsedDescriptor = (fdNumber) => fdNumber === "all" ? 1 : fdNumber;
-    getOptionName = (isWritable2) => isWritable2 ? "to" : "from";
+    getOptionName = (isWritable) => isWritable ? "to" : "from";
     serializeOptionValue = (value) => {
       if (typeof value === "string") {
         return `'${value}'`;
@@ -37128,6 +37128,341 @@ function resolveVersion() {
   return FALLBACK_VERSION;
 }
 
+// src/storage/db.ts
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync as existsSync4, mkdirSync, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { dirname as dirname4, join as join4, resolve as resolve2 } from "node:path";
+
+// src/storage/migrations/runner.ts
+import { existsSync as existsSync3, readdirSync, readFileSync as readFileSync5 } from "node:fs";
+import { dirname as dirname3, join as join3 } from "node:path";
+import { fileURLToPath as fileURLToPath5 } from "node:url";
+function resolveMigrationsDir() {
+  const here = dirname3(fileURLToPath5(import.meta.url));
+  const candidates2 = [here, join3(here, "storage", "migrations"), join3(here, "migrations")];
+  for (const dir of candidates2) {
+    try {
+      if (existsSync3(dir) && readdirSync(dir).some((f) => MIGRATION_FILE.test(f))) return dir;
+    } catch {
+    }
+  }
+  return here;
+}
+var MIGRATION_FILE = /^(\d+)_(.+)\.sql$/;
+var MIGRATIONS_DIR = resolveMigrationsDir();
+function runMigrations(db) {
+  const migrations = listMigrations();
+  ensureSchemaMetaTable(db);
+  for (const migration of migrations) {
+    if (migration.version <= getCurrentVersion(db)) continue;
+    applyMigration(db, migration);
+  }
+}
+function ensureSchemaMetaTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_meta (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `);
+}
+function getCurrentVersion(db) {
+  const row = db.prepare("SELECT value FROM schema_meta WHERE key = 'version'").get();
+  if (!row) return 0;
+  const n2 = Number.parseInt(row.value, 10);
+  return Number.isFinite(n2) ? n2 : 0;
+}
+function setVersion(db, version2) {
+  db.prepare(
+    `INSERT INTO schema_meta(key, value) VALUES('version', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run(String(version2));
+}
+function listMigrations(dir = MIGRATIONS_DIR) {
+  const migrations = [];
+  for (const f of readdirSync(dir)) {
+    const match = MIGRATION_FILE.exec(f);
+    if (!match) continue;
+    const versionPart = match[1];
+    const namePart = match[2];
+    if (versionPart === void 0 || namePart === void 0) continue;
+    migrations.push({
+      version: Number.parseInt(versionPart, 10),
+      name: namePart,
+      filePath: join3(dir, f)
+    });
+  }
+  migrations.sort((a2, b) => a2.version - b.version);
+  for (let i2 = 1; i2 < migrations.length; i2++) {
+    const prev = migrations[i2 - 1];
+    const cur = migrations[i2];
+    if (prev !== void 0 && cur !== void 0 && prev.version === cur.version) {
+      throw new Error(
+        `Duplicate migration number ${cur.version}: '${prev.name}' and '${cur.name}' in ${dir}. Renumber one of them to the next unused number.`
+      );
+    }
+  }
+  return migrations;
+}
+function applyMigration(db, migration) {
+  const sql = readFileSync5(migration.filePath, "utf8");
+  db.transaction(() => {
+    if (migration.version <= getCurrentVersion(db)) return;
+    db.exec(sql);
+    setVersion(db, migration.version);
+  })();
+}
+
+// src/storage/db.ts
+var sqliteModule;
+function loadSqlite() {
+  sqliteModule ??= createRequire(import.meta.url)("node:sqlite");
+  return sqliteModule;
+}
+var NODE_SQLITE_REQUIRED = "dev-guardian requires Node.js >= 22.13 (node:sqlite)";
+function nodeSqliteAvailable() {
+  try {
+    loadSqlite();
+    return true;
+  } catch {
+    return false;
+  }
+}
+var BUSY_TIMEOUT_MS = 5e3;
+var GuardianStatement = class {
+  constructor(stmt) {
+    this.stmt = stmt;
+  }
+  stmt;
+  run(...params) {
+    const info = this.stmt.run(...params);
+    return { changes: Number(info.changes), lastInsertRowid: info.lastInsertRowid };
+  }
+  get(...params) {
+    return this.stmt.get(...params);
+  }
+  all(...params) {
+    return this.stmt.all(...params);
+  }
+};
+var GuardianDatabase = class {
+  raw;
+  txDepth = 0;
+  /**
+   * The path passed to the constructor (or `':memory:'`). Mirrors
+   * better-sqlite3's `db.name`, which `healthStatus` reads to stat the DB file.
+   */
+  name;
+  constructor(source) {
+    if (typeof source === "string") {
+      this.raw = new (loadSqlite()).DatabaseSync(source);
+      this.name = source;
+    } else {
+      this.raw = source;
+      this.name = "";
+    }
+    this.raw.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  }
+  prepare(source) {
+    return new GuardianStatement(this.raw.prepare(source));
+  }
+  /** Run one or more statements for their side effects (DDL, PRAGMA, BEGIN…). */
+  exec(sql) {
+    this.raw.exec(sql);
+  }
+  /** better-sqlite3-style PRAGMA setter. Any returned row is intentionally ignored. */
+  pragma(source) {
+    this.raw.exec(`PRAGMA ${source}`);
+  }
+  /**
+   * Wraps `fn` in a transaction and returns a callable, mirroring
+   * better-sqlite3's `db.transaction(fn)`. Nesting-aware: the outermost call
+   * uses BEGIN IMMEDIATE/COMMIT/ROLLBACK, inner calls use SAVEPOINTs — so the
+   * repos' `tx(args)` semantics carry over unchanged.
+   *
+   * `BEGIN IMMEDIATE`, not a deferred `BEGIN`: a deferred transaction takes
+   * the write lock only at its first write, and if another connection wrote
+   * in between, that upgrade fails with SQLITE_BUSY without ever consulting
+   * the busy timeout. Taking the lock up front is what lets the timeout work.
+   *
+   * On failure, the ORIGINAL error is what the caller sees. SQLite rolls the
+   * whole transaction back by itself on some errors (`RAISE(ROLLBACK)`, a full
+   * disk, I/O errors); an unconditional `ROLLBACK` then throws
+   * `cannot rollback - no transaction is active`, which replaced the error
+   * that explained what went wrong and skipped the depth reset, leaving every
+   * later "transaction" on this connection a deferred SAVEPOINT.
+   */
+  transaction(fn) {
+    return (...args) => {
+      const depth = this.txDepth;
+      const top = depth === 0;
+      this.raw.exec(top ? "BEGIN IMMEDIATE" : `SAVEPOINT sp_${depth}`);
+      this.txDepth = depth + 1;
+      try {
+        const result = fn(...args);
+        this.raw.exec(top ? "COMMIT" : `RELEASE sp_${depth}`);
+        return result;
+      } catch (error2) {
+        this.rollbackAfterFailure(top, depth);
+        throw error2;
+      } finally {
+        this.txDepth = depth;
+      }
+    };
+  }
+  /** Best-effort undo for {@link transaction}; never throws over the caller's error. */
+  rollbackAfterFailure(top, depth) {
+    if (this.inTransaction() === false) return;
+    try {
+      if (top) {
+        this.raw.exec("ROLLBACK");
+      } else {
+        this.raw.exec(`ROLLBACK TO sp_${depth}`);
+        this.raw.exec(`RELEASE sp_${depth}`);
+      }
+    } catch {
+    }
+  }
+  /**
+   * `DatabaseSync#isTransaction` exists from Node 22.16 / 24.0. On 22.13–22.15
+   * it reads `undefined` at runtime (whatever the type declarations say), and
+   * the answer is "unknown": the rollback is then attempted and its own
+   * failure swallowed.
+   */
+  inTransaction() {
+    const flag = this.raw.isTransaction;
+    return typeof flag === "boolean" ? flag : void 0;
+  }
+  close() {
+    this.raw.close();
+  }
+};
+function openDatabase(options) {
+  if (options.inMemory) {
+    const db2 = new GuardianDatabase(":memory:");
+    applyPragmas(db2);
+    runMigrations(db2);
+    return { db: db2, path: ":memory:" };
+  }
+  const projectPath = resolve2(options.projectPath);
+  const preferredPath = join4(projectPath, ".guardian", "guardian.db");
+  let reason;
+  if (!isDirectory(projectPath)) {
+    reason = "it is not an existing directory";
+  } else {
+    try {
+      return { db: openWritable(preferredPath), path: preferredPath };
+    } catch (error2) {
+      if (!isNotWritableError(error2)) throw error2;
+      reason = error2 instanceof Error ? error2.message : String(error2);
+    }
+  }
+  const chosenPath = resolveFallbackDbPath(projectPath);
+  ensureDir(dirname4(chosenPath));
+  const db = new GuardianDatabase(chosenPath);
+  applyPragmas(db);
+  runMigrations(db);
+  return {
+    db,
+    path: chosenPath,
+    warning: `Project path '${projectPath}' is not writable (${reason}); dev-guardian DB persisted to '${chosenPath}' instead. Scans will not be visible alongside the project.`
+  };
+}
+function openWritable(dbPath) {
+  const dir = dirname4(dbPath);
+  ensureDir(dir);
+  probeDirectoryWritable(dir);
+  const db = new GuardianDatabase(dbPath);
+  try {
+    applyPragmas(db);
+    runMigrations(db);
+    probeDatabaseWritable(db);
+    return db;
+  } catch (error2) {
+    try {
+      db.close();
+    } catch {
+    }
+    throw error2;
+  }
+}
+function probeDirectoryWritable(dir) {
+  const probe2 = join4(dir, `.write-probe-${process.pid}-${randomBytes(4).toString("hex")}`);
+  writeFileSync3(probe2, "", { flag: "wx" });
+  try {
+    rmSync(probe2, { force: true });
+  } catch {
+  }
+}
+function probeDatabaseWritable(db) {
+  db.exec("PRAGMA busy_timeout = 0");
+  try {
+    db.exec("UPDATE schema_meta SET value = value WHERE 0");
+  } catch (error2) {
+    if (!isBusyError(error2)) throw error2;
+  } finally {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  }
+}
+function isNotWritableError(error2) {
+  if (error2 instanceof Error && "code" in error2) {
+    const code = error2.code;
+    if (code === "EACCES" || code === "EPERM" || code === "EROFS") return true;
+  }
+  const sqlite = sqliteErrorCode(error2);
+  return sqlite === 8 || sqlite === 14;
+}
+function resolveFallbackDbPath(projectPath) {
+  return join4(tmpdir(), "dev-guardian", shortHash(resolve2(projectPath)), "guardian.db");
+}
+function applyPragmas(db) {
+  retryWhileBusy(() => db.pragma("journal_mode = WAL"));
+  db.pragma("foreign_keys = ON");
+  db.pragma("mmap_size = 67108864");
+  db.pragma("synchronous = NORMAL");
+}
+function retryWhileBusy(op) {
+  const deadline = Date.now() + BUSY_TIMEOUT_MS;
+  for (; ; ) {
+    try {
+      op();
+      return;
+    } catch (error2) {
+      if (!isBusyError(error2) || Date.now() >= deadline) throw error2;
+      sleepSync(20 + Math.floor(Math.random() * 30));
+    }
+  }
+}
+function isBusyError(error2) {
+  const primary = sqliteErrorCode(error2);
+  return primary === 5 || primary === 6;
+}
+function sqliteErrorCode(error2) {
+  if (typeof error2 !== "object" || error2 === null || !("errcode" in error2)) return void 0;
+  const code = error2.errcode;
+  return typeof code === "number" ? code & 255 : void 0;
+}
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function ensureDir(dir) {
+  if (!existsSync4(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+}
+function isDirectory(path6) {
+  try {
+    return statSync2(path6).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function shortHash(input) {
+  return createHash("sha1").update(input).digest("hex").slice(0, 16);
+}
+
 // src/storage/repoUtil.ts
 function nowIso() {
   return (/* @__PURE__ */ new Date()).toISOString();
@@ -37199,27 +37534,40 @@ function rowToBaseline(row) {
 }
 
 // src/storage/cvesRepo.ts
+function seenIn(direction) {
+  return `COALESCE((
+      SELECT o.scan_id FROM scan_cves o JOIN scans os ON os.id = o.scan_id
+      WHERE o.cve_id = sc.cve_id AND o.package_name = sc.package_name
+        AND o.installed_version = sc.installed_version
+        AND os.project_path = s.project_path
+      ORDER BY os.started_at ${direction}, os.rowid ${direction}
+      LIMIT 1
+    ), sc.scan_id)`;
+}
 var CvesRepo = class {
   constructor(db) {
     this.db = db;
     this.upsertStmt = db.prepare(`
-      INSERT INTO cves (
-        cve_id, package_name, installed_version, fixed_version, severity,
-        first_seen_scan_id, last_seen_scan_id
+      INSERT INTO scan_cves (
+        scan_id, cve_id, package_name, installed_version, fixed_version, severity
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(cve_id, package_name, installed_version) DO UPDATE SET
-        fixed_version    = excluded.fixed_version,
-        severity         = excluded.severity,
-        last_seen_scan_id = excluded.last_seen_scan_id
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(scan_id, cve_id, package_name, installed_version) DO UPDATE SET
+        fixed_version = excluded.fixed_version,
+        severity      = excluded.severity
     `);
     this.listActiveStmt = db.prepare(`
-      SELECT * FROM cves WHERE last_seen_scan_id = ?
+      SELECT sc.cve_id, sc.package_name, sc.installed_version, sc.fixed_version, sc.severity,
+             ${seenIn("ASC")} AS first_seen_scan_id,
+             ${seenIn("DESC")} AS last_seen_scan_id
+      FROM scan_cves sc
+      LEFT JOIN scans s ON s.id = sc.scan_id
+      WHERE sc.scan_id = ?
       ORDER BY
-        CASE severity
+        CASE sc.severity
           WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2
           WHEN 'low' THEN 1 ELSE 0 END DESC,
-        cve_id ASC
+        sc.cve_id ASC, sc.package_name ASC, sc.installed_version ASC
     `);
   }
   db;
@@ -37227,13 +37575,12 @@ var CvesRepo = class {
   listActiveStmt;
   upsert(input) {
     this.upsertStmt.run(
+      input.scan_id,
       input.cve_id,
       input.package_name,
-      input.installed_version ?? null,
+      input.installed_version ?? "",
       input.fixed_version ?? null,
-      input.severity,
-      input.scan_id,
-      input.scan_id
+      input.severity
     );
   }
   bulkUpsert(rows) {
@@ -37244,11 +37591,12 @@ var CvesRepo = class {
     tx(rows);
   }
   /**
-   * Returns CVEs whose `last_seen_scan_id` matches the given scan. Resources
-   * usually pass the latest completed deps scan id here.
+   * Exactly the CVEs the given scan saw, one per (cve, package, installed
+   * version), most severe first. Resources usually pass the latest completed
+   * deps scan id here.
    */
-  listActive(latestScanId) {
-    return this.listActiveStmt.all(latestScanId).map(rowToCve);
+  listActive(scanId) {
+    return this.listActiveStmt.all(scanId).map(rowToCve);
   }
 };
 function rowToCve(row) {
@@ -37259,7 +37607,7 @@ function rowToCve(row) {
     first_seen_scan_id: row.first_seen_scan_id,
     last_seen_scan_id: row.last_seen_scan_id
   };
-  if (row.installed_version !== null) cve.installed_version = row.installed_version;
+  if (row.installed_version !== "") cve.installed_version = row.installed_version;
   if (row.fixed_version !== null) cve.fixed_version = row.fixed_version;
   return cve;
 }
@@ -37545,12 +37893,16 @@ var RuntimeMetaRepo = class {
 };
 
 // src/storage/scansRepo.ts
+import { hostname as hostname2 } from "node:os";
 var WORKTREE_PATH_EXCLUSION2 = "%guardian-fixpr-wt-%";
+var UNKNOWN_OWNER_REAP_AFTER_MS = 6 * 60 * 60 * 1e3;
+var LIVE_OWNER_REAP_AFTER_MS = 24 * 60 * 60 * 1e3;
 var ScansRepo = class {
   insertStmt;
   finalizeStmt;
   markCancelledStmt;
-  reapRunningStmt;
+  listRunningStmt;
+  reapOneStmt;
   getByIdStmt;
   getLatestStmt;
   getLatestForProjectStmt;
@@ -37562,9 +37914,10 @@ var ScansRepo = class {
     this.insertStmt = db.prepare(`
       INSERT INTO scans (
         id, scan_type, project_path, tree_hash,
-        started_at, status, tools_run, missing_tools, report_dir, meta
+        started_at, status, tools_run, missing_tools, report_dir, meta,
+        owner_pid, owner_host
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.finalizeStmt = db.prepare(`
       UPDATE scans
@@ -37578,10 +37931,13 @@ var ScansRepo = class {
       SET status = 'cancelled', finished_at = ?
       WHERE id = ? AND status = 'running'
     `);
-    this.reapRunningStmt = db.prepare(`
+    this.listRunningStmt = db.prepare(`
+      SELECT id, started_at, owner_pid, owner_host FROM scans WHERE status = 'running'
+    `);
+    this.reapOneStmt = db.prepare(`
       UPDATE scans
-      SET status = 'failed', finished_at = ?, error = 'reaped on startup'
-      WHERE status = 'running'
+      SET status = 'failed', finished_at = ?, error = ?
+      WHERE id = ? AND status = 'running'
     `);
     this.getByIdStmt = db.prepare(`SELECT * FROM scans WHERE id = ?`);
     this.getLatestStmt = db.prepare(`
@@ -37631,7 +37987,9 @@ var ScansRepo = class {
       "[]",
       "[]",
       input.report_dir ?? null,
-      JSON.stringify(input.meta ?? {})
+      JSON.stringify(input.meta ?? {}),
+      process.pid,
+      hostname2()
     );
     return {
       scan_id: input.scan_id,
@@ -37662,12 +38020,36 @@ var ScansRepo = class {
     this.markCancelledStmt.run(nowIso(), scanId);
   }
   /**
-   * Sweeps any scan left in `running` state by a previous server lifetime
-   * (crash, kill -9). Called once on startup.
+   * Fails scans left in `running` by a process that is gone (crash, kill -9).
+   *
+   * **Call it only at startup, before this process starts any scan** — the
+   * rule for this process's own pid below depends on that.
+   *
+   * Only DEAD owners' scans: several servers share one database, and the old
+   * sweep (`every running scan`) killed whatever another live server was
+   * scanning at the time. For a scan whose owner is on this host:
+   *   - the owner pid is THIS process's pid → reaped. This process has not
+   *     started a scan yet, so an earlier process with the same pid wrote the
+   *     row: a container restarted as pid 1 under the same hostname, or a pid
+   *     Windows handed out again;
+   *   - the pid no longer exists → reaped;
+   *   - the pid exists → left alone, until the scan is older than
+   *     {@link LIVE_OWNER_REAP_AFTER_MS} (the pid has been reused by then).
+   * A scan whose owner cannot be checked from here (none recorded, or another
+   * host) is reaped once older than {@link UNKNOWN_OWNER_REAP_AFTER_MS}.
    */
-  reapRunning() {
-    const info = this.reapRunningStmt.run(nowIso());
-    return info.changes;
+  reapRunning(options = {}) {
+    const now = options.now ?? Date.now();
+    const host = options.host ?? hostname2();
+    const ownPid = options.ownPid ?? process.pid;
+    const isAlive = options.isAlive ?? pidIsAlive;
+    let reaped = 0;
+    for (const row of this.listRunningStmt.all()) {
+      const reason = reapReason(row, { host, ownPid, now, isAlive });
+      if (reason === null) continue;
+      reaped += this.reapOneStmt.run(nowIso(), `reaped on startup: ${reason}`, row.id).changes;
+    }
+    return reaped;
   }
   getById(scanId) {
     const row = this.getByIdStmt.get(scanId);
@@ -37729,6 +38111,33 @@ var ScansRepo = class {
     this.attachCacheStmt.run(args.tree_hash, args.scan_id, args.scan_type, nowIso());
   }
 };
+function reapReason(row, ctx) {
+  const started = Date.parse(row.started_at);
+  const olderThan = (ms) => Number.isNaN(started) || ctx.now - started > ms;
+  const pid = row.owner_pid;
+  if (pid !== null && Number.isInteger(pid) && pid > 0 && row.owner_host === ctx.host) {
+    if (pid === ctx.ownPid) {
+      return `owner pid ${pid} is this process's own pid, and this process has not started a scan yet`;
+    }
+    if (!ctx.isAlive(pid)) return `owner process ${pid} is no longer running`;
+    if (olderThan(LIVE_OWNER_REAP_AFTER_MS)) {
+      return `owner pid ${pid} still exists, but the scan started more than 24 h ago: the pid was reused`;
+    }
+    return null;
+  }
+  if (olderThan(UNKNOWN_OWNER_REAP_AFTER_MS)) {
+    return "owner unknown on this host and the scan started more than 6 h ago";
+  }
+  return null;
+}
+function pidIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error2) {
+    return !(error2 instanceof Error && "code" in error2 && error2.code === "ESRCH");
+  }
+}
 function rowToRecord(row) {
   const record3 = {
     scan_id: row.id,
@@ -38121,220 +38530,6 @@ function rowToValidation(row) {
   };
 }
 
-// src/storage/db.ts
-import { createHash } from "node:crypto";
-import { existsSync as existsSync4, mkdirSync, accessSync, constants as constants4 } from "node:fs";
-import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { dirname as dirname4, join as join4, resolve as resolve2 } from "node:path";
-
-// src/storage/migrations/runner.ts
-import { existsSync as existsSync3, readdirSync, readFileSync as readFileSync5 } from "node:fs";
-import { dirname as dirname3, join as join3 } from "node:path";
-import { fileURLToPath as fileURLToPath5 } from "node:url";
-function resolveMigrationsDir() {
-  const here = dirname3(fileURLToPath5(import.meta.url));
-  const candidates2 = [here, join3(here, "storage", "migrations"), join3(here, "migrations")];
-  for (const dir of candidates2) {
-    try {
-      if (existsSync3(dir) && readdirSync(dir).some((f) => /^\d+_.+\.sql$/.test(f))) return dir;
-    } catch {
-    }
-  }
-  return here;
-}
-var MIGRATIONS_DIR = resolveMigrationsDir();
-function runMigrations(db) {
-  ensureSchemaMetaTable(db);
-  const current = getCurrentVersion(db);
-  const pending = listMigrations().filter((m) => m.version > current);
-  for (const migration of pending) {
-    applyMigration(db, migration);
-  }
-}
-function ensureSchemaMetaTable(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS schema_meta (
-      key   TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    )
-  `);
-}
-function getCurrentVersion(db) {
-  const row = db.prepare("SELECT value FROM schema_meta WHERE key = 'version'").get();
-  if (!row) return 0;
-  const n2 = Number.parseInt(row.value, 10);
-  return Number.isFinite(n2) ? n2 : 0;
-}
-function setVersion(db, version2) {
-  db.prepare(
-    `INSERT INTO schema_meta(key, value) VALUES('version', ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-  ).run(String(version2));
-}
-function listMigrations() {
-  const files = readdirSync(MIGRATIONS_DIR).filter((f) => /^\d+_.+\.sql$/.test(f));
-  return files.map((f) => {
-    const match = /^(\d+)_(.+)\.sql$/.exec(f);
-    if (!match) throw new Error(`Unreachable: regex matched once but not twice for '${f}'`);
-    const versionPart = match[1];
-    const namePart = match[2];
-    if (versionPart === void 0 || namePart === void 0) {
-      throw new Error(`Unreachable: capture groups undefined for '${f}'`);
-    }
-    return {
-      version: Number.parseInt(versionPart, 10),
-      name: namePart,
-      filePath: join3(MIGRATIONS_DIR, f)
-    };
-  }).sort((a2, b) => a2.version - b.version);
-}
-function applyMigration(db, migration) {
-  const sql = readFileSync5(migration.filePath, "utf8");
-  const tx = db.transaction(() => {
-    db.exec(sql);
-    setVersion(db, migration.version);
-  });
-  tx();
-}
-
-// src/storage/db.ts
-var { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
-var GuardianStatement = class {
-  constructor(stmt) {
-    this.stmt = stmt;
-  }
-  stmt;
-  run(...params) {
-    const info = this.stmt.run(...params);
-    return { changes: Number(info.changes), lastInsertRowid: info.lastInsertRowid };
-  }
-  get(...params) {
-    return this.stmt.get(...params);
-  }
-  all(...params) {
-    return this.stmt.all(...params);
-  }
-};
-var GuardianDatabase = class {
-  raw;
-  txDepth = 0;
-  /**
-   * The path passed to the constructor (or `':memory:'`). Mirrors
-   * better-sqlite3's `db.name`, which `healthStatus` reads to stat the DB file.
-   */
-  name;
-  constructor(source) {
-    if (typeof source === "string") {
-      this.raw = new DatabaseSync(source);
-      this.name = source;
-    } else {
-      this.raw = source;
-      this.name = "";
-    }
-  }
-  prepare(source) {
-    return new GuardianStatement(this.raw.prepare(source));
-  }
-  /** Run one or more statements for their side effects (DDL, PRAGMA, BEGIN…). */
-  exec(sql) {
-    this.raw.exec(sql);
-  }
-  /** better-sqlite3-style PRAGMA setter. Any returned row is intentionally ignored. */
-  pragma(source) {
-    this.raw.exec(`PRAGMA ${source}`);
-  }
-  /**
-   * Wraps `fn` in a transaction and returns a callable, mirroring
-   * better-sqlite3's `db.transaction(fn)`. Nesting-aware: the outermost call
-   * uses BEGIN/COMMIT/ROLLBACK, inner calls use SAVEPOINTs — so the repos'
-   * `tx(args)` semantics carry over unchanged.
-   */
-  transaction(fn) {
-    return (...args) => {
-      const depth = this.txDepth;
-      const top = depth === 0;
-      this.raw.exec(top ? "BEGIN" : `SAVEPOINT sp_${depth}`);
-      this.txDepth = depth + 1;
-      try {
-        const result = fn(...args);
-        this.raw.exec(top ? "COMMIT" : `RELEASE sp_${depth}`);
-        this.txDepth = depth;
-        return result;
-      } catch (error2) {
-        if (top) {
-          this.raw.exec("ROLLBACK");
-        } else {
-          this.raw.exec(`ROLLBACK TO sp_${depth}`);
-          this.raw.exec(`RELEASE sp_${depth}`);
-        }
-        this.txDepth = depth;
-        throw error2;
-      }
-    };
-  }
-  close() {
-    this.raw.close();
-  }
-};
-function openDatabase(options) {
-  if (options.inMemory) {
-    const db2 = new GuardianDatabase(":memory:");
-    applyPragmas(db2);
-    runMigrations(db2);
-    return { db: db2, path: ":memory:" };
-  }
-  const projectPath = resolve2(options.projectPath);
-  const preferredDir = join4(projectPath, ".guardian");
-  const preferredPath = join4(preferredDir, "guardian.db");
-  let chosenPath;
-  let warning;
-  if (isWritable(projectPath)) {
-    ensureDir(preferredDir);
-    chosenPath = preferredPath;
-  } else {
-    chosenPath = resolveFallbackDbPath(projectPath);
-    ensureDir(dirname4(chosenPath));
-    warning = `Project path '${projectPath}' is not writable; dev-guardian DB persisted to '${chosenPath}' instead. Scans will not be visible alongside the project.`;
-  }
-  const db = new GuardianDatabase(chosenPath);
-  applyPragmas(db);
-  runMigrations(db);
-  const result = { db, path: chosenPath };
-  if (warning !== void 0) {
-    result.warning = warning;
-  }
-  return result;
-}
-function resolveFallbackDbPath(projectPath) {
-  return join4(tmpdir(), "dev-guardian", shortHash(resolve2(projectPath)), "guardian.db");
-}
-function applyPragmas(db) {
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  db.pragma("mmap_size = 67108864");
-  db.pragma("synchronous = NORMAL");
-}
-function ensureDir(dir) {
-  if (!existsSync4(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-}
-function isWritable(dir) {
-  try {
-    if (!existsSync4(dir)) {
-      return false;
-    }
-    accessSync(dir, constants4.W_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function shortHash(input) {
-  return createHash("sha1").update(input).digest("hex").slice(0, 16);
-}
-
 // src/storage/index.ts
 var Storage = class {
   constructor(db) {
@@ -38366,6 +38561,122 @@ var Storage = class {
     return this.db;
   }
 };
+
+// src/storage/maintenance.ts
+var DEFAULT_RETENTION_SCANS = 50;
+var PRUNE_BATCH = 50;
+var RETENTION_BUDGET_MS = 1e3;
+var RETENTION_START_DELAY_MS = 2e3;
+var RETENTION_BATCH_GAP_MS = 20;
+function resolveRetentionLimit(raw) {
+  const value = raw?.trim() ?? "";
+  if (value === "") return { keep: DEFAULT_RETENTION_SCANS };
+  if (/^\d+$/.test(value)) return { keep: Number.parseInt(value, 10) };
+  return {
+    keep: DEFAULT_RETENTION_SCANS,
+    warning: `GUARDIAN_RETENTION_SCANS='${raw}' is not a non-negative integer; keeping the newest ${DEFAULT_RETENTION_SCANS} scans per project and scan type.`
+  };
+}
+var PRUNABLE_SQL = `
+  SELECT id FROM (
+    SELECT id, status, started_at, rowid AS rid,
+           ROW_NUMBER() OVER (
+             PARTITION BY project_path, scan_type
+             ORDER BY started_at DESC, rowid DESC
+           ) AS rn
+    FROM scans
+  )
+  WHERE rn > ?
+    AND status <> 'running'
+    AND id NOT IN (SELECT scan_id FROM baselines)
+  ORDER BY started_at ASC, rid ASC
+`;
+function listPrunableScans(db, keep) {
+  if (!(keep > 0)) return [];
+  return db.prepare(PRUNABLE_SQL).all(keep).map((r) => r.id);
+}
+function deleteScans(db, ids2) {
+  if (ids2.length === 0) return 0;
+  return db.transaction(() => {
+    const list2 = ids2.map(() => "?").join(", ");
+    const eligible = db.prepare(
+      `SELECT id FROM scans WHERE id IN (${list2})
+           AND status <> 'running' AND id NOT IN (SELECT scan_id FROM baselines)`
+    ).all(...ids2).map((r) => r.id);
+    if (eligible.length === 0) return 0;
+    const del = eligible.map(() => "?").join(", ");
+    db.prepare(`DELETE FROM findings WHERE scan_id IN (${del})`).run(...eligible);
+    db.prepare(`DELETE FROM scan_cves WHERE scan_id IN (${del})`).run(...eligible);
+    db.prepare(`DELETE FROM tree_cache WHERE scan_id IN (${del})`).run(...eligible);
+    db.prepare(
+      `DELETE FROM cves WHERE first_seen_scan_id IN (${del}) OR last_seen_scan_id IN (${del})`
+    ).run(...eligible, ...eligible);
+    return db.prepare(`DELETE FROM scans WHERE id IN (${del})`).run(...eligible).changes;
+  })();
+}
+function reapOrphanedScans(storage, log) {
+  try {
+    const reaped = storage.scans.reapRunning();
+    if (reaped > 0) log(`reaped ${reaped} orphaned scan(s)`);
+  } catch (error2) {
+    log(`reaper failed (continuing): ${describe(error2)}`);
+  }
+}
+var defaultDefer = (fn, ms) => {
+  const timer = setTimeout(fn, ms);
+  timer.unref();
+  return () => clearTimeout(timer);
+};
+function scheduleRetention(storage, log, options = {}) {
+  const limit = resolveRetentionLimit((options.env ?? process.env)["GUARDIAN_RETENTION_SCANS"]);
+  if (limit.warning !== void 0) log(limit.warning);
+  if (limit.keep === 0) return () => {
+  };
+  const defer = options.defer ?? defaultDefer;
+  const now = options.now ?? (() => performance.now());
+  const budgetMs = options.budgetMs ?? RETENTION_BUDGET_MS;
+  const batchSize = options.batchSize ?? PRUNE_BATCH;
+  let cancelled = false;
+  let cancelNext = () => {
+  };
+  let pending;
+  let spent = 0;
+  let deleted = 0;
+  const finish = (left) => {
+    if (deleted === 0 && left === 0) return;
+    log(
+      `pruned ${deleted} scan(s) beyond the newest ${limit.keep} per project and scan type` + (left > 0 ? `; ${left} left for the next start (retention budget ${budgetMs} ms)` : "")
+    );
+  };
+  const tick = () => {
+    if (cancelled) return;
+    const t0 = now();
+    let left;
+    try {
+      const db = storage.rawHandle();
+      pending ??= listPrunableScans(db, limit.keep);
+      deleted += deleteScans(db, pending.splice(0, batchSize));
+      left = pending.length;
+    } catch (error2) {
+      log(`retention failed (continuing): ${describe(error2)}`);
+      return;
+    }
+    spent += now() - t0;
+    if (left === 0 || spent >= budgetMs) {
+      finish(left);
+      return;
+    }
+    cancelNext = defer(tick, RETENTION_BATCH_GAP_MS);
+  };
+  cancelNext = defer(tick, options.startDelayMs ?? RETENTION_START_DELAY_MS);
+  return () => {
+    cancelled = true;
+    cancelNext();
+  };
+}
+function describe(error2) {
+  return error2 instanceof Error ? error2.message : String(error2);
+}
 
 // src/resources/index.ts
 var RESOURCES = [];
@@ -39313,7 +39624,7 @@ var BaseScanWithFixInput = BaseScanInput.extend({
 });
 
 // src/tools/scanHelpers.ts
-import { existsSync as existsSync6, mkdirSync as mkdirSync2, readFileSync as readFileSync6, readdirSync as readdirSync2, statSync as statSync2 } from "node:fs";
+import { existsSync as existsSync6, mkdirSync as mkdirSync2, readFileSync as readFileSync6, readdirSync as readdirSync2, statSync as statSync3 } from "node:fs";
 import { join as join6 } from "node:path";
 
 // src/platform/pkgManagerDetect.ts
@@ -39379,7 +39690,7 @@ function findNewestDir(parent, prefix, sinceMs) {
     if (!entry.startsWith(prefix)) continue;
     const abs = join6(parent, entry);
     try {
-      const s = statSync2(abs);
+      const s = statSync3(abs);
       if (!s.isDirectory()) continue;
       if (s.mtimeMs < sinceMs) continue;
       if (!best || s.mtimeMs > best.mtimeMs) best = { path: abs, mtimeMs: s.mtimeMs };
@@ -39503,7 +39814,7 @@ function hashConfigFile(path6) {
 }
 
 // src/configdrift/manifest.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync8, writeFileSync as writeFileSync3 } from "node:fs";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync8, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname6, join as join7 } from "node:path";
 var MANIFEST_RELATIVE_PATH = ".dev-guardian/configs.json";
 var MANIFEST_SCHEMA_VERSION = 1;
@@ -39540,7 +39851,7 @@ function writeManifest(projectPath, manifest) {
   try {
     const path6 = manifestPath(projectPath);
     mkdirSync3(dirname6(path6), { recursive: true });
-    writeFileSync3(path6, `${JSON.stringify(sorted, null, 2)}
+    writeFileSync4(path6, `${JSON.stringify(sorted, null, 2)}
 `, "utf8");
     return true;
   } catch {
@@ -39838,7 +40149,7 @@ async function walk(root, dir, out) {
 }
 
 // src/platform/projectPath.ts
-import { existsSync as existsSync9, statSync as statSync3 } from "node:fs";
+import { existsSync as existsSync9, realpathSync, statSync as statSync4 } from "node:fs";
 import { homedir } from "node:os";
 import { parse as parse3, resolve as resolve4 } from "node:path";
 var InvalidProjectPathError = class extends Error {
@@ -39856,19 +40167,32 @@ function resolveProjectPath(input) {
   if (!existsSync9(candidate)) {
     throw new InvalidProjectPathError("not_found", candidate);
   }
-  if (!statSync3(candidate).isDirectory()) {
+  if (!statSync4(candidate).isDirectory()) {
     throw new InvalidProjectPathError("not_a_directory", candidate);
   }
-  if (isRootOrHome(candidate)) {
-    throw new InvalidProjectPathError("root_or_home", candidate);
+  const canonical = canonicalPath(candidate);
+  if (isRootOrHome(canonical)) {
+    throw new InvalidProjectPathError("root_or_home", canonical);
   }
-  return { path: candidate };
+  return { path: canonical };
+}
+function canonicalPath(p) {
+  const resolved = resolve4(p);
+  let canonical = resolved;
+  try {
+    canonical = realpathSync.native(resolved);
+  } catch {
+  }
+  if (process.platform === "win32") {
+    if (canonical.startsWith("\\\\") && !resolved.startsWith("\\\\")) canonical = resolved;
+    canonical = canonical.replace(/\//g, "\\").replace(/^([a-z]):/, (_m, drive) => `${drive.toUpperCase()}:`);
+  }
+  return canonical;
 }
 function isRootOrHome(p) {
   if (parse3(p).root === p) return true;
   const home = resolve4(homedir());
-  if (p === home) return true;
-  return false;
+  return p === home || p === canonicalPath(home);
 }
 
 // src/tools/gitState.ts
@@ -40797,7 +41121,7 @@ registerToolModule(
 );
 
 // src/tools/scanContainers.ts
-import { existsSync as existsSync13, realpathSync } from "node:fs";
+import { existsSync as existsSync13, realpathSync as realpathSync2 } from "node:fs";
 import { isAbsolute, join as join16, relative as relative2, resolve as resolve5, sep as sep2 } from "node:path";
 var IMAGE_REF = /^(?!-)\S+$/;
 var scanContainers = makeScanTool({
@@ -40932,7 +41256,7 @@ function isInside(root, candidate) {
   if (!within(root, abs)) return false;
   if (!existsSync13(abs)) return true;
   try {
-    return within(realpathSync.native(root), realpathSync.native(abs));
+    return within(realpathSync2.native(root), realpathSync2.native(abs));
   } catch {
     return false;
   }
@@ -41841,8 +42165,8 @@ async function tryNativeAudit(opts) {
   });
   if (isNpmStdout && result.stdout.length > 0) {
     try {
-      const { writeFileSync: writeFileSync12 } = await import("node:fs");
-      writeFileSync12(opts.outFile, result.stdout, "utf8");
+      const { writeFileSync: writeFileSync13 } = await import("node:fs");
+      writeFileSync13(opts.outFile, result.stdout, "utf8");
     } catch {
     }
   }
@@ -42295,7 +42619,7 @@ function failDomain2(code, message) {
 }
 
 // src/tools/complianceCheck.ts
-import { readdirSync as readdirSync7, statSync as statSync4 } from "node:fs";
+import { readdirSync as readdirSync7, statSync as statSync5 } from "node:fs";
 import { join as join23 } from "node:path";
 var RISKY_LICENSE_PATTERNS = [
   { pattern: /^AGPL/i, severity: "high" },
@@ -42354,7 +42678,7 @@ function walk2(root, dir, depth, maxDepth, out) {
       continue;
     const abs = join23(dir, entry);
     try {
-      const s = statSync4(abs);
+      const s = statSync5(abs);
       if (s.isDirectory()) {
         if (depth + 1 <= maxDepth) walk2(root, abs, depth + 1, maxDepth, out);
       } else if (s.isFile()) {
@@ -42479,7 +42803,7 @@ registerToolModule(
 );
 
 // src/tools/generateSbom.ts
-import { existsSync as existsSync18, readFileSync as readFileSync11, statSync as statSync5 } from "node:fs";
+import { existsSync as existsSync18, readFileSync as readFileSync11, statSync as statSync6 } from "node:fs";
 import { join as join24 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
@@ -42597,7 +42921,7 @@ async function handler2(input, ctx) {
       }
     };
   }
-  const stat2 = statSync5(outFile);
+  const stat2 = statSync6(outFile);
   const raw = readFileSync11(outFile, "utf8");
   const summary = summarize2(raw);
   ctx.storage.scans.insert({
@@ -42778,7 +43102,7 @@ import { existsSync as existsSync21 } from "node:fs";
 import { join as join27 } from "node:path";
 
 // src/configdrift/refresh.ts
-import { copyFileSync, existsSync as existsSync20, mkdirSync as mkdirSync4, writeFileSync as writeFileSync4, readFileSync as readFileSync12 } from "node:fs";
+import { copyFileSync, existsSync as existsSync20, mkdirSync as mkdirSync4, writeFileSync as writeFileSync5, readFileSync as readFileSync12 } from "node:fs";
 import { dirname as dirname8, join as join26 } from "node:path";
 function alongsideName(target, version2) {
   return `${target}.dev-guardian-${version2}.new`;
@@ -42935,7 +43259,7 @@ function installFile(input) {
       pluginVersion: input.version,
       prefix
     });
-    writeFileSync4(input.dstPath, header + readFileSync12(input.srcPath, "utf8"), "utf8");
+    writeFileSync5(input.dstPath, header + readFileSync12(input.srcPath, "utf8"), "utf8");
     return true;
   } catch {
     return false;
@@ -43148,7 +43472,7 @@ function failDomain5(code, message) {
 }
 
 // src/tools/observabilitySetup.ts
-import { existsSync as existsSync22, mkdirSync as mkdirSync5, readdirSync as readdirSync9, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync22, mkdirSync as mkdirSync5, readdirSync as readdirSync9, writeFileSync as writeFileSync6 } from "node:fs";
 import { dirname as dirname9, join as join28 } from "node:path";
 var tool6 = {
   name: "observability_setup",
@@ -43184,7 +43508,7 @@ async function handler5(input, ctx) {
       }
       try {
         mkdirSync5(dirname9(abs), { recursive: true });
-        writeFileSync5(abs, p.contents, "utf8");
+        writeFileSync6(abs, p.contents, "utf8");
         written.push(p);
       } catch (e) {
         failed.push({ ...p, error: e.message });
@@ -43513,7 +43837,7 @@ function failDomain6(code, message) {
 }
 
 // src/tools/perfCheck.ts
-import { existsSync as existsSync23, readFileSync as readFileSync13, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync23, readFileSync as readFileSync13, writeFileSync as writeFileSync7 } from "node:fs";
 import { join as join29 } from "node:path";
 import { randomUUID as randomUUID4 } from "node:crypto";
 var inputSchema3 = {
@@ -43656,7 +43980,7 @@ async function runK6(opts) {
     timeoutMs: 30 * 6e4
   });
   if (!existsSync23(summaryFile)) {
-    writeFileSync6(summaryFile, result.stdout || "{}", "utf8");
+    writeFileSync7(summaryFile, result.stdout || "{}", "utf8");
   }
   const raw = readFileSync13(summaryFile, "utf8");
   let parsed;
@@ -45835,7 +46159,7 @@ function failDomain16(code, message) {
 }
 
 // src/tools/healthStatus.ts
-import { existsSync as existsSync29, statSync as statSync6 } from "node:fs";
+import { existsSync as existsSync29, statSync as statSync7 } from "node:fs";
 var startedAt = Date.now();
 var SERVER_VERSION = resolveVersion();
 var tool22 = {
@@ -45853,7 +46177,7 @@ async function handler21(ctx) {
   let dbSizeBytes = null;
   if (dbPath && dbPath !== ":memory:" && existsSync29(dbPath)) {
     try {
-      dbSizeBytes = statSync6(dbPath).size;
+      dbSizeBytes = statSync7(dbPath).size;
     } catch {
     }
   }
@@ -45892,7 +46216,7 @@ async function handler21(ctx) {
 }
 
 // src/tools/reportExport.ts
-import { mkdirSync as mkdirSync6, writeFileSync as writeFileSync7 } from "node:fs";
+import { mkdirSync as mkdirSync6, writeFileSync as writeFileSync8 } from "node:fs";
 import { join as join35 } from "node:path";
 
 // src/report/htmlTheme.ts
@@ -46314,7 +46638,7 @@ async function handler22(input, ctx) {
     mkdirSync6(outDir2, { recursive: true });
     const fileName2 = narrativeFormat === "markdown" ? "report.md" : "report.html";
     const outFile2 = join35(outDir2, fileName2);
-    writeFileSync7(outFile2, content2, "utf8");
+    writeFileSync8(outFile2, content2, "utf8");
     return {
       ok: true,
       kind: "narrative",
@@ -46336,7 +46660,7 @@ async function handler22(input, ctx) {
   const outDir = join35(projectPath, ".guardian", "reports", `export-${scanId.slice(0, 8)}`);
   mkdirSync6(outDir, { recursive: true });
   const outFile = join35(outDir, fileName);
-  writeFileSync7(outFile, content, "utf8");
+  writeFileSync8(outFile, content, "utf8");
   return {
     ok: true,
     kind: "scan",
@@ -47293,7 +47617,7 @@ function failDomain19(code, message) {
 }
 
 // src/tools/wpVulnCheck.ts
-import { existsSync as existsSync32, mkdirSync as mkdirSync7, readFileSync as readFileSync17, writeFileSync as writeFileSync8 } from "node:fs";
+import { existsSync as existsSync32, mkdirSync as mkdirSync7, readFileSync as readFileSync17, writeFileSync as writeFileSync9 } from "node:fs";
 import { randomUUID as randomUUID7 } from "node:crypto";
 import { join as join38 } from "node:path";
 
@@ -47497,7 +47821,7 @@ async function handler26(input, ctx) {
   if (!raw && r.stdout && r.stdout.trim().startsWith("{")) {
     raw = r.stdout;
     try {
-      writeFileSync8(outFile, raw, "utf8");
+      writeFileSync9(outFile, raw, "utf8");
     } catch {
     }
   }
@@ -48178,7 +48502,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID11 } from "node:crypto";
-import { existsSync as existsSync34, readFileSync as readFileSync18, readdirSync as readdirSync11, statSync as statSync7 } from "node:fs";
+import { existsSync as existsSync34, readFileSync as readFileSync18, readdirSync as readdirSync11, statSync as statSync8 } from "node:fs";
 import { join as join40, relative as relative3 } from "node:path";
 var PATTERNS = [
   {
@@ -48360,7 +48684,7 @@ function collectConfigFiles(root, maxDepth) {
       const abs = join40(dir, name);
       let stat2;
       try {
-        stat2 = statSync7(abs);
+        stat2 = statSync8(abs);
       } catch {
         continue;
       }
@@ -48377,7 +48701,7 @@ function collectConfigFiles(root, maxDepth) {
 
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
-import { readFileSync as readFileSync19, readdirSync as readdirSync12, statSync as statSync8 } from "node:fs";
+import { readFileSync as readFileSync19, readdirSync as readdirSync12, statSync as statSync9 } from "node:fs";
 import { join as join41, relative as relative4 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
@@ -48502,7 +48826,7 @@ function collectCsprojFiles(root, maxDepth) {
       if (SKIP_DIRS2.has(name)) continue;
       const abs = join41(dir, name);
       try {
-        const s = statSync8(abs);
+        const s = statSync9(abs);
         if (s.isDirectory()) walk4(abs, depth + 1);
         else if (name.endsWith(".csproj") || name.endsWith(".fsproj")) out.push(abs);
       } catch {
@@ -48518,7 +48842,7 @@ function failDomain23(code, message) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
-import { existsSync as existsSync35, readFileSync as readFileSync20, readdirSync as readdirSync13, statSync as statSync9 } from "node:fs";
+import { existsSync as existsSync35, readFileSync as readFileSync20, readdirSync as readdirSync13, statSync as statSync10 } from "node:fs";
 import { join as join42, relative as relative5 } from "node:path";
 var RULES = [
   {
@@ -48657,7 +48981,7 @@ function findMigrationsDirs(root) {
       const abs = join42(dir, name);
       let s;
       try {
-        s = statSync9(abs);
+        s = statSync10(abs);
       } catch {
         continue;
       }
@@ -48802,7 +49126,7 @@ function scoreRange(top) {
 
 // src/tools/scanSkill.ts
 import { createHash as createHash5, randomUUID as randomUUID14 } from "node:crypto";
-import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync10 } from "node:fs";
+import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync11 } from "node:fs";
 import { join as join44 } from "node:path";
 
 // src/runners/osv.ts
@@ -49948,10 +50272,10 @@ import {
   readFileSync as readFileSync21,
   readdirSync as readdirSync14,
   readlinkSync,
-  realpathSync as realpathSync2,
-  rmSync,
-  statSync as statSync10,
-  writeFileSync as writeFileSync9
+  realpathSync as realpathSync3,
+  rmSync as rmSync2,
+  statSync as statSync11,
+  writeFileSync as writeFileSync10
 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { basename as basename2, isAbsolute as isAbsolute2, join as join43, relative as relative6 } from "node:path";
@@ -50075,7 +50399,7 @@ async function ingestTarget(targetRaw) {
   if (!existsSync36(target)) {
     return { ok: false, code: "target_not_found", message: `Path does not exist: ${target}` };
   }
-  const st = statSync10(target);
+  const st = statSync11(target);
   if (st.isDirectory()) {
     const collected = collectDir(target);
     return {
@@ -50148,7 +50472,7 @@ async function ingestUrl(url) {
       const res = await fetch(url, { signal: controller.signal });
       if (!res.ok) throw new Error(`http ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
-      writeFileSync9(dest, buf);
+      writeFileSync10(dest, buf);
     } finally {
       clearTimeout(timeout);
     }
@@ -50231,7 +50555,7 @@ function collectDir(root) {
   let truncated = false;
   let rootReal;
   try {
-    rootReal = realpathSync2(root);
+    rootReal = realpathSync3(root);
   } catch {
     rootReal = root;
   }
@@ -50312,7 +50636,7 @@ function readLinkTargetSafely(abs) {
 }
 function safeRealpath(abs) {
   try {
-    return realpathSync2(abs);
+    return realpathSync3(abs);
   } catch {
     return null;
   }
@@ -50355,7 +50679,7 @@ function looksBinary(buf) {
 }
 function safeRm(dir) {
   try {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync2(dir, { recursive: true, force: true });
   } catch {
   }
 }
@@ -50435,8 +50759,8 @@ async function handler38(input, ctx, callMeta) {
         mkdirSync8(outDir, { recursive: true });
         const sarifPath = join44(outDir, "report.sarif");
         const jsonPath = join44(outDir, "report.json");
-        writeFileSync10(sarifPath, toSarif(findings, { toolName: "guardian-scanskill" }), "utf8");
-        writeFileSync10(
+        writeFileSync11(sarifPath, toSarif(findings, { toolName: "guardian-scanskill" }), "utf8");
+        writeFileSync11(
           jsonPath,
           JSON.stringify(
             {
@@ -50577,7 +50901,7 @@ function numProp(value, key) {
 }
 
 // src/surface/collectors/ports.ts
-import { existsSync as existsSync37, readFileSync as readFileSync22, realpathSync as realpathSync3 } from "node:fs";
+import { existsSync as existsSync37, readFileSync as readFileSync22, realpathSync as realpathSync4 } from "node:fs";
 import { basename as basename3, join as join45 } from "node:path";
 var DOCKERFILES = ["Dockerfile", "dockerfile"];
 var COMPOSE_FILES = [
@@ -50599,7 +50923,7 @@ function collectPorts(projectPath) {
   const seenDockerfiles = /* @__PURE__ */ new Set();
   for (const name of DOCKERFILES) {
     const path6 = join45(projectPath, name);
-    const canonical = canonicalPath(path6);
+    const canonical = canonicalPath2(path6);
     if (canonical === void 0) continue;
     if (seenDockerfiles.has(canonical)) continue;
     seenDockerfiles.add(canonical);
@@ -50639,9 +50963,9 @@ function readLines(path6) {
     return [];
   }
 }
-function canonicalPath(path6) {
+function canonicalPath2(path6) {
   try {
-    return realpathSync3.native(path6);
+    return realpathSync4.native(path6);
   } catch {
     return void 0;
   }
@@ -51640,7 +51964,7 @@ function buildToolRun(run, via) {
 }
 
 // src/surface/specDiscover.ts
-import { readFileSync as readFileSync23, readdirSync as readdirSync15, statSync as statSync11 } from "node:fs";
+import { readFileSync as readFileSync23, readdirSync as readdirSync15, statSync as statSync12 } from "node:fs";
 import { join as join47, relative as relative7, resolve as resolve7, sep as sep3 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
@@ -51672,7 +51996,7 @@ function readCandidates(paths) {
   for (const path6 of paths) {
     let size;
     try {
-      size = statSync11(path6).size;
+      size = statSync12(path6).size;
     } catch {
       continue;
     }
@@ -53101,7 +53425,7 @@ function armDeadline(ms, hostSignal) {
 }
 
 // src/dast/evidence.ts
-import { writeFileSync as writeFileSync11 } from "node:fs";
+import { writeFileSync as writeFileSync12 } from "node:fs";
 import { join as join49 } from "node:path";
 var EVIDENCE_BODY_CHARS = 2e3;
 var MAX_EVIDENCE_FILES = 200;
@@ -53178,7 +53502,7 @@ function writeEvidenceFiles(dir, records, redact) {
       continue;
     }
     try {
-      writeFileSync11(
+      writeFileSync12(
         join49(dir, `${record3.fingerprint}.json`),
         redact(JSON.stringify(record3, null, 2)),
         "utf8"
@@ -55273,7 +55597,7 @@ function headOf(stdout, stderr) {
 }
 
 // src/fixpr/worktree.ts
-import { existsSync as existsSync38, mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "node:fs";
+import { existsSync as existsSync38, mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join52 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
@@ -55300,10 +55624,10 @@ async function createWorktree(opts) {
     });
     return { ok: false, reason: describeFailure2(add, "git worktree add") };
   }
-  const canonicalPath2 = await resolveRegisteredPath(opts.projectPath, opts.branch, opts.timeoutMs) ?? dir;
+  const canonicalPath3 = await resolveRegisteredPath(opts.projectPath, opts.branch, opts.timeoutMs) ?? dir;
   return {
     ok: true,
-    worktree: makeWorktree(opts.projectPath, canonicalPath2, opts.branch, opts.timeoutMs)
+    worktree: makeWorktree(opts.projectPath, canonicalPath3, opts.branch, opts.timeoutMs)
   };
 }
 function makeWorktree(projectPath, path6, branch, timeoutMs) {
@@ -55395,7 +55719,7 @@ function firstNonEmptyLine2(text) {
 }
 function safeRmDir(dir) {
   try {
-    rmSync2(dir, { recursive: true, force: true });
+    rmSync3(dir, { recursive: true, force: true });
   } catch {
   }
 }
@@ -56154,13 +56478,17 @@ registerResourceModule({
 var SERVER_NAME = "dev-guardian";
 var SERVER_VERSION2 = resolveVersion();
 async function main() {
+  if (!nodeSqliteAvailable()) {
+    process.stderr.write(`${NODE_SQLITE_REQUIRED}
+`);
+    process.exit(1);
+  }
   const projectPath = resolve9(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
   if (storageWarning) logErr(`db warning: ${storageWarning}`);
-  const reaped = storage.scans.reapRunning();
-  if (reaped > 0) logErr(`reaped ${reaped} orphaned scan(s)`);
+  reapOrphanedScans(storage, logErr);
   const shell = await probeShell(storage.runtimeMeta);
   if (shell === null) {
     logErr(
@@ -56190,23 +56518,41 @@ async function main() {
   attachAllTools(mcp, ctx);
   attachAllResources(mcp, ctx);
   logErr(`registered ${TOOLS.length} tool(s), ${RESOURCES.length} resource(s)`);
-  installShutdownHooks(mcp, storage);
+  const background = { cancel: () => {
+  } };
+  installShutdownHooks(mcp, storage, background);
   await mcp.connect(new StdioServerTransport());
   logErr("listening on stdio");
+  background.cancel = scheduleRetention(storage, logErr);
 }
-function installShutdownHooks(mcp, storage) {
-  const shutdown = (signal) => {
-    logErr(`received ${signal}; shutting down`);
+function installShutdownHooks(mcp, storage, background) {
+  let closing = false;
+  const shutdown = (reason, closeTransport) => {
+    if (closing) return;
+    closing = true;
+    logErr(`${reason}; shutting down`);
+    background.cancel();
     try {
       storage.close();
     } catch {
     }
+    if (!closeTransport) process.exit(0);
     void mcp.close().finally(() => {
       process.exit(0);
     });
   };
-  process.on("SIGINT", () => shutdown("SIGINT"));
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("received SIGINT", true));
+  process.on("SIGTERM", () => shutdown("received SIGTERM", true));
+  process.stdout.on("error", (error2) => {
+    if (error2.code === "EPIPE") {
+      shutdown("stdout closed by the client (EPIPE)", false);
+      return;
+    }
+    logErr(`fatal: stdout: ${error2.stack ?? error2.message}`);
+    process.exit(1);
+  });
+  process.stderr.on("error", () => {
+  });
 }
 function logErr(line) {
   process.stderr.write(`[dev-guardian] ${line}

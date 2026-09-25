@@ -7,7 +7,7 @@
  * the build. This script does that, cross-platform.
  */
 
-import { cpSync, existsSync, mkdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -18,7 +18,10 @@ const pairs = [
   {
     from: resolve(root, 'src', 'storage', 'migrations'),
     to: resolve(root, 'dist', 'storage', 'migrations'),
-    filter: (path) => path.endsWith('.sql') || !path.includes('.'),
+    // Directories by stat, not by "has no dot in it": `src` is the FULL path,
+    // so the old test rejected the root directory itself — and with it every
+    // file — in any checkout whose path contains a '.' (e.g. `.claude/`).
+    filter: (path) => path.endsWith('.sql') || statSync(path).isDirectory(),
   },
 ];
 

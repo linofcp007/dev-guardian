@@ -10,16 +10,19 @@
  * engine is node:sqlite; swapping it again only touches files in this folder.
  *
  * The DB lives at `<project_root>/.guardian/guardian.db`. When that path is
- * not writable (read-only mounts, missing permissions), we fall back to
+ * not writable (read-only mounts, missing permissions, a database left behind
+ * by a `sudo` or Docker run), we fall back to
  * `os.tmpdir()/dev-guardian/<sha1(project_root)>/guardian.db` and surface a
- * warning the caller can include in tool responses.
+ * warning the caller can include in tool responses. Writability is PROBED —
+ * a file is created in `.guardian/` and the database takes a real write — not
+ * asked of `accessSync`, which on Windows ignores ACLs entirely.
  *
  * The connection opens in WAL mode with foreign keys on; the resolver uses
  * `:memory:` when the caller asks for it, which the unit tests rely on.
  */
 
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, accessSync, constants } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -31,8 +34,46 @@ import { runMigrations } from './migrations/runner.js';
 // (vite-node, whose bundled Vite predates node:sqlite and would try to resolve
 // a bare `sqlite`) both leave a runtime require untouched, so Node resolves the
 // builtin natively in every context. The type-only import above is erased.
-const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
-type DatabaseSync = InstanceType<typeof DatabaseSync>;
+//
+// And LAZILY, on first use rather than at import: on a Node without it
+// (< 22.13, or 22.5-22.12 without --experimental-sqlite) a top-level require
+// threw ERR_UNKNOWN_BUILTIN_MODULE while the server's modules were still
+// loading, before it could say what was wrong. See nodeSqliteAvailable().
+type SqliteModule = typeof import('node:sqlite');
+type DatabaseSync = InstanceType<SqliteModule['DatabaseSync']>;
+
+let sqliteModule: SqliteModule | undefined;
+function loadSqlite(): SqliteModule {
+  sqliteModule ??= createRequire(import.meta.url)('node:sqlite') as SqliteModule;
+  return sqliteModule;
+}
+
+/** What the server prints, and exits 1 with, when `node:sqlite` is unavailable. */
+export const NODE_SQLITE_REQUIRED = 'dev-guardian requires Node.js >= 22.13 (node:sqlite)';
+
+/**
+ * Whether this Node can load `node:sqlite` without flags — Node >= 22.13
+ * (22.5-22.12 have it only behind `--experimental-sqlite`, which this project
+ * never requires). Entry points check it before touching storage.
+ */
+export function nodeSqliteAvailable(): boolean {
+  try {
+    loadSqlite();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * How long every connection waits for another connection's lock before
+ * failing with `database is locked`. SQLite's own default is 0 — fail at
+ * once — and several processes share one database file in real use (the
+ * plugin's MCP server, a project-level one, the CLI): with 0, 15 of 20
+ * fresh-database opens by 4 concurrent processes failed, and a write lock
+ * held by one server made the next one's startup exit 1.
+ */
+export const BUSY_TIMEOUT_MS = 5000;
 
 /** Result of a write statement — matches better-sqlite3's `RunResult` shape. */
 export interface RunResult {
@@ -86,12 +127,17 @@ export class GuardianDatabase {
 
   constructor(source: string | DatabaseSync) {
     if (typeof source === 'string') {
-      this.raw = new DatabaseSync(source);
+      this.raw = new (loadSqlite().DatabaseSync)(source);
       this.name = source;
     } else {
       this.raw = source;
       this.name = '';
     }
+    // First statement on every connection, before anything that can take a
+    // lock (switching a fresh file to WAL does). A PRAGMA rather than the
+    // constructor's `timeout` option, which only exists from Node 22.16 —
+    // on 22.13 an unknown option is silently ignored.
+    this.raw.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   }
 
   prepare<P extends unknown[] = unknown[], R = unknown>(source: string): GuardianStatement<P, R> {
@@ -111,31 +157,64 @@ export class GuardianDatabase {
   /**
    * Wraps `fn` in a transaction and returns a callable, mirroring
    * better-sqlite3's `db.transaction(fn)`. Nesting-aware: the outermost call
-   * uses BEGIN/COMMIT/ROLLBACK, inner calls use SAVEPOINTs — so the repos'
-   * `tx(args)` semantics carry over unchanged.
+   * uses BEGIN IMMEDIATE/COMMIT/ROLLBACK, inner calls use SAVEPOINTs — so the
+   * repos' `tx(args)` semantics carry over unchanged.
+   *
+   * `BEGIN IMMEDIATE`, not a deferred `BEGIN`: a deferred transaction takes
+   * the write lock only at its first write, and if another connection wrote
+   * in between, that upgrade fails with SQLITE_BUSY without ever consulting
+   * the busy timeout. Taking the lock up front is what lets the timeout work.
+   *
+   * On failure, the ORIGINAL error is what the caller sees. SQLite rolls the
+   * whole transaction back by itself on some errors (`RAISE(ROLLBACK)`, a full
+   * disk, I/O errors); an unconditional `ROLLBACK` then throws
+   * `cannot rollback - no transaction is active`, which replaced the error
+   * that explained what went wrong and skipped the depth reset, leaving every
+   * later "transaction" on this connection a deferred SAVEPOINT.
    */
   transaction<Args extends unknown[], R>(fn: (...args: Args) => R): (...args: Args) => R {
     return (...args: Args): R => {
       const depth = this.txDepth;
       const top = depth === 0;
-      this.raw.exec(top ? 'BEGIN' : `SAVEPOINT sp_${depth}`);
+      this.raw.exec(top ? 'BEGIN IMMEDIATE' : `SAVEPOINT sp_${depth}`);
       this.txDepth = depth + 1;
       try {
         const result = fn(...args);
         this.raw.exec(top ? 'COMMIT' : `RELEASE sp_${depth}`);
-        this.txDepth = depth;
         return result;
       } catch (error) {
-        if (top) {
-          this.raw.exec('ROLLBACK');
-        } else {
-          this.raw.exec(`ROLLBACK TO sp_${depth}`);
-          this.raw.exec(`RELEASE sp_${depth}`);
-        }
-        this.txDepth = depth;
+        this.rollbackAfterFailure(top, depth);
         throw error;
+      } finally {
+        this.txDepth = depth;
       }
     };
+  }
+
+  /** Best-effort undo for {@link transaction}; never throws over the caller's error. */
+  private rollbackAfterFailure(top: boolean, depth: number): void {
+    if (this.inTransaction() === false) return; // SQLite already rolled it back
+    try {
+      if (top) {
+        this.raw.exec('ROLLBACK');
+      } else {
+        this.raw.exec(`ROLLBACK TO sp_${depth}`);
+        this.raw.exec(`RELEASE sp_${depth}`);
+      }
+    } catch {
+      // The error that made us roll back is the one worth reporting.
+    }
+  }
+
+  /**
+   * `DatabaseSync#isTransaction` exists from Node 22.16 / 24.0. On 22.13–22.15
+   * it reads `undefined` at runtime (whatever the type declarations say), and
+   * the answer is "unknown": the rollback is then attempted and its own
+   * failure swallowed.
+   */
+  private inTransaction(): boolean | undefined {
+    const flag: unknown = this.raw.isTransaction;
+    return typeof flag === 'boolean' ? flag : undefined;
   }
 
   close(): void {
@@ -183,33 +262,107 @@ export function openDatabase(options: OpenOptions): OpenedDatabase {
   }
 
   const projectPath = resolve(options.projectPath);
-  const preferredDir = join(projectPath, '.guardian');
-  const preferredPath = join(preferredDir, 'guardian.db');
+  const preferredPath = join(projectPath, '.guardian', 'guardian.db');
 
-  let chosenPath: string;
-  let warning: string | undefined;
-
-  if (isWritable(projectPath)) {
-    ensureDir(preferredDir);
-    chosenPath = preferredPath;
+  let reason: string;
+  if (!isDirectory(projectPath)) {
+    // Caller's responsibility to have a real project dir; if it doesn't
+    // exist, we can't write there.
+    reason = 'it is not an existing directory';
   } else {
-    chosenPath = resolveFallbackDbPath(projectPath);
-    ensureDir(dirname(chosenPath));
-    warning =
-      `Project path '${projectPath}' is not writable; ` +
-      `dev-guardian DB persisted to '${chosenPath}' instead. ` +
-      `Scans will not be visible alongside the project.`;
+    try {
+      return { db: openWritable(preferredPath), path: preferredPath };
+    } catch (error) {
+      if (!isNotWritableError(error)) throw error;
+      reason = error instanceof Error ? error.message : String(error);
+    }
   }
 
+  const chosenPath = resolveFallbackDbPath(projectPath);
+  ensureDir(dirname(chosenPath));
   const db = new GuardianDatabase(chosenPath);
   applyPragmas(db);
   runMigrations(db);
+  return {
+    db,
+    path: chosenPath,
+    warning:
+      `Project path '${projectPath}' is not writable (${reason}); ` +
+      `dev-guardian DB persisted to '${chosenPath}' instead. ` +
+      `Scans will not be visible alongside the project.`,
+  };
+}
 
-  const result: OpenedDatabase = { db, path: chosenPath };
-  if (warning !== undefined) {
-    result.warning = warning;
+/**
+ * Opens (and migrates) `dbPath` only if it can really be written: creates
+ * its directory, creates and removes a probe file there, then makes the
+ * database take a write. Throws otherwise — see {@link isNotWritableError}
+ * for the failures that mean "use the fallback".
+ */
+function openWritable(dbPath: string): GuardianDatabase {
+  const dir = dirname(dbPath);
+  ensureDir(dir);
+  probeDirectoryWritable(dir);
+  const db = new GuardianDatabase(dbPath);
+  try {
+    applyPragmas(db);
+    runMigrations(db);
+    probeDatabaseWritable(db);
+    return db;
+  } catch (error) {
+    try {
+      db.close();
+    } catch {
+      /* the open failure is the one worth reporting */
+    }
+    throw error;
   }
-  return result;
+}
+
+function probeDirectoryWritable(dir: string): void {
+  const probe = join(dir, `.write-probe-${process.pid}-${randomBytes(4).toString('hex')}`);
+  writeFileSync(probe, '', { flag: 'wx' });
+  try {
+    rmSync(probe, { force: true });
+  } catch {
+    /* a probe we could create but not delete is harmless; .guardian/ is git-ignored */
+  }
+}
+
+/**
+ * A read-only database FILE opens without complaint and serves every read —
+ * SQLite quietly opens it read-only — so only a write reveals it. An UPDATE
+ * that matches nothing still has to begin a write transaction, which is
+ * where SQLite answers SQLITE_READONLY, before and regardless of any lock.
+ *
+ * The busy timeout is dropped to 0 for the probe: SQLITE_BUSY means another
+ * process is writing this same file right now — proof enough that it is
+ * writable, and no reason to stall startup for 5 s.
+ */
+function probeDatabaseWritable(db: GuardianDatabase): void {
+  db.exec('PRAGMA busy_timeout = 0');
+  try {
+    db.exec('UPDATE schema_meta SET value = value WHERE 0');
+  } catch (error) {
+    if (!isBusyError(error)) throw error;
+  } finally {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  }
+}
+
+/**
+ * Failures that mean "this location cannot be written by us": the OS
+ * refusing (EACCES/EPERM, or EROFS on a read-only mount) or SQLite refusing
+ * (SQLITE_READONLY = 8, SQLITE_CANTOPEN = 14 — what an ACL-denied directory
+ * produces on Windows). Anything else is a real error and propagates.
+ */
+function isNotWritableError(error: unknown): boolean {
+  if (error instanceof Error && 'code' in error) {
+    const code = error.code;
+    if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') return true;
+  }
+  const sqlite = sqliteErrorCode(error);
+  return sqlite === 8 || sqlite === 14;
 }
 
 /**
@@ -264,12 +417,54 @@ export function openDatabaseAtPath(path: string): DB {
 function applyPragmas(db: GuardianDatabase): void {
   // WAL gives concurrent readers + one writer without the classic SQLITE_BUSY
   // storm. Required because the server reads from resources while tools write.
-  db.pragma('journal_mode = WAL');
+  retryWhileBusy(() => db.pragma('journal_mode = WAL'));
   db.pragma('foreign_keys = ON');
   // 64 MB memory map — modest, predictable, fits the largest expected scan.
   db.pragma('mmap_size = 67108864');
   // Synchronous=NORMAL is the documented WAL pairing for durability vs. speed.
   db.pragma('synchronous = NORMAL');
+}
+
+/**
+ * Runs `op`, retrying on SQLITE_BUSY until {@link BUSY_TIMEOUT_MS} has passed.
+ *
+ * For the few statements the busy timeout does not cover. SQLite skips the
+ * busy handler when waiting could deadlock — two connections that both hold
+ * a read lock and both want to upgrade it, which is exactly what several
+ * processes switching one fresh file to WAL at the same moment do. Measured:
+ * with the busy timeout alone, 7 of 20 concurrent fresh opens still failed
+ * `database is locked` on `journal_mode = WAL`. Retrying after the statement
+ * has released its read lock breaks the tie.
+ */
+function retryWhileBusy(op: () => void): void {
+  const deadline = Date.now() + BUSY_TIMEOUT_MS;
+  for (;;) {
+    try {
+      op();
+      return;
+    } catch (error) {
+      if (!isBusyError(error) || Date.now() >= deadline) throw error;
+      sleepSync(20 + Math.floor(Math.random() * 30));
+    }
+  }
+}
+
+/** SQLITE_BUSY (5) or SQLITE_LOCKED (6), including their extended codes. */
+function isBusyError(error: unknown): boolean {
+  const primary = sqliteErrorCode(error);
+  return primary === 5 || primary === 6;
+}
+
+/** The primary SQLite result code of a `node:sqlite` error, if it is one. */
+function sqliteErrorCode(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null || !('errcode' in error)) return undefined;
+  const code: unknown = error.errcode;
+  // Extended result codes carry the primary code in their low byte.
+  return typeof code === 'number' ? code & 0xff : undefined;
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function ensureDir(dir: string): void {
@@ -278,15 +473,9 @@ function ensureDir(dir: string): void {
   }
 }
 
-function isWritable(dir: string): boolean {
+function isDirectory(path: string): boolean {
   try {
-    if (!existsSync(dir)) {
-      // Caller's responsibility to have a real project dir; if it doesn't
-      // exist, we can't write there.
-      return false;
-    }
-    accessSync(dir, constants.W_OK);
-    return true;
+    return statSync(path).isDirectory();
   } catch {
     return false;
   }
