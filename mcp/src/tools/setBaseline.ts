@@ -83,8 +83,8 @@ async function handler(
         'unknown_scan_id',
         `No usable completed ${inp.scan_type ?? 'finding-producing'} scan exists for ${projectPath} ` +
           'yet; run a scan tool before setting a baseline.' +
-          (latest.skipped.length > 0
-            ? ` Skipped ${latest.skipped.length} scan(s) whose scanners did not run (coverage none).`
+          (latest.skipped.count > 0
+            ? ` Skipped ${latest.skipped.count} scan(s) whose scanners did not run (coverage none).`
             : ''),
       );
     }

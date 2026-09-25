@@ -19416,12 +19416,12 @@ var require_util_map_includes = __commonJS({
   "node_modules/yaml/dist/compose/util-map-includes.js"(exports) {
     "use strict";
     var identity3 = require_identity();
-    function mapIncludes(ctx, items, search) {
+    function mapIncludes(ctx, items, search2) {
       const { uniqueKeys } = ctx.options;
       if (uniqueKeys === false)
         return false;
       const isEqual = typeof uniqueKeys === "function" ? uniqueKeys : (a2, b) => a2 === b || identity3.isScalar(a2) && identity3.isScalar(b) && a2.value === b.value;
-      return items.some((pair) => isEqual(pair.key, search));
+      return items.some((pair) => isEqual(pair.key, search2));
     }
     exports.mapIncludes = mapIncludes;
   }
@@ -46551,10 +46551,10 @@ function failDomain7(code, message2) {
 
 // src/history/scanRoles.ts
 var SCAN_TYPE_ROLE = {
-  // Covers sast + secrets + deps through SECURITY_FULL_TOOL_TYPES below, so a
-  // newer scan_sast supersedes its semgrep findings but not its gitleaks
-  // ones. Rows written before child scans existed must not vanish from the
-  // open set, and do not: they still source every slot nothing newer covers.
+  // Two shapes — see isOrchestratedFullScan below. An orchestrated row's
+  // children (sast/secrets/deps/iac) are the sources, never the row itself;
+  // a script-era row is split across sast/secrets/deps/containers, so rows
+  // written before child scans existed do not vanish from the open set.
   security_full: "state",
   sast: "state",
   secrets: "state",
@@ -46584,32 +46584,53 @@ var SCAN_TYPE_ROLE = {
   dotnet_target_framework: "never"
 };
 var STATE_SCAN_TYPES = Object.keys(SCAN_TYPE_ROLE).filter((t) => SCAN_TYPE_ROLE[t] === "state");
-var SECURITY_FULL_TOOL_TYPES = {
+function isOrchestratedFullScan(scan2) {
+  return scan2.scan_type === "security_full" && Array.isArray(scan2.meta?.["child_scans"]);
+}
+function isScriptEraFullScan(scan2) {
+  return scan2.scan_type === "security_full" && !isOrchestratedFullScan(scan2);
+}
+var SCRIPT_ERA_RUN_SLOTS = {
   semgrep: "sast",
   bandit: "sast",
   gitleaks: "secrets",
   trivy: "deps",
-  "trivy-dockerfile": "deps"
+  "trivy-dockerfile": "containers"
 };
+function scriptEraSlotOfFinding(f) {
+  switch (f.tool) {
+    case "semgrep":
+    case "bandit":
+      return "sast";
+    case "gitleaks":
+      return "secrets";
+    case "trivy":
+      if (f.category === "license" || f.subcategory === "cve") return "deps";
+      if (f.subcategory === "secret") return "secrets";
+      return "containers";
+    default:
+      return "security_full";
+  }
+}
 function sourceTypesOf(slot) {
   if (slot === "security_full") return ["security_full"];
-  const coveredByFull = Object.values(SECURITY_FULL_TOOL_TYPES).includes(slot);
+  const coveredByFull = Object.values(SCRIPT_ERA_RUN_SLOTS).includes(slot);
   return coveredByFull ? [slot, "security_full"] : [slot];
 }
-function fullSlotOf(tool46) {
-  return SECURITY_FULL_TOOL_TYPES[tool46] ?? "security_full";
+function runSlotOf(tool46) {
+  return SCRIPT_ERA_RUN_SLOTS[tool46] ?? "security_full";
 }
 function findingInSlot(scan2, finding2, slot) {
   if (scan2.scan_type !== "security_full") return scan2.scan_type === slot;
-  return fullSlotOf(finding2.tool) === slot;
+  return scriptEraSlotOfFinding(finding2) === slot;
 }
 function slotView(scan2, slot) {
   if (scan2.scan_type !== "security_full") {
     return { tools_run: scan2.tools_run, missing_tools: scan2.missing_tools };
   }
   return {
-    tools_run: scan2.tools_run.filter((t) => fullSlotOf(t.name) === slot),
-    missing_tools: scan2.missing_tools.filter((t) => fullSlotOf(t) === slot)
+    tools_run: scan2.tools_run.filter((t) => runSlotOf(t.name) === slot),
+    missing_tools: scan2.missing_tools.filter((t) => runSlotOf(t) === slot)
   };
 }
 function isScopedScan(scan2) {
@@ -46621,9 +46642,14 @@ function isScopedScan(scan2) {
 
 // src/history/openSet.ts
 var PAGE = 25;
+var SKIPPED_SAMPLE = 5;
 function findLatestUsable(storage, projectPath, types, opts = {}) {
+  const r = search(storage, projectPath, types, opts);
+  return { scan: r.scan, coverage: r.coverage, skipped: summarizeSkipped(r.hits), hits: r.hits };
+}
+function search(storage, projectPath, types, opts) {
   const skipCoverageNone = opts.skipCoverageNone ?? true;
-  const skipped = [];
+  const hits = [];
   for (let offset = 0; ; offset += PAGE) {
     const page = storage.scans.listCompletedOfTypes(projectPath, types, {
       limit: PAGE,
@@ -46636,36 +46662,68 @@ function findLatestUsable(storage, projectPath, types, opts = {}) {
       const judged = judge(scan2, opts.slot);
       if (judged === null) continue;
       if (skipCoverageNone && judged === "none") {
-        skipped.push({
-          slot: opts.slot ?? scan2.scan_type,
-          scan_id: scan2.scan_id,
-          scan_type: scan2.scan_type,
-          started_at: scan2.started_at,
-          reason: "coverage_none"
-        });
+        hits.push({ slot: opts.slot ?? scan2.scan_type, scan: scan2, reason: "coverage_none" });
         continue;
       }
-      return { scan: scan2, coverage: judged, skipped };
+      return { scan: scan2, coverage: judged, hits };
     }
-    if (page.length < PAGE) return { scan: null, coverage: null, skipped };
+    if (page.length < PAGE) return { scan: null, coverage: null, hits };
   }
-}
-function latestUsableForSlot(storage, projectPath, slot, opts = {}) {
-  return findLatestUsable(storage, projectPath, sourceTypesOf(slot), { ...opts, slot });
 }
 function latestStateScan(storage, projectPath, scanType, opts = {}) {
-  return findLatestUsable(storage, projectPath, scanType !== void 0 ? [scanType] : STATE_SCAN_TYPES, opts);
+  const found = findLatestUsable(storage, projectPath, scanType !== void 0 ? [scanType] : STATE_SCAN_TYPES, opts);
+  if (scanType !== void 0 || found.scan === null) return found;
+  const run = runOf(storage, projectPath, found.scan);
+  if (run === found.scan) return found;
+  return { ...found, scan: run, coverage: judge(run, void 0) };
+}
+function mapRun(storage, projectPath, scan2) {
+  return scan2 === void 0 ? null : runOf(storage, projectPath, scan2);
+}
+function runOf(storage, projectPath, scan2) {
+  const parentId = scan2.meta?.["parent_scan_id"];
+  if (typeof parentId !== "string") return scan2;
+  const parent = storage.scans.getById(parentId);
+  if (parent === null || parent.status !== "completed" || parent.project_path !== projectPath || !isOrchestratedFullScan(parent)) {
+    return scan2;
+  }
+  return parent;
 }
 function judge(scan2, slot) {
-  if (slot === void 0 || scan2.scan_type !== "security_full" || slot === "security_full") {
-    const view2 = slot === void 0 ? scan2 : slotView(scan2, slot);
-    return computeCoverage(view2.tools_run, view2.missing_tools);
+  if (slot === void 0 || scan2.scan_type !== "security_full") {
+    return computeCoverage(scan2.tools_run, scan2.missing_tools);
   }
+  if (scan2.tools_run.length === 0 && scan2.missing_tools.length === 0) return "full";
   const view = slotView(scan2, slot);
-  const noBookkeeping = scan2.tools_run.length === 0 && scan2.missing_tools.length === 0;
-  const attempted = view.tools_run.length > 0 || view.missing_tools.length > 0 || noBookkeeping;
-  if (!attempted) return null;
+  if (view.tools_run.length === 0 && view.missing_tools.length === 0) return null;
   return computeCoverage(view.tools_run, view.missing_tools);
+}
+function summarizeSkipped(hits) {
+  const byScan = /* @__PURE__ */ new Map();
+  for (const h2 of hits) {
+    const seen = byScan.get(h2.scan.scan_id);
+    if (seen !== void 0) {
+      if (!seen.slots.includes(h2.slot)) seen.slots.push(h2.slot);
+      continue;
+    }
+    byScan.set(h2.scan.scan_id, {
+      scan_id: h2.scan.scan_id,
+      scan_type: h2.scan.scan_type,
+      started_at: h2.scan.started_at,
+      reason: h2.reason,
+      slots: [h2.slot]
+    });
+  }
+  const all = [...byScan.values()].sort(
+    (a2, b) => a2.started_at === b.started_at ? 0 : a2.started_at < b.started_at ? 1 : -1
+  );
+  const by_reason = { coverage_none: 0 };
+  const newest = [];
+  for (const s of all) {
+    by_reason[s.reason] += 1;
+    if (by_reason[s.reason] <= SKIPPED_SAMPLE) newest.push(s);
+  }
+  return { count: all.length, by_reason, newest };
 }
 function suppressionMatcher(suppressions, now) {
   const fingerprints = /* @__PURE__ */ new Set();
@@ -46677,23 +46735,42 @@ function suppressionMatcher(suppressions, now) {
   }
   return (f) => fingerprints.has(f.fingerprint) || f.identity !== void 0 && identities.has(f.identity);
 }
+function slotSources(storage, projectPath, slot) {
+  const pick2 = (r) => r.scan !== null && r.coverage !== null ? [{ scan: r.scan, coverage: r.coverage }] : [];
+  if (slot === "security_full") {
+    const r = search(storage, projectPath, ["security_full"], { slot, predicate: isScriptEraFullScan });
+    return { picks: pick2(r), hits: r.hits };
+  }
+  const dedicated = search(storage, projectPath, [slot], { slot });
+  if (!sourceTypesOf(slot).includes("security_full")) {
+    return { picks: pick2(dedicated), hits: dedicated.hits };
+  }
+  const legacy = search(storage, projectPath, ["security_full"], { slot, predicate: isScriptEraFullScan });
+  const picks = pick2(dedicated);
+  const newerThanDedicated = (s) => dedicated.scan === null || isNewer(storage, s, dedicated.scan);
+  if (legacy.scan !== null && legacy.coverage !== null && newerThanDedicated(legacy.scan)) {
+    picks.push({ scan: legacy.scan, coverage: legacy.coverage });
+  }
+  return { picks, hits: [...dedicated.hits, ...legacy.hits.filter((h2) => newerThanDedicated(h2.scan))] };
+}
+function isNewer(storage, a2, b) {
+  if (a2.started_at !== b.started_at) return a2.started_at > b.started_at;
+  return storage.scans.sortNewestFirst([a2.scan_id, b.scan_id])[0] === a2.scan_id;
+}
 function openSetForProject(storage, projectPath, opts = {}) {
   const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now());
   const picked = [];
-  const skipped = [];
+  const hits = [];
   const considered = /* @__PURE__ */ new Map();
   for (const slot of STATE_SCAN_TYPES) {
-    const found = latestUsableForSlot(storage, projectPath, slot);
-    for (const s of found.skipped) {
-      skipped.push(s);
-      if (!considered.has(s.scan_id)) {
-        const record4 = storage.scans.getById(s.scan_id);
-        if (record4 !== null) considered.set(s.scan_id, record4);
-      }
+    const found = slotSources(storage, projectPath, slot);
+    for (const h2 of found.hits) {
+      hits.push(h2);
+      considered.set(h2.scan.scan_id, h2.scan);
     }
-    if (found.scan !== null && found.coverage !== null) {
-      picked.push({ slot, scan: found.scan, coverage: found.coverage });
-      considered.set(found.scan.scan_id, found.scan);
+    for (const p of found.picks) {
+      picked.push({ slot, ...p });
+      considered.set(p.scan.scan_id, p.scan);
     }
   }
   const order = storage.scans.sortNewestFirst([...considered.keys()]);
@@ -46729,8 +46806,13 @@ function openSetForProject(storage, projectPath, opts = {}) {
   findings.sort(
     (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
   );
+  const skipped = summarizeSkipped(hits);
   const scans = [...considered.values()].sort((a2, b) => rankOf(a2.scan_id) - rankOf(b.scan_id));
-  const coverage = sources.length === 0 ? "none" : sources.some((s) => s.coverage !== "full") || skipped.length > 0 ? "partial" : "full";
+  const coverage = sources.length === 0 ? "none" : sources.some((s) => s.coverage !== "full") || skipped.count > 0 ? "partial" : "full";
+  const bookkeeping = [
+    ...picked.map((p) => ({ scan_id: p.scan.scan_id, slot: p.slot, ...slotView(p.scan, p.slot) })),
+    ...hits.map((h2) => ({ scan_id: h2.scan.scan_id, slot: h2.slot, ...slotView(h2.scan, h2.slot) }))
+  ];
   return {
     project_path: projectPath,
     findings,
@@ -46738,9 +46820,11 @@ function openSetForProject(storage, projectPath, opts = {}) {
     skipped,
     coverage,
     scans,
-    newest: scans[0] ?? null,
-    // `picked` is newest first.
-    newestSource: picked[0]?.scan ?? null
+    bookkeeping,
+    // Named as a run: a child of an orchestrated security_full stands for
+    // its parent (see `latestStateScan`). `picked` is newest first.
+    newest: mapRun(storage, projectPath, scans[0]),
+    newestSource: mapRun(storage, projectPath, picked[0]?.scan)
   };
 }
 function describeOpenSet(set) {
@@ -46793,7 +46877,7 @@ async function handler7(input, ctx) {
     if (!latest.scan) {
       return failDomain8(
         "unknown_scan_id",
-        `No usable completed ${inp.scan_type ?? "finding-producing"} scan exists for ${projectPath} yet; run a scan tool before setting a baseline.` + (latest.skipped.length > 0 ? ` Skipped ${latest.skipped.length} scan(s) whose scanners did not run (coverage none).` : "")
+        `No usable completed ${inp.scan_type ?? "finding-producing"} scan exists for ${projectPath} yet; run a scan tool before setting a baseline.` + (latest.skipped.count > 0 ? ` Skipped ${latest.skipped.count} scan(s) whose scanners did not run (coverage none).` : "")
       );
     }
     targetScanId = latest.scan.scan_id;
@@ -46882,10 +46966,10 @@ var tool12 = {
 registerToolModule(tool12);
 async function handler9(input, ctx) {
   const inp = input;
-  const skipped = [];
-  const toScan = resolveTo(inp, ctx, skipped);
+  const skipHits = [];
+  const toScan = resolveTo(inp, ctx, skipHits);
   if (!toScan.ok) return toScan.err;
-  const fromId = resolveFrom(inp, toScan.value, ctx, skipped);
+  const fromId = resolveFrom(inp, toScan.value, ctx, skipHits);
   if (!fromId.ok) return fromId.err;
   if (fromId.value === toScan.value.scan_id) {
     return failDomain10(
@@ -46926,10 +47010,10 @@ async function handler9(input, ctx) {
       resolved: resolved_findings.length > ITEMS_PER_BUCKET,
       unchanged: unchanged_findings.length > ITEMS_PER_BUCKET
     },
-    ...skipped.length > 0 ? { skipped } : {}
+    ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}
   };
 }
-function resolveTo(inp, ctx, skipped) {
+function resolveTo(inp, ctx, skipHits) {
   if (inp.to_scan_id) {
     const scan2 = ctx.storage.scans.getById(inp.to_scan_id);
     if (!scan2)
@@ -46943,7 +47027,7 @@ function resolveTo(inp, ctx, skipped) {
     return { ok: false, err: failDomain10("not_a_git_repo", e.message) };
   }
   const latest = latestStateScan(ctx.storage, projectPath, inp.scan_type);
-  skipped.push(...latest.skipped);
+  skipHits.push(...latest.hits);
   if (!latest.scan) {
     return {
       ok: false,
@@ -46955,7 +47039,7 @@ function resolveTo(inp, ctx, skipped) {
   }
   return { ok: true, value: latest.scan };
 }
-function resolveFrom(inp, toScan, ctx, skipped) {
+function resolveFrom(inp, toScan, ctx, skipHits) {
   if (inp.from_scan_id) {
     const scan2 = ctx.storage.scans.getById(inp.from_scan_id);
     if (!scan2)
@@ -46981,7 +47065,7 @@ function resolveFrom(inp, toScan, ctx, skipped) {
   const previous = latestStateScan(ctx.storage, toScan.project_path, toScan.scan_type, {
     beforeScanId: toScan.scan_id
   });
-  skipped.push(...previous.skipped);
+  skipHits.push(...previous.hits);
   if (!previous.scan)
     return {
       ok: false,
@@ -46993,8 +47077,10 @@ function resolveFrom(inp, toScan, ctx, skipped) {
   return { ok: true, value: previous.scan.scan_id };
 }
 function describeSkipped(skipped) {
-  if (skipped.length === 0) return "";
-  return ` Skipped ${skipped.length} scan(s) whose scanners did not run (coverage none): ${skipped.map((s) => s.scan_id).join(", ")}.`;
+  if (skipped.count === 0) return "";
+  const named = skipped.newest.map((s) => s.scan_id).join(", ");
+  const more = skipped.count > skipped.newest.length ? `, and ${skipped.count - skipped.newest.length} older` : "";
+  return ` Skipped ${skipped.count} scan(s) whose scanners did not run (coverage none): ${named}${more}.`;
 }
 function failDomain10(code, message2) {
   return { ok: false, error: { code, message: message2 } };
@@ -48611,9 +48697,9 @@ async function handler16(input, ctx) {
   } catch (e) {
     return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
   }
-  const skipped = [];
+  const skipHits = [];
   const current = latestStateScan(ctx.storage, projectPath, inp.scan_type);
-  skipped.push(...current.skipped);
+  skipHits.push(...current.hits);
   const latest = current.scan;
   if (!latest) {
     return {
@@ -48625,7 +48711,7 @@ async function handler16(input, ctx) {
       baseline_scan_id: null,
       current_scan_id: null,
       hint: "No usable scans recorded for this project yet.",
-      ...skipped.length > 0 ? { skipped } : {}
+      ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}
     };
   }
   const baseline = ctx.storage.baselines.getActiveForProject(projectPath, latest.scan_type);
@@ -48642,7 +48728,7 @@ async function handler16(input, ctx) {
     const prev = latestStateScan(ctx.storage, projectPath, latest.scan_type, {
       beforeScanId: latest.scan_id
     });
-    skipped.push(...prev.skipped);
+    skipHits.push(...prev.hits);
     if (prev.scan) {
       baselineId = prev.scan.scan_id;
       reference = "previous";
@@ -48658,7 +48744,7 @@ async function handler16(input, ctx) {
       baseline_scan_id: null,
       current_scan_id: latest.scan_id,
       hint: `No '${latest.scan_type}' baseline or previous '${latest.scan_type}' scan to compare against.`,
-      ...skipped.length > 0 ? { skipped } : {},
+      ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {},
       ...note
     };
   }
@@ -48683,7 +48769,7 @@ async function handler16(input, ctx) {
     new_findings_by_severity: countBySeverity3(newFindings),
     resolved_findings_by_severity: countBySeverity3(resolvedFindings),
     hint: regressed ? "Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes." : "No significant regression.",
-    ...skipped.length > 0 ? { skipped } : {},
+    ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {},
     ...note
   };
 }
@@ -49518,7 +49604,7 @@ async function handler22(input, ctx) {
   if (!scanId) {
     return failDomain17(
       "unknown_scan_id",
-      `No usable completed scan of ${projectPath} to export.` + ((latest?.skipped.length ?? 0) > 0 ? ` ${latest?.skipped.length ?? 0} scan(s) were skipped because their scanners did not run (coverage none).` : "")
+      `No usable completed scan of ${projectPath} to export.` + ((latest?.skipped.count ?? 0) > 0 ? ` ${latest?.skipped.count ?? 0} scan(s) were skipped because their scanners did not run (coverage none).` : "")
     );
   }
   const scan2 = ctx.storage.scans.getById(scanId);
@@ -49539,7 +49625,7 @@ async function handler22(input, ctx) {
     bytes: Buffer.byteLength(content, "utf8"),
     findings_count: findings.length,
     cves_count: cves.length,
-    ...(latest?.skipped.length ?? 0) > 0 ? { skipped_scans: latest?.skipped } : {}
+    ...(latest?.skipped.count ?? 0) > 0 ? { skipped_scans: latest?.skipped } : {}
   };
 }
 function renderReport(format2, scan2, findings, cves, lang) {
@@ -49847,7 +49933,7 @@ async function handler24(input, ctx) {
   if (open.sources.length === 0) {
     return failDomain18(
       "unknown_scan_id",
-      `No usable completed scan of ${projectPath} yet \u2014 nothing to file as issues.` + (open.skipped.length > 0 ? ` ${open.skipped.length} scan(s) were skipped because their scanners did not run (coverage none).` : "")
+      `No usable completed scan of ${projectPath} yet \u2014 nothing to file as issues.` + (open.skipped.count > 0 ? ` ${open.skipped.count} scan(s) were skipped because their scanners did not run (coverage none).` : "")
     );
   }
   const all = open.findings;
@@ -49915,7 +50001,7 @@ async function handler24(input, ctx) {
     project_path: projectPath,
     // Newer scans passed over because their scanners did not run: the
     // findings above come from the scan before each of them.
-    ...open.skipped.length > 0 ? { skipped_scans: open.skipped } : {},
+    ...open.skipped.count > 0 ? { skipped_scans: open.skipped } : {},
     plans
   };
 }
@@ -49969,10 +50055,22 @@ ${f.snippet}
 _Filed automatically by dev-guardian. Use \`suppress_finding\` to mark as false positive._`
   ].filter(Boolean).join("\n");
 }
+var ISSUE_LIST_LIMIT = 1e3;
 async function listExistingTags(cwd) {
   const r = await runProcess({
     command: "gh",
-    args: ["issue", "list", "--state", "all", "--limit", "1000", "--json", "number,title,state"],
+    args: [
+      "issue",
+      "list",
+      "--state",
+      "all",
+      "--search",
+      '"[guardian:" in:title',
+      "--limit",
+      String(ISSUE_LIST_LIMIT),
+      "--json",
+      "number,title,state"
+    ],
     cwd,
     timeoutMs: 3e4
   });
@@ -49986,6 +50084,12 @@ async function listExistingTags(cwd) {
     return { ok: false, error: "gh issue list printed something that is not JSON" };
   }
   if (!Array.isArray(parsed)) return { ok: false, error: "gh issue list did not return a JSON array" };
+  if (parsed.length >= ISSUE_LIST_LIMIT) {
+    return {
+      ok: false,
+      error: `gh issue list returned ${parsed.length} dev-guardian issues, its limit of ${ISSUE_LIST_LIMIT}: the listing may be cut, so an existing issue for a finding could be missing from it. Nothing was filed, to avoid duplicates \u2014 close or relabel old [guardian:\u2026] issues, or file by hand.`
+    };
+  }
   const tags = /* @__PURE__ */ new Set();
   for (const issue2 of parsed) {
     const title = issue2.title;
@@ -58001,7 +58105,7 @@ async function handler41(input, ctx) {
     ...selected.length === 0 ? { note: NO_OPEN_FINDINGS_NOTE } : {},
     // Newer scans the open set passed over because their scanners did not
     // run: the findings validated come from the scan before each of them.
-    ...openSet.skipped.length > 0 ? { skipped_scans: openSet.skipped } : {}
+    ...openSet.skipped.count > 0 ? { skipped_scans: openSet.skipped } : {}
   };
 }
 function languageOfPath(filePath) {
@@ -59218,7 +59322,7 @@ registerResourceModule({
         cves,
         last_run: latestDeps.started_at,
         scan_id: latestDeps.scan_id,
-        ...found.skipped.length > 0 ? { skipped: found.skipped } : {}
+        ...found.skipped.count > 0 ? { skipped: found.skipped } : {}
       }
     };
   }

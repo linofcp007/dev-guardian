@@ -39,7 +39,7 @@ registerResourceModule({
         cves,
         last_run: latestDeps.started_at,
         scan_id: latestDeps.scan_id,
-        ...(found.skipped.length > 0 ? { skipped: found.skipped } : {}),
+        ...(found.skipped.count > 0 ? { skipped: found.skipped } : {}),
       },
     };
   },

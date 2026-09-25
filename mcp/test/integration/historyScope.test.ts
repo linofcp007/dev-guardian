@@ -283,11 +283,15 @@ describe('risk_score reports its real coverage', () => {
     });
     const r = okResult<{
       components: { findings: { open_findings: number } };
-      coverage: { skipped: Array<{ scan_id: string; reason: string }>; sources: Array<{ scan_id: string }> };
+      coverage: {
+        skipped: { count: number; newest: Array<{ scan_id: string; reason: string }> };
+        sources: Array<{ scan_id: string }>;
+      };
     }>(await tool('risk_score').handler({ project_path: a }, s.plugin));
     expect(r.components.findings.open_findings).toBe(1);
     expect(r.coverage.sources.map((x) => x.scan_id)).toEqual([good]);
-    expect(r.coverage.skipped).toEqual([expect.objectContaining({ scan_id: empty, reason: 'coverage_none' })]);
+    expect(r.coverage.skipped.count).toBe(1);
+    expect(r.coverage.skipped.newest).toEqual([expect.objectContaining({ scan_id: empty, reason: 'coverage_none' })]);
   });
 });
 

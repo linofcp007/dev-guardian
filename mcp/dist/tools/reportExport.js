@@ -107,8 +107,8 @@ async function handler(input, ctx) {
     const scanId = inp.scan_id ?? latest?.scan?.scan_id;
     if (!scanId) {
         return failDomain('unknown_scan_id', `No usable completed scan of ${projectPath} to export.` +
-            ((latest?.skipped.length ?? 0) > 0
-                ? ` ${latest?.skipped.length ?? 0} scan(s) were skipped because their scanners did not run (coverage none).`
+            ((latest?.skipped.count ?? 0) > 0
+                ? ` ${latest?.skipped.count ?? 0} scan(s) were skipped because their scanners did not run (coverage none).`
                 : ''));
     }
     const scan = ctx.storage.scans.getById(scanId);
@@ -132,7 +132,7 @@ async function handler(input, ctx) {
         bytes: Buffer.byteLength(content, 'utf8'),
         findings_count: findings.length,
         cves_count: cves.length,
-        ...((latest?.skipped.length ?? 0) > 0 ? { skipped_scans: latest?.skipped } : {}),
+        ...((latest?.skipped.count ?? 0) > 0 ? { skipped_scans: latest?.skipped } : {}),
     };
 }
 function renderReport(format, scan, findings, cves, lang) {

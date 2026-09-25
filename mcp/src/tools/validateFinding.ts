@@ -250,7 +250,7 @@ async function handler(
     ...(selected.length === 0 ? { note: NO_OPEN_FINDINGS_NOTE } : {}),
     // Newer scans the open set passed over because their scanners did not
     // run: the findings validated come from the scan before each of them.
-    ...(openSet.skipped.length > 0 ? { skipped_scans: openSet.skipped } : {}),
+    ...(openSet.skipped.count > 0 ? { skipped_scans: openSet.skipped } : {}),
   };
 }
 

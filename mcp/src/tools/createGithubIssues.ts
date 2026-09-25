@@ -145,8 +145,8 @@ async function handler(
     return failDomain(
       'unknown_scan_id',
       `No usable completed scan of ${projectPath} yet — nothing to file as issues.` +
-        (open.skipped.length > 0
-          ? ` ${open.skipped.length} scan(s) were skipped because their scanners did not run (coverage none).`
+        (open.skipped.count > 0
+          ? ` ${open.skipped.count} scan(s) were skipped because their scanners did not run (coverage none).`
           : ''),
     );
   }
@@ -230,7 +230,7 @@ async function handler(
     project_path: projectPath,
     // Newer scans passed over because their scanners did not run: the
     // findings above come from the scan before each of them.
-    ...(open.skipped.length > 0 ? { skipped_scans: open.skipped } : {}),
+    ...(open.skipped.count > 0 ? { skipped_scans: open.skipped } : {}),
     plans,
   };
 }
@@ -310,17 +310,32 @@ function buildBody(f: Finding, scanId: string): string {
     .join('\n');
 }
 
+/** The most issues one dedupe listing asks `gh` for. */
+export const ISSUE_LIST_LIMIT = 1000;
+
 /**
- * The `[guardian:<12 hex>]` tag of every issue in the repository, open AND
- * closed. `gh issue list` alone returns open issues only — which is how a
- * closed issue's finding got filed again on every run.
+ * The `[guardian:<12 hex>]` tag of every dev-guardian issue in the
+ * repository, open AND closed. `gh issue list` alone returns open issues
+ * only — which is how a closed issue's finding got filed again on every run.
+ *
+ * Narrowed to dev-guardian's own issues by a title search, so the limit is
+ * spent on them rather than on the repository's other issues; and a listing
+ * that comes back AT the limit may have been cut — the issue for this very
+ * finding could be the one past it — so it fails closed: nothing is filed,
+ * rather than a duplicate public issue.
  */
 async function listExistingTags(
   cwd: string,
 ): Promise<{ ok: true; tags: Set<string> } | { ok: false; error: string }> {
   const r = await runProcess({
     command: 'gh',
-    args: ['issue', 'list', '--state', 'all', '--limit', '1000', '--json', 'number,title,state'],
+    args: [
+      'issue', 'list',
+      '--state', 'all',
+      '--search', '"[guardian:" in:title',
+      '--limit', String(ISSUE_LIST_LIMIT),
+      '--json', 'number,title,state',
+    ],
     cwd,
     timeoutMs: 30_000,
   });
@@ -334,6 +349,15 @@ async function listExistingTags(
     return { ok: false, error: 'gh issue list printed something that is not JSON' };
   }
   if (!Array.isArray(parsed)) return { ok: false, error: 'gh issue list did not return a JSON array' };
+  if (parsed.length >= ISSUE_LIST_LIMIT) {
+    return {
+      ok: false,
+      error:
+        `gh issue list returned ${parsed.length} dev-guardian issues, its limit of ${ISSUE_LIST_LIMIT}: ` +
+        'the listing may be cut, so an existing issue for a finding could be missing from it. Nothing ' +
+        'was filed, to avoid duplicates — close or relabel old [guardian:…] issues, or file by hand.',
+    };
+  }
   const tags = new Set<string>();
   for (const issue of parsed) {
     const title = (issue as { title?: unknown }).title;

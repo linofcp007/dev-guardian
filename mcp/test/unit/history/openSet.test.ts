@@ -144,7 +144,11 @@ describe('openSetForProject', () => {
     const set = openSetForProject(s.storage, P);
     expect(set.findings).toHaveLength(1);
     expect(set.sources.map((x) => x.scan_id)).toEqual(['good']);
-    expect(set.skipped).toEqual([expect.objectContaining({ scan_id: 'blind', slot: 'sast', reason: 'coverage_none' })]);
+    expect(set.skipped).toEqual({
+      count: 1,
+      by_reason: { coverage_none: 1 },
+      newest: [expect.objectContaining({ scan_id: 'blind', slots: ['sast'], reason: 'coverage_none' })],
+    });
     expect(set.coverage).toBe('partial');
   });
 
@@ -159,7 +163,7 @@ describe('openSetForProject', () => {
     });
     const set = openSetForProject(s.storage, P);
     expect(tools(set)).toEqual(['gitleaks', 'semgrep']);
-    expect(set.skipped).toEqual([expect.objectContaining({ scan_id: 'full', slot: 'secrets' })]);
+    expect(set.skipped.newest).toEqual([expect.objectContaining({ scan_id: 'full', slots: ['secrets'] })]);
   });
 
   it('never lets a scoped (diff/partial) run supersede a full one', () => {

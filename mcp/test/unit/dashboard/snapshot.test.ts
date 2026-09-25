@@ -630,6 +630,27 @@ describe('buildSnapshot', () => {
     db.close();
   });
 
+  it("judges a script-era security_full's coverage by the part of it that is a source, not all its bookkeeping", () => {
+    // Its gitleaks was missing, but a newer scan_secrets measured secrets:
+    // the numbers on screen lack nothing, so no 'secrets' gap may show.
+    const { storage, db } = fresh();
+    completedScan(storage, '/p', {
+      scan_type: 'security_full',
+      tools_run: [
+        { name: 'semgrep', status: 'ok' },
+        { name: 'gitleaks', status: 'skipped', reason: 'not_installed' },
+        { name: 'trivy', status: 'ok' },
+      ],
+      missing_tools: ['gitleaks'],
+    });
+    completedScan(storage, '/p', { scan_type: 'secrets', tools_run: [{ name: 'gitleaks', status: 'ok' }] });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.coverage.missing_tools).not.toContain('gitleaks');
+    expect(snap.coverage.omitted_categories).not.toContain('secrets');
+    expect(snap.coverage.level).toBe('full');
+    db.close();
+  });
+
   it('ignores a newer SBOM: the scan and findings stay those of the state scans', () => {
     const { storage, db } = fresh();
     const sast = completedScan(storage, '/p', { scan_type: 'sast' });

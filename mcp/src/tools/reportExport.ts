@@ -147,8 +147,8 @@ async function handler(
     return failDomain(
       'unknown_scan_id',
       `No usable completed scan of ${projectPath} to export.` +
-        ((latest?.skipped.length ?? 0) > 0
-          ? ` ${latest?.skipped.length ?? 0} scan(s) were skipped because their scanners did not run (coverage none).`
+        ((latest?.skipped.count ?? 0) > 0
+          ? ` ${latest?.skipped.count ?? 0} scan(s) were skipped because their scanners did not run (coverage none).`
           : ''),
     );
   }
@@ -175,7 +175,7 @@ async function handler(
     bytes: Buffer.byteLength(content, 'utf8'),
     findings_count: findings.length,
     cves_count: cves.length,
-    ...((latest?.skipped.length ?? 0) > 0 ? { skipped_scans: latest?.skipped } : {}),
+    ...((latest?.skipped.count ?? 0) > 0 ? { skipped_scans: latest?.skipped } : {}),
   };
 }
 

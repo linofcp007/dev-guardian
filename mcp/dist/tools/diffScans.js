@@ -30,7 +30,7 @@
  */
 import { z } from 'zod';
 import { indexFindings } from '../fingerprint/findingIdentity.js';
-import { latestStateScan } from '../history/openSet.js';
+import { latestStateScan, summarizeSkipped } from '../history/openSet.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { SCAN_TYPES } from '../types.js';
@@ -68,12 +68,12 @@ const tool = {
 registerToolModule(tool);
 async function handler(input, ctx) {
     const inp = input;
-    const skipped = [];
+    const skipHits = [];
     // Resolve `to` first because `from='previous'` depends on it.
-    const toScan = resolveTo(inp, ctx, skipped);
+    const toScan = resolveTo(inp, ctx, skipHits);
     if (!toScan.ok)
         return toScan.err;
-    const fromId = resolveFrom(inp, toScan.value, ctx, skipped);
+    const fromId = resolveFrom(inp, toScan.value, ctx, skipHits);
     if (!fromId.ok)
         return fromId.err;
     if (fromId.value === toScan.value.scan_id) {
@@ -115,10 +115,10 @@ async function handler(input, ctx) {
             resolved: resolved_findings.length > ITEMS_PER_BUCKET,
             unchanged: unchanged_findings.length > ITEMS_PER_BUCKET,
         },
-        ...(skipped.length > 0 ? { skipped } : {}),
+        ...(skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}),
     };
 }
-function resolveTo(inp, ctx, skipped) {
+function resolveTo(inp, ctx, skipHits) {
     if (inp.to_scan_id) {
         const scan = ctx.storage.scans.getById(inp.to_scan_id);
         if (!scan)
@@ -134,7 +134,7 @@ function resolveTo(inp, ctx, skipped) {
     }
     // Default: this project's newest usable state scan.
     const latest = latestStateScan(ctx.storage, projectPath, inp.scan_type);
-    skipped.push(...latest.skipped);
+    skipHits.push(...latest.hits);
     if (!latest.scan) {
         return {
             ok: false,
@@ -144,7 +144,7 @@ function resolveTo(inp, ctx, skipped) {
     }
     return { ok: true, value: latest.scan };
 }
-function resolveFrom(inp, toScan, ctx, skipped) {
+function resolveFrom(inp, toScan, ctx, skipHits) {
     if (inp.from_scan_id) {
         const scan = ctx.storage.scans.getById(inp.from_scan_id);
         if (!scan)
@@ -169,7 +169,7 @@ function resolveFrom(inp, toScan, ctx, skipped) {
     const previous = latestStateScan(ctx.storage, toScan.project_path, toScan.scan_type, {
         beforeScanId: toScan.scan_id,
     });
-    skipped.push(...previous.skipped);
+    skipHits.push(...previous.hits);
     if (!previous.scan)
         return {
             ok: false,
@@ -179,10 +179,11 @@ function resolveFrom(inp, toScan, ctx, skipped) {
     return { ok: true, value: previous.scan.scan_id };
 }
 function describeSkipped(skipped) {
-    if (skipped.length === 0)
+    if (skipped.count === 0)
         return '';
-    return (` Skipped ${skipped.length} scan(s) whose scanners did not run (coverage none): ` +
-        `${skipped.map((s) => s.scan_id).join(', ')}.`);
+    const named = skipped.newest.map((s) => s.scan_id).join(', ');
+    const more = skipped.count > skipped.newest.length ? `, and ${skipped.count - skipped.newest.length} older` : '';
+    return ` Skipped ${skipped.count} scan(s) whose scanners did not run (coverage none): ${named}${more}.`;
 }
 function failDomain(code, message) {
     return { ok: false, error: { code, message } };

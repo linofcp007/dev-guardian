@@ -140,6 +140,40 @@ describe('create_github_issues', () => {
     expect(create).not.toContain('security');
   });
 
+  it("narrows the dedupe listing to dev-guardian's own issues, by title", async () => {
+    const fp = '9'.repeat(64);
+    const { s, p } = seedOne(fp);
+    const repo: FakeRepo = { issues: [], labels: ['dev-guardian', 'security'], calls: [] };
+    fakeGh(repo);
+
+    await tool().handler({ project_path: p }, s.plugin);
+    const list = repo.calls.find((c) => c[0] === 'issue' && c[1] === 'list') ?? [];
+    expect(list).toContain('--state');
+    expect(list[list.indexOf('--state') + 1]).toBe('all');
+    expect(list).toContain('--search');
+    expect(list[list.indexOf('--search') + 1]).toBe('"[guardian:" in:title');
+  });
+
+  it('files nothing when the listing may have been cut at its limit — it could hide an existing issue', async () => {
+    // 1000 dev-guardian issues already exist; the one for this finding may
+    // be the 1001st. Filing anyway is a duplicate public issue.
+    const fp = '8'.repeat(64);
+    const { s, p } = seedOne(fp);
+    const issues = Array.from({ length: 1000 }, (_, i) => ({
+      number: i + 1,
+      title: `[HIGH] old ${i} [guardian:${i.toString(16).padStart(12, '0')}]`,
+      state: 'CLOSED' as const,
+    }));
+    const repo: FakeRepo = { issues, labels: ['dev-guardian', 'security'], calls: [] };
+    fakeGh(repo);
+
+    const r = await tool().handler({ project_path: p }, s.plugin);
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('expected failure');
+    expect(r.error.message).toMatch(/1000/);
+    expect(repo.calls.some((c) => c[0] === 'issue' && c[1] === 'create')).toBe(false);
+  });
+
   it('answers ok:false when every plan failed', async () => {
     const fp = 'f'.repeat(64);
     const { s, p } = seedOne(fp);

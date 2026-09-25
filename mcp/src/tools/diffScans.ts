@@ -32,7 +32,7 @@
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { indexFindings } from '../fingerprint/findingIdentity.js';
-import { latestStateScan, type SkippedScan } from '../history/openSet.js';
+import { latestStateScan, type SkipHit, summarizeSkipped, type SkippedSummary } from '../history/openSet.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { SCAN_TYPES, type DomainError, type Finding, type ScanType, type ToolResult } from '../types.js';
@@ -88,12 +88,12 @@ async function handler(
     to?: 'latest';
   };
 
-  const skipped: SkippedScan[] = [];
+  const skipHits: SkipHit[] = [];
 
   // Resolve `to` first because `from='previous'` depends on it.
-  const toScan = resolveTo(inp, ctx, skipped);
+  const toScan = resolveTo(inp, ctx, skipHits);
   if (!toScan.ok) return toScan.err;
-  const fromId = resolveFrom(inp, toScan.value, ctx, skipped);
+  const fromId = resolveFrom(inp, toScan.value, ctx, skipHits);
   if (!fromId.ok) return fromId.err;
 
   if (fromId.value === toScan.value.scan_id) {
@@ -140,7 +140,7 @@ async function handler(
       resolved: resolved_findings.length > ITEMS_PER_BUCKET,
       unchanged: unchanged_findings.length > ITEMS_PER_BUCKET,
     },
-    ...(skipped.length > 0 ? { skipped } : {}),
+    ...(skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}),
   };
 }
 
@@ -150,7 +150,7 @@ type ScanRow = NonNullable<ReturnType<PluginContext['storage']['scans']['getById
 function resolveTo(
   inp: { project_path?: string; scan_type?: ScanType; to_scan_id?: string; to?: 'latest' },
   ctx: PluginContext,
-  skipped: SkippedScan[],
+  skipHits: SkipHit[],
 ): Resolved<ScanRow> {
   if (inp.to_scan_id) {
     const scan = ctx.storage.scans.getById(inp.to_scan_id);
@@ -166,7 +166,7 @@ function resolveTo(
   }
   // Default: this project's newest usable state scan.
   const latest = latestStateScan(ctx.storage, projectPath, inp.scan_type);
-  skipped.push(...latest.skipped);
+  skipHits.push(...latest.hits);
   if (!latest.scan) {
     return {
       ok: false,
@@ -184,7 +184,7 @@ function resolveFrom(
   inp: { from_scan_id?: string; from?: 'baseline' | 'previous' },
   toScan: ScanRow,
   ctx: PluginContext,
-  skipped: SkippedScan[],
+  skipHits: SkipHit[],
 ): Resolved<string> {
   if (inp.from_scan_id) {
     const scan = ctx.storage.scans.getById(inp.from_scan_id);
@@ -215,7 +215,7 @@ function resolveFrom(
   const previous = latestStateScan(ctx.storage, toScan.project_path, toScan.scan_type, {
     beforeScanId: toScan.scan_id,
   });
-  skipped.push(...previous.skipped);
+  skipHits.push(...previous.hits);
   if (!previous.scan)
     return {
       ok: false,
@@ -228,12 +228,11 @@ function resolveFrom(
   return { ok: true, value: previous.scan.scan_id };
 }
 
-function describeSkipped(skipped: readonly SkippedScan[]): string {
-  if (skipped.length === 0) return '';
-  return (
-    ` Skipped ${skipped.length} scan(s) whose scanners did not run (coverage none): ` +
-    `${skipped.map((s) => s.scan_id).join(', ')}.`
-  );
+function describeSkipped(skipped: SkippedSummary): string {
+  if (skipped.count === 0) return '';
+  const named = skipped.newest.map((s) => s.scan_id).join(', ');
+  const more = skipped.count > skipped.newest.length ? `, and ${skipped.count - skipped.newest.length} older` : '';
+  return ` Skipped ${skipped.count} scan(s) whose scanners did not run (coverage none): ${named}${more}.`;
 }
 
 function failDomain(

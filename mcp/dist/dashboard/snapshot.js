@@ -68,7 +68,7 @@ export function buildSnapshot(storage, projectPath, now) {
     // and that has to reach coverage or it renders as a clean "0 CVEs".
     const cveSourceScan = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: 'deps' }).scan;
     const cveGap = currentScan !== null && cveSourceScan === null;
-    const coverage = buildCoverage(open.scans, cveGap);
+    const coverage = buildCoverage(open, cveGap);
     const openFindings = open.findings;
     const findings = buildFindingsSummary(openFindings, truncation);
     const cveItems = cveSourceScan ? storage.cves.listActive(cveSourceScan.scan_id) : [];
@@ -127,11 +127,14 @@ function toScanSummary(scan, now) {
 }
 /**
  * Coverage of the numbers on screen: the scanners of every scan the open set
- * considered (its sources, and the newer scans it skipped for coverage none
- * — their gaps are exactly what the numbers lack), names de-duplicated in
- * first-seen order.
+ * considered — its sources, and the newer scans it skipped for coverage none
+ * (their gaps are exactly what the numbers lack) — each through the slot it
+ * was considered for (`OpenSet.bookkeeping`). A script-era security_full that
+ * sources only the sast slot contributes its semgrep entries, not the
+ * gitleaks it was missing when a newer scan_secrets measured secrets. Names
+ * de-duplicated in first-seen order.
  */
-function buildCoverage(scans, cveGap) {
+function buildCoverage(open, cveGap) {
     const toolsRun = [];
     const missingTools = [];
     const partialTools = [];
@@ -139,10 +142,10 @@ function buildCoverage(scans, cveGap) {
         if (!list.includes(name))
             list.push(name);
     };
-    for (const scan of scans) {
-        for (const t of scan.tools_run)
+    for (const view of open.bookkeeping) {
+        for (const t of view.tools_run)
             addOnce(toolsRun, t.name);
-        for (const t of scan.missing_tools)
+        for (const t of view.missing_tools)
             addOnce(missingTools, t);
         // A name can appear in BOTH missing_tools and tools_run of one scan
         // (see bugHunt.ts's retry-success path): the tool itself ran ('ok'), but
@@ -150,13 +153,13 @@ function buildCoverage(scans, cveGap) {
         // entirely" — is what partial_tools flags, so the renderers can tell the
         // two apart instead of reporting every missing_tools entry as "did not
         // run this scan". Judged per scan, never across two.
-        const okToolNames = new Set(scan.tools_run.filter((t) => t.status === 'ok').map((t) => t.name));
-        for (const t of scan.missing_tools)
+        const okToolNames = new Set(view.tools_run.filter((t) => t.status === 'ok').map((t) => t.name));
+        for (const t of view.missing_tools)
             if (okToolNames.has(t))
                 addOnce(partialTools, t);
     }
     const omittedCategories = omittedCategoriesFor(missingTools, cveGap);
-    const level = scans.length === 0 ? 'none' : omittedCategories.length > 0 ? 'partial' : 'full';
+    const level = open.scans.length === 0 ? 'none' : omittedCategories.length > 0 ? 'partial' : 'full';
     return {
         level,
         tools_run: toolsRun,

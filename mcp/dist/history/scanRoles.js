@@ -32,10 +32,10 @@
  * compile time: a new scan type that is not placed here does not build.
  */
 export const SCAN_TYPE_ROLE = {
-    // Covers sast + secrets + deps through SECURITY_FULL_TOOL_TYPES below, so a
-    // newer scan_sast supersedes its semgrep findings but not its gitleaks
-    // ones. Rows written before child scans existed must not vanish from the
-    // open set, and do not: they still source every slot nothing newer covers.
+    // Two shapes — see isOrchestratedFullScan below. An orchestrated row's
+    // children (sast/secrets/deps/iac) are the sources, never the row itself;
+    // a script-era row is split across sast/secrets/deps/containers, so rows
+    // written before child scans existed do not vanish from the open set.
     security_full: 'state',
     sast: 'state',
     secrets: 'state',
@@ -70,38 +70,88 @@ export function isStateScanType(type) {
     return STATE_SCAN_TYPES.includes(type);
 }
 /**
- * `security_full` runs several scanners; each one's findings and its
- * `tools_run` / `missing_tools` entries belong to the type the dedicated
- * tool for that scanner writes. Keyed by tool name — the `tool` of a
- * finding and the `name` of a `ToolRun` (the Dockerfile pass records its run
- * as `trivy-dockerfile` while its findings carry `trivy`).
+ * `security_full` rows come in two shapes, and the open set treats them
+ * differently:
  *
- * A tool missing from this map stays in the `security_full` slot itself, so
- * nothing a security_full row holds is ever dropped from the open set.
+ *   - **Orchestrated** (Task 9 onwards): the tool runs `scan_sast`,
+ *     `scan_secrets`, `scan_deps` and `scan_iac` as real child scans of
+ *     their own types (`meta.parent_scan_id`), and the parent row keeps
+ *     their findings merged, plus `meta.child_scans`. The children ARE the
+ *     measurement; the parent is a copy. The parent is therefore never an
+ *     open-set source — its children supersede and are superseded like any
+ *     other scan of their type, and nothing is counted twice.
+ *   - **Script-era** (2.0.x, `scripts/scan/full-security-scan.sh`): one row
+ *     holding everything, with bookkeeping named after scanners. It ran
+ *     `semgrep --config=auto` (+ Bandit), `gitleaks detect` (history only),
+ *     `trivy fs --scanners vuln,license` and `trivy config Dockerfile` — for
+ *     each slot a SUBSET of what the dedicated tool runs today (scan_sast adds
+ *     the project's rules, base.yml, registered packs, p/csharp; scan_secrets
+ *     adds uncommitted files; scan_containers adds the image). Its findings
+ *     are routed to the slot of the tool that re-evaluates them
+ *     ({@link scriptEraSlotOfFinding}); see `history/openSet.ts` for why such a
+ *     row never supersedes a dedicated scan.
  */
-export const SECURITY_FULL_TOOL_TYPES = {
+export function isOrchestratedFullScan(scan) {
+    return scan.scan_type === 'security_full' && Array.isArray(scan.meta?.['child_scans']);
+}
+export function isScriptEraFullScan(scan) {
+    return scan.scan_type === 'security_full' && !isOrchestratedFullScan(scan);
+}
+/**
+ * The slot each script-era `ToolRun` / `missing_tools` entry speaks for.
+ * `trivy` is the `trivy fs` dependency pass; `trivy-dockerfile` is the
+ * `trivy config Dockerfile` pass — exactly what `scan_containers` re-runs
+ * under the same name.
+ */
+export const SCRIPT_ERA_RUN_SLOTS = {
     semgrep: 'sast',
     bandit: 'sast',
     gitleaks: 'secrets',
     trivy: 'deps',
-    'trivy-dockerfile': 'deps',
+    'trivy-dockerfile': 'containers',
 };
+/**
+ * The slot of a finding a script-era row holds. Every Trivy finding carries
+ * tool `trivy`, so a Trivy finding is routed by what it is: a CVE or a
+ * license came from the dependency pass (`scan_deps` re-evaluates it); a
+ * misconfiguration came from the Dockerfile pass (`scan_containers`
+ * re-evaluates it — `scan_deps` never does, so routing it by tool name let a
+ * newer `scan_deps` drop it). An unknown tool stays in the residual
+ * `security_full` slot, so nothing such a row holds is ever dropped.
+ */
+export function scriptEraSlotOfFinding(f) {
+    switch (f.tool) {
+        case 'semgrep':
+        case 'bandit':
+            return 'sast';
+        case 'gitleaks':
+            return 'secrets';
+        case 'trivy':
+            if (f.category === 'license' || f.subcategory === 'cve')
+                return 'deps';
+            if (f.subcategory === 'secret')
+                return 'secrets';
+            return 'containers';
+        default:
+            return 'security_full';
+    }
+}
 /** Scan types whose rows can feed `slot`. */
 export function sourceTypesOf(slot) {
     if (slot === 'security_full')
         return ['security_full'];
-    const coveredByFull = Object.values(SECURITY_FULL_TOOL_TYPES).includes(slot);
+    const coveredByFull = Object.values(SCRIPT_ERA_RUN_SLOTS).includes(slot);
     return coveredByFull ? [slot, 'security_full'] : [slot];
 }
-/** The slot one of a security_full row's tools belongs to. */
-function fullSlotOf(tool) {
-    return SECURITY_FULL_TOOL_TYPES[tool] ?? 'security_full';
+/** The slot one of a script-era row's `tools_run` / `missing_tools` names belongs to. */
+function runSlotOf(tool) {
+    return SCRIPT_ERA_RUN_SLOTS[tool] ?? 'security_full';
 }
 /** Whether `finding`, read from `scan`, belongs to `slot`. */
 export function findingInSlot(scan, finding, slot) {
     if (scan.scan_type !== 'security_full')
         return scan.scan_type === slot;
-    return fullSlotOf(finding.tool) === slot;
+    return scriptEraSlotOfFinding(finding) === slot;
 }
 /**
  * The part of `scan`'s bookkeeping that speaks for `slot` — the whole of it
@@ -114,8 +164,8 @@ export function slotView(scan, slot) {
         return { tools_run: scan.tools_run, missing_tools: scan.missing_tools };
     }
     return {
-        tools_run: scan.tools_run.filter((t) => fullSlotOf(t.name) === slot),
-        missing_tools: scan.missing_tools.filter((t) => fullSlotOf(t) === slot),
+        tools_run: scan.tools_run.filter((t) => runSlotOf(t.name) === slot),
+        missing_tools: scan.missing_tools.filter((t) => runSlotOf(t) === slot),
     };
 }
 /**

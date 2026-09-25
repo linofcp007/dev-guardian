@@ -16,7 +16,7 @@ import { makeFinding } from '../../src/runners/scannerParsers/index.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { Storage } from '../../src/storage/index.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
-import type { ScanStatus, ScanType, Severity, ToolRun } from '../../src/types.js';
+import type { Category, ScanStatus, ScanType, Severity, ToolRun } from '../../src/types.js';
 import { makeTempDir } from './tempDir.js';
 
 export interface Seeded {
@@ -54,6 +54,7 @@ export interface SeedFinding {
   identity?: string;
   message?: string;
   subcategory?: string;
+  category?: Category;
 }
 
 export interface SeedScan {
@@ -84,7 +85,7 @@ export function seedScan(s: Seeded, scan: SeedScan): string {
           tool: f.tool ?? 'semgrep',
           rule_id: f.rule_id ?? 'rule',
           severity: f.severity ?? 'high',
-          category: 'security',
+          category: f.category ?? 'security',
           title: `finding ${f.fp ?? i}`,
           file_path: f.file ?? `src/${scan.id}-${i}.ts`,
           line_start: f.line ?? i + 1,

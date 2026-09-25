@@ -24,7 +24,7 @@
  */
 import { z } from 'zod';
 import { indexFindings } from '../fingerprint/findingIdentity.js';
-import { latestStateScan } from '../history/openSet.js';
+import { latestStateScan, summarizeSkipped } from '../history/openSet.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { SCAN_TYPES } from '../types.js';
@@ -72,9 +72,9 @@ async function handler(input, ctx) {
     catch (e) {
         return { ok: false, error: { code: 'not_a_git_repo', message: e.message } };
     }
-    const skipped = [];
+    const skipHits = [];
     const current = latestStateScan(ctx.storage, projectPath, inp.scan_type);
-    skipped.push(...current.skipped);
+    skipHits.push(...current.hits);
     const latest = current.scan;
     if (!latest) {
         return {
@@ -86,7 +86,7 @@ async function handler(input, ctx) {
             baseline_scan_id: null,
             current_scan_id: null,
             hint: 'No usable scans recorded for this project yet.',
-            ...(skipped.length > 0 ? { skipped } : {}),
+            ...(skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}),
         };
     }
     // Reference: this project's baseline of the same type, else its previous
@@ -109,7 +109,7 @@ async function handler(input, ctx) {
         const prev = latestStateScan(ctx.storage, projectPath, latest.scan_type, {
             beforeScanId: latest.scan_id,
         });
-        skipped.push(...prev.skipped);
+        skipHits.push(...prev.hits);
         if (prev.scan) {
             baselineId = prev.scan.scan_id;
             reference = 'previous';
@@ -125,7 +125,7 @@ async function handler(input, ctx) {
             baseline_scan_id: null,
             current_scan_id: latest.scan_id,
             hint: `No '${latest.scan_type}' baseline or previous '${latest.scan_type}' scan to compare against.`,
-            ...(skipped.length > 0 ? { skipped } : {}),
+            ...(skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}),
             ...note,
         };
     }
@@ -152,7 +152,7 @@ async function handler(input, ctx) {
         hint: regressed
             ? 'Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes.'
             : 'No significant regression.',
-        ...(skipped.length > 0 ? { skipped } : {}),
+        ...(skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}),
         ...note,
     };
 }
