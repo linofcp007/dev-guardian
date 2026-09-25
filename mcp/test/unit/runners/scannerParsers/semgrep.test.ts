@@ -104,6 +104,53 @@ describe('semgrepParser — Docker and native runs agree', () => {
   });
 });
 
+describe('semgrepParser — secret redaction', () => {
+  // Simulates a logged-in / Docker run, where Semgrep's registry secrets
+  // family reports the real matched text in `extra.lines` instead of the
+  // anonymous "requires login" placeholder.
+  function secretResult(lines: string): string {
+    return JSON.stringify({
+      results: [
+        {
+          check_id: 'generic.secrets.security.detected-generic-secret',
+          path: 'src/config.js',
+          start: { line: 5 },
+          end: { line: 5 },
+          extra: {
+            severity: 'ERROR',
+            message: 'Secret detected',
+            lines,
+            metadata: { category: 'security', subcategory: 'secrets' },
+          },
+        },
+      ],
+      errors: [],
+    });
+  }
+
+  it('redacts extra.lines for a rule/subcategory that names a secret', () => {
+    const raw = 'const apiKey = "sk_live_abcdef1234567890";';
+    const f = semgrepParser.parse(secretResult(raw)).findings[0];
+    expect(f?.snippet).toBeDefined();
+    expect(f?.snippet).not.toBe(raw);
+    expect(f?.snippet).not.toContain('sk_live_abcdef1234567890');
+  });
+
+  it('does not redact a non-secret rule’s snippet', () => {
+    const raw = 'db.query(`SELECT * FROM users WHERE id = ${id}`)';
+    const f = semgrepParser.parse(oneResult({ check_id: 'rules.sql-injection', path: 'a.js' })).findings[0];
+    // oneResult's fixture body sets lines: 'x' — assert the pass-through path
+    // (not this literal raw string) is untouched by the redactor.
+    expect(f?.snippet).toBe('x');
+    void raw;
+  });
+
+  it('still reports the "requires login" placeholder unchanged for an anonymous run', () => {
+    const f = semgrepParser.parse(secretResult('requires login')).findings[0];
+    expect(f?.snippet).toBe('requires login');
+  });
+});
+
 describe('semgrepParser — category mapping', () => {
   it("maps metadata.category 'correctness' to bug, not quality", () => {
     const f = semgrepParser.parse(oneResult({ category: 'correctness' })).findings[0];
