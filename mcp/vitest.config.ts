@@ -4,28 +4,19 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     environment: 'node',
-    // Item 8 (2026-09-25 full review, Task 5 — packaging/deps): raised from
-    // 10_000 as an unavoidable, minimal consequence of the vitest 2 -> 5
-    // dependency bump (mcp/package.json is this task's own file; the
-    // several semgrep-heavy integration test files this actually affects
-    // are not — see the task report for the full reasoning; this is the
-    // one shared, out-of-lane touch that fix required).
-    //
-    // Several `test/integration/*Rules*.test.ts` / `semgrepPacks.test.ts`
-    // tests invoke real `semgrep` SYNCHRONOUSLY (execSync/spawnSync, no
-    // await) across every rule pack / every hit fixture — genuinely slow
-    // (measured 41-90s for ONE such call under heavy concurrent machine
-    // load) and, it turns out, was NEVER actually bounded by this 10s
-    // config value: vitest's timeout is enforced via a timer on the event
-    // loop, which cannot fire while a SYNCHRONOUS call blocks the thread —
-    // confirmed directly, re-running the identical test unmodified on
-    // vitest 2.1.9 under the SAME load that failed it on 5.0.1: it took
-    // 63s and PASSED, because the timeout timer never got a chance to run
-    // until the call had already returned. vitest 5 evidently measures and
-    // reports the overrun differently, surfacing a gap that was always
-    // real but never enforced. The fix is a genuinely longer budget, not a
-    // narrower one already exceeded in practice.
-    testTimeout: 180_000,
+    // Item 8's first fix (2026-09-25 full review) raised this GLOBALLY to
+    // 180_000 to work around a handful of slow, real-Semgrep-invoking
+    // integration/e2e tests — fix round 1, item 4 (Important, review round
+    // 1) reverted that: a 180s ceiling for all 141 files hides a genuine
+    // hang in any of the other, fast, unit-level tests for three whole
+    // minutes instead of ten seconds. The unit default stays 10_000; the
+    // handful of files that genuinely need longer (real `semgrep`
+    // subprocess calls across a whole rule pack / every hit fixture) set
+    // their OWN, file-scoped override via `vi.setConfig({ testTimeout })`
+    // at the top of the file — see each one's own comment for why. That
+    // override is why those files can run long without needing this default
+    // raised for everything else.
+    testTimeout: 10_000,
     // Runs in every worker before its test files. Gives each worker its own
     // Semgrep settings file so concurrent Semgrep invocations — within one
     // run, or across two agents running this suite at once — stop racing on
