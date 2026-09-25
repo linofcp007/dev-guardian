@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { analyzeSkill } from '../../../src/skillaudit/analyze.js';
 import { scanContent } from '../../../src/skillaudit/patterns.js';
 import { scoreFindings } from '../../../src/skillaudit/score.js';
 import { detectTaint } from '../../../src/skillaudit/taint.js';
@@ -120,5 +121,39 @@ describe('sarif', () => {
     expect(sarif.runs[0].tool.driver.rules[0].id).toBe('dc-dynamic-exec');
     expect(sarif.runs[0].results[0].level).toBe('error');
     expect(sarif.runs[0].results[0].locations[0].physicalLocation.region.startLine).toBe(3);
+  });
+});
+
+describe('analyzeSkill — symlinks', () => {
+  it('reports each refused link as its own finding, target string only, never content', async () => {
+    const report = await analyzeSkill([], {
+      checkDeps: false,
+      symlinks: [
+        { relPath: 'docs/credentials', target: '/home/user/.aws/credentials', kind: 'symlink' },
+      ],
+    });
+    expect(report.findings).toHaveLength(1);
+    const f = report.findings[0];
+    expect(f?.subcategory).toBe('privilege_escalation');
+    expect(f?.file_path).toBe('docs/credentials');
+    expect(f?.message).toContain('/home/user/.aws/credentials');
+    // Never a claim that content was inspected — only the target path.
+    expect(f?.title.toLowerCase()).toContain('symlink');
+  });
+
+  it('reports a directory that escapes the ingestion root distinctly from a symlink', async () => {
+    const report = await analyzeSkill([], {
+      checkDeps: false,
+      symlinks: [
+        { relPath: 'linked', target: '/outside/pkg', kind: 'escaped_directory' },
+      ],
+    });
+    expect(report.findings).toHaveLength(1);
+    expect(report.findings[0]?.title.toLowerCase()).toContain('escapes');
+  });
+
+  it('produces no symlink findings when none were reported', async () => {
+    const report = await analyzeSkill([], { checkDeps: false, symlinks: [] });
+    expect(report.findings).toEqual([]);
   });
 });

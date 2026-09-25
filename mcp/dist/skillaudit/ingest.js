@@ -21,9 +21,9 @@
  * ever sees reviewable text.
  */
 import { execa } from 'execa';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync, } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join, relative } from 'node:path';
 const MAX_FILES = 4000;
 const MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -95,6 +95,7 @@ export async function ingestTarget(targetRaw) {
             skipped: 0,
             truncated: false,
             warnings: [],
+            symlinks: [],
             cleanup: () => { },
         };
     }
@@ -173,6 +174,7 @@ async function ingestUrl(url) {
         skipped: 0,
         truncated: false,
         warnings: [],
+        symlinks: [],
         cleanup: () => safeRm(dir),
     };
 }
@@ -219,12 +221,40 @@ async function tryExtract(zipPath, destDir) {
         return false;
     }
 }
+/**
+ * Is `candidate` (an absolute path) `root` itself or something inside it?
+ * Pure and platform-agnostic — `path.relative` already returns an absolute
+ * path (never a `..`-prefixed one) for a candidate on a different Windows
+ * drive, which `isAbsolute` catches the same way `startsWith('..')` catches
+ * a POSIX escape. A sibling directory that merely shares `root`'s name as a
+ * PREFIX (`/pkg-evil` next to `/pkg`) is correctly rejected too:
+ * `path.relative` resolves it through the parent (`../pkg-evil`), never as a
+ * bare string match.
+ */
+export function isPathWithinRoot(candidate, root) {
+    const rel = relative(root, candidate);
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
 function collectDir(root) {
     const files = [];
     const warnings = [];
+    const symlinks = [];
     let totalBytes = 0;
     let skipped = 0;
     let truncated = false;
+    // Resolved once, outside the walk: every directory the walk descends into
+    // is checked against THIS, never against `root` the raw string, so a
+    // symlinked `root` itself (the caller passed a link as the top-level
+    // target) still anchors the boundary at root's real, physical location —
+    // see `ingestTarget`'s `directory` branch, which never lstat-guards its
+    // own top-level `target` the way this function guards everything below it.
+    let rootReal;
+    try {
+        rootReal = realpathSync(root);
+    }
+    catch {
+        rootReal = root;
+    }
     const stack = [root];
     while (stack.length > 0) {
         const dir = stack.pop();
@@ -245,16 +275,41 @@ function collectDir(root) {
                 break;
             }
             const abs = join(dir, entry);
+            // `lstat`, never `stat`: a symlink (or, where `lstat` reports it this
+            // way, a Windows junction) must be IDENTIFIED without ever being
+            // followed. This is the fix for the reproduced defect — see the
+            // module header and this function's own doc comment above.
             let s;
             try {
-                s = statSync(abs);
+                s = lstatSync(abs);
             }
             catch {
+                continue;
+            }
+            if (s.isSymbolicLink()) {
+                symlinks.push({ relPath: rel(root, abs), target: readLinkTargetSafely(abs), kind: 'symlink' });
+                skipped += 1;
                 continue;
             }
             if (s.isDirectory()) {
                 if (SKIP_DIRS.has(entry))
                     continue;
+                // Second, independent guard: an ordinary directory (lstat says so,
+                // not a link) whose REALPATH still resolves outside the root —
+                // the shape a junction or bind mount takes on a platform/Node
+                // version where `lstat` does not flag it as a link at all. Never
+                // descended into; reported the same way a link is, target string
+                // (the realpath) only.
+                const real = safeRealpath(abs);
+                if (real === null || !isPathWithinRoot(real, rootReal)) {
+                    symlinks.push({
+                        relPath: rel(root, abs),
+                        target: real ?? '(unresolvable)',
+                        kind: 'escaped_directory',
+                    });
+                    skipped += 1;
+                    continue;
+                }
                 stack.push(abs);
                 continue;
             }
@@ -284,7 +339,27 @@ function collectDir(root) {
     if (truncated) {
         warnings.push(`scan truncated at ${files.length} files / ${Math.round(totalBytes / 1024)} KB`);
     }
-    return { files, skipped, truncated, warnings };
+    return { files, skipped, truncated, warnings, symlinks };
+}
+/** `readlinkSync`, best-effort: a link can vanish or become unreadable
+ *  between the `lstat` above and this call (TOCTOU is inherent to any
+ *  filesystem walk); reporting `'(unreadable)'` beats throwing out of the
+ *  whole scan over one link. */
+function readLinkTargetSafely(abs) {
+    try {
+        return readlinkSync(abs);
+    }
+    catch {
+        return '(unreadable)';
+    }
+}
+function safeRealpath(abs) {
+    try {
+        return realpathSync(abs);
+    }
+    catch {
+        return null;
+    }
 }
 function rel(root, abs) {
     let r = abs.slice(root.length).replace(/\\/g, '/');

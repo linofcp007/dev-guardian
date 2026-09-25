@@ -3654,49 +3654,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative6, options, skipNormalization) {
+    function resolveComponent(base, relative7, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse5(serialize2(base, options), options);
-        relative6 = parse5(serialize2(relative6, options), options);
+        relative7 = parse5(serialize2(relative7, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative6.scheme) {
-        target.scheme = relative6.scheme;
-        target.userinfo = relative6.userinfo;
-        target.host = relative6.host;
-        target.port = relative6.port;
-        target.path = removeDotSegments(relative6.path || "");
-        target.query = relative6.query;
+      if (!options.tolerant && relative7.scheme) {
+        target.scheme = relative7.scheme;
+        target.userinfo = relative7.userinfo;
+        target.host = relative7.host;
+        target.port = relative7.port;
+        target.path = removeDotSegments(relative7.path || "");
+        target.query = relative7.query;
       } else {
-        if (relative6.userinfo !== void 0 || relative6.host !== void 0 || relative6.port !== void 0) {
-          target.userinfo = relative6.userinfo;
-          target.host = relative6.host;
-          target.port = relative6.port;
-          target.path = removeDotSegments(relative6.path || "");
-          target.query = relative6.query;
+        if (relative7.userinfo !== void 0 || relative7.host !== void 0 || relative7.port !== void 0) {
+          target.userinfo = relative7.userinfo;
+          target.host = relative7.host;
+          target.port = relative7.port;
+          target.path = removeDotSegments(relative7.path || "");
+          target.query = relative7.query;
         } else {
-          if (!relative6.path) {
+          if (!relative7.path) {
             target.path = base.path;
-            if (relative6.query !== void 0) {
-              target.query = relative6.query;
+            if (relative7.query !== void 0) {
+              target.query = relative7.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative6.path[0] === "/") {
-              target.path = removeDotSegments(relative6.path);
+            if (relative7.path[0] === "/") {
+              target.path = removeDotSegments(relative7.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative6.path;
+                target.path = "/" + relative7.path;
               } else if (!base.path) {
-                target.path = relative6.path;
+                target.path = relative7.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative6.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative7.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative6.query;
+            target.query = relative7.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3704,7 +3704,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative6.fragment;
+      target.fragment = relative7.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -45816,8 +45816,10 @@ function toSarif(findings, opts = {}) {
     };
     if (f.file_path) {
       const region = {};
-      if (f.line_start) region.startLine = f.line_start;
-      if (f.line_end) region.endLine = f.line_end;
+      if (f.line_start) {
+        region.startLine = f.line_start;
+        if (f.line_end) region.endLine = f.line_end;
+      }
       result.locations = [
         {
           physicalLocation: {
@@ -45862,7 +45864,7 @@ function levelFor(sev) {
   return SARIF_LEVEL_BY_SEVERITY[sev];
 }
 function toUri(p) {
-  return p.replace(/\\/g, "/");
+  return p.replace(/\\/g, "/").split("/").map((segment) => encodeURIComponent(segment)).join("/");
 }
 
 // src/tools/reportExport.ts
@@ -49299,6 +49301,22 @@ async function analyzeSkill(files, opts = {}) {
     findings.push(f);
     signals2.push({ severity: f.severity, isExecutable });
   };
+  for (const link of opts.symlinks ?? []) {
+    const escaped = link.kind === "escaped_directory";
+    push(
+      makeFinding({
+        tool: TOOL,
+        rule_id: escaped ? "skill-directory-escapes-root" : "skill-symlink",
+        severity: "medium",
+        category: "security",
+        subcategory: "privilege_escalation",
+        title: escaped ? "Directory escapes the skill package root" : "Symlink in skill package",
+        message: escaped ? `${link.relPath} resolves outside the ingested package root (${link.target}) and was not entered.` : `${link.relPath} is a symlink to ${link.target}. It was not followed and its target was never read \u2014 review whether it is intended to reach outside the package.`,
+        file_path: link.relPath
+      }),
+      false
+    );
+  }
   for (const file of files) {
     if (file.isExecutable) executableFiles += 1;
     for (const m of scanContent(file.content, file.isCode)) {
@@ -49523,15 +49541,18 @@ function finding(file, ruleId, severity, subcategory, title, message) {
 init_execa();
 import {
   existsSync as existsSync35,
+  lstatSync,
   mkdtempSync,
   readFileSync as readFileSync20,
   readdirSync as readdirSync12,
+  readlinkSync,
+  realpathSync,
   rmSync,
   statSync as statSync10,
   writeFileSync as writeFileSync9
 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { basename, join as join43 } from "node:path";
+import { basename, isAbsolute, join as join43, relative as relative5 } from "node:path";
 var MAX_FILES = 4e3;
 var MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 var MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -49678,6 +49699,7 @@ async function ingestTarget(targetRaw) {
       skipped: 0,
       truncated: false,
       warnings: [],
+      symlinks: [],
       cleanup: () => {
       }
     };
@@ -49753,6 +49775,7 @@ async function ingestUrl(url) {
     skipped: 0,
     truncated: false,
     warnings: [],
+    symlinks: [],
     cleanup: () => safeRm(dir)
   };
 }
@@ -49793,12 +49816,23 @@ async function tryExtract(zipPath, destDir) {
     return false;
   }
 }
+function isPathWithinRoot(candidate, root) {
+  const rel2 = relative5(root, candidate);
+  return rel2 === "" || !rel2.startsWith("..") && !isAbsolute(rel2);
+}
 function collectDir(root) {
   const files = [];
   const warnings = [];
+  const symlinks = [];
   let totalBytes = 0;
   let skipped = 0;
   let truncated = false;
+  let rootReal;
+  try {
+    rootReal = realpathSync(root);
+  } catch {
+    rootReal = root;
+  }
   const stack = [root];
   while (stack.length > 0) {
     const dir = stack.pop();
@@ -49817,12 +49851,27 @@ function collectDir(root) {
       const abs = join43(dir, entry);
       let s;
       try {
-        s = statSync10(abs);
+        s = lstatSync(abs);
       } catch {
+        continue;
+      }
+      if (s.isSymbolicLink()) {
+        symlinks.push({ relPath: rel(root, abs), target: readLinkTargetSafely(abs), kind: "symlink" });
+        skipped += 1;
         continue;
       }
       if (s.isDirectory()) {
         if (SKIP_DIRS3.has(entry)) continue;
+        const real = safeRealpath(abs);
+        if (real === null || !isPathWithinRoot(real, rootReal)) {
+          symlinks.push({
+            relPath: rel(root, abs),
+            target: real ?? "(unresolvable)",
+            kind: "escaped_directory"
+          });
+          skipped += 1;
+          continue;
+        }
         stack.push(abs);
         continue;
       }
@@ -49850,7 +49899,21 @@ function collectDir(root) {
   if (truncated) {
     warnings.push(`scan truncated at ${files.length} files / ${Math.round(totalBytes / 1024)} KB`);
   }
-  return { files, skipped, truncated, warnings };
+  return { files, skipped, truncated, warnings, symlinks };
+}
+function readLinkTargetSafely(abs) {
+  try {
+    return readlinkSync(abs);
+  } catch {
+    return "(unreadable)";
+  }
+}
+function safeRealpath(abs) {
+  try {
+    return realpathSync(abs);
+  } catch {
+    return null;
+  }
 }
 function rel(root, abs) {
   let r = abs.slice(root.length).replace(/\\/g, "/");
@@ -49943,7 +50006,8 @@ async function handler38(input, ctx, callMeta) {
   }
   try {
     const analyzeOpts = {
-      checkDeps: inp.check_deps !== false
+      checkDeps: inp.check_deps !== false,
+      symlinks: ingest.symlinks
     };
     if (callMeta?.signal) analyzeOpts.signal = callMeta.signal;
     const report = await analyzeSkill(ingest.files, analyzeOpts);
@@ -50075,7 +50139,7 @@ function hashFiles(parts) {
 
 // src/tools/mapAttackSurface.ts
 import { readFileSync as readFileSync23 } from "node:fs";
-import { isAbsolute, join as join48, resolve as resolve7 } from "node:path";
+import { isAbsolute as isAbsolute2, join as join48, resolve as resolve7 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -50111,7 +50175,7 @@ function numProp(value, key) {
 }
 
 // src/surface/collectors/ports.ts
-import { existsSync as existsSync36, readFileSync as readFileSync21, realpathSync } from "node:fs";
+import { existsSync as existsSync36, readFileSync as readFileSync21, realpathSync as realpathSync2 } from "node:fs";
 import { basename as basename2, join as join45 } from "node:path";
 var DOCKERFILES = ["Dockerfile", "dockerfile"];
 var COMPOSE_FILES = [
@@ -50175,7 +50239,7 @@ function readLines(path6) {
 }
 function canonicalPath(path6) {
   try {
-    return realpathSync.native(path6);
+    return realpathSync2.native(path6);
   } catch {
     return void 0;
   }
@@ -50218,13 +50282,22 @@ function languageFromPath(file) {
 var CODE_TOKENS = /[$`'"]|::|->|=>|\|\||&&/;
 var CALL_OR_INDEX = /[A-Za-z_]\w*\s*[([]/;
 var BARE_ROUTE = /^[a-z0-9][a-z0-9_~-]*$/;
-function isLiteralPath(value) {
+var HOST_CONFUSION_CHARS = /[@\\]/;
+function hasUnsafeLeadingShape(value) {
+  return value.startsWith(".") || value.startsWith("//");
+}
+function looksLikePathSyntax(value) {
   if (value.trim().length === 0) return false;
   if (/\s/.test(value)) return false;
   if (CODE_TOKENS.test(value)) return false;
   if (CALL_OR_INDEX.test(value)) return false;
   if (value.includes("/")) return true;
   return BARE_ROUTE.test(value);
+}
+function isLiteralPath(value) {
+  if (HOST_CONFUSION_CHARS.test(value)) return false;
+  if (hasUnsafeLeadingShape(value)) return false;
+  return looksLikePathSyntax(value);
 }
 function extractParams(path6) {
   const params = [];
@@ -50275,6 +50348,7 @@ function toRoute(metadata, metavars, file, line) {
   if (path6 === void 0) return null;
   const literalPath = isLiteralPath(path6);
   const usable = literalPath && (namespace === void 0 || isLiteralPath(namespace));
+  const parseableForParams = looksLikePathSyntax(path6);
   const route = {
     method: normalizeMethod(metavar(metavars, "$METHOD") ?? str2(metadata, "method")),
     provenance: "code",
@@ -50286,11 +50360,11 @@ function toRoute(metadata, metavars, file, line) {
     framework: str2(metadata, "framework") ?? "unknown",
     language: languageFromPath(file),
     auth_hint: normalizeAuth(str2(metadata, "auth")),
-    // Gated on the path alone, not on `usable`: for
+    // Gated on syntax alone, not on `usable`: for
     // `register_rest_route(self::NAMESPACE, '/items/(?P<id>\d+)')` we cannot
     // say where the route is served, but `id` is knowable from the path, and
     // emitting [] would assert "this route takes no parameters".
-    params: literalPath ? extractParams(path6) : [],
+    params: parseableForParams ? extractParams(path6) : [],
     confidence: usable ? normalizeConfidence(str2(metadata, "confidence")) : "low"
   };
   if (namespace !== void 0) route.namespace = namespace;
@@ -51165,7 +51239,7 @@ function buildToolRun(run, via) {
 
 // src/surface/specDiscover.ts
 import { readFileSync as readFileSync22, readdirSync as readdirSync13, statSync as statSync11 } from "node:fs";
-import { join as join47, relative as relative5, resolve as resolve6, sep as sep2 } from "node:path";
+import { join as join47, relative as relative6, resolve as resolve6, sep as sep2 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
 var SPEC_BASENAMES = /* @__PURE__ */ new Set(["openapi", "swagger", "api-docs"]);
@@ -51240,7 +51314,7 @@ function isSpecCandidate(root, dir, name) {
   const ext = name.slice(dot).toLowerCase();
   if (!SPEC_EXTENSIONS.has(ext)) return false;
   if (SPEC_BASENAMES.has(base.toLowerCase())) return true;
-  const relDir = relative5(root, dir);
+  const relDir = relative6(root, dir);
   if (relDir === "") return false;
   return relDir.split(sep2).some((segment) => segment.toLowerCase() === "openapi");
 }
@@ -51427,6 +51501,8 @@ function importSpec(file, text) {
     const line = lineFor(pathTemplate);
     const templateParams = paramsFromTemplate(pathTemplate);
     const pathItemParams = paramNamesInPath(root, prop5(pathItem, "parameters"));
+    const pathKeyPartial = !pathTemplate.startsWith("/");
+    const partial2 = basePartial || pathKeyPartial;
     for (const opKey of OPERATION_KEYS) {
       const operation = prop5(pathItem, opKey);
       if (operation === void 0) continue;
@@ -51436,8 +51512,8 @@ function importSpec(file, text) {
         method: operationMethod(opKey),
         provenance: "spec",
         path_raw: pathTemplate,
-        path_resolved: basePartial ? pathTemplate : `${base}${pathTemplate}`,
-        path_partial: basePartial,
+        path_resolved: partial2 ? pathTemplate : `${base}${pathTemplate}`,
+        path_partial: partial2,
         file,
         line,
         framework: format2,
@@ -51512,7 +51588,9 @@ function isAbsolutePathReference(url) {
 }
 function swaggerBasePath(root) {
   const basePath = str5(root, "basePath") ?? "";
+  if (basePath === "") return { base: "", partial: false };
   if (basePath.includes("{")) return { base: "", partial: true };
+  if (!isAbsolutePathReference(basePath)) return { base: "", partial: true };
   return { base: stripTrailingSlash(basePath), partial: false };
 }
 function stripTrailingSlash(value) {
@@ -51713,7 +51791,7 @@ function readSources(parsed, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path6 of collectAllFiles(parsed)) {
     try {
-      const buffer = readFileSync23(isAbsolute(path6) ? path6 : join48(projectPath, path6));
+      const buffer = readFileSync23(isAbsolute2(path6) ? path6 : join48(projectPath, path6));
       const text = buffer.toString("utf8");
       if (Buffer.byteLength(text, "utf8") !== buffer.length) continue;
       sources.set(path6, text);
@@ -51855,7 +51933,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path6) {
-  return resolve7(isAbsolute(path6) ? path6 : join48(projectPath, path6));
+  return resolve7(isAbsolute2(path6) ? path6 : join48(projectPath, path6));
 }
 function resultsArrayOf(parsed) {
   const results = parsed.results;
@@ -52049,6 +52127,17 @@ var WRITE_METHODS = ["POST", "PUT", "PATCH", "DELETE"];
 var DEFAULT_MAX_REQUESTS = 750;
 var CORS_PROBE_ORIGIN = "https://dev-guardian-cors-probe.invalid";
 var SYNTHETIC_PARAM_VALUE = "1";
+function buildProbeUrl(origin, path6) {
+  const normalized = path6.startsWith("/") ? path6 : `/${path6}`;
+  let url;
+  try {
+    url = new URL(normalized, origin);
+  } catch {
+    return { ok: false, reason: "off_origin" };
+  }
+  if (url.origin !== origin) return { ok: false, reason: "off_origin" };
+  return { ok: true, url: url.toString(), path: normalized };
+}
 function planProbes(routes, opts) {
   const requests = [];
   const kept = [];
@@ -52064,7 +52153,13 @@ function planProbes(routes, opts) {
       skipped.push({ method: r.method, path: r.path_resolved, reason: "method_envelope" });
       continue;
     }
-    const { path: path6, synthetic } = substituteParams(r.path_resolved);
+    const { path: substituted, synthetic } = substituteParams(r.path_resolved);
+    const built = buildProbeUrl(opts.origin, substituted);
+    if (!built.ok) {
+      skipped.push({ method: r.method, path: r.path_resolved, reason: "off_origin" });
+      continue;
+    }
+    const path6 = built.path;
     const fresh = [];
     for (const method of methods) {
       if (seen.has(`${method} ${path6}`)) {
@@ -52080,15 +52175,15 @@ function planProbes(routes, opts) {
     kept.push(r);
     for (const method of fresh) {
       seen.add(`${method} ${path6}`);
-      requests.push(build2(method, path6, "anonymous", {}, opts, synthetic, routeIndex));
+      requests.push(build2(method, path6, built.url, "anonymous", {}, synthetic, routeIndex));
       if (opts.authHeaderValue !== null) {
         requests.push(
           build2(
             method,
             path6,
+            built.url,
             "authenticated",
             { authorization: opts.authHeaderValue },
-            opts,
             synthetic,
             routeIndex
           )
@@ -52098,7 +52193,7 @@ function planProbes(routes, opts) {
     if (needCors) {
       seen.add(corsKey);
       requests.push(
-        build2("GET", path6, "cors", { origin: CORS_PROBE_ORIGIN }, opts, synthetic, routeIndex)
+        build2("GET", path6, built.url, "cors", { origin: CORS_PROBE_ORIGIN }, synthetic, routeIndex)
       );
     }
   }
@@ -52124,13 +52219,13 @@ function expandMethods(method, allowWrites) {
   if (isWrite && !allowWrites) return [];
   return [method];
 }
-function build2(method, path6, variant, extraHeaders, opts, synthetic, routeIndex) {
+function build2(method, path6, url, variant, extraHeaders, synthetic, routeIndex) {
   const isWrite = WRITE_METHODS.includes(method);
   const req = {
     id: `${variant} ${method} ${path6}`,
     method,
     path: path6,
-    url: `${opts.origin}${path6}`,
+    url,
     headers: { accept: "*/*", ...extraHeaders },
     variant,
     synthetic_params: synthetic,
@@ -52260,9 +52355,17 @@ function checkReachability(input, findings) {
 function checkDifferentialAuthz(input, findings) {
   if (!input.hasCredentials) return;
   const anonByKey = /* @__PURE__ */ new Map();
+  const authedByKey = /* @__PURE__ */ new Map();
   for (const r of input.results) {
     if (r.request.variant === "anonymous") anonByKey.set(`${r.request.method} ${r.request.path}`, r);
+    if (r.request.variant === "authenticated") authedByKey.set(`${r.request.method} ${r.request.path}`, r);
   }
+  const credentialProvenLive = [...authedByKey.entries()].some(([key, authed]) => {
+    if (authed.outcome !== "completed" || authed.status === null) return false;
+    const anon = anonByKey.get(key);
+    if (anon === void 0 || anon.outcome !== "completed" || anon.status === null) return false;
+    return anon.status !== authed.status || anon.body_hash !== authed.body_hash;
+  });
   for (const authed of input.results) {
     if (authed.request.variant !== "authenticated" || authed.outcome !== "completed") continue;
     const anon = anonByKey.get(`${authed.request.method} ${authed.request.path}`);
@@ -52270,11 +52373,13 @@ function checkDifferentialAuthz(input, findings) {
     if (anon.status < 200 || anon.status >= 300) continue;
     if (anon.status !== authed.status || anon.body_hash !== authed.body_hash) continue;
     const route = routeFor(input.plan.routes, anon.request.route_index);
+    const authKnownRequired = route?.auth_hint === "required";
+    const severity = authKnownRequired || credentialProvenLive ? "high" : "info";
     findings.push(buildFinding({
       check: "differential_authz",
-      severity: "high",
-      title: "Anonymous response matches the authenticated response",
-      message: `${anon.request.method} ${anon.request.path} returns a byte-identical response (status ${anon.status}) with and without credentials.`,
+      severity,
+      title: severity === "high" ? "Anonymous response matches the authenticated response" : "Anonymous response matches the authenticated response on a route with no known auth requirement",
+      message: `${anon.request.method} ${anon.request.path} returns a byte-identical response (status ${anon.status}) with and without credentials.` + (severity === "high" ? authKnownRequired ? " This route is documented or marked as requiring authentication." : " The same credential visibly changes the response on another route in this scan, so it is live and this silence is meaningful." : " Neither the route inventory nor any other route in this scan shows this credential is checked, so this may simply be a public route."),
       route,
       request: anon.request
     }));
@@ -52692,6 +52797,10 @@ function livenessRequest(origin) {
     id: "liveness GET /",
     method: "GET",
     path: "/",
+    // Not routed through `plan.ts#buildProbeUrl`: `path` here is the fixed
+    // literal `/`, never a value derived from route/spec data, so there is
+    // no off-origin shape for it to take — `origin` itself was already
+    // validated by `target.ts` before it ever reaches this function.
     url: `${origin}/`,
     headers: { accept: "*/*" },
     variant: "anonymous",
@@ -53043,14 +53152,16 @@ function isWriteCapable(method) {
   return WRITE_CAPABLE_METHODS.includes(method);
 }
 function buildBurst(route, origin, size) {
-  const { path: path6, synthetic } = substituteParams(route.path_resolved);
+  const { path: substituted, synthetic } = substituteParams(route.path_resolved);
+  const built = buildProbeUrl(origin, substituted);
+  if (!built.ok) return [];
   const body = JSON.stringify({ username: SYNTHETIC_USERNAME, password: SYNTHETIC_PASSWORD });
-  const id = `rate_limit POST ${path6}`;
+  const id = `rate_limit POST ${built.path}`;
   return Array.from({ length: size }, () => ({
     id,
     method: "POST",
-    path: path6,
-    url: `${origin}${path6}`,
+    path: built.path,
+    url: built.url,
     headers: { accept: "*/*", "content-type": "application/json" },
     body,
     variant: "rate_limit",
@@ -53108,6 +53219,7 @@ async function runRateLimitBurst(opts) {
   const selected = selectRateLimitTarget(opts.routes, opts.explicitPath);
   if (selected === null) return { ...empty, outcome: "no_candidate" };
   const requests = buildBurst(selected.route, opts.origin, RATE_LIMIT_BURST);
+  if (requests.length === 0) return { ...empty, outcome: "no_candidate" };
   const burstResults = [];
   for (const request of requests) {
     const result = await executeProbe(request, opts.probeOpts);

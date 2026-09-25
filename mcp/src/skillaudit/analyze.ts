@@ -22,7 +22,7 @@ import { makeFinding } from '../runners/scannerParsers/index.js';
 import { queryOsv, type OsvResult } from '../runners/osv.js';
 import type { Finding, Severity } from '../types.js';
 import { extractDependencies } from './deps.js';
-import type { IngestedFile } from './ingest.js';
+import type { IngestedFile, SymlinkEntry } from './ingest.js';
 import { scanContent, severityOfRule } from './patterns.js';
 import { scoreFindings, type ScoreResult, type ScoreSignal } from './score.js';
 import { detectTaint } from './taint.js';
@@ -44,6 +44,10 @@ export interface SkillAuditReport {
 export interface AnalyzeOptions {
   checkDeps?: boolean;
   signal?: AbortSignal;
+  /** Links `ingest.ts#collectDir` found and refused to follow — see
+   *  `SymlinkEntry`'s own doc comment for why walking never reads through
+   *  one. Each becomes its own finding below. */
+  symlinks?: SymlinkEntry[];
 }
 
 export async function analyzeSkill(
@@ -59,6 +63,31 @@ export async function analyzeSkill(
     findings.push(f);
     signals.push({ severity: f.severity, isExecutable });
   };
+
+  // 0. Symlinks/junctions the ingester refused to follow. Reported here
+  // (never as a raw ingested "file") so the pattern/YARA/taint passes below
+  // never see a link's target string as if it were reviewable source — see
+  // `SymlinkEntry`: the target is a path, never content.
+  for (const link of opts.symlinks ?? []) {
+    const escaped = link.kind === 'escaped_directory';
+    push(
+      makeFinding({
+        tool: TOOL,
+        rule_id: escaped ? 'skill-directory-escapes-root' : 'skill-symlink',
+        severity: 'medium',
+        category: 'security',
+        subcategory: 'privilege_escalation',
+        title: escaped ? 'Directory escapes the skill package root' : 'Symlink in skill package',
+        message: escaped
+          ? `${link.relPath} resolves outside the ingested package root (${link.target}) and ` +
+            'was not entered.'
+          : `${link.relPath} is a symlink to ${link.target}. It was not followed and its target ` +
+            'was never read — review whether it is intended to reach outside the package.',
+        file_path: link.relPath,
+      }),
+      false,
+    );
+  }
 
   for (const file of files) {
     if (file.isExecutable) executableFiles += 1;

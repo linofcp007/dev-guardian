@@ -98,6 +98,7 @@ async function handler(input, ctx, callMeta) {
     try {
         const analyzeOpts = {
             checkDeps: inp.check_deps !== false,
+            symlinks: ingest.symlinks,
         };
         if (callMeta?.signal)
             analyzeOpts.signal = callMeta.signal;

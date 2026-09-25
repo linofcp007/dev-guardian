@@ -116,6 +116,14 @@ export function importSpec(file: string, text: string): SpecImportResult {
     const line = lineFor(pathTemplate);
     const templateParams = paramsFromTemplate(pathTemplate);
     const pathItemParams = paramNamesInPath(root, prop(pathItem, 'parameters'));
+    // A valid OpenAPI/Swagger path key always starts with `/` — one missing
+    // it is either a malformed document or a crafted one (`@evil.example/x`,
+    // `.evil.example/x`) that reaches `dast/plan.ts` looking like an
+    // ordinary relative path once concatenated onto `base`. Partial here,
+    // same as `basePartial`: this module cannot say what path is meant, so
+    // it must not claim a resolved one.
+    const pathKeyPartial = !pathTemplate.startsWith('/');
+    const partial = basePartial || pathKeyPartial;
 
     for (const opKey of OPERATION_KEYS) {
       const operation = prop(pathItem, opKey);
@@ -128,8 +136,8 @@ export function importSpec(file: string, text: string): SpecImportResult {
         method: operationMethod(opKey),
         provenance: 'spec',
         path_raw: pathTemplate,
-        path_resolved: basePartial ? pathTemplate : `${base}${pathTemplate}`,
-        path_partial: basePartial,
+        path_resolved: partial ? pathTemplate : `${base}${pathTemplate}`,
+        path_partial: partial,
         file,
         line,
         framework: format,
@@ -265,9 +273,23 @@ function isAbsolutePathReference(url: string): boolean {
   return url.startsWith('/') && !url.startsWith('//');
 }
 
+/**
+ * Measured defect (task 4 brief, item 2): unlike `openapiBasePath` above,
+ * this used to apply ANY `basePath` string as the base with no leading-slash
+ * check at all — `basePath: "@evil.example"` or `basePath: "//evil.example"`
+ * both produced `path_partial: false` at `confidence: 'high'`, a claim that
+ * the path was verified when it was never even a path. Swagger 2.0 requires
+ * `basePath` to start with `/`; sharing `isAbsolutePathReference` with
+ * `openapiBasePath` also rejects a protocol-relative `basePath` the same way
+ * a protocol-relative `servers[0].url` already is.
+ */
 function swaggerBasePath(root: unknown): { base: string; partial: boolean } {
   const basePath = str(root, 'basePath') ?? '';
+  // Absent/empty is a real, common case — "no base path prefix" — and stays
+  // resolved: there is no leading slash to check on nothing.
+  if (basePath === '') return { base: '', partial: false };
   if (basePath.includes('{')) return { base: '', partial: true };
+  if (!isAbsolutePathReference(basePath)) return { base: '', partial: true };
   return { base: stripTrailingSlash(basePath), partial: false };
 }
 

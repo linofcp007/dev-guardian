@@ -16,7 +16,7 @@
  */
 
 import type { HttpMethod, RouteRecord } from '../types.js';
-import { substituteParams } from './plan.js';
+import { buildProbeUrl, substituteParams } from './plan.js';
 import type { ProbeRequest, ProbeResult } from './types.js';
 
 export const RATE_LIMIT_BURST = 30;
@@ -117,16 +117,28 @@ function isWriteCapable(method: HttpMethod): boolean {
  * Every one of the `size` requests is a distinct object but carries the
  * exact same id/method/path/url/headers/body — see `SYNTHETIC_USERNAME`'s
  * doc comment for why the body in particular must never vary.
+ *
+ * The url is built through `plan.ts#buildProbeUrl` — the one helper every
+ * probe URL in this engine goes through (see that file's rule 5) — never by
+ * concatenating `origin` and `path` here. This burst is the one check that
+ * carries a credential unconditionally, so an off-origin URL here would leak
+ * it to a host nobody authorised; `buildProbeUrl` refuses by returning
+ * `{ ok: false }`, and this function's answer to that is to build NOTHING —
+ * an empty array, never a request to a URL the caller cannot look up back to
+ * this route. `runRateLimitBurst` (`passes.ts`) reads that empty array the
+ * same way it reads "no candidate route was selected" at all.
  */
 export function buildBurst(route: RouteRecord, origin: string, size: number): ProbeRequest[] {
-  const { path, synthetic } = substituteParams(route.path_resolved);
+  const { path: substituted, synthetic } = substituteParams(route.path_resolved);
+  const built = buildProbeUrl(origin, substituted);
+  if (!built.ok) return [];
   const body = JSON.stringify({ username: SYNTHETIC_USERNAME, password: SYNTHETIC_PASSWORD });
-  const id = `rate_limit POST ${path}`;
+  const id = `rate_limit POST ${built.path}`;
   return Array.from({ length: size }, () => ({
     id,
     method: 'POST',
-    path,
-    url: `${origin}${path}`,
+    path: built.path,
+    url: built.url,
     headers: { accept: '*/*', 'content-type': 'application/json' },
     body,
     variant: 'rate_limit',

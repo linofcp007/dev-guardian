@@ -171,6 +171,45 @@ describe('planProbes — safety envelope', () => {
     expect(cors?.headers['origin']).toMatch(/^https:\/\/.*\.invalid$/);
     expect(cors?.method).toBe('GET');
   });
+
+  // Measured defect (task 4 brief, item 1): a Django/Laravel/Rails/Spring
+  // path with no leading slash (`api/users/`) concatenated onto
+  // `http://localhost` naively produced `http://localhostapi/users/` — a
+  // request to a HOST that happens to share a prefix with the real one,
+  // never to the target at all. Normalising the leading slash before
+  // building the URL is what makes `new URL(path, origin)` resolve it as a
+  // path ON origin instead.
+  it('normalises a resolved path missing its leading slash before building the url', () => {
+    const out = planProbes([route({ path_resolved: 'api/users' })], OPTS);
+    expect(out.requests[0]?.url).toBe('http://localhost:3000/api/users');
+    expect(out.requests[0]?.path).toBe('/api/users');
+    expect(out.skipped).toEqual([]);
+  });
+
+  // A protocol-relative path (`//evil.example/x`) is a NETWORK-PATH
+  // reference per RFC 3986: `new URL('//evil.example/x', origin)` resolves
+  // to host `evil.example`, not `origin`'s own host, however the leading
+  // slash is normalised. This is the one shape leading-slash normalisation
+  // alone cannot fix, and exactly why every request URL must also be
+  // checked against `origin` after being built, never assumed safe just
+  // because it was built with `new URL`.
+  it('skips a route whose resolved path would leave the origin, with reason off_origin', () => {
+    const out = planProbes([route({ path_resolved: '//evil.example/x' })], OPTS);
+    expect(out.requests).toEqual([]);
+    expect(out.skipped).toEqual([
+      { method: 'GET', path: '//evil.example/x', reason: 'off_origin' },
+    ]);
+  });
+
+  it('never sends a request whose url origin differs from the target, across every planned variant', () => {
+    // Guards a partial fix that only checks the anonymous probe and still
+    // builds the authenticated/cors twins from the unnormalised path.
+    const out = planProbes([route({ path_resolved: '//evil.example/x' })], {
+      ...OPTS,
+      authHeaderValue: 'Bearer t0ken',
+    });
+    expect(out.requests).toEqual([]);
+  });
 });
 
 describe('substituteParams', () => {

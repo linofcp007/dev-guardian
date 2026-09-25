@@ -246,6 +246,34 @@ function renderSinceBaseline(delta, ageDays, color) {
 // ---------------------------------------------------------------------------
 // HOTTEST — at most 3 files, remainder counted rather than dropped (§6)
 // ---------------------------------------------------------------------------
+/**
+ * Neutralises terminal-escape injection in finding-derived text before it
+ * reaches raw stdout. `Hotspot.file_path` is the one field this renderer
+ * prints that comes from a `Finding` — a scanner-reported path naming a file
+ * inside the SCANNED, untrusted repo — so it is the one value a malicious
+ * repo can use to inject an ANSI/terminal escape into the operator's own
+ * terminal (recolouring the next line, moving the cursor, or — via an OSC
+ * sequence — rewriting the window/tab title) simply by choosing that file's
+ * name. Every other string this module prints (coverage/tool names,
+ * `next_action`, band labels, `snapshot.project_path`) is either a fixed
+ * label or under the operator's OWN control, not the scanned repo's.
+ *
+ * Two passes, in order:
+ *   1. CSI (`ESC [ … final-byte`) and OSC (`ESC ] … BEL-or-ST`) escape
+ *      sequences are removed WHOLE, so no digit/`;` litter from a CSI's
+ *      parameter bytes is left behind as visible garbage.
+ *   2. Any remaining C0 control byte except `\t` (this also mops up a lone
+ *      or truncated ESC that pass 1 does not fully consume), plus the C1
+ *      control range (`\u0080`-`\u009F`) — the single-byte equivalent of
+ *      CSI/OSC some terminals still honour, and JS strings already decode
+ *      whatever byte encoding produced one into the matching code point.
+ */
+const CSI_SEQUENCE = /\x1B\[[0-?]*[ -/]*[@-~]/g;
+const OSC_SEQUENCE = /\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)?/g;
+const REMAINING_CONTROL = /[\x00-\x08\x0A-\x1F\x80-\x9F]/g;
+function sanitizeTerminalText(value) {
+    return value.replace(CSI_SEQUENCE, '').replace(OSC_SEQUENCE, '').replace(REMAINING_CONTROL, '');
+}
 function renderHottest(hotspots) {
     if (hotspots.length === 0)
         return [];
@@ -254,7 +282,7 @@ function renderHottest(hotspots) {
     let isFirst = true;
     for (const h of shown) {
         const label = isFirst ? '  HOTTEST      ' : '               ';
-        lines.push(`${label}${h.file_path}   ${h.count}`);
+        lines.push(`${label}${sanitizeTerminalText(h.file_path)}   ${h.count}`);
         isFirst = false;
     }
     const remaining = hotspots.length - shown.length;

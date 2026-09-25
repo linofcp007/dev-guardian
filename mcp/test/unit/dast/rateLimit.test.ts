@@ -87,6 +87,28 @@ describe('buildBurst', () => {
     expect(buildBurst(route({ path_resolved: '/login' }), 'http://x:1', RATE_LIMIT_BURST))
       .toHaveLength(30);
   });
+
+  // Measured defect (task 4 brief, item 1): `${origin}${path}` sent the
+  // credentialed burst to `http://localhostlogin` for a route resolved as
+  // `login` (no leading slash) — a different host, carrying the
+  // Authorization header, never a request the target ever saw. Normalising
+  // the leading slash fixes THIS case; the two tests below also cover the
+  // shape normalising alone cannot fix.
+  it('normalises a resolved path missing its leading slash before building the burst url', () => {
+    const reqs = buildBurst(route({ path_resolved: 'login', method: 'POST' }), 'http://x:1', 3);
+    expect(reqs).toHaveLength(3);
+    expect(reqs[0]?.url).toBe('http://x:1/login');
+    expect(reqs[0]?.path).toBe('/login');
+  });
+
+  it('builds no requests at all when the resolved path would leave the origin', () => {
+    const reqs = buildBurst(
+      route({ path_resolved: '//evil.example/x', method: 'POST' }),
+      'http://localhost:3000',
+      RATE_LIMIT_BURST,
+    );
+    expect(reqs).toEqual([]);
+  });
 });
 
 describe('rateLimitVerdict', () => {

@@ -92,11 +92,50 @@ const CALL_OR_INDEX = /[A-Za-z_]\w*\s*[([]/;
 const BARE_ROUTE = /^[a-z0-9][a-z0-9_~-]*$/;
 
 /**
- * Can this captured value be read as a path? When false the caller keeps the
- * route — a route we cannot name is still evidence of surface — but flags it
- * `path_partial` and drops its confidence to 'low'.
+ * Characters that turn a captured "path" into something that resolves to a
+ * DIFFERENT HOST once `dast/plan.ts#buildProbeUrl` (or any less careful
+ * caller) combines it with `origin`: `@` reads as a URL userinfo separator
+ * ahead of a host when concatenated naively; `\` is accepted by the WHATWG
+ * URL algorithm as a path-separator synonym for `/` on http(s) URLs, so
+ * `/\evil.example/x` resolves exactly like `//evil.example/x` does. Neither
+ * can appear in a same-origin HTTP path, so either one ANYWHERE in the
+ * capture is disqualifying — unlike `CODE_TOKENS`, which is about
+ * recognising source syntax, this is about recognising a host-confusion
+ * shape regardless of syntax. The one real route this costs is WordPress's
+ * `(?P<id>\d+)` regex-group syntax (a backslash escape inside a `preg`
+ * pattern) — accepted, per this module's own rule above: a false `partial`
+ * costs one skipped probe, a false `resolved` costs a request to a host that
+ * was never the target.
  */
-export function isLiteralPath(value: string): boolean {
+const HOST_CONFUSION_CHARS = /[@\\]/;
+
+/**
+ * Leading shapes with the same host-confusion property, checked separately
+ * from `HOST_CONFUSION_CHARS` because position (not mere presence) is what
+ * makes them dangerous: a `.` or `/` elsewhere in a path is completely
+ * ordinary (`/files/report.pdf`, `/a/b`). Only at the START does either turn
+ * into a different reference kind — a relative reference against a foreign
+ * base for a leading `.`, a network-path (protocol-relative) reference
+ * naming a NEW HOST for a leading `//` — so this checks `startsWith`, never
+ * `includes`.
+ */
+function hasUnsafeLeadingShape(value: string): boolean {
+  return value.startsWith('.') || value.startsWith('//');
+}
+
+/**
+ * The syntactic half of `isLiteralPath` — "does this look like path syntax
+ * rather than a source expression?" — WITHOUT the host-confusion checks.
+ * Kept separate because `toRoute` below reads params (`extractParams`) out
+ * of a capture that fails ONLY the host-confusion half: `(?P<id>\d+)` is not
+ * safe to treat as a resolved URL (see `HOST_CONFUSION_CHARS`), but `id` is
+ * still a real, knowable parameter name, and there is nothing unsafe about
+ * reading it out. Gating params on THIS function rather than skipping the
+ * gate entirely still matters — `extractParams`'s own `<([^>]+)>` branch
+ * would misread a generic call like `foo<T>()` as a path carrying param `T`
+ * if ever handed a bare code expression.
+ */
+function looksLikePathSyntax(value: string): boolean {
   if (value.trim().length === 0) return false;
   // Whitespace inside a capture means an expression (`base + '/users'`,
   // `ns . $route`); no route literal we support contains one.
@@ -107,6 +146,20 @@ export function isLiteralPath(value: string): boolean {
   // bare-word test above.
   if (value.includes('/')) return true;
   return BARE_ROUTE.test(value);
+}
+
+/**
+ * Can this captured value be read as a path SAFE to treat as a resolved
+ * URL? When false the caller keeps the route — a route we cannot name is
+ * still evidence of surface — but flags it `path_partial` and drops its
+ * confidence to 'low'. `looksLikePathSyntax` alone is not enough here: a
+ * value can look exactly like path syntax and still not be one this module
+ * is willing to resolve (see `HOST_CONFUSION_CHARS`).
+ */
+export function isLiteralPath(value: string): boolean {
+  if (HOST_CONFUSION_CHARS.test(value)) return false;
+  if (hasUnsafeLeadingShape(value)) return false;
+  return looksLikePathSyntax(value);
 }
 
 /**
@@ -208,6 +261,12 @@ function toRoute(
   // (resolvers/wordpress.ts honours the flag rather than clearing it).
   const literalPath = isLiteralPath(path);
   const usable = literalPath && (namespace === undefined || isLiteralPath(namespace));
+  // Syntactic only — see `looksLikePathSyntax`'s own doc comment for why
+  // params are read out of a capture even when it fails `isLiteralPath` on
+  // the host-confusion checks alone (`(?P<id>\d+)`, WordPress's regex-group
+  // syntax): reading a parameter name builds no URL and carries none of that
+  // risk.
+  const parseableForParams = looksLikePathSyntax(path);
 
   const route: RouteRecord = {
     method: normalizeMethod(metavar(metavars, '$METHOD') ?? str(metadata, 'method')),
@@ -220,11 +279,11 @@ function toRoute(
     framework: str(metadata, 'framework') ?? 'unknown',
     language: languageFromPath(file),
     auth_hint: normalizeAuth(str(metadata, 'auth')),
-    // Gated on the path alone, not on `usable`: for
+    // Gated on syntax alone, not on `usable`: for
     // `register_rest_route(self::NAMESPACE, '/items/(?P<id>\d+)')` we cannot
     // say where the route is served, but `id` is knowable from the path, and
     // emitting [] would assert "this route takes no parameters".
-    params: literalPath ? extractParams(path) : [],
+    params: parseableForParams ? extractParams(path) : [],
     confidence: usable ? normalizeConfidence(str(metadata, 'confidence')) : 'low',
   };
   if (namespace !== undefined) route.namespace = namespace;
