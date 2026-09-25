@@ -30,6 +30,12 @@ async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, un
   const wpCron = findLatest(ctx, 'wp_cron_audit');
   const wpRest = findLatest(ctx, 'wp_rest_audit');
   const wpVuln = findLatest(ctx, 'wp_vuln_check');
+  // wp_vuln_check_source (Task 18): the source/offline match against the
+  // Wordfence feed + wp.org, alongside wp_vuln_check's live-URL/WPScan
+  // lookup. Both can legitimately exist for the same project (one needs no
+  // live URL, the other needs no API key), so their CVEs are merged below
+  // rather than one shadowing the other.
+  const wpVulnSource = findLatest(ctx, 'wp_vuln_check_source');
   const wpCodeScan = findLatest(ctx, 'wordpress');
 
   const open = ctx.storage.findings
@@ -38,7 +44,11 @@ async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, un
       (f) => f.tool === 'wpscan' || f.tool === 'phpcs' || f.category === 'security',
     );
 
-  const cves = wpVuln ? ctx.storage.cves.listActive(wpVuln.scan_id) : [];
+  const cvesFromLive = wpVuln ? ctx.storage.cves.listActive(wpVuln.scan_id) : [];
+  const cvesFromSource = wpVulnSource ? ctx.storage.cves.listActive(wpVulnSource.scan_id) : [];
+  const cveById = new Map<string, (typeof cvesFromLive)[number]>();
+  for (const c of [...cvesFromLive, ...cvesFromSource]) cveById.set(c.cve_id, c);
+  const cves = [...cveById.values()];
 
   return {
     ok: true,
@@ -71,7 +81,13 @@ async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, un
       wp_vuln_check: wpVuln
         ? {
             scan_id: wpVuln.scan_id,
-            cves_count: cves.length,
+            cves_count: cvesFromLive.length,
+          }
+        : null,
+      wp_vuln_check_source: wpVulnSource
+        ? {
+            scan_id: wpVulnSource.scan_id,
+            cves_count: cvesFromSource.length,
           }
         : null,
       scan_wordpress: wpCodeScan
@@ -87,7 +103,8 @@ async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, un
     active_cves: cves,
     recommended_next:
       !wpAudit ? 'Run `wp_audit` first to capture baseline state.'
-      : !wpVuln ? 'Run `wp_vuln_check` to map CVEs to your installed plugins/themes.'
+      : !wpVuln && !wpVulnSource
+        ? 'Run `wp_vuln_check` (live URL) or `wp_vuln_check_source` (no live URL needed) to map CVEs to your installed plugins/themes.'
       : !wpCron ? 'Run `wp_cron_audit` to detect persistent backdoors.'
       : open.length > 0 ? 'Open findings exist. Try `triage_findings` + `wp_recommend_hardening`.'
       : 'Posture looks clean. Consider `audit_executive` for a full cross-stack pass.',

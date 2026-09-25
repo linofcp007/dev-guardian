@@ -204,7 +204,14 @@ function walkManifestDirs(root: string): ManifestDir[] {
   return found;
 }
 
-function readDirSafe(dir: string): Dirent[] {
+/**
+ * Exported for `wordpress/sourceInventory.ts` (Task 18): the WordPress
+ * source-vulnerability inventory reads the same directories this module's
+ * own WordPress detection does (`wp-content/plugins/*`,
+ * `wp-content/themes/*`), so it reuses this bounded, exception-safe walk
+ * rather than re-implementing it.
+ */
+export function readDirSafe(dir: string): Dirent[] {
   try {
     return readdirSync(dir, { withFileTypes: true });
   } catch {
@@ -443,7 +450,8 @@ function detectExistingTools(dir: string): string[] {
 
 // ---------------------------------------------------------------------- shared helpers
 
-function readTextSafe(path: string, maxBytes?: number): string | null {
+/** Exported for the same reason as {@link readDirSafe} above. */
+export function readTextSafe(path: string, maxBytes?: number): string | null {
   try {
     const text = readFileSync(path, 'utf8');
     return maxBytes !== undefined && text.length > maxBytes ? text.slice(0, maxBytes) : text;

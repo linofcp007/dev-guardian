@@ -140,6 +140,9 @@ export const RUN_NAMES = {
     wp_plugin_check: scanner(), // a findings-less lookup
     'wp-cli': scanner(), // wp_audit, wp_cron_audit: report through meta
     'http-probe': scanner(), // wp_rest_audit: reports through meta
+    // wp_vuln_check_source: source-based WP vuln matching, no live URL.
+    'wordfence-feed': scanner('wordfence'),
+    'wp-plugin-api': scanner('wp-plugin-api'),
     // .NET. `scan_dotnet_secrets` and `dotnet_target_framework_check` are
     // also audit_executive's entries for those sub-tools.
     scan_dotnet_secrets: scanner('scan_dotnet_secrets'),

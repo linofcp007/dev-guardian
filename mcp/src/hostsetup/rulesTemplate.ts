@@ -128,7 +128,8 @@ cache that avoids re-running unchanged scans.
 **WordPress**
 - "scan WP code" → \`scan_wordpress\`
 - "audit live WP install" → \`wp_audit\`
-- "any WP CVEs?" → \`wp_vuln_check\`
+- "any WP CVEs?" → \`wp_vuln_check\` (live URL, WPScan)
+- "WP CVEs from source, no live URL / offline?" → \`wp_vuln_check_source\` (Wordfence feed + wp.org)
 - "WP cron / backdoor check" → \`wp_cron_audit\`
 - "WP REST API exposed?" → \`wp_rest_audit\`
 - "WP posture overview" → \`wp_describe_setup\`
