@@ -43137,6 +43137,9 @@ function findDotnetTargets(projectPath) {
   }
   const sln = rootEntries.find((n2) => n2.toLowerCase().endsWith(".sln"));
   if (sln) return [join22(projectPath, sln)];
+  return findAllCsprojFiles(projectPath);
+}
+function findAllCsprojFiles(projectPath) {
   const out = [];
   const maxDepth = 4;
   function walk4(dir, depth) {
@@ -43163,6 +43166,10 @@ function findDotnetTargets(projectPath) {
   walk4(projectPath, 0);
   return out;
 }
+function findLockFilesForTarget(projectPath, target) {
+  const csprojFiles = target.toLowerCase().endsWith(".sln") ? findAllCsprojFiles(projectPath) : [target];
+  return csprojFiles.map((p) => join22(dirname8(p), "packages.lock.json")).filter((p) => existsSync16(p));
+}
 async function runDotnetSca(opts) {
   const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = opts;
   const targets = findDotnetTargets(ctx.projectPath);
@@ -43175,7 +43182,16 @@ async function runDotnetSca(opts) {
   }
   const runList = (target) => runProcess({
     command: "dotnet",
-    args: ["list", target, "package", "--vulnerable", "--include-transitive", "--format", "json"],
+    args: [
+      "list",
+      target,
+      "package",
+      "--vulnerable",
+      "--include-transitive",
+      "--format",
+      "json",
+      "--no-restore"
+    ],
     cwd: ctx.projectPath,
     env: ctx.scriptEnv,
     signal: ctx.signal,
@@ -43183,12 +43199,14 @@ async function runDotnetSca(opts) {
   });
   let anyOk = false;
   let anyFailed = false;
+  let anyLockedRestoreFailed = false;
   for (const [i2, target] of targets.entries()) {
     let list2 = await runList(target);
     if (list2.outcome !== "completed") {
-      const hasLockFile = existsSync16(join22(dirname8(target), "packages.lock.json"));
+      const lockFiles = findLockFilesForTarget(ctx.projectPath, target);
+      const usingLockedMode = lockFiles.length > 0;
       const restoreArgs = ["restore", target, "--nologo", "--verbosity", "quiet"];
-      if (hasLockFile) restoreArgs.push("--locked-mode");
+      if (usingLockedMode) restoreArgs.push("--locked-mode");
       const restore = await runProcess({
         command: "dotnet",
         args: restoreArgs,
@@ -43199,6 +43217,7 @@ async function runDotnetSca(opts) {
       });
       if (restore.outcome !== "completed") {
         anyFailed = true;
+        if (usingLockedMode) anyLockedRestoreFailed = true;
         continue;
       }
       list2 = await runList(target);
@@ -43219,18 +43238,22 @@ async function runDotnetSca(opts) {
     tools_run.push({
       name: "dotnet",
       status: "ok",
-      reason: anyFailed ? "parsed into findings (restore or list failed for at least one target)" : "parsed into findings"
+      reason: anyFailed ? anyLockedRestoreFailed ? "parsed into findings (restore failed for at least one target: packages.lock.json out of sync)" : "parsed into findings (restore or list failed for at least one target)" : "parsed into findings"
     });
     if (anyFailed) missing_tools.push("dotnet");
   } else {
-    tools_run.push({ name: "dotnet", status: "failed", reason: "restore or list package failed for every target" });
+    tools_run.push({
+      name: "dotnet",
+      status: "failed",
+      reason: anyLockedRestoreFailed ? "restore failed for every target: packages.lock.json out of sync (never rewritten)" : "restore or list package failed for every target"
+    });
     missing_tools.push("dotnet");
   }
 }
 
 // src/tools/depsUpdatePlan.ts
 init_execa();
-import { existsSync as existsSync17, readFileSync as readFileSync12, readdirSync as readdirSync9 } from "node:fs";
+import { existsSync as existsSync17, readFileSync as readFileSync12, readdirSync as readdirSync9, statSync as statSync7 } from "node:fs";
 import { join as join23 } from "node:path";
 function noUnplanned(steps) {
   return { steps, unplanned: [] };
@@ -43371,12 +43394,22 @@ async function runNpmOutdated(projectPath, cves) {
     const installed = typeof row["current"] === "string" ? row["current"] : "";
     const npmLatest = typeof row["latest"] === "string" ? row["latest"] : "";
     if (!installed) continue;
-    handled.add(pkg.toLowerCase());
-    const cve = cves.get(pkg.toLowerCase());
+    const pkgLower = pkg.toLowerCase();
+    handled.add(pkgLower);
+    const cve = cves.get(pkgLower);
     const safeCveVersion = cve ? minCleanVersionAbove(installed, [cve.fixedVersion]) : void 0;
+    const staleCve = cve !== void 0 && cve.fixedVersion !== void 0 && safeCveVersion === void 0;
+    if (staleCve && cve) {
+      unplanned.push({
+        package_name: pkg,
+        ecosystem: "npm",
+        cve_ids: cve.cveIds,
+        reason: `already_fixed: installed version ${installed} is already at or above the recorded fix ${cve.fixedVersion} \u2014 the CVE record is stale.`
+      });
+    }
     const safeNpmLatest = isCleanVersion(npmLatest) && compareVersions(npmLatest, installed) > 0 ? npmLatest : void 0;
-    const latest = safeCveVersion ?? safeNpmLatest;
-    if (cve && !latest) {
+    const latest = staleCve ? safeNpmLatest : safeCveVersion ?? safeNpmLatest;
+    if (cve && !staleCve && !latest) {
       unplanned.push({
         package_name: pkg,
         ecosystem: "npm",
@@ -43386,21 +43419,37 @@ async function runNpmOutdated(projectPath, cves) {
       continue;
     }
     if (!latest || installed === latest) continue;
-    const isTransitive = cve !== void 0 && directDeps.size > 0 && !directDeps.has(pkg);
-    steps.push(
-      isTransitive ? buildOverrideStep({ package_name: pkg, installed_version: installed, latest_version: latest, cve }) : buildStep({
-        package_name: pkg,
-        installed_version: installed,
-        latest_version: latest,
-        ecosystem: "npm",
-        cves,
-        upgrade_command: `npm install ${pkg}@${latest} --ignore-scripts`
-      })
-    );
+    if (!staleCve && cve !== void 0 && directDeps.size > 0 && !directDeps.has(pkgLower)) {
+      steps.push(buildOverrideStep({ package_name: pkg, installed_version: installed, latest_version: latest, cve }));
+    } else {
+      steps.push(
+        buildStep({
+          package_name: pkg,
+          installed_version: installed,
+          latest_version: latest,
+          ecosystem: "npm",
+          // A stale CVE must not re-attach its (already resolved) ids via
+          // buildStep's own lookup — an empty map forces the ordinary
+          // semver classification instead of `security`.
+          cves: staleCve ? /* @__PURE__ */ new Map() : cves,
+          upgrade_command: `npm install ${pkg}@${latest} --ignore-scripts`
+        })
+      );
+    }
   }
+  const npmResolvedNames = readNpmResolvedPackageNames(projectPath);
   for (const [pkgLower, cve] of cves) {
     if (handled.has(pkgLower)) continue;
-    if (directDeps.has(pkgLower)) continue;
+    if (directDeps.has(pkgLower)) {
+      unplanned.push({
+        package_name: cve.displayName,
+        ecosystem: "npm",
+        cve_ids: cve.cveIds,
+        reason: "active CVE on a direct dependency that `npm outdated` did not report \u2014 no upgrade target determined automatically"
+      });
+      continue;
+    }
+    if (!npmResolvedNames.has(pkgLower)) continue;
     const installed = cve.installedVersion;
     const target = minCleanVersionAbove(installed, [cve.fixedVersion]);
     if (!installed || !target) {
@@ -43428,10 +43477,61 @@ function readNpmDirectDependencies(projectPath) {
     for (const field of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
       const deps = pkg[field];
       if (deps && typeof deps === "object") {
-        for (const name of Object.keys(deps)) out.add(name);
+        for (const name of Object.keys(deps)) out.add(name.toLowerCase());
       }
     }
   } catch {
+  }
+  return out;
+}
+function readNpmResolvedPackageNames(projectPath) {
+  const out = /* @__PURE__ */ new Set();
+  try {
+    const raw = readFileSync12(join23(projectPath, "package-lock.json"), "utf8");
+    const lock = JSON.parse(raw);
+    const packages = lock["packages"];
+    if (packages && typeof packages === "object") {
+      for (const key of Object.keys(packages)) {
+        const m = /node_modules\/(@[^/]+\/[^/]+|[^/]+)$/.exec(key);
+        if (m?.[1]) out.add(m[1].toLowerCase());
+      }
+    }
+    const deps = lock["dependencies"];
+    if (deps && typeof deps === "object") collectLockV1Deps(deps, out);
+  } catch {
+  }
+  if (out.size === 0) {
+    try {
+      for (const name of listNodeModulesPackages(join23(projectPath, "node_modules"))) out.add(name.toLowerCase());
+    } catch {
+    }
+  }
+  return out;
+}
+function collectLockV1Deps(deps, out) {
+  for (const [name, val] of Object.entries(deps)) {
+    out.add(name.toLowerCase());
+    if (val && typeof val === "object") {
+      const nested = val["dependencies"];
+      if (nested && typeof nested === "object") collectLockV1Deps(nested, out);
+    }
+  }
+}
+function listNodeModulesPackages(nodeModulesDir) {
+  const out = [];
+  for (const entry of readdirSync9(nodeModulesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name.startsWith("@")) {
+      try {
+        for (const scoped of readdirSync9(join23(nodeModulesDir, entry.name), { withFileTypes: true })) {
+          if (scoped.isDirectory()) out.push(`${entry.name}/${scoped.name}`);
+        }
+      } catch {
+      }
+      continue;
+    }
+    if (entry.name.startsWith(".")) continue;
+    out.push(entry.name);
   }
   return out;
 }
@@ -43452,8 +43552,11 @@ function buildOverrideStep(input) {
     // is. Bracket notation is npm's own documented way to set a literal key
     // regardless of what characters it contains, and works identically for
     // names without a dot too — so it is used unconditionally, not only
-    // when a dot is detected.
-    upgrade_command: `npm pkg set overrides[${input.package_name}]=${input.latest_version}`,
+    // when a dot is detected. The WHOLE `overrides[...]=...` argument is
+    // single-quoted (fix round 2, "cheap" item): unquoted, a shell that
+    // globs by default (zsh) reads the bare `[...]` as a filename pattern
+    // and fails with "no matches found" before npm ever sees the argument.
+    upgrade_command: `npm pkg set 'overrides[${input.package_name}]=${input.latest_version}'`,
     // `npm pkg set` only rewrites package.json — the lockfile/node_modules
     // do not reflect the override until a plain reinstall re-resolves them.
     follow_up_command: "npm install --ignore-scripts"
@@ -43462,7 +43565,9 @@ function buildOverrideStep(input) {
 async function runPipPlan(projectPath, cves) {
   const steps = [];
   const unplanned = [];
+  const handled = /* @__PURE__ */ new Set();
   const considerMention = (file, mention) => {
+    handled.add(mention.name.toLowerCase());
     const cve = cves.get(mention.name.toLowerCase());
     if (!cve) return;
     if (mention.version === void 0) {
@@ -43490,6 +43595,18 @@ async function runPipPlan(projectPath, cves) {
     for (const mention of parsePinnedRequirements(file.content)) considerMention(file.relPath, mention);
   }
   for (const mention of parsePyprojectPins(projectPath)) considerMention("pyproject.toml", mention);
+  const npmResolvedNames = readNpmResolvedPackageNames(projectPath);
+  for (const [pkgLower, cve] of cves) {
+    if (handled.has(pkgLower)) continue;
+    if (npmResolvedNames.has(pkgLower)) continue;
+    if (!cve.installedVersion) continue;
+    unplanned.push({
+      package_name: cve.displayName,
+      ecosystem: "pip",
+      cve_ids: cve.cveIds,
+      reason: cve.fixedVersion ? `active CVE on a dependency no requirements*.txt / pyproject.toml mentions directly (likely transitive) \u2014 a fix (${cve.fixedVersion}) exists but there is no manifest line here to edit automatically` : `active CVE on a dependency no requirements*.txt / pyproject.toml mentions directly (likely transitive) \u2014 no fix version above the recorded installed version ${cve.installedVersion} is known either`
+    });
+  }
   return { steps, unplanned };
 }
 function buildPipSecurityStep(opts) {
@@ -43546,28 +43663,34 @@ function parsePinnedRequirements(content) {
     const semi = line.indexOf(";");
     if (semi >= 0) line = line.slice(0, semi).trim();
     if (!line) continue;
-    const extras = /^([A-Za-z0-9._-]+)\[[^\]]*\](.*)$/.exec(line);
-    const target = extras ? `${extras[1]}${extras[2]}` : line;
-    const exact = /^([A-Za-z0-9._-]+)\s*==\s*([A-Za-z0-9._-]+)$/.exec(target);
-    if (exact) {
-      const [, name, version2] = exact;
-      if (name && version2) out.push({ name, version: version2 });
-      continue;
-    }
-    const range = /^([A-Za-z0-9._-]+)\s*(>=|<=|~=|!=|===|<|>)/.exec(target);
-    if (range?.[1] && range[2]) {
-      out.push({
-        name: range[1],
-        unplannableReason: `non-exact specifier (${range[2]}) \u2014 cannot determine a safe target without inspecting the installed environment`
-      });
-      continue;
-    }
-    const bare = /^[A-Za-z0-9._-]+$/.exec(target);
-    if (bare) {
-      out.push({ name: target, unplannableReason: "no version specifier \u2014 cannot determine an installed version" });
-    }
+    const mention = parseOneRequirementSpec(line);
+    if (mention) out.push(mention);
   }
   return out;
+}
+function parseOneRequirementSpec(specRaw) {
+  const spec = specRaw.trim();
+  if (!spec) return null;
+  const extras = /^([A-Za-z0-9._-]+)\[[^\]]*\](.*)$/.exec(spec);
+  const target = extras ? `${extras[1]}${extras[2]}` : spec;
+  const exact = /^([A-Za-z0-9._-]+)\s*==\s*([A-Za-z0-9._-]+)$/.exec(target);
+  if (exact) {
+    const [, name, version2] = exact;
+    if (name && version2) return { name, version: version2 };
+    return null;
+  }
+  const range = /^([A-Za-z0-9._-]+)\s*(>=|<=|~=|!=|===|<|>)/.exec(target);
+  if (range?.[1] && range[2]) {
+    return {
+      name: range[1],
+      unplannableReason: `non-exact specifier (${range[2]}) \u2014 cannot determine a safe target without inspecting the installed environment`
+    };
+  }
+  const bare = /^[A-Za-z0-9._-]+$/.exec(target);
+  if (bare) {
+    return { name: target, unplannableReason: "no version specifier \u2014 cannot determine an installed version" };
+  }
+  return null;
 }
 function joinContinuedLines(content) {
   const out = [];
@@ -43590,16 +43713,29 @@ function parsePyprojectPins(projectPath) {
   } catch {
     return out;
   }
-  const block = /dependencies\s*=\s*\[([^\]]*)\]/i.exec(raw);
-  if (!block || !block[1]) return out;
-  const entryPattern = /["']([A-Za-z0-9._-]+)\s*==\s*([A-Za-z0-9._-]+)["']/g;
+  const block = extractDependenciesArray(raw);
+  if (block === null) return out;
+  const entryPattern = /["']([^"']*)["']/g;
   let m;
-  while ((m = entryPattern.exec(block[1])) !== null) {
-    const name = m[1];
-    const version2 = m[2];
-    if (name && version2) out.push({ name, version: version2 });
+  while ((m = entryPattern.exec(block)) !== null) {
+    const mention = parseOneRequirementSpec(m[1] ?? "");
+    if (mention) out.push(mention);
   }
   return out;
+}
+function extractDependenciesArray(raw) {
+  const startMatch = /dependencies\s*=\s*\[/i.exec(raw);
+  if (!startMatch) return null;
+  const start = startMatch.index + startMatch[0].length;
+  let depth = 1;
+  let i2 = start;
+  for (; i2 < raw.length && depth > 0; i2 += 1) {
+    const ch = raw[i2];
+    if (ch === "[") depth += 1;
+    else if (ch === "]") depth -= 1;
+  }
+  if (depth !== 0) return null;
+  return raw.slice(start, i2 - 1);
 }
 async function runComposerOutdated(projectPath, cves) {
   const result = await execa("composer", ["outdated", "--format=json"], {
@@ -43735,18 +43871,46 @@ async function runBundlerOutdated(projectPath, cves) {
   }
   return out;
 }
+var DOTNET_SKIP_DIRS2 = /* @__PURE__ */ new Set(["bin", "obj", "node_modules", ".git", ".guardian", "packages", ".vs"]);
+function anyPackagesLockJsonExists(projectPath) {
+  const maxDepth = 4;
+  function walk4(dir, depth) {
+    if (depth > maxDepth) return false;
+    let entries;
+    try {
+      entries = readdirSync9(dir);
+    } catch {
+      return false;
+    }
+    if (entries.includes("packages.lock.json")) return true;
+    for (const name of entries) {
+      if (DOTNET_SKIP_DIRS2.has(name)) continue;
+      const abs = join23(dir, name);
+      let isDir;
+      try {
+        isDir = statSync7(abs).isDirectory();
+      } catch {
+        continue;
+      }
+      if (isDir && walk4(abs, depth + 1)) return true;
+    }
+    return false;
+  }
+  return walk4(projectPath, 0);
+}
 async function runDotnetOutdated(projectPath, cves) {
-  let r = await execa("dotnet", ["list", "package", "--outdated", "--format", "json"], {
+  const listArgs = ["list", "package", "--outdated", "--format", "json", "--no-restore"];
+  let r = await execa("dotnet", listArgs, {
     cwd: projectPath,
     reject: false,
     timeout: 9e4
   });
   if (r.exitCode !== 0) {
     const restoreArgs = ["restore", "--nologo", "--verbosity", "quiet"];
-    if (existsSync17(join23(projectPath, "packages.lock.json"))) restoreArgs.push("--locked-mode");
+    if (anyPackagesLockJsonExists(projectPath)) restoreArgs.push("--locked-mode");
     const restore = await execa("dotnet", restoreArgs, { cwd: projectPath, reject: false, timeout: 5 * 6e4 });
     if (restore.exitCode !== 0) return [];
-    r = await execa("dotnet", ["list", "package", "--outdated", "--format", "json"], {
+    r = await execa("dotnet", listArgs, {
       cwd: projectPath,
       reject: false,
       timeout: 9e4
@@ -43757,7 +43921,7 @@ async function runDotnetOutdated(projectPath, cves) {
   }
   const fallback = await execa(
     "dotnet",
-    ["list", "package", "--outdated"],
+    ["list", "package", "--outdated", "--no-restore"],
     { cwd: projectPath, reject: false, timeout: 9e4 }
   );
   if (fallback.exitCode !== 0 || fallback.stdout.trim().length === 0) return [];
@@ -43877,7 +44041,7 @@ function failDomain2(code, message) {
 }
 
 // src/tools/complianceCheck.ts
-import { readdirSync as readdirSync10, statSync as statSync7 } from "node:fs";
+import { readdirSync as readdirSync10, statSync as statSync8 } from "node:fs";
 import { join as join24 } from "node:path";
 var RISKY_LICENSE_PATTERNS = [
   { pattern: /^AGPL/i, severity: "high" },
@@ -43936,7 +44100,7 @@ function walk2(root, dir, depth, maxDepth, out) {
       continue;
     const abs = join24(dir, entry);
     try {
-      const s = statSync7(abs);
+      const s = statSync8(abs);
       if (s.isDirectory()) {
         if (depth + 1 <= maxDepth) walk2(root, abs, depth + 1, maxDepth, out);
       } else if (s.isFile()) {
@@ -44061,7 +44225,7 @@ registerToolModule(
 );
 
 // src/tools/generateSbom.ts
-import { existsSync as existsSync18, readFileSync as readFileSync13, statSync as statSync8 } from "node:fs";
+import { existsSync as existsSync18, readFileSync as readFileSync13, statSync as statSync9 } from "node:fs";
 import { join as join25 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
@@ -44179,7 +44343,7 @@ async function handler2(input, ctx) {
       }
     };
   }
-  const stat2 = statSync8(outFile);
+  const stat2 = statSync9(outFile);
   const raw = readFileSync13(outFile, "utf8");
   const summary = summarize2(raw);
   ctx.storage.scans.insert({
@@ -47595,7 +47759,7 @@ function failDomain16(code, message) {
 }
 
 // src/tools/healthStatus.ts
-import { existsSync as existsSync29, statSync as statSync9 } from "node:fs";
+import { existsSync as existsSync29, statSync as statSync10 } from "node:fs";
 var startedAt = Date.now();
 var SERVER_VERSION = resolveVersion();
 var tool22 = {
@@ -47613,7 +47777,7 @@ async function handler21(ctx) {
   let dbSizeBytes = null;
   if (dbPath && dbPath !== ":memory:" && existsSync29(dbPath)) {
     try {
-      dbSizeBytes = statSync9(dbPath).size;
+      dbSizeBytes = statSync10(dbPath).size;
     } catch {
     }
   }
@@ -49940,7 +50104,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID11 } from "node:crypto";
-import { existsSync as existsSync34, readFileSync as readFileSync20, readdirSync as readdirSync15, statSync as statSync10 } from "node:fs";
+import { existsSync as existsSync34, readFileSync as readFileSync20, readdirSync as readdirSync15, statSync as statSync11 } from "node:fs";
 import { join as join41, relative as relative5 } from "node:path";
 var PATTERNS = [
   {
@@ -50122,7 +50286,7 @@ function collectConfigFiles(root, maxDepth) {
       const abs = join41(dir, name);
       let stat2;
       try {
-        stat2 = statSync10(abs);
+        stat2 = statSync11(abs);
       } catch {
         continue;
       }
@@ -50139,7 +50303,7 @@ function collectConfigFiles(root, maxDepth) {
 
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
-import { readFileSync as readFileSync21, readdirSync as readdirSync16, statSync as statSync11 } from "node:fs";
+import { readFileSync as readFileSync21, readdirSync as readdirSync16, statSync as statSync12 } from "node:fs";
 import { join as join42, relative as relative6 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
@@ -50264,7 +50428,7 @@ function collectCsprojFiles(root, maxDepth) {
       if (SKIP_DIRS2.has(name)) continue;
       const abs = join42(dir, name);
       try {
-        const s = statSync11(abs);
+        const s = statSync12(abs);
         if (s.isDirectory()) walk4(abs, depth + 1);
         else if (name.endsWith(".csproj") || name.endsWith(".fsproj")) out.push(abs);
       } catch {
@@ -50280,7 +50444,7 @@ function failDomain23(code, message) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
-import { existsSync as existsSync35, readFileSync as readFileSync22, readdirSync as readdirSync17, statSync as statSync12 } from "node:fs";
+import { existsSync as existsSync35, readFileSync as readFileSync22, readdirSync as readdirSync17, statSync as statSync13 } from "node:fs";
 import { join as join43, relative as relative7 } from "node:path";
 var RULES = [
   {
@@ -50419,7 +50583,7 @@ function findMigrationsDirs(root) {
       const abs = join43(dir, name);
       let s;
       try {
-        s = statSync12(abs);
+        s = statSync13(abs);
       } catch {
         continue;
       }
@@ -51712,7 +51876,7 @@ import {
   readlinkSync,
   realpathSync as realpathSync3,
   rmSync as rmSync2,
-  statSync as statSync13,
+  statSync as statSync14,
   writeFileSync as writeFileSync10
 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
@@ -51837,7 +52001,7 @@ async function ingestTarget(targetRaw) {
   if (!existsSync36(target)) {
     return { ok: false, code: "target_not_found", message: `Path does not exist: ${target}` };
   }
-  const st = statSync13(target);
+  const st = statSync14(target);
   if (st.isDirectory()) {
     const collected = collectDir(target);
     return {
@@ -53402,7 +53566,7 @@ function buildToolRun(run, via) {
 }
 
 // src/surface/specDiscover.ts
-import { readFileSync as readFileSync25, readdirSync as readdirSync19, statSync as statSync14 } from "node:fs";
+import { readFileSync as readFileSync25, readdirSync as readdirSync19, statSync as statSync15 } from "node:fs";
 import { join as join48, relative as relative9, resolve as resolve7, sep as sep4 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
@@ -53434,7 +53598,7 @@ function readCandidates(paths) {
   for (const path6 of paths) {
     let size;
     try {
-      size = statSync14(path6).size;
+      size = statSync15(path6).size;
     } catch {
       continue;
     }

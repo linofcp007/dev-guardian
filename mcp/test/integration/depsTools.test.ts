@@ -874,6 +874,57 @@ describe('deps_audit', () => {
     // Never restored — the direct `dotnet list` attempt already succeeded,
     // so a scan run against an already-restored tree must not touch it.
     expect(commands.some((c) => c.startsWith('dotnet restore'))).toBe(false);
+    // Fix round 2, item 8: EVERY `dotnet list` call carries `--no-restore`
+    // — `dotnet list package` restores implicitly otherwise, with no
+    // `--locked-mode` equivalent.
+    expect(commands.some((c) => c.startsWith('dotnet list') && c.includes('--no-restore'))).toBe(true);
+  });
+
+  it('item 8 (fix round 2): a .sln target discovers packages.lock.json next to EACH .csproj, not next to the .sln itself', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'App.sln'), 'Microsoft Visual Studio Solution File', 'utf8');
+    mkdirSync(join(project, 'src', 'Proj'), { recursive: true });
+    writeFileSync(join(project, 'src', 'Proj', 'Proj.csproj'), '<Project></Project>', 'utf8');
+    // The lock file sits next to the .csproj, in a subdirectory — NOT next
+    // to the .sln at the project root. `dirname(target)` for a .sln target
+    // is the project root, so the fix round 1 shape's `existsSync(join(
+    // dirname(target), 'packages.lock.json'))` would look in the WRONG
+    // place and never find this file.
+    writeFileSync(join(project, 'src', 'Proj', 'packages.lock.json'), '{}', 'utf8');
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'trivy' || name === 'dotnet' ? `/fake/bin/${name}` : null,
+    );
+    const restoreCommands: string[][] = [];
+    let listCalls = 0;
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'trivy') {
+        const path = outputPathFor(opts.args);
+        if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
+        return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+      }
+      if (opts.command === 'dotnet' && opts.args?.[0] === 'restore') {
+        restoreCommands.push(opts.args ?? []);
+        return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+      }
+      if (opts.command === 'dotnet' && opts.args?.[0] === 'list') {
+        listCalls += 1;
+        if (listCalls === 1) {
+          return { outcome: 'failed' as const, exitCode: 1, stdout: '', stderr: 'assets file not found', truncated: false };
+        }
+        return { outcome: 'completed' as const, exitCode: 0, stdout: dotnetListFx(), stderr: '', truncated: false };
+      }
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('deps_audit');
+    const r = await tool.handler({ project_path: project }, plugin);
+    expect(r.ok).toBe(true);
+    expect(restoreCommands).toHaveLength(1);
+    // The per-.csproj discovery found the lock file the .sln itself does
+    // not sit next to — `--locked-mode` must be passed.
+    expect(restoreCommands[0]).toContain('--locked-mode');
   });
 
   it('marks a missing dotnet SDK as a coverage gap for a project with a .csproj', async () => {
@@ -1261,8 +1312,10 @@ describe('deps_update_plan', () => {
     expect(r.plan).toHaveLength(1);
     expect(r.plan[0]?.classification).toBe('security');
     // Bracket notation, not dot notation: `npm pkg set` would otherwise
-    // treat a dot in the package name as a nested-key path separator.
-    expect(r.plan[0]?.upgrade_command).toBe('npm pkg set overrides[minimist]=1.2.6');
+    // treat a dot in the package name as a nested-key path separator. The
+    // whole `overrides[...]=...` argument is single-quoted (fix round 2,
+    // "cheap" item) so an unquoted `[...]` is never read as a shell glob.
+    expect(r.plan[0]?.upgrade_command).toBe("npm pkg set 'overrides[minimist]=1.2.6'");
     expect(r.plan[0]?.cve_ids).toEqual(['CVE-2024-2']);
     // `npm pkg set` only rewrites package.json — the lockfile still needs a
     // real reinstall to actually apply the override.
@@ -1435,13 +1488,23 @@ describe('deps_update_plan', () => {
       return { exitCode: 0, stdout: '', stderr: '' };
     }) as unknown as typeof execa);
 
-    const r = okResult<{ plan: Array<{ latest_version: string; installed_version: string }> }>(
-      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
-    );
+    const r = okResult<{
+      plan: Array<{ latest_version: string; installed_version: string; classification: string; cve_ids?: string[] }>;
+      unplanned: Array<{ package_name: string; ecosystem: string; cve_ids: string[]; reason: string }>;
+    }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
     expect(r.plan).toHaveLength(1);
     expect(r.plan[0]?.installed_version).toBe('4.17.21');
     // Never 4.17.19 (a downgrade from 4.17.21) — falls back to npm's own latest.
     expect(r.plan[0]?.latest_version).toBe('4.18.1');
+    // Fix round 2 ("cheap" item): this CVE is STALE — installed (4.17.21) is
+    // already above its own recorded fix (4.17.19) — so the ordinary
+    // npm-latest upgrade above must NOT be mislabelled `security` with
+    // those (already resolved) CVE ids still attached.
+    expect(r.plan[0]?.classification).toBe('minor');
+    expect(r.plan[0]?.cve_ids).toBeUndefined();
+    expect(r.unplanned).toHaveLength(1);
+    expect(r.unplanned[0]).toMatchObject({ package_name: 'lodash', ecosystem: 'npm', cve_ids: ['CVE-STALE-1'] });
+    expect(r.unplanned[0]?.reason).toMatch(/already_fixed/);
   });
 
   it('CRITICAL item 1: npm reports unplanned (never a downgrade) when neither the CVE fix nor npm\'s "latest" is above installed', async () => {
@@ -1480,6 +1543,23 @@ describe('deps_update_plan', () => {
     const project = tempProject();
     // minimist is NOT declared directly — a real transitive dependency.
     writeFileSync(project + '/package.json', '{"name":"x","dependencies":{"mkdirp":"0.5.0"}}', 'utf8');
+    // Fix round 2, item 10: pass 2 now only claims a package this npm
+    // install's own resolved graph actually contains (a lockfile or
+    // node_modules) — minimist has to be a REAL resolved transitive
+    // dependency here, not just a name that happens to be in the CVE map.
+    writeFileSync(
+      project + '/package-lock.json',
+      JSON.stringify({
+        name: 'x',
+        lockfileVersion: 3,
+        packages: {
+          '': { name: 'x', dependencies: { mkdirp: '0.5.0' } },
+          'node_modules/mkdirp': { version: '0.5.0' },
+          'node_modules/minimist': { version: '0.0.8' },
+        },
+      }),
+      'utf8',
+    );
     const plugin = makePlugin(project);
     seedCve(plugin, project, {
       cve_id: 'CVE-TRANS-1',
@@ -1505,9 +1585,63 @@ describe('deps_update_plan', () => {
     expect(r.plan[0]).toMatchObject({
       package_name: 'minimist',
       classification: 'security',
-      upgrade_command: 'npm pkg set overrides[minimist]=1.2.6',
+      upgrade_command: "npm pkg set 'overrides[minimist]=1.2.6'",
       follow_up_command: 'npm install --ignore-scripts',
     });
+  });
+
+  it('item 10 (fix round 2, NEW BREAKAGE): pass 2 never turns a non-npm CVE (no package-lock.json evidence) into an npm overrides step', async () => {
+    const project = tempProject();
+    // A polyglot repo: npm present (package.json, no lockfile written for
+    // this test — nothing here resolves via npm at all) alongside CVEs that
+    // plainly belong to OTHER ecosystems (pip's django, composer's
+    // laravel/framework) — reproducing the coordinator's own probe.
+    writeFileSync(project + '/package.json', '{"name":"x","dependencies":{}}', 'utf8');
+    const plugin = makePlugin(project);
+    seedCves(plugin, project, 'scan1', [
+      { cve_id: 'CVE-DJANGO-1', package_name: 'django', installed_version: '2.0.1', fixed_version: '2.2.9' },
+      {
+        cve_id: 'CVE-LARAVEL-1',
+        package_name: 'laravel/framework',
+        installed_version: '8.0.0',
+        fixed_version: '8.22.1',
+      },
+    ]);
+    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+
+    const r = okResult<{ plan: Array<{ package_name: string; upgrade_command: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    // Neither package is npm-resolvable (no lockfile, no node_modules) — the
+    // OLD code minted `npm pkg set overrides[django]=2.2.9` and
+    // `overrides[laravel/framework]=8.22.1` here, both labelled `security`.
+    expect(r.plan.some((s) => s.upgrade_command.includes('overrides'))).toBe(false);
+    expect(r.plan.some((s) => s.package_name === 'django')).toBe(false);
+    expect(r.plan.some((s) => s.package_name === 'laravel/framework')).toBe(false);
+  });
+
+  it('item 7 (fix round 2, npm half): a DIRECT npm dependency with an active CVE that `npm outdated` never lists is reported unplanned, not silently dropped', async () => {
+    const project = tempProject();
+    writeFileSync(project + '/package.json', '{"name":"x","dependencies":{"leftpad":"1.0.0"}}', 'utf8');
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, {
+      cve_id: 'CVE-DIRECT-1',
+      package_name: 'leftpad',
+      installed_version: '1.0.0',
+      fixed_version: '1.0.1',
+    });
+    // `npm outdated` reports NOTHING for leftpad at all (registry
+    // unreachable, npm considers it current, whatever the reason) — the old
+    // code's pass 2 silently `continue`d for any direct dependency.
+    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+
+    const r = okResult<{
+      plan: unknown[];
+      unplanned: Array<{ package_name: string; ecosystem: string; cve_ids: string[]; reason: string }>;
+    }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
+    expect(r.plan).toEqual([]);
+    expect(r.unplanned).toHaveLength(1);
+    expect(r.unplanned[0]).toMatchObject({ package_name: 'leftpad', ecosystem: 'npm', cve_ids: ['CVE-DIRECT-1'] });
   });
 
   it('item 2: a transitive CVE package with no recorded installed_version and no safe fix produces no step and no false unplanned entry', async () => {
@@ -1583,6 +1717,65 @@ describe('deps_update_plan', () => {
     expect(names).toEqual(['celery', 'django', 'somepkg']);
   });
 
+  it('item 7 (fix round 2): pyproject.toml — a range spec, an extras pin, and a transitive dependency no manifest mentions all end up somewhere, never in an empty plan AND an empty unplanned', async () => {
+    // Reproduces the coordinator's own probe exactly: a pyproject with
+    // django>=4.2 (range), celery[redis]==5.3.0 (extras + exact pin), and a
+    // transitive urllib3 (no mention anywhere), all three with active CVEs
+    // and known fixes. The fix round 1 shape returned `plan: []` AND
+    // `unplanned: []` — both `django` and `celery` were silently dropped by
+    // the old `[^\]]*` block regex (which truncated the array at the FIRST
+    // `]`, the one `celery[redis]` itself introduces), and urllib3 had no
+    // sweep at all.
+    const project = tempProject();
+    writeFileSync(
+      join(project, 'pyproject.toml'),
+      [
+        '[project]',
+        'name = "x"',
+        'dependencies = [',
+        '    "django>=4.2",',
+        '    "celery[redis]==5.3.0",',
+        ']',
+      ].join('\n'),
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    seedCves(plugin, project, 'scan1', [
+      { cve_id: 'CVE-PYPROJECT-DJANGO', package_name: 'django', installed_version: '4.2.0', fixed_version: '4.2.5' },
+      { cve_id: 'CVE-PYPROJECT-CELERY', package_name: 'celery', installed_version: '5.3.0', fixed_version: '5.3.1' },
+      {
+        cve_id: 'CVE-PYPROJECT-URLLIB3',
+        package_name: 'urllib3',
+        installed_version: '1.26.0',
+        fixed_version: '1.26.5',
+      },
+    ]);
+
+    const r = okResult<{
+      plan: Array<{ package_name: string; installed_version: string; latest_version: string }>;
+      unplanned: Array<{ package_name: string; ecosystem: string; cve_ids: string[]; reason: string }>;
+    }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
+
+    // celery[redis]==5.3.0 -> an exact pin once extras are stripped -> a
+    // real step (proves the depth-counting array parser: `celery[redis]`
+    // would have truncated the array before this element existed at all
+    // under the old regex).
+    expect(r.plan.some((s) => s.package_name === 'celery' && s.latest_version === '5.3.1')).toBe(true);
+    // django>=4.2 -> a non-exact specifier -> unplanned, not dropped, and
+    // not silently treated as an exact pin either.
+    const django = r.unplanned.find((u) => u.package_name === 'django');
+    expect(django).toBeDefined();
+    expect(django?.ecosystem).toBe('pip');
+    expect(django?.cve_ids).toEqual(['CVE-PYPROJECT-DJANGO']);
+    // urllib3 -> no requirements*.txt / pyproject.toml mention at all
+    // (genuinely transitive) -> unplanned via the new pip pass 2 sweep,
+    // never silently absent from both plan and unplanned.
+    const urllib3 = r.unplanned.find((u) => u.package_name === 'urllib3');
+    expect(urllib3).toBeDefined();
+    expect(urllib3?.ecosystem).toBe('pip');
+    expect(urllib3?.reason).toMatch(/transitive/);
+  });
+
   it('item 9: pip steps expose the target file as a structured field, not only inside upgrade_command', async () => {
     const project = tempProject();
     writeFileSync(project + '/requirements.txt', 'django==2.0.1\n', 'utf8');
@@ -1615,5 +1808,40 @@ describe('deps_update_plan', () => {
 
     await getTool('deps_update_plan').handler({ project_path: project }, plugin);
     expect(calls.some((c) => c.startsWith('dotnet restore'))).toBe(false);
+    // Fix round 2, item 8: every `dotnet list` call carries `--no-restore`.
+    expect(calls.some((c) => c.startsWith('dotnet list') && c.includes('--no-restore'))).toBe(true);
+  });
+
+  it('item 8 (fix round 2): deps_update_plan finds a packages.lock.json in a SUBDIRECTORY, not only at the project root', async () => {
+    const project = tempProject();
+    // A root-level .csproj is what makes `detectEcosystems` include
+    // 'dotnet' at all (nested-only .csproj discovery is a separately
+    // parked item, not this one) — but the LOCK FILE lives in a
+    // subdirectory, the routine multi-project-repo shape.
+    // `existsSync(join(projectPath, 'packages.lock.json'))` (the fix round
+    // 1 shape) never looked anywhere else.
+    writeFileSync(join(project, 'Root.csproj'), '<Project></Project>', 'utf8');
+    mkdirSync(join(project, 'src', 'Proj'), { recursive: true });
+    writeFileSync(join(project, 'src', 'Proj', 'Proj.csproj'), '<Project></Project>', 'utf8');
+    writeFileSync(join(project, 'src', 'Proj', 'packages.lock.json'), '{}', 'utf8');
+    const plugin = makePlugin(project);
+    const restoreCalls: string[][] = [];
+    let listCalls = 0;
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      if (cmd === 'dotnet' && args[0] === 'restore') {
+        restoreCalls.push(args);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      if (cmd === 'dotnet' && args[0] === 'list') {
+        listCalls += 1;
+        if (listCalls === 1) return { exitCode: 1, stdout: '', stderr: 'not restored' };
+        return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    await getTool('deps_update_plan').handler({ project_path: project }, plugin);
+    expect(restoreCalls).toHaveLength(1);
+    expect(restoreCalls[0]).toContain('--locked-mode');
   });
 });

@@ -480,6 +480,15 @@ function findDotnetTargets(projectPath) {
     const sln = rootEntries.find((n) => n.toLowerCase().endsWith('.sln'));
     if (sln)
         return [join(projectPath, sln)];
+    return findAllCsprojFiles(projectPath);
+}
+/** Every `.csproj` under `projectPath`, bounded recursive walk. Used both by
+ *  `findDotnetTargets`'s own non-solution branch AND by
+ *  `findLockFilesForTarget` for a `.sln` target (fix round 2, item 8) —
+ *  `packages.lock.json` sits next to each individual `.csproj`, never next
+ *  to the solution file itself, so discovering every project is the only
+ *  way to find every lock file a solution-wide restore could touch. */
+function findAllCsprojFiles(projectPath) {
     const out = [];
     const maxDepth = 4;
     function walk(dir, depth) {
@@ -513,6 +522,24 @@ function findDotnetTargets(projectPath) {
     return out;
 }
 /**
+ * Every `packages.lock.json` relevant to `target`: the one next to it when
+ * `target` is itself a `.csproj`, or every lock file next to any `.csproj`
+ * under `projectPath` when `target` is a `.sln` (fix round 2, item 8).
+ *
+ * The fix round 1 shape checked `dirname(target)` unconditionally — correct
+ * for a `.csproj` target (the lock sits right next to it), but WRONG for a
+ * `.sln` target: `dirname(target)` is the solution's own directory, and a
+ * multi-project solution's `.csproj` files (and their lock files) typically
+ * live in subdirectories the solution file does not share. Checking the
+ * wrong location meant `hasLockFile` read false for almost every real
+ * solution, so `--locked-mode` was never passed and an out-of-sync lock was
+ * silently rewritten rather than failing the restore closed.
+ */
+function findLockFilesForTarget(projectPath, target) {
+    const csprojFiles = target.toLowerCase().endsWith('.sln') ? findAllCsprojFiles(projectPath) : [target];
+    return csprojFiles.map((p) => join(dirname(p), 'packages.lock.json')).filter((p) => existsSync(p));
+}
+/**
  * Runs `dotnet list <target> package --vulnerable --include-transitive
  * --format json` for every target `findDotnetTargets` finds.
  *
@@ -520,12 +547,23 @@ function findDotnetTargets(projectPath) {
  * round 1, item 8 — a scan must not modify the working tree). `dotnet list
  * package` is tried DIRECTLY first; a project already restored (CI, a dev
  * machine mid-session) needs no further write at all. Only when that first
- * attempt fails is `dotnet restore` attempted, and — whenever a
- * `packages.lock.json` sits next to the target — with `--locked-mode`,
- * which makes restore FAIL if the lock file is out of date rather than
- * silently regenerating it in place. A target whose restore fails (private
- * feed not configured, `--locked-mode` rejecting a stale lock) is one
- * coverage gap, not a whole-scan failure — the other targets still run.
+ * attempt fails is `dotnet restore` attempted, and — whenever ANY
+ * `packages.lock.json` belongs to the target (`findLockFilesForTarget`,
+ * fix round 2, item 8 — see its own comment for why `dirname(target)` alone
+ * was wrong for a `.sln`) — with `--locked-mode`, which makes restore FAIL
+ * if the lock file is out of date rather than silently regenerating it in
+ * place. A target whose restore fails (private feed not configured,
+ * `--locked-mode` rejecting a stale lock) is one coverage gap, not a
+ * whole-scan failure — the other targets still run.
+ *
+ * **Every `dotnet list` call carries `--no-restore`** (fix round 2, item 8):
+ * `dotnet list package` restores IMPLICITLY otherwise — measured against a
+ * real SDK 10 install, `--no-restore` defaults to `false` — and that
+ * implicit restore has no `--locked-mode` equivalent. It silently rewrote a
+ * committed, out-of-sync `packages.lock.json` on the very FIRST `dotnet
+ * list` call, before this function's own "restore only on failure" logic
+ * ever ran at all; the fix round 1 shape only protected the EXPLICIT
+ * `dotnet restore` below, which the implicit one bypassed entirely.
  */
 async function runDotnetSca(opts) {
     const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = opts;
@@ -540,7 +578,16 @@ async function runDotnetSca(opts) {
     }
     const runList = (target) => runProcess({
         command: 'dotnet',
-        args: ['list', target, 'package', '--vulnerable', '--include-transitive', '--format', 'json'],
+        args: [
+            'list',
+            target,
+            'package',
+            '--vulnerable',
+            '--include-transitive',
+            '--format',
+            'json',
+            '--no-restore',
+        ],
         cwd: ctx.projectPath,
         env: ctx.scriptEnv,
         signal: ctx.signal,
@@ -548,12 +595,14 @@ async function runDotnetSca(opts) {
     });
     let anyOk = false;
     let anyFailed = false;
+    let anyLockedRestoreFailed = false;
     for (const [i, target] of targets.entries()) {
         let list = await runList(target);
         if (list.outcome !== 'completed') {
-            const hasLockFile = existsSync(join(dirname(target), 'packages.lock.json'));
+            const lockFiles = findLockFilesForTarget(ctx.projectPath, target);
+            const usingLockedMode = lockFiles.length > 0;
             const restoreArgs = ['restore', target, '--nologo', '--verbosity', 'quiet'];
-            if (hasLockFile)
+            if (usingLockedMode)
                 restoreArgs.push('--locked-mode');
             const restore = await runProcess({
                 command: 'dotnet',
@@ -565,6 +614,12 @@ async function runDotnetSca(opts) {
             });
             if (restore.outcome !== 'completed') {
                 anyFailed = true;
+                // `--locked-mode` rejecting an out-of-sync lock lands here too —
+                // that is the restore FAILING closed, never a silent rewrite; it is
+                // never retried without `--locked-mode`, which would be exactly the
+                // rewrite this whole mechanism exists to prevent.
+                if (usingLockedMode)
+                    anyLockedRestoreFailed = true;
                 continue;
             }
             list = await runList(target);
@@ -589,14 +644,22 @@ async function runDotnetSca(opts) {
             name: 'dotnet',
             status: 'ok',
             reason: anyFailed
-                ? 'parsed into findings (restore or list failed for at least one target)'
+                ? anyLockedRestoreFailed
+                    ? 'parsed into findings (restore failed for at least one target: packages.lock.json out of sync)'
+                    : 'parsed into findings (restore or list failed for at least one target)'
                 : 'parsed into findings',
         });
         if (anyFailed)
             missing_tools.push('dotnet');
     }
     else {
-        tools_run.push({ name: 'dotnet', status: 'failed', reason: 'restore or list package failed for every target' });
+        tools_run.push({
+            name: 'dotnet',
+            status: 'failed',
+            reason: anyLockedRestoreFailed
+                ? 'restore failed for every target: packages.lock.json out of sync (never rewritten)'
+                : 'restore or list package failed for every target',
+        });
         missing_tools.push('dotnet');
     }
 }
