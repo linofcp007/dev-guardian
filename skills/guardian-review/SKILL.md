@@ -1,6 +1,6 @@
 ---
 name: guardian-review
-description: Deep code review before PR, merge, or deploy — combines security + bugfix + quality + tests/CI checks, senior-dev style. EN triggers — use when the user says "guardian review", "review before commit/PR/merge/deploy", "check this before I push", "I'm about to push", "I'm opening a PR", "before going to production", "release time", "is this ready?", "is it safe to merge?", "validate these changes", "looks good?", "does it pass my standards?", "ship it or hold?". PT triggers — usa quando disserem "guardian review", "revê antes de commit/PR/merge/deploy", "verifica isto antes de enviar", "vou fazer push", "vou abrir PR", "antes de ir para produção", "vou fazer release", "isto está pronto?", "diz-me se está OK fazer merge", "valida estas alterações", "está com bom aspecto?", "passa nos meus standards?", "deita fora ou guarda?". ES triggers — úsala cuando digan "guardian review", "revisa antes de commit/PR/merge/despliegue", "comprueba esto antes de enviar", "voy a hacer push", "voy a abrir PR", "antes de ir a producción", "voy a hacer release", "¿está listo?", "¿es seguro hacer merge?", "valida estos cambios", "¿se ve bien?", "¿pasa mis estándares?", "¿lo lanzamos o esperamos?". Trilingual EN/PT/ES — respond in the user's language.
+description: Senior-style review of pending changes before a PR, merge or deploy — the review_pr MCP tool runs Semgrep, gitleaks, Bandit and Trivy on the diff, plus a scoped bug hunt and quality check, and a correctness / security / tests / migrations checklist, ending in a merge verdict. EN triggers — "review before PR / merge / deploy", "I'm opening a PR", "is this ready?", "is it safe to merge?", "validate these changes", "ship it or hold?". PT — "revê antes do PR / merge / deploy", "vou abrir PR", "isto está pronto?", "posso fazer merge?", "valida estas alterações", "avança ou espera?". ES — "revisa antes del PR / merge / despliegue", "voy a abrir un PR", "¿está listo?", "¿es seguro hacer merge?", "valida estos cambios", "¿lo lanzamos o esperamos?". Respond in the user's language.
 ---
 
 # Guardian Review
@@ -15,7 +15,7 @@ Revisão de código holística antes de PR, merge ou deploy. Pensa nisto como um
 - Pre-tag de release
 - Quando o utilizador diz "vou fazer push" e quer um sanity check
 
-Para auditorias periódicas sem mudança específica, usa `guardian-security`, `guardian-quality`, etc.
+Para auditorias periódicas sem mudança específica, usa `guardian-security`, `guardian-quality`, etc. Para um scan rápido antes do push (sem a revisão), `/guardian-scan --unpushed`. Para confirmar que o humano percebe as decisões de domínio do diff, junta a skill `guardian-grill`.
 
 ## Fluxo
 
@@ -94,9 +94,15 @@ Para cada PR, valida explicitamente:
 
 ### 3. Executar verificações automáticas
 
-Corre a ferramenta MCP `review_pr` (`base_ref` opcional — por omissão `origin/HEAD`, depois `main`, depois `master`; `head_ref` por omissão `HEAD`).
+1. `review_pr { project_path: "<project>", base_ref: "<base>" }` — `base_ref` por omissão `origin/HEAD`, depois `main`, depois `master`; `head_ref` por omissão `HEAD`. Corre Semgrep (as mesmas regras do `scan_sast`) sobre cada ficheiro adicionado, modificado ou renomeado no diff, gitleaks sobre os commits do PR (`base..head`), Bandit sobre os `.py` alterados e Trivy se um manifesto de dependências mudou. Os ficheiros são lidos no `head` — da working tree se estiver em checkout, senão de um checkout temporário. Um ref que não existe é um erro, nunca "sem ficheiros alterados". `local_only: true` evita o registry do Semgrep.
+2. Bugs e qualidade **só nos ficheiros do diff** (o `review_pr` não os corre), com o `head` em checkout:
 
-Corre Semgrep (as mesmas regras do `scan_sast`) sobre cada ficheiro adicionado, modificado ou renomeado no diff, gitleaks sobre os commits do PR (`base..head`), Bandit sobre os `.py` alterados e Trivy se um manifesto de dependências mudou. Um ref que não existe é um erro, nunca "sem ficheiros alterados". Os testes dos módulos afetados corres tu, à parte.
+   - `bug_hunt { project_path: "<project>", scope: { diff: { base: "<base>" } } }`
+   - `quality_check { project_path: "<project>", scope: { diff: { base: "<base>" } } }`
+
+   Para uma revisão pré-commit do que está staged, `scope: { diff: { staged: true } }` nos dois.
+
+3. Testes e CI: **nenhuma tool corre os testes**. Corre tu a suite (ou os testes dos módulos afetados) e vê o estado da CI (`gh pr checks` quando há GitHub CLI). Não inventes um "testes passam" que não viste.
 
 ### 4. Apresentar veredito
 
@@ -125,7 +131,7 @@ Estrutura curta e directa:
 
 ### 5. Conduta especial: PRs do Dependabot/Renovate
 
-Se o PR é só atualização de dependências:
+Se o PR é só atualização de dependências (detalhe na skill `guardian-deps`):
 
 - Analisa o changelog/release notes da versão nova
 - Marca como **patch** (seguro), **minor** (provavelmente seguro), **major** (precisa verificação manual)
@@ -135,7 +141,7 @@ Se o PR é só atualização de dependências:
 
 ### 6. Pre-deploy específicos
 
-Se a invocação é pre-deploy (não só PR), adiciona:
+Se a invocação é pre-deploy (não só PR), o gate completo é `/guardian-release predeploy`. Na revisão, adiciona:
 
 - Verifica feature flags — alguma activa só em staging?
 - Verifica env vars novos têm valores em produção

@@ -1,6 +1,6 @@
 ---
 name: guardian-scanskill
-description: Vet a third-party AI agent SKILL, MCP server, or agent BEFORE installing it — the supply-chain check for the agent ecosystem (prompt injection, data exfiltration, privilege escalation, excessive agency, MCP tool poisoning, dangerous code, OSV CVEs) with a 0-100 risk score and a SAFE→DO NOT INSTALL verdict. Backed by the `scan_skill` MCP tool. EN triggers — use when the user says "is this skill safe?", "scan this skill", "audit this MCP server", "should I install this plugin?", "vet this agent", "check this skill before I install", "is this MCP safe", "review this skill repo", "scan this skill zip", "skillspector", "is this plugin malicious?", "check this agent for prompt injection", "audit a downloaded skill". PT triggers — usa quando disserem "esta skill é segura?", "scaneia esta skill", "audita este MCP", "devo instalar este plugin?", "verifica esta skill antes de instalar", "este MCP é seguro?", "revê este repositório de skill", "scaneia este zip de skill", "este plugin é malicioso?", "verifica este agente por prompt injection", "audita uma skill que descarreguei", "vetar uma skill". ES triggers — úsala cuando digan "¿esta skill es segura?", "escanea esta skill", "audita este MCP", "¿debo instalar este plugin?", "verifica esta skill antes de instalar", "¿este MCP es seguro?", "revisa este repositorio de skill", "escanea este zip de skill", "¿este plugin es malicioso?", "comprueba este agente por inyección de prompts", "audita una skill que descargué", "vetar una skill". Trilingual EN/PT/ES — respond in the user's language.
+description: Vet a third-party AI skill, MCP server, plugin or agent BEFORE installing it, with the scan_skill MCP tool — prompt injection, data exfiltration, privilege escalation, excessive agency, MCP tool poisoning, dangerous code, OSV CVEs — rolled into a 0-100 risk score and a SAFE → DO NOT INSTALL verdict. EN triggers — "is this skill safe?", "scan this skill", "audit this MCP server", "should I install this plugin?", "vet this agent", "is this plugin malicious?". PT — "esta skill é segura?", "scaneia esta skill", "audita este MCP", "devo instalar este plugin?", "este plugin é malicioso?", "verifica esta skill antes de instalar". ES — "¿esta skill es segura?", "escanea esta skill", "audita este MCP", "¿debo instalar este plugin?", "¿este plugin es malicioso?", "verifica esta skill antes de instalar". Respond in the user's language.
 ---
 
 # Guardian Skill — vet AI skills / MCP servers / agents before install
@@ -99,9 +99,14 @@ The tool returns a **0-100 risk score** (severity-weighted; findings in
 
 ## When NOT to use this
 
-- For auditing the user's **own application code** → that's `guardian-security`
-  / `guardian-scan`.
-- For AI features *inside* the user's app (prompt injection surface in their own
-  RAG/chatbot) → that's `guardian-llm`.
+- For auditing the user's **own application code** → the `guardian-security`
+  skill or `/guardian-scan`.
+- For AI features *inside* the user's app (the prompt-injection surface of their
+  own RAG or chatbot) → there is no dedicated module: `/guardian-scan` finds
+  exposed keys and dangerous sinks, and the rest is a manual review with the
+  `guardian-review` checklist. Say so rather than running `scan_skill` on it.
+- For the AI-agent **workspace configuration** of this project (`.mcp.json`,
+  `.claude/settings.json`: unpinned MCP servers, inline secrets, wildcard Bash
+  permissions) → `audit_agent_config { project_path: "<project>" }`.
 - This module is specifically for **third-party agent artifacts you're deciding
   whether to trust**.
