@@ -26,27 +26,27 @@ function scan(over: Partial<ScanRecord> = {}): ScanRecord {
 
 describe('rescanOriginOf', () => {
   it('re-scans a scan_sast target with scan_sast, and the local_only that scan recorded', () => {
-    expect(rescanOriginOf(finding(), scan())).toMatchObject({ tool: 'scan_sast', input: { local_only: false } });
+    expect(rescanOriginOf(finding(), scan())).toMatchObject({ toolName: 'scan_sast', input: { local_only: false } });
     expect(rescanOriginOf(finding(), scan({ meta: { local_only: true } }))).toMatchObject({
-      tool: 'scan_sast', input: { local_only: true },
+      toolName: 'scan_sast', input: { local_only: true },
     });
   });
 
   it('re-scans a bug_hunt target with bug_hunt — never scan_sast, which does not load the bugfix packs', () => {
     expect(rescanOriginOf(finding(), scan({ scan_type: 'bugs' }))).toMatchObject({
-      tool: 'bug_hunt', input: { include_language_packs: false },
+      toolName: 'bug_hunt', input: { include_language_packs: false },
     });
     expect(rescanOriginOf(finding(), scan({ scan_type: 'bugs', meta: { include_language_packs: true } }))).toMatchObject({
-      tool: 'bug_hunt', input: { include_language_packs: true },
+      toolName: 'bug_hunt', input: { include_language_packs: true },
     });
   });
 
   it('re-scans dependency targets with the deps tool that found them', () => {
     const trivy = finding({ tool: 'trivy', file_path: 'package-lock.json', line_start: undefined });
-    expect(rescanOriginOf(trivy, scan({ scan_type: 'deps_audit' }))?.tool).toBe('deps_audit');
-    expect(rescanOriginOf(trivy, scan({ scan_type: 'deps' }))?.tool).toBe('scan_deps');
+    expect(rescanOriginOf(trivy, scan({ scan_type: 'deps_audit' }))?.toolName).toBe('deps_audit');
+    expect(rescanOriginOf(trivy, scan({ scan_type: 'deps' }))?.toolName).toBe('scan_deps');
     // A 2.0.x deps_audit row was typed 'deps' and carries bot_configured.
-    expect(rescanOriginOf(trivy, scan({ scan_type: 'deps', meta: { bot_configured: false } }))?.tool).toBe('deps_audit');
+    expect(rescanOriginOf(trivy, scan({ scan_type: 'deps', meta: { bot_configured: false } }))?.toolName).toBe('deps_audit');
   });
 
   it('has no re-scan for what no tool can re-run with the same packs', () => {

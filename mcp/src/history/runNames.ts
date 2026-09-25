@@ -11,7 +11,12 @@
  *     partial-run markers as `guardian-dast:unanswered` and
  *     `guardian-dast:wall-clock`, while its findings say `dast`;
  *   - every Trivy finding says `trivy`, whichever pass produced it
- *     (`trivy`, `trivy-image`, `trivy-config`, `trivy-dockerfile`);
+ *     (`trivy`, `trivy-image`, `trivy-config`, `trivy-dockerfile`), and
+ *     scan_deps / deps_audit list a manifest Trivy produced no Result for
+ *     as `trivy:<ecosystem>` (`trivy:dotnet` for a root .csproj with no
+ *     packages.lock.json) beside a `trivy` that ran ok;
+ *   - deps_audit's .NET SDK is recorded as `dotnet`, its findings say
+ *     `dotnet-list-package`;
  *   - scan_secrets' two gitleaks passes are `gitleaks` and
  *     `gitleaks-working-tree`; the WordPress passes are `semgrep-wp` and
  *     `phpcs-wpcs`, listed missing as `semgrep` and `phpcs`;
@@ -32,6 +37,7 @@
  * that no scan writes any more.
  */
 
+import { MANIFEST_ECOSYSTEMS, manifestEcosystemOfTarget } from '../runners/scannerParsers/trivy.js';
 import type { Finding } from '../types.js';
 
 /** Trivy's dependency / image pass: CVEs, licenses, secrets. */
@@ -41,18 +47,35 @@ export const TRIVY_CONFIG = 'trivy:config';
 /** scan_skill's OSV lookup has a bookkeeping entry of its own (`osv.dev`). */
 export const SKILL_OSV = 'guardian-scanskill:osv';
 
+/**
+ * A Trivy CVE or license finding read out of one ecosystem's lock file
+ * (`packages.lock.json` → `trivy:fs:dotnet`): the findings a
+ * `trivy:<ecosystem>` gap leaves unmeasured, and nothing else.
+ */
+export function trivyFsKey(ecosystem: string): string {
+  return `${TRIVY_FS}:${ecosystem}`;
+}
+
+/** Every key Trivy's dependency pass can produce: {@link TRIVY_FS} and one per ecosystem. */
+export const TRIVY_FS_KEYS: readonly string[] = [TRIVY_FS, ...MANIFEST_ECOSYSTEMS.map(trivyFsKey)];
+
 const SKILL_TOOL = 'guardian-scanskill';
 const SKILL_OSV_RULE = 'osv-vulnerable-dependency';
 
 /**
  * The key a finding is measured under: its `tool`, split where one tool
- * name covers passes that are recorded — and can fail — separately.
+ * name covers passes that are recorded — and can fail — separately. A Trivy
+ * dependency finding is split once more, by the ecosystem of the lock file
+ * it came from, because scan_deps / deps_audit record a gap per ecosystem.
  */
 export function findingKey(
-  f: Pick<Finding, 'tool'> & Partial<Pick<Finding, 'rule_id' | 'category' | 'subcategory'>>,
+  f: Pick<Finding, 'tool'> & Partial<Pick<Finding, 'rule_id' | 'category' | 'subcategory' | 'file_path'>>,
 ): string {
   if (f.tool === 'trivy') {
-    return f.category === 'license' || f.subcategory === 'cve' || f.subcategory === 'secret' ? TRIVY_FS : TRIVY_CONFIG;
+    if (f.subcategory === 'secret') return TRIVY_FS;
+    if (f.category !== 'license' && f.subcategory !== 'cve') return TRIVY_CONFIG;
+    const eco = f.file_path === undefined ? null : manifestEcosystemOfTarget(f.file_path);
+    return eco === null ? TRIVY_FS : trivyFsKey(eco);
   }
   if (f.tool === SKILL_TOOL && f.rule_id === SKILL_OSV_RULE) return SKILL_OSV;
   return f.tool;
@@ -99,16 +122,34 @@ export const RUN_NAMES = {
   'gitleaks-working-tree': scanner('gitleaks'),
 
   // Trivy, by pass.
-  trivy: { measures: [TRIVY_FS], whenNotOk: [TRIVY_FS, TRIVY_CONFIG] },
+  trivy: { measures: TRIVY_FS_KEYS, whenNotOk: [...TRIVY_FS_KEYS, TRIVY_CONFIG] },
   // `trivy image --scanners vuln,secret,misconfig`: CVEs and secrets, and
   // the image's own misconfigurations.
-  'trivy-image': { measures: [TRIVY_FS, TRIVY_CONFIG], ownTarget: true },
+  'trivy-image': { measures: [...TRIVY_FS_KEYS, TRIVY_CONFIG], ownTarget: true },
   'trivy-config': scanner(TRIVY_CONFIG),
   'trivy-dockerfile': scanner(TRIVY_CONFIG),
 
-  // deps_audit's native auditors, recorded by command.
+  // scan_deps / deps_audit: Trivy ran ok but produced no Result for a root
+  // manifest of this ecosystem (trivy.ts, `assessManifestCoverage`). Listed
+  // missing, never ok, so each is a gap in exactly its own ecosystem's
+  // dependency findings: an older scan's NuGet CVE is not re-measured when
+  // packages.lock.json has gone, and an npm CVE beside it still resolves.
+  // (Unlisted, the name would fall back to `trivy`'s not-ok keys — every
+  // Trivy finding, IaC misconfigurations included.) One per
+  // MANIFEST_ECOSYSTEMS entry: the exhaustiveness test holds the two equal.
+  'trivy:npm': scanner(trivyFsKey('npm')),
+  'trivy:composer': scanner(trivyFsKey('composer')),
+  'trivy:dotnet': scanner(trivyFsKey('dotnet')),
+  'trivy:rubygems': scanner(trivyFsKey('rubygems')),
+  'trivy:cargo': scanner(trivyFsKey('cargo')),
+
+  // deps_audit's native auditors, recorded by command: `npm audit`,
+  // `pip-audit` (parsed into findings since Task 10), and the .NET SDK's
+  // `dotnet list package --vulnerable`, whose findings say
+  // `dotnet-list-package`.
   npm: scanner('npm-audit'),
-  'pip-audit': scanner(), // captured as evidence only: no findings
+  'pip-audit': scanner('pip-audit'),
+  dotnet: scanner('dotnet-list-package'),
 
   // quality_check. Its read of `.guardian/budgets.yml` measures the quality
   // budgets against jscpd's and radon's own reports, so either one not
@@ -156,21 +197,24 @@ export const RUN_NAMES = {
   'guardian-scanskill:taint': scanner(SKILL_TOOL),
   'osv.dev': scanner(SKILL_OSV),
 
+  // audit_agent_config: its own static checks of the agent workspace config.
+  'agent-audit': scanner('agent-audit'),
+
   // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
   // sub-scan's own bookkeeping instead whenever the row still exists; these
   // speak for a sub-tool that failed before it wrote one.
-  security_scan_full: scanner('semgrep', 'bandit', 'security-code-scan', 'dotnet-analyzers', 'gitleaks', TRIVY_FS, TRIVY_CONFIG),
+  security_scan_full: scanner('semgrep', 'bandit', 'security-code-scan', 'dotnet-analyzers', 'gitleaks', ...TRIVY_FS_KEYS, TRIVY_CONFIG),
   quality_check: scanner('eslint', 'ruff', 'radon', 'jscpd', 'staticcheck', 'budgets'),
-  deps_audit: scanner(TRIVY_FS, 'npm-audit'),
-  compliance_check: scanner(TRIVY_FS),
-  scan_wordpress: scanner('semgrep', 'gitleaks', TRIVY_FS, 'phpcs'),
+  deps_audit: scanner(...TRIVY_FS_KEYS, 'npm-audit', 'pip-audit', 'dotnet-list-package'),
+  compliance_check: scanner(...TRIVY_FS_KEYS),
+  scan_wordpress: scanner('semgrep', 'gitleaks', ...TRIVY_FS_KEYS, 'phpcs'),
 
   // security_scan_full: its own entry for a child that threw, answered an
   // error, or is not registered — the child wrote no bookkeeping of its own.
   // (An audit reads these through the security_scan_full sub-scan.)
   scan_sast: scanner('semgrep', 'bandit', 'security-code-scan', 'dotnet-analyzers'),
   scan_secrets: scanner('gitleaks'),
-  scan_deps: scanner(TRIVY_FS),
+  scan_deps: scanner(...TRIVY_FS_KEYS),
   scan_iac: scanner(TRIVY_CONFIG),
 
   // generate_sbom: the producer of an SBOM row, which holds no findings.

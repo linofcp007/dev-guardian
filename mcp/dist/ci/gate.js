@@ -37,6 +37,44 @@ import { CI_EXIT } from './types.js';
 export function exitCodeForCoverage(coverage) {
     return coverage === 'full' ? CI_EXIT.PASS : CI_EXIT.INCOMPLETE_SCAN;
 }
+const withReason = (reason) => (reason ? ` (${reason})` : '');
+/**
+ * The gap line for one `missing_tools` name, worded from what that step's
+ * `tools_run` says about it — or null when the failed-run line below
+ * already names it. "Not installed" is said only when nothing says
+ * otherwise: a step lists a scanner missing for reasons other than absence,
+ * and every one of them has sent a reader to reinstall a working scanner.
+ *
+ *   - an `ok` run of the same name ran, but did not cover everything (files
+ *     it could not read, a pack that failed to load) — scanCoverage.ts's
+ *     own convention;
+ *   - a `failed` run of the same name is reported as failed, once;
+ *   - a run `skipped` for a reason other than `not_installed` did not scan,
+ *     and its reason says why (scan_deps: `trivy` recognised no manifest);
+ *   - `<scanner>:<part>` with no run of its own is one part of a scanner
+ *     that ran (scan_deps: `trivy:dotnet`, a manifest ecosystem Trivy
+ *     produced nothing for) and is worded from that scanner's run.
+ */
+function describeMissing(name, toolsRun) {
+    const own = toolsRun.filter((run) => run.name === name);
+    const ok = own.find((run) => run.status === 'ok');
+    if (ok !== undefined)
+        return `${name} ran with reduced coverage${withReason(ok.reason)}`;
+    if (own.some((run) => run.status === 'failed'))
+        return null;
+    const skipped = own.find((run) => run.status === 'skipped' && run.reason && run.reason !== 'not_installed');
+    if (skipped !== undefined)
+        return `${name} skipped${withReason(skipped.reason)}`;
+    const colon = name.indexOf(':');
+    if (own.length === 0 && colon > 0) {
+        const scanner = name.slice(0, colon);
+        const part = name.slice(colon + 1);
+        const base = toolsRun.find((run) => run.name === scanner && run.status === 'ok');
+        if (base !== undefined)
+            return `${scanner} ran with reduced coverage — ${part} not covered${withReason(base.reason)}`;
+    }
+    return `${name} not installed`;
+}
 export function evaluateGate(input) {
     const { findings, baseline, failOn, steps, droppedBaselineEntries } = input;
     // Coverage comes from a single call to computeCoverage over the union of
@@ -57,20 +95,11 @@ export function evaluateGate(input) {
             coverageGaps.push(`${step.tool}: ${step.reason ?? 'did not run'}`);
             continue;
         }
-        // A name in missing_tools that ALSO has an `ok` run ran, but did not
-        // cover everything (files it could not read, packages that did not
-        // compile) — scanCoverage.ts's own convention. Calling that "not
-        // installed" would send the reader to reinstall a working scanner.
-        const ranOk = new Map(step.tools_run.filter((run) => run.status === 'ok').map((run) => [run.name, run.reason]));
         for (const missing of step.missing_tools) {
             allMissingTools.push(missing);
-            if (ranOk.has(missing)) {
-                const reason = ranOk.get(missing);
-                coverageGaps.push(`${step.tool}: ${missing} ran with reduced coverage${reason ? ` (${reason})` : ''}`);
-            }
-            else {
-                coverageGaps.push(`${step.tool}: ${missing} not installed`);
-            }
+            const gap = describeMissing(missing, step.tools_run);
+            if (gap !== null)
+                coverageGaps.push(`${step.tool}: ${gap}`);
         }
         for (const run of step.tools_run) {
             if (run.status === 'failed') {

@@ -5,7 +5,8 @@
  * re-scan itself runs in `../tools/createFixPr.ts`.
  */
 import { isDepsAuditScan } from '../types.js';
-import { DEP_SCANNER_TOOLS, findingEcosystem } from './candidates.js';
+import { manifestEcosystemOfTarget } from '../runners/scannerParsers/trivy.js';
+import { DEP_SCANNER_TOOLS } from './candidates.js';
 /**
  * The re-scan for `f`, read off the scan it came from — or null when no tool
  * can re-run the rule packs that produced it (a WordPress scan's Semgrep
@@ -26,13 +27,13 @@ export function rescanOriginOf(f, scan) {
     if (f.tool === 'semgrep') {
         if (scan.scan_type === 'sast' || scan.scan_type === 'security_full') {
             const localOnly = scan.scan_type === 'sast' && scan.meta?.['local_only'] === true;
-            return { key: `scan_sast:${String(localOnly)}`, tool: 'scan_sast', input: { local_only: localOnly } };
+            return { key: `scan_sast:${String(localOnly)}`, toolName: 'scan_sast', input: { local_only: localOnly } };
         }
         if (scan.scan_type === 'bugs') {
             const languagePacks = scan.meta?.['include_language_packs'] === true;
             return {
                 key: `bug_hunt:${String(languagePacks)}`,
-                tool: 'bug_hunt',
+                toolName: 'bug_hunt',
                 input: { include_language_packs: languagePacks },
             };
         }
@@ -40,10 +41,10 @@ export function rescanOriginOf(f, scan) {
     }
     if (DEP_SCANNER_TOOLS.includes(f.tool) && f.tool !== 'wpscan') {
         if (isDepsAuditScan(scan) || scan.scan_type === 'security_full') {
-            return { key: 'deps_audit', tool: 'deps_audit', input: {} };
+            return { key: 'deps_audit', toolName: 'deps_audit', input: {} };
         }
         if (scan.scan_type === 'deps')
-            return { key: 'scan_deps', tool: 'scan_deps', input: {} };
+            return { key: 'scan_deps', toolName: 'scan_deps', input: {} };
     }
     return null;
 }
@@ -61,7 +62,8 @@ export function scannerNotVerified(target, scan) {
         case 'trivy': {
             if (!ranOk('trivy'))
                 return 'trivy';
-            const ecosystem = findingEcosystem(target);
+            // The same lock-file → ecosystem table the gap itself was computed with.
+            const ecosystem = manifestEcosystemOfTarget(target.file_path ?? '');
             const gap = ecosystem === null ? null : `trivy:${ecosystem}`;
             return gap !== null && scan.missing_tools.includes(gap) ? gap : null;
         }

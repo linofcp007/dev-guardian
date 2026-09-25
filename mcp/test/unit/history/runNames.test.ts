@@ -21,10 +21,13 @@ import {
   SKILL_OSV,
   TRIVY_CONFIG,
   TRIVY_FS,
+  TRIVY_FS_KEYS,
   findingKey,
   keysOfRun,
   runNameEntry,
+  trivyFsKey,
 } from '../../../src/history/runNames.js';
+import { MANIFEST_ECOSYSTEMS, MANIFEST_ECOSYSTEM_LOCKFILES } from '../../../src/runners/scannerParsers/trivy.js';
 
 const SRC = fileURLToPath(new URL('../../../src/', import.meta.url));
 
@@ -111,6 +114,11 @@ function bookkeepingNames(): string[] {
   found.push(...quoted(collect(/const OTHER_CHILDREN\s*=\s*\[([^\]]+)\]/g)));
   // generate_sbom: `let producedBy: 'syft' | 'trivy' | null`.
   found.push(...quoted(collect(/let producedBy:\s*([^=;]+)/g)));
+  // scan_deps / deps_audit: `missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`))`,
+  // one per ecosystem of trivy.ts' manifest-coverage table.
+  for (const x of collect(/(`trivy:\$\{g\.ecosystem\}`)/g)) {
+    found.push(...MANIFEST_ECOSYSTEMS.map((e) => ({ file: x.file, value: `trivy:${e}` })));
+  }
   return [...new Set(found.map((x) => x.value))].sort();
 }
 
@@ -145,6 +153,8 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
     'never reaches a scans row: map_attack_surface returns its tools_run and caches the surface, writing no scan',
   'tools/reviewPr.ts:...secrets.missing_tools': "a copy of gitleaksScan's names",
   'tools/scanWordpress.ts:...secrets.missing_tools': "a copy of gitleaksScan's names",
+  'tools/scanDeps.ts:...coverage.gaps.map((g': '`trivy:${g.ecosystem}`, one per MANIFEST_ECOSYSTEMS entry',
+  'tools/depsAudit.ts:...coverage.gaps.map((g': '`trivy:${g.ecosystem}`, one per MANIFEST_ECOSYSTEMS entry',
 };
 
 /** Every `tools_run` / `missing_tools` write whose name is an expression, as `file:expression`. */
@@ -159,14 +169,19 @@ function nameExpressions(): string[] {
   return [...new Set(found.filter((x) => !/^'[^']*'$/.test(x.value)).map((x) => `${x.file}:${x.value}`))].sort();
 }
 
-/** The keys a finding of `tool` can have (Trivy and scan_skill split by pass). */
+/** The keys a finding of `tool` can have (Trivy split by pass and lock file ecosystem, scan_skill by pass). */
 function keysOfTool(tool: string): string[] {
+  const lockFiles = MANIFEST_ECOSYSTEM_LOCKFILES.flatMap((e) => e.lockfiles);
   const shapes = [
     { tool },
     { tool, subcategory: 'cve' },
     { tool, category: 'license' as const },
     { tool, subcategory: 'misconfiguration' },
     { tool, rule_id: 'osv-vulnerable-dependency' },
+    ...lockFiles.flatMap((file_path) => [
+      { tool, subcategory: 'cve', file_path },
+      { tool, category: 'license' as const, file_path },
+    ]),
   ];
   return [...new Set(shapes.map((s) => findingKey(s)))];
 }
@@ -180,7 +195,7 @@ describe('runNames: exhaustive over the source', () => {
       expect.arrayContaining([
         'npm-audit', 'dast', 'nuclei', 'trivy', 'semgrep', 'gitleaks', 'bandit', 'phpcs', 'security-code-scan',
         'guardian-scanskill', 'scan_dotnet_secrets', 'dotnet_efcore_audit', 'wpscan', 'eslint', 'ruff',
-        'hadolint', 'docker-compose', 'budgets',
+        'hadolint', 'docker-compose', 'budgets', 'pip-audit', 'dotnet-list-package', 'agent-audit',
       ]),
     );
     expect(names).toEqual(
@@ -189,7 +204,8 @@ describe('runNames: exhaustive over the source', () => {
         'gitleaks', 'gitleaks-working-tree', 'trivy', 'trivy-image', 'trivy-config', 'trivy-dockerfile',
         'semgrep-wp', 'phpcs-wpcs', 'phpcs', 'dotnet-sdk', 'security-code-scan', 'osv.dev', 'jscpd',
         'security_scan_full', 'deps_audit', 'quality_check', 'compliance_check', 'scan_wordpress',
-        'hadolint', 'docker-compose', 'budgets', 'scan_sast', 'scan_iac', 'syft',
+        'hadolint', 'docker-compose', 'budgets', 'scan_sast', 'scan_iac', 'syft', 'dotnet', 'agent-audit',
+        'trivy:npm', 'trivy:dotnet',
       ]),
     );
     expect(nameExpressions()).toEqual(
@@ -220,7 +236,9 @@ describe('runNames: exhaustive over the source', () => {
 describe('runNames: the pairs that do not share a name', () => {
   it.each([
     ['npm', ['npm-audit']],
-    ['pip-audit', []],
+    ['pip-audit', ['pip-audit']],
+    ['dotnet', ['dotnet-list-package']],
+    ['agent-audit', ['agent-audit']],
     ['guardian-dast', ['dast']],
     ['guardian-dast:unanswered', ['dast']],
     ['guardian-dast:wall-clock', ['dast']],
@@ -228,7 +246,7 @@ describe('runNames: the pairs that do not share a name', () => {
     ['phpcs-wpcs', ['phpcs']],
     ['gitleaks-working-tree', ['gitleaks']],
     ['dotnet-sdk', ['security-code-scan', 'dotnet-analyzers']],
-    ['trivy-image', [TRIVY_FS, TRIVY_CONFIG]],
+    ['trivy-image', [...TRIVY_FS_KEYS, TRIVY_CONFIG]],
     ['hadolint', ['hadolint']],
     ['docker-compose', ['docker-compose']],
     ['budgets', ['budgets']],
@@ -238,7 +256,10 @@ describe('runNames: the pairs that do not share a name', () => {
     ['trivy-config', [TRIVY_CONFIG]],
     ['trivy-dockerfile', [TRIVY_CONFIG]],
     ['osv.dev', [SKILL_OSV]],
-    ['deps_audit', [TRIVY_FS, 'npm-audit']],
+    ['deps_audit', [...TRIVY_FS_KEYS, 'npm-audit', 'pip-audit', 'dotnet-list-package']],
+    ['scan_deps', TRIVY_FS_KEYS],
+    ['trivy:npm', [trivyFsKey('npm')]],
+    ['trivy:dotnet', [trivyFsKey('dotnet')]],
   ])('%s measures %j', (name, keys) => {
     expect(keysOfRun(name, true)).toEqual(keys);
   });
@@ -256,8 +277,8 @@ describe('runNames: the pairs that do not share a name', () => {
   });
 
   it('`trivy` that ran ok is the dependency pass; not ok, Trivy is absent and no pass ran', () => {
-    expect(keysOfRun('trivy', true)).toEqual([TRIVY_FS]);
-    expect(keysOfRun('trivy', false)).toEqual([TRIVY_FS, TRIVY_CONFIG]);
+    expect(keysOfRun('trivy', true)).toEqual(TRIVY_FS_KEYS);
+    expect(keysOfRun('trivy', false)).toEqual([...TRIVY_FS_KEYS, TRIVY_CONFIG]);
   });
 
   it('an unlisted `base:suffix` is a pass of a known base; anything else is unknown', () => {
@@ -273,5 +294,59 @@ describe('runNames: the pairs that do not share a name', () => {
     expect(findingKey({ tool: 'trivy', category: 'license' })).toBe(TRIVY_FS);
     expect(findingKey({ tool: 'trivy', subcategory: 'misconfiguration' })).toBe(TRIVY_CONFIG);
     expect(findingKey({ tool: 'npm-audit', subcategory: 'cve' })).toBe('npm-audit');
+  });
+});
+
+describe('runNames: a Trivy ecosystem gap (`trivy:<ecosystem>`) speaks for that ecosystem only', () => {
+  // Decision: scan_deps / deps_audit list `trivy:<ecosystem>` missing when
+  // Trivy ran ok but produced no Result for a root manifest of that
+  // ecosystem. Excluding the name (it measures nothing) would let an older
+  // scan's CVE from a lock file that has since gone read "resolved"; the old
+  // fallback to the `trivy` entry vetoed every Trivy finding, npm CVEs and
+  // IaC misconfigurations included, for as long as one .csproj lacked a lock
+  // file. So a dependency finding is keyed by its lock file's ecosystem, and
+  // the gap names exactly that key.
+  it.each([
+    ['packages.lock.json', 'dotnet'],
+    ['src/Api/packages.lock.json', 'dotnet'],
+    ['src\\Api\\packages.lock.json', 'dotnet'],
+    ['packages.config', 'dotnet'],
+    ['package-lock.json', 'npm'],
+    ['web/yarn.lock', 'npm'],
+    ['pnpm-lock.yaml', 'npm'],
+    ['bun.lock', 'npm'],
+    ['composer.lock', 'composer'],
+    ['Gemfile.lock', 'rubygems'],
+    ['Cargo.lock', 'cargo'],
+  ])('a CVE or license finding in %s is keyed to %s', (file_path, eco) => {
+    expect(findingKey({ tool: 'trivy', subcategory: 'cve', file_path })).toBe(trivyFsKey(eco));
+    expect(findingKey({ tool: 'trivy', category: 'license', file_path })).toBe(trivyFsKey(eco));
+  });
+
+  it('anything else Trivy reports stays on its pass key', () => {
+    // An OS package in an image, a Go module Trivy reads without a lock file,
+    // a secret: none of them is what a manifest gap left unmeasured.
+    expect(findingKey({ tool: 'trivy', subcategory: 'cve', file_path: 'alpine:3.18 (alpine 3.18.4)' })).toBe(TRIVY_FS);
+    expect(findingKey({ tool: 'trivy', subcategory: 'cve', file_path: 'go.mod' })).toBe(TRIVY_FS);
+    expect(findingKey({ tool: 'trivy', subcategory: 'secret', file_path: 'package-lock.json' })).toBe(TRIVY_FS);
+    expect(findingKey({ tool: 'trivy', subcategory: 'misconfiguration', file_path: 'package-lock.json' })).toBe(
+      TRIVY_CONFIG,
+    );
+  });
+
+  it('every manifest ecosystem has its own entry, which measures that ecosystem and nothing else', () => {
+    for (const eco of MANIFEST_ECOSYSTEMS) {
+      expect(Object.hasOwn(RUN_NAMES, `trivy:${eco}`)).toBe(true);
+      expect(keysOfRun(`trivy:${eco}`, false)).toEqual([trivyFsKey(eco)]);
+      expect(keysOfRun(`trivy:${eco}`, true)).toEqual([trivyFsKey(eco)]);
+    }
+  });
+
+  it('every entry that measures Trivy dependency findings measures every ecosystem of them', () => {
+    const measuresFs = Object.entries(RUN_NAMES).filter(([, e]) => (e.measures as readonly string[]).includes(TRIVY_FS));
+    expect(measuresFs.map(([n]) => n)).toEqual(
+      expect.arrayContaining(['trivy', 'trivy-image', 'scan_deps', 'deps_audit', 'security_scan_full']),
+    );
+    for (const [, e] of measuresFs) expect(e.measures).toEqual(expect.arrayContaining([...TRIVY_FS_KEYS]));
   });
 });

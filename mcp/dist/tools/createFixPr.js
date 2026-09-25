@@ -637,7 +637,7 @@ function semgrepFixSources(targets, origins, projectPath, ctx) {
         byKey.set(origin.key, entry);
     }
     return [...byKey.values()].map(({ origin, targets: t }) => {
-        if (origin.tool === 'bug_hunt') {
+        if (origin.toolName === 'bug_hunt') {
             return { targets: t, localConfigs: bugHuntLocalConfigs(ctx, projectPath), registryAllowed: true };
         }
         const localOnly = origin.input['local_only'] === true;
@@ -685,15 +685,15 @@ async function rescanAfterFix(targets, origins, worktreePath, projectPath, ctx, 
     const scanIds = [];
     const findings = [];
     for (const { origin, targets: own } of byKey.values()) {
-        const subTool = TOOLS.find((t) => t.name === origin.tool);
+        const subTool = TOOLS.find((t) => t.name === origin.toolName);
         if (subTool === undefined)
-            return { ok: false, reason: `the '${origin.tool}' tool is not registered` };
+            return { ok: false, reason: `the '${origin.toolName}' tool is not registered` };
         const result = await subTool.handler({ project_path: worktreePath, force: true, ...origin.input }, ctx, meta);
         if (!result.ok)
-            return { ok: false, reason: `${origin.tool} failed: ${result.error.message}` };
+            return { ok: false, reason: `${origin.toolName} failed: ${result.error.message}` };
         const scanId = result.scan_id;
         if (typeof scanId !== 'string')
-            return { ok: false, reason: `${origin.tool} returned no scan_id` };
+            return { ok: false, reason: `${origin.toolName} returned no scan_id` };
         const row = ctx.storage.scans.getById(scanId);
         const rows = ctx.storage.findings.listByScan(scanId);
         try {
@@ -703,12 +703,12 @@ async function rescanAfterFix(targets, origins, worktreePath, projectPath, ctx, 
             /* best effort — a stray row describes a deleted worktree, nothing more */
         }
         if (row === null)
-            return { ok: false, reason: `${origin.tool}'s scan row is missing` };
+            return { ok: false, reason: `${origin.toolName}'s scan row is missing` };
         const unverified = [...new Set(own.map((t) => scannerNotVerified(t, row)).filter((x) => x !== null))];
         if (unverified.length > 0) {
             return {
                 ok: false,
-                reason: `${unverified.join(', ')} did not run ok inside the worktree (${origin.tool} reported it ` +
+                reason: `${unverified.join(', ')} did not run ok inside the worktree (${origin.toolName} reported it ` +
                     'missing, failed or partial for this target, or cannot check it at all) — cannot verify',
             };
         }
