@@ -15,10 +15,39 @@
  * package for exactly this (draft-04-dialect schemas under ajv8), so this
  * suite imports `Ajv` from `ajv-draft-04`, not from `ajv` directly, unlike
  * the brief's own illustrative snippet.
+ *
+ * `ajv-formats` (task 4 brief, item 5) is applied on top: measured by hand
+ * before wiring it in, plain `ajv`/`ajv-draft-04` does NOT enforce the
+ * `format` keyword at all — `{ type: 'string', format: 'uri-reference' }`
+ * accepted a raw space, `%`, and `#` with no complaint, because format
+ * validation moved into this separate, opt-in package starting at ajv@7.
+ * That means every `expectValidSarif` call below this comment ran with
+ * `uri-reference` silently unchecked until now — the SARIF-shaped assertions
+ * were real, but the one property that would have caught `toSarif`'s
+ * unescaped-URI bug was not. `ajv-formats` was already resolved
+ * transitively (via `ajv-draft-04`'s own tree) before this task promoted it
+ * to an explicit devDependency.
+ *
+ * Loaded with `createRequire`, not `import addFormats from 'ajv-formats'`:
+ * confirmed by hand that the ordinary default import does not type-check
+ * under this project's `moduleResolution: "NodeNext"` — `ajv-formats` ships
+ * no `"type"`/`"exports"` field, and its `.d.ts` uses ESM `export default`
+ * syntax for what Node16/NodeNext resolution treats as a CommonJS module;
+ * `tsc` infers the MODULE NAMESPACE type for the import instead of the
+ * default export and rejects calling it ("not callable"). `ajv-draft-04`,
+ * imported the ordinary way two lines below, does not hit this — only
+ * `ajv-formats` lacks the `export =` a CommonJS `.d.ts` needs for
+ * `esModuleInterop` to unwrap it correctly here. `createRequire` sidesteps
+ * the broken VALUE-level interop entirely (a plain runtime `require`, which
+ * is what `ajv-formats` truly is); the TYPE still comes from the package's
+ * own `.d.ts` via `FormatsPlugin`, so this is a loader workaround, not a
+ * type escape hatch.
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import Ajv from 'ajv-draft-04';
+import type { FormatsPlugin } from 'ajv-formats';
 import { renderHuman, renderJson, renderSarif } from '../../../src/ci/report.js';
 import { evaluateGate } from '../../../src/ci/gate.js';
 import { buildBaseline } from '../../../src/ci/baseline.js';
@@ -68,11 +97,16 @@ function input(over: Partial<Parameters<typeof evaluateGate>[0]> = {}) {
 
 const PROJECT = '/proj';
 
+// See the module doc comment above for why this is `require`d rather than
+// imported.
+const addFormats = createRequire(import.meta.url)('ajv-formats') as FormatsPlugin;
+
 describe('renderSarif', () => {
   const schema = JSON.parse(
     readFileSync('test/fixtures/sarif/sarif-schema-2.1.0.json', 'utf8'),
   ) as object;
   const ajv = new Ajv({ strict: false, allErrors: true, logger: false });
+  addFormats(ajv);
   const validate = ajv.compile(schema);
 
   function expectValidSarif(doc: unknown): void {
@@ -304,6 +338,36 @@ describe('renderSarif', () => {
     expect(v.coverageGaps.some((g) => g.includes('semgrep'))).toBe(true); // sanity on the fixture
     const doc = JSON.parse(renderSarif(v, PROJECT));
     expect(JSON.stringify(doc)).not.toMatch(/semgrep/);
+  });
+
+  // Task 4 brief, item 5: the three characters this schema test could not
+  // actually catch before `ajv-formats` was wired in above. Each is a
+  // project-relative path (`renderSarif`'s own relativisation — tested
+  // elsewhere in this file — is orthogonal to the encoding fixed here), so
+  // this is exercising exactly the shape `toSarif`/`toUri` receives from a
+  // real scan.
+  it('produces a schema-valid document for a file path containing a space', () => {
+    const v = evaluateGate(input({ findings: [finding({ file_path: 'src/my file.ts' })] }));
+    const doc = JSON.parse(renderSarif(v, PROJECT));
+    expectValidSarif(doc);
+    const uri = doc.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri;
+    expect(uri).toBe('src/my%20file.ts');
+  });
+
+  it('produces a schema-valid document for a file path containing a percent sign', () => {
+    const v = evaluateGate(input({ findings: [finding({ file_path: 'src/100%.ts' })] }));
+    const doc = JSON.parse(renderSarif(v, PROJECT));
+    expectValidSarif(doc);
+    const uri = doc.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri;
+    expect(uri).toBe('src/100%25.ts');
+  });
+
+  it('produces a schema-valid document for a file path containing #, without corrupting it into a fragment', () => {
+    const v = evaluateGate(input({ findings: [finding({ file_path: 'src/notes#3.md' })] }));
+    const doc = JSON.parse(renderSarif(v, PROJECT));
+    expectValidSarif(doc);
+    const uri = doc.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri;
+    expect(uri).not.toContain('#');
   });
 });
 

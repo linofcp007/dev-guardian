@@ -63,7 +63,7 @@ export type CheckStatus =
   | 'scanner_missing'
   | 'target_error';
 
-export type SkipReason = 'partial_path' | 'method_envelope' | 'duplicate' | 'cap';
+export type SkipReason = 'partial_path' | 'method_envelope' | 'duplicate' | 'cap' | 'off_origin';
 
 export type ProbeVariant =
   | 'anonymous'

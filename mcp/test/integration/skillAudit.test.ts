@@ -5,7 +5,7 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -157,6 +157,34 @@ describe('scan_skill', () => {
       plugin,
     )) as { ok: true; passed: boolean };
     expect(r.passed).toBe(false);
+  });
+
+  // Measured defect (task 4 brief, item 4): `docs/.aws/credentials` ingested
+  // and echoed into findings — a symlink inside the skill directory pointed
+  // outside it, and the old `statSync`-based walk followed it, reading the
+  // linked file's content as if it were part of the package being audited.
+  it('never leaks the content of a file reached through a symlink escaping the skill directory', async () => {
+    const plugin = makePlugin();
+    const outside = makeTempDir('outside-secret-');
+    writeFileSync(join(outside, 'credentials'), 'AKIA-SUPER-SECRET-DO-NOT-LEAK', 'utf8');
+
+    const dir = cleanSkill();
+    mkdirSync(join(dir, 'docs'));
+    symlinkSync(join(outside, 'credentials'), join(dir, 'docs', 'credentials'), 'file');
+
+    const r = (await getTool('scan_skill').handler(
+      { target: dir, check_deps: false, write_reports: false },
+      plugin,
+    )) as {
+      ok: true;
+      top_findings: Array<{ message?: string; title: string; file_path?: string }>;
+    };
+    expect(r.ok).toBe(true);
+    expect(JSON.stringify(r)).not.toContain('AKIA-SUPER-SECRET');
+    // The link is reported as a finding, not silently dropped.
+    expect(
+      r.top_findings.some((f) => (f.file_path ?? '').includes('credentials')),
+    ).toBe(true);
   });
 
   it('returns target_not_found for a missing path', async () => {

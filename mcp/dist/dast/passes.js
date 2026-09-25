@@ -49,6 +49,15 @@ export async function runRateLimitBurst(opts) {
     if (selected === null)
         return { ...empty, outcome: 'no_candidate' };
     const requests = buildBurst(selected.route, opts.origin, RATE_LIMIT_BURST);
+    // `buildBurst` returns [] exactly when the selected route's resolved path
+    // would leave `origin` (see its own doc comment) — there is no other way
+    // for it to build fewer than `size` requests. That is "no usable
+    // candidate", the same outcome as `selectRateLimitTarget` returning null
+    // above, not "the target answered none of the burst" (`no_response`
+    // below), which is a fact about the TARGET rather than about the route
+    // this scan picked.
+    if (requests.length === 0)
+        return { ...empty, outcome: 'no_candidate' };
     const burstResults = [];
     for (const request of requests) {
         const result = await executeProbe(request, opts.probeOpts);

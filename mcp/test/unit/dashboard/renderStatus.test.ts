@@ -272,6 +272,49 @@ describe('renderStatus', () => {
     expect(out).toMatch(/\+2\b/);
   });
 
+  // Task 4 brief, item 6: `hotspots[].file_path` is finding-derived — it
+  // comes straight from a `Finding.file_path` a scanner reported, which
+  // ultimately names a file inside the SCANNED, untrusted repo. A file (or
+  // directory) name is attacker-chosen content, so this is the one field in
+  // `renderStatus` a scanned repo can use to inject a terminal escape into
+  // the operator's own terminal — colouring the next line, moving the
+  // cursor, or (via an OSC sequence) rewriting the window/tab title.
+  it('strips a CSI escape sequence (e.g. SGR colour) out of a hotspot file path', () => {
+    const out = renderStatus(snap({
+      findings: { total: 1,
+        by_severity: { critical: 0, high: 0, medium: 0, low: 1, info: 0 },
+        by_category: {}, by_tool: {},
+        hotspots: [{ file_path: '\u001b[31mevil.ts\u001b[0m', count: 1 }],
+        items: [] },
+    }), { color: false });
+    expect(out).not.toMatch(/\u001b/);
+    expect(out).toContain('evil.ts');
+  });
+
+  it('strips C0 control characters other than tab out of a hotspot file path', () => {
+    const out = renderStatus(snap({
+      findings: { total: 1,
+        by_severity: { critical: 0, high: 0, medium: 0, low: 1, info: 0 },
+        by_category: {}, by_tool: {},
+        hotspots: [{ file_path: 'be\u0007ll\u0000.ts', count: 1 }],
+        items: [] },
+    }), { color: false });
+    expect(out).not.toMatch(/[\u0000\u0007]/);
+    expect(out).toContain('bell.ts');
+  });
+
+  it('strips a C1 control character out of a hotspot file path', () => {
+    const out = renderStatus(snap({
+      findings: { total: 1,
+        by_severity: { critical: 0, high: 0, medium: 0, low: 1, info: 0 },
+        by_category: {}, by_tool: {},
+        hotspots: [{ file_path: 'c1\u009bfile.ts', count: 1 }],
+        items: [] },
+    }), { color: false });
+    expect(out).not.toMatch(/\u009b/);
+    expect(out).toContain('c1file.ts');
+  });
+
   it('renders every truncation notice it is given', () => {
     const out = renderStatus(snap({
       truncation: [{ what: 'findings', shown: 2000, total: 5310,

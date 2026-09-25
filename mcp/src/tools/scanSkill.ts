@@ -128,8 +128,9 @@ async function handler(
   }
 
   try {
-    const analyzeOpts: { checkDeps?: boolean; signal?: AbortSignal } = {
+    const analyzeOpts: Parameters<typeof analyzeSkill>[1] = {
       checkDeps: inp.check_deps !== false,
+      symlinks: ingest.symlinks,
     };
     if (callMeta?.signal) analyzeOpts.signal = callMeta.signal;
     const report = await analyzeSkill(ingest.files, analyzeOpts);
