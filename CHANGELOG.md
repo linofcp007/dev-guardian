@@ -40,20 +40,41 @@ version bump.
     that exists only in this repo; an installed rules file in another
     project told the agent to run a script that was never there. Every
     template now carries a `{{DEV_GUARDIAN_CLI}}` placeholder, substituted
-    with that install's own absolute CLI path.
+    with that install's own absolute CLI path — including two mentions
+    (`baseline update`, `dashboard`) the canonical body still named as bare
+    `dev-guardian <subcommand>` after the rest of the fix, found in review.
   - `--force` used to `copyFileSync` the whole rendered template over an
-    existing `AGENTS.md` / `GEMINI.md` / copilot instructions file,
-    destroying any content already there. Rules are now managed as a
+    existing `AGENTS.md` / `GEMINI.md` / copilot instructions file /
+    `clinerules`, destroying any content already there. Those four
+    (general-purpose files dev-guardian is a GUEST in) now manage a
     delimited block (`<!-- dev-guardian:begin -->` … `<!-- dev-guardian:end
-    -->`) inside the target file; existing content outside it is never
-    touched. `--update-mcp` is the new name for refreshing a stale MCP
-    entry / rules block; `--force` is kept as a deprecated alias.
+    -->`) instead; existing content outside it is never touched, and a
+    project that ran an OLDER, whole-file `--write` (an entirely unmarked
+    dev-guardian copy, no delimiters at all) is detected by a content
+    signature and routed through the same needs_update/force gate rather
+    than silently duplicated beside the fresh copy. `--update-mcp` is the
+    new name for refreshing a stale MCP entry / rules block; `--force` is
+    kept as a deprecated alias. Cursor's `.mdc` and Windsurf's rules file
+    are NOT part of this — see the next bullet.
+  - Cursor's `.cursor/rules/dev-guardian.mdc` and Windsurf's `.windsurf/
+    rules/dev-guardian.md` are files dev-guardian owns exclusively (nothing
+    else is expected to write there) and both require YAML frontmatter as
+    the file's literal first bytes to be recognised at all — wrapping them
+    in the delimited-block scheme above put that marker BEFORE the
+    frontmatter, silently disabling the rule (`alwaysApply`/`trigger`) on
+    every new install. Found in review before release; these two are now
+    written whole, frontmatter first, always.
   - Codex TOML: a stale `[mcp_servers.dev-guardian]` entry always reported
     `already_present` regardless of content (JSON hosts already compared
     correctly); and force-updating one left a hand-edited
     `[mcp_servers.dev-guardian.env]` sub-table sitting next to a freshly
     written `env = {}` — invalid TOML. Entries are now compared by content,
-    and force replaces the whole block including its own sub-tables.
+    and force removes EVERY `mcp_servers.dev-guardian`/`.*` span found
+    anywhere in the file — including a non-contiguous one (a sub-table
+    reappearing after an unrelated table) and an orphan sub-table with no
+    main heading at all, both found in review with a real TOML parser
+    (`python -m tomllib`) after the first pass only checked for a single,
+    contiguous span.
   - `mcp-config all --write` at the default project scope used to silently
     write the global Windsurf and Claude Desktop configs. Both are now
     skipped under `all` unless `--global` (or `--scope global`) is given
@@ -83,13 +104,17 @@ version bump.
 
 - `@modelcontextprotocol/sdk` bumped to `^1.30.1`; `vitest`/
   `@vitest/coverage-v8` bumped to `^5.0.1` (closes the last of `npm audit`'s
-  15 findings — `npm audit fix` handled the rest). `mcp/vitest.config.ts`'s
-  global `testTimeout` raised from 10s to 180s: several Semgrep-heavy
+  15 findings — `npm audit fix` handled the rest). Several Semgrep-heavy
   integration tests call `semgrep` synchronously and were already taking
   well over 10s under load — vitest 2's timeout simply could not preempt a
   blocking synchronous call, so this was never actually enforced; vitest 5
   does enforce it, surfacing a real, pre-existing gap rather than
-  introducing one.
+  introducing one. `mcp/vitest.config.ts`'s own default `testTimeout` stays
+  at the unit-appropriate 10s (an earlier pass here raised it globally to
+  180s, which would have hidden a genuine hang in any of the other 130+
+  files for three minutes instead of ten seconds — found in review); the
+  nine files that genuinely need longer opt in with their own
+  `vi.setConfig({ testTimeout: 180_000 })`.
 
 ## [2.0.0] - 2026-08-23
 
