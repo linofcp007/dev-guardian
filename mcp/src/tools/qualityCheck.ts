@@ -21,12 +21,24 @@
  * categories one call happened not to ask for. Each finding's category comes
  * from its analyser (`subcategory` for jscpd / radon / ESLint / staticcheck,
  * the rule code for ruff: C90 complexity, N naming).
+ *
+ * `scope` (`platform/scope.ts`) hands every analyser the scoped files instead
+ * of the project: jscpd all of them (so duplication is measured AMONG the
+ * scoped files — a copy of code outside the scope is not seen, and the reason
+ * says so), ruff and radon the `.py` ones, ESLint the JS/TS ones, staticcheck
+ * the packages holding the `.go` ones (it analyses packages, not files; the
+ * factory keeps only findings in scoped files). The budgets in
+ * `.guardian/budgets.yml` are project-level — a duplication percentage of the
+ * whole project — so a scoped run skips them and says why.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { z } from 'zod';
 import { budgetViolationFindings, evaluateQualityBudgets, loadBudgets, type QualityBudgets } from '../budgets/budgets.js';
+import { ScanScopeInput } from '../platform/scope.js';
+import { batchArgs } from '../runners/argBatches.js';
+import { scanFileBatches } from '../runners/fileBatchScan.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { eslintFatalErrors, eslintParser } from '../runners/scannerParsers/eslint.js';
@@ -88,10 +100,13 @@ registerToolModule(
       'naming; `categories` narrows the response to those classes while every finding is still recorded ' +
       '(`category_filter` counts what was withheld). An applicable analyser that is missing or fails is ' +
       'reported as such and coverage is partial, never full. Also reads .guardian/budgets.yml, when ' +
-      'present, and reports an exceeded duplication % or complexity budget as a finding.',
+      'present, and reports an exceeded duplication % or complexity budget as a finding. Pass scope to ' +
+      'analyse only some files (duplication is then measured among them; budgets, being project-level, ' +
+      'are skipped). .guardianignore paths are filtered out.',
     scan_type: 'quality',
     category: 'quality',
     supportsAutoFix: false,
+    supportsScope: true,
     responseOnlyInputs: ['categories'],
     responseView: (input, findings, scanId) => qualityCategoriesView(input.categories, findings, scanId),
     inputSchema: {
@@ -104,10 +119,22 @@ registerToolModule(
             '`category_filter` counts what was withheld.',
         ),
       force: Force,
+      scope: ScanScopeInput,
     },
     invoke: async (_input, ctx): Promise<ScannerInvocation> => {
       const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'quality');
       const out: Collected = { tools_run: [], missing_tools: [], parser_inputs: [], cancelled: false };
+
+      if (ctx.scope !== null) {
+        await runOnScope(ctx, reportDir, out, ctx.scope.files);
+        return {
+          outcome: out.cancelled ? 'cancelled' : 'completed',
+          tools_run: out.tools_run,
+          missing_tools: out.missing_tools,
+          parser_inputs: out.parser_inputs,
+          report_paths: [reportDir],
+        };
+      }
 
       await runJscpd(ctx, reportDir, out);
       if (!out.cancelled && hasFileWithExtension(ctx.projectPath, ['.py'])) {
@@ -342,11 +369,11 @@ async function runEslint(ctx: InvokeContext, reportDir: string, out: Collected):
   record(out, 'eslint', run, [0, 1], report, Array.isArray, eslintParser, couldNotAnalyse(fatal));
 }
 
-async function runStaticcheck(ctx: InvokeContext, out: Collected): Promise<void> {
+async function runStaticcheck(ctx: InvokeContext, out: Collected, packages: readonly string[] = ['./...']): Promise<void> {
   if (!(await scannerAvailable('staticcheck'))) return notInstalled(out, 'staticcheck');
   const run = await runProcess({
     command: 'staticcheck',
-    args: ['-f', 'json', './...'],
+    args: ['-f', 'json', ...packages],
     cwd: ctx.projectPath,
     env: ctx.scriptEnv,
     signal: ctx.signal,
@@ -378,6 +405,182 @@ async function runStaticcheck(ctx: InvokeContext, out: Collected): Promise<void>
     return;
   }
   record(out, 'staticcheck', run, [0, 1], run.stdout, () => true, staticcheckParser, couldNotAnalyse(errors));
+}
+
+// ---- scoped runs ------------------------------------------------------
+
+const JS_TS = /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/i;
+
+/** Every applicable analyser over the scope's files — see the module comment. */
+async function runOnScope(ctx: InvokeContext, reportDir: string, out: Collected, files: readonly string[]): Promise<void> {
+  if (files.length === 0) {
+    out.tools_run.push({ name: 'jscpd', status: 'skipped', reason: 'the scope holds no file — nothing to analyse' });
+    return;
+  }
+  await runJscpdOnFiles(ctx, reportDir, out, files);
+  const python = files.filter((f) => f.toLowerCase().endsWith('.py'));
+  if (!out.cancelled && python.length > 0) {
+    await runOnFileBatches(ctx, out, {
+      name: 'ruff',
+      // --exit-zero: findings are exit 0, so any other exit is ruff failing.
+      args: ['check', '--output-format', 'json', '--exit-zero'],
+      reportArgs: (f) => ['--output-file', f],
+      files: python,
+      reportDir,
+      okExitCodes: [0],
+      reportOk: Array.isArray,
+      parser: ruffParser,
+    });
+    if (!out.cancelled) {
+      await runOnFileBatches(ctx, out, {
+        name: 'radon',
+        args: ['cc', '-j'],
+        reportArgs: (f) => ['-O', f],
+        files: python,
+        reportDir,
+        okExitCodes: [0],
+        reportOk: isObject,
+        parser: radonParser,
+        errors: radonErrors,
+        env: { PYTHONUTF8: '1' },
+      });
+    }
+  }
+  const scripts = files.filter((f) => JS_TS.test(f));
+  if (!out.cancelled && scripts.length > 0 && hasEslintConfig(ctx.projectPath)) {
+    const eslint = localEslint(ctx.projectPath);
+    if (eslint === null) {
+      notInstalled(out, 'eslint', 'ESLint is configured but not installed in node_modules — npx is never used.');
+    } else {
+      await runOnFileBatches(ctx, out, {
+        name: 'eslint',
+        command: process.execPath,
+        args: [eslint, '--format', 'json'],
+        reportArgs: (f) => ['--output-file', f],
+        files: scripts,
+        reportDir,
+        okExitCodes: [0, 1],
+        reportOk: Array.isArray,
+        parser: eslintParser,
+        errors: eslintFatalErrors,
+      });
+    }
+  }
+  const goFiles = files.filter((f) => f.endsWith('.go'));
+  if (!out.cancelled && goFiles.length > 0 && existsSync(join(ctx.projectPath, 'go.mod'))) {
+    // staticcheck analyses packages: the directories holding the scoped files.
+    const packages = [...new Set(goFiles.map((f) => (f.includes('/') ? `./${f.slice(0, f.lastIndexOf('/'))}` : '.')))].sort();
+    await runStaticcheck(ctx, out, packages);
+  }
+  if (!out.cancelled && loadBudgets(ctx.projectPath).kind !== 'none') {
+    out.tools_run.push({
+      name: 'budgets',
+      status: 'skipped',
+      reason:
+        'project-level: .guardian/budgets.yml budgets the duplication % and complexity of the whole ' +
+        'project, which a scoped scan does not measure — run quality_check without scope to check them',
+    });
+  }
+}
+
+/**
+ * jscpd over the scoped files, one run per command-line batch, each with its
+ * own report directory. Duplication is measured among the files of one run:
+ * the reason says so, and says when a scope was too long for one run.
+ */
+async function runJscpdOnFiles(ctx: InvokeContext, reportDir: string, out: Collected, files: readonly string[]): Promise<void> {
+  if (!(await scannerAvailable('jscpd'))) return notInstalled(out, 'jscpd');
+  const fixed = ['--reporters', 'json', '--output', join(reportDir, 'dup-000'), '--silent', '--'];
+  const batches = batchArgs(files, { command: 'jscpd', fixedArgs: fixed });
+  const problems: string[] = [];
+  for (const [i, batch] of batches.entries()) {
+    const dupDir = join(reportDir, `dup-${String(i + 1).padStart(3, '0')}`);
+    const run = await runProcess({
+      command: 'jscpd',
+      args: ['--reporters', 'json', '--output', dupDir, '--silent', '--', ...batch],
+      cwd: ctx.projectPath,
+      env: ctx.scriptEnv,
+      signal: ctx.signal,
+      onLog: ctx.onLog,
+    });
+    if (run.outcome === 'cancelled') out.cancelled = true;
+    const report = readJsonSafe(join(dupDir, 'jscpd-report.json'));
+    const label = batches.length > 1 ? `batch ${i + 1}/${batches.length}: ` : '';
+    if (run.outcome === 'cancelled' || run.outcome === 'timed_out' || run.outcome === 'output_too_large') {
+      problems.push(`${label}did not finish (${run.outcome})`);
+    } else if (run.exitCode !== 0 && run.exitCode !== 1) {
+      problems.push(`${label}exit ${String(run.exitCode)}${firstLine(run.stderr) ? `: ${firstLine(run.stderr)}` : ''}`);
+    } else if (report === null || !isObject(parseInputAsJson(report))) {
+      problems.push(`${label}no readable report was written`);
+    } else {
+      out.parser_inputs.push({ parser: jscpdParser, input: report });
+    }
+    if (out.cancelled) break;
+  }
+  const scope =
+    `duplication measured among the ${files.length} scoped file(s) only — a copy of code outside the scope is not seen` +
+    (batches.length > 1 ? `, nor one across the ${batches.length} batches the scope needed` : '');
+  out.tools_run.push(
+    problems.length === 0
+      ? { name: 'jscpd', status: 'ok', reason: scope }
+      : { name: 'jscpd', status: 'failed', reason: problems.join('; ') },
+  );
+}
+
+/**
+ * One analyser over the scoped files, batched (`scanFileBatches`), recorded
+ * like a whole-project run: `ok`, `failed` with why, and files it could not
+ * analyse as reduced coverage.
+ */
+async function runOnFileBatches(
+  ctx: InvokeContext,
+  out: Collected,
+  opts: {
+    name: string;
+    command?: string;
+    args: readonly string[];
+    reportArgs: (f: string) => string[];
+    files: readonly string[];
+    reportDir: string;
+    okExitCodes: readonly number[];
+    reportOk: (parsed: unknown) => boolean;
+    parser: ScannerParser;
+    errors?: (report: string) => string[];
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<void> {
+  if (opts.command === undefined && !(await scannerAvailable(opts.name))) return notInstalled(out, opts.name);
+  const run = await scanFileBatches({
+    name: opts.name,
+    command: opts.command ?? opts.name,
+    args: opts.args,
+    reportArgs: opts.reportArgs,
+    files: opts.files,
+    cwd: ctx.projectPath,
+    reportDir: opts.reportDir,
+    reportPrefix: opts.name,
+    env: { ...ctx.scriptEnv, ...(opts.env ?? {}) },
+    signal: ctx.signal,
+    ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+    check: ({ raw, exitCode, outcome }) => {
+      if (outcome === 'cancelled' || outcome === 'timed_out' || outcome === 'output_too_large') {
+        return { ok: false, reason: `did not finish (${outcome})` };
+      }
+      if (exitCode === null || !opts.okExitCodes.includes(exitCode)) return { ok: false, reason: `exit ${String(exitCode)}` };
+      if (raw === null || !opts.reportOk(parseInputAsJson(raw))) return { ok: false, reason: 'no readable report was written' };
+      return { ok: true };
+    },
+  });
+  if (run.cancelled) out.cancelled = true;
+  for (const raw of run.reports) out.parser_inputs.push({ parser: opts.parser, input: raw });
+  const entry: ToolRun = { ...run.toolRun };
+  const errors = opts.errors === undefined ? [] : run.reports.flatMap((r) => opts.errors?.(r) ?? []);
+  const gaps = couldNotAnalyse(errors);
+  if (entry.status === 'ok' && gaps.length > 0) {
+    entry.reason = [entry.reason, ...gaps].filter((s) => s !== undefined).join('; ');
+    out.missing_tools.push(opts.name);
+  }
+  out.tools_run.push(entry);
 }
 
 function couldNotAnalyse(errors: readonly string[]): string[] {

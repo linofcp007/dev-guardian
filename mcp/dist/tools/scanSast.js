@@ -50,13 +50,27 @@
  * alternative — no registry, `--metrics=off`, and only rules already on disk.
  * The choice is recorded on the scan (`local_only`), so `create_fix_pr` can
  * re-scan a fix with the same rules that found the target.
+ *
+ * ---- `scope`, and `.guardianignore` -------------------------------------
+ *
+ * With `scope` (`platform/scope.ts`), Semgrep and Bandit get the scoped files
+ * as explicit targets (`runners/fileBatchScan.ts`: batched below the command-
+ * line limit, every batch judged on its own report). The Docker fallback
+ * mounts the whole project, so without a native Semgrep a scoped scan is a
+ * named gap rather than a silently widened one. The .NET analyzers run inside
+ * a build of the whole project: for a scope they are `skipped` as
+ * project-level, and a gap whenever .NET sources are in the scope. Unscoped,
+ * the project's `.guardianignore` reaches Semgrep as `--exclude` and Bandit as
+ * `-x` (`platform/guardianIgnore.ts`); the factory filters the rest.
  */
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { classifyRestoreFailure, findDotnetTargets, planDotnetRestore, projectsForTarget, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
-import { checkBanditReport } from '../runners/fileBatchScan.js';
+import { banditExcludeArgs, semgrepExcludeArgs } from '../platform/guardianIgnore.js';
+import { ScanScopeInput } from '../platform/scope.js';
+import { banditOnFiles, checkBanditReport, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
@@ -89,9 +103,11 @@ registerToolModule(makeScanTool({
         'rules from the Semgrep registry and sends usage metrics to Semgrep Inc.; Semgrep refuses ' +
         'to build an auto config with metrics off, so this is unavoidable in the default mode. ' +
         'Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using ' +
-        'only rules already on disk.',
+        'only rules already on disk. Pass scope to scan only some files (paths, a git diff, or what ' +
+        'changed since a ref/date); .guardianignore paths are never scanned.',
     scan_type: 'sast',
     category: 'security',
+    supportsScope: true,
     // The cache key and the argv read the SAME plan (see the module comment).
     // `rulesProjectPath` is the scanned path, except when create_fix_pr
     // re-scans a worktree and needs the original project's rules.
@@ -116,6 +132,7 @@ registerToolModule(makeScanTool({
             '--metrics=off so no telemetry leaves the machine. Fewer rules than the default. ' +
             'When the project has no local rules the scan is reported as skipped rather than ' +
             'as a clean result. Default: false.'),
+        scope: ScanScopeInput,
     },
     invoke: async (input, ctx) => {
         const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'sast');
@@ -124,11 +141,22 @@ registerToolModule(makeScanTool({
         const parser_inputs = [];
         const autoFix = input.auto_fix === true;
         const localOnly = input.local_only === true;
-        await runSemgrep({ ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs });
-        await runBandit({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
-        await runDotnetAnalyzers({ ctx, tools_run, missing_tools, parser_inputs });
+        if (ctx.scope !== null) {
+            const files = ctx.scope.files;
+            await runSemgrepOnScope({ ctx, reportDir, autoFix, localOnly, files, tools_run, missing_tools, parser_inputs });
+            await runBanditOnScope({ ctx, reportDir, files: files.filter(isPython), tools_run, missing_tools, parser_inputs });
+            dotnetNotApplicableToScope({ ctx, files, tools_run, missing_tools, parser_inputs });
+        }
+        else {
+            await runSemgrep({ ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs });
+            await runBandit({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
+            await runDotnetAnalyzers({ ctx, tools_run, missing_tools, parser_inputs });
+        }
+        // `failed` only when something failed and nothing ran: a scope with
+        // no file in it skips every scanner, which is not a failure.
         const anyOk = tools_run.some((t) => t.status === 'ok');
-        const outcome = anyOk ? 'completed' : missing_tools.length > 0 ? 'completed' : 'failed';
+        const anyFailed = tools_run.some((t) => t.status === 'failed');
+        const outcome = anyOk || missing_tools.length > 0 || !anyFailed ? 'completed' : 'failed';
         return {
             outcome,
             tools_run,
@@ -158,7 +186,7 @@ async function runSemgrep(args) {
     }
     const semgrepBin = await scannerAvailable('semgrep');
     if (semgrepBin) {
-        const argv = [...plan.args, '--json', '--quiet', '--output', outFile];
+        const argv = [...plan.args, ...semgrepExcludeArgs(ctx.exclusions), '--json', '--quiet', '--output', outFile];
         if (autoFix)
             argv.push('--autofix');
         argv.push(ctx.projectPath);
@@ -271,7 +299,7 @@ async function runBandit(args) {
     const outFile = join(reportDir, 'bandit.json');
     const result = await runProcess({
         command: 'bandit',
-        args: ['-r', ctx.projectPath, '-f', 'json', '-o', outFile, '-q'],
+        args: ['-r', ctx.projectPath, ...banditExcludeArgs(ctx.exclusions, ctx.projectPath), '-f', 'json', '-o', outFile, '-q'],
         cwd: ctx.projectPath,
         env: pythonUtf8Env(ctx.scriptEnv),
         signal: ctx.signal,
@@ -283,6 +311,105 @@ async function runBandit(args) {
     // Exit 0 (clean) or 1 (issues) AND a report with no unanalysed files.
     const check = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
     tools_run.push(check.ok ? { name: 'bandit', status: 'ok' } : { name: 'bandit', status: 'failed', reason: check.reason ?? 'bandit failed' });
+}
+const isPython = (f) => f.toLowerCase().endsWith('.py');
+/** Sources the .NET analyzers read when they compile the project. */
+const DOTNET_SOURCE = /\.(cs|fs|vb|razor|cshtml)$/i;
+/**
+ * Semgrep over a scope's files, as explicit targets (see the module comment).
+ * Same rule plan as a whole-project run; `.guardianignore` needs no flag here
+ * — the scope never holds an excluded file.
+ */
+async function runSemgrepOnScope(args) {
+    const { ctx, reportDir, autoFix, localOnly, files, tools_run, missing_tools, parser_inputs } = args;
+    if (files.length === 0) {
+        // Nothing asked for: not a gap (the scope's own warning says 0 files).
+        tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'the scope holds no file — nothing to scan' });
+        return;
+    }
+    const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly);
+    if (plan.nothingToRun) {
+        tools_run.push({
+            name: 'semgrep',
+            status: 'skipped',
+            reason: 'local_only=true but this project has no local Semgrep rules — no .semgrep.yml, ' +
+                'nothing registered with register_custom_rules.',
+        });
+        missing_tools.push('semgrep');
+        return;
+    }
+    if (!(await scannerAvailable('semgrep'))) {
+        tools_run.push({
+            name: 'semgrep',
+            status: 'skipped',
+            reason: 'not_installed — the Docker fallback mounts and scans the whole project, so it cannot run a ' +
+                'scoped scan; install Semgrep, or drop scope',
+        });
+        missing_tools.push('semgrep');
+        return;
+    }
+    const run = await semgrepOnFiles({
+        configArgs: [...plan.args, ...(autoFix ? ['--autofix'] : [])],
+        files,
+        cwd: ctx.projectPath,
+        reportDir,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+    });
+    for (const raw of run.reports)
+        parser_inputs.push({ parser: semgrepParser, input: raw });
+    const entry = { ...run.toolRun };
+    if (plan.notes.length > 0)
+        entry.reason = [entry.reason, ...plan.notes].filter((s) => s !== undefined).join('; ');
+    tools_run.push(entry);
+    // No rule applied to any file in scope: a gap, not a clean result.
+    if (run.nothingScanned)
+        missing_tools.push('semgrep');
+}
+/** Bandit over a scope's `.py` files; no entry at all when it holds none. */
+async function runBanditOnScope(args) {
+    const { ctx, reportDir, files, tools_run, missing_tools, parser_inputs } = args;
+    if (files.length === 0)
+        return;
+    if (!(await scannerAvailable('bandit'))) {
+        tools_run.push({ name: 'bandit', status: 'skipped', reason: 'not_installed' });
+        missing_tools.push('bandit');
+        return;
+    }
+    const run = await banditOnFiles({
+        files,
+        cwd: ctx.projectPath,
+        reportDir,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+    });
+    for (const raw of run.reports)
+        parser_inputs.push({ parser: banditParser, input: raw });
+    tools_run.push(run.toolRun);
+}
+/**
+ * The .NET analyzers compile the whole project — there is no "build these
+ * three files". For a scope they are `skipped` as project-level, never run
+ * and never reported as covering it; when the scope holds .NET sources that
+ * only they would have read, that is a named gap (`missing_tools`).
+ */
+function dotnetNotApplicableToScope(args) {
+    const { ctx, files, tools_run, missing_tools } = args;
+    if (!hasRootDotnetSignal(ctx.projectPath))
+        return;
+    const sources = files.filter((f) => DOTNET_SOURCE.test(f)).length;
+    const reason = 'project-level: the .NET analyzers run inside a build of the whole project, not over a file scope' +
+        (sources > 0
+            ? ` — ${sources} .NET source file(s) in the scope were not analysed by them (Semgrep's were); run ` +
+                'scan_sast without scope for that'
+            : '');
+    tools_run.push({ name: 'dotnet-analyzers', status: 'skipped', reason });
+    if (projectReferencesScs(ctx.projectPath))
+        tools_run.push({ name: 'security-code-scan', status: 'skipped', reason });
+    if (sources > 0)
+        missing_tools.push('dotnet-analyzers');
 }
 /**
  * The .NET pass — see the module comment. Per root target

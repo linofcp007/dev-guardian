@@ -115,6 +115,9 @@ import {
   legacyRegistrationsNotApplied,
   resolveCustomSemgrepConfigs,
 } from '../platform/customRules.js';
+import { semgrepExcludeArgs } from '../platform/guardianIgnore.js';
+import { ScanScopeInput } from '../platform/scope.js';
+import { semgrepOnFiles } from '../runners/fileBatchScan.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import {
@@ -844,6 +847,8 @@ registerToolModule(
       'instead of silently scanning nothing.',
     scan_type: 'bugs',
     category: 'bug',
+    // `scope`: the packs run over exactly the scoped files (`invokeBugHuntOnScope`).
+    supportsScope: true,
     // `categories` filters the response (see `categoriesView`), so it stays
     // out of the cache key: every filter over the same tree is one scan.
     responseOnlyInputs: ['categories'],
@@ -886,6 +891,7 @@ registerToolModule(
             'scanning alongside the bug hunt.',
         ),
       force: Force,
+      scope: ScanScopeInput,
     },
     // The pack choice is recorded on the scan row (meta, via extras) so
     // create_fix_pr can re-scan a fix with the SAME packs that found it.
@@ -928,9 +934,15 @@ async function invokeBugHunt(input: BugHuntInput, ctx: InvokeContext): Promise<S
   );
   const categoryParser = bugCategoryParser;
 
+  if (ctx.scope !== null) {
+    return invokeBugHuntOnScope({ input, ctx, reportDir, packs: configuredPacks, files: ctx.scope.files });
+  }
+
   const outFile = join(reportDir, 'bugs.json');
   const runWithPacks = (packs: readonly string[]): Promise<ProcessRunResult> => {
     const args = packs.map((pack) => `--config=${pack}`);
+    // `.guardianignore` — see `platform/guardianIgnore.ts`.
+    args.push(...semgrepExcludeArgs(ctx.exclusions));
     args.push('--json', '--quiet', '--output', outFile);
     if (input.auto_fix === true) args.push('--autofix');
     args.push(ctx.projectPath);
@@ -1075,6 +1087,95 @@ async function invokeBugHunt(input: BugHuntInput, ctx: InvokeContext): Promise<S
     parser_inputs,
     report_paths: [reportDir],
   };
+}
+
+/**
+ * `bug_hunt` over a scope's files: the same packs, as explicit targets
+ * (`semgrepOnFiles` — batched, every batch judged by its report), and the
+ * same retry when a registry pack fails to load: a dead `--config=` aborts
+ * every batch it is passed to, so the survivors are re-run over the whole
+ * file list and the gap is named.
+ */
+async function invokeBugHuntOnScope(args: {
+  input: BugHuntInput;
+  ctx: InvokeContext;
+  reportDir: string;
+  packs: readonly string[];
+  files: readonly string[];
+}): Promise<ScannerInvocation> {
+  const { input, ctx, reportDir, packs, files } = args;
+  const tools_run: ToolRun[] = [];
+  const missing_tools: string[] = [];
+  const parser_inputs: ScannerInvocation['parser_inputs'] = [];
+  const finish = (outcome: ScannerInvocation['outcome']): ScannerInvocation => ({
+    outcome,
+    tools_run,
+    missing_tools,
+    parser_inputs,
+    report_paths: [reportDir],
+  });
+  if (files.length === 0) {
+    tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'the scope holds no file — nothing to scan' });
+    return finish('completed');
+  }
+  const runOn = (use: readonly string[]) =>
+    semgrepOnFiles({
+      configArgs: [...use.map((pack) => `--config=${pack}`), ...(input.auto_fix === true ? ['--autofix'] : [])],
+      files,
+      cwd: ctx.projectPath,
+      reportDir,
+      env: ctx.scriptEnv,
+      signal: ctx.signal,
+      ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+    });
+  // Every batch reports the same dead `--config=`: once each.
+  const failuresOf = (reports: readonly string[]): ConfigDownloadFailure[] => {
+    const seen = new Map<string, ConfigDownloadFailure>();
+    for (const f of reports.flatMap((raw) => findConfigDownloadFailures(raw))) seen.set(`${f.pack ?? ''}\0${f.message}`, f);
+    return [...seen.values()];
+  };
+  const reportGap = (failures: readonly ConfigDownloadFailure[]): ScannerInvocation => {
+    tools_run.push({
+      name: 'semgrep',
+      status: 'failed',
+      reason: `no configured pack could be scanned (${describeConfigFailures(failures)})`,
+    });
+    missing_tools.push('semgrep');
+    return finish('completed');
+  };
+
+  const first = await runOn(packs);
+  const failures = failuresOf(first.reports);
+  if (failures.length === 0) {
+    for (const raw of first.reports) parser_inputs.push({ parser: bugCategoryParser, input: raw });
+    tools_run.push(first.toolRun);
+    if (first.nothingScanned) missing_tools.push('semgrep');
+    return finish(first.cancelled ? 'cancelled' : 'completed');
+  }
+  const survivors = survivingPacks(packs, failures);
+  if (survivors.length === 0 || survivors.length === packs.length) return reportGap(failures);
+
+  const retry = await runOn(survivors);
+  if (retry.cancelled) {
+    tools_run.push({
+      name: 'semgrep',
+      status: 'failed',
+      reason: `retry with ${survivors.join(', ')} did not finish (cancelled) — original gap: ${describeConfigFailures(failures)}`,
+    });
+    missing_tools.push('semgrep');
+    return finish('cancelled');
+  }
+  const retryFailures = failuresOf(retry.reports);
+  if (retryFailures.length > 0) return reportGap([...failures, ...retryFailures]);
+  for (const raw of retry.reports) parser_inputs.push({ parser: bugCategoryParser, input: raw });
+  tools_run.push({
+    ...retry.toolRun,
+    reason: [`ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`, retry.toolRun.reason]
+      .filter((s) => s !== undefined)
+      .join('; '),
+  });
+  missing_tools.push('semgrep');
+  return finish('completed');
 }
 
 function recordPackChoice(input: BugHuntInput, invocation: ScannerInvocation): ScannerInvocation {

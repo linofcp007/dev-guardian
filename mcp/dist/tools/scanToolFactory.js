@@ -50,13 +50,32 @@
  * The factory is single-tenant per process: concurrent calls for the same
  * key are serialised by SQLite's transactions, but the runtime doesn't
  * attempt to coalesce two in-flight calls into a single run.
+ *
+ * ---- Scoped scans and `.guardianignore` ------------------------------
+ *
+ * A tool with `supportsScope` takes a `scope` input (`platform/scope.ts`):
+ * the factory resolves it to a file set BEFORE any scan row exists (a scope
+ * that names nothing is a domain error, never an empty scan), hands it to
+ * `invoke` as `ctx.scope`, keeps only the findings inside it, and records the
+ * row with `meta.scope` — which keeps it out of the open set, the baselines
+ * and every "latest"/"previous" comparison (`history/scanRoles.ts`). The
+ * resolved file set and refs join the cache key, so a moved branch is a new
+ * scan; `scope` itself is an input like any other, so a scoped call never
+ * shares an entry with an unscoped one.
+ *
+ * Every tool honours the project's `.guardianignore`
+ * (`platform/guardianIgnore.ts`): `ctx.exclusions` for the native flags a
+ * scanner has, and a result filter here for all of them. What it excluded —
+ * files and findings — is in every response (`exclusions`), fresh or cached.
  */
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { buildDriftAdvisory } from '../configdrift/advisory.js';
 import { detectConfigDrift } from '../configdrift/detect.js';
-import { assignIdentities, makeSourceReader } from '../fingerprint/findingIdentity.js';
+import { assignIdentities, dependencyCoordinates, makeSourceReader } from '../fingerprint/findingIdentity.js';
 import { configsDirFromScriptsDir } from '../platform/configsDir.js';
+import { GUARDIAN_IGNORE_FILE, loadProjectExclusions, } from '../platform/guardianIgnore.js';
+import { resolveScope, ScanScopeInput, ScopeError, suggestScopeForFile, } from '../platform/scope.js';
 import { resolveVersion } from '../platform/version.js';
 import { makeProgressEmitter } from '../progress/progressEmitter.js';
 import { getScanLimiter } from '../runners/concurrencyLimiter.js';
@@ -74,7 +93,9 @@ const KEYLESS_INPUTS = ['project_path', 'severity_min', 'force'];
 /**
  * Keys the factory itself writes into `scans.meta`, as opposed to a tool's
  * `extras`. A cache hit re-emits every OTHER meta key as an extra, so a key
- * added to `meta` here must be added to this set too.
+ * added to `meta` here must be added to this set too — unless, like `scope`
+ * and `exclusions`, the factory writes it precisely so that a cache hit
+ * answers with it, exactly as the fresh run did.
  */
 const FACTORY_META_KEYS = new Set(['severity_min', 'parent_scan_id']);
 /** Longest scanner stderr line forwarded into a progress message. */
@@ -109,9 +130,8 @@ async function runScanPipeline(config, input, plugin, callMeta) {
                 }
             }
             catch (e) {
-                if (e instanceof InvalidProjectPathError) {
-                    return failDomain('not_a_git_repo', e.message);
-                }
+                if (e instanceof InvalidProjectPathError)
+                    return invalidProjectPath(config, e);
                 throw e;
             }
         }
@@ -121,9 +141,8 @@ async function runScanPipeline(config, input, plugin, callMeta) {
         resolvedProject = resolveProjectPath(input.project_path);
     }
     catch (e) {
-        if (e instanceof InvalidProjectPathError) {
-            return failDomain('not_a_git_repo', e.message);
-        }
+        if (e instanceof InvalidProjectPathError)
+            return invalidProjectPath(config, e);
         throw e;
     }
     const projectPath = resolvedProject.path;
@@ -135,6 +154,38 @@ async function runScanPipeline(config, input, plugin, callMeta) {
     const driftAdvisory = configDriftAdvisory(plugin, projectPath);
     if (driftAdvisory)
         warnings.push(driftAdvisory);
+    // `.guardianignore`, then the scope (which it narrows) — both before any
+    // scan row exists, so a scope that names nothing is an error, not a scan.
+    let exclusions = null;
+    const loadedExclusions = await loadProjectExclusions(projectPath);
+    if (loadedExclusions !== null) {
+        if ('error' in loadedExclusions) {
+            warnings.push(`${GUARDIAN_IGNORE_FILE} could not be read (${loadedExclusions.error}) — NOTHING was excluded from ` +
+                'this scan.');
+        }
+        else {
+            exclusions = loadedExclusions;
+        }
+    }
+    let scope = null;
+    if (config.supportsScope === true && input.scope !== undefined && input.scope !== null) {
+        // The MCP layer validated it; an in-process caller may not have.
+        const parsed = ScanScopeInput.safeParse(input.scope);
+        if (!parsed.success) {
+            const issues = parsed.error.issues.map((i) => `${['scope', ...i.path].join('.')}: ${i.message}`);
+            return failDomain('unsupported_target', `scope is not valid: ${issues.join('; ')}`);
+        }
+        if (parsed.data !== undefined) {
+            try {
+                scope = await resolveScope(projectPath, parsed.data, { exclusions });
+            }
+            catch (e) {
+                if (e instanceof ScopeError)
+                    return failDomain(e.code, e.message);
+                throw e;
+            }
+        }
+    }
     // No bash check here: no scan tool built on this factory runs a shell
     // script any more — each invokes its scanners directly — so a host without
     // Git Bash or WSL can still scan.
@@ -154,6 +205,13 @@ async function runScanPipeline(config, input, plugin, callMeta) {
             cacheState = { uncacheable: randomUUID() };
         }
     }
+    // The resolved scope (its files and refs) and the ignore file's content
+    // shape what is scanned and kept, so both are keyed; absent, the key is
+    // exactly what it was before either existed.
+    if (scope !== null)
+        cacheState = { ...cacheState, scope: scope.cacheState['scope'] ?? '' };
+    if (exclusions !== null)
+        cacheState = { ...cacheState, guardianignore: exclusions.hash };
     const cacheKey = buildCacheKey(config, input, { projectPath, plugin, rulesProjectPath }, treeHash, cacheState);
     if (config.configWarnings) {
         try {
@@ -183,13 +241,19 @@ async function runScanPipeline(config, input, plugin, callMeta) {
     // the start, so even a row that later fails or is reaped says whose it was.
     const scanId = randomUUID();
     const parentScanId = callMeta?.parentScanId;
+    // A scoped row says so from the start: a run that fails or is reaped is
+    // still never mistaken for a whole-project scan.
+    const insertMeta = {
+        ...(parentScanId !== undefined ? { parent_scan_id: parentScanId } : {}),
+        ...(scope !== null ? { scope: scope.meta } : {}),
+    };
     const inserted = plugin.storage.scans.insert({
         scan_id: scanId,
         scan_type: config.scan_type,
         project_path: projectPath,
         tree_hash: treeHash,
         cache_key: cacheKey,
-        ...(parentScanId !== undefined ? { meta: { parent_scan_id: parentScanId } } : {}),
+        ...(Object.keys(insertMeta).length > 0 ? { meta: insertMeta } : {}),
     });
     plugin.storage.scans.attachTreeCache({
         tree_hash: treeHash,
@@ -237,12 +301,108 @@ async function runScanPipeline(config, input, plugin, callMeta) {
                 ...(callMeta?.originProjectPath !== undefined ? { originProjectPath: callMeta.originProjectPath } : {}),
             },
             rulesProjectPath,
+            scope,
+            exclusions,
             ...(parentScanId !== undefined ? { parentScanId } : {}),
         });
     }
     finally {
         progress.dispose();
     }
+}
+/**
+ * An unusable `project_path`. A FILE, for a tool that can scope, is answered
+ * with the call to make instead — `scope.paths` — in `retry_with`.
+ */
+function invalidProjectPath(config, e) {
+    if (e.reason === 'not_a_directory' && config.supportsScope === true) {
+        const retry = suggestScopeForFile(e.path);
+        return failDomain('unsupported_target', `project_path ${e.path} is a file, and project_path must be a directory. To scan just that file, ` +
+            `pass project_path "${retry.project_path}" with scope: { paths: ["${retry.scope.paths.join('", "')}"] }.`, retry);
+    }
+    return failDomain('not_a_git_repo', e.message);
+}
+/** The warnings a scoped scan's response carries, from its `meta.scope`. */
+function scopeWarnings(scopeMeta) {
+    if (typeof scopeMeta !== 'object' || scopeMeta === null)
+        return [];
+    const block = scopeMeta;
+    const files = typeof block['files'] === 'number' ? block['files'] : 0;
+    const outside = typeof block['findings_outside_scope'] === 'number' ? block['findings_outside_scope'] : 0;
+    const ignored = typeof block['files_excluded_by_guardianignore'] === 'number' ? block['files_excluded_by_guardianignore'] : 0;
+    const warnings = [
+        `Scoped scan (${describeScope(block)}, ${files} file(s)): findings outside the scope are not reported` +
+            `${outside > 0 ? ` (${outside} dropped)` : ''}. It is recorded as scoped — never a baseline, and never ` +
+            "counted as the project's current findings.",
+    ];
+    if (files === 0) {
+        warnings.push(`The scope holds no file${ignored > 0 ? ` once ${GUARDIAN_IGNORE_FILE} is applied` : ''} — nothing was ` +
+            'scanned, and 0 findings here says nothing about the project.');
+    }
+    if (ignored > 0) {
+        warnings.push(`${ignored} file(s) in the scope are excluded by ${GUARDIAN_IGNORE_FILE} and were not scanned.`);
+    }
+    return warnings;
+}
+function describeScope(block) {
+    const diff = block['diff'];
+    if (block['kind'] === 'diff' && typeof diff === 'object' && diff !== null) {
+        const d = diff;
+        if (typeof d['base'] === 'string')
+            return `diff ${d['base']}...${typeof d['head'] === 'string' ? d['head'] : 'HEAD'}`;
+        return d['staged'] === true ? 'staged changes' : 'uncommitted changes';
+    }
+    if (block['kind'] === 'since' && typeof block['since'] === 'string')
+        return `since ${block['since']}`;
+    return 'paths';
+}
+function exclusionWarning(value) {
+    if (typeof value !== 'object' || value === null)
+        return null;
+    const r = value;
+    return (`${GUARDIAN_IGNORE_FILE} excluded ${r.excluded_files ?? 0} file(s) (${r.patterns ?? 0} pattern(s)) and ` +
+        `${r.findings_excluded ?? 0} finding(s) from this scan.`);
+}
+/** The `.guardianignore` findings an orchestrator's children (`extras.child_scans`) dropped. */
+function childFindingsExcluded(plugin, extras) {
+    const children = extras?.['child_scans'];
+    if (!Array.isArray(children))
+        return 0;
+    let total = 0;
+    for (const child of children) {
+        const id = typeof child === 'object' && child !== null ? child.scan_id : undefined;
+        if (typeof id !== 'string')
+            continue;
+        const report = plugin.storage.scans.getById(id)?.meta?.['exclusions'];
+        const n = typeof report === 'object' && report !== null ? report.findings_excluded : undefined;
+        if (typeof n === 'number')
+            total += n;
+    }
+    return total;
+}
+/**
+ * The CVE rows a scan still supports once findings were filtered out: a CVE
+ * found ONLY in an excluded (or out-of-scope) manifest must not reach the
+ * `cves` table and `guardian://cves/active` either. A row is dropped only
+ * when a dropped finding names it and no kept finding does — a CVE row whose
+ * findings this cannot read the package of is left alone.
+ */
+function cvesStillFound(cves, kept, dropped) {
+    const keys = (list) => {
+        const out = new Set();
+        for (const f of list) {
+            const coords = dependencyCoordinates(f);
+            if (coords !== null && f.rule_id !== undefined)
+                out.add(`${f.rule_id}\0${coords.name}`);
+        }
+        return out;
+    };
+    const keptKeys = keys(kept);
+    const droppedKeys = keys(dropped);
+    return cves.filter((c) => {
+        const key = `${c.cve_id}\0${c.package_name}`;
+        return keptKeys.has(key) || !droppedKeys.has(key);
+    });
 }
 /** Everything after the scan row exists: run, persist, finalize, respond. */
 async function runScanBody(args) {
@@ -278,6 +438,8 @@ async function runScanBody(args) {
         },
         childCallMeta: args.childCallMeta,
         rulesProjectPath: args.rulesProjectPath,
+        scope: args.scope,
+        exclusions: args.exclusions,
     };
     // Acquire a slot from the global concurrency limiter so 50 parallel
     // calls from the host don't fork 50 scanner processes. Default cap is 2.
@@ -319,6 +481,32 @@ async function runScanBody(args) {
     // before anything counts, persists, or filters the findings.
     if (invocation.dedupeFindings)
         findings = invocation.dedupeFindings(findings);
+    // `.guardianignore`, then the scope: what either leaves out is not this
+    // scan's result and is never stored — only counted, in the response and
+    // in `meta`. A finding with no path cannot be placed, and is kept.
+    // Unlike `severity_min`, these are properties of the SCAN (what the
+    // project declared, what the caller asked to scan), not of one response.
+    const placed = (f) => f.file_path === undefined || f.file_path === '' ? null : f.file_path;
+    const { exclusions, scope } = args;
+    const dropped = [];
+    const keepIf = (test) => {
+        const before = findings.length;
+        findings = findings.filter((f) => {
+            const p = placed(f);
+            if (p === null || test(p))
+                return true;
+            dropped.push(f);
+            return false;
+        });
+        return before - findings.length;
+    };
+    const findingsExcluded = exclusions === null ? 0 : keepIf((p) => !exclusions.ignores(p));
+    const outsideScope = scope === null ? 0 : keepIf((p) => scope.member(p));
+    if (dropped.length > 0 && cves.length > 0) {
+        const still = cvesStillFound(cves, findings, dropped);
+        cves.length = 0;
+        cves.push(...still);
+    }
     // Line-independent identity, over the scan's whole, final finding set —
     // the occurrence it carries is counted across that set, so this runs once,
     // after the dedupe and before anything persists. Source lines are read from
@@ -393,9 +581,25 @@ async function runScanBody(args) {
     if (input.severity_min !== undefined)
         meta['severity_min'] = input.severity_min;
     // `finalize` replaces the whole blob, so the parent written at insert time
-    // has to be written again.
+    // has to be written again — and so does the scope.
     if (args.parentScanId !== undefined)
         meta['parent_scan_id'] = args.parentScanId;
+    const scopeMeta = scope !== null ? { ...scope.meta, findings_outside_scope: outsideScope } : null;
+    if (scopeMeta !== null)
+        meta['scope'] = scopeMeta;
+    // An orchestrator's findings are its children's, already filtered there:
+    // what it excluded is what they did.
+    const excludedHere = config.orchestrator === true ? findingsExcluded + childFindingsExcluded(plugin, invocation.extras) : findingsExcluded;
+    const exclusionReport = exclusions !== null
+        ? {
+            file: GUARDIAN_IGNORE_FILE,
+            patterns: exclusions.patterns,
+            excluded_files: exclusions.excludedFileCount,
+            findings_excluded: excludedHere,
+        }
+        : null;
+    if (exclusionReport !== null)
+        meta['exclusions'] = exclusionReport;
     if (Object.keys(meta).length > 0)
         finalize.meta = meta;
     const finishedAt = plugin.storage.scans.finalize(finalize);
@@ -412,6 +616,10 @@ async function runScanBody(args) {
     const counts = countBySeverity(visible);
     const top = topFindings(visible, 10);
     const floor = severityFloorNotice(view.visible, input.severity_min, scanId);
+    warnings.push(...scopeWarnings(scopeMeta));
+    const excludedNote = exclusionWarning(exclusionReport);
+    if (excludedNote !== null)
+        warnings.push(excludedNote);
     if (view.warning)
         warnings.push(view.warning);
     if (floor?.warning)
@@ -449,6 +657,8 @@ async function runScanBody(args) {
         ...result,
         ...view.disclosure,
         ...(invocation.extras ?? {}),
+        ...(scopeMeta !== null ? { scope: scopeMeta } : {}),
+        ...(exclusionReport !== null ? { exclusions: exclusionReport } : {}),
     };
     return { ok: true, ...payload };
 }
@@ -597,11 +807,17 @@ function cachedResult(config, input, plugin, scanId, warnings) {
     // scan carries the same honest signal as a fresh one.
     const { coverage, warning: coverageWarning } = assessCoverage(record.scan_type, record.tools_run, record.missing_tools);
     const allWarnings = coverageWarning ? [coverageWarning, ...warnings] : [...warnings];
+    const { meta, ...row } = record;
+    // The scope and the exclusions were written by the run that produced these
+    // findings; they come back below as extras, and their warnings with them.
+    allWarnings.push(...scopeWarnings(meta?.['scope']));
+    const excludedNote = exclusionWarning(meta?.['exclusions']);
+    if (excludedNote !== null)
+        allWarnings.push(excludedNote);
     if (view.warning)
         allWarnings.push(view.warning);
     if (floor?.warning)
         allWarnings.push(floor.warning);
-    const { meta, ...row } = record;
     const extras = {};
     for (const [key, value] of Object.entries(meta ?? {})) {
         if (!FACTORY_META_KEYS.has(key))
