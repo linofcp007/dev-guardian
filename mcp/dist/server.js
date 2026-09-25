@@ -40009,10 +40009,11 @@ function assignIdentities(findings, opts = {}) {
     if (members === void 0) groups.set(group, [k]);
     else members.push(k);
   }
+  const snippetOrder = (f) => sha2562(f.snippet ?? "");
   const identities = /* @__PURE__ */ new Map();
   for (const members of groups.values()) {
     members.sort(
-      (a2, b) => (a2.finding.line_start ?? 0) - (b.finding.line_start ?? 0) || (a2.finding.line_end ?? 0) - (b.finding.line_end ?? 0) || compareStrings(a2.finding.fingerprint, b.finding.fingerprint) || a2.index - b.index
+      (a2, b) => (a2.finding.line_start ?? 0) - (b.finding.line_start ?? 0) || (a2.finding.line_end ?? 0) - (b.finding.line_end ?? 0) || compareStrings(snippetOrder(a2.finding), snippetOrder(b.finding)) || compareStrings(a2.finding.fingerprint, b.finding.fingerprint) || a2.index - b.index
     );
     const byFingerprint = /* @__PURE__ */ new Map();
     let occurrence = 0;
@@ -40115,6 +40116,12 @@ function contentSource(f, readable2, linesOf) {
   const dependency = dependencyCoordinates(f);
   if (dependency !== null) return `dep
 ${dependency.name}@${dependency.version}`;
+  if (isCredentialFinding(f)) {
+    const locator = isHistoryLocator(f) && f.snippet !== void 0 ? `
+${collapse(f.snippet)}` : "";
+    return `secret
+${f.rule_id ?? ""}${locator}`;
+  }
   if (isHistoryLocator(f) && f.snippet !== void 0) return `text
 ${collapse(f.snippet)}`;
   if (readable2 !== null && f.line_start !== void 0) {
@@ -40132,6 +40139,11 @@ ${collapse(snippetText(f.tool, f.snippet))}`;
 function snippetText(tool44, snippet) {
   if (tool44.toLowerCase() !== "bandit") return snippet;
   return snippet.split(/\r\n|\r|\n/).map((line) => line.replace(/^\d+ /, "")).join("\n");
+}
+var CREDENTIAL_RULE = /(^|[^a-z])(secrets?|passwords?|passwd|pwd|credentials?|api[-_]?keys?|private[-_]?keys?|access[-_]?keys?|aws[-_]?keys?|hardcoded[-_ ]?(passwords?|secrets?|credentials?|keys?|tokens?))([^a-z]|$)/i;
+function isCredentialFinding(f) {
+  if ((f.subcategory ?? "").toLowerCase() === "secret") return true;
+  return CREDENTIAL_RULE.test(f.rule_id ?? "") || CREDENTIAL_RULE.test(f.subcategory ?? "");
 }
 function isHistoryLocator(f) {
   return f.tool.toLowerCase() === "gitleaks" && /;commit=[0-9a-f]{7,64}$/i.test(f.snippet ?? "");

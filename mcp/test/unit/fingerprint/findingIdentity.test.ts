@@ -9,6 +9,7 @@
  * the literal string "requires login".
  */
 
+import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -16,6 +17,7 @@ import {
   assignIdentities,
   dependencyCoordinates,
   indexFindings,
+  isCredentialFinding,
   makeSourceReader,
   REDACTED_SNIPPET,
   resolutionKey,
@@ -227,7 +229,7 @@ describe('assignIdentities — where the content comes from', () => {
     expect(after.identity).toBe(before.identity);
   });
 
-  it('hashes a secret line without ever returning or storing its text', () => {
+  it('never returns or stores the text of a secret\'s line', () => {
     // Not a real credential shape on purpose — this file must not trip the
     // repo's own secret scanners; what matters is that the text never escapes.
     const sensitive = ['plaintext', 'never', 'stored'].join('-');
@@ -241,6 +243,137 @@ describe('assignIdentities — where the content comes from', () => {
     expect(JSON.stringify(out)).not.toContain(sensitive);
     expect(out.snippet).toBeUndefined();
   });
+});
+
+/**
+ * A secret's identity lands in the committed `.guardian/baseline.json`. A
+ * fast unsalted hash of the line there is an offline oracle: for a
+ * low-entropy value (`DB_PASSWORD=<guess>` in a scanned .env), guess, hash,
+ * compare. So a credential finding's content is keyed on its rule — never on
+ * the line — and its identity stays line-independent through the occurrence.
+ */
+describe('assignIdentities — credential findings are never keyed on their line', () => {
+  const sha = (text: string): string => createHash('sha256').update(text).digest('hex');
+  /** Every hash of the line a content key could plausibly have been. */
+  const lineHashes = (line: string): string[] => [
+    sha(line), sha(`${line}\n`), sha(`text\n${line}`), sha(`text\n${line.replace(/\s+/g, ' ').trim()}`),
+  ];
+
+  const value = (n: number): string => ['guessable', 'value', String(n)].join('-');
+  const cases: Array<{ label: string; line: (v: string) => string; finding: (line: number) => Finding }> = [
+    {
+      label: 'trivy secret',
+      line: (v) => `DB_PASSWORD=${v}`,
+      finding: (line) => makeFinding({
+        tool: 'trivy', rule_id: 'generic-password', severity: 'high', category: 'security',
+        subcategory: 'secret', title: 's', file_path: '.env', line_start: line, line_end: line,
+      }),
+    },
+    {
+      label: 'gitleaks, working tree (no commit)',
+      line: (v) => `DB_PASSWORD=${v}`,
+      finding: (line) => makeFinding({
+        tool: 'gitleaks', rule_id: 'generic-api-key', severity: 'high', category: 'security',
+        subcategory: 'secret', title: 's', file_path: '.env', line_start: line, line_end: line,
+        snippet: 'rule=generic-api-key',
+      }),
+    },
+    {
+      label: 'bandit hardcoded password (subcategory is not "secret")',
+      line: (v) => `password = "${v}"`,
+      finding: (line) => makeFinding({
+        tool: 'bandit', rule_id: 'B105', severity: 'low', category: 'security',
+        subcategory: 'hardcoded_password_string', title: 's', file_path: '.env',
+        line_start: line, line_end: line, snippet: `${line} password = "x"`,
+      }),
+    },
+    {
+      label: 'the shipped base.yml credential rule (semgrep, snippet redacted)',
+      line: (v) => `const key = "${v}";`,
+      finding: (line) => makeFinding({
+        tool: 'semgrep', rule_id: 'hardcoded-aws-key', severity: 'high', category: 'security',
+        subcategory: 'hardcoded-aws-key', title: 's', file_path: '.env',
+        line_start: line, line_end: line, snippet: REDACTED_SNIPPET,
+      }),
+    },
+  ];
+
+  for (const c of cases) {
+    it(`${c.label}: same identity when the VALUE changes and when the line moves; no hash of the line`, () => {
+      const dir = project({ '.env': `A=1\n${c.line(value(1))}\n` });
+      const first = only(identify(dir, [c.finding(2)]));
+
+      writeFiles(dir, { '.env': `A=1\n${c.line(value(2))}\n` }); // rotated in place
+      const rotated = only(identify(dir, [c.finding(2)]));
+      writeFiles(dir, { '.env': `# header\nA=1\n${c.line(value(2))}\n` }); // and moved
+      const moved = only(identify(dir, [c.finding(3)]));
+
+      expect(rotated.identity).toBe(first.identity);
+      expect(rotated.content_key).toBe(first.content_key);
+      expect(moved.identity).toBe(first.identity);
+
+      const persisted = JSON.stringify([first, rotated, moved]);
+      for (const v of [value(1), value(2)]) {
+        for (const h of lineHashes(c.line(v))) expect(persisted).not.toContain(h);
+      }
+    });
+  }
+
+  it('still tells two secrets of one rule in one file apart, by order', () => {
+    const dir = project({ '.env': 'A=x\nB=y\n' });
+    const secret = (line: number): Finding => makeFinding({
+      tool: 'trivy', rule_id: 'generic-password', severity: 'high', category: 'security',
+      subcategory: 'secret', title: 's', file_path: '.env', line_start: line, line_end: line,
+    });
+    const out = identify(dir, [secret(1), secret(2)]);
+    expect(new Set(out.map((f) => f.identity)).size).toBe(2);
+  });
+
+  it('recognises credential rules by name, and not rules that merely mention a token', () => {
+    for (const f of [
+      { subcategory: 'secret' },
+      { rule_id: 'B105', subcategory: 'hardcoded_password_string' },
+      { rule_id: 'hardcoded-private-key' },
+      { rule_id: 'generic.secrets.security.detected-generic-api-key.detected-generic-api-key' },
+      { rule_id: 'javascript.jsonwebtoken.security.jwt-hardcode.hardcoded-jwt-secret' },
+    ]) expect(isCredentialFinding(f), JSON.stringify(f)).toBe(true);
+    for (const f of [
+      { rule_id: 'javascript.jsonwebtoken.security.jwt-none-alg.jwt-none-alg' },
+      { rule_id: 'python.django.security.audit.csrf-exempt.no-csrf-exempt', subcategory: 'csrf-token' },
+      { rule_id: 'javascript.express.security.audit.express-xss', subcategory: 'vuln' },
+      { rule_id: 'CVE-2022-25883', subcategory: 'cve' },
+    ]) expect(isCredentialFinding(f), JSON.stringify(f)).toBe(false);
+  });
+
+  it('keeps keying an ordinary finding on its line', () => {
+    const dir = project({ 'a.js': 'eval(userInput);\n' });
+    const out = only(identify(dir, [semgrepHit('js.eval', 'a.js', 1)]));
+    expect(out.content_key).toBe(sha('text\neval(userInput);'));
+  });
+});
+
+describe('assignIdentities — occurrence tie-break', () => {
+  it('does not let two findings on the same line range swap identities when the line moves', () => {
+    // Same rule, same file, same line range, so the same content from disk —
+    // told apart only by their snippets. The fingerprint hashes the line
+    // number, so ordering ties by fingerprint reshuffles them on a shift.
+    const hit = (line: number, snippet: string): Finding => makeFinding({
+      tool: 'semgrep', rule_id: 'js.eval', severity: 'high', category: 'security', title: 't',
+      file_path: 'a.js', line_start: line, line_end: line, snippet,
+    });
+    for (let line = 1; line <= 24; line += 1) {
+      const dir = project({ 'a.js': `${'\n'.repeat(line - 1)}eval(a); eval(b);\n` });
+      const before = identify(dir, [hit(line, 'eval(a)'), hit(line, 'eval(b)')]);
+      writeFiles(dir, { 'a.js': `${'\n'.repeat(line)}eval(a); eval(b);\n` });
+      const after = identify(dir, [hit(line + 1, 'eval(a)'), hit(line + 1, 'eval(b)')]);
+      const bySnippet = (fs: Finding[], s: string) => fs.find((f) => f.snippet === s)?.identity;
+      expect(bySnippet(after, 'eval(a)'), `line ${line}`).toBe(bySnippet(before, 'eval(a)'));
+      expect(bySnippet(after, 'eval(b)'), `line ${line}`).toBe(bySnippet(before, 'eval(b)'));
+    }
+  });
+});
+
+describe('assignIdentities — paths', () => {
 
   it('normalises the path: Windows separators and an absolute path inside the project agree with the relative one', () => {
     const dir = project({ 'src/app.js': APP });

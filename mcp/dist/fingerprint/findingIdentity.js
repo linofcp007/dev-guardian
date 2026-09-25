@@ -45,9 +45,17 @@
  * anything at that line number today), and `rule=…;commit=…` is already a
  * stable, line-independent locator.
  *
- * **Secrets.** The text read from disk is hashed and dropped. It is never
- * written to the finding, the database or a response — for any finding, and
- * in particular not for `subcategory: 'secret'`, where it is the secret.
+ * **Secrets are never keyed on their line — not even hashed.** The identity
+ * is committed to `.guardian/baseline.json`, and a fast unsalted hash of a
+ * line such as `DB_PASSWORD=<value>` is an offline oracle: guess a
+ * low-entropy value, hash, compare. So a credential finding
+ * ({@link isCredentialFinding}: `subcategory: 'secret'`, or a rule/subcategory
+ * that names a password, secret, credential or key) has its content keyed on
+ * `secret` + its rule id, plus gitleaks' commit locator when it has one —
+ * nothing derived from the value, so rotating the secret in place keeps the
+ * identity, and the occurrence alone keeps two secrets of one rule in one
+ * file apart. For every other finding, the text read from disk is hashed and
+ * dropped: never written to the finding, the database or a response.
  *
  * `fingerprint` is untouched and stays each row's per-scan key. Everything
  * that matches across scans uses the identity first and falls back to the
@@ -119,10 +127,17 @@ export function assignIdentities(findings, opts = {}) {
         else
             members.push(k);
     }
+    // Order within a group: by position, then — for two findings on the same
+    // line range — by their snippet, which moves with them. Not by fingerprint
+    // first: it hashes the line number, so on a shift two such findings could
+    // swap order and with it identities. The fingerprint only breaks ties
+    // between findings whose snippet is equal too (then it rarely differs).
+    const snippetOrder = (f) => sha256(f.snippet ?? '');
     const identities = new Map();
     for (const members of groups.values()) {
         members.sort((a, b) => (a.finding.line_start ?? 0) - (b.finding.line_start ?? 0) ||
             (a.finding.line_end ?? 0) - (b.finding.line_end ?? 0) ||
+            compareStrings(snippetOrder(a.finding), snippetOrder(b.finding)) ||
             compareStrings(a.finding.fingerprint, b.finding.fingerprint) ||
             a.index - b.index);
         const byFingerprint = new Map();
@@ -285,6 +300,13 @@ function contentSource(f, readable, linesOf) {
     const dependency = dependencyCoordinates(f);
     if (dependency !== null)
         return `dep\n${dependency.name}@${dependency.version}`;
+    // Never the line, never its hash — see "Secrets" in the module comment.
+    // Checked before anything reads the file, so a credential line is not even
+    // loaded for this finding.
+    if (isCredentialFinding(f)) {
+        const locator = isHistoryLocator(f) && f.snippet !== undefined ? `\n${collapse(f.snippet)}` : '';
+        return `secret\n${f.rule_id ?? ''}${locator}`;
+    }
     if (isHistoryLocator(f) && f.snippet !== undefined)
         return `text\n${collapse(f.snippet)}`;
     if (readable !== null && f.line_start !== undefined) {
@@ -310,6 +332,27 @@ function snippetText(tool, snippet) {
         .split(/\r\n|\r|\n/)
         .map((line) => line.replace(/^\d+ /, ''))
         .join('\n');
+}
+/**
+ * Rule ids and subcategories that name what they flag as a credential. Each
+ * word must stand alone (bounded by a non-letter), so `jsonwebtoken` or a
+ * CSRF-token rule does not match; a bare `token` is not in the list for that
+ * reason. Matching too much costs only precision (the content then says less
+ * than the line would); matching too little puts a hash of a secret into a
+ * committed file, so this leans wide.
+ */
+const CREDENTIAL_RULE = /(^|[^a-z])(secrets?|passwords?|passwd|pwd|credentials?|api[-_]?keys?|private[-_]?keys?|access[-_]?keys?|aws[-_]?keys?|hardcoded[-_ ]?(passwords?|secrets?|credentials?|keys?|tokens?))([^a-z]|$)/i;
+/**
+ * A finding whose flagged line holds a credential: every `subcategory:
+ * 'secret'` finding (gitleaks, Trivy secrets), and a finding whose rule id or
+ * subcategory names one — Bandit's B105–B107 (`hardcoded_password_*`), the
+ * shipped `hardcoded-aws-key` / `hardcoded-private-key` rules, the Semgrep
+ * registry's `*.secrets.*` family.
+ */
+export function isCredentialFinding(f) {
+    if ((f.subcategory ?? '').toLowerCase() === 'secret')
+        return true;
+    return CREDENTIAL_RULE.test(f.rule_id ?? '') || CREDENTIAL_RULE.test(f.subcategory ?? '');
 }
 /** A gitleaks finding whose snippet names the commit it was found in. */
 function isHistoryLocator(f) {

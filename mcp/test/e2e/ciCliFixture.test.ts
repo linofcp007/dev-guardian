@@ -922,7 +922,7 @@ describe('dev-guardian baseline update — against a real, clean fixture', () =>
     expectCleanBaselineExit(r.status, r.stderr);
     expect(existsSync(baselinePath)).toBe(true);
     const doc = JSON.parse(readFileSync(baselinePath, 'utf8')) as { version?: number; entries?: unknown[] };
-    expect(doc.version).toBe(2); // v2: entries carry the line-independent identity
+    expect(doc.version).toBe(1); // identity is an additive field, not a version bump
     expect(Array.isArray(doc.entries)).toBe(true);
   }, SCAN_TIMEOUT_MS);
 
@@ -982,7 +982,7 @@ describe('dev-guardian baseline update — against a real, clean fixture', () =>
         // against is refusing to write anything when coverage is short.
         expect(existsSync(gapBaselinePath)).toBe(true);
         const doc = JSON.parse(readFileSync(gapBaselinePath, 'utf8')) as { version?: number };
-        expect(doc.version).toBe(2); // v2: entries carry the line-independent identity
+        expect(doc.version).toBe(1); // identity is an additive field, not a version bump
 
         // Names what was missing, on stdout — not just a bare "partial".
         expect(r.stdout).toMatch(/semgrep/i);

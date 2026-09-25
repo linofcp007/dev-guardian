@@ -154,9 +154,8 @@ describe('serialiseBaseline', () => {
     expect(parseBaseline(serialiseBaseline(b))).toEqual({ file: b, dropped: 0 });
   });
 
-  it('round-trips a version-2 file with identities', () => {
+  it('round-trips a file whose entries carry identities', () => {
     const b = buildBaseline([finding({ identity: 'id-1' })], null, '2026-08-14');
-    expect(b.version).toBe(2);
     expect(parseBaseline(serialiseBaseline(b))).toEqual({ file: b, dropped: 0 });
   });
 
@@ -165,12 +164,15 @@ describe('serialiseBaseline', () => {
   });
 });
 
-// ------------------------------------------------------------ identity (v2)
+// ------------------------------------------------------------ identity
 
-describe('version 2 — line-independent identity', () => {
-  it('writes version 2, with each finding\'s identity', () => {
+describe('line-independent identity — an additive field on version-1 entries', () => {
+  it('writes version 1, with each finding\'s identity as an extra field', () => {
+    // Version stays 1 on purpose: 2.0.x rejects any other version outright
+    // (its reader returns null, which is "no baseline" — every finding new),
+    // while it ignores keys it does not know. See the interop block below.
     const b = buildBaseline([finding({ identity: 'id-1' }), finding({ fingerprint: 'fp2' })], null, 'd');
-    expect(b.version).toBe(2);
+    expect(b.version).toBe(1);
     expect(b.entries.find((e) => e.fingerprint === 'fp1')?.identity).toBe('id-1');
     // A finding from a tool that computes no identity is still baselined, by fingerprint.
     expect(b.entries.find((e) => e.fingerprint === 'fp2')?.identity).toBeUndefined();
@@ -205,6 +207,21 @@ describe('version 2 — line-independent identity', () => {
       'd',
     );
     expect(b.entries.map((e) => e.identity)).toEqual(['a-id', 'b-id']);
+  });
+
+  it('still reads a version-2 file (written by a development build of this change)', () => {
+    const parsed = parseBaseline(
+      JSON.stringify({
+        version: 2,
+        generated_at: 'x',
+        entries: [{ identity: 'i', fingerprint: 'a', severity: 'high', title: 'A', added: 'd' }],
+      }),
+    );
+    expect(parsed?.file.version).toBe(2);
+    expect(newFindings([finding({ fingerprint: 'moved', identity: 'i' })], parsed?.file ?? null)).toEqual([]);
+    // Rewritten as version 1, dates kept.
+    const rewritten = buildBaseline([finding({ fingerprint: 'moved', identity: 'i' })], parsed?.file ?? null, 'now');
+    expect(rewritten).toMatchObject({ version: 1, entries: [{ identity: 'i', added: 'd' }] });
   });
 
   it('rejects an unknown document version and an entry whose identity is not a string', () => {
@@ -278,10 +295,10 @@ describe('a v1 baseline written by 2.0.0', () => {
     expect(newFindings([...currentFindings(), extra], baseline)).toEqual([extra]);
   });
 
-  it('`baseline update` converts it to version 2 and keeps every `added` date', () => {
+  it('`baseline update` adds identities, stays version 1, and keeps every `added` date', () => {
     const previous = parseBaseline(v1Text)?.file ?? null;
     const updated = buildBaseline(currentFindings(), previous, '2026-09-25T12:00:00.000Z');
-    expect(updated.version).toBe(2);
+    expect(updated.version).toBe(1);
     expect(updated.entries).toHaveLength(10);
     for (const entry of updated.entries) {
       expect(entry.identity).toMatch(/^[0-9a-f]{64}$/);
@@ -293,8 +310,8 @@ describe('a v1 baseline written by 2.0.0', () => {
     );
   });
 
-  it('once converted, survives the line shift the v1 file could not', () => {
-    const v2 = buildBaseline(currentFindings(), parseBaseline(v1Text)?.file ?? null, 'now');
+  it('once updated, survives the line shift the 2.0.0 file could not', () => {
+    const withIdentities = buildBaseline(currentFindings(), parseBaseline(v1Text)?.file ?? null, 'now');
     // Every finding on a source line moves down one line; the snippets (the
     // fixtures carry real text, as `semgrep login` would) move with them.
     const shifted = assignIdentities(
@@ -305,9 +322,82 @@ describe('a v1 baseline written by 2.0.0', () => {
         ...banditParser.parse(shiftLines(scanner('bandit.json'))).findings,
       ],
     );
-    const v1 = parseBaseline(v1Text)?.file ?? null;
-    expect(newFindings(shifted, v1).length).toBeGreaterThan(0); // why v2 exists
-    expect(newFindings(shifted, v2)).toEqual([]);
+    const fingerprintsOnly = parseBaseline(v1Text)?.file ?? null;
+    expect(newFindings(shifted, fingerprintsOnly).length).toBeGreaterThan(0); // why identity exists
+    expect(newFindings(shifted, withIdentities)).toEqual([]);
+  });
+});
+
+// ------------------------------------------------------------ mixed-version teams
+
+/**
+ * The shipped 2.0.0 reader, byte for byte: `fixtures/baseline/v2.0.0/` holds
+ * `mcp/dist/ci/baseline.js` and `mcp/dist/types.js` exactly as the `v2.0.0`
+ * tag has them (blob ids 5fb6c63 and b982268). A teammate — or a CI image —
+ * still on 2.0.x runs THIS code against the file the current build writes.
+ * It must read it as a baseline (not as "no baseline", which reports every
+ * finding as new) and, when it regenerates the file, keep every `added` date.
+ */
+interface V200Entry { fingerprint: string; added: string; identity?: unknown }
+interface V200File { version: number; generated_at: string; entries: V200Entry[] }
+interface V200BaselineModule {
+  parseBaseline(text: string | null): { file: V200File; dropped: number } | null;
+  buildBaseline(findings: readonly Finding[], previous: V200File | null, now: string): V200File;
+  newFindings(findings: readonly Finding[], baseline: V200File | null): Finding[];
+  serialiseBaseline(file: V200File): string;
+}
+
+async function load200(): Promise<V200BaselineModule> {
+  // A filesystem path, not a file:// URL: the repo path holds a space, and
+  // vitest's loader does not decode the `%20` a URL would carry.
+  const path = join(FIXTURES, 'baseline', 'v2.0.0', 'ci', 'baseline.js').replace(/\\/g, '/');
+  return (await import(path)) as V200BaselineModule;
+}
+
+describe('a file this build writes, read by 2.0.0', () => {
+  const scanner = (name: string) => readFileSync(join(FIXTURES, 'scanners', name), 'utf8');
+  const findings = (): Finding[] =>
+    assignIdentities([
+      ...semgrepParser.parse(scanner('semgrep.json')).findings,
+      ...trivyParser.parse(scanner('trivy-fs.json')).findings,
+      ...gitleaksParser.parse(scanner('gitleaks.json')).findings,
+      ...banditParser.parse(scanner('bandit.json')).findings,
+    ]);
+  const written = serialiseBaseline(buildBaseline(findings(), null, '2026-09-25T10:00:00.000Z'));
+
+  it('is accepted by 2.0.0\'s parser, whole: nothing dropped, identities carried along', async () => {
+    const v200 = await load200();
+    const parsed = v200.parseBaseline(written);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.dropped).toBe(0);
+    expect(parsed?.file.entries).toHaveLength(10);
+    for (const e of parsed?.file.entries ?? []) expect(e.identity).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('gates in 2.0.0 exactly as before: the same findings are not new', async () => {
+    const v200 = await load200();
+    expect(v200.newFindings(findings(), v200.parseBaseline(written)?.file ?? null)).toEqual([]);
+  });
+
+  it('2.0.0\'s `baseline update` keeps every `added` date, and this build reads the result back', async () => {
+    const v200 = await load200();
+    const rewrittenBy200 = v200.buildBaseline(
+      findings(),
+      v200.parseBaseline(written)?.file ?? null,
+      '2026-10-01T00:00:00.000Z',
+    );
+    for (const e of rewrittenBy200.entries) expect(e.added).toBe('2026-09-25T10:00:00.000Z');
+
+    // 2.0.0 dropped the identities it did not know; this build still matches
+    // by fingerprint, keeps the dates, and puts the identities back.
+    const back = parseBaseline(v200.serialiseBaseline(rewrittenBy200));
+    expect(back?.dropped).toBe(0);
+    expect(newFindings(findings(), back?.file ?? null)).toEqual([]);
+    const restored = buildBaseline(findings(), back?.file ?? null, '2026-10-02T00:00:00.000Z');
+    for (const e of restored.entries) {
+      expect(e.added).toBe('2026-09-25T10:00:00.000Z');
+      expect(e.identity).toMatch(/^[0-9a-f]{64}$/);
+    }
   });
 });
 

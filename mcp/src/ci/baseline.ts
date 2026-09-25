@@ -43,18 +43,29 @@
  * as if nothing had ever been baselined, over a file humans hand-edit to
  * suppress findings.
  *
- * ---- Versions ------------------------------------------------------------
+ * ---- Identity, and why the version is still 1 -------------------------------
  *
- * Version 1 (2.0.x) named each finding by `fingerprint` alone. The
- * fingerprint hashes the line range, so inserting one line above a baselined
- * finding made the gate report it as new (reproduced: `newFindings after
- * 1-line shift: 1`). Version 2 entries also carry the finding's
- * line-independent `identity` and are matched identity-first, fingerprint as
- * the fallback (`fingerprint/findingIdentity.ts#indexFindings`). Both
- * versions are read — a v1 file keeps gating exactly as it did, because the
- * fingerprint algorithm is frozen — and `buildBaseline` always writes 2,
- * carrying every entry's `added` date across, so the first `baseline
- * update` after upgrading converts the file without resetting any clock.
+ * 2.0.x named each finding by `fingerprint` alone. The fingerprint hashes the
+ * line range, so inserting one line above a baselined finding made the gate
+ * report it as new (reproduced: `newFindings after 1-line shift: 1`). Entries
+ * now also carry the finding's line-independent `identity`, and are matched
+ * identity-first with the fingerprint as the fallback
+ * (`fingerprint/findingIdentity.ts#indexFindings`). A file without
+ * identities — every file 2.0.x wrote — therefore keeps gating exactly as it
+ * did: the fingerprint algorithm is frozen.
+ *
+ * `identity` is an ADDITIVE field and the file stays `version: 1`, on
+ * purpose. A baseline is committed and read by every teammate's and every CI
+ * image's build, and those upgrade at different times. 2.0.x's reader ignores
+ * entry keys it does not know but rejects any version other than 1 by
+ * returning `null` — "no baseline" — so a version bump would make a 2.0.x
+ * `scan` report every finding as new, and a 2.0.x `baseline update` rebuild
+ * the file from nothing, resetting every `added` date. Written as version 1,
+ * a 2.0.x build reads the file as it always did; if it regenerates it, the
+ * identities are dropped but the dates survive, and the next `baseline
+ * update` from this build puts them back (tested against 2.0.0's own shipped
+ * reader). A `version: 2` file, which development builds of this change wrote
+ * briefly, is still read.
  */
 
 import { indexFindings } from '../fingerprint/findingIdentity.js';
@@ -64,8 +75,8 @@ import type { BaselineEntry, BaselineFile, BaselineParseResult, BaselineVersion 
 /** Where the committed baseline lives, relative to the project root. */
 export const BASELINE_RELATIVE_PATH = '.guardian/baseline.json';
 
-/** The version `buildBaseline` writes. */
-export const BASELINE_VERSION: BaselineVersion = 2;
+/** The version `buildBaseline` writes — still 1; see "Identity, and why the version is still 1". */
+export const BASELINE_VERSION: BaselineVersion = 1;
 
 function isBaselineVersion(value: unknown): value is BaselineVersion {
   return value === 1 || value === 2;
@@ -128,14 +139,15 @@ export function serialiseBaseline(file: BaselineFile): string {
 }
 
 /**
- * Regenerate the baseline from the current findings, as a version-2 file.
+ * Regenerate the baseline from the current findings; entries carry each
+ * finding's identity when it has one.
  *
  * A finding already recorded in `previous` — matched the way the gate
- * matches (identity first, fingerprint as the fallback, so a v1 entry is
- * found by its fingerprint) — keeps its original `added` date: a regeneration
- * must not reset the clock on a suppression a reviewer is already tracking
- * the age of, and neither may converting a v1 file or a line shift that gave
- * the finding a new fingerprint. Only a finding with no prior entry is
+ * matches (identity first, fingerprint as the fallback, so an entry without
+ * an identity is found by its fingerprint) — keeps its original `added`
+ * date: a regeneration must not reset the clock on a suppression a reviewer
+ * is already tracking the age of, and neither may adding identities to a
+ * 2.0.x file or a line shift that gave the finding a new fingerprint. Only a finding with no prior entry is
  * stamped with `now`. A finding that no longer appears in `findings` is
  * dropped: the loop below is driven by `findings`, so `previous` is consulted
  * only as a date lookup, never copied wholesale.
@@ -190,7 +202,7 @@ function entryKey(entry: BaselineEntry): string {
  * Findings not already recorded in the baseline.
  *
  * Matches on the finding's identity first and its fingerprint as the
- * fallback (see the module doc's "Versions") — never on severity, title, or
+ * fallback (see the module doc's "Identity") — never on severity, title, or
  * any other field — because a scanner re-wording a message or a rule pack
  * changing a severity must not resurface a finding someone already reviewed
  * and suppressed, and neither may a line inserted above it. A `null`

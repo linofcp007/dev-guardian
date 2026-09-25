@@ -19,6 +19,7 @@
  * with the real binary.
  */
 
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -297,42 +298,68 @@ describe('data written before identities existed', () => {
 });
 
 describe('secret findings', () => {
-  it('hash the flagged line and never store or return it', async () => {
-    const sensitive = ['plaintext', 'value', 'from', 'disk'].join('-');
-    const dir = makeTempDir('finding-identity-secret-');
-    writeFileSync(join(dir, 'cfg.js'), `x;\nconnect("${sensitive}");\n`);
-    const secretScan = makeScanTool({
-      name: 'identity_probe_secret',
-      scan_type: 'secrets',
-      category: 'security',
-      description: '',
-      inputSchema: { project_path: z.string().optional(), force: z.boolean().optional() },
-      invoke: async (): Promise<ScannerInvocation> => ({
-        outcome: 'completed',
-        tools_run: [{ name: 'trivy', status: 'ok' }],
-        missing_tools: [],
-        parser_inputs: [
-          {
-            parser: trivyParser,
-            input: JSON.stringify({
-              Results: [
-                { Target: 'cfg.js', Secrets: [{ RuleID: 'generic', Severity: 'HIGH', StartLine: 2, EndLine: 2 }] },
-              ],
-            }),
-          },
-        ],
-        report_paths: [],
-      }),
-    });
-    const plugin = makePlugin();
+  const secretScan = makeScanTool({
+    name: 'identity_probe_secret',
+    scan_type: 'secrets',
+    category: 'security',
+    description: '',
+    inputSchema: { project_path: z.string().optional(), force: z.boolean().optional() },
+    invoke: async (): Promise<ScannerInvocation> => ({
+      outcome: 'completed',
+      tools_run: [{ name: 'trivy', status: 'ok' }],
+      missing_tools: [],
+      parser_inputs: [
+        {
+          parser: trivyParser,
+          input: JSON.stringify({
+            Results: [
+              { Target: 'cfg.js', Secrets: [{ RuleID: 'generic', Severity: 'HIGH', StartLine: 2, EndLine: 2 }] },
+            ],
+          }),
+        },
+      ],
+      report_paths: [],
+    }),
+  });
+
+  async function scanSecret(plugin: PluginContext, dir: string): Promise<{ response: string; stored: Finding }> {
     const r = okResult<Record<string, unknown>>(
       await secretScan.handler({ project_path: dir, force: true }, plugin),
     );
-    expect(JSON.stringify(r)).not.toContain(sensitive);
     const stored = onlyFinding(plugin.storage.findings.listByScan(String(r['scan_id'])));
+    return { response: JSON.stringify(r), stored };
+  }
+
+  const sha = (text: string): string => createHash('sha256').update(text).digest('hex');
+  const lineOf = (value: string): string => `connect("${value}");`;
+  const value = (n: number): string => ['guessable', 'value', String(n)].join('-');
+
+  it('never store or return the line, nor any hash of it — in the database or the committed baseline', async () => {
+    const dir = makeTempDir('finding-identity-secret-');
+    writeFileSync(join(dir, 'cfg.js'), `x;\n${lineOf(value(1))}\n`);
+    const plugin = makePlugin();
+    const { response, stored } = await scanSecret(plugin, dir);
     expect(stored.subcategory).toBe('secret');
     expect(stored.content_key).toMatch(/^[0-9a-f]{64}$/);
-    expect(JSON.stringify(stored)).not.toContain(sensitive);
+
+    const baselineFile = serialiseBaseline(buildBaseline([stored], null, '2026-09-25T00:00:00.000Z'));
+    const row = JSON.stringify(stored);
+    const line = lineOf(value(1));
+    for (const text of [response, row, baselineFile]) {
+      expect(text).not.toContain(value(1));
+      for (const h of [sha(line), sha(`text\n${line}`), sha(`${line}\n`)]) expect(text).not.toContain(h);
+    }
+  });
+
+  it('keep their identity when the secret VALUE changes, so the identity carries no information about it', async () => {
+    const dir = makeTempDir('finding-identity-secret-');
+    const plugin = makePlugin();
+    writeFileSync(join(dir, 'cfg.js'), `x;\n${lineOf(value(1))}\n`);
+    const a = (await scanSecret(plugin, dir)).stored;
+    writeFileSync(join(dir, 'cfg.js'), `x;\n${lineOf(value(2))}\n`);
+    const b = (await scanSecret(plugin, dir)).stored;
+    expect(b.identity).toBe(a.identity);
+    expect(b.content_key).toBe(a.content_key);
   });
 });
 
