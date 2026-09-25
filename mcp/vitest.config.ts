@@ -4,6 +4,18 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     environment: 'node',
+    // Item 8's first fix (2026-09-25 full review) raised this GLOBALLY to
+    // 180_000 to work around a handful of slow, real-Semgrep-invoking
+    // integration/e2e tests — fix round 1, item 4 (Important, review round
+    // 1) reverted that: a 180s ceiling for all 141 files hides a genuine
+    // hang in any of the other, fast, unit-level tests for three whole
+    // minutes instead of ten seconds. The unit default stays 10_000; the
+    // handful of files that genuinely need longer (real `semgrep`
+    // subprocess calls across a whole rule pack / every hit fixture) set
+    // their OWN, file-scoped override via `vi.setConfig({ testTimeout })`
+    // at the top of the file — see each one's own comment for why. That
+    // override is why those files can run long without needing this default
+    // raised for everything else.
     testTimeout: 10_000,
     // Runs in every worker before its test files. Gives each worker its own
     // Semgrep settings file so concurrent Semgrep invocations — within one

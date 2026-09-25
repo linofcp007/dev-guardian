@@ -24,8 +24,12 @@ export const HOST_SPECS = {
         mcp: { format: 'json-mcpServers', serverKey: 'mcpServers', scopes: ['project', 'global'] },
     },
     windsurf: {
-        description: 'Windsurf — ~/.codeium/windsurf/mcp_config.json + .windsurfrules',
-        rules: { template_file: 'windsurfrules', target_path: '.windsurfrules' },
+        description: 'Windsurf — ~/.codeium/windsurf/mcp_config.json + .windsurf/rules/dev-guardian.md',
+        // Item 6e (2026-09-25 full review): the legacy `.windsurfrules` file is
+        // superseded by the `.windsurf/rules/` directory convention (frontmatter
+        // per rule file, e.g. `trigger: always_on` — verified directly against
+        // Windsurf's own docs). `mcp-config` used to write the legacy path.
+        rules: { template_file: 'windsurf.md', target_path: '.windsurf/rules/dev-guardian.md' },
         // Windsurf reads a single global MCP config; there is no project-scoped form.
         mcp: { format: 'json-mcpServers', serverKey: 'mcpServers', scopes: ['global'], forceScope: 'global' },
     },

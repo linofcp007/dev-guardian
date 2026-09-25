@@ -137,7 +137,19 @@
  * `GUARDIAN_REQUIRE_SEMGREP=1` turns that absence into a hard failure.
  */
 
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+
+// Fix round 1, item 4 (2026-09-25 full review): this file invokes real
+// `semgrep` SYNCHRONOUSLY (execSync/spawnSync inside `run()`, never
+// awaited) across every rule pack / hit fixture in the suite below —
+// genuinely slow under load (measured 41-90s for a single such call) and,
+// critically, never actually bounded by vitest's default `testTimeout`:
+// that timeout fires via a timer on the event loop, which cannot preempt a
+// blocking synchronous call. `mcp/vitest.config.ts`'s own default stays at
+// the unit-test-appropriate 10s; this file (and its siblings across the
+// other rule packs) opts into a longer budget explicitly, rather than
+// raising the ceiling for the other 130+ files that do not need it.
+vi.setConfig({ testTimeout: 180_000 });
 import { execFileSync, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';

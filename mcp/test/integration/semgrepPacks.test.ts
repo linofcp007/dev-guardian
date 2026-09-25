@@ -48,7 +48,15 @@
  * what was measured rather than the generalisation drawn from it.
  */
 
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+
+// Fix round 1, item 4 (2026-09-25 full review) — see baseRules.test.ts's
+// identical comment for the full reasoning: real, synchronous `semgrep`
+// calls (`--validate` across every pack in "compiles clean, silently, and
+// exits 0" — the slowest single test in this suite, measured up to ~90s
+// under heavy load) are never bounded by vitest's default testTimeout, so
+// this file opts into a longer one explicitly.
+vi.setConfig({ testTimeout: 180_000 });
 import { execFileSync, spawnSync } from 'node:child_process';
 import { Buffer } from 'node:buffer';
 import { copyFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';

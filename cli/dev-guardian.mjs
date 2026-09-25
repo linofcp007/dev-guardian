@@ -75,12 +75,13 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, parse, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
 import { ALL_HOSTS } from '../mcp/dist/hostsetup/hostSpecs.js';
@@ -89,15 +90,36 @@ import { detectOs } from '../mcp/dist/platform/osDetect.js';
 import { canonicalPath } from '../mcp/dist/platform/projectPath.js';
 import { scanForSecrets } from '../mcp/dist/hooks/secretScan.js';
 import { assessBashCommand } from '../mcp/dist/hooks/bashGuard.js';
-import { buildSnapshot } from '../mcp/dist/dashboard/snapshot.js';
-import { renderStatus } from '../mcp/dist/dashboard/renderStatus.js';
-import { renderDashboard } from '../mcp/dist/dashboard/renderHtml.js';
-import { openDatabase, openDatabaseAtPath, resolveFallbackDbPath, Storage } from '../mcp/dist/storage/index.js';
-import { runMigrations } from '../mcp/dist/storage/migrations/runner.js';
 
-const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/bin
+// `storage/*` and `dashboard/*` are NOT statically imported here (contrast
+// the five imports directly above, which are pure — no `node:sqlite`
+// anywhere in their own transitive closure, confirmed by grepping the built
+// `dist/` for it). `storage/db.ts` requires `node:sqlite` at MODULE LOAD
+// TIME (`createRequire(import.meta.url)('node:sqlite')`, top-level, not
+// inside a function) — still a gated/experimental Node builtin below the
+// project's own floor (Global Constraint 12: Node >= 22.13, no
+// `--experimental-sqlite` anywhere), so on an OLDER Node a static top-level
+// `import` of `storage/index.js` would throw the moment THIS FILE loads,
+// before `main()` runs and before argv is even inspected — every
+// invocation, including `--help`, `check`, and `mcp-config` (none of which
+// touch a database), would crash with a raw `ERR_UNKNOWN_BUILTIN_MODULE`
+// stack trace instead of running. `status`/`dashboard` are the only two
+// subcommands that ever need a database or a snapshot renderer; they load
+// this cluster lazily via `loadDashboardModules()` (mirroring
+// `loadCiModules()`'s identical reasoning for `scan`/`baseline update`,
+// just below), so every OTHER subcommand's process never touches
+// `node:sqlite` at all, on any Node version.
+
+const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/cli
 const ROOT = resolve(HERE, '..'); // <plugin>
 const SERVER_JS = resolve(ROOT, 'mcp', 'dist', 'server.js');
+// Item 6a: the absolute path this project's own CLI substitutes into every
+// `{{DEV_GUARDIAN_CLI}}` placeholder in an installed rules file — see
+// `installRulesOne` in `mcp/src/hostsetup/setup.ts`. Without this, a rules
+// file installed into ANOTHER project told the agent to run
+// `node cli/dev-guardian.mjs`, a path that exists only inside the
+// dev-guardian repo itself.
+const CLI_JS = resolve(HERE, 'dev-guardian.mjs');
 const HOST_RULES_DIR = resolve(ROOT, 'host-rules');
 const VALID_HOSTS = new Set([...ALL_HOSTS, 'all']);
 
@@ -160,15 +182,27 @@ mcp-config — wire the MCP server into an AI host
   Hosts: ${[...ALL_HOSTS].join(', ')}, all
   --write              Write/merge into the project (+ drop the rules file)
   --scope project|global   MCP scope (default project)
+  --global             Shorthand for --scope global. Also required to include a
+                        global-only host (windsurf, claude-desktop) when writing
+                        "all" — otherwise those two are skipped, never silently
+                        written to your global config
   --project <path>     Target project directory (default: current directory)
-  --force              Overwrite an existing rules file / update a differing MCP entry
+  --update-mcp         Refresh a stale MCP entry / rules block that already exists
+  --force              Deprecated alias of --update-mcp
+  Rules files are managed as a delimited block inside the target file
+  (<!-- dev-guardian:begin --> … <!-- dev-guardian:end -->) — your own content
+  around it is never touched or replaced.
+  Exit codes: 0 preview/write completed, 1 missing or unknown host,
+              2 usage error (e.g. --project with no value)
 
 check — run the guardrail detectors (same engine as the hooks)
   --file <path>        Scan a file for hard-coded secrets
   --bash "<command>"   Risk-assess a shell command (ok / warn / block)
   --min high|medium    Minimum secret confidence to report (default: medium)
   --json               Machine-readable output
-  Exit code: 0 = clean/ok, 1 = secret found / command is risky or catastrophic
+  Exit code: 0 = clean/ok, 1 = secret found / command is risky or catastrophic,
+             2 = usage error (no --file/--bash given) or the --file path does
+             not exist / could not be read
 
 scan — headless CI: run the scan pipeline, gate against the baseline, report
   --project <path>      Target project directory (default: current directory)
@@ -246,20 +280,54 @@ Examples:
 `);
 }
 
+/**
+ * `--project`/`--scope` with no operand used to leave `out.project`/
+ * `out.scope` as bare `undefined` (`argv[++i]` past the end of argv), and
+ * the very next thing `cmdMcpConfig` did with it — `resolve(args.project)` —
+ * threw an UNCAUGHT `TypeError [ERR_INVALID_ARG_TYPE]` for `resolve`, a raw
+ * Node stack trace instead of a clean usage error. Reproduced directly:
+ * `mcp-config cursor --project` (the flag as the last token) crashed rather
+ * than naming the mistake. Routed through the same `takeOperand` every OTHER
+ * value-taking flag in this file already uses (see its own doc comment,
+ * below `resolveProjectOrExit`) for the identical guarantee, not a second,
+ * independently-written check that could drift from it — `cmdMcpConfig`
+ * turns `{error}` into a clean, flag-naming usage error at exit code 2 (this
+ * command's OWN usage-error convention — see `usage()`'s `check` section,
+ * which documents the same code for the same kind of mistake), never a
+ * crash.
+ */
 function parseArgs(argv) {
-  const out = { _: [], scope: 'project', write: false, force: false, project: process.cwd() };
+  const out = { _: [], scope: 'project', write: false, force: false, updateMcp: false, project: process.cwd() };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--write') out.write = true;
-    else if (a === '--force') out.force = true;
-    else if (a === '--scope') out.scope = argv[++i];
-    else if (a.startsWith('--scope=')) out.scope = a.slice('--scope='.length);
-    else if (a === '--project') out.project = argv[++i];
-    else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
+    else if (a === '--global') out.scope = 'global';
+    else if (a === '--update-mcp') out.updateMcp = true;
+    else if (a === '--force') {
+      out.force = true;
+      out.deprecatedForceUsed = true;
+    } else if (a === '--scope') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return { error: r.error };
+      out.scope = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--scope=')) out.scope = a.slice('--scope='.length);
+    else if (a === '--project') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return { error: r.error };
+      out.project = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
     else out._.push(a);
   }
   if (out.scope !== 'project' && out.scope !== 'global') out.scope = 'project';
-  return out;
+  // `--force` is a deprecated alias of `--update-mcp` (item 6b): both drive
+  // the exact same underlying `force` behaviour downstream (a stale MCP
+  // entry / rules block gets updated in place), so they collapse to one
+  // flag here rather than `setupHost` having to know about two names for
+  // the same thing.
+  out.force = out.force || out.updateMcp;
+  return { value: out };
 }
 
 function indent(s) {
@@ -270,7 +338,19 @@ function indent(s) {
 }
 
 function cmdMcpConfig(argv) {
-  const args = parseArgs(argv);
+  const parsed = parseArgs(argv);
+  if (parsed.error) {
+    // This command's own usage-error convention (see `usage()`'s `check`
+    // section, which documents the same code for the same kind of mistake) —
+    // exit 2, never the uncaught TypeError this replaces.
+    process.stderr.write(`error: ${parsed.error}\n\n`);
+    usage();
+    process.exit(2);
+  }
+  const args = parsed.value;
+  if (args.deprecatedForceUsed) {
+    process.stderr.write('warning: --force is deprecated; use --update-mcp instead.\n');
+  }
   const hostArg = args._[0];
   if (!hostArg || !VALID_HOSTS.has(hostArg)) {
     process.stderr.write(`Missing or unknown host: ${hostArg ?? '(none)'}\n\n`);
@@ -294,6 +374,7 @@ function cmdMcpConfig(argv) {
       projectPath,
       hostsDir: HOST_RULES_DIR,
       serverJsPath: SERVER_JS,
+      cliPath: CLI_JS,
       env,
       scope: args.scope,
       registerMcp: true,
@@ -1225,25 +1306,97 @@ async function cmdBaseline(argv) {
  * writability probe at this point would risk creating a fresh, empty PRIMARY
  * database instead of reading the fallback that was just found.
  */
-function resolveDbHandle(projectPath) {
-  const primaryPath = join(projectPath, '.guardian', 'guardian.db');
-  if (existsSync(primaryPath)) return openDatabase({ projectPath }).db;
-
-  const fallbackPath = resolveFallbackDbPath(projectPath);
-  if (existsSync(fallbackPath)) return openDatabaseAtPath(fallbackPath);
-
-  return openDatabase({ projectPath, inMemory: true }).db;
+/**
+ * True when `error` is the shape Node throws for a builtin module that does
+ * not exist on the running Node version — `createRequire(...)('node:sqlite')`
+ * in `storage/db.ts` throws exactly this when `node:sqlite` is not
+ * registered (below the project's Node floor). Matched on BOTH the stable
+ * error `code` and a message fallback (Node has changed the exact wording of
+ * this error across versions; the `code` has not), so a genuine, unrelated
+ * failure inside `storage`/`dashboard` (a real bug) is never misreported as
+ * a Node-version problem — only this one, specific, well-known shape is.
+ */
+export function isNodeSqliteUnavailable(error) {
+  if (error && typeof error === 'object' && 'code' in error && error.code === 'ERR_UNKNOWN_BUILTIN_MODULE') {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /node:sqlite/i.test(message);
 }
 
-function buildProjectSnapshot(projectPath) {
-  const db = resolveDbHandle(projectPath);
+/**
+ * Lazily loads the `storage`/`dashboard` module cluster — see the module doc
+ * comment above the (deliberately static) imports for why this is dynamic
+ * rather than a top-level `import`. Mirrors `loadCiModules()` exactly: the
+ * same "not built" friendly check (a marker file existence probe, so a repo
+ * that never ran `npm run build` gets one clear line instead of
+ * `ERR_MODULE_NOT_FOUND`), and — new here, because this cluster is the one
+ * that can genuinely fail on a Node version this project no longer
+ * supports — a SECOND friendly message specifically for that case, so
+ * `status`/`dashboard` on Node < 22.13 fail with "this command requires
+ * Node.js >= 22.13" rather than a raw `ERR_UNKNOWN_BUILTIN_MODULE` stack
+ * trace. Only `status`/`dashboard` ever call this; every other subcommand
+ * never touches `node:sqlite`, on any Node version — see the note above the
+ * static imports.
+ */
+async function loadDashboardModules() {
+  const marker = resolve(ROOT, 'mcp', 'dist', 'storage', 'index.js');
+  if (!existsSync(marker)) {
+    process.stderr.write(
+      `dev-guardian: MCP server not built (missing ${marker}).\n` +
+        'Run once:  cd mcp && npm install && npm run build\n',
+    );
+    process.exit(USAGE_ERROR_EXIT);
+  }
   try {
-    runMigrations(db);
-    const storage = new Storage(db);
+    const [storage, migrations, snapshot, statusRenderer, dashboardRenderer] = await Promise.all([
+      import('../mcp/dist/storage/index.js'),
+      import('../mcp/dist/storage/migrations/runner.js'),
+      import('../mcp/dist/dashboard/snapshot.js'),
+      import('../mcp/dist/dashboard/renderStatus.js'),
+      import('../mcp/dist/dashboard/renderHtml.js'),
+    ]);
+    return {
+      openDatabase: storage.openDatabase,
+      openDatabaseAtPath: storage.openDatabaseAtPath,
+      resolveFallbackDbPath: storage.resolveFallbackDbPath,
+      Storage: storage.Storage,
+      runMigrations: migrations.runMigrations,
+      buildSnapshot: snapshot.buildSnapshot,
+      renderStatus: statusRenderer.renderStatus,
+      renderDashboard: dashboardRenderer.renderDashboard,
+    };
+  } catch (e) {
+    if (isNodeSqliteUnavailable(e)) {
+      process.stderr.write(
+        `dev-guardian: this command requires Node.js >= 22.13 (built-in node:sqlite support). ` +
+          `Current: ${process.version}.\n`,
+      );
+      process.exit(USAGE_ERROR_EXIT);
+    }
+    throw e;
+  }
+}
+
+function resolveDbHandle(mods, projectPath) {
+  const primaryPath = join(projectPath, '.guardian', 'guardian.db');
+  if (existsSync(primaryPath)) return mods.openDatabase({ projectPath }).db;
+
+  const fallbackPath = mods.resolveFallbackDbPath(projectPath);
+  if (existsSync(fallbackPath)) return mods.openDatabaseAtPath(fallbackPath);
+
+  return mods.openDatabase({ projectPath, inMemory: true }).db;
+}
+
+function buildProjectSnapshot(mods, projectPath) {
+  const db = resolveDbHandle(mods, projectPath);
+  try {
+    mods.runMigrations(db);
+    const storage = new mods.Storage(db);
     // Rows are keyed by the canonical spelling every MCP tool stores
     // (resolveProjectPath); the database FILE is still located from
     // `projectPath` as given, as the server itself does.
-    return buildSnapshot(storage, canonicalPath(projectPath), Date.now());
+    return mods.buildSnapshot(storage, canonicalPath(projectPath), Date.now());
   } finally {
     db.close();
   }
@@ -1308,10 +1461,11 @@ async function cmdStatus(argv) {
   const opts = parsed.value;
 
   const projectPath = resolveProjectOrExit(opts.project);
-  const snapshot = buildProjectSnapshot(projectPath);
+  const mods = await loadDashboardModules();
+  const snapshot = buildProjectSnapshot(mods, projectPath);
 
   const color = process.stdout.isTTY === true && !process.env.NO_COLOR;
-  const text = renderStatus(snapshot, { color });
+  const text = mods.renderStatus(snapshot, { color });
   process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
 
   // `process.exitCode = 0; return;`, never `process.exit(0)` — see the
@@ -1328,30 +1482,43 @@ async function cmdStatus(argv) {
  * the OS default browser — pure, no I/O, and exported so a test can assert
  * on the exact argv shape without ever launching anything.
  *
- * **win32 — fix-round-1 correction.** `start` is a `cmd.exe` BUILT-IN, not a
- * standalone executable: spawning the bare string `'start'` with
- * `shell: false` fails ENOENT (confirmed directly on Windows — there is no
- * `start.exe` on PATH, so `dashboard` never opened a browser on the very
- * platform this feature targets). `cmd.exe` itself IS a real, spawnable
- * executable, so IT is what gets spawned, with `/c start` as its own
- * arguments — that is what actually invokes the builtin. `target` still
- * reaches `spawn` as its own, discrete array element, exactly as on the
- * other two platforms below: nothing here is ever concatenated into a
- * command STRING, so `shell: false`'s security property — no shell
- * metacharacter interpretation of `target` (spaces, `&`, `|`, …) — holds
- * exactly as before; only the EXECUTABLE being spawned changed, not the
- * "argv stays an array" contract. The `'""'` immediately after `start` is
- * `start`'s OWN empty window-title argument: `start`'s argument grammar
- * treats the first quoted token after it as a title whenever what follows
- * is itself quoted or contains spaces, so an explicit empty title has to be
- * supplied, or `start` would treat `target` itself as the title and open
- * nothing.
+ * **win32 — fix-round-2 correction.** The fix-round-1 version spawned
+ * `cmd.exe /c start "" <target>`, fixing the ENOENT from spawning the bare
+ * `'start'` builtin directly (no `start.exe` on PATH) — but it traded that
+ * bug for a second, subtler one this task exists to fix: `spawn(..., {shell:
+ * false})` keeps `target` as its own untouched argv ELEMENT only up to
+ * `CreateProcess` itself. `cmd.exe /c <rest>` does not treat `<rest>` as an
+ * already-split argv — it re-parses the WHOLE remaining command line as
+ * cmd's own script syntax, where `&` (and `|`, `&&`, `||`, `%VAR%`, …) are
+ * live METACHARACTERS regardless of any quoting `spawn` applied when
+ * building the underlying command line, because that quoting only has to
+ * satisfy `CreateProcess`'s C-runtime argv split, not cmd's SEPARATE,
+ * SECOND parse of its own `/c` argument. A dashboard path containing `&` —
+ * plausible on Windows, where `&` is a legal filename character and this
+ * project's own repo path contains a space for the same kind of reason —
+ * would silently split into two commands under the OLD implementation;
+ * `shell: false` never protected against this, because the danger was never
+ * in how Node invoked `cmd.exe`, only in what `cmd.exe` itself does once
+ * running.
+ *
+ * `explorer.exe <target>` sidesteps the whole problem: it is a real,
+ * standalone executable (like `open`/`xdg-open` below), so `target` reaches
+ * it as one argv element with no SECOND parse by anything that treats `&` as
+ * syntax. (`explorer.exe` is also what Windows itself invokes for "open
+ * with default application" on a file passed as a bare argument, so this is
+ * not a repurposing of some other tool's argument grammar — it is that
+ * grammar.) The `rundll32 url.dll,FileProtocolHandler <target>` alternative
+ * named in the task brief was measured to behave identically for this one
+ * argument shape and was not chosen only because `explorer.exe` needs no
+ * DLL entry-point name to get right.
  *
  * **darwin/other — unchanged.** `open`/`xdg-open` ARE standalone
- * executables, spawned directly with `target` as their one argument.
+ * executables, spawned directly with `target` as their one argument — never
+ * shared this class of bug, because neither re-parses its own argument for
+ * shell metacharacters.
  */
 export function resolveOpenerCommand(platform, target) {
-  if (platform === 'win32') return { command: 'cmd.exe', args: ['/c', 'start', '""', target] };
+  if (platform === 'win32') return { command: 'explorer.exe', args: [target] };
   if (platform === 'darwin') return { command: 'open', args: [target] };
   return { command: 'xdg-open', args: [target] };
 }
@@ -1396,8 +1563,9 @@ async function cmdDashboard(argv) {
   const projectPath = resolveProjectOrExit(opts.project);
   const outPath = resolve(opts.out ?? join(projectPath, '.guardian', 'dashboard.html'));
 
-  const snapshot = buildProjectSnapshot(projectPath);
-  const html = renderDashboard(snapshot);
+  const mods = await loadDashboardModules();
+  const snapshot = buildProjectSnapshot(mods, projectPath);
+  const html = mods.renderDashboard(snapshot);
 
   // Both calls below can throw (an unwritable --out, a destination that is
   // itself a directory, a disk full) and are DELIBERATELY left to propagate
@@ -1487,21 +1655,48 @@ function main() {
   process.exit(1);
 }
 
-// Entry-point guard (fix-round-1 addition): `main()` runs when this file is
-// executed directly (`node cli/dev-guardian.mjs ...` — every real user
-// invocation, and every existing e2e test, which spawns exactly that as a
-// subprocess) but NOT when it is `import`ed, e.g. by
-// `test/unit/cli/browserOpener.test.ts` to reach `resolveOpenerCommand` as a
-// plain function. Without this, that import alone would run the full CLI
-// against the TEST RUNNER's own argv/exit lifecycle — `main()` calls
-// `process.exit()` on more than one path — which would tear down the whole
-// vitest worker rather than merely fail one test. `pathToFileURL` (not a
-// raw string comparison against `process.argv[1]`) is what this project's
-// own test files already use for the equivalent path<->URL conversion (see
-// `ciCliFixture.test.ts`'s `fileURLToPath`) — required on Windows, where a
-// bare `import.meta.url === process.argv[1]` string compare would never
-// match (`file:///C:/...` vs `C:\...`).
-const isEntryPoint = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+/**
+ * Entry-point guard (fix-round-1 addition, fix-round-2 correction below):
+ * `main()` runs when this file is executed directly (`node
+ * cli/dev-guardian.mjs ...` — every real user invocation, and every existing
+ * e2e test, which spawns exactly that as a subprocess) but NOT when it is
+ * `import`ed, e.g. by `test/unit/cli/browserOpener.test.ts` to reach
+ * `resolveOpenerCommand` as a plain function. Without this, that import alone
+ * would run the full CLI against the TEST RUNNER's own argv/exit lifecycle —
+ * `main()` calls `process.exit()` on more than one path — which would tear
+ * down the whole vitest worker rather than merely fail one test.
+ *
+ * **Compares REALPATHS, not raw paths (fix-round-2 correction).** The
+ * fix-round-1 version compared `import.meta.url` against
+ * `pathToFileURL(process.argv[1]).href` directly — right for the
+ * file-URL-vs-Windows-drive-letter mismatch it was written for, but it
+ * assumed `process.argv[1]` and the module Node actually loaded name the
+ * SAME path, which is false through a symlink or (Windows) junction: Node's
+ * ESM loader resolves `import.meta.url` to the link's REAL target, while
+ * `process.argv[1]` still holds the path the user typed — the link itself.
+ * Two different strings naming the same file compared unequal, `isEntryPoint`
+ * came back `false`, and `main()` silently never ran: reproduced directly —
+ * `check --bash 'rm -rf /'` through a symlink to this file printed nothing
+ * and exited 0, the same as a clean/ok command, on a catastrophic one.
+ * `realpathSync` resolves symlinks/junctions on both sides before comparing,
+ * so a link and its target compare equal regardless of which one was
+ * invoked. Wrapped in try/catch: `process.argv[1]` can in principle name a
+ * path `realpathSync` cannot resolve (already deleted, a dangling link) —
+ * that must read as "not the entry point" (`main()` does not run) rather
+ * than crash the module-load itself before a single line of user-facing
+ * output is produced.
+ */
+function isRunAsEntryPoint() {
+  if (process.argv[1] === undefined) return false;
+  try {
+    const thisFile = realpathSync(fileURLToPath(import.meta.url));
+    const invoked = realpathSync(process.argv[1]);
+    return thisFile === invoked;
+  } catch {
+    return false;
+  }
+}
+const isEntryPoint = isRunAsEntryPoint();
 if (isEntryPoint) {
   main();
 }

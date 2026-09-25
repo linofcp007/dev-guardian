@@ -2,7 +2,7 @@
   "mcpServers": {
     "dev-guardian": {
       "command": "node",
-      "args": ["mcp/dist/server.js"]
+      "args": ["${workspaceFolder}/mcp/dist/server.js"]
     }
   }
 }

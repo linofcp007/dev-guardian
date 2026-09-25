@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # dev-guardian
 
 This project has the **dev-guardian MCP server** registered. It exposes

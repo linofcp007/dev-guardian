@@ -36,7 +36,13 @@
  * `GUARDIAN_REQUIRE_SEMGREP=1` turns that absence into a hard failure.
  */
 
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+
+// Fix round 1, item 4 (2026-09-25 full review) — see baseRules.test.ts's
+// identical comment for the full reasoning: real, synchronous `semgrep`
+// calls in this file's own `run()` are never bounded by vitest's default
+// testTimeout, so this file opts into a longer one explicitly.
+vi.setConfig({ testTimeout: 180_000 });
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
