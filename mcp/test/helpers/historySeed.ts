@@ -68,6 +68,62 @@ export interface SeedScan {
   status?: Extract<ScanStatus, 'completed' | 'failed' | 'cancelled'>;
 }
 
+export interface ChildSpec {
+  findings?: SeedFinding[];
+  /** The child's scanner was not installed: skipped, coverage none. */
+  blind?: boolean;
+  /** The child's scanner ran and failed (Semgrep exit 7): coverage none. */
+  failed?: boolean;
+}
+
+/**
+ * Task 9's `security_scan_full` shape: the parent row first (it starts
+ * first) holding every child's findings merged and `meta.child_scans`, then
+ * one real scan per child type with `meta.parent_scan_id`.
+ */
+export function seedOrchestratedRun(
+  s: Seeded,
+  id: string,
+  project: string,
+  children: { sast?: ChildSpec; secrets?: ChildSpec; deps?: ChildSpec; iac?: ChildSpec },
+): void {
+  const run = (name: string, c: ChildSpec | undefined): ToolRun =>
+    c?.blind === true
+      ? { name, status: 'skipped', reason: 'not_installed' }
+      : c?.failed === true
+        ? { name, status: 'failed', reason: 'exit 7' }
+        : { name, status: 'ok' };
+  const gap = (c: ChildSpec | undefined): boolean => c?.blind === true || c?.failed === true;
+  const kids = [
+    { type: 'sast' as const, tool: 'semgrep', c: children.sast },
+    { type: 'secrets' as const, tool: 'gitleaks', c: children.secrets },
+    { type: 'deps' as const, tool: 'trivy', c: children.deps },
+    { type: 'iac' as const, tool: 'trivy-config', c: children.iac },
+  ];
+  seedScan(s, {
+    id,
+    type: 'security_full',
+    project,
+    tools_run: kids.map((k) => run(k.tool, k.c)),
+    missing_tools: kids.filter((k) => gap(k.c)).map((k) => k.tool),
+    findings: kids.flatMap((k) => k.c?.findings ?? []),
+    meta: {
+      child_scans: kids.map((k) => ({ tool: `scan_${k.type}`, scan_id: `${id}-${k.type}`, status: 'completed' })),
+    },
+  });
+  for (const k of kids) {
+    seedScan(s, {
+      id: `${id}-${k.type}`,
+      type: k.type,
+      project,
+      tools_run: [run(k.tool, k.c)],
+      missing_tools: gap(k.c) ? [k.tool] : [],
+      findings: k.c?.findings ?? [],
+      meta: { parent_scan_id: id },
+    });
+  }
+}
+
 let clock = Date.parse('2026-01-01T00:00:00.000Z');
 
 /** Inserts, fills and finalizes one scan, stamped one second after the last. */

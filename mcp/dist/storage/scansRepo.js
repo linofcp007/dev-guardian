@@ -278,19 +278,30 @@ export class ScansRepo {
      * window of the 50 newest rows in the whole database, and read "no such
      * scan" once 50 others had run since.
      *
-     * `beforeScanId` keeps only scans strictly older than that one, in the
-     * same (started_at, rowid) order — how "the previous scan" is found.
-     * Paged by `limit` / `offset` for callers that skip some rows (a scan with
-     * coverage none, a scoped run) and must keep looking.
+     * `beforeScanId` keeps only scans strictly older than that one, and
+     * `afterScanId` only scans strictly newer, in the same (started_at, rowid)
+     * order — how "the previous scan" is found, and how a search that only
+     * matters above some scan stops there. `excludeWithChildScans` drops rows
+     * whose `meta.child_scans` is an array (an orchestrated
+     * `security_scan_full` parent) in SQL, so a search for script-era rows does
+     * not page through every orchestrated run to find none. Paged by `limit` /
+     * `offset` for callers that skip some rows (a scan with coverage none, a
+     * scoped run) and must keep looking.
      */
     listCompletedOfTypes(projectPath, types, opts) {
         if (types.length === 0)
             return [];
-        const before = opts.beforeScanId !== undefined;
-        const stmt = this.completedOfTypesStmt(types.length, before);
+        const shape = {
+            before: opts.beforeScanId !== undefined,
+            after: opts.afterScanId !== undefined,
+            noParents: opts.excludeWithChildScans === true,
+        };
+        const stmt = this.completedOfTypesStmt(types.length, shape);
         const params = [projectPath, ...types];
         if (opts.beforeScanId !== undefined)
             params.push(opts.beforeScanId);
+        if (opts.afterScanId !== undefined)
+            params.push(opts.afterScanId);
         params.push(opts.limit, opts.offset ?? 0);
         return stmt.all(...params).map(rowToRecord);
     }
@@ -312,21 +323,29 @@ export class ScansRepo {
     countForProject(projectPath) {
         return this.countForProjectStmt.get(projectPath)?.n ?? 0;
     }
-    completedOfTypesStmt(arity, before) {
-        const key = `${arity}:${before ? 'b' : '-'}`;
+    completedOfTypesStmt(arity, shape) {
+        const key = `${arity}:${shape.before ? 'b' : '-'}${shape.after ? 'a' : '-'}${shape.noParents ? 'p' : '-'}`;
         const cached = this.completedOfTypesCache.get(key);
         if (cached !== undefined)
             return cached;
         const placeholders = Array.from({ length: arity }, () => '?').join(', ');
-        // Row values: "strictly before" in exactly the ORDER BY below, so two
-        // scans started in the same millisecond still have a defined previous.
-        const beforeClause = before
+        // Row values: "strictly before/after" in exactly the ORDER BY below, so
+        // two scans started in the same millisecond still have a defined order.
+        const beforeClause = shape.before
             ? 'AND (started_at, rowid) < (SELECT started_at, rowid FROM scans WHERE id = ?)'
+            : '';
+        const afterClause = shape.after
+            ? 'AND (started_at, rowid) > (SELECT started_at, rowid FROM scans WHERE id = ?)'
+            : '';
+        // CASE, not AND: SQLite does not promise to evaluate json_valid first,
+        // and json_type throws on malformed JSON — which rowToRecord tolerates.
+        const parentClause = shape.noParents
+            ? "AND (CASE WHEN json_valid(meta) THEN json_type(meta, '$.child_scans') END) IS NOT 'array'"
             : '';
         const stmt = this.db.prepare(`
       SELECT * FROM scans
       WHERE project_path = ? AND status = 'completed' AND scan_type IN (${placeholders})
-        ${beforeClause}
+        ${beforeClause} ${afterClause} ${parentClause}
       ORDER BY started_at DESC, rowid DESC
       LIMIT ? OFFSET ?
     `);

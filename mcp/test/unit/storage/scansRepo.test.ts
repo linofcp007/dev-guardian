@@ -303,6 +303,22 @@ describe('ScansRepo.listCompletedOfTypes — latest-by-type as one scoped query'
     expect(repo.listCompletedOfTypes('/a', ['sast'], { limit: 1, offset: 1 }).map((s) => s.scan_id)).toEqual(['s1']);
   });
 
+  it('leaves orchestrated parents out in SQL, keeps rows with malformed meta, and stops at afterScanId', () => {
+    const { db, repo } = freshRepo();
+    completed(repo, 'script-era', 'sast', '/a');
+    repo.insert({ scan_id: 'parent', scan_type: 'sast', project_path: '/a', tree_hash: 'h' });
+    repo.finalize({
+      scan_id: 'parent', status: 'completed', tools_run: [], missing_tools: [],
+      meta: { child_scans: [{ tool: 'scan_sast', scan_id: 'x' }] },
+    });
+    completed(repo, 'broken-meta', 'sast', '/a');
+    db.prepare(`UPDATE scans SET meta = '{not json' WHERE id = 'broken-meta'`).run();
+    const ids = (opts: { afterScanId?: string }): string[] =>
+      repo.listCompletedOfTypes('/a', ['sast'], { limit: 10, excludeWithChildScans: true, ...opts }).map((s) => s.scan_id);
+    expect(ids({})).toEqual(['broken-meta', 'script-era']);
+    expect(ids({ afterScanId: 'script-era' })).toEqual(['broken-meta']);
+  });
+
   it('orders "before" by started_at then insertion, so same-millisecond scans still have a previous', () => {
     const { db, repo } = freshRepo();
     for (const id of ['x1', 'x2', 'x3']) completed(repo, id, 'sast', '/a');

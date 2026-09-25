@@ -75,6 +75,13 @@ export interface FindingDelta {
   new_count: number;
   resolved_count: number;
   unchanged_count: number;
+  /**
+   * Findings of `from` that `to` did not measure again — its scanner for that
+   * type had coverage none (an orchestrated run's failed child, say). Counted
+   * here INSTEAD of as resolved: absence from a scan that did not look is not
+   * a fix. See `history/runCompare.ts`. Absent when there were none.
+   */
+  not_remeasured_count?: number;
   /** Possibly capped for display — see `TruncationNotice`. */
   new_findings: Finding[];
 }

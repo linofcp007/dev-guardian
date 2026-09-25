@@ -144,9 +144,17 @@ export interface OpenSet {
    * one slot.
    */
   bookkeeping: SlotBookkeeping[];
-  /** `scans[0]`: the newest state scan considered (source or skipped), or null. */
+  /**
+   * The newest state scan considered (source or skipped), NAMED AS A RUN: a
+   * child of an orchestrated security_full stands for its parent, which is
+   * itself never in `sources` (see `latestStateScan`). Null when none.
+   */
   newest: ScanRecord | null;
-  /** The newest scan findings were actually read from, or null. */
+  /**
+   * The newest source, named as a run the same way — so it may be an
+   * orchestrated parent that is NOT in `sources`. A reader that must name a
+   * scan the findings were read from uses `sources[0]` (newest first).
+   */
   newestSource: ScanRecord | null;
 }
 
@@ -168,6 +176,10 @@ export interface FindUsableOptions {
   slot?: OpenSetSlot;
   /** Only scans strictly older than this one — "the previous scan". */
   beforeScanId?: string;
+  /** Only scans strictly newer than this one. */
+  afterScanId?: string;
+  /** Leave orchestrated `security_full` parents out, in SQL. */
+  excludeOrchestrated?: boolean;
   /** Default true. False for readers of `meta` that no scanner produced. */
   skipCoverageNone?: boolean;
   /** Further narrowing (e.g. `isDepsAuditScan`). */
@@ -208,6 +220,8 @@ function search(
       limit: PAGE,
       offset,
       ...(opts.beforeScanId !== undefined ? { beforeScanId: opts.beforeScanId } : {}),
+      ...(opts.afterScanId !== undefined ? { afterScanId: opts.afterScanId } : {}),
+      ...(opts.excludeOrchestrated === true ? { excludeWithChildScans: true } : {}),
     });
     for (const scan of page) {
       if (isScopedScan(scan)) continue;
@@ -356,9 +370,14 @@ function slotSources(
   const pick = (r: SearchResult): SlotPick[] =>
     r.scan !== null && r.coverage !== null ? [{ scan: r.scan, coverage: r.coverage }] : [];
 
+  // Script-era rows only — orchestrated parents are left out in SQL, so no
+  // read pages through every orchestrated run to find none (the predicate
+  // stays as the JS-side guarantee).
+  const scriptEra = { excludeOrchestrated: true, predicate: isScriptEraFullScan } as const;
+
   // The residual slot: only what a script-era row could not route.
   if (slot === 'security_full') {
-    const r = search(storage, projectPath, ['security_full'], { slot, predicate: isScriptEraFullScan });
+    const r = search(storage, projectPath, ['security_full'], { slot, ...scriptEra });
     return { picks: pick(r), hits: r.hits };
   }
 
@@ -367,23 +386,19 @@ function slotSources(
     return { picks: pick(dedicated), hits: dedicated.hits };
   }
 
-  const legacy = search(storage, projectPath, ['security_full'], { slot, predicate: isScriptEraFullScan });
+  // A script-era row counts only when it is newer than the dedicated source
+  // (it is added, never superseding), so the search stops at that source.
+  // Every row it returns — and every blind row it passes — is newer.
+  const legacy = search(storage, projectPath, ['security_full'], {
+    slot,
+    ...scriptEra,
+    ...(dedicated.scan !== null ? { afterScanId: dedicated.scan.scan_id } : {}),
+  });
   const picks = pick(dedicated);
-  const newerThanDedicated = (s: ScanRecord): boolean =>
-    dedicated.scan === null || isNewer(storage, s, dedicated.scan);
-  // Added, never superseding: only when it is the newer of the two.
-  if (legacy.scan !== null && legacy.coverage !== null && newerThanDedicated(legacy.scan)) {
+  if (legacy.scan !== null && legacy.coverage !== null) {
     picks.push({ scan: legacy.scan, coverage: legacy.coverage });
   }
-  // Blind script-era rows matter only where they are newer than the
-  // dedicated source; older ones would not have been read anyway.
-  return { picks, hits: [...dedicated.hits, ...legacy.hits.filter((h) => newerThanDedicated(h.scan))] };
-}
-
-/** `a` is newer than `b` in the (started_at, rowid) order every query here uses. */
-function isNewer(storage: Storage, a: ScanRecord, b: ScanRecord): boolean {
-  if (a.started_at !== b.started_at) return a.started_at > b.started_at;
-  return storage.scans.sortNewestFirst([a.scan_id, b.scan_id])[0] === a.scan_id;
+  return { picks, hits: [...dedicated.hits, ...legacy.hits] };
 }
 
 export function openSetForProject(

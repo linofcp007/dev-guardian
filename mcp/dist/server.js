@@ -38595,17 +38595,27 @@ var ScansRepo = class {
    * window of the 50 newest rows in the whole database, and read "no such
    * scan" once 50 others had run since.
    *
-   * `beforeScanId` keeps only scans strictly older than that one, in the
-   * same (started_at, rowid) order — how "the previous scan" is found.
-   * Paged by `limit` / `offset` for callers that skip some rows (a scan with
-   * coverage none, a scoped run) and must keep looking.
+   * `beforeScanId` keeps only scans strictly older than that one, and
+   * `afterScanId` only scans strictly newer, in the same (started_at, rowid)
+   * order — how "the previous scan" is found, and how a search that only
+   * matters above some scan stops there. `excludeWithChildScans` drops rows
+   * whose `meta.child_scans` is an array (an orchestrated
+   * `security_scan_full` parent) in SQL, so a search for script-era rows does
+   * not page through every orchestrated run to find none. Paged by `limit` /
+   * `offset` for callers that skip some rows (a scan with coverage none, a
+   * scoped run) and must keep looking.
    */
   listCompletedOfTypes(projectPath, types, opts) {
     if (types.length === 0) return [];
-    const before = opts.beforeScanId !== void 0;
-    const stmt = this.completedOfTypesStmt(types.length, before);
+    const shape = {
+      before: opts.beforeScanId !== void 0,
+      after: opts.afterScanId !== void 0,
+      noParents: opts.excludeWithChildScans === true
+    };
+    const stmt = this.completedOfTypesStmt(types.length, shape);
     const params = [projectPath, ...types];
     if (opts.beforeScanId !== void 0) params.push(opts.beforeScanId);
+    if (opts.afterScanId !== void 0) params.push(opts.afterScanId);
     params.push(opts.limit, opts.offset ?? 0);
     return stmt.all(...params).map(rowToRecord);
   }
@@ -38625,16 +38635,18 @@ var ScansRepo = class {
   countForProject(projectPath) {
     return this.countForProjectStmt.get(projectPath)?.n ?? 0;
   }
-  completedOfTypesStmt(arity, before) {
-    const key = `${arity}:${before ? "b" : "-"}`;
+  completedOfTypesStmt(arity, shape) {
+    const key = `${arity}:${shape.before ? "b" : "-"}${shape.after ? "a" : "-"}${shape.noParents ? "p" : "-"}`;
     const cached2 = this.completedOfTypesCache.get(key);
     if (cached2 !== void 0) return cached2;
     const placeholders = Array.from({ length: arity }, () => "?").join(", ");
-    const beforeClause = before ? "AND (started_at, rowid) < (SELECT started_at, rowid FROM scans WHERE id = ?)" : "";
+    const beforeClause = shape.before ? "AND (started_at, rowid) < (SELECT started_at, rowid FROM scans WHERE id = ?)" : "";
+    const afterClause = shape.after ? "AND (started_at, rowid) > (SELECT started_at, rowid FROM scans WHERE id = ?)" : "";
+    const parentClause = shape.noParents ? "AND (CASE WHEN json_valid(meta) THEN json_type(meta, '$.child_scans') END) IS NOT 'array'" : "";
     const stmt = this.db.prepare(`
       SELECT * FROM scans
       WHERE project_path = ? AND status = 'completed' AND scan_type IN (${placeholders})
-        ${beforeClause}
+        ${beforeClause} ${afterClause} ${parentClause}
       ORDER BY started_at DESC, rowid DESC
       LIMIT ? OFFSET ?
     `);
@@ -46654,7 +46666,9 @@ function search(storage, projectPath, types, opts) {
     const page = storage.scans.listCompletedOfTypes(projectPath, types, {
       limit: PAGE,
       offset,
-      ...opts.beforeScanId !== void 0 ? { beforeScanId: opts.beforeScanId } : {}
+      ...opts.beforeScanId !== void 0 ? { beforeScanId: opts.beforeScanId } : {},
+      ...opts.afterScanId !== void 0 ? { afterScanId: opts.afterScanId } : {},
+      ...opts.excludeOrchestrated === true ? { excludeWithChildScans: true } : {}
     });
     for (const scan2 of page) {
       if (isScopedScan(scan2)) continue;
@@ -46737,25 +46751,25 @@ function suppressionMatcher(suppressions, now) {
 }
 function slotSources(storage, projectPath, slot) {
   const pick2 = (r) => r.scan !== null && r.coverage !== null ? [{ scan: r.scan, coverage: r.coverage }] : [];
+  const scriptEra = { excludeOrchestrated: true, predicate: isScriptEraFullScan };
   if (slot === "security_full") {
-    const r = search(storage, projectPath, ["security_full"], { slot, predicate: isScriptEraFullScan });
+    const r = search(storage, projectPath, ["security_full"], { slot, ...scriptEra });
     return { picks: pick2(r), hits: r.hits };
   }
   const dedicated = search(storage, projectPath, [slot], { slot });
   if (!sourceTypesOf(slot).includes("security_full")) {
     return { picks: pick2(dedicated), hits: dedicated.hits };
   }
-  const legacy = search(storage, projectPath, ["security_full"], { slot, predicate: isScriptEraFullScan });
+  const legacy = search(storage, projectPath, ["security_full"], {
+    slot,
+    ...scriptEra,
+    ...dedicated.scan !== null ? { afterScanId: dedicated.scan.scan_id } : {}
+  });
   const picks = pick2(dedicated);
-  const newerThanDedicated = (s) => dedicated.scan === null || isNewer(storage, s, dedicated.scan);
-  if (legacy.scan !== null && legacy.coverage !== null && newerThanDedicated(legacy.scan)) {
+  if (legacy.scan !== null && legacy.coverage !== null) {
     picks.push({ scan: legacy.scan, coverage: legacy.coverage });
   }
-  return { picks, hits: [...dedicated.hits, ...legacy.hits.filter((h2) => newerThanDedicated(h2.scan))] };
-}
-function isNewer(storage, a2, b) {
-  if (a2.started_at !== b.started_at) return a2.started_at > b.started_at;
-  return storage.scans.sortNewestFirst([a2.scan_id, b.scan_id])[0] === a2.scan_id;
+  return { picks, hits: [...dedicated.hits, ...legacy.hits] };
 }
 function openSetForProject(storage, projectPath, opts = {}) {
   const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now());
@@ -46836,6 +46850,64 @@ function describeOpenSet(set) {
   };
 }
 
+// src/history/runCompare.ts
+function childrenOf(storage, parent) {
+  const listed = parent.meta?.["child_scans"];
+  if (!Array.isArray(listed)) return [];
+  const out = [];
+  for (const entry of listed) {
+    if (entry === null || typeof entry !== "object") continue;
+    const e = entry;
+    const row = typeof e.scan_id === "string" ? storage.scans.getById(e.scan_id) : null;
+    const type = row?.scan_type ?? (typeof e.tool === "string" ? e.tool.replace(/^scan_/, "") : null);
+    if (type !== null) out.push({ type, row });
+  }
+  return out;
+}
+function notMeasuredTypes(storage, scan2) {
+  if (!isOrchestratedFullScan(scan2)) {
+    return computeCoverage(scan2.tools_run, scan2.missing_tools) === "none" ? [scan2.scan_type] : [];
+  }
+  const out = [];
+  for (const child of childrenOf(storage, scan2)) {
+    const row = child.row;
+    const usable = row !== null && row.status === "completed" && computeCoverage(row.tools_run, row.missing_tools) !== "none";
+    if (!usable && !out.includes(child.type)) out.push(child.type);
+  }
+  return out;
+}
+function typeResolver(storage, from) {
+  if (isOrchestratedFullScan(from)) {
+    const indexed = childrenOf(storage, from).filter((c3) => c3.row !== null).map((c3) => ({ type: c3.type, index: indexFindings(storage.findings.listByScan(c3.row.scan_id)) }));
+    return (f) => indexed.find((c3) => c3.index.has(f))?.type ?? null;
+  }
+  if (isScriptEraFullScan(from)) {
+    return (f) => {
+      const slot = scriptEraSlotOfFinding(f);
+      if (slot === "containers") return "iac";
+      return slot === "security_full" ? null : slot;
+    };
+  }
+  return () => from.scan_type;
+}
+function remeasureCheck(storage, from, to) {
+  const notMeasured = notMeasuredTypes(storage, to);
+  if (notMeasured.length === 0) return { notMeasured, isNotRemeasured: () => false };
+  if (!isOrchestratedFullScan(to)) return { notMeasured, isNotRemeasured: () => true };
+  const typeOf = typeResolver(storage, from);
+  return {
+    notMeasured,
+    isNotRemeasured: (f) => {
+      const type = typeOf(f);
+      return type === null || notMeasured.includes(type);
+    }
+  };
+}
+function describeNotMeasured(to, notMeasured) {
+  if (notMeasured.length === 0) return null;
+  return `Scan ${to.scan_id} did not measure ${notMeasured.join(", ")} (its scanner there did not run or failed: coverage none). Earlier findings of those types are reported as not re-measured, never as resolved; re-run the scan once the scanner works.`;
+}
+
 // src/tools/setBaseline.ts
 var inputSchema4 = {
   project_path: ProjectPath,
@@ -46886,6 +46958,8 @@ async function handler7(input, ctx) {
     scan_id: targetScanId,
     ...inp.note !== void 0 ? { note: inp.note } : {}
   });
+  const target = ctx.storage.scans.getById(targetScanId);
+  const notMeasured = target === null ? [] : notMeasuredTypes(ctx.storage, target);
   return {
     ok: true,
     baseline_id: baseline.id,
@@ -46893,7 +46967,11 @@ async function handler7(input, ctx) {
     project_path: baseline.project_path,
     scan_type: baseline.scan_type,
     set_at: baseline.set_at,
-    ...baseline.note !== void 0 ? { note: baseline.note } : {}
+    ...baseline.note !== void 0 ? { note: baseline.note } : {},
+    ...notMeasured.length > 0 ? {
+      not_measured: notMeasured,
+      warning: `This baseline's scan did not measure ${notMeasured.join(", ")} (the scanner there did not run or failed: coverage none). It holds no findings of those types, so later scans will report every one of them as new. Re-run the scan once the scanner works and set the baseline again.`
+    } : {}
   };
 }
 function failDomain8(code, message2) {
@@ -46959,7 +47037,7 @@ var inputSchema6 = {
 var tool12 = {
   name: "diff_scans",
   title: "Diff scans (regression / resolution detection)",
-  description: "Compare findings between two scans of one project (same scan_type). Returns new (in to but not in from), resolved (in from but not in to) and unchanged (in both): true counts in `summary`, at most 50 findings per list, `truncated` naming the lists that were cut. Findings are matched by their line-independent identity, so code moving above a finding does not make it new; scans from before identities existed match by fingerprint. Default: from=previous, to=latest \u2014 the newest usable scan of project_path (default: the server's working directory), never an SBOM/stack/diff-review run or one whose scanners did not run; skipped scans are listed in `skipped`. from=baseline uses the project's baseline of the same scan type.",
+  description: "Compare findings between two scans of one project (same scan_type). Returns new (in to but not in from), resolved (in from but not in to), unchanged (in both) and not_remeasured (in from, of a type to did not measure \u2014 e.g. a failed child of a security_scan_full run; never counted as resolved): true counts in `summary`, at most 50 findings per list, `truncated` naming the lists that were cut. Findings are matched by their line-independent identity, so code moving above a finding does not make it new; scans from before identities existed match by fingerprint. Default: from=previous, to=latest \u2014 the newest usable scan of project_path (default: the server's working directory), never an SBOM/stack/diff-review run or one whose scanners did not run; skipped scans are counted in `skipped`. from=baseline uses the project's baseline of the same scan type.",
   inputSchema: inputSchema6,
   handler: async (input, ctx) => handler9(input, ctx)
 };
@@ -46977,20 +47055,27 @@ async function handler9(input, ctx) {
       `Cannot diff a scan against itself (${toScan.value.scan_id}).`
     );
   }
+  const fromScan = ctx.storage.scans.getById(fromId.value);
+  if (!fromScan) return failDomain10("unknown_scan_id", `from scan '${fromId.value}' not found`);
   const fromFindings = ctx.storage.findings.listByScan(fromId.value);
   const toFindings = ctx.storage.findings.listByScan(toScan.value.scan_id);
   const fromIndex = indexFindings(fromFindings);
   const toIndex = indexFindings(toFindings);
+  const check2 = remeasureCheck(ctx.storage, fromScan, toScan.value);
   const new_findings = [];
   const resolved_findings = [];
   const unchanged_findings = [];
+  const not_remeasured_findings = [];
   for (const f of toFindings) {
     if (fromIndex.has(f)) unchanged_findings.push(f);
     else new_findings.push(f);
   }
   for (const f of fromFindings) {
-    if (!toIndex.has(f)) resolved_findings.push(f);
+    if (toIndex.has(f)) continue;
+    if (check2.isNotRemeasured(f)) not_remeasured_findings.push(f);
+    else resolved_findings.push(f);
   }
+  const note = describeNotMeasured(toScan.value, check2.notMeasured);
   return {
     ok: true,
     project_path: toScan.value.project_path,
@@ -47000,16 +47085,21 @@ async function handler9(input, ctx) {
     summary: {
       new: new_findings.length,
       resolved: resolved_findings.length,
-      unchanged: unchanged_findings.length
+      unchanged: unchanged_findings.length,
+      not_remeasured: not_remeasured_findings.length
     },
     new_findings: new_findings.slice(0, ITEMS_PER_BUCKET),
     resolved_findings: resolved_findings.slice(0, ITEMS_PER_BUCKET),
     unchanged_findings: unchanged_findings.slice(0, ITEMS_PER_BUCKET),
+    not_remeasured_findings: not_remeasured_findings.slice(0, ITEMS_PER_BUCKET),
     truncated: {
       new: new_findings.length > ITEMS_PER_BUCKET,
       resolved: resolved_findings.length > ITEMS_PER_BUCKET,
-      unchanged: unchanged_findings.length > ITEMS_PER_BUCKET
+      unchanged: unchanged_findings.length > ITEMS_PER_BUCKET,
+      not_remeasured: not_remeasured_findings.length > ITEMS_PER_BUCKET
     },
+    ...check2.notMeasured.length > 0 ? { not_remeasured_types: check2.notMeasured } : {},
+    ...note !== null ? { note } : {},
     ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}
   };
 }
@@ -48753,9 +48843,14 @@ async function handler16(input, ctx) {
   const prevIndex = indexFindings(prevFindings);
   const curIndex = indexFindings(curFindings);
   const newFindings = curFindings.filter((f) => !prevIndex.has(f));
-  const resolvedFindings = prevFindings.filter((f) => !curIndex.has(f));
+  const baselineScan = ctx.storage.scans.getById(baselineId);
+  const check2 = baselineScan === null ? { notMeasured: [], isNotRemeasured: () => false } : remeasureCheck(ctx.storage, baselineScan, latest);
+  const gone = prevFindings.filter((f) => !curIndex.has(f));
+  const notRemeasured = gone.filter((f) => check2.isNotRemeasured(f));
+  const resolvedFindings = gone.filter((f) => !check2.isNotRemeasured(f));
   const score = weightedScore(newFindings) - weightedScore(resolvedFindings);
   const regressed = score > threshold;
+  const measuredNote = describeNotMeasured(latest, check2.notMeasured);
   return {
     ok: true,
     regressed,
@@ -48768,9 +48863,12 @@ async function handler16(input, ctx) {
     current_scan_id: latest.scan_id,
     new_findings_by_severity: countBySeverity3(newFindings),
     resolved_findings_by_severity: countBySeverity3(resolvedFindings),
-    hint: regressed ? "Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes." : "No significant regression.",
+    not_remeasured_by_severity: countBySeverity3(notRemeasured),
+    ...check2.notMeasured.length > 0 ? { not_remeasured_types: check2.notMeasured } : {},
+    hint: regressed ? "Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes." : measuredNote !== null ? `No significant regression among the types that were measured. ${measuredNote}` : "No significant regression.",
     ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {},
-    ...note
+    ...note,
+    ...measuredNote !== null ? { not_measured_note: measuredNote } : {}
   };
 }
 function weightedScore(findings) {
@@ -59248,7 +59346,7 @@ function mcpInvalidParams(message2) {
 }
 
 // src/resources/findings.ts
-var SCOPE_NOTE = `Scoped to the server's working-directory project: the newest usable scan of every finding-producing type (never an SBOM, stack detection or diff review; a scan whose scanners did not run is skipped and listed in \`skipped\`), deduplicated, active suppressions removed. Paged with ?page=N&page_size=M (default ${DEFAULT_PAGE_SIZE}, max ${MAX_PAGE_SIZE}); messages are cut to ${MESSAGE_MAX_CHARS} characters.`;
+var SCOPE_NOTE = `Scoped to the server's working-directory project: the newest usable scan of every finding-producing type (never an SBOM, stack detection or diff review; a scan whose scanners did not run is skipped \u2014 \`skipped\` counts them and names the newest few), deduplicated, active suppressions removed. Paged with ?page=N&page_size=M (default ${DEFAULT_PAGE_SIZE}, max ${MAX_PAGE_SIZE}); messages are cut to ${MESSAGE_MAX_CHARS} characters.`;
 registerResourceModule({
   name: "guardian-findings-open",
   uri: "guardian://findings/open{?page,page_size}",
@@ -59285,7 +59383,7 @@ registerResourceModule({
 function respond(uri, ctx, keep) {
   const set = openSetForProject(ctx.storage, serverProjectPath());
   const { items, total, page, page_size } = paginate(uri, set.findings.filter(keep));
-  const newest = set.newestSource;
+  const newest = set.sources[0];
   return {
     project_path: set.project_path,
     findings: items.map(boundFinding),

@@ -38,18 +38,18 @@ describe('diff_scans', () => {
     const to = seedScan(s, { id: 'to', type: 'sast', project: p, findings: [...kept, ...many(3, 'c', (i) => `src/n${i}.ts`)] });
 
     const r = okResult<{
-      summary: { new: number; resolved: number; unchanged: number };
+      summary: { new: number; resolved: number; unchanged: number; not_remeasured: number };
       new_findings: unknown[];
       resolved_findings: unknown[];
       unchanged_findings: unknown[];
-      truncated: { new: boolean; resolved: boolean; unchanged: boolean };
+      truncated: { new: boolean; resolved: boolean; unchanged: boolean; not_remeasured: boolean };
     }>(await tool('diff_scans').handler({ from_scan_id: from, to_scan_id: to, project_path: p }, s.plugin));
 
-    expect(r.summary).toEqual({ new: 3, resolved: 60, unchanged: 70 });
+    expect(r.summary).toEqual({ new: 3, resolved: 60, unchanged: 70, not_remeasured: 0 });
     expect(r.new_findings).toHaveLength(3);
     expect(r.resolved_findings).toHaveLength(50);
     expect(r.unchanged_findings).toHaveLength(50);
-    expect(r.truncated).toEqual({ new: false, resolved: true, unchanged: true });
+    expect(r.truncated).toEqual({ new: false, resolved: true, unchanged: true, not_remeasured: false });
   });
 });
 

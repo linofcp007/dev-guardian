@@ -33,6 +33,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { indexFindings } from '../fingerprint/findingIdentity.js';
 import { latestStateScan, type SkipHit, summarizeSkipped, type SkippedSummary } from '../history/openSet.js';
+import { describeNotMeasured, remeasureCheck } from '../history/runCompare.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { SCAN_TYPES, type DomainError, type Finding, type ScanType, type ToolResult } from '../types.js';
@@ -61,14 +62,15 @@ const tool: ToolModule = {
   title: 'Diff scans (regression / resolution detection)',
   description:
     'Compare findings between two scans of one project (same scan_type). Returns new (in to but ' +
-    'not in from), resolved (in from but not in to) and unchanged (in both): true counts in ' +
-    '`summary`, at most 50 findings per list, `truncated` naming the lists that were cut. ' +
-    'Findings are matched by their line-independent identity, so code moving above a finding ' +
-    'does not make it new; scans from before identities existed match by fingerprint. Default: ' +
-    "from=previous, to=latest — the newest usable scan of project_path (default: the server's " +
-    'working directory), never an SBOM/stack/diff-review run or one whose scanners did not run; ' +
-    'skipped scans are listed in `skipped`. from=baseline uses the project\'s baseline of the ' +
-    'same scan type.',
+    'not in from), resolved (in from but not in to), unchanged (in both) and not_remeasured (in ' +
+    'from, of a type to did not measure — e.g. a failed child of a security_scan_full run; never ' +
+    'counted as resolved): true counts in `summary`, at most 50 findings per list, `truncated` ' +
+    'naming the lists that were cut. Findings are matched by their line-independent identity, so ' +
+    'code moving above a finding does not make it new; scans from before identities existed match ' +
+    "by fingerprint. Default: from=previous, to=latest — the newest usable scan of project_path " +
+    "(default: the server's working directory), never an SBOM/stack/diff-review run or one whose " +
+    'scanners did not run; skipped scans are counted in `skipped`. from=baseline uses the ' +
+    "project's baseline of the same scan type.",
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -103,23 +105,32 @@ async function handler(
     );
   }
 
+  const fromScan = ctx.storage.scans.getById(fromId.value);
+  if (!fromScan) return failDomain('unknown_scan_id', `from scan '${fromId.value}' not found`);
   const fromFindings = ctx.storage.findings.listByScan(fromId.value);
   const toFindings = ctx.storage.findings.listByScan(toScan.value.scan_id);
 
   const fromIndex = indexFindings(fromFindings);
   const toIndex = indexFindings(toFindings);
+  // A `from` finding absent from a `to` that never looked (a failed child of
+  // an orchestrated run, or a `to` at coverage none) is not resolved.
+  const check = remeasureCheck(ctx.storage, fromScan, toScan.value);
 
   const new_findings: Finding[] = [];
   const resolved_findings: Finding[] = [];
   const unchanged_findings: Finding[] = [];
+  const not_remeasured_findings: Finding[] = [];
 
   for (const f of toFindings) {
     if (fromIndex.has(f)) unchanged_findings.push(f);
     else new_findings.push(f);
   }
   for (const f of fromFindings) {
-    if (!toIndex.has(f)) resolved_findings.push(f);
+    if (toIndex.has(f)) continue;
+    if (check.isNotRemeasured(f)) not_remeasured_findings.push(f);
+    else resolved_findings.push(f);
   }
+  const note = describeNotMeasured(toScan.value, check.notMeasured);
 
   return {
     ok: true,
@@ -131,15 +142,20 @@ async function handler(
       new: new_findings.length,
       resolved: resolved_findings.length,
       unchanged: unchanged_findings.length,
+      not_remeasured: not_remeasured_findings.length,
     },
     new_findings: new_findings.slice(0, ITEMS_PER_BUCKET),
     resolved_findings: resolved_findings.slice(0, ITEMS_PER_BUCKET),
     unchanged_findings: unchanged_findings.slice(0, ITEMS_PER_BUCKET),
+    not_remeasured_findings: not_remeasured_findings.slice(0, ITEMS_PER_BUCKET),
     truncated: {
       new: new_findings.length > ITEMS_PER_BUCKET,
       resolved: resolved_findings.length > ITEMS_PER_BUCKET,
       unchanged: unchanged_findings.length > ITEMS_PER_BUCKET,
+      not_remeasured: not_remeasured_findings.length > ITEMS_PER_BUCKET,
     },
+    ...(check.notMeasured.length > 0 ? { not_remeasured_types: check.notMeasured } : {}),
+    ...(note !== null ? { note } : {}),
     ...(skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}),
   };
 }

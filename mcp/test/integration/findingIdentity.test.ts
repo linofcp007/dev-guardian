@@ -186,7 +186,7 @@ describe('one line inserted above a finding', () => {
     const diff = okResult<{ summary: { new: number; resolved: number; unchanged: number } }>(
       await getTool('diff_scans').handler({ from_scan_id: s1.scan_id, to_scan_id: s2.scan_id }, plugin),
     );
-    expect(diff.summary).toEqual({ new: 0, resolved: 0, unchanged: 1 });
+    expect(diff.summary).toEqual({ new: 0, resolved: 0, unchanged: 1, not_remeasured: 0 });
 
     const alert = okResult<{
       new_findings_by_severity: Record<string, number>;
@@ -220,14 +220,14 @@ describe('what must still read as a change', () => {
     const d1 = okResult<{ summary: { new: number; resolved: number; unchanged: number } }>(
       await getTool('diff_scans').handler({ from_scan_id: s1.scan_id, to_scan_id: s2.scan_id }, plugin),
     );
-    expect(d1.summary).toEqual({ new: 1, resolved: 0, unchanged: 1 });
+    expect(d1.summary).toEqual({ new: 1, resolved: 0, unchanged: 1, not_remeasured: 0 });
 
     writeFileSync(join(dir, 'app.js'), 'module.exports = {};\n');
     const s3 = await scan(plugin, dir);
     const d2 = okResult<{ summary: { new: number; resolved: number; unchanged: number } }>(
       await getTool('diff_scans').handler({ from_scan_id: s2.scan_id, to_scan_id: s3.scan_id }, plugin),
     );
-    expect(d2.summary).toEqual({ new: 0, resolved: 2, unchanged: 0 });
+    expect(d2.summary).toEqual({ new: 0, resolved: 2, unchanged: 0, not_remeasured: 0 });
   });
 
   it('a target that was really fixed is resolved', async () => {
@@ -293,7 +293,7 @@ describe('data written before identities existed', () => {
         plugin,
       ),
     );
-    expect(diff.summary).toEqual({ new: 0, resolved: 0, unchanged: 1 });
+    expect(diff.summary).toEqual({ new: 0, resolved: 0, unchanged: 1, not_remeasured: 0 });
   });
 });
 

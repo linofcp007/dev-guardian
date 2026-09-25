@@ -25,7 +25,8 @@ import { registerResourceModule } from './index.js';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MESSAGE_MAX_CHARS, boundFinding, paginate, serverProjectPath, } from './paging.js';
 const SCOPE_NOTE = "Scoped to the server's working-directory project: the newest usable scan of every " +
     'finding-producing type (never an SBOM, stack detection or diff review; a scan whose scanners ' +
-    'did not run is skipped and listed in `skipped`), deduplicated, active suppressions removed. ' +
+    'did not run is skipped — `skipped` counts them and names the newest few), deduplicated, active ' +
+    'suppressions removed. ' +
     `Paged with ?page=N&page_size=M (default ${DEFAULT_PAGE_SIZE}, max ${MAX_PAGE_SIZE}); messages ` +
     `are cut to ${MESSAGE_MAX_CHARS} characters.`;
 registerResourceModule({
@@ -62,7 +63,9 @@ registerResourceModule({
 function respond(uri, ctx, keep) {
     const set = openSetForProject(ctx.storage, serverProjectPath());
     const { items, total, page, page_size } = paginate(uri, set.findings.filter(keep));
-    const newest = set.newestSource;
+    // `sources` is newest first. Not `newestSource`: that names an orchestrated
+    // run by its parent, which is never itself a source.
+    const newest = set.sources[0];
     return {
         project_path: set.project_path,
         findings: items.map(boundFinding),

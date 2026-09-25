@@ -25,6 +25,7 @@
 import { z } from 'zod';
 import { indexFindings } from '../fingerprint/findingIdentity.js';
 import { latestStateScan, summarizeSkipped } from '../history/openSet.js';
+import { describeNotMeasured, remeasureCheck } from '../history/runCompare.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { SCAN_TYPES } from '../types.js';
@@ -134,9 +135,19 @@ async function handler(input, ctx) {
     const prevIndex = indexFindings(prevFindings);
     const curIndex = indexFindings(curFindings);
     const newFindings = curFindings.filter((f) => !prevIndex.has(f));
-    const resolvedFindings = prevFindings.filter((f) => !curIndex.has(f));
+    // A reference finding the current scan did not look at again (a failed
+    // child of an orchestrated run) is not resolved: counted as such, it
+    // cancelled a real new high and hid the regression.
+    const baselineScan = ctx.storage.scans.getById(baselineId);
+    const check = baselineScan === null
+        ? { notMeasured: [], isNotRemeasured: () => false }
+        : remeasureCheck(ctx.storage, baselineScan, latest);
+    const gone = prevFindings.filter((f) => !curIndex.has(f));
+    const notRemeasured = gone.filter((f) => check.isNotRemeasured(f));
+    const resolvedFindings = gone.filter((f) => !check.isNotRemeasured(f));
     const score = weightedScore(newFindings) - weightedScore(resolvedFindings);
     const regressed = score > threshold;
+    const measuredNote = describeNotMeasured(latest, check.notMeasured);
     return {
         ok: true,
         regressed,
@@ -149,11 +160,16 @@ async function handler(input, ctx) {
         current_scan_id: latest.scan_id,
         new_findings_by_severity: countBySeverity(newFindings),
         resolved_findings_by_severity: countBySeverity(resolvedFindings),
+        not_remeasured_by_severity: countBySeverity(notRemeasured),
+        ...(check.notMeasured.length > 0 ? { not_remeasured_types: check.notMeasured } : {}),
         hint: regressed
             ? 'Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes.'
-            : 'No significant regression.',
+            : measuredNote !== null
+                ? `No significant regression among the types that were measured. ${measuredNote}`
+                : 'No significant regression.',
         ...(skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}),
         ...note,
+        ...(measuredNote !== null ? { not_measured_note: measuredNote } : {}),
     };
 }
 function weightedScore(findings) {

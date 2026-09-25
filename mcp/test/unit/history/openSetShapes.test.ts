@@ -18,7 +18,7 @@ import { buildSnapshot } from '../../../src/dashboard/snapshot.js';
 import { describeOpenSet, latestStateScan, openSetForProject } from '../../../src/history/openSet.js';
 import type { ToolRun } from '../../../src/types.js';
 import { cleanupTempDirs } from '../../helpers/tempDir.js';
-import { freshPlugin, seedScan, type SeedFinding, type Seeded } from '../../helpers/historySeed.js';
+import { freshPlugin, seedOrchestratedRun, seedScan, type Seeded } from '../../helpers/historySeed.js';
 
 afterAll(cleanupTempDirs);
 
@@ -41,45 +41,9 @@ const SCRIPT_BLIND = {
 const ids = (set: ReturnType<typeof openSetForProject>): string[] => set.findings.map((f) => f.fingerprint).sort();
 const fp = (c: string): string => c.repeat(64);
 
-/** Task 9's shape: the parent first (it starts first), then its children. */
-function orchestrated(
-  s: Seeded,
-  id: string,
-  children: {
-    sast?: { findings?: SeedFinding[]; blind?: boolean };
-    secrets?: { findings?: SeedFinding[]; blind?: boolean };
-    deps?: { findings?: SeedFinding[]; blind?: boolean };
-    iac?: { findings?: SeedFinding[]; blind?: boolean };
-  },
-): void {
-  const run = (name: string, blind: boolean | undefined): ToolRun =>
-    blind === true ? { name, status: 'skipped', reason: 'not_installed' } : { name, status: 'ok' };
-  const kids = [
-    { type: 'sast' as const, tool: 'semgrep', c: children.sast },
-    { type: 'secrets' as const, tool: 'gitleaks', c: children.secrets },
-    { type: 'deps' as const, tool: 'trivy', c: children.deps },
-    { type: 'iac' as const, tool: 'trivy-config', c: children.iac },
-  ];
-  seedScan(s, {
-    id,
-    type: 'security_full',
-    project: P,
-    tools_run: kids.map((k) => run(k.tool, k.c?.blind)),
-    missing_tools: kids.filter((k) => k.c?.blind === true).map((k) => k.tool),
-    findings: kids.flatMap((k) => k.c?.findings ?? []),
-    meta: { child_scans: kids.map((k) => ({ tool: `scan_${k.type}`, scan_id: `${id}-${k.type}`, status: 'completed' })) },
-  });
-  for (const k of kids) {
-    seedScan(s, {
-      id: `${id}-${k.type}`,
-      type: k.type,
-      project: P,
-      tools_run: [run(k.tool, k.c?.blind)],
-      missing_tools: k.c?.blind === true ? [k.tool] : [],
-      findings: k.c?.findings ?? [],
-      meta: { parent_scan_id: id },
-    });
-  }
+/** Task 9's shape, in this file's project — see `seedOrchestratedRun`. */
+function orchestrated(s: Seeded, id: string, children: Parameters<typeof seedOrchestratedRun>[3]): void {
+  seedOrchestratedRun(s, id, P, children);
 }
 
 describe('a blind security_full is never a source (review item 1)', () => {

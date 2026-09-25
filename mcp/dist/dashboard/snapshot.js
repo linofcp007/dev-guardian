@@ -41,6 +41,7 @@
  * identity after a line shift came back as "resolved".
  */
 import { findLatestUsable, latestStateScan, openSetForProject, suppressionMatcher, } from '../history/openSet.js';
+import { remeasureCheck } from '../history/runCompare.js';
 import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan, } from '../types.js';
 import { compareFindings } from './delta.js';
 import { rankFiles } from './hotspots.js';
@@ -266,10 +267,23 @@ function buildSincePrevious(storage, currentScan, isSuppressed, truncation) {
     }).scan;
     if (previous === null)
         return null;
-    const { delta, truncation: cut } = compareFindings({ scan_id: previous.scan_id, findings: unsuppressed(storage, previous.scan_id, isSuppressed) }, { scan_id: currentScan.scan_id, findings: unsuppressed(storage, currentScan.scan_id, isSuppressed) }, DELTA_CAP);
+    return compareScans(storage, previous, currentScan, isSuppressed, truncation, 'deltas.since_previous.new_findings');
+}
+/**
+ * `compareFindings` of two scans, except that a finding of `from` which `to`
+ * did not measure again (`history/runCompare.ts` — an orchestrated run's
+ * failed child) is left out of the comparison and counted in
+ * `not_remeasured_count`: never resolved, never unchanged.
+ */
+function compareScans(storage, from, to, isSuppressed, truncation, what) {
+    const check = remeasureCheck(storage, from, to);
+    const fromFindings = unsuppressed(storage, from.scan_id, isSuppressed);
+    const remeasured = fromFindings.filter((f) => !check.isNotRemeasured(f));
+    const { delta, truncation: cut } = compareFindings({ scan_id: from.scan_id, findings: remeasured }, { scan_id: to.scan_id, findings: unsuppressed(storage, to.scan_id, isSuppressed) }, DELTA_CAP);
     if (cut !== null)
-        truncation.push({ ...cut, what: 'deltas.since_previous.new_findings' });
-    return delta;
+        truncation.push({ ...cut, what });
+    const notRemeasured = fromFindings.length - remeasured.length;
+    return notRemeasured > 0 ? { ...delta, not_remeasured_count: notRemeasured } : delta;
 }
 /**
  * The baseline against the newest usable scan of the baseline's own type —
@@ -281,12 +295,10 @@ function buildSinceBaseline(storage, baseline, projectPath, isSuppressed, trunca
     if (baselineType === undefined)
         return null;
     const target = latestStateScan(storage, projectPath, baselineType).scan;
-    if (target === null)
+    const baselineScan = storage.scans.getById(baseline.scan_id);
+    if (target === null || baselineScan === null)
         return null;
-    const { delta, truncation: cut } = compareFindings({ scan_id: baseline.scan_id, findings: unsuppressed(storage, baseline.scan_id, isSuppressed) }, { scan_id: target.scan_id, findings: unsuppressed(storage, target.scan_id, isSuppressed) }, DELTA_CAP);
-    if (cut !== null)
-        truncation.push({ ...cut, what: 'deltas.since_baseline.new_findings' });
-    return delta;
+    return compareScans(storage, baselineScan, target, isSuppressed, truncation, 'deltas.since_baseline.new_findings');
 }
 function unsuppressed(storage, scanId, isSuppressed) {
     return storage.findings.listByScan(scanId).filter((f) => !isSuppressed(f));
