@@ -8,6 +8,89 @@ version bump.
 
 ## [Unreleased]
 
+### Fixed
+
+- `.mcp.json` used `${CLAUDE_PROJECT_DIR}`, which Claude Code does not expand
+  there (only `${CLAUDE_PLUGIN_ROOT}`, used by `plugin.json`, is) — the
+  literal placeholder string became part of the path and the server failed
+  to start. Now a bare relative `mcp/dist/server.js`, matching how Claude
+  Code launches project servers (cwd = project root).
+- `--experimental-sqlite` removed from `plugin.json`; `engines.node` raised
+  to `>=22.13.0`. `cli/dev-guardian.mjs` now loads `storage`/`dashboard`
+  modules lazily, only inside `status`/`dashboard`, with a clear
+  "requires Node.js >= 22.13" message when `node:sqlite` is unavailable —
+  every other subcommand (`--help`, `check`, `mcp-config`) no longer touches
+  it at all.
+- The CLI's entry-point guard compared `import.meta.url` against a bare
+  `process.argv[1]`, so invoking it through a symlink/junction made `main()`
+  silently never run (`check --bash 'rm -rf /'` printed nothing, exit 0).
+  Now compares realpaths.
+- `mcp-config --project` (or `--scope`) with no value threw an uncaught
+  `TypeError` instead of a usage error; now a clean, flag-naming message at
+  exit code 2, the same code `check --help` documents for its own usage
+  errors (also newly documented there).
+- `dashboard`'s browser opener routed through `cmd.exe /c start`, which
+  re-parses its own argument as a second command line where `&` (and
+  friends) are live syntax regardless of how the array-argv was quoted for
+  `CreateProcess` — a target path containing `&` could silently split into
+  two commands. Now opens via `explorer.exe` directly, sidestepping the
+  second parse entirely.
+- `mcp-config` / `setupHost`:
+  - Installed rules files hard-coded `node cli/dev-guardian.mjs`, a path
+    that exists only in this repo; an installed rules file in another
+    project told the agent to run a script that was never there. Every
+    template now carries a `{{DEV_GUARDIAN_CLI}}` placeholder, substituted
+    with that install's own absolute CLI path.
+  - `--force` used to `copyFileSync` the whole rendered template over an
+    existing `AGENTS.md` / `GEMINI.md` / copilot instructions file,
+    destroying any content already there. Rules are now managed as a
+    delimited block (`<!-- dev-guardian:begin -->` … `<!-- dev-guardian:end
+    -->`) inside the target file; existing content outside it is never
+    touched. `--update-mcp` is the new name for refreshing a stale MCP
+    entry / rules block; `--force` is kept as a deprecated alias.
+  - Codex TOML: a stale `[mcp_servers.dev-guardian]` entry always reported
+    `already_present` regardless of content (JSON hosts already compared
+    correctly); and force-updating one left a hand-edited
+    `[mcp_servers.dev-guardian.env]` sub-table sitting next to a freshly
+    written `env = {}` — invalid TOML. Entries are now compared by content,
+    and force replaces the whole block including its own sub-tables.
+  - `mcp-config all --write` at the default project scope used to silently
+    write the global Windsurf and Claude Desktop configs. Both are now
+    skipped under `all` unless `--global` (or `--scope global`) is given
+    explicitly; naming either host directly is unaffected.
+  - Windsurf rules now install to `.windsurf/rules/dev-guardian.md` (with
+    `trigger: always_on` frontmatter), not the legacy `.windsurfrules`.
+- Every `host-rules/*` template and every in-repo ("dogfood") rules copy
+  (root `AGENTS.md`, `GEMINI.md`, `.cursor/rules/dev-guardian.mdc`,
+  `.windsurf/rules/dev-guardian.md`, `.github/copilot-instructions.md`) is
+  now generated from one canonical body (`mcp/src/hostsetup/
+  rulesTemplate.ts`) by `mcp/scripts/generateHostRules.mjs`, run as part of
+  `npm run build`; a drift test fails if a generated copy is ever hand-edited
+  instead. Fixes drift that had left `.cursor/rules/dev-guardian.mdc`
+  missing `scan_skill`/`check_toolchain`, `.windsurf/rules/dev-guardian.md`
+  missing `scan_skill`, and root `AGENTS.md` missing the
+  `severity_filter`/`filtered_reason` guidance; also corrects
+  `guardian://wp/audit/{id}` to `{scan_id}` and the unqualified "no
+  telemetry" claim (Semgrep's own registry mode sends metrics unless
+  `local_only: true` is passed).
+- Removed the dead `mcp/scripts/smoke-wp-dotnet.mjs` (imported the removed
+  `better-sqlite3`) and a stale `<plugin>/bin` doc comment in the CLI
+  (the CLI lives in `<plugin>/cli`).
+- `plugin.json`'s description claimed it installs/configures Playwright;
+  nothing in the plugin does, so the claim is removed.
+
+### Changed
+
+- `@modelcontextprotocol/sdk` bumped to `^1.30.1`; `vitest`/
+  `@vitest/coverage-v8` bumped to `^5.0.1` (closes the last of `npm audit`'s
+  15 findings — `npm audit fix` handled the rest). `mcp/vitest.config.ts`'s
+  global `testTimeout` raised from 10s to 180s: several Semgrep-heavy
+  integration tests call `semgrep` synchronously and were already taking
+  well over 10s under load — vitest 2's timeout simply could not preempt a
+  blocking synchronous call, so this was never actually enforced; vitest 5
+  does enforce it, surfacing a real, pre-existing gap rather than
+  introducing one.
+
 ## [2.0.0] - 2026-08-23
 
 **A maturity marker, not a breaking change. There is no migration work.**
