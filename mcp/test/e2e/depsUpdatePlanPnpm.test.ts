@@ -13,7 +13,7 @@
  * access, like the .NET e2e next to it.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -95,6 +95,41 @@ describe('deps_update_plan — pnpm project (real pnpm, gated)', () => {
       const after = await plan(project);
       expect(after.unplanned.find((u) => u.package_name === 'minimist')?.reason).toMatch(/^already_fixed: installed version 1\.2\.6/);
       expect(existsSync(join(project, 'package-lock.json'))).toBe(false);
+    },
+    240_000,
+  );
+
+  it.skipIf(!PNPM_INSTALLED)(
+    'fix round 5: a pnpm WORKSPACE MEMBER gets no npm command, and the root-package.json fix it names really works',
+    async () => {
+      // Reviewer's probes4/ws.mjs: the member has package.json + node_modules
+      // but no lock of its own — the one pnpm-lock.yaml is at the root.
+      const root = makeTempDir('pnpm-ws-e2e-');
+      mkdirSync(join(root, '.git'));
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'root', private: true }), 'utf8');
+      writeFileSync(join(root, 'pnpm-workspace.yaml'), "packages:\n  - 'packages/*'\n", 'utf8');
+      const member = join(root, 'packages', 'web');
+      mkdirSync(member, { recursive: true });
+      writeFileSync(join(member, 'package.json'), JSON.stringify({ name: 'web', version: '1.0.0', dependencies: { mkdirp: '0.5.1' } }), 'utf8');
+      await execa('pnpm', ['install', '--ignore-scripts'], { cwd: root });
+      expect(existsSync(join(member, 'pnpm-lock.yaml'))).toBe(false);
+
+      const before = await plan(member);
+      expect(before.plan).toEqual([]);
+      expect(before.unsupported_ecosystems_present).toContain('pnpm');
+      const minimist = before.unplanned.find((u) => u.package_name === 'minimist');
+      expect(minimist?.reason).toContain('to the workspace root package.json (../../package.json)');
+
+      // Apply the fix where the reason says: the ROOT package.json.
+      const rootPkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as Record<string, unknown>;
+      rootPkg['pnpm'] = { overrides: { minimist: '1.2.6' } };
+      writeFileSync(join(root, 'package.json'), JSON.stringify(rootPkg), 'utf8');
+      await execa('pnpm', ['install', '--ignore-scripts'], { cwd: root });
+      expect(readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8')).not.toContain('minimist@0.0.8');
+
+      const after = await plan(member);
+      expect(after.unplanned.find((u) => u.package_name === 'minimist')?.reason).toMatch(/^already_fixed: installed version 1\.2\.6/);
+      expect(existsSync(join(member, 'package-lock.json'))).toBe(false);
     },
     240_000,
   );

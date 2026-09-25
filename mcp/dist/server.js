@@ -19446,10 +19446,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep5, value } = collItem;
+        const { start, key, sep: sep6, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep5?.[0],
+          next: key ?? sep6?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -19463,7 +19463,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep5) {
+          if (!keyProps.anchor && !keyProps.tag && !sep6) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
@@ -19487,7 +19487,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep5 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep6 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -19503,7 +19503,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep5, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep6, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -19594,7 +19594,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep5 = "";
+        let sep6 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -19608,13 +19608,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep5 + cb;
-              sep5 = "";
+                comment += sep6 + cb;
+              sep6 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep5 += source;
+                sep6 += source;
               hasSpace = true;
               break;
             default:
@@ -19657,18 +19657,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i2 = 0; i2 < fc.items.length; ++i2) {
         const collItem = fc.items[i2];
-        const { start, key, sep: sep5, value } = collItem;
+        const { start, key, sep: sep6, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep5?.[0],
+          next: key ?? sep6?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep5 && !value) {
+          if (!props.anchor && !props.tag && !sep6 && !value) {
             if (i2 === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i2 < fc.items.length - 1)
@@ -19722,8 +19722,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap2 && !sep5 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep5, null, props, onError);
+        if (!isMap2 && !sep6 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep6, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -19735,7 +19735,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep5 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep6 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -19746,8 +19746,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap2 && !props.found && ctx.options.strict) {
-              if (sep5)
-                for (const st of sep5) {
+              if (sep6)
+                for (const st of sep6) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -19764,7 +19764,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep5, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep6, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -19944,7 +19944,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i2 + 1;
       }
       let value = "";
-      let sep5 = "";
+      let sep6 = "";
       let prevMoreIndented = false;
       for (let i2 = 0; i2 < contentStart; ++i2)
         value += lines[i2][0].slice(trimIndent) + "\n";
@@ -19961,24 +19961,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep5 + indent.slice(trimIndent) + content;
-          sep5 = "\n";
+          value += sep6 + indent.slice(trimIndent) + content;
+          sep6 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep5 === " ")
-            sep5 = "\n";
-          else if (!prevMoreIndented && sep5 === "\n")
-            sep5 = "\n\n";
-          value += sep5 + indent.slice(trimIndent) + content;
-          sep5 = "\n";
+          if (sep6 === " ")
+            sep6 = "\n";
+          else if (!prevMoreIndented && sep6 === "\n")
+            sep6 = "\n\n";
+          value += sep6 + indent.slice(trimIndent) + content;
+          sep6 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep5 === "\n")
+          if (sep6 === "\n")
             value += "\n";
           else
-            sep5 = "\n";
+            sep6 = "\n";
         } else {
-          value += sep5 + content;
-          sep5 = " ";
+          value += sep6 + content;
+          sep6 = " ";
           prevMoreIndented = false;
         }
       }
@@ -20161,25 +20161,25 @@ var require_resolve_flow_scalar = __commonJS({
         trimBoth = /^[ \t]+|[ \t]+$/g;
       }
       let res = match[1].replace(trimEnd, "");
-      let sep5 = " ";
+      let sep6 = " ";
       let pos = line.lastIndex;
       while (match = line.exec(source)) {
         const lm = match[1].replace(trimBoth, "");
         if (lm === "") {
-          if (sep5 === "\n")
-            res += sep5;
+          if (sep6 === "\n")
+            res += sep6;
           else
-            sep5 = "\n";
+            sep6 = "\n";
         } else {
-          res += sep5 + lm;
-          sep5 = " ";
+          res += sep6 + lm;
+          sep6 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep5 + (match?.[1] ?? "");
+      return res + sep6 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -20989,14 +20989,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep5, value }) {
+    function stringifyItem({ start, key, sep: sep6, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep5)
-        for (const st of sep5)
+      if (sep6)
+        for (const st of sep6)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -22163,18 +22163,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep5;
+          let sep6;
           if (scalar.end) {
-            sep5 = scalar.end;
-            sep5.push(this.sourceToken);
+            sep6 = scalar.end;
+            sep6.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep5 = [this.sourceToken];
+            sep6 = [this.sourceToken];
           const map = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep5 }]
+            items: [{ start, key: scalar, sep: sep6 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -22327,15 +22327,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep5 = it.sep;
-                  sep5.push(this.sourceToken);
+                  const sep6 = it.sep;
+                  sep6.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep5 }]
+                    items: [{ start: start2, key, sep: sep6 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -22529,13 +22529,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep5 = fc.end.splice(1, fc.end.length);
-            sep5.push(this.sourceToken);
+            const sep6 = fc.end.splice(1, fc.end.length);
+            sep6.push(this.sourceToken);
             const map = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep5 }]
+              items: [{ start, key: fc, sep: sep6 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map;
@@ -43424,7 +43424,7 @@ async function runDotnetSca(opts) {
 // src/tools/depsUpdatePlan.ts
 init_execa();
 import { existsSync as existsSync18, readFileSync as readFileSync13, readdirSync as readdirSync10, statSync as statSync6 } from "node:fs";
-import { join as join24, relative as relative6 } from "node:path";
+import { dirname as dirname9, join as join24, relative as relative6, sep as sep4 } from "node:path";
 var inputSchema = {
   project_path: ProjectPath,
   prefer: external_exports.enum(["security", "patch", "minor", "major"]).optional().describe("Sort entries so this classification appears first. Default: security.")
@@ -43432,7 +43432,7 @@ var inputSchema = {
 var tool2 = {
   name: "deps_update_plan",
   title: "Dependency upgrade plan",
-  description: "Produce an ordered upgrade plan from the project. npm/composer/cargo/go/rubygems/dotnet use each stack's own \"outdated\" command; for .NET that is preceded by `dotnet restore --locked-mode`, which EXECUTES the project's own MSBuild and contacts its NuGet feeds (it never creates or rewrites a packages.lock.json). pip reads this project's own requirements*.txt / pyproject.toml pins and never touches the host Python. pnpm and yarn projects get no npm commands \u2014 their CVEs are listed with the pnpm.overrides / resolutions fix to apply by hand. Classifies each entry as security (minimum CVE-fixed version, from the same project's latest deps scan) / patch / minor / major, and returns a sortable, structured plan (package_name, ecosystem, installed_version, latest_version, cve_ids, upgrade_command), `unplanned` (every CVE that got no step, with why) and `runner_failures` (every ecosystem command that failed, with its code \u2014 e.g. NU1004 lock out of sync vs NU1301 feed unreachable).",
+  description: "Produce an ordered upgrade plan from the project. npm/composer/cargo/go/rubygems/dotnet use each stack's own \"outdated\" command; for .NET that is preceded by `dotnet restore --locked-mode`, which EXECUTES the project's own MSBuild and contacts its NuGet feeds (it never creates or rewrites a packages.lock.json). pip reads this project's own requirements*.txt / pyproject.toml pins and never touches the host Python. pnpm and yarn projects get no npm commands \u2014 their CVEs are listed with the pnpm.overrides / resolutions fix to apply by hand (workspace members included). Classifies each entry as security (an active CVE in the same project's latest deps scan \u2014 npm/pip target the MINIMUM fixed version, other stacks the latest available) / patch / minor / major, and returns a sortable, structured plan (package_name, ecosystem, installed_version, latest_version, cve_ids, upgrade_command), `unplanned` (every CVE that got no step, with why) and `runner_failures` (every ecosystem command that failed, with its code \u2014 e.g. NU1004 lock out of sync vs NU1301 feed unreachable).",
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx)
 };
@@ -43513,30 +43513,42 @@ function appendCatchAllUnplanned(opts) {
     ...steps.map((s) => s.package_name.toLowerCase()),
     ...unplanned.map((u2) => u2.package_name.toLowerCase())
   ]);
-  let declarations;
+  let evidenceMap;
   for (const [pkgLower, cve] of cves) {
     if (named.has(pkgLower)) continue;
-    declarations ??= readManifestDeclarations(projectPath);
-    const declared = declarations.get(pkgLower);
+    evidenceMap ??= readDependencyEvidence(projectPath);
+    const evidence = evidenceMap.get(pkgLower);
     const fix = cve.fixedVersion ? ` (fixed in ${cve.fixedVersion})` : "";
-    if (declared) {
-      const failed = runnerFailures.filter((f) => f.ecosystem === declared.ecosystem);
-      unplanned.push({
-        package_name: cve.displayName,
-        ecosystem: declared.ecosystem,
-        cve_ids: cve.cveIds,
-        reason: failed.length > 0 ? `declared in ${declared.file}, but the ${declared.ecosystem} runner failed \u2014 ${failed.map(describeFailure).join("; ")} \u2014 so no upgrade could be planned${fix}` : `declared in ${declared.file}, but the ${declared.ecosystem} runner only plans what ${OUTDATED_COMMAND[declared.ecosystem]} lists, and it did not list this package \u2014 no CVE-driven step; upgrade it manually${fix}`
-      });
+    if (evidence) {
+      const { ecosystem } = evidence;
+      const versions = [...evidence.versions];
+      const where = [evidence.declaredIn, evidence.lockFile].filter((f) => f !== void 0).join(" / ");
+      if (versions.length > 0 && versions.every((v) => isAlreadyFixed(v, cve))) {
+        unplanned.push(alreadyFixedEntry(cve.displayName, cve, `${versions.join(", ")} (${where})`, ecosystem));
+        continue;
+      }
+      const at = versions.length > 0 ? ` at ${versions.join(", ")}` : "";
+      const failed = runnerFailures.filter((f) => f.ecosystem === ecosystem);
+      let reason;
+      if (failed.length > 0) {
+        reason = `${evidence.declaredIn ? "declared in" : "resolved in"} ${where}${at}, but the ${ecosystem} runner failed \u2014 ${failed.map(describeFailure).join("; ")} \u2014 so no upgrade could be planned${fix}`;
+      } else if (evidence.declaredIn) {
+        reason = `declared in ${where}${at}, but the ${ecosystem} runner only plans what ${OUTDATED_COMMAND[ecosystem]} lists, and it did not list this package \u2014 no CVE-driven step; upgrade it manually${fix}`;
+      } else {
+        reason = `resolved in ${where}${at} as a transitive dependency (no manifest declares it), and ${OUTDATED_COMMAND[ecosystem]} did not list it \u2014 upgrade the package that requires it, or constrain it directly${fix}`;
+      }
+      unplanned.push({ package_name: cve.displayName, ecosystem, cve_ids: cve.cveIds, reason });
       continue;
     }
     unplanned.push({
       package_name: cve.displayName,
       ecosystem: "unknown",
       cve_ids: cve.cveIds,
-      reason: runnerFailures.length > 0 ? `no manifest in this project declares it (likely a transitive dependency), and a runner that might have resolved it failed: ${runnerFailures.map(describeFailure).join("; ")}${fix}` : `no manifest, lockfile or outdated listing in this project mentions it \u2014 a transitive dependency of a stack deps_update_plan cannot sweep, or a CVE row for a package no longer present${fix}`
+      reason: `no manifest declares it and no runner listed it, and none of the lockfiles read here (${LOCKFILES_READ}) resolves it` + (runnerFailures.length > 0 ? ` \u2014 a runner that might have resolved it failed: ${runnerFailures.map(describeFailure).join("; ")}${fix}` : ` \u2014 a dependency of a stack deps_update_plan cannot resolve, or a CVE row for a package no longer present${fix}`)
     });
   }
 }
+var LOCKFILES_READ = "package-lock.json / pnpm-lock.yaml / yarn.lock, composer.lock, Cargo.lock, go.sum, Gemfile.lock, packages.lock.json";
 function describeFailure(f) {
   return `${f.ecosystem}${f.target ? ` (${f.target})` : ""}: ${f.code} \u2014 ${f.reason}`;
 }
@@ -43550,11 +43562,28 @@ var OUTDATED_COMMAND = {
   dotnet: "`dotnet list package --outdated` (top-level references only)",
   unknown: "its own listing"
 };
-function readManifestDeclarations(projectPath) {
+function readDependencyEvidence(projectPath) {
   const out = /* @__PURE__ */ new Map();
-  const add = (name, ecosystem, file) => {
+  const entry = (name, ecosystem) => {
     const key = name.trim().toLowerCase();
-    if (key && !out.has(key)) out.set(key, { ecosystem, file });
+    if (!key) return void 0;
+    const existing = out.get(key);
+    if (existing) return existing.ecosystem === ecosystem ? existing : void 0;
+    const created = { ecosystem, versions: /* @__PURE__ */ new Set() };
+    out.set(key, created);
+    return created;
+  };
+  const declare = (name, ecosystem, file, version2) => {
+    const e = entry(name, ecosystem);
+    if (!e) return;
+    e.declaredIn ??= file;
+    if (version2) e.versions.add(version2);
+  };
+  const resolve11 = (name, ecosystem, file, version2) => {
+    const e = entry(name, ecosystem);
+    if (!e) return;
+    e.lockFile ??= file;
+    if (version2) e.versions.add(version2);
   };
   const readJson = (file) => {
     try {
@@ -43571,28 +43600,28 @@ function readManifestDeclarations(projectPath) {
       return "";
     }
   };
-  const addKeys = (obj, ecosystem, file) => {
-    if (obj && typeof obj === "object") for (const k of Object.keys(obj)) add(k, ecosystem, file);
+  const declareKeys = (obj, ecosystem, file) => {
+    if (obj && typeof obj === "object") for (const k of Object.keys(obj)) declare(k, ecosystem, file);
   };
   const pkg = readJson("package.json");
   for (const f of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
-    addKeys(pkg?.[f], "npm", "package.json");
+    declareKeys(pkg?.[f], "npm", "package.json");
   }
   const composer = readJson("composer.json");
-  addKeys(composer?.["require"], "composer", "composer.json");
-  addKeys(composer?.["require-dev"], "composer", "composer.json");
+  declareKeys(composer?.["require"], "composer", "composer.json");
+  declareKeys(composer?.["require-dev"], "composer", "composer.json");
   let inDeps = false;
   for (const line of readText2("Cargo.toml").split(/\r?\n/)) {
     const header = /^\s*\[([^\]]+)\]\s*(?:#.*)?$/.exec(line);
     if (header?.[1]) {
       const table = header[1].trim();
       const dotted = /(?:^|\.)(?:dev-|build-)?dependencies\.([A-Za-z0-9_-]+)$/.exec(table);
-      if (dotted?.[1]) add(dotted[1], "cargo", "Cargo.toml");
+      if (dotted?.[1]) declare(dotted[1], "cargo", "Cargo.toml");
       inDeps = /(?:^|\.)(?:dev-|build-)?dependencies$/.test(table);
       continue;
     }
     const key = inDeps ? /^\s*([A-Za-z0-9_-]+)\s*=/.exec(line) : null;
-    if (key?.[1]) add(key[1], "cargo", "Cargo.toml");
+    if (key?.[1]) declare(key[1], "cargo", "Cargo.toml");
   }
   let inRequire = false;
   for (const line of readText2("go.mod").split(/\r?\n/)) {
@@ -43600,15 +43629,65 @@ function readManifestDeclarations(projectPath) {
     if (/^require\s*\($/.test(t)) inRequire = true;
     else if (inRequire && t === ")") inRequire = false;
     else {
-      const m = inRequire ? /^(\S+)\s+v\S+/.exec(t) : /^require\s+(\S+)\s+v\S+/.exec(t);
-      if (m?.[1]) add(m[1], "go", "go.mod");
+      const m = inRequire ? /^(\S+)\s+(v\S+)/.exec(t) : /^require\s+(\S+)\s+(v\S+)/.exec(t);
+      if (m?.[1]) declare(m[1], "go", "go.mod", m[2]);
     }
   }
   for (const m of readText2("Gemfile").matchAll(/^\s*gem\s+['"]([^'"]+)['"]/gm)) {
-    if (m[1]) add(m[1], "rubygems", "Gemfile");
+    if (m[1]) declare(m[1], "rubygems", "Gemfile");
   }
   const projects = findDotnetTargets(projectPath).flatMap((t) => projectsForTarget(t));
-  for (const [name, file] of readPackageReferences(projects)) add(name, "dotnet", relative6(projectPath, file) || file);
+  for (const [name, file] of readPackageReferences(projects)) declare(name, "dotnet", relative6(projectPath, file) || file);
+  const composerLock = readJson("composer.lock");
+  for (const section of ["packages", "packages-dev"]) {
+    const list2 = composerLock?.[section];
+    if (!Array.isArray(list2)) continue;
+    for (const p of list2) {
+      const rec = p && typeof p === "object" ? p : void 0;
+      const name = rec?.["name"];
+      const version2 = rec?.["version"];
+      if (typeof name === "string") resolve11(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
+    }
+  }
+  let cargoName;
+  for (const line of readText2("Cargo.lock").split(/\r?\n/)) {
+    if (/^\s*\[\[package\]\]\s*$/.test(line)) cargoName = void 0;
+    const n2 = /^\s*name\s*=\s*"([^"]+)"/.exec(line);
+    if (n2?.[1]) cargoName = n2[1];
+    const v = /^\s*version\s*=\s*"([^"]+)"/.exec(line);
+    if (v?.[1] && cargoName !== void 0) {
+      resolve11(cargoName, "cargo", "Cargo.lock", v[1]);
+      cargoName = void 0;
+    }
+  }
+  for (const line of readText2("go.sum").split(/\r?\n/)) {
+    const m = /^(\S+)\s+(v[^\s/]+)(\/go\.mod)?\s/.exec(line);
+    if (!m?.[1]) continue;
+    const inGoMod = out.get(m[1].toLowerCase())?.declaredIn === "go.mod";
+    resolve11(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
+  }
+  for (const m of readText2("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
+    if (m[1]) resolve11(m[1], "rubygems", "Gemfile.lock", m[2]);
+  }
+  for (const project of projects) {
+    for (const lock of lockFileCandidates(project)) {
+      let parsed;
+      try {
+        parsed = JSON.parse(readFileSync13(lock, "utf8"));
+      } catch {
+        continue;
+      }
+      const frameworks = parsed?.dependencies;
+      if (!frameworks || typeof frameworks !== "object") continue;
+      for (const deps of Object.values(frameworks)) {
+        if (!deps || typeof deps !== "object") continue;
+        for (const [name, info] of Object.entries(deps)) {
+          const resolved = info && typeof info === "object" ? info["resolved"] : void 0;
+          resolve11(name, "dotnet", relative6(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
+        }
+      }
+    }
+  }
   return out;
 }
 function listActiveCves(ctx, projectPath) {
@@ -43754,10 +43833,10 @@ async function runNpmOutdated(projectPath, cves) {
 function isAlreadyFixed(installed, cve) {
   return cve.fixedVersion !== void 0 && isCleanVersion(installed) && compareVersions(cve.fixedVersion, installed) <= 0;
 }
-function alreadyFixedEntry(name, cve, installed) {
+function alreadyFixedEntry(name, cve, installed, ecosystem = "npm") {
   return {
     package_name: name,
-    ecosystem: "npm",
+    ecosystem,
     cve_ids: cve.cveIds,
     reason: `already_fixed: installed version ${installed} is already at or above the recorded fix ${cve.fixedVersion ?? "(unknown)"} \u2014 the CVE record is stale.`
   };
@@ -43798,25 +43877,46 @@ function planDirectNotListed(opts) {
     })
   );
 }
+function toPosix(p) {
+  return p.split(sep4).join("/");
+}
 function detectNpmPackageManager(projectPath) {
-  if (existsSync18(join24(projectPath, "pnpm-lock.yaml"))) return { name: "pnpm", evidence: "pnpm-lock.yaml" };
-  if (existsSync18(join24(projectPath, "yarn.lock"))) return { name: "yarn", evidence: "yarn.lock" };
-  if (existsSync18(join24(projectPath, "package-lock.json")) || existsSync18(join24(projectPath, "npm-shrinkwrap.json"))) {
-    return { name: "npm", evidence: "package-lock.json" };
+  const has = (dir, file) => existsSync18(join24(dir, file));
+  const at = (dir, file) => {
+    const rel2 = toPosix(relative6(projectPath, join24(dir, file)));
+    return dir === projectPath ? file : `${rel2}, the workspace root`;
+  };
+  for (let dir = projectPath; ; ) {
+    if (has(dir, "pnpm-lock.yaml")) return { name: "pnpm", evidence: at(dir, "pnpm-lock.yaml"), root: dir };
+    if (has(dir, "pnpm-workspace.yaml")) return { name: "pnpm", evidence: at(dir, "pnpm-workspace.yaml"), root: dir };
+    if (has(dir, "yarn.lock")) return { name: "yarn", evidence: at(dir, "yarn.lock"), root: dir };
+    if (has(dir, "package-lock.json") || has(dir, "npm-shrinkwrap.json")) {
+      return { name: "npm", evidence: "package-lock.json", root: projectPath };
+    }
+    if (has(dir, ".git")) break;
+    const parent = dirname9(dir);
+    if (parent === dir) break;
+    dir = parent;
   }
   try {
     const pkg = JSON.parse(readFileSync13(join24(projectPath, "package.json"), "utf8"));
     const pm = typeof pkg["packageManager"] === "string" ? pkg["packageManager"] : "";
     const m = /^(pnpm|yarn)@/.exec(pm);
-    if (m?.[1] === "pnpm" || m?.[1] === "yarn") return { name: m[1], evidence: 'package.json "packageManager"' };
+    if (m?.[1] === "pnpm" || m?.[1] === "yarn") {
+      return { name: m[1], evidence: 'package.json "packageManager"', root: projectPath };
+    }
   } catch {
   }
-  if (existsSync18(join24(projectPath, "node_modules", ".pnpm"))) return { name: "pnpm", evidence: "node_modules/.pnpm" };
-  return { name: "npm", evidence: "default" };
+  if (existsSync18(join24(projectPath, "node_modules", ".pnpm"))) {
+    return { name: "pnpm", evidence: "node_modules/.pnpm", root: projectPath };
+  }
+  return { name: "npm", evidence: "default", root: projectPath };
 }
 function planForNonNpmManager(projectPath, cves, manager) {
   const directDeps = readNpmDirectDependencies(projectPath);
-  const resolved = readNpmResolvedPackages(projectPath, manager.name);
+  const resolved = readNpmResolvedPackages(projectPath, manager.name, manager.root);
+  const rootManifest = manager.root === projectPath ? "package.json" : `the workspace root package.json (${toPosix(relative6(projectPath, join24(manager.root, "package.json")))})`;
+  const runAt = manager.root === projectPath ? "" : " at the workspace root";
   const unplanned = [];
   for (const [pkgLower, cve] of cves) {
     const info = resolved.get(pkgLower);
@@ -43830,7 +43930,7 @@ function planForNonNpmManager(projectPath, cves, manager) {
     }
     const target = cve.fixedVersion ?? "<a version that fixes " + cve.cveIds.join(", ") + ">";
     const bump = direct ? `raise the "${name}" range in package.json to ${target}, or ` : "";
-    const reason = manager.name === "pnpm" ? `pnpm project (${manager.evidence}): no npm command is emitted \u2014 npm would write a package-lock.json and rebuild node_modules while pnpm-lock.yaml stays vulnerable, and pnpm ignores npm's top-level "overrides". Fix manually: ${bump}add "pnpm": { "overrides": { "${name}": "${target}" } } to package.json, then run pnpm install --ignore-scripts.` : `yarn project (${manager.evidence}): no npm command is emitted \u2014 npm would write a package-lock.json while yarn.lock stays vulnerable, and yarn reads "resolutions", not npm's "overrides". Fix manually: ${bump}add "resolutions": { "${name}": "${target}" } to package.json, then run yarn install (--ignore-scripts on Yarn 1, --mode=skip-build on Yarn 2+).`;
+    const reason = manager.name === "pnpm" ? `pnpm project (${manager.evidence}): no npm command is emitted \u2014 npm would write a package-lock.json and rebuild node_modules while pnpm-lock.yaml stays vulnerable, and pnpm ignores npm's top-level "overrides". Fix manually: ${bump}add "pnpm": { "overrides": { "${name}": "${target}" } } to ${rootManifest}, then run pnpm install --ignore-scripts${runAt}.` : `yarn project (${manager.evidence}): no npm command is emitted \u2014 npm would write a package-lock.json while yarn.lock stays vulnerable, and yarn reads "resolutions", not npm's "overrides". Fix manually: ${bump}add "resolutions": { "${name}": "${target}" } to ${rootManifest}, then run yarn install${runAt} (--ignore-scripts on Yarn 1, --mode=skip-build on Yarn 2+).`;
     unplanned.push({ package_name: name, ecosystem: "npm", cve_ids: cve.cveIds, reason });
   }
   return { steps: [], unplanned, unsupported: [manager.name] };
@@ -43850,7 +43950,7 @@ function readNpmDirectDependencies(projectPath) {
   }
   return out;
 }
-function readNpmResolvedPackages(projectPath, manager) {
+function readNpmResolvedPackages(projectPath, manager, lockDir = projectPath) {
   const out = /* @__PURE__ */ new Map();
   const add = (name, version2, topLevel = false) => {
     const key = name.toLowerCase();
@@ -43866,7 +43966,7 @@ function readNpmResolvedPackages(projectPath, manager) {
   };
   const readText2 = (file) => {
     try {
-      return readFileSync13(join24(projectPath, file), "utf8");
+      return readFileSync13(join24(lockDir, file), "utf8");
     } catch {
       return void 0;
     }
@@ -45006,7 +45106,7 @@ import { join as join29 } from "node:path";
 
 // src/configdrift/refresh.ts
 import { copyFileSync, existsSync as existsSync21, mkdirSync as mkdirSync4, writeFileSync as writeFileSync6, readFileSync as readFileSync15 } from "node:fs";
-import { dirname as dirname9, join as join28 } from "node:path";
+import { dirname as dirname10, join as join28 } from "node:path";
 function alongsideName(target, version2) {
   return `${target}.dev-guardian-${version2}.new`;
 }
@@ -45151,7 +45251,7 @@ function adoptIdenticalConfigs(input) {
 }
 function installFile(input) {
   try {
-    mkdirSync4(dirname9(input.dstPath), { recursive: true });
+    mkdirSync4(dirname10(input.dstPath), { recursive: true });
     const prefix = commentPrefixFor(input.formatHint ?? input.dstPath);
     if (prefix === null) {
       copyFileSync(input.srcPath, input.dstPath);
@@ -45376,7 +45476,7 @@ function failDomain5(code, message) {
 
 // src/tools/observabilitySetup.ts
 import { existsSync as existsSync23, mkdirSync as mkdirSync5, readdirSync as readdirSync13, writeFileSync as writeFileSync7 } from "node:fs";
-import { dirname as dirname10, join as join30 } from "node:path";
+import { dirname as dirname11, join as join30 } from "node:path";
 var tool6 = {
   name: "observability_setup",
   title: "Configure logging + metrics scaffolding",
@@ -45410,7 +45510,7 @@ async function handler5(input, ctx) {
         continue;
       }
       try {
-        mkdirSync5(dirname10(abs), { recursive: true });
+        mkdirSync5(dirname11(abs), { recursive: true });
         writeFileSync7(abs, p.contents, "utf8");
         written.push(p);
       } catch (e) {
@@ -53479,7 +53579,7 @@ function buildResolutionIndex(projectFiles) {
   const byPosixPath = /* @__PURE__ */ new Map();
   const goPackages = /* @__PURE__ */ new Map();
   for (const file of projectFiles) {
-    const posix = toPosix(file);
+    const posix = toPosix2(file);
     byPosixPath.set(posix, file);
     if (!posix.endsWith(".go")) continue;
     const dir = dirOf(posix);
@@ -53497,11 +53597,11 @@ function lookupCandidates(byPosixPath, candidates2) {
   }
   return void 0;
 }
-function toPosix(path6) {
+function toPosix2(path6) {
   return path6.replace(/\\/g, "/");
 }
 function dirOf(file) {
-  const posix = toPosix(file);
+  const posix = toPosix2(file);
   const parts = posix.split("/");
   parts.pop();
   const dir = parts.join("/");
@@ -54154,7 +54254,7 @@ function buildToolRun(run, via) {
 
 // src/surface/specDiscover.ts
 import { readFileSync as readFileSync26, readdirSync as readdirSync20, statSync as statSync14 } from "node:fs";
-import { join as join49, relative as relative11, resolve as resolve8, sep as sep4 } from "node:path";
+import { join as join49, relative as relative11, resolve as resolve8, sep as sep5 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
 var SPEC_BASENAMES = /* @__PURE__ */ new Set(["openapi", "swagger", "api-docs"]);
@@ -54231,7 +54331,7 @@ function isSpecCandidate(root, dir, name) {
   if (SPEC_BASENAMES.has(base.toLowerCase())) return true;
   const relDir = relative11(root, dir);
   if (relDir === "") return false;
-  return relDir.split(sep4).some((segment) => segment.toLowerCase() === "openapi");
+  return relDir.split(sep5).some((segment) => segment.toLowerCase() === "openapi");
 }
 
 // src/surface/specDiff.ts
@@ -55746,7 +55846,7 @@ function livenessMessage(target, liveness, timeoutMs) {
 import { join as join52 } from "node:path";
 
 // src/dast/nuclei.ts
-import { dirname as dirname11 } from "node:path";
+import { dirname as dirname12 } from "node:path";
 var DEFAULT_NUCLEI_RATE_LIMIT = 10;
 var ALWAYS_EXCLUDED_TAGS = ["dos", "fuzz"];
 function excludedTags(allowIntrusive) {
@@ -55821,7 +55921,7 @@ async function invokeNuclei(opts) {
     // has no bearing on what gets scanned; `outputPath`'s own directory is
     // used only because it is a real, already-relevant path handed to us,
     // rather than reaching for ambient process state.
-    cwd: dirname11(opts.outputPath),
+    cwd: dirname12(opts.outputPath),
     // An allowlisted environment, and `extendEnv: false` so it REPLACES the
     // parent's rather than being merged over it. Without the second half the
     // first is decorative: execa extends `process.env` by default, and the

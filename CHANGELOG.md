@@ -189,7 +189,15 @@ version bump.
     a `package-lock.json` while `pnpm-lock.yaml` / `yarn.lock` stays
     vulnerable, so each CVE'd package is reported with the manual
     `pnpm.overrides` / `resolutions` fix instead, and the manager is named
-    in `unsupported_ecosystems_present`. Every package with an active CVE
+    in `unsupported_ecosystems_present`. A workspace member is recognised
+    too: without a lockfile of its own, each directory up to the
+    repository root is checked for `pnpm-workspace.yaml` /
+    `pnpm-lock.yaml` / `yarn.lock`, the root lock is read, and the fix
+    names the workspace ROOT `package.json`, where pnpm and yarn read
+    overrides. Only the npm and pip branches target the minimum fixed
+    version; the other stacks' security steps keep their "outdated"
+    command's latest version, and the tool description says so. Every
+    package with an active CVE
     that could not become a step (a range specifier, an unfixable
     downgrade, an already-resolved/stale CVE, an untraceable transitive
     dependency) is reported in a new `unplanned` list instead of silently
@@ -197,10 +205,14 @@ version bump.
     that could not do its job (not installed, a failing exit, empty or
     unparseable output, a refused or failed .NET restore with its NuGet
     code). As a final catch-all, a CVE'd package no runner claimed is
-    reported with the reason that actually applies: declared in a manifest
-    whose runner failed, declared in a manifest whose runner only plans what
-    its own "outdated" command lists (composer/cargo/go/bundler, .NET
-    top-level references), or declared nowhere in the project (ecosystem
+    attributed from the project's manifests AND its `composer.lock` /
+    `Cargo.lock` / `go.mod` + `go.sum` / `Gemfile.lock` / NuGet
+    `packages.lock.json` — `already_fixed` when every recorded version is
+    past the fix, as on npm — and reported with the reason that actually
+    applies: its runner failed, it is declared but its runner only plans
+    what its own "outdated" command lists (composer/cargo/go/bundler, .NET
+    top-level references), it is only a transitive entry in a lockfile, or
+    no manifest declares it and no runner listed it (ecosystem
     `unknown`). The CVE source for both branches is the latest `deps` /
     `deps_audit` / `security_full` scan of the SAME project
     (`listHistoryForProject`), not an unscoped "latest scan in the whole

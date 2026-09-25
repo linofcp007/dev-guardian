@@ -2515,7 +2515,7 @@ describe('deps_update_plan', () => {
     expect(mono?.reason).toMatch(/declared in composer\.json, but the composer runner only plans what `composer outdated` lists/);
     expect(mono?.reason).toMatch(/2\.1\.0/);
     expect(ghost?.ecosystem).toBe('unknown');
-    expect(ghost?.reason).toMatch(/no manifest, lockfile or outdated listing/);
+    expect(ghost?.reason).toMatch(/^no manifest declares it and no runner listed it/);
   });
 
   it('A (fix round 4): a runner that cannot start (composer not installed) is a runner failure, not an empty plan', async () => {
@@ -2722,5 +2722,247 @@ describe('deps_update_plan', () => {
     expect(lodash?.reason).toContain('raise the "lodash" range in package.json to 4.17.21');
     expect(minimist?.reason).toMatch(/^already_fixed: installed version 1\.2\.8/);
     expect(r.unsupported_ecosystems_present).toContain('yarn');
+  });
+
+  // -------------------------------------------------------------- fix round 5
+
+  it('fix round 5 (1): a transitive package in composer.lock is composer\'s — already_fixed when the lock is past the fix, never "unknown"', async () => {
+    // Reviewer's probes4/comp.mjs: a real `composer install` of monolog 3
+    // locks psr/log 3.0.2; a CVE fixed in 3.0.1 was reported `unknown` with
+    // "no manifest, lockfile or outdated listing in this project mentions it".
+    const project = tempProject();
+    writeFileSync(join(project, 'composer.json'), JSON.stringify({ require: { 'monolog/monolog': '^3.0' } }), 'utf8');
+    writeFileSync(
+      join(project, 'composer.lock'),
+      JSON.stringify({
+        packages: [
+          { name: 'monolog/monolog', version: '3.9.0' },
+          { name: 'psr/log', version: '3.0.2' },
+        ],
+        'packages-dev': [{ name: 'guzzle/dev-only', version: '1.0.0' }],
+      }),
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    seedCves(plugin, project, 'scan1', [
+      { cve_id: 'CVE-PSR', package_name: 'psr/log', installed_version: '3.0.0', fixed_version: '3.0.1' },
+      { cve_id: 'CVE-DEV', package_name: 'guzzle/dev-only', installed_version: '1.0.0', fixed_version: '1.0.1' },
+    ]);
+    vi.mocked(execa).mockImplementation((async (cmd: string) => {
+      if (cmd === 'composer') return { exitCode: 0, stdout: JSON.stringify({ installed: [] }), stderr: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{ unplanned: Array<{ package_name: string; ecosystem: string; reason: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    const psr = r.unplanned.find((u) => u.package_name === 'psr/log');
+    const dev = r.unplanned.find((u) => u.package_name === 'guzzle/dev-only');
+    expect(psr?.ecosystem).toBe('composer');
+    expect(psr?.reason).toMatch(/^already_fixed: installed version 3\.0\.2 \(composer\.lock\)/);
+    expect(dev?.ecosystem).toBe('composer');
+    expect(dev?.reason).toMatch(/^resolved in composer\.lock at 1\.0\.0 as a transitive dependency/);
+    expect(dev?.reason).toMatch(/1\.0\.1/);
+  });
+
+  it('fix round 5 (1): Cargo.lock, go.mod/go.sum, Gemfile.lock and a NuGet packages.lock.json attribute packages to their own ecosystem', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'Cargo.toml'), '[package]\nname = "app"\n\n[dependencies]\nserde = "1"\n', 'utf8');
+    writeFileSync(
+      join(project, 'Cargo.lock'),
+      ['version = 3', '', '[[package]]', 'name = "smallvec"', 'version = "1.6.0"', '', '[[package]]', 'name = "time"', 'version = "0.3.36"', ''].join('\n'),
+      'utf8',
+    );
+    writeFileSync(
+      join(project, 'go.mod'),
+      ['module example.com/app', '', 'go 1.22', '', 'require (', '\tgolang.org/x/net v0.23.0 // indirect', ')', ''].join('\n'),
+      'utf8',
+    );
+    writeFileSync(
+      join(project, 'go.sum'),
+      [
+        'golang.org/x/net v0.10.0/go.mod h1:aaa=',
+        'golang.org/x/net v0.23.0 h1:bbb=',
+        'golang.org/x/text v0.3.0 h1:ccc=',
+        'golang.org/x/text v0.3.0/go.mod h1:ddd=',
+      ].join('\n'),
+      'utf8',
+    );
+    writeFileSync(join(project, 'Gemfile'), "source 'https://rubygems.org'\ngem 'rails'\n", 'utf8');
+    writeFileSync(
+      join(project, 'Gemfile.lock'),
+      ['GEM', '  remote: https://rubygems.org/', '  specs:', '    rack (2.2.3)', '    rails (7.0.4)', '      rack (>= 2.2.0)', '', 'PLATFORMS', '  ruby', ''].join('\n'),
+      'utf8',
+    );
+    writeFileSync(join(project, 'App.csproj'), '<Project><ItemGroup><PackageReference Include="Serilog" Version="2.*" /></ItemGroup></Project>', 'utf8');
+    writeFileSync(
+      join(project, 'packages.lock.json'),
+      JSON.stringify({
+        version: 1,
+        dependencies: {
+          'net8.0': {
+            Serilog: { type: 'Direct', requested: '[2.*, )', resolved: '2.12.0' },
+            'System.Text.Encodings.Web': { type: 'Transitive', resolved: '4.5.0' },
+          },
+        },
+      }),
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    seedCves(plugin, project, 'scan1', [
+      { cve_id: 'CVE-SV', package_name: 'smallvec', installed_version: '1.6.0', fixed_version: '1.6.1' },
+      { cve_id: 'CVE-TIME', package_name: 'time', installed_version: '0.1.0', fixed_version: '0.2.23' },
+      { cve_id: 'CVE-NET', package_name: 'golang.org/x/net', installed_version: '0.10.0', fixed_version: '0.23.0' },
+      { cve_id: 'CVE-TEXT', package_name: 'golang.org/x/text', installed_version: '0.3.0', fixed_version: '0.3.8' },
+      { cve_id: 'CVE-RACK', package_name: 'rack', installed_version: '2.2.3', fixed_version: '2.2.8' },
+      { cve_id: 'CVE-STE', package_name: 'System.Text.Encodings.Web', installed_version: '4.5.0', fixed_version: '4.5.1' },
+    ]);
+    // Every runner works and lists nothing outdated; the .NET restore/list succeed.
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      if (cmd === 'cargo') return { exitCode: 0, stdout: JSON.stringify({ dependencies: [] }), stderr: '' };
+      if (cmd === 'dotnet' && args[0] === 'list') return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{ unplanned: Array<{ package_name: string; ecosystem: string; reason: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    const by = (n: string) => r.unplanned.find((u) => u.package_name === n);
+    expect(by('smallvec')).toMatchObject({ ecosystem: 'cargo', reason: expect.stringMatching(/^resolved in Cargo\.lock at 1\.6\.0 as a transitive dependency/) });
+    expect(by('time')).toMatchObject({ ecosystem: 'cargo', reason: expect.stringMatching(/^already_fixed: installed version 0\.3\.36/) });
+    // go.mod's selected version decides, not the older go.sum `/go.mod` line.
+    expect(by('golang.org/x/net')).toMatchObject({ ecosystem: 'go', reason: expect.stringMatching(/^already_fixed: installed version v0\.23\.0/) });
+    expect(by('golang.org/x/text')).toMatchObject({ ecosystem: 'go', reason: expect.stringMatching(/^resolved in go\.sum at v0\.3\.0/) });
+    expect(by('rack')).toMatchObject({ ecosystem: 'rubygems', reason: expect.stringMatching(/^resolved in Gemfile\.lock at 2\.2\.3/) });
+    expect(by('System.Text.Encodings.Web')).toMatchObject({
+      ecosystem: 'dotnet',
+      reason: expect.stringMatching(/^resolved in packages\.lock\.json at 4\.5\.0 as a transitive dependency/),
+    });
+    expect(r.unplanned.some((u) => u.ecosystem === 'unknown')).toBe(false);
+  });
+
+  it('fix round 5 (2): the description says only npm/pip target the minimum fixed version', () => {
+    const description = getTool('deps_update_plan').description;
+    expect(description).toContain('npm/pip target the MINIMUM fixed version, other stacks the latest available');
+    expect(description).not.toMatch(/security \(minimum CVE-fixed version/);
+    expect(description.length).toBeLessThanOrEqual(1500);
+  });
+
+  /** A pnpm workspace: root package.json + pnpm-workspace.yaml + the ONE
+   *  root pnpm-lock.yaml, and a member under packages/web with no lock of
+   *  its own — what `pnpm install` at the root really produces. */
+  function pnpmWorkspace(): { root: string; member: string } {
+    const root = tempProject();
+    mkdirSync(join(root, '.git'));
+    writeFileSync(join(root, 'package.json'), '{"name":"root","private":true}', 'utf8');
+    writeFileSync(join(root, 'pnpm-workspace.yaml'), "packages:\n  - 'packages/*'\n", 'utf8');
+    writeFileSync(
+      join(root, 'pnpm-lock.yaml'),
+      [
+        "lockfileVersion: '9.0'",
+        '',
+        'importers:',
+        '',
+        '  .: {}',
+        '',
+        '  packages/web:',
+        '    dependencies:',
+        '      mkdirp:',
+        '        specifier: 0.5.1',
+        '        version: 0.5.1',
+        '',
+        'packages:',
+        '',
+        '  minimist@0.0.8:',
+        '    resolution: {integrity: sha512-x}',
+        '',
+        '  mkdirp@0.5.1:',
+        '    resolution: {integrity: sha512-y}',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const member = join(root, 'packages', 'web');
+    mkdirSync(member, { recursive: true });
+    writeFileSync(join(member, 'package.json'), '{"name":"web","dependencies":{"mkdirp":"0.5.1"}}', 'utf8');
+    return { root, member };
+  }
+
+  it('fix round 5 (3): a pnpm workspace MEMBER gets no npm command — the root lock decides, and the fix names the ROOT package.json', async () => {
+    // Reviewer's probes4/ws.mjs: project_path = packages/web inside a pnpm
+    // workspace got `npm install mkdirp@0.5.6 --ignore-scripts`.
+    const { member } = pnpmWorkspace();
+    const plugin = makePlugin(member);
+    seedCves(plugin, member, 'scan1', [
+      { cve_id: 'CVE-MM', package_name: 'minimist', installed_version: '0.0.8', fixed_version: '1.2.6' },
+      { cve_id: 'CVE-MK', package_name: 'mkdirp', installed_version: '0.5.1', fixed_version: '0.5.6' },
+    ]);
+    const calls: string[] = [];
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      calls.push([cmd, ...args].join(' '));
+      return { exitCode: 1, stdout: JSON.stringify({ mkdirp: { current: '0.5.1', latest: '3.0.1' } }), stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{
+      plan: unknown[];
+      unplanned: Array<{ package_name: string; ecosystem: string; reason: string }>;
+      unsupported_ecosystems_present: string[];
+    }>(await getTool('deps_update_plan').handler({ project_path: member }, plugin));
+    expect(calls).toEqual([]);
+    expect(r.plan).toEqual([]);
+    expect(r.unsupported_ecosystems_present).toContain('pnpm');
+    const minimist = r.unplanned.find((u) => u.package_name === 'minimist');
+    const mkdirp = r.unplanned.find((u) => u.package_name === 'mkdirp');
+    // minimist is resolved only in the ROOT lock — found through it.
+    expect(minimist?.reason).toMatch(/^pnpm project \(\.\.\/\.\.\/pnpm-lock\.yaml, the workspace root\)/);
+    expect(minimist?.reason).toContain('to the workspace root package.json (../../package.json)');
+    expect(minimist?.reason).toContain('pnpm install --ignore-scripts at the workspace root');
+    expect(mkdirp?.reason).toContain('raise the "mkdirp" range in package.json to 0.5.6');
+  });
+
+  it('fix round 5 (3): a yarn workspace member is yarn — resolutions go in the root package.json', async () => {
+    const root = tempProject();
+    mkdirSync(join(root, '.git'));
+    writeFileSync(join(root, 'package.json'), '{"name":"root","private":true,"workspaces":["packages/*"]}', 'utf8');
+    writeFileSync(join(root, 'yarn.lock'), ['# yarn lockfile v1', '', 'lodash@^4.17.0:', '  version "4.17.20"', ''].join('\n'), 'utf8');
+    const member = join(root, 'packages', 'api');
+    mkdirSync(member, { recursive: true });
+    writeFileSync(join(member, 'package.json'), '{"name":"api","dependencies":{"lodash":"^4.17.0"}}', 'utf8');
+    const plugin = makePlugin(member);
+    seedCve(plugin, member, { cve_id: 'CVE-L', package_name: 'lodash', installed_version: '4.17.20', fixed_version: '4.17.21' });
+    const calls: string[] = [];
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      calls.push([cmd, ...args].join(' '));
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{ plan: unknown[]; unplanned: Array<{ package_name: string; reason: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: member }, plugin),
+    );
+    expect(calls).toEqual([]);
+    expect(r.plan).toEqual([]);
+    expect(r.unplanned[0]?.reason).toMatch(/^yarn project \(\.\.\/\.\.\/yarn\.lock, the workspace root\)/);
+    expect(r.unplanned[0]?.reason).toContain('"resolutions": { "lodash": "4.17.21" } to the workspace root package.json (../../package.json)');
+  });
+
+  it('fix round 5 (3): the walk stops at the repository root — a pnpm lock ABOVE the .git directory does not make the project pnpm', async () => {
+    const outer = tempProject();
+    writeFileSync(join(outer, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n", 'utf8');
+    const repo = join(outer, 'repo');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    writeFileSync(join(repo, 'package.json'), '{"name":"x","dependencies":{"lodash":"4.17.20"}}', 'utf8');
+    const plugin = makePlugin(repo);
+    const calls: string[] = [];
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      calls.push([cmd, ...args].join(' '));
+      return { exitCode: 1, stdout: JSON.stringify({ lodash: { current: '4.17.20', latest: '4.17.21' } }), stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{ plan: Array<{ upgrade_command: string }>; unsupported_ecosystems_present: string[] }>(
+      await getTool('deps_update_plan').handler({ project_path: repo }, plugin),
+    );
+    expect(calls).toEqual(['npm outdated --json']);
+    expect(r.plan[0]?.upgrade_command).toBe('npm install lodash@4.17.21 --ignore-scripts');
+    expect(r.unsupported_ecosystems_present).not.toContain('pnpm');
   });
 });
