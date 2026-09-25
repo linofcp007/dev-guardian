@@ -291,9 +291,9 @@ dev-guardian/
 │   ├── scripts/                 # smoke.mjs
 │   └── dist/                    # built artifact (node dist/server.js)
 ├── scripts/
-│   ├── detect/detect-stack.sh   # language/framework detection
 │   ├── install/                 # install-linux.sh, install-macos.sh
 │   └── scan/                    # initial-scan (init_project's first status)
+│                                 # (stack detection is in-process: detect_stack / mcp/src/runners/stackDetect.ts)
 ├── configs/
 │   ├── renovate/, gitleaks/, semgrep/, pre-commit/
 ├── host-rules/                  # AGENTS.md, cursor.mdc, copilot-instructions.md, …
@@ -597,9 +597,9 @@ dev-guardian/
 │   ├── scripts/                 # smoke.mjs
 │   └── dist/                    # artefacto compilado (node dist/server.js)
 ├── scripts/
-│   ├── detect/detect-stack.sh   # deteção de linguagens/frameworks
 │   ├── install/                 # install-linux.sh, install-macos.sh
 │   └── scan/                    # initial-scan (init_project's first status)
+│                                 # (deteção de stack em processo: detect_stack / mcp/src/runners/stackDetect.ts)
 ├── configs/
 │   ├── renovate/, gitleaks/, semgrep/, pre-commit/
 ├── host-rules/                  # AGENTS.md, cursor.mdc, copilot-instructions.md, …
@@ -903,9 +903,9 @@ dev-guardian/
 │   ├── scripts/                 # smoke.mjs
 │   └── dist/                    # artefacto compilado (node dist/server.js)
 ├── scripts/
-│   ├── detect/detect-stack.sh   # detección de lenguajes/frameworks
 │   ├── install/                 # install-linux.sh, install-macos.sh
 │   └── scan/                    # initial-scan (init_project's first status)
+│                                 # (detección de stack en proceso: detect_stack / mcp/src/runners/stackDetect.ts)
 ├── configs/
 │   ├── renovate/, gitleaks/, semgrep/, pre-commit/
 ├── host-rules/                  # AGENTS.md, cursor.mdc, copilot-instructions.md, …

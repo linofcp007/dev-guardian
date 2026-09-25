@@ -36,13 +36,18 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 /**
- * A script every checkout has had since `detect_stack` was introduced, and
- * the first one every scan pipeline invokes (`detectStack.ts`'s own
- * `SCRIPT_REL_PATH`). Used only to confirm a CANDIDATE directory really is
- * `scripts/` — not merely that something exists at that depth — which is
- * exactly the check a bare `existsSync(candidate)` would skip.
+ * A script every checkout has had since `init_project` was introduced, and
+ * still the first (and, as of the TypeScript port of stack detection, only)
+ * one `init_project` invokes for its first-pass status (`initProject.ts`).
+ * Used only to confirm a CANDIDATE directory really is `scripts/` — not
+ * merely that something exists at that depth — which is exactly the check a
+ * bare `existsSync(candidate)` would skip.
+ *
+ * Used to be `detect/detect-stack.sh`, `detect_stack`'s own script — retired
+ * when stack detection was ported to TypeScript (no shell involved any
+ * more); this marker moved to a script that is still real and still run.
  */
-const MARKER_SCRIPT = ['detect', 'detect-stack.sh'];
+const MARKER_SCRIPT = ['scan', 'initial-scan.sh'];
 export function resolveScriptsDir() {
     const here = dirname(fileURLToPath(import.meta.url));
     // Bundled: this code is executing as part of dist/server.js, so `here` is

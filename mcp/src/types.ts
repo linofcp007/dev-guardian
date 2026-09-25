@@ -240,6 +240,23 @@ export interface Baseline {
   note?: string;
 }
 
+/**
+ * One manifest-bearing directory `detectStack` found while walking the
+ * project (the root itself, path `'.'`, when it has a manifest or a
+ * WordPress/PHP signal of its own, plus every nested manifest up to depth 3).
+ * The top-level `languages` / `package_managers` / `frameworks` on
+ * {@link StackSnapshot} are the union of every entry here — added so a repo
+ * whose manifests live below the root (this repo: `mcp/package.json`) is no
+ * longer reported as having no languages at all.
+ */
+export interface SubProjectStack {
+  /** `/`-separated, relative to the project root; `'.'` for the root itself. */
+  path: string;
+  languages: string[];
+  package_managers: string[];
+  frameworks: string[];
+}
+
 export interface StackSnapshot {
   os: 'linux' | 'darwin' | 'wsl' | 'debian' | 'rhel' | 'arch' | 'macos' | 'windows' | 'unknown';
   arch: string;
@@ -254,6 +271,10 @@ export interface StackSnapshot {
   has_ansible: boolean;
   has_github_actions: boolean;
   has_gitlab_ci: boolean;
+  /** `has_terraform || has_kubernetes || has_ansible` — one flag for "any IaC". */
+  has_iac: boolean;
+  /** Per-directory detail behind the top-level union — see {@link SubProjectStack}. */
+  projects: SubProjectStack[];
 }
 
 export const HTTP_METHODS = [

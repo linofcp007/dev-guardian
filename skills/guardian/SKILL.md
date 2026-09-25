@@ -85,7 +85,7 @@ Se o utilizador não diz explicitamente que modo quer, infere a partir do contex
 
 ## Fluxo geral
 
-1. **Detectar o stack** primeiro (sempre). Corre `bash ${CLAUDE_PLUGIN_ROOT}/scripts/detect/detect-stack.sh` no projeto. Isto identifica linguagens, package managers, frameworks e ferramentas já presentes. Sem isto, qualquer recomendação é genérica e potencialmente errada.
+1. **Detectar o stack** primeiro (sempre). Chama a tool `detect_stack` no projeto. Isto identifica linguagens, package managers, frameworks e ferramentas já presentes. Sem isto, qualquer recomendação é genérica e potencialmente errada.
 
 2. **Verificar o que já está configurado.** Não duplicar trabalho. Se já existe `.semgrep.yml`, `.gitleaks.toml`, `renovate.json`, `dependabot.yml`, `.pre-commit-config.yaml`, lê primeiro e respeita o que está lá.
 

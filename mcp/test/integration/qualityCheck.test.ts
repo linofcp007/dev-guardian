@@ -39,7 +39,7 @@ import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
-import type { ToolRun } from '../../src/types.js';
+import type { Finding, ToolRun } from '../../src/types.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -121,7 +121,8 @@ interface QualityResult {
   tools_run: ToolRun[];
   missing_tools: string[];
   findings_count_by_severity: Record<string, number>;
-  category_filter?: { categories: string[]; withheld: number };
+  top_findings: Finding[];
+  category_filter?: { categories: string[]; withheld: number; withheld_by_category?: Record<string, number> };
 }
 
 async function quality(project: string, input: Record<string, unknown> = {}) {
@@ -250,5 +251,82 @@ describe('quality_check', () => {
     const { r } = await quality(dir);
     expect(r.tools_run.find((t) => t.name === 'ruff')?.status).toBe('failed');
     expect(r.coverage).toBe('partial');
+  });
+});
+
+// --- task 15: .guardian/budgets.yml (duplication %, complexity) ----------
+//
+// The jscpd fixture (fixtures/scanners/jscpd.json) has duplicatedLines: 28,
+// lines: 5000 -> 0.56% duplication (no `percentage` field in the fixture
+// itself, so this also exercises the duplicatedLines/lines fallback). The
+// radon fixture's highest function/method complexity is 57 ("monster").
+
+function writeBudgets(dir: string, yaml: string): void {
+  mkdirSync(join(dir, '.guardian'), { recursive: true });
+  writeFileSync(join(dir, '.guardian', 'budgets.yml'), yaml, 'utf8');
+}
+
+describe('quality_check budgets', () => {
+  it('reports a duplication-budget violation as a finding', async () => {
+    const dir = polyglot();
+    writeBudgets(dir, 'quality:\n  duplication_pct: 0.5\n');
+    const { r, p } = await quality(dir);
+    expect(r.tools_run.find((t) => t.name === 'budgets')?.status).toBe('ok');
+    const findings = p.storage.findings.listByScan(r.scan_id);
+    const violation = findings.find((f) => f.rule_id === 'quality.duplication_pct');
+    expect(violation).toBeDefined();
+    expect(violation?.category).toBe('quality');
+    expect(violation?.tool).toBe('budgets');
+  });
+
+  it('reports a complexity-budget violation as a finding', async () => {
+    const dir = polyglot();
+    writeBudgets(dir, 'quality:\n  complexity: 50\n');
+    const { r, p } = await quality(dir);
+    const findings = p.storage.findings.listByScan(r.scan_id);
+    const violation = findings.find((f) => f.rule_id === 'quality.complexity');
+    expect(violation).toBeDefined();
+    expect(violation?.message).toContain('57');
+  });
+
+  it('reports no budget findings when both measurements are within budget', async () => {
+    const dir = polyglot();
+    writeBudgets(dir, 'quality:\n  duplication_pct: 50\n  complexity: 1000\n');
+    const { r, p } = await quality(dir);
+    const findings = p.storage.findings.listByScan(r.scan_id);
+    expect(findings.filter((f) => f.tool === 'budgets')).toEqual([]);
+    expect(r.tools_run.find((t) => t.name === 'budgets')?.status).toBe('ok');
+  });
+
+  it('does nothing when there is no budgets file at all (no tools_run entry, no findings)', async () => {
+    const dir = polyglot();
+    const { r, p } = await quality(dir);
+    expect(r.tools_run.find((t) => t.name === 'budgets')).toBeUndefined();
+    expect(p.storage.findings.listByScan(r.scan_id).filter((f) => f.tool === 'budgets')).toEqual([]);
+  });
+
+  it('reports budgets as a failed tools_run entry, never silently, when the file is invalid', async () => {
+    const dir = polyglot();
+    writeBudgets(dir, 'quality:\n  duplication_pct: "not a number"\n');
+    const { r } = await quality(dir);
+    const entry = r.tools_run.find((t) => t.name === 'budgets');
+    expect(entry?.status).toBe('failed');
+    expect(entry?.reason).toMatch(/budgets\.yml/);
+  });
+
+  it('a duplication-budget violation is visible under categories: [duplicate], not withheld as an unclassified "budget"', async () => {
+    const dir = polyglot();
+    writeBudgets(dir, 'quality:\n  duplication_pct: 0.5\n');
+    const { r } = await quality(dir, { categories: ['duplicate'] });
+    expect(r.top_findings.some((f) => f.rule_id === 'quality.duplication_pct')).toBe(true);
+    expect(r.category_filter?.withheld_by_category?.['budget']).toBeUndefined();
+  });
+
+  it('a complexity-budget violation is visible under categories: [complexity], not withheld as an unclassified "budget"', async () => {
+    const dir = polyglot();
+    writeBudgets(dir, 'quality:\n  complexity: 50\n');
+    const { r } = await quality(dir, { categories: ['complexity'] });
+    expect(r.top_findings.some((f) => f.rule_id === 'quality.complexity')).toBe(true);
+    expect(r.category_filter?.withheld_by_category?.['budget']).toBeUndefined();
   });
 });

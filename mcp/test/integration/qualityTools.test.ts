@@ -704,11 +704,13 @@ describe('bug_hunt', () => {
     frameworks: string[]; existing_tools: string[]; has_docker: boolean;
     has_compose: boolean; has_terraform: boolean; has_kubernetes: boolean;
     has_ansible: boolean; has_github_actions: boolean; has_gitlab_ci: boolean;
+    has_iac: boolean; projects: never[];
   } {
     return {
       os: 'linux', arch: 'x64', languages, package_managers: [], frameworks: [],
       existing_tools: [], has_docker: false, has_compose: false, has_terraform: false,
       has_kubernetes: false, has_ansible: false, has_github_actions: false, has_gitlab_ci: false,
+      has_iac: false, projects: [],
     };
   }
 

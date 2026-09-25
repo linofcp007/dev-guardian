@@ -417,7 +417,7 @@ describe('map_attack_surface', () => {
         os: 'linux', arch: 'x64', languages: ['elixir'], package_managers: [],
         frameworks: [], existing_tools: [], has_docker: false, has_compose: false,
         has_terraform: false, has_kubernetes: false, has_ansible: false,
-        has_github_actions: false, has_gitlab_ci: false,
+        has_github_actions: false, has_gitlab_ci: false, has_iac: false, projects: [],
       },
     });
 

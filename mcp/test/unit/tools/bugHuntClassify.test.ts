@@ -111,8 +111,8 @@ describe('languagePacksFor', () => {
     // p/javascript and p/typescript are the identical 74 rule ids under two
     // registry names (verified by fetching both packs and diffing their
     // sorted rule-id lists — see LANGUAGE_PACKS's doc comment). Running both
-    // against a TS project — the common case, since detect-stack.sh only
-    // ever sets `typescript` alongside `javascript`, never instead of it —
+    // against a TS project — the common case, since detect_stack only ever
+    // sets `typescript` alongside `javascript`, never instead of it —
     // used to configure the same 74 rules twice for zero extra coverage.
     expect(languagePacksFor(['javascript', 'typescript'])).toEqual(['p/typescript']);
   });

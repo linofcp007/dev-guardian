@@ -26,27 +26,29 @@
   },
   "packageRules": [
     {
-      "description": "Auto-merge patch updates of dev/test deps",
+      "description": "Auto-merge patch updates of dev/test deps, but never sooner than 3 days after release — a supply-chain compromise (malicious point release, then a fixed one days later) does not get an automatic branch merge in that window",
       "matchDepTypes": ["devDependencies"],
       "matchUpdateTypes": ["patch"],
+      "minimumReleaseAge": "3 days",
       "automerge": true,
       "automergeType": "branch"
     },
     {
-      "description": "Auto-merge minor updates of safe categories",
-      "matchPackagePatterns": ["^@types/", "^eslint", "^prettier", "^@typescript-eslint/"],
+      "description": "Auto-merge minor updates of safe categories, same 3-day floor",
+      "matchPackageNames": ["@types/**", "eslint*", "prettier*", "@typescript-eslint/**"],
       "matchUpdateTypes": ["minor", "patch"],
+      "minimumReleaseAge": "3 days",
       "automerge": true,
       "automergeType": "branch"
     },
     {
       "description": "Group all linting tools",
-      "matchPackagePatterns": ["eslint", "prettier", "stylelint", "ruff", "black", "isort"],
+      "matchPackageNames": ["*eslint*", "*prettier*", "*stylelint*", "*ruff*", "*black*", "*isort*"],
       "groupName": "linting tools"
     },
     {
       "description": "Group testing tools",
-      "matchPackagePatterns": ["jest", "vitest", "mocha", "pytest", "phpunit", "playwright"],
+      "matchPackageNames": ["*jest*", "*vitest*", "*mocha*", "*pytest*", "*phpunit*", "*playwright*"],
       "groupName": "testing tools"
     },
     {

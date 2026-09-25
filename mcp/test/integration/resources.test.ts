@@ -272,6 +272,8 @@ describe('guardian://stack', () => {
         has_ansible: false,
         has_github_actions: false,
         has_gitlab_ci: false,
+        has_iac: false,
+        projects: [],
       },
     });
 
