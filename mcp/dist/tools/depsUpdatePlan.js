@@ -20,7 +20,7 @@
  *   5. Order the result by `prefer` (default: security, then patch, then
  *      minor, then major).
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import { z } from 'zod';
@@ -109,7 +109,7 @@ function detectEcosystems(projectPath) {
 }
 function anyCsproj(projectPath) {
     try {
-        return require('node:fs').readdirSync(projectPath).some((n) => n.endsWith('.csproj') || n.endsWith('.sln'));
+        return readdirSync(projectPath).some((n) => n.endsWith('.csproj') || n.endsWith('.sln'));
     }
     catch {
         return false;

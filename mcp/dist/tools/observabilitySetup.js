@@ -12,7 +12,7 @@
  * package the project must install (`npm i pino`, `pip install structlog`,
  * etc.) — actual install is left to the user / their package manager.
  */
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -122,7 +122,7 @@ function inferStack(projectPath, ctx) {
     if (existsSync(join(projectPath, 'Gemfile')))
         return 'ruby';
     try {
-        const entries = require('node:fs').readdirSync(projectPath);
+        const entries = readdirSync(projectPath);
         if (entries.some((n) => n.endsWith('.csproj') || n.endsWith('.sln') || n === 'global.json'))
             return 'dotnet';
     }

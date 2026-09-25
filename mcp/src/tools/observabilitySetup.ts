@@ -13,7 +13,7 @@
  * etc.) — actual install is left to the user / their package manager.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
@@ -133,7 +133,7 @@ function inferStack(projectPath: string, ctx: PluginContext): Stack {
     return 'java';
   if (existsSync(join(projectPath, 'Gemfile'))) return 'ruby';
   try {
-    const entries = require('node:fs').readdirSync(projectPath) as string[];
+    const entries = readdirSync(projectPath);
     if (entries.some((n) => n.endsWith('.csproj') || n.endsWith('.sln') || n === 'global.json'))
       return 'dotnet';
   } catch {

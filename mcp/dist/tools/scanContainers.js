@@ -9,17 +9,27 @@
  *     `.guardian/reports/containers-<scan>/`.
  *
  * Returns `tools_run` with one entry per scanner pass (dockerfile / image).
+ *
+ * Both inputs are validated before any scan row is written or any process
+ * starts: `image` is handed to trivy as a positional argument, so a value
+ * starting with `-` would be parsed as an option and one with whitespace is
+ * no image reference at all; `dockerfile_path` must resolve INSIDE the
+ * project (symlinks included), because the tool scans the project and
+ * nothing else.
  */
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
+import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.js';
 import { makeScanTool, } from './scanToolFactory.js';
-registerToolModule(makeScanTool({
+/** An image reference: non-empty, no whitespace, not starting with `-`. */
+const IMAGE_REF = /^(?!-)\S+$/;
+const scanContainers = makeScanTool({
     name: 'scan_containers',
     title: 'Container scan (Dockerfile + image)',
     description: 'Run Trivy against a Dockerfile (config check) and/or a container image (vulnerability check). ' +
@@ -36,6 +46,7 @@ registerToolModule(makeScanTool({
             .describe('Path to a Dockerfile to scan with `trivy config`.'),
         image: z
             .string()
+            .regex(IMAGE_REF, 'image must be an image reference: no whitespace, not starting with "-"')
             .optional()
             .describe('Container image reference to scan with `trivy image`.'),
         force: Force,
@@ -58,10 +69,16 @@ registerToolModule(makeScanTool({
             };
         }
         const inp = input;
-        const dockerfile = inp.dockerfile_path ??
-            (existsSync(join(ctx.projectPath, 'Dockerfile'))
+        // Validated by the handler below before this runs; re-checked here so
+        // no other caller of `invoke` can bypass it.
+        const invalid = invalidInput(ctx.projectPath, inp);
+        if (invalid)
+            throw new Error(invalid);
+        const dockerfile = inp.dockerfile_path !== undefined
+            ? resolve(ctx.projectPath, inp.dockerfile_path)
+            : existsSync(join(ctx.projectPath, 'Dockerfile'))
                 ? join(ctx.projectPath, 'Dockerfile')
-                : undefined);
+                : undefined;
         let anyOutcome = 'completed';
         if (dockerfile) {
             const outFile = join(reportDir, 'dockerfile.json');
@@ -129,5 +146,64 @@ registerToolModule(makeScanTool({
             report_paths: [reportDir],
         };
     },
-}));
+});
+/**
+ * The scan pipeline, behind the argument checks: a rejected input returns a
+ * domain error before the factory writes a scan row or starts a process. The
+ * MCP layer already rejects a bad `image` through the schema's pattern; this
+ * also covers in-process callers, and `dockerfile_path` needs the project
+ * path, which no schema knows.
+ */
+const tool = {
+    ...scanContainers,
+    handler: async (input, plugin, callMeta) => {
+        const inp = input;
+        let projectPath = null;
+        try {
+            projectPath = resolveProjectPath(inp.project_path).path;
+        }
+        catch (e) {
+            // The pipeline reports an invalid project_path itself.
+            if (!(e instanceof InvalidProjectPathError))
+                throw e;
+        }
+        const invalid = projectPath !== null ? invalidInput(projectPath, inp) : null;
+        if (invalid)
+            return { ok: false, error: { code: 'unsupported_target', message: invalid } };
+        return scanContainers.handler(input, plugin, callMeta);
+    },
+};
+registerToolModule(tool);
+/** Why the input cannot be scanned, or null when it can. */
+function invalidInput(projectPath, inp) {
+    if (inp.image !== undefined && !IMAGE_REF.test(inp.image)) {
+        return `image ${JSON.stringify(inp.image)} is not an image reference: it must not contain whitespace or start with "-".`;
+    }
+    if (inp.dockerfile_path !== undefined && !isInside(projectPath, inp.dockerfile_path)) {
+        return `dockerfile_path ${JSON.stringify(inp.dockerfile_path)} resolves outside the project (${projectPath}); scan_containers only reads files inside it.`;
+    }
+    return null;
+}
+/**
+ * Whether `candidate` (relative to `root`, or absolute) names a path inside
+ * `root`. Checked lexically, and — when the file exists — again on the real
+ * paths, so a symlink inside the project pointing out of it is refused too.
+ */
+function isInside(root, candidate) {
+    const within = (base, target) => {
+        const rel = relative(base, target);
+        return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+    };
+    const abs = resolve(root, candidate);
+    if (!within(root, abs))
+        return false;
+    if (!existsSync(abs))
+        return true;
+    try {
+        return within(realpathSync.native(root), realpathSync.native(abs));
+    }
+    catch {
+        return false;
+    }
+}
 //# sourceMappingURL=scanContainers.js.map

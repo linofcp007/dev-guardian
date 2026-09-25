@@ -12,6 +12,8 @@
  */
 
 import type { DetectedOs } from '../platform/osDetect.js';
+import { compareSemver } from '../platform/semverCompare.js';
+import type { VersionProbe } from './toolProbe.js';
 
 export type WindowsPkgManager = 'winget' | 'scoop' | 'choco' | 'wsl';
 export type PosixPkgManager = 'apt' | 'brew' | 'pipx' | 'npm' | 'curl';
@@ -26,10 +28,28 @@ export interface InstallSpec {
   description?: string;
 }
 
+/**
+ * A range of releases known to be malicious — a supply-chain compromise, not
+ * a vulnerability. Inclusive bounds; checked against the installed version by
+ * `check_toolchain`. Every entry must cite its primary-source advisory.
+ */
+export interface CompromisedRange {
+  from: string;
+  to: string;
+  advisory: string;
+  cve?: string;
+  url: string;
+  action: string;
+}
+
 export interface ToolMeta {
   name: string;
   version_floor: string;
   required_by: string[];
+  /** How `check_toolchain` asks this tool for its version (argv, no shell). */
+  probe: VersionProbe;
+  /** Releases that must never be run. */
+  compromised?: CompromisedRange[];
   install: {
     win32: Partial<Record<WindowsPkgManager, InstallSpec>>;
     linux: Partial<Record<PosixPkgManager, InstallSpec>>;
@@ -39,10 +59,21 @@ export interface ToolMeta {
   default: boolean;
 }
 
+/**
+ * The Trivy release the curl installer fetches AND installs. Pinned because
+ * the installer used to be piped from the `main` branch into `sh` and then
+ * install "latest": on 2026-03-19 "latest" WAS the malicious v0.69.4 (see
+ * `compromised` on the trivy entry). A tag's `install.sh` is immutable
+ * (GitHub immutable releases, enabled on aquasecurity/trivy since
+ * 2026-03-03); v0.74.0 was published 2026-08-14. Bump deliberately.
+ */
+export const TRIVY_INSTALL_TAG = 'v0.74.0';
+
 export const TOOL_CATALOG: Record<string, ToolMeta> = {
   semgrep: {
     name: 'semgrep',
     version_floor: '1.0.0',
+    probe: { command: 'semgrep', args: ['--version'] },
     required_by: ['scan_sast', 'security_scan_full', 'bug_hunt', 'review_pr'],
     install: {
       win32: {
@@ -57,6 +88,27 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   trivy: {
     name: 'trivy',
     version_floor: '0.40.0',
+    probe: { command: 'trivy', args: ['--version'] },
+    compromised: [
+      {
+        // Verified against the primary source, the GitHub advisory
+        // (https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23,
+        // published 2026-03-21, CVE-2026-33634): v0.69.4 binaries and images
+        // were published with credential-stealing code on 2026-03-19, and
+        // malicious v0.69.5 / v0.69.6 images were pushed to Docker Hub on
+        // 2026-03-22 with no matching GitHub release. The advisory names
+        // v0.69.2 and v0.69.3 as known-safe. A binary reporting any of the
+        // three versions came from one of those artifacts.
+        from: '0.69.4',
+        to: '0.69.6',
+        advisory: 'GHSA-69fq-xp46-6x23',
+        cve: 'CVE-2026-33634',
+        url: 'https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23',
+        action:
+          'Remove this Trivy build now, install a release the advisory lists as safe (or a later one), ' +
+          'and rotate every secret it could read — it exfiltrated credentials.',
+      },
+    ],
     required_by: [
       'scan_deps',
       'scan_containers',
@@ -75,7 +127,8 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
       linux: {
         apt: aptInstall('trivy'),
         curl: curlInstaller(
-          'https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh',
+          `https://raw.githubusercontent.com/aquasecurity/trivy/${TRIVY_INSTALL_TAG}/contrib/install.sh`,
+          TRIVY_INSTALL_TAG,
         ),
       },
       darwin: { brew: brewInstall('aquasecurity/trivy/trivy') },
@@ -85,6 +138,7 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   gitleaks: {
     name: 'gitleaks',
     version_floor: '8.0.0',
+    probe: { command: 'gitleaks', args: ['version'] },
     required_by: ['scan_secrets', 'security_scan_full', 'review_pr'],
     install: {
       win32: {
@@ -102,7 +156,7 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
         // install-linux.sh, which resolves the real download URL itself;
         // only an explicit install_toolchain(tools:["gitleaks"]) call on
         // Linux reaches this empty bucket, and degrades to manual_steps
-        // the same way nuclei's win32 entry below already does.
+        // the same way nuclei's linux entry below does.
       },
       darwin: { brew: brewInstall('gitleaks') },
     },
@@ -111,6 +165,7 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   syft: {
     name: 'syft',
     version_floor: '0.80.0',
+    probe: { command: 'syft', args: ['version'] },
     required_by: ['generate_sbom'],
     install: {
       win32: { scoop: scoopInstall('syft'), choco: chocoInstall('syft') },
@@ -124,6 +179,7 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   'pre-commit': {
     name: 'pre-commit',
     version_floor: '3.0.0',
+    probe: { command: 'pre-commit', args: ['--version'] },
     required_by: ['init_project'],
     install: {
       win32: { scoop: pipxInstall('pre-commit') },
@@ -135,6 +191,7 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   ruff: {
     name: 'ruff',
     version_floor: '0.1.0',
+    probe: { command: 'ruff', args: ['--version'] },
     required_by: ['quality_check'],
     install: {
       win32: { scoop: pipxInstall('ruff') },
@@ -146,6 +203,7 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   bandit: {
     name: 'bandit',
     version_floor: '1.7.0',
+    probe: { command: 'bandit', args: ['--version'] },
     required_by: ['scan_sast', 'security_scan_full'],
     install: {
       win32: { scoop: pipxInstall('bandit') },
@@ -157,6 +215,7 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   jscpd: {
     name: 'jscpd',
     version_floor: '3.0.0',
+    probe: { command: 'jscpd', args: ['--version'] },
     required_by: ['quality_check'],
     install: {
       win32: { choco: npmInstallGlobal('jscpd') },
@@ -168,6 +227,7 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   lighthouse: {
     name: 'lighthouse',
     version_floor: '11.0.0',
+    probe: { command: 'lighthouse', args: ['--version'] },
     required_by: ['perf_check'],
     install: {
       win32: { choco: npmInstallGlobal('lighthouse') },
@@ -179,6 +239,7 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   k6: {
     name: 'k6',
     version_floor: '0.50.0',
+    probe: { command: 'k6', args: ['version'] },
     required_by: ['perf_check'],
     install: {
       win32: {
@@ -195,24 +256,21 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   nuclei: {
     name: 'nuclei',
     version_floor: '3.0.0',
+    probe: { command: 'nuclei', args: ['-version'] },
     required_by: ['scan_dast'],
     install: {
-      // No verified scoop/choco/winget package exists for nuclei: it is not
-      // among ProjectDiscovery's own documented install methods (go install,
-      // brew, docker, GitHub release binaries, Helm — checked against
-      // docs.projectdiscovery.io/opensource/nuclei/install), the
-      // ScoopInstaller/Extras bucket has no `nuclei.json` manifest, and
-      // winget's community repo returns zero results for it. Every other
-      // entry in this catalogue is a real, working command; pointing win32
-      // at a package manager that does not carry the tool would be exactly
-      // the kind of fabrication this project's whole DAST feature exists to
-      // avoid, so it is left empty rather than guessed at. `check_toolchain`
-      // / `install_toolchain` already degrade gracefully to "no known
-      // install command" when an OS bucket has none.
-      win32: {},
+      // Scoop's MAIN bucket — the one every scoop install has by default —
+      // carries `bucket/nuclei.json` (verified 2026-09-25 through the GitHub
+      // API on ScoopInstaller/Main: version 3.11.1, the official
+      // `nuclei_<v>_windows_amd64.zip` from projectdiscovery/nuclei's own
+      // releases). An earlier check here looked only at the Extras bucket,
+      // found nothing, and left win32 empty. No ProjectDiscovery manifest was
+      // found in microsoft/winget-pkgs (path lookup and code search, same
+      // day), so scoop is the only entry.
+      win32: { scoop: scoopInstall('nuclei') },
       linux: {
         // No curl entry, for the same reason as gitleaks' linux entry
-        // above and this tool's own win32 bucket: `.../releases/latest`
+        // above: `.../releases/latest`
         // resolves to the release's HTML page, not an install script
         // (measured: Content-Type: text/html on the final 200). Left
         // empty rather than fabricated, per curlInstaller's doc comment.
@@ -225,6 +283,9 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   'wp-cli': {
     name: 'wp-cli',
     version_floor: '2.8.0',
+    // The binary is `wp`. `--allow-root` because WP-CLI refuses to run as
+    // root without it, which is the normal case inside a container.
+    probe: { command: 'wp', args: ['--version', '--allow-root'] },
     required_by: ['wp_audit', 'wp_vuln_check'],
     install: {
       win32: { scoop: scoopInstall('wp-cli'), choco: chocoInstall('wp-cli') },
@@ -236,6 +297,7 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   wpscan: {
     name: 'wpscan',
     version_floor: '3.8.0',
+    probe: { command: 'wpscan', args: ['--version'] },
     required_by: ['wp_vuln_check'],
     install: {
       // wpscan is a Ruby gem. Windows native needs Ruby; we recommend WSL.
@@ -248,6 +310,7 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   phpcs: {
     name: 'phpcs',
     version_floor: '3.7.0',
+    probe: { command: 'phpcs', args: ['--version'] },
     required_by: ['scan_wordpress'],
     install: {
       win32: { choco: chocoInstall('php-codesniffer') },
@@ -260,11 +323,16 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   'dotnet-sdk': {
     name: 'dotnet-sdk',
     version_floor: '6.0.0',
+    probe: { command: 'dotnet', args: ['--list-sdks'], parse: 'dotnet-sdks' },
     required_by: ['scan_sast', 'deps_update_plan'],
     install: {
       // dev-guardian NEVER auto-installs the .NET SDK. These specs only
-      // exist so check_toolchain surfaces install hints.
-      win32: { winget: dotnetSdkHint('winget install Microsoft.DotNet.SDK.6') },
+      // exist so check_toolchain surfaces install hints. The hint names the
+      // current LTS: .NET 10 (released 2025-11-11, supported to 2028-11-14 —
+      // dotnet.microsoft.com support policy); .NET 6, which it used to name,
+      // left support in November 2024. winget id verified in
+      // microsoft/winget-pkgs (manifests/m/Microsoft/DotNet/SDK/10).
+      win32: { winget: dotnetSdkHint('winget install Microsoft.DotNet.SDK.10') },
       linux: { apt: dotnetSdkHint('see https://learn.microsoft.com/dotnet/core/install/linux') },
       darwin: { brew: dotnetSdkHint('brew install --cask dotnet-sdk') },
     },
@@ -273,6 +341,7 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   'dotnet-outdated': {
     name: 'dotnet-outdated',
     version_floor: '4.0.0',
+    probe: { command: 'dotnet-outdated', args: ['--version'] },
     required_by: ['deps_update_plan'],
     install: {
       win32: { winget: dotnetGlobalTool('dotnet-outdated-tool') },
@@ -284,6 +353,9 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   'dotnet-format': {
     name: 'dotnet-format',
     version_floor: '5.0.0',
+    // The standalone global tool. Since .NET 6 `dotnet format` ships inside
+    // the SDK, and check_toolchain treats an SDK >= 6 as providing it.
+    probe: { command: 'dotnet-format', args: ['--version'] },
     required_by: ['quality_check'],
     install: {
       win32: { winget: dotnetGlobalTool('dotnet-format') },
@@ -373,15 +445,20 @@ function npmInstallGlobal(pkg: string): InstallSpec {
  * nuclei's linux entries both once took this shape and both came back
  * `Content-Type: text/html` on the final 200; see the comments on those
  * catalog entries. A broken command is worse than none: leave the OS
- * bucket empty (as nuclei's win32 already does) rather than call this
- * helper on a URL that has not been checked.
+ * bucket empty (as nuclei's and gitleaks' linux entries do) rather than call
+ * this helper on a URL that has not been checked.
+ *
+ * `tag`, when given, is passed to the script as the release to install —
+ * godownloader-style scripts (trivy's, syft's) otherwise install "latest"
+ * at the moment they run, so pinning the script's URL alone pins nothing.
  */
-function curlInstaller(url: string): InstallSpec {
+function curlInstaller(url: string, tag?: string): InstallSpec {
+  const pinned = tag !== undefined ? ` ${tag}` : '';
   return {
     command: 'bash',
-    args: ['-c', `curl -sSfL ${url} | sh -s -- -b "$HOME/.local/bin"`],
+    args: ['-c', `curl -sSfL ${url} | sh -s -- -b "$HOME/.local/bin"${pinned}`],
     needs_elevation: false,
-    description: `curl ${url} | sh`,
+    description: `curl ${url} | sh${pinned}`,
   };
 }
 
@@ -479,4 +556,19 @@ export function suggestedInstallCommandString(
   // Surface the first declared option for the OS — most common entry point.
   const first = Object.values(candidates)[0];
   return first?.description ?? null;
+}
+
+/**
+ * The known-compromised range `version` of `toolName` falls in, or null.
+ * An unparseable version is never flagged: "we could not tell" must not read
+ * as "compromised" any more than as "safe" — `check_toolchain` reports the
+ * version as-is either way.
+ */
+export function knownCompromise(toolName: string, version: string): CompromisedRange | null {
+  for (const range of TOOL_CATALOG[toolName]?.compromised ?? []) {
+    const low = compareSemver(version, range.from);
+    const high = compareSemver(version, range.to);
+    if (low !== null && high !== null && low >= 0 && high <= 0) return range;
+  }
+  return null;
 }

@@ -33,6 +33,7 @@ import {
   resolveBinary,
   type PkgManagerCandidate,
 } from '../platform/pkgManagerDetect.js';
+import { WSL_SHELL } from '../platform/shellProbe.js';
 import { runProcess } from '../runners/processRunner.js';
 import { runShellScript } from '../runners/shellRunner.js';
 import {
@@ -43,6 +44,7 @@ import {
 } from '../runners/installCatalog.js';
 import type { ToolResult } from '../types.js';
 import { registerToolModule, TOOLS, type ToolModule } from './index.js';
+import { resetScannerCache } from './scanHelpers.js';
 
 const inputSchema = {
   tools: z
@@ -142,6 +144,10 @@ async function handler(
     await installDefaults({ os, dryRun, elevation, ctx, result });
   }
 
+  // Whatever was installed must be visible to the very next scan: without
+  // this, a cached "not installed" from before the install outlived it and
+  // the re-scan still reported `not_installed`.
+  resetScannerCache();
   const verification = await runCheckToolchain(ctx);
 
   return {
@@ -208,10 +214,14 @@ async function installDefaults(opts: DefaultsContext): Promise<void> {
     });
     return;
   }
+  // Through the shell runner with the WSL shell, so the script path is
+  // translated to its /mnt/<drive>/ form — a raw `C:\…` path handed to
+  // `wsl bash` names nothing inside WSL.
   const scriptPath = join(opts.ctx.scriptsDir, 'install', 'install-linux.sh');
-  const r = await runProcess({
-    command: 'wsl',
-    args: ['bash', scriptPath, '--no-sudo'],
+  const r = await runShellScript({
+    shell: WSL_SHELL,
+    scriptPath,
+    args: ['--no-sudo'],
     cwd: opts.ctx.scriptsDir,
   });
   for (const t of listDefaultTools()) {

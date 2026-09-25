@@ -15,6 +15,7 @@
  */
 
 import type { Category, Finding, Severity } from '../../types.js';
+import { CONTAINER_PROJECT_ROOT } from '../dockerScanner.js';
 import {
   asArray,
   getNumber,
@@ -75,7 +76,7 @@ function mapResult(raw: unknown, ctx: ParserContext): Finding | null {
     category,
     title: shortenTitle(message, checkId),
     fix_available: fixAvailable,
-    file_path: toRelativeIfPossible(filePath, ctx.project_path),
+    file_path: relativePath(filePath, ctx.project_path),
   };
   if (message !== undefined) input.message = message;
   if (subcategory !== undefined) input.subcategory = subcategory;
@@ -85,6 +86,21 @@ function mapResult(raw: unknown, ctx: ParserContext): Finding | null {
   if (snippet !== undefined) input.snippet = snippet;
 
   return makeFinding(input);
+}
+
+/**
+ * Project-relative POSIX path. A path still absolute under the container
+ * mount after relativising against the host project is a Docker-fallback
+ * result (`/src/app.js`) and loses the mount prefix, so it reads exactly as
+ * the native run of the same tree would (`app.js`) — fingerprints, dedupe
+ * and baselines all key on it. A native run can never produce such a path:
+ * every file it reports lies under the project path, which the first step
+ * already removed (a project that genuinely lives at `/src` included).
+ */
+function relativePath(filePath: string, projectPath: string | undefined): string {
+  const rel = toRelativeIfPossible(filePath, projectPath);
+  const mount = `${CONTAINER_PROJECT_ROOT}/`;
+  return rel.startsWith(mount) ? rel.slice(mount.length) : rel;
 }
 
 function mapSeverity(rawSeverity: string | undefined, metadata: unknown): Severity {
@@ -102,9 +118,11 @@ function mapCategory(metadata: unknown, checkId: string): Category {
   if (explicit) {
     if (explicit === 'security' || explicit === 'vulnerability') return 'security';
     if (explicit === 'performance') return 'performance';
-    if (explicit === 'best-practice' || explicit === 'maintainability' || explicit === 'correctness')
-      return 'quality';
+    // `correctness` is a bug class. It used to sit in the quality branch
+    // above this one too, which matched first, so the bug mapping written
+    // for it never ran.
     if (explicit === 'bug' || explicit === 'correctness') return 'bug';
+    if (explicit === 'best-practice' || explicit === 'maintainability') return 'quality';
   }
 
   // Heuristic on the check_id string.

@@ -3,7 +3,8 @@
  * with the local pre-commit framework via `pre-commit install`.
  *
  * Idempotent. Assumes `init_project` (or the user) has already created
- * `.pre-commit-config.yaml`. Returns the list of installed hook stages.
+ * `.pre-commit-config.yaml`. Returns the hook stages that installed
+ * (`stages_installed`) and those that did not (`stages_failed`).
  */
 
 import { existsSync } from 'node:fs';
@@ -71,20 +72,39 @@ async function handler(
     );
   }
 
-  // Optionally install hook into commit-msg / pre-push too — best-effort.
+  // Also install the commit-msg / pre-push hooks. Best effort — a failure
+  // does not fail the call — but reported per stage: this used to list all
+  // three as installed whatever these two returned, and a hook that did not
+  // install is one that silently never runs.
+  const stagesInstalled = ['pre-commit'];
+  const stagesFailed: Array<{ stage: string; error: string }> = [];
   for (const stage of ['commit-msg', 'pre-push']) {
-    await runProcess({
+    const r = await runProcess({
       command: 'pre-commit',
       args: ['install', '--hook-type', stage],
       cwd: projectPath,
       timeoutMs: 30_000,
-    }).catch(() => undefined);
+    });
+    if (r.outcome === 'completed') {
+      stagesInstalled.push(stage);
+    } else {
+      const firstLine = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
+      stagesFailed.push({ stage, error: firstLine?.trim() ?? r.outcome });
+    }
   }
 
   return {
     ok: true,
     project_path: projectPath,
-    stages_installed: ['pre-commit', 'commit-msg', 'pre-push'],
+    stages_installed: stagesInstalled,
+    stages_failed: stagesFailed,
+    ...(stagesFailed.length > 0
+      ? {
+          warnings: stagesFailed.map(
+            (f) => `the ${f.stage} hook was NOT installed and will not run: ${f.error}`,
+          ),
+        }
+      : {}),
     stdout: result.stdout.split(/\r?\n/).slice(0, 20).join('\n'),
   };
 }
