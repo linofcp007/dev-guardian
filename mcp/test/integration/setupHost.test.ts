@@ -212,6 +212,30 @@ describe('setupHost — rules files', () => {
     expect((content.match(/Never touch prod\./g) ?? [])).toHaveLength(1);
   });
 
+  // Fix round 4: the REAL template, saved with CRLF, present TWICE — quoted
+  // once inside the user's own notes, and once as the trailing copy an old
+  // whole-file --write left at the end. Round 3 re-found the template with
+  // an unanchored search, landed on the EARLIER copy, and dropped
+  // everything from there on — the user's "Never touch prod." included.
+  // Only the trailing copy is dev-guardian's to replace.
+  it('a REAL legacy copy at the end of a CRLF file that also quotes it earlier: only the trailing copy is replaced', () => {
+    const crlfLegacy = REAL_LEGACY_AGENTS_MD.replace(/\r?\n/g, '\r\n');
+    const usersPart = `# Team notes\r\n\r\n${crlfLegacy}\r\n## Team rules\r\nNever touch prod.\r\n\r\n`;
+    const original = `${usersPart}${crlfLegacy}`;
+    writeFileSync(join(project, 'AGENTS.md'), original, 'utf8');
+
+    const blocked = run({ hosts: ['codex'], registerMcp: false })[0];
+    expect(blocked?.status).toBe('needs_update');
+    expect(readFileSync(join(project, 'AGENTS.md'), 'utf8')).toBe(original);
+
+    const updated = run({ hosts: ['codex'], registerMcp: false, force: true })[0];
+    expect(updated?.status).toBe('merged');
+    expect(readFileSync(join(project, 'AGENTS.md'), 'utf8')).toBe(
+      `# Team notes\r\n\r\n${crlfLegacy}\r\n## Team rules\r\nNever touch prod.` +
+        '\n\n<!-- dev-guardian:begin -->\n# codex\n<!-- dev-guardian:end -->\n',
+    );
+  });
+
   // The exact regression reported: case B.
   it('case B — a user\'s own AGENTS.md that merely mentions dev-guardian in passing: never written, even with --update-mcp', () => {
     const usersOwnFile =

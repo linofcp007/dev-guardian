@@ -5,6 +5,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -350,6 +351,25 @@ describe('mergeTomlConfig', () => {
     expect((content.match(/\[mcp_servers\.dev-guardian\]/g) ?? [])).toHaveLength(1);
     assertParsesAsToml(content);
   });
+
+  // Fix round 4: after our spans are cut out, the remainder's trailing
+  // whitespace used to be stripped with `replace(/\s+$/, '')`, which V8
+  // retries from every position of a long whitespace run that is followed
+  // by more text — quadratic (measured: 40 000 spaces, 2 s). `trimEnd()`
+  // strips exactly the same characters (ECMAScript defines `\s` and
+  // `String.prototype.trim` over the same WhiteSpace + LineTerminator set)
+  // in one pass from the end.
+  it('stays linear on a long whitespace run in the user\'s own config when force strips our entry (no ReDoS)', () => {
+    const run = ' '.repeat(100_000);
+    const existing = `[other]\nx = 1\n${run}\n# user comment\n\n[mcp_servers.dev-guardian]\ncommand = "node"\n`;
+    const fresh = contentOrThrow(mergeTomlConfig(null, entry, false));
+    const started = performance.now();
+    const r = mergeTomlConfig(existing, entry, true);
+    const elapsedMs = performance.now() - started;
+    expect(r.status).toBe('merged');
+    expect(contentOrThrow(r)).toBe(`[other]\nx = 1\n${run}\n# user comment\n\n${fresh}`);
+    expect(elapsedMs).toBeLessThan(1_000);
+  });
 });
 
 // Item 6b (2026-09-25 full review): `--force` used to `copyFileSync` over
@@ -538,6 +558,88 @@ describe('mergeRulesBlock', () => {
         const content = contentOrThrow(r);
         expect(content).toContain('## Team rules\r\nNever touch prod.');
         expect(content).not.toContain('## Team rules\nNever touch prod.\n\n<!--'); // never silently LF-ified
+      });
+
+      // Fix round 4: the blank-line strip in front of the block used to be
+      // `replace(/(?:\r?\n[^\S\r\n]*)+$/, '')` — end-anchored, so V8 retries
+      // it from EVERY newline in a long blank run that is followed by more
+      // text, each retry walking the rest of the run: quadratic. Measured on
+      // the round-3 code: 40 000 blank lines took 6.5 s. The user's own text
+      // before the template is exactly where such a run would sit.
+      it('stays linear on a long run of blank lines in the user\'s text before the template (no ReDoS)', () => {
+        const run = '\n'.repeat(50_000);
+        const existing = `USERTEXT\n${run}MORE\n\n${legacyAgentsMd}`;
+        const started = performance.now();
+        const r = mergeRulesBlock(existing, rendered, true, knownTemplates);
+        const elapsedMs = performance.now() - started;
+        expect(contentOrThrow(r)).toBe(`USERTEXT\n${run}MORE\n\n${RULES_BLOCK_BEGIN}\n${rendered}\n${RULES_BLOCK_END}\n`);
+        expect(elapsedMs).toBeLessThan(1_000);
+      });
+    });
+
+    // Fix round 4: the known template text occurring MORE THAN ONCE. Round 3
+    // re-located the matched template with an UNANCHORED search and took the
+    // FIRST hit. A suffix match only proves the file ENDS with the template,
+    // so an earlier copy of the same text made the cut land on that copy
+    // instead, and everything after it — the user's own text and the real
+    // trailing copy — was dropped. Reproduced on the round-3 code:
+    // USERTEXT + T + MIDDLE + T came back as "USERTEXT\n\n<block>", MIDDLE
+    // gone. Only the copy sitting AT the anchored edge (offset 0 for a
+    // prefix, the end of the file modulo trailing whitespace for a suffix)
+    // is replaced; any other copy is, as far as this function can prove,
+    // the user's text and survives byte-for-byte.
+    describe('the known template appears MORE THAN ONCE (fix round 4)', () => {
+      const block = `${RULES_BLOCK_BEGIN}\n${rendered}\n${RULES_BLOCK_END}\n`;
+      const toCrlf = (s: string): string => s.replace(/\n/g, '\r\n');
+
+      it('SUFFIX: replaces only the TRAILING copy — USERTEXT, the earlier copy and MIDDLE survive exactly', () => {
+        const existing = `USERTEXT\n${legacyAgentsMd}\nMIDDLE\n${legacyAgentsMd}`;
+        const r = mergeRulesBlock(existing, rendered, true, knownTemplates);
+        expect(r.status).toBe('merged');
+        expect(contentOrThrow(r)).toBe(`USERTEXT\n${legacyAgentsMd}\nMIDDLE\n\n${block}`);
+      });
+
+      it('SUFFIX with several trailing newlines after the last copy: the same exact output', () => {
+        const existing = `USERTEXT\n${legacyAgentsMd}\nMIDDLE\n${legacyAgentsMd}\n\n\n`;
+        const r = mergeRulesBlock(existing, rendered, true, knownTemplates);
+        expect(contentOrThrow(r)).toBe(`USERTEXT\n${legacyAgentsMd}\nMIDDLE\n\n${block}`);
+      });
+
+      it('SUFFIX, CRLF file: replaces only the trailing copy, and every preserved byte keeps its CRLF', () => {
+        const crlfTemplate = toCrlf(legacyAgentsMd);
+        const existing = `USERTEXT\r\n${crlfTemplate}\r\nMIDDLE\r\n${crlfTemplate}`;
+        const r = mergeRulesBlock(existing, rendered, true, knownTemplates);
+        // The preserved text keeps its own CRLFs; the separator and the
+        // block are LF, as on every other write path of this function (the
+        // append path joins with LF too).
+        expect(contentOrThrow(r)).toBe(`USERTEXT\r\n${crlfTemplate}\r\nMIDDLE\n\n${block}`);
+      });
+
+      // The prefix mirror. Not RED on the round-3 code — the first hit of a
+      // template confirmed to START the file is necessarily at offset 0 —
+      // but the anchor is now explicit rather than a property of the search
+      // order, and this pins it.
+      it('PREFIX mirror: replaces only the LEADING copy — MIDDLE, the later copy and USERTEXT survive exactly', () => {
+        const existing = `${legacyAgentsMd}\nMIDDLE\n${legacyAgentsMd}\nUSERTEXT\n`;
+        const r = mergeRulesBlock(existing, rendered, true, knownTemplates);
+        expect(r.status).toBe('merged');
+        expect(contentOrThrow(r)).toBe(`${block}\nMIDDLE\n${legacyAgentsMd}\nUSERTEXT\n`);
+      });
+
+      it('PREFIX mirror, CRLF file: every preserved byte keeps its CRLF', () => {
+        const crlfTemplate = toCrlf(legacyAgentsMd);
+        const existing = `${crlfTemplate}\r\nMIDDLE\r\n${crlfTemplate}\r\nUSERTEXT\r\n`;
+        const r = mergeRulesBlock(existing, rendered, true, knownTemplates);
+        expect(contentOrThrow(r)).toBe(`${block}\nMIDDLE\r\n${crlfTemplate}\r\nUSERTEXT\r\n`);
+      });
+
+      // A file that both starts AND ends with the template matches as a
+      // prefix first. Exactly ONE copy is ever replaced per run; the other
+      // is left in place rather than guessed at.
+      it('T + MIDDLE + T: the prefix match wins and only the leading copy is replaced', () => {
+        const existing = `${legacyAgentsMd}\nMIDDLE\n${legacyAgentsMd}`;
+        const r = mergeRulesBlock(existing, rendered, true, knownTemplates);
+        expect(contentOrThrow(r)).toBe(`${block}\nMIDDLE\n${legacyAgentsMd}`);
       });
     });
 

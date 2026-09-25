@@ -48,14 +48,16 @@ version bump.
     `clinerules`, destroying any content already there. Those four
     (general-purpose files dev-guardian is a GUEST in) now manage a
     delimited block (`<!-- dev-guardian:begin -->` … `<!-- dev-guardian:end
-    -->`) instead; existing content outside it is never touched, and a
-    project that ran an OLDER, whole-file `--write` (an entirely unmarked
-    dev-guardian copy, no delimiters at all) is detected by a content
-    signature and routed through the same needs_update/force gate rather
-    than silently duplicated beside the fresh copy. `--update-mcp` is the
-    new name for refreshing a stale MCP entry / rules block; `--force` is
-    kept as a deprecated alias. Cursor's `.mdc` and Windsurf's rules file
-    are NOT part of this — see the next bullet.
+    -->`) instead; existing content outside it is never touched. A project
+    that ran an OLDER, whole-file `--write` (an unmarked dev-guardian copy,
+    no delimiters at all) is recognised only when the copy is byte-for-byte
+    one of 2.0.0's shipped templates — the whole file, or its leading or
+    trailing part — and goes through the same needs_update/force gate, with
+    only that one copy replaced; a file that merely mentions dev-guardian
+    reports `manual_merge_required` and is never rewritten. `--update-mcp`
+    is the new name for refreshing a stale MCP entry / rules block;
+    `--force` is kept as a deprecated alias. Cursor's `.mdc` and Windsurf's
+    rules file are NOT part of this — see the next bullet.
   - Cursor's `.cursor/rules/dev-guardian.mdc` and Windsurf's `.windsurf/
     rules/dev-guardian.md` are files dev-guardian owns exclusively (nothing
     else is expected to write there) and both require YAML frontmatter as
