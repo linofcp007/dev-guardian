@@ -2990,7 +2990,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve9.call(this, root, ref);
+      let _sch = resolve10.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3017,7 +3017,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve9(root, ref) {
+    function resolve10(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3648,55 +3648,55 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve9(baseURI, relativeURI, options) {
+    function resolve10(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse5(baseURI, schemelessOptions), parse5(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative6, options, skipNormalization) {
+    function resolveComponent(base, relative7, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse5(serialize2(base, options), options);
-        relative6 = parse5(serialize2(relative6, options), options);
+        relative7 = parse5(serialize2(relative7, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative6.scheme) {
-        target.scheme = relative6.scheme;
-        target.userinfo = relative6.userinfo;
-        target.host = relative6.host;
-        target.port = relative6.port;
-        target.path = removeDotSegments(relative6.path || "");
-        target.query = relative6.query;
+      if (!options.tolerant && relative7.scheme) {
+        target.scheme = relative7.scheme;
+        target.userinfo = relative7.userinfo;
+        target.host = relative7.host;
+        target.port = relative7.port;
+        target.path = removeDotSegments(relative7.path || "");
+        target.query = relative7.query;
       } else {
-        if (relative6.userinfo !== void 0 || relative6.host !== void 0 || relative6.port !== void 0) {
-          target.userinfo = relative6.userinfo;
-          target.host = relative6.host;
-          target.port = relative6.port;
-          target.path = removeDotSegments(relative6.path || "");
-          target.query = relative6.query;
+        if (relative7.userinfo !== void 0 || relative7.host !== void 0 || relative7.port !== void 0) {
+          target.userinfo = relative7.userinfo;
+          target.host = relative7.host;
+          target.port = relative7.port;
+          target.path = removeDotSegments(relative7.path || "");
+          target.query = relative7.query;
         } else {
-          if (!relative6.path) {
+          if (!relative7.path) {
             target.path = base.path;
-            if (relative6.query !== void 0) {
-              target.query = relative6.query;
+            if (relative7.query !== void 0) {
+              target.query = relative7.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative6.path[0] === "/") {
-              target.path = removeDotSegments(relative6.path);
+            if (relative7.path[0] === "/") {
+              target.path = removeDotSegments(relative7.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative6.path;
+                target.path = "/" + relative7.path;
               } else if (!base.path) {
-                target.path = relative6.path;
+                target.path = relative7.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative6.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative7.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative6.query;
+            target.query = relative7.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3704,7 +3704,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative6.fragment;
+      target.fragment = relative7.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -3906,7 +3906,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve9,
+      resolve: resolve10,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -7946,12 +7946,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve9, reject) {
+        return new Promise(function(resolve10, reject) {
           isexe(path6, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve9(is);
+              resolve10(is);
             }
           });
         });
@@ -8017,27 +8017,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve9, reject) => {
+      const step = (i2) => new Promise((resolve10, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve9(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve10(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path6.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve9(subStep(p, i2, 0));
+        resolve10(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve9, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve10, reject) => {
         if (ii === pathExt.length)
-          return resolve9(step(i2 + 1));
+          return resolve10(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve9(p + ext);
+              return resolve10(p + ext);
           }
-          return resolve9(subStep(p, i2, ii + 1));
+          return resolve10(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -9117,8 +9117,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve9, reject) => {
-        Object.assign(methods, { resolve: resolve9, reject });
+      const promise = new Promise((resolve10, reject) => {
+        Object.assign(methods, { resolve: resolve10, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -14415,11 +14415,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve9 = promise.resolve.bind(promise);
-      return { resolve: resolve9, promises };
+      const resolve10 = promise.resolve.bind(promise);
+      return { resolve: resolve10, promises };
     };
-    waitForConcurrentStreams = async ({ resolve: resolve9, promises }, subprocess) => {
-      resolve9();
+    waitForConcurrentStreams = async ({ resolve: resolve10, promises }, subprocess) => {
+      resolve10();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -19104,10 +19104,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep3, value } = collItem;
+        const { start, key, sep: sep4, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep3?.[0],
+          next: key ?? sep4?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -19121,7 +19121,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep3) {
+          if (!keyProps.anchor && !keyProps.tag && !sep4) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
@@ -19145,7 +19145,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep3 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep4 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -19161,7 +19161,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep3, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep4, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -19252,7 +19252,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep3 = "";
+        let sep4 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -19266,13 +19266,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep3 + cb;
-              sep3 = "";
+                comment += sep4 + cb;
+              sep4 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep3 += source;
+                sep4 += source;
               hasSpace = true;
               break;
             default:
@@ -19315,18 +19315,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i2 = 0; i2 < fc.items.length; ++i2) {
         const collItem = fc.items[i2];
-        const { start, key, sep: sep3, value } = collItem;
+        const { start, key, sep: sep4, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep3?.[0],
+          next: key ?? sep4?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep3 && !value) {
+          if (!props.anchor && !props.tag && !sep4 && !value) {
             if (i2 === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i2 < fc.items.length - 1)
@@ -19380,8 +19380,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap2 && !sep3 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep3, null, props, onError);
+        if (!isMap2 && !sep4 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep4, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -19393,7 +19393,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep3 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep4 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -19404,8 +19404,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap2 && !props.found && ctx.options.strict) {
-              if (sep3)
-                for (const st of sep3) {
+              if (sep4)
+                for (const st of sep4) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -19422,7 +19422,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep3, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep4, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -19602,7 +19602,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i2 + 1;
       }
       let value = "";
-      let sep3 = "";
+      let sep4 = "";
       let prevMoreIndented = false;
       for (let i2 = 0; i2 < contentStart; ++i2)
         value += lines[i2][0].slice(trimIndent) + "\n";
@@ -19619,24 +19619,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep3 + indent.slice(trimIndent) + content;
-          sep3 = "\n";
+          value += sep4 + indent.slice(trimIndent) + content;
+          sep4 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep3 === " ")
-            sep3 = "\n";
-          else if (!prevMoreIndented && sep3 === "\n")
-            sep3 = "\n\n";
-          value += sep3 + indent.slice(trimIndent) + content;
-          sep3 = "\n";
+          if (sep4 === " ")
+            sep4 = "\n";
+          else if (!prevMoreIndented && sep4 === "\n")
+            sep4 = "\n\n";
+          value += sep4 + indent.slice(trimIndent) + content;
+          sep4 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep3 === "\n")
+          if (sep4 === "\n")
             value += "\n";
           else
-            sep3 = "\n";
+            sep4 = "\n";
         } else {
-          value += sep3 + content;
-          sep3 = " ";
+          value += sep4 + content;
+          sep4 = " ";
           prevMoreIndented = false;
         }
       }
@@ -19818,25 +19818,25 @@ var require_resolve_flow_scalar = __commonJS({
       if (!match)
         return source;
       let res = match[1];
-      let sep3 = " ";
+      let sep4 = " ";
       let pos = first.lastIndex;
       line.lastIndex = pos;
       while (match = line.exec(source)) {
         if (match[1] === "") {
-          if (sep3 === "\n")
-            res += sep3;
+          if (sep4 === "\n")
+            res += sep4;
           else
-            sep3 = "\n";
+            sep4 = "\n";
         } else {
-          res += sep3 + match[1];
-          sep3 = " ";
+          res += sep4 + match[1];
+          sep4 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep3 + (match?.[1] ?? "");
+      return res + sep4 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -20646,14 +20646,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep3, value }) {
+    function stringifyItem({ start, key, sep: sep4, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep3)
-        for (const st of sep3)
+      if (sep4)
+        for (const st of sep4)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -21820,18 +21820,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep3;
+          let sep4;
           if (scalar.end) {
-            sep3 = scalar.end;
-            sep3.push(this.sourceToken);
+            sep4 = scalar.end;
+            sep4.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep3 = [this.sourceToken];
+            sep4 = [this.sourceToken];
           const map = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep3 }]
+            items: [{ start, key: scalar, sep: sep4 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -21984,15 +21984,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep3 = it.sep;
-                  sep3.push(this.sourceToken);
+                  const sep4 = it.sep;
+                  sep4.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep3 }]
+                    items: [{ start: start2, key, sep: sep4 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -22186,13 +22186,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep3 = fc.end.splice(1, fc.end.length);
-            sep3.push(this.sourceToken);
+            const sep4 = fc.end.splice(1, fc.end.length);
+            sep4.push(this.sourceToken);
             const map = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep3 }]
+              items: [{ start, key: fc, sep: sep4 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map;
@@ -34561,7 +34561,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve9) => setTimeout(resolve9, pollInterval));
+        await new Promise((resolve10) => setTimeout(resolve10, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -34578,7 +34578,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve9, reject) => {
+    return new Promise((resolve10, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -34656,7 +34656,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve9(parseResult.data);
+            resolve10(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -34917,12 +34917,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve9, reject) => {
+    return new Promise((resolve10, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve9, interval);
+      const timeoutId = setTimeout(resolve10, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -36074,24 +36074,24 @@ var McpServer = class {
       }
     });
     this.server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: Object.entries(this._registeredTools).filter(([, tool43]) => tool43.enabled).map(([name, tool43]) => {
+      tools: Object.entries(this._registeredTools).filter(([, tool44]) => tool44.enabled).map(([name, tool44]) => {
         const toolDefinition = {
           name,
-          title: tool43.title,
-          description: tool43.description,
+          title: tool44.title,
+          description: tool44.description,
           inputSchema: (() => {
-            const obj = normalizeObjectSchema(tool43.inputSchema);
+            const obj = normalizeObjectSchema(tool44.inputSchema);
             return obj ? toJsonSchemaCompat(obj, {
               strictUnions: true,
               pipeStrategy: "input"
             }) : EMPTY_OBJECT_JSON_SCHEMA;
           })(),
-          annotations: tool43.annotations,
-          execution: tool43.execution,
-          _meta: tool43._meta
+          annotations: tool44.annotations,
+          execution: tool44.execution,
+          _meta: tool44._meta
         };
-        if (tool43.outputSchema) {
-          const obj = normalizeObjectSchema(tool43.outputSchema);
+        if (tool44.outputSchema) {
+          const obj = normalizeObjectSchema(tool44.outputSchema);
           if (obj) {
             toolDefinition.outputSchema = toJsonSchemaCompat(obj, {
               strictUnions: true,
@@ -36104,16 +36104,16 @@ var McpServer = class {
     }));
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       try {
-        const tool43 = this._registeredTools[request.params.name];
-        if (!tool43) {
+        const tool44 = this._registeredTools[request.params.name];
+        if (!tool44) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
         }
-        if (!tool43.enabled) {
+        if (!tool44.enabled) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} disabled`);
         }
         const isTaskRequest = !!request.params.task;
-        const taskSupport = tool43.execution?.taskSupport;
-        const isTaskHandler = "createTask" in tool43.handler;
+        const taskSupport = tool44.execution?.taskSupport;
+        const isTaskHandler = "createTask" in tool44.handler;
         if ((taskSupport === "required" || taskSupport === "optional") && !isTaskHandler) {
           throw new McpError(ErrorCode.InternalError, `Tool ${request.params.name} has taskSupport '${taskSupport}' but was not registered with registerToolTask`);
         }
@@ -36121,14 +36121,14 @@ var McpServer = class {
           throw new McpError(ErrorCode.MethodNotFound, `Tool ${request.params.name} requires task augmentation (taskSupport: 'required')`);
         }
         if (taskSupport === "optional" && !isTaskRequest && isTaskHandler) {
-          return await this.handleAutomaticTaskPolling(tool43, request, extra);
+          return await this.handleAutomaticTaskPolling(tool44, request, extra);
         }
-        const args = await this.validateToolInput(tool43, request.params.arguments, request.params.name);
-        const result = await this.executeToolHandler(tool43, args, extra);
+        const args = await this.validateToolInput(tool44, request.params.arguments, request.params.name);
+        const result = await this.executeToolHandler(tool44, args, extra);
         if (isTaskRequest) {
           return result;
         }
-        await this.validateToolOutput(tool43, result, request.params.name);
+        await this.validateToolOutput(tool44, result, request.params.name);
         return result;
       } catch (error2) {
         if (error2 instanceof McpError) {
@@ -36161,12 +36161,12 @@ var McpServer = class {
   /**
    * Validates tool input arguments against the tool's input schema.
    */
-  async validateToolInput(tool43, args, toolName) {
-    if (!tool43.inputSchema) {
+  async validateToolInput(tool44, args, toolName) {
+    if (!tool44.inputSchema) {
       return void 0;
     }
-    const inputObj = normalizeObjectSchema(tool43.inputSchema);
-    const schemaToParse = inputObj ?? tool43.inputSchema;
+    const inputObj = normalizeObjectSchema(tool44.inputSchema);
+    const schemaToParse = inputObj ?? tool44.inputSchema;
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36178,8 +36178,8 @@ var McpServer = class {
   /**
    * Validates tool output against the tool's output schema.
    */
-  async validateToolOutput(tool43, result, toolName) {
-    if (!tool43.outputSchema) {
+  async validateToolOutput(tool44, result, toolName) {
+    if (!tool44.outputSchema) {
       return;
     }
     if (!("content" in result)) {
@@ -36191,7 +36191,7 @@ var McpServer = class {
     if (!result.structuredContent) {
       throw new McpError(ErrorCode.InvalidParams, `Output validation error: Tool ${toolName} has an output schema but no structured content was provided`);
     }
-    const outputObj = normalizeObjectSchema(tool43.outputSchema);
+    const outputObj = normalizeObjectSchema(tool44.outputSchema);
     const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36202,15 +36202,15 @@ var McpServer = class {
   /**
    * Executes a tool handler (either regular or task-based).
    */
-  async executeToolHandler(tool43, args, extra) {
-    const handler43 = tool43.handler;
+  async executeToolHandler(tool44, args, extra) {
+    const handler43 = tool44.handler;
     const isTaskHandler = "createTask" in handler43;
     if (isTaskHandler) {
       if (!extra.taskStore) {
         throw new Error("No task store provided.");
       }
       const taskExtra = { ...extra, taskStore: extra.taskStore };
-      if (tool43.inputSchema) {
+      if (tool44.inputSchema) {
         const typedHandler = handler43;
         return await Promise.resolve(typedHandler.createTask(args, taskExtra));
       } else {
@@ -36218,7 +36218,7 @@ var McpServer = class {
         return await Promise.resolve(typedHandler.createTask(taskExtra));
       }
     }
-    if (tool43.inputSchema) {
+    if (tool44.inputSchema) {
       const typedHandler = handler43;
       return await Promise.resolve(typedHandler(args, extra));
     } else {
@@ -36229,12 +36229,12 @@ var McpServer = class {
   /**
    * Handles automatic task polling for tools with taskSupport 'optional'.
    */
-  async handleAutomaticTaskPolling(tool43, request, extra) {
+  async handleAutomaticTaskPolling(tool44, request, extra) {
     if (!extra.taskStore) {
       throw new Error("No task store provided for task-capable tool.");
     }
-    const args = await this.validateToolInput(tool43, request.params.arguments, request.params.name);
-    const handler43 = tool43.handler;
+    const args = await this.validateToolInput(tool44, request.params.arguments, request.params.name);
+    const handler43 = tool44.handler;
     const taskExtra = { ...extra, taskStore: extra.taskStore };
     const createTaskResult = args ? await Promise.resolve(handler43.createTask(args, taskExtra)) : (
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -36244,7 +36244,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve9) => setTimeout(resolve9, pollInterval));
+      await new Promise((resolve10) => setTimeout(resolve10, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -36917,19 +36917,19 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve9) => {
+    return new Promise((resolve10) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve9();
+        resolve10();
       } else {
-        this._stdout.once("drain", resolve9);
+        this._stdout.once("drain", resolve10);
       }
     });
   }
 };
 
 // src/server.ts
-import { resolve as resolve8 } from "node:path";
+import { resolve as resolve9 } from "node:path";
 
 // src/gitignoreGuard.ts
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -38417,20 +38417,20 @@ function normalizeParams2(params) {
 
 // src/tools/index.ts
 var TOOLS = [];
-function registerToolModule(tool43) {
-  if (TOOLS.some((t) => t.name === tool43.name)) {
-    throw new Error(`Tool '${tool43.name}' is already registered`);
+function registerToolModule(tool44) {
+  if (TOOLS.some((t) => t.name === tool44.name)) {
+    throw new Error(`Tool '${tool44.name}' is already registered`);
   }
-  TOOLS.push(tool43);
+  TOOLS.push(tool44);
 }
 function attachAllTools(server, ctx) {
-  for (const tool43 of TOOLS) {
+  for (const tool44 of TOOLS) {
     server.registerTool(
-      tool43.name,
+      tool44.name,
       {
-        ...tool43.title ? { title: tool43.title } : {},
-        description: tool43.description,
-        inputSchema: tool43.inputSchema
+        ...tool44.title ? { title: tool44.title } : {},
+        description: tool44.description,
+        inputSchema: tool44.inputSchema
       },
       async (input, extra) => {
         const callMeta = {};
@@ -38442,7 +38442,7 @@ function attachAllTools(server, ctx) {
         if (typedExtra?.signal instanceof AbortSignal) {
           callMeta.signal = typedExtra.signal;
         }
-        const result = await tool43.handler(input, ctx, callMeta);
+        const result = await tool44.handler(input, ctx, callMeta);
         return toCallToolResult(result);
       }
     );
@@ -39675,7 +39675,7 @@ var Semaphore = class {
       this.active += 1;
       return;
     }
-    await new Promise((resolve9) => this.waiting.push(resolve9));
+    await new Promise((resolve10) => this.waiting.push(resolve10));
     this.active += 1;
   }
   release() {
@@ -40793,106 +40793,146 @@ registerToolModule(
 );
 
 // src/tools/scanContainers.ts
-import { existsSync as existsSync13 } from "node:fs";
-import { join as join16 } from "node:path";
-registerToolModule(
-  makeScanTool({
-    name: "scan_containers",
-    title: "Container scan (Dockerfile + image)",
-    description: "Run Trivy against a Dockerfile (config check) and/or a container image (vulnerability check). If neither dockerfile_path nor image is provided, scans ./Dockerfile when present.",
-    scan_type: "containers",
-    category: "security",
-    supportsAutoFix: false,
-    inputSchema: {
-      project_path: ProjectPath,
-      severity_min: SeverityMin,
-      dockerfile_path: external_exports.string().optional().describe("Path to a Dockerfile to scan with `trivy config`."),
-      image: external_exports.string().optional().describe("Container image reference to scan with `trivy image`."),
-      force: Force
-    },
-    invoke: async (input, ctx) => {
-      const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, "containers");
-      const tools_run = [];
-      const missing_tools = [];
-      const parser_inputs = [];
-      const trivyBin = await scannerAvailable("trivy");
-      if (!trivyBin) {
-        tools_run.push({ name: "trivy", status: "skipped", reason: "not_installed" });
-        missing_tools.push("trivy");
-        return {
-          outcome: "completed",
-          tools_run,
-          missing_tools,
-          parser_inputs,
-          report_paths: [reportDir]
-        };
-      }
-      const inp = input;
-      const dockerfile = inp.dockerfile_path ?? (existsSync13(join16(ctx.projectPath, "Dockerfile")) ? join16(ctx.projectPath, "Dockerfile") : void 0);
-      let anyOutcome = "completed";
-      if (dockerfile) {
-        const outFile = join16(reportDir, "dockerfile.json");
-        const result = await runProcess({
-          command: "trivy",
-          args: ["config", "--format", "json", "--output", outFile, "--quiet", dockerfile],
-          cwd: ctx.projectPath,
-          env: ctx.scriptEnv,
-          signal: ctx.signal,
-          onLog: ctx.onLog
-        });
-        const raw = readJsonSafe(outFile);
-        if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
-        tools_run.push({
-          name: "trivy-dockerfile",
-          status: result.outcome === "completed" ? "ok" : "failed"
-        });
-        if (result.outcome !== "completed") anyOutcome = result.outcome;
-      }
-      if (inp.image) {
-        const outFile = join16(reportDir, "image.json");
-        const result = await runProcess({
-          command: "trivy",
-          args: [
-            "image",
-            "--format",
-            "json",
-            "--output",
-            outFile,
-            "--quiet",
-            "--scanners",
-            "vuln",
-            inp.image
-          ],
-          cwd: ctx.projectPath,
-          env: ctx.scriptEnv,
-          signal: ctx.signal,
-          onLog: ctx.onLog
-        });
-        const raw = readJsonSafe(outFile);
-        if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
-        tools_run.push({
-          name: "trivy-image",
-          status: result.outcome === "completed" ? "ok" : "failed"
-        });
-        if (result.outcome !== "completed") anyOutcome = result.outcome;
-      }
-      if (tools_run.length === 0) {
-        tools_run.push({
-          name: "trivy",
-          status: "skipped",
-          reason: "no_dockerfile_or_image"
-        });
-      }
+import { existsSync as existsSync13, realpathSync } from "node:fs";
+import { isAbsolute, join as join16, relative as relative2, resolve as resolve5, sep as sep2 } from "node:path";
+var IMAGE_REF = /^(?!-)\S+$/;
+var scanContainers = makeScanTool({
+  name: "scan_containers",
+  title: "Container scan (Dockerfile + image)",
+  description: "Run Trivy against a Dockerfile (config check) and/or a container image (vulnerability check). If neither dockerfile_path nor image is provided, scans ./Dockerfile when present.",
+  scan_type: "containers",
+  category: "security",
+  supportsAutoFix: false,
+  inputSchema: {
+    project_path: ProjectPath,
+    severity_min: SeverityMin,
+    dockerfile_path: external_exports.string().optional().describe("Path to a Dockerfile to scan with `trivy config`."),
+    image: external_exports.string().regex(IMAGE_REF, 'image must be an image reference: no whitespace, not starting with "-"').optional().describe("Container image reference to scan with `trivy image`."),
+    force: Force
+  },
+  invoke: async (input, ctx) => {
+    const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, "containers");
+    const tools_run = [];
+    const missing_tools = [];
+    const parser_inputs = [];
+    const trivyBin = await scannerAvailable("trivy");
+    if (!trivyBin) {
+      tools_run.push({ name: "trivy", status: "skipped", reason: "not_installed" });
+      missing_tools.push("trivy");
       return {
-        outcome: anyOutcome,
+        outcome: "completed",
         tools_run,
         missing_tools,
         parser_inputs,
         report_paths: [reportDir]
       };
     }
-  })
-);
+    const inp = input;
+    const invalid = invalidInput(ctx.projectPath, inp);
+    if (invalid) throw new Error(invalid);
+    const dockerfile = inp.dockerfile_path !== void 0 ? resolve5(ctx.projectPath, inp.dockerfile_path) : existsSync13(join16(ctx.projectPath, "Dockerfile")) ? join16(ctx.projectPath, "Dockerfile") : void 0;
+    let anyOutcome = "completed";
+    if (dockerfile) {
+      const outFile = join16(reportDir, "dockerfile.json");
+      const result = await runProcess({
+        command: "trivy",
+        args: ["config", "--format", "json", "--output", outFile, "--quiet", dockerfile],
+        cwd: ctx.projectPath,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        onLog: ctx.onLog
+      });
+      const raw = readJsonSafe(outFile);
+      if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
+      tools_run.push({
+        name: "trivy-dockerfile",
+        status: result.outcome === "completed" ? "ok" : "failed"
+      });
+      if (result.outcome !== "completed") anyOutcome = result.outcome;
+    }
+    if (inp.image) {
+      const outFile = join16(reportDir, "image.json");
+      const result = await runProcess({
+        command: "trivy",
+        args: [
+          "image",
+          "--format",
+          "json",
+          "--output",
+          outFile,
+          "--quiet",
+          "--scanners",
+          "vuln",
+          inp.image
+        ],
+        cwd: ctx.projectPath,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        onLog: ctx.onLog
+      });
+      const raw = readJsonSafe(outFile);
+      if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
+      tools_run.push({
+        name: "trivy-image",
+        status: result.outcome === "completed" ? "ok" : "failed"
+      });
+      if (result.outcome !== "completed") anyOutcome = result.outcome;
+    }
+    if (tools_run.length === 0) {
+      tools_run.push({
+        name: "trivy",
+        status: "skipped",
+        reason: "no_dockerfile_or_image"
+      });
+    }
+    return {
+      outcome: anyOutcome,
+      tools_run,
+      missing_tools,
+      parser_inputs,
+      report_paths: [reportDir]
+    };
+  }
+});
+var tool = {
+  ...scanContainers,
+  handler: async (input, plugin, callMeta) => {
+    const inp = input;
+    let projectPath = null;
+    try {
+      projectPath = resolveProjectPath(inp.project_path).path;
+    } catch (e) {
+      if (!(e instanceof InvalidProjectPathError)) throw e;
+    }
+    const invalid = projectPath !== null ? invalidInput(projectPath, inp) : null;
+    if (invalid) return { ok: false, error: { code: "unsupported_target", message: invalid } };
+    return scanContainers.handler(input, plugin, callMeta);
+  }
+};
+registerToolModule(tool);
+function invalidInput(projectPath, inp) {
+  if (inp.image !== void 0 && !IMAGE_REF.test(inp.image)) {
+    return `image ${JSON.stringify(inp.image)} is not an image reference: it must not contain whitespace or start with "-".`;
+  }
+  if (inp.dockerfile_path !== void 0 && !isInside(projectPath, inp.dockerfile_path)) {
+    return `dockerfile_path ${JSON.stringify(inp.dockerfile_path)} resolves outside the project (${projectPath}); scan_containers only reads files inside it.`;
+  }
+  return null;
+}
+function isInside(root, candidate) {
+  const within = (base, target) => {
+    const rel2 = relative2(base, target);
+    return rel2 !== "" && rel2 !== ".." && !rel2.startsWith(`..${sep2}`) && !isAbsolute(rel2);
+  };
+  const abs = resolve5(root, candidate);
+  if (!within(root, abs)) return false;
+  if (!existsSync13(abs)) return true;
+  try {
+    return within(realpathSync.native(root), realpathSync.native(abs));
+  } catch {
+    return false;
+  }
+}
 
 // src/tools/scanIac.ts
 import { join as join17 } from "node:path";
@@ -41833,14 +41873,14 @@ var inputSchema = {
   project_path: ProjectPath,
   prefer: external_exports.enum(["security", "patch", "minor", "major"]).optional().describe("Sort entries so this classification appears first. Default: security.")
 };
-var tool = {
+var tool2 = {
   name: "deps_update_plan",
   title: "Dependency upgrade plan",
   description: "Produce an ordered upgrade plan from the project. Runs npm outdated / pip list --outdated / composer outdated, classifies each entry as security / patch / minor / major (security is inferred from the cves table), and returns a sortable list of upgrade_command strings.",
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx)
 };
-registerToolModule(tool);
+registerToolModule(tool2);
 async function handler(input, ctx) {
   const inp = input;
   let projectPath;
@@ -42496,14 +42536,14 @@ var inputSchema2 = {
   format: external_exports.enum(["cyclonedx-json", "spdx-json"]).optional().describe("SBOM output format. Default: cyclonedx-json."),
   inline_max_kb: external_exports.number().int().min(0).max(8192).optional().describe("Inline the SBOM document in the response when its size is below this many KB. Default: 256.")
 };
-var tool2 = {
+var tool3 = {
   name: "generate_sbom",
   title: "Generate SBOM (Syft / Trivy)",
   description: "Produce a Software Bill of Materials (CycloneDX or SPDX JSON). Prefers Syft; falls back to Trivy fs --format. The full SBOM is always written to .guardian/reports/sbom-<scan>/. The response inlines the document when its size is below inline_max_kb (default 256).",
   inputSchema: inputSchema2,
   handler: async (input, ctx) => handler2(input, ctx)
 };
-registerToolModule(tool2);
+registerToolModule(tool3);
 async function handler2(input, ctx) {
   const inp = input;
   let projectPath;
@@ -42604,14 +42644,14 @@ function failDomain3(code, message) {
 import { existsSync as existsSync19, readdirSync as readdirSync8 } from "node:fs";
 import { join as join25 } from "node:path";
 var SCRIPT_REL_PATH4 = ["detect", "detect-stack.sh"];
-var tool3 = {
+var tool4 = {
   name: "detect_stack",
   title: "Detect project stack",
   description: "Run scripts/detect/detect-stack.sh against the project and return the parsed stack info (languages, package managers, frameworks, existing tools, IaC, CI). The snapshot is also persisted to .guardian/guardian.db for stack-aware downstream tools.",
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler3(input, ctx)
 };
-registerToolModule(tool3);
+registerToolModule(tool4);
 async function handler3(input, ctx) {
   const inp = input;
   let projectPath;
@@ -42977,7 +43017,7 @@ var PROFILE_FILES = {
   standard: [GITLEAKS, RENOVATE, SEMGREP, PRECOMMIT],
   paranoid: [GITLEAKS, RENOVATE, SEMGREP, PRECOMMIT]
 };
-var tool4 = {
+var tool5 = {
   name: "init_project",
   title: "Bootstrap project with dev-guardian configs",
   description: "Install gitleaks/renovate/semgrep/pre-commit configs into the project (idempotent), then run scripts/scan/initial-scan.sh for a first-pass status. Profile=minimal|standard|paranoid. Copied files are stamped with their source and plugin version in .dev-guardian/configs.json, so later scans can tell you when a shipped config has been fixed since yours was installed. refresh=true compares your copies against the current baselines: with apply=false it only reports what would change, and with apply=true it updates files you never edited in place and writes <name>.new alongside the ones you did. An edited file is never overwritten.",
@@ -42991,7 +43031,7 @@ var tool4 = {
   },
   handler: async (input, ctx) => handler4(input, ctx)
 };
-registerToolModule(tool4);
+registerToolModule(tool5);
 async function handler4(input, ctx) {
   const inp = input;
   let projectPath;
@@ -43106,7 +43146,7 @@ function failDomain5(code, message) {
 // src/tools/observabilitySetup.ts
 import { existsSync as existsSync22, mkdirSync as mkdirSync5, readdirSync as readdirSync9, writeFileSync as writeFileSync5 } from "node:fs";
 import { dirname as dirname9, join as join28 } from "node:path";
-var tool5 = {
+var tool6 = {
   name: "observability_setup",
   title: "Configure logging + metrics scaffolding",
   description: "Propose stack-appropriate observability files (Pino logger / structlog / Monolog, plus a Prometheus-compatible metrics module). When apply=true (default false), writes the files; otherwise returns proposals only.",
@@ -43116,7 +43156,7 @@ var tool5 = {
   },
   handler: async (input, ctx) => handler5(input, ctx)
 };
-registerToolModule(tool5);
+registerToolModule(tool6);
 async function handler5(input, ctx) {
   const inp = input;
   let projectPath;
@@ -43478,14 +43518,14 @@ var inputSchema3 = {
   k6_script_path: external_exports.string().optional().describe("Path to a k6 script to execute. Mutually exclusive with target_url."),
   lighthouse_categories: external_exports.array(external_exports.enum(["performance", "accessibility", "best-practices", "seo", "pwa"])).optional().describe("Categories to include. Default: all five.")
 };
-var tool6 = {
+var tool7 = {
   name: "perf_check",
   title: "Performance probe (Lighthouse or k6)",
   description: "Run Lighthouse against target_url, or k6 against k6_script_path. Returns parsed metrics (Core Web Vitals for Lighthouse; request count + p95/p99 + thresholds for k6) and the absolute path to the raw JSON report.",
   inputSchema: inputSchema3,
   handler: async (input, ctx) => handler6(input, ctx)
 };
-registerToolModule(tool6);
+registerToolModule(tool7);
 async function handler6(input, ctx) {
   const inp = input;
   let projectPath;
@@ -43654,14 +43694,14 @@ var inputSchema4 = {
   scan_id: external_exports.string().uuid().optional().describe("Scan to mark as the baseline. Defaults to the latest completed scan."),
   note: external_exports.string().max(500).optional().describe("Free-form note attached to the baseline row.")
 };
-var tool7 = {
+var tool8 = {
   name: "set_baseline",
   title: "Set regression baseline",
   description: "Mark a scan as the active regression baseline. Future `diff_scans from=baseline` queries use this row as the reference. Older baselines are kept for history but inactive.",
   inputSchema: inputSchema4,
   handler: async (input, ctx) => handler7(input, ctx)
 };
-registerToolModule(tool7);
+registerToolModule(tool8);
 async function handler7(input, ctx) {
   const inp = input;
   let targetScanId;
@@ -43709,14 +43749,14 @@ var inputSchema5 = {
   reason: external_exports.string().min(1).max(1e3).describe("Why this finding is being suppressed. Required."),
   expires_at: external_exports.string().datetime().optional().describe("ISO-8601 expiry. When omitted, the suppression never expires.")
 };
-var tool8 = {
+var tool9 = {
   name: "suppress_finding",
   title: "Suppress finding",
   description: "Mark a finding fingerprint as a false positive. Resources that surface open findings exclude matches while the suppression is active. Pass expires_at for a temporary snooze.",
   inputSchema: inputSchema5,
   handler: async (input, ctx) => handler8(input, ctx)
 };
-registerToolModule(tool8);
+registerToolModule(tool9);
 async function handler8(input, ctx) {
   const inp = input;
   if (!inp.finding_fingerprint || !inp.reason) {
@@ -43751,14 +43791,14 @@ var inputSchema6 = {
   to_scan_id: external_exports.string().uuid().optional(),
   to: ToEnum.optional()
 };
-var tool9 = {
+var tool10 = {
   name: "diff_scans",
   title: "Diff scans (regression / resolution detection)",
   description: "Compare findings between two scans (same scan_type). Returns three lists by fingerprint: new (in to but not in from), resolved (in from but not in to), unchanged (in both). Default: from=previous, to=latest.",
   inputSchema: inputSchema6,
   handler: async (input, ctx) => handler9(input, ctx)
 };
-registerToolModule(tool9);
+registerToolModule(tool10);
 async function handler9(input, ctx) {
   const inp = input;
   const toId = resolveTo(inp, ctx);
@@ -43859,7 +43899,7 @@ import { randomUUID as randomUUID5 } from "node:crypto";
 var BASE_SUB_TOOLS = ["security_scan_full", "quality_check", "deps_audit", "compliance_check"];
 var WP_EXTRA_SUB_TOOLS = ["scan_wordpress"];
 var DOTNET_EXTRA_SUB_TOOLS = ["scan_dotnet_secrets", "dotnet_target_framework_check"];
-var tool10 = {
+var tool11 = {
   name: "audit_executive",
   title: "Executive audit (security + quality + deps + compliance)",
   description: "Run security_scan_full, quality_check, deps_audit, and compliance_check in sequence, producing one aggregated report with severity counts, top-10 findings, and a delta vs the previous executive audit (when present).",
@@ -43869,7 +43909,7 @@ var tool10 = {
   },
   handler: async (input, ctx) => handler10(input, ctx)
 };
-registerToolModule(tool10);
+registerToolModule(tool11);
 async function handler10(input, ctx) {
   const inp = input;
   let projectPath;
@@ -44589,14 +44629,14 @@ var INFORMATIONAL = [
   { name: "docker", probes: [{ command: "docker", args: ["--version"] }] }
 ];
 var PROBE_CONCURRENCY = 6;
-var tool11 = {
+var tool12 = {
   name: "check_toolchain",
   title: "Check toolchain status",
   description: "Probe every catalogued scanner directly (its binary and version command; no bash needed) and report per-scanner status: installed, version, expected version floor, known-compromised releases (with the advisory id), the MCP tools that depend on it, and the suggested install command for this OS.",
   inputSchema: {},
   handler: async (_input, ctx) => handler11(ctx)
 };
-registerToolModule(tool11);
+registerToolModule(tool12);
 async function handler11(ctx) {
   const os = detectOs();
   const cwd = ctx.scriptsDir;
@@ -44722,14 +44762,14 @@ var inputSchema7 = {
     "Set true to allow install steps that require sudo/admin (apt, choco, npm install -g). Default: false \u2014 steps needing elevation are reported under `requires_elevation` instead."
   )
 };
-var tool12 = {
+var tool13 = {
   name: "install_toolchain",
   title: "Install missing toolchain",
   description: "Install missing scanners. Defaults to the standard set; pass `tools=[...]` to limit. Linux/macOS delegate to scripts/install/install-{linux,macos}.sh. Windows uses winget/scoop/choco/WSL. dry_run prints commands without executing.",
   inputSchema: inputSchema7,
   handler: async (input, ctx) => handler12(input, ctx)
 };
-registerToolModule(tool12);
+registerToolModule(tool13);
 async function handler12(input, ctx) {
   const inp = input;
   const dryRun = inp.dry_run === true;
@@ -44990,14 +45030,14 @@ async function runCheckToolchain(ctx) {
 // src/tools/licenseCompatibility.ts
 import { existsSync as existsSync24, readFileSync as readFileSync14 } from "node:fs";
 import { join as join31 } from "node:path";
-var tool13 = {
+var tool14 = {
   name: "license_compatibility",
   title: "License compatibility check",
   description: "Cross-check the project license (from LICENSE / package.json / pyproject.toml) against the licenses of installed deps captured by the most recent compliance_check. Flags incompatibilities (e.g. permissive project + viral copyleft dep). Pure SQL read \u2014 does not spawn scanners.",
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler13(input, ctx)
 };
-registerToolModule(tool13);
+registerToolModule(tool14);
 async function handler13(input, ctx) {
   const inp = input;
   let projectPath;
@@ -45227,14 +45267,14 @@ function recommendation(score, open, cves, hasBaseline) {
 }
 
 // src/tools/riskScore.ts
-var tool14 = {
+var tool15 = {
   name: "risk_score",
   title: "Risk score (0-100)",
   description: "Compute a single 0-100 risk score from the project's persisted scans/findings/CVEs/baseline. Returns the score, a band (low/medium/high/critical), per-component breakdown, and the next action the model should recommend. Pure read.",
   inputSchema: {},
   handler: async (_input, ctx) => handler14(ctx)
 };
-registerToolModule(tool14);
+registerToolModule(tool15);
 async function handler14(ctx) {
   const open = ctx.storage.findings.listOpen();
   const latestDeps = findLatestOfType(ctx, ["deps", "security_full"]);
@@ -45287,14 +45327,14 @@ var inputSchema8 = {
   /** When set, prefer reading the SBOM JSON file from disk for a deeper diff. */
   use_full_file: external_exports.boolean().optional()
 };
-var tool15 = {
+var tool16 = {
   name: "sbom_diff",
   title: "SBOM diff (added / removed / changed components)",
   description: "Compare two generate_sbom scans. By default uses the persisted top_packages summary; pass use_full_file=true for a full-file comparison (reads the SBOM JSON from .guardian/reports/). Default to/from: latest sbom and the one before it.",
   inputSchema: inputSchema8,
   handler: async (input, ctx) => handler15(input, ctx)
 };
-registerToolModule(tool15);
+registerToolModule(tool16);
 async function handler15(input, ctx) {
   const inp = input;
   const sboms = ctx.storage.scans.listHistory(50).filter((s) => s.scan_type === "sbom" && s.status === "completed");
@@ -45414,14 +45454,14 @@ var inputSchema9 = {
     "Score-delta threshold above which `regressed=true`. Default 5. A single new critical alone surpasses this; 5 new lows do not."
   )
 };
-var tool16 = {
+var tool17 = {
   name: "regression_alert",
   title: "Regression alert",
   description: "Compare the active baseline (or previous completed scan) against the latest scan and flag when the severity-weighted change exceeds a threshold. Returns enough context for the model to recommend follow-up actions.",
   inputSchema: inputSchema9,
   handler: async (input, ctx) => handler16(input, ctx)
 };
-registerToolModule(tool16);
+registerToolModule(tool17);
 async function handler16(input, ctx) {
   const inp = input;
   const threshold = inp.threshold ?? 5;
@@ -45492,14 +45532,14 @@ var inputSchema10 = {
   finding_fingerprint: external_exports.string().regex(/^[0-9a-f]{64}$/).describe("Fingerprint of the finding to gather context for."),
   context_lines: external_exports.number().int().min(0).max(200).optional().describe("How many lines of source context to include around the finding. Default 20.")
 };
-var tool17 = {
+var tool18 = {
   name: "suggest_fix",
   title: "Gather fix context for the model",
   description: "Assemble structured context about a finding (source snippet, surrounding lines, rule metadata, prior suppressions for the same rule_id) so the calling model can propose a patch. This tool never calls an external LLM \u2014 the model that invoked it does the synthesis.",
   inputSchema: inputSchema10,
   handler: async (input, ctx) => handler17(input, ctx)
 };
-registerToolModule(tool17);
+registerToolModule(tool18);
 async function handler17(input, ctx) {
   const inp = input;
   let projectPath;
@@ -45592,14 +45632,14 @@ var FIXTURE_PATTERNS = [
   /(^|\/)stubs?\//i,
   /(^|\/)examples?\//i
 ];
-var tool18 = {
+var tool19 = {
   name: "triage_findings",
   title: "Heuristic triage of findings",
   description: "Bucket the latest scan's open findings into likely_false_positive / probably_safe / keep using path-based heuristics (test files, generated code, fixtures). No LLM call \u2014 the model that invoked the tool decides whether to call suppress_finding on the suggestions.",
   inputSchema: {},
   handler: async (_input, ctx) => handler18(ctx)
 };
-registerToolModule(tool18);
+registerToolModule(tool19);
 async function handler18(ctx) {
   const open = ctx.storage.findings.listOpen();
   const likely_false_positive = [];
@@ -45652,14 +45692,14 @@ function toBucket(f, reason) {
 // src/tools/precommitInstall.ts
 import { existsSync as existsSync27 } from "node:fs";
 import { join as join33 } from "node:path";
-var tool19 = {
+var tool20 = {
   name: "precommit_install",
   title: "Install pre-commit hooks",
   description: "Run `pre-commit install` in the project to wire its .pre-commit-config.yaml into git hooks. Requires pre-commit on PATH (install via install_toolchain).",
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler19(input, ctx)
 };
-registerToolModule(tool19);
+registerToolModule(tool20);
 async function handler19(input, _ctx) {
   const inp = input;
   let projectPath;
@@ -45696,18 +45736,32 @@ async function handler19(input, _ctx) {
       `pre-commit install failed: ${result.stderr.split(/\r?\n/)[0] ?? "(no stderr)"}`
     );
   }
+  const stagesInstalled = ["pre-commit"];
+  const stagesFailed = [];
   for (const stage of ["commit-msg", "pre-push"]) {
-    await runProcess({
+    const r = await runProcess({
       command: "pre-commit",
       args: ["install", "--hook-type", stage],
       cwd: projectPath,
       timeoutMs: 3e4
-    }).catch(() => void 0);
+    });
+    if (r.outcome === "completed") {
+      stagesInstalled.push(stage);
+    } else {
+      const firstLine2 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
+      stagesFailed.push({ stage, error: firstLine2?.trim() ?? r.outcome });
+    }
   }
   return {
     ok: true,
     project_path: projectPath,
-    stages_installed: ["pre-commit", "commit-msg", "pre-push"],
+    stages_installed: stagesInstalled,
+    stages_failed: stagesFailed,
+    ...stagesFailed.length > 0 ? {
+      warnings: stagesFailed.map(
+        (f) => `the ${f.stage} hook was NOT installed and will not run: ${f.error}`
+      )
+    } : {},
     stdout: result.stdout.split(/\r?\n/).slice(0, 20).join("\n")
   };
 }
@@ -45717,20 +45771,20 @@ function failDomain15(code, message) {
 
 // src/tools/registerCustomRules.ts
 import { existsSync as existsSync28, readdirSync as readdirSync10 } from "node:fs";
-import { join as join34, resolve as resolve5 } from "node:path";
+import { join as join34, resolve as resolve6 } from "node:path";
 var inputSchema11 = {
   project_path: ProjectPath,
   paths: external_exports.array(external_exports.string()).optional().describe("Explicit paths or globs to register. When omitted, auto-discovers .semgrep/ etc."),
   clear: external_exports.boolean().optional().describe("When true, remove any previously registered custom rules and exit.")
 };
-var tool20 = {
+var tool21 = {
   name: "register_custom_rules",
   title: "Register custom Semgrep rules",
   description: "Discover or accept a list of paths to Semgrep YAML rules and persist them. scan_sast and bug_hunt then run them as extra --config packs alongside their own. A registered path that later disappears is skipped rather than failing the scan. Pass clear=true to remove the registration.",
   inputSchema: inputSchema11,
   handler: async (input, ctx) => handler20(input, ctx)
 };
-registerToolModule(tool20);
+registerToolModule(tool21);
 var META_KEY = CUSTOM_RULES_META_KEY;
 async function handler20(input, ctx) {
   const inp = input;
@@ -45744,7 +45798,7 @@ async function handler20(input, ctx) {
     ctx.storage.runtimeMeta.delete(META_KEY);
     return { ok: true, cleared: true };
   }
-  const discovered = inp.paths && inp.paths.length > 0 ? inp.paths.map((p) => resolve5(projectPath, p)) : autoDiscover(projectPath);
+  const discovered = inp.paths && inp.paths.length > 0 ? inp.paths.map((p) => resolve6(projectPath, p)) : autoDiscover(projectPath);
   if (discovered.length === 0) {
     return {
       ok: true,
@@ -45780,14 +45834,14 @@ function failDomain16(code, message) {
 import { existsSync as existsSync29, statSync as statSync6 } from "node:fs";
 var startedAt = Date.now();
 var SERVER_VERSION = resolveVersion();
-var tool21 = {
+var tool22 = {
   name: "health_status",
   title: "Server health",
   description: "Return server uptime, DB info, last scan, shell choice, in-flight scan count, and tool/resource counts. Read-only.",
   inputSchema: {},
   handler: async (_input, ctx) => handler21(ctx)
 };
-registerToolModule(tool21);
+registerToolModule(tool22);
 async function handler21(ctx) {
   const latest = ctx.storage.scans.getLatest();
   const limiter2 = getScanLimiter();
@@ -46223,14 +46277,14 @@ var inputSchema12 = {
   subtitle: external_exports.string().optional().describe("Optional subtitle under the title (content_markdown mode)."),
   lang: external_exports.enum(["en", "pt", "es"]).optional().describe("Language for the HTML shell chrome (report title + footer). Default: en.")
 };
-var tool22 = {
+var tool23 = {
   name: "report_export",
   title: "Export a report (branded HTML / SARIF / Markdown / JSON)",
   description: "Write a report in one of four formats: markdown (default \u2014 handover doc), html (branded Pro Digital Key shell with a dark/light toggle, self-contained, opens offline in any browser), sarif (SARIF 2.1.0 for GitHub/GitLab code scanning), or json (raw findings). Pass content_markdown to render a stakeholder narrative as Markdown (or branded HTML with format=html). Local file only \u2014 no external services, no web fonts.",
   inputSchema: inputSchema12,
   handler: async (input, ctx) => handler22(input, ctx)
 };
-registerToolModule(tool22);
+registerToolModule(tool23);
 async function handler22(input, ctx) {
   const inp = input;
   const format2 = inp.format ?? "markdown";
@@ -46414,14 +46468,14 @@ function failDomain17(code, message) {
 var inputSchema13 = {
   framework: external_exports.enum(["gdpr", "soc2", "iso27001", "generic"]).optional().describe("Which framework to label the evidence under. Default: generic.")
 };
-var tool23 = {
+var tool24 = {
   name: "compliance_evidence",
   title: "Compliance evidence pack (Markdown)",
   description: "Generate a Markdown evidence document from accumulated state: latest compliance scan, license summary, CVE counts, baseline status, suppressions, policy docs found. Tag with a framework (gdpr/soc2/iso27001/generic) to shape the section labels. Read-only.",
   inputSchema: inputSchema13,
   handler: async (input, ctx) => handler23(input, ctx)
 };
-registerToolModule(tool23);
+registerToolModule(tool24);
 async function handler23(input, ctx) {
   const inp = input;
   const framework = inp.framework ?? "generic";
@@ -46562,14 +46616,14 @@ var inputSchema14 = {
   labels: external_exports.array(external_exports.string()).optional(),
   dry_run: external_exports.boolean().optional()
 };
-var tool24 = {
+var tool25 = {
   name: "create_github_issues",
   title: "Create GitHub issues for top findings",
   description: "Use the local `gh` CLI to open one issue per top finding. Uses the developer's existing GitHub auth, no API keys handled here, no GitHub Actions involved. Title encodes the finding fingerprint for idempotency. Pass dry_run=true to preview. severity_min defaults to high and max_issues to 10; every finding those two dropped is counted in `filtered` and summarised in `filtered_reason`, so a short plan is never unexplained.",
   inputSchema: inputSchema14,
   handler: async (input, ctx) => handler24(input, ctx)
 };
-registerToolModule(tool24);
+registerToolModule(tool25);
 async function handler24(input, ctx) {
   const inp = input;
   let projectPath;
@@ -46981,14 +47035,14 @@ var inputSchema15 = {
   include_options: external_exports.boolean().optional(),
   risky_login_names: external_exports.array(external_exports.string()).optional()
 };
-var tool25 = {
+var tool26 = {
   name: "wp_audit",
   title: "Live WordPress install audit",
   description: "Audit a running WordPress install via WP-CLI (read-only): core/plugin/theme file checksums, admin user list, dangerous config flags, plugins with auto_update on. Persists a scan row of type wp_audit so guardian://scans/{id} returns the structured audit.",
   inputSchema: inputSchema15,
   handler: async (input, ctx) => handler25(input, ctx)
 };
-registerToolModule(tool25);
+registerToolModule(tool26);
 async function handler25(input, ctx) {
   const inp = input;
   if (!inp.wp_install_path) {
@@ -47334,14 +47388,14 @@ var inputSchema16 = {
   target_url: external_exports.string().url().optional().describe("Live URL of the WordPress site to scan. Preferred when both inputs are present."),
   api_token: external_exports.string().optional().describe("WPScan API token. Falls back to WPSCAN_API_TOKEN env var.")
 };
-var tool26 = {
+var tool27 = {
   name: "wp_vuln_check",
   title: "WordPress vuln-DB lookup (WPScan)",
   description: "Run WPScan against a target URL (or against the URL inferred from a local install_path) and return vulnerabilities affecting core / plugins / themes. Token optional; without one, you are rate-limited by the public DB.",
   inputSchema: inputSchema16,
   handler: async (input, ctx) => handler26(input, ctx)
 };
-registerToolModule(tool26);
+registerToolModule(tool27);
 async function handler26(input, ctx) {
   const inp = input;
   if (!inp.target_url && !inp.wp_install_path) {
@@ -47510,14 +47564,14 @@ var KNOWN_PREFIXES = [
   "wp_version_check"
 ];
 var BASE64_RE = /^[A-Za-z0-9+/]{40,}={0,2}$/;
-var tool27 = {
+var tool28 = {
   name: "wp_cron_audit",
   title: "WordPress cron audit (suspicious scheduled events)",
   description: "List WP scheduled cron events and flag suspicious ones: unknown hook namespaces, base64-looking args, events from inactive plugins. Persistent backdoors on compromised WP sites almost always live here.",
   inputSchema: inputSchema17,
   handler: async (input, ctx) => handler27(input, ctx)
 };
-registerToolModule(tool27);
+registerToolModule(tool28);
 async function handler27(input, ctx) {
   const inp = input;
   let installPath;
@@ -47638,14 +47692,14 @@ function failDomain21(code, message) {
 }
 
 // src/tools/wpRecommendHardening.ts
-var tool28 = {
+var tool29 = {
   name: "wp_recommend_hardening",
   title: "WordPress hardening checklist",
   description: "Generate a prioritised hardening checklist (Markdown) from the latest wp_audit. Pure read \u2014 inspects scans.meta of the most recent wp_audit, applies heuristics, returns recommendations.",
   inputSchema: {},
   handler: async (_input, ctx) => handler28(ctx)
 };
-registerToolModule(tool28);
+registerToolModule(tool29);
 async function handler28(ctx) {
   const audit = findLatestWpAudit(ctx);
   if (!audit) {
@@ -47802,14 +47856,14 @@ var inputSchema18 = {
   wp_install_path: external_exports.string().optional().describe("Optional path to a local WP install for version detection."),
   target_url: external_exports.string().url().optional().describe("Optional live URL for fresh WPScan lookup (skipped without API token).")
 };
-var tool29 = {
+var tool30 = {
   name: "wp_plugin_check",
   title: "WordPress plugin check (1 plugin)",
   description: "Focused check on one plugin: installed version (when wp_install_path given), latest known, active CVEs from the dev-guardian cves table. Pass target_url to also do a fresh WPScan lookup. Read-mostly: no DB writes other than a scan row.",
   inputSchema: inputSchema18,
   handler: async (input, ctx) => handler29(input, ctx)
 };
-registerToolModule(tool29);
+registerToolModule(tool30);
 async function handler29(input, ctx) {
   const inp = input;
   if (!inp.slug) return failDomain22("unknown_scan_id", "slug is required.");
@@ -47891,14 +47945,14 @@ var inputSchema19 = {
   target_url: external_exports.string().url().describe("Base URL of the WordPress site (e.g. https://example.com)."),
   timeout_ms: external_exports.number().int().min(1e3).max(6e4).optional()
 };
-var tool30 = {
+var tool31 = {
   name: "wp_rest_audit",
   title: "WordPress REST API exposure audit",
   description: "Probe (read-only HTTP GET) the live WP REST API for endpoints that commonly leak data: users enumeration, draft posts, comments, xmlrpc.php. No POSTs, no auth. Returns one row per endpoint with `exposed: yes/no`.",
   inputSchema: inputSchema19,
   handler: async (input, ctx) => handler30(input, ctx)
 };
-registerToolModule(tool30);
+registerToolModule(tool31);
 async function handler30(input, ctx) {
   const inp = input;
   const url = inp.target_url.replace(/\/$/, "");
@@ -47986,14 +48040,14 @@ var inputSchema20 = {
   wp_install_paths: external_exports.array(external_exports.string().min(1)).min(1).max(50).describe("Up to 50 WP install paths to audit in parallel."),
   concurrency: external_exports.number().int().min(1).max(10).optional().describe("Max sites audited at once. Default 4.")
 };
-var tool31 = {
+var tool32 = {
   name: "bulk_audit_wordpress_sites",
   title: "Bulk wp_audit across many sites",
   description: "Run wp_audit on N WP installs in parallel (default concurrency 4). Returns one row per site with the wp_version, audit scan_id, and a flagged_count (anything in checksum_mismatches.core + modified plugins + modified themes).",
   inputSchema: inputSchema20,
   handler: async (input, ctx) => handler31(input, ctx)
 };
-registerToolModule(tool31);
+registerToolModule(tool32);
 async function handler31(input, ctx) {
   const inp = input;
   const limit = Math.max(1, Math.min(inp.concurrency ?? 4, 10));
@@ -48053,14 +48107,14 @@ function summarise(path6, result) {
 }
 
 // src/tools/wpDescribeSetup.ts
-var tool32 = {
+var tool33 = {
   name: "wp_describe_setup",
   title: "WordPress posture summary",
   description: "Aggregate read of accumulated WP state: latest wp_audit (versions, checksum mismatches, admins, config flags), latest wp_cron_audit (flagged events), latest wp_rest_audit, open WP-related findings, and active CVEs on wp packages. No scanner spawn.",
   inputSchema: {},
   handler: async (_input, ctx) => handler32(ctx)
 };
-registerToolModule(tool32);
+registerToolModule(tool33);
 async function handler32(ctx) {
   const wpAudit = findLatest2(ctx, "wp_audit");
   const wpCron = findLatest2(ctx, "wp_cron_audit");
@@ -48119,7 +48173,7 @@ function countChecksumIssues(meta) {
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID11 } from "node:crypto";
 import { existsSync as existsSync34, readFileSync as readFileSync18, readdirSync as readdirSync11, statSync as statSync7 } from "node:fs";
-import { join as join40, relative as relative2 } from "node:path";
+import { join as join40, relative as relative3 } from "node:path";
 var PATTERNS = [
   {
     id: "dotnet-sql-server-conn",
@@ -48205,14 +48259,14 @@ var SKIP_DIRS = /* @__PURE__ */ new Set([
 var inputSchema21 = {
   project_path: ProjectPath
 };
-var tool33 = {
+var tool34 = {
   name: "scan_dotnet_secrets",
   title: ".NET-specific secret scan",
   description: "Scan .NET config files (appsettings*.json, *.config, nuget.config, launchSettings.json) for MS-specific patterns that gitleaks generic rules miss: SQL Server conn strings, Azure Storage / Service Bus keys, NuGet feed plaintext credentials, JWT signing keys.",
   inputSchema: inputSchema21,
   handler: async (input, ctx) => handler33(input, ctx)
 };
-registerToolModule(tool33);
+registerToolModule(tool34);
 async function handler33(input, ctx) {
   const inp = input;
   let projectPath;
@@ -48248,7 +48302,7 @@ async function handler33(input, ctx) {
               category: "security",
               subcategory: "secret",
               title: rule.description,
-              file_path: relative2(projectPath, file).replace(/\\/g, "/"),
+              file_path: relative3(projectPath, file).replace(/\\/g, "/"),
               line_start: i2 + 1,
               line_end: i2 + 1,
               snippet: line.length > 200 ? `${line.slice(0, 200)}\u2026` : line,
@@ -48318,7 +48372,7 @@ function collectConfigFiles(root, maxDepth) {
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
 import { readFileSync as readFileSync19, readdirSync as readdirSync12, statSync as statSync8 } from "node:fs";
-import { join as join41, relative as relative3 } from "node:path";
+import { join as join41, relative as relative4 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
   "net9.0": { tfm: "net9.0", status: "sts-current", hint: "STS until May 2026." },
@@ -48337,14 +48391,14 @@ var SUPPORT = {
   "net45": { tfm: "net45", status: "eol", hint: ".NET Framework 4.5 \u2014 out of support." }
 };
 var inputSchema22 = { project_path: ProjectPath };
-var tool34 = {
+var tool35 = {
   name: "dotnet_target_framework_check",
   title: ".NET target framework EOL check",
   description: "Parse every *.csproj / *.fsproj `<TargetFramework>` and report support status (LTS, STS, EOL, legacy Framework) plus a hint for each. Pure XML grep \u2014 no .NET SDK required.",
   inputSchema: inputSchema22,
   handler: async (input, ctx) => handler34(input, ctx)
 };
-registerToolModule(tool34);
+registerToolModule(tool35);
 async function handler34(input, ctx) {
   const inp = input;
   let projectPath;
@@ -48366,7 +48420,7 @@ async function handler34(input, ctx) {
     if (tfms.length === 0) continue;
     const statuses = tfms.map((tfm) => SUPPORT[tfm] ?? unknownStatus(tfm));
     rows.push({
-      file: relative3(projectPath, file).replace(/\\/g, "/"),
+      file: relative4(projectPath, file).replace(/\\/g, "/"),
       target_frameworks: tfms,
       statuses
     });
@@ -48459,7 +48513,7 @@ function failDomain23(code, message) {
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
 import { existsSync as existsSync35, readFileSync as readFileSync20, readdirSync as readdirSync13, statSync as statSync9 } from "node:fs";
-import { join as join42, relative as relative4 } from "node:path";
+import { join as join42, relative as relative5 } from "node:path";
 var RULES = [
   {
     id: "efcore-drop-table",
@@ -48493,14 +48547,14 @@ var RULES = [
   }
 ];
 var inputSchema23 = { project_path: ProjectPath };
-var tool35 = {
+var tool36 = {
   name: "dotnet_efcore_audit",
   title: "EF Core migrations audit",
   description: "Scan EF Core migrations for dangerous patterns (DropTable, DropColumn, AlterColumn nullable=false without defaultValue, raw SQL with credentials). Pure source scan \u2014 no SDK required.",
   inputSchema: inputSchema23,
   handler: async (input, ctx) => handler35(input, ctx)
 };
-registerToolModule(tool35);
+registerToolModule(tool36);
 async function handler35(input, ctx) {
   const inp = input;
   let projectPath;
@@ -48543,7 +48597,7 @@ async function handler35(input, ctx) {
                 category: rule.id === "efcore-raw-sql-creds" ? "security" : "bug",
                 subcategory: "migration-risk",
                 title: rule.description,
-                file_path: relative4(projectPath, abs).replace(/\\/g, "/"),
+                file_path: relative5(projectPath, abs).replace(/\\/g, "/"),
                 line_start: i2 + 1,
                 line_end: i2 + 1,
                 snippet: line.length > 200 ? `${line.slice(0, 200)}\u2026` : line,
@@ -48614,14 +48668,14 @@ function findMigrationsDirs(root) {
 }
 
 // src/tools/dotnetDescribeSetup.ts
-var tool36 = {
+var tool37 = {
   name: "dotnet_describe_setup",
   title: ".NET posture summary",
   description: "Aggregate read of accumulated .NET state: latest dotnet_target_framework_check (EOL frameworks), scan_dotnet_secrets, dotnet_efcore_audit, deps_audit if a NuGet lockfile exists. Plus open .NET-relevant findings. No scanner spawn.",
   inputSchema: {},
   handler: async (_input, ctx) => handler36(ctx)
 };
-registerToolModule(tool36);
+registerToolModule(tool37);
 async function handler36(ctx) {
   const tfm = findLatest3(ctx, "dotnet_target_framework");
   const secrets = findLatest3(ctx, "dotnet_secrets");
@@ -48685,14 +48739,14 @@ var CATEGORY_WEIGHT = {
 var inputSchema24 = {
   limit: external_exports.number().int().min(1).max(500).optional().describe("Cap on returned items. Default 50.")
 };
-var tool37 = {
+var tool38 = {
   name: "prioritize_findings",
   title: "Prioritise open findings (heuristic)",
   description: "Rank open findings by a weighted heuristic: severity + category + fix_available + age. Returns top-N with explanation. No LLM call \u2014 the calling model uses the ranking to drive follow-ups.",
   inputSchema: inputSchema24,
   handler: async (input, ctx) => handler37(input, ctx)
 };
-registerToolModule(tool37);
+registerToolModule(tool38);
 async function handler37(input, ctx) {
   const inp = input;
   const limit = inp.limit ?? 50;
@@ -50263,14 +50317,14 @@ var RECOMMENDATION_RANK = {
   CAUTION: 2,
   DO_NOT_INSTALL: 3
 };
-var tool38 = {
+var tool39 = {
   name: "scan_skill",
   title: "Vet an AI skill / MCP server / agent before install",
   description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
   inputSchema: inputSchema25,
   handler: (input, ctx, callMeta) => handler38(input, ctx, callMeta)
 };
-registerToolModule(tool38);
+registerToolModule(tool39);
 async function handler38(input, ctx, callMeta) {
   const inp = input;
   let basePath;
@@ -50419,7 +50473,7 @@ function hashFiles(parts) {
 
 // src/tools/mapAttackSurface.ts
 import { readFileSync as readFileSync24 } from "node:fs";
-import { isAbsolute, join as join48, resolve as resolve7 } from "node:path";
+import { isAbsolute as isAbsolute2, join as join48, resolve as resolve8 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -50455,7 +50509,7 @@ function numProp(value, key) {
 }
 
 // src/surface/collectors/ports.ts
-import { existsSync as existsSync37, readFileSync as readFileSync22, realpathSync } from "node:fs";
+import { existsSync as existsSync37, readFileSync as readFileSync22, realpathSync as realpathSync2 } from "node:fs";
 import { basename as basename3, join as join45 } from "node:path";
 var DOCKERFILES = ["Dockerfile", "dockerfile"];
 var COMPOSE_FILES = [
@@ -50519,7 +50573,7 @@ function readLines(path6) {
 }
 function canonicalPath(path6) {
   try {
-    return realpathSync.native(path6);
+    return realpathSync2.native(path6);
   } catch {
     return void 0;
   }
@@ -51509,13 +51563,13 @@ function buildToolRun(run, via) {
 
 // src/surface/specDiscover.ts
 import { readFileSync as readFileSync23, readdirSync as readdirSync15, statSync as statSync11 } from "node:fs";
-import { join as join47, relative as relative5, resolve as resolve6, sep as sep2 } from "node:path";
+import { join as join47, relative as relative6, resolve as resolve7, sep as sep3 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
 var SPEC_BASENAMES = /* @__PURE__ */ new Set(["openapi", "swagger", "api-docs"]);
 var SPEC_EXTENSIONS = /* @__PURE__ */ new Set([".json", ".yaml", ".yml"]);
 function discoverSpecs(projectPath, explicit) {
-  const root = resolve6(projectPath);
+  const root = resolve7(projectPath);
   const candidates2 = explicit && explicit.length > 0 ? dedupeResolved(explicit) : walk3(root, root).sort();
   const truncated = candidates2.length > MAX_SPEC_FILES;
   const selected = candidates2.slice(0, MAX_SPEC_FILES);
@@ -51527,7 +51581,7 @@ function dedupeResolved(paths) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
   for (const path6 of paths) {
-    const resolved = resolve6(path6);
+    const resolved = resolve7(path6);
     if (seen.has(resolved)) continue;
     seen.add(resolved);
     out.push(resolved);
@@ -51584,9 +51638,9 @@ function isSpecCandidate(root, dir, name) {
   const ext = name.slice(dot).toLowerCase();
   if (!SPEC_EXTENSIONS.has(ext)) return false;
   if (SPEC_BASENAMES.has(base.toLowerCase())) return true;
-  const relDir = relative5(root, dir);
+  const relDir = relative6(root, dir);
   if (relDir === "") return false;
-  return relDir.split(sep2).some((segment) => segment.toLowerCase() === "openapi");
+  return relDir.split(sep3).some((segment) => segment.toLowerCase() === "openapi");
 }
 
 // src/surface/specDiff.ts
@@ -51933,7 +51987,7 @@ var IncludeEnvVars = external_exports.boolean().optional().default(true).describ
 var SpecPaths = external_exports.array(external_exports.string().min(1)).min(1).optional().describe(
   "Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when supplied \u2014 must be non-empty; omit the field to use automatic discovery instead. Relative paths resolve against project_path, not the current working directory. Bypasses the tree-hash cache (always computes a fresh snapshot) and is never persisted as the project's cached surface, so a later plain call cannot inherit these paths. Any named path that cannot be read is reported in spec_files, not silently dropped."
 );
-var tool39 = {
+var tool40 = {
   name: "map_attack_surface",
   title: "Map the application attack surface",
   // No "auth hint" in this description on purpose, for code-extracted routes:
@@ -51957,7 +52011,7 @@ var tool39 = {
   },
   handler: async (input, ctx) => handler39(input, ctx)
 };
-registerToolModule(tool39);
+registerToolModule(tool40);
 async function handler39(input, ctx) {
   const inp = input;
   let projectPath;
@@ -52057,7 +52111,7 @@ function readSources(parsed, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path6 of collectAllFiles(parsed)) {
     try {
-      const buffer = readFileSync24(isAbsolute(path6) ? path6 : join48(projectPath, path6));
+      const buffer = readFileSync24(isAbsolute2(path6) ? path6 : join48(projectPath, path6));
       const text = buffer.toString("utf8");
       if (Buffer.byteLength(text, "utf8") !== buffer.length) continue;
       sources.set(path6, text);
@@ -52199,7 +52253,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path6) {
-  return resolve7(isAbsolute(path6) ? path6 : join48(projectPath, path6));
+  return resolve8(isAbsolute2(path6) ? path6 : join48(projectPath, path6));
 }
 function resultsArrayOf(parsed) {
   const results = parsed.results;
@@ -53715,7 +53769,7 @@ var inputSchema26 = {
     `Global wall-clock ceiling for the probing phase, in milliseconds. Default: ${DEFAULT_WALL_CLOCK_MS}. Bounds the total, which neither timeout_ms (one request) nor max_requests (how many are planned) does. When it cuts, the run still returns and says so: summary.timed_out, summary.probes_cut, and a degraded coverage. Probes it cut record outcome 'cancelled', never 'timeout' \u2014 the target did not fail to answer, this tool stopped asking. Does not cover the one liveness request, which timeout_ms bounds.`
   )
 };
-var tool40 = {
+var tool41 = {
   name: "scan_dast",
   title: "Probe a running application against its route inventory",
   // The description is the only discovery surface an agent has, so it states
@@ -53727,7 +53781,7 @@ var tool40 = {
   inputSchema: inputSchema26,
   handler: (input, ctx, callMeta) => handler40(input, ctx, callMeta)
 };
-registerToolModule(tool40);
+registerToolModule(tool41);
 function fail(code, message, retryWith) {
   return {
     ok: false,
@@ -54457,7 +54511,7 @@ var Fingerprint = external_exports.string().min(1).optional().describe(
 var Providers = external_exports.array(external_exports.enum(["static"])).min(1).optional().describe(
   "Evidence providers to run. This version implements only 'static' (import graph + surface snapshot); 'runtime' and 'dependency' are planned and will widen this enum. Omit the field to run every provider available in this version, so a caller written today keeps working when the others land. Must be non-empty when supplied."
 );
-var tool41 = {
+var tool42 = {
   name: "validate_finding",
   title: "Qualify findings by reachability",
   // An agent's only discovery surface. It must carry the preconditions and
@@ -54472,7 +54526,7 @@ var tool41 = {
   },
   handler: async (input, ctx) => handler41(input, ctx)
 };
-registerToolModule(tool41);
+registerToolModule(tool42);
 function fail2(code, message, retryWith) {
   return {
     ok: false,
@@ -55250,7 +55304,7 @@ var KEEPS_BRANCH = /* @__PURE__ */ new Set([
   "push_failed",
   "create_failed"
 ]);
-var tool42 = {
+var tool43 = {
   name: "create_fix_pr",
   title: "Apply scanner-produced fixes and open a pull request",
   description: "Apply fixes the scanners themselves already produced \u2014 deps_update_plan pinned upgrade commands and Semgrep --autofix \u2014 inside an isolated git worktree, prove them with a scan differential and a (lazy) test differential, and open one pull request per ecosystem or scanner. apply defaults to false: candidates, the worktree, the fix, and both differentials always run; only commit/push/gh pr create sit behind apply=true. Every open finding that did NOT become a candidate is accounted for in `filtered` (counts per reason: below severity_min, no scanner-produced fix, no requested source covers it) and in the one-line `filtered_reason` \u2014 an empty `groups` is never left unexplained.",
@@ -55277,7 +55331,7 @@ var tool42 = {
   },
   handler: async (input, ctx) => handler42(input, ctx)
 };
-registerToolModule(tool42);
+registerToolModule(tool43);
 async function handler42(input, ctx) {
   const inp = input;
   let projectPath;
@@ -55499,7 +55553,7 @@ async function rescanAfterFix(group, targetFindings, worktreePath, ctx) {
   const missingTools = Array.isArray(r.missing_tools) ? r.missing_tools : [];
   const requiredTools = new Set(targetFindings.map((f) => f.tool));
   const uncheckable = [...requiredTools].filter(
-    (tool43) => scannerCouldNotBeVerified(group.source, tool43, missingTools)
+    (tool44) => scannerCouldNotBeVerified(group.source, tool44, missingTools)
   );
   if (uncheckable.length > 0) {
     return {
@@ -55509,11 +55563,11 @@ async function rescanAfterFix(group, targetFindings, worktreePath, ctx) {
   }
   return { ok: true, scanId: r.scan_id, findings: ctx.storage.findings.listByScan(r.scan_id) };
 }
-function scannerCouldNotBeVerified(source, tool43, missingTools) {
+function scannerCouldNotBeVerified(source, tool44, missingTools) {
   if (source === "semgrep") {
-    return tool43 === "semgrep" && missingTools.includes("semgrep");
+    return tool44 === "semgrep" && missingTools.includes("semgrep");
   }
-  const missingToolsName = DEPS_AUDIT_MISSING_TOOLS_NAME[tool43];
+  const missingToolsName = DEPS_AUDIT_MISSING_TOOLS_NAME[tool44];
   if (missingToolsName === void 0) return false;
   if (missingToolsName === null) return true;
   return missingTools.includes(missingToolsName);
@@ -55984,7 +56038,7 @@ registerResourceModule({
 var SERVER_NAME = "dev-guardian";
 var SERVER_VERSION2 = resolveVersion();
 async function main() {
-  const projectPath = resolve8(process.cwd());
+  const projectPath = resolve9(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
