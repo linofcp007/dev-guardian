@@ -51,6 +51,36 @@ version bump.
   regardless of whether a Wordfence key is configured. Complements
   `wp_vuln_check` (WPScan, needs a live URL) for offline/CI-only projects.
 
+- Scoped scans: `scan_sast`, `scan_secrets`, `bug_hunt` and `quality_check`
+  take `scope: { paths?, diff?: { base?, head?, staged?, include_untracked? },
+  since? }` — named files/directories/globs inside the project, a git change
+  set (every uncommitted change, the index, or `base...HEAD`), or what changed
+  since a commit/tag/date. The file set is computed with git (`-z`,
+  `--relative`, refs verified with `--end-of-options`; an unresolvable ref is
+  an error, never an empty diff); Semgrep, Bandit, ruff, radon, ESLint and
+  jscpd get the files as explicit, batched targets; gitleaks reads exactly the
+  scope's commits (`base..head`, `--since=`) or its files; findings outside
+  the scope are dropped and counted. A scoped scan is recorded with
+  `meta.scope`: it never becomes a baseline (`set_baseline` refuses one by
+  id), never feeds the open findings, never supersedes a whole-project scan
+  in a comparison, and never shares a cache entry with one. `.NET` build
+  analysis and quality budgets are project-level and are reported as skipped
+  for a scope, not run. A `project_path` that is a file is answered with the
+  scoped call to make (`retry_with`). The scoped commands (`diff`,
+  `prepush`, `branch`, `since`, `incoming`, `file`) can now ask for what they
+  describe instead of a whole-project scan.
+- `scan_deps` takes `packages` (a response filter, like `categories`): every
+  finding is still recorded; `package_filter.not_found` names requested
+  packages Trivy reported nothing for.
+- `.guardianignore` at a project root (gitignore syntax, verified against
+  `git check-ignore`) is honoured by every scan: Semgrep `--exclude`, Trivy
+  `--skip-dirs`/`--skip-files`, Bandit `-x`, and a result filter for every
+  scanner (gitleaks, jscpd, ruff, …). Every response of a project that has one
+  carries `exclusions` — files excluded, findings dropped — so exclusion is
+  never silent. This repo ships one excluding its deliberately vulnerable
+  fixture trees (`mcp/test/fixtures/`, `mcp/test/e2e/eval-vuln-fixture/`),
+  which a self-scan used to report as critical and high findings.
+
 - CVE exploitability intel: CISA KEV membership and FIRST EPSS score, cached
   24h in a new `cve_intel` table (migration 010, keyed by `cve_id` alone — no
   scan/project scope, so it survives retention pruning). `prioritize_findings`

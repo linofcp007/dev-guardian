@@ -143,6 +143,7 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
   'runners/fileBatchScan.ts:opts.name': "semgrepOnFiles' and banditOnFiles' `name: '…'`",
   'tools/depsAudit.ts:opts.command': "tryNativeAudit's `command: '…'`",
   'tools/qualityCheck.ts:name': "notInstalled's and record's name argument",
+  'tools/qualityCheck.ts:opts.name': "runOnFileBatches' `name: '…'` (ruff, radon, eslint)",
   'tools/auditExecutive.ts:name': 'the *SUB_TOOLS arrays',
   'tools/securityScanFull.ts:name': 'FIRST_CHILD and OTHER_CHILDREN',
   'tools/scanDast.ts:DAST_ENGINE': 'DAST_ENGINE',

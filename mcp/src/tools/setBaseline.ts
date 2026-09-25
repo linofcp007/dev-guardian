@@ -18,6 +18,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { latestStateScan } from '../history/openSet.js';
 import { notMeasured as notMeasuredBy } from '../history/runCompare.js';
+import { isScopedScan } from '../history/scanRoles.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { SCAN_TYPES, type DomainError, type ScanType, type ToolResult } from '../types.js';
@@ -43,8 +44,9 @@ const tool: ToolModule = {
   description:
     "Mark a scan as its project's regression baseline for its scan type. Without scan_id, uses " +
     "project_path's (default: the server's working directory) newest usable scan — of scan_type " +
-    'when given — never an SBOM, stack detection, diff review or a scan whose scanners did not ' +
-    'run. Future `diff_scans from=baseline` and `regression_alert` calls compare scans of that ' +
+    'when given — never an SBOM, stack detection, diff review, scoped scan (meta.scope; refused ' +
+    'as scan_id too) or a scan whose scanners did not run. Future `diff_scans from=baseline` and ' +
+    '`regression_alert` calls compare scans of that ' +
     'type against it. Older baselines are kept for history but inactive.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
@@ -68,6 +70,16 @@ async function handler(
       return failDomain(
         'unknown_scan_id',
         `Scan '${inp.scan_id}' is status='${scan.status}'. Baselines require completed scans.`,
+      );
+    }
+    // A scoped scan (a diff, a file, the changes since a tag) saw part of the
+    // project: as a baseline, everything outside its scope would come back
+    // "new" on the next whole-project scan.
+    if (isScopedScan(scan)) {
+      return failDomain(
+        'unsupported_target',
+        `Scan '${inp.scan_id}' is a scoped scan (meta.scope) — it measured part of the project only, so it ` +
+          'cannot be a baseline. Baseline a whole-project scan of the same type.',
       );
     }
     targetScanId = inp.scan_id;
