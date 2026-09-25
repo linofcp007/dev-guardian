@@ -46454,12 +46454,12 @@ async function runCheckToolchain(ctx) {
 }
 
 // src/tools/licenseCompatibility.ts
-import { existsSync as existsSync24, readFileSync as readFileSync16 } from "node:fs";
+import { existsSync as existsSync24, readFileSync as readFileSync16, readdirSync as readdirSync13 } from "node:fs";
 import { join as join32 } from "node:path";
 var tool14 = {
   name: "license_compatibility",
   title: "License compatibility check",
-  description: "Cross-check the project license (from LICENSE / package.json / pyproject.toml) against the licenses of installed deps captured by the most recent compliance_check. Flags incompatibilities (e.g. permissive project + viral copyleft dep). Pure SQL read \u2014 does not spawn scanners.",
+  description: "Cross-check the project license (package.json incl. UNLICENSED, pyproject.toml, composer.json, .csproj PackageLicenseExpression, or LICENSE) against the licenses of installed deps captured by the most recent compliance_check. No declared license (or UNLICENSED) is treated as proprietary and still flags copyleft deps. Pure SQL read \u2014 does not spawn scanners.",
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler13(input, ctx)
 };
@@ -46473,26 +46473,26 @@ async function handler13(input, ctx) {
     return failDomain12("not_a_git_repo", e.message);
   }
   const projectLicense = detectProjectLicense(projectPath);
+  const isProprietary = projectLicense === null || projectLicense.trim().toUpperCase() === "UNLICENSED";
   const compliance = findLatestCompliance(ctx);
   const meta = compliance?.meta;
   const depLicenses = meta?.licenses_summary ?? [];
   const incompatibilities = [];
-  if (projectLicense && depLicenses.length > 0) {
-    for (const entry of depLicenses) {
-      const reason = incompatibleReason(projectLicense, entry.license);
-      if (reason) {
-        incompatibilities.push({
-          project_license: projectLicense,
-          dep_license: entry.license,
-          packages: entry.packages,
-          reason
-        });
-      }
+  for (const entry of depLicenses) {
+    const reason = isProprietary ? proprietaryReason(entry.license) : incompatibleReason(projectLicense, entry.license);
+    if (reason) {
+      incompatibilities.push({
+        project_license: projectLicense ?? "proprietary (no license declared)",
+        dep_license: entry.license,
+        packages: entry.packages,
+        reason
+      });
     }
   }
   return {
     ok: true,
     project_license: projectLicense ?? null,
+    treated_as_proprietary: isProprietary,
     last_compliance_scan_id: compliance?.scan_id ?? null,
     dependencies_audited: depLicenses.length,
     incompatibilities,
@@ -46500,7 +46500,7 @@ async function handler13(input, ctx) {
       total: incompatibilities.length,
       by_dep_license: groupByLicense(incompatibilities)
     },
-    notes: 'Compatibility rules are heuristic \u2014 definitive guidance requires legal review. A "reciprocal" license (GPL/AGPL/SSPL) included in a permissive project requires the whole project to be released under the same terms when distributed.'
+    notes: `Compatibility rules are heuristic \u2014 definitive guidance requires legal review. A "reciprocal" license (GPL/AGPL/SSPL) included in a permissive project requires the whole project to be released under the same terms when distributed. No declared license (and npm's UNLICENSED) is treated as proprietary/all-rights-reserved \u2014 the least tolerant position, not an exemption from these checks.`
   };
 }
 function detectProjectLicense(projectPath) {
@@ -46531,6 +46531,15 @@ function detectProjectLicense(projectPath) {
     }
   } catch {
   }
+  try {
+    const csproj = findFirstCsproj(projectPath);
+    if (csproj) {
+      const xml = readFileSync16(csproj, "utf8");
+      const m = /<PackageLicenseExpression>([^<]+)<\/PackageLicenseExpression>/i.exec(xml);
+      if (m && m[1]) return m[1].trim();
+    }
+  } catch {
+  }
   for (const name of ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"]) {
     const p = join32(projectPath, name);
     if (!existsSync24(p)) continue;
@@ -46557,48 +46566,69 @@ function findLatestCompliance(ctx) {
   const full = ctx.storage.scans.getById(row.scan_id);
   return full ? { scan_id: row.scan_id, meta: full.meta } : null;
 }
+var PERMISSIVE = /* @__PURE__ */ new Set([
+  "MIT",
+  "ISC",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "Unlicense",
+  "0BSD"
+]);
+var AGPL = /* @__PURE__ */ new Set(["AGPL-1.0", "AGPL-3.0"]);
+var VIRAL = /* @__PURE__ */ new Set(["AGPL-1.0", "AGPL-3.0", "GPL-2.0", "GPL-3.0", "SSPL-1.0", "OSL-3.0"]);
+var WEAK_COPYLEFT = /* @__PURE__ */ new Set(["LGPL-2.1", "LGPL-3.0", "MPL-2.0", "EPL-2.0"]);
+var COMMERCIAL = /* @__PURE__ */ new Set(["BUSL-1.1", "Elastic-2.0", "CommonsClause"]);
 function incompatibleReason(projectLicense, depLicense) {
   const proj = normaliseLicense(projectLicense);
   const dep = normaliseLicense(depLicense);
-  const permissive = /* @__PURE__ */ new Set([
-    "MIT",
-    "ISC",
-    "Apache-2.0",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "CC0-1.0",
-    "Unlicense",
-    "0BSD"
-  ]);
-  const viral = /* @__PURE__ */ new Set([
-    "AGPL-1.0",
-    "AGPL-3.0",
-    "GPL-2.0",
-    "GPL-3.0",
-    "SSPL-1.0",
-    "OSL-3.0"
-  ]);
-  const weakCopyleft = /* @__PURE__ */ new Set(["LGPL-2.1", "LGPL-3.0", "MPL-2.0", "EPL-2.0"]);
-  const commercial = /* @__PURE__ */ new Set(["BUSL-1.1", "Elastic-2.0", "CommonsClause"]);
-  if (permissive.has(proj) && viral.has(dep)) {
+  if (PERMISSIVE.has(proj) && AGPL.has(dep)) {
+    return `Permissive project '${projectLicense}' includes AGPL dependency '${depLicense}'. Unlike GPL, AGPL's network-use clause is triggered by making the software available over a network (e.g. SaaS) even without ever distributing binaries \u2014 review before any network deployment.`;
+  }
+  if (PERMISSIVE.has(proj) && VIRAL.has(dep)) {
     return `Permissive project '${projectLicense}' includes viral copyleft dep '${depLicense}'. Distributing the combined work requires releasing the whole project under '${depLicense}'.`;
   }
-  if (permissive.has(proj) && weakCopyleft.has(dep)) {
+  if (PERMISSIVE.has(proj) && WEAK_COPYLEFT.has(dep)) {
     return `Permissive project '${projectLicense}' includes weak-copyleft dep '${depLicense}'. Static linking / bundling may require sources of the dep to be available; safe when linked dynamically.`;
   }
-  if (permissive.has(proj) && commercial.has(dep)) {
+  if (PERMISSIVE.has(proj) && COMMERCIAL.has(dep)) {
     return `Permissive project '${projectLicense}' includes a source-available-but-not-OSI license '${depLicense}'. Restricts deployment models \u2014 review the dep's specific terms.`;
   }
   if (proj === "GPL-2.0" && dep === "Apache-2.0") {
     return `GPL-2.0 project + Apache-2.0 dep: known incompatibility (patent termination clauses). Move to GPL-3.0 or replace the dep.`;
   }
-  if (proj === "AGPL-3.0" && commercial.has(dep)) {
+  if (proj === "AGPL-3.0" && COMMERCIAL.has(dep)) {
     return `AGPL-3.0 project + commercial-source-available dep '${depLicense}': mutually exclusive distribution terms.`;
   }
   return null;
 }
+function proprietaryReason(depLicense) {
+  const dep = normaliseLicense(depLicense);
+  if (AGPL.has(dep)) {
+    return `No project license declared (treated as proprietary/all-rights-reserved). AGPL dependency '${depLicense}' triggers its network-use clause: even SaaS deployment without redistributing binaries requires releasing source to users interacting with it over a network \u2014 incompatible with a closed-source project.`;
+  }
+  if (VIRAL.has(dep)) {
+    return `No project license declared (treated as proprietary). Viral copyleft dependency '${depLicense}' requires the combined work to be released under '${depLicense}' when distributed \u2014 incompatible with closed-source distribution.`;
+  }
+  if (WEAK_COPYLEFT.has(dep)) {
+    return `No project license declared (treated as proprietary). Weak-copyleft dependency '${depLicense}' may require its own source to stay available if statically linked/bundled \u2014 review before distributing.`;
+  }
+  if (COMMERCIAL.has(dep)) {
+    return `No project license declared (treated as proprietary). Dependency '${depLicense}' is source-available but not OSI-approved, restricting deployment models \u2014 review its specific terms.`;
+  }
+  return null;
+}
 function normaliseLicense(s) {
-  return s.trim().replace(/^["']|["']$/g, "").replace(/[-_]or[-_]later$/i, "").replace(/\s+/g, "");
+  return s.trim().replace(/^["']|["']$/g, "").replace(/[-_]or[-_]later$/i, "").replace(/[-_]only$/i, "").replace(/\s+/g, "");
+}
+function findFirstCsproj(projectPath) {
+  try {
+    const name = readdirSync13(projectPath).filter((n2) => n2.toLowerCase().endsWith(".csproj")).sort()[0];
+    return name ? join32(projectPath, name) : null;
+  } catch {
+    return null;
+  }
 }
 function groupByLicense(rows) {
   const out = {};
@@ -46747,27 +46777,38 @@ function findLatestOfType(ctx, types) {
 
 // src/tools/sbomDiff.ts
 import { existsSync as existsSync25, readFileSync as readFileSync17 } from "node:fs";
+var RESPONSE_CAP = 50;
 var inputSchema8 = {
+  project_path: ProjectPath,
   from_scan_id: external_exports.string().uuid().optional(),
   to_scan_id: external_exports.string().uuid().optional(),
-  /** When set, prefer reading the SBOM JSON file from disk for a deeper diff. */
+  /** No longer changes behaviour — full-file comparison always happens now
+   *  when the SBOM file is still on disk. Kept so an existing caller that
+   *  passes it does not break. */
   use_full_file: external_exports.boolean().optional()
 };
 var tool16 = {
   name: "sbom_diff",
   title: "SBOM diff (added / removed / changed components)",
-  description: "Compare two generate_sbom scans. By default uses the persisted top_packages summary; pass use_full_file=true for a full-file comparison (reads the SBOM JSON from .guardian/reports/). Default to/from: latest sbom and the one before it.",
+  description: "Compare two generate_sbom scans, full component list, keyed by (ecosystem, name) so a version change is never confused with an unrelated same-named package. Default to/from: the two latest completed SBOM scans of project_path. Response arrays are capped; summary always carries the true, uncapped totals.",
   inputSchema: inputSchema8,
   handler: async (input, ctx) => handler15(input, ctx)
 };
 registerToolModule(tool16);
 async function handler15(input, ctx) {
   const inp = input;
-  const sboms = ctx.storage.scans.listHistory(50).filter((s) => s.scan_type === "sbom" && s.status === "completed");
-  if (sboms.length < 2 && (!inp.from_scan_id || !inp.to_scan_id)) {
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return failDomain13("not_a_git_repo", e.message);
+  }
+  const needsDefaultPair = !inp.from_scan_id || !inp.to_scan_id;
+  const sboms = needsDefaultPair ? ctx.storage.scans.listHistoryForProject(projectPath, 50).filter((s) => s.scan_type === "sbom" && s.status === "completed") : [];
+  if (needsDefaultPair && sboms.length < 2) {
     return failDomain13(
       "unknown_scan_id",
-      `Need at least two completed SBOM scans (found ${sboms.length}). Call generate_sbom twice or pass explicit ids.`
+      `Need at least two completed SBOM scans of '${projectPath}' (found ${sboms.length}). Call generate_sbom twice or pass explicit ids.`
     );
   }
   const toId = inp.to_scan_id ?? sboms[0]?.scan_id;
@@ -46778,63 +46819,73 @@ async function handler15(input, ctx) {
   if (toId === fromId) {
     return failDomain13("unknown_scan_id", `Cannot diff a scan against itself (${toId}).`);
   }
-  const fromComps = await loadComponents(ctx, fromId, inp.use_full_file === true);
-  const toComps = await loadComponents(ctx, toId, inp.use_full_file === true);
+  const fromComps = loadComponents(ctx, fromId);
+  const toComps = loadComponents(ctx, toId);
   if (!fromComps || !toComps) {
     return failDomain13("unknown_scan_id", "One or both SBOM scans have no components recorded.");
   }
-  const fromMap = new Map(fromComps.map((c3) => [c3.name, c3.version ?? ""]));
-  const toMap = new Map(toComps.map((c3) => [c3.name, c3.version ?? ""]));
+  const key = (c3) => `${c3.ecosystem}:${c3.name}`;
+  const fromMap = new Map(fromComps.map((c3) => [key(c3), c3]));
+  const toMap = new Map(toComps.map((c3) => [key(c3), c3]));
   const added = [];
   const removed = [];
   const changed = [];
-  const unchanged = [];
-  for (const [name, version2] of toMap) {
-    if (!fromMap.has(name)) {
-      added.push({ name, version: version2 });
-    } else if (fromMap.get(name) !== version2) {
+  let unchangedCount = 0;
+  for (const [k, toComp] of toMap) {
+    const fromComp = fromMap.get(k);
+    if (!fromComp) {
+      added.push(toComp);
+    } else if ((fromComp.version ?? "") !== (toComp.version ?? "")) {
       changed.push({
-        name,
-        from_version: fromMap.get(name) ?? "",
-        to_version: version2
+        name: toComp.name,
+        ecosystem: toComp.ecosystem,
+        from_version: fromComp.version ?? "",
+        to_version: toComp.version ?? ""
       });
     } else {
-      unchanged.push({ name, version: version2 });
+      unchangedCount += 1;
     }
   }
-  for (const [name, version2] of fromMap) {
-    if (!toMap.has(name)) removed.push({ name, version: version2 });
+  for (const [k, fromComp] of fromMap) {
+    if (!toMap.has(k)) removed.push(fromComp);
   }
+  const truncated = added.length > RESPONSE_CAP || removed.length > RESPONSE_CAP || changed.length > RESPONSE_CAP;
   return {
     ok: true,
+    project_path: projectPath,
     from_scan_id: fromId,
     to_scan_id: toId,
     summary: {
       added: added.length,
       removed: removed.length,
       changed: changed.length,
-      unchanged: unchanged.length
+      unchanged: unchangedCount
     },
-    added,
-    removed,
-    changed
+    added: added.slice(0, RESPONSE_CAP),
+    removed: removed.slice(0, RESPONSE_CAP),
+    changed: changed.slice(0, RESPONSE_CAP),
+    truncated
   };
 }
-async function loadComponents(ctx, scanId, useFullFile) {
+function loadComponents(ctx, scanId) {
   const rec = ctx.storage.scans.getById(scanId);
   if (!rec) return null;
-  if (useFullFile) {
-    const filePath = rec.meta?.file_path;
-    if (filePath && existsSync25(filePath)) {
-      try {
-        const raw = readFileSync17(filePath, "utf8");
-        return extractFromSbomJson(raw);
-      } catch {
-      }
+  const filePath = rec.meta?.file_path;
+  if (filePath && existsSync25(filePath)) {
+    try {
+      const raw = readFileSync17(filePath, "utf8");
+      return extractFromSbomJson(raw);
+    } catch {
     }
   }
   const top = rec.meta?.top_packages;
-  return top && top.length > 0 ? top : null;
+  if (!top || top.length === 0) return null;
+  return top.map((c3) => ({ name: c3.name, ...c3.version !== void 0 ? { version: c3.version } : {}, ecosystem: "unknown" }));
+}
+function ecosystemFromPurl(purl) {
+  if (!purl) return "unknown";
+  const m = /^pkg:([^/]+)\//.exec(purl);
+  return m?.[1] ?? "unknown";
 }
 function extractFromSbomJson(raw) {
   let root;
@@ -46847,7 +46898,7 @@ function extractFromSbomJson(raw) {
   if (Array.isArray(cdx)) {
     return cdx.flatMap((c3) => {
       if (typeof c3?.name !== "string") return [];
-      const out = { name: c3.name };
+      const out = { name: c3.name, ecosystem: ecosystemFromPurl(c3.purl) };
       if (typeof c3.version === "string") out.version = c3.version;
       return [out];
     });
@@ -46856,7 +46907,8 @@ function extractFromSbomJson(raw) {
   if (Array.isArray(spdx)) {
     return spdx.flatMap((p) => {
       if (typeof p?.name !== "string") return [];
-      const out = { name: p.name };
+      const purlRef = (p.externalRefs ?? []).find((r) => r.referenceType === "purl");
+      const out = { name: p.name, ecosystem: ecosystemFromPurl(purlRef?.referenceLocator) };
       if (typeof p.versionInfo === "string") out.version = p.versionInfo;
       return [out];
     });
@@ -47196,7 +47248,7 @@ function failDomain15(code, message) {
 }
 
 // src/tools/registerCustomRules.ts
-import { existsSync as existsSync28, readdirSync as readdirSync13 } from "node:fs";
+import { existsSync as existsSync28, readdirSync as readdirSync14 } from "node:fs";
 import { join as join35, resolve as resolve6 } from "node:path";
 var inputSchema11 = {
   project_path: ProjectPath,
@@ -47245,7 +47297,7 @@ function autoDiscover(projectPath) {
     const abs = join35(projectPath, dir);
     if (!existsSync28(abs)) continue;
     try {
-      const hasYaml = readdirSync13(abs).some((f) => /\.ya?ml$/.test(f));
+      const hasYaml = readdirSync14(abs).some((f) => /\.ya?ml$/.test(f));
       if (hasYaml) out.push(abs);
     } catch {
     }
@@ -49602,7 +49654,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID11 } from "node:crypto";
-import { existsSync as existsSync34, readFileSync as readFileSync20, readdirSync as readdirSync14, statSync as statSync10 } from "node:fs";
+import { existsSync as existsSync34, readFileSync as readFileSync20, readdirSync as readdirSync15, statSync as statSync10 } from "node:fs";
 import { join as join41, relative as relative4 } from "node:path";
 var PATTERNS = [
   {
@@ -49775,7 +49827,7 @@ function collectConfigFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     let entries;
     try {
-      entries = readdirSync14(dir);
+      entries = readdirSync15(dir);
     } catch {
       return;
     }
@@ -49801,7 +49853,7 @@ function collectConfigFiles(root, maxDepth) {
 
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
-import { readFileSync as readFileSync21, readdirSync as readdirSync15, statSync as statSync11 } from "node:fs";
+import { readFileSync as readFileSync21, readdirSync as readdirSync16, statSync as statSync11 } from "node:fs";
 import { join as join42, relative as relative5 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
@@ -49918,7 +49970,7 @@ function collectCsprojFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     let entries;
     try {
-      entries = readdirSync15(dir);
+      entries = readdirSync16(dir);
     } catch {
       return;
     }
@@ -49942,7 +49994,7 @@ function failDomain23(code, message) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
-import { existsSync as existsSync35, readFileSync as readFileSync22, readdirSync as readdirSync16, statSync as statSync12 } from "node:fs";
+import { existsSync as existsSync35, readFileSync as readFileSync22, readdirSync as readdirSync17, statSync as statSync12 } from "node:fs";
 import { join as join43, relative as relative6 } from "node:path";
 var RULES = [
   {
@@ -50001,7 +50053,7 @@ async function handler35(input, ctx) {
   for (const dir of migrationDirs) {
     let files;
     try {
-      files = readdirSync16(dir).filter((n2) => n2.endsWith(".cs"));
+      files = readdirSync17(dir).filter((n2) => n2.endsWith(".cs"));
     } catch {
       continue;
     }
@@ -50072,7 +50124,7 @@ function findMigrationsDirs(root) {
     if (depth > 6) return;
     let entries;
     try {
-      entries = readdirSync16(dir);
+      entries = readdirSync17(dir);
     } catch {
       return;
     }
@@ -51370,7 +51422,7 @@ import {
   lstatSync,
   mkdtempSync,
   readFileSync as readFileSync23,
-  readdirSync as readdirSync17,
+  readdirSync as readdirSync18,
   readlinkSync,
   realpathSync as realpathSync3,
   rmSync as rmSync2,
@@ -51665,7 +51717,7 @@ function collectDir(root) {
     if (dir === void 0) break;
     let entries;
     try {
-      entries = readdirSync17(dir);
+      entries = readdirSync18(dir);
     } catch {
       continue;
     }
@@ -53064,7 +53116,7 @@ function buildToolRun(run, via) {
 }
 
 // src/surface/specDiscover.ts
-import { readFileSync as readFileSync25, readdirSync as readdirSync18, statSync as statSync14 } from "node:fs";
+import { readFileSync as readFileSync25, readdirSync as readdirSync19, statSync as statSync14 } from "node:fs";
 import { join as join48, relative as relative8, resolve as resolve7, sep as sep4 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
@@ -53116,7 +53168,7 @@ function readCandidates(paths) {
 function walk3(root, dir) {
   let entries;
   try {
-    entries = readdirSync18(dir, { withFileTypes: true });
+    entries = readdirSync19(dir, { withFileTypes: true });
   } catch {
     return [];
   }

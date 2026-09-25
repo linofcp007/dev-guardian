@@ -386,40 +386,111 @@ describe('register_custom_rules', () => {
 });
 
 describe('sbom_diff', () => {
-  it('detects added / removed / changed components', async () => {
-    const plugin = makePlugin();
-    plugin.storage.scans.insert({
-      scan_id: 'sbom1',
-      scan_type: 'sbom',
-      project_path: '/p',
-      tree_hash: '',
-    });
+  function seedSbomScan(
+    plugin: PluginContext,
+    project: string,
+    scanId: string,
+    components: Array<{ name: string; version: string; purl?: string }>,
+  ): void {
+    const filePath = join(project, `${scanId}.cdx.json`);
+    writeFileSync(
+      filePath,
+      JSON.stringify({
+        bomFormat: 'CycloneDX',
+        specVersion: '1.5',
+        components: components.map((c) => ({
+          type: 'library',
+          name: c.name,
+          version: c.version,
+          ...(c.purl ? { purl: c.purl } : {}),
+        })),
+      }),
+      'utf8',
+    );
+    plugin.storage.scans.insert({ scan_id: scanId, scan_type: 'sbom', project_path: project, tree_hash: '' });
     plugin.storage.scans.finalize({
-      scan_id: 'sbom1',
+      scan_id: scanId,
       status: 'completed',
       tools_run: [],
       missing_tools: [],
-      meta: { top_packages: [{ name: 'a', version: '1' }, { name: 'b', version: '1' }] },
+      report_dir: filePath,
+      meta: {
+        file_path: filePath,
+        top_packages: components.slice(0, 25).map((c) => ({ name: c.name, version: c.version })),
+      },
     });
-    plugin.storage.scans.insert({
-      scan_id: 'sbom2',
-      scan_type: 'sbom',
-      project_path: '/p',
-      tree_hash: '',
-    });
-    plugin.storage.scans.finalize({
-      scan_id: 'sbom2',
-      status: 'completed',
-      tools_run: [],
-      missing_tools: [],
-      meta: { top_packages: [{ name: 'a', version: '2' }, { name: 'c', version: '1' }] },
-    });
+  }
 
-    const r = (await getTool('sbom_diff').handler({}, plugin)) as {
+  it('detects added / removed / changed components from the full SBOM file, not just the first 25', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    // 30 unchanged components (beyond the old top-25 cap) plus one changed,
+    // one added and one removed — all outside the first 25 in document order.
+    const bulk = Array.from({ length: 30 }, (_, i) => ({ name: `pkg-${i}`, version: '1.0.0' }));
+    seedSbomScan(plugin, project, 'sbom1', [...bulk, { name: 'a', version: '1' }, { name: 'b', version: '1' }]);
+    seedSbomScan(plugin, project, 'sbom2', [...bulk, { name: 'a', version: '2' }, { name: 'c', version: '1' }]);
+
+    const r = (await getTool('sbom_diff').handler({ project_path: project }, plugin)) as {
       ok: true;
-      summary: { added: number; removed: number; changed: number };
+      summary: { added: number; removed: number; changed: number; unchanged: number };
     };
-    expect(r.summary).toEqual({ added: 1, removed: 1, changed: 1, unchanged: 0 });
+    expect(r.summary).toEqual({ added: 1, removed: 1, changed: 1, unchanged: 30 });
+  });
+
+  it('keys components by (ecosystem, name) — same name in two ecosystems never collapses into one row', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedSbomScan(plugin, project, 'sbom1', [
+      { name: 'requests', version: '2.28.0', purl: 'pkg:pypi/requests@2.28.0' },
+    ]);
+    seedSbomScan(plugin, project, 'sbom2', [
+      { name: 'requests', version: '2.28.0', purl: 'pkg:pypi/requests@2.28.0' },
+      // A DIFFERENT ecosystem's package that happens to share the name —
+      // must show up as ADDED, never merged into the pypi one above.
+      { name: 'requests', version: '0.1.0', purl: 'pkg:npm/requests@0.1.0' },
+    ]);
+
+    const r = (await getTool('sbom_diff').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      summary: { added: number; changed: number; unchanged: number };
+      added: Array<{ name: string; ecosystem: string }>;
+    };
+    expect(r.summary).toEqual({ added: 1, removed: 0, changed: 0, unchanged: 1 });
+    expect(r.added).toEqual([{ name: 'requests', version: '0.1.0', ecosystem: 'npm' }]);
+  });
+
+  it('the default pair is scoped to project_path — another project\'s SBOM scans never leak in', async () => {
+    const projectA = tempProject();
+    const projectB = tempProject();
+    const plugin = makePlugin(projectB);
+    // Two SBOM scans of project A only.
+    seedSbomScan(plugin, projectA, 'a1', [{ name: 'left-pkg', version: '1' }]);
+    seedSbomScan(plugin, projectA, 'a2', [{ name: 'left-pkg', version: '2' }]);
+    // One SBOM scan of project B — not enough, on its own, for a default pair.
+    seedSbomScan(plugin, projectB, 'b1', [{ name: 'right-pkg', version: '1' }]);
+
+    const r = await getTool('sbom_diff').handler({ project_path: projectB }, plugin);
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('expected failure');
+    expect(r.error.message).toContain(projectB);
+  });
+
+  it('caps the response arrays but reports true, uncapped totals in summary', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    const manyAdded = Array.from({ length: 60 }, (_, i) => ({ name: `new-${i}`, version: '1.0.0' }));
+    seedSbomScan(plugin, project, 'sbom1', []);
+    seedSbomScan(plugin, project, 'sbom2', manyAdded);
+
+    const r = (await getTool('sbom_diff').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      summary: { added: number };
+      added: unknown[];
+      truncated: boolean;
+    };
+    expect(r.summary.added).toBe(60);
+    expect(r.added.length).toBeLessThan(60);
+    expect(r.truncated).toBe(true);
   });
 });
 
@@ -450,6 +521,124 @@ describe('license_compatibility', () => {
     )) as { ok: true; incompatibilities: Array<{ dep_license: string }> };
     expect(r.incompatibilities).toHaveLength(1);
     expect(r.incompatibilities[0]?.dep_license).toBe('AGPL-3.0');
+  });
+
+  function seedComplianceLicenses(
+    plugin: PluginContext,
+    project: string,
+    licenses: Array<{ license: string; packages: string[] }>,
+  ): void {
+    plugin.storage.scans.insert({ scan_id: 'c', scan_type: 'compliance', project_path: project, tree_hash: 'h' });
+    plugin.storage.scans.finalize({
+      scan_id: 'c',
+      status: 'completed',
+      tools_run: [],
+      missing_tools: [],
+      meta: { licenses_summary: licenses.map((l) => ({ ...l, risk: 'high' })) },
+    });
+  }
+
+  it('no declared license (the normal proprietary case) still flags a copyleft dependency, instead of returning zero issues', async () => {
+    const project = tempProject(); // no package.json, no LICENSE — nothing declared
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'GPL-3.0', packages: ['risky-pkg'] }]);
+
+    const r = (await getTool('license_compatibility').handler(
+      { project_path: project },
+      plugin,
+    )) as { ok: true; project_license: string | null; treated_as_proprietary: boolean; incompatibilities: Array<{ dep_license: string }> };
+
+    expect(r.project_license).toBeNull();
+    expect(r.treated_as_proprietary).toBe(true);
+    expect(r.incompatibilities).toHaveLength(1);
+    expect(r.incompatibilities[0]?.dep_license).toBe('GPL-3.0');
+  });
+
+  it('npm UNLICENSED is treated the same as no declared license — copyleft deps are still flagged', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"UNLICENSED"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'AGPL-3.0', packages: ['risky-pkg'] }]);
+
+    const r = (await getTool('license_compatibility').handler(
+      { project_path: project },
+      plugin,
+    )) as { ok: true; project_license: string | null; treated_as_proprietary: boolean; incompatibilities: Array<{ dep_license: string }> };
+
+    expect(r.project_license).toBe('UNLICENSED');
+    expect(r.treated_as_proprietary).toBe(true);
+    expect(r.incompatibilities).toHaveLength(1);
+  });
+
+  it('a permissive-licensed dependency raises no issue for a proprietary (no-license) project', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'MIT', packages: ['fine-pkg'] }]);
+
+    const r = (await getTool('license_compatibility').handler(
+      { project_path: project },
+      plugin,
+    )) as { ok: true; incompatibilities: unknown[] };
+    expect(r.incompatibilities).toEqual([]);
+  });
+
+  it('reads PackageLicenseExpression from a .csproj when no package.json/composer.json exists', async () => {
+    const project = tempProject();
+    writeFileSync(
+      join(project, 'Lib.csproj'),
+      '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><PackageLicenseExpression>MIT</PackageLicenseExpression></PropertyGroup></Project>',
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'AGPL-3.0', packages: ['risky-pkg'] }]);
+
+    const r = (await getTool('license_compatibility').handler(
+      { project_path: project },
+      plugin,
+    )) as { ok: true; project_license: string | null; incompatibilities: Array<{ dep_license: string }> };
+    expect(r.project_license).toBe('MIT');
+    expect(r.incompatibilities).toHaveLength(1);
+  });
+
+  it('reads the license field from composer.json', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'composer.json'), '{"name":"x/y","license":"MIT"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'GPL-2.0', packages: ['risky-pkg'] }]);
+
+    const r = (await getTool('license_compatibility').handler(
+      { project_path: project },
+      plugin,
+    )) as { ok: true; project_license: string | null; incompatibilities: Array<{ dep_license: string }> };
+    expect(r.project_license).toBe('MIT');
+    expect(r.incompatibilities).toHaveLength(1);
+  });
+
+  it('models GPL-2.0-only vs Apache-2.0 as an incompatibility (SPDX "-only" suffix)', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"GPL-2.0-only"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'Apache-2.0', packages: ['dep'] }]);
+
+    const r = (await getTool('license_compatibility').handler(
+      { project_path: project },
+      plugin,
+    )) as { ok: true; incompatibilities: Array<{ reason: string }> };
+    expect(r.incompatibilities).toHaveLength(1);
+    expect(r.incompatibilities[0]?.reason).toMatch(/patent termination/i);
+  });
+
+  it("models AGPL's network clause distinctly from ordinary viral copyleft", async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"MIT"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'AGPL-3.0', packages: ['risky-pkg'] }]);
+
+    const r = (await getTool('license_compatibility').handler(
+      { project_path: project },
+      plugin,
+    )) as { ok: true; incompatibilities: Array<{ reason: string }> };
+    expect(r.incompatibilities[0]?.reason).toMatch(/network/i);
   });
 });
 
