@@ -35,13 +35,9 @@ Análise de qualidade de código com foco em legibilidade, manutenibilidade e d�
 
 ### 1. Baseline rápido
 
-Antes de fazer recomendações, mede o estado atual:
+Antes de fazer recomendações, mede o estado atual com a ferramenta MCP `quality_check` (`project_path`).
 
-```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/scan/quality-scan.sh
-```
-
-Devolve JSON com métricas por ficheiro/função.
+Corre jscpd, ruff e radon (Python), ESLint (só se estiver instalado em `node_modules` — nunca via `npx`) e staticcheck (Go), e devolve findings classificados em `duplicate`, `complexity`, `smell` e `naming`. `categories` filtra a resposta; todos os findings ficam registados.
 
 ### 2. Apresentar overview, não despejar tudo
 

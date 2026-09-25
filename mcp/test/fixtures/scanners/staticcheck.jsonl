@@ -1,0 +1,4 @@
+{"code":"SA4006","severity":"error","location":{"file":"/home/u/proj/main.go","line":12,"column":2},"end":{"file":"/home/u/proj/main.go","line":12,"column":5},"message":"this value of err is never used"}
+{"code":"ST1003","severity":"warning","location":{"file":"/home/u/proj/util/names.go","line":4,"column":6},"end":{"file":"","line":0,"column":0},"message":"func Get_value should be GetValue"}
+{"code":"U1000","severity":"warning","location":{"file":"/home/u/proj/util/names.go","line":20,"column":6},"end":{"file":"","line":0,"column":0},"message":"func unused is unused"}
+{"code":"compile","severity":"error","location":{"file":"/home/u/proj/bad.go","line":3,"column":1},"end":{"file":"","line":0,"column":0},"message":"expected declaration, found oops"}
