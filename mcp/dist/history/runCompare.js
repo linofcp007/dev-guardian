@@ -33,7 +33,11 @@
  *     ok, which is a run with a narrower gap inside it (bug_hunt's pack
  *     retry, gitleaks' size limits);
  *   - NOT RUN when the bookkeeping never names a scanner the table knows —
- *     nuclei not requested, no image given: the scan did not look;
+ *     nuclei not requested, no image given: the scan did not look — and
+ *     when the older scan ran a pass with a target of its own
+ *     (`trivy-image`) that may have produced the finding, and the newer one
+ *     did not run that pass again: its Dockerfile pass measures the same
+ *     key, but never looked at the image;
  *   - for a tool the table does not know at all, measured only by a scan
  *     with no gap anywhere (coverage `full`), never by a partial one;
  *   - a scan with no bookkeeping at all (the oldest rows) measured
@@ -44,14 +48,14 @@
  */
 import { indexFindings } from '../fingerprint/findingIdentity.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
-import { KNOWN_FINDING_KEYS, findingKey, keysOfRun } from './runNames.js';
+import { KNOWN_FINDING_KEYS, findingKey, keysOfRun, runNameEntry } from './runNames.js';
 import { isOrchestratedFullScan, isScriptEraFullScan, scriptEraSlotOfFinding } from './scanRoles.js';
 /** A comparison with nothing unmeasured on either side (no reference scan row to read). */
 export const COMPLETE_COMPARISON = {
     isNotRemeasured: () => false,
     isNotPreviouslyMeasured: () => false,
-    isNotRunByTo: () => false,
-    isNotRunByFrom: () => false,
+    notRunByTo: () => null,
+    notRunByFrom: () => null,
     notMeasuredByTo: [],
     notMeasuredByFrom: [],
 };
@@ -177,26 +181,49 @@ function typeResolver(storage, scan) {
     }
     return () => scan.scan_type;
 }
-/**
- * How `scan` answers for findings like `f` (`fType` is `f`'s child type, in
- * the terms of {@link typeResolver}, or null). For an orchestrated run the
- * child of that type answers — a missing or unfinished child measured
- * nothing — and when the type cannot be told, the run's merged bookkeeping.
- */
-function measurer(storage, scan) {
+function booksOf(storage, scan) {
     if (!isOrchestratedFullScan(scan)) {
         const book = bookkeepingOf(storage, scan);
-        return (f) => bookkeepingVerdict(book, f);
+        return () => book;
     }
     const children = childrenOf(storage, scan);
-    return (f, fType) => {
+    return (fType) => {
         if (fType === null)
-            return bookkeepingVerdict(scan, f);
+            return scan;
         const child = children.find((c) => c.type === fType);
-        if (child === undefined || !usableChild(child))
-            return 'unmeasured';
-        return bookkeepingVerdict(child.row, f);
+        return child !== undefined && usableChild(child) ? child.row : null;
     };
+}
+/**
+ * The own-target pass (`runNames.ts`: `trivy-image`) that `older` ran ok,
+ * that may have produced `f`, and that `newer` did not run ok again — or
+ * null. `f` shares its key with passes that look elsewhere (an image's
+ * misconfiguration and a Dockerfile's are both `trivy:config`), so the
+ * newer scan's Dockerfile pass says nothing about the image.
+ */
+function ownTargetNotRerun(older, newer, f) {
+    if (older === null)
+        return null;
+    const key = findingKey(f);
+    for (const run of older.tools_run) {
+        if (run.status !== 'ok' || runNameEntry(run.name)?.ownTarget !== true)
+            continue;
+        if (!(keysOfRun(run.name, true)?.includes(key) ?? false))
+            continue;
+        if (!newer.tools_run.some((r) => r.name === run.name && r.status === 'ok'))
+            return run.name;
+    }
+    return null;
+}
+/** How `newer` answers for `f`, a finding of `older` (both already narrowed to `f`'s child). */
+function answerFor(older, newer, f) {
+    if (newer === null)
+        return { verdict: 'unmeasured', notRun: null };
+    const verdict = bookkeepingVerdict(newer, f);
+    if (verdict !== 'measured')
+        return { verdict, notRun: verdict === 'not_run' ? f.tool : null };
+    const pass = ownTargetNotRerun(older, newer, f);
+    return pass === null ? { verdict, notRun: null } : { verdict: 'not_run', notRun: pass };
 }
 /**
  * What `scan` did not measure, for a caller to name — exactly the names
@@ -242,13 +269,23 @@ export function notMeasured(storage, scan) {
 export function compareScansFor(storage, from, to) {
     const typeOfFrom = typeResolver(storage, from);
     const typeOfTo = typeResolver(storage, to);
-    const inTo = measurer(storage, to);
-    const inFrom = measurer(storage, from);
+    const fromBooks = booksOf(storage, from);
+    const toBooks = booksOf(storage, to);
+    /** `to`'s answer for a finding of `from`. */
+    const inTo = (f) => {
+        const t = typeOfFrom(f);
+        return answerFor(fromBooks(t), toBooks(t), f);
+    };
+    /** `from`'s answer for a finding of `to`. */
+    const inFrom = (f) => {
+        const t = typeOfTo(f);
+        return answerFor(toBooks(t), fromBooks(t), f);
+    };
     return {
-        isNotRemeasured: (f) => inTo(f, typeOfFrom(f)) !== 'measured',
-        isNotPreviouslyMeasured: (f) => inFrom(f, typeOfTo(f)) !== 'measured',
-        isNotRunByTo: (f) => inTo(f, typeOfFrom(f)) === 'not_run',
-        isNotRunByFrom: (f) => inFrom(f, typeOfTo(f)) === 'not_run',
+        isNotRemeasured: (f) => inTo(f).verdict !== 'measured',
+        isNotPreviouslyMeasured: (f) => inFrom(f).verdict !== 'measured',
+        notRunByTo: (f) => inTo(f).notRun,
+        notRunByFrom: (f) => inFrom(f).notRun,
         notMeasuredByTo: notMeasured(storage, to),
         notMeasuredByFrom: notMeasured(storage, from),
     };
@@ -270,17 +307,16 @@ export function classifyDiff(check, fromFindings, toFindings) {
         notRunByTo: [],
         notRunByFrom: [],
     };
-    const note = (list, tool) => {
-        if (!list.includes(tool))
-            list.push(tool);
+    const note = (list, name) => {
+        if (name !== null && !list.includes(name))
+            list.push(name);
     };
     for (const f of toFindings) {
         if (fromIndex.has(f))
             out.unchanged.push(f);
         else if (check.isNotPreviouslyMeasured(f)) {
             out.notPreviouslyMeasured.push(f);
-            if (check.isNotRunByFrom(f))
-                note(out.notRunByFrom, f.tool);
+            note(out.notRunByFrom, check.notRunByFrom(f));
         }
         else
             out.new.push(f);
@@ -290,8 +326,7 @@ export function classifyDiff(check, fromFindings, toFindings) {
             continue;
         if (check.isNotRemeasured(f)) {
             out.notRemeasured.push(f);
-            if (check.isNotRunByTo(f))
-                note(out.notRunByTo, f.tool);
+            note(out.notRunByTo, check.notRunByTo(f));
         }
         else
             out.resolved.push(f);

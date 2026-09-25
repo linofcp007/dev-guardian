@@ -19,7 +19,7 @@ import { TOOLS } from '../../src/tools/index.js';
 import { okResult } from '../helpers/toolResult.js';
 import { cleanupTempDirs } from '../helpers/tempDir.js';
 import type { ToolRun } from '../../src/types.js';
-import { freshPlugin, projectDir, seedOrchestratedRun, seedScan, type Seeded } from '../helpers/historySeed.js';
+import { freshPlugin, projectDir, seedOrchestratedRun, seedScan, type SeedFinding, type Seeded } from '../helpers/historySeed.js';
 
 afterAll(cleanupTempDirs);
 
@@ -566,5 +566,106 @@ describe('an audit_executive row is judged by its sub-scans, not by "the sub-too
     );
     expect(r.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
     expect(r.not_measured).toEqual(['semgrep']);
+  });
+});
+
+/**
+ * Task 15's scanners: scan_containers' `trivy image` now runs with
+ * `--scanners vuln,secret,misconfig`, hadolint lints the Dockerfile, a
+ * compose file is checked, and quality_check reads `.guardian/budgets.yml`.
+ */
+describe("Task 15's scanners in the comparison", () => {
+  const M = 'm'.repeat(64);
+  const H = 'h'.repeat(64);
+  const C = 'c'.repeat(64);
+  const B = 'b'.repeat(64);
+  const misconfig: SeedFinding = { fp: M, tool: 'trivy', subcategory: 'dockerfile', severity: 'high' };
+
+  function containers(first: ToolRun[], second: ToolRun[], findings: SeedFinding[] = [misconfig]): { s: Seeded; p: string } {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-containers-');
+    seedScan(s, { id: 'a', type: 'containers', project: p, tools_run: first, findings });
+    seedScan(s, { id: 'b', type: 'containers', project: p, tools_run: second });
+    return { s, p };
+  }
+  const diff = async (s: Seeded, p: string, scan_type: string): Promise<DiffOut> =>
+    okResult<DiffOut>(await tool('diff_scans').handler({ project_path: p, scan_type }, s.plugin));
+
+  it("an image's misconfiguration is resolved by the next image scan", async () => {
+    const { s, p } = containers([{ name: 'trivy-image', status: 'ok' }], [{ name: 'trivy-image', status: 'ok' }]);
+    expect((await diff(s, p, 'containers')).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+  });
+
+  it("an image's misconfiguration is not resolved by a run that scanned only the Dockerfile", async () => {
+    const { s, p } = containers(
+      [{ name: 'trivy-dockerfile', status: 'ok' }, { name: 'trivy-image', status: 'ok' }],
+      [{ name: 'trivy-dockerfile', status: 'ok' }],
+    );
+    const r = await diff(s, p, 'containers');
+    expect(r.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+    expect(r.not_measured).toEqual(['trivy-image']);
+    expect(r.note).toMatch(/trivy-image/);
+  });
+
+  it("control: a Dockerfile misconfiguration is resolved by the next Dockerfile scan, with or without an image", async () => {
+    for (const second of [
+      [{ name: 'trivy-dockerfile', status: 'ok' }],
+      [{ name: 'trivy-dockerfile', status: 'ok' }, { name: 'trivy-image', status: 'ok' }],
+    ] satisfies ToolRun[][]) {
+      const { s, p } = containers([{ name: 'trivy-dockerfile', status: 'ok' }], second);
+      expect((await diff(s, p, 'containers')).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+    }
+  });
+
+  it("hadolint's finding: resolved when hadolint ran, whatever else failed; not re-measured when it failed", async () => {
+    const lint = [{ fp: H, tool: 'hadolint', category: 'quality' as const, severity: 'medium' as const }];
+    const first: ToolRun[] = [{ name: 'trivy-dockerfile', status: 'ok' }, { name: 'hadolint', status: 'ok' }];
+    const ran = containers(
+      first,
+      [
+        { name: 'trivy-dockerfile', status: 'ok' },
+        { name: 'hadolint', status: 'ok' },
+        { name: 'docker-compose', status: 'failed', reason: 'could not read the compose file' },
+      ],
+      lint,
+    );
+    expect((await diff(ran.s, ran.p, 'containers')).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+    const failed = containers(first, [{ name: 'trivy-dockerfile', status: 'ok' }, { name: 'hadolint', status: 'failed' }], lint);
+    expect((await diff(failed.s, failed.p, 'containers')).summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+  });
+
+  it("a compose finding is resolved by a run that checked the compose file, whatever else failed", async () => {
+    const { s, p } = containers(
+      [{ name: 'trivy-dockerfile', status: 'ok' }, { name: 'docker-compose', status: 'ok' }],
+      [{ name: 'trivy-dockerfile', status: 'failed' }, { name: 'docker-compose', status: 'ok' }],
+      [{ fp: C, tool: 'docker-compose', severity: 'high' }],
+    );
+    expect((await diff(s, p, 'containers')).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+  });
+
+  it('a quality budget finding: resolved when budgets and jscpd ran, not re-measured when jscpd failed', async () => {
+    const budget = [{ fp: B, tool: 'budgets', rule_id: 'quality.duplication_pct', category: 'quality' as const, subcategory: 'budget', severity: 'medium' as const }];
+    const quality = (second: ToolRun[]): { s: Seeded; p: string } => {
+      const s = freshPlugin();
+      const p = projectDir('runcmp-budgets-');
+      seedScan(s, {
+        id: 'a', type: 'quality', project: p, findings: budget,
+        tools_run: [{ name: 'jscpd', status: 'ok' }, { name: 'eslint', status: 'ok' }, { name: 'budgets', status: 'ok' }],
+      });
+      seedScan(s, { id: 'b', type: 'quality', project: p, tools_run: second });
+      return { s, p };
+    };
+    const fixed = quality([
+      { name: 'jscpd', status: 'ok' },
+      { name: 'eslint', status: 'failed', reason: 'exit 2' },
+      { name: 'budgets', status: 'ok' },
+    ]);
+    expect((await diff(fixed.s, fixed.p, 'quality')).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+    const blind = quality([
+      { name: 'jscpd', status: 'failed', reason: 'no readable report was written' },
+      { name: 'eslint', status: 'ok' },
+      { name: 'budgets', status: 'ok' },
+    ]);
+    expect((await diff(blind.s, blind.p, 'quality')).summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
   });
 });

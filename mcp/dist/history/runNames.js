@@ -27,7 +27,9 @@
  * ok nuclei resolved every engine finding. This table replaces the guess.
  * It is exhaustive by test: `test/unit/history/runNames.test.ts` reads
  * every finding `tool` and every bookkeeping name out of `src/` and fails
- * on one this table does not place.
+ * on one this table does not place, on a name written through an
+ * expression the test has not been taught to read, and on an entry here
+ * that no scan writes any more.
  */
 /** Trivy's dependency / image pass: CVEs, licenses, secrets. */
 export const TRIVY_FS = 'trivy:fs';
@@ -64,18 +66,27 @@ export const RUN_NAMES = {
     'gitleaks-working-tree': scanner('gitleaks'),
     // Trivy, by pass.
     trivy: { measures: [TRIVY_FS], whenNotOk: [TRIVY_FS, TRIVY_CONFIG] },
-    'trivy-image': scanner(TRIVY_FS),
+    // `trivy image --scanners vuln,secret,misconfig`: CVEs and secrets, and
+    // the image's own misconfigurations.
+    'trivy-image': { measures: [TRIVY_FS, TRIVY_CONFIG], ownTarget: true },
     'trivy-config': scanner(TRIVY_CONFIG),
     'trivy-dockerfile': scanner(TRIVY_CONFIG),
     // deps_audit's native auditors, recorded by command.
     npm: scanner('npm-audit'),
     'pip-audit': scanner(), // captured as evidence only: no findings
-    // quality_check.
+    // quality_check. Its read of `.guardian/budgets.yml` measures the quality
+    // budgets against jscpd's and radon's own reports, so either one not
+    // running ok leaves the budget findings unmeasured too.
     eslint: scanner('eslint'),
     ruff: scanner('ruff'),
-    radon: scanner('radon'),
-    jscpd: scanner('jscpd'),
+    radon: { measures: ['radon'], whenNotOk: ['radon', 'budgets'] },
+    jscpd: { measures: ['jscpd'], whenNotOk: ['jscpd', 'budgets'] },
     staticcheck: scanner('staticcheck'),
+    budgets: scanner('budgets'),
+    // scan_containers, beside its Trivy passes: the Dockerfile linter and the
+    // compose-file hardening checks.
+    hadolint: scanner('hadolint'),
+    'docker-compose': scanner('docker-compose'),
     // scan_wordpress's PHPCS pass, and its missing_tools name.
     'phpcs-wpcs': scanner('phpcs'),
     phpcs: scanner('phpcs'),
@@ -105,10 +116,19 @@ export const RUN_NAMES = {
     // sub-scan's own bookkeeping instead whenever the row still exists; these
     // speak for a sub-tool that failed before it wrote one.
     security_scan_full: scanner('semgrep', 'bandit', 'security-code-scan', 'gitleaks', TRIVY_FS, TRIVY_CONFIG),
-    quality_check: scanner('eslint', 'ruff', 'radon', 'jscpd', 'staticcheck'),
+    quality_check: scanner('eslint', 'ruff', 'radon', 'jscpd', 'staticcheck', 'budgets'),
     deps_audit: scanner(TRIVY_FS, 'npm-audit'),
     compliance_check: scanner(TRIVY_FS),
     scan_wordpress: scanner('semgrep', 'gitleaks', TRIVY_FS, 'phpcs'),
+    // security_scan_full: its own entry for a child that threw, answered an
+    // error, or is not registered — the child wrote no bookkeeping of its own.
+    // (An audit reads these through the security_scan_full sub-scan.)
+    scan_sast: scanner('semgrep', 'bandit', 'security-code-scan'),
+    scan_secrets: scanner('gitleaks'),
+    scan_deps: scanner(TRIVY_FS),
+    scan_iac: scanner(TRIVY_CONFIG),
+    // generate_sbom: the producer of an SBOM row, which holds no findings.
+    syft: scanner(),
 };
 const BY_NAME = new Map(Object.entries(RUN_NAMES));
 /**

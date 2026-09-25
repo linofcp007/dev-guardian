@@ -8,7 +8,7 @@
  * `dast`), and a partial scan resolved their findings. So this test reads
  * `src/` for every finding `tool` a scanner can produce and every name a
  * scan writes to `tools_run` / `missing_tools`, and fails on either one the
- * table does not place.
+ * table does not place — or on a table name nothing writes any more.
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
@@ -41,12 +41,17 @@ const SOURCES = tsFiles(SRC).map((path) => ({
   text: readFileSync(path, 'utf8'),
 }));
 
-function collect(pattern: RegExp, only?: (file: string) => boolean): Array<{ file: string; value: string }> {
+/** Group 1 of every match; `absent` stands in for a match whose group 1 did not take part. */
+function collect(
+  pattern: RegExp,
+  only?: (file: string) => boolean,
+  absent?: string,
+): Array<{ file: string; value: string }> {
   const out: Array<{ file: string; value: string }> = [];
   for (const { file, text } of SOURCES) {
     if (only !== undefined && !only(file)) continue;
     for (const m of text.matchAll(pattern)) {
-      const value = m[1];
+      const value = m[1] ?? absent;
       if (value !== undefined) out.push({ file, value });
     }
   }
@@ -99,7 +104,59 @@ function bookkeepingNames(): string[] {
   }
   // scan_skill's OSV entry: `name: 'osv.dev', status: report.osv.online ? …`.
   found.push(...collect(/name:\s*'(osv\.dev)'/g));
+  // review_pr's per-file passes: `semgrepOnFiles` / `banditOnFiles` hand `name: '…'` to `scanFileBatches`.
+  found.push(...collect(/\bname:\s*'([^']+)'/g, (f) => f === 'runners/fileBatchScan.ts'));
+  // security_scan_full's own entry for a child that threw or answered an error: the child's name.
+  found.push(...collect(/const FIRST_CHILD\s*=\s*'([^']+)'/g));
+  found.push(...quoted(collect(/const OTHER_CHILDREN\s*=\s*\[([^\]]+)\]/g)));
+  // generate_sbom: `let producedBy: 'syft' | 'trivy' | null`.
+  found.push(...quoted(collect(/let producedBy:\s*([^=;]+)/g)));
   return [...new Set(found.map((x) => x.value))].sort();
+}
+
+/** Every `'…'` inside each collected value, as its own entry. */
+function quoted(xs: Array<{ file: string; value: string }>): Array<{ file: string; value: string }> {
+  return xs.flatMap((x) =>
+    [...x.value.matchAll(/'([^']+)'/g)].flatMap((m) => (m[1] === undefined ? [] : [{ file: x.file, value: m[1] }])),
+  );
+}
+
+/**
+ * Bookkeeping names a scan writes through an expression rather than a
+ * literal, and where {@link bookkeepingNames} reads each one's value. The
+ * collectors above only see literals; a new expression fails the test below
+ * until it is placed here — with the collector that reads it, or with why it
+ * never reaches a `scans` row. (`history/` is left out: it reads rows.)
+ */
+const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
+  'runners/gitleaksScan.ts:GITLEAKS_HISTORY': 'the GITLEAKS_* constants',
+  'runners/gitleaksScan.ts:GITLEAKS_WORKING_TREE': 'the GITLEAKS_* constants',
+  'runners/gitleaksScan.ts:name': 'a parameter only ever given a GITLEAKS_* constant',
+  'runners/fileBatchScan.ts:opts.name': "semgrepOnFiles' and banditOnFiles' `name: '…'`",
+  'tools/depsAudit.ts:opts.command': "tryNativeAudit's `command: '…'`",
+  'tools/qualityCheck.ts:name': "notInstalled's and record's name argument",
+  'tools/auditExecutive.ts:name': 'the *SUB_TOOLS arrays',
+  'tools/securityScanFull.ts:name': 'FIRST_CHILD and OTHER_CHILDREN',
+  'tools/scanDast.ts:DAST_ENGINE': 'DAST_ENGINE',
+  'tools/scanDast.ts:`${DAST_ENGINE}:unanswered`': 'the `${DAST_ENGINE}:…` passes',
+  'tools/scanDast.ts:`${DAST_ENGINE}:wall-clock`': 'the `${DAST_ENGINE}:…` passes',
+  'tools/generateSbom.ts:producedBy': "producedBy's declared type",
+  'tools/mapAttackSurface.ts:RECOVERY_STEP':
+    'never reaches a scans row: map_attack_surface returns its tools_run and caches the surface, writing no scan',
+  'tools/reviewPr.ts:...secrets.missing_tools': "a copy of gitleaksScan's names",
+  'tools/scanWordpress.ts:...secrets.missing_tools': "a copy of gitleaksScan's names",
+};
+
+/** Every `tools_run` / `missing_tools` write whose name is an expression, as `file:expression`. */
+function nameExpressions(): string[] {
+  const writes = (file: string): boolean => !file.startsWith('history/');
+  const found = [
+    // `{ name: GITLEAKS_HISTORY, status: … }`, `{ name, status: … }`, `{ name: `${DAST_ENGINE}:…`, status: … }`.
+    ...collect(/\{\s*name(?:\s*:\s*(`[^`]*`|[^,}]+?))?\s*,\s*status\s*:/g, writes, 'name'),
+    // `missing_tools.push(name)`, `missing_tools.push(...other.missing_tools)`.
+    ...collect(/(?:missing_tools|missingTools)\??\.push\(\s*([^)]+?)\s*\)/g, writes),
+  ];
+  return [...new Set(found.filter((x) => !/^'[^']*'$/.test(x.value)).map((x) => `${x.file}:${x.value}`))].sort();
 }
 
 /** The keys a finding of `tool` can have (Trivy and scan_skill split by pass). */
@@ -123,6 +180,7 @@ describe('runNames: exhaustive over the source', () => {
       expect.arrayContaining([
         'npm-audit', 'dast', 'nuclei', 'trivy', 'semgrep', 'gitleaks', 'bandit', 'phpcs', 'security-code-scan',
         'guardian-scanskill', 'scan_dotnet_secrets', 'dotnet_efcore_audit', 'wpscan', 'eslint', 'ruff',
+        'hadolint', 'docker-compose', 'budgets',
       ]),
     );
     expect(names).toEqual(
@@ -131,7 +189,11 @@ describe('runNames: exhaustive over the source', () => {
         'gitleaks', 'gitleaks-working-tree', 'trivy', 'trivy-image', 'trivy-config', 'trivy-dockerfile',
         'semgrep-wp', 'phpcs-wpcs', 'phpcs', 'dotnet-sdk', 'security-code-scan', 'osv.dev', 'jscpd',
         'security_scan_full', 'deps_audit', 'quality_check', 'compliance_check', 'scan_wordpress',
+        'hadolint', 'docker-compose', 'budgets', 'scan_sast', 'scan_iac', 'syft',
       ]),
+    );
+    expect(nameExpressions()).toEqual(
+      expect.arrayContaining(['runners/gitleaksScan.ts:GITLEAKS_HISTORY', 'tools/securityScanFull.ts:name']),
     );
   });
 
@@ -143,6 +205,15 @@ describe('runNames: exhaustive over the source', () => {
 
   it('every bookkeeping name a scan writes is in the table', () => {
     expect(names.filter((n) => !Object.hasOwn(RUN_NAMES, n))).toEqual([]);
+  });
+
+  it('every name written through an expression is one the collectors read (or never reaches a scan)', () => {
+    expect(nameExpressions().filter((x) => !Object.hasOwn(NAME_EXPRESSIONS, x))).toEqual([]);
+  });
+
+  it('every name in the table is still written by some scan (no stale entries)', () => {
+    expect(Object.keys(RUN_NAMES).filter((n) => !names.includes(n))).toEqual([]);
+    expect(Object.keys(NAME_EXPRESSIONS).filter((x) => !nameExpressions().includes(x))).toEqual([]);
   });
 });
 
@@ -157,13 +228,31 @@ describe('runNames: the pairs that do not share a name', () => {
     ['phpcs-wpcs', ['phpcs']],
     ['gitleaks-working-tree', ['gitleaks']],
     ['dotnet-sdk', ['security-code-scan']],
-    ['trivy-image', [TRIVY_FS]],
+    ['trivy-image', [TRIVY_FS, TRIVY_CONFIG]],
+    ['hadolint', ['hadolint']],
+    ['docker-compose', ['docker-compose']],
+    ['budgets', ['budgets']],
+    ['scan_sast', ['semgrep', 'bandit', 'security-code-scan']],
+    ['scan_iac', [TRIVY_CONFIG]],
+    ['syft', []],
     ['trivy-config', [TRIVY_CONFIG]],
     ['trivy-dockerfile', [TRIVY_CONFIG]],
     ['osv.dev', [SKILL_OSV]],
     ['deps_audit', [TRIVY_FS, 'npm-audit']],
   ])('%s measures %j', (name, keys) => {
     expect(keysOfRun(name, true)).toEqual(keys);
+  });
+
+  it("jscpd or radon not ok leaves the quality budgets unmeasured: they are read from those scanners' reports", () => {
+    expect(keysOfRun('jscpd', true)).toEqual(['jscpd']);
+    expect(keysOfRun('jscpd', false)).toEqual(['jscpd', 'budgets']);
+    expect(keysOfRun('radon', false)).toEqual(['radon', 'budgets']);
+  });
+
+  it('`trivy-image` looks at a target no other pass does; the Dockerfile and IaC passes do not', () => {
+    expect(runNameEntry('trivy-image')?.ownTarget).toBe(true);
+    expect(runNameEntry('trivy-dockerfile')?.ownTarget).toBeUndefined();
+    expect(runNameEntry('trivy-config')?.ownTarget).toBeUndefined();
   });
 
   it('`trivy` that ran ok is the dependency pass; not ok, Trivy is absent and no pass ran', () => {

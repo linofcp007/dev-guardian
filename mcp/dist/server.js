@@ -47621,19 +47621,28 @@ var RUN_NAMES = {
   "gitleaks-working-tree": scanner("gitleaks"),
   // Trivy, by pass.
   trivy: { measures: [TRIVY_FS], whenNotOk: [TRIVY_FS, TRIVY_CONFIG] },
-  "trivy-image": scanner(TRIVY_FS),
+  // `trivy image --scanners vuln,secret,misconfig`: CVEs and secrets, and
+  // the image's own misconfigurations.
+  "trivy-image": { measures: [TRIVY_FS, TRIVY_CONFIG], ownTarget: true },
   "trivy-config": scanner(TRIVY_CONFIG),
   "trivy-dockerfile": scanner(TRIVY_CONFIG),
   // deps_audit's native auditors, recorded by command.
   npm: scanner("npm-audit"),
   "pip-audit": scanner(),
   // captured as evidence only: no findings
-  // quality_check.
+  // quality_check. Its read of `.guardian/budgets.yml` measures the quality
+  // budgets against jscpd's and radon's own reports, so either one not
+  // running ok leaves the budget findings unmeasured too.
   eslint: scanner("eslint"),
   ruff: scanner("ruff"),
-  radon: scanner("radon"),
-  jscpd: scanner("jscpd"),
+  radon: { measures: ["radon"], whenNotOk: ["radon", "budgets"] },
+  jscpd: { measures: ["jscpd"], whenNotOk: ["jscpd", "budgets"] },
   staticcheck: scanner("staticcheck"),
+  budgets: scanner("budgets"),
+  // scan_containers, beside its Trivy passes: the Dockerfile linter and the
+  // compose-file hardening checks.
+  hadolint: scanner("hadolint"),
+  "docker-compose": scanner("docker-compose"),
   // scan_wordpress's PHPCS pass, and its missing_tools name.
   "phpcs-wpcs": scanner("phpcs"),
   phpcs: scanner("phpcs"),
@@ -47666,10 +47675,19 @@ var RUN_NAMES = {
   // sub-scan's own bookkeeping instead whenever the row still exists; these
   // speak for a sub-tool that failed before it wrote one.
   security_scan_full: scanner("semgrep", "bandit", "security-code-scan", "gitleaks", TRIVY_FS, TRIVY_CONFIG),
-  quality_check: scanner("eslint", "ruff", "radon", "jscpd", "staticcheck"),
+  quality_check: scanner("eslint", "ruff", "radon", "jscpd", "staticcheck", "budgets"),
   deps_audit: scanner(TRIVY_FS, "npm-audit"),
   compliance_check: scanner(TRIVY_FS),
-  scan_wordpress: scanner("semgrep", "gitleaks", TRIVY_FS, "phpcs")
+  scan_wordpress: scanner("semgrep", "gitleaks", TRIVY_FS, "phpcs"),
+  // security_scan_full: its own entry for a child that threw, answered an
+  // error, or is not registered — the child wrote no bookkeeping of its own.
+  // (An audit reads these through the security_scan_full sub-scan.)
+  scan_sast: scanner("semgrep", "bandit", "security-code-scan"),
+  scan_secrets: scanner("gitleaks"),
+  scan_deps: scanner(TRIVY_FS),
+  scan_iac: scanner(TRIVY_CONFIG),
+  // generate_sbom: the producer of an SBOM row, which holds no findings.
+  syft: scanner()
 };
 var BY_NAME = new Map(Object.entries(RUN_NAMES));
 function runNameEntry(name) {
@@ -47691,8 +47709,8 @@ var KNOWN_FINDING_KEYS = new Set(
 var COMPLETE_COMPARISON = {
   isNotRemeasured: () => false,
   isNotPreviouslyMeasured: () => false,
-  isNotRunByTo: () => false,
-  isNotRunByFrom: () => false,
+  notRunByTo: () => null,
+  notRunByFrom: () => null,
   notMeasuredByTo: [],
   notMeasuredByFrom: []
 };
@@ -47777,18 +47795,34 @@ function typeResolver(storage, scan2) {
   }
   return () => scan2.scan_type;
 }
-function measurer(storage, scan2) {
+function booksOf(storage, scan2) {
   if (!isOrchestratedFullScan(scan2)) {
     const book = bookkeepingOf(storage, scan2);
-    return (f) => bookkeepingVerdict(book, f);
+    return () => book;
   }
   const children = childrenOf(storage, scan2);
-  return (f, fType) => {
-    if (fType === null) return bookkeepingVerdict(scan2, f);
+  return (fType) => {
+    if (fType === null) return scan2;
     const child = children.find((c3) => c3.type === fType);
-    if (child === void 0 || !usableChild(child)) return "unmeasured";
-    return bookkeepingVerdict(child.row, f);
+    return child !== void 0 && usableChild(child) ? child.row : null;
   };
+}
+function ownTargetNotRerun(older, newer, f) {
+  if (older === null) return null;
+  const key = findingKey(f);
+  for (const run of older.tools_run) {
+    if (run.status !== "ok" || runNameEntry(run.name)?.ownTarget !== true) continue;
+    if (!(keysOfRun(run.name, true)?.includes(key) ?? false)) continue;
+    if (!newer.tools_run.some((r) => r.name === run.name && r.status === "ok")) return run.name;
+  }
+  return null;
+}
+function answerFor(older, newer, f) {
+  if (newer === null) return { verdict: "unmeasured", notRun: null };
+  const verdict = bookkeepingVerdict(newer, f);
+  if (verdict !== "measured") return { verdict, notRun: verdict === "not_run" ? f.tool : null };
+  const pass = ownTargetNotRerun(older, newer, f);
+  return pass === null ? { verdict, notRun: null } : { verdict: "not_run", notRun: pass };
 }
 function notMeasured(storage, scan2) {
   const out = [];
@@ -47819,13 +47853,21 @@ function notMeasured(storage, scan2) {
 function compareScansFor(storage, from, to) {
   const typeOfFrom = typeResolver(storage, from);
   const typeOfTo = typeResolver(storage, to);
-  const inTo = measurer(storage, to);
-  const inFrom = measurer(storage, from);
+  const fromBooks = booksOf(storage, from);
+  const toBooks = booksOf(storage, to);
+  const inTo = (f) => {
+    const t = typeOfFrom(f);
+    return answerFor(fromBooks(t), toBooks(t), f);
+  };
+  const inFrom = (f) => {
+    const t = typeOfTo(f);
+    return answerFor(toBooks(t), fromBooks(t), f);
+  };
   return {
-    isNotRemeasured: (f) => inTo(f, typeOfFrom(f)) !== "measured",
-    isNotPreviouslyMeasured: (f) => inFrom(f, typeOfTo(f)) !== "measured",
-    isNotRunByTo: (f) => inTo(f, typeOfFrom(f)) === "not_run",
-    isNotRunByFrom: (f) => inFrom(f, typeOfTo(f)) === "not_run",
+    isNotRemeasured: (f) => inTo(f).verdict !== "measured",
+    isNotPreviouslyMeasured: (f) => inFrom(f).verdict !== "measured",
+    notRunByTo: (f) => inTo(f).notRun,
+    notRunByFrom: (f) => inFrom(f).notRun,
     notMeasuredByTo: notMeasured(storage, to),
     notMeasuredByFrom: notMeasured(storage, from)
   };
@@ -47842,21 +47884,21 @@ function classifyDiff(check2, fromFindings, toFindings) {
     notRunByTo: [],
     notRunByFrom: []
   };
-  const note = (list2, tool46) => {
-    if (!list2.includes(tool46)) list2.push(tool46);
+  const note = (list2, name) => {
+    if (name !== null && !list2.includes(name)) list2.push(name);
   };
   for (const f of toFindings) {
     if (fromIndex.has(f)) out.unchanged.push(f);
     else if (check2.isNotPreviouslyMeasured(f)) {
       out.notPreviouslyMeasured.push(f);
-      if (check2.isNotRunByFrom(f)) note(out.notRunByFrom, f.tool);
+      note(out.notRunByFrom, check2.notRunByFrom(f));
     } else out.new.push(f);
   }
   for (const f of fromFindings) {
     if (toIndex.has(f)) continue;
     if (check2.isNotRemeasured(f)) {
       out.notRemeasured.push(f);
-      if (check2.isNotRunByTo(f)) note(out.notRunByTo, f.tool);
+      note(out.notRunByTo, check2.notRunByTo(f));
     } else out.resolved.push(f);
   }
   return out;
