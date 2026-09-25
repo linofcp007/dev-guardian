@@ -120,12 +120,20 @@ version bump.
   - **New: .NET SCA.** `deps_audit` now runs `dotnet list <target> package
     --vulnerable --include-transitive --format json` for every `.sln`/
     `.csproj` found, gated on the SDK — the only source of NuGet findings,
-    since Trivy cannot cover it at all without a lockfile. It restores only
-    when a direct `dotnet list` attempt fails (a scan must never modify the
-    working tree otherwise), and with `--locked-mode` whenever a tracked
-    `packages.lock.json` exists, so an out-of-date lock fails the restore
-    instead of being silently rewritten in place; `deps_update_plan`'s own
-    dotnet branch got the same fix.
+    since Trivy cannot cover it at all without a lockfile. Every `dotnet
+    list` call carries `--no-restore` — measured against a real SDK 10
+    install, `dotnet list package` restores IMPLICITLY otherwise, with no
+    `--locked-mode` equivalent, and silently rewrote a committed, out-of-
+    sync `packages.lock.json` on that FIRST call alone, before any of this
+    tool's own restore logic ran (a claim this changelog got wrong the first
+    time — the fix round 1 entry said restoring "only on failure" was
+    already enough). Restore is a separate, EXPLICIT step attempted only
+    when the `--no-restore` list attempt fails, with `--locked-mode`
+    whenever any `packages.lock.json` belongs to the target — discovered
+    per `.csproj`, not by checking next to a `.sln` itself (a solution's own
+    directory is almost never where a lock file lives) — so an out-of-date
+    lock fails the restore instead of being silently rewritten in place;
+    `deps_update_plan`'s own dotnet branch got the same fix.
   - `pip-audit` ran bare, auditing the MCP host's own Python, and its output
     was never parsed; an exit-1 resolution failure with no valid report was
     also misread as a clean, successful scan. Now run once PER
