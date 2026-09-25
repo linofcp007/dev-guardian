@@ -455,7 +455,10 @@ describe('mergeRulesBlock', () => {
       });
     });
 
-    // The exact regression reported: case A.
+    // The exact regression reported: case A. Fix round 3, item 1: these now
+    // pin the EXACT output (`toBe`, not `toContain`) — a `toContain`-only
+    // assertion is exactly what let the suffix cut-point bug (see below)
+    // ship unnoticed in fix round 2.
     describe('PREFIX match — the known template with user content appended after it', () => {
       const withUserContentAfter = `${legacyAgentsMd}\n## Team rules\nNever touch prod.\n`;
 
@@ -465,20 +468,39 @@ describe('mergeRulesBlock', () => {
         expect(r.content).toBeUndefined();
       });
 
-      it('--update-mcp (force) preserves "Never touch prod" BYTE-FOR-BYTE, replacing only the matched region', () => {
+      it('--update-mcp (force) preserves "Never touch prod" BYTE-FOR-BYTE — EXACT output, replacing only the matched region', () => {
         const r = mergeRulesBlock(withUserContentAfter, rendered, true, knownTemplates);
         expect(r.status).toBe('merged');
-        const content = contentOrThrow(r);
-        // The exact text the regression deleted, verbatim.
-        expect(content).toContain('## Team rules\nNever touch prod.\n');
-        expect(content).toContain(rendered);
-        expect(content).not.toContain('54 tools and 18 resources');
-        expect((content.match(/Never touch prod\./g) ?? [])).toHaveLength(1);
+        expect(contentOrThrow(r)).toBe(
+          `${RULES_BLOCK_BEGIN}\n${rendered}\n${RULES_BLOCK_END}\n\n## Team rules\nNever touch prod.\n`,
+        );
+      });
+
+      it('does NOT strip the remainder\'s own leading indentation — only leading BLANK lines (fix round 3, item 1)', () => {
+        const withIndentedContent = `${legacyAgentsMd}\n\n  - indented list item\nNever touch prod.\n`;
+        const r = mergeRulesBlock(withIndentedContent, rendered, true, knownTemplates);
+        // Leading blank lines are stripped (any number of them — here,
+        // legacyAgentsMd's own trailing "\n" plus the two more in the
+        // literal above), but the list item's OWN "  " indentation must
+        // survive: a blanket `replace(/^\s+/, '')` would have eaten it too.
+        expect(contentOrThrow(r)).toBe(
+          `${RULES_BLOCK_BEGIN}\n${rendered}\n${RULES_BLOCK_END}\n\n  - indented list item\nNever touch prod.\n`,
+        );
       });
     });
 
+    // The exact regression reported: case A's suffix-shaped twin, AND the
+    // fix round 3, item 1 regression: a suffix match used to leak the
+    // matched template's own first few bytes into the "preserved" prefix —
+    // `matchedLength` was measured against `normalisedExisting.trimEnd()`
+    // but sliced from the UN-trimmed text, so `k` trailing whitespace
+    // characters after the template caused the first `k` characters of the
+    // TEMPLATE itself to survive in front of the fresh block. Verified with
+    // the CLI directly: 3 trailing newlines leaked "Thi" (the start of
+    // "This repository has…").
     describe('SUFFIX match — user content followed by the known template', () => {
       const withUserContentBefore = `## Team rules\nNever touch prod.\n\n${legacyAgentsMd}`;
+      const expectedOutput = `## Team rules\nNever touch prod.\n\n${RULES_BLOCK_BEGIN}\n${rendered}\n${RULES_BLOCK_END}\n`;
 
       it('needs_update when force is off — and the file is completely untouched', () => {
         const r = mergeRulesBlock(withUserContentBefore, rendered, false, knownTemplates);
@@ -486,13 +508,36 @@ describe('mergeRulesBlock', () => {
         expect(r.content).toBeUndefined();
       });
 
-      it('--update-mcp (force) preserves "Never touch prod" BYTE-FOR-BYTE, replacing only the matched region', () => {
+      it('--update-mcp (force) preserves "Never touch prod" BYTE-FOR-BYTE — EXACT output, replacing only the matched region', () => {
         const r = mergeRulesBlock(withUserContentBefore, rendered, true, knownTemplates);
         expect(r.status).toBe('merged');
+        expect(contentOrThrow(r)).toBe(expectedOutput);
+      });
+
+      // The exact regression: several trailing newlines AFTER the template
+      // (a real legacy file's own single trailing "\n", plus extra blank
+      // lines a user or editor added) must not change the output AT ALL —
+      // the cut point is found by locating the template directly, not by
+      // subtracting a length from the end of the string.
+      it('several trailing newlines after the template do not leak any of the template\'s own text', () => {
+        const withExtraTrailingNewlines = `## Team rules\nNever touch prod.\n\n${legacyAgentsMd}\n\n\n`;
+        const r = mergeRulesBlock(withExtraTrailingNewlines, rendered, true, knownTemplates);
+        expect(r.status).toBe('merged');
+        // Identical to the single-trailing-newline case above — proof the
+        // extra trailing whitespace has no effect on correctness.
+        expect(contentOrThrow(r)).toBe(expectedOutput);
+        // The literal fragment the bug produced, named explicitly.
+        expect(contentOrThrow(r)).not.toContain('Thi\n');
+      });
+
+      it('preserves the remainder\'s own CRLF line endings — never downgraded to LF (fix round 3, item 1)', () => {
+        const crlfBefore = '## Team rules\r\nNever touch prod.\r\n\r\n';
+        const withCrlfUserContent = `${crlfBefore}${legacyAgentsMd}`;
+        const r = mergeRulesBlock(withCrlfUserContent, rendered, true, knownTemplates);
+        expect(r.status).toBe('merged');
         const content = contentOrThrow(r);
-        expect(content).toContain('## Team rules\nNever touch prod.');
-        expect(content).toContain(rendered);
-        expect(content).not.toContain('54 tools and 18 resources');
+        expect(content).toContain('## Team rules\r\nNever touch prod.');
+        expect(content).not.toContain('## Team rules\nNever touch prod.\n\n<!--'); // never silently LF-ified
       });
     });
 

@@ -385,23 +385,30 @@ function wrapRulesBlock(rendered: string): string {
  */
 const LEGACY_MENTION_SIGNATURE = /dev-guardian MCP server/;
 
-/** CRLF → LF, for comparing content that may have been written or hand-edited
- *  on either platform. Comparisons/matching in `mergeRulesBlock` work
- *  entirely in this normalised space; only KNOWN template text and (for a
- *  prefix/suffix match) the untouched remainder ever reach the output, so no
- *  information is lost — a CRLF file that fails every match still reaches
- *  the caller with its ORIGINAL bytes on the safe "genuinely foreign, no
- *  match at all" append path, which never re-serialises `existing`. */
+/** CRLF → LF, used ONLY to DETECT a match (`findLegacyTemplateMatch`) —
+ *  never to build output. A user's copy of an old template may have been
+ *  saved with either line ending, so detection has to tolerate both; the
+ *  ACTUAL replacement (`replaceLegacyTemplateSpan`) re-locates the same
+ *  match directly in the ORIGINAL, un-normalised text (see its own doc
+ *  comment) specifically so a CRLF remainder is never silently downgraded
+ *  to LF. */
 function normaliseLineEndings(text: string): string {
   return text.replace(/\r\n/g, '\n');
 }
 
 interface LegacyTemplateMatch {
   kind: 'exact' | 'prefix' | 'suffix';
-  /** Length, in the NORMALISED existing text, of the region that is the
-   *  known template — the whole file for `exact`, otherwise the prefix or
-   *  suffix span to replace. */
-  matchedLength: number;
+  /** The exact known-template text that matched (already CRLF-normalised
+   *  and trimmed) — re-located in the ORIGINAL text by
+   *  `replaceLegacyTemplateSpan` via a CRLF-tolerant pattern built from
+   *  this same string, rather than any length/offset computed here being
+   *  reused directly. Fix round 3, item 1: a length measured in the
+   *  NORMALISED text was previously sliced out of the UN-normalised one —
+   *  correct only when the file had no trailing whitespace at all after a
+   *  suffix match, and wrong by exactly the trailing-whitespace count
+   *  otherwise (reproduced: 3 trailing newlines leaked the template's own
+   *  first 3 characters into the "preserved" remainder). */
+  template: string;
 }
 
 /**
@@ -423,31 +430,68 @@ function findLegacyTemplateMatch(
     .filter((t) => t.length > 0);
 
   for (const template of normalisedTemplates) {
-    if (trimmedExisting === template) return { kind: 'exact', matchedLength: normalisedExisting.length };
+    if (trimmedExisting === template) return { kind: 'exact', template };
   }
   for (const template of normalisedTemplates) {
-    if (normalisedExisting.startsWith(template)) return { kind: 'prefix', matchedLength: template.length };
-    if (normalisedExisting.trimEnd().endsWith(template)) {
-      return { kind: 'suffix', matchedLength: template.length };
-    }
+    if (normalisedExisting.startsWith(template)) return { kind: 'prefix', template };
+    if (normalisedExisting.trimEnd().endsWith(template)) return { kind: 'suffix', template };
   }
   return null;
 }
 
-/** Builds the `merged` content for a prefix/suffix legacy-template match —
- *  the matched span becomes the wrapped block; the REST of the file (the
- *  part that is NOT the known template) is preserved byte-for-byte, only
- *  trimmed of the whitespace immediately touching the old boundary so the
- *  join reads as one blank-line-separated document rather than accumulating
- *  runs of blank lines. */
-function replaceLegacyTemplateSpan(normalisedExisting: string, match: LegacyTemplateMatch, block: string): string {
+/** Escapes `s` for literal use inside a `RegExp` source. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * A `RegExp` SOURCE that matches `normalisedTrimmedTemplate` against text
+ * using EITHER line-ending convention — every `\n` in the template becomes
+ * `\r?\n` in the pattern. Searching the ORIGINAL (un-normalised) `existing`
+ * text with this is what lets `replaceLegacyTemplateSpan` locate the
+ * template's REAL byte range there directly, rather than computing an
+ * offset in normalised space and reapplying it to different text (fix round
+ * 3, item 1's bug) — everything outside that range, remainder included, is
+ * then whatever `existing` actually contained, CRLF or not.
+ */
+function crlfTolerantTemplateSource(normalisedTrimmedTemplate: string): string {
+  return escapeRegExp(normalisedTrimmedTemplate).replace(/\n/g, '\r?\n');
+}
+
+/**
+ * Builds the `merged` content for a prefix/suffix legacy-template match —
+ * the matched span becomes the wrapped block; the REST of `existing` (the
+ * part that is NOT the known template) is preserved byte-for-byte, INCLUDING
+ * its own original line endings (fix round 3, item 1) — `existing` here is
+ * the ORIGINAL text, never the CRLF-normalised copy `findLegacyTemplateMatch`
+ * used only to detect the match. Only whitespace-only LINES immediately
+ * touching the old boundary are trimmed, so the join reads as one
+ * blank-line-separated document rather than accumulating runs of blank
+ * lines — never a user's own leading INDENTATION on their first real line
+ * (fix round 3, item 1: `replace(/^\s+/, '')` used to strip that too).
+ */
+function replaceLegacyTemplateSpan(existing: string, match: LegacyTemplateMatch, block: string): string {
   if (match.kind === 'exact') return block;
+
+  const pattern = new RegExp(crlfTolerantTemplateSource(match.template));
+  const found = pattern.exec(existing);
+  // Always found in practice — `findLegacyTemplateMatch` already confirmed
+  // this exact template matches as a prefix/suffix of the CRLF-normalised
+  // text, and this pattern is that same template's own CRLF-tolerant form.
+  // Falling back to a plain block (never throwing) is a defensive floor for
+  // a mismatch between the two detection passes, not an expected path.
+  if (!found) return block;
+
   if (match.kind === 'prefix') {
-    const rest = normalisedExisting.slice(match.matchedLength).replace(/^\s+/, '');
+    // Strips leading BLANK lines only (optional non-newline whitespace,
+    // then a line break, repeated) — stops at the first line carrying real
+    // content, so that line's own leading indentation survives.
+    const rest = existing.slice(found.index + found[0].length).replace(/^(?:[^\S\n]*\r?\n)+/, '');
     return rest ? `${block}\n${rest}` : block;
   }
-  // suffix
-  const before = normalisedExisting.slice(0, normalisedExisting.length - match.matchedLength).replace(/\s+$/, '');
+  // suffix — symmetric: strips trailing blank lines only, up to (and
+  // including) the boundary right before the matched template.
+  const before = existing.slice(0, found.index).replace(/(?:\r?\n[^\S\r\n]*)+$/, '');
   return before ? `${before}\n\n${block}` : block;
 }
 
@@ -482,10 +526,12 @@ function replaceLegacyTemplateSpan(normalisedExisting: string, match: LegacyTemp
  * reported `needs_update`, and `--update-mcp` then deleted the user's own
  * text in both. Never safe: the substring match alone proves nothing about
  * how much of the file is actually dev-guardian's. This parameter instead
- * supplies the EXACT, byte-known bodies of every legacy template this
- * project has ever shipped (see `setup.ts`'s `loadKnownLegacyTemplates`),
- * and nothing is ever rewritten unless a region of `existing` can be PROVEN
- * to be one of them:
+ * supplies the EXACT, byte-known bodies of the legacy templates this
+ * project has captured so far (currently: 2.0.0's own shared-host bodies —
+ * see `setup.ts`'s `loadKnownLegacyTemplates` for exactly which, and why
+ * that is "2.0.0's" rather than "every version ever shipped"), and nothing
+ * is ever rewritten unless a region of `existing` can be PROVEN to be one of
+ * them:
  *   - No existing file (or empty): write just the wrapped block. `written`.
  *   - Existing file, no markers found, no known-template match anywhere,
  *     and no mere MENTION of dev-guardian either: APPEND the block — every
@@ -530,7 +576,11 @@ export function mergeRulesBlock(
     const legacyMatch = findLegacyTemplateMatch(normalisedExisting, knownLegacyTemplates);
     if (legacyMatch) {
       if (!force) return { status: 'needs_update' };
-      return { status: 'merged', content: replaceLegacyTemplateSpan(normalisedExisting, legacyMatch, block) };
+      // Original (un-normalised) `existing`, not `normalisedExisting` — see
+      // `replaceLegacyTemplateSpan`'s own doc comment for why (fix round 3,
+      // item 1): it re-locates the match in the REAL text itself, so a
+      // CRLF remainder is preserved as CRLF, not silently downgraded.
+      return { status: 'merged', content: replaceLegacyTemplateSpan(existing, legacyMatch, block) };
     }
     if (LEGACY_MENTION_SIGNATURE.test(existing)) {
       // Mentions dev-guardian, but not provably ONE of the known templates

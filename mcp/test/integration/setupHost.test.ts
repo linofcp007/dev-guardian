@@ -176,7 +176,7 @@ describe('setupHost — rules files', () => {
   // real matching this project's own install path uses, not a fabricated
   // stand-in.
   const REAL_LEGACY_AGENTS_MD = readFileSync(
-    resolve(fileURLToPath(new URL('../../src/hostsetup/legacyRulesTemplates/AGENTS.md', import.meta.url))),
+    resolve(fileURLToPath(new URL('../../src/hostsetup/legacyRulesTemplates/agents-2.0.0.md.txt', import.meta.url))),
     'utf8',
   );
 

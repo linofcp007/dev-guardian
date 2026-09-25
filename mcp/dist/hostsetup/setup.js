@@ -16,11 +16,28 @@ import { ALL_HOSTS, effectiveScope, HOST_SPECS, } from './hostSpecs.js';
 import { buildManualSnippet, buildServerEntry, mergeJsonConfig, mergeOwnedRulesFile, mergeRulesBlock, mergeTomlConfig, resolveMcpConfigPath, RULES_BLOCK_BEGIN, RULES_BLOCK_END, } from './mcpConfig.js';
 import { substituteCliPath } from './rulesTemplate.js';
 /**
- * Directory of KNOWN, byte-exact legacy rules-template snapshots — every
- * shared-host body (`AGENTS.md`, `GEMINI.md`, copilot instructions,
- * `clinerules`) this project has ever shipped, from before item 7's
- * canonical-body unification. Sits next to this module's own compiled
- * location (`mcp/dist/hostsetup/legacyRulesTemplates/`, copied there by
+ * Directory of KNOWN, byte-exact legacy rules-template snapshots. Fix round
+ * 3, item 2: named non-magically on purpose — `agents-2.0.0.md.txt`, not
+ * `AGENTS.md` — because Gemini CLI and other AGENTS.md-aware tools treat a
+ * NESTED file with that literal name as live, directory-scoped instructions
+ * of their own; a contributor's own agent would otherwise pick up this
+ * project's stale, pre-item-7 bodies (the unqualified "no telemetry" claim,
+ * `guardian://wp/audit/{id}`) merely by having this repo checked out.
+ *
+ * Currently holds ONLY the 2.0.0 shared-host bodies (`AGENTS.md`/codex,
+ * `GEMINI.md`/gemini, copilot instructions, `clinerules`) — NOT "every
+ * version this project has ever shipped": only 2.0.0's own text was
+ * captured (from this repo's own git history, `git show
+ * 158ae41:host-rules/<file>`). An installed copy from an OLDER release that
+ * happens to differ from 2.0.0's own wording will not match here; that is
+ * an accepted gap, not a bug — `mergeRulesBlock` falls through to
+ * `manual_merge_required` for it (safe: nothing is ever guessed at or
+ * silently rewritten), never anything worse. Extend this directory with
+ * more `<host>-<version>.md.txt` snapshots if an earlier release's own
+ * wording turns out to matter in practice.
+ *
+ * Sits next to this module's own compiled location
+ * (`mcp/dist/hostsetup/legacyRulesTemplates/`, copied there by
  * `scripts/copy-assets.mjs` — same convention as `storage/migrations/*.sql`)
  * so it resolves correctly whether this file is running from `dist/`
  * (production) or `src/` (dev, via tsx) without either needing to know

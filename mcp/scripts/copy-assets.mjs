@@ -10,7 +10,7 @@
  * cross-platform.
  */
 
-import { cpSync, existsSync, mkdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -30,11 +30,23 @@ const pairs = [
     // no extension-based filtering needed (unlike migrations/, this
     // directory holds nothing else).
     filter: () => true,
+    // Fix round 3, item 2: `cpSync` only ever ADDS/overwrites — renaming a
+    // source file here (as this same fix did, to non-magic names Gemini
+    // CLI / AGENTS.md-aware tools won't treat as live instructions) leaves
+    // the OLD-named copy sitting in `dist/` forever otherwise, silently
+    // wrong (stale content, under a name nothing in `src/` produces
+    // anymore) until someone notices. `clean: true` wipes the destination
+    // before every copy so it can only ever hold what `src/` currently
+    // does — deliberately scoped to this ONE pair, not migrations/, which
+    // has never had a rename and whose behaviour this fix has no reason to
+    // touch.
+    clean: true,
   },
 ];
 
-for (const { from, to, filter } of pairs) {
+for (const { from, to, filter, clean } of pairs) {
   if (!existsSync(from)) continue;
+  if (clean) rmSync(to, { recursive: true, force: true });
   if (!existsSync(to)) mkdirSync(to, { recursive: true });
   cpSync(from, to, { recursive: true, filter: (src) => filter(src) });
   console.log(`copied ${from} -> ${to}`);
