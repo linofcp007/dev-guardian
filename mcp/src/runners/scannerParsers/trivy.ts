@@ -12,6 +12,7 @@
  * without re-deriving them from `findings`.
  */
 
+import { readdirSync } from 'node:fs';
 import type { Category, Finding, Severity } from '../../types.js';
 import {
   asArray,
@@ -178,4 +179,101 @@ function mapSecret(raw: unknown, target: string, ctx: ParserContext): Finding | 
   if (lineStart !== undefined) input.line_start = lineStart;
   if (lineEnd !== undefined) input.line_end = lineEnd;
   return makeFinding(input);
+}
+
+// ---------------------------------------------------------------- manifest coverage
+//
+// Task 10, item 1: a bare `.csproj` (no `packages.lock.json`) is silently
+// "not scanned" by Trivy fs — reproduced against Trivy 0.69.3: the JSON
+// report omits the `Results` key entirely (identical to an empty project),
+// while stderr only ever logs `Number of language-specific files num=0`.
+// The caller (scanDeps.ts / depsAudit.ts) used to read that as `ok`, 0
+// findings — a clean bill of health for a project that was never scanned.
+//
+// The same silent gap exists for `package.json` without any npm/yarn/pnpm
+// lockfile and for `composer.json` without `composer.lock` — confirmed the
+// same way. It does NOT exist for `requirements.txt` (pip) or `go.mod`
+// (go): both are scanned by Trivy from the bare manifest alone, no lockfile
+// required — also confirmed against 0.69.3 — so they are deliberately
+// excluded from this table; flagging them would be a false alarm.
+
+interface EcosystemManifest {
+  /** Human label used in `ManifestCoverageGap.ecosystem`. */
+  ecosystem: string;
+  /** Matches a top-level directory entry name against this ecosystem. */
+  matches: (name: string) => boolean;
+  /** Trivy `Results[].Type` values that count as this ecosystem being
+   *  covered by whatever Trivy actually scanned (its lockfile, not
+   *  necessarily the manifest file itself — Trivy reports the LOCKFILE as
+   *  `Target`, so matching is done on `Type`, never on `Target`). */
+  trivyTypes: readonly string[];
+}
+
+const ECOSYSTEM_MANIFESTS: readonly EcosystemManifest[] = [
+  { ecosystem: 'npm', matches: (n) => n === 'package.json', trivyTypes: ['npm', 'yarn', 'pnpm', 'bun'] },
+  { ecosystem: 'composer', matches: (n) => n === 'composer.json', trivyTypes: ['composer'] },
+  {
+    ecosystem: 'dotnet',
+    matches: (n) => /\.(csproj|sln)$/i.test(n),
+    trivyTypes: ['nuget'],
+  },
+  { ecosystem: 'rubygems', matches: (n) => n === 'Gemfile', trivyTypes: ['bundler'] },
+  { ecosystem: 'cargo', matches: (n) => n === 'Cargo.toml', trivyTypes: ['cargo'] },
+];
+
+export interface ManifestCoverageGap {
+  ecosystem: string;
+  /** The manifest file(s) found at the project root for this ecosystem. */
+  files: string[];
+}
+
+export interface ManifestCoverageAssessment {
+  /** Ecosystems with a manifest present that Trivy's own output shows no
+   *  Result for. Empty when nothing was missed. */
+  gaps: ManifestCoverageGap[];
+  /** Whether Trivy's `Results` array had ANY entry at all (any ecosystem,
+   *  not just the ones in {@link ECOSYSTEM_MANIFESTS}) — used to tell a
+   *  scan that recognised nothing whatsoever (skip the tool run entirely)
+   *  from one that covered some ecosystems but missed others (still ok,
+   *  reduced coverage). */
+  sawAnyResults: boolean;
+}
+
+/**
+ * Assess whether Trivy's fs-scan output covers every dependency manifest
+ * actually present at the project's top level. Only the project ROOT is
+ * checked — same shallow scope as `license_compatibility`'s manifest
+ * detection — because a manifest buried in a subdirectory (a monorepo
+ * package) is Trivy's own concern to find or not; this only detects the
+ * specific silent gap described above (manifest present, lockfile absent,
+ * `Results` never mentions it).
+ */
+export function assessManifestCoverage(
+  projectPath: string,
+  rawTrivyOutput: unknown,
+): ManifestCoverageAssessment {
+  let entries: string[];
+  try {
+    entries = readdirSync(projectPath);
+  } catch {
+    return { gaps: [], sawAnyResults: false };
+  }
+
+  const root = parseInputAsJson(rawTrivyOutput);
+  const results = asArray(getProp(root, 'Results'));
+  const coveredTypes = new Set<string>();
+  for (const result of results) {
+    const type = getString(result, 'Type');
+    if (type) coveredTypes.add(type);
+  }
+
+  const gaps: ManifestCoverageGap[] = [];
+  for (const eco of ECOSYSTEM_MANIFESTS) {
+    const files = entries.filter((n) => eco.matches(n));
+    if (files.length === 0) continue;
+    const covered = eco.trivyTypes.some((t) => coveredTypes.has(t));
+    if (!covered) gaps.push({ ecosystem: eco.ecosystem, files });
+  }
+
+  return { gaps, sawAnyResults: results.length > 0 };
 }

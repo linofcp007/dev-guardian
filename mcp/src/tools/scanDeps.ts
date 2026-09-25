@@ -11,7 +11,7 @@
  */
 
 import { join } from 'node:path';
-import { trivyParser } from '../runners/scannerParsers/trivy.js';
+import { assessManifestCoverage, trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { ToolRun } from '../types.js';
@@ -82,10 +82,30 @@ registerToolModule(
 
       const raw = readJsonSafe(outFile);
       if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
-      tools_run.push({
-        name: 'trivy',
-        status: result.outcome === 'completed' ? 'ok' : 'failed',
-      });
+
+      const extras: Record<string, unknown> = {};
+      if (result.outcome !== 'completed') {
+        tools_run.push({ name: 'trivy', status: 'failed' });
+      } else {
+        const coverage = assessManifestCoverage(ctx.projectPath, raw ?? '');
+        if (coverage.gaps.length > 0) {
+          // A manifest Trivy recognises nothing for (e.g. a bare .csproj with
+          // no packages.lock.json) must never read as a clean scan — see
+          // trivy.ts's own module comment. `skipped` when Trivy's whole
+          // Results array was empty (it ran, but covered nothing this
+          // project has); `ok` with a reason when SOME ecosystems were
+          // covered and this one specifically was not.
+          tools_run.push({
+            name: 'trivy',
+            status: coverage.sawAnyResults ? 'ok' : 'skipped',
+            reason: 'no_supported_manifest',
+          });
+          missing_tools.push('trivy');
+          extras['manifest_coverage_gaps'] = coverage.gaps;
+        } else {
+          tools_run.push({ name: 'trivy', status: 'ok' });
+        }
+      }
 
       return {
         outcome: result.outcome,
@@ -93,6 +113,7 @@ registerToolModule(
         missing_tools,
         parser_inputs,
         report_paths: [reportDir],
+        ...(Object.keys(extras).length > 0 ? { extras } : {}),
       };
     },
   }),

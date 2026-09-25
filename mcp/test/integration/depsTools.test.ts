@@ -98,6 +98,17 @@ function makePlugin(projectPath: string): PluginContext {
 
 const trivyFsFx = () => readFileSync(join(FIX, 'trivy-fs.json'), 'utf8');
 const npmAuditFx = () => readFileSync(join(FIX, 'npm-audit.json'), 'utf8');
+const pipAuditFx = () => readFileSync(join(FIX, 'pip-audit.json'), 'utf8');
+const dotnetListFx = () => readFileSync(join(FIX, 'dotnet-list-vulnerable.json'), 'utf8');
+
+/** trivy fs run that produces NO Results at all — the bare-manifest shape
+ *  reproduced against Trivy 0.69.3 (see trivy.ts's own module comment). */
+const trivyNoResultsFx = () => JSON.stringify({ SchemaVersion: 2, ArtifactType: 'filesystem' });
+
+function outputPathFor(args: string[] | undefined): string | undefined {
+  const flagIdx = args?.findIndex((a) => a === '--output' || a === '-o') ?? -1;
+  return flagIdx >= 0 ? args?.[flagIdx + 1] : undefined;
+}
 
 beforeEach(() => {
   vi.mocked(runProcess).mockReset();
@@ -109,6 +120,62 @@ afterEach(() => {
   vi.mocked(runProcess).mockReset();
   vi.mocked(scannerAvailable).mockReset();
   vi.mocked(execa).mockReset();
+});
+
+describe('scan_deps', () => {
+  it('marks trivy skipped/no_supported_manifest for a bare .csproj instead of a clean 0-findings scan', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'Test.csproj'), '<Project></Project>', 'utf8');
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('scan_deps');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      missing_tools: string[];
+      manifest_coverage_gaps: Array<{ ecosystem: string; files: string[] }>;
+      findings_count_by_severity: Record<string, number>;
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+
+    expect(r.ok).toBe(true);
+    const trivy = r.tools_run.find((t) => t.name === 'trivy');
+    expect(trivy?.status).toBe('skipped');
+    expect(trivy?.reason).toBe('no_supported_manifest');
+    expect(r.missing_tools).toContain('trivy');
+    expect(r.manifest_coverage_gaps).toEqual([{ ecosystem: 'dotnet', files: ['Test.csproj'] }]);
+    expect(Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0)).toBe(0);
+    expect(r.coverage).not.toBe('full');
+  });
+
+  it('reports coverage=full for a project with no dependency manifest at all', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('scan_deps');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      tools_run: { name: string; status: string }[];
+    };
+    expect(r.ok).toBe(true);
+    expect(r.tools_run.find((t) => t.name === 'trivy')?.status).toBe('ok');
+    expect(r.coverage).toBe('full');
+  });
 });
 
 describe('deps_audit', () => {
@@ -431,6 +498,178 @@ describe('deps_audit', () => {
     expect(r.bot_configured.dependabot).toBe(true);
     expect(r.missing_tools).toContain('trivy');
   });
+
+  it('marks trivy skipped/no_supported_manifest for a bare .csproj instead of a clean 0-findings scan', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'Test.csproj'), '<Project></Project>', 'utf8');
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'trivy' ? '/fake/bin/trivy' : null,
+    );
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('deps_audit');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      missing_tools: string[];
+      manifest_coverage_gaps: Array<{ ecosystem: string; files: string[] }>;
+      findings_count_by_severity: Record<string, number>;
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+
+    expect(r.ok).toBe(true);
+    const trivy = r.tools_run.find((t) => t.name === 'trivy');
+    expect(trivy?.status).toBe('skipped');
+    expect(trivy?.reason).toBe('no_supported_manifest');
+    expect(r.missing_tools).toContain('trivy');
+    expect(r.manifest_coverage_gaps).toEqual([{ ecosystem: 'dotnet', files: ['Test.csproj'] }]);
+    expect(Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0)).toBe(0);
+    // Coverage must never read 'full' — nothing was actually scanned.
+    expect(r.coverage).not.toBe('full');
+  });
+
+  it('never invokes pip-audit bare — always -r per requirements file', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'requirements.txt'), 'django==2.0.1\n', 'utf8');
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'pip-audit' ? '/fake/bin/pip-audit' : null,
+    );
+    let capturedArgs: string[] | undefined;
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'pip-audit') {
+        capturedArgs = opts.args;
+        const path = outputPathFor(opts.args);
+        if (path) writeFileSync(path, pipAuditFx(), 'utf8');
+      }
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('deps_audit');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      findings_count_by_severity: Record<string, number>;
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+
+    expect(r.ok).toBe(true);
+    expect(capturedArgs).toContain('-r');
+    const reqIdx = capturedArgs?.indexOf('-r') ?? -1;
+    expect(capturedArgs?.[reqIdx + 1]).toBe(join(project, 'requirements.txt'));
+    // Never a bare call: some target argument must always precede --format.
+    expect(capturedArgs?.length).toBeGreaterThan(2);
+
+    const pipAudit = r.tools_run.find((t) => t.name === 'pip-audit');
+    expect(pipAudit?.status).toBe('ok');
+    expect(pipAudit?.reason).toMatch(/parsed/i);
+    // pip-audit fixture: 2 vulns (django CVE + requests no-fix).
+    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+    expect(total).toBe(2);
+  });
+
+  it('audits a pyproject-only project by pointing pip-audit at the project directory', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'pyproject.toml'), '[project]\nname = "x"\n', 'utf8');
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'pip-audit' ? '/fake/bin/pip-audit' : null,
+    );
+    let capturedArgs: string[] | undefined;
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'pip-audit') {
+        capturedArgs = opts.args;
+        const path = outputPathFor(opts.args);
+        if (path) writeFileSync(path, pipAuditFx(), 'utf8');
+      }
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    await getTool('deps_audit').handler({ project_path: project }, plugin);
+
+    expect(capturedArgs).not.toContain('-r');
+    expect(capturedArgs).toContain(project);
+  });
+
+  it('runs dotnet SCA for a bare .csproj Trivy could not cover, restoring first', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'Test.csproj'), '<Project></Project>', 'utf8');
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'trivy' || name === 'dotnet' ? `/fake/bin/${name}` : null,
+    );
+    const commands: string[] = [];
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      commands.push([opts.command, ...(opts.args ?? [])].join(' '));
+      if (opts.command === 'trivy') {
+        const path = outputPathFor(opts.args);
+        if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
+        return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+      }
+      if (opts.command === 'dotnet' && opts.args?.[0] === 'restore') {
+        return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+      }
+      if (opts.command === 'dotnet' && opts.args?.[0] === 'list') {
+        return {
+          outcome: 'completed' as const,
+          exitCode: 0,
+          stdout: dotnetListFx(),
+          stderr: '',
+          truncated: false,
+        };
+      }
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('deps_audit');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      findings_count_by_severity: Record<string, number>;
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+
+    expect(r.ok).toBe(true);
+    expect(commands.some((c) => c.startsWith('dotnet restore'))).toBe(true);
+    expect(commands.some((c) => c.startsWith('dotnet list') && c.includes('--vulnerable'))).toBe(true);
+    const dotnet = r.tools_run.find((t) => t.name === 'dotnet');
+    expect(dotnet?.status).toBe('ok');
+    // dotnet-list-vulnerable.json fixture: 1 top-level + 1 transitive.
+    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
+    expect(total).toBe(2);
+  });
+
+  it('marks a missing dotnet SDK as a coverage gap for a project with a .csproj', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'Test.csproj'), '<Project></Project>', 'utf8');
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'trivy' ? '/fake/bin/trivy' : null,
+    );
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const tool = getTool('deps_audit');
+    const r = (await tool.handler({ project_path: project }, plugin)) as {
+      ok: true;
+      missing_tools: string[];
+      coverage: string;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.missing_tools).toContain('dotnet');
+    expect(r.coverage).not.toBe('full');
+  });
 });
 
 describe('deps_update_plan', () => {
@@ -461,7 +700,8 @@ describe('deps_update_plan', () => {
     expect(r.ok).toBe(true);
     expect(r.plan).toHaveLength(1);
     expect(r.plan[0]?.classification).toBe('patch');
-    expect(r.plan[0]?.upgrade_command).toBe('npm install lodash@4.17.21');
+    // Every npm install this tool proposes carries --ignore-scripts.
+    expect(r.plan[0]?.upgrade_command).toBe('npm install lodash@4.17.21 --ignore-scripts');
     expect(r.summary.has_security_updates).toBe(false);
   });
 
@@ -597,5 +837,332 @@ describe('deps_update_plan', () => {
     expect(r.unsupported_ecosystems_present).toEqual(
       expect.arrayContaining(['maven', 'gradle']),
     );
+  });
+
+  function seedCve(
+    plugin: PluginContext,
+    project: string,
+    cve: { cve_id: string; package_name: string; installed_version: string; fixed_version?: string },
+  ): void {
+    plugin.storage.scans.insert({
+      scan_id: cve.cve_id,
+      scan_type: 'deps',
+      project_path: project,
+      tree_hash: 'h',
+    });
+    plugin.storage.scans.finalize({
+      scan_id: cve.cve_id,
+      status: 'completed',
+      tools_run: [],
+      missing_tools: [],
+    });
+    plugin.storage.cves.upsert({ ...cve, severity: 'high', scan_id: cve.cve_id });
+  }
+
+  /** Seeds several CVEs into ONE scan (unlike `seedCve`, which creates a
+   *  fresh scan per call — only the latest scan's CVEs are ever visible to
+   *  `deps_update_plan`, so a package with more than one active CVE must be
+   *  seeded this way for both to be seen together). */
+  function seedCves(
+    plugin: PluginContext,
+    project: string,
+    scanId: string,
+    cves: Array<{ cve_id: string; package_name: string; installed_version: string; fixed_version?: string }>,
+  ): void {
+    plugin.storage.scans.insert({ scan_id: scanId, scan_type: 'deps', project_path: project, tree_hash: 'h' });
+    plugin.storage.scans.finalize({ scan_id: scanId, status: 'completed', tools_run: [], missing_tools: [] });
+    for (const cve of cves) {
+      plugin.storage.cves.upsert({ ...cve, severity: 'high', scan_id: scanId });
+    }
+  }
+
+  it('ignores a messy (non-exact) Trivy fixed_version rather than corrupting the computed minimum', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"my-app","dependencies":{"lodash":"3.10.1"}}', 'utf8');
+    const plugin = makePlugin(project);
+    // Real Trivy data for a package with a long CVE history routinely mixes
+    // exact versions with open ranges and multi-branch lists (lodash's own
+    // CVE set has both). A naive string comparison between ">=4.17.11" and
+    // "4.17.19" picks the range string as "greater" — this asserts it never
+    // does, and that the messy one is simply ignored in the version math.
+    seedCves(plugin, project, 'scan1', [
+      { cve_id: 'CVE-A', package_name: 'lodash', installed_version: '3.10.1', fixed_version: '4.17.19' },
+      { cve_id: 'CVE-B', package_name: 'lodash', installed_version: '3.10.1', fixed_version: '>=4.17.11' },
+    ]);
+
+    // `dependent` deliberately does NOT match the package.json `name` field
+    // ("npmoutdated" is real npm's own top-level `dependent` value in a
+    // fixture whose package.json declares "name": "x" — see
+    // readNpmDirectDependencies's own module comment) — directness is read
+    // from package.json's own `dependencies`, never from this field.
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      if (cmd === 'npm' && args[0] === 'outdated') {
+        return {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            lodash: { current: '3.10.1', latest: '4.18.1', dependent: 'some-directory-name' },
+          }),
+          stderr: '',
+        };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{ plan: Array<{ latest_version: string; cve_ids?: string[]; upgrade_command: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+
+    expect(r.plan).toHaveLength(1);
+    // The clean 4.17.19 wins — never the range string, and never silently
+    // discarded in favour of npm's own "latest" either.
+    expect(r.plan[0]?.latest_version).toBe('4.17.19');
+    expect(r.plan[0]?.cve_ids).toEqual(['CVE-A', 'CVE-B']);
+    // A real install, not an overrides-only step: lodash IS a direct
+    // dependency (declared in package.json), regardless of what `dependent`
+    // said.
+    expect(r.plan[0]?.upgrade_command).toBe('npm install lodash@4.17.19 --ignore-scripts');
+  });
+
+  it('falls back to npm outdated\'s "latest" when every active CVE\'s fixed_version is unusable', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"my-app","dependencies":{"lodash":"3.10.1"}}', 'utf8');
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, {
+      cve_id: 'CVE-C',
+      package_name: 'lodash',
+      installed_version: '3.10.1',
+      fixed_version: '>=4.17.11',
+    });
+
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      if (cmd === 'npm' && args[0] === 'outdated') {
+        return {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            lodash: { current: '3.10.1', latest: '4.18.1', dependent: 'irrelevant' },
+          }),
+          stderr: '',
+        };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{ plan: Array<{ latest_version: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    expect(r.plan[0]?.latest_version).toBe('4.18.1');
+  });
+
+  it('upgrades a direct npm package to the MINIMUM fixed version, not npm outdated\'s "latest"', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"my-app","dependencies":{"lodash":"4.17.15"}}', 'utf8');
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, {
+      cve_id: 'CVE-2024-1',
+      package_name: 'lodash',
+      installed_version: '4.17.15',
+      fixed_version: '4.17.19',
+    });
+
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      if (cmd === 'npm' && args[0] === 'outdated') {
+        return {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            lodash: { current: '4.17.15', latest: '4.17.21', dependent: 'irrelevant' },
+          }),
+          stderr: '',
+        };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{
+      plan: Array<{ package_name: string; latest_version: string; upgrade_command: string; cve_ids?: string[] }>;
+    }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
+
+    expect(r.plan).toHaveLength(1);
+    expect(r.plan[0]?.latest_version).toBe('4.17.19'); // fixed, not npm's own 4.17.21
+    expect(r.plan[0]?.upgrade_command).toBe('npm install lodash@4.17.19 --ignore-scripts');
+    expect(r.plan[0]?.cve_ids).toEqual(['CVE-2024-1']);
+  });
+
+  it('emits an npm overrides step (not npm install) for a vulnerable TRANSITIVE package', async () => {
+    const project = tempProject();
+    // minimist is deliberately absent from package.json's own dependency
+    // fields — a real transitive package (pulled in by something else),
+    // never declared directly.
+    writeFileSync(
+      join(project, 'package.json'),
+      '{"name":"my-app","dependencies":{"mkdirp":"0.5.0"}}',
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, {
+      cve_id: 'CVE-2024-2',
+      package_name: 'minimist',
+      installed_version: '0.0.8',
+      fixed_version: '1.2.6',
+    });
+
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      if (cmd === 'npm' && args[0] === 'outdated') {
+        return {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            minimist: { current: '0.0.8', latest: '1.2.8', dependent: 'mkdirp' },
+          }),
+          stderr: '',
+        };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{
+      plan: Array<{ package_name: string; upgrade_command: string; classification: string; cve_ids?: string[] }>;
+    }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
+
+    expect(r.plan).toHaveLength(1);
+    expect(r.plan[0]?.classification).toBe('security');
+    expect(r.plan[0]?.upgrade_command).toBe('npm pkg set overrides.minimist=1.2.6');
+    expect(r.plan[0]?.cve_ids).toEqual(['CVE-2024-2']);
+  });
+
+  it('defaults to a real npm install (never overrides-only) when package.json cannot be read', async () => {
+    // An overrides-only step never touches node_modules/package-lock.json —
+    // reproduced against a genuine Trivy scan (see this file's own history):
+    // guessing "transitive" when directness is unknown can leave a CVE
+    // completely unfixed. A real `npm install` is the safe default either way.
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), 'not valid json{{{', 'utf8');
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, {
+      cve_id: 'CVE-2024-4',
+      package_name: 'lodash',
+      installed_version: '4.17.15',
+      fixed_version: '4.17.19',
+    });
+
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      if (cmd === 'npm' && args[0] === 'outdated') {
+        return {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            lodash: { current: '4.17.15', latest: '4.17.21', dependent: 'whatever' },
+          }),
+          stderr: '',
+        };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{ plan: Array<{ upgrade_command: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    expect(r.plan[0]?.upgrade_command).toBe('npm install lodash@4.17.19 --ignore-scripts');
+  });
+
+  it('scopes the CVE source to THIS project — a same-named package with a CVE on a different project does not leak in', async () => {
+    const projectA = tempProject();
+    const projectB = tempProject();
+    writeFileSync(join(projectA, 'package.json'), '{"name":"app-a","dependencies":{"lodash":"4.17.15"}}', 'utf8');
+    writeFileSync(join(projectB, 'package.json'), '{"name":"app-b","dependencies":{"lodash":"4.17.15"}}', 'utf8');
+    const plugin = makePlugin(projectB);
+    // CVE recorded against project A only.
+    seedCve(plugin, projectA, {
+      cve_id: 'CVE-2024-3',
+      package_name: 'lodash',
+      installed_version: '4.17.15',
+      fixed_version: '4.17.19',
+    });
+
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      if (cmd === 'npm' && args[0] === 'outdated') {
+        return {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            lodash: { current: '4.17.15', latest: '4.17.21', dependent: 'app-b' },
+          }),
+          stderr: '',
+        };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{ plan: Array<{ classification: string; latest_version: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: projectB }, plugin),
+    );
+
+    // Project B's own scan never happened — no CVE data for it, so this is
+    // an ordinary (non-security) update at npm's own "latest".
+    expect(r.plan[0]?.classification).not.toBe('security');
+    expect(r.plan[0]?.latest_version).toBe('4.17.21');
+  });
+
+  it('pip: plans a pin bump from requirements.txt for a package with an active CVE and fixed_version, never touching pip/pip-audit on the host', async () => {
+    const project = tempProject();
+    writeFileSync(project + '/requirements.txt', 'django==2.0.1\nrequests==2.20.0\n', 'utf8');
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, {
+      cve_id: 'CVE-2019-19844',
+      package_name: 'django',
+      installed_version: '2.0.1',
+      fixed_version: '2.2.9',
+    });
+
+    const execaSpy = vi.mocked(execa);
+    execaSpy.mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+
+    const r = okResult<{
+      plan: Array<{ package_name: string; installed_version: string; latest_version: string; ecosystem: string; cve_ids?: string[] }>;
+    }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
+
+    expect(r.plan).toHaveLength(1);
+    expect(r.plan[0]).toMatchObject({
+      package_name: 'django',
+      installed_version: '2.0.1',
+      latest_version: '2.2.9',
+      ecosystem: 'pip',
+      cve_ids: ['CVE-2019-19844'],
+    });
+    // requests has no active CVE, so it is left alone.
+    expect(r.plan.some((s) => s.package_name === 'requests')).toBe(false);
+    // Never calls pip or pip-audit against the host.
+    expect(execaSpy.mock.calls.some(([cmd]) => cmd === 'pip' || cmd === 'pip-audit')).toBe(false);
+  });
+
+  it('pip: plans from pyproject.toml PEP 621 dependencies when no requirements.txt exists', async () => {
+    const project = tempProject();
+    writeFileSync(
+      project + '/pyproject.toml',
+      '[project]\nname = "x"\ndependencies = ["django==2.0.1", "click>=8.0"]\n',
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, {
+      cve_id: 'CVE-2019-19844',
+      package_name: 'django',
+      installed_version: '2.0.1',
+      fixed_version: '2.2.9',
+    });
+
+    const r = okResult<{ plan: Array<{ package_name: string; latest_version: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+
+    expect(r.plan).toHaveLength(1);
+    expect(r.plan[0]?.package_name).toBe('django');
+    expect(r.plan[0]?.latest_version).toBe('2.2.9');
+  });
+
+  it('pip: proposes nothing for a pin with no active CVE', async () => {
+    const project = tempProject();
+    writeFileSync(project + '/requirements.txt', 'django==2.0.1\n', 'utf8');
+    const plugin = makePlugin(project);
+
+    const r = okResult<{ plan: unknown[] }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    expect(r.plan).toEqual([]);
   });
 });

@@ -11,6 +11,7 @@
  * `guardian://cves/active` resource can serve dedicated CVE queries
  * without re-deriving them from `findings`.
  */
+import { readdirSync } from 'node:fs';
 import { asArray, getNumber, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
 export const TRIVY_TOOL_NAME = 'trivy';
 export const trivyParser = {
@@ -166,5 +167,52 @@ function mapSecret(raw, target, ctx) {
     if (lineEnd !== undefined)
         input.line_end = lineEnd;
     return makeFinding(input);
+}
+const ECOSYSTEM_MANIFESTS = [
+    { ecosystem: 'npm', matches: (n) => n === 'package.json', trivyTypes: ['npm', 'yarn', 'pnpm', 'bun'] },
+    { ecosystem: 'composer', matches: (n) => n === 'composer.json', trivyTypes: ['composer'] },
+    {
+        ecosystem: 'dotnet',
+        matches: (n) => /\.(csproj|sln)$/i.test(n),
+        trivyTypes: ['nuget'],
+    },
+    { ecosystem: 'rubygems', matches: (n) => n === 'Gemfile', trivyTypes: ['bundler'] },
+    { ecosystem: 'cargo', matches: (n) => n === 'Cargo.toml', trivyTypes: ['cargo'] },
+];
+/**
+ * Assess whether Trivy's fs-scan output covers every dependency manifest
+ * actually present at the project's top level. Only the project ROOT is
+ * checked — same shallow scope as `license_compatibility`'s manifest
+ * detection — because a manifest buried in a subdirectory (a monorepo
+ * package) is Trivy's own concern to find or not; this only detects the
+ * specific silent gap described above (manifest present, lockfile absent,
+ * `Results` never mentions it).
+ */
+export function assessManifestCoverage(projectPath, rawTrivyOutput) {
+    let entries;
+    try {
+        entries = readdirSync(projectPath);
+    }
+    catch {
+        return { gaps: [], sawAnyResults: false };
+    }
+    const root = parseInputAsJson(rawTrivyOutput);
+    const results = asArray(getProp(root, 'Results'));
+    const coveredTypes = new Set();
+    for (const result of results) {
+        const type = getString(result, 'Type');
+        if (type)
+            coveredTypes.add(type);
+    }
+    const gaps = [];
+    for (const eco of ECOSYSTEM_MANIFESTS) {
+        const files = entries.filter((n) => eco.matches(n));
+        if (files.length === 0)
+            continue;
+        const covered = eco.trivyTypes.some((t) => coveredTypes.has(t));
+        if (!covered)
+            gaps.push({ ecosystem: eco.ecosystem, files });
+    }
+    return { gaps, sawAnyResults: results.length > 0 };
 }
 //# sourceMappingURL=trivy.js.map

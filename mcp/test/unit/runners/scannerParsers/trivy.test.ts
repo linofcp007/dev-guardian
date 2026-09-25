@@ -1,8 +1,11 @@
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
-import { trivyParser } from '../../../../src/runners/scannerParsers/trivy.js';
+import { afterAll, describe, expect, it } from 'vitest';
+import { assessManifestCoverage, trivyParser } from '../../../../src/runners/scannerParsers/trivy.js';
+import { makeTempDir, cleanupTempDirs } from '../../../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FS_FIXTURE = resolve(here, '../../../fixtures/scanners/trivy-fs.json');
@@ -47,6 +50,73 @@ describe('trivyParser (fs scan)', () => {
     const license = findings.find((f) => f.category === 'license');
     expect(license?.subcategory).toBe('agpl-3.0-or-later');
     expect(license?.severity).toBe('high');
+  });
+});
+
+describe('assessManifestCoverage', () => {
+  // Reproduced against Trivy 0.69.3: a bare .csproj (no packages.lock.json)
+  // produces a report with NO `Results` key at all.
+  const NO_RESULTS_OUTPUT = JSON.stringify({ SchemaVersion: 2, ArtifactType: 'filesystem' });
+
+  it('flags a bare .csproj as a dotnet coverage gap when Trivy saw nothing', () => {
+    const project = makeTempDir('trivy-manifest-');
+    writeFileSync(join(project, 'Test.csproj'), '<Project></Project>', 'utf8');
+
+    const { gaps, sawAnyResults } = assessManifestCoverage(project, NO_RESULTS_OUTPUT);
+
+    expect(sawAnyResults).toBe(false);
+    expect(gaps).toEqual([{ ecosystem: 'dotnet', files: ['Test.csproj'] }]);
+  });
+
+  it('flags a bare package.json (no lockfile) as an npm coverage gap', () => {
+    const project = makeTempDir('trivy-manifest-');
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+
+    const { gaps } = assessManifestCoverage(project, NO_RESULTS_OUTPUT);
+    expect(gaps).toEqual([{ ecosystem: 'npm', files: ['package.json'] }]);
+  });
+
+  it('does not flag requirements.txt or go.mod — Trivy scans both without a lockfile', () => {
+    const project = makeTempDir('trivy-manifest-');
+    writeFileSync(join(project, 'requirements.txt'), 'django==2.0.1\n', 'utf8');
+    writeFileSync(join(project, 'go.mod'), 'module x\n\ngo 1.21\n', 'utf8');
+
+    const { gaps } = assessManifestCoverage(project, NO_RESULTS_OUTPUT);
+    expect(gaps).toEqual([]);
+  });
+
+  it('does not flag an ecosystem Trivy DID produce Results for', () => {
+    const project = makeTempDir('trivy-manifest-');
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    writeFileSync(join(project, 'package-lock.json'), '{}', 'utf8');
+
+    const output = JSON.stringify({
+      Results: [{ Target: 'package-lock.json', Type: 'npm', Vulnerabilities: [] }],
+    });
+    const { gaps, sawAnyResults } = assessManifestCoverage(project, output);
+    expect(sawAnyResults).toBe(true);
+    expect(gaps).toEqual([]);
+  });
+
+  it('reports a partial gap when one ecosystem is covered and another is not', () => {
+    const project = makeTempDir('trivy-manifest-');
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    writeFileSync(join(project, 'package-lock.json'), '{}', 'utf8');
+    writeFileSync(join(project, 'Api.csproj'), '<Project></Project>', 'utf8');
+
+    const output = JSON.stringify({
+      Results: [{ Target: 'package-lock.json', Type: 'npm', Vulnerabilities: [] }],
+    });
+    const { gaps, sawAnyResults } = assessManifestCoverage(project, output);
+    expect(sawAnyResults).toBe(true);
+    expect(gaps).toEqual([{ ecosystem: 'dotnet', files: ['Api.csproj'] }]);
+  });
+
+  it('reports nothing when no manifest is present at all (genuinely nothing to scan)', () => {
+    const project = makeTempDir('trivy-manifest-');
+    const { gaps, sawAnyResults } = assessManifestCoverage(project, NO_RESULTS_OUTPUT);
+    expect(gaps).toEqual([]);
+    expect(sawAnyResults).toBe(false);
   });
 });
 
