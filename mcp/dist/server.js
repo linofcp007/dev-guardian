@@ -45688,8 +45688,68 @@ async function runDotnetSca(opts) {
 
 // src/tools/depsUpdatePlan.ts
 init_execa();
+var import_yaml4 = __toESM(require_dist2(), 1);
 import { existsSync as existsSync21, readFileSync as readFileSync17, readdirSync as readdirSync10, statSync as statSync6 } from "node:fs";
 import { dirname as dirname11, join as join27, relative as relative9, sep as sep5 } from "node:path";
+
+// src/platform/glob.ts
+function globToRegExp(pattern) {
+  const p = pattern.replace(/\\/g, "/").replace(/^(\.\/)+/, "").replace(/\/+$/, "");
+  let re = "";
+  for (let i2 = 0; i2 < p.length; i2++) {
+    const c3 = p.charAt(i2);
+    if (c3 === "*") {
+      if (p.charAt(i2 + 1) === "*") {
+        const atSegmentStart = i2 === 0 || p.charAt(i2 - 1) === "/";
+        const atSegmentEnd = i2 + 2 === p.length || p.charAt(i2 + 2) === "/";
+        if (atSegmentStart && atSegmentEnd) {
+          if (i2 + 2 === p.length) {
+            re += ".*";
+            i2 += 1;
+          } else {
+            re += "(?:[^/]*/)*";
+            i2 += 2;
+          }
+          continue;
+        }
+        re += "[^/]*";
+        i2 += 1;
+        continue;
+      }
+      re += "[^/]*";
+    } else if (c3 === "?") {
+      re += "[^/]";
+    } else if (c3 === "{") {
+      const close = p.indexOf("}", i2);
+      if (close === -1) {
+        re += "\\{";
+        continue;
+      }
+      const alternatives = p.slice(i2 + 1, close).split(",").map(escapeRegExp);
+      re += `(?:${alternatives.join("|")})`;
+      i2 = close;
+    } else {
+      re += escapeRegExp(c3);
+    }
+  }
+  return new RegExp(`^${re}$`);
+}
+function matchesAny(relPath, patterns) {
+  const path6 = relPath.replace(/\\/g, "/").replace(/^(\.\/)+/, "").replace(/\/+$/, "");
+  let matched = false;
+  for (const raw of patterns) {
+    const negated = raw.startsWith("!");
+    const pattern = negated ? raw.slice(1) : raw;
+    if (pattern.length === 0) continue;
+    if (globToRegExp(pattern).test(path6)) matched = !negated;
+  }
+  return matched;
+}
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+}
+
+// src/tools/depsUpdatePlan.ts
 var inputSchema = {
   project_path: ProjectPath,
   prefer: external_exports.enum(["security", "patch", "minor", "major"]).optional().describe("Sort entries so this classification appears first. Default: security.")
@@ -46151,12 +46211,17 @@ function detectNpmPackageManager(projectPath) {
     const rel2 = toPosix(relative9(projectPath, join27(dir, file)));
     return dir === projectPath ? file : `${rel2}, the workspace root`;
   };
+  const inRepository = gitRootAbove(projectPath) !== null;
   for (let dir = projectPath; ; ) {
-    if (has(dir, "pnpm-lock.yaml")) return { name: "pnpm", evidence: at(dir, "pnpm-lock.yaml"), root: dir };
-    if (has(dir, "pnpm-workspace.yaml")) return { name: "pnpm", evidence: at(dir, "pnpm-workspace.yaml"), root: dir };
-    if (has(dir, "yarn.lock")) return { name: "yarn", evidence: at(dir, "yarn.lock"), root: dir };
-    if (has(dir, "package-lock.json") || has(dir, "npm-shrinkwrap.json")) {
-      return { name: "npm", evidence: "package-lock.json", root: projectPath };
+    const trusted = dir === projectPath || inRepository || workspaceIncludes(dir, projectPath);
+    if (trusted) {
+      if (has(dir, "pnpm-lock.yaml")) return { name: "pnpm", evidence: at(dir, "pnpm-lock.yaml"), root: dir };
+      if (has(dir, "pnpm-workspace.yaml")) return { name: "pnpm", evidence: at(dir, "pnpm-workspace.yaml"), root: dir };
+      if (has(dir, "yarn.lock")) return { name: "yarn", evidence: at(dir, "yarn.lock"), root: dir };
+      if (has(dir, "package-lock.json") || has(dir, "npm-shrinkwrap.json")) {
+        return { name: "npm", evidence: "package-lock.json", root: projectPath };
+      }
+      if (dir !== projectPath && !inRepository) break;
     }
     if (has(dir, ".git")) break;
     const parent = dirname11(dir);
@@ -46176,6 +46241,33 @@ function detectNpmPackageManager(projectPath) {
     return { name: "pnpm", evidence: "node_modules/.pnpm", root: projectPath };
   }
   return { name: "npm", evidence: "default", root: projectPath };
+}
+function gitRootAbove(start) {
+  for (let dir = start; ; ) {
+    if (existsSync21(join27(dir, ".git"))) return dir;
+    const parent = dirname11(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+function workspaceIncludes(root, projectPath) {
+  const rel2 = toPosix(relative9(root, projectPath));
+  if (rel2 === "" || rel2.startsWith("..")) return false;
+  const patterns = [];
+  try {
+    const doc = (0, import_yaml4.parse)(readFileSync17(join27(root, "pnpm-workspace.yaml"), "utf8"));
+    const packages = typeof doc === "object" && doc !== null ? doc["packages"] : void 0;
+    if (Array.isArray(packages)) patterns.push(...packages.filter((p) => typeof p === "string"));
+  } catch {
+  }
+  try {
+    const pkg = JSON.parse(readFileSync17(join27(root, "package.json"), "utf8"));
+    const ws = pkg["workspaces"];
+    const list2 = Array.isArray(ws) ? ws : typeof ws === "object" && ws !== null ? ws["packages"] : void 0;
+    if (Array.isArray(list2)) patterns.push(...list2.filter((p) => typeof p === "string"));
+  } catch {
+  }
+  return patterns.length > 0 && matchesAny(rel2, patterns);
 }
 function planForNonNpmManager(projectPath, cves, manager) {
   const directDeps = readNpmDirectDependencies(projectPath);
@@ -58046,7 +58138,7 @@ function diffSpecRoutes(codeRoutes, specRoutes, specsParsed) {
 }
 
 // src/surface/specImport.ts
-var import_yaml4 = __toESM(require_dist2(), 1);
+var import_yaml5 = __toESM(require_dist2(), 1);
 var OPERATION_KEYS = [
   "get",
   "put",
@@ -58153,16 +58245,16 @@ function parseRoot(text) {
     return { kind: "ok", root: JSON.parse(text), lineFor: () => 0 };
   } catch {
   }
-  const doc = (0, import_yaml4.parseDocument)(text);
+  const doc = (0, import_yaml5.parseDocument)(text);
   if (doc.errors.length > 0) {
     return { kind: "parse_error", reason: doc.errors[0]?.message ?? "YAML parse error" };
   }
   const lineByPath = /* @__PURE__ */ new Map();
   const pathsNode = doc.get("paths", true);
-  if ((0, import_yaml4.isMap)(pathsNode)) {
+  if ((0, import_yaml5.isMap)(pathsNode)) {
     for (const item of pathsNode.items) {
       const key = item.key;
-      if (!(0, import_yaml4.isScalar)(key) || typeof key.value !== "string") continue;
+      if (!(0, import_yaml5.isScalar)(key) || typeof key.value !== "string") continue;
       const range = key.range;
       if (range == null) continue;
       lineByPath.set(key.value, text.slice(0, range[0]).split("\n").length);

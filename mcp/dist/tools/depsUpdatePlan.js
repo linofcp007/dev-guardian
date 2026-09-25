@@ -113,7 +113,9 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { execa } from 'execa';
+import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import { matchesAny } from '../platform/glob.js';
 import { classifyRestoreFailure, findDotnetTargets, lockFileCandidates, planDotnetRestore, projectsForTarget, readPackageReferences, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
 import { compareVersions, compareVersionsLoose, isCleanVersion, isLooseVersion, minCleanVersionAbove, minCleanVersionAboveLoose, } from '../deps/versionCompare.js';
 import { ProjectPath } from '../schemas.js';
@@ -821,10 +823,13 @@ function planDirectNotListed(opts) {
  * decides first (`pnpm-lock.yaml`, `yarn.lock`, then `package-lock.json` /
  * `npm-shrinkwrap.json`). Without one, the project may be a WORKSPACE MEMBER
  * whose lock lives at the workspace root: each ancestor up to the repository
- * root (the nearest directory holding `.git`, else the filesystem root) is
- * checked for `pnpm-workspace.yaml` / `pnpm-lock.yaml` / `yarn.lock` — the
- * nearest one decides, and an ancestor `package-lock.json` /
- * `npm-shrinkwrap.json` stops the walk as npm. Only then the project's own
+ * root (the nearest directory holding `.git`) is checked for
+ * `pnpm-workspace.yaml` / `pnpm-lock.yaml` / `yarn.lock` — the nearest one
+ * decides, and an ancestor `package-lock.json` / `npm-shrinkwrap.json` stops
+ * the walk as npm. With no repository above the project at all, an ancestor
+ * is consulted only when its `pnpm-workspace.yaml` / `package.json`
+ * `workspaces` globs include the project (Task 11 item 9 — a stray lock in an
+ * unrelated ancestor decided otherwise). Only then the project's own
  * `packageManager` field, then a pnpm store in `node_modules/.pnpm`; npm
  * otherwise. (Fix round 5: a member of a pnpm or yarn workspace used to fall
  * through to npm and get `npm install … --ignore-scripts` steps.)
@@ -839,15 +844,30 @@ function detectNpmPackageManager(projectPath) {
         const rel = toPosix(relative(projectPath, join(dir, file)));
         return dir === projectPath ? file : `${rel}, the workspace root`;
     };
+    // Task 11 item 9: with a repository above (or at) the project, the walk
+    // stops at its root, as before. With NO `.git` anywhere above, there is no
+    // root to stop at and the walk used to reach the filesystem root — a stray
+    // `pnpm-lock.yaml` in some unrelated ancestor (a home directory, a
+    // downloads folder) turned an npm project into a "pnpm workspace member"
+    // with an empty plan. There, an ancestor counts only when its own
+    // workspace declaration actually includes this directory.
+    const inRepository = gitRootAbove(projectPath) !== null;
     for (let dir = projectPath;;) {
-        if (has(dir, 'pnpm-lock.yaml'))
-            return { name: 'pnpm', evidence: at(dir, 'pnpm-lock.yaml'), root: dir };
-        if (has(dir, 'pnpm-workspace.yaml'))
-            return { name: 'pnpm', evidence: at(dir, 'pnpm-workspace.yaml'), root: dir };
-        if (has(dir, 'yarn.lock'))
-            return { name: 'yarn', evidence: at(dir, 'yarn.lock'), root: dir };
-        if (has(dir, 'package-lock.json') || has(dir, 'npm-shrinkwrap.json')) {
-            return { name: 'npm', evidence: 'package-lock.json', root: projectPath };
+        const trusted = dir === projectPath || inRepository || workspaceIncludes(dir, projectPath);
+        if (trusted) {
+            if (has(dir, 'pnpm-lock.yaml'))
+                return { name: 'pnpm', evidence: at(dir, 'pnpm-lock.yaml'), root: dir };
+            if (has(dir, 'pnpm-workspace.yaml'))
+                return { name: 'pnpm', evidence: at(dir, 'pnpm-workspace.yaml'), root: dir };
+            if (has(dir, 'yarn.lock'))
+                return { name: 'yarn', evidence: at(dir, 'yarn.lock'), root: dir };
+            if (has(dir, 'package-lock.json') || has(dir, 'npm-shrinkwrap.json')) {
+                return { name: 'npm', evidence: 'package-lock.json', root: projectPath };
+            }
+            // A workspace root that declares this project but has no lock yet is
+            // still the workspace: nothing above it can be.
+            if (dir !== projectPath && !inRepository)
+                break;
         }
         if (has(dir, '.git'))
             break;
@@ -871,6 +891,54 @@ function detectNpmPackageManager(projectPath) {
         return { name: 'pnpm', evidence: 'node_modules/.pnpm', root: projectPath };
     }
     return { name: 'npm', evidence: 'default', root: projectPath };
+}
+/** The nearest directory at or above `start` holding `.git` (a directory, or
+ *  a worktree's `.git` file), or null when there is none. */
+function gitRootAbove(start) {
+    for (let dir = start;;) {
+        if (existsSync(join(dir, '.git')))
+            return dir;
+        const parent = dirname(dir);
+        if (parent === dir)
+            return null;
+        dir = parent;
+    }
+}
+/**
+ * Whether `root` declares `projectPath` as one of its workspace packages:
+ * `pnpm-workspace.yaml` `packages:`, or the root `package.json` `workspaces`
+ * (an array, or yarn's `{ packages: [...] }`). Globs are matched against the
+ * project's path relative to `root`, `!` negations honoured.
+ */
+function workspaceIncludes(root, projectPath) {
+    const rel = toPosix(relative(root, projectPath));
+    if (rel === '' || rel.startsWith('..'))
+        return false;
+    const patterns = [];
+    try {
+        const doc = parseYaml(readFileSync(join(root, 'pnpm-workspace.yaml'), 'utf8'));
+        const packages = typeof doc === 'object' && doc !== null ? doc['packages'] : undefined;
+        if (Array.isArray(packages))
+            patterns.push(...packages.filter((p) => typeof p === 'string'));
+    }
+    catch {
+        /* absent or unparseable — no pnpm declaration */
+    }
+    try {
+        const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+        const ws = pkg['workspaces'];
+        const list = Array.isArray(ws)
+            ? ws
+            : typeof ws === 'object' && ws !== null
+                ? ws['packages']
+                : undefined;
+        if (Array.isArray(list))
+            patterns.push(...list.filter((p) => typeof p === 'string'));
+    }
+    catch {
+        /* absent or unparseable — no npm/yarn declaration */
+    }
+    return patterns.length > 0 && matchesAny(rel, patterns);
 }
 /**
  * A pnpm or yarn project gets NO npm command. Measured with pnpm 10.33.2:

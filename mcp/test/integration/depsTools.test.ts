@@ -2965,4 +2965,82 @@ describe('deps_update_plan', () => {
     expect(r.plan[0]?.upgrade_command).toBe('npm install lodash@4.17.21 --ignore-scripts');
     expect(r.unsupported_ecosystems_present).not.toContain('pnpm');
   });
+
+  /** An npm project with no `.git` anywhere above it — the walk has no
+   *  repository root to stop at. */
+  async function planWithoutGit(project: string): Promise<{
+    calls: string[];
+    r: { plan: Array<{ upgrade_command: string }>; unplanned: Array<{ reason: string }>; unsupported_ecosystems_present: string[] };
+  }> {
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, { cve_id: 'CVE-L', package_name: 'lodash', installed_version: '4.17.20', fixed_version: '4.17.21' });
+    const calls: string[] = [];
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      calls.push([cmd, ...args].join(' '));
+      return { exitCode: 1, stdout: JSON.stringify({ lodash: { current: '4.17.20', latest: '4.17.21' } }), stderr: '' };
+    }) as unknown as typeof execa);
+    const r = okResult<{ plan: Array<{ upgrade_command: string }>; unplanned: Array<{ reason: string }>; unsupported_ecosystems_present: string[] }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    return { calls, r };
+  }
+
+  it('Task 11 item 9: with no .git above it, a stray pnpm/yarn lock in an unrelated ancestor does not flip an npm project', async () => {
+    const outer = tempProject();
+    writeFileSync(join(outer, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n", 'utf8');
+    writeFileSync(join(outer, 'yarn.lock'), '# yarn lockfile v1\n', 'utf8');
+    const project = join(outer, 'somewhere', 'proj');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"lodash":"4.17.20"}}', 'utf8');
+
+    const { calls, r } = await planWithoutGit(project);
+    expect(calls).toEqual(['npm outdated --json']);
+    expect(r.plan[0]?.upgrade_command).toBe('npm install lodash@4.17.21 --ignore-scripts');
+    expect(r.unsupported_ecosystems_present).not.toContain('pnpm');
+    expect(r.unsupported_ecosystems_present).not.toContain('yarn');
+  });
+
+  it('Task 11 item 9: with no .git, an ancestor workspace whose globs do NOT include the project is not its workspace', async () => {
+    const outer = tempProject();
+    writeFileSync(join(outer, 'package.json'), '{"name":"root","private":true}', 'utf8');
+    writeFileSync(join(outer, 'pnpm-workspace.yaml'), "packages:\n  - 'packages/*'\n", 'utf8');
+    writeFileSync(join(outer, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n", 'utf8');
+    const project = join(outer, 'tools', 'proj');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"lodash":"4.17.20"}}', 'utf8');
+
+    const { r } = await planWithoutGit(project);
+    expect(r.plan[0]?.upgrade_command).toBe('npm install lodash@4.17.21 --ignore-scripts');
+    expect(r.unsupported_ecosystems_present).not.toContain('pnpm');
+  });
+
+  it('Task 11 item 9: with no .git, a real pnpm workspace member (the globs include it) is still pnpm', async () => {
+    const outer = tempProject();
+    writeFileSync(join(outer, 'package.json'), '{"name":"root","private":true}', 'utf8');
+    writeFileSync(join(outer, 'pnpm-workspace.yaml'), "packages:\n  - 'packages/**'\n  - '!**/test/**'\n", 'utf8');
+    writeFileSync(join(outer, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n", 'utf8');
+    const project = join(outer, 'packages', 'web');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{"name":"web","dependencies":{"lodash":"4.17.20"}}', 'utf8');
+
+    const { calls, r } = await planWithoutGit(project);
+    expect(calls).toEqual([]);
+    expect(r.plan).toEqual([]);
+    expect(r.unsupported_ecosystems_present).toContain('pnpm');
+    expect(r.unplanned[0]?.reason).toMatch(/^pnpm project \(\.\.\/\.\.\/pnpm-workspace\.yaml, the workspace root\)|^pnpm project \(\.\.\/\.\.\/pnpm-lock\.yaml, the workspace root\)/);
+  });
+
+  it('Task 11 item 9: with no .git, a real yarn workspace member (root package.json workspaces include it) is still yarn', async () => {
+    const outer = tempProject();
+    writeFileSync(join(outer, 'package.json'), '{"name":"root","private":true,"workspaces":{"packages":["apps/*"]}}', 'utf8');
+    writeFileSync(join(outer, 'yarn.lock'), '# yarn lockfile v1\n', 'utf8');
+    const project = join(outer, 'apps', 'api');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{"name":"api","dependencies":{"lodash":"4.17.20"}}', 'utf8');
+
+    const { calls, r } = await planWithoutGit(project);
+    expect(calls).toEqual([]);
+    expect(r.unsupported_ecosystems_present).toContain('yarn');
+    expect(r.unplanned[0]?.reason).toMatch(/^yarn project \(\.\.\/\.\.\/yarn\.lock, the workspace root\)/);
+  });
 });
