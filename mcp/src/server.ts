@@ -10,14 +10,16 @@
  *      fallback), apply migrations.
  *   3. Probe a usable bash. Failure is fatal-for-scripts but the server
  *      still starts so resources and pure-SQL tools can serve data.
- *   4. Startup maintenance, best-effort (storage/maintenance.ts): reap scans
- *      whose owning process died, then prune scans beyond the retention
- *      limit. A failure in either is logged and never stops the server.
+ *   4. Reap scans whose owning process died (storage/maintenance.ts).
+ *      Best-effort: a failure is logged and never stops the server.
  *   5. Add `.guardian/` to the target project's `.gitignore` if missing.
  *   6. Build the McpServer, attach the registered TOOLS and RESOURCES.
  *   7. Connect the stdio transport. Block until the host closes it. A client
  *      that closes our stdout (EPIPE on the next write) is a disconnect, not
  *      a crash: exit 0.
+ *   8. AFTER connecting, schedule scan retention in the background: short
+ *      batches under a per-start work budget, so a large backlog never delays
+ *      startup (storage/maintenance.ts#scheduleRetention).
  *
  * The bootstrap never logs to stdout — that channel belongs to the MCP
  * JSON-RPC stream. Everything diagnostic goes to stderr (visible to the
@@ -35,7 +37,7 @@ import { resolveVersion } from './platform/version.js';
 import type { ProgressNotifier, ProgressPayload } from './progress/progressEmitter.js';
 import { NODE_SQLITE_REQUIRED, nodeSqliteAvailable } from './storage/db.js';
 import { openDatabase, Storage } from './storage/index.js';
-import { runStartupMaintenance } from './storage/maintenance.js';
+import { reapOrphanedScans, scheduleRetention } from './storage/maintenance.js';
 import { attachAllResources } from './resources/index.js';
 import { attachAllTools, TOOLS } from './tools/index.js';
 import { RESOURCES } from './resources/index.js';
@@ -66,8 +68,8 @@ async function main(): Promise<void> {
   logErr(`db opened: ${dbPath}`);
   if (storageWarning) logErr(`db warning: ${storageWarning}`);
 
-  // Reap dead processes' scans, then apply retention. Never fatal.
-  runStartupMaintenance(storage, logErr);
+  // Reap dead processes' scans. Never fatal. (Retention runs after connect.)
+  reapOrphanedScans(storage, logErr);
 
   // Probe a usable shell once; tools read the choice from the cache later.
   const shell = await probeShell(storage.runtimeMeta);
@@ -111,18 +113,26 @@ async function main(): Promise<void> {
   attachAllResources(mcp, ctx);
   logErr(`registered ${TOOLS.length} tool(s), ${RESOURCES.length} resource(s)`);
 
-  installShutdownHooks(mcp, storage);
+  const background = { cancel: (): void => {} };
+  installShutdownHooks(mcp, storage, background);
 
   await mcp.connect(new StdioServerTransport());
   logErr('listening on stdio');
+
+  background.cancel = scheduleRetention(storage, logErr);
 }
 
-function installShutdownHooks(mcp: McpServer, storage: Storage): void {
+function installShutdownHooks(
+  mcp: McpServer,
+  storage: Storage,
+  background: { cancel: () => void },
+): void {
   let closing = false;
   const shutdown = (reason: string, closeTransport: boolean): void => {
     if (closing) return;
     closing = true;
     logErr(`${reason}; shutting down`);
+    background.cancel();
     try {
       storage.close();
     } catch {

@@ -42,6 +42,14 @@ const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
  * still running; short enough that a crashed one does not linger for days.
  */
 export const UNKNOWN_OWNER_REAP_AFTER_MS = 6 * 60 * 60 * 1000;
+/**
+ * How old a `running` scan must be before the reaper fails it even though its
+ * owner pid on this host still looks alive. Pids are reused — quickly on
+ * Windows — so "a process with that pid exists" does not prove it is the
+ * process that started the scan. Every scanner run is capped (10 min by
+ * default, `GUARDIAN_SCAN_TIMEOUT_MS`), so a day is far beyond any real scan.
+ */
+export const LIVE_OWNER_REAP_AFTER_MS = 24 * 60 * 60 * 1000;
 export class ScansRepo {
     insertStmt;
     finalizeStmt;
@@ -168,23 +176,31 @@ export class ScansRepo {
     }
     /**
      * Fails scans left in `running` by a process that is gone (crash, kill -9).
-     * Called once on startup.
+     *
+     * **Call it only at startup, before this process starts any scan** — the
+     * rule for this process's own pid below depends on that.
      *
      * Only DEAD owners' scans: several servers share one database, and the old
      * sweep (`every running scan`) killed whatever another live server was
-     * scanning at the time. A scan whose owner is on this host is reaped when
-     * that pid no longer exists; one whose owner cannot be checked from here
-     * (none recorded, or another host) only once it is older than
-     * {@link UNKNOWN_OWNER_REAP_AFTER_MS}. A live owner's scan is never reaped,
-     * however old — including this process's own.
+     * scanning at the time. For a scan whose owner is on this host:
+     *   - the owner pid is THIS process's pid → reaped. This process has not
+     *     started a scan yet, so an earlier process with the same pid wrote the
+     *     row: a container restarted as pid 1 under the same hostname, or a pid
+     *     Windows handed out again;
+     *   - the pid no longer exists → reaped;
+     *   - the pid exists → left alone, until the scan is older than
+     *     {@link LIVE_OWNER_REAP_AFTER_MS} (the pid has been reused by then).
+     * A scan whose owner cannot be checked from here (none recorded, or another
+     * host) is reaped once older than {@link UNKNOWN_OWNER_REAP_AFTER_MS}.
      */
     reapRunning(options = {}) {
         const now = options.now ?? Date.now();
         const host = options.host ?? hostname();
+        const ownPid = options.ownPid ?? process.pid;
         const isAlive = options.isAlive ?? pidIsAlive;
         let reaped = 0;
         for (const row of this.listRunningStmt.all()) {
-            const reason = reapReason(row, host, now, isAlive);
+            const reason = reapReason(row, { host, ownPid, now, isAlive });
             if (reason === null)
                 continue;
             reaped += this.reapOneStmt.run(nowIso(), `reaped on startup: ${reason}`, row.id).changes;
@@ -252,14 +268,23 @@ export class ScansRepo {
     }
 }
 /** Why `row` should be reaped, or null to leave it running. */
-function reapReason(row, host, now, isAlive) {
-    const pid = row.owner_pid;
-    if (pid !== null && Number.isInteger(pid) && pid > 0 && row.owner_host === host) {
-        return isAlive(pid) ? null : `owner process ${pid} is no longer running`;
-    }
+function reapReason(row, ctx) {
     // A timestamp that does not parse was not written by a live scan of ours.
     const started = Date.parse(row.started_at);
-    if (Number.isNaN(started) || now - started > UNKNOWN_OWNER_REAP_AFTER_MS) {
+    const olderThan = (ms) => Number.isNaN(started) || ctx.now - started > ms;
+    const pid = row.owner_pid;
+    if (pid !== null && Number.isInteger(pid) && pid > 0 && row.owner_host === ctx.host) {
+        if (pid === ctx.ownPid) {
+            return `owner pid ${pid} is this process's own pid, and this process has not started a scan yet`;
+        }
+        if (!ctx.isAlive(pid))
+            return `owner process ${pid} is no longer running`;
+        if (olderThan(LIVE_OWNER_REAP_AFTER_MS)) {
+            return `owner pid ${pid} still exists, but the scan started more than 24 h ago: the pid was reused`;
+        }
+        return null;
+    }
+    if (olderThan(UNKNOWN_OWNER_REAP_AFTER_MS)) {
         return 'owner unknown on this host and the scan started more than 6 h ago';
     }
     return null;

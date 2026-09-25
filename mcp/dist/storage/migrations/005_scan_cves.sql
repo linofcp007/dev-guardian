@@ -45,3 +45,13 @@ SELECT first_seen_scan_id, cve_id, package_name, COALESCE(installed_version, '')
        fixed_version, severity
 FROM cves
 WHERE first_seen_scan_id IN (SELECT id FROM scans);
+
+-- Retention (storage/maintenance.ts) deletes a scan together with every row
+-- that points at it. These three referencing columns had no index, so each
+-- deleted scan cost a full scan of `cves` (twice) and of `tree_cache`, once
+-- for the explicit delete and again for SQLite's own foreign-key check.
+-- Measured before: 21.5 s, under one write lock, to prune 2950 scans over
+-- 60k legacy CVE rows.
+CREATE INDEX IF NOT EXISTS idx_cves_first_seen_scan_id ON cves(first_seen_scan_id);
+CREATE INDEX IF NOT EXISTS idx_cves_last_seen_scan_id  ON cves(last_seen_scan_id);
+CREATE INDEX IF NOT EXISTS idx_tree_cache_scan_id      ON tree_cache(scan_id);

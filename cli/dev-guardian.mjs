@@ -86,6 +86,7 @@ import { spawn } from 'node:child_process';
 import { ALL_HOSTS } from '../mcp/dist/hostsetup/hostSpecs.js';
 import { previewMcpConfig, setupHost } from '../mcp/dist/hostsetup/setup.js';
 import { detectOs } from '../mcp/dist/platform/osDetect.js';
+import { canonicalPath } from '../mcp/dist/platform/projectPath.js';
 import { scanForSecrets } from '../mcp/dist/hooks/secretScan.js';
 import { assessBashCommand } from '../mcp/dist/hooks/bashGuard.js';
 import { buildSnapshot } from '../mcp/dist/dashboard/snapshot.js';
@@ -1239,7 +1240,10 @@ function buildProjectSnapshot(projectPath) {
   try {
     runMigrations(db);
     const storage = new Storage(db);
-    return buildSnapshot(storage, projectPath, Date.now());
+    // Rows are keyed by the canonical spelling every MCP tool stores
+    // (resolveProjectPath); the database FILE is still located from
+    // `projectPath` as given, as the server itself does.
+    return buildSnapshot(storage, canonicalPath(projectPath), Date.now());
   } finally {
     db.close();
   }

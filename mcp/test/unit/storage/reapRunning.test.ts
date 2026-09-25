@@ -1,6 +1,6 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { hostname } from 'node:os';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { GuardianDatabase as Database } from '../../../src/storage/db.js';
 import { runMigrations } from '../../../src/storage/migrations/runner.js';
 import { ScansRepo } from '../../../src/storage/scansRepo.js';
@@ -19,6 +19,22 @@ function deadPid(): number {
   if (typeof r.pid !== 'number') throw new Error('could not spawn a short-lived child');
   return r.pid;
 }
+
+/**
+ * A process that is alive for the whole file and is NOT this one. The reaper
+ * runs once, at startup, before its own process has started any scan — so
+ * this process's own pid can never be "another live server".
+ */
+let otherServer: ChildProcess | undefined;
+let otherServerPid = 0;
+beforeAll(() => {
+  otherServer = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000);'], { stdio: 'ignore' });
+  if (typeof otherServer.pid !== 'number') throw new Error('could not spawn a long-lived child');
+  otherServerPid = otherServer.pid;
+});
+afterAll(() => {
+  otherServer?.kill();
+});
 
 function insertRunning(
   db: Database,
@@ -49,10 +65,25 @@ describe('ScansRepo.insert records its owner', () => {
 
 describe('reapRunning (startup reaper)', () => {
   it("leaves alone a running scan whose owner process is alive — another server's scan", () => {
-    const { repo } = freshRepo();
-    repo.insert({ scan_id: 'live', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
+    const { db, repo } = freshRepo();
+    insertRunning(db, repo, 'live', { pid: otherServerPid, host: hostname() }, 1 * HOUR);
     expect(repo.reapRunning()).toBe(0);
     expect(repo.getById('live')?.status).toBe('running');
+  });
+
+  // A container restarted with the same hostname is pid 1 again, and Windows
+  // hands out a dead process's pid again quickly. The reaper runs at startup,
+  // before this process has started any scan, so a running row carrying OUR
+  // pid was written by an earlier process that happened to have it.
+  it("reaps a running scan recorded under this process's own pid: an earlier process that had it", () => {
+    const { db, repo } = freshRepo();
+    repo.insert({ scan_id: 'same-pid', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
+    expect(repo.reapRunning()).toBe(1);
+    const row = db
+      .prepare<[], { status: string; error: string }>("SELECT status, error FROM scans WHERE id = 'same-pid'")
+      .get();
+    expect(row?.status).toBe('failed');
+    expect(row?.error).toMatch(/this process's own pid/);
   });
 
   it('reaps a running scan whose owner on this host has exited', () => {
@@ -69,11 +100,25 @@ describe('reapRunning (startup reaper)', () => {
     expect(reaped?.finished_at).not.toBeNull();
   });
 
-  it("never reaps a live owner's scan, however old it is", () => {
+  it("leaves a live owner's scan alone for longer than an unknown owner's (7 h)", () => {
     const { db, repo } = freshRepo();
-    insertRunning(db, repo, 'long', { pid: process.pid, host: hostname() }, 7 * HOUR);
+    insertRunning(db, repo, 'long', { pid: otherServerPid, host: hostname() }, 7 * HOUR);
     expect(repo.reapRunning()).toBe(0);
     expect(repo.getById('long')?.status).toBe('running');
+  });
+
+  // Every scanner run is capped (10 min by default), so no real scan is
+  // still going a day later: an owner that still looks alive then is a
+  // reused pid, not the process that started the scan.
+  it('reaps a scan whose owner still looks alive once it is more than 24 h old', () => {
+    const { db, repo } = freshRepo();
+    insertRunning(db, repo, 'reused-pid', { pid: otherServerPid, host: hostname() }, 25 * HOUR);
+    expect(repo.reapRunning()).toBe(1);
+    const row = db
+      .prepare<[], { status: string; error: string }>("SELECT status, error FROM scans WHERE id = 'reused-pid'")
+      .get();
+    expect(row?.status).toBe('failed');
+    expect(row?.error).toMatch(/24 h/);
   });
 
   it('reaps a scan with no recorded owner (written before owners existed) only once it is 6 h old', () => {
@@ -88,7 +133,7 @@ describe('reapRunning (startup reaper)', () => {
   it("treats another host's scan as an unknown owner: its pid means nothing here", () => {
     const { db, repo } = freshRepo();
     insertRunning(db, repo, 'remote-young', { pid: deadPid(), host: 'some-other-host' }, 1 * HOUR);
-    insertRunning(db, repo, 'remote-old', { pid: process.pid, host: 'some-other-host' }, 7 * HOUR);
+    insertRunning(db, repo, 'remote-old', { pid: otherServerPid, host: 'some-other-host' }, 7 * HOUR);
     expect(repo.reapRunning()).toBe(1);
     expect(repo.getById('remote-young')?.status).toBe('running');
     expect(repo.getById('remote-old')?.status).toBe('failed');

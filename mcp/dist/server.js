@@ -37884,6 +37884,7 @@ var RuntimeMetaRepo = class {
 import { hostname as hostname2 } from "node:os";
 var WORKTREE_PATH_EXCLUSION2 = "%guardian-fixpr-wt-%";
 var UNKNOWN_OWNER_REAP_AFTER_MS = 6 * 60 * 60 * 1e3;
+var LIVE_OWNER_REAP_AFTER_MS = 24 * 60 * 60 * 1e3;
 var ScansRepo = class {
   insertStmt;
   finalizeStmt;
@@ -38008,23 +38009,31 @@ var ScansRepo = class {
   }
   /**
    * Fails scans left in `running` by a process that is gone (crash, kill -9).
-   * Called once on startup.
+   *
+   * **Call it only at startup, before this process starts any scan** — the
+   * rule for this process's own pid below depends on that.
    *
    * Only DEAD owners' scans: several servers share one database, and the old
    * sweep (`every running scan`) killed whatever another live server was
-   * scanning at the time. A scan whose owner is on this host is reaped when
-   * that pid no longer exists; one whose owner cannot be checked from here
-   * (none recorded, or another host) only once it is older than
-   * {@link UNKNOWN_OWNER_REAP_AFTER_MS}. A live owner's scan is never reaped,
-   * however old — including this process's own.
+   * scanning at the time. For a scan whose owner is on this host:
+   *   - the owner pid is THIS process's pid → reaped. This process has not
+   *     started a scan yet, so an earlier process with the same pid wrote the
+   *     row: a container restarted as pid 1 under the same hostname, or a pid
+   *     Windows handed out again;
+   *   - the pid no longer exists → reaped;
+   *   - the pid exists → left alone, until the scan is older than
+   *     {@link LIVE_OWNER_REAP_AFTER_MS} (the pid has been reused by then).
+   * A scan whose owner cannot be checked from here (none recorded, or another
+   * host) is reaped once older than {@link UNKNOWN_OWNER_REAP_AFTER_MS}.
    */
   reapRunning(options = {}) {
     const now = options.now ?? Date.now();
     const host = options.host ?? hostname2();
+    const ownPid = options.ownPid ?? process.pid;
     const isAlive = options.isAlive ?? pidIsAlive;
     let reaped = 0;
     for (const row of this.listRunningStmt.all()) {
-      const reason = reapReason(row, host, now, isAlive);
+      const reason = reapReason(row, { host, ownPid, now, isAlive });
       if (reason === null) continue;
       reaped += this.reapOneStmt.run(nowIso(), `reaped on startup: ${reason}`, row.id).changes;
     }
@@ -38090,13 +38099,21 @@ var ScansRepo = class {
     this.attachCacheStmt.run(args.tree_hash, args.scan_id, args.scan_type, nowIso());
   }
 };
-function reapReason(row, host, now, isAlive) {
-  const pid = row.owner_pid;
-  if (pid !== null && Number.isInteger(pid) && pid > 0 && row.owner_host === host) {
-    return isAlive(pid) ? null : `owner process ${pid} is no longer running`;
-  }
+function reapReason(row, ctx) {
   const started = Date.parse(row.started_at);
-  if (Number.isNaN(started) || now - started > UNKNOWN_OWNER_REAP_AFTER_MS) {
+  const olderThan = (ms) => Number.isNaN(started) || ctx.now - started > ms;
+  const pid = row.owner_pid;
+  if (pid !== null && Number.isInteger(pid) && pid > 0 && row.owner_host === ctx.host) {
+    if (pid === ctx.ownPid) {
+      return `owner pid ${pid} is this process's own pid, and this process has not started a scan yet`;
+    }
+    if (!ctx.isAlive(pid)) return `owner process ${pid} is no longer running`;
+    if (olderThan(LIVE_OWNER_REAP_AFTER_MS)) {
+      return `owner pid ${pid} still exists, but the scan started more than 24 h ago: the pid was reused`;
+    }
+    return null;
+  }
+  if (olderThan(UNKNOWN_OWNER_REAP_AFTER_MS)) {
     return "owner unknown on this host and the scan started more than 6 h ago";
   }
   return null;
@@ -38535,7 +38552,10 @@ var Storage = class {
 
 // src/storage/maintenance.ts
 var DEFAULT_RETENTION_SCANS = 50;
-var PRUNE_BATCH = 200;
+var PRUNE_BATCH = 50;
+var RETENTION_BUDGET_MS = 1e3;
+var RETENTION_START_DELAY_MS = 2e3;
+var RETENTION_BATCH_GAP_MS = 20;
 function resolveRetentionLimit(raw) {
   const value = raw?.trim() ?? "";
   if (value === "") return { keep: DEFAULT_RETENTION_SCANS };
@@ -38545,9 +38565,9 @@ function resolveRetentionLimit(raw) {
     warning: `GUARDIAN_RETENTION_SCANS='${raw}' is not a non-negative integer; keeping the newest ${DEFAULT_RETENTION_SCANS} scans per project and scan type.`
   };
 }
-var DOOMED_SQL = `
+var PRUNABLE_SQL = `
   SELECT id FROM (
-    SELECT id, status,
+    SELECT id, status, started_at, rowid AS rid,
            ROW_NUMBER() OVER (
              PARTITION BY project_path, scan_type
              ORDER BY started_at DESC, rowid DESC
@@ -38557,51 +38577,90 @@ var DOOMED_SQL = `
   WHERE rn > ?
     AND status <> 'running'
     AND id NOT IN (SELECT scan_id FROM baselines)
-  LIMIT ${PRUNE_BATCH}
+  ORDER BY started_at ASC, rid ASC
 `;
-function pruneScans(db, keep) {
-  if (!(keep > 0)) return { deleted: 0 };
-  const selectDoomed = db.prepare(DOOMED_SQL);
-  const batch = db.transaction(() => {
-    const ids2 = selectDoomed.all(keep).map((r) => r.id);
-    if (ids2.length > 0) deleteBatch(db, ids2);
-    return ids2.length;
-  });
-  let deleted = 0;
-  for (; ; ) {
-    const n2 = batch();
-    deleted += n2;
-    if (n2 < PRUNE_BATCH) return { deleted };
-  }
+function listPrunableScans(db, keep) {
+  if (!(keep > 0)) return [];
+  return db.prepare(PRUNABLE_SQL).all(keep).map((r) => r.id);
 }
-function deleteBatch(db, ids2) {
-  const list2 = ids2.map(() => "?").join(", ");
-  db.prepare(`DELETE FROM findings WHERE scan_id IN (${list2})`).run(...ids2);
-  db.prepare(`DELETE FROM scan_cves WHERE scan_id IN (${list2})`).run(...ids2);
-  db.prepare(`DELETE FROM tree_cache WHERE scan_id IN (${list2})`).run(...ids2);
-  db.prepare(
-    `DELETE FROM cves WHERE first_seen_scan_id IN (${list2}) OR last_seen_scan_id IN (${list2})`
-  ).run(...ids2, ...ids2);
-  db.prepare(`DELETE FROM scans WHERE id IN (${list2})`).run(...ids2);
+function deleteScans(db, ids2) {
+  if (ids2.length === 0) return 0;
+  return db.transaction(() => {
+    const list2 = ids2.map(() => "?").join(", ");
+    const eligible = db.prepare(
+      `SELECT id FROM scans WHERE id IN (${list2})
+           AND status <> 'running' AND id NOT IN (SELECT scan_id FROM baselines)`
+    ).all(...ids2).map((r) => r.id);
+    if (eligible.length === 0) return 0;
+    const del = eligible.map(() => "?").join(", ");
+    db.prepare(`DELETE FROM findings WHERE scan_id IN (${del})`).run(...eligible);
+    db.prepare(`DELETE FROM scan_cves WHERE scan_id IN (${del})`).run(...eligible);
+    db.prepare(`DELETE FROM tree_cache WHERE scan_id IN (${del})`).run(...eligible);
+    db.prepare(
+      `DELETE FROM cves WHERE first_seen_scan_id IN (${del}) OR last_seen_scan_id IN (${del})`
+    ).run(...eligible, ...eligible);
+    return db.prepare(`DELETE FROM scans WHERE id IN (${del})`).run(...eligible).changes;
+  })();
 }
-function runStartupMaintenance(storage, log, env = process.env) {
+function reapOrphanedScans(storage, log) {
   try {
     const reaped = storage.scans.reapRunning();
     if (reaped > 0) log(`reaped ${reaped} orphaned scan(s)`);
   } catch (error2) {
     log(`reaper failed (continuing): ${describe(error2)}`);
   }
-  const limit = resolveRetentionLimit(env["GUARDIAN_RETENTION_SCANS"]);
+}
+var defaultDefer = (fn, ms) => {
+  const timer = setTimeout(fn, ms);
+  timer.unref();
+  return () => clearTimeout(timer);
+};
+function scheduleRetention(storage, log, options = {}) {
+  const limit = resolveRetentionLimit((options.env ?? process.env)["GUARDIAN_RETENTION_SCANS"]);
   if (limit.warning !== void 0) log(limit.warning);
-  if (limit.keep === 0) return;
-  try {
-    const { deleted } = pruneScans(storage.rawHandle(), limit.keep);
-    if (deleted > 0) {
-      log(`pruned ${deleted} scan(s) beyond the newest ${limit.keep} per project and scan type`);
+  if (limit.keep === 0) return () => {
+  };
+  const defer = options.defer ?? defaultDefer;
+  const now = options.now ?? (() => performance.now());
+  const budgetMs = options.budgetMs ?? RETENTION_BUDGET_MS;
+  const batchSize = options.batchSize ?? PRUNE_BATCH;
+  let cancelled = false;
+  let cancelNext = () => {
+  };
+  let pending;
+  let spent = 0;
+  let deleted = 0;
+  const finish = (left) => {
+    if (deleted === 0 && left === 0) return;
+    log(
+      `pruned ${deleted} scan(s) beyond the newest ${limit.keep} per project and scan type` + (left > 0 ? `; ${left} left for the next start (retention budget ${budgetMs} ms)` : "")
+    );
+  };
+  const tick = () => {
+    if (cancelled) return;
+    const t0 = now();
+    let left;
+    try {
+      const db = storage.rawHandle();
+      pending ??= listPrunableScans(db, limit.keep);
+      deleted += deleteScans(db, pending.splice(0, batchSize));
+      left = pending.length;
+    } catch (error2) {
+      log(`retention failed (continuing): ${describe(error2)}`);
+      return;
     }
-  } catch (error2) {
-    log(`retention failed (continuing): ${describe(error2)}`);
-  }
+    spent += now() - t0;
+    if (left === 0 || spent >= budgetMs) {
+      finish(left);
+      return;
+    }
+    cancelNext = defer(tick, RETENTION_BATCH_GAP_MS);
+  };
+  cancelNext = defer(tick, options.startDelayMs ?? RETENTION_START_DELAY_MS);
+  return () => {
+    cancelled = true;
+    cancelNext();
+  };
 }
 function describe(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
@@ -55915,7 +55974,7 @@ async function main() {
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
   if (storageWarning) logErr(`db warning: ${storageWarning}`);
-  runStartupMaintenance(storage, logErr);
+  reapOrphanedScans(storage, logErr);
   const shell = await probeShell(storage.runtimeMeta);
   if (shell === null) {
     logErr(
@@ -55945,16 +56004,20 @@ async function main() {
   attachAllTools(mcp, ctx);
   attachAllResources(mcp, ctx);
   logErr(`registered ${TOOLS.length} tool(s), ${RESOURCES.length} resource(s)`);
-  installShutdownHooks(mcp, storage);
+  const background = { cancel: () => {
+  } };
+  installShutdownHooks(mcp, storage, background);
   await mcp.connect(new StdioServerTransport());
   logErr("listening on stdio");
+  background.cancel = scheduleRetention(storage, logErr);
 }
-function installShutdownHooks(mcp, storage) {
+function installShutdownHooks(mcp, storage, background) {
   let closing = false;
   const shutdown = (reason, closeTransport) => {
     if (closing) return;
     closing = true;
     logErr(`${reason}; shutting down`);
+    background.cancel();
     try {
       storage.close();
     } catch {

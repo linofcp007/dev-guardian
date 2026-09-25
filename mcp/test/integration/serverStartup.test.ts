@@ -34,10 +34,11 @@ afterEach(() => {
   }
 });
 
-function startServer(cwd: string, nodeArgs: string[] = []): ServerRun {
+function startServer(cwd: string, nodeArgs: string[] = [], env: Record<string, string> = {}): ServerRun {
   const child = spawn(process.execPath, [...nodeArgs, ...TSX_NODE_ARGS, SERVER], {
     cwd,
     stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, ...env },
   });
   running.push(child);
   let err = '';
@@ -98,6 +99,30 @@ describe('server startup against a database another process is writing to', () =
       holder.release();
       await holder.released;
     }
+  }, 60_000);
+});
+
+describe('server startup with a retention backlog', () => {
+  // Retention used to run synchronously before the transport connected, and
+  // to loop until nothing was left — measured 21.5 s for 2950 scans over 60k
+  // legacy CVE rows — so a large backlog delayed the server's first answer.
+  it('connects first and prunes afterwards, in the background', async () => {
+    const project = makeTempDir('guardian-server-retention-');
+    const { db } = openDatabase({ projectPath: project });
+    for (let i = 0; i < 3; i++) {
+      db.prepare(
+        `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, status)
+         VALUES (?, 'sast', ?, 'h', ?, 'completed')`,
+      ).run(`old-${i}`, project, new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString());
+    }
+    db.close();
+
+    const server = startServer(project, [], { GUARDIAN_RETENTION_SCANS: '1' });
+    await server.waitFor(/pruned 2 scan\(s\)/);
+
+    const log = server.stderr();
+    expect(log.indexOf('listening on stdio')).toBeGreaterThan(-1);
+    expect(log.indexOf('listening on stdio')).toBeLessThan(log.indexOf('pruned 2 scan(s)'));
   }, 60_000);
 });
 

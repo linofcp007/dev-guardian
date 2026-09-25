@@ -62,16 +62,17 @@ describe('ScansRepo', () => {
     expect(repo.getById('s-b')?.status).toBe('cancelled');
   });
 
-  it('reapRunning flips orphans (owner process gone) to failed and returns the count', () => {
+  it('reapRunning flips orphans to failed and returns the count', () => {
     const { repo } = freshRepo();
     repo.insert({ scan_id: 'orphan-1', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
     repo.insert({ scan_id: 'orphan-2', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
     repo.insert({ scan_id: 'clean', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
     repo.finalize({ scan_id: 'clean', status: 'completed', tools_run: [], missing_tools: [] });
 
-    // The owner recorded on insert is this process; pretend it has exited.
-    // (Owner-aware cases live in reapRunning.test.ts.)
-    const reaped = repo.reapRunning({ isAlive: () => false });
+    // The owner recorded on insert is this process's pid, which at startup can
+    // only mean an earlier process with the same pid. (Owner-aware cases live
+    // in reapRunning.test.ts.)
+    const reaped = repo.reapRunning();
     expect(reaped).toBe(2);
     expect(repo.getById('orphan-1')?.status).toBe('failed');
     expect(repo.getById('clean')?.status).toBe('completed');
