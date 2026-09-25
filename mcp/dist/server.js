@@ -38148,6 +38148,8 @@ var SCAN_TYPES = [
   "wordpress",
   "wp_audit",
   "wp_vuln_check",
+  // Source-based vulnerability matching (no live URL): wp_vuln_check_source.
+  "wp_vuln_check_source",
   "wp_cron_audit",
   "wp_rest_audit",
   // .NET family
@@ -49331,6 +49333,7 @@ var SCAN_TYPE_ROLE = {
   perf: "state",
   wordpress: "state",
   wp_vuln_check: "state",
+  wp_vuln_check_source: "state",
   dotnet_secrets: "state",
   dotnet_efcore_audit: "state",
   sbom: "never",
@@ -49691,6 +49694,17 @@ var RUN_NAMES = {
   // wp_audit, wp_cron_audit: report through meta
   "http-probe": scanner(),
   // wp_rest_audit: reports through meta
+  // wp_vuln_check_source: source-based WP vuln matching, no live URL.
+  "wordfence-feed": scanner("wordfence"),
+  "wp-plugin-api": scanner("wp-plugin-api"),
+  // Named, partial sub-gaps (fix round 1) — the pass itself stayed 'ok'
+  // (real matching/checking happened), but some installed components
+  // could not be covered. Same pattern as `trivy:<ecosystem>` below: an
+  // unlisted `base:suffix` would inherit `base`'s measures via
+  // `runNameEntry`'s fallback at runtime, but the exhaustiveness test
+  // requires an exact literal key, so both get their own entry.
+  "wordfence-feed:unmatched-version": scanner("wordfence"),
+  "wp-plugin-api:deadline": scanner("wp-plugin-api"),
   // .NET. `scan_dotnet_secrets` and `dotnet_target_framework_check` are
   // also audit_executive's entries for those sub-tools.
   scan_dotnet_secrets: scanner("scan_dotnet_secrets"),
@@ -54750,10 +54764,786 @@ function failDomain20(code, message3) {
   return { ok: false, error: { code, message: message3 } };
 }
 
-// src/tools/wpCronAudit.ts
+// src/tools/wpVulnCheckSource.ts
 import { existsSync as existsSync38 } from "node:fs";
-import { randomUUID as randomUUID9 } from "node:crypto";
+import { join as join50 } from "node:path";
+
+// src/wordpress/sourceInventory.ts
 import { join as join48 } from "node:path";
+var MAX_HEADER_BYTES = 8192;
+var MAX_README_BYTES = 16384;
+function inventoryWordPressSource(wpPath) {
+  const warnings = [];
+  const coreVersion = readCoreVersion(wpPath);
+  if (coreVersion === null) {
+    warnings.push(
+      "wp-includes/version.php not found or unparsable under the given path \u2014 core version unknown."
+    );
+  }
+  return {
+    core: { version: coreVersion },
+    plugins: inventoryPlugins(wpPath, warnings),
+    themes: inventoryThemes(wpPath, warnings),
+    mu_plugins: inventoryMuPlugins(wpPath, warnings),
+    warnings
+  };
+}
+function warnUnversioned(warnings, label, stableTag) {
+  const stableTagNote = stableTag === void 0 ? "" : stableTag === null ? " (no readme.txt Stable tag either)" : ` (readme.txt's Stable tag is "${stableTag}", not a usable version)`;
+  warnings.push(`${label}: version unknown \u2014 no Version: header${stableTagNote}. Cannot be matched against a vulnerability feed.`);
+}
+function readCoreVersion(wpPath) {
+  const text = readTextSafe(join48(wpPath, "wp-includes", "version.php"));
+  if (text === null) return null;
+  const m = /\$wp_version\s*=\s*'([^']+)'/.exec(text);
+  return m?.[1] ?? null;
+}
+function inventoryPlugins(wpPath, warnings) {
+  const pluginsDir = join48(wpPath, "wp-content", "plugins");
+  const out = [];
+  for (const entry of readDirSafe(pluginsDir)) {
+    if (entry.isDirectory()) {
+      const dir = join48(pluginsDir, entry.name);
+      const main2 = findMainFile(dir, entry.name, "Plugin Name");
+      if (main2 === null) {
+        warnings.push(`wp-content/plugins/${entry.name}: no file with a "Plugin Name:" header \u2014 skipped.`);
+        continue;
+      }
+      const text = readTextSafe(main2, MAX_HEADER_BYTES) ?? "";
+      const stableTag = readStableTag(join48(dir, "readme.txt"));
+      const headerVersion = extractHeader(text, "Version");
+      const version2 = headerVersion ?? usableVersion(stableTag);
+      const component = {
+        slug: entry.name,
+        name: extractHeader(text, "Plugin Name"),
+        version: version2,
+        path: main2
+      };
+      if (stableTag !== null) component.stable_tag = stableTag;
+      if (version2 === null) warnUnversioned(warnings, `wp-content/plugins/${entry.name}`, stableTag);
+      out.push(component);
+    } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".php")) {
+      const filePath = join48(pluginsDir, entry.name);
+      const text = readTextSafe(filePath, MAX_HEADER_BYTES);
+      if (text === null || !hasHeader(text, "Plugin Name")) continue;
+      const version2 = extractHeader(text, "Version");
+      if (version2 === null) warnUnversioned(warnings, `wp-content/plugins/${entry.name}`, void 0);
+      out.push({
+        slug: entry.name.slice(0, -".php".length),
+        name: extractHeader(text, "Plugin Name"),
+        version: version2,
+        path: filePath
+      });
+    }
+  }
+  return out;
+}
+function inventoryThemes(wpPath, warnings) {
+  const themesDir = join48(wpPath, "wp-content", "themes");
+  const out = [];
+  for (const entry of readDirSafe(themesDir)) {
+    if (!entry.isDirectory()) continue;
+    const styleCssPath = join48(themesDir, entry.name, "style.css");
+    const text = readTextSafe(styleCssPath, MAX_HEADER_BYTES);
+    if (text === null || !hasHeader(text, "Theme Name")) {
+      warnings.push(`wp-content/themes/${entry.name}: no readable style.css with a "Theme Name:" header \u2014 skipped.`);
+      continue;
+    }
+    const version2 = extractHeader(text, "Version");
+    if (version2 === null) warnUnversioned(warnings, `wp-content/themes/${entry.name}`, void 0);
+    out.push({
+      slug: entry.name,
+      name: extractHeader(text, "Theme Name"),
+      version: version2,
+      path: styleCssPath
+    });
+  }
+  return out;
+}
+var MU_PLUGIN_LOADER_RE = /(?:require|include)(?:_once)?\s*\(?\s*(?:__DIR__|dirname\s*\(\s*__FILE__\s*\)|WPMU_PLUGIN_DIR|WP_PLUGIN_DIR)\s*\.\s*['"]\/?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+\.php)['"]/gi;
+function inventoryMuPlugins(wpPath, warnings) {
+  const muDir = join48(wpPath, "wp-content", "mu-plugins");
+  const out = [];
+  for (const entry of readDirSafe(muDir)) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".php")) continue;
+    const filePath = join48(muDir, entry.name);
+    const text = readTextSafe(filePath, MAX_HEADER_BYTES);
+    if (text === null) continue;
+    if (hasHeader(text, "Plugin Name")) {
+      const slug = entry.name.slice(0, -".php".length);
+      const version2 = extractHeader(text, "Version");
+      if (version2 === null) warnUnversioned(warnings, `wp-content/mu-plugins/${entry.name}`, void 0);
+      out.push({
+        slug,
+        name: extractHeader(text, "Plugin Name"),
+        version: version2,
+        path: filePath
+      });
+      continue;
+    }
+    for (const match of text.matchAll(MU_PLUGIN_LOADER_RE)) {
+      const subDir = match[1];
+      const subFile = match[2];
+      if (subDir === void 0 || subFile === void 0) continue;
+      const targetPath = join48(muDir, subDir, subFile);
+      const targetText = readTextSafe(targetPath, MAX_HEADER_BYTES);
+      if (targetText === null || !hasHeader(targetText, "Plugin Name")) continue;
+      const version2 = extractHeader(targetText, "Version");
+      if (version2 === null) warnUnversioned(warnings, `wp-content/mu-plugins/${subDir}`, void 0);
+      out.push({
+        slug: subDir,
+        name: extractHeader(targetText, "Plugin Name"),
+        version: version2,
+        path: targetPath
+      });
+    }
+  }
+  return out;
+}
+function findMainFile(dir, dirName, nameHeader) {
+  const candidates2 = readDirSafe(dir).filter((e) => e.isFile() && e.name.toLowerCase().endsWith(".php"));
+  const preferredName = `${dirName.toLowerCase()}.php`;
+  const preferred = candidates2.find((e) => e.name.toLowerCase() === preferredName);
+  const ordered = preferred ? [preferred, ...candidates2.filter((e) => e !== preferred)] : candidates2;
+  for (const entry of ordered) {
+    const path6 = join48(dir, entry.name);
+    const text = readTextSafe(path6, MAX_HEADER_BYTES);
+    if (text !== null && hasHeader(text, nameHeader)) return path6;
+  }
+  return null;
+}
+function readStableTag(readmePath) {
+  const text = readTextSafe(readmePath, MAX_README_BYTES);
+  if (text === null) return null;
+  const value = extractHeader(text, "Stable tag");
+  return value;
+}
+function usableVersion(stableTag) {
+  if (stableTag === null) return null;
+  return /^trunk$/i.test(stableTag) ? null : stableTag;
+}
+function hasHeader(text, name) {
+  return headerRegex(name).test(text);
+}
+function extractHeader(text, name) {
+  const m = headerRegex(name).exec(text);
+  if (!m) return null;
+  const cleaned = (m[1] ?? "").trim().replace(/\*\/\s*$/, "").replace(/\?>\s*$/, "").trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+function headerRegex(name) {
+  return new RegExp(`^[ \\t/*#@]*${name}:(.*)$`, "im");
+}
+
+// src/wordpress/vulnFeed.ts
+import { mkdirSync as mkdirSync10, renameSync, writeFileSync as writeFileSync13 } from "node:fs";
+import { readFile as readFile2 } from "node:fs/promises";
+import { homedir as homedir2 } from "node:os";
+import { join as join49 } from "node:path";
+import { randomUUID as randomUUID9 } from "node:crypto";
+var WORDFENCE_TOOL_NAME = "wordfence";
+var WORDFENCE_BASE_URL = "https://www.wordfence.com/api/intelligence/v3";
+var WORDFENCE_PRODUCTION_PATH = "/vulnerabilities/production";
+var WORDFENCE_FEED_TTL_MS = 24 * 60 * 60 * 1e3;
+var DEFAULT_FEED_TIMEOUT_MS = 6e4;
+var VERSION_ANY = "*";
+function comparePhpVersions(a2, b) {
+  const ca = splitVersion(a2);
+  const cb = splitVersion(b);
+  const n2 = Math.max(ca.length, cb.length);
+  for (let i2 = 0; i2 < n2; i2++) {
+    const x = ca[i2] ?? DEFAULT_COMPONENT;
+    const y = cb[i2] ?? DEFAULT_COMPONENT;
+    const c3 = compareComponents(x, y);
+    if (c3 !== 0) return c3;
+  }
+  return 0;
+}
+var TIER_UNRECOGNIZED = 1;
+var TIER_NUMBER = 6;
+var LOWER_TIERS = { dev: 2, alpha: 3, a: 3, beta: 4, b: 4, rc: 5 };
+var HIGHER_TIERS = { pl: 7, p: 7 };
+var DEFAULT_COMPONENT = { tier: TIER_NUMBER, numeric: 0 };
+function splitVersion(version2) {
+  let v = version2.replace(/[_+-]/g, ".");
+  v = v.replace(/[^0-9.]+/g, (m) => `.${m}.`);
+  v = v.replace(/\.{2,}/g, ".");
+  v = v.replace(/^\.+|\.+$/g, "");
+  const parts = v === "" ? ["0"] : v.split(".");
+  return parts.map(componentOf);
+}
+function componentOf(raw) {
+  if (/^[0-9]+$/.test(raw)) return { tier: TIER_NUMBER, numeric: parseInt(raw, 10) };
+  const lower = raw.toLowerCase();
+  if (lower in LOWER_TIERS) return { tier: LOWER_TIERS[lower], numeric: 0 };
+  if (lower in HIGHER_TIERS) return { tier: HIGHER_TIERS[lower], numeric: 0 };
+  return { tier: TIER_UNRECOGNIZED, numeric: 0 };
+}
+function compareComponents(a2, b) {
+  if (a2.tier !== b.tier) return a2.tier < b.tier ? -1 : 1;
+  if (a2.tier !== TIER_NUMBER) return 0;
+  if (a2.numeric === b.numeric) return 0;
+  return a2.numeric < b.numeric ? -1 : 1;
+}
+function versionInRange(version2, range) {
+  if (range.from_version !== VERSION_ANY) {
+    const c3 = comparePhpVersions(range.from_version, version2);
+    const ok = c3 === -1 || range.from_inclusive && c3 === 0;
+    if (!ok) return false;
+  }
+  if (range.to_version !== VERSION_ANY) {
+    const c3 = comparePhpVersions(range.to_version, version2);
+    const ok = c3 === 1 || range.to_inclusive && c3 === 0;
+    if (!ok) return false;
+  }
+  return true;
+}
+async function fetchWordfenceFeed(opts) {
+  const fetchImpl = opts.fetchImpl ?? (typeof fetch === "function" ? fetch : void 0);
+  if (fetchImpl === void 0) return { ok: false, reason: "no fetch implementation available" };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_FEED_TIMEOUT_MS);
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort();
+    else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  try {
+    const res = await fetchImpl(`${WORDFENCE_BASE_URL}${WORDFENCE_PRODUCTION_PATH}`, {
+      signal: controller.signal,
+      headers: { Authorization: `Bearer ${opts.apiKey}`, Accept: "application/json" }
+    });
+    if (!res.ok) return { ok: false, reason: `Wordfence Intelligence API returned http ${res.status}` };
+    const json = await res.json();
+    if (json === null || typeof json !== "object" || Array.isArray(json)) {
+      return { ok: false, reason: "Wordfence Intelligence API response was not a JSON object" };
+    }
+    return { ok: true, feed: json };
+  } catch (e) {
+    return { ok: false, reason: describeFetchError3(e) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+function describeFetchError3(e) {
+  if (e instanceof Error) {
+    if (e.name === "AbortError") return "Wordfence Intelligence API request timed out";
+    return e.message;
+  }
+  return "Wordfence Intelligence API request failed";
+}
+var CACHE_FILE_NAME = "wordfence-vulnerabilities-production.json";
+function defaultWordfenceCacheDir(env = process.env) {
+  const override = env["GUARDIAN_CACHE_DIR"];
+  if (override !== void 0 && override.length > 0) return override;
+  if (process.platform === "win32") {
+    const base2 = env["LOCALAPPDATA"] ?? join49(homedir2(), "AppData", "Local");
+    return join49(base2, "dev-guardian", "cache");
+  }
+  if (process.platform === "darwin") {
+    const base2 = env["XDG_CACHE_HOME"] ?? join49(homedir2(), "Library", "Caches");
+    return join49(base2, "dev-guardian");
+  }
+  const base = env["XDG_CACHE_HOME"] ?? join49(homedir2(), ".cache");
+  return join49(base, "dev-guardian");
+}
+async function getWordfenceFeed(opts = {}) {
+  const now = opts.now ?? Date.now();
+  const env = opts.env ?? process.env;
+  const cacheDir = opts.cacheDir ?? defaultWordfenceCacheDir(env);
+  const cachePath = join49(cacheDir, CACHE_FILE_NAME);
+  const cached2 = await readCachedFeed(cachePath);
+  const cachedFresh = cached2 !== null && now - Date.parse(cached2.fetched_at) < WORDFENCE_FEED_TTL_MS;
+  if (cachedFresh && cached2 !== null) {
+    return { ok: true, feed: cached2.feed, stale: false, fetched_at: cached2.fetched_at };
+  }
+  const offline = opts.offline ?? env["GUARDIAN_OFFLINE"] === "1";
+  if (offline) {
+    if (cached2 !== null) return { ok: true, feed: cached2.feed, stale: true, fetched_at: cached2.fetched_at };
+    return { ok: false, reason: "network disabled (GUARDIAN_OFFLINE=1)" };
+  }
+  const apiKey = opts.apiKey ?? env["WORDFENCE_API_KEY"];
+  if (apiKey === void 0 || apiKey.length === 0) {
+    if (cached2 !== null) return { ok: true, feed: cached2.feed, stale: true, fetched_at: cached2.fetched_at };
+    return { ok: false, reason: "no Wordfence Intelligence API key (set WORDFENCE_API_KEY)" };
+  }
+  const fetchWordfenceFeedImpl = opts.fetchWordfenceFeedImpl ?? fetchWordfenceFeed;
+  const netOpts = { apiKey };
+  if (opts.fetchImpl !== void 0) netOpts.fetchImpl = opts.fetchImpl;
+  if (opts.timeoutMs !== void 0) netOpts.timeoutMs = opts.timeoutMs;
+  if (opts.signal !== void 0) netOpts.signal = opts.signal;
+  const fetched = await fetchWordfenceFeedImpl(netOpts);
+  if (fetched.ok) {
+    const fetchedAt = new Date(now).toISOString();
+    await writeCachedFeed(cachePath, { fetched_at: fetchedAt, feed: fetched.feed });
+    return { ok: true, feed: fetched.feed, stale: false, fetched_at: fetchedAt };
+  }
+  if (cached2 !== null) return { ok: true, feed: cached2.feed, stale: true, fetched_at: cached2.fetched_at };
+  return { ok: false, reason: fetched.reason };
+}
+async function readCachedFeed(cachePath) {
+  let raw;
+  try {
+    raw = await readFile2(cachePath, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object") return null;
+    const rec = parsed;
+    if (typeof rec["fetched_at"] !== "string") return null;
+    const feed = rec["feed"];
+    if (feed === null || typeof feed !== "object" || Array.isArray(feed)) return null;
+    return { fetched_at: rec["fetched_at"], feed };
+  } catch {
+    return null;
+  }
+}
+async function writeCachedFeed(cachePath, payload) {
+  mkdirSync10(join49(cachePath, ".."), { recursive: true });
+  const tmpPath = `${cachePath}.${randomUUID9()}.tmp`;
+  writeFileSync13(tmpPath, JSON.stringify(payload), "utf8");
+  renameSync(tmpPath, cachePath);
+}
+var CORE_SLUG = "wordpress";
+var CORE_NAME = "WordPress";
+function allComponents(inventory) {
+  const out = [
+    { type: "core", slug: CORE_SLUG, name: CORE_NAME, version: inventory.core.version }
+  ];
+  for (const p of [...inventory.plugins, ...inventory.mu_plugins]) {
+    out.push({ type: "plugin", slug: p.slug, name: p.name ?? p.slug, version: p.version });
+  }
+  for (const t of inventory.themes) {
+    out.push({ type: "theme", slug: t.slug, name: t.name ?? t.slug, version: t.version });
+  }
+  return out;
+}
+function assessComponentCoverage(inventory) {
+  const all = allComponents(inventory);
+  const unmatched = all.filter((c3) => c3.version === null).map((c3) => ({ type: c3.type, slug: c3.slug }));
+  return { total: all.length, matchable: all.length - unmatched.length, unmatched };
+}
+function matchInventoryAgainstFeed(inventory, feed) {
+  const targets = allComponents(inventory).filter(
+    (c3) => c3.version !== null
+  );
+  const matches = [];
+  for (const vuln of Object.values(feed)) {
+    for (const software of vuln.software) {
+      const target = targets.find((t) => t.type === software.type && t.slug === software.slug);
+      if (target === void 0) continue;
+      const inRange = Object.values(software.affected_versions).some(
+        (range) => versionInRange(target.version, range)
+      );
+      if (!inRange) continue;
+      matches.push({
+        vulnId: vuln.id,
+        title: vuln.title,
+        cve: vuln.cve ?? null,
+        cveLink: vuln.cve_link ?? null,
+        severity: severityOf2(vuln.cvss),
+        componentType: software.type,
+        slug: target.slug,
+        name: software.name || target.name,
+        installedVersion: target.version,
+        fixedVersion: software.patched && software.patched_versions.length > 0 ? software.patched_versions[0] : null,
+        patchedVersions: software.patched_versions,
+        remediation: software.remediation ?? null
+      });
+    }
+  }
+  return matches;
+}
+function severityOf2(cvss) {
+  const rating = cvss?.rating?.toLowerCase();
+  if (rating === "critical") return "critical";
+  if (rating === "high") return "high";
+  if (rating === "medium") return "medium";
+  if (rating === "low") return "low";
+  if (rating === "none") return "info";
+  const score = cvss?.score;
+  if (typeof score === "number") {
+    if (score >= 9) return "critical";
+    if (score >= 7) return "high";
+    if (score >= 4) return "medium";
+    return "low";
+  }
+  return "medium";
+}
+function wordfenceMatchToFindingAndCve(match) {
+  const componentLabel = `${match.slug}@${match.installedVersion}`;
+  const subcategory = match.componentType === "core" ? "wordpress-core" : match.componentType === "plugin" ? "wordpress-plugin" : "wordpress-theme";
+  const finding4 = makeFinding({
+    tool: WORDFENCE_TOOL_NAME,
+    rule_id: match.cve ?? match.vulnId.slice(0, 64),
+    severity: match.severity,
+    category: "security",
+    subcategory,
+    title: match.title,
+    ...match.remediation !== null ? { message: match.remediation } : {},
+    fix_available: match.fixedVersion !== null,
+    file_path: componentLabel,
+    snippet: `component:${componentLabel}`
+  });
+  const cve = match.cve === null ? null : {
+    cve_id: match.cve,
+    package_name: match.slug,
+    installed_version: match.installedVersion,
+    ...match.fixedVersion !== null ? { fixed_version: match.fixedVersion } : {},
+    severity: match.severity
+  };
+  return { finding: finding4, cve };
+}
+
+// src/wordpress/wpOrgHealth.ts
+var WP_ORG_CACHE_TTL_MS = 24 * 60 * 60 * 1e3;
+var TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1e3;
+var WP_ORG_TOOL_NAME = "wp-plugin-api";
+var WP_ORG_URL = "https://api.wordpress.org/plugins/info/1.2/";
+var DEFAULT_TIMEOUT_MS4 = 8e3;
+var CACHE_KEY_PREFIX = "intel:wporg_plugin:";
+async function checkWpOrgPlugin(storage, slug, opts = {}) {
+  const now = opts.now ?? Date.now();
+  const cacheKey = `${CACHE_KEY_PREFIX}${slug}`;
+  const cached2 = parseCachedEntry(storage.runtimeMeta.getJson(cacheKey));
+  const cachedFresh = cached2 !== null && now - Date.parse(cached2.fetched_at) < WP_ORG_CACHE_TTL_MS;
+  if (cachedFresh && cached2 !== null) {
+    return { slug, status: "ok", ...toResultFields(cached2) };
+  }
+  const offline = opts.offline ?? (opts.env ?? process.env)["GUARDIAN_OFFLINE"] === "1";
+  if (offline) {
+    if (cached2 !== null) return { slug, status: "ok", stale: true, reason: "network disabled (GUARDIAN_OFFLINE=1)", ...toResultFields(cached2) };
+    return { slug, status: "unavailable", reason: "network disabled (GUARDIAN_OFFLINE=1)" };
+  }
+  const fetched = await fetchWpOrgPluginInfo(slug, opts);
+  if (fetched.ok) {
+    const entry = { fetched_at: new Date(now).toISOString(), plugin_status: fetched.plugin_status };
+    if (fetched.last_updated !== void 0) entry.last_updated = fetched.last_updated;
+    if (fetched.closed_date !== void 0) entry.closed_date = fetched.closed_date;
+    if (fetched.closure_reason !== void 0) entry.closure_reason = fetched.closure_reason;
+    if (fetched.closure_reason_text !== void 0) entry.closure_reason_text = fetched.closure_reason_text;
+    storage.runtimeMeta.setJson(cacheKey, entry);
+    return { slug, status: "ok", ...toResultFields(entry) };
+  }
+  if (cached2 !== null) return { slug, status: "ok", stale: true, reason: fetched.reason, ...toResultFields(cached2) };
+  return { slug, status: "unavailable", reason: fetched.reason };
+}
+var DEFAULT_CONCURRENCY = 5;
+var DEFAULT_OVERALL_TIMEOUT_MS = 3e4;
+async function checkWpOrgPlugins(storage, slugs, opts = {}) {
+  const concurrency = opts.concurrency ?? DEFAULT_CONCURRENCY;
+  const deadline = (opts.now ?? Date.now()) + (opts.overallTimeoutMs ?? DEFAULT_OVERALL_TIMEOUT_MS);
+  const results = [];
+  let i2 = 0;
+  while (i2 < slugs.length) {
+    if (Date.now() >= deadline) break;
+    const batch = slugs.slice(i2, i2 + concurrency);
+    const batchResults = await Promise.all(batch.map((slug) => checkWpOrgPlugin(storage, slug, opts)));
+    results.push(...batchResults);
+    i2 += batch.length;
+  }
+  return { results, notChecked: slugs.slice(i2) };
+}
+function toResultFields(entry) {
+  const out = {
+    plugin_status: entry.plugin_status,
+    fetched_at: entry.fetched_at
+  };
+  if (entry.last_updated !== void 0) out.last_updated = entry.last_updated;
+  if (entry.closed_date !== void 0) out.closed_date = entry.closed_date;
+  if (entry.closure_reason !== void 0) out.closure_reason = entry.closure_reason;
+  if (entry.closure_reason_text !== void 0) out.closure_reason_text = entry.closure_reason_text;
+  return out;
+}
+function parseCachedEntry(raw) {
+  if (raw === null || typeof raw !== "object") return null;
+  const rec = raw;
+  if (typeof rec["fetched_at"] !== "string") return null;
+  const status = rec["plugin_status"];
+  if (status !== "found" && status !== "closed" && status !== "not_found") return null;
+  const entry = { fetched_at: rec["fetched_at"], plugin_status: status };
+  if (typeof rec["last_updated"] === "string") entry.last_updated = rec["last_updated"];
+  if (typeof rec["closed_date"] === "string") entry.closed_date = rec["closed_date"];
+  if (typeof rec["closure_reason"] === "string") entry.closure_reason = rec["closure_reason"];
+  if (typeof rec["closure_reason_text"] === "string") entry.closure_reason_text = rec["closure_reason_text"];
+  return entry;
+}
+async function fetchWpOrgPluginInfo(slug, opts) {
+  const fetchImpl = opts.fetchImpl ?? (typeof fetch === "function" ? fetch : void 0);
+  if (fetchImpl === void 0) return { ok: false, reason: "no fetch implementation available" };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS4);
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort();
+    else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  try {
+    const url = `${WP_ORG_URL}?action=plugin_information&request%5Bslug%5D=${encodeURIComponent(slug)}`;
+    const res = await fetchImpl(url, { signal: controller.signal });
+    let json;
+    try {
+      json = await res.json();
+    } catch {
+      return { ok: false, reason: `wp.org plugin API returned unparsable JSON (http ${res.status})` };
+    }
+    const errorField = getStringProp(json, "error");
+    if (errorField === "closed") {
+      const result2 = { ok: true, plugin_status: "closed" };
+      const closedDate = getStringProp(json, "closed_date");
+      const reason = getStringProp(json, "reason");
+      const reasonText = getStringProp(json, "reason_text");
+      if (closedDate !== void 0) result2.closed_date = closedDate;
+      if (reason !== void 0) result2.closure_reason = reason;
+      if (reasonText !== void 0) result2.closure_reason_text = reasonText;
+      return result2;
+    }
+    if (errorField !== void 0) return { ok: true, plugin_status: "not_found" };
+    if (!res.ok) return { ok: false, reason: `wp.org plugin API returned http ${res.status}` };
+    const lastUpdatedRaw = getStringProp(json, "last_updated");
+    const result = { ok: true, plugin_status: "found" };
+    const lastUpdatedIso = lastUpdatedRaw !== void 0 ? parseWpOrgDate(lastUpdatedRaw) : null;
+    if (lastUpdatedIso !== null) result.last_updated = lastUpdatedIso;
+    return result;
+  } catch (e) {
+    return { ok: false, reason: describeFetchError4(e) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+function getStringProp(obj, key) {
+  if (obj === null || typeof obj !== "object" || Array.isArray(obj)) return void 0;
+  const v = obj[key];
+  return typeof v === "string" ? v : void 0;
+}
+var WP_ORG_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})(am|pm)\s+GMT$/i;
+function parseWpOrgDate(raw) {
+  const m = WP_ORG_DATE_RE.exec(raw.trim());
+  if (!m) return null;
+  const [, y, mo, d, hRaw, mi, ampm] = m;
+  let hour = parseInt(hRaw, 10) % 12;
+  if (ampm.toLowerCase() === "pm") hour += 12;
+  const ms = Date.UTC(Number(y), Number(mo) - 1, Number(d), hour, Number(mi));
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+function describeFetchError4(e) {
+  if (e instanceof Error) {
+    if (e.name === "AbortError") return "wp.org plugin API request timed out";
+    return e.message;
+  }
+  return "wp.org plugin API request failed";
+}
+function isStalePlugin(lastUpdatedIso, now) {
+  const parsed = Date.parse(lastUpdatedIso);
+  if (!Number.isFinite(parsed)) return false;
+  return now - parsed > TWO_YEARS_MS;
+}
+
+// src/tools/wpVulnCheckSource.ts
+var WORDFENCE_TIMEOUT_MS = 6e4;
+var WP_ORG_TIMEOUT_MS = 8e3;
+var WP_ORG_CONCURRENCY = 5;
+var WP_ORG_OVERALL_TIMEOUT_MS = 6e4;
+registerToolModule(
+  makeScanTool({
+    name: "wp_vuln_check_source",
+    title: "WordPress vulnerabilities from source (no live URL)",
+    description: "Reads a local WordPress install (project_path = the install root: wp-includes/, wp-content/ \u2014 not a single plugin/theme directory) and matches core/plugin/theme versions against the Wordfence Intelligence v3 feed (needs WORDFENCE_API_KEY; cached 24h) plus wp.org's plugin directory (closed/removed, or stale > 2 years; no key needed). No key or GUARDIAN_OFFLINE=1 -> coverage partial with a stated reason, never a clean result; wp.org checks still run without a Wordfence key. Complements wp_vuln_check (WPScan, needs a live URL) for offline/CI-only WordPress projects.",
+    scan_type: "wp_vuln_check_source",
+    category: "security",
+    supportsAutoFix: false,
+    // The Wordfence feed's own cache is 24h and wp.org's is 24h too; a
+    // shorter factory cache would just re-parse the same ~100 MB feed for
+    // an identical answer. An hour balances "don't re-parse for nothing"
+    // against "force=true still gets a real re-check within the same day".
+    cacheTtlMs: 60 * 60 * 1e3,
+    inputSchema: {
+      project_path: ProjectPath,
+      severity_min: SeverityMin,
+      force: Force
+    },
+    invoke: async (_input, ctx) => {
+      const tools_run = [];
+      const missing_tools = [];
+      const warnings = [];
+      const findings = [];
+      const cves = [];
+      const looksLikeWpRoot = existsSync38(join50(ctx.projectPath, "wp-includes")) || existsSync38(join50(ctx.projectPath, "wp-content"));
+      if (!looksLikeWpRoot) {
+        warnings.push(
+          "not_a_wordpress_install_root: no wp-includes/ or wp-content/ at project_path \u2014 this tool expects the WordPress install root, not a single plugin/theme directory."
+        );
+      }
+      const inventory = inventoryWordPressSource(ctx.projectPath);
+      warnings.push(...inventory.warnings);
+      const offline = ctx.scriptEnv["GUARDIAN_OFFLINE"] === "1";
+      const apiKey = ctx.scriptEnv["WORDFENCE_API_KEY"];
+      let matches = [];
+      const coverage = assessComponentCoverage(inventory);
+      const wf = await getWordfenceFeed({
+        ...apiKey !== void 0 ? { apiKey } : {},
+        env: ctx.scriptEnv,
+        timeoutMs: WORDFENCE_TIMEOUT_MS,
+        signal: ctx.signal
+      });
+      if (wf.ok) {
+        matches = matchInventoryAgainstFeed(inventory, wf.feed);
+        const entry = { name: "wordfence-feed", status: "ok" };
+        if (wf.stale) {
+          entry.reason = `serving a cached feed from ${wf.fetched_at}`;
+          warnings.push(
+            `Wordfence feed: serving a cached copy from ${wf.fetched_at} (a refresh could not be completed this run) \u2014 results may be outdated.`
+          );
+        }
+        if (coverage.total > 0 && coverage.matchable === 0) {
+          entry.status = "failed";
+          entry.reason = `0 of ${coverage.total} installed component(s) have a readable version \u2014 nothing could be matched against the Wordfence feed.`;
+        } else if (coverage.unmatched.length > 0) {
+          missing_tools.push("wordfence-feed:unmatched-version");
+          const names = coverage.unmatched.slice(0, 5).map((c3) => `${c3.type}:${c3.slug}`);
+          const suffix = coverage.unmatched.length > 5 ? ", ..." : "";
+          warnings.push(
+            `Wordfence feed: ${coverage.unmatched.length} of ${coverage.total} installed component(s) have no readable version and could not be checked: ${names.join(", ")}${suffix}`
+          );
+        }
+        tools_run.push(entry);
+        for (const match of matches) {
+          const { finding: finding4, cve } = wordfenceMatchToFindingAndCve(match);
+          findings.push(finding4);
+          if (cve !== null) cves.push(cve);
+        }
+      } else {
+        const configGap = offline || apiKey === void 0 || apiKey.length === 0;
+        tools_run.push({ name: "wordfence-feed", status: configGap ? "skipped" : "failed", reason: wf.reason });
+        if (configGap) missing_tools.push("wordfence-feed");
+      }
+      const pluginSlugs = inventory.plugins.map((p) => p.slug);
+      const { results: wpOrgResults, notChecked } = await checkWpOrgPlugins(ctx.plugin.storage, pluginSlugs, {
+        env: ctx.scriptEnv,
+        timeoutMs: WP_ORG_TIMEOUT_MS,
+        signal: ctx.signal,
+        concurrency: WP_ORG_CONCURRENCY,
+        overallTimeoutMs: WP_ORG_OVERALL_TIMEOUT_MS
+      });
+      const unavailable = wpOrgResults.filter((r) => r.status === "unavailable");
+      if (pluginSlugs.length === 0) {
+        tools_run.push({ name: "wp-plugin-api", status: "skipped", reason: "no plugins to check" });
+      } else if (unavailable.length + notChecked.length === pluginSlugs.length) {
+        tools_run.push({
+          name: "wp-plugin-api",
+          status: offline ? "skipped" : "failed",
+          reason: unavailable[0]?.reason ?? "wp.org lookup did not finish within its overall time budget before any plugin could be checked"
+        });
+        if (offline) missing_tools.push("wp-plugin-api");
+      } else {
+        tools_run.push({ name: "wp-plugin-api", status: "ok" });
+        if (unavailable.length > 0) {
+          const names = unavailable.slice(0, 5).map((r) => r.slug);
+          const suffix = unavailable.length > 5 ? ", ..." : "";
+          warnings.push(
+            `wp.org plugin lookup failed for ${unavailable.length} of ${pluginSlugs.length} plugin(s): ${names.join(", ")}${suffix}`
+          );
+        }
+        if (notChecked.length > 0) {
+          missing_tools.push("wp-plugin-api:deadline");
+          const names = notChecked.slice(0, 5);
+          const suffix = notChecked.length > 5 ? ", ..." : "";
+          warnings.push(
+            `wp.org plugin lookup did not finish within its overall time budget for ${notChecked.length} of ${pluginSlugs.length} plugin(s): ${names.join(", ")}${suffix}`
+          );
+        }
+        const staleServed = wpOrgResults.filter((r) => r.stale === true);
+        if (staleServed.length > 0) {
+          warnings.push(
+            `wp.org: serving cached data for ${staleServed.length} plugin(s) (a refresh could not be completed this run) \u2014 results may be outdated.`
+          );
+        }
+      }
+      const now = Date.now();
+      let closedCount = 0;
+      let staleCount = 0;
+      for (const r of wpOrgResults) {
+        if (r.status !== "ok") continue;
+        const installed = inventory.plugins.find((p) => p.slug === r.slug);
+        const componentLabel = `${r.slug}@${installed?.version ?? "unknown"}`;
+        if (r.plugin_status === "closed") {
+          closedCount += 1;
+          const severity = r.closure_reason === "security-issue" ? "high" : "medium";
+          const finding4 = makeFinding({
+            tool: WP_ORG_TOOL_NAME,
+            severity,
+            category: "security",
+            subcategory: "wordpress-plugin-closed",
+            title: `Plugin "${r.slug}" is closed on wp.org` + (r.closure_reason_text !== void 0 ? `: ${r.closure_reason_text}` : ""),
+            fix_available: false,
+            file_path: componentLabel,
+            snippet: `component:${componentLabel}`
+          });
+          if (r.closed_date !== void 0) finding4.message = `Closed ${r.closed_date}.`;
+          findings.push(finding4);
+        } else if (r.plugin_status === "found" && r.last_updated !== void 0 && isStalePlugin(r.last_updated, now)) {
+          staleCount += 1;
+          findings.push(
+            makeFinding({
+              tool: WP_ORG_TOOL_NAME,
+              severity: "low",
+              category: "security",
+              subcategory: "wordpress-plugin-stale",
+              title: `Plugin "${r.slug}" has not been updated on wp.org since ${r.last_updated.slice(0, 10)}`,
+              fix_available: false,
+              file_path: componentLabel,
+              snippet: `component:${componentLabel}`
+            })
+          );
+        }
+      }
+      const parser_inputs = [];
+      if (findings.length > 0 || cves.length > 0) {
+        const passthrough = { name: "wp_vuln_check_source", parse: () => ({ findings, cves }) };
+        parser_inputs.push({ parser: passthrough, input: null });
+      }
+      const extras = {
+        inventory: {
+          core_version: inventory.core.version,
+          plugins_count: inventory.plugins.length,
+          themes_count: inventory.themes.length,
+          mu_plugins_count: inventory.mu_plugins.length
+        },
+        wordfence: wf.ok ? {
+          status: "ok",
+          stale: wf.stale,
+          fetched_at: wf.fetched_at,
+          matched_count: matches.length,
+          components_checked: coverage.matchable,
+          components_total: coverage.total
+        } : { status: "unavailable", reason: wf.reason },
+        wp_org: {
+          checked: wpOrgResults.length,
+          not_checked: notChecked.length,
+          found: wpOrgResults.filter((r) => r.plugin_status === "found").length,
+          closed: closedCount,
+          stale: staleCount,
+          not_found: wpOrgResults.filter((r) => r.plugin_status === "not_found").length,
+          unavailable: unavailable.length
+        }
+      };
+      if (warnings.length > 0) extras["warnings_extra"] = warnings;
+      return {
+        outcome: "completed",
+        tools_run,
+        missing_tools,
+        parser_inputs,
+        report_paths: [],
+        extras
+      };
+    }
+  })
+);
+
+// src/tools/wpCronAudit.ts
+import { existsSync as existsSync39 } from "node:fs";
+import { randomUUID as randomUUID10 } from "node:crypto";
+import { join as join51 } from "node:path";
 var inputSchema17 = {
   wp_install_path: external_exports.string().min(1).describe("Path to the directory containing wp-config.php.")
 };
@@ -54794,7 +55584,7 @@ async function handler27(input, ctx) {
   } catch (e) {
     return failDomain21("not_a_wordpress_install", e.message);
   }
-  if (!existsSync38(join48(installPath, "wp-config.php"))) {
+  if (!existsSync39(join51(installPath, "wp-config.php"))) {
     return failDomain21("not_a_wordpress_install", `No wp-config.php in ${installPath}`);
   }
   const wpBin = await scannerAvailable("wp");
@@ -54859,7 +55649,7 @@ async function handler27(input, ctx) {
     }
     if (reasons.length > 0) flagged.push({ ...ev, reasons });
   }
-  const scanId = randomUUID9();
+  const scanId = randomUUID10();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_cron_audit",
@@ -55064,7 +55854,7 @@ function findLatestWpAudit(ctx) {
 }
 
 // src/tools/wpPluginCheck.ts
-import { randomUUID as randomUUID10 } from "node:crypto";
+import { randomUUID as randomUUID11 } from "node:crypto";
 var inputSchema18 = {
   slug: external_exports.string().min(1).describe('Plugin slug as known by wp.org (e.g. "contact-form-7").'),
   wp_install_path: external_exports.string().optional().describe("Optional path to a local WP install for version detection."),
@@ -55114,14 +55904,16 @@ async function handler29(input, ctx) {
   }
   const slugLower = inp.slug.toLowerCase();
   const allActive = ctx.storage.scans.listHistory(50).filter(
-    (s) => s.scan_type === "wp_vuln_check" || s.scan_type === "deps" || s.scan_type === "deps_audit"
+    (s) => s.scan_type === "wp_vuln_check" || // wp_vuln_check_source (Task 18): source-based match against the
+    // Wordfence feed, no live URL — same `cves` shape, same slug key.
+    s.scan_type === "wp_vuln_check_source" || s.scan_type === "deps" || s.scan_type === "deps_audit"
   ).map((s) => ctx.storage.cves.listActive(s.scan_id)).flat().filter((c3) => c3.package_name.toLowerCase() === slugLower);
   const cveMap = /* @__PURE__ */ new Map();
   for (const c3 of allActive) {
     if (!cveMap.has(c3.cve_id)) cveMap.set(c3.cve_id, c3);
   }
   const knownCves = [...cveMap.values()];
-  const scanId = randomUUID10();
+  const scanId = randomUUID11();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_vuln_check",
@@ -55156,7 +55948,7 @@ function failDomain22(code, message3) {
 }
 
 // src/tools/wpRestAudit.ts
-import { randomUUID as randomUUID11 } from "node:crypto";
+import { randomUUID as randomUUID12 } from "node:crypto";
 var inputSchema19 = {
   target_url: external_exports.string().url().describe("Base URL of the WordPress site (e.g. https://example.com)."),
   timeout_ms: external_exports.number().int().min(1e3).max(6e4).optional()
@@ -55189,7 +55981,7 @@ async function handler30(input, ctx) {
     results.push(await probe(`${url}${ep.path}`, ep.label, ep.expectListing, timeoutMs));
   }
   const exposed = results.filter((r) => r.exposed);
-  const scanId = randomUUID11();
+  const scanId = randomUUID12();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_rest_audit",
@@ -55336,11 +56128,16 @@ async function handler32(ctx) {
   const wpCron = findLatest2(ctx, "wp_cron_audit");
   const wpRest = findLatest2(ctx, "wp_rest_audit");
   const wpVuln = findLatest2(ctx, "wp_vuln_check");
+  const wpVulnSource = findLatest2(ctx, "wp_vuln_check_source");
   const wpCodeScan = findLatest2(ctx, "wordpress");
   const open = ctx.storage.findings.listOpen().filter(
     (f) => f.tool === "wpscan" || f.tool === "phpcs" || f.category === "security"
   );
-  const cves = wpVuln ? ctx.storage.cves.listActive(wpVuln.scan_id) : [];
+  const cvesFromLive = wpVuln ? ctx.storage.cves.listActive(wpVuln.scan_id) : [];
+  const cvesFromSource = wpVulnSource ? ctx.storage.cves.listActive(wpVulnSource.scan_id) : [];
+  const cveById = /* @__PURE__ */ new Map();
+  for (const c3 of [...cvesFromLive, ...cvesFromSource]) cveById.set(c3.cve_id, c3);
+  const cves = [...cveById.values()];
   return {
     ok: true,
     audits: {
@@ -55362,7 +56159,11 @@ async function handler32(ctx) {
       } : null,
       wp_vuln_check: wpVuln ? {
         scan_id: wpVuln.scan_id,
-        cves_count: cves.length
+        cves_count: cvesFromLive.length
+      } : null,
+      wp_vuln_check_source: wpVulnSource ? {
+        scan_id: wpVulnSource.scan_id,
+        cves_count: cvesFromSource.length
       } : null,
       scan_wordpress: wpCodeScan ? {
         scan_id: wpCodeScan.scan_id,
@@ -55373,7 +56174,7 @@ async function handler32(ctx) {
     open_critical: open.filter((f) => f.severity === "critical").length,
     open_high: open.filter((f) => f.severity === "high").length,
     active_cves: cves,
-    recommended_next: !wpAudit ? "Run `wp_audit` first to capture baseline state." : !wpVuln ? "Run `wp_vuln_check` to map CVEs to your installed plugins/themes." : !wpCron ? "Run `wp_cron_audit` to detect persistent backdoors." : open.length > 0 ? "Open findings exist. Try `triage_findings` + `wp_recommend_hardening`." : "Posture looks clean. Consider `audit_executive` for a full cross-stack pass."
+    recommended_next: !wpAudit ? "Run `wp_audit` first to capture baseline state." : !wpVuln && !wpVulnSource ? "Run `wp_vuln_check` (live URL) or `wp_vuln_check_source` (no live URL needed) to map CVEs to your installed plugins/themes." : !wpCron ? "Run `wp_cron_audit` to detect persistent backdoors." : open.length > 0 ? "Open findings exist. Try `triage_findings` + `wp_recommend_hardening`." : "Posture looks clean. Consider `audit_executive` for a full cross-stack pass."
   };
 }
 function findLatest2(ctx, type) {
@@ -55387,9 +56188,9 @@ function countChecksumIssues(meta) {
 }
 
 // src/tools/scanDotnetSecrets.ts
-import { randomUUID as randomUUID12 } from "node:crypto";
-import { existsSync as existsSync39, readFileSync as readFileSync28, readdirSync as readdirSync18, statSync as statSync13 } from "node:fs";
-import { join as join49, relative as relative14 } from "node:path";
+import { randomUUID as randomUUID13 } from "node:crypto";
+import { existsSync as existsSync40, readFileSync as readFileSync28, readdirSync as readdirSync18, statSync as statSync13 } from "node:fs";
+import { join as join52, relative as relative14 } from "node:path";
 var PATTERNS = [
   {
     id: "dotnet-sql-server-conn",
@@ -55529,7 +56330,7 @@ async function handler33(input, ctx) {
       }
     }
   }
-  const scanId = randomUUID12();
+  const scanId = randomUUID13();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "dotnet_secrets",
@@ -55567,7 +56368,7 @@ function collectConfigFiles(root, maxDepth) {
     }
     for (const name of entries2) {
       if (SKIP_DIRS3.has(name)) continue;
-      const abs = join49(dir, name);
+      const abs = join52(dir, name);
       let stat2;
       try {
         stat2 = statSync13(abs);
@@ -55576,7 +56377,7 @@ function collectConfigFiles(root, maxDepth) {
       }
       if (stat2.isDirectory()) {
         walk4(abs, depth + 1);
-      } else if (TARGET_FILES.some((re) => re.test(name)) && existsSync39(abs)) {
+      } else if (TARGET_FILES.some((re) => re.test(name)) && existsSync40(abs)) {
         out.push(abs);
       }
     }
@@ -55586,9 +56387,9 @@ function collectConfigFiles(root, maxDepth) {
 }
 
 // src/tools/dotnetTargetFrameworkCheck.ts
-import { randomUUID as randomUUID13 } from "node:crypto";
+import { randomUUID as randomUUID14 } from "node:crypto";
 import { readFileSync as readFileSync29, readdirSync as readdirSync19, statSync as statSync14 } from "node:fs";
-import { join as join50, relative as relative15 } from "node:path";
+import { join as join53, relative as relative15 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
   "net9.0": { tfm: "net9.0", status: "sts-current", hint: "STS until May 2026." },
@@ -55643,7 +56444,7 @@ async function handler34(input, ctx) {
   }
   const eol = rows.flatMap((r) => r.statuses).filter((s) => s.status === "eol");
   const legacy = rows.flatMap((r) => r.statuses).filter((s) => s.status === "legacy");
-  const scanId = randomUUID13();
+  const scanId = randomUUID14();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "dotnet_target_framework",
@@ -55710,7 +56511,7 @@ function collectCsprojFiles(root, maxDepth) {
     }
     for (const name of entries2) {
       if (SKIP_DIRS4.has(name)) continue;
-      const abs = join50(dir, name);
+      const abs = join53(dir, name);
       try {
         const s = statSync14(abs);
         if (s.isDirectory()) walk4(abs, depth + 1);
@@ -55727,9 +56528,9 @@ function failDomain23(code, message3) {
 }
 
 // src/tools/dotnetEfcoreAudit.ts
-import { randomUUID as randomUUID14 } from "node:crypto";
-import { existsSync as existsSync40, readFileSync as readFileSync30, readdirSync as readdirSync20, statSync as statSync15 } from "node:fs";
-import { join as join51, relative as relative16 } from "node:path";
+import { randomUUID as randomUUID15 } from "node:crypto";
+import { existsSync as existsSync41, readFileSync as readFileSync30, readdirSync as readdirSync20, statSync as statSync15 } from "node:fs";
+import { join as join54, relative as relative16 } from "node:path";
 var RULES = [
   {
     id: "efcore-drop-table",
@@ -55792,7 +56593,7 @@ async function handler35(input, ctx) {
       continue;
     }
     for (const fname of files) {
-      const abs = join51(dir, fname);
+      const abs = join54(dir, fname);
       let content;
       try {
         content = readFileSync30(abs, "utf8");
@@ -55825,7 +56626,7 @@ async function handler35(input, ctx) {
       }
     }
   }
-  const scanId = randomUUID14();
+  const scanId = randomUUID15();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "dotnet_efcore_audit",
@@ -55864,7 +56665,7 @@ function findMigrationsDirs(root) {
     }
     for (const name of entries2) {
       if (SKIP.has(name)) continue;
-      const abs = join51(dir, name);
+      const abs = join54(dir, name);
       let s;
       try {
         s = statSync15(abs);
@@ -55872,7 +56673,7 @@ function findMigrationsDirs(root) {
         continue;
       }
       if (!s.isDirectory()) continue;
-      if (name === "Migrations" && existsSync40(abs)) {
+      if (name === "Migrations" && existsSync41(abs)) {
         out.push(abs);
       } else {
         walk4(abs, depth + 1);
@@ -56045,13 +56846,13 @@ function scoreRange(top) {
 }
 
 // src/tools/scanSkill.ts
-import { createHash as createHash8, randomUUID as randomUUID15 } from "node:crypto";
-import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync14 } from "node:fs";
-import { join as join53 } from "node:path";
+import { createHash as createHash8, randomUUID as randomUUID16 } from "node:crypto";
+import { mkdirSync as mkdirSync11, writeFileSync as writeFileSync15 } from "node:fs";
+import { join as join56 } from "node:path";
 
 // src/runners/osv.ts
 var OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
-var DEFAULT_TIMEOUT_MS4 = 6e3;
+var DEFAULT_TIMEOUT_MS5 = 6e3;
 var MAX_QUERIES = 200;
 var CHUNK2 = 100;
 async function queryOsv(packages, opts = {}) {
@@ -56103,7 +56904,7 @@ async function queryOsv(packages, opts = {}) {
 }
 async function postJson(url, body, opts) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS4);
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS5);
   if (opts.signal) {
     if (opts.signal.aborted) controller.abort();
     else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
@@ -57186,7 +57987,7 @@ function finding2(file, ruleId, severity, subcategory, title, message3) {
 // src/skillaudit/ingest.ts
 init_execa();
 import {
-  existsSync as existsSync41,
+  existsSync as existsSync42,
   lstatSync as lstatSync3,
   mkdtempSync as mkdtempSync4,
   readFileSync as readFileSync31,
@@ -57195,10 +57996,10 @@ import {
   realpathSync as realpathSync4,
   rmSync as rmSync6,
   statSync as statSync16,
-  writeFileSync as writeFileSync13
+  writeFileSync as writeFileSync14
 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
-import { basename as basename5, isAbsolute as isAbsolute6, join as join52, relative as relative17 } from "node:path";
+import { basename as basename5, isAbsolute as isAbsolute6, join as join55, relative as relative17 } from "node:path";
 var MAX_FILES = 4e3;
 var MAX_TOTAL_BYTES2 = 25 * 1024 * 1024;
 var MAX_FILE_BYTES2 = 2 * 1024 * 1024;
@@ -57316,7 +58117,7 @@ async function ingestTarget(targetRaw) {
     if (looksLikeGitHost(target)) return ingestGit(target);
     return ingestUrl(target);
   }
-  if (!existsSync41(target)) {
+  if (!existsSync42(target)) {
     return { ok: false, code: "target_not_found", message: `Path does not exist: ${target}` };
   }
   const st = statSync16(target);
@@ -57356,7 +58157,7 @@ function looksLikeGitHost(url) {
   return /(github\.com|gitlab\.com|bitbucket\.org)\/[^/]+\/[^/]+\/?$/.test(url);
 }
 async function ingestGit(url) {
-  const dir = mkdtempSync4(join52(tmpdir5(), "guardian-scanskill-git-"));
+  const dir = mkdtempSync4(join55(tmpdir5(), "guardian-scanskill-git-"));
   try {
     await execa("git", ["clone", "--depth", "1", "--quiet", url, dir], { timeout: 12e4 });
   } catch (e) {
@@ -57381,10 +58182,10 @@ async function ingestUrl(url) {
   if (typeof fetch !== "function") {
     return { ok: false, code: "unsupported_target", message: "No fetch available to download URL." };
   }
-  const dir = mkdtempSync4(join52(tmpdir5(), "guardian-scanskill-url-"));
+  const dir = mkdtempSync4(join55(tmpdir5(), "guardian-scanskill-url-"));
   const isZip = /\.zip($|\?)/i.test(url);
   const fileName = isZip ? "download.zip" : basename5(url.split("?")[0] ?? "download") || "download";
-  const dest = join52(dir, fileName);
+  const dest = join55(dir, fileName);
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6e4);
@@ -57392,7 +58193,7 @@ async function ingestUrl(url) {
       const res = await fetch(url, { signal: controller.signal });
       if (!res.ok) throw new Error(`http ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
-      writeFileSync13(dest, buf);
+      writeFileSync14(dest, buf);
     } finally {
       clearTimeout(timeout);
     }
@@ -57426,7 +58227,7 @@ async function ingestUrl(url) {
   };
 }
 async function ingestZip(zipPath, ownsParent, parentDir) {
-  const extractDir = mkdtempSync4(join52(tmpdir5(), "guardian-scanskill-zip-"));
+  const extractDir = mkdtempSync4(join55(tmpdir5(), "guardian-scanskill-zip-"));
   const extracted = await tryExtract(zipPath, extractDir);
   if (!extracted) {
     safeRm(extractDir);
@@ -57494,7 +58295,7 @@ function collectDir(root) {
         truncated = true;
         break;
       }
-      const abs = join52(dir, entry);
+      const abs = join55(dir, entry);
       let s;
       try {
         s = lstatSync3(abs);
@@ -57658,7 +58459,7 @@ async function handler38(input, ctx, callMeta) {
     if (callMeta?.signal) analyzeOpts.signal = callMeta.signal;
     const report = await analyzeSkill(ingest.files, analyzeOpts);
     const findings = filterFindings(report.findings, inp.severity_min);
-    const scanId = randomUUID15();
+    const scanId = randomUUID16();
     const treeHash = hashFiles(ingest.files.map((f) => `${f.relPath}:${f.bytes}`));
     ctx.storage.scans.insert({
       scan_id: scanId,
@@ -57674,13 +58475,13 @@ async function handler38(input, ctx, callMeta) {
     }
     const reportPaths = [];
     if (inp.write_reports !== false) {
-      const outDir = join53(basePath, ".guardian", "reports", `skill-audit-${scanId.slice(0, 8)}`);
+      const outDir = join56(basePath, ".guardian", "reports", `skill-audit-${scanId.slice(0, 8)}`);
       try {
-        mkdirSync10(outDir, { recursive: true });
-        const sarifPath = join53(outDir, "report.sarif");
-        const jsonPath = join53(outDir, "report.json");
-        writeFileSync14(sarifPath, toSarif(findings, { toolName: "guardian-scanskill" }), "utf8");
-        writeFileSync14(
+        mkdirSync11(outDir, { recursive: true });
+        const sarifPath = join56(outDir, "report.sarif");
+        const jsonPath = join56(outDir, "report.json");
+        writeFileSync15(sarifPath, toSarif(findings, { toolName: "guardian-scanskill" }), "utf8");
+        writeFileSync15(
           jsonPath,
           JSON.stringify(
             {
@@ -57785,7 +58586,7 @@ function hashFiles(parts) {
 
 // src/tools/mapAttackSurface.ts
 import { readFileSync as readFileSync34 } from "node:fs";
-import { isAbsolute as isAbsolute7, join as join57, resolve as resolve12 } from "node:path";
+import { isAbsolute as isAbsolute7, join as join60, resolve as resolve12 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -57821,8 +58622,8 @@ function numProp(value, key) {
 }
 
 // src/surface/collectors/ports.ts
-import { existsSync as existsSync42, readFileSync as readFileSync32, realpathSync as realpathSync5 } from "node:fs";
-import { basename as basename6, join as join54 } from "node:path";
+import { existsSync as existsSync43, readFileSync as readFileSync32, realpathSync as realpathSync5 } from "node:fs";
+import { basename as basename6, join as join57 } from "node:path";
 var DOCKERFILES = ["Dockerfile", "dockerfile"];
 var COMPOSE_FILES = [
   "docker-compose.yml",
@@ -57842,7 +58643,7 @@ function collectPorts(projectPath) {
   };
   const seenDockerfiles = /* @__PURE__ */ new Set();
   for (const name of DOCKERFILES) {
-    const path6 = join54(projectPath, name);
+    const path6 = join57(projectPath, name);
     const canonical = canonicalPath2(path6);
     if (canonical === void 0) continue;
     if (seenDockerfiles.has(canonical)) continue;
@@ -57861,7 +58662,7 @@ function collectPorts(projectPath) {
     }
   }
   for (const name of COMPOSE_FILES) {
-    for (const line of readLines(join54(projectPath, name))) {
+    for (const line of readLines(join57(projectPath, name))) {
       const published = /^\s*published:\s*"?(\d+)"?\s*$/.exec(line);
       if (published?.[1] !== void 0) {
         push(Number.parseInt(published[1], 10), name);
@@ -57876,7 +58677,7 @@ function collectPorts(projectPath) {
   return out;
 }
 function readLines(path6) {
-  if (!existsSync42(path6)) return [];
+  if (!existsSync43(path6)) return [];
   try {
     return readFileSync32(path6, "utf8").split(/\r?\n/);
   } catch {
@@ -58832,7 +59633,7 @@ function resolveWordpressRoutes(routes) {
 
 // src/surface/scanSemgrep.ts
 import { copyFileSync as copyFileSync3 } from "node:fs";
-import { join as join55 } from "node:path";
+import { join as join58 } from "node:path";
 async function invokeSemgrep(options) {
   const { projectPath, rulesPath, outFile, reportDir } = options;
   const semgrepBin = await scannerAvailable("semgrep");
@@ -58848,7 +59649,7 @@ async function invokeSemgrep(options) {
   if (dockerBin === null) return null;
   let containerRules;
   try {
-    const stagedRules = join55(reportDir, "routes.yml");
+    const stagedRules = join58(reportDir, "routes.yml");
     copyFileSync3(rulesPath, stagedRules);
     containerRules = toContainerPath(projectPath, stagedRules);
   } catch (e) {
@@ -58885,7 +59686,7 @@ function buildToolRun(run, via) {
 
 // src/surface/specDiscover.ts
 import { readFileSync as readFileSync33, readdirSync as readdirSync22, statSync as statSync17 } from "node:fs";
-import { join as join56, relative as relative18, resolve as resolve11, sep as sep9 } from "node:path";
+import { join as join59, relative as relative18, resolve as resolve11, sep as sep9 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
 var SPEC_BASENAMES = /* @__PURE__ */ new Set(["openapi", "swagger", "api-docs"]);
@@ -58944,10 +59745,10 @@ function walk3(root, dir) {
   for (const entry of entries2) {
     if (entry.isDirectory()) {
       if (FS_EXCLUDE.has(entry.name)) continue;
-      out.push(...walk3(root, join56(dir, entry.name)));
+      out.push(...walk3(root, join59(dir, entry.name)));
     } else if (entry.isFile()) {
       if (isSpecCandidate(root, dir, entry.name)) {
-        out.push(join56(dir, entry.name));
+        out.push(join59(dir, entry.name));
       }
     }
   }
@@ -59349,7 +60150,7 @@ async function handler39(input, ctx) {
   }
   const treeHash = await computeTreeHash(projectPath);
   const includeEnvVars = inp.include_env_vars !== false;
-  const rulesPath = join57(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
+  const rulesPath = join60(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
   const cacheKey = surfaceCacheKey({
     projectPath,
     treeHash,
@@ -59369,7 +60170,7 @@ async function handler39(input, ctx) {
     }
   }
   const reportDir = ensureReportDir(projectPath, treeHash, "surface");
-  const outFile = join57(reportDir, "surface.json");
+  const outFile = join60(reportDir, "surface.json");
   const invocation = await invokeSemgrep({ projectPath, rulesPath, outFile, reportDir });
   if (invocation === null) {
     return degradedResult(
@@ -59451,7 +60252,7 @@ function readSources(parsed, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path6 of collectAllFiles(parsed)) {
     try {
-      const buffer = readFileSync34(isAbsolute7(path6) ? path6 : join57(projectPath, path6));
+      const buffer = readFileSync34(isAbsolute7(path6) ? path6 : join60(projectPath, path6));
       const text = buffer.toString("utf8");
       if (Buffer.byteLength(text, "utf8") !== buffer.length) continue;
       sources.set(path6, text);
@@ -59593,7 +60394,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path6) {
-  return resolve12(isAbsolute7(path6) ? path6 : join57(projectPath, path6));
+  return resolve12(isAbsolute7(path6) ? path6 : join60(projectPath, path6));
 }
 function resultsArrayOf(parsed) {
   const results = parsed.results;
@@ -59778,8 +60579,8 @@ function degradedResult(toolsRun, missingTools, note, ctx) {
 }
 
 // src/tools/scanDast.ts
-import { randomUUID as randomUUID16 } from "node:crypto";
-import { join as join60 } from "node:path";
+import { randomUUID as randomUUID17 } from "node:crypto";
+import { join as join63 } from "node:path";
 
 // src/dast/plan.ts
 var READ_METHODS = ["GET", "HEAD", "OPTIONS"];
@@ -60359,8 +61160,8 @@ function armDeadline(ms, hostSignal) {
 }
 
 // src/dast/evidence.ts
-import { writeFileSync as writeFileSync15 } from "node:fs";
-import { join as join58 } from "node:path";
+import { writeFileSync as writeFileSync16 } from "node:fs";
+import { join as join61 } from "node:path";
 var EVIDENCE_BODY_CHARS = 2e3;
 var MAX_EVIDENCE_FILES = 200;
 function toExchange(result) {
@@ -60436,8 +61237,8 @@ function writeEvidenceFiles(dir, records, redact2) {
       continue;
     }
     try {
-      writeFileSync15(
-        join58(dir, `${record4.fingerprint}.json`),
+      writeFileSync16(
+        join61(dir, `${record4.fingerprint}.json`),
         redact2(JSON.stringify(record4, null, 2)),
         "utf8"
       );
@@ -60474,7 +61275,7 @@ function livenessMessage(target, liveness, timeoutMs) {
 }
 
 // src/dast/passes.ts
-import { join as join59 } from "node:path";
+import { join as join62 } from "node:path";
 
 // src/dast/nuclei.ts
 import { dirname as dirname16 } from "node:path";
@@ -60677,7 +61478,7 @@ import { createHash as createHash9 } from "node:crypto";
 var BODY_PREFIX_BYTES = 8192;
 var BODY_READ_CAP_BYTES = 256 * 1024;
 var DEFAULT_PROBE_TIMEOUT_MS = 5e3;
-var DEFAULT_CONCURRENCY = 4;
+var DEFAULT_CONCURRENCY2 = 4;
 async function executeProbe(req, opts) {
   const started = Date.now();
   const controller = new AbortController();
@@ -60963,7 +61764,7 @@ async function runNuclei(opts) {
       missing: true
     };
   }
-  const outputPath = join59(opts.outputDir, "nuclei.jsonl");
+  const outputPath = join62(opts.outputDir, "nuclei.jsonl");
   const run = await invokeNuclei({
     binaryPath: opts.binaryPath,
     targetUrl: opts.origin,
@@ -61198,7 +61999,7 @@ async function handler40(input, ctx, callMeta) {
     if (aborted3()) return fail("cancelled", "Scan was cancelled by the host.");
     return fail("target_not_found", livenessMessage(target, liveness, timeoutMs));
   }
-  const scanId = randomUUID16();
+  const scanId = randomUUID17();
   const treeHash = await computeTreeHash(projectPath);
   if (persisted.tree_hash !== treeHash) {
     warnings.push(
@@ -61232,7 +62033,7 @@ async function handler40(input, ctx, callMeta) {
   const deadline = armDeadline(wallClockMs, callMeta?.signal);
   const probeOpts = {
     timeoutMs,
-    concurrency: DEFAULT_CONCURRENCY,
+    concurrency: DEFAULT_CONCURRENCY2,
     signal: deadline.signal
   };
   const cancel = () => {
@@ -61488,7 +62289,7 @@ function toInsertInput(finding4, scanId, evidenceDir) {
     raw: {
       check: check2,
       evidence_id,
-      evidence_file: evidenceDir === null ? null : join60(evidenceDir, `${finding4.fingerprint}.json`)
+      evidence_file: evidenceDir === null ? null : join63(evidenceDir, `${finding4.fingerprint}.json`)
     }
   };
 }
@@ -61989,12 +62790,12 @@ function collectAnonymousExposures(ctx, projectPath) {
 }
 
 // src/tools/createFixPr.ts
-import { existsSync as existsSync46, readFileSync as readFileSync37 } from "node:fs";
-import { isAbsolute as isAbsolute9, join as join65, relative as relative20 } from "node:path";
+import { existsSync as existsSync47, readFileSync as readFileSync37 } from "node:fs";
+import { isAbsolute as isAbsolute9, join as join68, relative as relative20 } from "node:path";
 
 // src/fixpr/apply.ts
-import { existsSync as existsSync43, readFileSync as readFileSync35, rmSync as rmSync7, writeFileSync as writeFileSync16 } from "node:fs";
-import { isAbsolute as isAbsolute8, join as join61, relative as relative19, resolve as resolve13, sep as sep10 } from "node:path";
+import { existsSync as existsSync44, readFileSync as readFileSync35, rmSync as rmSync7, writeFileSync as writeFileSync17 } from "node:fs";
+import { isAbsolute as isAbsolute8, join as join64, relative as relative19, resolve as resolve13, sep as sep10 } from "node:path";
 async function applyGroup(opts) {
   const run = opts.run ?? runProcess;
   if (opts.group.source === "semgrep") {
@@ -62011,7 +62812,7 @@ async function applyGroup(opts) {
 }
 async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
   const label = `semgrep --metrics=off --autofix [${plan.configLabels.join("; ")}]`;
-  const missing = plan.files.filter((f) => !existsSync43(join61(worktreePath, f)));
+  const missing = plan.files.filter((f) => !existsSync44(join64(worktreePath, f)));
   if (missing.length > 0) {
     return {
       applied: false,
@@ -62027,12 +62828,12 @@ async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
   const fixed = ["--metrics=off", ...plan.configs.map((c3) => `--config=${c3}`), "--autofix", "--json", "--quiet"];
   const batches = batchArgs(plan.files, {
     command: "semgrep",
-    fixedArgs: [...fixed, "--output", join61(plan.dir, "fix-000.json"), "--"]
+    fixedArgs: [...fixed, "--output", join64(plan.dir, "fix-000.json"), "--"]
   });
   const commands = [];
   for (let i2 = 0; i2 < batches.length; i2++) {
     const batch = batches[i2] ?? [];
-    const report = join61(plan.dir, `fix-${String(i2).padStart(3, "0")}.json`);
+    const report = join64(plan.dir, `fix-${String(i2).padStart(3, "0")}.json`);
     rmSync7(report, { force: true });
     const result = await run({
       command: "semgrep",
@@ -62149,7 +62950,7 @@ function editPipPin(worktreePath, step) {
   if (count2 === 0) {
     return { ok: false, label, reason: `no '${step.package_name}==${step.installed_version}' pin in '${file}'` };
   }
-  writeFileSync16(target, edited, "utf8");
+  writeFileSync17(target, edited, "utf8");
   return { ok: true, label };
 }
 function toArgv(commandLine) {
@@ -62558,9 +63359,9 @@ function errorMessage(e) {
 
 // src/fixpr/semgrepFix.ts
 var import_yaml7 = __toESM(require_dist2(), 1);
-import { mkdirSync as mkdirSync11, mkdtempSync as mkdtempSync5, readFileSync as readFileSync36, rmSync as rmSync8, statSync as statSync18, writeFileSync as writeFileSync17 } from "node:fs";
+import { mkdirSync as mkdirSync12, mkdtempSync as mkdtempSync5, readFileSync as readFileSync36, rmSync as rmSync8, statSync as statSync18, writeFileSync as writeFileSync18 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
-import { basename as basename7, dirname as dirname17, join as join62 } from "node:path";
+import { basename as basename7, dirname as dirname17, join as join65 } from "node:path";
 function checkIdMatches(checkId, ruleFile, id) {
   if (checkId === id) return true;
   if (!checkId.endsWith(`.${id}`)) return false;
@@ -62600,15 +63401,15 @@ function planSemgrepFix(sources, tmpRoot = tmpdir6()) {
       reason: `rule(s) ${[...new Set(unresolved)].join(", ")} are in no local rule file the originating scan loaded, and that scan did not use the Semgrep registry \u2014 refusing to guess where the fix comes from`
     };
   }
-  const dir = mkdtempSync5(join62(tmpRoot, "guardian-fixpr-sg-"));
+  const dir = mkdtempSync5(join65(tmpRoot, "guardian-fixpr-sg-"));
   const configs = [];
   const configLabels = [];
   let n2 = 0;
   for (const [file, picked] of byFile) {
-    const sub = join62(dir, `rules-${String(n2++).padStart(3, "0")}`);
-    mkdirSync11(sub);
-    const copy = join62(sub, basename7(file));
-    writeFileSync17(copy, (0, import_yaml7.stringify)({ rules: [...picked.values()] }), "utf8");
+    const sub = join65(dir, `rules-${String(n2++).padStart(3, "0")}`);
+    mkdirSync12(sub);
+    const copy = join65(sub, basename7(file));
+    writeFileSync18(copy, (0, import_yaml7.stringify)({ rules: [...picked.values()] }), "utf8");
     configs.push(copy);
     configLabels.push(`${[...picked.keys()].join(", ")} from ${basename7(file)}`);
   }
@@ -62700,13 +63501,13 @@ function fromPyprojectToml(content) {
 }
 
 // src/fixpr/testEnv.ts
-import { existsSync as existsSync44 } from "node:fs";
-import { join as join63 } from "node:path";
+import { existsSync as existsSync45 } from "node:fs";
+import { join as join66 } from "node:path";
 var INSTALL_TIMEOUT_MS = 15 * 6e4;
 async function prepareTestEnvironment(opts) {
   const { treePath, derived } = opts;
   if (derived === null || derived.command !== "npm") return { ok: true, command: null };
-  const hasLock = existsSync44(join63(treePath, "package-lock.json")) || existsSync44(join63(treePath, "npm-shrinkwrap.json"));
+  const hasLock = existsSync45(join66(treePath, "package-lock.json")) || existsSync45(join66(treePath, "npm-shrinkwrap.json"));
   if (!hasLock) return { ok: true, command: null };
   const run = opts.run ?? runProcess;
   const ignored = await run({ command: "git", args: ["-C", treePath, "check-ignore", "-q", "node_modules"], cwd: treePath });
@@ -62909,14 +63710,14 @@ function headOf(stdout, stderr) {
 }
 
 // src/fixpr/worktree.ts
-import { existsSync as existsSync45, mkdtempSync as mkdtempSync6, realpathSync as realpathSync6, rmSync as rmSync9 } from "node:fs";
+import { existsSync as existsSync46, mkdtempSync as mkdtempSync6, realpathSync as realpathSync6, rmSync as rmSync9 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
-import { join as join64, resolve as resolve14 } from "node:path";
+import { join as join67, resolve as resolve14 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
 async function createWorktree(opts) {
   let dir;
   try {
-    dir = mkdtempSync6(join64(tmpdir7(), WORKTREE_DIR_PREFIX));
+    dir = mkdtempSync6(join67(tmpdir7(), WORKTREE_DIR_PREFIX));
   } catch (e) {
     return { ok: false, reason: `could not create a temp directory: ${errorMessage2(e)}` };
   }
@@ -62966,7 +63767,7 @@ async function removeWorktree(projectPath, path6, timeoutMs) {
     cwd: projectPath,
     timeoutMs
   });
-  if (!existsSync45(path6)) {
+  if (!existsSync46(path6)) {
     return { removed: true, warning: null };
   }
   const detail = removeResult.outcome !== "completed" ? `: ${describeFailure3(removeResult, "git worktree remove")}` : "";
@@ -63242,7 +64043,7 @@ function isRunnerFailure(v) {
   return typeof o2["ecosystem"] === "string" && typeof o2["code"] === "string" && typeof o2["reason"] === "string";
 }
 function inWorktree(root, prefix) {
-  return join65(root, ...prefix.split("/").filter((segment) => segment.length > 0));
+  return join68(root, ...prefix.split("/").filter((segment) => segment.length > 0));
 }
 function projectRelative(projectPath, filePath) {
   const rel2 = isAbsolute9(filePath) ? relative20(projectPath, filePath) : filePath;
@@ -63449,8 +64250,8 @@ function prNote(pr) {
 function readManifests(worktreePath) {
   const files = {};
   for (const name of TEST_MANIFESTS) {
-    const path6 = join65(worktreePath, name);
-    if (!existsSync46(path6)) continue;
+    const path6 = join68(worktreePath, name);
+    if (!existsSync47(path6)) continue;
     try {
       files[name] = readFileSync37(path6, "utf8");
     } catch {
@@ -63594,7 +64395,7 @@ function failDomain24(code, message3) {
 }
 
 // src/tools/auditAgentConfig.ts
-import { randomUUID as randomUUID17 } from "node:crypto";
+import { randomUUID as randomUUID18 } from "node:crypto";
 
 // src/agentaudit/hash.ts
 import { createHash as createHash11 } from "node:crypto";
@@ -64275,9 +65076,9 @@ function analyzeAgentConfig(sources, previousHashes) {
 }
 
 // src/agentaudit/configSources.ts
-import { existsSync as existsSync47, readFileSync as readFileSync38, statSync as statSync19 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { join as join66 } from "node:path";
+import { existsSync as existsSync48, readFileSync as readFileSync38, statSync as statSync19 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join69 } from "node:path";
 
 // src/agentaudit/jsonc.ts
 function stripComments(text) {
@@ -64367,45 +65168,45 @@ function parseJsonc(text) {
 
 // src/agentaudit/configSources.ts
 var PROJECT_DESCRIPTORS = [
-  { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join66(p, ".mcp.json") },
+  { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join69(p, ".mcp.json") },
   {
     label: ".claude/settings.json",
     kind: "project",
     mcpServersField: null,
-    resolve: (p) => join66(p, ".claude", "settings.json")
+    resolve: (p) => join69(p, ".claude", "settings.json")
   },
   {
     label: ".claude/settings.local.json",
     kind: "project",
     mcpServersField: null,
-    resolve: (p) => join66(p, ".claude", "settings.local.json")
+    resolve: (p) => join69(p, ".claude", "settings.local.json")
   },
   {
     label: ".cursor/mcp.json",
     kind: "project",
     mcpServersField: "mcpServers",
-    resolve: (p) => join66(p, ".cursor", "mcp.json")
+    resolve: (p) => join69(p, ".cursor", "mcp.json")
   },
   {
     label: ".vscode/mcp.json",
     kind: "project",
     mcpServersField: "servers",
-    resolve: (p) => join66(p, ".vscode", "mcp.json")
+    resolve: (p) => join69(p, ".vscode", "mcp.json")
   },
   {
     label: ".gemini/settings.json",
     kind: "project",
     mcpServersField: "mcpServers",
-    resolve: (p) => join66(p, ".gemini", "settings.json")
+    resolve: (p) => join69(p, ".gemini", "settings.json")
   }
 ];
 var USER_DESCRIPTORS = [
-  { label: "~/.claude.json", kind: "user", mcpServersField: "mcpServers", resolve: () => join66(homedir2(), ".claude.json") },
+  { label: "~/.claude.json", kind: "user", mcpServersField: "mcpServers", resolve: () => join69(homedir3(), ".claude.json") },
   {
     label: "~/.claude/settings.json",
     kind: "user",
     mcpServersField: null,
-    resolve: () => join66(homedir2(), ".claude", "settings.json")
+    resolve: () => join69(homedir3(), ".claude", "settings.json")
   }
 ];
 function configSourceDescriptors(includeUserConfig) {
@@ -64423,7 +65224,7 @@ function readOne2(descriptor, projectPath) {
     absolutePath,
     mcpServersField: descriptor.mcpServersField
   };
-  if (!existsSync47(absolutePath)) return { ...base, exists: false };
+  if (!existsSync48(absolutePath)) return { ...base, exists: false };
   let size;
   try {
     size = statSync19(absolutePath).size;
@@ -64483,7 +65284,7 @@ async function handler43(input, ctx) {
   const previousHashes = ctx.storage.agentAudit.getHashes(projectPath);
   const result = analyzeAgentConfig(sources, previousHashes);
   const findings = filterFindings(result.findings, inp.severity_min);
-  const scanId = randomUUID17();
+  const scanId = randomUUID18();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "agent_audit",

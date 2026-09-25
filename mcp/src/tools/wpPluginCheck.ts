@@ -88,7 +88,13 @@ async function handler(
   const allActive = ctx.storage.scans
     .listHistory(50)
     .filter(
-      (s) => s.scan_type === 'wp_vuln_check' || s.scan_type === 'deps' || s.scan_type === 'deps_audit',
+      (s) =>
+        s.scan_type === 'wp_vuln_check' ||
+        // wp_vuln_check_source (Task 18): source-based match against the
+        // Wordfence feed, no live URL — same `cves` shape, same slug key.
+        s.scan_type === 'wp_vuln_check_source' ||
+        s.scan_type === 'deps' ||
+        s.scan_type === 'deps_audit',
     )
     .map((s) => ctx.storage.cves.listActive(s.scan_id))
     .flat()

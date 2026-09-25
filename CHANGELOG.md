@@ -10,6 +10,24 @@ version bump.
 
 ### Added
 
+- `wp_vuln_check_source` — WordPress vulnerabilities from source: no live
+  URL, no WP-CLI, no WPScan. Reads a local WordPress install's core version
+  (`wp-includes/version.php`), plugin versions (main-file header, falling
+  back to `readme.txt`'s `Stable tag:`) and theme versions (`style.css`
+  header), and matches them against the Wordfence Intelligence v3
+  vulnerability feed (`WORDFENCE_API_KEY`; v1/v2 are gone, HTTP 410 — v3
+  requires a token for every caller) using PHP's own `version_compare()`
+  ordering, not semver (`1.2`, `1.2.3.4`, `-beta`, `2.0-RC1` all handled).
+  The ~100+ MB production feed is cached whole in the OS user cache
+  directory (`%LOCALAPPDATA%`/`~/.cache`/`~/Library/Caches`, never SQLite),
+  refreshed at most once per 24h in aggregate across every caller. Also
+  queries wp.org's plugin directory (no key needed) for a plugin that is
+  closed/removed or not updated in over two years. No key, or
+  `GUARDIAN_OFFLINE=1`, is a real coverage gap (`partial`, with a stated
+  reason) — never a silent "0 vulnerabilities"; wp.org's own checks run
+  regardless of whether a Wordfence key is configured. Complements
+  `wp_vuln_check` (WPScan, needs a live URL) for offline/CI-only projects.
+
 - CVE exploitability intel: CISA KEV membership and FIRST EPSS score, cached
   24h in a new `cve_intel` table (migration 010, keyed by `cve_id` alone — no
   scan/project scope, so it survives retention pruning). `prioritize_findings`

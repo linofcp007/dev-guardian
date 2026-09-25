@@ -182,6 +182,18 @@ export const RUN_NAMES = {
   'wp-cli': scanner(), // wp_audit, wp_cron_audit: report through meta
   'http-probe': scanner(), // wp_rest_audit: reports through meta
 
+  // wp_vuln_check_source: source-based WP vuln matching, no live URL.
+  'wordfence-feed': scanner('wordfence'),
+  'wp-plugin-api': scanner('wp-plugin-api'),
+  // Named, partial sub-gaps (fix round 1) — the pass itself stayed 'ok'
+  // (real matching/checking happened), but some installed components
+  // could not be covered. Same pattern as `trivy:<ecosystem>` below: an
+  // unlisted `base:suffix` would inherit `base`'s measures via
+  // `runNameEntry`'s fallback at runtime, but the exhaustiveness test
+  // requires an exact literal key, so both get their own entry.
+  'wordfence-feed:unmatched-version': scanner('wordfence'),
+  'wp-plugin-api:deadline': scanner('wp-plugin-api'),
+
   // .NET. `scan_dotnet_secrets` and `dotnet_target_framework_check` are
   // also audit_executive's entries for those sub-tools.
   scan_dotnet_secrets: scanner('scan_dotnet_secrets'),

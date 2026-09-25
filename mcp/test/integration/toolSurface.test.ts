@@ -71,6 +71,7 @@ const EXPECTED_TOOLS = [
   'wp_recommend_hardening',
   'wp_rest_audit',
   'wp_vuln_check',
+  'wp_vuln_check_source',
 ];
 
 const EXPECTED_RESOURCES = [
@@ -103,8 +104,8 @@ describe('MCP surface — stability snapshot', () => {
     expect(RESOURCES.map((r) => r.name).sort()).toEqual(EXPECTED_RESOURCES);
   });
 
-  it('matches the counts documented in the README (55 tools, 18 resources)', () => {
-    expect(TOOLS).toHaveLength(55);
+  it('matches the counts documented in the README (56 tools, 18 resources)', () => {
+    expect(TOOLS).toHaveLength(56);
     expect(RESOURCES).toHaveLength(18);
   });
 });
