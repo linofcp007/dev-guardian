@@ -149,6 +149,54 @@ describe('judgeScan', () => {
   });
 });
 
+// --- Task 7: a target is resolved only when nothing like it remains ---------
+//
+// The reproduction: an autofix of another finding above the target moved the
+// UNFIXED target down one line; the fingerprint hashes the line, so the
+// target's fingerprint vanished and `passed` came back true. The end-to-end
+// version, through the real scan pipeline, is in
+// test/integration/findingIdentity.test.ts.
+
+describe('judgeScan — identity rules', () => {
+  const src = (fingerprint: string, over: Partial<Finding> = {}): Finding => ({
+    fingerprint, tool: 'semgrep', rule_id: 'js.eval', severity: 'high', category: 'security',
+    title: 'eval', file_path: 'app.js', line_start: 2, line_end: 2, fix_available: true,
+    identity: `id-${fingerprint}`, content_key: 'ck-eval', ...over,
+  });
+
+  it('keeps a target present when the same (tool, rule, path, content) is still there on another line', () => {
+    const v = judgeScan([A],
+      { scan_id: 'before', findings: [src(A)] },
+      { scan_id: 'after', findings: [src(B, { line_start: 3, line_end: 3 })] });
+    expect(v).toMatchObject({ passed: false, still_present: [A], resolved: [] });
+  });
+
+  it('resolves it when the content is gone, even though the rule still fires elsewhere in the file', () => {
+    const v = judgeScan([A],
+      { scan_id: 'before', findings: [src(A), src(C, { content_key: 'ck-other', line_start: 9, line_end: 9 })] },
+      { scan_id: 'after', findings: [src(C, { content_key: 'ck-other', line_start: 8, line_end: 8 })] });
+    expect(v).toMatchObject({ passed: true, resolved: [A] });
+  });
+
+  it('keeps a target present whose fingerprint is still reported, whatever its content key became', () => {
+    // Same rule on the same line under a redacted snippet: the fix rewrote
+    // the line and the rule still fires on it. Not fixed.
+    const v = judgeScan([A],
+      { scan_id: 'before', findings: [src(A)] },
+      { scan_id: 'after', findings: [src(A, { content_key: 'ck-rewritten' })] });
+    expect(v.still_present).toEqual([A]);
+  });
+
+  it('does not match across tools, rules or files', () => {
+    for (const over of [{ tool: 'bandit' }, { rule_id: 'js.other' }, { file_path: 'other.js' }]) {
+      const v = judgeScan([A],
+        { scan_id: 'before', findings: [src(A)] },
+        { scan_id: 'after', findings: [src(B, over)] });
+      expect(v.resolved, JSON.stringify(over)).toEqual([A]);
+    }
+  });
+});
+
 describe('judgeTests', () => {
   function fakeRun(results: { outcome: string; exitCode: number | null; stdout?: string }[]) {
     const calls: string[] = [];

@@ -122,6 +122,22 @@ export interface Finding {
   snippet?: string;
   fix_available: boolean;
   fix_applied?: boolean;
+  /**
+   * Line-independent identity — the key every cross-scan comparison uses
+   * first (suppressions, the CI baseline, `diff_scans`, `regression_alert`).
+   * `fingerprint` hashes the line numbers and so changes when a line is
+   * inserted above the finding; this does not. See
+   * `fingerprint/findingIdentity.ts`. Absent on rows written before schema 7
+   * and on findings from tools that do not compute one; consumers then fall
+   * back to `fingerprint`.
+   */
+  identity?: string;
+  /**
+   * sha256 of what the finding flags (its source lines, whitespace-collapsed,
+   * or `package@installed_version` for a dependency) — a hash, never the
+   * text. Present exactly when `identity` is.
+   */
+  content_key?: string;
 }
 
 export interface ScanRecord {
@@ -208,6 +224,9 @@ export interface Cve {
 export interface Suppression {
   id: number;
   finding_fingerprint: string;
+  /** The suppressed finding's `identity`, when it had one. A suppression
+   *  matches a finding on either key. */
+  finding_identity?: string;
   reason: string;
   created_at: string;
   expires_at?: string;
