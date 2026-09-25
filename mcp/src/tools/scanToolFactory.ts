@@ -89,7 +89,7 @@ import {
   InvalidProjectPathError,
   resolveProjectPath,
 } from '../platform/projectPath.js';
-import { isWorkingTreeClean } from './gitState.js';
+import { workingTreeState } from './gitState.js';
 import { assessCoverage, computeCoverage } from './scanCoverage.js';
 import type { ToolCallMeta, ToolModule } from './index.js';
 
@@ -260,10 +260,23 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     if (input.allow_dirty !== true) {
       try {
         const resolved = resolveProjectPath(input.project_path);
-        if (!(await isWorkingTreeClean(resolved.path))) {
+        // Only a tree git POSITIVELY confirms clean may be rewritten without
+        // `allow_dirty` — see gitState.ts: "not a repo" and "git failed" are
+        // not clean, they are unknown.
+        const tree = await workingTreeState(resolved.path);
+        if (tree.state === 'dirty') {
           return failDomain('working_tree_dirty', `auto_fix=true requires a clean working tree.`, {
             allow_dirty: true,
           });
+        }
+        if (tree.state === 'unknown') {
+          return failDomain(
+            'not_a_git_repo',
+            `auto_fix=true requires a working tree git confirms is clean, and git could not ` +
+              `(${tree.reason}). Autofix would rewrite files nothing can restore; pass ` +
+              `allow_dirty=true to accept that.`,
+            { allow_dirty: true },
+          );
         }
       } catch (e) {
         if (e instanceof InvalidProjectPathError) {

@@ -40638,16 +40638,20 @@ async function walk(root, dir, out) {
 
 // src/tools/gitState.ts
 init_execa();
-async function isWorkingTreeClean(projectPath) {
+async function workingTreeState(projectPath) {
   try {
     const result = await execa("git", ["-C", projectPath, "status", "--porcelain"], {
       reject: false,
       timeout: 1e4
     });
-    if (result.exitCode !== 0) return true;
-    return result.stdout.trim().length === 0;
-  } catch {
-    return true;
+    if (result.exitCode !== 0) {
+      const line = firstLine2(result.stderr) ?? `git status exited ${String(result.exitCode)}`;
+      return { state: "unknown", reason: line };
+    }
+    const changed = result.stdout.split(/\r?\n/).filter((l) => l.trim().length > 0).length;
+    return changed === 0 ? { state: "clean" } : { state: "dirty", changed };
+  } catch (e) {
+    return { state: "unknown", reason: e instanceof Error ? e.message : String(e) };
   }
 }
 async function isGitRepo(projectPath) {
@@ -40660,6 +40664,13 @@ async function isGitRepo(projectPath) {
   } catch {
     return false;
   }
+}
+function firstLine2(text) {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return null;
 }
 
 // src/tools/scanCoverage.ts
@@ -40716,10 +40727,18 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
     if (input.allow_dirty !== true) {
       try {
         const resolved = resolveProjectPath(input.project_path);
-        if (!await isWorkingTreeClean(resolved.path)) {
+        const tree = await workingTreeState(resolved.path);
+        if (tree.state === "dirty") {
           return failDomain("working_tree_dirty", `auto_fix=true requires a clean working tree.`, {
             allow_dirty: true
           });
+        }
+        if (tree.state === "unknown") {
+          return failDomain(
+            "not_a_git_repo",
+            `auto_fix=true requires a working tree git confirms is clean, and git could not (${tree.reason}). Autofix would rewrite files nothing can restore; pass allow_dirty=true to accept that.`,
+            { allow_dirty: true }
+          );
         }
       } catch (e) {
         if (e instanceof InvalidProjectPathError) {
@@ -41372,8 +41391,8 @@ function mapSubcategory(metadata, checkId) {
 }
 function shortenTitle(message3, checkId) {
   if (message3 && message3.length > 0) {
-    const firstLine5 = message3.split(/\r?\n/)[0] ?? message3;
-    return firstLine5.length > 140 ? firstLine5.slice(0, 137) + "\u2026" : firstLine5;
+    const firstLine6 = message3.split(/\r?\n/)[0] ?? message3;
+    return firstLine6.length > 140 ? firstLine6.slice(0, 137) + "\u2026" : firstLine6;
   }
   return checkId;
 }
@@ -41827,8 +41846,8 @@ async function resolveBinary(name) {
   try {
     const result = await execa(finder, [name], { timeout: 2e3, reject: false });
     if (result.exitCode !== 0) return null;
-    const firstLine5 = result.stdout.split(/\r?\n/)[0]?.trim();
-    return firstLine5 && firstLine5.length > 0 ? firstLine5 : null;
+    const firstLine6 = result.stdout.split(/\r?\n/)[0]?.trim();
+    return firstLine6 && firstLine6.length > 0 ? firstLine6 : null;
   } catch {
     return null;
   }
@@ -44288,7 +44307,7 @@ function record2(out, name, run, okExitCodes, report, reportOk, parser, gaps = [
   if (run.outcome === "cancelled" || run.outcome === "timed_out" || run.outcome === "output_too_large") {
     problems.push(`did not finish (${run.outcome})`);
   } else if (run.exitCode === null || !okExitCodes.includes(run.exitCode)) {
-    problems.push(`exit ${String(run.exitCode)}${firstLine2(run.stderr) ? `: ${firstLine2(run.stderr)}` : ""}`);
+    problems.push(`exit ${String(run.exitCode)}${firstLine3(run.stderr) ? `: ${firstLine3(run.stderr)}` : ""}`);
   }
   if (problems.length === 0 && (report === null || !reportOk(parseInputAsJson(report)))) {
     problems.push("no readable report was written");
@@ -44393,7 +44412,7 @@ async function runStaticcheck(ctx, out) {
   const errors = staticcheckErrors(run.stdout);
   const finished7 = run.outcome !== "cancelled" && run.outcome !== "timed_out" && run.outcome !== "output_too_large";
   if (finished7 && run.exitCode !== 0 && entries2 === 0) {
-    const detail = firstLine2(run.stderr);
+    const detail = firstLine3(run.stderr);
     out.tools_run.push({
       name: "staticcheck",
       status: "failed",
@@ -44435,7 +44454,7 @@ function localEslint(projectPath) {
 function isObject3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function firstLine2(text) {
+function firstLine3(text) {
   return text.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
 }
 function qualityCategoryOf(f) {
@@ -45023,11 +45042,11 @@ function classifyRestoreFailure(stdout, stderr) {
   const lines = `${stderr}
 ${stdout}`.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   const errorLine = lines.find((l) => /\berror\s+[A-Z]+\d+\b/.test(l)) ?? lines.find((l) => /\berror\b/i.test(l));
-  const firstLine5 = errorLine ?? lines[0] ?? "(no output)";
-  const code = /\berror\s+([A-Z]+\d+)\b/.exec(firstLine5)?.[1] ?? "restore_failed";
+  const firstLine6 = errorLine ?? lines[0] ?? "(no output)";
+  const code = /\berror\s+([A-Z]+\d+)\b/.exec(firstLine6)?.[1] ?? "restore_failed";
   const kind = KIND_BY_CODE[code] ?? "other";
   const lead = kind === "lock_out_of_sync" ? "packages.lock.json is out of sync with the project (restore runs in --locked-mode and never rewrites it)" : kind === "package_not_found" ? "a package or version could not be found on the configured feeds" : kind === "feed_unreachable" ? "a package feed could not be reached" : "restore failed";
-  const stripped = firstLine5.replace(/^.*?\berror\s+[A-Z]+\d+:\s*/, "").replace(/\s*\[[^[\]]*\]\s*$/, "");
+  const stripped = firstLine6.replace(/^.*?\berror\s+[A-Z]+\d+:\s*/, "").replace(/\s*\[[^[\]]*\]\s*$/, "");
   const message3 = stripped.length > 240 ? `${stripped.slice(0, 237)}...` : stripped;
   return { code, kind, reason: `${lead} (${code}: ${message3})` };
 }
@@ -50339,7 +50358,7 @@ async function runVersionProbe(probe2, cwd) {
   if (r.outcome !== "completed") {
     const onPath = await resolveBinary(probe2.command);
     if (!onPath) return { installed: false, version: "" };
-    const why = firstLine3(r.stderr) ?? firstLine3(r.stdout) ?? r.outcome;
+    const why = firstLine4(r.stderr) ?? firstLine4(r.stdout) ?? r.outcome;
     let error2 = `found at ${onPath}, but \`${[probe2.command, ...probe2.args].join(" ")}\` exited ${r.exitCode ?? "(no exit code)"}: ${why}`;
     if (process.platform === "win32" && !/\.(exe|cmd|bat|com)$/i.test(onPath)) {
       error2 += " \u2014 the first match has no .exe/.cmd/.bat extension; if it is a bash shim it runs only inside bash and cannot be started by this server: put the real executable on PATH";
@@ -50352,9 +50371,9 @@ ${r.stderr}`;
     const sdk = highestDotnetSdk(r.stdout);
     return sdk === null ? { installed: false, version: "", error: "dotnet is present but lists no SDK (runtime only)" } : { installed: true, version: sdk };
   }
-  return { installed: true, version: extractVersion(text) ?? (firstLine3(text) ?? "").slice(0, 80) };
+  return { installed: true, version: extractVersion(text) ?? (firstLine4(text) ?? "").slice(0, 80) };
 }
-function firstLine3(text) {
+function firstLine4(text) {
   return text.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
 }
 
@@ -51839,8 +51858,8 @@ async function handler19(input, _ctx) {
     if (r.outcome === "completed") {
       stagesInstalled.push(stage);
     } else {
-      const firstLine5 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
-      stagesFailed.push({ stage, error: firstLine5?.trim() ?? r.outcome });
+      const firstLine6 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
+      stagesFailed.push({ stage, error: firstLine6?.trim() ?? r.outcome });
     }
   }
   return {
@@ -52887,7 +52906,7 @@ async function listExistingTags(cwd) {
     timeoutMs: 3e4
   });
   if (r.outcome !== "completed") {
-    return { ok: false, error: firstLine4(r.stderr) ?? `gh exited ${r.outcome}` };
+    return { ok: false, error: firstLine5(r.stderr) ?? `gh exited ${r.outcome}` };
   }
   let parsed;
   try {
@@ -52952,7 +52971,7 @@ async function ensureLabels(cwd, labels) {
   }
   return { applied, omitted };
 }
-function firstLine4(text) {
+function firstLine5(text) {
   return text.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
 }
 async function createIssue(cwd, title, body, labels) {
@@ -52965,7 +52984,7 @@ async function createIssue(cwd, title, body, labels) {
   }
   return {
     ok: false,
-    error: firstLine4(r.stderr) ?? `gh exited ${r.outcome}`
+    error: firstLine5(r.stderr) ?? `gh exited ${r.outcome}`
   };
 }
 function failDomain18(code, message3) {
@@ -57826,8 +57845,8 @@ function buildToolRun(run, via) {
   if (ok) {
     return via ? { name: "semgrep", status: "ok", reason: `ran via ${via}` } : { name: "semgrep", status: "ok" };
   }
-  const firstLine5 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  const reason = via ? `${via}: ${firstLine5 ?? "fallback failed"}` : firstLine5 ?? "unknown";
+  const firstLine6 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  const reason = via ? `${via}: ${firstLine6 ?? "fallback failed"}` : firstLine6 ?? "unknown";
   return { name: "semgrep", status: "failed", reason };
 }
 
@@ -59516,8 +59535,8 @@ async function invokeNuclei(opts) {
 }
 function interpretRun(run) {
   if (run.outcome === "completed") return { ok: true };
-  const firstLine5 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  return { ok: false, reason: firstLine5 ?? `nuclei ${run.outcome}` };
+  const firstLine6 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  return { ok: false, reason: firstLine6 ?? `nuclei ${run.outcome}` };
 }
 
 // src/dast/normalizeNuclei.ts
