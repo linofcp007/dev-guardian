@@ -19416,12 +19416,12 @@ var require_util_map_includes = __commonJS({
   "node_modules/yaml/dist/compose/util-map-includes.js"(exports) {
     "use strict";
     var identity3 = require_identity();
-    function mapIncludes(ctx, items, search) {
+    function mapIncludes(ctx, items, search2) {
       const { uniqueKeys } = ctx.options;
       if (uniqueKeys === false)
         return false;
       const isEqual = typeof uniqueKeys === "function" ? uniqueKeys : (a2, b) => a2 === b || identity3.isScalar(a2) && identity3.isScalar(b) && a2.value === b.value;
-      return items.some((pair) => isEqual(pair.key, search));
+      return items.some((pair) => isEqual(pair.key, search2));
     }
     exports.mapIncludes = mapIncludes;
   }
@@ -37858,34 +37858,68 @@ function parseJsonObject(raw, fallback) {
 }
 
 // src/storage/baselinesRepo.ts
+var SELECT_SCOPED = `
+  SELECT b.id, b.scan_id, b.set_at, b.note,
+         COALESCE(b.project_path, s.project_path) AS project_path,
+         COALESCE(b.scan_type, s.scan_type) AS scan_type
+  FROM baselines b LEFT JOIN scans s ON s.id = b.scan_id
+`;
 var BaselinesRepo = class {
+  scanScopeStmt;
   insertStmt;
   getActiveStmt;
+  getActiveForProjectStmt;
+  getActiveForProjectTypeStmt;
   listAllStmt;
   constructor(db) {
+    this.scanScopeStmt = db.prepare(
+      `SELECT project_path, scan_type FROM scans WHERE id = ?`
+    );
     this.insertStmt = db.prepare(`
-      INSERT INTO baselines (scan_id, set_at, note) VALUES (?, ?, ?)
+      INSERT INTO baselines (scan_id, set_at, note, project_path, scan_type) VALUES (?, ?, ?, ?, ?)
     `);
-    this.getActiveStmt = db.prepare(`
-      SELECT * FROM baselines ORDER BY id DESC LIMIT 1
+    this.getActiveStmt = db.prepare(`${SELECT_SCOPED} ORDER BY b.id DESC LIMIT 1`);
+    this.getActiveForProjectStmt = db.prepare(`
+      ${SELECT_SCOPED}
+      WHERE COALESCE(b.project_path, s.project_path) = ?
+      ORDER BY b.id DESC LIMIT 1
     `);
-    this.listAllStmt = db.prepare(`
-      SELECT * FROM baselines ORDER BY id DESC
+    this.getActiveForProjectTypeStmt = db.prepare(`
+      ${SELECT_SCOPED}
+      WHERE COALESCE(b.project_path, s.project_path) = ? AND COALESCE(b.scan_type, s.scan_type) = ?
+      ORDER BY b.id DESC LIMIT 1
     `);
+    this.listAllStmt = db.prepare(`${SELECT_SCOPED} ORDER BY b.id DESC`);
   }
+  /** Records the scan's own project and type beside it. */
   set(input) {
     const setAt = nowIso();
-    const info = this.insertStmt.run(input.scan_id, setAt, input.note ?? null);
+    const scope = this.scanScopeStmt.get(input.scan_id);
+    const info = this.insertStmt.run(
+      input.scan_id,
+      setAt,
+      input.note ?? null,
+      scope?.project_path ?? null,
+      scope?.scan_type ?? null
+    );
     const b = {
       id: Number(info.lastInsertRowid),
       scan_id: input.scan_id,
-      set_at: setAt
+      set_at: setAt,
+      project_path: scope?.project_path ?? null,
+      scan_type: scope?.scan_type ?? null
     };
     if (input.note !== void 0) b.note = input.note;
     return b;
   }
+  /** The newest baseline in the database, from ANY project — see the module comment. */
   getActive() {
     const row = this.getActiveStmt.get();
+    return row ? rowToBaseline(row) : null;
+  }
+  /** The newest baseline of one project — of one scan type, when given. */
+  getActiveForProject(projectPath, scanType) {
+    const row = scanType === void 0 ? this.getActiveForProjectStmt.get(projectPath) : this.getActiveForProjectTypeStmt.get(projectPath, scanType);
     return row ? rowToBaseline(row) : null;
   }
   listAll() {
@@ -37893,7 +37927,13 @@ var BaselinesRepo = class {
   }
 };
 function rowToBaseline(row) {
-  const b = { id: row.id, scan_id: row.scan_id, set_at: row.set_at };
+  const b = {
+    id: row.id,
+    scan_id: row.scan_id,
+    set_at: row.set_at,
+    project_path: row.project_path,
+    scan_type: row.scan_type
+  };
   if (row.note !== null) b.note = row.note;
   return b;
 }
@@ -37993,6 +38033,41 @@ var CATEGORIES = [
   "license",
   "compliance",
   "performance"
+];
+var SCAN_TYPES = [
+  "security_full",
+  "sast",
+  "secrets",
+  "deps",
+  // `deps_audit` wrote 'deps' until 2.0.x, sharing its cache entries with
+  // `scan_deps`; see `isDepsAuditScan` for reading those older rows.
+  "deps_audit",
+  "containers",
+  "iac",
+  "bugs",
+  "quality",
+  "review_pr",
+  "compliance",
+  "audit",
+  "sbom",
+  "detect_stack",
+  "perf",
+  "init",
+  "observability",
+  // WordPress family
+  "wordpress",
+  "wp_audit",
+  "wp_vuln_check",
+  "wp_cron_audit",
+  "wp_rest_audit",
+  // .NET family
+  "dotnet_secrets",
+  "dotnet_target_framework",
+  "dotnet_efcore_audit",
+  // AI-agent supply chain
+  "skill_audit",
+  // Active DAST
+  "dast"
 ];
 var CVE_SOURCE_SCAN_TYPES = ["deps_audit", "deps", "security_full"];
 function isDepsAuditScan(scan2) {
@@ -38100,6 +38175,13 @@ var FindingsRepo = class {
         )
       ORDER BY f.fingerprint ASC
     `);
+    this.findInProjectStmt = db.prepare(`
+      SELECT f.* FROM findings f
+      JOIN scans s ON s.id = f.scan_id
+      WHERE f.fingerprint = ? AND s.project_path = ? AND s.status = 'completed'
+      ORDER BY s.started_at DESC, s.rowid DESC
+      LIMIT 1
+    `);
     this.countBySeverityStmt = db.prepare(`
       SELECT severity, COUNT(*) AS n FROM findings
       WHERE scan_id = ?
@@ -38114,6 +38196,7 @@ var FindingsRepo = class {
   listOpenForProjectStmt;
   listBySeverityLatestStmt;
   countBySeverityStmt;
+  findInProjectStmt;
   bulkInsert(findings) {
     if (findings.length === 0) return 0;
     const tx = this.db.transaction((rows) => {
@@ -38185,6 +38268,18 @@ var FindingsRepo = class {
   }
   listBySeverity(severity) {
     return this.listBySeverityLatestStmt.all(severity).map(rowToFinding);
+  }
+  /**
+   * The newest completed scan OF ONE PROJECT that reported `fingerprint`,
+   * with the finding as that scan stored it — whatever type the scan was
+   * and however many scans ran since. `suggest_fix` looked only in the
+   * single latest scan in the database, so a finding from a SAST run could
+   * not be found once anything else (a secrets scan, another project's
+   * scan) had run after it.
+   */
+  findLatestInProject(projectPath, fingerprint) {
+    const row = this.findInProjectStmt.get(fingerprint, projectPath);
+    return row ? { finding: rowToFinding(row), scan_id: row.scan_id } : null;
   }
   /**
    * Counts findings per severity for one scan, returning the full record
@@ -38285,19 +38380,8 @@ var WORKTREE_PATH_EXCLUSION2 = "%guardian-fixpr-wt-%";
 var UNKNOWN_OWNER_REAP_AFTER_MS = 6 * 60 * 60 * 1e3;
 var LIVE_OWNER_REAP_AFTER_MS = 24 * 60 * 60 * 1e3;
 var ScansRepo = class {
-  insertStmt;
-  finalizeStmt;
-  markCancelledStmt;
-  listRunningStmt;
-  reapOneStmt;
-  getByIdStmt;
-  getLatestStmt;
-  getLatestForProjectStmt;
-  listHistoryStmt;
-  listHistoryForProjectStmt;
-  findCacheStmt;
-  attachCacheStmt;
   constructor(db) {
+    this.db = db;
     this.insertStmt = db.prepare(`
       INSERT INTO scans (
         id, scan_type, project_path, tree_hash,
@@ -38361,7 +38445,25 @@ var ScansRepo = class {
       INSERT OR REPLACE INTO tree_cache (tree_hash, scan_id, scan_type, computed_at)
       VALUES (?, ?, ?, ?)
     `);
+    this.countForProjectStmt = db.prepare(
+      `SELECT COUNT(*) AS n FROM scans WHERE project_path = ?`
+    );
   }
+  db;
+  insertStmt;
+  finalizeStmt;
+  markCancelledStmt;
+  listRunningStmt;
+  reapOneStmt;
+  getByIdStmt;
+  getLatestStmt;
+  getLatestForProjectStmt;
+  listHistoryStmt;
+  listHistoryForProjectStmt;
+  findCacheStmt;
+  attachCacheStmt;
+  countForProjectStmt;
+  completedOfTypesCache = /* @__PURE__ */ new Map();
   insert(input) {
     const started = nowIso();
     this.insertStmt.run(
@@ -38447,15 +38549,11 @@ var ScansRepo = class {
     return row ? rowToRecord(row) : null;
   }
   /**
-   * The latest completed scan in the WHOLE database, from ANY project — no
-   * `project_path` filter. Correct for a caller with no project in scope
-   * (most resources and tools here take no `project_path` input at all and
-   * report on "whatever this server last scanned"). A caller that DID
-   * resolve a `project_path` and attributes something to the scan it names
-   * (e.g. `validate_finding`'s `findings_from_scan`) must use
-   * `getLatestForProject` instead — see that method and
-   * `findingsRepo.ts`'s `listOpen`/`listOpenForProject` for the identical
-   * split.
+   * The latest completed scan in the WHOLE database, from ANY project and of
+   * ANY type — no `project_path` filter. Only for a caller with genuinely no
+   * project in scope; a reader answering for a project uses
+   * `history/openSet.ts` (the open set, or the latest usable scan of a type),
+   * and one that wants that project's history uses `getLatestForProject`.
    */
   getLatest() {
     const row = this.getLatestStmt.get();
@@ -38488,6 +38586,72 @@ var ScansRepo = class {
    */
   listHistoryForProject(projectPath, limit = 50) {
     return this.listHistoryForProjectStmt.all(projectPath, limit).map(rowToRecord);
+  }
+  /**
+   * Completed scans of `types` for ONE project, newest first, as one SQL
+   * query — the latest scan of a type is found however many other scans
+   * (of other types, or of other projects) were written after it. Every
+   * "find the latest scan of type X" used to search `listHistory(50)`, a
+   * window of the 50 newest rows in the whole database, and read "no such
+   * scan" once 50 others had run since.
+   *
+   * `beforeScanId` keeps only scans strictly older than that one, and
+   * `afterScanId` only scans strictly newer, in the same (started_at, rowid)
+   * order — how "the previous scan" is found, and how a search that only
+   * matters above some scan stops there. `excludeWithChildScans` drops rows
+   * whose `meta.child_scans` is an array (an orchestrated
+   * `security_scan_full` parent) in SQL, so a search for script-era rows does
+   * not page through every orchestrated run to find none. Paged by `limit` /
+   * `offset` for callers that skip some rows (a scan with coverage none, a
+   * scoped run) and must keep looking.
+   */
+  listCompletedOfTypes(projectPath, types, opts) {
+    if (types.length === 0) return [];
+    const shape = {
+      before: opts.beforeScanId !== void 0,
+      after: opts.afterScanId !== void 0,
+      noParents: opts.excludeWithChildScans === true
+    };
+    const stmt = this.completedOfTypesStmt(types.length, shape);
+    const params = [projectPath, ...types];
+    if (opts.beforeScanId !== void 0) params.push(opts.beforeScanId);
+    if (opts.afterScanId !== void 0) params.push(opts.afterScanId);
+    params.push(opts.limit, opts.offset ?? 0);
+    return stmt.all(...params).map(rowToRecord);
+  }
+  /**
+   * `scanIds`, newest first in the one order every "latest" query here uses
+   * — `started_at DESC, rowid DESC` — so two scans started in the same
+   * millisecond still sort the way SQL picked them. Unknown ids are dropped.
+   */
+  sortNewestFirst(scanIds) {
+    if (scanIds.length === 0) return [];
+    const placeholders = scanIds.map(() => "?").join(", ");
+    return this.db.prepare(
+      `SELECT id FROM scans WHERE id IN (${placeholders}) ORDER BY started_at DESC, rowid DESC`
+    ).all(...scanIds).map((r) => r.id);
+  }
+  /** How many scans (any status, any type) one project has recorded. */
+  countForProject(projectPath) {
+    return this.countForProjectStmt.get(projectPath)?.n ?? 0;
+  }
+  completedOfTypesStmt(arity, shape) {
+    const key = `${arity}:${shape.before ? "b" : "-"}${shape.after ? "a" : "-"}${shape.noParents ? "p" : "-"}`;
+    const cached2 = this.completedOfTypesCache.get(key);
+    if (cached2 !== void 0) return cached2;
+    const placeholders = Array.from({ length: arity }, () => "?").join(", ");
+    const beforeClause = shape.before ? "AND (started_at, rowid) < (SELECT started_at, rowid FROM scans WHERE id = ?)" : "";
+    const afterClause = shape.after ? "AND (started_at, rowid) > (SELECT started_at, rowid FROM scans WHERE id = ?)" : "";
+    const parentClause = shape.noParents ? "AND (CASE WHEN json_valid(meta) THEN json_type(meta, '$.child_scans') END) IS NOT 'array'" : "";
+    const stmt = this.db.prepare(`
+      SELECT * FROM scans
+      WHERE project_path = ? AND status = 'completed' AND scan_type IN (${placeholders})
+        ${beforeClause} ${afterClause} ${parentClause}
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT ? OFFSET ?
+    `);
+    this.completedOfTypesCache.set(key, stmt);
+    return stmt;
   }
   /**
    * Returns the most recent completed scan stored under exactly `cache_key`
@@ -38558,6 +38722,7 @@ var StackRepo = class {
   insertStmt;
   getLatestStmt;
   listRecentStmt;
+  getLatestForProjectStmt;
   constructor(db) {
     this.insertStmt = db.prepare(`
       INSERT INTO stack_snapshots (project_path, captured_at, json)
@@ -38565,6 +38730,9 @@ var StackRepo = class {
     `);
     this.getLatestStmt = db.prepare(`
       SELECT * FROM stack_snapshots ORDER BY captured_at DESC LIMIT 1
+    `);
+    this.getLatestForProjectStmt = db.prepare(`
+      SELECT * FROM stack_snapshots WHERE project_path = ? ORDER BY captured_at DESC, id DESC LIMIT 1
     `);
     this.listRecentStmt = db.prepare(`
       SELECT * FROM stack_snapshots ORDER BY captured_at DESC LIMIT ?
@@ -38583,6 +38751,11 @@ var StackRepo = class {
   }
   getLatest() {
     const row = this.getLatestStmt.get();
+    return row ? rowToSnapshot(row) : null;
+  }
+  /** The newest snapshot of ONE project — what `guardian://stack` serves. */
+  getLatestForProject(projectPath) {
+    const row = this.getLatestForProjectStmt.get(projectPath);
     return row ? rowToSnapshot(row) : null;
   }
   listRecent(limit = 10) {
@@ -38606,6 +38779,7 @@ var SuppressionsRepo = class {
   isSuppressedStmt;
   listForFingerprintStmt;
   adoptIdentitiesStmt;
+  listActiveForRuleStmt;
   constructor(db) {
     this.insertStmt = db.prepare(`
       INSERT INTO suppressions (
@@ -38630,6 +38804,17 @@ var SuppressionsRepo = class {
     this.listForFingerprintStmt = db.prepare(`
       SELECT * FROM suppressions WHERE finding_fingerprint = ?
       ORDER BY created_at DESC
+    `);
+    this.listActiveForRuleStmt = db.prepare(`
+      SELECT s.* FROM suppressions s
+      WHERE (s.expires_at IS NULL OR s.expires_at > ?)
+        AND EXISTS (
+          SELECT 1 FROM findings f
+          WHERE (f.fingerprint = s.finding_fingerprint OR f.identity = s.finding_identity)
+            AND f.tool = ? AND f.rule_id = ?
+        )
+      ORDER BY s.created_at DESC, s.id DESC
+      LIMIT ?
     `);
     this.adoptIdentitiesStmt = db.prepare(`
       UPDATE suppressions
@@ -38671,6 +38856,14 @@ var SuppressionsRepo = class {
   }
   listForFingerprint(fingerprint) {
     return this.listForFingerprintStmt.all(fingerprint).map(rowToSuppression);
+  }
+  /**
+   * Active suppressions of findings reported by `tool` under `ruleId` —
+   * matched through the findings table on either key, since a suppression
+   * stores only the finding's fingerprint/identity. Newest first.
+   */
+  listActiveForRule(tool46, ruleId, limit) {
+    return this.listActiveForRuleStmt.all(nowIso(), tool46, ruleId, limit).map(rowToSuppression);
   }
   /**
    * Give every identity-less suppression whose fingerprint `scanId` reported
@@ -39106,6 +39299,99 @@ function describe(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
 
+// src/platform/projectPath.ts
+import { existsSync as existsSync5, realpathSync, statSync as statSync3 } from "node:fs";
+import { homedir } from "node:os";
+import { parse as parse3, resolve as resolve3 } from "node:path";
+var InvalidProjectPathError = class extends Error {
+  constructor(reason, path6) {
+    super(`Invalid project_path (${reason}): ${path6}`);
+    this.reason = reason;
+    this.path = path6;
+    this.name = "InvalidProjectPathError";
+  }
+  reason;
+  path;
+};
+function resolveProjectPath(input) {
+  const candidate = resolve3(input && input.length > 0 ? input : process.cwd());
+  if (!existsSync5(candidate)) {
+    throw new InvalidProjectPathError("not_found", candidate);
+  }
+  if (!statSync3(candidate).isDirectory()) {
+    throw new InvalidProjectPathError("not_a_directory", candidate);
+  }
+  const canonical = canonicalPath(candidate);
+  if (isRootOrHome(canonical)) {
+    throw new InvalidProjectPathError("root_or_home", canonical);
+  }
+  return { path: canonical };
+}
+function canonicalPath(p) {
+  const resolved = resolve3(p);
+  let canonical = resolved;
+  try {
+    canonical = realpathSync.native(resolved);
+  } catch {
+  }
+  if (process.platform === "win32") {
+    if (canonical.startsWith("\\\\") && !resolved.startsWith("\\\\")) canonical = resolved;
+    canonical = canonical.replace(/\//g, "\\").replace(/^([a-z]):/, (_m, drive) => `${drive.toUpperCase()}:`);
+  }
+  return canonical;
+}
+function isRootOrHome(p) {
+  if (parse3(p).root === p) return true;
+  const home = resolve3(homedir());
+  return p === home || p === canonicalPath(home);
+}
+
+// src/resources/paging.ts
+var DEFAULT_PAGE_SIZE = 50;
+var MAX_PAGE_SIZE = 100;
+var MESSAGE_MAX_CHARS = 500;
+function serverProjectPath() {
+  return canonicalPath(process.cwd());
+}
+var QueryTolerantUriTemplate = class extends UriTemplate {
+  base;
+  queryNames;
+  constructor(template) {
+    super(template);
+    const m = /\{\?([^}]*)\}$/.exec(template);
+    const baseTemplate = m ? template.slice(0, m.index) : template;
+    this.base = new UriTemplate(baseTemplate);
+    this.queryNames = m?.[1] ? m[1].split(",").map((n2) => n2.trim()).filter((n2) => n2.length > 0) : [];
+  }
+  match(uri) {
+    const q = uri.indexOf("?");
+    const path6 = q === -1 ? uri : uri.slice(0, q);
+    const vars = this.base.match(path6);
+    if (vars === null) return null;
+    if (q === -1) return vars;
+    const params = new URLSearchParams(uri.slice(q + 1));
+    const out = { ...vars };
+    for (const name of this.queryNames) {
+      const value = params.get(name);
+      if (value !== null) out[name] = value;
+    }
+    return out;
+  }
+};
+function paginate(uri, all) {
+  const total = all.length;
+  const pageRaw = Number(uri.searchParams.get("page") ?? "1");
+  const sizeRaw = Number(uri.searchParams.get("page_size") ?? String(DEFAULT_PAGE_SIZE));
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? Math.floor(pageRaw) : 1;
+  const page_size = Number.isFinite(sizeRaw) && sizeRaw > 0 ? Math.min(Math.floor(sizeRaw), MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE;
+  const start = (page - 1) * page_size;
+  return { items: all.slice(start, start + page_size), total, page, page_size };
+}
+function boundFinding(f) {
+  if (f.message === void 0 || f.message.length <= MESSAGE_MAX_CHARS) return f;
+  return { ...f, message: `${f.message.slice(0, MESSAGE_MAX_CHARS - 1)}\u2026` };
+}
+
 // src/resources/index.ts
 var RESOURCES = [];
 function registerResourceModule(resource) {
@@ -39118,18 +39404,18 @@ function attachAllResources(server, ctx) {
   for (const resource of RESOURCES) {
     const mimeType = resource.mimeType ?? "application/json";
     if (resource.isTemplate) {
-      const template = new ResourceTemplate(resource.uri, { list: void 0 });
+      const listAs = resource.listAs;
+      const template = new ResourceTemplate(new QueryTolerantUriTemplate(resource.uri), {
+        list: listAs === void 0 ? void 0 : () => ({ resources: [{ uri: listAs, name: resource.name, description: resource.description, mimeType }] })
+      });
       server.registerResource(
         resource.name,
         template,
         { description: resource.description, mimeType },
         async (uri, params) => {
-          const normalizedParams = normalizeParams2(params);
-          const { json } = await resource.handler(uri, normalizedParams, ctx);
+          const { json } = await resource.handler(uri, params, ctx);
           return {
-            contents: [
-              { uri: uri.href, mimeType, text: JSON.stringify(json, null, 2) }
-            ]
+            contents: [{ uri: uri.href, mimeType, text: JSON.stringify(json) }]
           };
         }
       );
@@ -39141,17 +39427,12 @@ function attachAllResources(server, ctx) {
         async (uri) => {
           const { json } = await resource.handler(uri, {}, ctx);
           return {
-            contents: [
-              { uri: uri.href, mimeType, text: JSON.stringify(json, null, 2) }
-            ]
+            contents: [{ uri: uri.href, mimeType, text: JSON.stringify(json) }]
           };
         }
       );
     }
   }
-}
-function normalizeParams2(params) {
-  return params;
 }
 
 // src/tools/index.ts
@@ -39182,18 +39463,21 @@ function attachAllTools(server, ctx) {
           callMeta.signal = typedExtra.signal;
         }
         const result = await tool46.handler(input, ctx, callMeta);
-        return toCallToolResult(result);
+        return toCallToolResult(result, tool46.contentOnlyKeys ?? []);
       }
     );
   }
 }
-function toCallToolResult(result) {
+function toCallToolResult(result, contentOnlyKeys) {
   if (result.ok) {
     const { ok: _ok, ...rest } = result;
     const payload = { ok: true, ...rest };
+    const structured = { ...payload };
+    for (const key of contentOnlyKeys) delete structured[key];
+    const indent = contentOnlyKeys.length > 0 ? void 0 : 2;
     return {
-      content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-      structuredContent: payload
+      content: [{ type: "text", text: JSON.stringify(payload, null, indent) }],
+      structuredContent: structured
     };
   }
   const errorPayload = { ok: false, error: result.error };
@@ -39228,7 +39512,7 @@ function dedupeFindings(findings) {
 // src/runners/git.ts
 init_execa();
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync5, mkdtempSync, rmSync as rmSync2 } from "node:fs";
+import { existsSync as existsSync6, mkdtempSync, rmSync as rmSync2 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { join as join5 } from "node:path";
 var GIT_TIMEOUT_MS = 6e4;
@@ -39326,7 +39610,7 @@ async function materialiseCommit(cwd, sha) {
   const remove = async () => {
     const problems = [];
     const rm = await git(cwd, ["worktree", "remove", "--force", root]);
-    if (rm.exitCode !== 0 && existsSync5(root)) problems.push(firstLine(rm.stderr) || `git worktree remove exited ${rm.exitCode}`);
+    if (rm.exitCode !== 0 && existsSync6(root)) problems.push(firstLine(rm.stderr) || `git worktree remove exited ${rm.exitCode}`);
     try {
       rmSync2(holder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     } catch (e) {
@@ -39349,7 +39633,7 @@ function firstLine(text) {
 import { readdirSync as readdirSync2 } from "node:fs";
 
 // src/platform/customRules.ts
-import { existsSync as existsSync6 } from "node:fs";
+import { existsSync as existsSync7 } from "node:fs";
 var CUSTOM_RULES_META_KEY = "custom_semgrep_configs";
 function resolveCustomSemgrepConfigs(ctx) {
   let raw;
@@ -39359,12 +39643,12 @@ function resolveCustomSemgrepConfigs(ctx) {
     return [];
   }
   if (!Array.isArray(raw)) return [];
-  return raw.filter((p) => typeof p === "string" && p.length > 0 && existsSync6(p));
+  return raw.filter((p) => typeof p === "string" && p.length > 0 && existsSync7(p));
 }
 
 // src/platform/projectSemgrepConfig.ts
 var import_yaml = __toESM(require_dist2(), 1);
-import { existsSync as existsSync7, readFileSync as readFileSync7 } from "node:fs";
+import { existsSync as existsSync8, readFileSync as readFileSync7 } from "node:fs";
 import { join as join7 } from "node:path";
 
 // src/configdrift/manifest.ts
@@ -39435,7 +39719,7 @@ function inspectProjectSemgrepConfigs(projectPath) {
     const key = absolute.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    if (!existsSync7(absolute)) continue;
+    if (!existsSync8(absolute)) continue;
     const verdict = classify(absolute);
     if (verdict.ok) {
       usable.push({ path: absolute, target: candidate.target, via: candidate.via });
@@ -39574,7 +39858,7 @@ function list(items) {
 }
 
 // src/configdrift/detect.ts
-import { existsSync as existsSync8 } from "node:fs";
+import { existsSync as existsSync9 } from "node:fs";
 import { join as join8 } from "node:path";
 
 // src/configdrift/hash.ts
@@ -39659,7 +39943,7 @@ function classify2(entry, input) {
   const targetPath = join8(input.projectPath, entry.target);
   const targetHash = hashConfigFile(targetPath);
   if (targetHash === null) return { ...base, state: "target_missing" };
-  if (entry.delivered_as !== void 0 && existsSync8(join8(input.projectPath, entry.delivered_as))) {
+  if (entry.delivered_as !== void 0 && existsSync9(join8(input.projectPath, entry.delivered_as))) {
     return { ...base, state: "pending_merge", delivered_as: entry.delivered_as };
   }
   const oursMoved = sourceHash !== entry.source_sha256;
@@ -39672,8 +39956,8 @@ function classify2(entry, input) {
 
 // src/fingerprint/findingIdentity.ts
 import { createHash as createHash5 } from "node:crypto";
-import { readFileSync as readFileSync9, realpathSync, statSync as statSync3 } from "node:fs";
-import { isAbsolute, relative, resolve as resolve3, sep } from "node:path";
+import { readFileSync as readFileSync9, realpathSync as realpathSync2, statSync as statSync4 } from "node:fs";
+import { isAbsolute, relative, resolve as resolve4, sep } from "node:path";
 
 // src/fingerprint/findingFingerprint.ts
 import { createHash as createHash4 } from "node:crypto";
@@ -39777,11 +40061,11 @@ function assignIdentities(findings, opts = {}) {
 function makeSourceReader(projectPath) {
   const root = realOrResolved(projectPath);
   return (filePath) => {
-    const lexical = resolve3(root, filePath);
+    const lexical = resolve4(root, filePath);
     if (!isInside(root, lexical)) return null;
     try {
-      const real = realpathSync.native(lexical);
-      const stat2 = statSync3(real);
+      const real = realpathSync2.native(lexical);
+      const stat2 = statSync4(real);
       if (!isInside(root, real) || !stat2.isFile() || stat2.size > MAX_SOURCE_BYTES) return null;
       return readFileSync9(real, "utf8");
     } catch {
@@ -39913,9 +40197,9 @@ function isInside(root, candidate) {
 }
 function realOrResolved(p) {
   try {
-    return realpathSync.native(resolve3(p));
+    return realpathSync2.native(resolve4(p));
   } catch {
-    return resolve3(p);
+    return resolve4(p);
   }
 }
 function compareStrings(a2, b) {
@@ -39926,16 +40210,16 @@ function sha2562(text) {
 }
 
 // src/platform/configsDir.ts
-import { existsSync as existsSync9, readdirSync as readdirSync3 } from "node:fs";
+import { existsSync as existsSync10, readdirSync as readdirSync3 } from "node:fs";
 import { dirname as dirname6, join as join9 } from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 var MARKER_RULES = ["semgrep", "base.yml"];
 function resolveConfigsDir() {
   const here = dirname6(fileURLToPath6(import.meta.url));
   const bundled = join9(here, "..", "..", "configs");
-  if (existsSync9(join9(bundled, ...MARKER_RULES))) return bundled;
+  if (existsSync10(join9(bundled, ...MARKER_RULES))) return bundled;
   const unbundled = join9(here, "..", "..", "..", "configs");
-  if (existsSync9(join9(unbundled, ...MARKER_RULES))) return unbundled;
+  if (existsSync10(join9(unbundled, ...MARKER_RULES))) return unbundled;
   return unbundled;
 }
 function configsDirFromScriptsDir(scriptsDir) {
@@ -40123,7 +40407,7 @@ function filterFindings(items, min) {
 
 // src/treeHash/cacheKey.ts
 import { createHash as createHash6 } from "node:crypto";
-import { readFileSync as readFileSync10, readdirSync as readdirSync4, statSync as statSync4 } from "node:fs";
+import { readFileSync as readFileSync10, readdirSync as readdirSync4, statSync as statSync5 } from "node:fs";
 import { join as join10, relative as relative2, sep as sep2 } from "node:path";
 function sha2563(text) {
   return createHash6("sha256").update(text).digest("hex");
@@ -40164,7 +40448,7 @@ function describePack(entry) {
   let isDir = false;
   let isFile = false;
   try {
-    const s = statSync4(entry);
+    const s = statSync5(entry);
     isDir = s.isDirectory();
     isFile = s.isFile();
   } catch {
@@ -40222,7 +40506,7 @@ function surfaceCacheKey(parts) {
 init_execa();
 import { createHash as createHash7 } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
-import { join as join11, relative as relative3, resolve as resolve4, sep as sep3 } from "node:path";
+import { join as join11, relative as relative3, resolve as resolve5, sep as sep3 } from "node:path";
 var FS_EXCLUDE = /* @__PURE__ */ new Set([
   ".git",
   ".guardian",
@@ -40243,7 +40527,7 @@ var FS_EXCLUDE = /* @__PURE__ */ new Set([
   ".tox"
 ]);
 async function computeTreeHash(projectPath, options = {}) {
-  const root = resolve4(projectPath);
+  const root = resolve5(projectPath);
   const files = options.forceFilesystemWalk ? await walkFiles(root) : await tryGitListFiles(root) ?? await walkFiles(root);
   files.sort();
   const hash = createHash7("sha256");
@@ -40310,53 +40594,6 @@ async function walk(root, dir, out) {
       }
     }
   }
-}
-
-// src/platform/projectPath.ts
-import { existsSync as existsSync10, realpathSync as realpathSync2, statSync as statSync5 } from "node:fs";
-import { homedir } from "node:os";
-import { parse as parse3, resolve as resolve5 } from "node:path";
-var InvalidProjectPathError = class extends Error {
-  constructor(reason, path6) {
-    super(`Invalid project_path (${reason}): ${path6}`);
-    this.reason = reason;
-    this.path = path6;
-    this.name = "InvalidProjectPathError";
-  }
-  reason;
-  path;
-};
-function resolveProjectPath(input) {
-  const candidate = resolve5(input && input.length > 0 ? input : process.cwd());
-  if (!existsSync10(candidate)) {
-    throw new InvalidProjectPathError("not_found", candidate);
-  }
-  if (!statSync5(candidate).isDirectory()) {
-    throw new InvalidProjectPathError("not_a_directory", candidate);
-  }
-  const canonical = canonicalPath(candidate);
-  if (isRootOrHome(canonical)) {
-    throw new InvalidProjectPathError("root_or_home", canonical);
-  }
-  return { path: canonical };
-}
-function canonicalPath(p) {
-  const resolved = resolve5(p);
-  let canonical = resolved;
-  try {
-    canonical = realpathSync2.native(resolved);
-  } catch {
-  }
-  if (process.platform === "win32") {
-    if (canonical.startsWith("\\\\") && !resolved.startsWith("\\\\")) canonical = resolved;
-    canonical = canonical.replace(/\//g, "\\").replace(/^([a-z]):/, (_m, drive) => `${drive.toUpperCase()}:`);
-  }
-  return canonical;
-}
-function isRootOrHome(p) {
-  if (parse3(p).root === p) return true;
-  const home = resolve5(homedir());
-  return p === home || p === canonicalPath(home);
 }
 
 // src/tools/gitState.ts
@@ -41095,8 +41332,8 @@ function mapSubcategory(metadata, checkId) {
 }
 function shortenTitle(message3, checkId) {
   if (message3 && message3.length > 0) {
-    const firstLine4 = message3.split(/\r?\n/)[0] ?? message3;
-    return firstLine4.length > 140 ? firstLine4.slice(0, 137) + "\u2026" : firstLine4;
+    const firstLine5 = message3.split(/\r?\n/)[0] ?? message3;
+    return firstLine5.length > 140 ? firstLine5.slice(0, 137) + "\u2026" : firstLine5;
   }
   return checkId;
 }
@@ -41550,8 +41787,8 @@ async function resolveBinary(name) {
   try {
     const result = await execa(finder, [name], { timeout: 2e3, reject: false });
     if (result.exitCode !== 0) return null;
-    const firstLine4 = result.stdout.split(/\r?\n/)[0]?.trim();
-    return firstLine4 && firstLine4.length > 0 ? firstLine4 : null;
+    const firstLine5 = result.stdout.split(/\r?\n/)[0]?.trim();
+    return firstLine5 && firstLine5.length > 0 ? firstLine5 : null;
   } catch {
     return null;
   }
@@ -45491,17 +45728,22 @@ function extractSpdx(root) {
 }
 
 // src/tools/generateSbom.ts
+var DEFAULT_INLINE_KB = 64;
+var MAX_INLINE_KB = 1024;
 var inputSchema2 = {
   project_path: ProjectPath,
   format: external_exports.enum(["cyclonedx-json", "spdx-json"]).optional().describe("SBOM output format. Default: cyclonedx-json."),
-  inline_max_kb: external_exports.number().int().min(0).max(8192).optional().describe("Inline the SBOM document in the response when its size is below this many KB. Default: 256.")
+  inline_max_kb: external_exports.number().int().min(0).max(MAX_INLINE_KB).optional().describe(
+    `Inline the SBOM document in the response when its size is at most this many KB. Default: ${DEFAULT_INLINE_KB}; maximum ${MAX_INLINE_KB} (1 MB). 0 never inlines.`
+  )
 };
 var tool5 = {
   name: "generate_sbom",
   title: "Generate SBOM (Syft / Trivy)",
-  description: "Produce a Software Bill of Materials (CycloneDX or SPDX JSON). Prefers Syft; falls back to Trivy fs --format. The full SBOM is always written to .guardian/reports/sbom-<scan>/. The response inlines the document when its size is below inline_max_kb (default 256).",
+  description: `Produce a Software Bill of Materials (CycloneDX or SPDX JSON). Prefers Syft; falls back to Trivy fs --format. The full SBOM is always written to .guardian/reports/sbom-<scan>/ (\`file_path\`). The response inlines the document once, in its text content, when its size is at most inline_max_kb (default ${DEFAULT_INLINE_KB}, max ${MAX_INLINE_KB}); \`inlined\` says whether it did. Read the file for anything larger.`,
   inputSchema: inputSchema2,
-  handler: async (input, ctx) => handler2(input, ctx)
+  handler: async (input, ctx) => handler2(input, ctx),
+  contentOnlyKeys: ["inline"]
 };
 registerToolModule(tool5);
 async function handler2(input, ctx) {
@@ -45513,7 +45755,7 @@ async function handler2(input, ctx) {
     return failDomain3("not_a_git_repo", e.message);
   }
   const format2 = inp.format ?? "cyclonedx-json";
-  const inlineMaxBytes = (inp.inline_max_kb ?? 256) * 1024;
+  const inlineMaxBytes = Math.min(inp.inline_max_kb ?? DEFAULT_INLINE_KB, MAX_INLINE_KB) * 1024;
   const scanId = randomUUID3();
   const reportDir = ensureReportDir(projectPath, scanId, "sbom");
   const outFile = join28(reportDir, `sbom.${format2 === "cyclonedx-json" ? "cdx" : "spdx"}.json`);
@@ -45588,12 +45830,16 @@ async function handler2(input, ctx) {
     components_count: summary.components_count,
     top_packages: summary.top_packages
   };
+  let inlined = false;
   if (stat2.size <= inlineMaxBytes) {
     try {
       payload["inline"] = JSON.parse(raw);
+      inlined = true;
     } catch {
     }
   }
+  payload["inlined"] = inlined;
+  payload["inline_max_kb"] = inlineMaxBytes / 1024;
   return payload;
 }
 function failDomain3(code, message3) {
@@ -47059,15 +47305,668 @@ function failDomain7(code, message3) {
   return { ok: false, error: { code, message: message3 } };
 }
 
+// src/history/scanRoles.ts
+var SCAN_TYPE_ROLE = {
+  // Two shapes — see isOrchestratedFullScan below. An orchestrated row's
+  // children (sast/secrets/deps/iac) are the sources, never the row itself;
+  // a script-era row is split across sast/secrets/deps/containers, so rows
+  // written before child scans existed do not vanish from the open set.
+  security_full: "state",
+  sast: "state",
+  secrets: "state",
+  deps: "state",
+  deps_audit: "state",
+  containers: "state",
+  iac: "state",
+  bugs: "state",
+  quality: "state",
+  dast: "state",
+  compliance: "state",
+  perf: "state",
+  wordpress: "state",
+  wp_vuln_check: "state",
+  dotnet_secrets: "state",
+  dotnet_efcore_audit: "state",
+  sbom: "never",
+  detect_stack: "never",
+  init: "never",
+  observability: "never",
+  audit: "never",
+  skill_audit: "never",
+  review_pr: "never",
+  wp_audit: "never",
+  wp_cron_audit: "never",
+  wp_rest_audit: "never",
+  dotnet_target_framework: "never"
+};
+var STATE_SCAN_TYPES = Object.keys(SCAN_TYPE_ROLE).filter((t) => SCAN_TYPE_ROLE[t] === "state");
+function isOrchestratedFullScan(scan2) {
+  return scan2.scan_type === "security_full" && Array.isArray(scan2.meta?.["child_scans"]);
+}
+function isScriptEraFullScan(scan2) {
+  return scan2.scan_type === "security_full" && !isOrchestratedFullScan(scan2);
+}
+var SCRIPT_ERA_RUN_SLOTS = {
+  semgrep: "sast",
+  bandit: "sast",
+  gitleaks: "secrets",
+  trivy: "deps",
+  "trivy-dockerfile": "containers"
+};
+function scriptEraSlotOfFinding(f) {
+  switch (f.tool) {
+    case "semgrep":
+    case "bandit":
+      return "sast";
+    case "gitleaks":
+      return "secrets";
+    case "trivy":
+      if (f.category === "license" || f.subcategory === "cve") return "deps";
+      if (f.subcategory === "secret") return "secrets";
+      return "containers";
+    default:
+      return "security_full";
+  }
+}
+function sourceTypesOf(slot) {
+  if (slot === "security_full") return ["security_full"];
+  const coveredByFull = Object.values(SCRIPT_ERA_RUN_SLOTS).includes(slot);
+  return coveredByFull ? [slot, "security_full"] : [slot];
+}
+function runSlotOf(tool46) {
+  return SCRIPT_ERA_RUN_SLOTS[tool46] ?? "security_full";
+}
+function findingInSlot(scan2, finding3, slot) {
+  if (scan2.scan_type !== "security_full") return scan2.scan_type === slot;
+  return scriptEraSlotOfFinding(finding3) === slot;
+}
+function slotView(scan2, slot) {
+  if (scan2.scan_type !== "security_full") {
+    return { tools_run: scan2.tools_run, missing_tools: scan2.missing_tools };
+  }
+  return {
+    tools_run: scan2.tools_run.filter((t) => runSlotOf(t.name) === slot),
+    missing_tools: scan2.missing_tools.filter((t) => runSlotOf(t) === slot)
+  };
+}
+function isScopedScan(scan2) {
+  const meta = scan2.meta;
+  if (meta === void 0) return false;
+  if (meta["scope"] !== void 0 && meta["scope"] !== null) return true;
+  return scan2.scan_type === "wp_vuln_check" && meta["slug"] !== void 0;
+}
+
+// src/history/openSet.ts
+var PAGE = 25;
+var SKIPPED_SAMPLE = 5;
+function findLatestUsable(storage, projectPath, types, opts = {}) {
+  const r = search(storage, projectPath, types, opts);
+  return { scan: r.scan, coverage: r.coverage, skipped: summarizeSkipped(r.hits), hits: r.hits };
+}
+function search(storage, projectPath, types, opts) {
+  const skipCoverageNone = opts.skipCoverageNone ?? true;
+  const hits = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const page = storage.scans.listCompletedOfTypes(projectPath, types, {
+      limit: PAGE,
+      offset,
+      ...opts.beforeScanId !== void 0 ? { beforeScanId: opts.beforeScanId } : {},
+      ...opts.afterScanId !== void 0 ? { afterScanId: opts.afterScanId } : {},
+      ...opts.excludeOrchestrated === true ? { excludeWithChildScans: true } : {}
+    });
+    for (const scan2 of page) {
+      if (isScopedScan(scan2)) continue;
+      if (opts.predicate !== void 0 && !opts.predicate(scan2)) continue;
+      const judged = judge(scan2, opts.slot);
+      if (judged === null) continue;
+      if (skipCoverageNone && judged === "none") {
+        hits.push({ slot: opts.slot ?? scan2.scan_type, scan: scan2, reason: "coverage_none" });
+        continue;
+      }
+      return { scan: scan2, coverage: judged, hits };
+    }
+    if (page.length < PAGE) return { scan: null, coverage: null, hits };
+  }
+}
+function latestStateScan(storage, projectPath, scanType, opts = {}) {
+  const found = findLatestUsable(storage, projectPath, scanType !== void 0 ? [scanType] : STATE_SCAN_TYPES, opts);
+  if (scanType !== void 0 || found.scan === null) return found;
+  const run = runOf(storage, projectPath, found.scan);
+  if (run === found.scan) return found;
+  return { ...found, scan: run, coverage: judge(run, void 0) };
+}
+function mapRun(storage, projectPath, scan2) {
+  return scan2 === void 0 ? null : runOf(storage, projectPath, scan2);
+}
+function runOf(storage, projectPath, scan2) {
+  const parentId = scan2.meta?.["parent_scan_id"];
+  if (typeof parentId !== "string") return scan2;
+  const parent = storage.scans.getById(parentId);
+  if (parent === null || parent.status !== "completed" || parent.project_path !== projectPath || !isOrchestratedFullScan(parent)) {
+    return scan2;
+  }
+  return parent;
+}
+function judge(scan2, slot) {
+  if (slot === void 0 || scan2.scan_type !== "security_full") {
+    return computeCoverage(scan2.tools_run, scan2.missing_tools);
+  }
+  if (scan2.tools_run.length === 0 && scan2.missing_tools.length === 0) return "full";
+  const view = slotView(scan2, slot);
+  if (view.tools_run.length === 0 && view.missing_tools.length === 0) return null;
+  return computeCoverage(view.tools_run, view.missing_tools);
+}
+function summarizeSkipped(hits) {
+  const byScan = /* @__PURE__ */ new Map();
+  for (const h2 of hits) {
+    const seen = byScan.get(h2.scan.scan_id);
+    if (seen !== void 0) {
+      if (!seen.slots.includes(h2.slot)) seen.slots.push(h2.slot);
+      continue;
+    }
+    byScan.set(h2.scan.scan_id, {
+      scan_id: h2.scan.scan_id,
+      scan_type: h2.scan.scan_type,
+      started_at: h2.scan.started_at,
+      reason: h2.reason,
+      slots: [h2.slot]
+    });
+  }
+  const all = [...byScan.values()].sort(
+    (a2, b) => a2.started_at === b.started_at ? 0 : a2.started_at < b.started_at ? 1 : -1
+  );
+  const by_reason = { coverage_none: 0 };
+  const newest = [];
+  for (const s of all) {
+    by_reason[s.reason] += 1;
+    if (by_reason[s.reason] <= SKIPPED_SAMPLE) newest.push(s);
+  }
+  return { count: all.length, by_reason, newest };
+}
+function suppressionMatcher(suppressions, now) {
+  const fingerprints = /* @__PURE__ */ new Set();
+  const identities = /* @__PURE__ */ new Set();
+  for (const s of suppressions) {
+    if (s.expires_at !== void 0 && !(Date.parse(s.expires_at) > now)) continue;
+    fingerprints.add(s.finding_fingerprint);
+    if (s.finding_identity !== void 0) identities.add(s.finding_identity);
+  }
+  return (f) => fingerprints.has(f.fingerprint) || f.identity !== void 0 && identities.has(f.identity);
+}
+function slotSources(storage, projectPath, slot) {
+  const pick2 = (r) => r.scan !== null && r.coverage !== null ? [{ scan: r.scan, coverage: r.coverage }] : [];
+  const scriptEra = { excludeOrchestrated: true, predicate: isScriptEraFullScan };
+  if (slot === "security_full") {
+    const r = search(storage, projectPath, ["security_full"], { slot, ...scriptEra });
+    return { picks: pick2(r), hits: r.hits };
+  }
+  const dedicated = search(storage, projectPath, [slot], { slot });
+  if (!sourceTypesOf(slot).includes("security_full")) {
+    return { picks: pick2(dedicated), hits: dedicated.hits };
+  }
+  const legacy = search(storage, projectPath, ["security_full"], {
+    slot,
+    ...scriptEra,
+    ...dedicated.scan !== null ? { afterScanId: dedicated.scan.scan_id } : {}
+  });
+  const picks = pick2(dedicated);
+  if (legacy.scan !== null && legacy.coverage !== null) {
+    picks.push({ scan: legacy.scan, coverage: legacy.coverage });
+  }
+  return { picks, hits: [...dedicated.hits, ...legacy.hits] };
+}
+function openSetForProject(storage, projectPath, opts = {}) {
+  const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now());
+  const picked = [];
+  const hits = [];
+  const considered = /* @__PURE__ */ new Map();
+  for (const slot of STATE_SCAN_TYPES) {
+    const found = slotSources(storage, projectPath, slot);
+    for (const h2 of found.hits) {
+      hits.push(h2);
+      considered.set(h2.scan.scan_id, h2.scan);
+    }
+    for (const p of found.picks) {
+      picked.push({ slot, ...p });
+      considered.set(p.scan.scan_id, p.scan);
+    }
+  }
+  const order = storage.scans.sortNewestFirst([...considered.keys()]);
+  const rank = new Map(order.map((id, i2) => [id, i2]));
+  const rankOf = (scanId) => rank.get(scanId) ?? order.length;
+  picked.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
+  const byScan = /* @__PURE__ */ new Map();
+  const findings = [];
+  const sources = [];
+  for (const { slot, scan: scan2, coverage: coverage2 } of picked) {
+    let rows = byScan.get(scan2.scan_id);
+    if (rows === void 0) {
+      rows = storage.findings.listByScan(scan2.scan_id);
+      byScan.set(scan2.scan_id, rows);
+    }
+    const seen = indexFindings(findings);
+    let contributed = 0;
+    for (const f of rows) {
+      if (!findingInSlot(scan2, f, slot) || isSuppressed(f) || seen.has(f)) continue;
+      findings.push({ ...f, scan_id: scan2.scan_id });
+      contributed += 1;
+    }
+    sources.push({
+      slot,
+      scan_id: scan2.scan_id,
+      scan_type: scan2.scan_type,
+      started_at: scan2.started_at,
+      finished_at: scan2.finished_at,
+      coverage: coverage2,
+      findings: contributed
+    });
+  }
+  findings.sort(
+    (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
+  );
+  const skipped = summarizeSkipped(hits);
+  const scans = [...considered.values()].sort((a2, b) => rankOf(a2.scan_id) - rankOf(b.scan_id));
+  const coverage = sources.length === 0 ? "none" : sources.some((s) => s.coverage !== "full") || skipped.count > 0 ? "partial" : "full";
+  const bookkeeping = [
+    ...picked.map((p) => ({ scan_id: p.scan.scan_id, slot: p.slot, ...slotView(p.scan, p.slot) })),
+    ...hits.map((h2) => ({ scan_id: h2.scan.scan_id, slot: h2.slot, ...slotView(h2.scan, h2.slot) }))
+  ];
+  return {
+    project_path: projectPath,
+    findings,
+    sources,
+    skipped,
+    coverage,
+    scans,
+    bookkeeping,
+    // Named as a run: a child of an orchestrated security_full stands for
+    // its parent (see `latestStateScan`). `picked` is newest first.
+    newest: mapRun(storage, projectPath, scans[0]),
+    newestSource: mapRun(storage, projectPath, picked[0]?.scan)
+  };
+}
+function describeOpenSet(set) {
+  return {
+    project_path: set.project_path,
+    coverage: set.coverage,
+    sources: set.sources,
+    skipped: set.skipped
+  };
+}
+
+// src/history/runNames.ts
+var TRIVY_FS = "trivy:fs";
+var TRIVY_CONFIG = "trivy:config";
+var SKILL_OSV = "guardian-scanskill:osv";
+var SKILL_TOOL = "guardian-scanskill";
+var SKILL_OSV_RULE = "osv-vulnerable-dependency";
+function findingKey(f) {
+  if (f.tool === "trivy") {
+    return f.category === "license" || f.subcategory === "cve" || f.subcategory === "secret" ? TRIVY_FS : TRIVY_CONFIG;
+  }
+  if (f.tool === SKILL_TOOL && f.rule_id === SKILL_OSV_RULE) return SKILL_OSV;
+  return f.tool;
+}
+var scanner = (...measures) => ({ measures });
+var RUN_NAMES = {
+  // SAST — scan_sast, bug_hunt, review_pr, map_attack_surface, security_scan_full.
+  semgrep: scanner("semgrep"),
+  "semgrep-wp": scanner("semgrep"),
+  bandit: scanner("bandit"),
+  "security-code-scan": scanner("security-code-scan"),
+  // scan_sast's missing_tools entry when the SDK that runs security-code-scan is absent.
+  "dotnet-sdk": scanner("security-code-scan"),
+  // Secrets — scan_secrets, scan_wordpress, review_pr (runners/gitleaksScan.ts).
+  gitleaks: scanner("gitleaks"),
+  "gitleaks-working-tree": scanner("gitleaks"),
+  // Trivy, by pass.
+  trivy: { measures: [TRIVY_FS], whenNotOk: [TRIVY_FS, TRIVY_CONFIG] },
+  // `trivy image --scanners vuln,secret,misconfig`: CVEs and secrets, and
+  // the image's own misconfigurations.
+  "trivy-image": { measures: [TRIVY_FS, TRIVY_CONFIG], ownTarget: true },
+  "trivy-config": scanner(TRIVY_CONFIG),
+  "trivy-dockerfile": scanner(TRIVY_CONFIG),
+  // deps_audit's native auditors, recorded by command.
+  npm: scanner("npm-audit"),
+  "pip-audit": scanner(),
+  // captured as evidence only: no findings
+  // quality_check. Its read of `.guardian/budgets.yml` measures the quality
+  // budgets against jscpd's and radon's own reports, so either one not
+  // running ok leaves the budget findings unmeasured too.
+  eslint: scanner("eslint"),
+  ruff: scanner("ruff"),
+  radon: { measures: ["radon"], whenNotOk: ["radon", "budgets"] },
+  jscpd: { measures: ["jscpd"], whenNotOk: ["jscpd", "budgets"] },
+  staticcheck: scanner("staticcheck"),
+  budgets: scanner("budgets"),
+  // scan_containers, beside its Trivy passes: the Dockerfile linter and the
+  // compose-file hardening checks.
+  hadolint: scanner("hadolint"),
+  "docker-compose": scanner("docker-compose"),
+  // scan_wordpress's PHPCS pass, and its missing_tools name.
+  "phpcs-wpcs": scanner("phpcs"),
+  phpcs: scanner("phpcs"),
+  // scan_dast: the own engine, its partial-run markers, and nuclei.
+  "guardian-dast": scanner("dast"),
+  "guardian-dast:unanswered": scanner("dast"),
+  "guardian-dast:wall-clock": scanner("dast"),
+  nuclei: scanner("nuclei"),
+  // WordPress.
+  wpscan: scanner("wpscan"),
+  wp_plugin_check: scanner(),
+  // a findings-less lookup
+  "wp-cli": scanner(),
+  // wp_audit, wp_cron_audit: report through meta
+  "http-probe": scanner(),
+  // wp_rest_audit: reports through meta
+  // .NET. `scan_dotnet_secrets` and `dotnet_target_framework_check` are
+  // also audit_executive's entries for those sub-tools.
+  scan_dotnet_secrets: scanner("scan_dotnet_secrets"),
+  dotnet_efcore_audit: scanner("dotnet_efcore_audit"),
+  dotnet_target_framework_check: scanner(),
+  // compliance_check.
+  "policy-docs": scanner(),
+  // scan_skill.
+  "guardian-scanskill:patterns": scanner(SKILL_TOOL),
+  "guardian-scanskill:yara": scanner(SKILL_TOOL),
+  "guardian-scanskill:taint": scanner(SKILL_TOOL),
+  "osv.dev": scanner(SKILL_OSV),
+  // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
+  // sub-scan's own bookkeeping instead whenever the row still exists; these
+  // speak for a sub-tool that failed before it wrote one.
+  security_scan_full: scanner("semgrep", "bandit", "security-code-scan", "gitleaks", TRIVY_FS, TRIVY_CONFIG),
+  quality_check: scanner("eslint", "ruff", "radon", "jscpd", "staticcheck", "budgets"),
+  deps_audit: scanner(TRIVY_FS, "npm-audit"),
+  compliance_check: scanner(TRIVY_FS),
+  scan_wordpress: scanner("semgrep", "gitleaks", TRIVY_FS, "phpcs"),
+  // security_scan_full: its own entry for a child that threw, answered an
+  // error, or is not registered — the child wrote no bookkeeping of its own.
+  // (An audit reads these through the security_scan_full sub-scan.)
+  scan_sast: scanner("semgrep", "bandit", "security-code-scan"),
+  scan_secrets: scanner("gitleaks"),
+  scan_deps: scanner(TRIVY_FS),
+  scan_iac: scanner(TRIVY_CONFIG),
+  // generate_sbom: the producer of an SBOM row, which holds no findings.
+  syft: scanner()
+};
+var BY_NAME = new Map(Object.entries(RUN_NAMES));
+function runNameEntry(name) {
+  const listed = BY_NAME.get(name);
+  if (listed !== void 0) return listed;
+  const colon = name.indexOf(":");
+  return colon > 0 ? BY_NAME.get(name.slice(0, colon)) ?? null : null;
+}
+function keysOfRun(name, ok) {
+  const entry = runNameEntry(name);
+  if (entry === null) return null;
+  return ok ? entry.measures : entry.whenNotOk ?? entry.measures;
+}
+var KNOWN_FINDING_KEYS = new Set(
+  [...BY_NAME.values()].flatMap((e) => [...e.measures, ...e.whenNotOk ?? []])
+);
+
+// src/history/runCompare.ts
+var COMPLETE_COMPARISON = {
+  isNotRemeasured: () => false,
+  isNotPreviouslyMeasured: () => false,
+  notRunByTo: () => null,
+  notRunByFrom: () => null,
+  notMeasuredByTo: [],
+  gapsByTo: [],
+  notMeasuredByFrom: []
+};
+function childrenOf(storage, parent) {
+  const listed = parent.meta?.["child_scans"];
+  if (!Array.isArray(listed)) return [];
+  const out = [];
+  for (const entry of listed) {
+    if (entry === null || typeof entry !== "object") continue;
+    const e = entry;
+    const row = typeof e.scan_id === "string" ? storage.scans.getById(e.scan_id) : null;
+    const type = row?.scan_type ?? (typeof e.tool === "string" ? e.tool.replace(/^scan_/, "") : null);
+    if (type !== null) out.push({ type, row });
+  }
+  return out;
+}
+function usableChild(c3) {
+  return c3.row !== null && c3.row.status === "completed";
+}
+function auditBookkeeping(storage, audit) {
+  const ids2 = audit.meta?.["sub_scan_ids"];
+  if (ids2 === null || typeof ids2 !== "object" || Array.isArray(ids2)) return audit;
+  const byTool = ids2;
+  const tools_run = [];
+  const missing_tools = [...audit.missing_tools];
+  for (const entry of audit.tools_run) {
+    const id = Object.hasOwn(byTool, entry.name) ? byTool[entry.name] : void 0;
+    const sub = entry.status === "ok" && typeof id === "string" ? storage.scans.getById(id) : null;
+    if (sub === null || sub.tools_run.length === 0 && sub.missing_tools.length === 0) {
+      tools_run.push(entry);
+      continue;
+    }
+    tools_run.push(...sub.tools_run);
+    missing_tools.push(...sub.missing_tools);
+  }
+  return { tools_run, missing_tools };
+}
+function bookkeepingOf(storage, scan2) {
+  return scan2.scan_type === "audit" ? auditBookkeeping(storage, scan2) : scan2;
+}
+function keyVerdict(book, key) {
+  let named = false;
+  let anyOk = false;
+  let anyFailed = false;
+  const okNames = /* @__PURE__ */ new Set();
+  for (const run of book.tools_run) {
+    const ok = run.status === "ok";
+    if (!(keysOfRun(run.name, ok)?.includes(key) ?? false)) continue;
+    named = true;
+    if (ok) {
+      anyOk = true;
+      okNames.add(run.name);
+    } else if (run.status === "failed") {
+      anyFailed = true;
+    }
+  }
+  let missing = false;
+  for (const name of book.missing_tools) {
+    if (!(keysOfRun(name, false)?.includes(key) ?? false)) continue;
+    named = true;
+    if (!okNames.has(name)) missing = true;
+  }
+  if (named) {
+    if (anyFailed || missing) return "unmeasured";
+    return anyOk ? "measured" : "not_run";
+  }
+  if (KNOWN_FINDING_KEYS.has(key)) return "not_run";
+  return computeCoverage(book.tools_run, book.missing_tools) === "full" ? "measured" : "unmeasured";
+}
+function bookkeepingVerdict(book, f) {
+  if (book.tools_run.length === 0 && book.missing_tools.length === 0) return "measured";
+  return keyVerdict(book, findingKey(f));
+}
+function typeResolver(storage, scan2) {
+  if (isOrchestratedFullScan(scan2)) {
+    const indexed = childrenOf(storage, scan2).filter((c3) => c3.row !== null).map((c3) => ({ type: c3.type, index: indexFindings(storage.findings.listByScan(c3.row.scan_id)) }));
+    return (f) => indexed.find((c3) => c3.index.has(f))?.type ?? null;
+  }
+  if (isScriptEraFullScan(scan2)) {
+    return (f) => {
+      const slot = scriptEraSlotOfFinding(f);
+      if (slot === "containers") return "iac";
+      return slot === "security_full" ? null : slot;
+    };
+  }
+  return () => scan2.scan_type;
+}
+function booksOf(storage, scan2) {
+  if (!isOrchestratedFullScan(scan2)) {
+    const book = bookkeepingOf(storage, scan2);
+    return () => book;
+  }
+  const children = childrenOf(storage, scan2);
+  return (fType) => {
+    if (fType === null) return scan2;
+    const child = children.find((c3) => c3.type === fType);
+    return child !== void 0 && usableChild(child) ? child.row : null;
+  };
+}
+function ownTargetNotRun(holder, asked, f) {
+  if (holder === null || asked.tools_run.length === 0 && asked.missing_tools.length === 0) return null;
+  const key = findingKey(f);
+  for (const run of holder.tools_run) {
+    if (run.status !== "ok" || runNameEntry(run.name)?.ownTarget !== true) continue;
+    if (!(keysOfRun(run.name, true)?.includes(key) ?? false)) continue;
+    if (!asked.tools_run.some((r) => r.name === run.name && r.status === "ok")) return run.name;
+  }
+  return null;
+}
+function answerFor(holder, asked, f) {
+  if (asked === null) return { verdict: "unmeasured", notRun: null };
+  const verdict = bookkeepingVerdict(asked, f);
+  if (verdict !== "measured") return { verdict, notRun: verdict === "not_run" ? f.tool : null };
+  const pass = ownTargetNotRun(holder, asked, f);
+  return pass === null ? { verdict, notRun: null } : { verdict: "not_run", notRun: pass };
+}
+function notMeasured(storage, scan2, scope = "any") {
+  const out = [];
+  const add = (x) => {
+    if (!out.includes(x)) out.push(x);
+  };
+  const gapsOf = (book, wholeType) => {
+    if (computeCoverage(book.tools_run, book.missing_tools) === "none") {
+      add(wholeType);
+      return;
+    }
+    const names = [...book.tools_run.filter((t) => t.status !== "ok").map((t) => t.name), ...book.missing_tools];
+    for (const name of names) {
+      if (scope === "gaps") {
+        if (isGap(book, name)) add(name);
+        continue;
+      }
+      const keys = keysOfRun(name, false);
+      if (keys === null || keys.length === 0 || keys.some((k) => keyVerdict(book, k) !== "measured")) add(name);
+    }
+  };
+  if (!isOrchestratedFullScan(scan2)) {
+    gapsOf(bookkeepingOf(storage, scan2), scan2.scan_type);
+    return out;
+  }
+  for (const child of childrenOf(storage, scan2)) {
+    if (!usableChild(child)) add(child.type);
+    else gapsOf(child.row, child.type);
+  }
+  return out;
+}
+function isGap(book, name) {
+  const as = (status) => book.tools_run.some((t) => t.name === name && t.status === status);
+  return as("failed") || book.missing_tools.includes(name) && !as("ok");
+}
+function compareScansFor(storage, from, to) {
+  const typeOfFrom = typeResolver(storage, from);
+  const typeOfTo = typeResolver(storage, to);
+  const fromBooks = booksOf(storage, from);
+  const toBooks = booksOf(storage, to);
+  const inTo = (f) => {
+    const t = typeOfFrom(f);
+    return answerFor(fromBooks(t), toBooks(t), f);
+  };
+  const inFrom = (f) => {
+    const t = typeOfTo(f);
+    return answerFor(toBooks(t), fromBooks(t), f);
+  };
+  return {
+    // Anything short of measured: the newer scan cannot resolve what it did
+    // not look for, whether the scanner failed or did not run.
+    isNotRemeasured: (f) => inTo(f).verdict !== "measured",
+    // Only a gap: a reference that did not run the scanner at all looked at
+    // everything it had to, and the finding is new.
+    isNotPreviouslyMeasured: (f) => inFrom(f).verdict === "unmeasured",
+    notRunByTo: (f) => inTo(f).notRun,
+    notRunByFrom: (f) => inFrom(f).notRun,
+    notMeasuredByTo: notMeasured(storage, to, "any"),
+    gapsByTo: notMeasured(storage, to, "gaps"),
+    notMeasuredByFrom: notMeasured(storage, from, "gaps")
+  };
+}
+function classifyDiff(check2, fromFindings, toFindings) {
+  const fromIndex = indexFindings(fromFindings);
+  const toIndex = indexFindings(toFindings);
+  const out = {
+    new: [],
+    resolved: [],
+    unchanged: [],
+    notRemeasured: [],
+    notPreviouslyMeasured: [],
+    notRunByTo: [],
+    notRunByFrom: []
+  };
+  const note = (list2, name) => {
+    if (name !== null && !list2.includes(name)) list2.push(name);
+  };
+  for (const f of toFindings) {
+    if (fromIndex.has(f)) out.unchanged.push(f);
+    else if (check2.isNotPreviouslyMeasured(f)) out.notPreviouslyMeasured.push(f);
+    else {
+      out.new.push(f);
+      note(out.notRunByFrom, check2.notRunByFrom(f));
+    }
+  }
+  for (const f of fromFindings) {
+    if (toIndex.has(f)) continue;
+    if (check2.isNotRemeasured(f)) {
+      out.notRemeasured.push(f);
+      note(out.notRunByTo, check2.notRunByTo(f));
+    } else out.resolved.push(f);
+  }
+  return out;
+}
+function measurementGaps(check2, d) {
+  const byTo = [...check2.notMeasuredByTo, ...d.notRunByTo.filter((x) => !check2.notMeasuredByTo.includes(x))];
+  return {
+    byTo,
+    notRunByTo: byTo.filter((x) => !check2.gapsByTo.includes(x)),
+    byFrom: check2.notMeasuredByFrom,
+    notRunByFrom: d.notRunByFrom.filter((x) => !check2.notMeasuredByFrom.includes(x))
+  };
+}
+function describeMeasurementGaps(from, to, gaps) {
+  const parts = [];
+  const failedByTo = gaps.byTo.filter((x) => !gaps.notRunByTo.includes(x));
+  if (failedByTo.length > 0) {
+    parts.push(
+      `Scan ${to.scan_id} did not measure ${failedByTo.join(", ")} (it failed, or is not installed): earlier findings from it are reported as not re-measured, never as resolved \u2014 re-run once the scanner works.`
+    );
+  }
+  if (gaps.notRunByTo.length > 0) {
+    parts.push(
+      `Scan ${to.scan_id} did not run ${gaps.notRunByTo.join(", ")} (not requested, or nothing for it to scan): earlier findings from it are reported as not re-measured, never as resolved \u2014 run it again to re-measure them.`
+    );
+  }
+  if (gaps.byFrom.length > 0) {
+    parts.push(
+      `The reference scan ${from.scan_id} did not measure ${gaps.byFrom.join(", ")} (it failed, or was not installed): findings from it are reported as not previously measured, never as new.`
+    );
+  }
+  if (gaps.notRunByFrom.length > 0) {
+    parts.push(
+      `The reference scan ${from.scan_id} did not run ${gaps.notRunByFrom.join(", ")} (not applicable, or not requested, then): findings from it are new.`
+    );
+  }
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
 // src/tools/setBaseline.ts
 var inputSchema4 = {
-  scan_id: external_exports.string().uuid().optional().describe("Scan to mark as the baseline. Defaults to the latest completed scan."),
+  project_path: ProjectPath,
+  scan_id: external_exports.string().uuid().optional().describe("Scan to mark as the baseline. Defaults to project_path's newest usable scan."),
+  scan_type: external_exports.enum(SCAN_TYPES).optional().describe("Without scan_id: baseline the newest scan of this type. Default: any finding-producing type."),
   note: external_exports.string().max(500).optional().describe("Free-form note attached to the baseline row.")
 };
 var tool10 = {
   name: "set_baseline",
   title: "Set regression baseline",
-  description: "Mark a scan as the active regression baseline. Future `diff_scans from=baseline` queries use this row as the reference. Older baselines are kept for history but inactive.",
+  description: "Mark a scan as its project's regression baseline for its scan type. Without scan_id, uses project_path's (default: the server's working directory) newest usable scan \u2014 of scan_type when given \u2014 never an SBOM, stack detection, diff review or a scan whose scanners did not run. Future `diff_scans from=baseline` and `regression_alert` calls compare scans of that type against it. Older baselines are kept for history but inactive.",
   inputSchema: inputSchema4,
   handler: async (input, ctx) => handler7(input, ctx)
 };
@@ -47088,25 +47987,39 @@ async function handler7(input, ctx) {
     }
     targetScanId = inp.scan_id;
   } else {
-    const latest = ctx.storage.scans.getLatest();
-    if (!latest) {
+    let projectPath;
+    try {
+      projectPath = resolveProjectPath(inp.project_path).path;
+    } catch (e) {
+      return failDomain8("not_a_git_repo", e.message);
+    }
+    const latest = latestStateScan(ctx.storage, projectPath, inp.scan_type);
+    if (!latest.scan) {
       return failDomain8(
         "unknown_scan_id",
-        "No completed scan exists yet; run a scan tool before setting a baseline."
+        `No usable completed ${inp.scan_type ?? "finding-producing"} scan exists for ${projectPath} yet; run a scan tool before setting a baseline.` + (latest.skipped.count > 0 ? ` Skipped ${latest.skipped.count} scan(s) whose scanners did not run (coverage none).` : "")
       );
     }
-    targetScanId = latest.scan_id;
+    targetScanId = latest.scan.scan_id;
   }
   const baseline = ctx.storage.baselines.set({
     scan_id: targetScanId,
     ...inp.note !== void 0 ? { note: inp.note } : {}
   });
+  const target = ctx.storage.scans.getById(targetScanId);
+  const notMeasured2 = target === null ? [] : notMeasured(ctx.storage, target, "gaps");
   return {
     ok: true,
     baseline_id: baseline.id,
     scan_id: baseline.scan_id,
+    project_path: baseline.project_path,
+    scan_type: baseline.scan_type,
     set_at: baseline.set_at,
-    ...baseline.note !== void 0 ? { note: baseline.note } : {}
+    ...baseline.note !== void 0 ? { note: baseline.note } : {},
+    ...notMeasured2.length > 0 ? {
+      not_measured: notMeasured2,
+      warning: `This baseline's scan did not fully measure ${notMeasured2.join(", ")} (a scanner, or a pass of one, failed or was not installed), so it holds only some of their findings, or none. Later comparisons against this baseline report a finding from them that it does not hold as "not previously measured" \u2014 never as new, and never counted in regression_alert's score. Re-run the scan once the scanner works and set the baseline again.`
+    } : {}
   };
 }
 function failDomain8(code, message3) {
@@ -47158,9 +48071,12 @@ function failDomain9(code, message3) {
 }
 
 // src/tools/diffScans.ts
+var ITEMS_PER_BUCKET = 50;
 var FromEnum = external_exports.enum(["baseline", "previous"]);
 var ToEnum = external_exports.enum(["latest"]);
 var inputSchema6 = {
+  project_path: ProjectPath,
+  scan_type: external_exports.enum(SCAN_TYPES).optional().describe("With to='latest': diff the newest scan of this type. Default: the newest scan of any finding-producing type."),
   from_scan_id: external_exports.string().uuid().optional(),
   from: FromEnum.optional(),
   to_scan_id: external_exports.string().uuid().optional(),
@@ -47169,63 +48085,92 @@ var inputSchema6 = {
 var tool12 = {
   name: "diff_scans",
   title: "Diff scans (regression / resolution detection)",
-  description: "Compare findings between two scans (same scan_type). Returns three lists: new (in to but not in from), resolved (in from but not in to), unchanged (in both). Findings are matched by their line-independent identity, so code moving above a finding does not make it new; scans from before identities existed match by fingerprint. Default: from=previous, to=latest.",
+  description: "Compare findings between two scans of one project (same scan_type). Returns new (in to but not in from), resolved (in from but not in to), unchanged (in both) and not_remeasured (in from, of a type to did not measure \u2014 e.g. a failed child of a security_scan_full run; never counted as resolved): true counts in `summary`, at most 50 findings per list, `truncated` naming the lists that were cut. Findings are matched by their line-independent identity, so code moving above a finding does not make it new; scans from before identities existed match by fingerprint. Default: from=previous, to=latest \u2014 the newest usable scan of project_path (default: the server's working directory), never an SBOM/stack/diff-review run or one whose scanners did not run; skipped scans are counted in `skipped`. from=baseline uses the project's baseline of the same scan type.",
   inputSchema: inputSchema6,
   handler: async (input, ctx) => handler9(input, ctx)
 };
 registerToolModule(tool12);
 async function handler9(input, ctx) {
   const inp = input;
-  const toId = resolveTo(inp, ctx);
-  if (!toId.ok) return toId.err;
-  const fromId = resolveFrom(inp, toId.value, ctx);
+  const skipHits = [];
+  const toScan = resolveTo(inp, ctx, skipHits);
+  if (!toScan.ok) return toScan.err;
+  const fromId = resolveFrom(inp, toScan.value, ctx, skipHits);
   if (!fromId.ok) return fromId.err;
-  if (fromId.value === toId.value) {
+  if (fromId.value === toScan.value.scan_id) {
     return failDomain10(
       "unknown_scan_id",
-      `Cannot diff a scan against itself (${toId.value}).`
+      `Cannot diff a scan against itself (${toScan.value.scan_id}).`
     );
   }
+  const fromScan = ctx.storage.scans.getById(fromId.value);
+  if (!fromScan) return failDomain10("unknown_scan_id", `from scan '${fromId.value}' not found`);
   const fromFindings = ctx.storage.findings.listByScan(fromId.value);
-  const toFindings = ctx.storage.findings.listByScan(toId.value);
-  const fromIndex = indexFindings(fromFindings);
-  const toIndex = indexFindings(toFindings);
-  const new_findings = [];
-  const resolved_findings = [];
-  const unchanged_findings = [];
-  for (const f of toFindings) {
-    if (fromIndex.has(f)) unchanged_findings.push(f);
-    else new_findings.push(f);
-  }
-  for (const f of fromFindings) {
-    if (!toIndex.has(f)) resolved_findings.push(f);
-  }
+  const toFindings = ctx.storage.findings.listByScan(toScan.value.scan_id);
+  const check2 = compareScansFor(ctx.storage, fromScan, toScan.value);
+  const d = classifyDiff(check2, fromFindings, toFindings);
+  const gaps = measurementGaps(check2, d);
+  const note = describeMeasurementGaps(fromScan, toScan.value, gaps);
+  const cap = (list2) => list2.slice(0, ITEMS_PER_BUCKET);
+  const cut = (list2) => list2.length > ITEMS_PER_BUCKET;
   return {
     ok: true,
+    project_path: toScan.value.project_path,
+    scan_type: toScan.value.scan_type,
     from_scan_id: fromId.value,
-    to_scan_id: toId.value,
-    new_findings,
-    resolved_findings,
-    unchanged_findings,
+    to_scan_id: toScan.value.scan_id,
     summary: {
-      new: new_findings.length,
-      resolved: resolved_findings.length,
-      unchanged: unchanged_findings.length
-    }
+      new: d.new.length,
+      resolved: d.resolved.length,
+      unchanged: d.unchanged.length,
+      not_remeasured: d.notRemeasured.length,
+      not_previously_measured: d.notPreviouslyMeasured.length
+    },
+    new_findings: cap(d.new),
+    resolved_findings: cap(d.resolved),
+    unchanged_findings: cap(d.unchanged),
+    not_remeasured_findings: cap(d.notRemeasured),
+    not_previously_measured_findings: cap(d.notPreviouslyMeasured),
+    truncated: {
+      new: cut(d.new),
+      resolved: cut(d.resolved),
+      unchanged: cut(d.unchanged),
+      not_remeasured: cut(d.notRemeasured),
+      not_previously_measured: cut(d.notPreviouslyMeasured)
+    },
+    ...gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {},
+    ...gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {},
+    ...note !== null ? { note } : {},
+    ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}
   };
 }
-function resolveTo(inp, ctx) {
+function resolveTo(inp, ctx, skipHits) {
   if (inp.to_scan_id) {
     const scan2 = ctx.storage.scans.getById(inp.to_scan_id);
     if (!scan2)
       return { ok: false, err: failDomain10("unknown_scan_id", `to scan '${inp.to_scan_id}' not found`) };
-    return { ok: true, value: inp.to_scan_id };
+    return { ok: true, value: scan2 };
   }
-  const latest = ctx.storage.scans.getLatest();
-  if (!latest) return { ok: false, err: failDomain10("unknown_scan_id", "No completed scans yet.") };
-  return { ok: true, value: latest.scan_id };
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, err: failDomain10("not_a_git_repo", e.message) };
+  }
+  const latest = latestStateScan(ctx.storage, projectPath, inp.scan_type);
+  skipHits.push(...latest.hits);
+  if (!latest.scan) {
+    return {
+      ok: false,
+      err: failDomain10(
+        "unknown_scan_id",
+        `No usable completed ${inp.scan_type ?? "finding-producing"} scan for ${projectPath} yet.` + describeSkipped(latest.skipped)
+      )
+    };
+  }
+  return { ok: true, value: latest.scan };
 }
-function resolveFrom(inp, toScanId, ctx) {
+function resolveFrom(inp, toScan, ctx, skipHits) {
   if (inp.from_scan_id) {
     const scan2 = ctx.storage.scans.getById(inp.from_scan_id);
     if (!scan2)
@@ -47237,33 +48182,36 @@ function resolveFrom(inp, toScanId, ctx) {
   }
   const mode = inp.from ?? "previous";
   if (mode === "baseline") {
-    const baseline = ctx.storage.baselines.getActive();
+    const baseline = ctx.storage.baselines.getActiveForProject(toScan.project_path, toScan.scan_type);
     if (!baseline)
       return {
         ok: false,
-        err: failDomain10("unknown_scan_id", "No baseline is set. Call `set_baseline` first.")
+        err: failDomain10(
+          "unknown_scan_id",
+          `No '${toScan.scan_type}' baseline is set for ${toScan.project_path}. Call \`set_baseline\` on a scan of that type first.`
+        )
       };
     return { ok: true, value: baseline.scan_id };
   }
-  const toScan = ctx.storage.scans.getById(toScanId);
-  if (!toScan)
-    return {
-      ok: false,
-      err: failDomain10("unknown_scan_id", `to scan '${toScanId}' not found`)
-    };
-  const history = ctx.storage.scans.listHistory(200);
-  const previous = history.find(
-    (s) => s.scan_type === toScan.scan_type && s.status === "completed" && s.scan_id !== toScanId && s.started_at < toScan.started_at
-  );
-  if (!previous)
+  const previous = latestStateScan(ctx.storage, toScan.project_path, toScan.scan_type, {
+    beforeScanId: toScan.scan_id
+  });
+  skipHits.push(...previous.hits);
+  if (!previous.scan)
     return {
       ok: false,
       err: failDomain10(
         "unknown_scan_id",
-        `No previous '${toScan.scan_type}' scan exists before ${toScanId}.`
+        `No previous usable '${toScan.scan_type}' scan of ${toScan.project_path} exists before ${toScan.scan_id}.${describeSkipped(previous.skipped)}`
       )
     };
-  return { ok: true, value: previous.scan_id };
+  return { ok: true, value: previous.scan.scan_id };
+}
+function describeSkipped(skipped) {
+  if (skipped.count === 0) return "";
+  const named = skipped.newest.map((s) => s.scan_id).join(", ");
+  const more = skipped.count > skipped.newest.length ? `, and ${skipped.count - skipped.newest.length} older` : "";
+  return ` Skipped ${skipped.count} scan(s) whose scanners did not run (coverage none): ${named}${more}.`;
 }
 function failDomain10(code, message3) {
   return { ok: false, error: { code, message: message3 } };
@@ -48683,16 +49631,27 @@ function recommendation(score, open, cves, hasBaseline) {
 var tool17 = {
   name: "risk_score",
   title: "Risk score (0-100)",
-  description: "Compute a single 0-100 risk score from the project's persisted scans/findings/CVEs/baseline. Returns the score, a band (low/medium/high/critical), per-component breakdown, and the next action the model should recommend. Pure read.",
-  inputSchema: {},
-  handler: async (_input, ctx) => handler14(ctx)
+  description: "Compute a single 0-100 risk score for one project (project_path, default: the server's working directory) from its persisted scans/findings/CVEs/baseline. Open findings are the union of the newest usable scan of every finding-producing type, suppressions removed. Returns the score, a band (low/medium/high/critical), per-component breakdown, the next action to recommend, and `coverage` \u2014 which scans it read, which newer scans it skipped because they measured nothing, and `coverage_caveat` when the numbers are incomplete. Pure read.",
+  inputSchema: { project_path: ProjectPath },
+  handler: async (input, ctx) => handler14(input, ctx)
 };
 registerToolModule(tool17);
-async function handler14(ctx) {
-  const open = ctx.storage.findings.listOpen();
-  const latestDeps = findLatestOfType(ctx, CVE_SOURCE_SCAN_TYPES);
-  const cves = latestDeps ? ctx.storage.cves.listActive(latestDeps.scan_id) : [];
-  const latestCompliance = findLatestOfType(ctx, ["compliance"]);
+async function handler14(input, ctx) {
+  const inp = input;
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const now = Date.now();
+  const storage = ctx.storage;
+  const open = openSetForProject(storage, projectPath, { now });
+  const cveSource = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: "deps" });
+  const cves = cveSource.scan ? storage.cves.listActive(cveSource.scan.scan_id) : [];
+  const latestCompliance = findLatestUsable(storage, projectPath, ["compliance"], {
+    skipCoverageNone: false
+  }).scan;
   let policiesMissing = 0;
   if (latestCompliance?.meta) {
     const m = latestCompliance.meta;
@@ -48702,34 +49661,43 @@ async function handler14(ctx) {
     }
   }
   let dependencyBotConfigured = true;
-  const latestDepsAudit = ctx.storage.scans.listHistory(50).find((s) => s.status === "completed" && isDepsAuditScan(s));
+  const latestDepsAudit = findLatestUsable(storage, projectPath, ["deps_audit", "deps"], {
+    skipCoverageNone: false,
+    predicate: isDepsAuditScan
+  }).scan;
   if (latestDepsAudit?.meta) {
     const m = latestDepsAudit.meta;
     const bot = m.bot_configured ?? {};
     dependencyBotConfigured = Boolean(bot.renovate || bot.dependabot);
   }
-  const baseline = ctx.storage.baselines.getActive();
+  const baseline = storage.baselines.getActiveForProject(projectPath);
+  const coveragePartial = open.coverage !== "full" || cveSource.scan === null;
   const result = scoreRisk({
-    findings: open,
+    findings: open.findings,
     cves,
     policies_missing: policiesMissing,
     dependency_bot_configured: dependencyBotConfigured,
     baseline_set_at: baseline ? baseline.set_at : null,
-    coverage_partial: false,
-    now: Date.now()
+    coverage_partial: coveragePartial,
+    now
   });
   return {
     ok: true,
     score: result.score,
     band: result.band,
     components: result.components,
-    recommended_next_action: result.next_action
+    recommended_next_action: result.next_action,
+    coverage_caveat: result.coverage_caveat,
+    project_path: projectPath,
+    coverage: {
+      level: open.coverage,
+      sources: open.sources,
+      skipped: open.skipped,
+      cve_source_scan_id: cveSource.scan?.scan_id ?? null,
+      ...cveSource.scan === null ? { cve_gap: "no dependency scan has measured this project: CVEs are unmeasured, not zero" } : {},
+      cve_source_skipped: cveSource.skipped
+    }
   };
-}
-function findLatestOfType(ctx, types) {
-  const history = ctx.storage.scans.listHistory(50);
-  const found = history.find((s) => s.status === "completed" && types.includes(s.scan_type));
-  return found ? ctx.storage.scans.getById(found.scan_id) : null;
 }
 
 // src/tools/sbomDiff.ts
@@ -48863,6 +49831,8 @@ var SEVERITY_WEIGHT = {
   critical: 10
 };
 var inputSchema9 = {
+  project_path: ProjectPath,
+  scan_type: external_exports.enum(SCAN_TYPES).optional().describe("Compare scans of this type. Default: the type of the newest finding-producing scan."),
   threshold: external_exports.number().min(0).max(1e3).optional().describe(
     "Score-delta threshold above which `regressed=true`. Default 5. A single new critical alone surpasses this; 5 new lows do not."
   )
@@ -48870,7 +49840,7 @@ var inputSchema9 = {
 var tool19 = {
   name: "regression_alert",
   title: "Regression alert",
-  description: "Compare the active baseline (or previous completed scan) against the latest scan and flag when the severity-weighted change exceeds a threshold. Returns enough context for the model to recommend follow-up actions.",
+  description: "Compare one project's latest scan against its baseline of the same scan type (or its previous scan of that type) and flag when the severity-weighted change exceeds a threshold. project_path defaults to the server's working directory; scan_type defaults to the newest finding-producing scan. Never compares scans of different types or projects. Returns enough context for the model to recommend follow-up actions.",
   inputSchema: inputSchema9,
   handler: async (input, ctx) => handler16(input, ctx)
 };
@@ -48878,54 +49848,94 @@ registerToolModule(tool19);
 async function handler16(input, ctx) {
   const inp = input;
   const threshold = inp.threshold ?? 5;
-  const latest = ctx.storage.scans.getLatest();
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const skipHits = [];
+  const current = latestStateScan(ctx.storage, projectPath, inp.scan_type);
+  skipHits.push(...current.hits);
+  const latest = current.scan;
   if (!latest) {
     return {
       ok: true,
       regressed: false,
       score_delta: 0,
+      project_path: projectPath,
+      scan_type: inp.scan_type ?? null,
       baseline_scan_id: null,
       current_scan_id: null,
-      hint: "No scans recorded yet."
+      hint: "No usable scans recorded for this project yet.",
+      ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}
     };
   }
-  const baseline = ctx.storage.baselines.getActive();
-  let baselineId = baseline?.scan_id ?? null;
-  if (!baselineId) {
-    const history = ctx.storage.scans.listHistory(50);
-    const prev = history.find(
-      (s) => s.scan_type === latest.scan_type && s.scan_id !== latest.scan_id && s.status === "completed"
-    );
-    baselineId = prev?.scan_id ?? null;
+  const baseline = ctx.storage.baselines.getActiveForProject(projectPath, latest.scan_type);
+  const otherTypeBaseline = baseline ? null : ctx.storage.baselines.getActiveForProject(projectPath);
+  const note = otherTypeBaseline?.scan_type != null ? {
+    note: `This project's baseline is a '${otherTypeBaseline.scan_type}' scan, not '${latest.scan_type}'; pass scan_type: '${otherTypeBaseline.scan_type}' to compare against it.`
+  } : {};
+  let baselineId = null;
+  let reference = null;
+  if (baseline && baseline.scan_id !== latest.scan_id) {
+    baselineId = baseline.scan_id;
+    reference = "baseline";
+  } else {
+    const prev = latestStateScan(ctx.storage, projectPath, latest.scan_type, {
+      beforeScanId: latest.scan_id
+    });
+    skipHits.push(...prev.hits);
+    if (prev.scan) {
+      baselineId = prev.scan.scan_id;
+      reference = "previous";
+    }
   }
   if (!baselineId) {
     return {
       ok: true,
       regressed: false,
       score_delta: 0,
+      project_path: projectPath,
+      scan_type: latest.scan_type,
       baseline_scan_id: null,
       current_scan_id: latest.scan_id,
-      hint: "No baseline / previous scan to compare against."
+      hint: `No '${latest.scan_type}' baseline or previous '${latest.scan_type}' scan to compare against.`,
+      ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {},
+      ...note
     };
   }
   const prevFindings = ctx.storage.findings.listByScan(baselineId);
   const curFindings = ctx.storage.findings.listByScan(latest.scan_id);
-  const prevIndex = indexFindings(prevFindings);
-  const curIndex = indexFindings(curFindings);
-  const newFindings = curFindings.filter((f) => !prevIndex.has(f));
-  const resolvedFindings = prevFindings.filter((f) => !curIndex.has(f));
+  const baselineScan = ctx.storage.scans.getById(baselineId);
+  const check2 = baselineScan === null ? COMPLETE_COMPARISON : compareScansFor(ctx.storage, baselineScan, latest);
+  const d = classifyDiff(check2, prevFindings, curFindings);
+  const gaps = measurementGaps(check2, d);
+  const newFindings = d.new;
+  const resolvedFindings = d.resolved;
   const score = weightedScore(newFindings) - weightedScore(resolvedFindings);
   const regressed = score > threshold;
+  const measuredNote = baselineScan === null ? null : describeMeasurementGaps(baselineScan, latest, gaps);
   return {
     ok: true,
     regressed,
     score_delta: Math.round(score * 10) / 10,
     threshold,
+    project_path: projectPath,
+    scan_type: latest.scan_type,
+    reference,
     baseline_scan_id: baselineId,
     current_scan_id: latest.scan_id,
     new_findings_by_severity: countBySeverity3(newFindings),
     resolved_findings_by_severity: countBySeverity3(resolvedFindings),
-    hint: regressed ? "Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes." : "No significant regression."
+    not_remeasured_by_severity: countBySeverity3(d.notRemeasured),
+    not_previously_measured_by_severity: countBySeverity3(d.notPreviouslyMeasured),
+    ...gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {},
+    ...gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {},
+    hint: regressed ? "Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes." : measuredNote !== null ? `No significant regression among the types that were measured. ${measuredNote}` : "No significant regression.",
+    ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {},
+    ...note,
+    ...measuredNote !== null ? { not_measured_note: measuredNote } : {}
   };
 }
 function weightedScore(findings) {
@@ -48948,7 +49958,7 @@ var inputSchema10 = {
 var tool20 = {
   name: "suggest_fix",
   title: "Gather fix context for the model",
-  description: "Assemble structured context about a finding (source snippet, surrounding lines, rule metadata, prior suppressions for the same rule_id) so the calling model can propose a patch. This tool never calls an external LLM \u2014 the model that invoked it does the synthesis.",
+  description: "Assemble structured context about a finding (source snippet, surrounding lines, rule metadata, prior suppressions for the same tool and rule_id) so the calling model can propose a patch. The finding is found in project_path's (default: the server's working directory) newest scan that reported it. This tool never calls an external LLM \u2014 the model that invoked it does the synthesis.",
   inputSchema: inputSchema10,
   handler: async (input, ctx) => handler17(input, ctx)
 };
@@ -48962,11 +49972,14 @@ async function handler17(input, ctx) {
     return failDomain14("not_a_git_repo", e.message);
   }
   const contextLines = inp.context_lines ?? 20;
-  const latest = ctx.storage.scans.getLatest();
-  const finding3 = latest ? ctx.storage.findings.listByScan(latest.scan_id).find((f) => f.fingerprint === inp.finding_fingerprint) : null;
-  if (!finding3) {
-    return failDomain14("unknown_scan_id", `Finding ${inp.finding_fingerprint} not in the latest scan.`);
+  const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);
+  if (!located) {
+    return failDomain14(
+      "unknown_scan_id",
+      `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`
+    );
   }
+  const finding3 = located.finding;
   let surrounding_source = null;
   let source_start_line = 0;
   let source_end_line = 0;
@@ -48990,9 +50003,12 @@ async function handler17(input, ctx) {
       }
     }
   }
-  const priorSuppressions = finding3.rule_id ? ctx.storage.suppressions.listActive().filter((s) => s.finding_fingerprint !== finding3.fingerprint).slice(0, 10) : [];
+  const priorSuppressions = finding3.rule_id ? ctx.storage.suppressions.listActiveForRule(finding3.tool, finding3.rule_id, 20).filter(
+    (s) => s.finding_fingerprint !== finding3.fingerprint && (finding3.identity === void 0 || s.finding_identity !== finding3.identity)
+  ).slice(0, 10) : [];
   return {
     ok: true,
+    scan_id: located.scan_id,
     finding: {
       fingerprint: finding3.fingerprint,
       tool: finding3.tool,
@@ -49022,6 +50038,7 @@ function failDomain14(code, message3) {
 }
 
 // src/tools/triageFindings.ts
+var ITEMS_PER_BUCKET2 = 50;
 var TEST_PATTERNS = [
   /(^|\/)tests?\//i,
   /(^|\/)__tests__\//i,
@@ -49048,13 +50065,21 @@ var FIXTURE_PATTERNS = [
 var tool21 = {
   name: "triage_findings",
   title: "Heuristic triage of findings",
-  description: "Bucket the latest scan's open findings into likely_false_positive / probably_safe / keep using path-based heuristics (test files, generated code, fixtures). No LLM call \u2014 the model that invoked the tool decides whether to call suppress_finding on the suggestions.",
-  inputSchema: {},
-  handler: async (_input, ctx) => handler18(ctx)
+  description: "Bucket one project's open findings (project_path, default: the server's working directory; the newest usable scan of every finding-producing type, suppressions removed) into likely_false_positive / probably_safe / keep using path-based heuristics (test files, generated code, fixtures). True counts in `summary`, at most 50 entries per bucket, `truncated` naming the buckets that were cut. No LLM call \u2014 the model that invoked the tool decides whether to call suppress_finding on the suggestions.",
+  inputSchema: { project_path: ProjectPath },
+  handler: async (input, ctx) => handler18(input, ctx)
 };
 registerToolModule(tool21);
-async function handler18(ctx) {
-  const open = ctx.storage.findings.listOpen();
+async function handler18(input, ctx) {
+  const inp = input;
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const set = openSetForProject(ctx.storage, projectPath);
+  const open = set.findings;
   const likely_false_positive = [];
   const probably_safe = [];
   const keep = [];
@@ -49077,9 +50102,15 @@ async function handler18(ctx) {
       probably_safe: probably_safe.length,
       keep: keep.length
     },
-    likely_false_positive,
-    probably_safe,
-    keep_sample: keep.slice(0, 20),
+    likely_false_positive: likely_false_positive.slice(0, ITEMS_PER_BUCKET2),
+    probably_safe: probably_safe.slice(0, ITEMS_PER_BUCKET2),
+    keep: keep.slice(0, ITEMS_PER_BUCKET2),
+    truncated: {
+      likely_false_positive: likely_false_positive.length > ITEMS_PER_BUCKET2,
+      probably_safe: probably_safe.length > ITEMS_PER_BUCKET2,
+      keep: keep.length > ITEMS_PER_BUCKET2
+    },
+    open_set: describeOpenSet(set),
     instructions_for_model: "For each entry in `likely_false_positive`, consider calling `suppress_finding` with the suggested_suppression_reason. Be more conservative with `probably_safe` \u2014 review one before batch-suppressing. Never auto-suppress severity=critical without explicit human approval."
   };
 }
@@ -49161,8 +50192,8 @@ async function handler19(input, _ctx) {
     if (r.outcome === "completed") {
       stagesInstalled.push(stage);
     } else {
-      const firstLine4 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
-      stagesFailed.push({ stage, error: firstLine4?.trim() ?? r.outcome });
+      const firstLine5 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
+      stagesFailed.push({ stage, error: firstLine5?.trim() ?? r.outcome });
     }
   }
   return {
@@ -49681,7 +50712,7 @@ function toUri(p) {
 // src/tools/reportExport.ts
 var inputSchema12 = {
   project_path: ProjectPath,
-  scan_id: external_exports.string().uuid().optional().describe("Scan to export. Defaults to the latest completed."),
+  scan_id: external_exports.string().uuid().optional().describe("Scan to export. Defaults to project_path's newest usable finding-producing scan."),
   format: external_exports.enum(["html", "sarif", "markdown", "json"]).optional().default("markdown").describe(
     "Output format. markdown (default, handover doc), html (branded Pro Digital Key shell with a dark/light toggle, self-contained, opens offline), sarif (SARIF 2.1.0 for CI/IDE code scanning), or json (raw findings)."
   ),
@@ -49733,9 +50764,13 @@ async function handler22(input, ctx) {
       bytes: Buffer.byteLength(content2, "utf8")
     };
   }
-  const scanId = inp.scan_id ?? ctx.storage.scans.getLatest()?.scan_id;
+  const latest = inp.scan_id === void 0 ? latestStateScan(ctx.storage, projectPath) : null;
+  const scanId = inp.scan_id ?? latest?.scan?.scan_id;
   if (!scanId) {
-    return failDomain17("unknown_scan_id", "No completed scans to export.");
+    return failDomain17(
+      "unknown_scan_id",
+      `No usable completed scan of ${projectPath} to export.` + ((latest?.skipped.count ?? 0) > 0 ? ` ${latest?.skipped.count ?? 0} scan(s) were skipped because their scanners did not run (coverage none).` : "")
+    );
   }
   const scan2 = ctx.storage.scans.getById(scanId);
   if (!scan2) return failDomain17("unknown_scan_id", `Scan '${scanId}' not found.`);
@@ -49754,7 +50789,8 @@ async function handler22(input, ctx) {
     file_path: outFile,
     bytes: Buffer.byteLength(content, "utf8"),
     findings_count: findings.length,
-    cves_count: cves.length
+    cves_count: cves.length,
+    ...(latest?.skipped.count ?? 0) > 0 ? { skipped_scans: latest?.skipped } : {}
   };
 }
 function renderReport(format2, scan2, findings, cves, lang) {
@@ -50034,7 +51070,7 @@ var inputSchema14 = {
 var tool27 = {
   name: "create_github_issues",
   title: "Create GitHub issues for top findings",
-  description: "Use the local `gh` CLI to open one issue per top finding. Uses the developer's existing GitHub auth, no API keys handled here, no GitHub Actions involved. Title encodes the finding fingerprint for idempotency. Pass dry_run=true to preview. severity_min defaults to high and max_issues to 10; every finding those two dropped is counted in `filtered` and summarised in `filtered_reason`, so a short plan is never unexplained.",
+  description: "Use the local `gh` CLI to open one issue per top open finding of project_path (default: the server's working directory; suppressed findings are never filed). Uses the developer's existing GitHub auth, no API keys handled here, no GitHub Actions involved. Title encodes the finding fingerprint; a finding with an issue in ANY state (open or closed) is skipped. Missing labels are created, or left off when they cannot be (`labels_omitted`). Pass dry_run=true to preview. severity_min defaults to high and max_issues to 10; every finding those two dropped is counted in `filtered` and summarised in `filtered_reason`. ok:false when every issue failed to file.",
   inputSchema: inputSchema14,
   handler: async (input, ctx) => handler24(input, ctx)
 };
@@ -50058,20 +51094,25 @@ async function handler24(input, ctx) {
   const sevMin = inp.severity_min ?? "high";
   const max = inp.max_issues ?? 10;
   const labels = inp.labels ?? ["dev-guardian", "security"];
-  const latest = ctx.storage.scans.getLatest();
-  if (!latest) {
-    return failDomain18("unknown_scan_id", "No completed scans yet \u2014 nothing to file as issues.");
+  const open = openSetForProject(ctx.storage, projectPath);
+  if (open.sources.length === 0) {
+    return failDomain18(
+      "unknown_scan_id",
+      `No usable completed scan of ${projectPath} yet \u2014 nothing to file as issues.` + (open.skipped.count > 0 ? ` ${open.skipped.count} scan(s) were skipped because their scanners did not run (coverage none).` : "")
+    );
   }
-  const all = ctx.storage.findings.listByScan(latest.scan_id);
+  const all = open.findings;
   const sevFloor = SEVERITY_ORDER[sevMin];
   const aboveFloor = all.filter((f) => SEVERITY_ORDER[f.severity] >= sevFloor).sort((a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity]);
   const top = aboveFloor.slice(0, max);
   const belowFloor = severityShortfall(all, sevMin);
   const overMax = aboveFloor.length - top.length;
+  const existing = !dryRun && top.length > 0 ? await listExistingTags(projectPath) : null;
+  let labelPlan = null;
   const plans = [];
   for (const f of top) {
     const title = buildTitle(f);
-    const body = buildBody(f, latest.scan_id);
+    const body = buildBody(f, f.scan_id);
     const plan = {
       fingerprint: f.fingerprint,
       title,
@@ -50079,12 +51120,15 @@ async function handler24(input, ctx) {
       severity: f.severity,
       status: "would_create"
     };
-    if (!dryRun) {
-      const exists = await issueExistsByFingerprint(projectPath, f.fingerprint);
-      if (exists) {
+    if (existing !== null) {
+      if (!existing.ok) {
+        plan.status = "failed";
+        plan.error = `could not list existing issues to avoid duplicates: ${existing.error}`;
+      } else if (existing.tags.has(tagOf(f))) {
         plan.status = "skipped_existing";
       } else {
-        const created = await createIssue(projectPath, title, body, labels);
+        labelPlan ??= await ensureLabels(projectPath, labels);
+        const created = await createIssue(projectPath, title, body, labelPlan.applied);
         if (created.ok) {
           plan.status = "created";
           plan.url = created.url;
@@ -50095,6 +51139,13 @@ async function handler24(input, ctx) {
       }
     }
     plans.push(plan);
+  }
+  const failedPlans = plans.filter((p) => p.status === "failed");
+  if (plans.length > 0 && failedPlans.length === plans.length) {
+    return failDomain18(
+      "scanner_failed",
+      `All ${plans.length} issue(s) failed to file. First error: ${failedPlans[0]?.error ?? "unknown"}`
+    );
   }
   const filtered = {
     considered: all.length,
@@ -50111,6 +51162,11 @@ async function handler24(input, ctx) {
     candidates: plans.length,
     filtered,
     filtered_reason: describeFiltered(filtered, sevMin, max),
+    ...labelPlan === null ? { labels_requested: labels } : { labels_applied: labelPlan.applied, labels_omitted: labelPlan.omitted },
+    project_path: projectPath,
+    // Newer scans passed over because their scanners did not run: the
+    // findings above come from the scan before each of them.
+    ...open.skipped.count > 0 ? { skipped_scans: open.skipped } : {},
     plans
   };
 }
@@ -50127,15 +51183,18 @@ function describeFiltered(filtered, severityMin, maxIssues) {
       `${filtered.by_reason.over_max_issues} beyond max_issues (${maxIssues}), lowest severity first`
     );
   }
-  const head = `${filtered.excluded} of ${filtered.considered} finding(s) in this scan were excluded; ${filtered.candidates} filed. Excluded: ${parts.join("; ")}.`;
+  const head = `${filtered.excluded} of ${filtered.considered} open finding(s) were excluded; ${filtered.candidates} filed. Excluded: ${parts.join("; ")}.`;
   const suggested = filtered.below_severity_min.suggested_severity_min;
   if (suggested === null) return head;
   const lowest = lowestExcludedSeverity(filtered.below_severity_min);
   const rest = lowest !== null && lowest !== suggested ? `, or "${lowest}" for all ${filtered.below_severity_min.total}` : "";
   return `${head} Pass severity_min "${suggested}" to include ${filtered.below_severity_min.recovered_by_suggestion} of them${rest}.`;
 }
+function tagOf(f) {
+  return f.fingerprint.slice(0, 12);
+}
 function buildTitle(f) {
-  const tag = `[guardian:${f.fingerprint.slice(0, 12)}]`;
+  const tag = `[guardian:${tagOf(f)}]`;
   const head = `[${f.severity.toUpperCase()}] ${f.title}`.slice(0, 200);
   return `${head} ${tag}`;
 }
@@ -50161,21 +51220,93 @@ ${f.snippet}
 _Filed automatically by dev-guardian. Use \`suppress_finding\` to mark as false positive._`
   ].filter(Boolean).join("\n");
 }
-async function issueExistsByFingerprint(cwd, fingerprint) {
-  const short2 = fingerprint.slice(0, 12);
+var ISSUE_LIST_LIMIT = 1e3;
+async function listExistingTags(cwd) {
   const r = await runProcess({
     command: "gh",
-    args: ["issue", "list", "--search", `[guardian:${short2}] in:title`, "--json", "number", "--limit", "5"],
+    args: [
+      "issue",
+      "list",
+      "--state",
+      "all",
+      "--search",
+      '"[guardian:" in:title',
+      "--limit",
+      String(ISSUE_LIST_LIMIT),
+      "--json",
+      "number,title,state"
+    ],
+    cwd,
+    timeoutMs: 3e4
+  });
+  if (r.outcome !== "completed") {
+    return { ok: false, error: firstLine4(r.stderr) ?? `gh exited ${r.outcome}` };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(r.stdout || "[]");
+  } catch {
+    return { ok: false, error: "gh issue list printed something that is not JSON" };
+  }
+  if (!Array.isArray(parsed)) return { ok: false, error: "gh issue list did not return a JSON array" };
+  if (parsed.length >= ISSUE_LIST_LIMIT) {
+    return {
+      ok: false,
+      error: `gh issue list returned ${parsed.length} dev-guardian issues, its limit of ${ISSUE_LIST_LIMIT}: the listing may be cut, so an existing issue for a finding could be missing from it. Nothing was filed, to avoid duplicates \u2014 close or relabel old [guardian:\u2026] issues, or file by hand.`
+    };
+  }
+  const tags = /* @__PURE__ */ new Set();
+  for (const issue2 of parsed) {
+    const title = issue2.title;
+    if (typeof title !== "string") continue;
+    for (const m of title.matchAll(/\[guardian:([0-9a-f]{12})\]/g)) {
+      const tag = m[1];
+      if (tag !== void 0) tags.add(tag);
+    }
+  }
+  return { ok: true, tags };
+}
+async function ensureLabels(cwd, labels) {
+  if (labels.length === 0) return { applied: [], omitted: [] };
+  const listed = await runProcess({
+    command: "gh",
+    args: ["label", "list", "--limit", "1000", "--json", "name"],
     cwd,
     timeoutMs: 15e3
   });
-  if (r.outcome !== "completed") return false;
-  try {
-    const arr = JSON.parse(r.stdout || "[]");
-    return Array.isArray(arr) && arr.length > 0;
-  } catch {
-    return false;
+  const known = /* @__PURE__ */ new Set();
+  if (listed.outcome === "completed") {
+    try {
+      const parsed = JSON.parse(listed.stdout || "[]");
+      if (Array.isArray(parsed)) {
+        for (const l of parsed) {
+          const name = l.name;
+          if (typeof name === "string") known.add(name.toLowerCase());
+        }
+      }
+    } catch {
+    }
   }
+  const applied = [];
+  const omitted = [];
+  for (const label of labels) {
+    if (known.has(label.toLowerCase())) {
+      applied.push(label);
+      continue;
+    }
+    const created = await runProcess({
+      command: "gh",
+      args: ["label", "create", label, "--description", "Filed by dev-guardian"],
+      cwd,
+      timeoutMs: 15e3
+    });
+    if (created.outcome === "completed" || /already exists/i.test(created.stderr)) applied.push(label);
+    else omitted.push(label);
+  }
+  return { applied, omitted };
+}
+function firstLine4(text) {
+  return text.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
 }
 async function createIssue(cwd, title, body, labels) {
   const args = ["issue", "create", "--title", title, "--body", body];
@@ -50187,7 +51318,7 @@ async function createIssue(cwd, title, body, labels) {
   }
   return {
     ok: false,
-    error: r.stderr.split(/\r?\n/)[0] ?? `gh exited ${r.outcome}`
+    error: firstLine4(r.stderr) ?? `gh exited ${r.outcome}`
   };
 }
 function failDomain18(code, message3) {
@@ -52148,12 +53279,13 @@ var CATEGORY_WEIGHT = {
   performance: 25
 };
 var inputSchema24 = {
+  project_path: ProjectPath,
   limit: external_exports.number().int().min(1).max(500).optional().describe("Cap on returned items. Default 50.")
 };
 var tool40 = {
   name: "prioritize_findings",
   title: "Prioritise open findings (heuristic)",
-  description: "Rank open findings by a weighted heuristic: severity + category + fix_available + age. Returns top-N with explanation. No LLM call \u2014 the calling model uses the ranking to drive follow-ups.",
+  description: "Rank one project's open findings (project_path, default: the server's working directory; the newest usable scan of every finding-producing type, suppressions removed) by a weighted heuristic: severity + category + fix_available + age. Returns top-N with explanation. No LLM call \u2014 the calling model uses the ranking to drive follow-ups.",
   inputSchema: inputSchema24,
   handler: async (input, ctx) => handler37(input, ctx)
 };
@@ -52161,8 +53293,15 @@ registerToolModule(tool40);
 async function handler37(input, ctx) {
   const inp = input;
   const limit = inp.limit ?? 50;
-  const open = ctx.storage.findings.listOpen();
-  const latest = ctx.storage.scans.getLatest();
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const set = openSetForProject(ctx.storage, projectPath);
+  const open = set.findings;
+  const latest = set.newest;
   const recentScanTs = latest ? new Date(latest.started_at).getTime() : Date.now();
   const ranked = open.map((f) => {
     const factors = [];
@@ -52192,6 +53331,7 @@ async function handler37(input, ctx) {
     ok: true,
     summary,
     ranked: top,
+    open_set: describeOpenSet(set),
     instructions_for_model: "Pick the first 3-5 entries to action. For each, prefer `suggest_fix(finding_fingerprint)` over speculation. If most top entries are security/critical, call `audit_executive` to understand cross-cutting impact first.",
     // unused reference to keep the time variable from being dead-code'd by
     // future maintainers who add age-weighting.
@@ -55039,8 +56179,8 @@ function buildToolRun(run, via) {
   if (ok) {
     return via ? { name: "semgrep", status: "ok", reason: `ran via ${via}` } : { name: "semgrep", status: "ok" };
   }
-  const firstLine4 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  const reason = via ? `${via}: ${firstLine4 ?? "fallback failed"}` : firstLine4 ?? "unknown";
+  const firstLine5 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  const reason = via ? `${via}: ${firstLine5 ?? "fallback failed"}` : firstLine5 ?? "unknown";
   return { name: "semgrep", status: "failed", reason };
 }
 
@@ -56729,8 +57869,8 @@ async function invokeNuclei(opts) {
 }
 function interpretRun(run) {
   if (run.outcome === "completed") return { ok: true };
-  const firstLine4 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  return { ok: false, reason: firstLine4 ?? `nuclei ${run.outcome}` };
+  const firstLine5 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  return { ok: false, reason: firstLine5 ?? `nuclei ${run.outcome}` };
 }
 
 // src/dast/normalizeNuclei.ts
@@ -58038,7 +59178,6 @@ function collectGaps(input, stale) {
 }
 
 // src/tools/validateFinding.ts
-var DAST_SCAN_SEARCH_LIMIT = 200;
 var ANONYMOUS_EXPOSURE = "anonymous_exposure";
 var Fingerprint = external_exports.string().min(1).optional().describe(
   "Validate exactly this finding. Omitted (the default) validates EVERY open finding \u2014 batch is the point, since validating one finding at a time saves nobody any triage effort. A fingerprint that matches no open finding is an error, never an empty result."
@@ -58068,7 +59207,7 @@ function fail2(code, message3, retryWith) {
     error: { code, message: message3, ...retryWith === void 0 ? {} : { retry_with: retryWith } }
   };
 }
-var NO_OPEN_FINDINGS_NOTE = "No open findings to validate, so nothing was computed and nothing was persisted. This is NOT a statement that the project is clean \u2014 it means the latest completed scan recorded no unsuppressed findings. Run security_scan_full (or scan_sast) first, then re-run validate_finding.";
+var NO_OPEN_FINDINGS_NOTE = "No open findings to validate, so nothing was computed and nothing was persisted. This is NOT a statement that the project is clean \u2014 it means no usable scan of this project's finding-producing types left an unsuppressed finding open. Run security_scan_full (or scan_sast) first, then re-run validate_finding.";
 async function handler41(input, ctx) {
   const inp = input;
   let projectPath;
@@ -58085,7 +59224,8 @@ async function handler41(input, ctx) {
       { run_first: "map_attack_surface", project_path: projectPath }
     );
   }
-  const open = ctx.storage.findings.listOpenForProject(projectPath);
+  const openSet = openSetForProject(ctx.storage, projectPath);
+  const open = openSet.findings;
   const selected = inp.fingerprint === void 0 ? open : open.filter((f) => f.fingerprint === inp.fingerprint);
   if (inp.fingerprint !== void 0 && selected.length === 0) {
     return fail2(
@@ -58119,33 +59259,34 @@ async function handler41(input, ctx) {
       graph,
       validations,
       dast,
-      // The scan `listOpenForProject()` drew from — see `sourceScanOf`.
-      sourceScan: sourceScanOf(ctx, projectPath),
+      // The newest scan the open set read findings from, taken from the set
+      // itself so it cannot drift from it (each finding also carries its
+      // own `scan_id`). Present even when nothing was selected — the case
+      // where a reader most needs to know which scans came back empty.
+      sourceScan: openSet.newestSource,
       workingTreeHash,
       now: Date.now()
     }),
-    ...selected.length === 0 ? { note: NO_OPEN_FINDINGS_NOTE } : {}
+    ...selected.length === 0 ? { note: NO_OPEN_FINDINGS_NOTE } : {},
+    // Newer scans the open set passed over because their scanners did not
+    // run: the findings validated come from the scan before each of them.
+    ...openSet.skipped.count > 0 ? { skipped_scans: openSet.skipped } : {}
   };
 }
 function languageOfPath(filePath) {
   const language = languageFromPath(filePath);
   return language === "unknown" ? null : language;
 }
-function sourceScanOf(ctx, projectPath) {
-  return ctx.storage.scans.getLatestForProject(projectPath);
-}
 function collectAnonymousExposures(ctx, projectPath) {
-  const history = ctx.storage.scans.listHistory(DAST_SCAN_SEARCH_LIMIT);
-  const scan2 = history.find(
-    (s) => s.scan_type === "dast" && s.status === "completed" && s.project_path === projectPath
-  ) ?? null;
-  if (scan2 === null) return { scan: null, files: /* @__PURE__ */ new Set(), scansSearched: history.length };
+  const scan2 = ctx.storage.scans.listCompletedOfTypes(projectPath, ["dast"], { limit: 1 })[0] ?? null;
+  const scansSearched = ctx.storage.scans.countForProject(projectPath);
+  if (scan2 === null) return { scan: null, files: /* @__PURE__ */ new Set(), scansSearched };
   const files = /* @__PURE__ */ new Set();
   for (const f of ctx.storage.findings.listByScan(scan2.scan_id)) {
     if (f.subcategory !== ANONYMOUS_EXPOSURE || f.file_path === void 0) continue;
     files.add(f.file_path);
   }
-  return { scan: scan2, files, scansSearched: history.length };
+  return { scan: scan2, files, scansSearched };
 }
 
 // src/tools/createFixPr.ts
@@ -59202,9 +60343,9 @@ function failDomain24(code, message3) {
 registerResourceModule({
   name: "guardian-scans-latest",
   uri: "guardian://scans/latest",
-  description: "Latest completed scan of any type, with severity counts and the top-10 findings inlined. Returns `{ last_run: null }` when no scan has run yet.",
+  description: "Latest completed scan of any type of the server's working-directory project, with severity counts and the top-10 findings inlined. Returns `{ last_run: null }` when no scan has run yet. For what is open across every scan type, read guardian://findings/open.",
   handler: async (_uri, _params, ctx) => {
-    const latest = ctx.storage.scans.getLatest();
+    const latest = ctx.storage.scans.getLatestForProject(serverProjectPath());
     if (!latest) return { json: { last_run: null } };
     return { json: enrich(latest.scan_id, ctx) };
   }
@@ -59212,10 +60353,11 @@ registerResourceModule({
 registerResourceModule({
   name: "guardian-scans-history",
   uri: "guardian://scans/history",
-  description: "Up to 50 most-recent scans across every type, ordered by start time descending. Records are sparse \u2014 call `guardian://scans/{scan_id}` for the full ScanResult.",
+  description: "Up to 50 most-recent scans of the server's working-directory project, across every type, ordered by start time descending. Records are sparse \u2014 call `guardian://scans/{scan_id}` for the full ScanResult.",
   handler: async (_uri, _params, ctx) => {
-    const scans = ctx.storage.scans.listHistory(50);
-    return { json: { scans } };
+    const projectPath = serverProjectPath();
+    const scans = ctx.storage.scans.listHistoryForProject(projectPath, 50);
+    return { json: { project_path: projectPath, scans } };
   }
 });
 registerResourceModule({
@@ -59245,7 +60387,7 @@ function enrich(scanId, ctx) {
   return {
     ...record4,
     findings_count_by_severity: counts,
-    top_findings: top
+    top_findings: top.map(boundFinding)
   };
 }
 function countBySeverity5(findings) {
@@ -59271,57 +60413,28 @@ function mcpInvalidParams(message3) {
 }
 
 // src/resources/findings.ts
+var SCOPE_NOTE = `Scoped to the server's working-directory project: the newest usable scan of every finding-producing type (never an SBOM, stack detection or diff review; a scan whose scanners did not run is skipped \u2014 \`skipped\` counts them and names the newest few), deduplicated, active suppressions removed. Paged with ?page=N&page_size=M (default ${DEFAULT_PAGE_SIZE}, max ${MAX_PAGE_SIZE}); messages are cut to ${MESSAGE_MAX_CHARS} characters.`;
 registerResourceModule({
   name: "guardian-findings-open",
-  uri: "guardian://findings/open",
-  description: "All findings from the latest completed scan, with active suppressions filtered out. Returns `{ findings: [], last_run: null, scan_id: null }` when no scan has run.",
-  handler: async (uri, _params, ctx) => {
-    const latest = ctx.storage.scans.getLatest();
-    if (!latest) {
-      return { json: { findings: [], last_run: null, scan_id: null, total: 0 } };
-    }
-    const findings = ctx.storage.findings.listOpen();
-    const { items, total, page, page_size } = paginate(uri, findings);
-    return {
-      json: {
-        findings: items,
-        total,
-        page,
-        page_size,
-        last_run: latest.started_at,
-        scan_id: latest.scan_id
-      }
-    };
-  }
+  uri: "guardian://findings/open{?page,page_size}",
+  isTemplate: true,
+  listAs: "guardian://findings/open",
+  description: `All open findings. ${SCOPE_NOTE}`,
+  handler: async (uri, _params, ctx) => ({ json: respond(uri, ctx, () => true) })
 });
 registerResourceModule({
   name: "guardian-findings-critical",
-  uri: "guardian://findings/critical",
-  description: "Findings from the latest completed scan with severity=critical, suppressions filtered out.",
-  handler: async (uri, _params, ctx) => {
-    const latest = ctx.storage.scans.getLatest();
-    if (!latest) {
-      return { json: { findings: [], last_run: null, scan_id: null, total: 0 } };
-    }
-    const findings = ctx.storage.findings.listBySeverity("critical");
-    const { items, total, page, page_size } = paginate(uri, findings);
-    return {
-      json: {
-        findings: items,
-        total,
-        page,
-        page_size,
-        last_run: latest.started_at,
-        scan_id: latest.scan_id
-      }
-    };
-  }
+  uri: "guardian://findings/critical{?page,page_size}",
+  isTemplate: true,
+  listAs: "guardian://findings/critical",
+  description: `Open findings with severity=critical. ${SCOPE_NOTE}`,
+  handler: async (uri, _params, ctx) => ({ json: respond(uri, ctx, (f) => f.severity === "critical") })
 });
 registerResourceModule({
   name: "guardian-findings-by-severity",
-  uri: "guardian://findings/by-severity/{level}",
+  uri: "guardian://findings/by-severity/{level}{?page,page_size}",
   isTemplate: true,
-  description: "Findings from the latest completed scan filtered by severity (info | low | medium | high | critical), with active suppressions removed.",
+  description: `Open findings of one severity (info | low | medium | high | critical). ${SCOPE_NOTE}`,
   handler: async (uri, params, ctx) => {
     const raw = params["level"];
     const level = Array.isArray(raw) ? raw[0] : raw;
@@ -59330,34 +60443,28 @@ registerResourceModule({
         `level must be one of ${SEVERITIES.join("|")}, got '${level ?? "(missing)"}'`
       );
     }
-    const latest = ctx.storage.scans.getLatest();
-    if (!latest) {
-      return { json: { findings: [], last_run: null, scan_id: null, total: 0 } };
-    }
-    const findings = ctx.storage.findings.listBySeverity(level);
-    const { items, total, page, page_size } = paginate(uri, findings);
-    return {
-      json: {
-        level,
-        findings: items,
-        total,
-        page,
-        page_size,
-        last_run: latest.started_at,
-        scan_id: latest.scan_id
-      }
-    };
+    const severity = level;
+    return { json: { level, ...respond(uri, ctx, (f) => f.severity === severity) } };
   }
 });
-function paginate(uri, all) {
-  const total = all.length;
-  const pageRaw = Number(uri.searchParams.get("page") ?? "1");
-  const sizeRaw = Number(uri.searchParams.get("page_size") ?? "200");
-  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? Math.floor(pageRaw) : 1;
-  const page_size = Number.isFinite(sizeRaw) && sizeRaw > 0 ? Math.min(Math.floor(sizeRaw), 1e3) : 200;
-  const start = (page - 1) * page_size;
-  const items = all.slice(start, start + page_size);
-  return { items, total, page, page_size };
+function respond(uri, ctx, keep) {
+  const set = openSetForProject(ctx.storage, serverProjectPath());
+  const { items, total, page, page_size } = paginate(uri, set.findings.filter(keep));
+  const newest = set.sources[0];
+  return {
+    project_path: set.project_path,
+    findings: items.map(boundFinding),
+    total,
+    page,
+    page_size,
+    // The newest scan the set was read from — kept for callers of the old
+    // single-scan shape. `sources` names every one.
+    last_run: newest?.started_at ?? null,
+    scan_id: newest?.scan_id ?? null,
+    coverage: set.coverage,
+    sources: set.sources,
+    skipped: set.skipped
+  };
 }
 function mcpInvalidParams2(message3) {
   const err = new Error(message3);
@@ -59369,20 +60476,28 @@ function mcpInvalidParams2(message3) {
 registerResourceModule({
   name: "guardian-cves-active",
   uri: "guardian://cves/active",
-  description: "CVEs pinned to the most recent deps-flavoured scan (deps / deps_audit / security_full). Returns `{ cves: [] }` when no deps scan has run.",
+  description: "CVEs of the server's working-directory project, from its newest deps-flavoured scan (deps / deps_audit / security_full) that actually ran a dependency scanner. Returns `{ cves: [] }` when no deps scan has run.",
   handler: async (_uri, _params, ctx) => {
-    const latestDeps = findLatestOfType2(ctx, CVE_SOURCE_SCAN_TYPES);
-    if (!latestDeps) return { json: { cves: [], last_run: null } };
+    const found = findLatestUsable(ctx.storage, serverProjectPath(), CVE_SOURCE_SCAN_TYPES, { slot: "deps" });
+    const latestDeps = found.scan;
+    if (!latestDeps) return { json: { cves: [], last_run: null, skipped: found.skipped } };
     const cves = ctx.storage.cves.listActive(latestDeps.scan_id);
-    return { json: { cves, last_run: latestDeps.started_at, scan_id: latestDeps.scan_id } };
+    return {
+      json: {
+        cves,
+        last_run: latestDeps.started_at,
+        scan_id: latestDeps.scan_id,
+        ...found.skipped.count > 0 ? { skipped: found.skipped } : {}
+      }
+    };
   }
 });
 registerResourceModule({
   name: "guardian-sbom",
   uri: "guardian://sbom",
-  description: "Metadata for the most recent SBOM produced by `generate_sbom`: format, produced_by, file path on disk, component count, top packages. Inline payload omitted \u2014 call generate_sbom directly for the full document.",
+  description: "Metadata for the server's working-directory project's most recent SBOM produced by `generate_sbom`: format, produced_by, file path on disk, component count, top packages. Inline payload omitted \u2014 read the file or call generate_sbom for the full document.",
   handler: async (_uri, _params, ctx) => {
-    const latest = findLatestOfType2(ctx, ["sbom"]);
+    const latest = findLatestUsable(ctx.storage, serverProjectPath(), ["sbom"]).scan;
     if (!latest) return { json: { last_sbom: null } };
     return {
       json: {
@@ -59396,9 +60511,9 @@ registerResourceModule({
 registerResourceModule({
   name: "guardian-stack",
   uri: "guardian://stack",
-  description: "Latest stack snapshot produced by `detect_stack`. Returns `{ snapshot: null }` when no snapshot exists yet.",
+  description: "Latest stack snapshot of the server's working-directory project, produced by `detect_stack`. Returns `{ snapshot: null }` when no snapshot exists yet.",
   handler: async (_uri, _params, ctx) => {
-    const snap = ctx.storage.stack.getLatest();
+    const snap = ctx.storage.stack.getLatestForProject(serverProjectPath());
     if (!snap) return { json: { snapshot: null } };
     return {
       json: {
@@ -59411,9 +60526,11 @@ registerResourceModule({
 registerResourceModule({
   name: "guardian-compliance-status",
   uri: "guardian://compliance/status",
-  description: "Compliance status from the most recent compliance_check: licenses_summary, risky_licenses, and policy_documents_found. Returns `{ last_run: null }` when no compliance scan exists.",
+  description: "Compliance status of the server's working-directory project from its most recent compliance_check: licenses_summary, risky_licenses, and policy_documents_found. Returns `{ last_run: null }` when no compliance scan exists.",
   handler: async (_uri, _params, ctx) => {
-    const latest = findLatestOfType2(ctx, ["compliance"]);
+    const latest = findLatestUsable(ctx.storage, serverProjectPath(), ["compliance"], {
+      skipCoverageNone: false
+    }).scan;
     if (!latest) return { json: { last_run: null } };
     return {
       json: {
@@ -59427,28 +60544,24 @@ registerResourceModule({
 registerResourceModule({
   name: "guardian-baseline",
   uri: "guardian://baseline",
-  description: "Active regression baseline: `{ baseline_id, scan_id, set_at, note? }`. Returns `{ active: false }` when no baseline has been set.",
+  description: "Active regression baseline of the server's working-directory project: `{ baseline_id, scan_id, scan_type, set_at, note? }` \u2014 never another project's. Returns `{ active: false }` when this project has no baseline.",
   handler: async (_uri, _params, ctx) => {
-    const baseline = ctx.storage.baselines.getActive();
-    if (!baseline) return { json: { active: false } };
+    const projectPath = serverProjectPath();
+    const baseline = ctx.storage.baselines.getActiveForProject(projectPath);
+    if (!baseline) return { json: { active: false, project_path: projectPath } };
     return {
       json: {
         active: true,
+        project_path: projectPath,
         baseline_id: baseline.id,
         scan_id: baseline.scan_id,
+        scan_type: baseline.scan_type,
         set_at: baseline.set_at,
         ...baseline.note !== void 0 ? { note: baseline.note } : {}
       }
     };
   }
 });
-function findLatestOfType2(ctx, acceptedTypes) {
-  const history = ctx.storage.scans.listHistory(50);
-  const found = history.find(
-    (s) => s.status === "completed" && acceptedTypes.includes(s.scan_type)
-  );
-  return found ? ctx.storage.scans.getById(found.scan_id) : null;
-}
 
 // src/resources/wp.ts
 registerResourceModule({
@@ -59495,7 +60608,7 @@ registerResourceModule({
   uri: "guardian://wp/cron",
   description: "Latest wp_cron_audit result: total scheduled events + flagged ones (suspicious hooks, base64-looking args, hooks from inactive plugins).",
   handler: async (_uri, _params, ctx) => {
-    const scan2 = findLatestOfType3(ctx, "wp_cron_audit");
+    const scan2 = findLatestOfType(ctx, "wp_cron_audit");
     if (!scan2) return { json: { last_run: null } };
     return {
       json: {
@@ -59507,12 +60620,10 @@ registerResourceModule({
   }
 });
 function findLatestWpAudit2(ctx) {
-  return findLatestOfType3(ctx, "wp_audit");
+  return findLatestOfType(ctx, "wp_audit");
 }
-function findLatestOfType3(ctx, type) {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === type && s.status === "completed");
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
+function findLatestOfType(ctx, type) {
+  return findLatestUsable(ctx.storage, serverProjectPath(), [type], { skipCoverageNone: false }).scan;
 }
 function mcpInvalidParams3(message3) {
   const err = new Error(message3);
@@ -59526,7 +60637,7 @@ registerResourceModule({
   uri: "guardian://dotnet/target-frameworks",
   description: "Latest dotnet_target_framework_check: per-project target framework moniker + EOL/legacy status.",
   handler: async (_uri, _params, ctx) => {
-    const scan2 = findLatestOfType4(ctx, "dotnet_target_framework");
+    const scan2 = findLatestOfType2(ctx, "dotnet_target_framework");
     if (!scan2) return { json: { last_run: null } };
     return {
       json: {
@@ -59542,7 +60653,7 @@ registerResourceModule({
   uri: "guardian://dotnet/efcore",
   description: "Latest dotnet_efcore_audit: dangerous migration patterns detected (DropTable, DropColumn, AlterColumn nullable=false without defaultValue, raw SQL with credentials).",
   handler: async (_uri, _params, ctx) => {
-    const scan2 = findLatestOfType4(ctx, "dotnet_efcore_audit");
+    const scan2 = findLatestOfType2(ctx, "dotnet_efcore_audit");
     if (!scan2) return { json: { last_run: null } };
     return {
       json: {
@@ -59553,25 +60664,28 @@ registerResourceModule({
     };
   }
 });
-function findLatestOfType4(ctx, type) {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === type && s.status === "completed");
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
+function findLatestOfType2(ctx, type) {
+  return findLatestUsable(ctx.storage, serverProjectPath(), [type], { skipCoverageNone: false }).scan;
 }
 
 // src/resources/surface.ts
+var SURFACE_ITEM_CAP = 200;
 registerResourceModule({
   name: "guardian-surface-latest",
   uri: "guardian://surface/latest",
-  description: "Latest attack-surface snapshot from `map_attack_surface`: every route (code- and spec-provenance) with its resolved path, method, params and auth hint, plus env vars, declared ports, per-language coverage, the discovered spec_files, and the full spec_diff \u2014 matched pairs, code_only (shadow endpoints), spec_only (dead documentation) and unmatchable. Returns `{ snapshot: null }` when none exists yet.",
+  description: `Latest attack-surface snapshot of the server's working-directory project, from \`map_attack_surface\`: routes (code- and spec-provenance) with resolved path, method, params and auth hint, env vars, declared ports, per-language coverage, spec_files and the spec_diff (matched, code_only, spec_only, unmatchable). Each list is capped at ${SURFACE_ITEM_CAP} entries \u2014 \`totals\` has the true counts, \`truncated\` names what was cut, and guardian://surface/{snapshot_id} returns the whole snapshot. Import edges are counted, not inlined. Returns \`{ snapshot: null }\` when none exists yet.`,
   handler: async (_uri, _params, ctx) => {
-    const latest = ctx.storage.surface.getLatest();
+    const latest = ctx.storage.surface.getLatestForProject(serverProjectPath());
     if (!latest) return { json: { snapshot: null } };
+    const { snapshot, totals, truncated } = boundSnapshot(latest.snapshot);
     return {
       json: {
         snapshot_id: latest.id,
         captured_at: latest.captured_at,
-        snapshot: latest.snapshot
+        snapshot,
+        totals,
+        truncated,
+        ...truncated.length > 0 ? { full_snapshot: `guardian://surface/${latest.id}` } : {}
       }
     };
   }
@@ -59580,7 +60694,7 @@ registerResourceModule({
   name: "guardian-surface-by-id",
   uri: "guardian://surface/{id}",
   isTemplate: true,
-  description: "A specific attack-surface snapshot by id, as returned in `snapshot_id` by `map_attack_surface`. Returns `{ snapshot: null }` for an unknown id.",
+  description: "A specific attack-surface snapshot by id, as returned in `snapshot_id` by `map_attack_surface`, in full. Returns `{ snapshot: null }` for an unknown id.",
   handler: async (_uri, params, ctx) => {
     const rawId = Array.isArray(params["id"]) ? params["id"][0] : params["id"];
     const id = Number.parseInt(String(rawId ?? ""), 10);
@@ -59596,6 +60710,49 @@ registerResourceModule({
     };
   }
 });
+function boundSnapshot(s) {
+  const truncated = [];
+  const list2 = (items) => Array.isArray(items) ? items : [];
+  const cap = (name, items) => {
+    const all = list2(items);
+    if (all.length > SURFACE_ITEM_CAP) truncated.push(name);
+    return all.slice(0, SURFACE_ITEM_CAP);
+  };
+  const { imports, spec_diff, ...rest } = s;
+  const diff = spec_diff ?? null;
+  const snapshot = {
+    ...rest,
+    routes: cap("routes", s.routes),
+    webhooks: cap("webhooks", s.webhooks),
+    env_vars: cap("env_vars", s.env_vars),
+    ports: cap("ports", s.ports),
+    spec_files: cap("spec_files", s.spec_files),
+    spec_diff: diff === null ? null : {
+      ...diff,
+      matched: cap("spec_diff.matched", diff.matched),
+      code_only: cap("spec_diff.code_only", diff.code_only),
+      spec_only: cap("spec_diff.spec_only", diff.spec_only),
+      unmatchable: cap("spec_diff.unmatchable", diff.unmatchable)
+    }
+  };
+  const totals = {
+    routes: list2(s.routes).length,
+    webhooks: list2(s.webhooks).length,
+    env_vars: list2(s.env_vars).length,
+    ports: list2(s.ports).length,
+    spec_files: list2(s.spec_files).length,
+    imports: list2(imports).length,
+    ...diff === null ? {} : {
+      spec_diff: {
+        matched: list2(diff.matched).length,
+        code_only: list2(diff.code_only).length,
+        spec_only: list2(diff.spec_only).length,
+        unmatchable: list2(diff.unmatchable).length
+      }
+    }
+  };
+  return { snapshot, totals, truncated };
+}
 
 // src/server.ts
 var SERVER_NAME = "dev-guardian";

@@ -344,3 +344,19 @@ describe('renderStatus', () => {
     expect(out.split('\n').length).toBeLessThanOrEqual(24);
   });
 });
+
+describe('renderStatus — findings a delta could not compare (Task 8 fix round 3)', () => {
+  it('prints the not-re-measured and not-previously-measured counts beside a delta, never hides them', () => {
+    const out = renderStatus(snap({
+      deltas: {
+        since_previous: { from_scan_id: 'a', to_scan_id: 'b', new_count: 1,
+          resolved_count: 0, unchanged_count: 3, not_remeasured_count: 2, new_findings: [] },
+        since_baseline: { from_scan_id: 'z', to_scan_id: 'b', new_count: 0,
+          resolved_count: 0, unchanged_count: 3, not_previously_measured_count: 4, new_findings: [] },
+      },
+      baseline: { active: { baseline_id: 1, scan_id: 'z', set_at: '2026-07-12T00:00:00.000Z' }, age_days: 34 },
+    }), { color: false });
+    expect(out).toMatch(/2 not re-measured/);
+    expect(out).toMatch(/4 not previously measured/);
+  });
+});

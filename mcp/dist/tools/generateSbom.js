@@ -11,8 +11,12 @@
  *
  * The full SBOM is always persisted to `.guardian/reports/sbom-<scan>/`.
  * It is also inlined in the response when the file size is ≤ `inline_max_kb`
- * (default 256 KB) — bigger SBOMs are referenced by path only so the MCP
- * channel never carries a huge blob.
+ * (default {@link DEFAULT_INLINE_KB} KB, at most {@link MAX_INLINE_KB} KB) —
+ * bigger SBOMs are referenced by path only so the MCP channel never carries
+ * a huge blob. The default was 256 KB and the cap 8 MB, and the document
+ * went out TWICE, in the text block and again in `structuredContent`: a
+ * 256 KB SBOM cost over half a megabyte of context. It now travels once, in
+ * the text block (`contentOnlyKeys`); `inlined` says whether it did.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -24,6 +28,10 @@ import { ProjectPath } from '../schemas.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ensureReportDir, scannerAvailable, } from './scanHelpers.js';
 import { registerToolModule } from './index.js';
+/** Inline the document by default only up to this many KB. */
+export const DEFAULT_INLINE_KB = 64;
+/** Never inline more than this many KB (1 MB), whatever the caller asks. */
+export const MAX_INLINE_KB = 1024;
 const inputSchema = {
     project_path: ProjectPath,
     format: z
@@ -34,18 +42,22 @@ const inputSchema = {
         .number()
         .int()
         .min(0)
-        .max(8192)
+        .max(MAX_INLINE_KB)
         .optional()
-        .describe('Inline the SBOM document in the response when its size is below this many KB. Default: 256.'),
+        .describe(`Inline the SBOM document in the response when its size is at most this many KB. ` +
+        `Default: ${DEFAULT_INLINE_KB}; maximum ${MAX_INLINE_KB} (1 MB). 0 never inlines.`),
 };
 const tool = {
     name: 'generate_sbom',
     title: 'Generate SBOM (Syft / Trivy)',
     description: 'Produce a Software Bill of Materials (CycloneDX or SPDX JSON). Prefers Syft; falls back to ' +
-        'Trivy fs --format. The full SBOM is always written to .guardian/reports/sbom-<scan>/. The ' +
-        'response inlines the document when its size is below inline_max_kb (default 256).',
+        'Trivy fs --format. The full SBOM is always written to .guardian/reports/sbom-<scan>/ ' +
+        '(`file_path`). The response inlines the document once, in its text content, when its size ' +
+        `is at most inline_max_kb (default ${DEFAULT_INLINE_KB}, max ${MAX_INLINE_KB}); \`inlined\` ` +
+        'says whether it did. Read the file for anything larger.',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
+    contentOnlyKeys: ['inline'],
 };
 registerToolModule(tool);
 async function handler(input, ctx) {
@@ -58,7 +70,7 @@ async function handler(input, ctx) {
         return failDomain('not_a_git_repo', e.message);
     }
     const format = inp.format ?? 'cyclonedx-json';
-    const inlineMaxBytes = (inp.inline_max_kb ?? 256) * 1024;
+    const inlineMaxBytes = Math.min(inp.inline_max_kb ?? DEFAULT_INLINE_KB, MAX_INLINE_KB) * 1024;
     const scanId = randomUUID();
     const reportDir = ensureReportDir(projectPath, scanId, 'sbom');
     const outFile = join(reportDir, `sbom.${format === 'cyclonedx-json' ? 'cdx' : 'spdx'}.json`);
@@ -136,14 +148,18 @@ async function handler(input, ctx) {
         components_count: summary.components_count,
         top_packages: summary.top_packages,
     };
+    let inlined = false;
     if (stat.size <= inlineMaxBytes) {
         try {
             payload['inline'] = JSON.parse(raw);
+            inlined = true;
         }
         catch {
             // SBOM file unparseable — keep the path, drop the inline.
         }
     }
+    payload['inlined'] = inlined;
+    payload['inline_max_kb'] = inlineMaxBytes / 1024;
     return payload;
 }
 function failDomain(code, message) {

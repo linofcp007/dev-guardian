@@ -962,3 +962,18 @@ describe('renderDashboard — the interaction script itself', () => {
     return own.length > 0 ? [own, ...fromChildren] : fromChildren;
   }
 });
+
+describe('renderDashboard — findings a delta could not compare (Task 8 fix round 3)', () => {
+  it('shows the not-re-measured and not-previously-measured counts in the delta line', () => {
+    const html = renderDashboard(snap({
+      deltas: {
+        since_previous: { from_scan_id: 'a', to_scan_id: 'b', new_count: 1,
+          resolved_count: 0, unchanged_count: 3, not_remeasured_count: 2, new_findings: [] },
+        since_baseline: { from_scan_id: 'z', to_scan_id: 'b', new_count: 0,
+          resolved_count: 0, unchanged_count: 3, not_previously_measured_count: 4, new_findings: [] },
+      },
+    }));
+    expect(html).toMatch(/2 not re-measured/);
+    expect(html).toMatch(/4 not previously measured/);
+  });
+});

@@ -1605,22 +1605,29 @@ describe('guardian://surface resources', () => {
 
   it('serves the latest snapshot with its full route list', async () => {
     const ctx = makeCtx();
-    ctx.storage.surface.insert({
-      project_path: '/p',
-      tree_hash: 'h',
-      snapshot: {
-        routes: [], env_vars: [], ports: [], webhooks: [], coverage: [],
-        tools_run: [], missing_tools: [], spec_files: [], spec_diff: null,
-        imports: [],
-      },
-    });
-    const { json } = await resource('guardian-surface-latest').handler(
-      new URL('guardian://surface/latest'),
-      {},
-      ctx,
-    );
-    expect(json).toHaveProperty('captured_at');
-    expect(json).toHaveProperty('snapshot.routes');
+    // `latest` answers for the server's own project (its working directory).
+    const project = makeTempDir('surface-latest-');
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(project);
+    try {
+      ctx.storage.surface.insert({
+        project_path: project,
+        tree_hash: 'h',
+        snapshot: {
+          routes: [], env_vars: [], ports: [], webhooks: [], coverage: [],
+          tools_run: [], missing_tools: [], spec_files: [], spec_diff: null,
+          imports: [],
+        },
+      });
+      const { json } = await resource('guardian-surface-latest').handler(
+        new URL('guardian://surface/latest'),
+        {},
+        ctx,
+      );
+      expect(json).toHaveProperty('captured_at');
+      expect(json).toHaveProperty('snapshot.routes');
+    } finally {
+      cwd.mockRestore();
+    }
   });
 
   it('serves a snapshot by id and nulls an unknown id', async () => {

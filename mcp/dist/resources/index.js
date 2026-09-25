@@ -1,11 +1,18 @@
 /**
  * Resource registry.
  *
- * Every resource serves JSON. Resources with parameterized URIs (e.g.
- * `guardian://scans/{scan_id}`) are registered via the SDK's
- * `ResourceTemplate`; static URIs use the simple string form.
+ * Every resource serves compact JSON (no indentation — a resource is read
+ * into a model's context, where whitespace is pure cost). Resources with
+ * parameterized URIs (e.g. `guardian://scans/{scan_id}`, or a paged
+ * `guardian://findings/open{?page,page_size}`) are registered via the SDK's
+ * `ResourceTemplate`, matched by `paging.ts#QueryTolerantUriTemplate`;
+ * static URIs use the simple string form.
+ *
+ * Every resource that reads history answers for the server's own project —
+ * see `paging.ts#serverProjectPath`.
  */
 import { ResourceTemplate, } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { QueryTolerantUriTemplate } from './paging.js';
 export const RESOURCES = [];
 export function registerResourceModule(resource) {
     if (RESOURCES.some((r) => r.name === resource.name)) {
@@ -17,14 +24,16 @@ export function attachAllResources(server, ctx) {
     for (const resource of RESOURCES) {
         const mimeType = resource.mimeType ?? 'application/json';
         if (resource.isTemplate) {
-            const template = new ResourceTemplate(resource.uri, { list: undefined });
+            const listAs = resource.listAs;
+            const template = new ResourceTemplate(new QueryTolerantUriTemplate(resource.uri), {
+                list: listAs === undefined
+                    ? undefined
+                    : () => ({ resources: [{ uri: listAs, name: resource.name, description: resource.description, mimeType }] }),
+            });
             server.registerResource(resource.name, template, { description: resource.description, mimeType }, async (uri, params) => {
-                const normalizedParams = normalizeParams(params);
-                const { json } = await resource.handler(uri, normalizedParams, ctx);
+                const { json } = await resource.handler(uri, params, ctx);
                 return {
-                    contents: [
-                        { uri: uri.href, mimeType, text: JSON.stringify(json, null, 2) },
-                    ],
+                    contents: [{ uri: uri.href, mimeType, text: JSON.stringify(json) }],
                 };
             });
         }
@@ -32,18 +41,10 @@ export function attachAllResources(server, ctx) {
             server.registerResource(resource.name, resource.uri, { description: resource.description, mimeType }, async (uri) => {
                 const { json } = await resource.handler(uri, {}, ctx);
                 return {
-                    contents: [
-                        { uri: uri.href, mimeType, text: JSON.stringify(json, null, 2) },
-                    ],
+                    contents: [{ uri: uri.href, mimeType, text: JSON.stringify(json) }],
                 };
             });
         }
     }
-}
-function normalizeParams(params) {
-    // Surface a stable shape — templates that capture a single segment yield a
-    // string, multi-capture yields an array. We pass both through verbatim
-    // (handlers know which one they expect).
-    return params;
 }
 //# sourceMappingURL=index.js.map

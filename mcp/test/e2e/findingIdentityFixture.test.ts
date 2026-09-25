@@ -127,7 +127,7 @@ describe('E2E — a finding keeps its identity when a line is inserted above it 
       const diff = okResult<{ summary: { new: number; resolved: number; unchanged: number } }>(
         await getTool('diff_scans').handler({ from_scan_id: s1.scan_id, to_scan_id: s2.scan_id }, plugin),
       );
-      expect(diff.summary).toEqual({ new: 0, resolved: 0, unchanged: 1 });
+      expect(diff.summary).toEqual({ new: 0, resolved: 0, unchanged: 1, not_remeasured: 0, not_previously_measured: 0 });
 
       // The unfixed target is still present to the fix verification.
       expect(judgeScan([before.fingerprint], s1, s2)).toMatchObject({

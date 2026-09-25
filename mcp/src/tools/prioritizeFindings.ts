@@ -14,10 +14,18 @@
  *
  * Each row carries a `priority_score` (0-1000) and a list of `factors`
  * the model can quote.
+ *
+ * Reads `project_path`'s open set (default: the server's working directory)
+ * — every finding-producing scan type's newest usable scan, suppressions
+ * removed (`history/openSet.ts`) — never the single latest scan in the whole
+ * database, which could be another project's or an SBOM.
  */
 
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
+import { describeOpenSet, openSetForProject } from '../history/openSet.js';
+import { resolveProjectPath } from '../platform/projectPath.js';
+import { ProjectPath } from '../schemas.js';
 import type { Category, Finding, Severity, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
@@ -39,6 +47,7 @@ const CATEGORY_WEIGHT: Record<Category, number> = {
 };
 
 const inputSchema = {
+  project_path: ProjectPath,
   limit: z
     .number()
     .int()
@@ -58,9 +67,10 @@ const tool: ToolModule = {
   name: 'prioritize_findings',
   title: 'Prioritise open findings (heuristic)',
   description:
-    'Rank open findings by a weighted heuristic: severity + category + fix_available + age. ' +
-    'Returns top-N with explanation. No LLM call — the calling model uses the ranking to drive ' +
-    'follow-ups.',
+    "Rank one project's open findings (project_path, default: the server's working directory; " +
+    'the newest usable scan of every finding-producing type, suppressions removed) by a weighted ' +
+    'heuristic: severity + category + fix_available + age. Returns top-N with explanation. No ' +
+    'LLM call — the calling model uses the ranking to drive follow-ups.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -71,11 +81,18 @@ async function handler(
   input: Record<string, unknown>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { limit?: number };
+  const inp = input as { project_path?: string; limit?: number };
   const limit = inp.limit ?? 50;
+  let projectPath: string;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+  }
 
-  const open = ctx.storage.findings.listOpen();
-  const latest = ctx.storage.scans.getLatest();
+  const set = openSetForProject(ctx.storage, projectPath);
+  const open = set.findings;
+  const latest = set.newest;
   const recentScanTs = latest ? new Date(latest.started_at).getTime() : Date.now();
 
   const ranked: RankedFinding[] = open.map((f) => {
@@ -114,6 +131,7 @@ async function handler(
     ok: true,
     summary,
     ranked: top,
+    open_set: describeOpenSet(set),
     instructions_for_model:
       'Pick the first 3-5 entries to action. For each, prefer `suggest_fix(finding_fingerprint)` ' +
       'over speculation. If most top entries are security/critical, call `audit_executive` to ' +

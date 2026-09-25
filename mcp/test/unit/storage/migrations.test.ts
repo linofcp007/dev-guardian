@@ -9,6 +9,9 @@ import { MCP_ROOT } from '../../helpers/tsxNode.js';
 
 afterAll(cleanupTempDirs);
 
+/** The version the newest shipped migration brings a database to. */
+const LATEST = String(Math.max(...listMigrations().map((m) => m.version)));
+
 describe('listMigrations', () => {
   it('lists the shipped migrations in version order with unique numbers', () => {
     const versions = listMigrations().map((m) => m.version);
@@ -76,7 +79,7 @@ describe('migrations runner', () => {
     const row = db
       .prepare(`SELECT value FROM schema_meta WHERE key = 'version'`)
       .get() as { value: string } | undefined;
-    expect(row?.value).toBe('7');
+    expect(row?.value).toBe(LATEST);
   });
 
   it('is idempotent (running twice does not throw and version stays the same)', () => {
@@ -86,7 +89,7 @@ describe('migrations runner', () => {
     const row = db
       .prepare(`SELECT value FROM schema_meta WHERE key = 'version'`)
       .get() as { value: string };
-    expect(row.value).toBe('7');
+    expect(row.value).toBe(LATEST);
   });
 
   it('upgrades a version-5 database in place, leaving its rows readable and uncached (006)', () => {
@@ -112,7 +115,7 @@ describe('migrations runner', () => {
     const version = db
       .prepare(`SELECT value FROM schema_meta WHERE key = 'version'`)
       .get() as { value: string };
-    expect(version.value).toBe('7');
+    expect(version.value).toBe(LATEST);
     const scan = db.prepare(`SELECT id, cache_key FROM scans`).get() as {
       id: string;
       cache_key: string | null;
@@ -149,7 +152,7 @@ describe('migrations runner', () => {
     runMigrations(db);
 
     const version = db.prepare(`SELECT value FROM schema_meta WHERE key = 'version'`).get() as { value: string };
-    expect(version.value).toBe('7');
+    expect(version.value).toBe(LATEST);
     const rows = db.prepare(`SELECT fingerprint, identity, content_key FROM findings ORDER BY fingerprint`).all();
     expect(rows).toEqual([
       { fingerprint: 'fp-old', identity: null, content_key: null },
@@ -170,5 +173,43 @@ describe('migrations runner', () => {
       .prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('idx_findings_identity', 'idx_suppressions_identity') ORDER BY name`)
       .all();
     expect(indexes).toEqual([{ name: 'idx_findings_identity' }, { name: 'idx_suppressions_identity' }]);
+  });
+
+  it('upgrades a version-7 database in place: every baseline learns its project and scan type (008)', () => {
+    // Baselines had no project column, so `guardian://baseline`, `diff_scans
+    // from:'baseline'` and `regression_alert` read one global row — another
+    // project's, whenever it had set one more recently.
+    const db = new Database(':memory:');
+    for (const m of listMigrations().filter((x) => x.version <= 7)) {
+      db.exec(readFileSync(m.filePath, 'utf8'));
+    }
+    db.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '7')`);
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('a1', 'sast', '/a', 'h', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z', 'completed'),
+              ('b1', 'secrets', '/b', 'h', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO baselines (scan_id, set_at, note)
+       VALUES ('a1', '2026-01-01T00:00:02.000Z', 'mine'), ('b1', '2026-01-02T00:00:02.000Z', 'theirs')`,
+    );
+
+    runMigrations(db);
+
+    const rows = db.prepare(`SELECT scan_id, project_path, scan_type FROM baselines ORDER BY id`).all();
+    expect(rows).toEqual([
+      { scan_id: 'a1', project_path: '/a', scan_type: 'sast' },
+      { scan_id: 'b1', project_path: '/b', scan_type: 'secrets' },
+    ]);
+    const storage = new Storage(db);
+    expect(storage.baselines.getActiveForProject('/a')).toEqual(
+      expect.objectContaining({ scan_id: 'a1', project_path: '/a', scan_type: 'sast', note: 'mine' }),
+    );
+
+    // An older build sharing this file still inserts without the new
+    // columns; its row must not be invisible to the project it belongs to.
+    db.exec(`INSERT INTO baselines (scan_id, set_at) VALUES ('a1', '2026-01-03T00:00:00.000Z')`);
+    expect(storage.baselines.getActiveForProject('/a')?.set_at).toBe('2026-01-03T00:00:00.000Z');
+    expect(storage.baselines.getActiveForProject('/b')?.scan_id).toBe('b1');
   });
 });

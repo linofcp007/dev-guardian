@@ -75,6 +75,24 @@ export interface FindingDelta {
   new_count: number;
   resolved_count: number;
   unchanged_count: number;
+  /**
+   * Findings of `from` that `to` did not measure again: the scanner that
+   * reports each one did not run ok in `to` — per scanner, not per type, so a
+   * Semgrep exit 7 beside an ok Bandit, a failed `npm` beside an ok Trivy, a
+   * failed DAST pass, or a child of an orchestrated run that did not run at
+   * all. Counted here INSTEAD of as resolved: absence from a scan that did
+   * not look is not a fix. See `history/runCompare.ts`. Absent when there
+   * were none.
+   */
+  not_remeasured_count?: number;
+  /**
+   * Findings of `to` whose scanner `from` named and did not run ok — it
+   * failed, or was missing (a partial baseline, say). Counted here INSTEAD
+   * of as new: the reference tried to look and could not. A scanner `from`
+   * did not run at all (not applicable, or not requested, then) makes its
+   * findings new instead. Absent when there were none.
+   */
+  not_previously_measured_count?: number;
   /** Possibly capped for display — see `TruncationNotice`. */
   new_findings: Finding[];
 }

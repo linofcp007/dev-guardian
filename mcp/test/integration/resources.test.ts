@@ -7,13 +7,24 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';
+import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { RESOURCES } from '../../src/resources/index.js';
 import { makeFinding } from '../../src/runners/scannerParsers/index.js';
+import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
+
+/**
+ * The project every seeded scan belongs to, and the server's working
+ * directory while each test runs: resources answer for the server's own
+ * project, never for "the newest scan in the database".
+ */
+const P = resolveProjectPath(makeTempDir('resources-')).path;
 
 beforeAll(async () => {
   await import('../../src/resources/scans.js');
@@ -46,7 +57,7 @@ function seedScan(
   plugin.storage.scans.insert({
     scan_id: args.id,
     scan_type: args.type,
-    project_path: '/p',
+    project_path: P,
     tree_hash: `h-${args.id}`,
   });
   if (args.findings) {
@@ -76,6 +87,10 @@ const fakeUri = new URL('guardian://placeholder/');
 let plugin: PluginContext;
 beforeEach(() => {
   plugin = makePlugin();
+  vi.spyOn(process, 'cwd').mockReturnValue(P);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 // ---------------------------------------------------------------------- scans
@@ -197,7 +212,7 @@ describe('guardian://cves/active', () => {
     plugin.storage.scans.insert({
       scan_id: 'd1',
       scan_type: 'deps',
-      project_path: '/p',
+      project_path: P,
       tree_hash: 'h',
     });
     plugin.storage.cves.upsert({
@@ -226,7 +241,7 @@ describe('guardian://cves/active', () => {
   });
 
   it('returns CVEs pinned to a deps_audit scan, which has its own scan type', async () => {
-    plugin.storage.scans.insert({ scan_id: 'a1', scan_type: 'deps_audit', project_path: '/p', tree_hash: 'h' });
+    plugin.storage.scans.insert({ scan_id: 'a1', scan_type: 'deps_audit', project_path: P, tree_hash: 'h' });
     plugin.storage.cves.upsert({
       cve_id: 'CVE-2024-Y', package_name: 'minimist', severity: 'critical', scan_id: 'a1',
     });
@@ -242,7 +257,7 @@ describe('guardian://cves/active', () => {
 describe('guardian://stack', () => {
   it('returns the latest snapshot', async () => {
     plugin.storage.stack.insert({
-      project_path: '/p',
+      project_path: P,
       snapshot: {
         os: 'linux',
         arch: 'x86_64',
@@ -278,7 +293,7 @@ describe('guardian://compliance/status', () => {
     plugin.storage.scans.insert({
       scan_id: 'c1',
       scan_type: 'compliance',
-      project_path: '/p',
+      project_path: P,
       tree_hash: 'h',
     });
     plugin.storage.scans.finalize({
@@ -332,7 +347,7 @@ describe('guardian://sbom', () => {
     plugin.storage.scans.insert({
       scan_id: 'sb1',
       scan_type: 'sbom',
-      project_path: '/p',
+      project_path: P,
       tree_hash: '',
     });
     plugin.storage.scans.finalize({

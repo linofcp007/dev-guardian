@@ -45,6 +45,7 @@ import { runShellScript } from '../../src/runners/shellRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 
 import type { PluginContext } from '../../src/context.js';
+import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
@@ -128,12 +129,13 @@ afterEach(() => {
 // ---------------------------------------------------------------------- set_baseline
 
 describe('set_baseline', () => {
-  it('defaults to the latest completed scan when scan_id is omitted', async () => {
-    const plugin = makePlugin(tempProject());
+  it("defaults to the project's latest completed scan when scan_id is omitted", async () => {
+    const project = resolveProjectPath(tempProject()).path;
+    const plugin = makePlugin(project);
     plugin.storage.scans.insert({
       scan_id: 'scan-A',
       scan_type: 'sast',
-      project_path: '/p',
+      project_path: project,
       tree_hash: 'h',
     });
     plugin.storage.scans.finalize({
@@ -143,7 +145,7 @@ describe('set_baseline', () => {
       missing_tools: [],
     });
 
-    const r = (await getTool('set_baseline').handler({}, plugin)) as {
+    const r = (await getTool('set_baseline').handler({ project_path: project }, plugin)) as {
       ok: true;
       scan_id: string;
     };
@@ -153,8 +155,9 @@ describe('set_baseline', () => {
   });
 
   it('errors when no completed scan exists yet', async () => {
-    const plugin = makePlugin(tempProject());
-    const r = (await getTool('set_baseline').handler({}, plugin)) as
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    const r = (await getTool('set_baseline').handler({ project_path: project }, plugin)) as
       | { ok: true }
       | { ok: false; error: { code: string } };
     expect(r.ok).toBe(false);
@@ -272,7 +275,7 @@ describe('diff_scans', () => {
       resolved_findings: Array<{ fingerprint: string }>;
     };
     expect(r.ok).toBe(true);
-    expect(r.summary).toEqual({ new: 1, resolved: 1, unchanged: 1 });
+    expect(r.summary).toEqual({ new: 1, resolved: 1, unchanged: 1, not_remeasured: 0, not_previously_measured: 0 });
     expect(r.new_findings[0]?.fingerprint).toBe(fNew.fingerprint);
     expect(r.resolved_findings[0]?.fingerprint).toBe(fOld.fingerprint);
   });

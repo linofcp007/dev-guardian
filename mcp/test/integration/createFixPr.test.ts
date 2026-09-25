@@ -740,7 +740,8 @@ describe('create_fix_pr', () => {
     await seedRealDepsBefore(c);
 
     const riskScoreTool = TOOLS.find((t) => t.name === 'risk_score');
-    const beforeRaw = await riskScoreTool?.handler({}, c as never);
+    // risk_score answers for one project (Task 8) — this one.
+    const beforeRaw = await riskScoreTool?.handler({ project_path: repo }, c as never);
     if (!beforeRaw) throw new Error('risk_score tool not found');
     const before = okResult<{ components: { cves: { active_cves: number } } }>(beforeRaw);
     // Not vacuous: there must be a real, non-zero signal at risk of being
@@ -750,7 +751,7 @@ describe('create_fix_pr', () => {
     const mod = TOOLS.find((t) => t.name === 'create_fix_pr');
     await mod?.handler({ project_path: repo, sources: ['deps'], apply: false }, c as never);
 
-    const after = await riskScoreTool?.handler({}, c as never);
+    const after = await riskScoreTool?.handler({ project_path: repo }, c as never);
     expect(after).toEqual(before);
   }, REGISTRY_BACKED_TIMEOUT_MS);
 
