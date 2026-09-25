@@ -14,6 +14,12 @@
  */
 export const DEFAULT_SEMGREP_IMAGE = 'semgrep/semgrep';
 /**
+ * Where the project is mounted inside the container. Semgrep run there
+ * reports paths under it (`/src/app.js`); the Semgrep parser strips it so a
+ * Docker run and a native run of the same tree give the same relative paths.
+ */
+export const CONTAINER_PROJECT_ROOT = '/src';
+/**
  * Build the argv for `docker run … semgrep …`, mirroring the native Semgrep
  * invocation in scan_sast (config=auto, +p/csharp for .NET, --json --quiet,
  * --output, optional --autofix). The report path is rewritten to its location
@@ -26,9 +32,9 @@ export function buildSemgrepDockerArgs(opts) {
         'run',
         '--rm',
         '--mount',
-        `type=bind,source=${opts.projectPath},target=/src`,
+        `type=bind,source=${opts.projectPath},target=${CONTAINER_PROJECT_ROOT}`,
         '-w',
-        '/src',
+        CONTAINER_PROJECT_ROOT,
         image,
         'semgrep',
     ];
@@ -41,7 +47,7 @@ export function buildSemgrepDockerArgs(opts) {
     args.push('--json', '--quiet', '--output', containerOut);
     if (opts.autoFix)
         args.push('--autofix');
-    args.push('/src');
+    args.push(CONTAINER_PROJECT_ROOT);
     return args;
 }
 /**
@@ -58,6 +64,6 @@ export function toContainerPath(projectPath, outFileHost) {
         rel = rel.slice(root.length);
     }
     rel = rel.replace(/^\/+/, '');
-    return rel ? `/src/${rel}` : '/src';
+    return rel ? `${CONTAINER_PROJECT_ROOT}/${rel}` : CONTAINER_PROJECT_ROOT;
 }
 //# sourceMappingURL=dockerScanner.js.map

@@ -13,6 +13,7 @@
  *   - snippet:     extra.lines, clamped to 1 KB by `makeFinding`
  *   - fix_available: true when `extra.fix` (autofix string) exists
  */
+import { CONTAINER_PROJECT_ROOT } from '../dockerScanner.js';
 import { asArray, getNumber, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
 export const SEMGREP_TOOL_NAME = 'semgrep';
 export const semgrepParser = {
@@ -53,7 +54,7 @@ function mapResult(raw, ctx) {
         category,
         title: shortenTitle(message, checkId),
         fix_available: fixAvailable,
-        file_path: toRelativeIfPossible(filePath, ctx.project_path),
+        file_path: relativePath(filePath, ctx.project_path),
     };
     if (message !== undefined)
         input.message = message;
@@ -67,6 +68,20 @@ function mapResult(raw, ctx) {
     if (snippet !== undefined)
         input.snippet = snippet;
     return makeFinding(input);
+}
+/**
+ * Project-relative POSIX path. A path still absolute under the container
+ * mount after relativising against the host project is a Docker-fallback
+ * result (`/src/app.js`) and loses the mount prefix, so it reads exactly as
+ * the native run of the same tree would (`app.js`) — fingerprints, dedupe
+ * and baselines all key on it. A native run can never produce such a path:
+ * every file it reports lies under the project path, which the first step
+ * already removed (a project that genuinely lives at `/src` included).
+ */
+function relativePath(filePath, projectPath) {
+    const rel = toRelativeIfPossible(filePath, projectPath);
+    const mount = `${CONTAINER_PROJECT_ROOT}/`;
+    return rel.startsWith(mount) ? rel.slice(mount.length) : rel;
 }
 function mapSeverity(rawSeverity, metadata) {
     // Semgrep's three-level severity is too coarse for security rules; if the
@@ -85,10 +100,13 @@ function mapCategory(metadata, checkId) {
             return 'security';
         if (explicit === 'performance')
             return 'performance';
-        if (explicit === 'best-practice' || explicit === 'maintainability' || explicit === 'correctness')
-            return 'quality';
+        // `correctness` is a bug class. It used to sit in the quality branch
+        // above this one too, which matched first, so the bug mapping written
+        // for it never ran.
         if (explicit === 'bug' || explicit === 'correctness')
             return 'bug';
+        if (explicit === 'best-practice' || explicit === 'maintainability')
+            return 'quality';
     }
     // Heuristic on the check_id string.
     const lowered = checkId.toLowerCase();

@@ -38694,6 +38694,41 @@ function mapItem(raw, ctx) {
   return makeFinding(input);
 }
 
+// src/runners/dockerScanner.ts
+var DEFAULT_SEMGREP_IMAGE = "semgrep/semgrep";
+var CONTAINER_PROJECT_ROOT = "/src";
+function buildSemgrepDockerArgs(opts) {
+  const image = opts.image ?? DEFAULT_SEMGREP_IMAGE;
+  const containerOut = toContainerPath(opts.projectPath, opts.outFileHost);
+  const args = [
+    "run",
+    "--rm",
+    "--mount",
+    `type=bind,source=${opts.projectPath},target=${CONTAINER_PROJECT_ROOT}`,
+    "-w",
+    CONTAINER_PROJECT_ROOT,
+    image,
+    "semgrep"
+  ];
+  for (const config2 of opts.configs ?? ["auto"]) args.push(`--config=${config2}`);
+  if (opts.hasCsproj) args.push("--config=p/csharp");
+  if (opts.metricsOff) args.push("--metrics=off");
+  args.push("--json", "--quiet", "--output", containerOut);
+  if (opts.autoFix) args.push("--autofix");
+  args.push(CONTAINER_PROJECT_ROOT);
+  return args;
+}
+function toContainerPath(projectPath, outFileHost) {
+  const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const root = norm(projectPath);
+  let rel2 = norm(outFileHost);
+  if (rel2.toLowerCase().startsWith(root.toLowerCase())) {
+    rel2 = rel2.slice(root.length);
+  }
+  rel2 = rel2.replace(/^\/+/, "");
+  return rel2 ? `${CONTAINER_PROJECT_ROOT}/${rel2}` : CONTAINER_PROJECT_ROOT;
+}
+
 // src/runners/scannerParsers/semgrep.ts
 var SEMGREP_TOOL_NAME = "semgrep";
 var semgrepParser = {
@@ -38731,7 +38766,7 @@ function mapResult2(raw, ctx) {
     category,
     title: shortenTitle(message, checkId),
     fix_available: fixAvailable,
-    file_path: toRelativeIfPossible(filePath, ctx.project_path)
+    file_path: relativePath(filePath, ctx.project_path)
   };
   if (message !== void 0) input.message = message;
   if (subcategory !== void 0) input.subcategory = subcategory;
@@ -38740,6 +38775,11 @@ function mapResult2(raw, ctx) {
   const snippet = getString(extra, "lines");
   if (snippet !== void 0) input.snippet = snippet;
   return makeFinding(input);
+}
+function relativePath(filePath, projectPath) {
+  const rel2 = toRelativeIfPossible(filePath, projectPath);
+  const mount = `${CONTAINER_PROJECT_ROOT}/`;
+  return rel2.startsWith(mount) ? rel2.slice(mount.length) : rel2;
 }
 function mapSeverity(rawSeverity, metadata) {
   const base = normalizeSeverity(rawSeverity);
@@ -38752,9 +38792,8 @@ function mapCategory(metadata, checkId) {
   if (explicit) {
     if (explicit === "security" || explicit === "vulnerability") return "security";
     if (explicit === "performance") return "performance";
-    if (explicit === "best-practice" || explicit === "maintainability" || explicit === "correctness")
-      return "quality";
     if (explicit === "bug" || explicit === "correctness") return "bug";
+    if (explicit === "best-practice" || explicit === "maintainability") return "quality";
   }
   const lowered = checkId.toLowerCase();
   if (/(security|audit|sqli|xss|injection|secret|crypto|csrf|ssrf|deserial|path[-_]traversal)/i.test(
@@ -40309,40 +40348,6 @@ function subcategoryFor(ruleId) {
   if (open_redirect.has(ruleId)) return "open-redirect";
   if (ldap.has(ruleId)) return "ldap-injection";
   return "dotnet-security";
-}
-
-// src/runners/dockerScanner.ts
-var DEFAULT_SEMGREP_IMAGE = "semgrep/semgrep";
-function buildSemgrepDockerArgs(opts) {
-  const image = opts.image ?? DEFAULT_SEMGREP_IMAGE;
-  const containerOut = toContainerPath(opts.projectPath, opts.outFileHost);
-  const args = [
-    "run",
-    "--rm",
-    "--mount",
-    `type=bind,source=${opts.projectPath},target=/src`,
-    "-w",
-    "/src",
-    image,
-    "semgrep"
-  ];
-  for (const config2 of opts.configs ?? ["auto"]) args.push(`--config=${config2}`);
-  if (opts.hasCsproj) args.push("--config=p/csharp");
-  if (opts.metricsOff) args.push("--metrics=off");
-  args.push("--json", "--quiet", "--output", containerOut);
-  if (opts.autoFix) args.push("--autofix");
-  args.push("/src");
-  return args;
-}
-function toContainerPath(projectPath, outFileHost) {
-  const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
-  const root = norm(projectPath);
-  let rel2 = norm(outFileHost);
-  if (rel2.toLowerCase().startsWith(root.toLowerCase())) {
-    rel2 = rel2.slice(root.length);
-  }
-  rel2 = rel2.replace(/^\/+/, "");
-  return rel2 ? `/src/${rel2}` : "/src";
 }
 
 // src/platform/customRules.ts
