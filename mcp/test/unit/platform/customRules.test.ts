@@ -22,6 +22,8 @@ import {
   CUSTOM_RULES_META_KEY,
   customRulesMetaKey,
   inspectCustomSemgrepConfigs,
+  legacyRegistrationNote,
+  legacyRegistrationsNotApplied,
   resolveCustomSemgrepConfigs,
   validateSemgrepRulesFile,
 } from '../../../src/platform/customRules.js';
@@ -103,6 +105,28 @@ describe('validateSemgrepRulesFile', () => {
     expect(validateSemgrepRulesFile(noId)).toEqual({ ok: false, reason: 'rule #1 has no `id`' });
   });
 
+  it('requires a severity Semgrep accepts — without one Semgrep exits 7 and scans nothing', () => {
+    // Measured on Semgrep 1.176.1: no `severity` → InvalidRuleSchemaError,
+    // exit 7, paths.scanned 0 — once registered it would abort every scan.
+    // Lower-case values fail the same way; the legacy and the newer
+    // upper-case levels load.
+    const dir = makeTempDir('guardian-customrules-');
+    const withSeverity = (severity: string | null): string =>
+      ruleFile(
+        dir,
+        `sev-${severity ?? 'none'}.yml`,
+        `rules:\n  - id: s\n    message: m\n    languages: [javascript]\n${severity === null ? '' : `    severity: ${severity}\n`}    pattern: f()\n`,
+      );
+    expect(validateSemgrepRulesFile(withSeverity(null))).toEqual({ ok: false, reason: "rule 's' has no `severity`" });
+    expect(validateSemgrepRulesFile(withSeverity('warning'))).toEqual({
+      ok: false,
+      reason: "rule 's' has severity 'warning', which Semgrep rejects (expected one of INFO, WARNING, ERROR, LOW, MEDIUM, HIGH, CRITICAL, EXPERIMENT, INVENTORY)",
+    });
+    for (const ok of ['INFO', 'WARNING', 'ERROR', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL']) {
+      expect(validateSemgrepRulesFile(withSeverity(ok)).ok).toBe(true);
+    }
+  });
+
   it('rejects invalid YAML and a missing file', () => {
     const dir = makeTempDir('guardian-customrules-');
     expect(validateSemgrepRulesFile(ruleFile(dir, 'bad.yml', 'rules: [\n')).ok).toBe(false);
@@ -129,6 +153,19 @@ describe('resolveCustomSemgrepConfigs', () => {
     const ctx = ctxWith({ [CUSTOM_RULES_META_KEY]: [aRules, bRules] });
     expect(resolveCustomSemgrepConfigs(ctx, a)).toEqual([aRules]);
     expect(resolveCustomSemgrepConfigs(ctx, b)).toEqual([bRules]);
+  });
+
+  it('names the 2.0.x registrations it no longer applies, and says how to re-register them', () => {
+    const a = makeTempDir('guardian-customrules-a-');
+    const b = makeTempDir('guardian-customrules-b-');
+    const aRules = ruleFile(a);
+    const bRules = ruleFile(b);
+    const ctx = ctxWith({ [CUSTOM_RULES_META_KEY]: [aRules, bRules] });
+    expect(legacyRegistrationsNotApplied(ctx, a)).toEqual([bRules]);
+    const note = legacyRegistrationNote(legacyRegistrationsNotApplied(ctx, a));
+    expect(note).toContain(bRules);
+    expect(note).toContain('register_custom_rules');
+    expect(legacyRegistrationNote([])).toBeNull();
   });
 
   it('drops a registered path that no longer exists, rather than passing it on', () => {

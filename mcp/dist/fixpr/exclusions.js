@@ -32,6 +32,7 @@ export function summariseExclusions(input) {
     const by_reason = {
         no_fix_available: 0,
         below_severity_min: 0,
+        uncommitted_changes: 0,
         no_fix_source: 0,
     };
     const belowFloor = [];
@@ -46,6 +47,9 @@ export function summariseExclusions(input) {
         else if (!passes(finding.severity, input.severityMin)) {
             by_reason.below_severity_min += 1;
             belowFloor.push(finding);
+        }
+        else if (input.uncommitted?.(finding) === true) {
+            by_reason.uncommitted_changes += 1;
         }
         else {
             by_reason.no_fix_source += 1;
@@ -72,7 +76,7 @@ export function describeExclusions(exclusions, severityMin, sources) {
     if (exclusions.excluded === 0)
         return null;
     const parts = [];
-    const { no_fix_available, below_severity_min, no_fix_source } = exclusions.by_reason;
+    const { no_fix_available, below_severity_min, uncommitted_changes, no_fix_source } = exclusions.by_reason;
     if (below_severity_min > 0) {
         parts.push(`${below_severity_min} below severity_min "${severityMin}" ` +
             `(${describeShortfallTiers(exclusions.below_severity_min)})`);
@@ -80,6 +84,10 @@ export function describeExclusions(exclusions, severityMin, sources) {
     if (no_fix_available > 0) {
         parts.push(`${no_fix_available} with no scanner-produced fix (fix_available=false — this tool only ` +
             'applies a fix the scanner itself emitted, and most rule packs emit none)');
+    }
+    if (uncommitted_changes > 0) {
+        parts.push(`${uncommitted_changes} in files with uncommitted changes (a fix is applied to and verified against ` +
+            'committed HEAD — commit or stash them to include these)');
     }
     if (no_fix_source > 0) {
         parts.push(`${no_fix_source} that no requested source can act on or re-verify (sources: ${sources.join(', ')})`);

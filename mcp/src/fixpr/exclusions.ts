@@ -43,6 +43,11 @@ export type ExclusionReason =
   | 'no_fix_available'
   /** Carries a fix, but ranks below `severity_min`. A lower floor recovers it. */
   | 'below_severity_min'
+  /** Clears both gates, but its file differs from committed HEAD (Task 11
+   *  fix round 1): the fix is applied to and re-scanned on HEAD while the
+   *  finding came from the working tree, so no verdict about it would mean
+   *  anything. Committing or stashing recovers it. */
+  | 'uncommitted_changes'
   /** Cleared both gates, but no requested source can act on it — the tool
    *  that found it is not one this run considers, `deps_update_plan`
    *  offered no upgrade for the package it names, or no tool can re-scan it
@@ -67,6 +72,8 @@ export function summariseExclusions(input: {
   findings: readonly Finding[];
   groups: readonly FixGroup[];
   severityMin: Severity;
+  /** Whether the finding's file has uncommitted changes. Default: none has. */
+  uncommitted?: (finding: Finding) => boolean;
 }): FixExclusions {
   const covered = new Set(
     input.groups.flatMap((group) => group.candidates.flatMap((candidate) => candidate.fingerprints)),
@@ -75,6 +82,7 @@ export function summariseExclusions(input: {
   const by_reason: Record<ExclusionReason, number> = {
     no_fix_available: 0,
     below_severity_min: 0,
+    uncommitted_changes: 0,
     no_fix_source: 0,
   };
   const belowFloor: Finding[] = [];
@@ -88,6 +96,8 @@ export function summariseExclusions(input: {
     } else if (!passes(finding.severity, input.severityMin)) {
       by_reason.below_severity_min += 1;
       belowFloor.push(finding);
+    } else if (input.uncommitted?.(finding) === true) {
+      by_reason.uncommitted_changes += 1;
     } else {
       by_reason.no_fix_source += 1;
     }
@@ -119,7 +129,7 @@ export function describeExclusions(
   if (exclusions.excluded === 0) return null;
 
   const parts: string[] = [];
-  const { no_fix_available, below_severity_min, no_fix_source } = exclusions.by_reason;
+  const { no_fix_available, below_severity_min, uncommitted_changes, no_fix_source } = exclusions.by_reason;
 
   if (below_severity_min > 0) {
     parts.push(
@@ -131,6 +141,12 @@ export function describeExclusions(
     parts.push(
       `${no_fix_available} with no scanner-produced fix (fix_available=false — this tool only ` +
         'applies a fix the scanner itself emitted, and most rule packs emit none)',
+    );
+  }
+  if (uncommitted_changes > 0) {
+    parts.push(
+      `${uncommitted_changes} in files with uncommitted changes (a fix is applied to and verified against ` +
+        'committed HEAD — commit or stash them to include these)',
     );
   }
   if (no_fix_source > 0) {

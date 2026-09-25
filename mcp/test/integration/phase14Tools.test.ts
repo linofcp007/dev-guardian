@@ -34,7 +34,7 @@ import { TOOLS } from '../../src/tools/index.js';
 import { makeFinding } from '../../src/runners/scannerParsers/index.js';
 import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
-import { resolveCustomSemgrepConfigs } from '../../src/platform/customRules.js';
+import { legacyRegistrationsNotApplied, resolveCustomSemgrepConfigs } from '../../src/platform/customRules.js';
 
 afterAll(cleanupTempDirs);
 
@@ -478,6 +478,18 @@ describe('register_custom_rules', () => {
     await getTool('register_custom_rules').handler({ project_path: a, clear: true }, plugin);
     expect(resolveCustomSemgrepConfigs(plugin, a)).toEqual([]);
     expect(resolveCustomSemgrepConfigs(plugin, b)).toEqual([join(b, 'r.yml')]);
+  });
+
+  it('clear=true also removes the 2.0.x global registration — what clear meant in 2.0.x — and with it the notice', async () => {
+    const a = tempProject();
+    const elsewhere = tempProject();
+    writeFileSync(join(elsewhere, 'r.yml'), VALID_RULES, 'utf8');
+    const plugin = makePlugin();
+    plugin.storage.runtimeMeta.setJson('custom_semgrep_configs', [join(elsewhere, 'r.yml')]);
+    expect(legacyRegistrationsNotApplied(plugin, a)).toEqual([join(elsewhere, 'r.yml')]);
+    await getTool('register_custom_rules').handler({ project_path: a, clear: true }, plugin);
+    expect(plugin.storage.runtimeMeta.getJson('custom_semgrep_configs')).toBeNull();
+    expect(legacyRegistrationsNotApplied(plugin, a)).toEqual([]);
   });
 });
 

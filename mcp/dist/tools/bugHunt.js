@@ -109,7 +109,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { resolveBugfixRules } from '../platform/configsDir.js';
-import { resolveCustomSemgrepConfigs } from '../platform/customRules.js';
+import { legacyRegistrationNote, legacyRegistrationsNotApplied, resolveCustomSemgrepConfigs, } from '../platform/customRules.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { runProcess } from '../runners/processRunner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
@@ -735,6 +735,10 @@ registerToolModule(makeScanTool({
     // `rulesProjectPath`: the scanned path itself, except when create_fix_pr
     // re-scans a worktree of a project and needs that project's rules.
     rulePacks: (input, { plugin, rulesProjectPath }) => configuredPacksFor(input, plugin, rulesProjectPath),
+    configWarnings: (_input, { plugin, rulesProjectPath }) => {
+        const note = legacyRegistrationNote(legacyRegistrationsNotApplied(plugin, rulesProjectPath));
+        return note === null ? [] : [note];
+    },
     inputSchema: {
         project_path: ProjectPath,
         severity_min: SeverityMin,

@@ -7,7 +7,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -61,6 +61,19 @@ function record(name: string, result: ToolResult<Record<string, unknown>>): Arra
     tool.handler = original;
   });
   return seen;
+}
+
+/** One Trivy CVE finding in a deps_audit scan of `projectPath`. */
+function seedDepsFinding(plugin: PluginContext, projectPath: string): void {
+  plugin.storage.scans.insert({ scan_id: 'deps-seed', scan_type: 'deps_audit', project_path: projectPath, tree_hash: 'h' });
+  plugin.storage.findings.bulkInsert([
+    {
+      scan_id: 'deps-seed', fingerprint: 'fp-dep-seed', tool: 'trivy', rule_id: 'CVE-2021-23337', severity: 'critical',
+      category: 'security', subcategory: 'cve', title: 'lodash: command injection', fix_available: true,
+      file_path: 'package-lock.json', snippet: 'lodash@4.17.20->4.17.21',
+    },
+  ]);
+  plugin.storage.scans.finalize({ scan_id: 'deps-seed', status: 'completed', tools_run: [], missing_tools: [] });
 }
 
 function tool(name: string): ToolModule {
@@ -275,6 +288,9 @@ describe('create_fix_pr hands the host callMeta to its sub-tools', () => {
       },
     ]);
     plugin.storage.scans.finalize({ scan_id: 'before', status: 'completed', tools_run: [], missing_tools: [] });
+    // A dependency finding too, so there is something for deps_update_plan
+    // to plan (it is not run when no finding could use a step).
+    seedDepsFinding(plugin, projectPath);
 
     const planCalls = record('deps_update_plan', { ok: true, plan: [] });
     const rescanCalls = record('scan_sast', CANCELLED);
@@ -289,5 +305,69 @@ describe('create_fix_pr hands the host callMeta to its sub-tools', () => {
     expect(rescanCalls).toHaveLength(1);
     expect(rescanCalls[0]?.signal).toBe(controller.signal);
     expect(rescanCalls[0]?.progressToken).toBe('tok-fix');
+  }, 60_000);
+});
+
+describe('create_fix_pr runs deps_update_plan on a detached worktree of HEAD (Task 11 fix round 1)', () => {
+  it("never on the user's project: on the worktree's copy of it, with the project as origin", async () => {
+    // deps_update_plan's .NET branch runs `dotnet restore` (writes obj/,
+    // executes MSBuild) wherever it is pointed, and a dry run must not touch
+    // the user's tree. The project is a SUBDIRECTORY of the repository, so
+    // the worktree's copy of it is that subdirectory of the worktree.
+    const repo = makeTempDir('callmeta-fixpr-plan-');
+    const git = (...args: string[]): string =>
+      execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 't@example.com');
+    git('config', 'user.name', 'T');
+    git('config', 'core.autocrlf', 'false');
+    mkdirSync(join(repo, 'app'));
+    writeFileSync(join(repo, 'app', 'package.json'), '{"name":"app"}\n');
+    git('add', '.');
+    git('commit', '-q', '-m', 'first');
+
+    const plugin = makePlugin();
+    const projectPath = resolveProjectPath(join(repo, 'app')).path;
+    seedDepsFinding(plugin, projectPath);
+
+    const seen: Array<{ where: string; meta: ToolCallMeta | undefined; hadPackageJson: boolean }> = [];
+    const planTool = tool('deps_update_plan');
+    const original: Handler = planTool.handler;
+    planTool.handler = async (input, _ctx, meta) => {
+      const where = String(input['project_path']);
+      seen.push({ where, meta, hadPackageJson: existsSync(join(where, 'package.json')) });
+      return { ok: true, plan: [] };
+    };
+    restore.push(() => {
+      planTool.handler = original;
+    });
+
+    const controller = new AbortController();
+    const result = await tool('create_fix_pr').handler(
+      { project_path: projectPath, sources: ['deps'] },
+      plugin,
+      { signal: controller.signal },
+    );
+    expect(result.ok).toBe(true);
+    expect(seen).toHaveLength(1);
+    const call = seen[0];
+    expect(call?.where).not.toBe(projectPath);
+    expect(call?.where.replace(/\\/g, '/')).toMatch(/\/app$/);
+    expect(call?.hadPackageJson).toBe(true);
+    expect(call?.meta?.originProjectPath).toBe(projectPath);
+    expect(call?.meta?.signal).toBe(controller.signal);
+    // The plan's worktree is gone, and no ref was ever written.
+    expect(git('worktree', 'list').trim().split('\n')).toHaveLength(1);
+    expect(git('branch', '--list').trim()).toBe('* main');
+  }, 60_000);
+
+  it('does not run deps_update_plan (nor build its worktree) when no finding could use an upgrade step', async () => {
+    const repo = makeTempDir('callmeta-fixpr-noplan-');
+    execFileSync('git', ['init', '-q', '-b', 'main', repo], { stdio: 'ignore' });
+    const plugin = makePlugin();
+    const planCalls = record('deps_update_plan', { ok: true, plan: [] });
+    const result = await tool('create_fix_pr').handler({ project_path: repo, sources: ['deps'] }, plugin);
+    expect(result.ok).toBe(true);
+    expect(planCalls).toHaveLength(0);
   }, 60_000);
 });

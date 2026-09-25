@@ -36,7 +36,6 @@ import type { PluginContext } from '../context.js';
 import {
   CUSTOM_RULES_META_KEY,
   customRulesMetaKey,
-  isInside,
   validateSemgrepRulesFile,
   yamlFilesUnder,
 } from '../platform/customRules.js';
@@ -58,7 +57,7 @@ const inputSchema = {
   clear: z
     .boolean()
     .optional()
-    .describe("When true, remove this project's registered custom rules and exit."),
+    .describe("When true, remove this project's registered custom rules (and any 2.0.x global registration) and exit."),
 };
 
 const tool: ToolModule = {
@@ -68,7 +67,7 @@ const tool: ToolModule = {
     'Discover or accept paths/globs to Semgrep YAML rules and persist them for THIS project ' +
     '(registrations are per project). scan_sast and bug_hunt then run them as extra --config packs. ' +
     'Every file is checked to be a Semgrep rules file (non-empty rules:, each rule with id, message, ' +
-    'languages and a pattern) — anything else is returned in `rejected` with a reason and never ' +
+    'languages, severity and a pattern) — anything else is returned in `rejected` with a reason and never ' +
     'registered, so a stray YAML (e.g. Prometheus alerts in rules/) cannot break later scans. A ' +
     'registered path that later disappears or stops validating is skipped rather than failing the ' +
     'scan. Pass clear=true to remove the registration.',
@@ -97,7 +96,9 @@ async function handler(
 
   if (inp.clear) {
     ctx.storage.runtimeMeta.delete(customRulesMetaKey(projectPath));
-    clearLegacyEntriesInside(ctx, projectPath);
+    // The 2.0.x registration was global, and clear removed it: it still
+    // does, which also ends the notice scans give about it.
+    ctx.storage.runtimeMeta.delete(CUSTOM_RULES_META_KEY);
     return { ok: true, cleared: true };
   }
 
@@ -195,17 +196,6 @@ function collectDiscovered(projectPath: string): { registered: string[]; rejecte
     consider(abs, registered, rejected);
   }
   return { registered, rejected };
-}
-
-/** `clear` for a 2.0.x database: the global key's entries inside this
- *  project stop counting for it; entries elsewhere are left alone. */
-function clearLegacyEntriesInside(ctx: PluginContext, projectPath: string): void {
-  const raw = ctx.storage.runtimeMeta.getJson<unknown>(CUSTOM_RULES_META_KEY);
-  if (!Array.isArray(raw)) return;
-  const kept = raw.filter((p) => typeof p !== 'string' || !isInside(projectPath, p));
-  if (kept.length === raw.length) return;
-  if (kept.length === 0) ctx.storage.runtimeMeta.delete(CUSTOM_RULES_META_KEY);
-  else ctx.storage.runtimeMeta.setJson(CUSTOM_RULES_META_KEY, kept);
 }
 
 function failDomain(

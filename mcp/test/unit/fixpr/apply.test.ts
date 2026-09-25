@@ -84,6 +84,23 @@ describe('applyGroup — deps', () => {
     expect(calls[0]?.args).toEqual(['require', 'guzzlehttp/guzzle:^7.9.2', '--no-scripts']);
   });
 
+  it('a Ruby step only re-locks: `bundle update` becomes `bundle lock --update` — never a gem install into the host', async () => {
+    const ruby = (cmd: string): FixGroup => group({ key: 'rubygems', candidates: [candidate([npmStep({
+      ecosystem: 'rubygems', package_name: 'rack', upgrade_command: cmd,
+    })])] });
+    const a = fakeRun([{ outcome: 'completed', exitCode: 0 }]);
+    const r = await applyGroup({ group: ruby('bundle update rack'), worktreePath: '/w', run: a.run, lockfileOnly: false });
+    expect(r.applied).toBe(true);
+    expect(a.calls.map((c) => [c.command, ...c.args].join(' '))).toEqual(['bundle lock --update rack']);
+
+    // Any other bundle subcommand installs or executes: refused, nothing runs.
+    const b = fakeRun([]);
+    const refused = await applyGroup({ group: ruby('bundle install'), worktreePath: '/w', run: b.run, lockfileOnly: false });
+    expect(refused.applied).toBe(false);
+    expect(refused.failure?.stderr_head).toMatch(/host/);
+    expect(b.calls).toEqual([]);
+  });
+
   it('Task 10 handoff: runs a step\'s follow_up_command, so an overrides-only fix re-resolves the lockfile', async () => {
     const override = npmStep({
       upgrade_command: 'npm pkg set overrides[minimist]=1.2.6',

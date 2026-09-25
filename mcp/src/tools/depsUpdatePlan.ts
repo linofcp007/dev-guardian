@@ -138,7 +138,7 @@ import {
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, type DomainError, type ToolResult } from '../types.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { registerToolModule, type ToolCallMeta, type ToolModule } from './index.js';
 
 type Classification = 'security' | 'patch' | 'minor' | 'major';
 
@@ -288,7 +288,7 @@ const tool: ToolModule = {
     '`unplanned` (every CVE that got no step, with why) and `runner_failures` (every ecosystem ' +
     'command that failed, with its code — e.g. NU1004 lock out of sync vs NU1301 feed unreachable).',
   inputSchema,
-  handler: async (input, ctx) => handler(input, ctx),
+  handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };
 
 registerToolModule(tool);
@@ -296,6 +296,7 @@ registerToolModule(tool);
 async function handler(
   input: Record<string, unknown>,
   ctx: PluginContext,
+  callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
   const inp = input as { project_path?: string; prefer?: Classification };
   let projectPath: string;
@@ -305,7 +306,9 @@ async function handler(
     return failDomain('not_a_git_repo', (e as Error).message);
   }
 
-  const cves = listActiveCves(ctx, projectPath);
+  // create_fix_pr plans on a disposable checkout of HEAD (Task 11): the
+  // files are the checkout's, the CVE history is the origin project's.
+  const cves = listActiveCves(ctx, callMeta?.originProjectPath ?? projectPath);
   const ecosystems = detectEcosystems(projectPath);
   const plansByEcosystem = await Promise.all(
     ecosystems.map(async (eco): Promise<EcosystemPlan> => {
@@ -810,13 +813,19 @@ async function runNpmOutdated(
 
   const directDeps = readNpmDirectDependencies(projectPath);
   const handled = new Set<string>(); // lowercased names pass 1 already decided
+  const resolved = readNpmResolvedPackages(projectPath, 'npm');
 
   // Pass 1: npm outdated's own entries — direct dependencies only, on a
   // real npm 7+ install (see this function's own doc comment).
   for (const [pkg, raw] of Object.entries(outdatedObj)) {
     if (!raw || typeof raw !== 'object') continue;
     const row = raw as Record<string, unknown>;
-    const installed = typeof row['current'] === 'string' ? (row['current'] as string) : '';
+    // With no node_modules — a fresh checkout, which is where create_fix_pr
+    // plans (Task 11) — npm reports no `current` at all (measured, npm 11,
+    // with or without --package-lock-only); the lockfile's top-level version
+    // is the installed one then.
+    const installed =
+      typeof row['current'] === 'string' ? (row['current'] as string) : (resolved.get(pkg.toLowerCase())?.topLevel ?? '');
     const npmLatest = typeof row['latest'] === 'string' ? (row['latest'] as string) : '';
     if (!installed) continue;
     const pkgLower = pkg.toLowerCase();
@@ -878,7 +887,6 @@ async function runNpmOutdated(
   // graph contains them (fix round 2, item 10: the `cves` table has no
   // ecosystem column — a pip `django` or composer `laravel/framework` must
   // never become an npm override step).
-  const resolved = readNpmResolvedPackages(projectPath, 'npm');
   for (const [pkgLower, cve] of cves) {
     if (handled.has(pkgLower)) continue;
     const info = resolved.get(pkgLower);
@@ -2002,7 +2010,10 @@ async function runBundlerOutdated(
         latest_version: latest,
         ecosystem: 'rubygems',
         cves,
-        upgrade_command: `bundle update ${name}`,
+        // Lockfile only (Task 11): `bundle update` INSTALLS the gems — into
+        // the host's GEM_HOME, compiling native extensions — which create_fix_pr
+        // must never do; `bundle lock --update` re-resolves Gemfile.lock alone.
+        upgrade_command: `bundle lock --update ${name}`,
       }),
     );
   }

@@ -12,11 +12,12 @@
  * to build an auto config with metrics off.
  */
 import { readdirSync } from 'node:fs';
-import { inspectCustomSemgrepConfigs } from '../platform/customRules.js';
+import { inspectCustomSemgrepConfigs, legacyRegistrationNote, legacyRegistrationsNotApplied, } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
 export function planSemgrepConfigs(projectPath, plugin, localOnly) {
     const inspection = inspectProjectSemgrepConfigs(projectPath);
     const custom = inspectCustomSemgrepConfigs(plugin, projectPath);
+    const legacy = legacyRegistrationNote(legacyRegistrationsNotApplied(plugin, projectPath));
     const projectConfigs = inspection.usable.map((c) => c.path);
     const local = [...projectConfigs, ...custom.usable];
     const registry = localOnly ? [] : ['auto', ...(hasDotnetProject(projectPath) ? ['p/csharp'] : [])];
@@ -29,6 +30,7 @@ export function planSemgrepConfigs(projectPath, plugin, localOnly) {
         notes: [
             ...inspection.unusable.map((u) => `${u.target} not loaded (${u.reason})`),
             ...custom.unusable.map((u) => `${u.path} not loaded (${u.reason})`),
+            ...(legacy !== null ? [legacy] : []),
         ],
         nothingToRun: rulePacks.length === 0,
     };

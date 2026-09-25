@@ -55,6 +55,26 @@ export const dotnetSarifParser: ScannerParser = {
   },
 };
 
+/**
+ * How many security rules the SARIF says its analyzers loaded — rules whose
+ * metadata category is `Security`, plus any Security Code Scan rule. Zero
+ * means the security analyzers did not run at all (measured: a netstandard2.0
+ * build without `EnableNETAnalyzers` lists none and reports nothing), which
+ * must read as a gap, never as a clean project. Unparseable input counts 0.
+ */
+export function sarifSecurityRuleCount(input: unknown): number {
+  const root = parseInputAsJson(stripBom(input));
+  let count = 0;
+  for (const run of asArray(getProp(root, 'runs'))) {
+    for (const rule of asArray(getProp(getProp(getProp(run, 'tool'), 'driver'), 'rules'))) {
+      const id = getString(rule, 'id') ?? '';
+      const category = getString(getProp(rule, 'properties'), 'category') ?? '';
+      if (category.toLowerCase() === 'security' || /^SCS\d{4}$/.test(id)) count += 1;
+    }
+  }
+  return count;
+}
+
 function stripBom(input: unknown): unknown {
   return typeof input === 'string' && input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
 }

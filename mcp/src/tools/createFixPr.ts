@@ -112,7 +112,7 @@
  *     target is re-scanned by the tool that produced it (`fixpr/rescan.ts`:
  *     `scan_sast` with its `local_only`, `bug_hunt` with its language packs,
  *     `deps_audit` / `scan_deps`), with the original project's rule
- *     configuration (`ToolCallMeta.rulesProjectPath`), against the findings
+ *     configuration (`ToolCallMeta.originProjectPath`), against the findings
  *     of the scans that produced the targets — the project-scoped open set
  *     (Task 8), not "the latest scan of any type". A finding nothing can
  *     re-scan that way is no candidate.
@@ -122,11 +122,11 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { applyGroup, type ApplyResult } from '../fixpr/apply.js';
-import { buildGroups, selectGroups } from '../fixpr/candidates.js';
+import { buildGroups, DEP_SCANNER_TOOLS, selectGroups } from '../fixpr/candidates.js';
 import { describeExclusions, summariseExclusions } from '../fixpr/exclusions.js';
 import { branchName, deleteLocalBranch, existsOutcome, openPr, prExists, type PrOutcome } from '../fixpr/pr.js';
 import { disposeSemgrepFixPlan, planSemgrepFix, type SemgrepFixPlan, type SemgrepFixSource } from '../fixpr/semgrepFix.js';
@@ -141,6 +141,7 @@ import { resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
 import { ProjectPath, SeverityMin } from '../schemas.js';
+import { passes } from '../severity/filter.js';
 import { deleteScans } from '../storage/maintenance.js';
 import type { DomainError, Finding, Severity, ToolResult } from '../types.js';
 import { bugHuntLocalConfigs } from './bugHunt.js';
@@ -229,7 +230,8 @@ const tool: ToolModule = {
     'in a detached worktree, writes no branch, never runs tests in your tree and leaves no scan ' +
     'rows behind; only commit/push/gh pr create sit behind apply=true. Every open finding ' +
     'that did NOT become a candidate is accounted for in `filtered` (below severity_min, no ' +
-    'scanner-produced fix, no requested source or re-scan covers it) and in `filtered_reason`. ' +
+    'scanner-produced fix, file changed since HEAD, no requested source or re-scan covers it) and in ' +
+    '`filtered_reason`. ' +
     'A cancelled call answers ok with cancelled: true and the groups it finished.',
   inputSchema: {
     project_path: ProjectPath,
@@ -315,25 +317,42 @@ async function handler(
     const origin = scan === null || scan === undefined ? null : rescanOriginOf(f, scan);
     if (origin !== null) origins.set(f.fingerprint, origin);
   }
-  const upgradeSteps = sources.includes('deps')
-    ? await fetchUpgradeSteps(projectPath, ctx, callMeta)
-    : [];
+  // Where the project sits in its repository (a worktree is a checkout of the
+  // whole repository), and which of its files differ from HEAD: a finding in
+  // such a file came from the working tree while the fix and its re-scan run
+  // on HEAD — no verdict about it would mean anything (Task 11 fix round 1).
+  const tree = await projectTreeState(projectPath);
+  if (!tree.ok) return failDomain('not_a_git_repo', tree.reason);
+  const uncommitted = (f: Finding): boolean =>
+    f.file_path !== undefined && f.file_path.length > 0 && tree.dirty.has(tree.prefix + projectRelative(projectPath, f.file_path));
+  // A finding no tool can re-scan with the packs that produced it, or one in
+  // an uncommitted file, is not a candidate: its fix could never be verified.
+  const verifiable = (f: Finding): boolean => origins.has(f.fingerprint) && !uncommitted(f);
+
+  // The plan is only worth its disposable worktree when some finding could
+  // take a step from it.
+  const needsPlan =
+    sources.includes('deps') &&
+    allFindings.some(
+      (f) => DEP_SCANNER_TOOLS.includes(f.tool) && f.fix_available && passes(f.severity, severityMin) && verifiable(f),
+    );
+  const plan = needsPlan
+    ? await fetchUpgradeSteps(projectPath, tree.prefix, ctx, callMeta)
+    : { steps: [], error: null };
 
   const groups = buildGroups({
     findings: allFindings,
-    upgradeSteps,
+    upgradeSteps: plan.steps,
     sources,
     severityMin,
-    // A finding no tool can re-scan with the packs that produced it is not
-    // a candidate: its fix could never be verified (Task 11 item 2).
-    rescannable: (f) => origins.has(f.fingerprint),
+    rescannable: verifiable,
   });
   // Every open finding this run did NOT turn into a candidate, and why —
   // computed from `groups`, i.e. BEFORE `max_prs` defers any of them, so the
   // two "not acted on" reports stay disjoint: `filtered` is about findings
   // that never became candidates, `deferred` about candidate groups the cap
   // held back. See `fixpr/exclusions.ts` for why silence here was a defect.
-  const filtered = summariseExclusions({ findings: allFindings, groups, severityMin });
+  const filtered = summariseExclusions({ findings: allFindings, groups, severityMin, uncommitted });
   const filtered_reason = describeExclusions(filtered, severityMin, sources);
   const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
 
@@ -363,7 +382,9 @@ async function handler(
       continue;
     }
     try {
-      results.push(await processGroup({ group, allFindings, origins, projectPath, apply, ctx, callMeta }));
+      results.push(
+        await processGroup({ group, allFindings, origins, projectPath, prefix: tree.prefix, apply, ctx, callMeta }),
+      );
     } catch (e) {
       // Every ANTICIPATED failure mode (worktree creation, apply, re-scan,
       // push, gh pr create) is reported by processGroup as a normal return,
@@ -397,6 +418,9 @@ async function handler(
     severity_min: severityMin,
     sources,
     ...(cancelled ? { cancelled: true } : {}),
+    // The deps side found nothing to pair because the plan itself could not
+    // be computed — said, never left to read as "no upgrade available".
+    ...(plan.error !== null ? { deps_plan_error: plan.error } : {}),
     filtered,
     filtered_reason,
     groups: results,
@@ -414,19 +438,90 @@ async function handler(
  * A missing tool or a failed plan degrades to "no deps candidates" rather
  * than failing this whole call: the deps side of the run simply finds
  * nothing to group, which `buildGroups` already reports honestly (no group
- * silently invents a fix).
+ * silently invents a fix) — and the response names the failure
+ * (`deps_plan_error`).
+ *
+ * **It runs on a detached worktree of HEAD, never on the user's project**
+ * (Task 11 fix round 1). Its .NET branch runs `dotnet restore` where it is
+ * pointed (writing `obj/`, executing the project's MSBuild), and a dry run
+ * changes nothing outside a worktree. It is also the more correct input: the
+ * plan's installed versions and pip `file`s are HEAD's, which is exactly
+ * what the fix edits. The CVE history it plans against is the project's own
+ * (`ToolCallMeta.originProjectPath`).
  */
 async function fetchUpgradeSteps(
   projectPath: string,
+  prefix: string,
   ctx: PluginContext,
   callMeta: ToolCallMeta | undefined,
-): Promise<UpgradeStep[]> {
+): Promise<{ steps: UpgradeStep[]; error: string | null }> {
   const depsPlanTool = TOOLS.find((t) => t.name === 'deps_update_plan');
-  if (depsPlanTool === undefined) return [];
-  const result = await depsPlanTool.handler({ project_path: projectPath }, ctx, callMeta);
-  if (!result.ok) return [];
-  const r = result as unknown as { plan?: unknown };
-  return Array.isArray(r.plan) ? (r.plan as UpgradeStep[]) : [];
+  if (depsPlanTool === undefined) return { steps: [], error: "the 'deps_update_plan' tool is not registered" };
+  const created = await createWorktree({ projectPath, branch: null });
+  if (!created.ok) return { steps: [], error: `could not create a worktree to plan in: ${created.reason}` };
+  try {
+    const meta: ToolCallMeta = {
+      ...(callMeta?.signal !== undefined ? { signal: callMeta.signal } : {}),
+      ...(callMeta?.progressToken !== undefined ? { progressToken: callMeta.progressToken } : {}),
+      originProjectPath: projectPath,
+    };
+    const result = await depsPlanTool.handler({ project_path: inWorktree(created.worktree.path, prefix) }, ctx, meta);
+    if (!result.ok) return { steps: [], error: `deps_update_plan failed: ${result.error.message}` };
+    const r = result as unknown as { plan?: unknown };
+    return { steps: Array.isArray(r.plan) ? (r.plan as UpgradeStep[]) : [], error: null };
+  } finally {
+    await created.worktree.remove();
+  }
+}
+
+/**
+ * The project's place in its repository (`git rev-parse --show-prefix`:
+ * `''` at the root, `app/` for a subdirectory — the same subdirectory of any
+ * worktree) and every path under it that differs from HEAD, repository-root
+ * relative (`git status --porcelain -z` prints them that way from any
+ * subdirectory — measured), untracked files and both sides of a rename
+ * included.
+ */
+async function projectTreeState(
+  projectPath: string,
+): Promise<{ ok: true; prefix: string; dirty: ReadonlySet<string> } | { ok: false; reason: string }> {
+  const prefix = await runProcess({ command: 'git', args: ['-C', projectPath, 'rev-parse', '--show-prefix'], cwd: projectPath });
+  if (prefix.outcome !== 'completed') return { ok: false, reason: `git rev-parse --show-prefix failed: ${prefix.stderr.trim()}` };
+  const status = await runProcess({
+    command: 'git',
+    args: ['-C', projectPath, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'],
+    cwd: projectPath,
+  });
+  if (status.outcome !== 'completed') {
+    return { ok: false, reason: `git status failed — cannot tell which files have uncommitted changes: ${status.stderr.trim()}` };
+  }
+  const dirty = new Set<string>();
+  const entries = status.stdout.split('\0');
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i] ?? '';
+    if (entry.length < 4) continue;
+    const xy = entry.slice(0, 2);
+    dirty.add(entry.slice(3));
+    // A rename or copy is followed by its source path.
+    if (xy.includes('R') || xy.includes('C')) {
+      const source = entries[i + 1];
+      if (source !== undefined && source.length > 0) dirty.add(source);
+      i += 1;
+    }
+  }
+  return { ok: true, prefix: prefix.stdout.trim(), dirty };
+}
+
+/** The project's directory inside a worktree: `prefix` (`app/`, or empty)
+ *  under its root, with no trailing separator. */
+function inWorktree(root: string, prefix: string): string {
+  return join(root, ...prefix.split('/').filter((segment) => segment.length > 0));
+}
+
+/** A finding's file as a POSIX path relative to the project. */
+function projectRelative(projectPath: string, filePath: string): string {
+  const rel = isAbsolute(filePath) ? relative(projectPath, filePath) : filePath;
+  return rel.replace(/\\/g, '/').replace(/^(\.\/)+/, '');
 }
 
 async function processGroup(opts: {
@@ -435,12 +530,14 @@ async function processGroup(opts: {
   /** Fingerprint → how that finding is re-scanned (see `rescanOriginOf`). */
   origins: ReadonlyMap<string, RescanOrigin>;
   projectPath: string;
+  /** The project's place in its repository (`app/`, or empty at the root). */
+  prefix: string;
   apply: boolean;
   ctx: PluginContext;
   /** The host's, handed to the re-scan so cancelling this call aborts it. */
   callMeta: ToolCallMeta | undefined;
 }): Promise<GroupResult> {
-  const { group, allFindings, origins, projectPath, apply, ctx, callMeta } = opts;
+  const { group, allFindings, origins, projectPath, prefix, apply, ctx, callMeta } = opts;
   const branch = branchName(group.source, group.key, group.hash);
   const targets = group.candidates.flatMap((c) => c.fingerprints);
   const findings = findingsForGroup(allFindings, group);
@@ -515,12 +612,16 @@ async function processGroup(opts: {
     // read from the worktree (the fix has not been applied yet, but the
     // worktree already reflects the exact committed content that will be
     // tested, which projectPath's own possibly-dirty working tree might not).
-    const derivedTest = deriveTestCommand(readManifests(worktree.path));
+    // The project's own directory inside the worktree (a checkout of the
+    // whole repository): where the fix, the test run and the re-scan happen.
+    // Git operations (openPr) use the worktree root.
+    const projectDir = inWorktree(worktree.path, prefix);
+    const derivedTest = deriveTestCommand(readManifests(projectDir));
     const commands: string[] = [];
 
     // The same dependency install the base-commit tree gets, if any — see
     // fixpr/testEnv.ts: the test differential compares like with like.
-    const env = await prepareTestEnvironment({ treePath: worktree.path, derived: derivedTest });
+    const env = await prepareTestEnvironment({ treePath: projectDir, derived: derivedTest });
     if (env.command !== null) commands.push(`${env.command} (test environment)`);
     if (!env.ok) {
       return {
@@ -554,7 +655,7 @@ async function processGroup(opts: {
     try {
       applied = await applyGroup({
         group,
-        worktreePath: worktree.path,
+        worktreePath: projectDir,
         lockfileOnly: derivedTest === null,
         ...(semgrepFix !== undefined ? { semgrepFix } : {}),
       });
@@ -574,7 +675,7 @@ async function processGroup(opts: {
       };
     }
 
-    const rescan = await rescanAfterFix(findings, origins, worktree.path, projectPath, ctx, callMeta);
+    const rescan = await rescanAfterFix(findings, origins, projectDir, projectPath, ctx, callMeta);
     if (!rescan.ok) {
       return {
         ...base,
@@ -599,8 +700,8 @@ async function processGroup(opts: {
     );
     const testVerdict = await judgeTests({
       derived: derivedTest,
-      worktreePath: worktree.path,
-      baseTree: baseTreeProvider(projectPath, derivedTest),
+      worktreePath: projectDir,
+      baseTree: baseTreeProvider(projectPath, prefix, derivedTest),
     });
 
     if (!mayOpenPr(scanVerdict, testVerdict)) {
@@ -677,16 +778,17 @@ async function localBranchExists(projectPath: string, branch: string): Promise<b
  * (`prepareTestEnvironment`), removed after the run — never the user's own
  * working tree (Task 11 item 1).
  */
-function baseTreeProvider(projectPath: string, derived: DerivedTestCommand | null): BaseTreeProvider {
+function baseTreeProvider(projectPath: string, prefix: string, derived: DerivedTestCommand | null): BaseTreeProvider {
   return async () => {
     const created = await createWorktree({ projectPath, branch: null });
     if (!created.ok) return { ok: false, reason: created.reason };
-    const env = await prepareTestEnvironment({ treePath: created.worktree.path, derived });
+    const dir = inWorktree(created.worktree.path, prefix);
+    const env = await prepareTestEnvironment({ treePath: dir, derived });
     if (!env.ok) {
       await created.worktree.remove();
       return { ok: false, reason: env.reason };
     }
-    return { ok: true, path: created.worktree.path, dispose: async () => { await created.worktree.remove(); } };
+    return { ok: true, path: dir, dispose: async () => { await created.worktree.remove(); } };
   };
 }
 
@@ -763,7 +865,7 @@ function semgrepFixSources(
 /**
  * Re-runs, inside the already-fixed worktree, the tool and rule packs that
  * produced each target (see {@link rescanOriginOf}) — with the ORIGINAL
- * project's rule configuration (`ToolCallMeta.rulesProjectPath`: its own
+ * project's rule configuration (`ToolCallMeta.originProjectPath`: its own
  * `.semgrep.yml`, its registered rules), since the worktree is a different
  * path and may not even hold an uncommitted config.
  *
@@ -798,7 +900,7 @@ async function rescanAfterFix(
   const meta: ToolCallMeta = {
     ...(callMeta?.signal !== undefined ? { signal: callMeta.signal } : {}),
     ...(callMeta?.progressToken !== undefined ? { progressToken: callMeta.progressToken } : {}),
-    rulesProjectPath: projectPath,
+    originProjectPath: projectPath,
   };
   const scanIds: string[] = [];
   const findings: Finding[] = [];

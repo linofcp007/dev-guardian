@@ -110,6 +110,20 @@ describe('summariseExclusions', () => {
     expect(reason).toContain('semgrep');
   });
 
+  it('Task 11 fix round 1: a finding in a file with uncommitted changes is uncommitted_changes, and the reason says what to do', () => {
+    const dirty = finding({ file_path: 'src/dirty.ts' });
+    const clean = finding({ file_path: 'src/clean.ts' });
+    const low = finding({ file_path: 'src/dirty.ts', severity: 'low' });
+    const findings = [dirty, clean, low];
+    const uncommitted = (f: Finding): boolean => f.file_path === 'src/dirty.ts';
+    const groups = buildGroups({ findings, upgradeSteps: [], sources: ['semgrep'], severityMin: 'high', rescannable: (f) => !uncommitted(f) });
+    const exclusions = summariseExclusions({ findings, groups, severityMin: 'high', uncommitted });
+    expect(exclusions.candidates).toBe(1);
+    // The severity floor is reported first: lowering it alone would not help.
+    expect(exclusions.by_reason).toMatchObject({ uncommitted_changes: 1, below_severity_min: 1, no_fix_source: 0 });
+    expect(describeExclusions(exclusions, 'high', ['semgrep'])).toMatch(/uncommitted changes .*commit or stash/);
+  });
+
   it('counts an eligible deps finding with no matching upgrade step as no_fix_source, not as a candidate', () => {
     // It passes fix_available and the floor, and `deps` IS a requested
     // source — buildGroups still cannot act on it, because deps_update_plan

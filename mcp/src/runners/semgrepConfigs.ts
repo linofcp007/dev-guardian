@@ -14,7 +14,11 @@
 
 import { readdirSync } from 'node:fs';
 import type { PluginContext } from '../context.js';
-import { inspectCustomSemgrepConfigs } from '../platform/customRules.js';
+import {
+  inspectCustomSemgrepConfigs,
+  legacyRegistrationNote,
+  legacyRegistrationsNotApplied,
+} from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
 
 export interface SemgrepConfigPlan {
@@ -27,7 +31,8 @@ export interface SemgrepConfigPlan {
   /** The project's own in-tree configs alone (absolute paths) — the only
    *  local rules a container run can see through its project mount. */
   projectConfigs: string[];
-  /** Local rule files that were refused, and why — the user's rules silently not running. */
+  /** Local rule files that were refused, and why — the user's rules silently not running —
+   *  and any 2.0.x registration outside the project that is no longer applied. */
   notes: string[];
   /** `local_only` with no local rules at all: there is nothing to run. */
   nothingToRun: boolean;
@@ -40,6 +45,7 @@ export function planSemgrepConfigs(
 ): SemgrepConfigPlan {
   const inspection = inspectProjectSemgrepConfigs(projectPath);
   const custom = inspectCustomSemgrepConfigs(plugin, projectPath);
+  const legacy = legacyRegistrationNote(legacyRegistrationsNotApplied(plugin, projectPath));
   const projectConfigs = inspection.usable.map((c) => c.path);
   const local = [...projectConfigs, ...custom.usable];
   const registry = localOnly ? [] : ['auto', ...(hasDotnetProject(projectPath) ? ['p/csharp'] : [])];
@@ -52,6 +58,7 @@ export function planSemgrepConfigs(
     notes: [
       ...inspection.unusable.map((u) => `${u.target} not loaded (${u.reason})`),
       ...custom.unusable.map((u) => `${u.path} not loaded (${u.reason})`),
+      ...(legacy !== null ? [legacy] : []),
     ],
     nothingToRun: rulePacks.length === 0,
   };

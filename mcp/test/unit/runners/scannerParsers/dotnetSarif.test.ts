@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DOTNET_ANALYZERS_TOOL_NAME,
   dotnetSarifParser,
+  sarifSecurityRuleCount,
 } from '../../../../src/runners/scannerParsers/dotnetSarif.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -47,6 +48,14 @@ describe('dotnetSarifParser', () => {
   it('accepts a UTF-8 BOM (Roslyn writes one) and tolerates junk', () => {
     expect(dotnetSarifParser.parse(`\uFEFF${FIXTURE}`, {}).findings).toHaveLength(2);
     expect(dotnetSarifParser.parse('not json', {}).findings).toEqual([]);
+  });
+
+  it('counts the security rules the SARIF says were loaded — zero means the analyzers never ran', () => {
+    expect(sarifSecurityRuleCount(FIXTURE)).toBe(1);
+    expect(sarifSecurityRuleCount(FIXTURE.replace(/"category": "Security"/g, '"category": "Performance"'))).toBe(0);
+    expect(sarifSecurityRuleCount('not json')).toBe(0);
+    const scsOnly = JSON.stringify({ runs: [{ tool: { driver: { rules: [{ id: 'SCS0005' }] } }, results: [] }] });
+    expect(sarifSecurityRuleCount(scsOnly)).toBe(1);
   });
 
   it('falls back to the security rule-id ranges when the SARIF carries no rule metadata', () => {

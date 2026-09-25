@@ -24,8 +24,9 @@
  *     one, and guessing is how A's rules reached B.
  *   - **Every file is validated as a Semgrep rules file** before it is handed
  *     to Semgrep, at registration and again at every read: a non-empty
- *     `rules:` list whose every rule has `id`, `message`, `languages` and a
- *     pattern key. Auto-discovery used to register `rules/` whatever it held;
+ *     `rules:` list whose every rule has `id`, `message`, `languages`, a
+ *     pattern key and a `severity` Semgrep accepts (without one: exit 7,
+ *     0 files scanned). Auto-discovery used to register `rules/` whatever it held;
  *     a directory of Prometheus alerts made every later `scan_sast` exit 7
  *     with 0 files scanned, and `rules: []` gave exit 0 with 0 files scanned.
  *     A registered directory is expanded into its valid rule files here, so a
@@ -108,9 +109,36 @@ export function validateSemgrepRulesFile(path) {
         if (!PATTERN_KEYS.some((k) => rule[k] !== undefined)) {
             return { ok: false, reason: `rule '${id}' has no pattern key` };
         }
+        const severity = rule['severity'];
+        if (severity === undefined || severity === null)
+            return { ok: false, reason: `rule '${id}' has no \`severity\`` };
+        if (typeof severity !== 'string' || !SEMGREP_SEVERITIES.includes(severity)) {
+            return {
+                ok: false,
+                reason: `rule '${id}' has severity '${String(severity)}', which Semgrep rejects ` +
+                    `(expected one of ${SEMGREP_SEVERITIES.join(', ')})`,
+            };
+        }
     }
     return { ok: true, rules: rules.length };
 }
+/**
+ * The `severity` values Semgrep's rule schema accepts — measured on 1.176.1,
+ * each on its own rule: these load, while a missing severity or a lower-case
+ * spelling (`warning`) is an `InvalidRuleSchemaError`, exit 7, 0 files
+ * scanned. `EXPERIMENT` and `INVENTORY` load but report no findings.
+ */
+const SEMGREP_SEVERITIES = [
+    'INFO',
+    'WARNING',
+    'ERROR',
+    'LOW',
+    'MEDIUM',
+    'HIGH',
+    'CRITICAL',
+    'EXPERIMENT',
+    'INVENTORY',
+];
 /** `.yml` / `.yaml` files under `dir`, recursively, sorted; `.git` and
  *  `node_modules` are never entered. */
 export function yamlFilesUnder(dir) {
@@ -182,6 +210,32 @@ export function inspectCustomSemgrepConfigs(ctx, projectPath) {
         }
     }
     return { usable, unusable };
+}
+/**
+ * Entries of the 2.0.x GLOBAL registration that lie outside `projectPath`
+ * and so are no longer applied to it — 2.0.x ran them on every project.
+ * Only paths that still exist: a vanished one would not have run anyway.
+ */
+export function legacyRegistrationsNotApplied(ctx, projectPath) {
+    return readList(ctx, CUSTOM_RULES_META_KEY).filter((p) => !isInside(projectPath, p) && pathExists(p));
+}
+/** The user-facing account of {@link legacyRegistrationsNotApplied}, or null. */
+export function legacyRegistrationNote(paths) {
+    if (paths.length === 0)
+        return null;
+    return (`custom Semgrep rules registered before registrations became per-project (dev-guardian 2.0.x) are no ` +
+        `longer applied here because they lie outside this project: ${paths.join(', ')}. Re-register the ` +
+        `ones this project needs with register_custom_rules (paths: [...]); register_custom_rules ` +
+        'clear=true removes the old registration and this notice.');
+}
+function pathExists(p) {
+    try {
+        statSync(p);
+        return true;
+    }
+    catch {
+        return false;
+    }
 }
 /** The usable half of {@link inspectCustomSemgrepConfigs}. */
 export function resolveCustomSemgrepConfigs(ctx, projectPath) {

@@ -43,14 +43,14 @@ export interface ToolCallMeta {
    */
   treeHash?: string;
   /**
-   * Set only by `create_fix_pr`'s verification, which scans a disposable
-   * worktree of a project: the project whose rule configuration — its own
-   * Semgrep config, its registered custom rules, its stack — the scan must
-   * use, so the re-scan runs the same rule packs that produced the targets.
-   * Omitted: the scanned path is its own rules project. Never set by the MCP
-   * host.
+   * Set only by `create_fix_pr`, which runs tools on a disposable worktree
+   * of a project: the project that worktree is a checkout of. Its rule
+   * configuration (own Semgrep config, registered custom rules) and its
+   * stored history (the CVEs `deps_update_plan` plans against) are what the
+   * call uses — the worktree's own path has neither. Omitted: the scanned
+   * path is its own origin. Never set by the MCP host.
    */
-  rulesProjectPath?: string;
+  originProjectPath?: string;
 }
 
 export interface ToolModule {

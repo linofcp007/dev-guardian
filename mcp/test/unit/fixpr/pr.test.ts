@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { branchName, deleteLocalBranch, existsOutcome, prExists, openPr } from '../../../src/fixpr/pr.js';
+import { branchName, deleteLocalBranch, EXCLUDE_GUARDIAN_DIR, existsOutcome, prExists, openPr } from '../../../src/fixpr/pr.js';
 
 /**
  * `openPr` now checks `git status --porcelain -- ':!.guardian'` before
@@ -160,7 +160,7 @@ describe('openPr', () => {
     });
     await openPr({ ...base, run });
     const addCall = calls.find((c) => c[0] === 'git' && c[1] === 'add');
-    expect(addCall).toEqual(['git', 'add', '-A', '--', ':!.guardian']);
+    expect(addCall).toEqual(['git', 'add', '-A', '--', EXCLUDE_GUARDIAN_DIR]);
   });
 
   it('checks for real changes with the SAME .guardian exclusion git add uses, not a bare git status', async () => {
@@ -172,7 +172,7 @@ describe('openPr', () => {
     });
     await openPr({ ...base, run });
     const statusCall = calls.find((c) => c[0] === 'git' && c[1] === 'status');
-    expect(statusCall).toEqual(['git', 'status', '--porcelain', '--', ':!.guardian']);
+    expect(statusCall).toEqual(['git', 'status', '--porcelain', '--', EXCLUDE_GUARDIAN_DIR]);
   });
 });
 

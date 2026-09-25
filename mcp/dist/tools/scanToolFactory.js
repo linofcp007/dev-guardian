@@ -144,7 +144,7 @@ async function runScanPipeline(config, input, plugin, callMeta) {
     const treeHash = callMeta?.parentScanId !== undefined && callMeta.treeHash !== undefined
         ? callMeta.treeHash
         : await computeTreeHash(projectPath);
-    const rulesProjectPath = callMeta?.rulesProjectPath ?? projectPath;
+    const rulesProjectPath = callMeta?.originProjectPath ?? projectPath;
     let cacheState = {};
     if (config.cacheState) {
         try {
@@ -155,6 +155,14 @@ async function runScanPipeline(config, input, plugin, callMeta) {
         }
     }
     const cacheKey = buildCacheKey(config, input, { projectPath, plugin, rulesProjectPath }, treeHash, cacheState);
+    if (config.configWarnings) {
+        try {
+            warnings.push(...config.configWarnings(input, { projectPath, plugin, rulesProjectPath }));
+        }
+        catch {
+            /* a warning about configuration never fails the scan */
+        }
+    }
     // Cache check. Only a run whose every scanner ran is served again: one
     // with a scanner missing or failed is `completed` at coverage none or
     // partial, and its own warning tells the caller to install the scanner and
@@ -226,7 +234,7 @@ async function runScanPipeline(config, input, plugin, callMeta) {
                 parentScanId: scanId,
                 treeHash,
                 ...(callMeta?.progressToken !== undefined ? { progressToken: callMeta.progressToken } : {}),
-                ...(callMeta?.rulesProjectPath !== undefined ? { rulesProjectPath: callMeta.rulesProjectPath } : {}),
+                ...(callMeta?.originProjectPath !== undefined ? { originProjectPath: callMeta.originProjectPath } : {}),
             },
             rulesProjectPath,
             ...(parentScanId !== undefined ? { parentScanId } : {}),

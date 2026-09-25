@@ -139,7 +139,7 @@ export interface InvokeContext extends ToolContext {
   /**
    * The project whose rule configuration this scan uses — `projectPath`
    * itself, unless `create_fix_pr` is re-scanning a worktree of another
-   * project (`ToolCallMeta.rulesProjectPath`).
+   * project (`ToolCallMeta.originProjectPath`).
    */
   rulesProjectPath: string;
 }
@@ -205,6 +205,12 @@ export interface ScanToolConfig<TInput extends ScanToolBaseInput> {
    * edited pack is served from a stale cache entry.
    */
   rulePacks?: (input: TInput, ctx: RulePackContext) => readonly string[];
+  /**
+   * Warnings about the tool's CONFIGURATION rather than about one run — e.g.
+   * custom rules registered in 2.0.x that no longer apply — added to every
+   * response, fresh or served from the cache. A throw adds nothing.
+   */
+  configWarnings?: (input: TInput, ctx: RulePackContext) => readonly string[];
   /**
    * State outside the working tree that the scan reads, joined to the cache
    * key — e.g. HEAD and every ref for a git-history scan, which a fetch or an
@@ -322,7 +328,7 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     callMeta?.parentScanId !== undefined && callMeta.treeHash !== undefined
       ? callMeta.treeHash
       : await computeTreeHash(projectPath);
-  const rulesProjectPath = callMeta?.rulesProjectPath ?? projectPath;
+  const rulesProjectPath = callMeta?.originProjectPath ?? projectPath;
   let cacheState: Record<string, string> = {};
   if (config.cacheState) {
     try {
@@ -332,6 +338,13 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     }
   }
   const cacheKey = buildCacheKey(config, input, { projectPath, plugin, rulesProjectPath }, treeHash, cacheState);
+  if (config.configWarnings) {
+    try {
+      warnings.push(...config.configWarnings(input, { projectPath, plugin, rulesProjectPath }));
+    } catch {
+      /* a warning about configuration never fails the scan */
+    }
+  }
 
   // Cache check. Only a run whose every scanner ran is served again: one
   // with a scanner missing or failed is `completed` at coverage none or
@@ -409,7 +422,7 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
         parentScanId: scanId,
         treeHash,
         ...(callMeta?.progressToken !== undefined ? { progressToken: callMeta.progressToken } : {}),
-        ...(callMeta?.rulesProjectPath !== undefined ? { rulesProjectPath: callMeta.rulesProjectPath } : {}),
+        ...(callMeta?.originProjectPath !== undefined ? { originProjectPath: callMeta.originProjectPath } : {}),
       },
       rulesProjectPath,
       ...(parentScanId !== undefined ? { parentScanId } : {}),

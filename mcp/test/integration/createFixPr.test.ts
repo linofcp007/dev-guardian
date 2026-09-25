@@ -89,6 +89,7 @@ const REGISTRY_BACKED_TIMEOUT_MS = 120_000;
 const TRIVY_INSTALLED = await isInstalled('trivy');
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 const SEMGREP_INSTALLED = await isInstalled('semgrep');
+const DOTNET_INSTALLED = await isInstalled('dotnet');
 
 let repo: string; let binDir: string; let ghLog: string; let originDir: string | null;
 
@@ -913,6 +914,65 @@ describe('create_fix_pr', () => {
       const group = res.groups[0];
       expect(group?.outcome, group?.note).toBe('not_verified');
       expect(group?.scan?.new_findings.map((f) => f.title)).toContain('safeEval appeared');
+    },
+    REGISTRY_BACKED_TIMEOUT_MS,
+  );
+
+  it.skipIf(!DOTNET_INSTALLED)(
+    'Task 11 fix round 1 (item 1): a dry run never runs deps_update_plan\'s dotnet restore in the user\'s project',
+    async () => {
+      // deps_update_plan's .NET branch runs `dotnet restore` where it is
+      // pointed: obj/ appeared in the user's project on every dry run.
+      writeFileSync(
+        join(repo, 'App.csproj'),
+        '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>\n',
+      );
+      execFileSync('git', ['-C', repo, 'add', '.']);
+      execFileSync('git', ['-C', repo, 'commit', '-q', '-m', 'dotnet']);
+      const c = ctx();
+      const scanId = randomUUID();
+      c.storage.scans.insert({ scan_id: scanId, scan_type: 'deps_audit', project_path: repo, tree_hash: 'h' });
+      c.storage.findings.bulkInsert([{
+        scan_id: scanId, fingerprint: 'fp-nuget', tool: 'dotnet-list-package', rule_id: 'GHSA-5crp-9r3c-p9vr',
+        severity: 'high', category: 'security', subcategory: 'dependency', title: 'Newtonsoft.Json vulnerable',
+        file_path: 'App.csproj', snippet: 'Newtonsoft.Json@12.0.1', fix_available: true,
+      }]);
+      c.storage.scans.finalize({ scan_id: scanId, status: 'completed', tools_run: [], missing_tools: [] });
+
+      const res = await TOOLS.find((t) => t.name === 'create_fix_pr')?.handler(
+        { project_path: repo, sources: ['deps'], apply: false }, c as never,
+      );
+      expect(res?.ok).toBe(true);
+      expect(existsSync(join(repo, 'obj'))).toBe(false);
+      expect(execFileSync('git', ['-C', repo, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('');
+      expect(worktreeCount()).toBe(1);
+    },
+    REGISTRY_BACKED_TIMEOUT_MS,
+  );
+
+  it.skipIf(!REQUIRE_SEMGREP && !SEMGREP_INSTALLED)(
+    'Task 11 fix round 1 (item 7): a target in a file with uncommitted changes is never verified — excluded and reported',
+    async () => {
+      // "Before" is the working-tree scan; the fix and its re-scan run on
+      // HEAD. A target whose file differs from HEAD would compare two
+      // different files and could read "resolved" without being fixed.
+      const c = ctx();
+      await setupLocalRuleRepo(c, FIXABLE_RULE);
+      // Uncommitted: the eval moves down a line and a second one appears.
+      writeFileSync(join(repo, 'app.js'), '// local edit\neval(userInput);\neval(other);\n');
+      const rescan = await TOOLS.find((t) => t.name === 'scan_sast')?.handler(
+        { project_path: repo, local_only: true, force: true }, c as never,
+      );
+      expect(rescan?.ok).toBe(true);
+
+      const res = await TOOLS.find((t) => t.name === 'create_fix_pr')?.handler(
+        { project_path: repo, sources: ['semgrep'], apply: false }, c as never,
+      ) as { ok: true; groups: unknown[]; filtered: { by_reason: Record<string, number> }; filtered_reason: string | null };
+
+      expect(res.groups).toEqual([]);
+      expect(res.filtered.by_reason['uncommitted_changes']).toBe(2);
+      expect(res.filtered_reason).toContain('uncommitted');
+      expect(worktreeCount()).toBe(1);
     },
     REGISTRY_BACKED_TIMEOUT_MS,
   );

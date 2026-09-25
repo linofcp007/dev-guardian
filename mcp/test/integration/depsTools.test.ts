@@ -2985,6 +2985,72 @@ describe('deps_update_plan', () => {
     return { calls, r };
   }
 
+  it('Task 11 fix round 1: run on a worktree of a project, it plans against the ORIGIN project\'s CVE history', async () => {
+    // create_fix_pr runs the plan in a disposable checkout of HEAD, so the
+    // plan's installed versions and pip files match what the fix edits and
+    // nothing runs in the user's tree — while the CVEs are the project's own.
+    const origin = tempProject();
+    const worktree = tempProject();
+    for (const dir of [origin, worktree]) {
+      writeFileSync(join(dir, 'requirements.txt'), 'requests==2.31.0\n', 'utf8');
+    }
+    const plugin = makePlugin(origin);
+    seedCve(plugin, origin, { cve_id: 'CVE-R', package_name: 'requests', installed_version: '2.31.0', fixed_version: '2.32.0' });
+    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+
+    const bare = okResult<{ plan: unknown[] }>(await getTool('deps_update_plan').handler({ project_path: worktree }, plugin));
+    expect(bare.plan).toEqual([]);
+    const r = okResult<{ plan: Array<{ package_name: string; file?: string; latest_version: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: worktree }, plugin, { originProjectPath: origin }),
+    );
+    expect(r.plan).toEqual([expect.objectContaining({ package_name: 'requests', file: 'requirements.txt', latest_version: '2.32.0' })]);
+  });
+
+  it('Task 11 fix round 1: on a fresh checkout (no node_modules) npm outdated gives no "current" — the lockfile\'s version stands in', async () => {
+    // create_fix_pr now plans on a disposable checkout of HEAD, which has a
+    // lockfile and no node_modules. Measured (npm 11): `npm outdated --json`
+    // then omits `current` — with or without --package-lock-only — and the
+    // direct dependency got no step at all unless a CVE row covered it.
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"lodash":"4.17.20"}}', 'utf8');
+    writeFileSync(
+      join(project, 'package-lock.json'),
+      JSON.stringify({
+        name: 'x',
+        lockfileVersion: 3,
+        packages: { '': { name: 'x', dependencies: { lodash: '4.17.20' } }, 'node_modules/lodash': { version: '4.17.20' } },
+      }),
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    vi.mocked(execa).mockImplementation((async () => ({
+      exitCode: 1,
+      stdout: JSON.stringify({ lodash: { wanted: '4.17.20', latest: '4.18.1', dependent: 'x' } }),
+      stderr: '',
+    })) as unknown as typeof execa);
+    const r = okResult<{ plan: Array<{ package_name: string; installed_version: string; upgrade_command: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    expect(r.plan).toEqual([
+      expect.objectContaining({ package_name: 'lodash', installed_version: '4.17.20', upgrade_command: 'npm install lodash@4.18.1 --ignore-scripts' }),
+    ]);
+  });
+
+  it('Task 11 fix round 1: a Ruby step only re-locks (bundle lock --update) — never bundle update, which installs gems into the host', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'Gemfile'), "source 'https://rubygems.org'\ngem 'rack'\n", 'utf8');
+    const plugin = makePlugin(project);
+    vi.mocked(execa).mockImplementation((async (cmd: string) => {
+      if (cmd === 'bundle') return { exitCode: 1, stdout: 'rack (newest 3.1.8, installed 2.2.3)\n', stderr: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+    const r = okResult<{ plan: Array<{ package_name: string; upgrade_command: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    const rack = r.plan.find((s) => s.package_name === 'rack');
+    expect(rack?.upgrade_command).toBe('bundle lock --update rack');
+  });
+
   it('Task 11 item 9: with no .git above it, a stray pnpm/yarn lock in an unrelated ancestor does not flip an npm project', async () => {
     const outer = tempProject();
     writeFileSync(join(outer, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n", 'utf8');

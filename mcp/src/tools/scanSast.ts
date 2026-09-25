@@ -34,12 +34,13 @@
  * .NET SAST used to exist only for projects referencing the unmaintained
  * Security Code Scan, and scraped `dotnet build --verbosity:diag` stdout —
  * which exceeds the 5 MB output cap on real projects and killed the run. It
- * now builds every root solution/project with `-p:AnalysisModeSecurity=All`
- * (the SDK's built-in CA security rules) and a per-project
- * `-p:ErrorLog=obj/<file>.sarif`, at minimal verbosity, and reads the
- * compiler's own SARIF (`dotnetSarif.ts`). Security Code Scan, when the
- * project references it, reports through the same SARIF. `dotnet build`
- * EXECUTES the project's MSBuild — the description says so.
+ * now restores every root solution/project in locked mode, builds it with the
+ * SDK's own security analyzers switched on, and reads the compiler's SARIF
+ * per project and target framework (`dotnetSarif.ts`) — see
+ * `runDotnetAnalyzers` for the measured reasons behind each switch. Security
+ * Code Scan, when the project references it, reports through the same
+ * SARIF. `dotnet restore`/`build` EXECUTE the project's MSBuild — the
+ * description says so.
  *
  * ---- Telemetry, and `local_only` -------------------------------------
  *
@@ -51,13 +52,19 @@
  * re-scan a fix with the same rules that found the target.
  */
 
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join, relative, sep } from 'node:path';
 import { z } from 'zod';
-import { findDotnetTargets, projectsForTarget } from '../deps/dotnetRestore.js';
+import {
+  classifyRestoreFailure,
+  findDotnetTargets,
+  planDotnetRestore,
+  removeCreatedLockFiles,
+} from '../deps/dotnetRestore.js';
 import { checkBanditReport } from '../runners/fileBatchScan.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
-import { dotnetSarifParser } from '../runners/scannerParsers/dotnetSarif.js';
+import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import {
@@ -76,6 +83,7 @@ import type { ToolRun } from '../types.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { hasDotnetProject, planSemgrepConfigs } from '../runners/semgrepConfigs.js';
 import { checkSemgrepReport, pythonUtf8Env } from '../runners/semgrepReport.js';
+import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
 import { registerToolModule } from './index.js';
 import {
@@ -102,9 +110,10 @@ registerToolModule(
       "(--config=auto), the project's own rules (.semgrep.yml, or whatever " +
       '.dev-guardian/configs.json records as its target) and any rules registered for this ' +
       'project with register_custom_rules. Also runs Bandit when Python files are present, and ' +
-      'for a .NET project (root .csproj/.fsproj/.sln) runs `dotnet build` with the SDK security ' +
-      'analyzers (AnalysisModeSecurity=All, plus Security Code Scan when referenced) and reads ' +
-      "their SARIF — that build EXECUTES the project's own MSBuild. A Semgrep run that scanned " +
+      'for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a ' +
+      'packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers ' +
+      '(plus Security Code Scan when referenced), reading their SARIF per target framework — that ' +
+      "restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned " +
       'nothing or reported errors is never reported as ok. Output JSON is written to ' +
       '.guardian/reports/sast-<scan>/ and parsed into Findings. PRIVACY: --config=auto downloads ' +
       'rules from the Semgrep registry and sends usage metrics to Semgrep Inc.; Semgrep refuses ' +
@@ -118,6 +127,12 @@ registerToolModule(
     // re-scans a worktree and needs the original project's rules.
     rulePacks: (input, { rulesProjectPath, plugin }) =>
       planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true).rulePacks,
+    // 2.0.x custom rules outside the project are not run any more: say so on
+    // every response, cached or not, not only in tools_run.
+    configWarnings: (_input, { rulesProjectPath, plugin }) => {
+      const note = legacyRegistrationNote(legacyRegistrationsNotApplied(plugin, rulesProjectPath));
+      return note === null ? [] : [note];
+    },
     inputSchema: {
       project_path: ProjectPath,
       severity_min: SeverityMin,
@@ -330,9 +345,32 @@ async function runBandit(args: Collect & { ctx: InvokeContext; reportDir: string
 }
 
 /**
- * The .NET pass — see the module comment. One `dotnet build` per root target
- * (`findDotnetTargets`: the root solution, else every project file), each
- * project writing its own SARIF under its own `obj/`, read and removed here.
+ * The .NET pass — see the module comment. Per root target
+ * (`findDotnetTargets`: the root solution, else every project file):
+ *
+ *   1. `dotnet restore --locked-mode`, planned by `../deps/dotnetRestore.ts`
+ *      exactly as deps_audit does — it never creates or rewrites a
+ *      `packages.lock.json`. A plain `dotnet build` restores implicitly and
+ *      WITHOUT locked mode: it rewrote an out-of-date lock (and created one
+ *      for an opted-in project) in the user's tree on every scan, and in
+ *      create_fix_pr's re-scan the created lock went into the pull request.
+ *      A restore that fails (`NU1004`: the lock is out of sync) is a named
+ *      gap, and that target is not built.
+ *   2. `dotnet build --no-restore` with the SDK's analyzers switched ON
+ *      (`EnableNETAnalyzers=true` — they are off by default below .NET 5:
+ *      measured, a netstandard2.0 library using MD5 built clean with an empty
+ *      SARIF) at the latest security level, in security-all mode.
+ *   3. The SARIF is written per project AND per target framework into a
+ *      temp directory, by an imported targets file
+ *      (`CustomAfterMicrosoftCommonTargets`): a global `-p:ErrorLog=` is not
+ *      expanded (`$(TargetFramework)` stays literal), so every inner build of
+ *      a multi-targeted project overwrote one file and only the last
+ *      framework's results survived (measured: `net10.0;netstandard2.0`).
+ *   4. A SARIF whose rule metadata lists no security rule means the
+ *      analyzers did not load: a gap, never an ok with 0 findings.
+ *
+ * `CustomAfterMicrosoftCommonTargets` is a global property: a project that
+ * sets its own is built without it for this scan.
  */
 async function runDotnetAnalyzers(args: Collect & { ctx: InvokeContext }): Promise<void> {
   const { ctx, tools_run, missing_tools, parser_inputs } = args;
@@ -349,49 +387,98 @@ async function runDotnetAnalyzers(args: Collect & { ctx: InvokeContext }): Promi
     return;
   }
 
-  const sarifName = `dev-guardian-sast-${ctx.scanId.slice(0, 8)}.sarif`;
+  const work = mkdtempSync(join(tmpdir(), 'guardian-sast-dotnet-'));
+  const sarifDir = join(work, 'sarif');
+  mkdirSync(sarifDir);
+  const targetsFile = join(work, 'dev-guardian-sarif.targets');
+  writeFileSync(targetsFile, SARIF_TARGETS, 'utf8');
+
   const failures: string[] = [];
   let reports = 0;
-  for (const target of findDotnetTargets(ctx.projectPath)) {
-    const result = await runProcess({
-      command: 'dotnet',
-      args: [
-        'build',
-        target,
-        '--no-incremental',
-        '--verbosity:minimal',
-        `-p:ErrorLog=obj/${sarifName}%2Cversion=2.1`,
-        '-p:AnalysisModeSecurity=All',
-      ],
-      cwd: ctx.projectPath,
-      env: ctx.scriptEnv,
-      signal: ctx.signal,
-      onLog: ctx.onLog,
-      timeoutMs: DOTNET_BUILD_TIMEOUT_MS,
-    });
-    // Every project the build touched wrote its own SARIF, relative to its
-    // own directory. Read what exists — a failed build's compiled projects
-    // still reported real diagnostics — then remove it.
-    for (const project of projectsForTarget(target)) {
-      const sarif = join(dirname(project), 'obj', sarifName);
-      if (!existsSync(sarif)) continue;
-      try {
-        parser_inputs.push({ parser: dotnetSarifParser, input: readFileSync(sarif, 'utf8') });
-        reports += 1;
-      } catch {
-        failures.push(`${basename(project)}: SARIF unreadable`);
+  try {
+    for (const target of findDotnetTargets(ctx.projectPath)) {
+      const rel = relative(ctx.projectPath, target) || basename(target);
+      const plan = planDotnetRestore(ctx.projectPath, target);
+      if (plan.blocked) {
+        failures.push(`${rel}: ${plan.blocked.reason}`);
+        continue;
       }
-      rmSync(sarif, { force: true });
+      const restore = await runProcess({
+        command: 'dotnet',
+        args: plan.args,
+        cwd: ctx.projectPath,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        onLog: ctx.onLog,
+        timeoutMs: DOTNET_BUILD_TIMEOUT_MS,
+      });
+      const created = removeCreatedLockFiles(plan);
+      if (created.length > 0) {
+        failures.push(
+          `${rel}: restore created ${created.map((c) => relative(ctx.projectPath, c) || c).join(', ')} ` +
+            '(a RestorePackagesWithLockFile opt-in this scan could not see) — deleted again, not built',
+        );
+        continue;
+      }
+      if (restore.outcome !== 'completed') {
+        // Never retried without --locked-mode — that is the lock rewrite
+        // this sequence exists to prevent.
+        failures.push(`${rel}: ${classifyRestoreFailure(restore.stdout, restore.stderr).reason}`);
+        continue;
+      }
+
+      const before = new Set(listSarif(sarifDir));
+      const build = await runProcess({
+        command: 'dotnet',
+        args: [
+          'build',
+          target,
+          '--no-restore',
+          '--no-incremental',
+          '--verbosity:minimal',
+          '-nologo',
+          '-p:EnableNETAnalyzers=true',
+          '-p:AnalysisLevelSecurity=latest',
+          '-p:AnalysisModeSecurity=All',
+          `-p:CustomAfterMicrosoftCommonTargets=${targetsFile}`,
+          `-p:DevGuardianSarifDir=${sarifDir}${sep}`,
+        ],
+        cwd: ctx.projectPath,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        onLog: ctx.onLog,
+        timeoutMs: DOTNET_BUILD_TIMEOUT_MS,
+      });
+      // Every project and framework the build compiled wrote its own SARIF.
+      // Read what exists — a failed build's compiled projects still
+      // reported real diagnostics.
+      for (const name of listSarif(sarifDir).filter((n) => !before.has(n))) {
+        let raw: string;
+        try {
+          raw = readFileSync(join(sarifDir, name), 'utf8');
+        } catch {
+          failures.push(`${rel}: SARIF ${name} unreadable`);
+          continue;
+        }
+        if (sarifSecurityRuleCount(raw) === 0) {
+          failures.push(`${rel}: ${sarifLabel(name)} — the security analyzers did not load (its SARIF lists no security rule)`);
+          continue;
+        }
+        parser_inputs.push({ parser: dotnetSarifParser, input: raw });
+        reports += 1;
+      }
+      if (build.outcome !== 'completed' || build.exitCode !== 0) {
+        failures.push(`${rel}: ${describeBuildFailure(build)}`);
+      }
     }
-    if (result.outcome !== 'completed' || result.exitCode !== 0) {
-      failures.push(`${basename(target)}: ${describeBuildFailure(result)}`);
-    }
+  } finally {
+    rmSync(work, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   }
   if (failures.length === 0 && reports === 0) failures.push('the build wrote no analyzer report (SARIF)');
 
   const run: ToolRun =
     failures.length === 0
-      ? { name: 'dotnet-analyzers', status: 'ok', reason: `${reports} project SARIF report(s) read` }
+      ? { name: 'dotnet-analyzers', status: 'ok', reason: `${reports} SARIF report(s) read (one per project and target framework)` }
       : { name: 'dotnet-analyzers', status: 'failed', reason: failures.join('; ') };
   tools_run.push(run);
   if (referencesScs) {
@@ -400,6 +487,35 @@ async function runDotnetAnalyzers(args: Collect & { ctx: InvokeContext }): Promi
     tools_run.push({ ...run, name: 'security-code-scan' });
   }
 }
+
+/**
+ * Imported after the SDK's own targets (see `runDotnetAnalyzers`): the
+ * ErrorLog path is evaluated per project instance, so `$(TargetFramework)`
+ * and a fresh GUID make every inner build's SARIF its own file.
+ */
+const SARIF_TARGETS = [
+  '<Project>',
+  '  <PropertyGroup>',
+  '    <ErrorLog>$(DevGuardianSarifDir)$(MSBuildProjectName)-$(TargetFramework)-$([System.Guid]::NewGuid().ToString(\'N\')).sarif,version=2.1</ErrorLog>',
+  '  </PropertyGroup>',
+  '</Project>',
+  '',
+].join('\n');
+
+function listSarif(dir: string): string[] {
+  try {
+    return readdirSync(dir).filter((n) => n.endsWith('.sarif'));
+  } catch {
+    return [];
+  }
+}
+
+/** `App-net8.0-<guid>.sarif` → `App (net8.0)`. */
+function sarifLabel(name: string): string {
+  const m = /^(.*)-([^-]*)-[0-9a-f]{32}\.sarif$/.exec(name);
+  return m === null ? name : `${m[1] ?? name} (${m[2] || 'no target framework'})`;
+}
+
 
 /** The first `error` line of a failed build, else its outcome. */
 function describeBuildFailure(result: ProcessRunResult): string {

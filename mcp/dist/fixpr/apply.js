@@ -27,6 +27,8 @@
  *     composer command that installs with `--no-scripts`, added here when the
  *     plan's command lacks it: a dependency's lifecycle script is arbitrary
  *     code, and a dry run must never execute it (Task 11 items 1 and 5).
+ *     Bundler runs only as `bundle lock` — `bundle update` would install
+ *     gems into the host's GEM_HOME (see `harden`).
  *   - `semgrep`: ONE `--autofix` pass for the whole group, with ONLY the
  *     target rules (`./semgrepFix.ts` — filtered copies of local rule files,
  *     `r/<rule-id>` for registry rules), `--metrics=off`, over the targets'
@@ -156,7 +158,10 @@ async function runCommand(run, worktreePath, timeoutMs, lockfileOnly, commandLin
     if (argv === null) {
         return { command: commandLine, outcome: 'failed', exit_code: null, stderr_head: 'empty command' };
     }
-    harden(argv, lockfileOnly);
+    const refused = harden(argv, lockfileOnly);
+    if (refused !== null) {
+        return { command: commandLine, outcome: 'failed', exit_code: null, stderr_head: refused };
+    }
     const result = await run({ command: argv.command, args: argv.args, cwd: worktreePath, timeoutMs });
     const invoked = [argv.command, ...argv.args].join(' ');
     commands.push(invoked);
@@ -171,10 +176,21 @@ const COMPOSER_INSTALLING = new Set(['require', 'install', 'update', 'upgrade'])
 /**
  * `--ignore-scripts` on every installing npm command and `--no-scripts` on
  * every installing composer command (see the module comment), and
- * `--package-lock-only` on `npm install` when `lockfileOnly`.
+ * `--package-lock-only` on `npm install` when `lockfileOnly`. Bundler runs
+ * only as `bundle lock` (re-resolving Gemfile.lock): `bundle update <gem>` is
+ * rewritten to `bundle lock --update <gem>`, and any other subcommand is
+ * refused — they install gems into the host's GEM_HOME and compile native
+ * extensions. Returns why the command was refused, or null.
  */
 function harden(argv, lockfileOnly) {
     const sub = argv.args[0] ?? '';
+    if (argv.command === 'bundle') {
+        if (sub === 'update')
+            argv.args.splice(0, 1, 'lock', '--update');
+        else if (sub !== 'lock') {
+            return `refused: 'bundle ${sub}' would install gems into the host (only 'bundle lock' runs)`;
+        }
+    }
     if (argv.command === 'npm' && NPM_INSTALLING.has(sub)) {
         if (!argv.args.includes('--ignore-scripts'))
             argv.args.push('--ignore-scripts');
@@ -185,6 +201,7 @@ function harden(argv, lockfileOnly) {
     if (argv.command === 'composer' && COMPOSER_INSTALLING.has(sub) && !argv.args.includes('--no-scripts')) {
         argv.args.push('--no-scripts');
     }
+    return null;
 }
 /**
  * The pip step, as an edit: the exact pin `name==installed` in the step's
