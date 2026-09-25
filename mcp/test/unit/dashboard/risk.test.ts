@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { scoreRisk } from '../../../src/dashboard/risk.js';
 import type { RiskInput } from '../../../src/dashboard/types.js';
+import type { CveIntelResult } from '../../../src/intel/types.js';
 import type { Finding, Cve } from '../../../src/types.js';
 
 const NOW = Date.parse('2026-08-15T12:00:00.000Z');
@@ -91,6 +92,44 @@ describe('scoreRisk', () => {
   it('sets coverage_caveat straight through from the input', () => {
     expect(scoreRisk(base({ coverage_partial: true })).coverage_caveat).toBe(true);
     expect(scoreRisk(base({ coverage_partial: false })).coverage_caveat).toBe(false);
+  });
+
+  it('weighs a KEV-listed CVE above an equal-severity non-KEV CVE (Task 19)', () => {
+    const intel = new Map<string, CveIntelResult>([
+      ['CVE-medium', { cve_id: 'CVE-medium', status: 'ok', kev: true, kev_date_added: '2026-01-01' }],
+    ]);
+    const plain = scoreRisk(base({ cves: [cve('medium')] }));
+    const kev = scoreRisk(base({ cves: [cve('medium')], cve_intel: intel }));
+    expect(kev.components.cves.score).toBeGreaterThan(plain.components.cves.score);
+  });
+
+  it('weighs a higher-EPSS CVE above a lower-EPSS CVE of the same severity (Task 19)', () => {
+    const low = new Map<string, CveIntelResult>([
+      ['CVE-medium', { cve_id: 'CVE-medium', status: 'ok', kev: false, epss_score: 0.1 }],
+    ]);
+    const high = new Map<string, CveIntelResult>([
+      ['CVE-medium', { cve_id: 'CVE-medium', status: 'ok', kev: false, epss_score: 0.9 }],
+    ]);
+    const lowScore = scoreRisk(base({ cves: [cve('medium')], cve_intel: low })).components.cves.score;
+    const highScore = scoreRisk(base({ cves: [cve('medium')], cve_intel: high })).components.cves.score;
+    expect(highScore).toBeGreaterThan(lowScore);
+  });
+
+  it('leaves the CVE score exactly as before when no cve_intel is supplied (dashboard/snapshot.ts today)', () => {
+    // Pins the pre-Task-19 test's own numbers: 8+4+1.5+0.5 = 14.
+    const r = scoreRisk(base({ cves: [cve('critical'), cve('high'), cve('medium'), cve('unknown')] }));
+    expect(r.components.cves.score).toBe(14);
+  });
+
+  it('a CVE with no measured intel (absent from the map, or status: unavailable) gets no bonus', () => {
+    const unavailable = new Map<string, CveIntelResult>([
+      ['CVE-medium', { cve_id: 'CVE-medium', status: 'unavailable', kev: false }],
+    ]);
+    const plain = scoreRisk(base({ cves: [cve('medium')] })).components.cves.score;
+    const withUnavailable = scoreRisk(base({ cves: [cve('medium')], cve_intel: unavailable })).components.cves.score;
+    const withEmptyMap = scoreRisk(base({ cves: [cve('medium')], cve_intel: new Map() })).components.cves.score;
+    expect(withUnavailable).toBe(plain);
+    expect(withEmptyMap).toBe(plain);
   });
 
   it('never returns a score above 100 or below 0', () => {

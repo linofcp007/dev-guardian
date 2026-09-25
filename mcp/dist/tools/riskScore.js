@@ -11,7 +11,13 @@
  *     to read the single latest completed scan in the WHOLE database, so an
  *     SBOM generated after a SAST scan scored the project as clean, and any
  *     other project's scan answered for this one;
- *   - the newest usable deps-flavoured scan's active CVEs;
+ *   - the newest usable deps-flavoured scan's active CVEs, weighted by CISA
+ *     KEV / FIRST EPSS (Task 19, `intel/enrich.ts`) — cached 24h, timeout-
+ *     bounded, `GUARDIAN_OFFLINE=1` skips it. A CVE the network could not
+ *     measure this call contributes NO exploitability bonus (never a
+ *     fabricated "not exploited"); `coverage.cve_intel` below reports how
+ *     many of `active_cves` that was true for, so a caller can tell "no KEV
+ *     CVEs" apart from "KEV status unmeasured for every CVE";
  *   - compliance signals (missing policy docs, missing dependency bots);
  *   - the project's active baseline's age;
  *   - the REAL coverage of all of the above: `coverage_caveat` is true when
@@ -21,10 +27,12 @@
  * Every "latest scan of type X" is a project-scoped SQL query; none searches
  * a window of the 50 newest rows in the database any more.
  *
- * Read-only — does not spawn scanners.
+ * Read-only over scan/finding/CVE history — the one network dependency is
+ * the CVE intel refresh above, itself best-effort and never scan-blocking.
  */
 import { scoreRisk } from '../dashboard/risk.js';
 import { findLatestUsable, openSetForProject } from '../history/openSet.js';
+import { enrichCveIntel } from '../intel/enrich.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan } from '../types.js';
@@ -34,11 +42,12 @@ const tool = {
     title: 'Risk score (0-100)',
     description: 'Compute a single 0-100 risk score for one project (project_path, default: the server\'s ' +
         'working directory) from its persisted scans/findings/CVEs/baseline. Open findings are the ' +
-        'union of the newest usable scan of every finding-producing type, suppressions removed. ' +
-        'Returns the score, a band (low/medium/high/critical), per-component breakdown, the next ' +
-        'action to recommend, and `coverage` — which scans it read, which newer scans it skipped ' +
-        'because they measured nothing, and `coverage_caveat` when the numbers are incomplete. ' +
-        'Pure read.',
+        'union of the newest usable scan of every finding-producing type, suppressions removed. CVEs ' +
+        'are weighted up when CISA KEV-listed or high FIRST EPSS (cached 24h, offline-safe). Returns ' +
+        'the score, a band (low/medium/high/critical), per-component breakdown, the next action to ' +
+        'recommend, and `coverage` — which scans it read, which newer scans it skipped because they ' +
+        'measured nothing, `coverage.cve_intel` (KEV/EPSS measured vs unavailable), and ' +
+        '`coverage_caveat` when the numbers are incomplete.',
     inputSchema: { project_path: ProjectPath },
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -59,6 +68,8 @@ async function handler(input, ctx) {
     // (a security_full run is judged on its trivy half only).
     const cveSource = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: 'deps' });
     const cves = cveSource.scan ? storage.cves.listActive(cveSource.scan.scan_id) : [];
+    const cveIntel = await enrichCveIntel(storage, cves.map((c) => c.cve_id));
+    const cveIntelCoverage = summariseCveIntel(cves, cveIntel);
     // Compliance signals — missing policy docs and CI dependency bots. Both are
     // read from files, not scanner output, so a run's scanner coverage does
     // not disqualify them.
@@ -92,6 +103,7 @@ async function handler(input, ctx) {
     const result = scoreRisk({
         findings: open.findings,
         cves,
+        cve_intel: cveIntel,
         policies_missing: policiesMissing,
         dependency_bot_configured: dependencyBotConfigured,
         baseline_set_at: baseline ? baseline.set_at : null,
@@ -115,7 +127,28 @@ async function handler(input, ctx) {
                 ? { cve_gap: 'no dependency scan has measured this project: CVEs are unmeasured, not zero' }
                 : {}),
             cve_source_skipped: cveSource.skipped,
+            cve_intel: cveIntelCoverage,
         },
     };
+}
+/** `intel` keyed by `cve_id`, same as `enrichCveIntel` returns — a `cve_id`
+ *  absent from it (should not happen; `enrichCveIntel` answers for every id
+ *  it is asked about) is treated the same as `status: 'unavailable'`. */
+function summariseCveIntel(cves, intel) {
+    let kevCount = 0;
+    let epssMeasured = 0;
+    let unavailable = 0;
+    for (const cve of cves) {
+        const entry = intel.get(cve.cve_id);
+        if (entry === undefined || entry.status !== 'ok') {
+            unavailable += 1;
+            continue;
+        }
+        if (entry.kev)
+            kevCount += 1;
+        if (entry.epss_score !== undefined)
+            epssMeasured += 1;
+    }
+    return { active_cves: cves.length, kev_count: kevCount, epss_measured: epssMeasured, unavailable };
 }
 //# sourceMappingURL=riskScore.js.map

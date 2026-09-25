@@ -37974,6 +37974,60 @@ function rowToBaseline(row) {
   return b;
 }
 
+// src/storage/cveIntelRepo.ts
+var CveIntelRepo = class {
+  constructor(db) {
+    this.db = db;
+    this.upsertStmt = db.prepare(`
+      INSERT INTO cve_intel (cve_id, epss_score, epss_percentile, kev, kev_date_added, fetched_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(cve_id) DO UPDATE SET
+        epss_score      = excluded.epss_score,
+        epss_percentile = excluded.epss_percentile,
+        kev             = excluded.kev,
+        kev_date_added  = excluded.kev_date_added,
+        fetched_at      = excluded.fetched_at
+    `);
+  }
+  db;
+  upsertStmt;
+  upsertMany(rows) {
+    if (rows.length === 0) return;
+    const tx = this.db.transaction((items) => {
+      for (const r of items) {
+        this.upsertStmt.run(
+          r.cve_id,
+          r.epss_score ?? null,
+          r.epss_percentile ?? null,
+          r.kev ? 1 : 0,
+          r.kev_date_added ?? null,
+          r.fetched_at
+        );
+      }
+    });
+    tx(rows);
+  }
+  /** Exactly the requested `cveIds` that have a cached row — a `cve_id` this
+   *  table has never cached is simply absent from the returned map. */
+  getMany(cveIds) {
+    const ids2 = [...new Set(cveIds)];
+    if (ids2.length === 0) return /* @__PURE__ */ new Map();
+    const placeholders = ids2.map(() => "?").join(", ");
+    const rows = this.db.prepare(`SELECT * FROM cve_intel WHERE cve_id IN (${placeholders})`).all(...ids2);
+    return new Map(rows.map((r) => [r.cve_id, rowToIntel(r)]));
+  }
+};
+function rowToIntel(row) {
+  return {
+    cve_id: row.cve_id,
+    epss_score: row.epss_score,
+    epss_percentile: row.epss_percentile,
+    kev: row.kev !== 0,
+    kev_date_added: row.kev_date_added,
+    fetched_at: row.fetched_at
+  };
+}
+
 // src/storage/cvesRepo.ts
 function seenIn(direction) {
   return `COALESCE((
@@ -39196,6 +39250,7 @@ var Storage = class {
     this.scans = new ScansRepo(db);
     this.findings = new FindingsRepo(db);
     this.cves = new CvesRepo(db);
+    this.cveIntel = new CveIntelRepo(db);
     this.suppressions = new SuppressionsRepo(db);
     this.baselines = new BaselinesRepo(db);
     this.stack = new StackRepo(db);
@@ -39208,6 +39263,7 @@ var Storage = class {
   scans;
   findings;
   cves;
+  cveIntel;
   suppressions;
   baselines;
   stack;
@@ -51233,6 +51289,8 @@ function failDomain12(code, message3) {
 }
 
 // src/dashboard/risk.ts
+var KEV_CVE_BONUS = 4;
+var EPSS_CVE_BONUS_MAX = 4;
 function scoreRisk(input) {
   const findingsScore = clamp(
     input.findings.reduce((acc, f) => {
@@ -51254,16 +51312,27 @@ function scoreRisk(input) {
   );
   const cveScore = clamp(
     input.cves.reduce((acc, c3) => {
+      let pts;
       switch (c3.severity) {
         case "critical":
-          return acc + 8;
+          pts = 8;
+          break;
         case "high":
-          return acc + 4;
+          pts = 4;
+          break;
         case "medium":
-          return acc + 1.5;
+          pts = 1.5;
+          break;
         default:
-          return acc + 0.5;
+          pts = 0.5;
+          break;
       }
+      const intel = input.cve_intel?.get(c3.cve_id);
+      if (intel?.status === "ok") {
+        if (intel.kev) pts += KEV_CVE_BONUS;
+        else if (intel.epss_score !== void 0) pts += intel.epss_score * EPSS_CVE_BONUS_MAX;
+      }
+      return acc + pts;
     }, 0),
     0,
     30
@@ -51313,11 +51382,206 @@ function recommendation(score, open, cves, hasBaseline) {
   return "Posture is stable. Consider a periodic audit_executive to confirm.";
 }
 
+// src/intel/kev.ts
+var KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json";
+var DEFAULT_TIMEOUT_MS2 = 8e3;
+async function fetchKevCatalog(opts = {}) {
+  const fetchImpl = opts.fetchImpl ?? (typeof fetch === "function" ? fetch : void 0);
+  if (fetchImpl === void 0) return { ok: false, reason: "no fetch implementation available" };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS2);
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort();
+    else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  try {
+    const res = await fetchImpl(KEV_URL, { signal: controller.signal });
+    if (!res.ok) return { ok: false, reason: `CISA KEV feed returned http ${res.status}` };
+    const json = await res.json();
+    if (!Array.isArray(json.vulnerabilities)) {
+      return { ok: false, reason: "CISA KEV feed response had no `vulnerabilities` array" };
+    }
+    return { ok: true, entries: parseEntries(json.vulnerabilities) };
+  } catch (e) {
+    return { ok: false, reason: describeFetchError(e) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+function parseEntries(vulnerabilities) {
+  const entries2 = /* @__PURE__ */ new Map();
+  for (const raw of vulnerabilities) {
+    if (raw === null || typeof raw !== "object") continue;
+    const rec = raw;
+    const cveId = typeof rec["cveID"] === "string" ? rec["cveID"] : void 0;
+    const dateAdded = typeof rec["dateAdded"] === "string" ? rec["dateAdded"] : void 0;
+    if (cveId === void 0 || dateAdded === void 0) continue;
+    entries2.set(cveId, dateAdded);
+  }
+  return entries2;
+}
+function describeFetchError(e) {
+  if (e instanceof Error) {
+    if (e.name === "AbortError") return "CISA KEV feed request timed out";
+    return e.message;
+  }
+  return "CISA KEV feed request failed";
+}
+
+// src/intel/epss.ts
+var EPSS_URL = "https://api.first.org/data/v1/epss";
+var DEFAULT_TIMEOUT_MS3 = 6e3;
+var CHUNK = 100;
+async function queryEpss(cveIds, opts = {}) {
+  const ids2 = [...new Set(cveIds)];
+  if (ids2.length === 0) return { ok: true, scores: /* @__PURE__ */ new Map() };
+  const fetchImpl = opts.fetchImpl ?? (typeof fetch === "function" ? fetch : void 0);
+  if (fetchImpl === void 0) return { ok: false, reason: "no fetch implementation available" };
+  const scores = /* @__PURE__ */ new Map();
+  for (let i2 = 0; i2 < ids2.length; i2 += CHUNK) {
+    const chunk = ids2.slice(i2, i2 + CHUNK);
+    const url = `${EPSS_URL}?cve=${chunk.map(encodeURIComponent).join(",")}`;
+    const result = await fetchOneBatch(url, fetchImpl, opts);
+    if (!result.ok) return result;
+    for (const [cveId, entry] of result.scores) scores.set(cveId, entry);
+  }
+  return { ok: true, scores };
+}
+async function fetchOneBatch(url, fetchImpl, opts) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS3);
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort();
+    else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  try {
+    const res = await fetchImpl(url, { signal: controller.signal });
+    if (!res.ok) return { ok: false, reason: `FIRST EPSS returned http ${res.status}` };
+    const json = await res.json();
+    return { ok: true, scores: parseEntries2(json.data) };
+  } catch (e) {
+    return { ok: false, reason: describeFetchError2(e) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+function parseEntries2(data) {
+  const scores = /* @__PURE__ */ new Map();
+  if (!Array.isArray(data)) return scores;
+  for (const raw of data) {
+    if (raw === null || typeof raw !== "object") continue;
+    const rec = raw;
+    const cve = typeof rec["cve"] === "string" ? rec["cve"] : void 0;
+    const score = toNumber(rec["epss"]);
+    const percentile = toNumber(rec["percentile"]);
+    if (cve === void 0 || score === void 0 || percentile === void 0) continue;
+    scores.set(cve, { score, percentile });
+  }
+  return scores;
+}
+function toNumber(v) {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n2 = Number(v);
+    if (Number.isFinite(n2)) return n2;
+  }
+  return void 0;
+}
+function describeFetchError2(e) {
+  if (e instanceof Error) {
+    if (e.name === "AbortError") return "FIRST EPSS request timed out";
+    return e.message;
+  }
+  return "FIRST EPSS request failed";
+}
+
+// src/intel/enrich.ts
+var INTEL_TTL_MS = 24 * 60 * 60 * 1e3;
+async function enrichCveIntel(storage, cveIds, opts = {}) {
+  const ids2 = [...new Set(cveIds)];
+  const result = /* @__PURE__ */ new Map();
+  if (ids2.length === 0) return result;
+  const now = opts.now ?? Date.now();
+  const cached2 = storage.cveIntel.getMany(ids2);
+  const staleIds = [];
+  for (const id of ids2) {
+    const row = cached2.get(id);
+    if (row !== void 0 && now - Date.parse(row.fetched_at) < INTEL_TTL_MS) {
+      result.set(id, freshResult(row));
+    } else {
+      staleIds.push(id);
+    }
+  }
+  if (staleIds.length === 0) return result;
+  const offline = opts.offline ?? (opts.env ?? process.env)["GUARDIAN_OFFLINE"] === "1";
+  if (offline) {
+    for (const id of staleIds) {
+      result.set(id, fallbackResult(id, cached2.get(id), "network disabled (GUARDIAN_OFFLINE=1)"));
+    }
+    return result;
+  }
+  const netOpts = { fetchImpl: opts.fetchImpl, timeoutMs: opts.timeoutMs, signal: opts.signal };
+  const queryEpssImpl = opts.queryEpssImpl ?? queryEpss;
+  const fetchKevCatalogImpl = opts.fetchKevCatalogImpl ?? fetchKevCatalog;
+  const [epssResult, kevResult] = await Promise.all([
+    queryEpssImpl(staleIds, netOpts),
+    fetchKevCatalogImpl(netOpts)
+  ]);
+  if (epssResult.ok && kevResult.ok) {
+    const nowIso2 = new Date(now).toISOString();
+    const toUpsert = [];
+    for (const id of staleIds) {
+      const kev = kevResult.entries.has(id);
+      const kevDate = kevResult.entries.get(id);
+      const epss = epssResult.scores.get(id);
+      const entry = { cve_id: id, status: "ok", kev, fetched_at: nowIso2 };
+      if (kevDate !== void 0) entry.kev_date_added = kevDate;
+      if (epss !== void 0) {
+        entry.epss_score = epss.score;
+        entry.epss_percentile = epss.percentile;
+      }
+      result.set(id, entry);
+      const row = { cve_id: id, kev, fetched_at: nowIso2 };
+      if (kevDate !== void 0) row.kev_date_added = kevDate;
+      if (epss !== void 0) {
+        row.epss_score = epss.score;
+        row.epss_percentile = epss.percentile;
+      }
+      toUpsert.push(row);
+    }
+    storage.cveIntel.upsertMany(toUpsert);
+    return result;
+  }
+  const reasonParts = [];
+  if (!kevResult.ok) reasonParts.push(`kev: ${kevResult.reason}`);
+  if (!epssResult.ok) reasonParts.push(`epss: ${epssResult.reason}`);
+  const reason = reasonParts.join("; ");
+  for (const id of staleIds) {
+    result.set(id, fallbackResult(id, cached2.get(id), reason));
+  }
+  return result;
+}
+function freshResult(row) {
+  const entry = { cve_id: row.cve_id, status: "ok", kev: row.kev, fetched_at: row.fetched_at };
+  if (row.kev_date_added !== null) entry.kev_date_added = row.kev_date_added;
+  if (row.epss_score !== null) entry.epss_score = row.epss_score;
+  if (row.epss_percentile !== null) entry.epss_percentile = row.epss_percentile;
+  return entry;
+}
+function fallbackResult(id, row, reason) {
+  if (row === void 0) return { cve_id: id, status: "unavailable", kev: false, reason };
+  const entry = { cve_id: id, status: "ok", stale: true, kev: row.kev, fetched_at: row.fetched_at, reason };
+  if (row.kev_date_added !== null) entry.kev_date_added = row.kev_date_added;
+  if (row.epss_score !== null) entry.epss_score = row.epss_score;
+  if (row.epss_percentile !== null) entry.epss_percentile = row.epss_percentile;
+  return entry;
+}
+
 // src/tools/riskScore.ts
 var tool17 = {
   name: "risk_score",
   title: "Risk score (0-100)",
-  description: "Compute a single 0-100 risk score for one project (project_path, default: the server's working directory) from its persisted scans/findings/CVEs/baseline. Open findings are the union of the newest usable scan of every finding-producing type, suppressions removed. Returns the score, a band (low/medium/high/critical), per-component breakdown, the next action to recommend, and `coverage` \u2014 which scans it read, which newer scans it skipped because they measured nothing, and `coverage_caveat` when the numbers are incomplete. Pure read.",
+  description: "Compute a single 0-100 risk score for one project (project_path, default: the server's working directory) from its persisted scans/findings/CVEs/baseline. Open findings are the union of the newest usable scan of every finding-producing type, suppressions removed. CVEs are weighted up when CISA KEV-listed or high FIRST EPSS (cached 24h, offline-safe). Returns the score, a band (low/medium/high/critical), per-component breakdown, the next action to recommend, and `coverage` \u2014 which scans it read, which newer scans it skipped because they measured nothing, `coverage.cve_intel` (KEV/EPSS measured vs unavailable), and `coverage_caveat` when the numbers are incomplete.",
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler14(input, ctx)
 };
@@ -51335,6 +51599,8 @@ async function handler14(input, ctx) {
   const open = openSetForProject(storage, projectPath, { now });
   const cveSource = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: "deps" });
   const cves = cveSource.scan ? storage.cves.listActive(cveSource.scan.scan_id) : [];
+  const cveIntel = await enrichCveIntel(storage, cves.map((c3) => c3.cve_id));
+  const cveIntelCoverage = summariseCveIntel(cves, cveIntel);
   const latestCompliance = findLatestUsable(storage, projectPath, ["compliance"], {
     skipCoverageNone: false
   }).scan;
@@ -51361,6 +51627,7 @@ async function handler14(input, ctx) {
   const result = scoreRisk({
     findings: open.findings,
     cves,
+    cve_intel: cveIntel,
     policies_missing: policiesMissing,
     dependency_bot_configured: dependencyBotConfigured,
     baseline_set_at: baseline ? baseline.set_at : null,
@@ -51381,9 +51648,25 @@ async function handler14(input, ctx) {
       skipped: open.skipped,
       cve_source_scan_id: cveSource.scan?.scan_id ?? null,
       ...cveSource.scan === null ? { cve_gap: "no dependency scan has measured this project: CVEs are unmeasured, not zero" } : {},
-      cve_source_skipped: cveSource.skipped
+      cve_source_skipped: cveSource.skipped,
+      cve_intel: cveIntelCoverage
     }
   };
+}
+function summariseCveIntel(cves, intel) {
+  let kevCount = 0;
+  let epssMeasured = 0;
+  let unavailable = 0;
+  for (const cve of cves) {
+    const entry = intel.get(cve.cve_id);
+    if (entry === void 0 || entry.status !== "ok") {
+      unavailable += 1;
+      continue;
+    }
+    if (entry.kev) kevCount += 1;
+    if (entry.epss_score !== void 0) epssMeasured += 1;
+  }
+  return { active_cves: cves.length, kev_count: kevCount, epss_measured: epssMeasured, unavailable };
 }
 
 // src/tools/sbomDiff.ts
@@ -55004,7 +55287,44 @@ function findLatest3(ctx, type) {
   return row ? ctx.storage.scans.getById(row.scan_id) : null;
 }
 
+// src/intel/rank.ts
+var CVE_ID_RE = /CVE-\d{4}-\d+/gi;
+var CVE_ID_ONLY_RE = /^CVE-\d{4}-\d+$/i;
+function findingCveIds(finding4) {
+  const ids2 = /* @__PURE__ */ new Set();
+  if (finding4.rule_id !== void 0 && CVE_ID_ONLY_RE.test(finding4.rule_id)) {
+    ids2.add(finding4.rule_id.toUpperCase());
+  }
+  for (const text of [finding4.title, finding4.message]) {
+    if (text === void 0) continue;
+    for (const match of text.matchAll(CVE_ID_RE)) ids2.add(match[0].toUpperCase());
+  }
+  return [...ids2];
+}
+function exploitabilitySignal(cveIds, intel) {
+  let kev = false;
+  let maxEpss = null;
+  const contributed = [];
+  for (const id of cveIds) {
+    const entry = intel.get(id);
+    if (entry === void 0 || entry.status !== "ok") continue;
+    let matters = false;
+    if (entry.kev) {
+      kev = true;
+      matters = true;
+    }
+    if (entry.epss_score !== void 0) {
+      if (maxEpss === null || entry.epss_score > maxEpss) maxEpss = entry.epss_score;
+      matters = true;
+    }
+    if (matters) contributed.push(id);
+  }
+  return { kev, max_epss: maxEpss, cve_ids: contributed };
+}
+
 // src/tools/prioritizeFindings.ts
+var KEV_BOOST = 220;
+var EPSS_BOOST_MAX = 100;
 var SEVERITY_WEIGHT2 = {
   critical: 400,
   high: 250,
@@ -55027,7 +55347,7 @@ var inputSchema24 = {
 var tool40 = {
   name: "prioritize_findings",
   title: "Prioritise open findings (heuristic)",
-  description: "Rank one project's open findings (project_path, default: the server's working directory; the newest usable scan of every finding-producing type, suppressions removed) by a weighted heuristic: severity + category + fix_available + age. Returns top-N with explanation. No LLM call \u2014 the calling model uses the ranking to drive follow-ups.",
+  description: "Rank one project's open findings (project_path, default: the server's working directory; the newest usable scan of every finding-producing type, suppressions removed) by a weighted heuristic: severity + category + fix_available + age, boosted when a finding is linked to a CVE that is CISA KEV-listed or has a high FIRST EPSS score (cached 24h; offline or unmeasured CVEs get no boost, never a fabricated one). Returns top-N with explanation. No LLM call \u2014 the calling model uses the ranking to drive follow-ups.",
   inputSchema: inputSchema24,
   handler: async (input, ctx) => handler37(input, ctx)
 };
@@ -55045,6 +55365,9 @@ async function handler37(input, ctx) {
   const open = set.findings;
   const latest = set.newest;
   const recentScanTs = latest ? new Date(latest.started_at).getTime() : Date.now();
+  const cveIdsByFinding = new Map(open.map((f) => [f.fingerprint, findingCveIds(f)]));
+  const allCveIds = [...new Set([...cveIdsByFinding.values()].flat())];
+  const intel = await enrichCveIntel(ctx.storage, allCveIds);
   const ranked = open.map((f) => {
     const factors = [];
     let score = 0;
@@ -55058,6 +55381,17 @@ async function handler37(input, ctx) {
     }
     score += 30;
     factors.push("observed in latest scan (+30)");
+    const signal = exploitabilitySignal(cveIdsByFinding.get(f.fingerprint) ?? [], intel);
+    if (signal.kev) {
+      score += KEV_BOOST;
+      factors.push(`CISA KEV-listed (${signal.cve_ids.join(", ")}) (+${KEV_BOOST} \u2014 actively exploited)`);
+    } else if (signal.max_epss !== null) {
+      const boost = Math.round(signal.max_epss * EPSS_BOOST_MAX);
+      score += boost;
+      factors.push(
+        `FIRST EPSS ${signal.max_epss.toFixed(3)} (${signal.cve_ids.join(", ")}) (+${boost} of ${EPSS_BOOST_MAX})`
+      );
+    }
     return { finding: f, priority_score: score, factors };
   });
   ranked.sort(
@@ -55094,9 +55428,9 @@ import { join as join51 } from "node:path";
 
 // src/runners/osv.ts
 var OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
-var DEFAULT_TIMEOUT_MS2 = 6e3;
+var DEFAULT_TIMEOUT_MS4 = 6e3;
 var MAX_QUERIES = 200;
-var CHUNK = 100;
+var CHUNK2 = 100;
 async function queryOsv(packages, opts = {}) {
   const queryable = packages.filter((p) => p.name).slice(0, MAX_QUERIES);
   if (queryable.length === 0) {
@@ -55107,8 +55441,8 @@ async function queryOsv(packages, opts = {}) {
   }
   const vulnerable = [];
   try {
-    for (let i2 = 0; i2 < queryable.length; i2 += CHUNK) {
-      const chunk = queryable.slice(i2, i2 + CHUNK);
+    for (let i2 = 0; i2 < queryable.length; i2 += CHUNK2) {
+      const chunk = queryable.slice(i2, i2 + CHUNK2);
       const body = {
         queries: chunk.map((p) => ({
           package: { name: p.name, ecosystem: p.ecosystem },
@@ -55146,7 +55480,7 @@ async function queryOsv(packages, opts = {}) {
 }
 async function postJson(url, body, opts) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS2);
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS4);
   if (opts.signal) {
     if (opts.signal.aborted) controller.abort();
     else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
@@ -63155,15 +63489,16 @@ function mcpInvalidParams2(message3) {
 registerResourceModule({
   name: "guardian-cves-active",
   uri: "guardian://cves/active",
-  description: "CVEs of the server's working-directory project, from its newest deps-flavoured scan (deps / deps_audit / security_full) that actually ran a dependency scanner. Returns `{ cves: [] }` when no deps scan has run.",
+  description: "CVEs of the server's working-directory project, from its newest deps-flavoured scan (deps / deps_audit / security_full) that actually ran a dependency scanner, each with `kev`/`epss_score`/`epss_percentile` when already cached (cache only \u2014 call prioritize_findings or risk_score first to refresh). Returns `{ cves: [] }` when no deps scan has run.",
   handler: async (_uri, _params, ctx) => {
     const found = findLatestUsable(ctx.storage, serverProjectPath(), CVE_SOURCE_SCAN_TYPES, { slot: "deps" });
     const latestDeps = found.scan;
     if (!latestDeps) return { json: { cves: [], last_run: null, skipped: found.skipped } };
     const cves = ctx.storage.cves.listActive(latestDeps.scan_id);
+    const cached2 = ctx.storage.cveIntel.getMany(cves.map((c3) => c3.cve_id));
     return {
       json: {
-        cves,
+        cves: cves.map((c3) => withCachedIntel(c3, cached2)),
         last_run: latestDeps.started_at,
         scan_id: latestDeps.scan_id,
         ...found.skipped.count > 0 ? { skipped: found.skipped } : {}
@@ -63171,6 +63506,17 @@ registerResourceModule({
     };
   }
 });
+function withCachedIntel(cve, cached2) {
+  const row = cached2.get(cve.cve_id);
+  if (row === void 0) return cve;
+  return {
+    ...cve,
+    kev: row.kev,
+    ...row.kev_date_added !== null ? { kev_date_added: row.kev_date_added } : {},
+    ...row.epss_score !== null ? { epss_score: row.epss_score } : {},
+    ...row.epss_percentile !== null ? { epss_percentile: row.epss_percentile } : {}
+  };
+}
 registerResourceModule({
   name: "guardian-sbom",
   uri: "guardian://sbom",

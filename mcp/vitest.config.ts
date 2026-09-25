@@ -17,6 +17,17 @@ export default defineConfig({
     // override is why those files can run long without needing this default
     // raised for everything else.
     testTimeout: 10_000,
+    // Task 19 (EPSS/KEV intel): `intel/enrich.ts` calls the network for any
+    // CVE it has not cached in the last 24h, and several PRE-EXISTING tests
+    // exercise real trivy-sourced CVEs (e.g. `test/integration/createFixPr.test.ts`'s
+    // risk_score check) without mocking `fetch` — they were written before
+    // this feature existed and must not suddenly start dialing out. Default
+    // network off for the whole suite; a test that specifically exercises the
+    // online path clears it with `vi.stubEnv('GUARDIAN_OFFLINE', '0')` (and
+    // `vi.unstubAllEnvs()` after) and supplies its own mocked `fetch` — see
+    // `test/unit/intel/*.test.ts`. The one test allowed to hit the real APIs
+    // is gated behind its own env var instead (`test/e2e/cveIntelLive.test.ts`).
+    env: { GUARDIAN_OFFLINE: '1' },
     // Runs in every worker before its test files. Gives each worker its own
     // Semgrep settings file so concurrent Semgrep invocations — within one
     // run, or across two agents running this suite at once — stop racing on
