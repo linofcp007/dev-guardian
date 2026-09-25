@@ -54,6 +54,8 @@ const fixture = (name: string): string => readFileSync(join(FIX, name), 'utf8');
 type Call = ProcessRunOptions & { args: string[] };
 let calls: Call[] = [];
 let ruffExit = 0;
+/** Overrides of what an analyser writes, for the clean and the broken cases. */
+let reports: { eslint?: string; radon?: string; staticcheck?: ProcessRunResult } = {};
 
 function result(exitCode: number, stdout = ''): ProcessRunResult {
   return { outcome: exitCode === 0 ? 'completed' : 'failed', exitCode, stdout, stderr: '', truncated: false };
@@ -78,12 +80,12 @@ async function fakeScanner(opts: ProcessRunOptions): Promise<ProcessRunResult> {
     return result(ruffExit);
   }
   if (opts.command === 'radon') {
-    writeFileSync(after(a, '-O'), fixture('radon-cc.json'));
+    writeFileSync(after(a, '-O'), reports.radon ?? fixture('radon-cc.json'));
     return result(0);
   }
-  if (opts.command === 'staticcheck') return result(1, fixture('staticcheck.jsonl'));
+  if (opts.command === 'staticcheck') return reports.staticcheck ?? result(1, fixture('staticcheck.jsonl'));
   if (a[0]?.endsWith('eslint.js')) {
-    writeFileSync(after(a, '--output-file'), fixture('eslint.json'));
+    writeFileSync(after(a, '--output-file'), reports.eslint ?? fixture('eslint.json'));
     return result(1);
   }
   return result(0);
@@ -92,6 +94,7 @@ async function fakeScanner(opts: ProcessRunOptions): Promise<ProcessRunResult> {
 beforeEach(() => {
   calls = [];
   ruffExit = 0;
+  reports = {};
   vi.mocked(scannerAvailable).mockReset();
   vi.mocked(scannerAvailable).mockImplementation(async (name: string) => `/fake/bin/${name}`);
   vi.mocked(runProcess).mockReset();
@@ -154,11 +157,45 @@ describe('quality_check', () => {
     for (const name of ['jscpd', 'ruff', 'radon', 'eslint', 'staticcheck']) {
       expect(r.tools_run.find((t) => t.name === name)?.status, name).toBe('ok');
     }
-    // What the analysers could not read is said, not dropped.
+    // What the analysers could not read is said, not dropped — and it is a
+    // gap: those files were not analysed.
     expect(r.tools_run.find((t) => t.name === 'eslint')?.reason).toMatch(/broken\.js/);
     expect(r.tools_run.find((t) => t.name === 'radon')?.reason).toMatch(/broken\.py/);
     expect(r.tools_run.find((t) => t.name === 'staticcheck')?.reason).toMatch(/bad\.go/);
+    expect([...r.missing_tools].sort()).toEqual(['eslint', 'radon', 'staticcheck']);
+    expect(r.coverage).toBe('partial');
+  });
+
+  it('reads full coverage when every analyser read every file', async () => {
+    reports = { eslint: '[]', radon: '{}', staticcheck: result(0, '') };
+    const { r } = await quality(polyglot());
+    expect(r.missing_tools).toEqual([]);
     expect(r.coverage).toBe('full');
+  });
+
+  it('staticcheck exiting non-zero with no JSON is failed — go missing, no packages — never clean', async () => {
+    reports = {
+      eslint: '[]',
+      radon: '{}',
+      staticcheck: { ...result(1, ''), stderr: 'staticcheck: exec: "go": executable file not found in $PATH\n' },
+    };
+    const { r } = await quality(polyglot());
+    const sc = r.tools_run.find((t) => t.name === 'staticcheck');
+    expect(sc?.status).toBe('failed');
+    expect(sc?.reason).toMatch(/"go": executable file not found/);
+    expect(r.coverage).toBe('partial');
+  });
+
+  it('a staticcheck run whose only output is compile errors analysed nothing — failed', async () => {
+    const compileOnly = fixture('staticcheck.jsonl')
+      .split('\n')
+      .filter((l) => l.includes('"compile"'))
+      .join('\n');
+    reports = { eslint: '[]', radon: '{}', staticcheck: result(1, compileOnly) };
+    const { r } = await quality(polyglot());
+    const sc = r.tools_run.find((t) => t.name === 'staticcheck');
+    expect(sc?.status).toBe('failed');
+    expect(sc?.reason).toMatch(/bad\.go/);
   });
 
   it('runs ruff and radon on a project with 3 000 .py files and no Python manifest', async () => {

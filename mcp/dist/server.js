@@ -43315,7 +43315,7 @@ function notInstalled(out, name, reason = "not_installed") {
   out.tools_run.push({ name, status: "skipped", reason });
   out.missing_tools.push(name);
 }
-function record2(out, name, run, okExitCodes, report, reportOk, parser, notes = []) {
+function record2(out, name, run, okExitCodes, report, reportOk, parser, gaps = []) {
   if (run.outcome === "cancelled") out.cancelled = true;
   const problems = [];
   if (run.outcome === "cancelled" || run.outcome === "timed_out" || run.outcome === "output_too_large") {
@@ -43332,7 +43332,10 @@ function record2(out, name, run, okExitCodes, report, reportOk, parser, notes = 
   }
   out.parser_inputs.push({ parser, input: report });
   const entry = { name, status: "ok" };
-  if (notes.length > 0) entry.reason = notes.join("; ");
+  if (gaps.length > 0) {
+    entry.reason = gaps.join("; ");
+    out.missing_tools.push(name);
+  }
   out.tools_run.push(entry);
 }
 async function runJscpd(ctx, reportDir, out) {
@@ -43419,7 +43422,26 @@ async function runStaticcheck(ctx, out) {
     onLog: ctx.onLog,
     stdoutCapBytes: 50 * 1024 * 1024
   });
+  const entries2 = run.stdout.split(/\r?\n/).filter((l) => l.trim().startsWith("{")).length;
   const errors = staticcheckErrors(run.stdout);
+  const finished7 = run.outcome !== "cancelled" && run.outcome !== "timed_out" && run.outcome !== "output_too_large";
+  if (finished7 && run.exitCode !== 0 && entries2 === 0) {
+    const detail = firstLine2(run.stderr);
+    out.tools_run.push({
+      name: "staticcheck",
+      status: "failed",
+      reason: `exit ${String(run.exitCode)} with no results${detail ? `: ${detail}` : ""}`
+    });
+    return;
+  }
+  if (finished7 && entries2 > 0 && errors.length === entries2) {
+    out.tools_run.push({
+      name: "staticcheck",
+      status: "failed",
+      reason: `no package could be analysed: ${errors.slice(0, 5).join("; ")}${errors.length > 5 ? "; \u2026" : ""}`
+    });
+    return;
+  }
   record2(out, "staticcheck", run, [0, 1], run.stdout, () => true, staticcheckParser, couldNotAnalyse(errors));
 }
 function couldNotAnalyse(errors) {
