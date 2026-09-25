@@ -1,0 +1,439 @@
+/**
+ * `.guardianignore` — paths a project declares are not its own code to scan.
+ *
+ * Self-scanning dev-guardian reported its own deliberately vulnerable test
+ * fixtures (`mcp/test/fixtures/**`) as critical and high findings: every rule
+ * pack ships a `hits/` tree whose whole purpose is to be flagged. A project
+ * says so once, in `.guardianignore` at its root, in gitignore syntax, and
+ * every scanner honours it.
+ *
+ * ---- Two layers, and which one is the guarantee ---------------------------
+ *
+ *   1. **The result filter** (`ignores`) — every finding of every scan tool
+ *      built on the scan factory passes through it before anything is
+ *      stored. This is the guarantee: it implements the syntax exactly (it is
+ *      tested against `git check-ignore` itself), and it covers scanners that
+ *      have no exclusion flag at all (gitleaks, jscpd, ruff, …).
+ *   2. **Native flags** — Semgrep `--exclude`, Trivy `--skip-dirs` /
+ *      `--skip-files`, Bandit `-x` — so the scanner never reads an excluded
+ *      tree in the first place. They are derived from the project's file list
+ *      (`excludedDirs` / `excludedFiles`: the top-most excluded paths, exact),
+ *      never by translating patterns, because each scanner reads a pattern
+ *      differently. Measured: Semgrep 1.176.1 reads `--exclude` as gitignore
+ *      (`/docs` anchored, `docs` at any depth); Trivy anchors `--skip-dirs`
+ *      at the target root; Bandit's `-x` is a SUBSTRING test on the path as
+ *      it walks it, so only an absolute native path works (a relative
+ *      `data/fx` excluded nothing on Windows). A native flag that could
+ *      exclude MORE than the file says under some reading is not passed — the
+ *      filter still applies, so that costs only speed, never a silent gap.
+ *
+ * Exclusion is never silent: the factory reports how many files the ignore
+ * file excludes and how many findings it dropped on every scan of a project
+ * that has one.
+ *
+ * Only the file at the project root is read; `.guardianignore` files in
+ * subdirectories are not (gitignore's per-directory files are not supported).
+ */
+
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join, sep } from 'node:path';
+import { git, splitNul } from '../runners/git.js';
+import { listProjectFiles, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
+
+export const GUARDIAN_IGNORE_FILE = '.guardianignore';
+
+/** Bandit's own default `-x` list — replaced, not extended, by passing `-x`. */
+const BANDIT_DEFAULT_EXCLUDES = ['.svn', 'CVS', '.bzr', '.hg', '.git', '__pycache__', '.tox', '.eggs', '*.egg'];
+
+/** Most native exclusion entries passed to one scanner; the rest are filtered from results only. */
+const MAX_NATIVE_ENTRIES = 200;
+/** Most characters of native exclusion arguments (the command line is shared with targets). */
+const MAX_NATIVE_CHARS = 8_000;
+
+interface Rule {
+  negated: boolean;
+  dirOnly: boolean;
+  regex: RegExp;
+}
+
+export interface IgnoreMatcher {
+  /** Number of patterns (comments and blank lines excluded). */
+  readonly patterns: number;
+  /**
+   * Is `relPath` (relative to the project, either separator) excluded — by
+   * its own pattern, or because a directory above it is? `isDir` says the
+   * path itself is a directory (only matters for `dir/` patterns).
+   */
+  ignores(relPath: string, isDir?: boolean): boolean;
+}
+
+/** Parse gitignore-syntax text into a matcher. */
+export function compileIgnore(text: string): IgnoreMatcher {
+  const rules: Rule[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const rule = parseLine(rawLine);
+    if (rule !== null) rules.push(rule);
+  }
+
+  /** The last rule matching this exact path decides; no rule means kept. */
+  const decide = (path: string, isDir: boolean): boolean => {
+    let ignored = false;
+    for (const rule of rules) {
+      if (rule.dirOnly && !isDir) continue;
+      if (rule.regex.test(path)) ignored = !rule.negated;
+    }
+    return ignored;
+  };
+
+  return {
+    patterns: rules.length,
+    ignores(relPath: string, isDir = false): boolean {
+      const path = normalise(relPath);
+      if (path === null || path === '') return false;
+      const segments = path.split('/');
+      // A file inside an excluded directory cannot be re-included (git).
+      for (let i = 1; i < segments.length; i++) {
+        if (decide(segments.slice(0, i).join('/'), true)) return true;
+      }
+      return decide(path, isDir);
+    },
+  };
+}
+
+/**
+ * A project-relative path in POSIX form without a leading `./`, or null when
+ * it is not relative to the project at all (absolute, or climbing out).
+ */
+function normalise(relPath: string): string | null {
+  let p = relPath.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+  if (p.startsWith('/') || /^[A-Za-z]:\//.test(p)) return null;
+  p = p.replace(/\/{2,}/g, '/');
+  if (p === '..' || p.startsWith('../')) return null;
+  return p;
+}
+
+function parseLine(rawLine: string): Rule | null {
+  // Trailing spaces are ignored unless escaped with a backslash.
+  let line = rawLine.replace(/(?<!\\)[ \t]+$/, '');
+  if (line.length === 0 || line.startsWith('#')) return null;
+  let negated = false;
+  if (line.startsWith('!')) {
+    negated = true;
+    line = line.slice(1);
+  } else if (line.startsWith('\\!') || line.startsWith('\\#')) {
+    line = line.slice(1);
+  }
+  let dirOnly = false;
+  if (line.endsWith('/') && !line.endsWith('\\/')) {
+    dirOnly = true;
+    line = line.replace(/\/+$/, '');
+  }
+  if (line.length === 0) return null;
+  // A slash at the start or in the middle anchors the pattern at the root;
+  // otherwise it matches at any depth.
+  const anchored = line.includes('/');
+  if (line.startsWith('/')) line = line.slice(1);
+  if (line.length === 0) return null;
+  const body = globBody(line);
+  const regex = new RegExp(anchored ? `^${body}$` : `^(?:.*/)?${body}$`);
+  return { negated, dirOnly, regex };
+}
+
+/** gitignore glob → regex source (unanchored), per gitignore(5). */
+function globBody(pattern: string): string {
+  let re = '';
+  let i = 0;
+  while (i < pattern.length) {
+    const c = pattern.charAt(i);
+    if (c === '*') {
+      if (pattern.charAt(i + 1) === '*') {
+        const atStart = i === 0 || pattern.charAt(i - 1) === '/';
+        const atEnd = i + 2 === pattern.length;
+        const beforeSlash = pattern.charAt(i + 2) === '/';
+        if (atStart && beforeSlash) {
+          // `**/` — zero or more leading directories.
+          re += '(?:.*/)?';
+          i += 3;
+          continue;
+        }
+        if (atStart && atEnd) {
+          // `/**` at the end (or a lone `**`): everything inside.
+          re += '.*';
+          i += 2;
+          continue;
+        }
+        // Any other run of asterisks is an ordinary `*`.
+        while (pattern.charAt(i) === '*') i += 1;
+        re += '[^/]*';
+        continue;
+      }
+      re += '[^/]*';
+      i += 1;
+    } else if (c === '?') {
+      re += '[^/]';
+      i += 1;
+    } else if (c === '[') {
+      const close = findClassEnd(pattern, i);
+      if (close === -1) {
+        re += '\\[';
+        i += 1;
+        continue;
+      }
+      let cls = pattern.slice(i + 1, close);
+      let negate = false;
+      if (cls.startsWith('!') || cls.startsWith('^')) {
+        negate = true;
+        cls = cls.slice(1);
+      }
+      cls = cls.replace(/\\(.)/g, '$1').replace(/[\\\]^]/g, '\\$&');
+      re += `[${negate ? '^' : ''}${cls}]`;
+      i = close + 1;
+    } else if (c === '\\' && i + 1 < pattern.length) {
+      re += escapeRegExp(pattern.charAt(i + 1));
+      i += 2;
+    } else {
+      re += escapeRegExp(c);
+      i += 1;
+    }
+  }
+  return re;
+}
+
+/** Index of the `]` closing the class opened at `start`, or -1. A `]` first in the class is literal. */
+function findClassEnd(pattern: string, start: number): number {
+  let j = start + 1;
+  if (pattern.charAt(j) === '!' || pattern.charAt(j) === '^') j += 1;
+  if (pattern.charAt(j) === ']') j += 1;
+  for (; j < pattern.length; j++) {
+    if (pattern.charAt(j) === '\\') {
+      j += 1;
+      continue;
+    }
+    if (pattern.charAt(j) === ']') return j;
+  }
+  return -1;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+}
+
+// ---- A project's exclusions -------------------------------------------
+
+export interface ProjectExclusions {
+  /** Absolute path of the ignore file. */
+  file: string;
+  /** sha256 of its content — part of every scan's cache key. */
+  hash: string;
+  patterns: number;
+  ignores(relPath: string, isDir?: boolean): boolean;
+  /** Top-most excluded directories (POSIX, project-relative, sorted). */
+  excludedDirs: string[];
+  /** Excluded files outside every excluded directory (sorted). */
+  excludedFiles: string[];
+  /** Every regular file the ignore file excludes (the walk's count). */
+  excludedFileCount: number;
+  /** Every regular file it keeps — what native flags are checked against. */
+  keptFiles: string[];
+}
+
+export interface ExclusionsLoadError {
+  file: string;
+  error: string;
+}
+
+/**
+ * The project's `.guardianignore`, compiled and applied to the project's
+ * files. Null when there is no such file; an error object when it exists and
+ * cannot be read — the caller must say so, never proceed as if nothing were
+ * excluded without a word.
+ *
+ * The files are git's own listing in a work tree (tracked, plus untracked
+ * files `.gitignore` does not exclude — what Semgrep and the tree hash read,
+ * and never a crawl of a gitignored `data/` of a million files), else a walk
+ * of the directory. Either way `PROJECT_WALK_EXCLUDE` (`node_modules`,
+ * `.git`, `.guardian`, build output, …) is left out: no scan of the
+ * project's own files reads those.
+ */
+export async function loadProjectExclusions(
+  projectPath: string,
+): Promise<ProjectExclusions | ExclusionsLoadError | null> {
+  const file = join(projectPath, GUARDIAN_IGNORE_FILE);
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (e) {
+    const code = typeof e === 'object' && e !== null && 'code' in e ? (e as { code: unknown }).code : undefined;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+    return { file, error: e instanceof Error ? e.message : String(e) };
+  }
+  const matcher = compileIgnore(text);
+  const files = (await gitListFiles(projectPath)) ?? listProjectFiles(projectPath);
+  return {
+    file,
+    hash: createHash('sha256').update(text).digest('hex'),
+    patterns: matcher.patterns,
+    ignores: (relPath, isDir) => matcher.ignores(relPath, isDir),
+    ...classify(files, matcher),
+  };
+}
+
+/** `git ls-files` of the work tree at `root`, relative to it; null outside git. */
+async function gitListFiles(root: string): Promise<string[] | null> {
+  const r = await git(root, [
+    'ls-files',
+    '-z',
+    '--cached',
+    '--others',
+    '--exclude-standard',
+    ...[...PROJECT_WALK_EXCLUDE].map((d) => `--exclude=${d}/`),
+  ]);
+  if (r.exitCode !== 0) return null;
+  const files = new Set<string>();
+  for (const entry of splitNul(r.stdout)) {
+    // Tracked files under an excluded directory name are listed by git; no
+    // walk of the project would see them.
+    if (entry.split('/').some((segment) => PROJECT_WALK_EXCLUDE.has(segment))) continue;
+    files.add(entry);
+  }
+  return [...files];
+}
+
+/**
+ * Each file is excluded by its top-most excluded directory, or by its own
+ * pattern, or kept. Directory verdicts are memoised: a tree of thousands of
+ * files under one excluded directory costs one match per directory.
+ */
+function classify(
+  files: readonly string[],
+  matcher: IgnoreMatcher,
+): Pick<ProjectExclusions, 'excludedDirs' | 'excludedFiles' | 'excludedFileCount' | 'keptFiles'> {
+  const dirVerdict = new Map<string, boolean>();
+  const dirIgnored = (dir: string): boolean => {
+    let v = dirVerdict.get(dir);
+    if (v === undefined) {
+      v = matcher.ignores(dir, true);
+      dirVerdict.set(dir, v);
+    }
+    return v;
+  };
+  const excludedDirs = new Set<string>();
+  const excludedFiles: string[] = [];
+  const keptFiles: string[] = [];
+  let excludedFileCount = 0;
+  for (const f of files) {
+    const segments = f.split('/');
+    let top: string | null = null;
+    for (let i = 1; i < segments.length; i++) {
+      const dir = segments.slice(0, i).join('/');
+      if (dirIgnored(dir)) {
+        top = dir;
+        break;
+      }
+    }
+    if (top !== null) {
+      excludedDirs.add(top);
+      excludedFileCount += 1;
+    } else if (matcher.ignores(f, false)) {
+      excludedFiles.push(f);
+      excludedFileCount += 1;
+    } else {
+      keptFiles.push(f);
+    }
+  }
+  return {
+    excludedDirs: [...excludedDirs].sort(),
+    excludedFiles: excludedFiles.sort(),
+    excludedFileCount,
+    keptFiles: keptFiles.sort(),
+  };
+}
+
+// ---- Native flags -----------------------------------------------------
+
+interface NativeEntry {
+  rel: string;
+  dir: boolean;
+}
+
+function nativeEntries(ex: ProjectExclusions): NativeEntry[] {
+  return [
+    ...ex.excludedDirs.map((rel) => ({ rel, dir: true })),
+    ...ex.excludedFiles.map((rel) => ({ rel, dir: false })),
+  ];
+}
+
+/**
+ * Would an UNANCHORED reading of `entry` (a scanner treating `a/b` as "a/b at
+ * any depth") also exclude a file the ignore file keeps?
+ */
+function widensOntoKept(entry: NativeEntry, kept: readonly string[]): boolean {
+  const needle = `/${entry.rel}`;
+  return kept.some((k) => {
+    const hay = `/${k}`;
+    return entry.dir ? hay.includes(`${needle}/`) : hay.endsWith(needle);
+  });
+}
+
+/** Keep entries until the count or character budget is spent. */
+function withinBudget<T>(items: readonly T[], cost: (item: T) => number): T[] {
+  const out: T[] = [];
+  let used = 0;
+  for (const item of items) {
+    if (out.length >= MAX_NATIVE_ENTRIES) break;
+    const c = cost(item);
+    if (used + c > MAX_NATIVE_CHARS) break;
+    out.push(item);
+    used += c;
+  }
+  return out;
+}
+
+/**
+ * `--exclude=/<path>` per top-most excluded path — the leading slash anchors
+ * it at the scan root (measured, Semgrep 1.176.1). An entry an unanchored
+ * reading would widen onto a kept file is left to the result filter.
+ */
+export function semgrepExcludeArgs(ex: ProjectExclusions | null): string[] {
+  if (ex === null) return [];
+  const safe = nativeEntries(ex).filter((e) => !widensOntoKept(e, ex.keptFiles));
+  return withinBudget(safe.map((e) => `--exclude=/${e.rel}`), (a) => a.length + 3);
+}
+
+/**
+ * `--skip-dirs <dir>` / `--skip-files <file>`, project-relative: Trivy
+ * matches them against the path relative to the scan target, anchored
+ * (measured — `data/fx` skips `data/fx`, not `x/data/fx`).
+ */
+export function trivySkipArgs(ex: ProjectExclusions | null): string[] {
+  if (ex === null) return [];
+  const args: string[] = [];
+  for (const e of withinBudget(nativeEntries(ex), (entry) => entry.rel.length + 16)) {
+    args.push(e.dir ? '--skip-dirs' : '--skip-files', e.rel);
+  }
+  return args;
+}
+
+/**
+ * `-x <list>`: Bandit's defaults plus the absolute path of every top-most
+ * excluded path (a directory with a trailing separator, so `data/fx` does not
+ * also match `data/fx2`). Bandit tests each as a substring of the path it
+ * walks, so an entry that is a prefix of a kept file's path, or holds a comma
+ * (the list separator), is left to the result filter. Empty when nothing is
+ * excluded — Bandit's own defaults then stay in force.
+ */
+export function banditExcludeArgs(ex: ProjectExclusions | null, projectPath: string): string[] {
+  if (ex === null) return [];
+  const keptAbs = ex.keptFiles.map((k) => join(projectPath, ...k.split('/')));
+  const entries = nativeEntries(ex)
+    .filter((e) => !e.rel.includes(','))
+    .map((e) => {
+      const abs = join(projectPath, ...e.rel.split('/'));
+      return e.dir ? `${abs}${sep}` : abs;
+    })
+    .filter((abs) => !keptAbs.some((k) => k.includes(abs)));
+  const chosen = withinBudget(entries, (a) => a.length + 1);
+  if (chosen.length === 0) return [];
+  return ['-x', [...BANDIT_DEFAULT_EXCLUDES, ...chosen].join(',')];
+}
