@@ -8,6 +8,7 @@
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import {
+  existsSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
@@ -925,100 +926,160 @@ describe('deps_audit', () => {
     expect(r.missing_tools).toContain('dotnet');
   });
 
-  it('item 8 (fix round 3): requestedVersion != resolvedVersion in the list JSON is treated as a gap, not a clean scan', async () => {
-    const project = tempProject();
-    writeFileSync(join(project, 'Test.csproj'), '<Project></Project>', 'utf8');
-    const plugin = makePlugin(project);
+  // -------------------------------------------------------------- fix round 4
 
+  /** The shape `dotnet sln add` writes: backslash paths, a solution folder. */
+  function slnListing(entries: Array<[string, string]>): string {
+    const lines = ['Microsoft Visual Studio Solution File, Format Version 12.00'];
+    lines.push('Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{11111111-1111-1111-1111-111111111111}"', 'EndProject');
+    for (const [name, path] of entries) {
+      lines.push(`Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "${name}", "${path}", "{22222222-2222-2222-2222-222222222222}"`, 'EndProject');
+    }
+    return lines.join('\r\n');
+  }
+
+  /** A deps_audit run with trivy reporting nothing and dotnet answering from
+   *  `onRestore` / `onList`; returns the dotnet commands it saw. */
+  async function auditDotnet(
+    project: string,
+    onRestore: (args: string[]) => { outcome: 'completed' | 'failed'; exitCode: number; stdout?: string; stderr?: string },
+    onList: () => string = dotnetListFx,
+  ) {
+    const plugin = makePlugin(project);
     vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
       name === 'trivy' || name === 'dotnet' ? `/fake/bin/${name}` : null,
     );
+    const dotnetCalls: string[][] = [];
     vi.mocked(runProcess).mockImplementation(async (opts) => {
       if (opts.command === 'trivy') {
         const path = outputPathFor(opts.args);
         if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
         return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
       }
+      if (opts.command === 'dotnet') dotnetCalls.push(opts.args ?? []);
       if (opts.command === 'dotnet' && opts.args?.[0] === 'restore') {
-        return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+        const r = onRestore(opts.args);
+        return { outcome: r.outcome, exitCode: r.exitCode, stdout: r.stdout ?? '', stderr: r.stderr ?? '', truncated: false };
       }
       if (opts.command === 'dotnet' && opts.args?.[0] === 'list') {
-        const stale = JSON.stringify({
-          projects: [
-            {
-              frameworks: [
-                {
-                  topLevelPackages: [
-                    { id: 'Newtonsoft.Json', requestedVersion: '12.0.3', resolvedVersion: '12.0.1' },
-                  ],
-                },
-              ],
-            },
-          ],
-        });
-        return { outcome: 'completed' as const, exitCode: 0, stdout: stale, stderr: '', truncated: false };
+        return { outcome: 'completed' as const, exitCode: 0, stdout: onList(), stderr: '', truncated: false };
       }
       return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
     });
-
-    const tool = getTool('deps_audit');
-    const r = (await tool.handler({ project_path: project }, plugin)) as {
+    const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
       ok: true;
       tools_run: { name: string; status: string; reason?: string }[];
       missing_tools: string[];
       findings_count_by_severity: Record<string, number>;
+      dotnet_restore_failures?: Array<{ target: string; code: string; reason: string }>;
     };
-    expect(r.ok).toBe(true);
-    const dotnet = r.tools_run.find((t) => t.name === 'dotnet');
-    expect(dotnet?.status).not.toBe('ok');
-    expect(r.missing_tools).toContain('dotnet');
-    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
-    expect(total).toBe(0);
+    const restores = dotnetCalls.filter((a) => a[0] === 'restore');
+    const lists = dotnetCalls.filter((a) => a[0] === 'list');
+    return { r, restores, lists, total: Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0) };
+  }
+
+  const ok = () => ({ outcome: 'completed' as const, exitCode: 0 });
+
+  it('C (fix round 4): a floating/range PackageReference (requested "12.*", resolved "12.0.3") is NOT a gap — its findings are kept', async () => {
+    // Reviewer's floating.mjs, against a real SDK: `12.*`, `[12.0.1,13.0)`,
+    // `12.0` and a not-on-the-feed `12.0.0` all make requestedVersion differ
+    // from resolvedVersion after a perfectly fresh restore. The round 3
+    // "defence in depth" read every one of them as staleness: dotnet
+    // `failed`, coverage `none`, the Newtonsoft.Json finding dropped.
+    const project = tempProject();
+    writeFileSync(join(project, 'Test.csproj'), '<Project></Project>', 'utf8');
+    const floating = dotnetListFx().replace('"requestedVersion": "12.0.1"', '"requestedVersion": "12.*"').replace(
+      '"resolvedVersion": "12.0.1"',
+      '"resolvedVersion": "12.0.3"',
+    );
+    expect(floating).toContain('"12.*"'); // the fixture edit really happened
+    const { r, total } = await auditDotnet(project, ok, () => floating);
+    expect(r.tools_run.find((t) => t.name === 'dotnet')?.status).toBe('ok');
+    expect(r.missing_tools).not.toContain('dotnet');
+    expect(total).toBe(2);
   });
 
-  it('item 8 (fix round 2): a .sln target discovers packages.lock.json next to EACH .csproj, not next to the .sln itself', async () => {
+  it('E (fix round 4): every restore passes --locked-mode — and -p:RestorePackagesWithLockFile=false when no project has a lock', async () => {
+    // Measured: a project with RestorePackagesWithLockFile=true and no
+    // committed lock gets a NEW packages.lock.json from a plain restore AND
+    // from `--locked-mode` alone; only the false property stops it.
     const project = tempProject();
-    writeFileSync(join(project, 'App.sln'), 'Microsoft Visual Studio Solution File', 'utf8');
-    mkdirSync(join(project, 'src', 'Proj'), { recursive: true });
-    writeFileSync(join(project, 'src', 'Proj', 'Proj.csproj'), '<Project></Project>', 'utf8');
-    // The lock file sits next to the .csproj, in a subdirectory — NOT next
-    // to the .sln at the project root. `dirname(target)` for a .sln target
-    // is the project root, so the fix round 1 shape's `existsSync(join(
-    // dirname(target), 'packages.lock.json'))` would look in the WRONG
-    // place and never find this file.
-    writeFileSync(join(project, 'src', 'Proj', 'packages.lock.json'), '{}', 'utf8');
-    const plugin = makePlugin(project);
-
-    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
-      name === 'trivy' || name === 'dotnet' ? `/fake/bin/${name}` : null,
+    writeFileSync(
+      join(project, 'Test.csproj'),
+      '<Project><PropertyGroup><RestorePackagesWithLockFile>true</RestorePackagesWithLockFile></PropertyGroup></Project>',
+      'utf8',
     );
-    const restoreCommands: string[][] = [];
-    // Fix round 3: restore ALWAYS runs first, so the one `dotnet list` call
-    // that follows always sees a fresh restore — no retry-on-failure mock
-    // needed here any more.
-    vi.mocked(runProcess).mockImplementation(async (opts) => {
-      if (opts.command === 'trivy') {
-        const path = outputPathFor(opts.args);
-        if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
-        return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
-      }
-      if (opts.command === 'dotnet' && opts.args?.[0] === 'restore') {
-        restoreCommands.push(opts.args ?? []);
-        return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
-      }
-      if (opts.command === 'dotnet' && opts.args?.[0] === 'list') {
-        return { outcome: 'completed' as const, exitCode: 0, stdout: dotnetListFx(), stderr: '', truncated: false };
-      }
-      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
-    });
+    const { restores } = await auditDotnet(project, ok);
+    expect(restores).toHaveLength(1);
+    expect(restores[0]).toContain('--locked-mode');
+    expect(restores[0]).toContain('-p:RestorePackagesWithLockFile=false');
+  });
 
-    const tool = getTool('deps_audit');
-    const r = await tool.handler({ project_path: project }, plugin);
-    expect(r.ok).toBe(true);
-    expect(restoreCommands).toHaveLength(1);
-    // The per-.csproj discovery found the lock file the .sln itself does
-    // not sit next to — `--locked-mode` must be passed.
-    expect(restoreCommands[0]).toContain('--locked-mode');
+  it('E (fix round 4): a lock five directories below the .sln is found from the solution list — --locked-mode, and NOT the false property (NU1005)', async () => {
+    // Reviewer's deep.mjs: the old depth-4 walk never saw this lock, so a
+    // plain restore rewrote it.
+    const project = tempProject();
+    writeFileSync(join(project, 'Root.sln'), slnListing([['App', 'src\\a\\b\\c\\App\\App.csproj']]), 'utf8');
+    mkdirSync(join(project, 'src', 'a', 'b', 'c', 'App'), { recursive: true });
+    writeFileSync(join(project, 'src', 'a', 'b', 'c', 'App', 'App.csproj'), '<Project></Project>', 'utf8');
+    writeFileSync(join(project, 'src', 'a', 'b', 'c', 'App', 'packages.lock.json'), '{}', 'utf8');
+    const { restores } = await auditDotnet(project, ok);
+    expect(restores).toHaveLength(1);
+    expect(restores[0]).toContain('--locked-mode');
+    expect(restores[0]).not.toContain('-p:RestorePackagesWithLockFile=false');
+  });
+
+  it('E (fix round 4): a solution mixing a locked project with an opted-in lock-less one is not restored at all — reported as a gap', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'Root.sln'), slnListing([['A', 'A\\A.csproj'], ['B', 'B\\B.csproj']]), 'utf8');
+    mkdirSync(join(project, 'A'));
+    mkdirSync(join(project, 'B'));
+    writeFileSync(join(project, 'A', 'A.csproj'), '<Project></Project>', 'utf8');
+    writeFileSync(join(project, 'A', 'packages.lock.json'), '{}', 'utf8');
+    writeFileSync(
+      join(project, 'B', 'B.csproj'),
+      '<Project><PropertyGroup><RestorePackagesWithLockFile>true</RestorePackagesWithLockFile></PropertyGroup></Project>',
+      'utf8',
+    );
+    const { r, restores, lists } = await auditDotnet(project, ok);
+    expect(restores).toHaveLength(0);
+    expect(lists).toHaveLength(0);
+    expect(r.tools_run.find((t) => t.name === 'dotnet')?.status).toBe('failed');
+    expect(r.missing_tools).toContain('dotnet');
+    expect(r.dotnet_restore_failures?.[0]?.code).toBe('lock_file_would_be_created');
+  });
+
+  it('E (fix round 4): a lock file the restore created anyway is deleted again and the target reported as a gap', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'Test.csproj'), '<Project></Project>', 'utf8');
+    const lock = join(project, 'packages.lock.json');
+    const { r, lists } = await auditDotnet(project, () => {
+      writeFileSync(lock, '{}', 'utf8'); // an opt-in this scan could not see
+      return { outcome: 'completed', exitCode: 0 };
+    });
+    expect(existsSync(lock)).toBe(false);
+    expect(lists).toHaveLength(0);
+    expect(r.tools_run.find((t) => t.name === 'dotnet')?.status).toBe('failed');
+    expect(r.dotnet_restore_failures?.[0]?.code).toBe('lock_file_would_be_created');
+  });
+
+  it('A (fix round 4): a feed failure (NU1101) is reported with its own code, distinct from an out-of-sync lock', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'Test.csproj'), '<Project></Project>', 'utf8');
+    const { r } = await auditDotnet(project, () => ({
+      outcome: 'failed',
+      exitCode: 1,
+      stdout:
+        "C:\\p\\Test.csproj : warning NU1903: Package 'Newtonsoft.Json' 12.0.1 has a known high severity vulnerability\n" +
+        'C:\\p\\Test.csproj : error NU1101: Unable to find package Zz.Nope. No packages exist with this id in source(s): nuget.org',
+    }));
+    const dotnet = r.tools_run.find((t) => t.name === 'dotnet');
+    expect(dotnet?.status).toBe('failed');
+    expect(dotnet?.reason).toMatch(/NU1101/);
+    expect(dotnet?.reason).not.toMatch(/out of sync/);
+    expect(r.dotnet_restore_failures).toEqual([
+      expect.objectContaining({ target: 'Test.csproj', code: 'NU1101' }),
+    ]);
   });
 
   it('marks a missing dotnet SDK as a coverage gap for a project with a .csproj', async () => {
@@ -1810,10 +1871,13 @@ describe('deps_update_plan', () => {
     expect(r.unplanned.find((u) => u.package_name === 'laravel/framework')?.ecosystem).toBe('unknown');
   });
 
-  it('#7 (fix round 3): npm+composer with NO pip present still surfaces a composer CVE via the catch-all, not dropped', async () => {
+  it('#7 (fix round 3) / A (fix round 4): npm+composer with NO pip present still surfaces a composer CVE — attributed to composer, naming the runner failure', async () => {
     // The coordinator's own probe: npm and composer present, pip absent —
     // laravel/framework has no runner of its own (composer has no CVE-map
-    // sweep) and previously vanished from both plan and unplanned.
+    // sweep) and previously vanished from both plan and unplanned. Round 4:
+    // it is DECLARED in composer.json, and `composer outdated` printed
+    // nothing here, so the reason says the composer runner failed — not the
+    // round 3 "no ecosystem runner found evidence for it", which was false.
     const project = tempProject();
     writeFileSync(project + '/package.json', '{"name":"x","dependencies":{}}', 'utf8');
     writeFileSync(
@@ -1832,24 +1896,26 @@ describe('deps_update_plan', () => {
 
     const r = okResult<{
       plan: unknown[];
-      unplanned: Array<{ package_name: string; ecosystem: string; cve_ids: string[] }>;
+      unplanned: Array<{ package_name: string; ecosystem: string; cve_ids: string[]; reason: string }>;
+      runner_failures: Array<{ ecosystem: string; code: string }>;
     }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
     expect(r.plan).toEqual([]);
+    expect(r.runner_failures).toEqual([expect.objectContaining({ ecosystem: 'composer', code: 'no_output' })]);
     expect(r.unplanned).toHaveLength(1);
     expect(r.unplanned[0]).toMatchObject({
       package_name: 'laravel/framework',
-      ecosystem: 'unknown',
+      ecosystem: 'composer',
       cve_ids: ['CVE-LARAVEL-2'],
     });
+    expect(r.unplanned[0]?.reason).toMatch(/declared in composer\.json, but the composer runner failed/);
   });
 
-  it('#7 (fix round 3): a pnpm-resolved TRANSITIVE dependency is found via the .pnpm store, real symlinks and all', async () => {
-    // pnpm's top-level node_modules/<name> entries are SYMLINKS into
-    // .pnpm/ — Dirent.isDirectory() reflects the symlink itself (always
-    // false), not its target, so a plain check silently skipped every pnpm
-    // dependency. The .pnpm store itself holds a REAL directory per
-    // installed package (direct or transitive), which this test builds by
-    // hand to avoid depending on a real pnpm install being on PATH.
+  it('D (fix round 4): a pnpm store in node_modules/.pnpm makes it a pnpm project — no npm override is emitted for the transitive CVE', async () => {
+    // Round 3 found the pnpm-resolved transitive `minimist` here and emitted
+    // `npm pkg set overrides[minimist]=…` — which pnpm ignores (measured:
+    // pnpm 10.33.2 still resolved minimist@0.0.8 with a top-level
+    // "overrides"). It is still FOUND via the .pnpm store; it is now reported
+    // with the pnpm fix instead of an npm command.
     const project = tempProject();
     writeFileSync(project + '/package.json', '{"name":"x","dependencies":{"mkdirp":"0.5.1"}}', 'utf8');
     const nm = join(project, 'node_modules');
@@ -1865,11 +1931,6 @@ describe('deps_update_plan', () => {
       '{"name":"mkdirp","version":"0.5.1"}',
       'utf8',
     );
-    // The top-level entry pnpm would normally symlink — a real directory
-    // here is a fine stand-in: the point under test is the .pnpm store
-    // scan, not symlink-following itself.
-    mkdirSync(join(nm, 'mkdirp'), { recursive: true });
-    writeFileSync(join(nm, 'mkdirp', 'package.json'), '{"name":"mkdirp","version":"0.5.1"}', 'utf8');
     const plugin = makePlugin(project);
     seedCve(plugin, project, {
       cve_id: 'CVE-PNPM-1',
@@ -1877,16 +1938,25 @@ describe('deps_update_plan', () => {
       installed_version: '0.0.8',
       fixed_version: '1.2.6',
     });
-    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+    const calls: string[] = [];
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      calls.push([cmd, ...args].join(' '));
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
 
-    const r = okResult<{ plan: Array<{ package_name: string; upgrade_command: string }> }>(
-      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
-    );
-    expect(r.plan).toHaveLength(1);
-    expect(r.plan[0]).toMatchObject({
-      package_name: 'minimist',
-      upgrade_command: 'npm pkg set overrides[minimist]=1.2.6',
-    });
+    const r = okResult<{
+      plan: unknown[];
+      unplanned: Array<{ package_name: string; ecosystem: string; reason: string }>;
+      unsupported_ecosystems_present: string[];
+    }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
+    expect(r.plan).toEqual([]);
+    expect(calls.some((c) => c.startsWith('npm'))).toBe(false);
+    expect(r.unplanned).toEqual([
+      expect.objectContaining({ package_name: 'minimist', ecosystem: 'npm', reason: expect.stringMatching(/pnpm project \(node_modules\/\.pnpm\)/) }),
+    ]);
+    expect(r.unplanned[0]?.reason).toContain('"pnpm": { "overrides": { "minimist": "1.2.6" } }');
+    expect(r.unplanned[0]?.reason).toContain('pnpm install --ignore-scripts');
+    expect(r.unsupported_ecosystems_present).toContain('pnpm');
   });
 
   it('"cheap" item (fix round 3): the override key uses the LOCKFILE\'s spelling, not the CVE scanner\'s own casing', async () => {
@@ -2135,6 +2205,24 @@ describe('deps_update_plan', () => {
     expect(r.plan.some((s) => s.package_name === 'pytest')).toBe(false);
   });
 
+  it('fix round 4: a [project] header followed by a TOML comment still opens the table (reviewer crlf.mjs "header comment")', async () => {
+    const project = tempProject();
+    writeFileSync(
+      join(project, 'pyproject.toml'),
+      '[project] # main\r\nname = "x"\r\ndependencies = ["django==4.2.0"]\r\n',
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, { cve_id: 'CVE-D', package_name: 'django', installed_version: '4.2.0', fixed_version: '4.2.5' });
+    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+
+    const r = okResult<{ plan: Array<{ package_name: string; latest_version: string }>; unplanned: unknown[] }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    expect(r.plan.map((s) => [s.package_name, s.latest_version])).toEqual([['django', '4.2.5']]);
+    expect(r.unplanned).toEqual([]);
+  });
+
   it('"cheap" item (fix round 3): an environment marker on a pyproject array element is stripped before matching, not left to break every regex', async () => {
     const project = tempProject();
     writeFileSync(
@@ -2216,14 +2304,29 @@ describe('deps_update_plan', () => {
     expect(calls.some((c) => c.startsWith('dotnet list') && c.includes('--no-restore'))).toBe(true);
   });
 
-  it('item 8 (fix round 3): a failed restore returns an empty plan — dotnet list is never even attempted', async () => {
+  it('item 8 (fix round 3) / A (fix round 4): a failed restore never reaches dotnet list, and is reported in runner_failures with its NuGet code', async () => {
     const project = tempProject();
-    writeFileSync(project + '/Test.csproj', '<Project></Project>', 'utf8');
+    writeFileSync(
+      project + '/Test.csproj',
+      '<Project><ItemGroup><PackageReference Include="Newtonsoft.Json" Version="12.0.1" /></ItemGroup></Project>',
+      'utf8',
+    );
     const plugin = makePlugin(project);
+    seedCve(plugin, project, {
+      cve_id: 'GHSA-5crp-9r3c-p9vr',
+      package_name: 'Newtonsoft.Json',
+      installed_version: '12.0.1',
+      fixed_version: '13.0.1',
+    });
     let listCalled = false;
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
       if (cmd === 'dotnet' && args[0] === 'restore') {
-        return { exitCode: 1, stdout: '', stderr: 'error NU1004: lock out of sync' };
+        return {
+          exitCode: 1,
+          stdout:
+            'C:\\p\\Test.csproj : error NU1004: The package reference Newtonsoft.Json version has changed from [12.0.1, ) to [12.0.3, ). [C:\\p\\Test.csproj]',
+          stderr: '',
+        };
       }
       if (cmd === 'dotnet' && args[0] === 'list') {
         listCalled = true;
@@ -2232,21 +2335,60 @@ describe('deps_update_plan', () => {
       return { exitCode: 0, stdout: '', stderr: '' };
     }) as unknown as typeof execa);
 
-    const r = okResult<{ plan: unknown[] }>(
-      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
-    );
+    const r = okResult<{
+      plan: unknown[];
+      unplanned: Array<{ package_name: string; ecosystem: string; reason: string }>;
+      runner_failures: Array<{ ecosystem: string; code: string; target?: string; reason: string }>;
+    }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
     expect(listCalled).toBe(false);
     expect(r.plan).toEqual([]);
+    expect(r.runner_failures).toEqual([
+      expect.objectContaining({ ecosystem: 'dotnet', code: 'NU1004', target: 'Test.csproj' }),
+    ]);
+    expect(r.runner_failures[0]?.reason).toMatch(/out of sync/);
+    // Reviewer finding #8: the catch-all used to say "no ecosystem runner …
+    // found evidence" for this package, which is declared right there in the
+    // .csproj — the runner FAILED.
+    expect(r.unplanned).toEqual([
+      expect.objectContaining({ package_name: 'Newtonsoft.Json', ecosystem: 'dotnet' }),
+    ]);
+    expect(r.unplanned[0]?.reason).toMatch(/declared in Test\.csproj, but the dotnet runner failed/);
+    expect(r.unplanned[0]?.reason).toMatch(/NU1004/);
   });
 
-  it('item 8 (fix round 3): a requestedVersion != resolvedVersion mismatch in the list JSON is treated as stale, not trusted', async () => {
+  it('A (fix round 4): an unreachable feed (NU1301) is told apart from an out-of-sync lock', async () => {
     const project = tempProject();
     writeFileSync(project + '/Test.csproj', '<Project></Project>', 'utf8');
     const plugin = makePlugin(project);
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
       if (cmd === 'dotnet' && args[0] === 'restore') {
-        return { exitCode: 0, stdout: '', stderr: '' };
+        return {
+          exitCode: 1,
+          stdout: '',
+          stderr: 'C:\\p\\Test.csproj : error NU1301: Unable to load the service index for source https://pkgs.example/index.json.',
+        };
       }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{ runner_failures: Array<{ code: string; reason: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    expect(r.runner_failures).toHaveLength(1);
+    expect(r.runner_failures[0]?.code).toBe('NU1301');
+    expect(r.runner_failures[0]?.reason).toMatch(/feed could not be reached/);
+    expect(r.runner_failures[0]?.reason).not.toMatch(/out of sync/);
+  });
+
+  it('C (fix round 4): a floating reference (requested "2.*", resolved "2.12.0") is planned — one such reference no longer empties the whole .NET plan', async () => {
+    // Reviewer's floatplan.mjs P2, against a real SDK: `Serilog 2.*` next to
+    // an exact, vulnerable Newtonsoft.Json made the round 3 mismatch check
+    // return [] for the WHOLE target — the Newtonsoft security step vanished.
+    const project = tempProject();
+    writeFileSync(project + '/Test.csproj', '<Project></Project>', 'utf8');
+    const plugin = makePlugin(project);
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      if (cmd === 'dotnet' && args[0] === 'restore') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd === 'dotnet' && args[0] === 'list') {
         return {
           exitCode: 0,
@@ -2256,12 +2398,8 @@ describe('deps_update_plan', () => {
                 frameworks: [
                   {
                     topLevelPackages: [
-                      {
-                        id: 'Newtonsoft.Json',
-                        requestedVersion: '12.0.3',
-                        resolvedVersion: '12.0.1',
-                        latestVersion: '13.0.1',
-                      },
+                      { id: 'Newtonsoft.Json', requestedVersion: '12.0.1', resolvedVersion: '12.0.1', latestVersion: '13.0.4' },
+                      { id: 'Serilog', requestedVersion: '2.*', resolvedVersion: '2.12.0', latestVersion: '4.4.0' },
                     ],
                   },
                 ],
@@ -2274,42 +2412,315 @@ describe('deps_update_plan', () => {
       return { exitCode: 0, stdout: '', stderr: '' };
     }) as unknown as typeof execa);
 
-    const r = okResult<{ plan: unknown[] }>(
+    const r = okResult<{ plan: Array<{ package_name: string; installed_version: string }>; runner_failures: unknown[] }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
     );
-    expect(r.plan).toEqual([]);
+    expect(r.plan.map((s) => [s.package_name, s.installed_version]).sort()).toEqual([
+      ['Newtonsoft.Json', '12.0.1'],
+      ['Serilog', '2.12.0'],
+    ]);
+    expect(r.runner_failures).toEqual([]);
   });
 
-  it('item 8 (fix round 2): deps_update_plan finds a packages.lock.json in a SUBDIRECTORY, not only at the project root', async () => {
+  it('E (fix round 4): every restore passes --locked-mode, per target, and the false property only where no lock exists', async () => {
+    // A root-level .csproj plus a second project in a subdirectory with its
+    // own lock: two targets (no solution), two restores. Round 3 passed
+    // `--locked-mode` only when SOME lock existed somewhere, and a plain
+    // restore otherwise — which creates a lock for a project that opts in.
     const project = tempProject();
-    // A root-level .csproj is what makes `detectEcosystems` include
-    // 'dotnet' at all (nested-only .csproj discovery is a separately
-    // parked item, not this one) — but the LOCK FILE lives in a
-    // subdirectory, the routine multi-project-repo shape.
-    // `existsSync(join(projectPath, 'packages.lock.json'))` (the fix round
-    // 1 shape) never looked anywhere else.
     writeFileSync(join(project, 'Root.csproj'), '<Project></Project>', 'utf8');
     mkdirSync(join(project, 'src', 'Proj'), { recursive: true });
     writeFileSync(join(project, 'src', 'Proj', 'Proj.csproj'), '<Project></Project>', 'utf8');
     writeFileSync(join(project, 'src', 'Proj', 'packages.lock.json'), '{}', 'utf8');
     const plugin = makePlugin(project);
     const restoreCalls: string[][] = [];
-    // Fix round 3: restore ALWAYS runs first now, so `dotnet list` only
-    // ever runs once, against an already-fresh restore — no retry-on-
-    // failure mock needed here any more.
+    const listCalls: string[][] = [];
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
       if (cmd === 'dotnet' && args[0] === 'restore') {
         restoreCalls.push(args);
         return { exitCode: 0, stdout: '', stderr: '' };
       }
       if (cmd === 'dotnet' && args[0] === 'list') {
+        listCalls.push(args);
         return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
     }) as unknown as typeof execa);
 
     await getTool('deps_update_plan').handler({ project_path: project }, plugin);
+    expect(restoreCalls).toHaveLength(2);
+    for (const args of restoreCalls) expect(args).toContain('--locked-mode');
+    const rootRestore = restoreCalls.find((a) => a[1]?.endsWith('Root.csproj'));
+    const projRestore = restoreCalls.find((a) => a[1]?.endsWith('Proj.csproj'));
+    expect(rootRestore).toContain('-p:RestorePackagesWithLockFile=false');
+    expect(projRestore).not.toContain('-p:RestorePackagesWithLockFile=false');
+    // Each listing is scoped to its own target and never restores on its own.
+    expect(listCalls).toHaveLength(2);
+    for (const args of listCalls) {
+      expect(args[1]).toMatch(/\.csproj$/);
+      expect(args).toContain('--no-restore');
+    }
+  });
+
+  it('E (fix round 4): a lock below a solution is found from the solution list, not a depth-limited walk', async () => {
+    const project = tempProject();
+    writeFileSync(
+      join(project, 'Root.sln'),
+      [
+        'Microsoft Visual Studio Solution File, Format Version 12.00',
+        'Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\\a\\b\\c\\App\\App.csproj", "{22222222-2222-2222-2222-222222222222}"',
+        'EndProject',
+      ].join('\r\n'),
+      'utf8',
+    );
+    mkdirSync(join(project, 'src', 'a', 'b', 'c', 'App'), { recursive: true });
+    writeFileSync(join(project, 'src', 'a', 'b', 'c', 'App', 'App.csproj'), '<Project></Project>', 'utf8');
+    writeFileSync(join(project, 'src', 'a', 'b', 'c', 'App', 'packages.lock.json'), '{}', 'utf8');
+    const plugin = makePlugin(project);
+    const restoreCalls: string[][] = [];
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      if (cmd === 'dotnet' && args[0] === 'restore') restoreCalls.push(args);
+      if (cmd === 'dotnet' && args[0] === 'list') return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    await getTool('deps_update_plan').handler({ project_path: project }, plugin);
     expect(restoreCalls).toHaveLength(1);
+    expect(restoreCalls[0]?.[1]).toMatch(/Root\.sln$/);
     expect(restoreCalls[0]).toContain('--locked-mode');
+    expect(restoreCalls[0]).not.toContain('-p:RestorePackagesWithLockFile=false');
+  });
+
+  it('A (fix round 4): catch-all reasons — declared but not listed by a runner that worked, vs declared nowhere', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'composer.json'), JSON.stringify({ require: { 'monolog/monolog': '^2.0' } }), 'utf8');
+    const plugin = makePlugin(project);
+    seedCves(plugin, project, 'scan1', [
+      { cve_id: 'CVE-MONO', package_name: 'monolog/monolog', installed_version: '2.0.0', fixed_version: '2.1.0' },
+      { cve_id: 'CVE-GHOST', package_name: 'ghost-lib', installed_version: '1.0.0', fixed_version: '1.0.1' },
+    ]);
+    vi.mocked(execa).mockImplementation((async (cmd: string) => {
+      if (cmd === 'composer') return { exitCode: 0, stdout: JSON.stringify({ installed: [] }), stderr: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{
+      unplanned: Array<{ package_name: string; ecosystem: string; reason: string }>;
+      runner_failures: unknown[];
+    }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
+    expect(r.runner_failures).toEqual([]);
+    const mono = r.unplanned.find((u) => u.package_name === 'monolog/monolog');
+    const ghost = r.unplanned.find((u) => u.package_name === 'ghost-lib');
+    expect(mono?.ecosystem).toBe('composer');
+    expect(mono?.reason).toMatch(/declared in composer\.json, but the composer runner only plans what `composer outdated` lists/);
+    expect(mono?.reason).toMatch(/2\.1\.0/);
+    expect(ghost?.ecosystem).toBe('unknown');
+    expect(ghost?.reason).toMatch(/no manifest, lockfile or outdated listing/);
+  });
+
+  it('A (fix round 4): a runner that cannot start (composer not installed) is a runner failure, not an empty plan', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'composer.json'), JSON.stringify({ require: { 'laravel/framework': '^8.0' } }), 'utf8');
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, {
+      cve_id: 'CVE-LARAVEL-3',
+      package_name: 'laravel/framework',
+      installed_version: '8.0.0',
+      fixed_version: '8.22.1',
+    });
+    vi.mocked(execa).mockImplementation((async (cmd: string) => {
+      // execa with reject:false, command not on PATH: no exit code at all.
+      if (cmd === 'composer') return { exitCode: undefined, failed: true, code: 'ENOENT', shortMessage: 'spawn composer ENOENT', stdout: '', stderr: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{
+      unplanned: Array<{ ecosystem: string; reason: string }>;
+      runner_failures: Array<{ ecosystem: string; code: string }>;
+    }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
+    expect(r.runner_failures).toEqual([expect.objectContaining({ ecosystem: 'composer', code: 'not_installed' })]);
+    expect(r.unplanned[0]?.ecosystem).toBe('composer');
+    expect(r.unplanned[0]?.reason).toMatch(/composer runner failed/);
+  });
+
+  it('B (fix round 4): a DIRECT dependency already at latest, with a stale CVE, is already_fixed — the version comes from package-lock.json', async () => {
+    // Reviewer's atlatest.mjs: minimist@1.2.8 installed and current, CVE
+    // row recorded against 0.0.8 with its fix in 1.2.6. `npm outdated` does
+    // not list a package at latest, so round 3 reported "a direct dependency
+    // that `npm outdated` did not report" instead of already_fixed.
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"minimist":"1.2.8"}}', 'utf8');
+    writeFileSync(
+      join(project, 'package-lock.json'),
+      JSON.stringify({
+        name: 'x',
+        lockfileVersion: 3,
+        packages: { '': { name: 'x', dependencies: { minimist: '1.2.8' } }, 'node_modules/minimist': { version: '1.2.8' } },
+      }),
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, { cve_id: 'CVE-STALE', package_name: 'minimist', installed_version: '0.0.8', fixed_version: '1.2.6' });
+    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '{}', stderr: '' })) as unknown as typeof execa);
+
+    const r = okResult<{ plan: unknown[]; unplanned: Array<{ package_name: string; ecosystem: string; reason: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    expect(r.plan).toEqual([]);
+    expect(r.unplanned).toHaveLength(1);
+    expect(r.unplanned[0]).toMatchObject({ package_name: 'minimist', ecosystem: 'npm' });
+    expect(r.unplanned[0]?.reason).toMatch(/^already_fixed: installed version 1\.2\.8/);
+  });
+
+  it('B (fix round 4): a DIRECT dependency below its fix that `npm outdated` could not report (registry error) still gets the minimum-fix install step', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"minimist":"^1.2.0"}}', 'utf8');
+    mkdirSync(join(project, 'node_modules', 'minimist'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', 'minimist', 'package.json'), '{"name":"minimist","version":"1.2.5"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, { cve_id: 'CVE-MM', package_name: 'minimist', installed_version: '1.2.5', fixed_version: '1.2.6' });
+    vi.mocked(execa).mockImplementation((async () => ({
+      exitCode: 1,
+      stdout: JSON.stringify({ error: { code: 'ENOTFOUND', summary: 'request to https://registry.npmjs.org/minimist failed' } }),
+      stderr: '',
+    })) as unknown as typeof execa);
+
+    const r = okResult<{
+      plan: Array<{ package_name: string; installed_version: string; latest_version: string; classification: string; upgrade_command: string }>;
+      runner_failures: Array<{ ecosystem: string; code: string }>;
+    }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
+    expect(r.runner_failures).toEqual([expect.objectContaining({ ecosystem: 'npm', code: 'ENOTFOUND' })]);
+    expect(r.plan).toEqual([
+      expect.objectContaining({
+        package_name: 'minimist',
+        installed_version: '1.2.5',
+        latest_version: '1.2.6',
+        classification: 'security',
+        upgrade_command: 'npm install minimist@1.2.6 --ignore-scripts',
+      }),
+    ]);
+  });
+
+  it('B (fix round 4): a TRANSITIVE dependency whose every resolved copy is past the fix is already_fixed, not an override', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"mkdirp":"1.0.4"}}', 'utf8');
+    writeFileSync(
+      join(project, 'package-lock.json'),
+      JSON.stringify({
+        name: 'x',
+        lockfileVersion: 3,
+        packages: {
+          '': { name: 'x', dependencies: { mkdirp: '1.0.4' } },
+          'node_modules/mkdirp': { version: '1.0.4' },
+          'node_modules/minimist': { version: '1.2.8' },
+        },
+      }),
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, { cve_id: 'CVE-OLD', package_name: 'minimist', installed_version: '0.0.8', fixed_version: '1.2.6' });
+    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '{}', stderr: '' })) as unknown as typeof execa);
+
+    const r = okResult<{ plan: unknown[]; unplanned: Array<{ package_name: string; reason: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    expect(r.plan).toEqual([]);
+    expect(r.unplanned).toEqual([expect.objectContaining({ package_name: 'minimist', reason: expect.stringMatching(/^already_fixed/) })]);
+  });
+
+  it('D (fix round 4): a pnpm-lock.yaml project gets NO npm command — npm outdated is not even run — and the transitive CVE carries the pnpm.overrides fix', async () => {
+    // Reviewer's plan2.mjs on a real pnpm install: round 3 emitted
+    // `npm pkg set overrides[minimist]=1.2.6` + `npm install --ignore-scripts`
+    // labelled security (and an ordinary `npm install mkdirp@3.0.1`).
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"mkdirp":"0.5.1"}}', 'utf8');
+    writeFileSync(
+      join(project, 'pnpm-lock.yaml'),
+      [
+        "lockfileVersion: '9.0'",
+        '',
+        'importers:',
+        '',
+        '  .:',
+        '    dependencies:',
+        '      mkdirp:',
+        '        specifier: 0.5.1',
+        '        version: 0.5.1',
+        '',
+        'packages:',
+        '',
+        '  minimist@0.0.8:',
+        '    resolution: {integrity: sha512-x}',
+        '',
+        '  mkdirp@0.5.1:',
+        '    resolution: {integrity: sha512-y}',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, { cve_id: 'CVE-MM', package_name: 'minimist', installed_version: '0.0.8', fixed_version: '1.2.6' });
+    const calls: string[] = [];
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      calls.push([cmd, ...args].join(' '));
+      return { exitCode: 1, stdout: JSON.stringify({ mkdirp: { current: '0.5.1', latest: '3.0.1' } }), stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{
+      plan: Array<{ upgrade_command: string }>;
+      unplanned: Array<{ package_name: string; ecosystem: string; reason: string }>;
+      unsupported_ecosystems_present: string[];
+    }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
+    expect(calls).toEqual([]);
+    expect(r.plan).toEqual([]);
+    expect(r.unplanned).toHaveLength(1);
+    expect(r.unplanned[0]).toMatchObject({ package_name: 'minimist', ecosystem: 'npm' });
+    expect(r.unplanned[0]?.reason).toMatch(/^pnpm project \(pnpm-lock\.yaml\)/);
+    expect(r.unplanned[0]?.reason).toContain('"pnpm": { "overrides": { "minimist": "1.2.6" } }');
+    expect(r.unsupported_ecosystems_present).toContain('pnpm');
+  });
+
+  it('D (fix round 4): a yarn.lock project gets NO npm command — a direct CVE carries the yarn resolutions fix; a copy past the fix is already_fixed', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"lodash":"^4.17.0","minimist":"^1.2.0"}}', 'utf8');
+    writeFileSync(
+      join(project, 'yarn.lock'),
+      [
+        '# yarn lockfile v1',
+        '',
+        'lodash@^4.17.0:',
+        '  version "4.17.20"',
+        '',
+        'minimist@^1.2.0, minimist@^1.2.5:',
+        '  version "1.2.8"',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    seedCves(plugin, project, 'scan1', [
+      { cve_id: 'CVE-LODASH', package_name: 'lodash', installed_version: '4.17.20', fixed_version: '4.17.21' },
+      { cve_id: 'CVE-MM', package_name: 'minimist', installed_version: '0.0.8', fixed_version: '1.2.6' },
+    ]);
+    const calls: string[] = [];
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      calls.push([cmd, ...args].join(' '));
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = okResult<{
+      plan: unknown[];
+      unplanned: Array<{ package_name: string; reason: string }>;
+      unsupported_ecosystems_present: string[];
+    }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
+    expect(calls).toEqual([]);
+    expect(r.plan).toEqual([]);
+    const lodash = r.unplanned.find((u) => u.package_name === 'lodash');
+    const minimist = r.unplanned.find((u) => u.package_name === 'minimist');
+    expect(lodash?.reason).toMatch(/^yarn project \(yarn\.lock\)/);
+    expect(lodash?.reason).toContain('"resolutions": { "lodash": "4.17.21" }');
+    expect(lodash?.reason).toContain('raise the "lodash" range in package.json to 4.17.21');
+    expect(minimist?.reason).toMatch(/^already_fixed: installed version 1\.2\.8/);
+    expect(r.unsupported_ecosystems_present).toContain('yarn');
   });
 });

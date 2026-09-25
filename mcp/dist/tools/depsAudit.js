@@ -20,19 +20,26 @@
  *     host's own interpreter, not this project's dependencies). Parsed via
  *     `pipAuditParser`;
  *   - `dotnet list <target> package --vulnerable --include-transitive
- *     --format json`, one call per `.sln` (preferred) or `.csproj` found at
- *     the project root, when the .NET SDK is on PATH. **Running this
- *     restores the project first** (`dotnet restore`), which executes the
- *     project's own MSBuild targets — the same trust boundary
- *     `deps_update_plan`'s own dotnet branch already crosses. Parsed via
+ *     --format json --no-restore`, one call per root `.sln`/`.slnx`
+ *     (preferred) or `.csproj`, when the .NET SDK is on PATH. **Each one is
+ *     preceded by `dotnet restore <target> --locked-mode`**, which evaluates
+ *     and runs the project's own MSBuild and reaches its NuGet feeds — the
+ *     same trust boundary `deps_update_plan`'s own dotnet branch crosses.
+ *     `../deps/dotnetRestore.ts` has the measured rules that keep that
+ *     restore from creating or rewriting a lock file. Parsed via
  *     `dotnetScaParser`. Trivy cannot cover this stack at all without a
  *     `packages.lock.json` (see `trivy.ts`), so this is NuGet's only source
  *     of CVE-adjacent findings, not a complementary one like npm's.
  *
+ * pip-audit resolves `-r` requirements by building a temporary virtualenv
+ * and installing them into it from PyPI — network access, and an sdist's own
+ * build step runs there. The tool description says so, next to the restore.
+ *
  * All raw outputs are persisted under `.guardian/reports/depsaudit-<scan>/`.
  */
-import { existsSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { classifyRestoreFailure, findDotnetTargets, planDotnetRestore, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
 import { dotnetScaParser } from '../runners/scannerParsers/dotnetSca.js';
 import { NPM_AUDIT_TOOL_NAME, npmAuditParser } from '../runners/scannerParsers/npmAudit.js';
 import { pipAuditParser } from '../runners/scannerParsers/pipAudit.js';
@@ -93,12 +100,16 @@ function detectBots(projectPath) {
 registerToolModule(makeScanTool({
     name: 'deps_audit',
     title: 'Dependency audit (Trivy + native auditors + bot detection)',
-    description: 'Run Trivy fs (vuln+license) plus stack-specific auditors when applicable: npm audit, ' +
-        'pip-audit (run against this project\'s own requirements*.txt / pyproject.toml, never the ' +
-        'host Python), and `dotnet list package --vulnerable --include-transitive` for any .sln/' +
-        '.csproj (this restores the project first, which runs its own MSBuild targets). Returns ' +
-        'Findings, indexed CVEs, and a `bot_configured` flag indicating whether Renovate or ' +
-        'Dependabot is set up in this repo.',
+    description: 'Run Trivy fs (vuln+license) plus stack-specific auditors when applicable: npm audit; ' +
+        'pip-audit, once per requirements*.txt (or the project dir for pyproject.toml), never the ' +
+        'host Python — it builds a TEMPORARY virtualenv and installs those requirements into it ' +
+        'from PyPI (network access; an sdist\'s build step runs there); and for any .sln/.csproj, ' +
+        '`dotnet restore --locked-mode` then `dotnet list package --vulnerable --include-transitive ' +
+        '--no-restore`. That restore EXECUTES the project\'s own MSBuild (targets, imported .props) ' +
+        'and contacts its NuGet feeds; it never rewrites or creates a packages.lock.json (an ' +
+        'out-of-sync lock, or one a restore would create, is reported as a gap). Returns Findings, ' +
+        'indexed CVEs, and a `bot_configured` flag indicating whether Renovate or Dependabot is set ' +
+        'up in this repo.',
     // Its own type, not scan_deps' 'deps': the two shared cache entries and
     // answered for each other. Readers that want "the latest deps_audit" use
     // `isDepsAuditScan`, which also recognises the 2.0.x rows typed 'deps'.
@@ -209,7 +220,7 @@ registerToolModule(makeScanTool({
         // packages.lock.json (trivy.ts's own module comment), so this is the
         // stack's only source of dependency findings, run whenever a
         // .sln/.csproj exists and the SDK is on PATH.
-        await runDotnetSca({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
+        const dotnetFailures = await runDotnetSca({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
         const bot_configured = detectBots(ctx.projectPath);
         return {
             outcome: 'completed',
@@ -221,6 +232,7 @@ registerToolModule(makeScanTool({
             extras: {
                 bot_configured,
                 ...(manifestCoverageGaps.length > 0 ? { manifest_coverage_gaps: manifestCoverageGaps } : {}),
+                ...(dotnetFailures.length > 0 ? { dotnet_restore_failures: dotnetFailures } : {}),
             },
         };
     },
@@ -269,7 +281,6 @@ async function tryNativeAudit(opts) {
     // npm audit writes to stdout; redirect ourselves.
     if (isNpmStdout && result.stdout.length > 0) {
         try {
-            const { writeFileSync } = await import('node:fs');
             writeFileSync(opts.outFile, result.stdout, 'utf8');
         }
         catch {
@@ -458,270 +469,108 @@ async function runPipAudit(opts) {
         missing_tools.push('pip-audit');
     }
 }
-// --------------------------------------------------------------- .NET SCA
-const DOTNET_SKIP_DIRS = new Set(['bin', 'obj', 'node_modules', '.git', '.guardian', 'packages', '.vs']);
-/**
- * The target(s) `dotnet list package --vulnerable` should be run against: a
- * `.sln` at the project root when one exists (covers every project it
- * references in a single call), otherwise every `.csproj` found by a bounded
- * recursive walk (same `SKIP_DIRS` shape as
- * `dotnetTargetFrameworkCheck.ts#collectCsprojFiles`, duplicated rather than
- * imported — that module is owned by a different tool and this one's job is
- * narrower: vulnerable NuGet packages, not target-framework EOL).
- */
-function findDotnetTargets(projectPath) {
-    let rootEntries = [];
-    try {
-        rootEntries = readdirSync(projectPath);
-    }
-    catch {
-        return [];
-    }
-    const sln = rootEntries.find((n) => n.toLowerCase().endsWith('.sln'));
-    if (sln)
-        return [join(projectPath, sln)];
-    return findAllCsprojFiles(projectPath);
-}
-/** Every `.csproj` under `projectPath`, bounded recursive walk. Used both by
- *  `findDotnetTargets`'s own non-solution branch AND by
- *  `findLockFilesForTarget` for a `.sln` target (fix round 2, item 8) —
- *  `packages.lock.json` sits next to each individual `.csproj`, never next
- *  to the solution file itself, so discovering every project is the only
- *  way to find every lock file a solution-wide restore could touch. */
-function findAllCsprojFiles(projectPath) {
-    const out = [];
-    const maxDepth = 4;
-    function walk(dir, depth) {
-        if (depth > maxDepth)
-            return;
-        let entries;
-        try {
-            entries = readdirSync(dir);
-        }
-        catch {
-            return;
-        }
-        for (const name of entries) {
-            if (DOTNET_SKIP_DIRS.has(name))
-                continue;
-            const abs = join(dir, name);
-            let isDir;
-            try {
-                isDir = statSync(abs).isDirectory();
-            }
-            catch {
-                continue;
-            }
-            if (isDir)
-                walk(abs, depth + 1);
-            else if (name.toLowerCase().endsWith('.csproj'))
-                out.push(abs);
-        }
-    }
-    walk(projectPath, 0);
-    return out;
-}
-/**
- * Every `packages.lock.json` relevant to `target`: the one next to it when
- * `target` is itself a `.csproj`, or every lock file next to any `.csproj`
- * under `projectPath` when `target` is a `.sln` (fix round 2, item 8).
- *
- * The fix round 1 shape checked `dirname(target)` unconditionally — correct
- * for a `.csproj` target (the lock sits right next to it), but WRONG for a
- * `.sln` target: `dirname(target)` is the solution's own directory, and a
- * multi-project solution's `.csproj` files (and their lock files) typically
- * live in subdirectories the solution file does not share. Checking the
- * wrong location meant `hasLockFile` read false for almost every real
- * solution, so `--locked-mode` was never passed and an out-of-sync lock was
- * silently rewritten rather than failing the restore closed.
- */
-function findLockFilesForTarget(projectPath, target) {
-    const csprojFiles = target.toLowerCase().endsWith('.sln') ? findAllCsprojFiles(projectPath) : [target];
-    return csprojFiles.map((p) => join(dirname(p), 'packages.lock.json')).filter((p) => existsSync(p));
-}
-/**
- * The first non-empty line of `stderr`, falling back to `stdout` — used to
- * report WHY a restore failed without dumping the whole (often long) MSBuild
- * log. `output` combines both streams for the NU1004 search below, since
- * dotnet's own error placement between them is not consistent across SDK
- * versions.
- */
-function classifyRestoreFailure(stdout, stderr) {
-    const firstLine = stderr.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ??
-        stdout.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ??
-        '(no output)';
-    // NU1004: NuGet's own code for "restoring with --locked-mode would change
-    // packages.lock.json" — the one failure mode this mechanism exists to
-    // catch and report distinctly from an ordinary network/feed failure.
-    const lockOutOfSync = /\bNU1004\b/.test(`${stdout}\n${stderr}`);
-    return { reason: `restore failed: ${firstLine}`, lockOutOfSync };
-}
-/**
- * `topLevelPackages` entries with a `requestedVersion` that does not match
- * their own `resolvedVersion` (fix round 3, item #8) — a real `dotnet
- * list ... --no-restore` on a STALE `obj/` (the routine "just pulled a PR
- * that bumped a PackageReference, never re-restored" case, measured
- * directly: no lock file needed, no restore failure either, `dotnet list`
- * exits 0 with valid-looking JSON) reports the csproj's requested version
- * alongside the LAST-RESTORED resolved one. Both are present in the SAME
- * JSON this function already parses for findings, so this is read straight
- * out of it rather than re-invoking anything.
- */
-function hasStaleTopLevelMismatch(raw) {
-    let parsed;
-    try {
-        parsed = JSON.parse(raw);
-    }
-    catch {
-        return false;
-    }
-    const projects = parsed?.projects;
-    if (!Array.isArray(projects))
-        return false;
-    for (const proj of projects) {
-        const frameworks = proj?.frameworks;
-        if (!Array.isArray(frameworks))
-            continue;
-        for (const fw of frameworks) {
-            const topLevel = fw?.topLevelPackages;
-            if (!Array.isArray(topLevel))
-                continue;
-            for (const pkg of topLevel) {
-                if (!pkg || typeof pkg !== 'object')
-                    continue;
-                const p = pkg;
-                const requested = typeof p['requestedVersion'] === 'string' ? p['requestedVersion'] : undefined;
-                const resolved = typeof p['resolvedVersion'] === 'string' ? p['resolvedVersion'] : undefined;
-                if (requested !== undefined && resolved !== undefined && requested !== resolved)
-                    return true;
-            }
-        }
-    }
-    return false;
-}
 /**
  * Runs `dotnet list <target> package --vulnerable --include-transitive
- * --format json` for every target `findDotnetTargets` finds.
+ * --format json --no-restore` for every target `findDotnetTargets` finds,
+ * each one preceded by an explicit `dotnet restore` planned by
+ * `planDotnetRestore` (`../deps/dotnetRestore.ts` — its module comment has
+ * the measured rules): `--locked-mode` on every restore, lock files found from
+ * the solution/project list rather than a depth-limited walk, and a restore
+ * that would create a lock file is either prevented
+ * (`-p:RestorePackagesWithLockFile=false`) or not run at all. `dotnet list`
+ * never restores on its own (`--no-restore`), so the listing is always built
+ * from the restore this call just ran — which is also why no
+ * `requestedVersion`/`resolvedVersion` comparison is made any more: after a
+ * fresh restore the two legitimately differ for every floating (`12.*`),
+ * range (`[12.0.1,13.0)`), two-part (`12.0`) or not-on-the-feed (`12.0.0`
+ * resolving to `12.0.1`) reference, and treating that as staleness threw real
+ * findings away.
  *
- * **ALWAYS restores explicitly first** (fix round 3, item #8 — the fix
- * round 1/2 "try `dotnet list` directly, restore only on failure" shape is
- * gone). Measured directly: `dotnet list --no-restore` on a STALE `obj/`
- * (restored once, the `.csproj` edited since — the routine "pulled a PR,
- * never re-restored" case, not an edge case) exits 0 with a valid-looking
- * JSON built from the OLD, pre-drift resolution — no restore failure, no
- * empty output, nothing that "try list first" could ever catch. `dotnet
- * restore <target> --locked-mode` runs first whenever ANY `packages.lock.json`
- * belongs to the target (`findLockFilesForTarget`, fix round 2, item 8), a
- * plain `dotnet restore <target>` otherwise (writes `obj/` only, no lock to
- * protect) — and ONLY once that restore has genuinely succeeded is `dotnet
- * list ... --no-restore` run at all, so its JSON is always built from a
- * restore this call just performed, never stale `obj/` left over from
- * whenever the tree was last restored. A restore that FAILS is one coverage
- * gap, not a whole-scan failure — the other targets still run — and its
- * reason distinguishes an out-of-sync lock (NuGet's own `NU1004`) from an
- * ordinary network/feed failure via `classifyRestoreFailure`.
- *
- * **Defence in depth**: even after a successful restore, `hasStaleTopLevelMismatch`
- * checks the list JSON's own `requestedVersion` vs `resolvedVersion` for
- * every top-level package — a mismatch there means something DID drift
- * despite the restore reporting success, and is treated as a gap rather
- * than trusted.
+ * A failed target is one coverage gap, not a whole-scan failure — the other
+ * targets still run — and its reason carries NuGet's own code, so an
+ * out-of-sync lock (`NU1004`) reads differently from a missing package
+ * (`NU1101`) or an unreachable feed (`NU1301`).
  */
 async function runDotnetSca(opts) {
     const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = opts;
     const targets = findDotnetTargets(ctx.projectPath);
     if (targets.length === 0)
-        return; // no .csproj/.sln — nothing to do, not a gap
+        return []; // no .sln/.csproj — nothing to do, not a gap
     const dotnetBin = await scannerAvailable('dotnet');
     if (!dotnetBin) {
         tools_run.push({ name: 'dotnet', status: 'skipped', reason: 'not_installed' });
         missing_tools.push('dotnet');
-        return;
+        return [];
     }
     let anyOk = false;
-    let anyFailed = false;
-    let anyLockedRestoreFailed = false;
-    let anyStaleMismatch = false;
-    let lastFailureReason;
+    const failures = [];
     for (const [i, target] of targets.entries()) {
-        const lockFiles = findLockFilesForTarget(ctx.projectPath, target);
-        const usingLockedMode = lockFiles.length > 0;
-        const restoreArgs = ['restore', target, '--nologo', '--verbosity', 'quiet'];
-        if (usingLockedMode)
-            restoreArgs.push('--locked-mode');
+        const rel = relative(ctx.projectPath, target) || target;
+        const plan = planDotnetRestore(ctx.projectPath, target);
+        if (plan.blocked) {
+            failures.push({ target: rel, code: plan.blocked.code, reason: plan.blocked.reason });
+            continue;
+        }
         const restore = await runProcess({
             command: 'dotnet',
-            args: restoreArgs,
+            args: plan.args,
             cwd: ctx.projectPath,
             env: ctx.scriptEnv,
             signal: ctx.signal,
             onLog: ctx.onLog,
         });
+        const created = removeCreatedLockFiles(plan);
+        if (created.length > 0) {
+            failures.push({
+                target: rel,
+                code: 'lock_file_would_be_created',
+                reason: `restore created ${created.map((c) => relative(ctx.projectPath, c) || c).join(', ')} ` +
+                    '(a RestorePackagesWithLockFile opt-in this scan could not see) — deleted again; results not used',
+            });
+            continue;
+        }
         if (restore.outcome !== 'completed') {
-            anyFailed = true;
-            const { reason, lockOutOfSync } = classifyRestoreFailure(restore.stdout, restore.stderr);
-            lastFailureReason = reason;
-            // `--locked-mode` rejecting an out-of-sync lock lands here too — that
-            // is the restore FAILING closed, never a silent rewrite; it is never
-            // retried without `--locked-mode`, which would be exactly the rewrite
-            // this whole mechanism exists to prevent.
-            if (usingLockedMode && lockOutOfSync)
-                anyLockedRestoreFailed = true;
-            continue; // no `dotnet list` at all for this target — its obj/ was never freshly restored
+            // Never retried without --locked-mode: that retry would be exactly the
+            // lock rewrite this whole sequence exists to prevent.
+            const failure = classifyRestoreFailure(restore.stdout, restore.stderr);
+            failures.push({ target: rel, code: failure.code, reason: failure.reason });
+            continue;
         }
         const list = await runProcess({
             command: 'dotnet',
-            args: [
-                'list',
-                target,
-                'package',
-                '--vulnerable',
-                '--include-transitive',
-                '--format',
-                'json',
-                '--no-restore',
-            ],
+            args: ['list', target, 'package', '--vulnerable', '--include-transitive', '--format', 'json', '--no-restore'],
             cwd: ctx.projectPath,
             env: ctx.scriptEnv,
             signal: ctx.signal,
             onLog: ctx.onLog,
         });
         if (list.outcome !== 'completed' || list.stdout.trim().length === 0) {
-            anyFailed = true;
+            failures.push({ target: rel, code: 'list_failed', reason: 'restored, but `dotnet list package --vulnerable` failed' });
             continue;
-        }
-        if (hasStaleTopLevelMismatch(list.stdout)) {
-            anyFailed = true;
-            anyStaleMismatch = true;
-            continue; // requested != resolved despite a successful restore — do not trust it
         }
         anyOk = true;
         parser_inputs.push({ parser: dotnetScaParser, input: list.stdout });
         try {
-            const { writeFileSync } = await import('node:fs');
             writeFileSync(join(reportDir, `dotnet-list-${i}.json`), list.stdout, 'utf8');
         }
         catch {
             /* best-effort evidence copy */
         }
     }
-    const gapReason = anyStaleMismatch
-        ? 'restored, but the package listing still reports requestedVersion != resolvedVersion for at least one target'
-        : anyLockedRestoreFailed
-            ? `restore failed for at least one target: packages.lock.json out of sync (${lastFailureReason ?? 'NU1004'})`
-            : (lastFailureReason ?? 'restore or list package failed for at least one target');
+    const gapReason = failures.map((f) => `${f.target}: ${f.reason}`).join('; ');
     if (anyOk) {
         tools_run.push({
             name: 'dotnet',
             status: 'ok',
-            reason: anyFailed ? `parsed into findings (${gapReason})` : 'parsed into findings',
+            reason: failures.length > 0 ? `parsed into findings (gap — ${gapReason})` : 'parsed into findings',
         });
-        if (anyFailed)
+        if (failures.length > 0)
             missing_tools.push('dotnet');
     }
     else {
-        tools_run.push({ name: 'dotnet', status: 'failed', reason: gapReason });
+        tools_run.push({ name: 'dotnet', status: 'failed', reason: gapReason || 'no target could be listed' });
         missing_tools.push('dotnet');
     }
+    return failures;
 }
 //# sourceMappingURL=depsAudit.js.map

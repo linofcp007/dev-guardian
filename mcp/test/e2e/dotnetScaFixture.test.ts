@@ -1,7 +1,9 @@
 /**
  * Real, unmocked `deps_audit` run against a `.csproj` referencing a known-
  * vulnerable NuGet package (Newtonsoft.Json 12.0.1, GHSA-5crp-9r3c-p9vr) —
- * item 2 of Task 10's brief: ".NET SCA... e2e gated on the SDK."
+ * item 2 of Task 10's brief: ".NET SCA... e2e gated on the SDK." The fix
+ * round 4 cases also drive `deps_update_plan`'s dotnet branch, which shares
+ * the restore plan (`src/deps/dotnetRestore.ts`).
  *
  * Gated on the .NET SDK being on PATH (`isInstalled('dotnet')`), the same
  * `it.skipIf` discipline `rulePackFixture.test.ts` documents for Semgrep: a
@@ -14,7 +16,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
@@ -26,6 +28,7 @@ import { isInstalled } from '../helpers/toolchain.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 await import('../../src/tools/depsAudit.js');
+await import('../../src/tools/depsUpdatePlan.js');
 
 afterAll(cleanupTempDirs);
 
@@ -243,6 +246,146 @@ describe('deps_audit — .NET SCA (real dotnet, gated)', () => {
       expect(r.missing_tools).toContain('dotnet');
     },
     120_000,
+  );
+
+  // -------------------------------------------------------------- fix round 4
+
+  const csproj = (refs: Array<[string, string]>, extraProps = ''): string =>
+    [
+      '<Project Sdk="Microsoft.NET.Sdk">',
+      `  <PropertyGroup><TargetFramework>net8.0</TargetFramework>${extraProps}</PropertyGroup>`,
+      '  <ItemGroup>',
+      ...refs.map(([name, version]) => `    <PackageReference Include="${name}" Version="${version}" />`),
+      '  </ItemGroup>',
+      '</Project>',
+    ].join('\n');
+  const LOCK_OPT_IN = '<RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>';
+  const sha = (p: string): string => createHash('sha256').update(readFileSync(p)).digest('hex');
+
+  it.skipIf(!DOTNET_INSTALLED)(
+    'E (fix round 4): a lock FIVE directories below the .sln (out of sync, stale obj/) is found from the solution list and never rewritten',
+    async () => {
+      // Reviewer's deep.mjs: the round 3 depth-4 walk never saw this lock, so
+      // the restore ran without --locked-mode and REWROTE it, reading `ok`.
+      const project = makeTempDir('dotnet-sca-deep-e2e-');
+      const rel = join('src', 'a', 'b', 'c', 'App');
+      mkdirSync(join(project, rel), { recursive: true });
+      const csprojPath = join(project, rel, 'App.csproj');
+      writeFileSync(csprojPath, csproj([['Newtonsoft.Json', '12.0.1']], LOCK_OPT_IN), 'utf8');
+      execFileSync('dotnet', ['new', 'sln', '-n', 'Root', '--format', 'sln'], { cwd: project });
+      execFileSync('dotnet', ['sln', 'Root.sln', 'add', join(rel, 'App.csproj')], { cwd: project });
+      execFileSync('dotnet', ['restore', 'Root.sln', '--nologo', '--verbosity', 'quiet'], { cwd: project });
+      writeFileSync(csprojPath, csproj([['Newtonsoft.Json', '12.0.3']], LOCK_OPT_IN), 'utf8'); // obj/ left stale
+      const lockPath = join(project, rel, 'packages.lock.json');
+      const before = sha(lockPath);
+
+      const r = (await getTool('deps_audit').handler({ project_path: project }, makePlugin(project))) as {
+        ok: true;
+        tools_run: Array<{ name: string; status: string; reason?: string }>;
+      };
+      expect(sha(lockPath)).toBe(before);
+      const dotnet = r.tools_run.find((t) => t.name === 'dotnet');
+      expect(dotnet?.status).toBe('failed');
+      expect(dotnet?.reason).toMatch(/NU1004/);
+    },
+    180_000,
+  );
+
+  it.skipIf(!DOTNET_INSTALLED)(
+    'E (fix round 4): RestorePackagesWithLockFile=true with NO committed lock — the scan never creates packages.lock.json',
+    async () => {
+      // Measured: a plain restore AND `--locked-mode` alone both create it.
+      const project = makeTempDir('dotnet-sca-nolock-e2e-');
+      writeFileSync(join(project, 'App.csproj'), csproj([['Newtonsoft.Json', '12.0.1']], LOCK_OPT_IN), 'utf8');
+      const r = (await getTool('deps_audit').handler({ project_path: project }, makePlugin(project))) as {
+        ok: true;
+        tools_run: Array<{ name: string; status: string }>;
+        findings_count_by_severity: Record<string, number>;
+      };
+      expect(existsSync(join(project, 'packages.lock.json'))).toBe(false);
+      expect(r.tools_run.find((t) => t.name === 'dotnet')?.status).toBe('ok');
+      expect(Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0)).toBeGreaterThan(0);
+    },
+    120_000,
+  );
+
+  it.skipIf(!DOTNET_INSTALLED)(
+    'C (fix round 4): a floating version (12.*) is scanned — its finding is kept, not discarded as "stale"',
+    async () => {
+      const project = makeTempDir('dotnet-sca-floating-e2e-');
+      writeFileSync(join(project, 'App.csproj'), csproj([['Newtonsoft.Json', '12.*']]), 'utf8');
+      const plugin = makePlugin(project);
+      const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+        ok: true;
+        scan_id: string;
+        tools_run: Array<{ name: string; status: string }>;
+      };
+      expect(r.tools_run.find((t) => t.name === 'dotnet')?.status).toBe('ok');
+      const finding = plugin.storage.findings.listByScan(r.scan_id).find((f) => f.tool === 'dotnet-list-package');
+      expect(finding?.snippet).toContain('Newtonsoft.Json');
+    },
+    120_000,
+  );
+
+  function seedNewtonsoftCve(plugin: PluginContext, project: string): void {
+    plugin.storage.scans.insert({ scan_id: 's1', scan_type: 'deps', project_path: project, tree_hash: 'h' });
+    plugin.storage.scans.finalize({ scan_id: 's1', status: 'completed', tools_run: [], missing_tools: [] });
+    plugin.storage.cves.upsert({
+      severity: 'high',
+      scan_id: 's1',
+      cve_id: 'GHSA-5crp-9r3c-p9vr',
+      package_name: 'Newtonsoft.Json',
+      installed_version: '12.0.1',
+      fixed_version: '13.0.1',
+    });
+  }
+
+  it.skipIf(!DOTNET_INSTALLED)(
+    'C (fix round 4): deps_update_plan keeps the Newtonsoft.Json security step next to a floating Serilog 2.*',
+    async () => {
+      // Reviewer's floatplan.mjs P2: round 3 returned an EMPTY .NET plan here.
+      const project = makeTempDir('dotnet-plan-floating-e2e-');
+      writeFileSync(join(project, 'App.csproj'), csproj([['Newtonsoft.Json', '12.0.1'], ['Serilog', '2.*']]), 'utf8');
+      const plugin = makePlugin(project);
+      seedNewtonsoftCve(plugin, project);
+      const r = (await getTool('deps_update_plan').handler({ project_path: project }, plugin)) as {
+        ok: true;
+        plan: Array<{ package_name: string; classification: string }>;
+        runner_failures: unknown[];
+      };
+      expect(r.runner_failures).toEqual([]);
+      expect(r.plan.find((s) => s.package_name === 'Newtonsoft.Json')?.classification).toBe('security');
+      expect(r.plan.some((s) => s.package_name === 'Serilog')).toBe(true);
+    },
+    180_000,
+  );
+
+  it.skipIf(!DOTNET_INSTALLED)(
+    'A (fix round 4): deps_update_plan reports a package the feed does not have as NU1101 in runner_failures, and attributes the CVE to dotnet',
+    async () => {
+      // Reviewer's feed.mjs shape, on the plan side: round 3 returned [] and
+      // the catch-all claimed no runner had found evidence for a package the
+      // .csproj declares.
+      const project = makeTempDir('dotnet-plan-feed-e2e-');
+      writeFileSync(
+        join(project, 'App.csproj'),
+        csproj([['Newtonsoft.Json', '12.0.1'], ['Zz.Does.Not.Exist.Guardian', '1.0.0']]),
+        'utf8',
+      );
+      const plugin = makePlugin(project);
+      seedNewtonsoftCve(plugin, project);
+      const r = (await getTool('deps_update_plan').handler({ project_path: project }, plugin)) as {
+        ok: true;
+        runner_failures: Array<{ ecosystem: string; code: string }>;
+        unplanned: Array<{ package_name: string; ecosystem: string; reason: string }>;
+      };
+      expect(r.runner_failures).toEqual([expect.objectContaining({ ecosystem: 'dotnet', code: 'NU1101' })]);
+      const newtonsoft = r.unplanned.find((u) => u.package_name === 'Newtonsoft.Json');
+      expect(newtonsoft?.ecosystem).toBe('dotnet');
+      expect(newtonsoft?.reason).toMatch(/dotnet runner failed/);
+      expect(newtonsoft?.reason).toMatch(/NU1101/);
+    },
+    180_000,
   );
 
   it.skipIf(DOTNET_INSTALLED)('skip notice: .NET SDK is not on PATH — this e2e did not run', () => {
