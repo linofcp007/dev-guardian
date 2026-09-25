@@ -111,46 +111,81 @@ version bump.
     `skipped`/`no_supported_manifest` (never `ok` with a clean 0) when a
     manifest goes unrecognised; `requirements.txt` and `go.mod` are
     excluded from this check since Trivy scans both from the bare
-    manifest, no lockfile required.
+    manifest, no lockfile required. When Trivy DID cover some ecosystems
+    but not all (e.g. npm scanned fine, NuGet did not), the gap is now
+    named `trivy:<ecosystem>` in `missing_tools`, never the bare `trivy` —
+    `create_fix_pr`'s own verification treats a literal `trivy` there as
+    "trivy did not run at all", which used to block every trivy-sourced fix
+    PR in the repo (e.g. an unrelated npm CVE) over one uncovered ecosystem.
   - **New: .NET SCA.** `deps_audit` now runs `dotnet list <target> package
-    --vulnerable --include-transitive --format json` (restoring first) for
-    every `.sln`/`.csproj` found, gated on the SDK — the only source of
-    NuGet findings, since Trivy cannot cover it at all without a lockfile.
-  - `pip-audit` ran bare (`depsAudit.ts:163-164`), auditing the MCP host's
-    own Python, and its output was never parsed. Now run with `-r` per
-    `requirements*.txt` file or against the project directory for a
-    `pyproject.toml`-only project, parsed into Findings.
+    --vulnerable --include-transitive --format json` for every `.sln`/
+    `.csproj` found, gated on the SDK — the only source of NuGet findings,
+    since Trivy cannot cover it at all without a lockfile. It restores only
+    when a direct `dotnet list` attempt fails (a scan must never modify the
+    working tree otherwise), and with `--locked-mode` whenever a tracked
+    `packages.lock.json` exists, so an out-of-date lock fails the restore
+    instead of being silently rewritten in place; `deps_update_plan`'s own
+    dotnet branch got the same fix.
+  - `pip-audit` ran bare, auditing the MCP host's own Python, and its output
+    was never parsed; an exit-1 resolution failure with no valid report was
+    also misread as a clean, successful scan. Now run once PER
+    `requirements*.txt` file (so every finding is attributed to its real
+    source file, not a hardcoded `requirements.txt`) or once against the
+    project directory for a `pyproject.toml`-only project, with an exit
+    code alone never enough to call it `ok` — the captured output must
+    actually parse as a report.
   - `deps_update_plan`'s pip branch ran `pip list --outdated` / `pip
     install -U` against the host interpreter. Now reads the project's own
-    `requirements*.txt` exact pins and PEP 621 `pyproject.toml`
-    dependencies and proposes a step only for a pin with an active CVE and
-    a known fixed version — never touching the host environment. The npm
-    branch now upgrades to the CVE's MINIMUM fixed version rather than
+    `requirements*.txt` pins — including pip-compile's hash-pinned
+    continuation lines, extras, and environment markers — and PEP 621
+    `pyproject.toml` dependencies, and proposes a step only for an exact
+    pin with an active CVE and a fix version genuinely ABOVE what is
+    installed (never a downgrade: a scanner's own "fixed_version" can be an
+    older release branch's backport, or simply stale). The npm branch
+    upgrades to the same minimum-above-installed fixed version rather than
     `npm outdated`'s own "latest", every `npm install` it proposes carries
-    `--ignore-scripts`, and a vulnerable TRANSITIVE package gets an
-    `overrides` step (`npm pkg set overrides.<pkg>=<version>`) instead of
-    an install. The CVE source for both is now the latest `deps` /
-    `deps_audit` / `security_full` scan of the SAME project
+    `--ignore-scripts`, and a vulnerable TRANSITIVE dependency — found by
+    sweeping the CVE table itself, since `npm outdated --json` has listed
+    only DIRECT dependencies since npm 7 and so can never surface a
+    transitive one — gets an `npm pkg set overrides[<pkg>]=<version>` step
+    (bracket notation: a dotted package name would otherwise become a
+    nested key) followed by a `npm install --ignore-scripts` to re-resolve
+    the lockfile. Every package with an active CVE that could not become a
+    step (a range specifier, an unfixable downgrade, an untraceable
+    transitive dependency) is reported in a new `unplanned` list instead of
+    silently dropped. The CVE source for both branches is the latest
+    `deps` / `deps_audit` / `security_full` scan of the SAME project
     (`listHistoryForProject`), not an unscoped "latest scan in the whole
     database" lookup that a different project's scan could win.
   - `license_compatibility` returned zero issues whenever no project
     license was found — the normal case for proprietary client work — and
-    never read npm's `UNLICENSED` or a `.csproj`'s
-    `PackageLicenseExpression`. No declared license (and `UNLICENSED`) is
-    now treated as proprietary/all-rights-reserved and still flags
-    copyleft dependencies; a `.csproj`'s `PackageLicenseExpression` is now
-    also read (`composer.json` already was); `GPL-2.0-only` now normalises
-    the same as `GPL-2.0` (the SPDX `-only` suffix was not stripped, only
-    `-or-later` was); AGPL's network-use clause is now modelled with its
-    own message, distinct from ordinary viral copyleft.
+    never read npm's `UNLICENSED`, composer's own documented `"proprietary"`
+    / `"SEE LICENSE IN …"` labels, or a `.csproj`'s
+    `PackageLicenseExpression`. All of those are now treated as
+    proprietary/all-rights-reserved and still flag copyleft dependencies. An
+    SPDX `OR`/`AND` dependency license (`"MIT OR Apache-2.0"`) is now
+    evaluated instead of silently reading as compatible once
+    whitespace-collapsed into an unrecognisable string, and any dependency
+    license this tool does not recognise at all is reported in a new
+    `undetermined` list — never silently compatible. `GPL-2.0`/`GPL-3.0`/
+    `AGPL` are now matched in all three SPDX forms (bare, `-only`,
+    `-or-later`) instead of normalising the suffix away, which used to
+    exempt `-or-later` from every check entirely. `findLatestCompliance` is
+    now scoped to the project (`listHistoryForProject`), not the latest
+    compliance scan in the whole database.
   - `sbom_diff` compared only the first 25 components in document order
-    (`top_packages`), keyed by name only (so `lodash@3`/`lodash@4` in two
-    different ecosystems could collapse into one row), against an unscoped
-    default pair. Now always reads the full SBOM document already on disk,
-    keys components by (ecosystem, name) via each component's purl, scopes
-    the default pair to `project_path`'s own latest two SBOM scans, and
-    caps only the response arrays — `summary` always carries the true,
-    uncapped totals.
+    (`top_packages`), keyed by name only (so `lodash@3` and `lodash@4`
+    coexisting in the SAME ecosystem — a routine nested-duplicate-install
+    shape — collapsed into one row and hid one of the two versions),
+    against an unscoped default pair. Now always reads the full SBOM
+    document already on disk, keys components by (ecosystem, name) with a
+    VERSION SET per key so coexisting versions are reported per-version
+    rather than collapsed, scopes the default pair to `project_path`'s own
+    latest two SBOM scans, and refuses (rather than silently running) a
+    comparison that would mix a full component list against a capped,
+    ecosystem-untagged summary fallback — the response arrays are capped
+    but `summary` carries the true, uncapped totals except on the
+    (explicitly flagged) both-files-gone fallback path.
 
 ### Changed
 
