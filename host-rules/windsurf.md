@@ -1,8 +1,5 @@
 ---
-description: dev-guardian MCP — security, quality, deps, compliance, WP, .NET
-globs:
-  - "**/*"
-alwaysApply: true
+trigger: always_on
 ---
 
 # dev-guardian
@@ -113,10 +110,10 @@ cache that avoids re-running unchanged scans.
 - "health check" → `health_status`
 - "regression check" → `regression_alert`
 - "SBOM diff" → `sbom_diff`
-- "project health at a glance?" → `node cli/dev-guardian.mjs status` (CLI,
+- "project health at a glance?" → `node {{DEV_GUARDIAN_CLI}} status` (CLI,
   one-screen summary) or `dashboard` (CLI, same data as a self-contained HTML
   page) — both read-only, report rather than gate
-- "set up another AI host" → run `node cli/dev-guardian.mjs mcp-config <host>` (CLI)
+- "set up another AI host" → run `node {{DEV_GUARDIAN_CLI}} mcp-config <host>` (CLI)
 
 ## Resources
 
@@ -152,7 +149,7 @@ cache that avoids re-running unchanged scans.
 
 ## CI (headless, no MCP connection)
 
-For a pipeline, not a conversation: `node cli/dev-guardian.mjs scan` runs the same
+For a pipeline, not a conversation: `node {{DEV_GUARDIAN_CLI}} scan` runs the same
 scan pipeline as the MCP tools, gated against a committed `.guardian/baseline.json`;
 `dev-guardian baseline update` is the only command that writes it. Exit codes: `0`
 pass, `1` gate failed, `2` incomplete scan (a scanner didn't run — never read as a
@@ -169,7 +166,7 @@ project, but the CLI never starts that server.
 ## Local dashboard (offline, read-only)
 
 For a developer at their own laptop, not a CI artifact and not a client
-deliverable: `node cli/dev-guardian.mjs status` prints a one-screen summary
+deliverable: `node {{DEV_GUARDIAN_CLI}} status` prints a one-screen summary
 (risk score and band, open findings/CVEs by severity, both deltas, up to 3
 hotspots ranked by finding count, missing-scanner consequences, active
 suppressions); `dev-guardian dashboard` writes the same snapshot as a

@@ -1,12 +1,13 @@
-# Agent rules — dev-guardian
+# dev-guardian
 
-This repository has the **dev-guardian MCP server** registered. It exposes
+This project has the **dev-guardian MCP server** registered. It exposes
 54 tools and 18 resources for security, quality, bugfix, deps,
 compliance, observability, performance, plus first-class WordPress and
-.NET (C#/F#) support. All scanners run locally, no telemetry, results
-persisted in `.guardian/guardian.db`.
+.NET (C#/F#) support. All scanners run locally. dev-guardian sends no
+telemetry of its own; Semgrep's registry mode sends metrics — pass
+`local_only: true` to avoid it. Results persist in `.guardian/guardian.db`.
 
-When working in this repo, **prefer invoking dev-guardian MCP tools over
+When working in this project, **prefer invoking dev-guardian MCP tools over
 running scanners directly via shell**. The MCP layer adds: regression
 diffing, baselines, suppressions, severity-weighted risk scoring, and a
 cache that avoids re-running unchanged scans.
@@ -118,10 +119,10 @@ cache that avoids re-running unchanged scans.
   `guardian://scans/{scan_id}`
 - Other: `guardian://cves/active`, `guardian://sbom`, `guardian://stack`,
   `guardian://compliance/status`, `guardian://baseline`
-- WordPress: `guardian://wp/audit/latest`, `guardian://wp/audit/{id}`,
+- WordPress: `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`,
   `guardian://wp/cron`
 - .NET: `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`
-- Attack surface: `guardian://surface/latest`, `guardian://surface/{id}`
+- Attack surface: `guardian://surface/latest`, `guardian://surface/{scan_id}`
 
 ## Typical sequences
 
@@ -173,8 +174,8 @@ render — including over a project full of criticals, or one never scanned —
 because they report; `scan` is what gates. `3` is the only other exit code,
 on a usage error. The page is a **snapshot, not live**: it does not update
 when a later scan runs, so regenerate it to see one. The window itself is
-bounded too — the latest scan plus two deltas, no multi-week trend
-(`/guardian-trend` still asks for history nothing here computes).
+bounded too — the latest scan plus two deltas, no multi-week trend (the
+plugin's own trend command still asks for history nothing here computes).
 
 ## Anti-patterns
 
@@ -186,6 +187,11 @@ bounded too — the latest scan plus two deltas, no multi-week trend
 - Don't run `wp_audit` without WP-CLI — `install_toolchain tools=["wp-cli"]`.
 - Don't run `scan_dast` before `map_attack_surface` — it refuses with
   `no_surface_snapshot` and has no route inventory to probe.
+- Don't read a scan's `severity_min` as "the rest was not found". It filters
+  the response only: the scan records everything it saw, so a baseline taken
+  from a filtered scan is complete and `diff_scans` against it will not call
+  the below-floor findings new. Read `severity_filter` on the result for how
+  many were held back and which floor recovers them.
 - Don't read a clean `scan_dast` result as "no injection vulnerabilities" —
   the own engine sends no injection payloads at all; that class is delegated
   to an opt-in nuclei pass whose default templates test the origin, not this
@@ -199,7 +205,14 @@ bounded too — the latest scan plus two deltas, no multi-week trend
   and a Semgrep rule with no `fix:` field can't be autofixed either; only
   `deps_update_plan` bumps and Semgrep `--autofix` are in reach. And it
   won't open a PR unless you pass `apply: true` — the default run is a
-  dry run that proves the fix and reports it, nothing more.
+  dry run that proves the fix and reports it, nothing more. When it acts on
+  fewer findings than you expected, read `filtered` / `filtered_reason` on
+  the result rather than guessing: they count every open finding it skipped,
+  split by reason (below `severity_min`, no scanner-produced fix, no
+  requested source), and name a lower `severity_min` only when one would
+  genuinely recover something. `create_github_issues` reports the same two
+  fields for its own `severity_min` (default `high`) and `max_issues`
+  (default 10).
 - Three more `create_fix_pr` limits worth knowing before you rely on it:
   maven and gradle bumps are out of reach (inherited from
   `deps_update_plan`'s own ecosystem gap); a second hit of the same rule

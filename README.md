@@ -114,7 +114,7 @@ node cli/dev-guardian.mjs mcp-config all --scope global
 | Host | MCP config file (project / global) | Rules file |
 | ---- | ---------------------------------- | ---------- |
 | **Cursor** | `.cursor/mcp.json` / `~/.cursor/mcp.json` | `.cursor/rules/dev-guardian.mdc` |
-| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurfrules` |
+| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurf/rules/dev-guardian.md` |
 | **GitHub Copilot** | `.vscode/mcp.json` (`servers` key, `type:"stdio"`) | `.github/copilot-instructions.md` |
 | **Codex CLI** | `.codex/config.toml` / `~/.codex/config.toml` | `AGENTS.md` |
 | **Gemini CLI** | `.gemini/settings.json` / `~/.gemini/settings.json` | `GEMINI.md` |
@@ -288,7 +288,7 @@ dev-guardian/
 ├── mcp/                         # MCP server (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/, hooks/
 │   ├── test/                    # 1094 unit + integration + e2e tests
-│   ├── scripts/                 # smoke.mjs, smoke-wp-dotnet.mjs
+│   ├── scripts/                 # smoke.mjs
 │   └── dist/                    # built artifact (node dist/server.js)
 ├── scripts/
 │   ├── detect/detect-stack.sh   # language/framework detection
@@ -420,7 +420,7 @@ node cli/dev-guardian.mjs mcp-config all --scope global
 | Host | Ficheiro de config MCP (projeto / global) | Ficheiro de regras |
 | ---- | ----------------------------------------- | ------------------ |
 | **Cursor** | `.cursor/mcp.json` / `~/.cursor/mcp.json` | `.cursor/rules/dev-guardian.mdc` |
-| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurfrules` |
+| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurf/rules/dev-guardian.md` |
 | **GitHub Copilot** | `.vscode/mcp.json` (chave `servers`, `type:"stdio"`) | `.github/copilot-instructions.md` |
 | **Codex CLI** | `.codex/config.toml` / `~/.codex/config.toml` | `AGENTS.md` |
 | **Gemini CLI** | `.gemini/settings.json` / `~/.gemini/settings.json` | `GEMINI.md` |
@@ -594,7 +594,7 @@ dev-guardian/
 ├── mcp/                         # Servidor MCP (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/
 │   ├── test/                    # 1094 testes unit + integration + e2e
-│   ├── scripts/                 # smoke.mjs, smoke-wp-dotnet.mjs
+│   ├── scripts/                 # smoke.mjs
 │   └── dist/                    # artefacto compilado (node dist/server.js)
 ├── scripts/
 │   ├── detect/detect-stack.sh   # deteção de linguagens/frameworks
@@ -726,7 +726,7 @@ node cli/dev-guardian.mjs mcp-config all --scope global
 | Host | Archivo de config MCP (proyecto / global) | Archivo de reglas |
 | ---- | ----------------------------------------- | ----------------- |
 | **Cursor** | `.cursor/mcp.json` / `~/.cursor/mcp.json` | `.cursor/rules/dev-guardian.mdc` |
-| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurfrules` |
+| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurf/rules/dev-guardian.md` |
 | **GitHub Copilot** | `.vscode/mcp.json` (clave `servers`, `type:"stdio"`) | `.github/copilot-instructions.md` |
 | **Codex CLI** | `.codex/config.toml` / `~/.codex/config.toml` | `AGENTS.md` |
 | **Gemini CLI** | `.gemini/settings.json` / `~/.gemini/settings.json` | `GEMINI.md` |
@@ -900,7 +900,7 @@ dev-guardian/
 ├── mcp/                         # Servidor MCP (TypeScript + SQLite)
 │   ├── src/                     # tools/, resources/, runners/, storage/, platform/
 │   ├── test/                    # 1094 tests unit + integration + e2e
-│   ├── scripts/                 # smoke.mjs, smoke-wp-dotnet.mjs
+│   ├── scripts/                 # smoke.mjs
 │   └── dist/                    # artefacto compilado (node dist/server.js)
 ├── scripts/
 │   ├── detect/detect-stack.sh   # detección de lenguajes/frameworks
