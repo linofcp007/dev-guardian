@@ -12,7 +12,8 @@
  * without re-deriving them from `findings`.
  */
 
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Category, Finding, Severity } from '../../types.js';
 import {
   asArray,
@@ -205,6 +206,18 @@ function mapSecret(raw: unknown, target: string, ctx: ParserContext): Finding | 
 // (go): both are scanned by Trivy from the bare manifest alone, no lockfile
 // required — also confirmed against 0.69.3 — so they are deliberately
 // excluded from this table; flagging them would be a false alarm.
+//
+// Nor is there a gap for a `package.json` that declares no dependency at
+// all. Measured against 0.69.3: such a manifest produces no `Results` key
+// WITH a `package-lock.json` beside it as much as without one, so the
+// report is byte-for-byte the bare-manifest gap above — but nothing was
+// missed, and no lock file a user could add would change what Trivy says.
+// Flagged, it turned every package.json kept only for `scripts` (and the
+// CI CLI's own clean e2e fixture) into a permanently INCOMPLETE scan. Only
+// npm gets this test: its manifest is the whole declaration. A `.csproj`
+// with no `PackageReference` still draws packages from
+// `Directory.Packages.props`, `Directory.Build.props` and the SDK's own
+// framework reference, so an empty-looking one stays a gap.
 
 interface EcosystemManifest {
   /** Human label used in `ManifestCoverageGap.ecosystem`. */
@@ -216,19 +229,86 @@ interface EcosystemManifest {
    *  necessarily the manifest file itself — Trivy reports the LOCKFILE as
    *  `Target`, so matching is done on `Type`, never on `Target`). */
   trivyTypes: readonly string[];
+  /** The file names Trivy reads for those Types — the `Target` of their
+   *  Results, and so the `file_path` of every CVE / license finding they
+   *  produce. `history/runNames.ts` keys those findings by ecosystem with
+   *  it, so a gap here vetoes exactly the findings it could have hidden. */
+  lockfiles: readonly string[];
+  /** True when the manifest at this path declares nothing Trivy could
+   *  report on, so its missing Result is not a gap. Absent: always a gap. */
+  declaresNothing?: (path: string) => boolean;
 }
 
 const ECOSYSTEM_MANIFESTS: readonly EcosystemManifest[] = [
-  { ecosystem: 'npm', matches: (n) => n === 'package.json', trivyTypes: ['npm', 'yarn', 'pnpm', 'bun'] },
-  { ecosystem: 'composer', matches: (n) => n === 'composer.json', trivyTypes: ['composer'] },
+  {
+    ecosystem: 'npm',
+    matches: (n) => n === 'package.json',
+    trivyTypes: ['npm', 'yarn', 'pnpm', 'bun'],
+    lockfiles: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock'],
+    declaresNothing: npmManifestDeclaresNothing,
+  },
+  { ecosystem: 'composer', matches: (n) => n === 'composer.json', trivyTypes: ['composer'], lockfiles: ['composer.lock'] },
   {
     ecosystem: 'dotnet',
     matches: (n) => /\.(csproj|sln)$/i.test(n),
     trivyTypes: ['nuget'],
+    lockfiles: ['packages.lock.json', 'packages.config'],
   },
-  { ecosystem: 'rubygems', matches: (n) => n === 'Gemfile', trivyTypes: ['bundler'] },
-  { ecosystem: 'cargo', matches: (n) => n === 'Cargo.toml', trivyTypes: ['cargo'] },
+  { ecosystem: 'rubygems', matches: (n) => n === 'Gemfile', trivyTypes: ['bundler'], lockfiles: ['Gemfile.lock'] },
+  { ecosystem: 'cargo', matches: (n) => n === 'Cargo.toml', trivyTypes: ['cargo'], lockfiles: ['Cargo.lock'] },
 ];
+
+/** Every ecosystem the coverage check can report a gap for (`ManifestCoverageGap.ecosystem`). */
+export const MANIFEST_ECOSYSTEMS: readonly string[] = ECOSYSTEM_MANIFESTS.map((e) => e.ecosystem);
+
+/** Each ecosystem with the lock file names Trivy reports its Results under. */
+export const MANIFEST_ECOSYSTEM_LOCKFILES: ReadonlyArray<{ ecosystem: string; lockfiles: readonly string[] }> =
+  ECOSYSTEM_MANIFESTS.map((e) => ({ ecosystem: e.ecosystem, lockfiles: e.lockfiles }));
+
+/**
+ * The ecosystem whose lock file a Trivy Result `Target` (a finding's
+ * `file_path`) names, at any depth, or null — an OS package in an image, a
+ * `go.mod`, a `requirements.txt`: nothing the coverage check reports on.
+ */
+export function manifestEcosystemOfTarget(target: string): string | null {
+  const base = target.slice(Math.max(target.lastIndexOf('/'), target.lastIndexOf('\\')) + 1).toLowerCase();
+  const eco = ECOSYSTEM_MANIFESTS.find((e) => e.lockfiles.some((l) => l.toLowerCase() === base));
+  return eco?.ecosystem ?? null;
+}
+
+/** npm dependency fields; `workspaces` because the members declare theirs. */
+const NPM_DECLARING_FIELDS = [
+  'dependencies',
+  'devDependencies',
+  'optionalDependencies',
+  'peerDependencies',
+  'bundleDependencies',
+  'bundledDependencies',
+  'workspaces',
+] as const;
+
+/**
+ * A `package.json` that parses to an object and whose every dependency field
+ * (and `workspaces`) is absent, `{}` or `[]`. Anything else — a field with
+ * entries, `bundleDependencies: true`, a manifest that does not parse — may
+ * declare something, and stays a gap.
+ */
+function npmManifestDeclaresNothing(path: string): boolean {
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''));
+  } catch {
+    return false;
+  }
+  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) return false;
+  const fields = manifest as Record<string, unknown>;
+  return NPM_DECLARING_FIELDS.every((k) => {
+    const v = fields[k];
+    if (v === undefined) return true;
+    if (Array.isArray(v)) return v.length === 0;
+    return typeof v === 'object' && v !== null && Object.keys(v).length === 0;
+  });
+}
 
 export interface ManifestCoverageGap {
   ecosystem: string;
@@ -278,7 +358,7 @@ export function assessManifestCoverage(
 
   const gaps: ManifestCoverageGap[] = [];
   for (const eco of ECOSYSTEM_MANIFESTS) {
-    const files = entries.filter((n) => eco.matches(n));
+    const files = entries.filter((n) => eco.matches(n) && !(eco.declaresNothing?.(join(projectPath, n)) ?? false));
     if (files.length === 0) continue;
     const covered = eco.trivyTypes.some((t) => coveredTypes.has(t));
     if (!covered) gaps.push({ ecosystem: eco.ecosystem, files });

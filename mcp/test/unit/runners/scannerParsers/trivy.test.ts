@@ -70,10 +70,53 @@ describe('assessManifestCoverage', () => {
 
   it('flags a bare package.json (no lockfile) as an npm coverage gap', () => {
     const project = makeTempDir('trivy-manifest-');
-    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"lodash":"4.17.4"}}', 'utf8');
 
     const { gaps } = assessManifestCoverage(project, NO_RESULTS_OUTPUT);
     expect(gaps).toEqual([{ ecosystem: 'npm', files: ['package.json'] }]);
+  });
+
+  // Measured against Trivy 0.69.3: a package.json that declares no
+  // dependency produces no `Results` key — WITH a package-lock.json as much
+  // as without one — so the report is identical to the bare-manifest gap
+  // above. It is not one: there is nothing for Trivy to have missed, and no
+  // lockfile a user could add would make Trivy say anything else.
+  it.each([
+    ['no dependency fields at all', '{"name":"x","version":"1.0.0","private":true}'],
+    ['empty dependency fields', '{"name":"x","dependencies":{},"devDependencies":{},"workspaces":[]}'],
+    ['a byte-order mark before an empty manifest', '\uFEFF{"name":"x"}'],
+  ])('does not flag a package.json that declares nothing to audit (%s)', (_label, body) => {
+    const project = makeTempDir('trivy-manifest-');
+    writeFileSync(join(project, 'package.json'), body, 'utf8');
+
+    const { gaps, sawAnyResults } = assessManifestCoverage(project, NO_RESULTS_OUTPUT);
+    expect(sawAnyResults).toBe(false);
+    expect(gaps).toEqual([]);
+  });
+
+  it.each([
+    ['devDependencies only', '{"name":"x","devDependencies":{"vitest":"^1.0.0"}}'],
+    ['optionalDependencies only', '{"name":"x","optionalDependencies":{"fsevents":"^2.0.0"}}'],
+    ['peerDependencies only', '{"name":"x","peerDependencies":{"react":"^18.0.0"}}'],
+    ['workspaces (the members declare the dependencies)', '{"name":"x","private":true,"workspaces":["packages/*"]}'],
+    ['a manifest that does not parse', '{"name": "x", '],
+    ['a manifest that is not an object', '["x"]'],
+  ])('still flags a package.json that declares, or may declare, dependencies (%s)', (_label, body) => {
+    const project = makeTempDir('trivy-manifest-');
+    writeFileSync(join(project, 'package.json'), body, 'utf8');
+
+    const { gaps } = assessManifestCoverage(project, NO_RESULTS_OUTPUT);
+    expect(gaps).toEqual([{ ecosystem: 'npm', files: ['package.json'] }]);
+  });
+
+  it('keeps flagging a bare .csproj with no PackageReference: its dependencies can live outside the file', () => {
+    // Directory.Packages.props, Directory.Build.props and the SDK's own
+    // framework reference all add packages a .csproj does not list.
+    const project = makeTempDir('trivy-manifest-');
+    writeFileSync(join(project, 'Api.csproj'), '<Project Sdk="Microsoft.NET.Sdk"></Project>', 'utf8');
+
+    const { gaps } = assessManifestCoverage(project, NO_RESULTS_OUTPUT);
+    expect(gaps).toEqual([{ ecosystem: 'dotnet', files: ['Api.csproj'] }]);
   });
 
   it('does not flag requirements.txt or go.mod — Trivy scans both without a lockfile', () => {

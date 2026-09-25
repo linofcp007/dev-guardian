@@ -163,6 +163,89 @@ describe('evaluateGate — coverage gaps beyond "missing" (guards computeCoverag
     ]);
   });
 
+  it('says a Trivy ecosystem gap is reduced coverage of an installed Trivy, never "not installed"', () => {
+    // The exact bookkeeping scan_deps writes when Trivy ran, covered npm, and
+    // recognised nothing for a root .csproj (no packages.lock.json), as
+    // security_scan_full merges it: `trivy` ok, `trivy:<ecosystem>` missing.
+    // The gate used to look the pseudo-name up as if it were a scanner of its
+    // own, find no `ok` run named `trivy:dotnet`, and print "not installed".
+    const v = evaluateGate(input({
+      steps: [
+        step({
+          tool: 'security_scan_full',
+          tools_run: [
+            { name: 'semgrep', status: 'ok' },
+            { name: 'trivy', status: 'ok', reason: 'no_supported_manifest' },
+            { name: 'trivy-config', status: 'ok' },
+          ],
+          missing_tools: ['trivy:dotnet'],
+        }),
+      ],
+    }));
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.coverage).toBe('partial');
+    expect(v.coverageGaps).toEqual([
+      'security_scan_full: trivy ran with reduced coverage — dotnet not covered (no_supported_manifest)',
+    ]);
+  });
+
+  it('says a Trivy that recognised no manifest at all was skipped, with its reason — not "not installed"', () => {
+    // scan_deps' other shape: Trivy ran and its report had no Results at all
+    // for a manifest that declares dependencies, so its entry is `skipped` and
+    // the bare name is listed missing. Installed, so never "not installed".
+    const v = evaluateGate(input({
+      steps: [
+        step({
+          tool: 'security_scan_full',
+          tools_run: [
+            { name: 'semgrep', status: 'ok' },
+            { name: 'trivy', status: 'skipped', reason: 'no_supported_manifest' },
+            { name: 'trivy-config', status: 'ok' },
+          ],
+          missing_tools: ['trivy'],
+        }),
+      ],
+    }));
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.coverageGaps).toEqual(['security_scan_full: trivy skipped (no_supported_manifest)']);
+  });
+
+  it('reports a tool that failed AND is listed missing once, as failed — not also as "not installed"', () => {
+    // deps_audit lists a failed `npm audit` in missing_tools as well; the
+    // failed line already names it, and it is installed.
+    const v = evaluateGate(input({
+      steps: [
+        step({
+          tool: 'deps_audit',
+          tools_run: [
+            { name: 'trivy', status: 'ok' },
+            { name: 'npm', status: 'failed', reason: 'ran but produced no audit report (missing lockfile?)' },
+          ],
+          missing_tools: ['npm'],
+        }),
+      ],
+    }));
+    expect(v.coverageGaps).toEqual([
+      'deps_audit: npm failed (ran but produced no audit report (missing lockfile?))',
+    ]);
+  });
+
+  it('still says "not installed" for a scanner that is not installed', () => {
+    const v = evaluateGate(input({
+      steps: [
+        step({
+          tool: 'security_scan_full',
+          tools_run: [
+            { name: 'semgrep', status: 'ok' },
+            { name: 'trivy', status: 'skipped', reason: 'not_installed' },
+          ],
+          missing_tools: ['trivy'],
+        }),
+      ],
+    }));
+    expect(v.coverageGaps).toEqual(['security_scan_full: trivy not installed']);
+  });
+
   it('reports a failed tool without a parenthetical when no reason is given', () => {
     // Companion to the "reason given" failed-tool case above: pins the other
     // side of the `run.reason ? ... : ''` branch so both are exercised.

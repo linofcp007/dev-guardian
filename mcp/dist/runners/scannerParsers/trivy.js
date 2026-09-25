@@ -11,7 +11,8 @@
  * `guardian://cves/active` resource can serve dedicated CVE queries
  * without re-deriving them from `findings`.
  */
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { asArray, getNumber, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
 export const TRIVY_TOOL_NAME = 'trivy';
 export const trivyParser = {
@@ -178,16 +179,73 @@ function mapSecret(raw, target, ctx) {
     return makeFinding(input);
 }
 const ECOSYSTEM_MANIFESTS = [
-    { ecosystem: 'npm', matches: (n) => n === 'package.json', trivyTypes: ['npm', 'yarn', 'pnpm', 'bun'] },
-    { ecosystem: 'composer', matches: (n) => n === 'composer.json', trivyTypes: ['composer'] },
+    {
+        ecosystem: 'npm',
+        matches: (n) => n === 'package.json',
+        trivyTypes: ['npm', 'yarn', 'pnpm', 'bun'],
+        lockfiles: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock'],
+        declaresNothing: npmManifestDeclaresNothing,
+    },
+    { ecosystem: 'composer', matches: (n) => n === 'composer.json', trivyTypes: ['composer'], lockfiles: ['composer.lock'] },
     {
         ecosystem: 'dotnet',
         matches: (n) => /\.(csproj|sln)$/i.test(n),
         trivyTypes: ['nuget'],
+        lockfiles: ['packages.lock.json', 'packages.config'],
     },
-    { ecosystem: 'rubygems', matches: (n) => n === 'Gemfile', trivyTypes: ['bundler'] },
-    { ecosystem: 'cargo', matches: (n) => n === 'Cargo.toml', trivyTypes: ['cargo'] },
+    { ecosystem: 'rubygems', matches: (n) => n === 'Gemfile', trivyTypes: ['bundler'], lockfiles: ['Gemfile.lock'] },
+    { ecosystem: 'cargo', matches: (n) => n === 'Cargo.toml', trivyTypes: ['cargo'], lockfiles: ['Cargo.lock'] },
 ];
+/** Every ecosystem the coverage check can report a gap for (`ManifestCoverageGap.ecosystem`). */
+export const MANIFEST_ECOSYSTEMS = ECOSYSTEM_MANIFESTS.map((e) => e.ecosystem);
+/** Each ecosystem with the lock file names Trivy reports its Results under. */
+export const MANIFEST_ECOSYSTEM_LOCKFILES = ECOSYSTEM_MANIFESTS.map((e) => ({ ecosystem: e.ecosystem, lockfiles: e.lockfiles }));
+/**
+ * The ecosystem whose lock file a Trivy Result `Target` (a finding's
+ * `file_path`) names, at any depth, or null — an OS package in an image, a
+ * `go.mod`, a `requirements.txt`: nothing the coverage check reports on.
+ */
+export function manifestEcosystemOfTarget(target) {
+    const base = target.slice(Math.max(target.lastIndexOf('/'), target.lastIndexOf('\\')) + 1).toLowerCase();
+    const eco = ECOSYSTEM_MANIFESTS.find((e) => e.lockfiles.some((l) => l.toLowerCase() === base));
+    return eco?.ecosystem ?? null;
+}
+/** npm dependency fields; `workspaces` because the members declare theirs. */
+const NPM_DECLARING_FIELDS = [
+    'dependencies',
+    'devDependencies',
+    'optionalDependencies',
+    'peerDependencies',
+    'bundleDependencies',
+    'bundledDependencies',
+    'workspaces',
+];
+/**
+ * A `package.json` that parses to an object and whose every dependency field
+ * (and `workspaces`) is absent, `{}` or `[]`. Anything else — a field with
+ * entries, `bundleDependencies: true`, a manifest that does not parse — may
+ * declare something, and stays a gap.
+ */
+function npmManifestDeclaresNothing(path) {
+    let manifest;
+    try {
+        manifest = JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''));
+    }
+    catch {
+        return false;
+    }
+    if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest))
+        return false;
+    const fields = manifest;
+    return NPM_DECLARING_FIELDS.every((k) => {
+        const v = fields[k];
+        if (v === undefined)
+            return true;
+        if (Array.isArray(v))
+            return v.length === 0;
+        return typeof v === 'object' && v !== null && Object.keys(v).length === 0;
+    });
+}
 /**
  * Assess whether Trivy's fs-scan output covers every dependency manifest
  * actually present at the project's top level. Only the project ROOT is
@@ -215,7 +273,7 @@ export function assessManifestCoverage(projectPath, rawTrivyOutput) {
     }
     const gaps = [];
     for (const eco of ECOSYSTEM_MANIFESTS) {
-        const files = entries.filter((n) => eco.matches(n));
+        const files = entries.filter((n) => eco.matches(n) && !(eco.declaresNothing?.(join(projectPath, n)) ?? false));
         if (files.length === 0)
             continue;
         const covered = eco.trivyTypes.some((t) => coveredTypes.has(t));
