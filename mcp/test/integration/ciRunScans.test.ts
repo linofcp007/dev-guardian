@@ -193,6 +193,18 @@ describe('runScans', () => {
     });
   });
 
+  it('passes local_only to security_scan_full when asked, and only then', async () => {
+    const inputs: Array<Record<string, unknown>> = [];
+    mockTool('security_scan_full', async (input) => {
+      inputs.push(input);
+      return ok();
+    });
+    await runScans({ projectPath: makeProjectDir(), localOnly: true });
+    await runScans({ projectPath: makeProjectDir() });
+    expect(inputs[0]?.['local_only']).toBe(true);
+    expect(inputs[1]?.['local_only']).toBeUndefined();
+  });
+
   it('does NOT abort when a step refuses — it records and continues', async () => {
     // The wrong implementation stops at the first refusal and reports LESS
     // than one that continues and says what it missed — every step after

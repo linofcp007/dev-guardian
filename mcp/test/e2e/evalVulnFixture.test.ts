@@ -117,10 +117,9 @@ describe('E2E — eval-vuln fixture', () => {
     'security_scan_full runs end-to-end without crashing (orchestration smoke)',
     async () => {
 
-    // A COPY, not the in-repo FIXTURE itself: security_scan_full shells out to
-    // scripts/scan/full-security-scan.sh, which `cd`s into whatever
-    // project_path it is given and writes real `.guardian/reports/
-    // security-<TS>/` output there — correct behaviour for a real project,
+    // A COPY, not the in-repo FIXTURE itself: security_scan_full's child
+    // scans write real `.guardian/reports/<scan>-<id>/` output into whatever
+    // project_path they are given — correct behaviour for a real project,
     // but pointed straight at the in-repo fixture it left a fresh, real
     // report directory in THIS repo's own working tree on every test run.
     // `.guardian/` is gitignored, so `git status` never flagged the growth;
@@ -137,11 +136,8 @@ describe('E2E — eval-vuln fixture', () => {
     const db = new Database(':memory:');
     runMigrations(db);
     const storage = new Storage(db);
+    // No bash needed: security_scan_full runs its scanners directly.
     const shell = await probeShell(storage.runtimeMeta);
-    if (!shell) {
-      console.warn('[e2e] no usable shell, skipping');
-      return;
-    }
     const plugin: PluginContext = {
       storage,
       shell,

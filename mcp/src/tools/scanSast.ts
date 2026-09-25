@@ -60,6 +60,9 @@ import {
 } from '../schemas.js';
 import type { ToolRun } from '../types.js';
 import { resolveCustomSemgrepConfigs } from '../platform/customRules.js';
+import { hasFileWithExtension } from '../runners/projectFiles.js';
+import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
+import { pythonUtf8Env } from '../runners/semgrepReport.js';
 import {
   inspectProjectSemgrepConfigs,
   type ProjectSemgrepInspection,
@@ -94,14 +97,10 @@ registerToolModule(
     category: 'security',
     // For the cache key: every config the native Semgrep run below passes.
     // Registered custom rules can live outside the project, where the tree
-    // hash cannot see an edit to them.
-    rulePacks: (input, { projectPath, plugin }) => [
-      ...(input.local_only === true
-        ? []
-        : ['auto', ...(anyCsprojInProject(projectPath) ? ['p/csharp'] : [])]),
-      ...inspectProjectSemgrepConfigs(projectPath).usable.map((c) => c.path),
-      ...resolveCustomSemgrepConfigs(plugin),
-    ],
+    // hash cannot see an edit to them. Shared with security_scan_full and
+    // review_pr (runners/semgrepConfigs.ts), whose keys must move with it.
+    rulePacks: (input, { projectPath, plugin }) =>
+      planSemgrepConfigs(projectPath, plugin, input.local_only === true).rulePacks,
     inputSchema: {
       project_path: ProjectPath,
       severity_min: SeverityMin,
@@ -183,7 +182,9 @@ registerToolModule(
           command: 'semgrep',
           args,
           cwd: ctx.projectPath,
-          env: ctx.scriptEnv,
+          // UTF-8 mode: a non-ASCII file name otherwise makes Semgrep fail to
+          // write its report on Windows (see runners/semgrepReport.ts).
+          env: pythonUtf8Env(ctx.scriptEnv),
           signal: ctx.signal,
           onLog: ctx.onLog,
         });
@@ -283,11 +284,14 @@ registerToolModule(
       }
 
       // --- Bandit ------------------------------------------------------
-      // Only attempt Bandit when the project obviously has Python sources.
+      // Only attempt Bandit when the project has Python sources: a manifest,
+      // or any `.py` file (a walk that stops at the first — the shell's
+      // `find | head -1` under pipefail skipped Bandit on large trees).
       const looksPython =
         existsSync(join(ctx.projectPath, 'pyproject.toml')) ||
         existsSync(join(ctx.projectPath, 'requirements.txt')) ||
-        existsSync(join(ctx.projectPath, 'setup.py'));
+        existsSync(join(ctx.projectPath, 'setup.py')) ||
+        hasFileWithExtension(ctx.projectPath, ['.py']);
       if (looksPython) {
         const banditBin = await scannerAvailable('bandit');
         if (banditBin) {
@@ -296,7 +300,7 @@ registerToolModule(
             command: 'bandit',
             args: ['-r', ctx.projectPath, '-f', 'json', '-o', outFile, '-q'],
             cwd: ctx.projectPath,
-            env: ctx.scriptEnv,
+            env: pythonUtf8Env(ctx.scriptEnv),
             signal: ctx.signal,
             onLog: ctx.onLog,
           });

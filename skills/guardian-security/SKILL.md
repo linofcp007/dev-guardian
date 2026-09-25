@@ -27,15 +27,16 @@ Antes de scanar, garante que as ferramentas estão instaladas. Se não estiverem
 
 ### 2. Executar scans
 
-Corre `bash ${CLAUDE_PLUGIN_ROOT}/scripts/scan/full-security-scan.sh <project-path>`. Este script orquestra todos os scanners e produz output JSON unificado em `.guardian/reports/security-<timestamp>.json`.
+Corre a ferramenta MCP `security_scan_full` (`project_path`; `local_only: true` para não usar o registry do Semgrep). Ela corre `scan_sast`, `scan_secrets`, `scan_deps` e `scan_iac`, cada um como um scan próprio (`meta.parent_scan_id`), e guarda os findings fundidos no scan pai, com a lista em `child_scans`. Um scanner que não correu ou falhou aparece como tal em `tools_run` e a cobertura fica `partial`/`none` — nunca "0 findings" limpo.
 
-Internamente:
+Equivalente aproximado (prefere sempre a ferramenta):
 
 ```bash
 # SAST — repara nos DOIS --config: ver a nota abaixo
 semgrep --config=auto --config=.semgrep.yml --json --output=.guardian/sast.json .
 
-# Secrets (incluindo histórico Git)
+# Secrets: histórico Git E ficheiros ainda por commitar (a ferramenta copia-os
+# para um diretório temporário e corre `gitleaks detect --no-git` lá)
 gitleaks detect --no-banner --report-format=json --report-path=.guardian/secrets.json
 
 # Dependências

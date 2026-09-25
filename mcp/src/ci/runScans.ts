@@ -35,6 +35,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PluginContext } from '../context.js';
 import { resolveScriptsDir } from '../platform/scriptsDir.js';
+import { dedupeFindings } from '../runners/findingMerge.js';
 import { probeShell } from '../platform/shellProbe.js';
 import { GuardianDatabase } from '../storage/db.js';
 import { runMigrations } from '../storage/migrations/runner.js';
@@ -68,9 +69,10 @@ export const SCAN_SEQUENCE: readonly string[] = [
   'validate_finding',
 ];
 
-/** Far more than the at-most-two scan rows (security_scan_full, scan_dast)
- *  this pipeline can create in one run — generous on purpose so a future
- *  step that persists additional scan rows doesn't silently truncate. */
+/** Far more than the scan rows this pipeline can create in one run —
+ *  security_scan_full's own and one per child it runs (four), scan_dast's —
+ *  generous on purpose so a future step that persists additional scan rows
+ *  doesn't silently truncate. */
 const SCAN_HISTORY_LIMIT = 50;
 
 const TEMP_DIR_PREFIX = 'dev-guardian-ci-';
@@ -80,6 +82,11 @@ export interface RunScansOptions {
   /** Passed to scan_dast when present; absent means the DAST step is skipped. */
   baseUrl?: string;
   authorizedTarget?: boolean;
+  /**
+   * `--local-only`: `security_scan_full` runs Semgrep with only the rules on
+   * disk and `--metrics=off` — no registry download, no telemetry.
+   */
+  localOnly?: boolean;
 }
 
 export interface RunScansResult {
@@ -133,8 +140,11 @@ function buildSequence(opts: RunScansOptions): readonly string[] {
 }
 
 /** Every step shares `project_path`; `scan_dast` additionally needs the
- *  target it is meant to probe. */
+ *  target it is meant to probe, and `security_scan_full` `local_only`. */
 function buildInput(name: string, opts: RunScansOptions): Record<string, unknown> {
+  if (name === 'security_scan_full' && opts.localOnly === true) {
+    return { project_path: opts.projectPath, local_only: true };
+  }
   if (name !== 'scan_dast') return { project_path: opts.projectPath };
 
   const input: Record<string, unknown> = {
@@ -197,17 +207,16 @@ function toStringArray(value: unknown): string[] {
  * project-path or "latest scan" filtering is needed to keep another run's
  * data out, unlike the equivalent reads inside an interactive MCP session.
  *
- * Deduplicated by fingerprint across scan rows (`security_scan_full` and
- * `scan_dast` each create their own): fingerprints are shared/stable across
- * scans by design (`findingsRepo.ts`'s own doc comment), so the same issue
- * reported by two steps must not be double-counted by the gate.
+ * Deduplicated across scan rows (`security_scan_full`, each of its child
+ * scans, and `scan_dast` all create their own, and the parent row repeats its
+ * children's findings): the same issue reported by two rows must not be
+ * double-counted by the gate. `runners/findingMerge.ts` decides what "the
+ * same" means.
  */
 function collectFindings(storage: Storage): Finding[] {
-  const byFingerprint = new Map<string, Finding>();
+  const all: Finding[] = [];
   for (const scan of storage.scans.listHistory(SCAN_HISTORY_LIMIT)) {
-    for (const finding of storage.findings.listByScan(scan.scan_id)) {
-      byFingerprint.set(finding.fingerprint, finding);
-    }
+    all.push(...storage.findings.listByScan(scan.scan_id));
   }
-  return [...byFingerprint.values()];
+  return dedupeFindings(all);
 }
