@@ -53,7 +53,8 @@ registerToolModule(
       'and fix version; CVEs are also indexed for the guardian://cves/active resource. ' +
       '`packages` narrows the response to those packages (every finding is still recorded; ' +
       '`package_filter` counts what was withheld and names requested packages with no finding). ' +
-      '.guardianignore paths are skipped.',
+      '.guardianignore paths are excluded from the results, and skipped by Trivy where they can be ' +
+      'named exactly.',
     scan_type: 'deps',
     category: 'security',
     supportsAutoFix: false,

@@ -30,6 +30,7 @@
 import { lstatSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { z } from 'zod';
+import { GUARDIAN_IGNORE_FILE } from '../platform/guardianIgnore.js';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
 import { banditOnFiles, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import { changedFiles, git, materialiseCommit, repoState, resolveCommit, showPrefix, } from '../runners/git.js';
@@ -142,12 +143,22 @@ const reviewPr = makeScanTool({
             if (tree)
                 cleanupNote = await tree.remove();
         }
+        // A pull request that edits .guardianignore changes what every scan of
+        // the project leaves out — this review's included. Say so, every time.
+        const warnings = changed.includes(GUARDIAN_IGNORE_FILE)
+            ? [
+                `This diff changes ${GUARDIAN_IGNORE_FILE}, which decides what every dev-guardian scan of this ` +
+                    "project leaves out (this review applied the working tree's copy). Review that change before " +
+                    'trusting a quiet result: a pattern added there hides findings, it does not fix them.',
+            ]
+            : [];
         return {
             outcome: out.cancelled ? 'cancelled' : 'completed',
             tools_run: out.tools_run,
             missing_tools: [...new Set(out.missing_tools)],
             parser_inputs: out.parser_inputs,
             report_paths: [reportDir],
+            ...(warnings.length > 0 ? { warnings } : {}),
             extras: {
                 base_sha: base,
                 head_sha: head,

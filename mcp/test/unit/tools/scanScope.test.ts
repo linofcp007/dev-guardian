@@ -165,7 +165,8 @@ describe('scoped scans in the factory', () => {
       supportsScope: true,
       invoke: async () => {
         calls += 1;
-        return { outcome: 'completed', tools_run: [], missing_tools: [], parser_inputs: [], report_paths: [] };
+        // A scanner that ran: a scope in which nothing ran is never served from the cache.
+        return { outcome: 'completed', tools_run: [{ name: 'mock', status: 'ok' }], missing_tools: [], parser_inputs: [], report_paths: [] };
       },
     });
     const whole = okResult<Payload>(await tool.handler({ project_path: project }, plugin));
@@ -237,6 +238,24 @@ describe('.guardianignore in the factory', () => {
     expect(again.cached).toBe(true);
     expect(again.exclusions).toEqual(r.exclusions);
     expect(again.warnings.some((w) => w.includes('.guardianignore'))).toBe(true);
+  });
+
+  it('filters project files only — never an image target or a pseudo-target that merely matches a pattern', async () => {
+    write(project, '.guardianignore', 'mcp/test/fixtures/\n*.js\nalpine*\n');
+    write(project, 'src/app.js');
+    const r = okResult<Payload>(
+      await scopedTool('ignore_targets', [
+        finding('src/app.js'), // a project file: excluded
+        finding('mcp/test/fixtures/deleted.py'), // gone from disk, but inside an excluded tree: excluded
+        finding('Node.js'), // Trivy's pseudo-target for an image's Node packages: kept
+        finding('alpine:3.18 (alpine 3.18.4)'), // an image target: kept
+      ]).handler({ project_path: project }, plugin),
+    );
+    expect(plugin.storage.findings.listByScan(r.scan_id).map((f) => f.file_path).sort()).toEqual([
+      'Node.js',
+      'alpine:3.18 (alpine 3.18.4)',
+    ]);
+    expect(r.exclusions).toMatchObject({ findings_excluded: 2 });
   });
 
   it('reports the file even when it excluded nothing, so exclusion is never silent', async () => {

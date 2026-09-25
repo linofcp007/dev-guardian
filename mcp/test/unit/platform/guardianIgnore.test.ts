@@ -214,6 +214,43 @@ describe('loadProjectExclusions', () => {
     expect(list).toContain(join(root, 'secret.env'));
   });
 
+  it("anchors Semgrep's --exclude at the git root, where Semgrep anchors it, for a project in a subdirectory", async () => {
+    // Measured, Semgrep 1.176.1, project at repo/sub: `--exclude=/fixtures`
+    // excluded nothing, and `--exclude=/sub/lib` (meant for <project>/sub/lib)
+    // excluded <project>/lib — a kept file — instead.
+    const repoRoot = makeTempDir('ignore-sub-');
+    await execa('git', ['init', '-q'], { cwd: repoRoot });
+    const project = join(repoRoot, 'sub');
+    write(project, GUARDIAN_IGNORE_FILE, 'fixtures/\n/sub/lib/\n');
+    write(project, 'fixtures/x.py');
+    write(project, 'sub/lib/y.py');
+    write(project, 'lib/ok.py');
+    const ex = await loadProjectExclusions(project);
+    if (ex === null || 'error' in ex) throw new Error('expected exclusions');
+    expect(ex.excludedDirs).toEqual(['fixtures', 'sub/lib']);
+    expect(semgrepExcludeArgs(ex)).toEqual(['--exclude=/sub/fixtures', '--exclude=/sub/sub/lib']);
+    // Trivy anchors at its own target, the project.
+    expect(trivySkipArgs(ex)).toEqual(['--skip-dirs', 'fixtures', '--skip-dirs', 'sub/lib']);
+  });
+
+  it('withholds a native flag whose path holds glob syntax — `[id]` is a character class to every scanner', async () => {
+    const root = makeTempDir('ignore-glob-');
+    write(root, GUARDIAN_IGNORE_FILE, '*.test.js\n');
+    write(root, 'pages/[id].test.js');
+    write(root, 'pages/a.test.js');
+    write(root, 'pages/i.js');
+    const ex = await loadProjectExclusions(root);
+    if (ex === null || 'error' in ex) throw new Error('expected exclusions');
+    expect(ex.excludedFiles).toEqual(['pages/[id].test.js', 'pages/a.test.js']);
+    expect(semgrepExcludeArgs(ex)).toEqual(['--exclude=/pages/a.test.js']);
+    expect(trivySkipArgs(ex)).toEqual(['--skip-files', 'pages/a.test.js']);
+    const bandit = (banditExcludeArgs(ex, root)[1] ?? '').split(',');
+    expect(bandit).toContain(join(root, 'pages', 'a.test.js'));
+    expect(bandit.some((b) => b.includes('[id]'))).toBe(false);
+    // The result filter still honours it.
+    expect(ex.ignores('pages/[id].test.js')).toBe(true);
+  });
+
   it('never passes a native flag that an unanchored reading would widen onto a kept file', async () => {
     const root = makeTempDir('ignore-collide-');
     // `/data/` is anchored: only the top-level data/ is excluded. An old

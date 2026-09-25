@@ -4,7 +4,7 @@
  */
 
 import { execa } from 'execa';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { loadProjectExclusions, type ProjectExclusions } from '../../../src/platform/guardianIgnore.js';
@@ -96,6 +96,36 @@ describe('scope.paths', () => {
     expect(outside.code).toBe('unsupported_target');
     const absOutside = await refusal(dir, { paths: [join(dir, '..', 'x.py')] });
     expect(absOutside.code).toBe('unsupported_target');
+  });
+
+  describe('a link out of the project (a junction on Windows, a directory symlink on POSIX)', () => {
+    /** A project holding `link` → a directory outside it with `secret.py` and `sub/x.py`. */
+    function linked(): string {
+      const outside = makeTempDir('scope-outside-');
+      write(outside, 'secret.py');
+      write(outside, 'sub/x.py');
+      const dir = resolveProjectPath(makeTempDir('scope-link-')).path;
+      write(dir, 'src/a.py');
+      symlinkSync(outside, join(dir, 'link'), 'junction');
+      write(dir, 'src/inner.py');
+      symlinkSync(outside, join(dir, 'src', 'link2'), 'junction');
+      return dir;
+    }
+
+    it('refuses the link itself, and any path THROUGH it — last component or mid-path', async () => {
+      const dir = linked();
+      for (const entry of ['link', 'link/secret.py', 'link/sub', 'link/sub/x.py', 'src/link2/secret.py']) {
+        const e = await refusal(dir, { paths: [entry] });
+        expect(e.code, entry).toBe('unsupported_target');
+      }
+    });
+
+    it('never follows one while expanding a directory or a glob', async () => {
+      const dir = linked();
+      expect((await resolve(dir, { paths: ['.'] })).files).toEqual(['src/a.py', 'src/inner.py']);
+      expect((await resolve(dir, { paths: ['src'] })).files).toEqual(['src/a.py', 'src/inner.py']);
+      expect((await resolve(dir, { paths: ['**/*.py'] })).files).toEqual(['src/a.py', 'src/inner.py']);
+    });
   });
 
   it('works without git', async () => {

@@ -74,7 +74,7 @@ import { buildDriftAdvisory } from '../configdrift/advisory.js';
 import { detectConfigDrift } from '../configdrift/detect.js';
 import { assignIdentities, dependencyCoordinates, makeSourceReader } from '../fingerprint/findingIdentity.js';
 import { configsDirFromScriptsDir } from '../platform/configsDir.js';
-import { GUARDIAN_IGNORE_FILE, loadProjectExclusions, } from '../platform/guardianIgnore.js';
+import { GUARDIAN_IGNORE_FILE, isProjectPath, loadProjectExclusions, } from '../platform/guardianIgnore.js';
 import { resolveScope, ScanScopeInput, ScopeError, suggestScopeForFile, } from '../platform/scope.js';
 import { resolveVersion } from '../platform/version.js';
 import { makeProgressEmitter } from '../progress/progressEmitter.js';
@@ -97,7 +97,7 @@ const KEYLESS_INPUTS = ['project_path', 'severity_min', 'force'];
  * and `exclusions`, the factory writes it precisely so that a cache hit
  * answers with it, exactly as the fresh run did.
  */
-const FACTORY_META_KEYS = new Set(['severity_min', 'parent_scan_id']);
+const FACTORY_META_KEYS = new Set(['severity_min', 'parent_scan_id', 'run_warnings']);
 /** Longest scanner stderr line forwarded into a progress message. */
 const MAX_LOG_LINE = 200;
 export function makeScanTool(config) {
@@ -233,7 +233,11 @@ async function runScanPipeline(config, input, plugin, callMeta) {
             cache_key: cacheKey,
             freshThreshold: fresh,
         });
-        if (cached && computeCoverage(cached.tools_run, cached.missing_tools) === 'full') {
+        // A scope that held nothing to scan is coverage none, whatever its
+        // bookkeeping (every scanner merely `skipped`) computes to.
+        if (cached &&
+            computeCoverage(cached.tools_run, cached.missing_tools) === 'full' &&
+            !scannedNothing(cached.meta?.['scope'])) {
             return cachedResult(config, input, plugin, cached.scan_id, warnings);
         }
     }
@@ -322,6 +326,14 @@ function invalidProjectPath(config, e) {
     }
     return failDomain('not_a_git_repo', e.message);
 }
+/** A run's own warnings (`ScannerInvocation.warnings`) as its row keeps them. */
+function runWarnings(value) {
+    return Array.isArray(value) ? value.filter((w) => typeof w === 'string') : [];
+}
+/** `meta.scope` of a scoped scan in which no scanner ran (see `nothingInScope`). */
+function scannedNothing(scopeMeta) {
+    return typeof scopeMeta === 'object' && scopeMeta !== null && scopeMeta.nothing_in_scope === true;
+}
 /** The warnings a scoped scan's response carries, from its `meta.scope`. */
 function scopeWarnings(scopeMeta) {
     if (typeof scopeMeta !== 'object' || scopeMeta === null)
@@ -335,9 +347,10 @@ function scopeWarnings(scopeMeta) {
             `${outside > 0 ? ` (${outside} dropped)` : ''}. It is recorded as scoped — never a baseline, and never ` +
             "counted as the project's current findings.",
     ];
-    if (files === 0) {
-        warnings.push(`The scope holds no file${ignored > 0 ? ` once ${GUARDIAN_IGNORE_FILE} is applied` : ''} — nothing was ` +
-            'scanned, and 0 findings here says nothing about the project.');
+    // Keyed on what RAN (`nothing_in_scope`), never on the file count alone.
+    if (scannedNothing(block)) {
+        warnings.push(`The scope held nothing to scan${ignored > 0 ? ` once ${GUARDIAN_IGNORE_FILE} is applied` : ''} — no ` +
+            'scanner ran, nothing was scanned, and 0 findings here says nothing about the project.');
     }
     if (ignored > 0) {
         warnings.push(`${ignored} file(s) in the scope are excluded by ${GUARDIAN_IGNORE_FILE} and were not scanned.`);
@@ -500,7 +513,9 @@ async function runScanBody(args) {
         });
         return before - findings.length;
     };
-    const findingsExcluded = exclusions === null ? 0 : keepIf((p) => !exclusions.ignores(p));
+    // Only paths IN the project: an image target that happens to match a
+    // pattern is not a file the project declared (`isProjectPath`).
+    const findingsExcluded = exclusions === null ? 0 : keepIf((p) => !(isProjectPath(projectPath, p) && exclusions.ignores(p)));
     const outsideScope = scope === null ? 0 : keepIf((p) => scope.member(p));
     if (dropped.length > 0 && cves.length > 0) {
         const still = cvesStillFound(cves, findings, dropped);
@@ -584,7 +599,18 @@ async function runScanBody(args) {
     // has to be written again — and so does the scope.
     if (args.parentScanId !== undefined)
         meta['parent_scan_id'] = args.parentScanId;
-    const scopeMeta = scope !== null ? { ...scope.meta, findings_outside_scope: outsideScope } : null;
+    // A scope in which no scanner ran — every one `skipped` because the scope
+    // held nothing for it, none missing or failed — computes to coverage
+    // `full` from its bookkeeping. It measured nothing (Global Constraint 3):
+    // it is coverage `none` and `nothing_in_scope`, decided by what RAN, not by
+    // the file count — a commit range whose files are all deleted still had its
+    // history read.
+    const nothingInScope = scope !== null &&
+        !invocation.tools_run.some((t) => t.status === 'ok') &&
+        computeCoverage(invocation.tools_run, invocation.missing_tools) === 'full';
+    const scopeMeta = scope !== null
+        ? { ...scope.meta, findings_outside_scope: outsideScope, ...(nothingInScope ? { nothing_in_scope: true } : {}) }
+        : null;
     if (scopeMeta !== null)
         meta['scope'] = scopeMeta;
     // An orchestrator's findings are its children's, already filtered there:
@@ -600,6 +626,8 @@ async function runScanBody(args) {
         : null;
     if (exclusionReport !== null)
         meta['exclusions'] = exclusionReport;
+    if (invocation.warnings !== undefined && invocation.warnings.length > 0)
+        meta['run_warnings'] = invocation.warnings;
     if (Object.keys(meta).length > 0)
         finalize.meta = meta;
     const finishedAt = plugin.storage.scans.finalize(finalize);
@@ -620,6 +648,7 @@ async function runScanBody(args) {
     const excludedNote = exclusionWarning(exclusionReport);
     if (excludedNote !== null)
         warnings.push(excludedNote);
+    warnings.push(...(invocation.warnings ?? []));
     if (view.warning)
         warnings.push(view.warning);
     if (floor?.warning)
@@ -628,7 +657,12 @@ async function runScanBody(args) {
     // "0 findings" result is only trustworthy at coverage 'full'. When a primary
     // scanner was missing/failed we push a loud warning so the count is never
     // mistaken for a clean bill of health.
-    const { coverage, warning: coverageWarning } = assessCoverage(config.scan_type, invocation.tools_run, invocation.missing_tools);
+    const assessed = assessCoverage(config.scan_type, invocation.tools_run, invocation.missing_tools);
+    // See `nothingInScope` above: the bookkeeping says `full`, the scan measured nothing.
+    const coverage = nothingInScope ? 'none' : assessed.coverage;
+    const coverageWarning = nothingInScope
+        ? `⚠️ ${config.scan_type}: coverage none — no scanner ran on this scope, so its "0 findings" is not a clean result.`
+        : assessed.warning;
     if (coverageWarning)
         warnings.unshift(coverageWarning);
     // The row's own times: `started_at` as `insert` wrote it, `finished_at` as
@@ -658,6 +692,7 @@ async function runScanBody(args) {
         ...view.disclosure,
         ...(invocation.extras ?? {}),
         ...(scopeMeta !== null ? { scope: scopeMeta } : {}),
+        ...(nothingInScope ? { nothing_in_scope: true } : {}),
         ...(exclusionReport !== null ? { exclusions: exclusionReport } : {}),
     };
     return { ok: true, ...payload };
@@ -814,6 +849,7 @@ function cachedResult(config, input, plugin, scanId, warnings) {
     const excludedNote = exclusionWarning(meta?.['exclusions']);
     if (excludedNote !== null)
         allWarnings.push(excludedNote);
+    allWarnings.push(...runWarnings(meta?.['run_warnings']));
     if (view.warning)
         allWarnings.push(view.warning);
     if (floor?.warning)

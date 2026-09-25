@@ -252,7 +252,12 @@ function resolvePaths(projectPath: string, entries: readonly string[]): PathPart
       files.add(rel);
     } else if (kind === 'dir') {
       dirs.push(rel);
-      for (const f of listProjectFiles(abs)) files.add(rel === '' ? f : `${rel}/${f}`);
+      // The walk never descends through a link; each file is still checked.
+      for (const f of listProjectFiles(abs)) {
+        const fileRel = rel === '' ? f : `${rel}/${f}`;
+        assertInside(projectPath, root, fileRel);
+        files.add(fileRel);
+      }
     } else if (kind === 'other') {
       throw new ScopeError(
         `scope.paths entry "${entry}" is not a regular file or directory (a symbolic link is not followed)`,
@@ -267,6 +272,7 @@ function resolvePaths(projectPath: string, entries: readonly string[]): PathPart
       let matched = 0;
       for (const f of allFiles) {
         if (matchesSelfOrAncestor(re, f)) {
+          assertInside(projectPath, root, f);
           files.add(f);
           matched += 1;
         }
@@ -322,7 +328,18 @@ function realOrSelf(p: string): string {
   }
 }
 
-/** What is at `abs` — a symbolic link counts only when it stays inside the project. */
+/**
+ * Does `abs`, every link on its way resolved, still lie inside `root` (a
+ * real path)? `lstat` alone looks at the LAST component only: through a
+ * junction or directory symlink in the middle, `link/secret.py` is an
+ * ordinary file — outside the project. Semgrep would read it, `--autofix`
+ * would rewrite it and gitleaks would copy it.
+ */
+function staysInside(abs: string, root: string): boolean {
+  return !escapes(relative(root, realOrSelf(abs)));
+}
+
+/** What is at `abs`: `escapes` whenever its real location is outside the project. */
 function entryKind(abs: string, root: string): 'file' | 'dir' | 'other' | 'missing' | 'escapes' {
   let st;
   try {
@@ -330,12 +347,18 @@ function entryKind(abs: string, root: string): 'file' | 'dir' | 'other' | 'missi
   } catch {
     return 'missing';
   }
-  if (st.isSymbolicLink()) {
-    return escapes(relative(root, realOrSelf(abs))) ? 'escapes' : 'other';
-  }
+  if (!staysInside(abs, root)) return 'escapes';
+  if (st.isSymbolicLink()) return 'other';
   if (st.isFile()) return 'file';
   if (st.isDirectory()) return 'dir';
   return 'other';
+}
+
+/** Refuse a file whose real location is outside the project (see `staysInside`). */
+function assertInside(projectPath: string, root: string, rel: string): void {
+  if (!staysInside(join(projectPath, ...rel.split('/')), root)) {
+    throw new ScopeError(`scope: "${rel}" resolves outside the project through a link`, 'unsupported_target');
+  }
 }
 
 // ---- diff / since -----------------------------------------------------
@@ -374,14 +397,20 @@ async function untracked(cwd: string): Promise<string[]> {
   ]);
 }
 
+/** The regular files among `rels` that exist — each refused if a link takes it outside the project. */
 function onDisk(projectPath: string, rels: readonly string[]): string[] {
+  const root = realOrSelf(projectPath);
   const out = new Set<string>();
   for (const rel of rels) {
+    let isFile = false;
     try {
-      if (lstatSync(join(projectPath, ...rel.split('/'))).isFile()) out.add(rel);
+      isFile = lstatSync(join(projectPath, ...rel.split('/'))).isFile();
     } catch {
       /* deleted, or never there: nothing to read */
     }
+    if (!isFile) continue;
+    assertInside(projectPath, root, rel);
+    out.add(rel);
   }
   return [...out].sort();
 }

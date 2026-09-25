@@ -19,13 +19,22 @@
  *      tree in the first place. They are derived from the project's file list
  *      (`excludedDirs` / `excludedFiles`: the top-most excluded paths, exact),
  *      never by translating patterns, because each scanner reads a pattern
- *      differently. Measured: Semgrep 1.176.1 reads `--exclude` as gitignore
- *      (`/docs` anchored, `docs` at any depth); Trivy anchors `--skip-dirs`
- *      at the target root; Bandit's `-x` is a SUBSTRING test on the path as
- *      it walks it, so only an absolute native path works (a relative
- *      `data/fx` excluded nothing on Windows). A native flag that could
- *      exclude MORE than the file says under some reading is not passed — the
- *      filter still applies, so that costs only speed, never a silent gap.
+ *      differently. Measured on Semgrep 1.176.1: `--exclude` is read as
+ *      gitignore (`docs` at any depth, `/docs` anchored) — and anchored at
+ *      the GIT ROOT, not at the scan target: with the project at `repo/sub`,
+ *      `--exclude=/fixtures` excluded nothing and `--exclude=/sub/lib` (meant
+ *      for `<project>/sub/lib`) excluded the kept `<project>/lib` instead. So
+ *      the anchor is the project's `git rev-parse --show-prefix` (the target
+ *      itself outside git), and no Semgrep flag at all when that cannot be
+ *      known. Trivy anchors `--skip-dirs` / `--skip-files` at its target (a
+ *      single segment too). Bandit's `-x` is a SUBSTRING test on the path as
+ *      it walks it (plus `fnmatch`), so only an absolute native path works — a
+ *      relative `data/fx` excluded nothing on Windows. A path holding glob
+ *      syntax (`pages/[id].test.js`) is a pattern to all three — `--exclude`
+ *      of that name excluded `pages/i.py` and kept itself — so it is never
+ *      passed. A native flag that could exclude MORE than the file says under
+ *      some reading is not passed either: the filter still applies, so a
+ *      withheld flag costs only speed, never a silent gap.
  *
  * Exclusion is never silent: the factory reports how many files the ignore
  * file excludes and how many findings it dropped on every scan of a project
@@ -35,13 +44,17 @@
  * subdirectories are not (gitignore's per-directory files are not supported).
  */
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join, sep } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve, sep } from 'node:path';
 import { git, splitNul } from '../runners/git.js';
 import { listProjectFiles, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
 export const GUARDIAN_IGNORE_FILE = '.guardianignore';
 /** Bandit's own default `-x` list — replaced, not extended, by passing `-x`. */
 const BANDIT_DEFAULT_EXCLUDES = ['.svn', 'CVS', '.bzr', '.hg', '.git', '__pycache__', '.tox', '.eggs', '*.egg'];
+/** Glob syntax to Semgrep's gitignore reader and Trivy's doublestar (tested on POSIX paths). */
+const GLOB_SYNTAX = /[*?[\]{}\\]/;
+/** Glob syntax to Bandit's `fnmatch` (tested on native absolute paths, backslashes and all). */
+const FNMATCH_SYNTAX = /[*?[\]]/;
 /** Most native exclusion entries passed to one scanner; the rest are filtered from results only. */
 const MAX_NATIVE_ENTRIES = 200;
 /** Most characters of native exclusion arguments (the command line is shared with targets). */
@@ -235,14 +248,57 @@ export async function loadProjectExclusions(projectPath) {
         return { file, error: e instanceof Error ? e.message : String(e) };
     }
     const matcher = compileIgnore(text);
-    const files = (await gitListFiles(projectPath)) ?? listProjectFiles(projectPath);
+    const listed = await gitListFiles(projectPath);
+    let semgrepAnchor;
+    if (listed !== null) {
+        const prefix = await git(projectPath, ['rev-parse', '--show-prefix']);
+        semgrepAnchor = prefix.exitCode === 0 ? prefix.stdout.trim() : null;
+    }
+    else {
+        // git could not list the project: outside any work tree Semgrep anchors
+        // at the target; inside one (git failing for another reason) the anchor
+        // is unknown.
+        semgrepAnchor = insideGitWorkTree(projectPath) ? null : '';
+    }
     return {
         file,
         hash: createHash('sha256').update(text).digest('hex'),
         patterns: matcher.patterns,
         ignores: (relPath, isDir) => matcher.ignores(relPath, isDir),
-        ...classify(files, matcher),
+        ...classify(listed ?? listProjectFiles(projectPath), matcher),
+        semgrepAnchor,
     };
+}
+/**
+ * Is a finding's `file_path` a path IN the project — the file itself, or a
+ * directory it would sit in (a secret in a file a later commit deleted)? A
+ * container image target (`alpine:3.18 (alpine 3.18.4)`) or Trivy's `Node.js`
+ * pseudo-target can match a pattern (`alpine*`, `*.js`) and is no project
+ * file: the result filter leaves those alone. A deleted top-level file has no
+ * directory left to place it by and is kept too — the direction that never
+ * hides a finding.
+ */
+export function isProjectPath(projectPath, relPath) {
+    const p = relPath.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+    if (p === '' || p.startsWith('/') || /^[A-Za-z]:/.test(p) || p === '..' || p.startsWith('../'))
+        return false;
+    const segments = p.split('/');
+    if (existsSync(join(projectPath, ...segments)))
+        return true;
+    for (let i = segments.length - 1; i >= 1; i--) {
+        if (existsSync(join(projectPath, ...segments.slice(0, i))))
+            return true;
+    }
+    return false;
+}
+/** A `.git` (directory or worktree file) in the project or one of its ancestors. */
+function insideGitWorkTree(projectPath) {
+    for (let dir = resolve(projectPath);; dir = dirname(dir)) {
+        if (existsSync(join(dir, '.git')))
+            return true;
+        if (dirname(dir) === dir)
+            return false;
+    }
 }
 /** `git ls-files` of the work tree at `root`, relative to it; null outside git. */
 async function gitListFiles(root) {
@@ -347,26 +403,36 @@ function withinBudget(items, cost) {
     return out;
 }
 /**
- * `--exclude=/<path>` per top-most excluded path — the leading slash anchors
- * it at the scan root (measured, Semgrep 1.176.1). An entry an unanchored
- * reading would widen onto a kept file is left to the result filter.
+ * `--exclude=/<anchor><path>` per top-most excluded path. The leading slash
+ * anchors it at the GIT ROOT, where Semgrep 1.176.1 anchors it (measured —
+ * see the module comment), hence `semgrepAnchor`; unknown anchor, no flags.
+ * An entry holding glob syntax, or one an unanchored reading would widen onto
+ * a kept file, is left to the result filter.
  */
 export function semgrepExcludeArgs(ex) {
-    if (ex === null)
+    if (ex === null || ex.semgrepAnchor === null)
         return [];
-    const safe = nativeEntries(ex).filter((e) => !widensOntoKept(e, ex.keptFiles));
-    return withinBudget(safe.map((e) => `--exclude=/${e.rel}`), (a) => a.length + 3);
+    const anchor = ex.semgrepAnchor;
+    const patterns = nativeEntries(ex)
+        .filter((e) => !widensOntoKept(e, ex.keptFiles))
+        .map((e) => `/${anchor}${e.rel}`)
+        // Glob syntax, or a trailing space gitignore would trim: not this path.
+        .filter((p) => !GLOB_SYNTAX.test(p) && !/\s$/.test(p));
+    return withinBudget(patterns.map((p) => `--exclude=${p}`), (a) => a.length + 3);
 }
 /**
  * `--skip-dirs <dir>` / `--skip-files <file>`, project-relative: Trivy
  * matches them against the path relative to the scan target, anchored
- * (measured — `data/fx` skips `data/fx`, not `x/data/fx`).
+ * (measured — `data/fx` skips `data/fx`, not `x/data/fx`; `data` skips only
+ * the top-level one). They are doublestar patterns: a path with glob syntax
+ * is left to the result filter.
  */
 export function trivySkipArgs(ex) {
     if (ex === null)
         return [];
     const args = [];
-    for (const e of withinBudget(nativeEntries(ex), (entry) => entry.rel.length + 16)) {
+    const plain = nativeEntries(ex).filter((e) => !GLOB_SYNTAX.test(e.rel));
+    for (const e of withinBudget(plain, (entry) => entry.rel.length + 16)) {
         args.push(e.dir ? '--skip-dirs' : '--skip-files', e.rel);
     }
     return args;
@@ -389,7 +455,7 @@ export function banditExcludeArgs(ex, projectPath) {
         const abs = join(projectPath, ...e.rel.split('/'));
         return e.dir ? `${abs}${sep}` : abs;
     })
-        .filter((abs) => !keptAbs.some((k) => k.includes(abs)));
+        .filter((abs) => !FNMATCH_SYNTAX.test(abs) && !keptAbs.some((k) => k.includes(abs)));
     const chosen = withinBudget(entries, (a) => a.length + 1);
     if (chosen.length === 0)
         return [];

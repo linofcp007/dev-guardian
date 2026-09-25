@@ -10,7 +10,7 @@
  */
 
 import { execa } from 'execa';
-import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -44,6 +44,7 @@ beforeAll(async () => {
   await import('../../src/tools/bugHunt.js');
   await import('../../src/tools/qualityCheck.js');
   await import('../../src/tools/scanDeps.js');
+  await import('../../src/tools/reviewPr.js');
 });
 
 type Call = ProcessRunOptions & { args: string[] };
@@ -158,6 +159,8 @@ interface ScanPayload {
   scope?: Record<string, unknown>;
   exclusions?: Record<string, unknown>;
   package_filter?: Record<string, unknown>;
+  nothing_in_scope?: boolean;
+  cached?: boolean;
 }
 
 async function run(name: string, project: string, input: Record<string, unknown> = {}) {
@@ -266,12 +269,42 @@ describe('scan_sast — scope', () => {
     expect(r.missing_tools).toContain('semgrep');
   });
 
-  it('an empty change set runs nothing, and says so', async () => {
+  it('an empty change set runs nothing, says so, is coverage none — never a clean result — and is never served from the cache', async () => {
     const dir = await repo({ 'a.py': 'x = 1\n' });
-    const r = await ok('scan_sast', dir, { scope: { diff: {} } });
+    const tool = TOOLS.find((t) => t.name === 'scan_sast');
+    if (!tool) throw new Error('scan_sast not registered');
+    const p = plugin(dir);
+    const first = await tool.handler({ project_path: dir, scope: { diff: {} } }, p);
+    if (!first.ok) throw new Error(JSON.stringify(first.error));
+    const r = first as unknown as ScanPayload;
     expect(byCommand('semgrep')).toHaveLength(0);
     expect(r.tools_run.find((t) => t.name === 'semgrep')?.reason).toMatch(/no file/);
+    expect(r.coverage).toBe('none');
+    expect(r.nothing_in_scope).toBe(true);
     expect(r.warnings.some((w) => w.includes('nothing was scanned'))).toBe(true);
+    const again = await tool.handler({ project_path: dir, scope: { diff: {} } }, p);
+    if (!again.ok) throw new Error(JSON.stringify(again.error));
+    expect((again as unknown as ScanPayload).cached).toBeUndefined();
+  });
+
+  it.each(['bug_hunt', 'quality_check', 'scan_secrets'])('%s: an empty change set is coverage none too', async (name) => {
+    const dir = await repo({ 'a.py': 'x = 1\n' });
+    const r = await ok(name, dir, { scope: { diff: {} } });
+    expect(r.coverage).toBe('none');
+    expect(r.nothing_in_scope).toBe(true);
+  });
+
+  it('refuses a scope path that runs through a link out of the project, before any scanner runs', async () => {
+    const outside = makeTempDir('scoped-outside-');
+    write(outside, 'secret.py');
+    const dir = project();
+    write(dir, 'a.py');
+    symlinkSync(outside, join(dir, 'link'), 'junction');
+    const { r } = await run('scan_sast', dir, { scope: { paths: ['link/secret.py'] }, auto_fix: true, allow_dirty: true });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('expected failure');
+    expect(r.error.code).toBe('unsupported_target');
+    expect(calls).toHaveLength(0);
   });
 
   it('scope.diff scans the uncommitted files only', async () => {
@@ -323,6 +356,21 @@ describe('scan_secrets — scope', () => {
     expect(leaks).toHaveLength(1);
     expect(leaks[0]?.args).toContain(`--log-opts=${base}..${head}`);
     expect(leaks[0]?.args).not.toContain('--no-git');
+  });
+
+  it('a range whose files were all deleted still read its history: not "nothing scanned", not coverage none', async () => {
+    const dir = await repo({ 'a.env': 'k=1\n' });
+    await git(dir, 'checkout', '-q', '-b', 'feature');
+    write(dir, 'leak.env', 'k=2\n');
+    await commitAll(dir);
+    rmSync(join(dir, 'leak.env'));
+    await commitAll(dir);
+    const r = await ok('scan_secrets', dir, { scope: { diff: { base: 'main' } } });
+    expect(byCommand('gitleaks')).toHaveLength(1);
+    expect(r.scope).toMatchObject({ files: 0 });
+    expect(r.coverage).toBe('full');
+    expect(r.nothing_in_scope).toBeUndefined();
+    expect(r.warnings.some((w) => w.includes('nothing was scanned'))).toBe(false);
   });
 
   it('scope.since as a date narrows history with --since', async () => {
@@ -479,6 +527,35 @@ describe('scan_deps — packages and .guardianignore', () => {
     expect(p.storage.findings.listByScan(res.scan_id).map((f) => f.rule_id)).toEqual(['CVE-1']);
     expect(p.storage.cves.listActive(res.scan_id).map((c) => c.cve_id)).toEqual(['CVE-1']);
     expect(res.exclusions).toMatchObject({ findings_excluded: 1 });
+  });
+});
+
+describe('review_pr — a diff that edits .guardianignore', () => {
+  it('warns: the pull request changes what every scan of the project leaves out — also on a cache hit', async () => {
+    const dir = await repo({ 'a.py': 'x = 1\n', '.guardianignore': 'fixtures/\n' });
+    await git(dir, 'checkout', '-q', '-b', 'feature');
+    write(dir, '.guardianignore', 'fixtures/\nsrc/\n');
+    write(dir, 'src/b.py', 'eval(x)\n');
+    await commitAll(dir);
+    const tool = TOOLS.find((t) => t.name === 'review_pr');
+    if (!tool) throw new Error('review_pr not registered');
+    const p = plugin(dir);
+    for (const attempt of ['fresh', 'cached']) {
+      const r = await tool.handler({ project_path: dir, base_ref: 'main' }, p);
+      if (!r.ok) throw new Error(JSON.stringify(r.error));
+      const res = r as unknown as ScanPayload;
+      expect(res.cached === true, attempt).toBe(attempt === 'cached');
+      expect(res.warnings.some((w) => w.includes('.guardianignore') && w.includes('This diff')), JSON.stringify(res.warnings)).toBe(true);
+    }
+  });
+
+  it('says nothing when the diff leaves it alone', async () => {
+    const dir = await repo({ 'a.py': 'x = 1\n', '.guardianignore': 'fixtures/\n' });
+    await git(dir, 'checkout', '-q', '-b', 'feature');
+    write(dir, 'a.py', 'eval(x)\n');
+    await commitAll(dir);
+    const r = await ok('review_pr', dir, { base_ref: 'main' });
+    expect(r.warnings.some((w) => w.includes('This diff'))).toBe(false);
   });
 });
 

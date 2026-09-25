@@ -142,4 +142,31 @@ describe('scoped scans and .guardianignore with real Semgrep', () => {
     expect(semgrepFiles(p, diff.scan_id)).toEqual(['app.py']);
     expect(diff.coverage).not.toBe('none');
   });
+
+  it.skipIf(!SEMGREP_INSTALLED)('a project in a subdirectory of its repository: excludes land where the ignore file means', async () => {
+    // Semgrep anchors a leading-`/` --exclude at the GIT ROOT. Unprefixed,
+    // `/fixtures` excluded nothing and `/sub/lib` (meant for <project>/sub/lib)
+    // excluded the kept <project>/lib — a finding silently lost.
+    const repoRoot = makeTempDir('scoped-e2e-sub-');
+    await git(repoRoot, 'init', '-q');
+    await git(repoRoot, 'config', 'user.email', 'guardian-test@example.com');
+    await git(repoRoot, 'config', 'user.name', 'Guardian Test');
+    await git(repoRoot, 'config', 'commit.gpgsign', 'false');
+    const project = join(repoRoot, 'sub');
+    write(project, '.semgrep.yml', RULES);
+    write(project, '.guardianignore', 'fixtures/\n/sub/lib/\n');
+    write(project, 'fixtures/vuln.py', 'eval(user_input)\n');
+    write(project, 'sub/lib/y.py', 'eval(user_input)\n');
+    write(project, 'lib/ok.py', 'eval(user_input)\n');
+    write(project, 'app.py', 'x = 1\n');
+    await git(repoRoot, 'add', '-A');
+    await git(repoRoot, 'commit', '-q', '-m', 'base');
+    const canonical = resolveProjectPath(project).path;
+    const p = plugin(canonical);
+
+    const whole = await sast(canonical, p);
+    expect(scannedBySemgrep(canonical, whole)).toEqual(['app.py', 'lib/ok.py']);
+    expect(semgrepFiles(p, whole.scan_id)).toEqual(['lib/ok.py']);
+    expect(whole.exclusions).toMatchObject({ excluded_files: 2, findings_excluded: 0 });
+  });
 });

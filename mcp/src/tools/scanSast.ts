@@ -135,7 +135,8 @@ registerToolModule(
       'to build an auto config with metrics off, so this is unavoidable in the default mode. ' +
       'Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using ' +
       'only rules already on disk. Pass scope to scan only some files (paths, a git diff, or what ' +
-      'changed since a ref/date); .guardianignore paths are never scanned.',
+      'changed since a ref/date). .guardianignore paths are excluded from the results, and skipped by ' +
+      'Semgrep and Bandit where they can be named exactly.',
     scan_type: 'sast',
     category: 'security',
     supportsScope: true,
