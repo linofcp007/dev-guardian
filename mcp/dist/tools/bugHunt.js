@@ -109,7 +109,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { resolveBugfixRules } from '../platform/configsDir.js';
-import { resolveCustomSemgrepConfigs } from '../platform/customRules.js';
+import { legacyRegistrationNote, legacyRegistrationsNotApplied, resolveCustomSemgrepConfigs, } from '../platform/customRules.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { runProcess } from '../runners/processRunner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
@@ -226,8 +226,18 @@ function configuredPacksFor(input, plugin, projectPath) {
     return buildPackList({
         includeLanguagePacks,
         languages: includeLanguagePacks ? detectLanguages(plugin, projectPath) : [],
-        customConfigs: resolveCustomSemgrepConfigs(plugin),
+        customConfigs: resolveCustomSemgrepConfigs(plugin, projectPath),
     });
+}
+/**
+ * The LOCAL rule files a `bug_hunt` of `projectPath` loads — the shipped
+ * bugfix packs plus the project's registered rules. Everything else it runs
+ * is a registry pack. `create_fix_pr` needs this split to apply exactly one
+ * rule's autofix: a local rule comes from a filtered copy of its file, a
+ * registry rule from `r/<rule-id>`.
+ */
+export function bugHuntLocalConfigs(plugin, projectPath) {
+    return [...resolveBugfixRules(), ...resolveCustomSemgrepConfigs(plugin, projectPath)];
 }
 /**
  * Assembles the full `--config=` pack list `bug_hunt` runs with. Extracted
@@ -722,7 +732,13 @@ registerToolModule(makeScanTool({
     // out of the cache key: every filter over the same tree is one scan.
     responseOnlyInputs: ['categories'],
     responseView: (input, findings, scanId) => categoriesView(input.categories, findings, scanId),
-    rulePacks: (input, { plugin, projectPath }) => configuredPacksFor(input, plugin, projectPath),
+    // `rulesProjectPath`: the scanned path itself, except when create_fix_pr
+    // re-scans a worktree of a project and needs that project's rules.
+    rulePacks: (input, { plugin, rulesProjectPath }) => configuredPacksFor(input, plugin, rulesProjectPath),
+    configWarnings: (_input, { plugin, rulesProjectPath }) => {
+        const note = legacyRegistrationNote(legacyRegistrationsNotApplied(plugin, rulesProjectPath));
+        return note === null ? [] : [note];
+    },
     inputSchema: {
         project_path: ProjectPath,
         severity_min: SeverityMin,
@@ -749,165 +765,65 @@ registerToolModule(makeScanTool({
             'scanning alongside the bug hunt.'),
         force: Force,
     },
-    invoke: async (input, ctx) => {
-        const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'bugs');
-        const tools_run = [];
-        const missing_tools = [];
-        const parser_inputs = [];
-        const semgrepBin = await scannerAvailable('semgrep');
-        if (!semgrepBin) {
-            tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'not_installed' });
-            missing_tools.push('semgrep');
-            return {
-                outcome: 'completed',
-                tools_run,
-                missing_tools,
-                parser_inputs,
-                report_paths: [reportDir],
-            };
-        }
-        // Language packs are off by default (§ BugHuntInput above: this is
-        // deliberately not part of `categories`, which filters output, not
-        // input). Detection only runs when asked — a project with a
-        // persisted JS/TS stack snapshot does NOT get p/javascript/p/typescript
-        // added unless the caller opts in. The local bugfix-*.yml rules, by
-        // contrast, are NOT gated behind a flag — `buildPackList` appends
-        // all of them by default (omitting them only if resolveBugfixRules()
-        // finds none); see this file's header comment.
-        const configuredPacks = configuredPacksFor(input, ctx.plugin, ctx.projectPath);
-        const categoryParser = bugCategoryParser;
-        const outFile = join(reportDir, 'bugs.json');
-        const runWithPacks = (packs) => {
-            const args = packs.map((pack) => `--config=${pack}`);
-            args.push('--json', '--quiet', '--output', outFile);
-            if (input.auto_fix === true)
-                args.push('--autofix');
-            args.push(ctx.projectPath);
-            return runProcess({
-                command: 'semgrep',
-                args,
-                cwd: ctx.projectPath,
-                env: ctx.scriptEnv,
-                signal: ctx.signal,
-                onLog: ctx.onLog,
-            });
+    // The pack choice is recorded on the scan row (meta, via extras) so
+    // create_fix_pr can re-scan a fix with the SAME packs that found it.
+    invoke: async (input, ctx) => recordPackChoice(input, await invokeBugHunt(input, ctx)),
+}));
+async function invokeBugHunt(input, ctx) {
+    const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'bugs');
+    const tools_run = [];
+    const missing_tools = [];
+    const parser_inputs = [];
+    const semgrepBin = await scannerAvailable('semgrep');
+    if (!semgrepBin) {
+        tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'not_installed' });
+        missing_tools.push('semgrep');
+        return {
+            outcome: 'completed',
+            tools_run,
+            missing_tools,
+            parser_inputs,
+            report_paths: [reportDir],
         };
-        // A gap that survives every retry attempt: nothing scanned, and that
-        // must never be reported as a clean bug report. `outcome: 'completed'`
-        // matches scan_sast's convention for an expected, named gap — the
-        // signal lives in `missing_tools` / `coverage`, not in `outcome`.
-        // `missing_tools` gets the bare tool name only (never
-        // `semgrep:<pack>`) — see the header comment for why; the pack-level
-        // detail lives in the `reason` string below instead.
-        const reportGap = (failures) => {
-            tools_run.push({
-                name: 'semgrep',
-                status: 'failed',
-                reason: `no configured pack could be scanned (${describeConfigFailures(failures)})`,
-            });
-            missing_tools.push('semgrep');
-            return {
-                outcome: 'completed',
-                tools_run,
-                missing_tools,
-                parser_inputs,
-                report_paths: [reportDir],
-            };
-        };
-        const result = await runWithPacks(configuredPacks);
-        const raw = readJsonSafe(outFile);
-        const failures = findConfigDownloadFailures(raw);
-        if (failures.length === 0) {
-            // The ordinary case: no WHOLE `--config=` failed to load —
-            // findConfigDownloadFailures found nothing whole-config-fatal. That
-            // does NOT mean the exit code is clean: a single bad RULE inside an
-            // otherwise-valid local file (e.g. a typo'd bugfix-js.yml pattern)
-            // also exits non-zero/non-one, but Semgrep still scans with
-            // everything else that loaded — verified live, not assumed (see
-            // semgrepConfigFailure.ts's header comment). wasAnythingScanned is
-            // what tells the two apart; exit code/outcome alone cannot (same
-            // file, same comment).
-            if (raw)
-                parser_inputs.push({ parser: categoryParser, input: raw });
-            const okByExit = result.outcome === 'completed' || result.exitCode === 1;
-            const ok = okByExit || wasAnythingScanned(raw);
-            const toolRun = { name: 'semgrep', status: ok ? 'ok' : 'failed' };
-            if (!okByExit) {
-                // Either genuinely failed, or "ok" only because something was
-                // scanned anyway despite a non-clean exit — both need the
-                // human-readable reason attached. Before this, a malformed local
-                // rule file reported status:'failed' with NO reason at all,
-                // alongside assessCoverage's "install semgrep" warning — which
-                // sends a user chasing their toolchain instead of their own rule
-                // file (bugfix-rules-jsts task-3 fix round).
-                const reason = describeRawErrors(raw);
-                if (reason !== null)
-                    toolRun.reason = reason;
-            }
-            tools_run.push(toolRun);
-            return {
-                outcome: ok ? 'completed' : result.outcome,
-                tools_run,
-                missing_tools,
-                parser_inputs,
-                report_paths: [reportDir],
-            };
-        }
-        // At least one configured pack failed to download (registry
-        // retirement, outage, typo). A single bad `--config=` aborts the
-        // WHOLE invocation — `raw` above has empty results/paths.scanned even
-        // for packs that resolved fine — so it cannot be reused as-is. Re-run
-        // with whatever survives rather than reporting a scan that covered
-        // nothing.
-        const survivors = survivingPacks(configuredPacks, failures);
-        if (survivors.length === 0 || survivors.length === configuredPacks.length) {
-            // Nothing to retry with (every pack failed), or the failure(s)
-            // could not be attributed to a specific configured pack (so a retry
-            // would just reproduce the same result).
-            return reportGap(failures);
-        }
-        const retry = await runWithPacks(survivors);
-        // A cancelled/timed-out/oversized retry never produced a genuine
-        // second attempt — the child was killed before (or while) writing
-        // `--output`, so `outFile` may still hold attempt one's STALE content,
-        // or nothing at all. Reading that as "the retry also hit a download
-        // failure" would duplicate attempt one's own failure, and forcing
-        // `outcome: 'completed'` below would misreport a cancelled/timed-out
-        // run as having finished normally — the same family of untruth this
-        // whole fix exists to close. Propagate the retry's real outcome
-        // instead, and report only what attempt one actually found (never
-        // touching `outFile` in this branch at all).
-        if (retry.outcome !== 'completed' && retry.outcome !== 'failed') {
-            tools_run.push({
-                name: 'semgrep',
-                status: 'failed',
-                reason: `retry with ${survivors.join(', ')} did not finish (${retry.outcome}) — ` +
-                    `original gap: ${describeConfigFailures(failures)}`,
-            });
-            missing_tools.push('semgrep');
-            return {
-                outcome: retry.outcome,
-                tools_run,
-                missing_tools,
-                parser_inputs,
-                report_paths: [reportDir],
-            };
-        }
-        const retryRaw = readJsonSafe(outFile);
-        const retryFailures = findConfigDownloadFailures(retryRaw);
-        const retryOk = retryFailures.length === 0 && (retry.outcome === 'completed' || retry.exitCode === 1);
-        if (!retryOk) {
-            // The retry ran to a real exit but didn't help either (network
-            // flake, or the "survivor" just got retired too) — combine every
-            // failure we saw and refuse to trust either attempt's output.
-            return reportGap([...failures, ...retryFailures]);
-        }
-        if (retryRaw)
-            parser_inputs.push({ parser: categoryParser, input: retryRaw });
+    }
+    // Language packs are off by default (§ BugHuntInput above: this is
+    // deliberately not part of `categories`, which filters output, not
+    // input). Detection only runs when asked — a project with a
+    // persisted JS/TS stack snapshot does NOT get p/javascript/p/typescript
+    // added unless the caller opts in. The local bugfix-*.yml rules, by
+    // contrast, are NOT gated behind a flag — `buildPackList` appends
+    // all of them by default (omitting them only if resolveBugfixRules()
+    // finds none); see this file's header comment.
+    const configuredPacks = configuredPacksFor(input, ctx.plugin, ctx.rulesProjectPath);
+    const categoryParser = bugCategoryParser;
+    const outFile = join(reportDir, 'bugs.json');
+    const runWithPacks = (packs) => {
+        const args = packs.map((pack) => `--config=${pack}`);
+        args.push('--json', '--quiet', '--output', outFile);
+        if (input.auto_fix === true)
+            args.push('--autofix');
+        args.push(ctx.projectPath);
+        return runProcess({
+            command: 'semgrep',
+            args,
+            cwd: ctx.projectPath,
+            env: ctx.scriptEnv,
+            signal: ctx.signal,
+            onLog: ctx.onLog,
+        });
+    };
+    // A gap that survives every retry attempt: nothing scanned, and that
+    // must never be reported as a clean bug report. `outcome: 'completed'`
+    // matches scan_sast's convention for an expected, named gap — the
+    // signal lives in `missing_tools` / `coverage`, not in `outcome`.
+    // `missing_tools` gets the bare tool name only (never
+    // `semgrep:<pack>`) — see the header comment for why; the pack-level
+    // detail lives in the `reason` string below instead.
+    const reportGap = (failures) => {
         tools_run.push({
             name: 'semgrep',
-            status: 'ok',
-            reason: `ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`,
+            status: 'failed',
+            reason: `no configured pack could be scanned (${describeConfigFailures(failures)})`,
         });
         missing_tools.push('semgrep');
         return {
@@ -917,6 +833,115 @@ registerToolModule(makeScanTool({
             parser_inputs,
             report_paths: [reportDir],
         };
-    },
-}));
+    };
+    const result = await runWithPacks(configuredPacks);
+    const raw = readJsonSafe(outFile);
+    const failures = findConfigDownloadFailures(raw);
+    if (failures.length === 0) {
+        // The ordinary case: no WHOLE `--config=` failed to load —
+        // findConfigDownloadFailures found nothing whole-config-fatal. That
+        // does NOT mean the exit code is clean: a single bad RULE inside an
+        // otherwise-valid local file (e.g. a typo'd bugfix-js.yml pattern)
+        // also exits non-zero/non-one, but Semgrep still scans with
+        // everything else that loaded — verified live, not assumed (see
+        // semgrepConfigFailure.ts's header comment). wasAnythingScanned is
+        // what tells the two apart; exit code/outcome alone cannot (same
+        // file, same comment).
+        if (raw)
+            parser_inputs.push({ parser: categoryParser, input: raw });
+        const okByExit = result.outcome === 'completed' || result.exitCode === 1;
+        const ok = okByExit || wasAnythingScanned(raw);
+        const toolRun = { name: 'semgrep', status: ok ? 'ok' : 'failed' };
+        if (!okByExit) {
+            // Either genuinely failed, or "ok" only because something was
+            // scanned anyway despite a non-clean exit — both need the
+            // human-readable reason attached. Before this, a malformed local
+            // rule file reported status:'failed' with NO reason at all,
+            // alongside assessCoverage's "install semgrep" warning — which
+            // sends a user chasing their toolchain instead of their own rule
+            // file (bugfix-rules-jsts task-3 fix round).
+            const reason = describeRawErrors(raw);
+            if (reason !== null)
+                toolRun.reason = reason;
+        }
+        tools_run.push(toolRun);
+        return {
+            outcome: ok ? 'completed' : result.outcome,
+            tools_run,
+            missing_tools,
+            parser_inputs,
+            report_paths: [reportDir],
+        };
+    }
+    // At least one configured pack failed to download (registry
+    // retirement, outage, typo). A single bad `--config=` aborts the
+    // WHOLE invocation — `raw` above has empty results/paths.scanned even
+    // for packs that resolved fine — so it cannot be reused as-is. Re-run
+    // with whatever survives rather than reporting a scan that covered
+    // nothing.
+    const survivors = survivingPacks(configuredPacks, failures);
+    if (survivors.length === 0 || survivors.length === configuredPacks.length) {
+        // Nothing to retry with (every pack failed), or the failure(s)
+        // could not be attributed to a specific configured pack (so a retry
+        // would just reproduce the same result).
+        return reportGap(failures);
+    }
+    const retry = await runWithPacks(survivors);
+    // A cancelled/timed-out/oversized retry never produced a genuine
+    // second attempt — the child was killed before (or while) writing
+    // `--output`, so `outFile` may still hold attempt one's STALE content,
+    // or nothing at all. Reading that as "the retry also hit a download
+    // failure" would duplicate attempt one's own failure, and forcing
+    // `outcome: 'completed'` below would misreport a cancelled/timed-out
+    // run as having finished normally — the same family of untruth this
+    // whole fix exists to close. Propagate the retry's real outcome
+    // instead, and report only what attempt one actually found (never
+    // touching `outFile` in this branch at all).
+    if (retry.outcome !== 'completed' && retry.outcome !== 'failed') {
+        tools_run.push({
+            name: 'semgrep',
+            status: 'failed',
+            reason: `retry with ${survivors.join(', ')} did not finish (${retry.outcome}) — ` +
+                `original gap: ${describeConfigFailures(failures)}`,
+        });
+        missing_tools.push('semgrep');
+        return {
+            outcome: retry.outcome,
+            tools_run,
+            missing_tools,
+            parser_inputs,
+            report_paths: [reportDir],
+        };
+    }
+    const retryRaw = readJsonSafe(outFile);
+    const retryFailures = findConfigDownloadFailures(retryRaw);
+    const retryOk = retryFailures.length === 0 && (retry.outcome === 'completed' || retry.exitCode === 1);
+    if (!retryOk) {
+        // The retry ran to a real exit but didn't help either (network
+        // flake, or the "survivor" just got retired too) — combine every
+        // failure we saw and refuse to trust either attempt's output.
+        return reportGap([...failures, ...retryFailures]);
+    }
+    if (retryRaw)
+        parser_inputs.push({ parser: categoryParser, input: retryRaw });
+    tools_run.push({
+        name: 'semgrep',
+        status: 'ok',
+        reason: `ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`,
+    });
+    missing_tools.push('semgrep');
+    return {
+        outcome: 'completed',
+        tools_run,
+        missing_tools,
+        parser_inputs,
+        report_paths: [reportDir],
+    };
+}
+function recordPackChoice(input, invocation) {
+    return {
+        ...invocation,
+        extras: { ...(invocation.extras ?? {}), include_language_packs: input.include_language_packs === true },
+    };
+}
 //# sourceMappingURL=bugHunt.js.map

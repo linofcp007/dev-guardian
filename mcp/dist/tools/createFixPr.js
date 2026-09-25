@@ -98,19 +98,50 @@
  * produces — reported whenever ANYTHING was excluded, not only when
  * everything was: a run that fixes 2 of 42 is nearly as opaque as one that
  * fixes 0.
+ *
+ * **Task 11 (2026-09-25 review) — what a run touches, and what proves it.**
+ *
+ *   - A DRY RUN CHANGES NOTHING OUTSIDE ITS WORKTREE. Its worktree is
+ *     detached (no branch written to the user's refs); the failing-test
+ *     comparison runs in a second, disposable tree of the base commit, never
+ *     in the user's own working tree (`judgeTests`' `baseTree`); a pip fix
+ *     edits the pin inside the worktree, never `pip install` on the host;
+ *     every npm install runs with `--ignore-scripts`; and the verification
+ *     scans' rows are deleted once read.
+ *   - "Before" and "after" come from the SAME tool and rule packs: each
+ *     target is re-scanned by the tool that produced it (`fixpr/rescan.ts`:
+ *     `scan_sast` with its `local_only`, `bug_hunt` with its language packs,
+ *     `deps_audit` / `scan_deps`), with the original project's rule
+ *     configuration (`ToolCallMeta.originProjectPath`), against the findings
+ *     of the scans that produced the targets — the project-scoped open set
+ *     (Task 8), not "the latest scan of any type". A finding nothing can
+ *     re-scan that way is no candidate.
+ *   - The Semgrep fix applies ONLY the target rules (`fixpr/semgrepFix.ts`),
+ *     with metrics off; a dependency finding is paired with its upgrade step
+ *     by its structured package, never by words in its advisory.
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { z } from 'zod';
 import { applyGroup } from '../fixpr/apply.js';
-import { buildGroups, selectGroups } from '../fixpr/candidates.js';
+import { buildGroups, DEP_SCANNER_TOOLS, findingEcosystem, selectGroups } from '../fixpr/candidates.js';
 import { describeExclusions, summariseExclusions } from '../fixpr/exclusions.js';
 import { branchName, deleteLocalBranch, existsOutcome, openPr, prExists } from '../fixpr/pr.js';
+import { disposeSemgrepFixPlan, planSemgrepFix } from '../fixpr/semgrepFix.js';
 import { deriveTestCommand, TEST_MANIFESTS } from '../fixpr/testCommand.js';
+import { prepareTestEnvironment } from '../fixpr/testEnv.js';
+import { projectTreeState } from '../fixpr/treeState.js';
+import { rescanOriginOf, scannerNotVerified } from '../fixpr/rescan.js';
 import { judgeScan, judgeTests, mayOpenPr } from '../fixpr/verify.js';
 import { createWorktree } from '../fixpr/worktree.js';
+import { openSetForProject } from '../history/openSet.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
+import { runProcess } from '../runners/processRunner.js';
+import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
 import { ProjectPath, SeverityMin } from '../schemas.js';
+import { passes } from '../severity/filter.js';
+import { deleteScans } from '../storage/maintenance.js';
+import { bugHuntLocalConfigs } from './bugHunt.js';
 import { isGitRepo } from './gitState.js';
 import { registerToolModule, TOOLS } from './index.js';
 const DEFAULT_SOURCES = ['deps', 'semgrep'];
@@ -138,13 +169,17 @@ const tool = {
     name: 'create_fix_pr',
     title: 'Apply scanner-produced fixes and open a pull request',
     description: 'Apply fixes the scanners themselves already produced — deps_update_plan pinned upgrade ' +
-        'commands and Semgrep --autofix — inside an isolated git worktree, prove them with a scan ' +
-        'differential and a (lazy) test differential, and open one pull request per ecosystem or ' +
-        'scanner. apply defaults to false: candidates, the worktree, the fix, and both differentials ' +
-        'always run; only commit/push/gh pr create sit behind apply=true. Every open finding that did ' +
-        'NOT become a candidate is accounted for in `filtered` (counts per reason: below severity_min, ' +
-        'no scanner-produced fix, no requested source covers it) and in the one-line `filtered_reason` ' +
-        '— an empty `groups` is never left unexplained.',
+        'steps (npm with --ignore-scripts, pip pins edited in place) and the target rules\' own ' +
+        'Semgrep autofix (only those rules, --metrics=off) — inside an isolated git worktree, prove ' +
+        'them by re-running the SAME tool and rule packs that found them (scan_sast, bug_hunt, ' +
+        'deps_audit or scan_deps) plus a lazy test differential against a pristine base-commit tree, ' +
+        'and open one pull request per ecosystem or scanner. apply defaults to false: a dry run works ' +
+        'in a detached worktree, writes no branch, never runs tests in your tree and leaves no scan ' +
+        'rows behind; only commit/push/gh pr create sit behind apply=true. Every open finding ' +
+        'that did NOT become a candidate is accounted for in `filtered` (below severity_min, no ' +
+        'scanner-produced fix, file changed since HEAD, no requested source or re-scan covers it) and in ' +
+        '`filtered_reason`. ' +
+        'A cancelled call answers ok with cancelled: true and the groups it finished.',
     inputSchema: {
         project_path: ProjectPath,
         // .describe() override, not the shared SeverityMin as-is (M8): that
@@ -196,17 +231,61 @@ async function handler(input, ctx, callMeta) {
     const sources = inp.sources ?? DEFAULT_SOURCES;
     const maxPrs = inp.max_prs ?? DEFAULT_MAX_PRS;
     const apply = inp.apply === true;
-    const allFindings = ctx.storage.findings.listOpenForProject(projectPath);
-    const upgradeSteps = sources.includes('deps')
-        ? await fetchUpgradeSteps(projectPath, ctx, callMeta)
-        : [];
-    const groups = buildGroups({ findings: allFindings, upgradeSteps, sources, severityMin });
+    // The project's open set (Task 8): every state scan type's newest usable
+    // scan of THIS project, suppressions applied — each finding carrying the
+    // scan it was read from, which is what decides how it is re-verified.
+    const openSet = openSetForProject(ctx.storage, projectPath);
+    const allFindings = openSet.findings;
+    const scansById = new Map(openSet.scans.map((s) => [s.scan_id, s]));
+    const origins = new Map();
+    for (const f of allFindings) {
+        const scan = scansById.get(f.scan_id) ?? ctx.storage.scans.getById(f.scan_id);
+        const origin = scan === null || scan === undefined ? null : rescanOriginOf(f, scan);
+        if (origin !== null)
+            origins.set(f.fingerprint, origin);
+    }
+    // Where the project sits in its repository (a worktree is a checkout of the
+    // whole repository), and which of its files differ from HEAD: a finding in
+    // such a file came from the working tree while the fix and its re-scan run
+    // on HEAD — no verdict about it would mean anything (Task 11 fix round 1).
+    const tree = await projectTreeState(projectPath);
+    if (!tree.ok)
+        return failDomain('not_a_git_repo', tree.reason);
+    const uncommitted = (f) => f.file_path !== undefined && f.file_path.length > 0 && tree.dirty.has(tree.prefix + projectRelative(projectPath, f.file_path));
+    // A finding no tool can re-scan with the packs that produced it, or one in
+    // an uncommitted file, is not a candidate: its fix could never be verified.
+    const verifiable = (f) => origins.has(f.fingerprint) && !uncommitted(f);
+    // The plan is only worth its disposable worktree when some finding could
+    // take a step from it.
+    const needsPlan = sources.includes('deps') &&
+        allFindings.some((f) => DEP_SCANNER_TOOLS.includes(f.tool) && f.fix_available && passes(f.severity, severityMin) && verifiable(f));
+    const plan = needsPlan
+        ? await fetchUpgradeSteps(projectPath, tree.prefix, ctx, callMeta)
+        : { steps: [], error: null, runnerFailures: [] };
+    // A dependency finding whose ecosystem the plan could not cover is not
+    // "no fix source" — nobody knows (Task 11 fix round 2).
+    const failedEcosystems = new Set(plan.runnerFailures.map((f) => f.ecosystem));
+    const planFailed = (f) => {
+        if (!needsPlan || !DEP_SCANNER_TOOLS.includes(f.tool))
+            return false;
+        if (plan.error !== null)
+            return true;
+        const ecosystem = findingEcosystem(f);
+        return ecosystem !== null && failedEcosystems.has(ecosystem);
+    };
+    const groups = buildGroups({
+        findings: allFindings,
+        upgradeSteps: plan.steps,
+        sources,
+        severityMin,
+        rescannable: verifiable,
+    });
     // Every open finding this run did NOT turn into a candidate, and why —
     // computed from `groups`, i.e. BEFORE `max_prs` defers any of them, so the
     // two "not acted on" reports stay disjoint: `filtered` is about findings
     // that never became candidates, `deferred` about candidate groups the cap
     // held back. See `fixpr/exclusions.ts` for why silence here was a defect.
-    const filtered = summariseExclusions({ findings: allFindings, groups, severityMin });
+    const filtered = summariseExclusions({ findings: allFindings, groups, severityMin, uncommitted, planFailed });
     const filtered_reason = describeExclusions(filtered, severityMin, sources);
     const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
     const results = [];
@@ -235,7 +314,7 @@ async function handler(input, ctx, callMeta) {
             continue;
         }
         try {
-            results.push(await processGroup({ group, allFindings, projectPath, apply, ctx, callMeta }));
+            results.push(await processGroup({ group, allFindings, origins, projectPath, prefix: tree.prefix, apply, ctx, callMeta }));
         }
         catch (e) {
             // Every ANTICIPATED failure mode (worktree creation, apply, re-scan,
@@ -269,6 +348,10 @@ async function handler(input, ctx, callMeta) {
         severity_min: severityMin,
         sources,
         ...(cancelled ? { cancelled: true } : {}),
+        // The deps side found nothing to pair because the plan itself could not
+        // be computed — said, never left to read as "no upgrade available".
+        ...(plan.error !== null ? { deps_plan_error: plan.error } : {}),
+        ...(plan.runnerFailures.length > 0 ? { deps_plan_runner_failures: plan.runnerFailures } : {}),
         filtered,
         filtered_reason,
         groups: results,
@@ -285,25 +368,90 @@ async function handler(input, ctx, callMeta) {
  * A missing tool or a failed plan degrades to "no deps candidates" rather
  * than failing this whole call: the deps side of the run simply finds
  * nothing to group, which `buildGroups` already reports honestly (no group
- * silently invents a fix).
+ * silently invents a fix) — and the response names the failure
+ * (`deps_plan_error`).
+ *
+ * **It runs on a detached worktree of HEAD, never on the user's project**
+ * (Task 11 fix round 1). Its .NET branch runs `dotnet restore` where it is
+ * pointed (writing `obj/`, executing the project's MSBuild), and a dry run
+ * changes nothing outside a worktree. It is also the more correct input: the
+ * plan's installed versions and pip `file`s are HEAD's, which is exactly
+ * what the fix edits. The CVE history it plans against is the project's own
+ * (`ToolCallMeta.originProjectPath`).
  */
-async function fetchUpgradeSteps(projectPath, ctx, callMeta) {
+async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta) {
     const depsPlanTool = TOOLS.find((t) => t.name === 'deps_update_plan');
-    if (depsPlanTool === undefined)
-        return [];
-    const result = await depsPlanTool.handler({ project_path: projectPath }, ctx, callMeta);
-    if (!result.ok)
-        return [];
-    const r = result;
-    return Array.isArray(r.plan) ? r.plan : [];
+    if (depsPlanTool === undefined) {
+        return { steps: [], error: "the 'deps_update_plan' tool is not registered", runnerFailures: [] };
+    }
+    const created = await createWorktree({ projectPath, branch: null });
+    if (!created.ok) {
+        return { steps: [], error: `could not create a worktree to plan in: ${created.reason}`, runnerFailures: [] };
+    }
+    try {
+        const meta = {
+            ...(callMeta?.signal !== undefined ? { signal: callMeta.signal } : {}),
+            ...(callMeta?.progressToken !== undefined ? { progressToken: callMeta.progressToken } : {}),
+            originProjectPath: projectPath,
+        };
+        const result = await depsPlanTool.handler({ project_path: inWorktree(created.worktree.path, prefix) }, ctx, meta);
+        if (!result.ok)
+            return { steps: [], error: `deps_update_plan failed: ${result.error.message}`, runnerFailures: [] };
+        const r = result;
+        return {
+            steps: Array.isArray(r.plan) ? r.plan : [],
+            error: null,
+            runnerFailures: Array.isArray(r.runner_failures) ? r.runner_failures.filter(isRunnerFailure) : [],
+        };
+    }
+    finally {
+        await created.worktree.remove();
+    }
+}
+function isRunnerFailure(v) {
+    if (typeof v !== 'object' || v === null)
+        return false;
+    const o = v;
+    return typeof o['ecosystem'] === 'string' && typeof o['code'] === 'string' && typeof o['reason'] === 'string';
+}
+/** The project's directory inside a worktree: `prefix` (`app/`, or empty)
+ *  under its root, with no trailing separator. */
+function inWorktree(root, prefix) {
+    return join(root, ...prefix.split('/').filter((segment) => segment.length > 0));
+}
+/** A finding's file as a POSIX path relative to the project. */
+function projectRelative(projectPath, filePath) {
+    const rel = isAbsolute(filePath) ? relative(projectPath, filePath) : filePath;
+    return rel.replace(/\\/g, '/').replace(/^(\.\/)+/, '');
 }
 async function processGroup(opts) {
-    const { group, allFindings, projectPath, apply, ctx, callMeta } = opts;
+    const { group, allFindings, origins, projectPath, prefix, apply, ctx, callMeta } = opts;
     const branch = branchName(group.source, group.key, group.hash);
     const targets = group.candidates.flatMap((c) => c.fingerprints);
     const findings = findingsForGroup(allFindings, group);
     const base = { key: group.key, source: group.source, severity: group.severity, branch, findings };
-    const created = await createWorktree({ projectPath, branch });
+    // A dry run changes nothing outside its worktree (Task 11 item 1): its
+    // worktree is DETACHED, so no branch is ever written to the user's refs.
+    // A branch an earlier apply=true run kept (KEEPS_BRANCH) still decides what
+    // apply=true would do next, so a dry run reports it the way apply would.
+    if (!apply && (await localBranchExists(projectPath, branch))) {
+        const existing = await prExists({ projectPath, branch });
+        if (existing.known && existing.exists) {
+            const pr = existsOutcome(branch);
+            return { ...base, commands: [], outcome: PR_STATUS_OUTCOME[pr.status], scan: null, tests: null, pr, note: prNote(pr) };
+        }
+        return {
+            ...base,
+            commands: [],
+            outcome: 'worktree_failed',
+            scan: null,
+            tests: null,
+            pr: null,
+            note: `worktree_failed: branch '${branch}' already exists locally (kept by an earlier run) and no pull ` +
+                'request was found for it — apply=true would collide on it',
+        };
+    }
+    const created = await createWorktree({ projectPath, branch: apply ? branch : null });
     if (!created.ok) {
         // The module comment (I1) explains why this is reachable at all: a
         // branch collision here can only mean a PREVIOUS run reached `openPr`
@@ -338,25 +486,70 @@ async function processGroup(opts) {
     const { worktree } = created;
     // Set true only at the one point below where openPr's own status says the
     // branch should survive — see the module comment (C2) and KEEPS_BRANCH.
-    // Everything else, including every early return above this point never
-    // being reached at all, deletes it in the `finally`.
-    let keepBranch = false;
+    // A dry run's worktree is detached: there is no branch to delete at all.
+    let keepBranch = !apply;
+    let semgrepFix;
     try {
         // The test command must be known BEFORE applyGroup runs — it decides
         // lockfileOnly, which applyGroup needs as an input — so manifests are
         // read from the worktree (the fix has not been applied yet, but the
         // worktree already reflects the exact committed content that will be
         // tested, which projectPath's own possibly-dirty working tree might not).
-        const derivedTest = deriveTestCommand(readManifests(worktree.path));
-        const applied = await applyGroup({
-            group,
-            worktreePath: worktree.path,
-            lockfileOnly: derivedTest === null,
-        });
+        // The project's own directory inside the worktree (a checkout of the
+        // whole repository): where the fix, the test run and the re-scan happen.
+        // Git operations (openPr) use the worktree root.
+        const projectDir = inWorktree(worktree.path, prefix);
+        const derivedTest = deriveTestCommand(readManifests(projectDir));
+        const commands = [];
+        // The same dependency install the base-commit tree gets, if any — see
+        // fixpr/testEnv.ts: the test differential compares like with like.
+        const env = await prepareTestEnvironment({ treePath: projectDir, derived: derivedTest });
+        if (env.command !== null)
+            commands.push(`${env.command} (test environment)`);
+        if (!env.ok) {
+            return {
+                ...base,
+                commands,
+                outcome: 'apply_failed',
+                scan: null,
+                tests: null,
+                pr: null,
+                note: `apply_failed: could not prepare the test environment — ${env.reason}`,
+            };
+        }
+        if (group.source === 'semgrep') {
+            const planned = planSemgrepFix(semgrepFixSources(findings, origins, projectPath, ctx));
+            if (!planned.ok) {
+                return {
+                    ...base,
+                    commands,
+                    outcome: 'apply_failed',
+                    scan: null,
+                    tests: null,
+                    pr: null,
+                    note: `apply_failed: the fix could not be applied — ${planned.reason}`,
+                };
+            }
+            semgrepFix = planned.plan;
+        }
+        let applied;
+        try {
+            applied = await applyGroup({
+                group,
+                worktreePath: projectDir,
+                lockfileOnly: derivedTest === null,
+                ...(semgrepFix !== undefined ? { semgrepFix } : {}),
+            });
+        }
+        finally {
+            if (semgrepFix !== undefined)
+                disposeSemgrepFixPlan(semgrepFix);
+        }
+        commands.push(...applied.commands);
         if (!applied.applied) {
             return {
                 ...base,
-                commands: applied.commands,
+                commands,
                 outcome: 'apply_failed',
                 scan: null,
                 tests: null,
@@ -364,11 +557,11 @@ async function processGroup(opts) {
                 note: `apply_failed: the fix could not be applied — ${describeApplyFailure(applied.failure)}`,
             };
         }
-        const rescan = await rescanAfterFix(group, findings, worktree.path, ctx, callMeta);
+        const rescan = await rescanAfterFix(findings, origins, projectDir, projectPath, ctx, callMeta);
         if (!rescan.ok) {
             return {
                 ...base,
-                commands: applied.commands,
+                commands,
                 outcome: 'verification_failed',
                 scan: null,
                 tests: null,
@@ -376,21 +569,27 @@ async function processGroup(opts) {
                 note: `verification_failed: could not verify the fix — ${rescan.reason}`,
             };
         }
-        const beforeScanId = ctx.storage.scans.getLatestForProject(projectPath)?.scan_id ?? 'unknown';
-        const scanVerdict = judgeScan(targets, { scan_id: beforeScanId, findings: allFindings }, { scan_id: rescan.scanId, findings: rescan.findings });
+        // "Before" is exactly the scans that produced the targets — the same
+        // tools and packs the re-scan just ran (Task 11 item 2) — never "the
+        // project's latest scan of any type".
+        const sourceScanIds = [...new Set(findings.map((f) => f.scan_id))].sort();
+        const before = sourceScanIds.flatMap((id) => ctx.storage.findings.listByScan(id));
+        const scanVerdict = judgeScan(targets, { scan_id: sourceScanIds.join(','), findings: before }, { scan_id: rescan.scanIds.join(','), findings: rescan.findings });
         const testVerdict = await judgeTests({
             derived: derivedTest,
-            worktreePath: worktree.path,
-            projectPath,
+            worktreePath: projectDir,
+            baseTree: baseTreeProvider(projectPath, prefix, derivedTest),
         });
         if (!mayOpenPr(scanVerdict, testVerdict)) {
             const why = !scanVerdict.passed
                 ? `the scan differential did not pass (${scanVerdict.still_present.length} target(s) still ` +
                     `present, ${scanVerdict.new_findings.length} new finding(s))`
-                : 'the fix broke the test suite';
+                : testVerdict.outcome === 'unattributed'
+                    ? 'the test suite failed after the fix and the base-commit comparison could not be run'
+                    : 'the fix broke the test suite';
             return {
                 ...base,
-                commands: applied.commands,
+                commands,
                 outcome: 'not_verified',
                 scan: scanVerdict,
                 tests: testVerdict,
@@ -401,7 +600,7 @@ async function processGroup(opts) {
         if (!apply) {
             return {
                 ...base,
-                commands: applied.commands,
+                commands,
                 outcome: 'verified_dry_run',
                 scan: scanVerdict,
                 tests: testVerdict,
@@ -410,12 +609,12 @@ async function processGroup(opts) {
             };
         }
         const title = buildPrTitle(group, targets.length);
-        const body = buildPrBody({ group, findings, commands: applied.commands, scan: scanVerdict, tests: testVerdict });
+        const body = buildPrBody({ group, findings, commands, scan: scanVerdict, tests: testVerdict });
         const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body });
         keepBranch = KEEPS_BRANCH.has(pr.status);
         return {
             ...base,
-            commands: applied.commands,
+            commands,
             outcome: PR_STATUS_OUTCOME[pr.status],
             scan: scanVerdict,
             tests: testVerdict,
@@ -430,18 +629,41 @@ async function processGroup(opts) {
         // "teardown verified by observing the world" discipline rather than
         // trusting a fire-and-forget call.
         await worktree.remove();
-        // C2: best-effort, like worktree.remove() above and unlike the rest of
-        // this function — deleteLocalBranch's own {deleted, warning} is not
-        // threaded back into GroupResult. Doing so would mean restructuring
-        // every `return` above into an intermediate variable so this `finally`
-        // could still enrich it, which risks the control-flow bug this project
-        // has been bitten by before (a safety property that looks like
-        // plumbing) for a warning message, not a correctness property: a branch
-        // that fails to delete is a stray local ref, not a lie the tool tells.
+        // C2: best-effort, like worktree.remove() above — a branch that fails to
+        // delete is a stray local ref, not a lie the tool tells.
         if (!keepBranch) {
             await deleteLocalBranch({ projectPath, branch });
         }
     }
+}
+/** Whether `refs/heads/<branch>` exists in the user's repository. A read. */
+async function localBranchExists(projectPath, branch) {
+    const r = await runProcess({
+        command: 'git',
+        args: ['-C', projectPath, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`],
+        cwd: projectPath,
+    });
+    return r.outcome === 'completed';
+}
+/**
+ * The base-commit tree the test differential compares a failing run against:
+ * a fresh DETACHED worktree of HEAD, prepared exactly like the fix's tree
+ * (`prepareTestEnvironment`), removed after the run — never the user's own
+ * working tree (Task 11 item 1).
+ */
+function baseTreeProvider(projectPath, prefix, derived) {
+    return async () => {
+        const created = await createWorktree({ projectPath, branch: null });
+        if (!created.ok)
+            return { ok: false, reason: created.reason };
+        const dir = inWorktree(created.worktree.path, prefix);
+        const env = await prepareTestEnvironment({ treePath: dir, derived });
+        if (!env.ok) {
+            await created.worktree.remove();
+            return { ok: false, reason: env.reason };
+        }
+        return { ok: true, path: dir, dispose: async () => { await created.worktree.remove(); } };
+    };
 }
 /**
  * The human-readable half of a `PrOutcome` (`GroupResult.note` is always
@@ -479,93 +701,101 @@ function describeApplyFailure(failure) {
     return `'${failure.command}' ${failure.outcome}${exit}: ${failure.stderr_head}`;
 }
 /**
- * `Finding.tool` → the name `deps_audit`'s OWN `missing_tools` array uses
- * for it, when `deps_audit` is even capable of re-checking that tool at all
- * (task-7-review.md I5). `'trivy'` matches directly. `'npm-audit'`
- * (`NPM_AUDIT_TOOL_NAME`, scannerParsers/npmAudit.ts) does NOT: `deps_audit`
- * names the COMMAND it ran ('npm') in `missing_tools`, a different string
- * for the same scanner — a literal `.includes('npm-audit')` would never
- * match even when npm audit genuinely did not run. `'wpscan'` maps to
- * `null`: `deps_audit` never attempts wpscan at all (design §10's own
- * documented gap), so it can never report it as either present or missing —
- * `missing_tools` simply never mentions it either way, and treating "never
- * mentioned" as "ran fine" would be the exact false positive this map
- * exists to close, for a scanner `deps_audit` does not even know exists.
+ * For each origin among the group's Semgrep targets: the targets, the LOCAL
+ * rule files that origin's scan loads for this project, and whether it loads
+ * the registry at all — what `planSemgrepFix` needs to apply exactly the
+ * target rules.
  */
-const DEPS_AUDIT_MISSING_TOOLS_NAME = {
-    trivy: 'trivy',
-    'npm-audit': 'npm',
-    wpscan: null,
-};
-/**
- * Re-runs the group's originating scanner(s) inside the already-fixed
- * worktree (design §4.1) via the same MCP tool that would have produced
- * this group's findings in the first place: `scan_sast` for `semgrep`,
- * `deps_audit` for `deps`.
- *
- * **Which scanner(s) must have run is derived from the group's OWN target
- * findings' `tool` values, never a single hardcoded guess
- * (task-7-review.md I5).** A `deps` group's targets can come from trivy,
- * npm-audit OR wpscan (`DEP_SCANNER_TOOLS`, `../fixpr/candidates.ts`) — a
- * group covering an npm-audit-sourced CVE re-verified only by checking
- * whether TRIVY ran would trust an empty after-set even when the specific
- * scanner that found that CVE never ran at all, and a wpscan-sourced target
- * would be judged resolved on literally every run, since `deps_audit` never
- * attempts wpscan in the first place. `targetFindings` is this group's own
- * `findingsForGroup` result, not `group` itself, which carries no `Finding`
- * objects (only fingerprints).
- *
- * A required scanner that did not run is treated as a verification failure,
- * not as "0 findings": `scan_sast`/`deps_audit` both report `ok: true` with
- * an EMPTY finding set when a scanner could not run at all (consistent with
- * every other scan tool in this repo — a coverage gap, not a clean bill of
- * health). Trusting that empty set at face value here would read "the
- * scanner didn't run" as "nothing is wrong any more" — exactly the false
- * positive the scan differential exists to prevent, in a new costume.
- */
-async function rescanAfterFix(group, targetFindings, worktreePath, ctx, callMeta) {
-    const toolName = group.source === 'semgrep' ? 'scan_sast' : 'deps_audit';
-    const subTool = TOOLS.find((t) => t.name === toolName);
-    if (subTool === undefined) {
-        return { ok: false, reason: `the '${toolName}' tool is not registered` };
+function semgrepFixSources(targets, origins, projectPath, ctx) {
+    const byKey = new Map();
+    for (const f of targets) {
+        const origin = origins.get(f.fingerprint);
+        if (origin === undefined)
+            continue;
+        const entry = byKey.get(origin.key) ?? { origin, targets: [] };
+        entry.targets.push({ rule_id: f.rule_id ?? '', file_path: f.file_path ?? '' });
+        byKey.set(origin.key, entry);
     }
-    const result = await subTool.handler({ project_path: worktreePath }, ctx, callMeta);
-    if (!result.ok) {
-        return { ok: false, reason: `${toolName} failed: ${result.error.message}` };
-    }
-    const r = result;
-    if (typeof r.scan_id !== 'string') {
-        return { ok: false, reason: `${toolName} returned no scan_id` };
-    }
-    const missingTools = Array.isArray(r.missing_tools) ? r.missing_tools : [];
-    const requiredTools = new Set(targetFindings.map((f) => f.tool));
-    const uncheckable = [...requiredTools].filter((tool) => scannerCouldNotBeVerified(group.source, tool, missingTools));
-    if (uncheckable.length > 0) {
+    return [...byKey.values()].map(({ origin, targets: t }) => {
+        if (origin.toolName === 'bug_hunt') {
+            return { targets: t, localConfigs: bugHuntLocalConfigs(ctx, projectPath), registryAllowed: true };
+        }
+        const localOnly = origin.input['local_only'] === true;
+        const plan = planSemgrepConfigs(projectPath, ctx, localOnly);
         return {
-            ok: false,
-            reason: `${uncheckable.join(', ')} did not run inside the worktree (reported missing, or ${toolName} ` +
-                `does not cover it at all) — cannot verify`,
+            targets: t,
+            localConfigs: plan.rulePacks.filter((p) => !plan.registry.includes(p)),
+            registryAllowed: !localOnly,
         };
-    }
-    return { ok: true, scanId: r.scan_id, findings: ctx.storage.findings.listByScan(r.scan_id) };
+    });
 }
-function scannerCouldNotBeVerified(source, tool, missingTools) {
-    if (source === 'semgrep') {
-        // buildSemgrepGroup (../fixpr/candidates.js) only ever pairs
-        // tool === 'semgrep' findings, so `tool` here is always 'semgrep' in
-        // practice — checked by name anyway rather than assumed.
-        return tool === 'semgrep' && missingTools.includes('semgrep');
+/**
+ * Re-runs, inside the already-fixed worktree, the tool and rule packs that
+ * produced each target (see {@link rescanOriginOf}) — with the ORIGINAL
+ * project's rule configuration (`ToolCallMeta.originProjectPath`: its own
+ * `.semgrep.yml`, its registered rules), since the worktree is a different
+ * path and may not even hold an uncommitted config.
+ *
+ * **Every scanner that produced a target must have run ok in the re-scan**,
+ * or the verification fails: an empty after-set from a scanner that did not
+ * run would read "fixed". That is checked per target on the re-scan's own
+ * bookkeeping — including Trivy's per-ecosystem gaps (`trivy:<ecosystem>` in
+ * `missing_tools`) for the target's own ecosystem, which leave Trivy's own
+ * status `ok` while that ecosystem went unscanned (Task 10 handoff).
+ *
+ * **The re-scan's rows are deleted once read** (Task 11 item 1): they
+ * describe a disposable worktree, and a dry run leaves the database as it
+ * found it.
+ */
+async function rescanAfterFix(targets, origins, worktreePath, projectPath, ctx, callMeta) {
+    const byKey = new Map();
+    for (const f of targets) {
+        const origin = origins.get(f.fingerprint);
+        if (origin === undefined)
+            return { ok: false, reason: `no tool can re-scan the target ${f.fingerprint.slice(0, 12)}` };
+        const entry = byKey.get(origin.key) ?? { origin, targets: [] };
+        entry.targets.push(f);
+        byKey.set(origin.key, entry);
     }
-    const missingToolsName = DEPS_AUDIT_MISSING_TOOLS_NAME[tool];
-    // Not one of DEP_SCANNER_TOOLS (../fixpr/candidates.js) — unreachable
-    // today, since buildGroups only ever pairs those three tools into a
-    // `deps` group, but permissive rather than blocking on a tool this
-    // module has no more precise information about.
-    if (missingToolsName === undefined)
-        return false;
-    if (missingToolsName === null)
-        return true; // deps_audit can never check this one (wpscan)
-    return missingTools.includes(missingToolsName);
+    const meta = {
+        ...(callMeta?.signal !== undefined ? { signal: callMeta.signal } : {}),
+        ...(callMeta?.progressToken !== undefined ? { progressToken: callMeta.progressToken } : {}),
+        originProjectPath: projectPath,
+    };
+    const scanIds = [];
+    const findings = [];
+    for (const { origin, targets: own } of byKey.values()) {
+        const subTool = TOOLS.find((t) => t.name === origin.toolName);
+        if (subTool === undefined)
+            return { ok: false, reason: `the '${origin.toolName}' tool is not registered` };
+        const result = await subTool.handler({ project_path: worktreePath, force: true, ...origin.input }, ctx, meta);
+        if (!result.ok)
+            return { ok: false, reason: `${origin.toolName} failed: ${result.error.message}` };
+        const scanId = result.scan_id;
+        if (typeof scanId !== 'string')
+            return { ok: false, reason: `${origin.toolName} returned no scan_id` };
+        const row = ctx.storage.scans.getById(scanId);
+        const rows = ctx.storage.findings.listByScan(scanId);
+        try {
+            deleteScans(ctx.storage.rawHandle(), [scanId]);
+        }
+        catch {
+            /* best effort — a stray row describes a deleted worktree, nothing more */
+        }
+        if (row === null)
+            return { ok: false, reason: `${origin.toolName}'s scan row is missing` };
+        const unverified = [...new Set(own.map((t) => scannerNotVerified(t, row)).filter((x) => x !== null))];
+        if (unverified.length > 0) {
+            return {
+                ok: false,
+                reason: `${unverified.join(', ')} did not run ok inside the worktree (${origin.toolName} reported it ` +
+                    'missing, failed or partial for this target, or cannot check it at all) — cannot verify',
+            };
+        }
+        scanIds.push(scanId);
+        findings.push(...rows);
+    }
+    return { ok: true, scanIds, findings };
 }
 function buildPrTitle(group, findingCount) {
     const noun = group.source === 'deps' ? `${group.key} dependency` : 'Semgrep';
@@ -625,6 +855,10 @@ export function buildPrBody(opts) {
             // outcome === 'broken_by_fix'. Handled anyway so every TestOutcome has
             // an explicit branch rather than a silently-missing one.
             lines.push('the fix broke the test suite; this pull request should not exist.');
+            break;
+        case 'unattributed':
+            // Never reaches here either — mayOpenPr refuses it too.
+            lines.push('the tests failed and the base-commit comparison could not run; this pull request should not exist.');
             break;
     }
     lines.push('', "_Generated by dev-guardian's `create_fix_pr`. This tool verifies that the target findings " +

@@ -306,6 +306,35 @@ describe('makeScanTool', () => {
     if (r.ok) expect(r.status).toBe('completed');
   });
 
+  it('refuses auto_fix when git cannot confirm the tree is clean (not a git repo), and never invokes the scanner', async () => {
+    // `projectPath` is a plain temp dir — no `.git` anywhere above it that
+    // git would accept. auto_fix would rewrite unversioned files there.
+    let invokeCalls = 0;
+    const tool = makeScanTool({
+      name: 'autofix_scan',
+      scan_type: 'sast',
+      category: 'security',
+      description: '',
+      inputSchema: { ...tinySchema, auto_fix: z.boolean().optional(), allow_dirty: z.boolean().optional() },
+      invoke: async () => {
+        invokeCalls += 1;
+        return { outcome: 'completed', tools_run: [{ name: 'mock', status: 'ok' }], missing_tools: [], parser_inputs: [], report_paths: [] };
+      },
+    });
+    const r = await tool.handler({ project_path: projectPath, auto_fix: true }, plugin);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('not_a_git_repo');
+      expect(r.error.retry_with).toEqual({ allow_dirty: true });
+    }
+    expect(invokeCalls).toBe(0);
+
+    // The caller may still opt in, knowingly.
+    const optedIn = await tool.handler({ project_path: projectPath, auto_fix: true, allow_dirty: true }, plugin);
+    expect(optedIn.ok).toBe(true);
+    expect(invokeCalls).toBe(1);
+  });
+
   it('records the orchestrator that ran it in meta.parent_scan_id, and hands its children its own id', async () => {
     let seen: InvokeContext['childCallMeta'] | undefined;
     const child = makeScanTool({

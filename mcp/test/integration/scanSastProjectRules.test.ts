@@ -20,8 +20,9 @@
  * with the real binary is `test/e2e/projectRulesFixture.test.ts`.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { okResult } from '../helpers/toolResult.js';
@@ -37,7 +38,8 @@ vi.mock('../../src/tools/scanHelpers.js', async () => {
 });
 
 import type { PluginContext } from '../../src/context.js';
-import { CUSTOM_RULES_META_KEY } from '../../src/platform/customRules.js';
+import { CUSTOM_RULES_META_KEY, customRulesMetaKey } from '../../src/platform/customRules.js';
+import { planSemgrepConfigs } from '../../src/runners/semgrepConfigs.js';
 import { runProcess } from '../../src/runners/processRunner.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
@@ -74,7 +76,10 @@ function makePlugin(projectPath: string): PluginContext {
 /** Captured argv of the last `runProcess` call, per command. */
 const captured: Array<{ command: string; args: string[] }> = [];
 
-function mockSemgrepOnPath(exitCode = 0): void {
+/** What the mocked Semgrep writes as its report — a real run always has `paths`. */
+const CLEAN_REPORT = { results: [], errors: [], paths: { scanned: ['a.py'] } };
+
+function mockSemgrepOnPath(exitCode = 0, report: unknown = CLEAN_REPORT): void {
   vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
     name === 'semgrep' ? '/fake/bin/semgrep' : null,
   );
@@ -84,7 +89,7 @@ function mockSemgrepOnPath(exitCode = 0): void {
     if (out) {
       writeFileSync(
         out,
-        JSON.stringify({ results: [], errors: [], paths: { scanned: ['a.py'] } }),
+        JSON.stringify(report),
         'utf8',
       );
     }
@@ -226,7 +231,7 @@ describe('scan_sast cache key covers the rules it loads', () => {
     const rules = join(rulesDir, 'team.yml');
     writeFileSync(rules, RULES, 'utf8');
     const plugin = makePlugin(project);
-    plugin.storage.runtimeMeta.setJson(CUSTOM_RULES_META_KEY, [rules]);
+    plugin.storage.runtimeMeta.setJson(customRulesMetaKey(project), [rules]);
     mockSemgrepOnPath();
     const tool = getTool('scan_sast');
 
@@ -256,19 +261,130 @@ describe('scan_sast cache key covers the rules it loads', () => {
   });
 });
 
-describe('scan_sast exit-code tolerance for a rule that cannot compile', () => {
-  it('still counts as a real scan when Semgrep exits 2 but scanned files', async () => {
-    // Loading the user's own config makes this reachable: one bad rule in a
-    // file they own must not flip the whole scan to `failed` and drag coverage
-    // down with it. Measured: exit 2 with `paths.scanned` non-empty.
+describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
+  // Exit 0/1 is necessary and never sufficient: the report decides.
+  const FINDING = {
+    check_id: 'x',
+    path: 'a.py',
+    start: { line: 1 },
+    end: { line: 1 },
+    extra: { severity: 'WARNING', message: 'm', lines: 'foo()' },
+  };
+
+  it('a rule that did not compile (exit 2, errors[]) is a failed run — its findings are still recorded', async () => {
+    // This used to be `ok` ("one bad rule costs that rule"). A non-empty
+    // `errors[]` means the run did not cover what it was given.
     const project = makeTempDir('sast-rules-');
     writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
-    mockSemgrepOnPath(2);
+    mockSemgrepOnPath(2, {
+      results: [FINDING],
+      errors: [{ type: 'Rule parse error', message: 'Invalid pattern in rule x' }],
+      paths: { scanned: ['a.py'] },
+    });
 
     const r = await runSast(project, makePlugin(project));
     const run = r.tools_run.find((t) => t.name === 'semgrep');
-    expect(run?.status).toBe('ok');
-    expect(r.status).toBe('completed');
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toContain('Invalid pattern in rule x');
+    expect((r as unknown as { coverage: string }).coverage).not.toBe('full');
+    expect((r as unknown as { findings_count_by_severity: Record<string, number> }).findings_count_by_severity['medium']).toBe(1);
+  });
+
+  it('exit 0 with a non-empty errors[] (a file that did not parse) is not ok', async () => {
+    const project = makeTempDir('sast-rules-');
+    mockSemgrepOnPath(0, {
+      results: [],
+      errors: [{ type: ['PartialParsing', []], message: 'Syntax error at line a.py:3' }],
+      paths: { scanned: ['a.py'] },
+    });
+    const r = await runSast(project, makePlugin(project));
+    expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('failed');
+  });
+
+  it('exit 0 that scanned nothing is never a clean result — skipped, listed missing, coverage not full', async () => {
+    // Measured shapes: `rules: []`, or a tree no loaded rule applies to.
+    const project = makeTempDir('sast-rules-');
+    mockSemgrepOnPath(0, { results: [], errors: [], paths: { scanned: [] } });
+    const r = await runSast(project, makePlugin(project));
+    const run = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(run?.status).toBe('skipped');
+    expect(run?.reason).toMatch(/scanned 0 files/);
+    expect(r.missing_tools).toContain('semgrep');
+    expect((r as unknown as { coverage: string }).coverage).not.toBe('full');
+  });
+
+  it('a report with no `paths` at all (not a real Semgrep report) is not ok either', async () => {
+    const project = makeTempDir('sast-rules-');
+    mockSemgrepOnPath(0, { results: [], errors: [] });
+    const r = await runSast(project, makePlugin(project));
+    expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).not.toBe('ok');
+  });
+
+  it('the Docker fallback is judged the same way', async () => {
+    const project = makeTempDir('sast-rules-docker-');
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) => (name === 'docker' ? '/usr/bin/docker' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const i = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const containerOut = i >= 0 ? opts.args?.[i + 1] : undefined;
+      if (containerOut !== undefined) {
+        const host = join(project, ...containerOut.replace('/src/', '').split('/'));
+        writeFileSync(host, JSON.stringify({ results: [], errors: [], paths: { scanned: [] } }), 'utf8');
+      }
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = await runSast(project, makePlugin(project));
+    expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('skipped');
+    expect(r.missing_tools).toContain('semgrep');
+  });
+});
+
+describe('scan_sast argv and cache key come from one plan', () => {
+  it('passes exactly the rule packs its cache key covers — registry, project config, and this project\'s registered rules', async () => {
+    const project = makeTempDir('sast-plan-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    const rulesDir = makeTempDir('sast-plan-rules-');
+    const team = join(rulesDir, 'team.yml');
+    writeFileSync(team, RULES, 'utf8');
+    const plugin = makePlugin(project);
+    plugin.storage.runtimeMeta.setJson(customRulesMetaKey(project), [team]);
+    mockSemgrepOnPath();
+
+    await runSast(project, plugin);
+    const configs = semgrepArgs().filter((a) => a.startsWith('--config=')).map((a) => a.slice('--config='.length));
+    expect(configs).toEqual(planSemgrepConfigs(project, plugin, false).rulePacks);
+    expect(configs).toEqual(['auto', join(project, '.semgrep.yml'), team]);
+  });
+
+  it('says, in the response warnings, which 2.0.x registrations outside the project it no longer runs', async () => {
+    const project = makeTempDir('sast-plan-');
+    const elsewhere = makeTempDir('sast-plan-legacy-');
+    const legacy = join(elsewhere, 'team.yml');
+    writeFileSync(legacy, RULES, 'utf8');
+    const plugin = makePlugin(project);
+    plugin.storage.runtimeMeta.setJson(CUSTOM_RULES_META_KEY, [legacy]);
+    mockSemgrepOnPath();
+
+    const r = okResult<{ warnings: string[] }>(
+      await getTool('scan_sast').handler({ project_path: project, force: true }, plugin),
+    );
+    expect(semgrepArgs()).not.toContain(`--config=${legacy}`);
+    const warning = r.warnings.find((w) => w.includes(legacy));
+    expect(warning).toBeDefined();
+    expect(warning).toContain('register_custom_rules');
+    expect(planSemgrepConfigs(project, plugin, false).notes.some((n) => n.includes(legacy))).toBe(true);
+  });
+
+  it("never runs another project's registered rules", async () => {
+    const project = makeTempDir('sast-plan-');
+    const other = makeTempDir('sast-plan-other-');
+    const otherRules = join(other, 'r.yml');
+    writeFileSync(otherRules, RULES, 'utf8');
+    const plugin = makePlugin(project);
+    plugin.storage.runtimeMeta.setJson(customRulesMetaKey(other), [otherRules]);
+    mockSemgrepOnPath();
+
+    await runSast(project, plugin);
+    expect(semgrepArgs()).not.toContain(`--config=${otherRules}`);
   });
 });
 
@@ -329,5 +445,232 @@ describe('scan_sast local_only mode', () => {
     expect(run?.status).toBe('skipped');
     expect(run?.reason ?? '').toContain('local_only');
     expect(r.missing_tools).toContain('semgrep');
+  });
+});
+
+
+describe('scan_sast .NET: the SDK security analyzers, read from SARIF (Task 11 items 8, fix round 1)', () => {
+  const SARIF = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '../fixtures/scanners/dotnet-build.sarif.json'),
+    'utf8',
+  );
+  /** The same SARIF with every rule's category changed away from Security:
+   *  what a build whose security analyzers never loaded writes. */
+  const SARIF_NO_SECURITY_RULES = SARIF.replace(/"category": "Security"/g, '"category": "Performance"').replace(/SCS0005/g, 'CS1234');
+  const CSPROJ = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>';
+
+  interface DotnetMock {
+    restore?: { outcome: 'completed' | 'failed'; stdout?: string; createLock?: string };
+    build?: { exitCode?: number; stdout?: string };
+    /** SARIF bodies the build writes, one file each (multi-targeting). */
+    sarifs?: string[];
+  }
+
+  /** semgrep + dotnet on PATH. `dotnet build` writes each SARIF body into
+   *  the directory `-p:DevGuardianSarifDir=` names, the way the imported
+   *  targets file makes every inner build write its own. */
+  function mockDotnet(opts: DotnetMock = {}): void {
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'semgrep' || name === 'dotnet' ? `/fake/bin/${name}` : null,
+    );
+    vi.mocked(runProcess).mockImplementation(async (o) => {
+      captured.push({ command: o.command, args: [...(o.args ?? [])] });
+      const ok = { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+      if (o.command === 'semgrep') {
+        const out = o.args?.find((_a, i) => o.args?.[i - 1] === '--output');
+        if (out) writeFileSync(out, JSON.stringify(CLEAN_REPORT), 'utf8');
+        return ok;
+      }
+      if (o.command === 'dotnet' && o.args?.[0] === 'restore') {
+        if (opts.restore?.createLock !== undefined) writeFileSync(opts.restore.createLock, '{}', 'utf8');
+        return opts.restore?.outcome === 'failed'
+          ? { outcome: 'failed' as const, exitCode: 1, stdout: opts.restore.stdout ?? '', stderr: '', truncated: false }
+          : ok;
+      }
+      if (o.command === 'dotnet' && o.args?.[0] === 'build') {
+        const dir = o.args.find((a) => a.startsWith('-p:DevGuardianSarifDir='))?.slice('-p:DevGuardianSarifDir='.length) ?? '';
+        (opts.sarifs ?? [SARIF]).forEach((body, i) => {
+          writeFileSync(join(dir, `App-tfm${i}-${String(i).padStart(32, '0')}.sarif`), body, 'utf8');
+        });
+        const exitCode = opts.build?.exitCode ?? 0;
+        return { outcome: exitCode === 0 ? ('completed' as const) : ('failed' as const), exitCode, stdout: opts.build?.stdout ?? '', stderr: '', truncated: false };
+      }
+      return ok;
+    });
+  }
+
+  const dotnetCalls = (): string[][] => captured.filter((c) => c.command === 'dotnet').map((c) => c.args);
+
+  function dotnetProject(): string {
+    const project = makeTempDir('sast-dotnet-');
+    writeFileSync(join(project, 'App.csproj'), CSPROJ, 'utf8');
+    return project;
+  }
+
+  it('restores in --locked-mode FIRST, then builds --no-restore with the analyzers enabled — never --verbosity:diag', async () => {
+    // A plain `dotnet build` restores implicitly without locked mode: it
+    // rewrote an out-of-date packages.lock.json in the user's tree.
+    const project = dotnetProject();
+    mockDotnet();
+    const plugin = makePlugin(project);
+
+    const r = await runSast(project, plugin);
+    const [restore, build] = dotnetCalls();
+    expect(restore?.[0]).toBe('restore');
+    expect(restore).toContain('--locked-mode');
+    expect(build?.[0]).toBe('build');
+    expect(build).toContain('--no-restore');
+    // Below .NET 5 the analyzers are OFF unless enabled (measured on netstandard2.0).
+    expect(build).toContain('-p:EnableNETAnalyzers=true');
+    expect(build).toContain('-p:AnalysisLevelSecurity=latest');
+    expect(build).toContain('-p:AnalysisModeSecurity=All');
+    expect(build?.some((a) => /diag/.test(a))).toBe(false);
+    // A global -p:ErrorLog is not expanded per target framework; the
+    // imported targets file sets it per project instance instead.
+    expect(build?.some((a) => a.startsWith('-p:ErrorLog='))).toBe(false);
+    expect(build?.some((a) => a.startsWith('-p:CustomAfterMicrosoftCommonTargets='))).toBe(true);
+
+    expect(r.tools_run.find((t) => t.name === 'dotnet-analyzers')?.status).toBe('ok');
+    expect(r.tools_run.some((t) => t.name === 'security-code-scan')).toBe(false);
+    const rows = plugin.storage.findings.listByScan((r as unknown as { scan_id: string }).scan_id);
+    expect(rows.map((f) => f.rule_id).sort()).toEqual(['CA5351', 'SCS0005']);
+    // Nothing of ours is left in the project.
+    expect(existsSync(join(project, 'obj'))).toBe(false);
+  });
+
+  it('the targets file writes one SARIF per project AND target framework', async () => {
+    const project = dotnetProject();
+    mockDotnet();
+    await runSast(project, makePlugin(project));
+    const build = dotnetCalls()[1] ?? [];
+    const targetsFile = build.find((a) => a.startsWith('-p:CustomAfterMicrosoftCommonTargets='))?.slice('-p:CustomAfterMicrosoftCommonTargets='.length) ?? '';
+    // The temp file is gone after the scan; its content is asserted through the
+    // mocked build's argv only by name, so check the shipped text instead.
+    expect(targetsFile).toMatch(/dev-guardian-sarif\.targets$/);
+    expect(existsSync(targetsFile)).toBe(false);
+  });
+
+  it('reads every SARIF a multi-targeted build writes, not just the last framework\'s', async () => {
+    const project = dotnetProject();
+    const other = SARIF.replace(/"ruleId": "CA5351"/g, '"ruleId": "CA5350"').replace(/"id": "CA5351"/g, '"id": "CA5350"');
+    mockDotnet({ sarifs: [SARIF, other] });
+    const plugin = makePlugin(project);
+    const r = await runSast(project, plugin);
+    const run = r.tools_run.find((t) => t.name === 'dotnet-analyzers');
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toContain('2 SARIF report(s)');
+    const rules = plugin.storage.findings.listByScan((r as unknown as { scan_id: string }).scan_id).map((f) => f.rule_id);
+    expect(rules).toEqual(expect.arrayContaining(['CA5351', 'CA5350']));
+  });
+
+  it('names a project-set CustomAfterMicrosoftCommonTargets as reduced coverage — the scan build replaces it', async () => {
+    const project = makeTempDir('sast-dotnet-');
+    writeFileSync(
+      join(project, 'App.csproj'),
+      CSPROJ.replace('</PropertyGroup>', '<CustomAfterMicrosoftCommonTargets>own.targets</CustomAfterMicrosoftCommonTargets></PropertyGroup>'),
+      'utf8',
+    );
+    writeFileSync(
+      join(project, 'Directory.Build.props'),
+      '<Project><PropertyGroup><CustomAfterMicrosoftCommonTargets>x</CustomAfterMicrosoftCommonTargets></PropertyGroup></Project>',
+      'utf8',
+    );
+    mockDotnet();
+    const r = await runSast(project, makePlugin(project));
+    const run = r.tools_run.find((t) => t.name === 'dotnet-analyzers');
+    expect(run?.reason).toMatch(/reduced coverage/);
+    expect(run?.reason).toContain('App.csproj');
+    expect(run?.reason).toContain('Directory.Build.props');
+  });
+
+  it('says nothing about CustomAfterMicrosoftCommonTargets when the project does not set it', async () => {
+    const project = dotnetProject();
+    mockDotnet();
+    const r = await runSast(project, makePlugin(project));
+    expect(r.tools_run.find((t) => t.name === 'dotnet-analyzers')?.reason).not.toMatch(/reduced coverage/);
+  });
+
+  it('the same result reported by two target frameworks is ONE finding, not two', async () => {
+    // Every framework of a multi-targeted project compiles the same source:
+    // its SARIFs carry the same result, and the identity pass numbered the
+    // copies as occurrences 0 and 1 — two findings for one line.
+    const project = dotnetProject();
+    mockDotnet({ sarifs: [SARIF, SARIF] });
+    const plugin = makePlugin(project);
+    const r = await runSast(project, plugin);
+    const rows = plugin.storage.findings.listByScan((r as unknown as { scan_id: string }).scan_id);
+    expect(rows.filter((f) => f.rule_id === 'CA5351')).toHaveLength(1);
+    expect(rows.filter((f) => f.rule_id === 'SCS0005')).toHaveLength(1);
+    const counts = (r as unknown as { findings_count_by_severity: Record<string, number> }).findings_count_by_severity;
+    expect(Object.values(counts).reduce((a, b) => a + b, 0)).toBe(2);
+  });
+
+  it('a SARIF that lists no security rule means the analyzers did not load — a gap, never ok', async () => {
+    const project = dotnetProject();
+    mockDotnet({ sarifs: [SARIF_NO_SECURITY_RULES] });
+    const r = await runSast(project, makePlugin(project));
+    const run = r.tools_run.find((t) => t.name === 'dotnet-analyzers');
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toContain('did not load');
+    expect((r as unknown as { coverage: string }).coverage).not.toBe('full');
+  });
+
+  it('a lock file out of sync fails the locked restore (NU1004): named gap, no build, nothing rewritten', async () => {
+    const project = dotnetProject();
+    mockDotnet({
+      restore: { outcome: 'failed', stdout: 'App.csproj : error NU1004: The package reference Foo version has changed [App.csproj]' },
+    });
+    const r = await runSast(project, makePlugin(project));
+    expect(dotnetCalls().map((a) => a[0])).toEqual(['restore']);
+    const run = r.tools_run.find((t) => t.name === 'dotnet-analyzers');
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toContain('NU1004');
+  });
+
+  it('a lock file the restore created anyway is deleted again, and that target is not built', async () => {
+    const project = dotnetProject();
+    const lock = join(project, 'packages.lock.json');
+    mockDotnet({ restore: { outcome: 'completed', createLock: lock } });
+    const r = await runSast(project, makePlugin(project));
+    expect(existsSync(lock)).toBe(false);
+    expect(dotnetCalls().map((a) => a[0])).toEqual(['restore']);
+    expect(r.tools_run.find((t) => t.name === 'dotnet-analyzers')?.status).toBe('failed');
+  });
+
+  it('reports Security Code Scan too when the project references it', async () => {
+    const project = makeTempDir('sast-dotnet-');
+    writeFileSync(
+      join(project, 'App.csproj'),
+      CSPROJ.replace('</Project>', '<ItemGroup><PackageReference Include="SecurityCodeScan.VS2019" Version="5.6.7" /></ItemGroup></Project>'),
+      'utf8',
+    );
+    mockDotnet();
+    const r = await runSast(project, makePlugin(project));
+    expect(r.tools_run.find((t) => t.name === 'security-code-scan')?.status).toBe('ok');
+  });
+
+  it('a build that fails is a failed run with the error line — never ok', async () => {
+    const project = dotnetProject();
+    mockDotnet({ build: { exitCode: 1, stdout: 'Program.cs(3,1): error CS1002: ; expected [App.csproj]' }, sarifs: [] });
+    const r = await runSast(project, makePlugin(project));
+    const run = r.tools_run.find((t) => t.name === 'dotnet-analyzers');
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toContain('CS1002');
+    expect((r as unknown as { coverage: string }).coverage).not.toBe('full');
+  });
+
+  it('a build that wrote no SARIF at all is not a clean result', async () => {
+    const project = dotnetProject();
+    mockDotnet({ sarifs: [] });
+    const r = await runSast(project, makePlugin(project));
+    expect(r.tools_run.find((t) => t.name === 'dotnet-analyzers')?.status).toBe('failed');
+  });
+
+  it('names the missing SDK when dotnet is absent', async () => {
+    const project = dotnetProject();
+    mockSemgrepOnPath();
+    const r = await runSast(project, makePlugin(project));
+    expect(r.tools_run.find((t) => t.name === 'dotnet-analyzers')?.status).toBe('skipped');
+    expect(r.missing_tools).toContain('dotnet-sdk');
   });
 });

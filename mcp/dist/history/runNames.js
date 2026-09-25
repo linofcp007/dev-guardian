@@ -21,7 +21,7 @@
  *     `gitleaks-working-tree`; the WordPress passes are `semgrep-wp` and
  *     `phpcs-wpcs`, listed missing as `semgrep` and `phpcs`;
  *   - scan_sast lists the absent .NET SDK as `dotnet-sdk`, not the
- *     `security-code-scan` analyser it runs;
+ *     `dotnet-analyzers` / `security-code-scan` analysers it runs;
  *   - audit_executive records one entry per SUB-TOOL (`deps_audit`,
  *     `security_scan_full`, …), each standing for several scanners.
  *
@@ -82,8 +82,10 @@ export const RUN_NAMES = {
     'semgrep-wp': scanner('semgrep'),
     bandit: scanner('bandit'),
     'security-code-scan': scanner('security-code-scan'),
-    // scan_sast's missing_tools entry when the SDK that runs security-code-scan is absent.
-    'dotnet-sdk': scanner('security-code-scan'),
+    // scan_sast's .NET build pass: the SDK's own security analyzers, read from SARIF.
+    'dotnet-analyzers': scanner('dotnet-analyzers'),
+    // scan_sast's missing_tools entry when the SDK that runs both analyzers is absent.
+    'dotnet-sdk': scanner('security-code-scan', 'dotnet-analyzers'),
     // Secrets — scan_secrets, scan_wordpress, review_pr (runners/gitleaksScan.ts).
     gitleaks: scanner('gitleaks'),
     'gitleaks-working-tree': scanner('gitleaks'),
@@ -157,7 +159,7 @@ export const RUN_NAMES = {
     // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
     // sub-scan's own bookkeeping instead whenever the row still exists; these
     // speak for a sub-tool that failed before it wrote one.
-    security_scan_full: scanner('semgrep', 'bandit', 'security-code-scan', 'gitleaks', ...TRIVY_FS_KEYS, TRIVY_CONFIG),
+    security_scan_full: scanner('semgrep', 'bandit', 'security-code-scan', 'dotnet-analyzers', 'gitleaks', ...TRIVY_FS_KEYS, TRIVY_CONFIG),
     quality_check: scanner('eslint', 'ruff', 'radon', 'jscpd', 'staticcheck', 'budgets'),
     deps_audit: scanner(...TRIVY_FS_KEYS, 'npm-audit', 'pip-audit', 'dotnet-list-package'),
     compliance_check: scanner(...TRIVY_FS_KEYS),
@@ -165,7 +167,7 @@ export const RUN_NAMES = {
     // security_scan_full: its own entry for a child that threw, answered an
     // error, or is not registered — the child wrote no bookkeeping of its own.
     // (An audit reads these through the security_scan_full sub-scan.)
-    scan_sast: scanner('semgrep', 'bandit', 'security-code-scan'),
+    scan_sast: scanner('semgrep', 'bandit', 'security-code-scan', 'dotnet-analyzers'),
     scan_secrets: scanner('gitleaks'),
     scan_deps: scanner(...TRIVY_FS_KEYS),
     scan_iac: scanner(TRIVY_CONFIG),

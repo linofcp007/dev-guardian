@@ -42,6 +42,15 @@ export interface ToolCallMeta {
    * (a Semgrep autofix) since.
    */
   treeHash?: string;
+  /**
+   * Set only by `create_fix_pr`, which runs tools on a disposable worktree
+   * of a project: the project that worktree is a checkout of. Its rule
+   * configuration (own Semgrep config, registered custom rules) and its
+   * stored history (the CVEs `deps_update_plan` plans against) are what the
+   * call uses — the worktree's own path has neither. Omitted: the scanned
+   * path is its own origin. Never set by the MCP host.
+   */
+  originProjectPath?: string;
 }
 
 export interface ToolModule {

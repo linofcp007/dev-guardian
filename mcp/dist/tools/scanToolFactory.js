@@ -66,7 +66,7 @@ import { SEVERITY_ORDER } from '../types.js';
 import { hashInput, hashRulePacks, scanCacheKey } from '../treeHash/cacheKey.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import { InvalidProjectPathError, resolveProjectPath, } from '../platform/projectPath.js';
-import { isWorkingTreeClean } from './gitState.js';
+import { workingTreeState } from './gitState.js';
 import { assessCoverage, computeCoverage } from './scanCoverage.js';
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 /** Inputs that never enter the cache key — see the module comment. */
@@ -93,10 +93,19 @@ async function runScanPipeline(config, input, plugin, callMeta) {
         if (input.allow_dirty !== true) {
             try {
                 const resolved = resolveProjectPath(input.project_path);
-                if (!(await isWorkingTreeClean(resolved.path))) {
+                // Only a tree git POSITIVELY confirms clean may be rewritten without
+                // `allow_dirty` — see gitState.ts: "not a repo" and "git failed" are
+                // not clean, they are unknown.
+                const tree = await workingTreeState(resolved.path);
+                if (tree.state === 'dirty') {
                     return failDomain('working_tree_dirty', `auto_fix=true requires a clean working tree.`, {
                         allow_dirty: true,
                     });
+                }
+                if (tree.state === 'unknown') {
+                    return failDomain('not_a_git_repo', `auto_fix=true requires a working tree git confirms is clean, and git could not ` +
+                        `(${tree.reason}). Autofix would rewrite files nothing can restore; pass ` +
+                        `allow_dirty=true to accept that.`, { allow_dirty: true });
                 }
             }
             catch (e) {
@@ -135,16 +144,25 @@ async function runScanPipeline(config, input, plugin, callMeta) {
     const treeHash = callMeta?.parentScanId !== undefined && callMeta.treeHash !== undefined
         ? callMeta.treeHash
         : await computeTreeHash(projectPath);
+    const rulesProjectPath = callMeta?.originProjectPath ?? projectPath;
     let cacheState = {};
     if (config.cacheState) {
         try {
-            cacheState = await config.cacheState(input, { projectPath, plugin });
+            cacheState = await config.cacheState(input, { projectPath, plugin, rulesProjectPath });
         }
         catch {
             cacheState = { uncacheable: randomUUID() };
         }
     }
-    const cacheKey = buildCacheKey(config, input, projectPath, treeHash, plugin, cacheState);
+    const cacheKey = buildCacheKey(config, input, { projectPath, plugin, rulesProjectPath }, treeHash, cacheState);
+    if (config.configWarnings) {
+        try {
+            warnings.push(...config.configWarnings(input, { projectPath, plugin, rulesProjectPath }));
+        }
+        catch {
+            /* a warning about configuration never fails the scan */
+        }
+    }
     // Cache check. Only a run whose every scanner ran is served again: one
     // with a scanner missing or failed is `completed` at coverage none or
     // partial, and its own warning tells the caller to install the scanner and
@@ -216,7 +234,9 @@ async function runScanPipeline(config, input, plugin, callMeta) {
                 parentScanId: scanId,
                 treeHash,
                 ...(callMeta?.progressToken !== undefined ? { progressToken: callMeta.progressToken } : {}),
+                ...(callMeta?.originProjectPath !== undefined ? { originProjectPath: callMeta.originProjectPath } : {}),
             },
+            rulesProjectPath,
             ...(parentScanId !== undefined ? { parentScanId } : {}),
         });
     }
@@ -257,6 +277,7 @@ async function runScanBody(args) {
             GUARDIAN_SCAN_ID: scanId,
         },
         childCallMeta: args.childCallMeta,
+        rulesProjectPath: args.rulesProjectPath,
     };
     // Acquire a slot from the global concurrency limiter so 50 parallel
     // calls from the host don't fork 50 scanner processes. Default cap is 2.
@@ -436,12 +457,13 @@ async function runScanBody(args) {
  * and why. A `rulePacks` that throws leaves the call uncacheable (a key no
  * other call can produce) rather than failing the scan.
  */
-function buildCacheKey(config, input, projectPath, treeHash, plugin, 
+function buildCacheKey(config, input, packCtx, treeHash, 
 /** `config.cacheState`'s answer; empty leaves the key exactly as before it existed. */
 cacheState) {
+    const { projectPath } = packCtx;
     let rulePacksHash;
     try {
-        rulePacksHash = hashRulePacks(config.rulePacks ? config.rulePacks(input, { projectPath, plugin }) : []);
+        rulePacksHash = hashRulePacks(config.rulePacks ? config.rulePacks(input, packCtx) : []);
     }
     catch {
         rulePacksHash = `uncacheable:${randomUUID()}`;

@@ -2965,4 +2965,187 @@ describe('deps_update_plan', () => {
     expect(r.plan[0]?.upgrade_command).toBe('npm install lodash@4.17.21 --ignore-scripts');
     expect(r.unsupported_ecosystems_present).not.toContain('pnpm');
   });
+
+  /** An npm project with no `.git` anywhere above it — the walk has no
+   *  repository root to stop at. */
+  async function planWithoutGit(project: string): Promise<{
+    calls: string[];
+    r: { plan: Array<{ upgrade_command: string }>; unplanned: Array<{ reason: string }>; unsupported_ecosystems_present: string[] };
+  }> {
+    const plugin = makePlugin(project);
+    seedCve(plugin, project, { cve_id: 'CVE-L', package_name: 'lodash', installed_version: '4.17.20', fixed_version: '4.17.21' });
+    const calls: string[] = [];
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      calls.push([cmd, ...args].join(' '));
+      return { exitCode: 1, stdout: JSON.stringify({ lodash: { current: '4.17.20', latest: '4.17.21' } }), stderr: '' };
+    }) as unknown as typeof execa);
+    const r = okResult<{ plan: Array<{ upgrade_command: string }>; unplanned: Array<{ reason: string }>; unsupported_ecosystems_present: string[] }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    return { calls, r };
+  }
+
+  it('Task 11 fix round 1: run on a worktree of a project, it plans against the ORIGIN project\'s CVE history', async () => {
+    // create_fix_pr runs the plan in a disposable checkout of HEAD, so the
+    // plan's installed versions and pip files match what the fix edits and
+    // nothing runs in the user's tree — while the CVEs are the project's own.
+    const origin = tempProject();
+    const worktree = tempProject();
+    for (const dir of [origin, worktree]) {
+      writeFileSync(join(dir, 'requirements.txt'), 'requests==2.31.0\n', 'utf8');
+    }
+    const plugin = makePlugin(origin);
+    seedCve(plugin, origin, { cve_id: 'CVE-R', package_name: 'requests', installed_version: '2.31.0', fixed_version: '2.32.0' });
+    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+
+    const bare = okResult<{ plan: unknown[] }>(await getTool('deps_update_plan').handler({ project_path: worktree }, plugin));
+    expect(bare.plan).toEqual([]);
+    const r = okResult<{ plan: Array<{ package_name: string; file?: string; latest_version: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: worktree }, plugin, { originProjectPath: origin }),
+    );
+    expect(r.plan).toEqual([expect.objectContaining({ package_name: 'requests', file: 'requirements.txt', latest_version: '2.32.0' })]);
+  });
+
+  it('Task 11 fix round 1: on a fresh checkout (no node_modules) npm outdated gives no "current" — the lockfile\'s version stands in', async () => {
+    // create_fix_pr now plans on a disposable checkout of HEAD, which has a
+    // lockfile and no node_modules. Measured (npm 11): `npm outdated --json`
+    // then omits `current` — with or without --package-lock-only — and the
+    // direct dependency got no step at all unless a CVE row covered it.
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"lodash":"4.17.20"}}', 'utf8');
+    writeFileSync(
+      join(project, 'package-lock.json'),
+      JSON.stringify({
+        name: 'x',
+        lockfileVersion: 3,
+        packages: { '': { name: 'x', dependencies: { lodash: '4.17.20' } }, 'node_modules/lodash': { version: '4.17.20' } },
+      }),
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    vi.mocked(execa).mockImplementation((async () => ({
+      exitCode: 1,
+      stdout: JSON.stringify({ lodash: { wanted: '4.17.20', latest: '4.18.1', dependent: 'x' } }),
+      stderr: '',
+    })) as unknown as typeof execa);
+    const r = okResult<{ plan: Array<{ package_name: string; installed_version: string; upgrade_command: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    expect(r.plan).toEqual([
+      expect.objectContaining({ package_name: 'lodash', installed_version: '4.17.20', upgrade_command: 'npm install lodash@4.18.1 --ignore-scripts' }),
+    ]);
+  });
+
+  it('Task 11 fix round 2: composer plans from the LOCK file (--locked) — a fresh checkout has no vendor/', async () => {
+    // Measured, Composer 2.10.2, no vendor/: `composer outdated --format=json`
+    // prints `[]` (exit 0, "No dependencies installed") and every Composer
+    // step vanished; `--locked` lists the lock's packages with their latest.
+    const project = tempProject();
+    writeFileSync(join(project, 'composer.json'), JSON.stringify({ require: { 'psr/log': '1.0.0' } }), 'utf8');
+    writeFileSync(join(project, 'composer.lock'), JSON.stringify({ packages: [{ name: 'psr/log', version: '1.0.0' }] }), 'utf8');
+    const plugin = makePlugin(project);
+    const calls: string[] = [];
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      calls.push([cmd, ...args].join(' '));
+      if (cmd === 'composer' && args.includes('--locked')) {
+        return { exitCode: 0, stdout: JSON.stringify({ locked: [{ name: 'psr/log', version: '1.0.0', latest: '3.0.2' }] }), stderr: '' };
+      }
+      if (cmd === 'composer') return { exitCode: 0, stdout: '[]', stderr: 'No dependencies installed. Try running composer install or update.' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+    const r = okResult<{ plan: Array<{ package_name: string; installed_version: string; latest_version: string }>; runner_failures: unknown[] }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    expect(calls).toContain('composer outdated --locked --format=json');
+    expect(r.plan).toEqual([expect.objectContaining({ package_name: 'psr/log', installed_version: '1.0.0', latest_version: '3.0.2' })]);
+    expect(r.runner_failures).toEqual([]);
+  });
+
+  it('Task 11 fix round 2: composer saying "No dependencies installed" is a runner failure, never an empty plan', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'composer.json'), JSON.stringify({ require: { 'psr/log': '1.0.0' } }), 'utf8');
+    const plugin = makePlugin(project);
+    vi.mocked(execa).mockImplementation((async (cmd: string) =>
+      cmd === 'composer'
+        ? { exitCode: 0, stdout: '[]', stderr: 'No dependencies installed. Try running composer install or update.' }
+        : { exitCode: 0, stdout: '', stderr: '' }) as unknown as typeof execa);
+    const r = okResult<{ runner_failures: Array<{ ecosystem: string; reason: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    expect(r.runner_failures).toEqual([expect.objectContaining({ ecosystem: 'composer', reason: expect.stringContaining('No dependencies installed') })]);
+  });
+
+  it('Task 11 fix round 1: a Ruby step only re-locks (bundle lock --update) — never bundle update, which installs gems into the host', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'Gemfile'), "source 'https://rubygems.org'\ngem 'rack'\n", 'utf8');
+    const plugin = makePlugin(project);
+    vi.mocked(execa).mockImplementation((async (cmd: string) => {
+      if (cmd === 'bundle') return { exitCode: 1, stdout: 'rack (newest 3.1.8, installed 2.2.3)\n', stderr: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+    const r = okResult<{ plan: Array<{ package_name: string; upgrade_command: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    const rack = r.plan.find((s) => s.package_name === 'rack');
+    expect(rack?.upgrade_command).toBe('bundle lock --update rack');
+  });
+
+  it('Task 11 item 9: with no .git above it, a stray pnpm/yarn lock in an unrelated ancestor does not flip an npm project', async () => {
+    const outer = tempProject();
+    writeFileSync(join(outer, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n", 'utf8');
+    writeFileSync(join(outer, 'yarn.lock'), '# yarn lockfile v1\n', 'utf8');
+    const project = join(outer, 'somewhere', 'proj');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"lodash":"4.17.20"}}', 'utf8');
+
+    const { calls, r } = await planWithoutGit(project);
+    expect(calls).toEqual(['npm outdated --json']);
+    expect(r.plan[0]?.upgrade_command).toBe('npm install lodash@4.17.21 --ignore-scripts');
+    expect(r.unsupported_ecosystems_present).not.toContain('pnpm');
+    expect(r.unsupported_ecosystems_present).not.toContain('yarn');
+  });
+
+  it('Task 11 item 9: with no .git, an ancestor workspace whose globs do NOT include the project is not its workspace', async () => {
+    const outer = tempProject();
+    writeFileSync(join(outer, 'package.json'), '{"name":"root","private":true}', 'utf8');
+    writeFileSync(join(outer, 'pnpm-workspace.yaml'), "packages:\n  - 'packages/*'\n", 'utf8');
+    writeFileSync(join(outer, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n", 'utf8');
+    const project = join(outer, 'tools', 'proj');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"lodash":"4.17.20"}}', 'utf8');
+
+    const { r } = await planWithoutGit(project);
+    expect(r.plan[0]?.upgrade_command).toBe('npm install lodash@4.17.21 --ignore-scripts');
+    expect(r.unsupported_ecosystems_present).not.toContain('pnpm');
+  });
+
+  it('Task 11 item 9: with no .git, a real pnpm workspace member (the globs include it) is still pnpm', async () => {
+    const outer = tempProject();
+    writeFileSync(join(outer, 'package.json'), '{"name":"root","private":true}', 'utf8');
+    writeFileSync(join(outer, 'pnpm-workspace.yaml'), "packages:\n  - 'packages/**'\n  - '!**/test/**'\n", 'utf8');
+    writeFileSync(join(outer, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n", 'utf8');
+    const project = join(outer, 'packages', 'web');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{"name":"web","dependencies":{"lodash":"4.17.20"}}', 'utf8');
+
+    const { calls, r } = await planWithoutGit(project);
+    expect(calls).toEqual([]);
+    expect(r.plan).toEqual([]);
+    expect(r.unsupported_ecosystems_present).toContain('pnpm');
+    expect(r.unplanned[0]?.reason).toMatch(/^pnpm project \(\.\.\/\.\.\/pnpm-workspace\.yaml, the workspace root\)|^pnpm project \(\.\.\/\.\.\/pnpm-lock\.yaml, the workspace root\)/);
+  });
+
+  it('Task 11 item 9: with no .git, a real yarn workspace member (root package.json workspaces include it) is still yarn', async () => {
+    const outer = tempProject();
+    writeFileSync(join(outer, 'package.json'), '{"name":"root","private":true,"workspaces":{"packages":["apps/*"]}}', 'utf8');
+    writeFileSync(join(outer, 'yarn.lock'), '# yarn lockfile v1\n', 'utf8');
+    const project = join(outer, 'apps', 'api');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{"name":"api","dependencies":{"lodash":"4.17.20"}}', 'utf8');
+
+    const { calls, r } = await planWithoutGit(project);
+    expect(calls).toEqual([]);
+    expect(r.unsupported_ecosystems_present).toContain('yarn');
+    expect(r.unplanned[0]?.reason).toMatch(/^yarn project \(\.\.\/\.\.\/yarn\.lock, the workspace root\)/);
+  });
 });

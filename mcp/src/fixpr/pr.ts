@@ -80,12 +80,13 @@
  * commit it: a tree that contains dev-guardian's own scan output is never
  * empty, even when the fix was a no-op. Measured: a commit titled "automated
  * Semgrep fix" whose entire diff was `sast.json`. Both `git add` and the
- * real-change check below use the pathspec `-- ':!.guardian'`, so neither
+ * real-change check below use an exclude pathspec for `.guardian` at any depth
+ * (`EXCLUDE_GUARDIAN_DIR`), so neither
  * ever sees that directory.
  *
  * **An empty diff is an explicit outcome (`no_changes`), not inferred from
  * `git commit` refusing an empty tree.** Checked directly — `git status
- * --porcelain -- ':!.guardian'` on the worktree — after the existence check
+ * --porcelain` with that pathspec on the worktree — after the existence check
  * and before `git add`, so a fix that genuinely changed nothing never
  * reaches `git commit`, `git push` or `gh pr create` at all. Relying on
  * `git commit`'s own refusal instead would still work (it does refuse an
@@ -100,8 +101,11 @@ import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import type { FixSource } from './types.js';
 
 /** Excludes dev-guardian's own scan-report artifacts from both staging and
- *  the "did anything real change" check — see the module comment (C1). */
-const EXCLUDE_GUARDIAN_DIR = ':!.guardian';
+ *  the "did anything real change" check — see the module comment (C1). At
+ *  ANY depth: a project in a subdirectory of its repository has its re-scan
+ *  reports in `<subdir>/.guardian/`, which the plain `:!.guardian` (root
+ *  only) staged — measured with `git status` on both shapes. */
+export const EXCLUDE_GUARDIAN_DIR = ':(exclude,glob)**/.guardian/**';
 
 export interface PrOutcome {
   status: 'created' | 'exists' | 'refused' | 'no_changes' | 'push_failed' | 'create_failed';

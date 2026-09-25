@@ -89,7 +89,7 @@ import {
   InvalidProjectPathError,
   resolveProjectPath,
 } from '../platform/projectPath.js';
-import { isWorkingTreeClean } from './gitState.js';
+import { workingTreeState } from './gitState.js';
 import { assessCoverage, computeCoverage } from './scanCoverage.js';
 import type { ToolCallMeta, ToolModule } from './index.js';
 
@@ -136,6 +136,12 @@ export interface InvokeContext extends ToolContext {
    * records in its own row's `meta.parent_scan_id`.
    */
   childCallMeta: ToolCallMeta;
+  /**
+   * The project whose rule configuration this scan uses — `projectPath`
+   * itself, unless `create_fix_pr` is re-scanning a worktree of another
+   * project (`ToolCallMeta.originProjectPath`).
+   */
+  rulesProjectPath: string;
 }
 
 export interface ScanToolBaseInput {
@@ -151,6 +157,8 @@ export interface RulePackContext {
   /** Canonical project path. */
   projectPath: string;
   plugin: PluginContext;
+  /** See `InvokeContext.rulesProjectPath`. */
+  rulesProjectPath: string;
 }
 
 /**
@@ -197,6 +205,12 @@ export interface ScanToolConfig<TInput extends ScanToolBaseInput> {
    * edited pack is served from a stale cache entry.
    */
   rulePacks?: (input: TInput, ctx: RulePackContext) => readonly string[];
+  /**
+   * Warnings about the tool's CONFIGURATION rather than about one run — e.g.
+   * custom rules registered in 2.0.x that no longer apply — added to every
+   * response, fresh or served from the cache. A throw adds nothing.
+   */
+  configWarnings?: (input: TInput, ctx: RulePackContext) => readonly string[];
   /**
    * State outside the working tree that the scan reads, joined to the cache
    * key — e.g. HEAD and every ref for a git-history scan, which a fetch or an
@@ -260,10 +274,23 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     if (input.allow_dirty !== true) {
       try {
         const resolved = resolveProjectPath(input.project_path);
-        if (!(await isWorkingTreeClean(resolved.path))) {
+        // Only a tree git POSITIVELY confirms clean may be rewritten without
+        // `allow_dirty` — see gitState.ts: "not a repo" and "git failed" are
+        // not clean, they are unknown.
+        const tree = await workingTreeState(resolved.path);
+        if (tree.state === 'dirty') {
           return failDomain('working_tree_dirty', `auto_fix=true requires a clean working tree.`, {
             allow_dirty: true,
           });
+        }
+        if (tree.state === 'unknown') {
+          return failDomain(
+            'not_a_git_repo',
+            `auto_fix=true requires a working tree git confirms is clean, and git could not ` +
+              `(${tree.reason}). Autofix would rewrite files nothing can restore; pass ` +
+              `allow_dirty=true to accept that.`,
+            { allow_dirty: true },
+          );
         }
       } catch (e) {
         if (e instanceof InvalidProjectPathError) {
@@ -301,15 +328,23 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     callMeta?.parentScanId !== undefined && callMeta.treeHash !== undefined
       ? callMeta.treeHash
       : await computeTreeHash(projectPath);
+  const rulesProjectPath = callMeta?.originProjectPath ?? projectPath;
   let cacheState: Record<string, string> = {};
   if (config.cacheState) {
     try {
-      cacheState = await config.cacheState(input, { projectPath, plugin });
+      cacheState = await config.cacheState(input, { projectPath, plugin, rulesProjectPath });
     } catch {
       cacheState = { uncacheable: randomUUID() };
     }
   }
-  const cacheKey = buildCacheKey(config, input, projectPath, treeHash, plugin, cacheState);
+  const cacheKey = buildCacheKey(config, input, { projectPath, plugin, rulesProjectPath }, treeHash, cacheState);
+  if (config.configWarnings) {
+    try {
+      warnings.push(...config.configWarnings(input, { projectPath, plugin, rulesProjectPath }));
+    } catch {
+      /* a warning about configuration never fails the scan */
+    }
+  }
 
   // Cache check. Only a run whose every scanner ran is served again: one
   // with a scanner missing or failed is `completed` at coverage none or
@@ -387,7 +422,9 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
         parentScanId: scanId,
         treeHash,
         ...(callMeta?.progressToken !== undefined ? { progressToken: callMeta.progressToken } : {}),
+        ...(callMeta?.originProjectPath !== undefined ? { originProjectPath: callMeta.originProjectPath } : {}),
       },
+      rulesProjectPath,
       ...(parentScanId !== undefined ? { parentScanId } : {}),
     });
   } finally {
@@ -408,6 +445,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   signal: AbortSignal;
   progress: ProgressEmitter;
   childCallMeta: ToolCallMeta;
+  rulesProjectPath: string;
   /** Set when an orchestrator runs this scan as one of its children. */
   parentScanId?: string;
 }): Promise<ToolResult<Record<string, unknown>>> {
@@ -445,6 +483,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
       GUARDIAN_SCAN_ID: scanId,
     },
     childCallMeta: args.childCallMeta,
+    rulesProjectPath: args.rulesProjectPath,
   };
 
   // Acquire a slot from the global concurrency limiter so 50 parallel
@@ -644,15 +683,15 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
 function buildCacheKey<TInput extends ScanToolBaseInput>(
   config: ScanToolConfig<TInput>,
   input: TInput,
-  projectPath: string,
+  packCtx: RulePackContext,
   treeHash: string,
-  plugin: PluginContext,
   /** `config.cacheState`'s answer; empty leaves the key exactly as before it existed. */
   cacheState: Record<string, string>,
 ): string {
+  const { projectPath } = packCtx;
   let rulePacksHash: string;
   try {
-    rulePacksHash = hashRulePacks(config.rulePacks ? config.rulePacks(input, { projectPath, plugin }) : []);
+    rulePacksHash = hashRulePacks(config.rulePacks ? config.rulePacks(input, packCtx) : []);
   } catch {
     rulePacksHash = `uncacheable:${randomUUID()}`;
   }
