@@ -154,6 +154,81 @@ describe('audit_agent_config', () => {
     expect(r.sources_missing.length).toBeGreaterThan(0);
   });
 
+  // Coordinator review, round 1: the real disk-reading path had no test that
+  // wrote actual broken files and ran the real tool handler over them — every
+  // earlier test either hand-built a ConfigSource or wrote only valid JSON.
+  describe('malformed / unreadable / oversized config on real disk', () => {
+    it('surfaces a real malformed-JSON .mcp.json as a warning, not a crash', async () => {
+      const dir = makeTempDir('agent-audit-');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, '.mcp.json'), '{ "mcpServers": { this is not valid json', 'utf8');
+      const plugin = makePlugin();
+      const r = (await getTool('audit_agent_config').handler({ project_path: dir }, plugin)) as unknown as AuditResult;
+      expect(r.ok).toBe(true);
+      expect(r.warnings.some((w) => w.includes('.mcp.json') && w.includes('invalid JSON'))).toBe(true);
+      expect(r.sources_read).not.toContain('.mcp.json');
+      expect(r.mcp_servers_found).toBe(0);
+    });
+
+    it('surfaces a real unreadable .mcp.json (a directory in its place) as a warning, not a crash', async () => {
+      const dir = makeTempDir('agent-audit-');
+      // A directory where the file is expected makes readFileSync throw
+      // EISDIR on every platform — chmod-based unreadability is unreliable
+      // for the file's own owner on POSIX and near-meaningless on Windows
+      // (doubly so running as Administrator, as this suite does).
+      mkdirSync(join(dir, '.mcp.json'), { recursive: true });
+      const plugin = makePlugin();
+      const r = (await getTool('audit_agent_config').handler({ project_path: dir }, plugin)) as unknown as AuditResult;
+      expect(r.ok).toBe(true);
+      expect(r.warnings.some((w) => w.includes('.mcp.json') && w.includes('could not read'))).toBe(true);
+      expect(r.sources_read).not.toContain('.mcp.json');
+    });
+
+    it('surfaces an oversized .mcp.json as a gap rather than reading it', async () => {
+      const dir = makeTempDir('agent-audit-');
+      const { MAX_CONFIG_BYTES } = await import('../../src/agentaudit/configSources.js');
+      writeFileSync(
+        join(dir, '.mcp.json'),
+        `{"mcpServers": {"x": {"command": "${'a'.repeat(MAX_CONFIG_BYTES + 1)}"}}}`,
+        'utf8',
+      );
+      const plugin = makePlugin();
+      const r = (await getTool('audit_agent_config').handler({ project_path: dir }, plugin)) as unknown as AuditResult;
+      expect(r.ok).toBe(true);
+      expect(r.warnings.some((w) => w.includes('.mcp.json') && w.includes('exceeds'))).toBe(true);
+      expect(r.sources_read).not.toContain('.mcp.json');
+      expect(r.mcp_servers_found).toBe(0);
+    });
+
+    it('parses a real, commented .vscode/mcp.json (JSONC) and audits the server it declares', async () => {
+      const dir = makeTempDir('agent-audit-');
+      mkdirSync(join(dir, '.vscode'), { recursive: true });
+      writeFileSync(
+        join(dir, '.vscode', 'mcp.json'),
+        [
+          '{',
+          '  // dev-guardian MCP server, VS Code / Copilot shape',
+          '  "servers": {',
+          '    "risky": {',
+          '      "type": "stdio", /* stdio transport */',
+          '      "command": "npx",',
+          '      "args": ["-y", "some-random-package"],',
+          '    },',
+          '  },',
+          '}',
+        ].join('\n'),
+        'utf8',
+      );
+      const plugin = makePlugin();
+      const r = (await getTool('audit_agent_config').handler({ project_path: dir }, plugin)) as unknown as AuditResult;
+      expect(r.ok).toBe(true);
+      expect(r.sources_read).toContain('.vscode/mcp.json');
+      expect(r.warnings).toEqual([]);
+      expect(r.mcp_servers_found).toBe(1);
+      expect(r.findings.some((f) => f.rule_id === 'agent-audit-unpinned-launcher')).toBe(true);
+    });
+  });
+
   it('fails cleanly on a project_path that does not exist', async () => {
     const plugin = makePlugin();
     const r = (await getTool('audit_agent_config').handler(

@@ -65,6 +65,33 @@ describe('analyzeAgentConfig', () => {
     expect(second.findings.some((f) => f.rule_id === 'agent-audit-entry-changed')).toBe(false);
   });
 
+  // Coordinator review, round 1, cheap item: an entry the PREVIOUS audit
+  // hashed but that is absent from the CURRENT scan (removed from the config
+  // since) is never looked at — `analyzeAgentConfig` only walks the current
+  // `entries`, never the previous-hashes map's own keys. Documented
+  // behaviour (see `storage/migrations/009_agent_config_hashes.sql`'s own
+  // comment: the stale row is left in place, harmless, never re-surfaced
+  // unless the same entry_key reappears) rather than a bug — this pins it:
+  // no crash, no finding, and the still-current entry is unaffected.
+  it('does not crash and produces no finding for an entry removed since the previous audit', () => {
+    const sources: ConfigSource[] = [mcpSource({ json: { mcpServers: { x: { command: 'node' } } } })];
+    const first = analyzeAgentConfig(sources, new Map());
+    const xHash = first.entryHashes[0]?.hash ?? '';
+
+    // The previous audit's hashes carry an extra key no longer produced by
+    // the current scan (the server was removed from .mcp.json since), plus
+    // x's own hash unchanged.
+    const previous = new Map([
+      ['.mcp.json::x', xHash],
+      ['.mcp.json::removed-server', 'some-old-hash'],
+    ]);
+    expect(() => analyzeAgentConfig(sources, previous)).not.toThrow();
+    const result = analyzeAgentConfig(sources, previous);
+    expect(result.entryHashes.map((h) => h.entry_key)).toEqual(['.mcp.json::x']);
+    expect(result.findings.filter((f) => f.rule_id === 'agent-audit-entry-changed')).toEqual([]);
+    expect(result.entriesChanged).toBe(0);
+  });
+
   it('turns a parse error into a warning instead of throwing, and excludes it from sourcesRead', () => {
     const sources: ConfigSource[] = [
       { ...mcpSource({}), json: undefined, raw: '{not json', parseError: 'invalid JSON: bad' },

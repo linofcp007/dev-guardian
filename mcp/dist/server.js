@@ -59472,37 +59472,6 @@ function scanForSecrets(text, options = {}) {
 
 // src/agentaudit/rules.ts
 var TOOL2 = "agent-audit";
-var DANGEROUS_BASH_PREFIXES = /* @__PURE__ */ new Set([
-  "rm",
-  "del",
-  "erase",
-  "rd",
-  "rmdir",
-  "remove-item",
-  "curl",
-  "wget",
-  "iwr",
-  "irm",
-  "invoke-webrequest",
-  "invoke-restmethod",
-  "sudo",
-  "su",
-  "chmod",
-  "chown",
-  "dd",
-  "mkfs",
-  "format",
-  "eval",
-  "iex",
-  "invoke-expression",
-  "ssh",
-  "scp",
-  "kill",
-  "killall",
-  "taskkill",
-  "shutdown",
-  "reboot"
-]);
 var NETWORK_EGRESS_RE = /\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b/i;
 var WRITE_OUTSIDE_RE = /(?:\d*>{1,2}|Out-File\s+-(?:Path\s+)?|Set-Content\s+-(?:Path\s+)?|Add-Content\s+-(?:Path\s+)?)\s*['"]?(?:~|\/(?!\/)|[A-Za-z]:[\\/]|\.\.[\\/])/i;
 var TEMPLATE_VAR_RE = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/;
@@ -59643,13 +59612,65 @@ function bashSpecifier(rule) {
   const m = /^Bash\((.*)\)$/.exec(rule);
   return m?.[1];
 }
-function isDangerousWildcard(specifier) {
-  if (specifier === "*") return true;
-  const m = /^(\S+)(?:\s.*)?:\*$/.exec(specifier);
-  const leading = m?.[1];
-  if (leading === void 0) return false;
-  return DANGEROUS_BASH_PREFIXES.has(leading.toLowerCase());
+function trailingWildcardPrefix(specifier) {
+  if (specifier === "*" || !specifier.endsWith("*")) return void 0;
+  const prefix = specifier.slice(0, -1).replace(/:$/, "").trimEnd();
+  return prefix.length > 0 ? prefix : void 0;
 }
+function matchesPrefixList(prefix, words) {
+  return words.some((w) => prefix === w || prefix.startsWith(`${w} `));
+}
+var SAFE_WILDCARD_PREFIXES = [
+  "npm run",
+  "npm test",
+  "pnpm run",
+  "pnpm test",
+  "yarn run",
+  "yarn test",
+  "git status",
+  "git diff",
+  "git log"
+];
+var HIGH_RISK_BASH_PREFIXES = [
+  "node -e",
+  "python -c",
+  "python3 -c",
+  "bash -c",
+  "sh -c",
+  "zsh -c",
+  "ksh -c",
+  "pwsh -c",
+  "powershell -c",
+  "eval",
+  "iex",
+  "invoke-expression",
+  "rm",
+  "del",
+  "erase",
+  "rd",
+  "rmdir",
+  "remove-item",
+  "curl",
+  "wget",
+  "iwr",
+  "irm",
+  "invoke-webrequest",
+  "invoke-restmethod",
+  "sudo",
+  "su",
+  "chmod",
+  "chown",
+  "dd",
+  "mkfs",
+  "format",
+  "ssh",
+  "scp",
+  "kill",
+  "killall",
+  "taskkill",
+  "shutdown",
+  "reboot"
+];
 function checkWildcardPermissions(source) {
   const root = asObject(source.json);
   const permissions = asObject(root?.["permissions"]);
@@ -59659,14 +59680,33 @@ function checkWildcardPermissions(source) {
   for (const rule of allow) {
     if (typeof rule !== "string") continue;
     const specifier = bashSpecifier(rule);
-    if (specifier === void 0 || !isDangerousWildcard(specifier)) continue;
+    if (specifier === void 0) continue;
+    if (specifier === "*") {
+      out.push(
+        finding3({
+          rule_id: "agent-audit-wildcard-permission",
+          severity: "critical",
+          category: "security",
+          title: `Wildcard Bash permission: ${rule}`,
+          message: `permissions.allow contains "${rule}", which auto-approves every Bash command with no confirmation prompt. Narrow it to the specific commands actually needed.`,
+          file_path: source.label,
+          snippet: rule
+        })
+      );
+      continue;
+    }
+    const prefix = trailingWildcardPrefix(specifier);
+    if (prefix === void 0) continue;
+    const lowerPrefix = prefix.toLowerCase();
+    if (matchesPrefixList(lowerPrefix, SAFE_WILDCARD_PREFIXES)) continue;
+    const severity = matchesPrefixList(lowerPrefix, HIGH_RISK_BASH_PREFIXES) ? "high" : "medium";
     out.push(
       finding3({
         rule_id: "agent-audit-wildcard-permission",
-        severity: specifier === "*" ? "critical" : "high",
+        severity,
         category: "security",
         title: `Wildcard Bash permission: ${rule}`,
-        message: `permissions.allow contains "${rule}", which auto-approves ${specifier === "*" ? "every Bash command" : `any Bash command starting with '${specifier.split(":")[0]}'`} with no confirmation prompt. Narrow it to the specific commands actually needed.`,
+        message: `permissions.allow contains "${rule}", which auto-approves any Bash command starting with '${prefix}' with no confirmation prompt. Narrow it to the specific commands actually needed.`,
         file_path: source.label,
         snippet: rule
       })
@@ -59878,9 +59918,97 @@ function analyzeAgentConfig(sources, previousHashes) {
 }
 
 // src/agentaudit/configSources.ts
-import { existsSync as existsSync44, readFileSync as readFileSync32 } from "node:fs";
+import { existsSync as existsSync44, readFileSync as readFileSync32, statSync as statSync14 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join59 } from "node:path";
+
+// src/agentaudit/jsonc.ts
+function stripComments(text) {
+  let out = "";
+  let i2 = 0;
+  const n2 = text.length;
+  let inString = false;
+  while (i2 < n2) {
+    const ch = text[i2];
+    if (inString) {
+      out += ch;
+      if (ch === "\\" && i2 + 1 < n2) {
+        out += text[i2 + 1];
+        i2 += 2;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      i2 += 1;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      i2 += 1;
+      continue;
+    }
+    if (ch === "/" && text[i2 + 1] === "/") {
+      i2 += 2;
+      while (i2 < n2 && text[i2] !== "\n") i2 += 1;
+      continue;
+    }
+    if (ch === "/" && text[i2 + 1] === "*") {
+      i2 += 2;
+      while (i2 < n2 && !(text[i2] === "*" && text[i2 + 1] === "/")) i2 += 1;
+      i2 += 2;
+      continue;
+    }
+    out += ch;
+    i2 += 1;
+  }
+  return out;
+}
+function stripTrailingCommas(text) {
+  let out = "";
+  let i2 = 0;
+  const n2 = text.length;
+  let inString = false;
+  while (i2 < n2) {
+    const ch = text[i2];
+    if (inString) {
+      out += ch;
+      if (ch === "\\" && i2 + 1 < n2) {
+        out += text[i2 + 1];
+        i2 += 2;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      i2 += 1;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      i2 += 1;
+      continue;
+    }
+    if (ch === ",") {
+      let j = i2 + 1;
+      while (j < n2 && /\s/.test(text[j] ?? "")) j += 1;
+      const next = text[j];
+      if (next === "}" || next === "]") {
+        i2 += 1;
+        continue;
+      }
+    }
+    out += ch;
+    i2 += 1;
+  }
+  return out;
+}
+function stripJsonc(text) {
+  return stripTrailingCommas(stripComments(text));
+}
+function parseJsonc(text) {
+  return JSON.parse(stripJsonc(text));
+}
+
+// src/agentaudit/configSources.ts
 var PROJECT_DESCRIPTORS = [
   { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join59(p, ".mcp.json") },
   {
@@ -59926,6 +60054,7 @@ var USER_DESCRIPTORS = [
 function configSourceDescriptors(includeUserConfig) {
   return includeUserConfig ? [...PROJECT_DESCRIPTORS, ...USER_DESCRIPTORS] : [...PROJECT_DESCRIPTORS];
 }
+var MAX_CONFIG_BYTES = 256 * 1024;
 function readConfigSources(projectPath, includeUserConfig) {
   return configSourceDescriptors(includeUserConfig).map((descriptor) => readOne2(descriptor, projectPath));
 }
@@ -59938,6 +60067,19 @@ function readOne2(descriptor, projectPath) {
     mcpServersField: descriptor.mcpServersField
   };
   if (!existsSync44(absolutePath)) return { ...base, exists: false };
+  let size;
+  try {
+    size = statSync14(absolutePath).size;
+  } catch (e) {
+    return { ...base, exists: false, parseError: `could not read: ${e.message}` };
+  }
+  if (size > MAX_CONFIG_BYTES) {
+    return {
+      ...base,
+      exists: true,
+      parseError: `file exceeds the ${MAX_CONFIG_BYTES}-byte size cap and was not read`
+    };
+  }
   let raw;
   try {
     raw = readFileSync32(absolutePath, "utf8");
@@ -59945,7 +60087,7 @@ function readOne2(descriptor, projectPath) {
     return { ...base, exists: false, parseError: `could not read: ${e.message}` };
   }
   try {
-    const json = JSON.parse(raw);
+    const json = parseJsonc(raw);
     return { ...base, exists: true, raw, json };
   } catch (e) {
     return { ...base, exists: true, raw, parseError: `invalid JSON: ${e.message}` };

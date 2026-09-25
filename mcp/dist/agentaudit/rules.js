@@ -9,14 +9,6 @@
 import { redact, scanForSecrets } from '../hooks/secretScan.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
 const TOOL = 'agent-audit';
-/** Bash command prefixes dangerous enough that a `:*` (or bare-`*`) wildcard on them is a real risk. */
-const DANGEROUS_BASH_PREFIXES = new Set([
-    'rm', 'del', 'erase', 'rd', 'rmdir', 'remove-item',
-    'curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod',
-    'sudo', 'su', 'chmod', 'chown', 'dd', 'mkfs', 'format',
-    'eval', 'iex', 'invoke-expression',
-    'ssh', 'scp', 'kill', 'killall', 'taskkill', 'shutdown', 'reboot',
-]);
 const NETWORK_EGRESS_RE = /\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b/i;
 // Redirection (`>`/`>>`, optionally preceded by a file-descriptor number) or
 // a write-cmdlet, followed by a path that is absolute (leading `/`, `~`, or
@@ -186,15 +178,68 @@ function bashSpecifier(rule) {
     const m = /^Bash\((.*)\)$/.exec(rule);
     return m?.[1];
 }
-function isDangerousWildcard(specifier) {
-    if (specifier === '*')
-        return true;
-    const m = /^(\S+)(?:\s.*)?:\*$/.exec(specifier);
-    const leading = m?.[1];
-    if (leading === undefined)
-        return false;
-    return DANGEROUS_BASH_PREFIXES.has(leading.toLowerCase());
+/**
+ * Coordinator review, round 1: the original version of this check only
+ * recognised a wildcard written `<prefix>:*` (colon before the star). A
+ * trailing `*` with no colon — `Bash(node -e ' *)`, an entry this repo's
+ * own `.claude/settings.local.json` actually carries — was never even
+ * examined, so an interpreter-escape prefix went unflagged purely because
+ * of which separator its author happened to type. Both spellings grant the
+ * same thing (Claude Code prefix-matches everything before the `*`), so
+ * both are recognised here: strip one trailing `*`, then an optional `:`
+ * separator, then trailing whitespace, and whatever is left is the prefix
+ * being granted unconditionally. Returns undefined for `*` alone (handled
+ * as its own, always-critical case) and for a specifier with no trailing
+ * wildcard at all (an exact command grants nothing beyond itself).
+ */
+function trailingWildcardPrefix(specifier) {
+    if (specifier === '*' || !specifier.endsWith('*'))
+        return undefined;
+    const prefix = specifier.slice(0, -1).replace(/:$/, '').trimEnd();
+    return prefix.length > 0 ? prefix : undefined;
 }
+/**
+ * True when `prefix` (lower-cased) is exactly one of `words`, or begins with
+ * one of them followed by a space — a word-boundary prefix match, so
+ * `"npm run"` matches `"npm run test:*"`'s prefix but not an unrelated
+ * `"npm running-something"`.
+ */
+function matchesPrefixList(prefix, words) {
+    return words.some((w) => prefix === w || prefix.startsWith(`${w} `));
+}
+/**
+ * A small, deliberately narrow allowlist of trailing-wildcard prefixes that
+ * are safe DESPITE the wildcard: a fixed, project-controlled verb (an npm/
+ * pnpm/yarn script name, a read-only git subcommand) rather than a path, a
+ * shell, or an interpreter. Anything not on this list is flagged (at
+ * `medium` by default, `high` when it also matches `HIGH_RISK_BASH_PREFIXES`
+ * below) — kept intentionally small rather than grown to "everything that
+ * looks fine", which is exactly the reasoning gap that let `Bash(node -e '
+ * *)` read as equivalent to `Bash(npm run *)` before this review.
+ */
+const SAFE_WILDCARD_PREFIXES = [
+    'npm run', 'npm test', 'pnpm run', 'pnpm test', 'yarn run', 'yarn test',
+    'git status', 'git diff', 'git log',
+];
+/**
+ * Prefixes that turn a trailing wildcard into effectively arbitrary code
+ * execution or an outright destructive action, rated 'high' rather than the
+ * 'medium' every other non-safe-listed prefix gets. Two families:
+ *   - interpreters given an inline-code flag (`node -e`, `python -c`,
+ *     `bash -c`, …) — the wildcard suffix IS the code that runs;
+ *   - single commands whose blast radius does not need a flag to be
+ *     catastrophic (rm, curl, wget, sudo, dd, …) — the original dangerous-
+ *     prefix list from before this review, carried forward unchanged so a
+ *     prefix that used to read 'high' still does.
+ */
+const HIGH_RISK_BASH_PREFIXES = [
+    'node -e', 'python -c', 'python3 -c', 'bash -c', 'sh -c', 'zsh -c', 'ksh -c',
+    'pwsh -c', 'powershell -c', 'eval', 'iex', 'invoke-expression',
+    'rm', 'del', 'erase', 'rd', 'rmdir', 'remove-item',
+    'curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod',
+    'sudo', 'su', 'chmod', 'chown', 'dd', 'mkfs', 'format',
+    'ssh', 'scp', 'kill', 'killall', 'taskkill', 'shutdown', 'reboot',
+];
 export function checkWildcardPermissions(source) {
     const root = asObject(source.json);
     const permissions = asObject(root?.['permissions']);
@@ -206,14 +251,37 @@ export function checkWildcardPermissions(source) {
         if (typeof rule !== 'string')
             continue;
         const specifier = bashSpecifier(rule);
-        if (specifier === undefined || !isDangerousWildcard(specifier))
+        if (specifier === undefined)
             continue;
+        if (specifier === '*') {
+            out.push(finding({
+                rule_id: 'agent-audit-wildcard-permission',
+                severity: 'critical',
+                category: 'security',
+                title: `Wildcard Bash permission: ${rule}`,
+                message: `permissions.allow contains "${rule}", which auto-approves every Bash command with no ` +
+                    `confirmation prompt. Narrow it to the specific commands actually needed.`,
+                file_path: source.label,
+                snippet: rule,
+            }));
+            continue;
+        }
+        const prefix = trailingWildcardPrefix(specifier);
+        if (prefix === undefined)
+            continue; // exact command, or no wildcard at all — grants nothing extra
+        const lowerPrefix = prefix.toLowerCase();
+        if (matchesPrefixList(lowerPrefix, SAFE_WILDCARD_PREFIXES))
+            continue;
+        const severity = matchesPrefixList(lowerPrefix, HIGH_RISK_BASH_PREFIXES)
+            ? 'high'
+            : 'medium';
         out.push(finding({
             rule_id: 'agent-audit-wildcard-permission',
-            severity: specifier === '*' ? 'critical' : 'high',
+            severity,
             category: 'security',
             title: `Wildcard Bash permission: ${rule}`,
-            message: `permissions.allow contains "${rule}", which auto-approves ${specifier === '*' ? 'every Bash command' : `any Bash command starting with '${specifier.split(':')[0]}'`} with no confirmation prompt. Narrow it to the specific commands actually needed.`,
+            message: `permissions.allow contains "${rule}", which auto-approves any Bash command starting with ` +
+                `'${prefix}' with no confirmation prompt. Narrow it to the specific commands actually needed.`,
             file_path: source.label,
             snippet: rule,
         }));

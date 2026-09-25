@@ -132,6 +132,76 @@ describe('checkWildcardPermissions', () => {
   it('does nothing when there is no permissions.allow', () => {
     expect(checkWildcardPermissions(source({}))).toEqual([]);
   });
+
+  // Coordinator review, round 1: a trailing `*` with NO colon before it was
+  // never recognised as a wildcard at all, so `Bash(node -e ' *)` — an entry
+  // this repo's own .claude/settings.local.json actually carries — went
+  // unflagged however dangerous the prefix. `node -e '<anything>*'`
+  // auto-approves arbitrary inline JS execution.
+  it('flags a bare-trailing-* entry with no colon (the node -e defect)', () => {
+    const findings = checkWildcardPermissions(source({ permissions: { allow: ["Bash(node -e ' *)"] } }));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.severity).toBe('high');
+  });
+
+  it('flags other interpreter/eval trailing-* prefixes as high, colon or not', () => {
+    const findings = checkWildcardPermissions(
+      source({
+        permissions: {
+          allow: [
+            'Bash(python -c *)',
+            'Bash(bash -c:*)',
+            'Bash(sh -c *)',
+            'Bash(pwsh -c *)',
+            'Bash(powershell -c *)',
+            'Bash(eval *)',
+          ],
+        },
+      }),
+    );
+    expect(findings).toHaveLength(6);
+    expect(findings.every((f) => f.severity === 'high')).toBe(true);
+  });
+
+  it('flags an unrecognised trailing-* prefix too, at a lower (medium) severity', () => {
+    const findings = checkWildcardPermissions(source({ permissions: { allow: ['Bash(docker info *)'] } }));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.severity).toBe('medium');
+  });
+
+  it('does not flag the small explicit safe list even with a trailing *', () => {
+    const findings = checkWildcardPermissions(
+      source({
+        permissions: {
+          allow: [
+            'Bash(npm run *)',
+            'Bash(npm test *)',
+            'Bash(pnpm run *)',
+            'Bash(yarn run *)',
+            'Bash(git status *)',
+            'Bash(git diff *)',
+            'Bash(git log *)',
+          ],
+        },
+      }),
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('a safe-list prefix immediately followed by more command text is still safe (prefix match, not substring)', () => {
+    // "npm run test:*" is "npm run" + a specific script name — narrower
+    // than the bare safe entry, not broader.
+    expect(
+      checkWildcardPermissions(source({ permissions: { allow: ['Bash(npm run test:*)'] } })),
+    ).toEqual([]);
+    // But a command that merely SHARES a prefix word without the boundary
+    // ("npm running-something", not "npm run ...") must not be treated as
+    // safe by accident.
+    const findings = checkWildcardPermissions(
+      source({ permissions: { allow: ['Bash(npm running-something *)'] } }),
+    );
+    expect(findings).toHaveLength(1);
+  });
 });
 
 describe('checkBypassPermissions', () => {

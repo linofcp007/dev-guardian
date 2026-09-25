@@ -7,11 +7,19 @@
  * `tools/auditAgentConfig.ts`. `homedir()` resolves via `USERPROFILE` on
  * Windows / `HOME` on POSIX, so a test that wants an isolated home directory
  * points that env var at a temp dir before calling in.
+ *
+ * Every file is parsed as JSONC (`./jsonc.ts`), not strict JSON: real
+ * `.vscode/mcp.json` and Cursor/VS Code settings carry `//`/`/* *\/`
+ * comments and trailing commas as ordinary, hand-edited config, and a
+ * strict `JSON.parse` reported the whole file unreadable the moment either
+ * appeared. Strict JSON is valid JSONC, so this changes nothing for a file
+ * that never had a comment in it.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { parseJsonc } from './jsonc.js';
 
 export type ConfigSourceKind = 'project' | 'user';
 
@@ -91,7 +99,16 @@ export function configSourceDescriptors(includeUserConfig: boolean): ConfigSourc
   return includeUserConfig ? [...PROJECT_DESCRIPTORS, ...USER_DESCRIPTORS] : [...PROJECT_DESCRIPTORS];
 }
 
-/** Reads and JSON-parses every applicable config source. Missing files are `exists: false`, never thrown. */
+/**
+ * Config files here are small, hand-edited JSON(C) — a legitimate one is at
+ * most a few KB. Same shape as `specDiscover.ts`'s `MAX_SPEC_BYTES` /
+ * `mapAttackSurface.ts`'s size cap: checked via `statSync` BEFORE reading,
+ * so an oversized or adversarial file is reported as a gap rather than read
+ * (and JSON.parse'd) in full.
+ */
+export const MAX_CONFIG_BYTES = 256 * 1024;
+
+/** Reads and parses every applicable config source. Missing files are `exists: false`, never thrown. */
 export function readConfigSources(projectPath: string, includeUserConfig: boolean): ConfigSource[] {
   return configSourceDescriptors(includeUserConfig).map((descriptor) => readOne(descriptor, projectPath));
 }
@@ -105,6 +122,21 @@ function readOne(descriptor: ConfigSourceDescriptor, projectPath: string): Confi
     mcpServersField: descriptor.mcpServersField,
   };
   if (!existsSync(absolutePath)) return { ...base, exists: false };
+
+  let size: number;
+  try {
+    size = statSync(absolutePath).size;
+  } catch (e) {
+    return { ...base, exists: false, parseError: `could not read: ${(e as Error).message}` };
+  }
+  if (size > MAX_CONFIG_BYTES) {
+    return {
+      ...base,
+      exists: true,
+      parseError: `file exceeds the ${MAX_CONFIG_BYTES}-byte size cap and was not read`,
+    };
+  }
+
   let raw: string;
   try {
     raw = readFileSync(absolutePath, 'utf8');
@@ -112,7 +144,7 @@ function readOne(descriptor: ConfigSourceDescriptor, projectPath: string): Confi
     return { ...base, exists: false, parseError: `could not read: ${(e as Error).message}` };
   }
   try {
-    const json = JSON.parse(raw) as unknown;
+    const json = parseJsonc(raw);
     return { ...base, exists: true, raw, json };
   } catch (e) {
     return { ...base, exists: true, raw, parseError: `invalid JSON: ${(e as Error).message}` };
