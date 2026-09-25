@@ -263,7 +263,7 @@ describe('FindingsRepo — suppressions are per project at match time (migration
     expect(findings.listOpen().map((f) => f.fingerprint)).toEqual(['shared-fp']);
   });
 
-  it('a suppression scoped to project A also hides the same IDENTITY in project B unless B is different', () => {
+  it('a suppression scoped to project A by IDENTITY does not hide that identity in project B', () => {
     const { scans, findings, suppressions } = setup();
     scans.insert({ scan_id: 'a1', scan_type: 'sast', project_path: '/project-a', tree_hash: 'ha' });
     findings.bulkInsert([{ ...makeFinding({ fingerprint: 'fp-a', identity: 'shared-identity' }), scan_id: 'a1' }]);
