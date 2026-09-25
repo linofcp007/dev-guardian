@@ -17,58 +17,84 @@
  *                    transitive package never appears in it at all. Every
  *                    CVE-driven target is the smallest version STRICTLY
  *                    ABOVE what is currently installed
- *                    (`../deps/versionCompare.js#minCleanVersionAbove`) —
- *                    never a scanner's raw "fixed_version" taken on faith,
- *                    which can be an older release branch's own backport,
- *                    simply stale (fix round 2's `already_fixed` — never
- *                    relabels a resolved CVE `security` on the strength of
- *                    an ordinary npm-latest bump), or belonging to some
- *                    OTHER ecosystem the CVE table's own lack of an
- *                    ecosystem column cannot rule out (fix round 2, item 10
- *                    — the CVE-map sweep only claims a package
- *                    `package-lock.json` / `node_modules` actually
- *                    resolves, case-insensitively). Every `npm install`
- *                    carries `--ignore-scripts`; a transitive CVE'd package
- *                    gets a single-quoted `npm pkg set
- *                    'overrides[<pkg>]=<version>'` step (bracket notation —
- *                    a dotted package name would otherwise become a nested
- *                    key; quoted so an unquoted `[...]` is not read as a
- *                    shell glob) with a `follow_up_command` of `npm install
- *                    --ignore-scripts` to re-resolve the lockfile. A direct
- *                    dependency `npm outdated` itself never lists at all
- *                    is reported `unplanned`, not silently skipped;
+ *                    (`../deps/versionCompare.js#minCleanVersionAbove`, or
+ *                    its `...Loose` counterpart for a PRE-RELEASE install —
+ *                    fix round 3, item N2: `2.0.0-beta.1` is genuinely
+ *                    below a clean `2.0.1` fix, which the strict clean-
+ *                    version check alone cannot see) — never a scanner's
+ *                    raw "fixed_version" taken on faith, which can be an
+ *                    older release branch's own backport, simply stale
+ *                    (`already_fixed` — never relabels a resolved CVE
+ *                    `security` on the strength of an ordinary npm-latest
+ *                    bump; only ever claimed for a CLEAN installed version,
+ *                    never a pre-release), or belonging to some OTHER
+ *                    ecosystem the CVE table's own lack of an ecosystem
+ *                    column cannot rule out (the CVE-map sweep only claims
+ *                    a package `package-lock.json` / `node_modules` —
+ *                    including pnpm's own flat `.pnpm` store, fix round 3 —
+ *                    actually resolves, case-insensitively, keyed by the
+ *                    LOCKFILE's own spelling of the name). Every
+ *                    `npm install` carries `--ignore-scripts`; a transitive
+ *                    CVE'd package gets an `npm pkg set
+ *                    overrides[<pkg>]=<version>` step (bracket notation — a
+ *                    dotted package name would otherwise become a nested
+ *                    key; deliberately UNQUOTED — `create_fix_pr` runs this
+ *                    without a shell, and fix round 2's own quoting
+ *                    corrupted `package.json` there; a shell-quoted,
+ *                    paste-safe copy is in `shell_command` instead) with a
+ *                    `follow_up_command` of `npm install --ignore-scripts`
+ *                    to re-resolve the lockfile. A direct dependency `npm
+ *                    outdated` itself never lists at all is reported
+ *                    `unplanned`, not silently skipped;
  *        pip      → NEVER runs pip/pip-audit against the host interpreter.
  *                    Reads this project's own `requirements*.txt` pins
  *                    (including pip-compile hash-continuation lines,
  *                    extras and environment markers) and PEP 621
- *                    `pyproject.toml` dependencies (extras and range specs
- *                    included — fix round 2's depth-counting array parser,
- *                    not a `[^\]]*` regex that stopped at an extras
- *                    marker's own `]`), and proposes a step only for an
- *                    exact pin with an active CVE and a fix version above
- *                    the pin — see `runPipPlan`'s own doc comment for why
+ *                    `[project] dependencies` — scoped to that ONE TOML
+ *                    table (fix round 3: a `[tool.uv] dev-dependencies`
+ *                    array earlier in the same file used to win an
+ *                    unscoped substring search outright), extras and range
+ *                    specs included (a depth-counting array parser, not a
+ *                    `[^\]]*` regex that stopped at an extras marker's own
+ *                    `]`), environment markers stripped before matching on
+ *                    either path — and proposes a step only for an exact
+ *                    pin with an active CVE and a fix version above the pin
+ *                    — see `runPipPlan`'s own doc comment for why
  *                    `upgrade_command` is not a real, executable command
  *                    here, and why the target file is also exposed as a
- *                    structured `file` field. A CVE'd package no manifest
- *                    mentions at all (genuinely transitive) is swept from
- *                    the CVE map too (fix round 2, item 7) and reported
- *                    `unplanned`, excluding anything npm's own lockfile
- *                    already resolves;
+ *                    structured `file` field. Pip has NO CVE-map sweep of
+ *                    its own (fix round 3: the earlier one mislabelled
+ *                    non-pip packages, e.g. a composer or Go one, `'pip'`
+ *                    purely because npm did not resolve them) — a
+ *                    genuinely transitive pip dependency with no manifest
+ *                    mention now surfaces through the catch-all below;
  *        composer / cargo / go / rubygems / dotnet → each stack's own
- *                    "outdated" command (dotnet's `list` call always
- *                    carries `--no-restore` — it restores IMPLICITLY
- *                    otherwise, bypassing `--locked-mode` entirely, fix
- *                    round 2, item 8 — and restores explicitly only when
- *                    that fails, with `--locked-mode` when ANY
- *                    `packages.lock.json` exists anywhere under the
- *                    project — a scan must never modify the working tree).
+ *                    "outdated" command. dotnet ALWAYS restores explicitly
+ *                    FIRST now (fix round 3 — never "try list first,
+ *                    restore only on failure": a STALE but PRESENT `obj/`
+ *                    makes `dotnet list --no-restore` exit 0 with valid-
+ *                    looking JSON built from the OLD resolution, which
+ *                    that shape could never catch), `--locked-mode` when
+ *                    ANY `packages.lock.json` exists anywhere under the
+ *                    project, a plain restore otherwise — a scan must
+ *                    never modify the working tree, and a
+ *                    `requestedVersion` != `resolvedVersion` mismatch in
+ *                    the list JSON is treated as stale even after a
+ *                    restore that reported success.
  *      (Other stacks return an empty plan with `unsupported_ecosystems_present`.)
  *      **Every package with an active CVE that did NOT become a step is
  *      reported in `unplanned`** (package, ecosystem, cve_ids, reason) —
  *      never silently dropped: a non-exact pip specifier, a CVE whose only
  *      reported fix is a downgrade or already resolved, a transitive
  *      package with no recorded installed version to compare against, or
- *      one no ecosystem's own manifest evidence could confirm at all.
+ *      one no ecosystem's own manifest evidence could confirm at all. As a
+ *      final catch-all (fix round 3, `appendCatchAllUnplanned`), ANY CVE
+ *      key that still has neither a step nor an ecosystem-specific
+ *      `unplanned` entry after every runner has had a turn — a composer/
+ *      cargo/go/rubygems package (none of those have a CVE-map sweep of
+ *      their own), a `.NET` target whose restore failed — is reported
+ *      `unplanned` with ecosystem `'unknown'` rather than vanishing from
+ *      both `plan` and `unplanned` together.
  *   3. Classify each entry as patch / minor / major (by semver diff).
  *   4. Mark entries as `security` when an active CVE exists for the package —
  *      sourced from the latest `deps` / `deps_audit` / `security_full` scan
@@ -83,7 +109,12 @@ import { join } from 'node:path';
 import { execa } from 'execa';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import { compareVersions, isCleanVersion, minCleanVersionAbove } from '../deps/versionCompare.js';
+import {
+  compareVersions,
+  isCleanVersion,
+  minCleanVersionAbove,
+  minCleanVersionAboveLoose,
+} from '../deps/versionCompare.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, type DomainError, type ToolResult } from '../types.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -111,7 +142,26 @@ interface UpgradeStep {
    * are named by `package_name` and `upgrade_command` alone.
    */
   file?: string;
+  /**
+   * MUST stay argv-safe — no quoting of any kind. `create_fix_pr`'s own
+   * `fixpr/apply.ts` splits this on whitespace and runs it WITHOUT a shell
+   * (`toArgv`, its own module comment), so a quoted token is not unwrapped:
+   * a fix round 2 attempt to single-quote `overrides[...]=...` (to make it
+   * paste-safe in a shell that globs by default) made `npm pkg set` receive
+   * the literal quote characters as part of the key/value, writing
+   * `"'overrides":{"minimist":"1.2.6'"}` to `package.json` while `apply.ts`
+   * still reported `applied: true` (fix round 3, item N1 — the coordinator's
+   * own probe against `applyGroup`). A human-facing, shell-quoted copy of
+   * the SAME command belongs in `shell_command` instead.
+   */
   upgrade_command: string;
+  /** The SAME command as `upgrade_command`, shell-quoted for a human to
+   *  paste into a terminal (a shell that globs by default, e.g. zsh, reads
+   *  an unquoted `overrides[...]` as a filename pattern) — never used by
+   *  `create_fix_pr`'s own unquoted, non-shell `execa` invocation. Set only
+   *  where quoting would otherwise matter (an npm `overrides` step); absent
+   *  when `upgrade_command` is already shell-safe as written. */
+  shell_command?: string;
   /**
    * A second command that MUST run after `upgrade_command` for the fix to
    * actually take effect — set on an npm `overrides` step
@@ -237,6 +287,7 @@ async function handler(
 
   const flat: UpgradeStep[] = plansByEcosystem.flatMap((p) => p.steps);
   const unplanned: UnplannedEntry[] = plansByEcosystem.flatMap((p) => p.unplanned);
+  appendCatchAllUnplanned(cves, flat, unplanned);
   const ordered = orderPlan(flat, inp.prefer ?? 'security');
   const summary = summarize(ordered);
 
@@ -289,6 +340,46 @@ function detectUnsupportedEcosystems(projectPath: string): string[] {
   )
     out.push('gradle');
   return out;
+}
+
+/**
+ * The final safety net (fix round 3, item #7 — "catch-all"): every CVE key
+ * that, after every ecosystem runner has had a turn, produced NEITHER a
+ * step NOR an `unplanned` entry is pushed to `unplanned` here, tagged
+ * ecosystem `'unknown'`. The `cves` table has no ecosystem column, and
+ * every per-ecosystem runner only claims a package it has SOME real
+ * evidence for (a manifest mention, an "outdated" listing, a resolved
+ * lockfile entry) — which means a package genuinely outside every runner's
+ * evidence (composer/cargo/go/rubygems have no CVE-map sweep of their own
+ * at all; a pnpm project's `node_modules` symlinks are invisible to the
+ * npm-lockfile reader; a `.NET` target whose locked restore failed) used to
+ * vanish from BOTH `plan` and `unplanned` with nothing to show for it.
+ * Reproduced by the coordinator on three different shapes — npm+composer
+ * with no pip (`laravel/framework`), a pnpm project (`minimist`), and a
+ * `.NET` project with a failed locked restore — all silently dropped.
+ * `undetermined`/`unknown` is the same honest fallback `license_compatibility`
+ * already uses for "this tool cannot decide" rather than silence.
+ */
+function appendCatchAllUnplanned(
+  cves: Map<string, CveInfo>,
+  steps: UpgradeStep[],
+  unplanned: UnplannedEntry[],
+): void {
+  const named = new Set<string>([
+    ...steps.map((s) => s.package_name.toLowerCase()),
+    ...unplanned.map((u) => u.package_name.toLowerCase()),
+  ]);
+  for (const [pkgLower, cve] of cves) {
+    if (named.has(pkgLower)) continue;
+    unplanned.push({
+      package_name: cve.displayName,
+      ecosystem: 'unknown',
+      cve_ids: cve.cveIds,
+      reason:
+        'active CVE, but no ecosystem runner in this project found manifest/lockfile/outdated-' +
+        'listing evidence for it — could not be attributed to a supported stack or turned into a step',
+    });
+  }
 }
 
 /**
@@ -422,8 +513,17 @@ async function runNpmOutdated(
     const cve = cves.get(pkgLower);
     // The CVE's own minimum fix, checked against THIS run's actual current
     // version — never the (possibly stale) version the CVE row itself was
-    // recorded against.
-    const safeCveVersion = cve ? minCleanVersionAbove(installed, [cve.fixedVersion]) : undefined;
+    // recorded against. `minCleanVersionAboveLoose`, not the strict
+    // `minCleanVersionAbove` (fix round 3, item N2): `installed` can be a
+    // PRE-RELEASE (`2.0.0-beta.1`), which the strict clean-version regex
+    // rejects outright — that rejection alone used to read as "no safe
+    // version above installed", indistinguishable from the package already
+    // being past the fix. The loose comparator uses real pre-release
+    // precedence instead, so a genuinely later fix (`2.0.1`) is still
+    // recognised as above a pre-release install of the SAME or an earlier
+    // core version. The candidate fix itself is still required to be a
+    // clean, installable version either way.
+    const safeCveVersion = cve ? minCleanVersionAboveLoose(installed, [cve.fixedVersion]) : undefined;
     // A CVE row whose OWN recorded fix target IS defined but no longer
     // above the FRESH installed version npm just reported: the package was
     // already upgraded past the fix by the time this ran, and the CVE
@@ -433,7 +533,21 @@ async function runNpmOutdated(
     // (already-resolved) CVE ids still attached — it is reported as
     // resolved/stale here instead, tagged `already_fixed` so a caller can
     // pattern-match on it.
-    const staleCve = cve !== undefined && cve.fixedVersion !== undefined && safeCveVersion === undefined;
+    //
+    // Only ever claimed when `installed` is a plain, unambiguous CLEAN
+    // version (fix round 3, item N2): a pre-release install failing
+    // `minCleanVersionAboveLoose` above for a DIFFERENT reason (no clean
+    // candidate exists at all, or the whole string is not even loosely a
+    // version) must not be misread as "already fixed" just because
+    // `safeCveVersion` came back empty — `isCleanVersion(installed)` and a
+    // DIRECT `compareVersions` against the CVE's own recorded fix is the
+    // only basis for "the install is already at or above the fix",
+    // independent of whatever `safeCveVersion` computed.
+    const staleCve =
+      cve !== undefined &&
+      cve.fixedVersion !== undefined &&
+      isCleanVersion(installed) &&
+      compareVersions(cve.fixedVersion, installed) <= 0;
     if (staleCve && cve) {
       unplanned.push({
         package_name: pkg,
@@ -509,7 +623,8 @@ async function runNpmOutdated(
       });
       continue;
     }
-    if (!npmResolvedNames.has(pkgLower)) continue; // not a package this npm install resolves at all — leave it to its own ecosystem
+    const lockfileName = npmResolvedNames.get(pkgLower);
+    if (lockfileName === undefined) continue; // not a package this npm install resolves at all — leave it to its own ecosystem
     const installed = cve.installedVersion;
     const target = minCleanVersionAbove(installed, [cve.fixedVersion]);
     if (!installed || !target) {
@@ -518,7 +633,7 @@ async function runNpmOutdated(
       // target, only report the gap when there IS an installed_version.
       if (installed) {
         unplanned.push({
-          package_name: cve.displayName,
+          package_name: lockfileName,
           ecosystem: 'npm',
           cve_ids: cve.cveIds,
           reason: `active CVE on a transitive dependency, but no fix version above the recorded installed version ${installed}`,
@@ -527,7 +642,12 @@ async function runNpmOutdated(
       continue;
     }
     steps.push(
-      buildOverrideStep({ package_name: cve.displayName, installed_version: installed, latest_version: target, cve }),
+      // `lockfileName`, NOT `cve.displayName` (fix round 3, "cheap" item):
+      // `overrides[<name>]` must be keyed by the LOCKFILE's own spelling —
+      // a scanner's own recorded casing (`MiniMist`) creates an override
+      // for a name that does not exist in the tree at all, silently doing
+      // nothing.
+      buildOverrideStep({ package_name: lockfileName, installed_version: installed, latest_version: target, cve }),
     );
   }
 
@@ -581,22 +701,26 @@ function readNpmDirectDependencies(projectPath: string): Set<string> {
  * direct or transitive — read from `package-lock.json` (lockfile v2/v3's
  * `packages` map, keyed `node_modules/<name>` — possibly nested,
  * `node_modules/a/node_modules/b`; v1's recursive `dependencies` map), or
- * `node_modules/` itself when no lockfile is present. Lowercased throughout
- * (fix round 2, item 10 — see `readNpmDirectDependencies`'s own comment).
+ * `node_modules/` itself when no lockfile is present. Returns a
+ * `Map<lowercased, real-cased>` rather than a plain `Set` (fix round 3,
+ * "cheap" item): `overrides[<name>]` must use the LOCKFILE's own spelling,
+ * never a CVE scanner's own recorded casing — `npm pkg set
+ * overrides[MiniMist]=...` for a package the lockfile spells `minimist`
+ * creates an override for a name that does not exist, doing nothing.
  *
  * **Why this exists**: `cves` (`Map<string, CveInfo>`) has NO ecosystem
  * column — a `django` (pip) or `laravel/framework` (composer) CVE sits in
  * the exact same table as an npm one. Fix round 1's pass 2 swept that WHOLE
  * table unconditionally, so on a polyglot repo it minted `npm pkg set
  * overrides[django]=...` for a package npm has never heard of (fix round 2,
- * item 10 — NEW BREAKAGE the coordinator's own probe reproduced). Pass 2 now
- * only creates an npm step for a package this function actually resolves —
- * `runPipPlan`'s own pass 2 sweep (item 7) uses it too, to avoid the
- * reverse mistake (claiming an npm-resolvable package as an unattributed
- * pip one).
+ * item 10 — NEW BREAKAGE the coordinator's own probe reproduced). Pass 2
+ * only creates an npm step for a package this function actually resolves.
  */
-function readNpmResolvedPackageNames(projectPath: string): Set<string> {
-  const out = new Set<string>();
+function readNpmResolvedPackageNames(projectPath: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const add = (name: string): void => {
+    if (!out.has(name.toLowerCase())) out.set(name.toLowerCase(), name);
+  };
   try {
     const raw = readFileSync(join(projectPath, 'package-lock.json'), 'utf8');
     const lock = JSON.parse(raw) as Record<string, unknown>;
@@ -604,17 +728,17 @@ function readNpmResolvedPackageNames(projectPath: string): Set<string> {
     if (packages && typeof packages === 'object') {
       for (const key of Object.keys(packages as Record<string, unknown>)) {
         const m = /node_modules\/(@[^/]+\/[^/]+|[^/]+)$/.exec(key);
-        if (m?.[1]) out.add(m[1].toLowerCase());
+        if (m?.[1]) add(m[1]);
       }
     }
     const deps = lock['dependencies'];
-    if (deps && typeof deps === 'object') collectLockV1Deps(deps as Record<string, unknown>, out);
+    if (deps && typeof deps === 'object') collectLockV1Deps(deps as Record<string, unknown>, add);
   } catch {
     /* no/unreadable package-lock.json — fall through to node_modules below */
   }
   if (out.size === 0) {
     try {
-      for (const name of listNodeModulesPackages(join(projectPath, 'node_modules'))) out.add(name.toLowerCase());
+      for (const name of listNodeModulesPackages(join(projectPath, 'node_modules'))) add(name);
     } catch {
       /* no node_modules either — returns whatever the lockfile branch found
        * (possibly empty), which the caller treats as "resolves nothing". */
@@ -623,34 +747,89 @@ function readNpmResolvedPackageNames(projectPath: string): Set<string> {
   return out;
 }
 
-function collectLockV1Deps(deps: Record<string, unknown>, out: Set<string>): void {
+function collectLockV1Deps(deps: Record<string, unknown>, add: (name: string) => void): void {
   for (const [name, val] of Object.entries(deps)) {
-    out.add(name.toLowerCase());
+    add(name);
     if (val && typeof val === 'object') {
       const nested = (val as Record<string, unknown>)['dependencies'];
-      if (nested && typeof nested === 'object') collectLockV1Deps(nested as Record<string, unknown>, out);
+      if (nested && typeof nested === 'object') collectLockV1Deps(nested as Record<string, unknown>, add);
     }
   }
 }
 
+/**
+ * Every package name `node_modules/` itself resolves — the fallback when no
+ * `package-lock.json` exists. Walks pnpm's own flat `.pnpm/<encoded>/
+ * node_modules/<realName>` store in addition to the ordinary top-level
+ * entries (fix round 3, item #7's pnpm case): pnpm's TOP-LEVEL
+ * `node_modules/<name>` entries are SYMLINKS into `.pnpm/`, and
+ * `Dirent.isDirectory()` reflects the symlink itself (always `false`), not
+ * its target — a plain `entry.isDirectory()` check silently skips every
+ * pnpm dependency, direct or transitive, which is how the coordinator's own
+ * probe found a pnpm-resolved transitive `minimist` reported nowhere at
+ * all. The `.pnpm` store lists every installed package — direct AND
+ * transitive — as its own real (non-symlink) directory one level down, so
+ * reading it directly sidesteps the symlink issue entirely rather than
+ * trying to resolve each link.
+ */
 function listNodeModulesPackages(nodeModulesDir: string): string[] {
   const out: string[] = [];
-  for (const entry of readdirSync(nodeModulesDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    if (entry.name.startsWith('@')) {
+  const addScoped = (dir: string, scopeName: string): void => {
+    try {
+      for (const scoped of readdirSync(join(dir, scopeName))) {
+        if (safeIsDirectory(join(dir, scopeName, scoped))) out.push(`${scopeName}/${scoped}`);
+      }
+    } catch {
+      /* unreadable scope dir — skip it */
+    }
+  };
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(nodeModulesDir);
+  } catch {
+    return out;
+  }
+  for (const name of entries) {
+    if (name === '.pnpm') {
       try {
-        for (const scoped of readdirSync(join(nodeModulesDir, entry.name), { withFileTypes: true })) {
-          if (scoped.isDirectory()) out.push(`${entry.name}/${scoped.name}`);
+        for (const storeEntry of readdirSync(join(nodeModulesDir, '.pnpm'))) {
+          const innerNm = join(nodeModulesDir, '.pnpm', storeEntry, 'node_modules');
+          try {
+            for (const pkgName of readdirSync(innerNm)) {
+              if (!safeIsDirectory(join(innerNm, pkgName))) continue;
+              if (pkgName.startsWith('@')) addScoped(innerNm, pkgName);
+              else out.push(pkgName);
+            }
+          } catch {
+            /* unreadable inner node_modules — skip this store entry */
+          }
         }
       } catch {
-        /* unreadable scope dir — skip it */
+        /* .pnpm listed but unreadable — skip it */
       }
       continue;
     }
-    if (entry.name.startsWith('.')) continue;
-    out.push(entry.name);
+    if (!safeIsDirectory(join(nodeModulesDir, name))) continue; // follows a pnpm top-level symlink too — see module comment
+    if (name.startsWith('@')) {
+      addScoped(nodeModulesDir, name);
+      continue;
+    }
+    if (name.startsWith('.')) continue;
+    out.push(name);
   }
   return out;
+}
+
+/** `statSync`-based directory check that FOLLOWS symlinks (unlike
+ *  `Dirent.isDirectory()`, which reflects the dirent itself) — needed for
+ *  pnpm's own top-level `node_modules/<name>` entries, each a symlink into
+ *  `.pnpm/`. */
+function safeIsDirectory(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function buildOverrideStep(input: {
@@ -675,11 +854,19 @@ function buildOverrideStep(input: {
     // is. Bracket notation is npm's own documented way to set a literal key
     // regardless of what characters it contains, and works identically for
     // names without a dot too — so it is used unconditionally, not only
-    // when a dot is detected. The WHOLE `overrides[...]=...` argument is
-    // single-quoted (fix round 2, "cheap" item): unquoted, a shell that
-    // globs by default (zsh) reads the bare `[...]` as a filename pattern
-    // and fails with "no matches found" before npm ever sees the argument.
-    upgrade_command: `npm pkg set 'overrides[${input.package_name}]=${input.latest_version}'`,
+    // when a dot is detected.
+    //
+    // UNQUOTED (fix round 3, item N1 — reverting fix round 2's own single
+    // quotes): `create_fix_pr`'s `fixpr/apply.ts` splits `upgrade_command`
+    // on whitespace and runs it WITHOUT a shell, so a quoted token is not a
+    // shell-quoting hint to it — it is literal characters `npm pkg set`
+    // receives as part of the argument. Quoting it broke `create_fix_pr`
+    // silently: `applied: true` was still reported, but `package.json` grew
+    // `"'overrides": {"minimist": "1.2.6'"}` — the literal quote marks
+    // baked into the key and value. `shell_command` carries the
+    // shell-quoted form instead, for a human pasting this into a terminal.
+    upgrade_command: `npm pkg set overrides[${input.package_name}]=${input.latest_version}`,
+    shell_command: `npm pkg set 'overrides[${input.package_name}]=${input.latest_version}'`,
     // `npm pkg set` only rewrites package.json — the lockfile/node_modules
     // do not reflect the override until a plain reinstall re-resolves them.
     follow_up_command: 'npm install --ignore-scripts',
@@ -757,38 +944,20 @@ async function runPipPlan(
   }
   for (const mention of parsePyprojectPins(projectPath)) considerMention('pyproject.toml', mention);
 
-  // Pass 2 (fix round 2, item 7): a CVE'd package no requirements*.txt /
-  // pyproject.toml mentions AT ALL — a genuinely transitive pip dependency
-  // (pulled in indirectly, e.g. by `requests`) that a previous pip-audit-
-  // based scan still found and recorded an installed_version for. There is
-  // no established, structured way to "edit" a manifest line that does not
-  // exist, so this always lands in `unplanned`, never a step — reported
-  // rather than silently dropped, which is what happened before this pass
-  // existed (the coordinator's own probe: a pyproject with an unpinned
-  // range, an extras pin, and a transitive package, all with active CVEs,
-  // produced an empty plan AND an empty unplanned list).
-  //
-  // Never claims a package npm's own lockfile already resolves (fix round
-  // 2, item 10's ecosystem-scoping applies symmetrically here): without
-  // this exclusion, a transitive NPM CVE in a polyglot repo would double up
-  // as a bogus pip `unplanned` entry too.
-  const npmResolvedNames = readNpmResolvedPackageNames(projectPath);
-  for (const [pkgLower, cve] of cves) {
-    if (handled.has(pkgLower)) continue;
-    if (npmResolvedNames.has(pkgLower)) continue;
-    if (!cve.installedVersion) continue; // no signal this CVE even belongs to this tree
-    unplanned.push({
-      package_name: cve.displayName,
-      ecosystem: 'pip',
-      cve_ids: cve.cveIds,
-      reason: cve.fixedVersion
-        ? `active CVE on a dependency no requirements*.txt / pyproject.toml mentions directly ` +
-          `(likely transitive) — a fix (${cve.fixedVersion}) exists but there is no manifest line here to edit automatically`
-        : `active CVE on a dependency no requirements*.txt / pyproject.toml mentions directly ` +
-          `(likely transitive) — no fix version above the recorded installed version ${cve.installedVersion} is known either`,
-    });
-  }
-
+  // Fix round 3, item #7: there is deliberately NO pass 2 here any more. The
+  // fix round 2 shape swept the WHOLE `cves` map for anything npm's own
+  // lockfile did not resolve and labelled every one of them `pip` ("likely
+  // transitive") — but "not npm" does not mean "pip": the coordinator's own
+  // probe showed a composer `laravel/framework` and a Go
+  // `golang.org/x/net` both mislabelled `pip` by this exact sweep in a repo
+  // that has pip present alongside them. `ecosystem: 'pip'` is now used ONLY
+  // for a package this function's own parsing actually found a manifest
+  // line for (`handled`, above) — every other CVE'd package, including a
+  // genuinely transitive pip dependency this file never mentions by name,
+  // falls through to `appendCatchAllUnplanned`'s generic `'unknown'` entry
+  // in the top-level handler, which is the honest attribution: this
+  // function has no evidence it is pip at all, only that it is not
+  // something ELSE this project's runners could place either.
   return { steps, unplanned };
 }
 
@@ -901,11 +1070,22 @@ function parsePinnedRequirements(content: string): RequirementMention[] {
 
 /**
  * Parses ONE already-isolated requirement specifier — no comments, no
- * `--hash=...` annotations, no environment marker, no line continuation:
- * the caller (a requirements-file line, or one element of a pyproject
+ * `--hash=...` annotations, no line continuation: the caller (a
+ * requirements-file line, or one element of a pyproject
  * `dependencies = [...]` array) already stripped those. Shared so both
  * shapes get the SAME extras/exact/range/bare handling rather than two
  * copies that can drift (fix round 2, item 7).
+ *
+ * The environment marker (everything from a top-level `;` onward,
+ * `pkg==1.0.0; python_version >= "3.8"`) IS stripped here, internally (fix
+ * round 3, "cheap" item) — `parsePinnedRequirements` already stripped it
+ * before this function existed as a shared helper, but a pyproject array
+ * element (`"urllib3==1.26.0; python_version >= '3.8'"`) went straight from
+ * `parsePyprojectPins` to this function with no such preprocessing, so the
+ * marker's trailing text made every one of the regexes below fail to match
+ * at all — the whole mention silently vanished, not even reported
+ * `unplanned`. Doing it here, once, means BOTH callers get it whether or
+ * not they remembered to strip it themselves.
  *
  * Returns an exact `==` pin with `version` set, a non-exact specifier or
  * bare name with `unplannableReason` set (fix round 1, item 7 — never
@@ -913,7 +1093,8 @@ function parsePinnedRequirements(content: string): RequirementMention[] {
  * all (a VCS URL, a local path, `-e .`, …).
  */
 function parseOneRequirementSpec(specRaw: string): RequirementMention | null {
-  const spec = specRaw.trim();
+  const semi = specRaw.indexOf(';');
+  const spec = (semi >= 0 ? specRaw.slice(0, semi) : specRaw).trim();
   if (!spec) return null;
 
   // Extras: `celery[redis]==5.3.0` -> name `celery`, rest `==5.3.0`.
@@ -962,11 +1143,21 @@ function joinContinuedLines(content: string): string[] {
 
 /**
  * PEP 621 `[project] dependencies = ["pkg==1.2.3", "pkg[extra]>=1.0", …]` —
- * a regex scan over the raw text, the same simplicity
- * `licenseCompatibility.ts#detectProjectLicense` already uses for this same
- * file rather than adding a TOML parser dependency for one array. Poetry's
- * own `[tool.poetry.dependencies]` table (`pkg = "1.2.3"`) is a different,
- * non-PEP-621 shape and is out of scope here.
+ * a regex scan, the same simplicity `licenseCompatibility.ts#detectProjectLicense`
+ * already uses for this same file rather than adding a TOML parser
+ * dependency for one array. Poetry's own `[tool.poetry.dependencies]` table
+ * (`pkg = "1.2.3"`) is a different, non-PEP-621 shape and is out of scope
+ * here.
+ *
+ * Scoped to the `[project]` TABLE specifically, not the whole file (fix
+ * round 3, "cheap" item): `dependencies\s*=\s*\[` as a bare substring search
+ * also matches INSIDE `dev-dependencies = [...]` — "dev-dependencies" ends
+ * in "dependencies" — so a `[tool.uv] dev-dependencies = [...]` array
+ * placed earlier in the file than `[project] dependencies = [...]` won the
+ * old unscoped search outright, and the REAL PEP 621 dependency list was
+ * never read at all. `extractProjectTableText` isolates the `[project]`
+ * table's own text (from its header to the next `[section]` header or EOF)
+ * first; `extractDependenciesArray` then searches only within that slice.
  *
  * Every element goes through `parseOneRequirementSpec` (fix round 2, item
  * 7): a range specifier (`django>=4.2`) and an extras pin
@@ -983,7 +1174,9 @@ function parsePyprojectPins(projectPath: string): RequirementMention[] {
   } catch {
     return out;
   }
-  const block = extractDependenciesArray(raw);
+  const projectTable = extractProjectTableText(raw);
+  if (projectTable === null) return out; // no [project] table at all — nothing PEP 621 defines to read
+  const block = extractDependenciesArray(projectTable);
   if (block === null) return out;
   const entryPattern = /["']([^"']*)["']/g;
   let m: RegExpExecArray | null;
@@ -992,6 +1185,22 @@ function parsePyprojectPins(projectPath: string): RequirementMention[] {
     if (mention) out.push(mention);
   }
   return out;
+}
+
+/** The raw text of the `[project]` TOML table only — from its own header
+ *  line to the next top-level `[...]` header (any table, including
+ *  `[project.urls]` — TOML does not nest a table's OWN content under a
+ *  dotted child header) or EOF. `null` when no bare `[project]` header
+ *  exists at all. Matches only a header that is EXACTLY `[project]` on its
+ *  own line — `[tool.project]` or `[project.optional-dependencies]` do not
+ *  count as the table itself. */
+function extractProjectTableText(raw: string): string | null {
+  const header = /^[ \t]*\[project\][ \t]*$/m.exec(raw);
+  if (!header) return null;
+  const start = header.index + header[0].length;
+  const rest = raw.slice(start);
+  const nextHeader = /^[ \t]*\[/m.exec(rest);
+  return nextHeader ? rest.slice(0, nextHeader.index) : rest;
 }
 
 /**
@@ -1222,53 +1431,79 @@ function anyPackagesLockJsonExists(projectPath: string): boolean {
   return walk(projectPath, 0);
 }
 
+/** Same field-level check as `depsAudit.ts`'s `hasStaleTopLevelMismatch`
+ *  (not shared code — see this file's own convention, e.g.
+ *  `findPipRequirementsFiles`'s comment): a top-level package whose
+ *  `requestedVersion` does not match its own `resolvedVersion` means the
+ *  listing was built from a STALE `obj/`, even though the command exited 0
+ *  with valid-looking JSON (fix round 3, item #8). */
+function hasStaleTopLevelMismatch(raw: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  const projects = (parsed as { projects?: unknown })?.projects;
+  if (!Array.isArray(projects)) return false;
+  for (const proj of projects) {
+    const frameworks = (proj as { frameworks?: unknown })?.frameworks;
+    if (!Array.isArray(frameworks)) continue;
+    for (const fw of frameworks) {
+      const topLevel = (fw as { topLevelPackages?: unknown })?.topLevelPackages;
+      if (!Array.isArray(topLevel)) continue;
+      for (const pkg of topLevel) {
+        if (!pkg || typeof pkg !== 'object') continue;
+        const p = pkg as Record<string, unknown>;
+        const requested = typeof p['requestedVersion'] === 'string' ? p['requestedVersion'] : undefined;
+        const resolved = typeof p['resolvedVersion'] === 'string' ? p['resolvedVersion'] : undefined;
+        if (requested !== undefined && resolved !== undefined && requested !== resolved) return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
- * Restore only when the tree genuinely was not restored already (fix round
- * 1, item 8: a scan must never modify tracked files). `dotnet list package`
- * is tried directly first; a restore is attempted only when that fails, and
- * `--locked-mode` is added whenever ANY `packages.lock.json` exists under
- * the project so an out-of-date lock FAILS the restore instead of being
- * silently rewritten.
- *
- * **`--no-restore` on EVERY `dotnet list` call, including the first** (fix
- * round 2, item 8): `dotnet list package` restores IMPLICITLY otherwise —
- * measured against a real SDK 10 install, `--no-restore` defaults to
- * `false` — and that implicit restore has no `--locked-mode` equivalent. It
- * silently rewrote a committed, out-of-sync `packages.lock.json` in place
- * on the very FIRST `dotnet list` call, before this function's own
- * "restore only on failure" logic ever ran; the fix round 1 shape only
- * protected the EXPLICIT `dotnet restore` this function calls itself, which
- * the implicit one inside `dotnet list` bypassed entirely. A locked-mode
- * restore that then fails because the lock genuinely is out of sync is
- * reported as a skipped branch here, never retried without `--locked-mode`
- * — that retry would be exactly the silent rewrite this exists to prevent.
+ * **ALWAYS restores explicitly first** (fix round 3, item #8 — the fix
+ * round 1/2 "try `dotnet list` directly, restore only on failure" shape is
+ * gone). Measured directly: `dotnet list --no-restore` on a STALE `obj/`
+ * (restored once, the `.csproj` edited since — a routine, not an edge,
+ * case) exits 0 with valid-looking JSON built from the OLD, pre-drift
+ * resolution — no failure for "restore only on failure" to ever catch.
+ * `dotnet restore --locked-mode` runs first whenever ANY
+ * `packages.lock.json` exists under the project (fix round 2, item 8's own
+ * `anyPackagesLockJsonExists`), a plain `dotnet restore` otherwise (writes
+ * `obj/` only); a failed restore returns an empty plan (this ecosystem has
+ * no dedicated `unplanned` channel of its own — the top-level
+ * `appendCatchAllUnplanned` sweep is what keeps a CVE'd package from
+ * vanishing silently when this returns nothing). Only once restore has
+ * genuinely succeeded does `dotnet list --outdated --no-restore` run at
+ * all. `hasStaleTopLevelMismatch` is a second check even after a
+ * successful restore — a `requestedVersion` != `resolvedVersion` mismatch
+ * means something still drifted, and is treated the same as a failure
+ * rather than trusted.
  */
 async function runDotnetOutdated(
   projectPath: string,
   cves: Map<string, CveInfo>,
 ): Promise<UpgradeStep[]> {
+  const restoreArgs = ['restore', '--nologo', '--verbosity', 'quiet'];
+  if (anyPackagesLockJsonExists(projectPath)) restoreArgs.push('--locked-mode');
+  const restore = await execa('dotnet', restoreArgs, { cwd: projectPath, reject: false, timeout: 5 * 60_000 });
+  if (restore.exitCode !== 0) return []; // private feed not configured, lock out of sync (never rewritten), etc. — skip the branch
+
   const listArgs = ['list', 'package', '--outdated', '--format', 'json', '--no-restore'];
-  let r = await execa('dotnet', listArgs, {
+  const r = await execa('dotnet', listArgs, {
     cwd: projectPath,
     reject: false,
     timeout: 90_000,
   });
 
-  if (r.exitCode !== 0) {
-    const restoreArgs = ['restore', '--nologo', '--verbosity', 'quiet'];
-    if (anyPackagesLockJsonExists(projectPath)) restoreArgs.push('--locked-mode');
-    const restore = await execa('dotnet', restoreArgs, { cwd: projectPath, reject: false, timeout: 5 * 60_000 });
-    if (restore.exitCode !== 0) return []; // private feed not configured, lock out of sync (never rewritten), etc. — skip the branch
-    r = await execa('dotnet', listArgs, {
-      cwd: projectPath,
-      reject: false,
-      timeout: 90_000,
-    });
-  }
-
   // `--format json` is available on .NET 8+; on older SDKs we fall back to
   // parsing the human-readable text output (less precise but functional).
   if (r.exitCode === 0 && r.stdout.trim().startsWith('{')) {
+    if (hasStaleTopLevelMismatch(r.stdout)) return []; // requested != resolved despite a fresh restore — do not trust it
     return parseDotnetJson(r.stdout, cves);
   }
 

@@ -189,6 +189,62 @@ describe('deps_audit — .NET SCA (real dotnet, gated)', () => {
     120_000,
   );
 
+  it.skipIf(!DOTNET_INSTALLED)(
+    'item 8 (fix round 3): a STALE obj/ (the routine case — restored once, csproj edited since, obj/ NOT deleted) must still be caught, not read as a clean ok',
+    async () => {
+      // This is the exact case fix round 2 missed: `dotnet list --no-restore`
+      // on a stale (but present) `obj/` exits 0 with valid-looking JSON built
+      // from the OLD resolution — no restore failure, no empty output,
+      // nothing the fix round 2 "try list first" shape could ever catch. Fix
+      // round 3 restores explicitly FIRST, every time, so this now reaches
+      // the same `--locked-mode` failure the out-of-sync-lock test above
+      // does. Deliberately does NOT delete `obj/` — that is the whole point
+      // of this test, and why it exists separately from the one above.
+      const project = makeTempDir('dotnet-sca-staleobj-lockfile-e2e-');
+      writeFileSync(
+        join(project, 'StaleObj.csproj'),
+        [
+          '<Project Sdk="Microsoft.NET.Sdk">',
+          '  <PropertyGroup>',
+          '    <TargetFramework>net8.0</TargetFramework>',
+          '    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>',
+          '  </PropertyGroup>',
+          '  <ItemGroup><PackageReference Include="Newtonsoft.Json" Version="12.0.1" /></ItemGroup>',
+          '</Project>',
+        ].join('\n'),
+        'utf8',
+      );
+      execFileSync('dotnet', ['restore', '--nologo', '--verbosity', 'quiet'], { cwd: project });
+      const lockPath = join(project, 'packages.lock.json');
+      expect(existsSync(lockPath)).toBe(true);
+      expect(existsSync(join(project, 'obj'))).toBe(true); // the stale cache this test is about
+
+      const csprojPath = join(project, 'StaleObj.csproj');
+      const original = readFileSync(csprojPath, 'utf8');
+      writeFileSync(csprojPath, original.replace('12.0.1', '12.0.3'), 'utf8');
+      // obj/ is intentionally left in place, still describing 12.0.1.
+
+      const before = createHash('sha256').update(readFileSync(lockPath)).digest('hex');
+
+      const plugin = makePlugin(project);
+      const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+        ok: true;
+        tools_run: Array<{ name: string; status: string; reason?: string }>;
+        missing_tools: string[];
+      };
+      expect(r.ok).toBe(true);
+
+      const after = createHash('sha256').update(readFileSync(lockPath)).digest('hex');
+      expect(after).toBe(before);
+
+      const dotnet = r.tools_run.find((t) => t.name === 'dotnet');
+      expect(dotnet?.status).not.toBe('ok');
+      expect(dotnet?.reason).toMatch(/NU1004/);
+      expect(r.missing_tools).toContain('dotnet');
+    },
+    120_000,
+  );
+
   it.skipIf(DOTNET_INSTALLED)('skip notice: .NET SDK is not on PATH — this e2e did not run', () => {
     expect(DOTNET_INSTALLED).toBe(false);
   });
