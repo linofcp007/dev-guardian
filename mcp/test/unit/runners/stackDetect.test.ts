@@ -15,7 +15,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { detectStack } from '../../../src/runners/stackDetect.js';
+import { detectStack, detectStackArch } from '../../../src/runners/stackDetect.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -73,6 +73,20 @@ describe('detectStack', () => {
     );
     const snap = detectStack(root);
     expect(snap.frameworks).toContain('wordpress');
+    expect(snap.languages).toContain('php');
+  });
+
+  it('does NOT flag a generic PHP project as wordpress just because it has a style.css with no WP headers', () => {
+    const root = project();
+    write(
+      root,
+      'style.css',
+      '/*\nMy Project Styles\nAuthor: Someone\nVersion: 1.0\n*/\nbody { color: red; }\n',
+    );
+    write(root, 'index.php', '<?php echo "hello";');
+    const snap = detectStack(root);
+    expect(snap.frameworks).not.toContain('wordpress');
+    // The PHP-by-glob fix (a sibling of this one) must still fire.
     expect(snap.languages).toContain('php');
   });
 
@@ -187,5 +201,40 @@ describe('detectStack', () => {
     ]) {
       expect(snap).toHaveProperty(key);
     }
+  });
+});
+
+describe('detectStackArch', () => {
+  // The bash script this replaces read ARCH from `uname -m`, which spells
+  // 64-bit ARM differently per OS: "aarch64" on Linux, "arm64" on macOS
+  // (Apple's own uname). Node's `process.arch` collapses both to "arm64",
+  // so the OS has to be consulted to keep the old script's semantics.
+  it('reports aarch64 for arm64 on Linux (matches `uname -m` there)', () => {
+    expect(detectStackArch('linux', 'arm64')).toBe('aarch64');
+  });
+
+  it('reports arm64 for arm64 on macOS (matches Apple\'s own `uname -m`)', () => {
+    expect(detectStackArch('darwin', 'arm64')).toBe('arm64');
+  });
+
+  it('reports x86_64 for x64 on every OS (uname -m agrees there already)', () => {
+    expect(detectStackArch('linux', 'x64')).toBe('x86_64');
+    expect(detectStackArch('darwin', 'x64')).toBe('x86_64');
+    expect(detectStackArch('win32', 'x64')).toBe('x86_64');
+  });
+
+  it('reports i686 for ia32 and armv7l for arm, unaffected by OS', () => {
+    expect(detectStackArch('linux', 'ia32')).toBe('i686');
+    expect(detectStackArch('linux', 'arm')).toBe('armv7l');
+  });
+
+  it('falls back to the raw process.arch string for anything unrecognised', () => {
+    expect(detectStackArch('linux', 'riscv64')).toBe('riscv64');
+  });
+
+  it('defaults to the real process.platform/process.arch when called with no arguments', () => {
+    const result = detectStackArch();
+    expect(typeof result).toBe('string');
+    expect(result.length).toBeGreaterThan(0);
   });
 });

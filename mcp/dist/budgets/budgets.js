@@ -167,7 +167,7 @@ export function budgetViolationFindings(violations, filePath) {
             title: `${v.budget} over budget: ${v.measured}${v.unit} > ${v.limit}${v.unit}`,
             message: `${v.budget} measured ${v.measured}${v.unit}, over the ${v.limit}${v.unit} budget set in ${filePath}. ` +
                 'Either bring it back under budget or, if the budget itself is wrong, edit that file — it is the ' +
-                'single source of truth guardian-improve and the CI gate both read.',
+                'single source of truth perf_check and quality_check both read.',
             file_path: filePath,
             fix_available: false,
         });

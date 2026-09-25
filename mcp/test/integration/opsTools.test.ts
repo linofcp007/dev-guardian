@@ -581,10 +581,11 @@ describe('perf_check', () => {
     const r = (await tool.handler(
       { project_path: project, target_url: 'https://example.com' },
       plugin,
-    )) as { ok: true; findings: { rule_id: string; category: string }[] };
+    )) as { ok: true; findings: { rule_id: string; category: string }[]; budgets: { status: string } };
     expect(r.ok).toBe(true);
     expect(r.findings).toHaveLength(1);
     expect(r.findings[0]).toMatchObject({ rule_id: 'perf.lcp_ms', category: 'performance' });
+    expect(r.budgets.status).toBe('ok');
   });
 
   it('reports no findings when every measured vital is within budget', async () => {
@@ -598,9 +599,10 @@ describe('perf_check', () => {
     const r = (await tool.handler(
       { project_path: project, target_url: 'https://example.com' },
       plugin,
-    )) as { ok: true; findings: unknown[] };
+    )) as { ok: true; findings: unknown[]; budgets: { status: string } };
     expect(r.ok).toBe(true);
     expect(r.findings).toEqual([]);
+    expect(r.budgets.status).toBe('ok');
   });
 
   it('reports no findings (and does not fail) when there is no budgets file at all', async () => {
@@ -612,9 +614,46 @@ describe('perf_check', () => {
     const r = (await tool.handler(
       { project_path: project, target_url: 'https://example.com' },
       plugin,
-    )) as { ok: true; findings: unknown[] };
+    )) as { ok: true; findings: unknown[]; budgets: { status: string } };
     expect(r.ok).toBe(true);
     expect(r.findings).toEqual([]);
+    expect(r.budgets.status).toBe('none');
+  });
+
+  // Fix round 1: perf_check used to treat an INVALID budgets.yml exactly
+  // like a MISSING one (both fell into `loaded.kind !== 'loaded'`, both
+  // returned no findings) — a typo'd budget silently read as "within
+  // budget" instead of "not evaluated". quality_check already handled this
+  // correctly (tools_run: 'budgets' failed, coverage partial); perf_check
+  // has no tools_run/coverage of its own, so the equivalent signal is the
+  // new `budgets` field on its response.
+  it('reports an invalid .guardian/budgets.yml visibly — never as an empty success', async () => {
+    const project = tempProject();
+    mkdirSync(join(project, '.guardian'), { recursive: true });
+    // A non-numeric value: exactly the "typo" case the reviewer named.
+    writeFileSync(join(project, '.guardian', 'budgets.yml'), 'perf:\n  lcp_ms: "fast please"\n', 'utf8');
+    const plugin = makePlugin(project);
+    // A vital that WOULD have violated a real lcp_ms budget, so a silent
+    // "findings: []" here is indistinguishable from "within budget" unless
+    // something else says the file was never evaluated.
+    mockLighthouseRun({ 'largest-contentful-paint': { numericValue: 99999 } });
+
+    const tool = getTool('perf_check');
+    const r = (await tool.handler(
+      { project_path: project, target_url: 'https://example.com' },
+      plugin,
+    )) as {
+      ok: true;
+      findings: unknown[];
+      budgets: { status: string; path?: string; reason?: string };
+      warnings?: string[];
+    };
+    expect(r.ok).toBe(true);
+    expect(r.findings).toEqual([]);
+    expect(r.budgets.status).toBe('invalid');
+    expect(r.budgets.reason?.length ?? 0).toBeGreaterThan(0);
+    expect(r.budgets.path).toContain('budgets.yml');
+    expect(r.warnings?.some((w) => /budgets\.yml/.test(w))).toBe(true);
   });
 
   it('derives bundle_size_kb from the total-byte-weight audit', async () => {

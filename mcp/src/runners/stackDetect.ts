@@ -119,18 +119,29 @@ function isWsl(): boolean {
   }
 }
 
-function detectStackArch(): string {
-  switch (process.arch) {
+/**
+ * `arch`, in the same spelling the bash script's `uname -m` used — which is
+ * NOT what `process.arch` spells 64-bit ARM as on every OS. Linux's `uname
+ * -m` reports `aarch64`; Apple's own `uname -m` reports `arm64`; Node's
+ * `process.arch` collapses both to `'arm64'`. `platform`/`arch` are
+ * parameters (defaulting to the real `process.platform`/`process.arch`) so
+ * this is directly unit-testable without stubbing globals.
+ */
+export function detectStackArch(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): string {
+  switch (arch) {
     case 'x64':
       return 'x86_64';
     case 'arm64':
-      return 'arm64';
+      return platform === 'darwin' ? 'arm64' : 'aarch64';
     case 'ia32':
       return 'i686';
     case 'arm':
       return 'armv7l';
     default:
-      return process.arch;
+      return arch;
   }
 }
 

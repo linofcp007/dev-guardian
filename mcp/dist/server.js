@@ -43528,7 +43528,7 @@ function budgetViolationFindings(violations, filePath) {
       category,
       subcategory: "budget",
       title: `${v.budget} over budget: ${v.measured}${v.unit} > ${v.limit}${v.unit}`,
-      message: `${v.budget} measured ${v.measured}${v.unit}, over the ${v.limit}${v.unit} budget set in ${filePath}. Either bring it back under budget or, if the budget itself is wrong, edit that file \u2014 it is the single source of truth guardian-improve and the CI gate both read.`,
+      message: `${v.budget} measured ${v.measured}${v.unit}, over the ${v.limit}${v.unit} budget set in ${filePath}. Either bring it back under budget or, if the budget itself is wrong, edit that file \u2014 it is the single source of truth perf_check and quality_check both read.`,
       file_path: filePath,
       fix_available: false
     });
@@ -45683,18 +45683,18 @@ function isWsl() {
     return false;
   }
 }
-function detectStackArch() {
-  switch (process.arch) {
+function detectStackArch(platform2 = process.platform, arch = process.arch) {
+  switch (arch) {
     case "x64":
       return "x86_64";
     case "arm64":
-      return "arm64";
+      return platform2 === "darwin" ? "arm64" : "aarch64";
     case "ia32":
       return "i686";
     case "arm":
       return "armv7l";
     default:
-      return process.arch;
+      return arch;
   }
 }
 var MANIFEST_FILES = [
@@ -46853,7 +46853,7 @@ var inputSchema3 = {
 var tool9 = {
   name: "perf_check",
   title: "Performance probe (Lighthouse or k6)",
-  description: "Run Lighthouse against target_url, or k6 against k6_script_path. Returns parsed metrics (Core Web Vitals for Lighthouse; request count + p95/p99 + thresholds for k6) and the absolute path to the raw JSON report. A Lighthouse run also reads .guardian/budgets.yml, when present, and reports any exceeded perf budget (LCP/INP/CLS/TBT/bundle size) as a Finding in `findings`.",
+  description: 'Run Lighthouse against target_url, or k6 against k6_script_path. Returns parsed metrics (Core Web Vitals for Lighthouse; request count + p95/p99 + thresholds for k6) and the absolute path to the raw JSON report. A Lighthouse run also reads .guardian/budgets.yml, when present, and reports any exceeded perf budget (LCP/INP/CLS/TBT/bundle size) as a Finding in `findings`. `budgets.status` says none/ok/invalid \u2014 an invalid file is never reported the same as "no budgets" or "within budget".',
   inputSchema: inputSchema3,
   handler: async (input, ctx) => handler6(input, ctx)
 };
@@ -46930,19 +46930,36 @@ async function runLighthouse(opts) {
     return failDomain7("scanner_failed", "Lighthouse output was not valid JSON.");
   }
   const summary = summariseLighthouse(parsed);
-  const findings = evaluateLighthouseBudgets(opts.projectPath, summary.core_web_vitals);
+  const budgetResult = evaluateLighthouseBudgets(opts.projectPath, summary.core_web_vitals);
   return {
     ok: true,
     tool: "lighthouse",
     url: opts.url,
     report_path: outFile,
     summary,
-    findings
+    findings: budgetResult.findings,
+    budgets: budgetResult.budgets,
+    ...budgetResult.warnings.length > 0 ? { warnings: budgetResult.warnings } : {}
   };
 }
 function evaluateLighthouseBudgets(projectPath, cwv) {
   const loaded = loadBudgets(projectPath);
-  if (loaded.kind !== "loaded" || !loaded.budgets.perf) return [];
+  if (loaded.kind === "none") {
+    return { findings: [], budgets: { status: "none" }, warnings: [] };
+  }
+  if (loaded.kind === "invalid") {
+    return {
+      findings: [],
+      budgets: { status: "invalid", path: loaded.path, reason: loaded.error },
+      warnings: [
+        `.guardian/budgets.yml is invalid and was NOT evaluated (perf budgets, if any were set, were not checked): ${loaded.error}`
+      ]
+    };
+  }
+  const relPath = relative7(projectPath, loaded.path);
+  if (!loaded.budgets.perf) {
+    return { findings: [], budgets: { status: "ok", path: relPath, violations: 0 }, warnings: [] };
+  }
   const totalByteWeight = cwv["total-byte-weight"];
   const measured = {
     lcp_ms: cwv["largest-contentful-paint"] ?? void 0,
@@ -46952,7 +46969,8 @@ function evaluateLighthouseBudgets(projectPath, cwv) {
     bundle_size_kb: totalByteWeight !== null && totalByteWeight !== void 0 ? totalByteWeight / 1024 : void 0
   };
   const violations = evaluatePerfBudgets(measured, loaded.budgets.perf);
-  return budgetViolationFindings(violations, relative7(projectPath, loaded.path));
+  const findings = budgetViolationFindings(violations, relPath);
+  return { findings, budgets: { status: "ok", path: relPath, violations: findings.length }, warnings: [] };
 }
 function summariseLighthouse(root) {
   const categories = getProp(root, "categories");

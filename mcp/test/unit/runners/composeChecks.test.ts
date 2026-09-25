@@ -25,6 +25,16 @@ services:
     expect(rule(findings, 'compose-privileged')[0]?.file_path).toBe('docker-compose.yml');
   });
 
+  it('does not flag a commented-out privileged: true (it is not a mapping key, just text)', () => {
+    const yaml = `
+services:
+  app:
+    image: myapp:1.0
+    # privileged: true
+`;
+    expect(rule(checkCompose(yaml, 'c.yml'), 'compose-privileged')).toHaveLength(0);
+  });
+
   it('does not flag a service without privileged, or with privileged: false', () => {
     const yaml = `
 services:

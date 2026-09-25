@@ -171,4 +171,14 @@ describe('budgetViolationFindings', () => {
     expect(findings).toHaveLength(2);
     expect(findings.map((f) => f.rule_id)).toEqual(['perf.lcp_ms', 'perf.cls']);
   });
+
+  it('names the tools that actually read the budgets file, not the CI gate (which does not)', () => {
+    const [f] = budgetViolationFindings(
+      [{ budget: 'perf.lcp_ms', measured: 4000, limit: 2500, unit: 'ms' }],
+      '.guardian/budgets.yml',
+    );
+    expect(f?.message).not.toMatch(/CI gate/i);
+    expect(f?.message).toMatch(/perf_check/);
+    expect(f?.message).toMatch(/quality_check/);
+  });
 });
