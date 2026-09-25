@@ -11,7 +11,6 @@
  */
 
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -31,15 +30,20 @@ import {
   buildManualSnippet,
   buildServerEntry,
   mergeJsonConfig,
+  mergeRulesBlock,
   mergeTomlConfig,
   resolveMcpConfigPath,
   type ResolveEnv,
 } from './mcpConfig.js';
+import { substituteCliPath } from './rulesTemplate.js';
 
 export type RulesStatus =
   | 'written'
-  | 'already_exists'
+  | 'merged'
+  | 'already_present'
+  | 'needs_update'
   | 'would_write'
+  | 'would_merge'
   | 'template_missing'
   | 'failed'
   | 'skipped'
@@ -91,6 +95,15 @@ export interface SetupOptions {
   projectPath: string;
   hostsDir: string;
   serverJsPath: string;
+  /**
+   * Absolute path to `cli/dev-guardian.mjs` for THIS install (item 6a). A
+   * rules file used to hard-code `node cli/dev-guardian.mjs` — a path that
+   * exists only inside the dev-guardian repo itself — so an installed rules
+   * file in another project told the agent to run a script that was never
+   * there. `installRulesOne` substitutes this into every
+   * `{{DEV_GUARDIAN_CLI}}` placeholder in the template before writing.
+   */
+  cliPath: string;
   env: ResolveEnv;
   scope: McpScope;
   registerMcp: boolean;
@@ -99,21 +112,45 @@ export interface SetupOptions {
   force: boolean;
 }
 
+/**
+ * True when `host` is a global-only host (Windsurf, Claude Desktop —
+ * `spec.mcp.forceScope === 'global'`) being swept in via `hosts: ['all']`
+ * at a NON-global requested scope. Item 6d (2026-09-25 full review):
+ * `mcp-config all --write` at the default (project) scope used to silently
+ * write the GLOBAL Windsurf and Claude Desktop configs anyway — surprising,
+ * cross-project side effects nobody asked for — because both hosts force
+ * their own scope regardless of what was requested. Naming a SINGLE
+ * global-only host explicitly (`mcp-config windsurf --write`) is unaffected:
+ * the user asked for that host by name, so there is nothing surprising about
+ * it landing in its only possible location.
+ */
+function isForceGlobalSkippedUnderAll(spec: HostSpec, requestedAll: boolean, requestedScope: McpScope): boolean {
+  return requestedAll && spec.mcp.forceScope === 'global' && requestedScope !== 'global';
+}
+
 /** Write/merge MCP config + rules for one or more hosts. */
 export function setupHost(opts: SetupOptions): HostResult[] {
-  const hosts: HostName[] = opts.hosts.includes('all')
-    ? [...ALL_HOSTS]
-    : (opts.hosts as HostName[]);
+  const requestedAll = opts.hosts.includes('all');
+  const hosts: HostName[] = requestedAll ? [...ALL_HOSTS] : (opts.hosts as HostName[]);
 
   return hosts.map((host) => {
     const spec = HOST_SPECS[host];
     const scope = effectiveScope(spec, opts.scope);
     const rules: RulesResult = opts.installRules
-      ? installRulesOne(spec, opts.hostsDir, opts.projectPath, opts.apply, opts.force)
+      ? installRulesOne(spec, opts.hostsDir, opts.projectPath, opts.apply, opts.force, opts.cliPath)
       : { status: 'skipped', reason: 'install_rules=false' };
-    const mcp: McpResult = opts.registerMcp
-      ? registerMcpOne(host, spec, scope, opts.serverJsPath, opts.env, opts.apply, opts.force)
-      : { status: 'skipped', reason: 'register_mcp=false' };
+    const skipGlobal = isForceGlobalSkippedUnderAll(spec, requestedAll, opts.scope);
+    const mcp: McpResult = !opts.registerMcp
+      ? { status: 'skipped', reason: 'register_mcp=false' }
+      : skipGlobal
+        ? {
+            status: 'skipped',
+            scope,
+            reason:
+              "global-only host skipped under 'all' at project scope, to avoid an unexpected write " +
+              "to your global config — pass --global (or --scope global) to include it",
+          }
+        : registerMcpOne(host, spec, scope, opts.serverJsPath, opts.env, opts.apply, opts.force);
     return { host, scope, ...rules, mcp };
   });
 }
@@ -167,12 +204,20 @@ export function previewMcpConfig(
   };
 }
 
+/**
+ * Renders the template at `src` (substituting `{{DEV_GUARDIAN_CLI}}` with
+ * `cliPath` — item 6a) and merges it into `dst` as a delimited block (item
+ * 6b), never a whole-file overwrite. See `mergeRulesBlock`'s own doc comment
+ * in `mcpConfig.ts` for the full written/merged/already_present/needs_update
+ * contract this mirrors from the JSON/TOML mergers.
+ */
 function installRulesOne(
   spec: HostSpec,
   hostsDir: string,
   projectPath: string,
   apply: boolean,
   force: boolean,
+  cliPath: string,
 ): RulesResult {
   const rules = spec.rules;
   if (!rules) {
@@ -191,20 +236,40 @@ function installRulesOne(
   };
 
   if (!existsSync(src)) return { ...base, status: 'template_missing', reason: `${src} missing` };
-  if (existsSync(dst) && !force) {
-    return { ...base, status: 'already_exists', reason: 'force=false; not overwriting' };
+
+  let templateText: string;
+  let existingText: string | null = null;
+  try {
+    templateText = readFileSync(src, 'utf8');
+    if (existsSync(dst)) existingText = readFileSync(dst, 'utf8');
+  } catch (e) {
+    return { ...base, status: 'failed', reason: (e as Error).message };
   }
+
+  const rendered = substituteCliPath(templateText, cliPath);
+  const merged = mergeRulesBlock(existingText, rendered, force);
+
+  if (merged.status === 'already_present') return { ...base, status: 'already_present' };
+  if (merged.status === 'needs_update') {
+    return {
+      ...base,
+      status: 'needs_update',
+      reason: 'the installed rules block differs from the current template; pass --update-mcp to refresh it',
+    };
+  }
+
+  const content = merged.content as string;
   if (!apply) {
-    try {
-      return { ...base, status: 'would_write', bytes: statSync(src).size };
-    } catch {
-      return { ...base, status: 'would_write' };
-    }
+    return {
+      ...base,
+      status: merged.status === 'written' ? 'would_write' : 'would_merge',
+      bytes: Buffer.byteLength(content, 'utf8'),
+    };
   }
   try {
     mkdirSync(dirname(dst), { recursive: true });
-    copyFileSync(src, dst);
-    return { ...base, status: 'written', bytes: statSync(dst).size };
+    writeFileSync(dst, content, 'utf8');
+    return { ...base, status: merged.status, bytes: statSync(dst).size };
   } catch (e) {
     return { ...base, status: 'failed', reason: (e as Error).message };
   }
@@ -268,7 +333,7 @@ function registerMcpOne(
       config_path: configPath,
       key: m.serverKey,
       scope,
-      reason: 'an entry named "dev-guardian" exists but differs; pass --force to update it',
+      reason: 'an entry named "dev-guardian" exists but differs; pass --update-mcp to update it',
     };
   }
   if (!apply) {

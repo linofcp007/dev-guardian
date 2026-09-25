@@ -11,7 +11,10 @@ import {
   buildServerEntry,
   claudeDesktopConfigPath,
   mergeJsonConfig,
+  mergeRulesBlock,
   mergeTomlConfig,
+  RULES_BLOCK_BEGIN,
+  RULES_BLOCK_END,
   resolveMcpConfigPath,
   resolveServerJsPath,
   SERVER_ID,
@@ -158,9 +161,14 @@ describe('mergeTomlConfig', () => {
     expect(r.content).toContain('[mcp_servers.dev-guardian]');
   });
 
-  it('is idempotent when our table already exists', () => {
+  it('a heading alone is not enough for already_present — a partial/stale table reports needs_update (item 6c)', () => {
+    // Deliberately incomplete (no args/env/enabled) — the PRE-fix behaviour
+    // treated any existing heading as already_present regardless of content,
+    // which is exactly the bug item 6c fixes: see the dedicated
+    // needs_update/already_present/sub-table tests below for the full
+    // content-aware contract.
     const existing = '[mcp_servers.dev-guardian]\ncommand = "node"\n';
-    expect(mergeTomlConfig(existing, entry, false).status).toBe('already_present');
+    expect(mergeTomlConfig(existing, entry, false).status).toBe('needs_update');
   });
 
   it('replaces our table on force, leaving one occurrence', () => {
@@ -177,6 +185,126 @@ describe('mergeTomlConfig', () => {
     const weird = "/plug/o'brien/server.js";
     const r = mergeTomlConfig(null, buildServerEntry(weird, false), false);
     expect(r.content).toContain('"/plug/o\'brien/server.js"');
+  });
+
+  // Item 6c (2026-09-25 full review): a stale TOML entry used to always read
+  // `already_present` regardless of force — `mergeTomlConfig` only checked
+  // whether the HEADING existed, never whether its content matched what we'd
+  // actually write, so `mcp-config codex` never noticed (or offered to fix)
+  // a Codex config pointing at an old server path. JSON hosts already got
+  // this right via `mergeJsonConfig`'s `deepEqual` check.
+  it('reports needs_update (not already_present) when the existing table differs and force is off', () => {
+    const stale = '[mcp_servers.dev-guardian]\ncommand = \'node\'\nargs = [\'/old.js\']\nenv = {}\nenabled = true\n';
+    const r = mergeTomlConfig(stale, entry, false);
+    expect(r.status).toBe('needs_update');
+    expect(r.content).toBeUndefined();
+  });
+
+  it('is idempotent (already_present) when the existing table already matches byte-for-byte', () => {
+    const { content: fresh } = mergeTomlConfig(null, entry, false);
+    expect(mergeTomlConfig(fresh as string, entry, false).status).toBe('already_present');
+  });
+
+  it('updates a stale entry when force is on', () => {
+    const stale = '[mcp_servers.dev-guardian]\ncommand = \'node\'\nargs = [\'/old.js\']\nenv = {}\nenabled = true\n';
+    const r = mergeTomlConfig(stale, entry, true);
+    expect(r.status).toBe('merged');
+    expect(r.content).toContain(`'${SRV}'`);
+    expect(r.content).not.toContain('/old.js');
+  });
+
+  // The exact regression reported: a hand-edited config with a
+  // `[mcp_servers.dev-guardian.env]` sub-table survives a force-update next
+  // to a freshly-written `env = {}` scalar — two conflicting definitions of
+  // the same key, which is invalid TOML.
+  it('force replaces the WHOLE dev-guardian block, including its own sub-tables, leaving valid TOML', () => {
+    const withSubTable =
+      '[mcp_servers.dev-guardian]\n' +
+      "command = 'node'\n" +
+      "args = ['/old.js']\n" +
+      'enabled = true\n\n' +
+      '[mcp_servers.dev-guardian.env]\n' +
+      'FOO = "bar"\n\n' +
+      '[other]\n' +
+      'x = 1\n';
+    const r = mergeTomlConfig(withSubTable, entry, true);
+    expect(r.status).toBe('merged');
+    const content = r.content as string;
+    // The invalid shape this regression produced: an `env = {}` scalar
+    // co-existing with a `[mcp_servers.dev-guardian.env]` table for the same
+    // key. Neither may appear once force has replaced the block.
+    expect(content).not.toMatch(/\[mcp_servers\.dev-guardian\.env\]/);
+    expect(content).not.toContain('FOO = "bar"');
+    expect(content).toContain('env = {}');
+    // Exactly one dev-guardian heading, and the sibling table survives.
+    expect((content.match(/\[mcp_servers\.dev-guardian\]/g) ?? [])).toHaveLength(1);
+    expect(content).toContain('[other]');
+    expect(content).toContain('x = 1');
+  });
+});
+
+// Item 6b (2026-09-25 full review): `--force` used to `copyFileSync` over
+// the user's WHOLE rules file (AGENTS.md / GEMINI.md / the copilot
+// instructions file), destroying any unrelated content already there —
+// reproduced directly: a project's own "Never touch prod" instruction in
+// AGENTS.md was gone after a `--force` run. `mergeRulesBlock` manages a
+// delimited block instead, so dev-guardian's own content is always
+// confined between two HTML-comment markers and the rest of the file is
+// never read, let alone replaced.
+describe('mergeRulesBlock', () => {
+  const rendered = 'dev-guardian rules body';
+
+  it('creates a fresh file (just the wrapped block) when none exists', () => {
+    const r = mergeRulesBlock(null, rendered, false);
+    expect(r.status).toBe('written');
+    expect(r.content).toBe(`${RULES_BLOCK_BEGIN}\n${rendered}\n${RULES_BLOCK_END}\n`);
+  });
+
+  it('APPENDS the block to an existing file with no markers, force off — never touches existing content', () => {
+    const existing = '# My project\n\nNever touch prod.\n';
+    const r = mergeRulesBlock(existing, rendered, false);
+    expect(r.status).toBe('merged');
+    // Every byte of the user's original content survives, verbatim.
+    expect(r.content).toContain(existing);
+    expect(r.content).toContain('Never touch prod.');
+    expect(r.content).toContain(RULES_BLOCK_BEGIN);
+    expect(r.content).toContain(rendered);
+  });
+
+  it('is idempotent (already_present) when the existing block already matches', () => {
+    const existing = `# My project\n\n${RULES_BLOCK_BEGIN}\n${rendered}\n${RULES_BLOCK_END}\n`;
+    const r = mergeRulesBlock(existing, rendered, false);
+    expect(r.status).toBe('already_present');
+    expect(r.content).toBeUndefined();
+  });
+
+  it('reports needs_update (not already_present) when an existing block differs and force is off', () => {
+    const existing = `# My project\n\n${RULES_BLOCK_BEGIN}\nold body\n${RULES_BLOCK_END}\n`;
+    const r = mergeRulesBlock(existing, rendered, false);
+    expect(r.status).toBe('needs_update');
+    expect(r.content).toBeUndefined();
+  });
+
+  it('never touches surrounding content when force updates a stale block', () => {
+    const existing =
+      `# My project\n\nNever touch prod.\n\n${RULES_BLOCK_BEGIN}\nold body\n${RULES_BLOCK_END}\n\nMore user content after.\n`;
+    const r = mergeRulesBlock(existing, rendered, true);
+    expect(r.status).toBe('merged');
+    const content = r.content as string;
+    expect(content).toContain('Never touch prod.');
+    expect(content).toContain('More user content after.');
+    expect(content).toContain(rendered);
+    expect(content).not.toContain('old body');
+    // Exactly one pair of markers.
+    expect((content.match(new RegExp(RULES_BLOCK_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) ?? [])).toHaveLength(1);
+  });
+
+  it('appending to an existing file with no markers works regardless of force (non-destructive by construction)', () => {
+    const existing = '# My project\n';
+    const r = mergeRulesBlock(existing, rendered, true);
+    expect(r.status).toBe('merged');
+    expect(r.content).toContain('# My project');
+    expect(r.content).toContain(rendered);
   });
 });
 
