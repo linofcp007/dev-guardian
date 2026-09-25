@@ -108,6 +108,9 @@ async function handler(
     reason: inp.reason,
     ...(inp.expires_at !== undefined ? { expires_at: inp.expires_at } : {}),
     created_by: 'user',
+    // Scopes the suppression to THIS project at match time (migration 011) —
+    // already resolved above to look the finding up, so no extra lookup.
+    project_path: projectPath,
   });
 
   return {

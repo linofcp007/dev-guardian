@@ -68,6 +68,16 @@ describe('SuppressionsRepo', () => {
     expect(repo.listActive()[0]?.finding_identity).toBeUndefined();
   });
 
+  it('round-trips project_path (migration 011); omitted stays undefined, not the literal string "null"', () => {
+    const repo = freshRepo();
+    repo.insert({ finding_fingerprint: 'scoped', reason: 'fp', project_path: '/my-project' });
+    repo.insert({ finding_fingerprint: 'legacy', reason: 'no project given' });
+
+    const byFp = new Map(repo.listAll().map((s) => [s.finding_fingerprint, s]));
+    expect(byFp.get('scoped')?.project_path).toBe('/my-project');
+    expect(byFp.get('legacy')?.project_path).toBeUndefined();
+  });
+
   it('listAll returns every row regardless of expiry, unlike listActive', () => {
     const repo = freshRepo();
     repo.insert({ finding_fingerprint: 'forever', reason: 'fp' });

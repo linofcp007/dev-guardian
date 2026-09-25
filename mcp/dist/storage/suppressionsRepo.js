@@ -9,6 +9,21 @@
  * the finding; the identity does not. The findings table itself remains
  * untouched so historical scans stay intact and the suppression can be lifted
  * later by deleting (or letting expire) the row.
+ *
+ * Since migration 011, a suppression also carries the `project_path` it
+ * belongs to — the caller's own resolved project, at the moment
+ * `suppress_finding` looked the target up. NULL means "matches every
+ * project" (every row written before this column existed, and any row an
+ * older build still inserts without it), never "no project": the readers
+ * that actually hide findings by suppression (`findingsRepo.ts`'s
+ * `SUPPRESSION_MATCHES_F`, `history/openSet.ts`'s `suppressionMatcher`)
+ * treat a NULL project_path as matching whatever project they are asked
+ * about. This file's own `isSuppressed`/`listActiveForRule` are unaffected —
+ * neither hides a finding from a caller: `isSuppressed` has no production
+ * caller left (its own SQL predicate is the pre-011 fingerprint/identity
+ * match, kept for what it is — a yes/no lookup, not a listing), and
+ * `listActiveForRule` only surfaces informational "similar findings were
+ * suppressed before" history to `suggest_fix`, never hides anything.
  */
 import { nowIso } from './repoUtil.js';
 export class SuppressionsRepo {
@@ -22,9 +37,9 @@ export class SuppressionsRepo {
     constructor(db) {
         this.insertStmt = db.prepare(`
       INSERT INTO suppressions (
-        finding_fingerprint, finding_identity, reason, created_at, expires_at, created_by
+        finding_fingerprint, finding_identity, reason, created_at, expires_at, created_by, project_path
       )
-      VALUES (?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
         this.listActiveStmt = db.prepare(`
       SELECT * FROM suppressions
@@ -81,7 +96,7 @@ export class SuppressionsRepo {
     `);
     }
     insert(input) {
-        const info = this.insertStmt.run(input.finding_fingerprint, input.finding_identity ?? null, input.reason, nowIso(), input.expires_at ?? null, input.created_by ?? null);
+        const info = this.insertStmt.run(input.finding_fingerprint, input.finding_identity ?? null, input.reason, nowIso(), input.expires_at ?? null, input.created_by ?? null, input.project_path ?? null);
         return Number(info.lastInsertRowid);
     }
     listActive() {
@@ -129,6 +144,8 @@ function rowToSuppression(row) {
         s.expires_at = row.expires_at;
     if (row.created_by !== null)
         s.created_by = row.created_by;
+    if (row.project_path !== null)
+        s.project_path = row.project_path;
     return s;
 }
 //# sourceMappingURL=suppressionsRepo.js.map

@@ -198,6 +198,10 @@ describe('suppress_finding', () => {
     expect(r.ok).toBe(true);
     expect(r.suppression_id).toBeGreaterThan(0);
     expect(plugin.storage.findings.listOpen()).toHaveLength(0);
+    // Written with the caller's own resolved project (migration 011), so it
+    // is scoped at match time rather than matching every project sharing
+    // this server's storage.
+    expect(plugin.storage.suppressions.listAll()[0]?.project_path).toBe(project);
   });
 
   it('rejects a fingerprint no scan of this project ever reported with unknown_finding', async () => {

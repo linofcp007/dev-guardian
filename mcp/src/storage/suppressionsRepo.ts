@@ -9,6 +9,21 @@
  * the finding; the identity does not. The findings table itself remains
  * untouched so historical scans stay intact and the suppression can be lifted
  * later by deleting (or letting expire) the row.
+ *
+ * Since migration 011, a suppression also carries the `project_path` it
+ * belongs to — the caller's own resolved project, at the moment
+ * `suppress_finding` looked the target up. NULL means "matches every
+ * project" (every row written before this column existed, and any row an
+ * older build still inserts without it), never "no project": the readers
+ * that actually hide findings by suppression (`findingsRepo.ts`'s
+ * `SUPPRESSION_MATCHES_F`, `history/openSet.ts`'s `suppressionMatcher`)
+ * treat a NULL project_path as matching whatever project they are asked
+ * about. This file's own `isSuppressed`/`listActiveForRule` are unaffected —
+ * neither hides a finding from a caller: `isSuppressed` has no production
+ * caller left (its own SQL predicate is the pre-011 fingerprint/identity
+ * match, kept for what it is — a yes/no lookup, not a listing), and
+ * `listActiveForRule` only surfaces informational "similar findings were
+ * suppressed before" history to `suggest_fix`, never hides anything.
  */
 
 import type { DB, Statement } from './db.js';
@@ -23,6 +38,7 @@ interface SuppressionRow {
   created_at: string;
   expires_at: string | null;
   created_by: string | null;
+  project_path: string | null;
 }
 
 export interface InsertSuppressionInput {
@@ -32,11 +48,18 @@ export interface InsertSuppressionInput {
   reason: string;
   expires_at?: string;
   created_by?: string;
+  /**
+   * The project this suppression belongs to. Omit only for a caller with no
+   * project in scope; every project-aware caller (`suppress_finding`) should
+   * pass its own resolved `project_path` — see the module comment for what
+   * omitting it means at match time.
+   */
+  project_path?: string;
 }
 
 export class SuppressionsRepo {
   private readonly insertStmt: Statement<
-    [string, string | null, string, string, string | null, string | null]
+    [string, string | null, string, string, string | null, string | null, string | null]
   >;
   private readonly listActiveStmt: Statement<[string], SuppressionRow>;
   private readonly listAllStmt: Statement<[], SuppressionRow>;
@@ -48,9 +71,9 @@ export class SuppressionsRepo {
   constructor(db: DB) {
     this.insertStmt = db.prepare(`
       INSERT INTO suppressions (
-        finding_fingerprint, finding_identity, reason, created_at, expires_at, created_by
+        finding_fingerprint, finding_identity, reason, created_at, expires_at, created_by, project_path
       )
-      VALUES (?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
 
     this.listActiveStmt = db.prepare<[string], SuppressionRow>(`
@@ -121,6 +144,7 @@ export class SuppressionsRepo {
       nowIso(),
       input.expires_at ?? null,
       input.created_by ?? null,
+      input.project_path ?? null,
     );
     return Number(info.lastInsertRowid);
   }
@@ -173,5 +197,6 @@ function rowToSuppression(row: SuppressionRow): Suppression {
   if (row.finding_identity !== null) s.finding_identity = row.finding_identity;
   if (row.expires_at !== null) s.expires_at = row.expires_at;
   if (row.created_by !== null) s.created_by = row.created_by;
+  if (row.project_path !== null) s.project_path = row.project_path;
   return s;
 }

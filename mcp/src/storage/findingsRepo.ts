@@ -9,7 +9,10 @@
  *     fallback for rows that have no identity;
  *   - a suppression hides a finding that matches it on EITHER key
  *     (`SUPPRESSION_MATCHES_F`), so one written before identities existed
- *     still works, and one written after survives a line shift.
+ *     still works, and one written after survives a line shift. Since
+ *     migration 011 the match is also scoped to the finding's own project
+ *     (or to no project at all, for a suppression written before that
+ *     column existed) — see that constant's own comment.
  *
  * **A project's open findings are NOT read here.** They are the union over
  * every state-describing scan type of that type's newest usable scan — see
@@ -56,11 +59,27 @@ const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
 
 /**
  * Suppression `s` names finding `f`: same fingerprint, or — when both sides
- * have one — the same identity. SQL's `NULL = NULL` is not true, so a legacy
- * row or suppression without an identity only ever matches by fingerprint.
+ * have one — the same identity, AND `s` belongs to the finding's own project
+ * (`l.project_path`, from the `latest` CTE every caller of this constant
+ * joins in) or to no project at all (migration 011: NULL means "every
+ * project" — every row written before that column existed). SQL's
+ * `NULL = NULL` is not true, so a legacy row or suppression without an
+ * identity only ever matches by fingerprint; `s.project_path IS NULL` is a
+ * proper null-safe check, so a legacy/global suppression is unaffected by
+ * the project clause.
+ *
+ * Without the project clause, a suppression scoped to project A hid a
+ * finding sharing its fingerprint or identity in project B the moment both
+ * projects' scans lived in the same database — reproduced and fixed
+ * alongside `history/openSet.ts`'s `suppressionMatcher`, the JS-side
+ * equivalent every resource/history reader actually calls through
+ * `openSetForProject` (this file's own module comment already says
+ * `listOpen`/`listOpenForProject`/`listBySeverity` below are legacy, kept
+ * only for callers that have not moved to it).
  */
 const SUPPRESSION_MATCHES_F =
-  '(s.finding_fingerprint = f.fingerprint OR s.finding_identity = f.identity)';
+  '(s.finding_fingerprint = f.fingerprint OR s.finding_identity = f.identity) ' +
+  'AND (s.project_path IS NULL OR s.project_path = l.project_path)';
 
 interface FindingRow {
   fingerprint: string;
@@ -140,7 +159,7 @@ export class FindingsRepo {
     // for why this lives here as a literal rather than an import.
     this.listOpenLatestScanStmt = db.prepare<[], FindingRow>(`
       WITH latest AS (
-        SELECT id FROM scans
+        SELECT id, project_path FROM scans
         WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
@@ -163,7 +182,7 @@ export class FindingsRepo {
     // means latest FOR THIS PROJECT rather than latest in the whole table.
     this.listOpenForProjectStmt = db.prepare<[string], FindingRow>(`
       WITH latest AS (
-        SELECT id FROM scans WHERE status = 'completed' AND project_path = ?
+        SELECT id, project_path FROM scans WHERE status = 'completed' AND project_path = ?
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -184,7 +203,7 @@ export class FindingsRepo {
     // reason — this is ALSO an unscoped "latest scan" query.
     this.listBySeverityLatestStmt = db.prepare<[string], FindingRow>(`
       WITH latest AS (
-        SELECT id FROM scans
+        SELECT id, project_path FROM scans
         WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )

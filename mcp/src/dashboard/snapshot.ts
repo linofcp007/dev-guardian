@@ -118,7 +118,7 @@ export function buildSnapshot(
 
   const allSuppressions = storage.suppressions.listAll();
   const activeSuppressions = allSuppressions.filter((s) => isSuppressionActiveAt(s, now));
-  const isSuppressed = suppressionMatcher(allSuppressions, now);
+  const isSuppressed = suppressionMatcher(allSuppressions, now, projectPath);
 
   const sincePrevious = deltaScan
     ? buildSincePrevious(storage, deltaScan, isSuppressed, truncation)

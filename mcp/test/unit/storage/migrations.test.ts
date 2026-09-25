@@ -220,4 +220,59 @@ describe('migrations runner', () => {
     expect(storage.baselines.getActiveForProject('/a')?.set_at).toBe('2026-01-03T00:00:00.000Z');
     expect(storage.baselines.getActiveForProject('/b')?.scan_id).toBe('b1');
   });
+
+  it('upgrades a version-10 database in place: every suppression learns its project (011)', () => {
+    // A pre-011 database: suppressions had no project_path, so a suppression
+    // matched a same-fingerprint/identity finding in ANY project sharing the
+    // database — reproduced in findingsRepo.test.ts's "suppressions are per
+    // project at match time" block. Backfilled here from the newest scan
+    // reporting the suppressed fingerprint/identity; a suppression whose
+    // target is in no stored scan (fp-unknown below) has nothing to
+    // backfill from and stays NULL — "matches every project", the same
+    // global behaviour it had before this migration, not "matches nothing".
+    const db = new Database(':memory:');
+    for (const m of listMigrations().filter((x) => x.version <= 10)) {
+      db.exec(readFileSync(m.filePath, 'utf8'));
+    }
+    db.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '10')`);
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('a1', 'sast', '/a', 'h', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO findings (fingerprint, scan_id, tool, severity, category, title, file_path, line_start, identity)
+       VALUES ('fp-a', 'a1', 'semgrep', 'high', 'security', 't', 'a.js', 3, 'id-a')`,
+    );
+    db.exec(
+      `INSERT INTO suppressions (finding_fingerprint, finding_identity, reason, created_at)
+       VALUES ('fp-a', 'id-a', 'reviewed', '2026-01-01T00:00:02.000Z'),
+              ('fp-unknown', NULL, 'dangling — no scan ever reported this fingerprint', '2026-01-01T00:00:03.000Z')`,
+    );
+
+    runMigrations(db);
+
+    const version = db.prepare(`SELECT value FROM schema_meta WHERE key = 'version'`).get() as { value: string };
+    expect(version.value).toBe(LATEST);
+    const rows = db
+      .prepare(`SELECT finding_fingerprint, project_path FROM suppressions ORDER BY finding_fingerprint`)
+      .all();
+    expect(rows).toEqual([
+      { finding_fingerprint: 'fp-a', project_path: '/a' },
+      { finding_fingerprint: 'fp-unknown', project_path: null },
+    ]);
+
+    // And the backfilled row now actually scopes the match: a same
+    // fingerprint reported by a DIFFERENT project is not suppressed there.
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('b1', 'sast', '/b', 'h', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO findings (fingerprint, scan_id, tool, severity, category, title, file_path, line_start)
+       VALUES ('fp-a', 'b1', 'semgrep', 'high', 'security', 't', 'a.js', 3)`,
+    );
+    const storage = new Storage(db);
+    expect(storage.findings.listOpenForProject('/a')).toEqual([]);
+    expect(storage.findings.listOpenForProject('/b').map((f) => f.fingerprint)).toEqual(['fp-a']);
+  });
 });

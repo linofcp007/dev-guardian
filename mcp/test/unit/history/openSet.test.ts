@@ -205,4 +205,31 @@ describe('openSetForProject', () => {
     seedScan(s, { id: 'sast', type: 'sast', project: P, findings: [{ tool: 'semgrep' }] });
     expect(openSetForProject(s.storage, P).findings[0]?.scan_id).toBe('sast');
   });
+
+  // Coordinator fix round 1, item 3: `storage.suppressions.listAll()` (fed
+  // to `suppressionMatcher`) is the WHOLE database's suppressions, from
+  // every project this server has ever scanned — the dominant runtime path
+  // every resource/history reader goes through, not just findingsRepo.ts's
+  // own raw-SQL queries.
+  describe('suppressions are per project at match time (migration 011)', () => {
+    it('a suppression scoped to project P does not hide the same fingerprint in project OTHER', () => {
+      const s = freshPlugin();
+      seedScan(s, { id: 'p-sast', type: 'sast', project: P, findings: [{ fp: '1'.repeat(64) }] });
+      seedScan(s, { id: 'o-sast', type: 'sast', project: OTHER, findings: [{ fp: '1'.repeat(64) }] });
+      s.storage.suppressions.insert({ finding_fingerprint: '1'.repeat(64), reason: 'fp', project_path: P });
+
+      expect(openSetForProject(s.storage, P).findings).toEqual([]);
+      expect(openSetForProject(s.storage, OTHER).findings.map((f) => f.fingerprint)).toEqual(['1'.repeat(64)]);
+    });
+
+    it('a suppression with no project (legacy / NULL) still hides the finding everywhere', () => {
+      const s = freshPlugin();
+      seedScan(s, { id: 'p-sast', type: 'sast', project: P, findings: [{ fp: '1'.repeat(64) }] });
+      seedScan(s, { id: 'o-sast', type: 'sast', project: OTHER, findings: [{ fp: '1'.repeat(64) }] });
+      s.storage.suppressions.insert({ finding_fingerprint: '1'.repeat(64), reason: 'legacy, no project' });
+
+      expect(openSetForProject(s.storage, P).findings).toEqual([]);
+      expect(openSetForProject(s.storage, OTHER).findings).toEqual([]);
+    });
+  });
 });
