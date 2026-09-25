@@ -252,6 +252,39 @@ describe('guardian://cves/active', () => {
     expect(payload.scan_id).toBe('a1');
     expect(payload.cves.map((c) => c.cve_id)).toEqual(['CVE-2024-Y']);
   });
+
+  // Task 19 — the resource enriches from the `cve_intel` CACHE ONLY, never a
+  // live network call (a resource read must stay fast and side-effect-free);
+  // `intel/enrich.ts`'s own tests cover the cache/network split itself.
+  describe('KEV/EPSS enrichment (Task 19, cache-only)', () => {
+    it('includes kev/epss fields for a CVE with a cached intel row', async () => {
+      plugin.storage.scans.insert({ scan_id: 'd2', scan_type: 'deps', project_path: P, tree_hash: 'h' });
+      plugin.storage.cves.upsert({
+        cve_id: 'CVE-2024-KEV', package_name: 'lodash', severity: 'high', scan_id: 'd2',
+      });
+      plugin.storage.scans.finalize({ scan_id: 'd2', status: 'completed', tools_run: [], missing_tools: [] });
+      plugin.storage.cveIntel.upsertMany([
+        { cve_id: 'CVE-2024-KEV', kev: true, kev_date_added: '2026-01-01', epss_score: 0.8, epss_percentile: 0.9, fetched_at: new Date().toISOString() },
+      ]);
+
+      const r = await getResource('guardian-cves-active').handler(fakeUri, {}, plugin);
+      const payload = r.json as { cves: Array<{ cve_id: string; kev?: boolean; epss_score?: number }> };
+      expect(payload.cves[0]).toMatchObject({ cve_id: 'CVE-2024-KEV', kev: true, epss_score: 0.8 });
+    });
+
+    it('a CVE with no cached intel row carries no kev/epss fields at all — never a fabricated kev: false', async () => {
+      plugin.storage.scans.insert({ scan_id: 'd3', scan_type: 'deps', project_path: P, tree_hash: 'h' });
+      plugin.storage.cves.upsert({
+        cve_id: 'CVE-2024-UNKNOWN', package_name: 'lodash', severity: 'high', scan_id: 'd3',
+      });
+      plugin.storage.scans.finalize({ scan_id: 'd3', status: 'completed', tools_run: [], missing_tools: [] });
+
+      const r = await getResource('guardian-cves-active').handler(fakeUri, {}, plugin);
+      const payload = r.json as { cves: Array<Record<string, unknown>> };
+      expect(payload.cves[0]).not.toHaveProperty('kev');
+      expect(payload.cves[0]).not.toHaveProperty('epss_score');
+    });
+  });
 });
 
 describe('guardian://stack', () => {

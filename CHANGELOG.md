@@ -10,6 +10,17 @@ version bump.
 
 ### Added
 
+- CVE exploitability intel: CISA KEV membership and FIRST EPSS score, cached
+  24h in a new `cve_intel` table (migration 010, keyed by `cve_id` alone — no
+  scan/project scope, so it survives retention pruning). `prioritize_findings`
+  and `risk_score` now weigh a finding/CVE up when it is KEV-listed or has a
+  high EPSS score; `guardian://cves/active` shows both when already cached
+  (cache only — it never makes a network call itself). Fully offline-safe:
+  `GUARDIAN_OFFLINE=1` skips the network, every fetch is timeout-bounded, and
+  a CVE the network could not measure is reported `unavailable` and left
+  unenriched, never scored as "not exploited". `create_fix_pr` ordering is
+  not yet wired to this — `intel/rank.ts#rankByExploitability` is ready for
+  the integrator to call from `fixpr/candidates.ts#selectGroups`.
 - `audit_agent_config` — audits the AI-agent WORKSPACE configuration itself
   (`.mcp.json`, `.claude/settings.json` + `.claude/settings.local.json`,
   `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, and with

@@ -7,6 +7,7 @@
  * `DashboardSnapshot` and its other parts.
  */
 
+import type { CveIntelResult } from '../intel/types.js';
 import type { Cve, Finding, Severity } from '../types.js';
 
 /**
@@ -20,6 +21,17 @@ export interface RiskInput {
   findings: readonly Finding[];
   /** Active CVEs for this project's latest deps-flavoured scan. */
   cves: readonly Cve[];
+  /**
+   * CISA KEV / FIRST EPSS intel for `cves`, keyed by `cve_id` (Task 19).
+   * Optional and additive: omitted entirely (never an empty `Map`), the CVE
+   * component scores exactly as it did before this field existed — that is
+   * what lets `dashboard/snapshot.ts` keep calling `scoreRisk` synchronously
+   * without itself doing the async network/cache work `intel/enrich.ts`
+   * needs. A CVE absent from the map, or present with `status:
+   * 'unavailable'`, contributes no bonus — never measured, never treated as
+   * "confirmed not exploited".
+   */
+  cve_intel?: ReadonlyMap<string, CveIntelResult>;
   /** 0–3: privacy_policy, terms_of_service, security_policy that are absent. */
   policies_missing: number;
   /** True when renovate OR dependabot is configured. */

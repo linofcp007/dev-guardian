@@ -10,7 +10,11 @@
  *
  * Components (weighted sum, capped at 100):
  *   - 40 pts: severity-weighted finding count (critical=10, high=5, medium=2, low=1).
- *   - 30 pts: CVE count weighted by severity.
+ *   - 30 pts: CVE count weighted by severity, PLUS a KEV/EPSS exploitability
+ *     bonus per CVE (Task 19) — see `KEV_CVE_BONUS`/`EPSS_CVE_BONUS_MAX`
+ *     below. Additive on top of the severity weight, still inside the same
+ *     30-pt cap, so a pile of KEV-listed CVEs cannot push this component
+ *     past what an equally large pile of critical ones already could.
  *   - 15 pts: missing CI bots (renovate/dependabot) and policy docs.
  *   - 15 pts: stale baseline (more than 30 days old).
  *
@@ -18,7 +22,21 @@
  * call `Date.now()` in this file — that is what makes this function testable
  * without faking global time, and what lets `snapshot.ts` and `risk_score`
  * share one implementation while each supplies its own "now".
+ *
+ * `input.cve_intel` is OPTIONAL (`dashboard/types.ts`'s own doc comment):
+ * omitted, this component scores exactly as it did before Task 19 —
+ * `snapshot.ts` (the local, synchronous dashboard) does not call the async
+ * `intel/enrich.ts` and never will pass it. Only `tools/riskScore.ts` does.
  */
+/** Added to a CVE's severity-weighted points when it is CISA KEV-listed
+ *  (`input.cve_intel.get(cve_id).kev`) — half of `critical`'s own 8 pts, so
+ *  a KEV-listed low/medium CVE can outweigh a non-KEV high, but a pile of
+ *  KEV CVEs still cannot out-score an equally large pile of criticals. */
+const KEV_CVE_BONUS = 4;
+/** Scaled by the CVE's own FIRST EPSS score (0-1) when it has one and is
+ *  not already KEV-listed (KEV is the stronger, binary signal — "currently
+ *  being exploited" — so it wins outright rather than stacking with EPSS). */
+const EPSS_CVE_BONUS_MAX = 4;
 export function scoreRisk(input) {
     const findingsScore = clamp(input.findings.reduce((acc, f) => {
         switch (f.severity) {
@@ -30,12 +48,31 @@ export function scoreRisk(input) {
         }
     }, 0), 0, 40);
     const cveScore = clamp(input.cves.reduce((acc, c) => {
+        let pts;
         switch (c.severity) {
-            case 'critical': return acc + 8;
-            case 'high': return acc + 4;
-            case 'medium': return acc + 1.5;
-            default: return acc + 0.5;
+            case 'critical':
+                pts = 8;
+                break;
+            case 'high':
+                pts = 4;
+                break;
+            case 'medium':
+                pts = 1.5;
+                break;
+            default:
+                pts = 0.5;
+                break;
         }
+        const intel = input.cve_intel?.get(c.cve_id);
+        // 'unavailable' (offline, or a fetch failure) is never treated as
+        // "confirmed not exploited" — no bonus, same as no intel at all.
+        if (intel?.status === 'ok') {
+            if (intel.kev)
+                pts += KEV_CVE_BONUS;
+            else if (intel.epss_score !== undefined)
+                pts += intel.epss_score * EPSS_CVE_BONUS_MAX;
+        }
+        return acc + pts;
     }, 0), 0, 30);
     // Compliance signals — penalise missing bots and policy docs.
     let complianceScore = input.policies_missing * 3; // up to 9
