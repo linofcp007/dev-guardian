@@ -71,6 +71,8 @@ import './tools/scanDast.js';
 import './tools/validateFinding.js';
 // Fix PR (Phase 19):
 import './tools/createFixPr.js';
+// Agent workspace audit (Task 22):
+import './tools/auditAgentConfig.js';
 
 // Resources:
 import './resources/scans.js';

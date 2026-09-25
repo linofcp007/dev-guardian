@@ -5,6 +5,7 @@
  * handle. This is the only module that knows the DB is SQLite — swapping
  * the engine later only touches files in this folder.
  */
+import { AgentAuditRepo } from './agentAuditRepo.js';
 import { BaselinesRepo } from './baselinesRepo.js';
 import { CvesRepo } from './cvesRepo.js';
 import { FindingsRepo } from './findingsRepo.js';
@@ -25,6 +26,7 @@ export class Storage {
     runtimeMeta;
     surface;
     validations;
+    agentAudit;
     constructor(db) {
         this.db = db;
         this.scans = new ScansRepo(db);
@@ -36,6 +38,7 @@ export class Storage {
         this.runtimeMeta = new RuntimeMetaRepo(db);
         this.surface = new SurfaceRepo(db);
         this.validations = new ValidationsRepo(db);
+        this.agentAudit = new AgentAuditRepo(db);
     }
     close() {
         this.db.close();

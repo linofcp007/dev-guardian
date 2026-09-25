@@ -13704,16 +13704,16 @@ var init_mjs = __esm({
     };
     SignalExitBase = class {
     };
-    signalExitWrap = (handler43) => {
+    signalExitWrap = (handler44) => {
       return {
         onExit(cb, opts) {
-          return handler43.onExit(cb, opts);
+          return handler44.onExit(cb, opts);
         },
         load() {
-          return handler43.load();
+          return handler44.load();
         },
         unload() {
-          return handler43.unload();
+          return handler44.unload();
         }
       };
     };
@@ -34643,25 +34643,25 @@ var Protocol = class {
     const error2 = McpError.fromError(ErrorCode.ConnectionClosed, "Connection closed");
     this._transport = void 0;
     this.onclose?.();
-    for (const handler43 of responseHandlers.values()) {
-      handler43(error2);
+    for (const handler44 of responseHandlers.values()) {
+      handler44(error2);
     }
   }
   _onerror(error2) {
     this.onerror?.(error2);
   }
   _onnotification(notification) {
-    const handler43 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
-    if (handler43 === void 0) {
+    const handler44 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
+    if (handler44 === void 0) {
       return;
     }
-    Promise.resolve().then(() => handler43(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
+    Promise.resolve().then(() => handler44(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
   }
   _onrequest(request, extra) {
-    const handler43 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
+    const handler44 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
     const capturedTransport = this._transport;
     const relatedTaskId = request.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
-    if (handler43 === void 0) {
+    if (handler44 === void 0) {
       const errorResponse = {
         jsonrpc: "2.0",
         id: request.id,
@@ -34725,7 +34725,7 @@ var Protocol = class {
       if (taskCreationParams) {
         this.assertTaskHandlerCapability(request.method);
       }
-    }).then(() => handler43(request, fullExtra)).then(async (result) => {
+    }).then(() => handler44(request, fullExtra)).then(async (result) => {
       if (abortController.signal.aborted) {
         return;
       }
@@ -34774,8 +34774,8 @@ var Protocol = class {
   _onprogress(notification) {
     const { progressToken, ...params } = notification.params;
     const messageId = Number(progressToken);
-    const handler43 = this._progressHandlers.get(messageId);
-    if (!handler43) {
+    const handler44 = this._progressHandlers.get(messageId);
+    if (!handler44) {
       this._onerror(new Error(`Received a progress notification for an unknown token: ${JSON.stringify(notification)}`));
       return;
     }
@@ -34792,7 +34792,7 @@ var Protocol = class {
         return;
       }
     }
-    handler43(params);
+    handler44(params);
   }
   _onresponse(response) {
     const messageId = Number(response.id);
@@ -34807,8 +34807,8 @@ var Protocol = class {
       }
       return;
     }
-    const handler43 = this._responseHandlers.get(messageId);
-    if (handler43 === void 0) {
+    const handler44 = this._responseHandlers.get(messageId);
+    if (handler44 === void 0) {
       this._onerror(new Error(`Received a response for an unknown message ID: ${JSON.stringify(response)}`));
       return;
     }
@@ -34829,10 +34829,10 @@ var Protocol = class {
       this._progressHandlers.delete(messageId);
     }
     if (isJSONRPCResultResponse(response)) {
-      handler43(response);
+      handler44(response);
     } else {
       const error2 = McpError.fromError(response.error.code, response.error.message, response.error.data);
-      handler43(error2);
+      handler44(error2);
     }
   }
   get transport() {
@@ -35030,9 +35030,9 @@ var Protocol = class {
       const relatedTaskId = relatedTask?.taskId;
       if (relatedTaskId) {
         const responseResolver = (response) => {
-          const handler43 = this._responseHandlers.get(messageId);
-          if (handler43) {
-            handler43(response);
+          const handler44 = this._responseHandlers.get(messageId);
+          if (handler44) {
+            handler44(response);
           } else {
             this._onerror(new Error(`Response handler missing for side-channeled request ${messageId}`));
           }
@@ -35169,12 +35169,12 @@ var Protocol = class {
    *
    * Note that this will replace any previous request handler for the same method.
    */
-  setRequestHandler(requestSchema, handler43) {
+  setRequestHandler(requestSchema, handler44) {
     const method = getMethodLiteral(requestSchema);
     this.assertRequestHandlerCapability(method);
     this._requestHandlers.set(method, (request, extra) => {
       const parsed = parseWithCompat(requestSchema, request);
-      return Promise.resolve(handler43(parsed, extra));
+      return Promise.resolve(handler44(parsed, extra));
     });
   }
   /**
@@ -35196,11 +35196,11 @@ var Protocol = class {
    *
    * Note that this will replace any previous notification handler for the same method.
    */
-  setNotificationHandler(notificationSchema, handler43) {
+  setNotificationHandler(notificationSchema, handler44) {
     const method = getMethodLiteral(notificationSchema);
     this._notificationHandlers.set(method, (notification) => {
       const parsed = parseWithCompat(notificationSchema, notification);
-      return Promise.resolve(handler43(parsed));
+      return Promise.resolve(handler44(parsed));
     });
   }
   /**
@@ -35750,7 +35750,7 @@ var Server = class extends Protocol {
   /**
    * Override request handler registration to enforce server-side validation for tools/call.
    */
-  setRequestHandler(requestSchema, handler43) {
+  setRequestHandler(requestSchema, handler44) {
     const shape = getObjectShape(requestSchema);
     const methodSchema = shape?.method;
     if (!methodSchema) {
@@ -35769,7 +35769,7 @@ var Server = class extends Protocol {
           throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage4}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler43(request, extra));
+        const result = await Promise.resolve(handler44(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
@@ -35787,7 +35787,7 @@ var Server = class extends Protocol {
       };
       return super.setRequestHandler(requestSchema, wrappedHandler);
     }
-    return super.setRequestHandler(requestSchema, handler43);
+    return super.setRequestHandler(requestSchema, handler44);
   }
   assertCapabilityForMethod(method) {
     switch (method) {
@@ -36360,13 +36360,13 @@ var ExperimentalMcpServerTasks = class {
   constructor(_mcpServer) {
     this._mcpServer = _mcpServer;
   }
-  registerToolTask(name, config2, handler43) {
+  registerToolTask(name, config2, handler44) {
     const execution = { taskSupport: "required", ...config2.execution };
     if (execution.taskSupport === "forbidden") {
       throw new Error(`Cannot register task-based tool '${name}' with taskSupport 'forbidden'. Use registerTool() instead.`);
     }
     const mcpServerInternal = this._mcpServer;
-    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler43);
+    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler44);
   }
 };
 
@@ -36424,24 +36424,24 @@ var McpServer = class {
       }
     });
     this.server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: Object.entries(this._registeredTools).filter(([, tool46]) => tool46.enabled).map(([name, tool46]) => {
+      tools: Object.entries(this._registeredTools).filter(([, tool47]) => tool47.enabled).map(([name, tool47]) => {
         const toolDefinition = {
           name,
-          title: tool46.title,
-          description: tool46.description,
+          title: tool47.title,
+          description: tool47.description,
           inputSchema: (() => {
-            const obj = normalizeObjectSchema(tool46.inputSchema);
+            const obj = normalizeObjectSchema(tool47.inputSchema);
             return obj ? toJsonSchemaCompat(obj, {
               strictUnions: true,
               pipeStrategy: "input"
             }) : EMPTY_OBJECT_JSON_SCHEMA;
           })(),
-          annotations: tool46.annotations,
-          execution: tool46.execution,
-          _meta: tool46._meta
+          annotations: tool47.annotations,
+          execution: tool47.execution,
+          _meta: tool47._meta
         };
-        if (tool46.outputSchema) {
-          const obj = normalizeObjectSchema(tool46.outputSchema);
+        if (tool47.outputSchema) {
+          const obj = normalizeObjectSchema(tool47.outputSchema);
           if (obj) {
             toolDefinition.outputSchema = toJsonSchemaCompat(obj, {
               strictUnions: true,
@@ -36454,16 +36454,16 @@ var McpServer = class {
     }));
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       try {
-        const tool46 = this._registeredTools[request.params.name];
-        if (!tool46) {
+        const tool47 = this._registeredTools[request.params.name];
+        if (!tool47) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
         }
-        if (!tool46.enabled) {
+        if (!tool47.enabled) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} disabled`);
         }
         const isTaskRequest = !!request.params.task;
-        const taskSupport = tool46.execution?.taskSupport;
-        const isTaskHandler = "createTask" in tool46.handler;
+        const taskSupport = tool47.execution?.taskSupport;
+        const isTaskHandler = "createTask" in tool47.handler;
         if ((taskSupport === "required" || taskSupport === "optional") && !isTaskHandler) {
           throw new McpError(ErrorCode.InternalError, `Tool ${request.params.name} has taskSupport '${taskSupport}' but was not registered with registerToolTask`);
         }
@@ -36471,14 +36471,14 @@ var McpServer = class {
           throw new McpError(ErrorCode.MethodNotFound, `Tool ${request.params.name} requires task augmentation (taskSupport: 'required')`);
         }
         if (taskSupport === "optional" && !isTaskRequest && isTaskHandler) {
-          return await this.handleAutomaticTaskPolling(tool46, request, extra);
+          return await this.handleAutomaticTaskPolling(tool47, request, extra);
         }
-        const args = await this.validateToolInput(tool46, request.params.arguments, request.params.name);
-        const result = await this.executeToolHandler(tool46, args, extra);
+        const args = await this.validateToolInput(tool47, request.params.arguments, request.params.name);
+        const result = await this.executeToolHandler(tool47, args, extra);
         if (isTaskRequest) {
           return result;
         }
-        await this.validateToolOutput(tool46, result, request.params.name);
+        await this.validateToolOutput(tool47, result, request.params.name);
         return result;
       } catch (error2) {
         if (error2 instanceof McpError) {
@@ -36511,12 +36511,12 @@ var McpServer = class {
   /**
    * Validates tool input arguments against the tool's input schema.
    */
-  async validateToolInput(tool46, args, toolName) {
-    if (!tool46.inputSchema) {
+  async validateToolInput(tool47, args, toolName) {
+    if (!tool47.inputSchema) {
       return void 0;
     }
-    const inputObj = normalizeObjectSchema(tool46.inputSchema);
-    const schemaToParse = inputObj ?? tool46.inputSchema;
+    const inputObj = normalizeObjectSchema(tool47.inputSchema);
+    const schemaToParse = inputObj ?? tool47.inputSchema;
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36528,8 +36528,8 @@ var McpServer = class {
   /**
    * Validates tool output against the tool's output schema.
    */
-  async validateToolOutput(tool46, result, toolName) {
-    if (!tool46.outputSchema) {
+  async validateToolOutput(tool47, result, toolName) {
+    if (!tool47.outputSchema) {
       return;
     }
     if (!("content" in result)) {
@@ -36541,7 +36541,7 @@ var McpServer = class {
     if (!result.structuredContent) {
       throw new McpError(ErrorCode.InvalidParams, `Output validation error: Tool ${toolName} has an output schema but no structured content was provided`);
     }
-    const outputObj = normalizeObjectSchema(tool46.outputSchema);
+    const outputObj = normalizeObjectSchema(tool47.outputSchema);
     const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36552,43 +36552,43 @@ var McpServer = class {
   /**
    * Executes a tool handler (either regular or task-based).
    */
-  async executeToolHandler(tool46, args, extra) {
-    const handler43 = tool46.handler;
-    const isTaskHandler = "createTask" in handler43;
+  async executeToolHandler(tool47, args, extra) {
+    const handler44 = tool47.handler;
+    const isTaskHandler = "createTask" in handler44;
     if (isTaskHandler) {
       if (!extra.taskStore) {
         throw new Error("No task store provided.");
       }
       const taskExtra = { ...extra, taskStore: extra.taskStore };
-      if (tool46.inputSchema) {
-        const typedHandler = handler43;
+      if (tool47.inputSchema) {
+        const typedHandler = handler44;
         return await Promise.resolve(typedHandler.createTask(args, taskExtra));
       } else {
-        const typedHandler = handler43;
+        const typedHandler = handler44;
         return await Promise.resolve(typedHandler.createTask(taskExtra));
       }
     }
-    if (tool46.inputSchema) {
-      const typedHandler = handler43;
+    if (tool47.inputSchema) {
+      const typedHandler = handler44;
       return await Promise.resolve(typedHandler(args, extra));
     } else {
-      const typedHandler = handler43;
+      const typedHandler = handler44;
       return await Promise.resolve(typedHandler(extra));
     }
   }
   /**
    * Handles automatic task polling for tools with taskSupport 'optional'.
    */
-  async handleAutomaticTaskPolling(tool46, request, extra) {
+  async handleAutomaticTaskPolling(tool47, request, extra) {
     if (!extra.taskStore) {
       throw new Error("No task store provided for task-capable tool.");
     }
-    const args = await this.validateToolInput(tool46, request.params.arguments, request.params.name);
-    const handler43 = tool46.handler;
+    const args = await this.validateToolInput(tool47, request.params.arguments, request.params.name);
+    const handler44 = tool47.handler;
     const taskExtra = { ...extra, taskStore: extra.taskStore };
-    const createTaskResult = args ? await Promise.resolve(handler43.createTask(args, taskExtra)) : (
+    const createTaskResult = args ? await Promise.resolve(handler44.createTask(args, taskExtra)) : (
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await Promise.resolve(handler43.createTask(taskExtra))
+      await Promise.resolve(handler44.createTask(taskExtra))
     );
     const taskId = createTaskResult.task.taskId;
     let task = createTaskResult.task;
@@ -36924,17 +36924,17 @@ var McpServer = class {
     }
     return registeredPrompt;
   }
-  _createRegisteredTool(name, title, description, inputSchema27, outputSchema, annotations, execution, _meta, handler43) {
+  _createRegisteredTool(name, title, description, inputSchema28, outputSchema, annotations, execution, _meta, handler44) {
     validateAndWarnToolName(name);
     const registeredTool = {
       title,
       description,
-      inputSchema: getZodSchemaObject(inputSchema27),
+      inputSchema: getZodSchemaObject(inputSchema28),
       outputSchema: getZodSchemaObject(outputSchema),
       annotations,
       execution,
       _meta,
-      handler: handler43,
+      handler: handler44,
       enabled: true,
       disable: () => registeredTool.update({ enabled: false }),
       enable: () => registeredTool.update({ enabled: true }),
@@ -36980,7 +36980,7 @@ var McpServer = class {
       throw new Error(`Tool ${name} is already registered`);
     }
     let description;
-    let inputSchema27;
+    let inputSchema28;
     let outputSchema;
     let annotations;
     if (typeof rest[0] === "string") {
@@ -36989,7 +36989,7 @@ var McpServer = class {
     if (rest.length > 1) {
       const firstArg = rest[0];
       if (isZodRawShapeCompat(firstArg)) {
-        inputSchema27 = rest.shift();
+        inputSchema28 = rest.shift();
         if (rest.length > 1 && typeof rest[0] === "object" && rest[0] !== null && !isZodRawShapeCompat(rest[0])) {
           annotations = rest.shift();
         }
@@ -37001,7 +37001,7 @@ var McpServer = class {
       }
     }
     const callback = rest[0];
-    return this._createRegisteredTool(name, void 0, description, inputSchema27, outputSchema, annotations, { taskSupport: "forbidden" }, void 0, callback);
+    return this._createRegisteredTool(name, void 0, description, inputSchema28, outputSchema, annotations, { taskSupport: "forbidden" }, void 0, callback);
   }
   /**
    * Registers a tool with a config object and callback.
@@ -37010,8 +37010,8 @@ var McpServer = class {
     if (this._registeredTools[name]) {
       throw new Error(`Tool ${name} is already registered`);
     }
-    const { title, description, inputSchema: inputSchema27, outputSchema, annotations, _meta } = config2;
-    return this._createRegisteredTool(name, title, description, inputSchema27, outputSchema, annotations, { taskSupport: "forbidden" }, _meta, cb);
+    const { title, description, inputSchema: inputSchema28, outputSchema, annotations, _meta } = config2;
+    return this._createRegisteredTool(name, title, description, inputSchema28, outputSchema, annotations, { taskSupport: "forbidden" }, _meta, cb);
   }
   prompt(name, ...rest) {
     if (this._registeredPrompts[name]) {
@@ -37857,6 +37857,42 @@ function parseJsonObject(raw, fallback) {
   }
 }
 
+// src/storage/agentAuditRepo.ts
+var AgentAuditRepo = class {
+  constructor(db) {
+    this.db = db;
+    this.getHashesStmt = db.prepare(`
+      SELECT entry_key, hash FROM agent_config_hashes WHERE project_path = ?
+    `);
+    this.upsertStmt = db.prepare(`
+      INSERT INTO agent_config_hashes (project_path, entry_key, hash, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(project_path, entry_key) DO UPDATE SET hash = excluded.hash, updated_at = excluded.updated_at
+    `);
+  }
+  db;
+  getHashesStmt;
+  upsertStmt;
+  /** Every hash recorded for `projectPath`, keyed by entry_key. Empty map when none. */
+  getHashes(projectPath) {
+    const rows = this.getHashesStmt.all(projectPath);
+    const out = /* @__PURE__ */ new Map();
+    for (const row of rows) out.set(row.entry_key, row.hash);
+    return out;
+  }
+  /** Insert-or-update `entries` for `projectPath` in one transaction. No-op on an empty array. */
+  upsertHashes(projectPath, entries2) {
+    if (entries2.length === 0) return;
+    const updatedAt = nowIso();
+    const tx = this.db.transaction((rows) => {
+      for (const entry of rows) {
+        this.upsertStmt.run(projectPath, entry.entry_key, entry.hash, updatedAt);
+      }
+    });
+    tx(entries2);
+  }
+};
+
 // src/storage/baselinesRepo.ts
 var BaselinesRepo = class {
   insertStmt;
@@ -38219,7 +38255,7 @@ var FindingsRepo = class {
   }
 };
 function rowToFinding(row) {
-  const finding3 = {
+  const finding4 = {
     fingerprint: row.fingerprint,
     tool: row.tool,
     severity: row.severity,
@@ -38228,16 +38264,16 @@ function rowToFinding(row) {
     fix_available: intToBool(row.fix_available),
     fix_applied: intToBool(row.fix_applied)
   };
-  if (row.rule_id !== null) finding3.rule_id = row.rule_id;
-  if (row.subcategory !== null) finding3.subcategory = row.subcategory;
-  if (row.message !== null) finding3.message = row.message;
-  if (row.file_path !== null) finding3.file_path = row.file_path;
-  if (row.line_start !== null) finding3.line_start = row.line_start;
-  if (row.line_end !== null) finding3.line_end = row.line_end;
-  if (row.snippet !== null) finding3.snippet = row.snippet;
-  if (row.identity !== null) finding3.identity = row.identity;
-  if (row.content_key !== null) finding3.content_key = row.content_key;
-  return finding3;
+  if (row.rule_id !== null) finding4.rule_id = row.rule_id;
+  if (row.subcategory !== null) finding4.subcategory = row.subcategory;
+  if (row.message !== null) finding4.message = row.message;
+  if (row.file_path !== null) finding4.file_path = row.file_path;
+  if (row.line_start !== null) finding4.line_start = row.line_start;
+  if (row.line_end !== null) finding4.line_end = row.line_end;
+  if (row.snippet !== null) finding4.snippet = row.snippet;
+  if (row.identity !== null) finding4.identity = row.identity;
+  if (row.content_key !== null) finding4.content_key = row.content_key;
+  return finding4;
 }
 
 // src/storage/runtimeMetaRepo.ts
@@ -38971,6 +39007,7 @@ var Storage = class {
     this.runtimeMeta = new RuntimeMetaRepo(db);
     this.surface = new SurfaceRepo(db);
     this.validations = new ValidationsRepo(db);
+    this.agentAudit = new AgentAuditRepo(db);
   }
   db;
   scans;
@@ -38982,6 +39019,7 @@ var Storage = class {
   runtimeMeta;
   surface;
   validations;
+  agentAudit;
   close() {
     this.db.close();
   }
@@ -39156,20 +39194,20 @@ function normalizeParams2(params) {
 
 // src/tools/index.ts
 var TOOLS = [];
-function registerToolModule(tool46) {
-  if (TOOLS.some((t) => t.name === tool46.name)) {
-    throw new Error(`Tool '${tool46.name}' is already registered`);
+function registerToolModule(tool47) {
+  if (TOOLS.some((t) => t.name === tool47.name)) {
+    throw new Error(`Tool '${tool47.name}' is already registered`);
   }
-  TOOLS.push(tool46);
+  TOOLS.push(tool47);
 }
 function attachAllTools(server, ctx) {
-  for (const tool46 of TOOLS) {
+  for (const tool47 of TOOLS) {
     server.registerTool(
-      tool46.name,
+      tool47.name,
       {
-        ...tool46.title ? { title: tool46.title } : {},
-        description: tool46.description,
-        inputSchema: tool46.inputSchema
+        ...tool47.title ? { title: tool47.title } : {},
+        description: tool47.description,
+        inputSchema: tool47.inputSchema
       },
       async (input, extra) => {
         const callMeta = {};
@@ -39181,7 +39219,7 @@ function attachAllTools(server, ctx) {
         if (typedExtra?.signal instanceof AbortSignal) {
           callMeta.signal = typedExtra.signal;
         }
-        const result = await tool46.handler(input, ctx, callMeta);
+        const result = await tool47.handler(input, ctx, callMeta);
         return toCallToolResult(result);
       }
     );
@@ -39711,10 +39749,10 @@ var REDACTED_SNIPPET = "requires login";
 var IDENTITY_VERSION = 1;
 var MAX_SOURCE_BYTES = 8 * 1024 * 1024;
 function assignIdentities(findings, opts = {}) {
-  const located = findings.map((finding3, index) => ({
-    finding: finding3,
+  const located = findings.map((finding4, index) => ({
+    finding: finding4,
     index,
-    location: locate(finding3.file_path, opts.projectPath)
+    location: locate(finding4.file_path, opts.projectPath)
   }));
   const contentKeys = /* @__PURE__ */ new Map();
   let currentPath = null;
@@ -39730,14 +39768,14 @@ function assignIdentities(findings, opts = {}) {
   const byPath = [...located].sort(
     (a2, b) => compareStrings(a2.location.readable ?? "", b.location.readable ?? "")
   );
-  for (const { finding: finding3, index, location } of byPath) {
-    contentKeys.set(index, sha2562(contentSource(finding3, location.readable, linesOf)));
+  for (const { finding: finding4, index, location } of byPath) {
+    contentKeys.set(index, sha2562(contentSource(finding4, location.readable, linesOf)));
   }
-  const keyed = located.map(({ finding: finding3, index, location }) => ({
-    finding: finding3,
+  const keyed = located.map(({ finding: finding4, index, location }) => ({
+    finding: finding4,
     index,
-    tool: finding3.tool.toLowerCase(),
-    rule: finding3.rule_id ?? "",
+    tool: finding4.tool.toLowerCase(),
+    rule: finding4.rule_id ?? "",
     path: location.key,
     contentKey: contentKeys.get(index) ?? sha2562("none")
   }));
@@ -39875,8 +39913,8 @@ ${collapse(snippetText(f.tool, f.snippet))}`;
   }
   return "none";
 }
-function snippetText(tool46, snippet) {
-  if (tool46.toLowerCase() !== "bandit") return snippet;
+function snippetText(tool47, snippet) {
+  if (tool47.toLowerCase() !== "bandit") return snippet;
   return snippet.split(/\r\n|\r|\n/).map((line) => line.replace(/^\d+ /, "")).join("\n");
 }
 var CREDENTIAL_RULE = /(^|[^a-z])(secrets?|passwords?|passwd|pwd|credentials?|api[-_]?keys?|private[-_]?keys?|access[-_]?keys?|aws[-_]?keys?|hardcoded[-_ ]?(passwords?|secrets?|credentials?|keys?|tokens?))([^a-z]|$)/i;
@@ -40854,7 +40892,7 @@ function makeFinding(input) {
   if (input.line_end !== void 0) fingerprintInput.line_end = input.line_end;
   if (snippet !== void 0) fingerprintInput.snippet = snippet;
   const fingerprint = computeFingerprint(fingerprintInput);
-  const finding3 = {
+  const finding4 = {
     fingerprint,
     tool: input.tool,
     severity: input.severity,
@@ -40862,14 +40900,14 @@ function makeFinding(input) {
     title: input.title,
     fix_available: input.fix_available ?? false
   };
-  if (input.rule_id !== void 0) finding3.rule_id = input.rule_id;
-  if (input.subcategory !== void 0) finding3.subcategory = input.subcategory;
-  if (input.message !== void 0) finding3.message = input.message;
-  if (input.file_path !== void 0) finding3.file_path = input.file_path;
-  if (input.line_start !== void 0) finding3.line_start = input.line_start;
-  if (input.line_end !== void 0) finding3.line_end = input.line_end;
-  if (snippet !== void 0) finding3.snippet = snippet;
-  return finding3;
+  if (input.rule_id !== void 0) finding4.rule_id = input.rule_id;
+  if (input.subcategory !== void 0) finding4.subcategory = input.subcategory;
+  if (input.message !== void 0) finding4.message = input.message;
+  if (input.file_path !== void 0) finding4.file_path = input.file_path;
+  if (input.line_start !== void 0) finding4.line_start = input.line_start;
+  if (input.line_end !== void 0) finding4.line_end = input.line_end;
+  if (snippet !== void 0) finding4.snippet = snippet;
+  return finding4;
 }
 function normalizeSeverity(raw) {
   if (!raw) return "medium";
@@ -40935,8 +40973,8 @@ var banditParser = {
     const results = asArray(getProp(root, "results"));
     const findings = [];
     for (const raw of results) {
-      const finding3 = mapResult(raw, ctx);
-      if (finding3) findings.push(finding3);
+      const finding4 = mapResult(raw, ctx);
+      if (finding4) findings.push(finding4);
     }
     return { findings, cves: [] };
   }
@@ -41017,8 +41055,8 @@ var semgrepParser = {
     const results = asArray(getProp(root, "results"));
     const findings = [];
     for (const raw of results) {
-      const finding3 = mapResult2(raw, ctx);
-      if (finding3) findings.push(finding3);
+      const finding4 = mapResult2(raw, ctx);
+      if (finding4) findings.push(finding4);
     }
     return { findings, cves: [] };
   }
@@ -41843,8 +41881,8 @@ var gitleaksParser = {
     const items = Array.isArray(root) ? root : asArray(getProp(root, "findings"));
     const findings = [];
     for (const item of items) {
-      const finding3 = mapItem(item, ctx);
-      if (finding3) findings.push(finding3);
+      const finding4 = mapItem(item, ctx);
+      if (finding4) findings.push(finding4);
     }
     return { findings, cves: [] };
   }
@@ -42361,22 +42399,22 @@ var trivyParser = {
     for (const result of asArray(getProp(root, "Results"))) {
       const target = getString(result, "Target") ?? "";
       for (const v of asArray(getProp(result, "Vulnerabilities"))) {
-        const finding3 = mapVulnerability(v, target, ctx);
-        if (finding3) findings.push(finding3);
+        const finding4 = mapVulnerability(v, target, ctx);
+        if (finding4) findings.push(finding4);
         const cve = mapVulnerabilityCve(v);
         if (cve) cves.push(cve);
       }
       for (const l of asArray(getProp(result, "Licenses"))) {
-        const finding3 = mapLicense(l, target, ctx);
-        if (finding3) findings.push(finding3);
+        const finding4 = mapLicense(l, target, ctx);
+        if (finding4) findings.push(finding4);
       }
       for (const m of asArray(getProp(result, "Misconfigurations"))) {
-        const finding3 = mapMisconfiguration(m, target, ctx);
-        if (finding3) findings.push(finding3);
+        const finding4 = mapMisconfiguration(m, target, ctx);
+        if (finding4) findings.push(finding4);
       }
       for (const s of asArray(getProp(result, "Secrets"))) {
-        const finding3 = mapSecret(s, target, ctx);
-        if (finding3) findings.push(finding3);
+        const finding4 = mapSecret(s, target, ctx);
+        if (finding4) findings.push(finding4);
       }
     }
     return { findings, cves };
@@ -42691,8 +42729,8 @@ async function runChild(name, input, ctx, meta) {
     cves: [],
     cancelled
   });
-  const tool46 = TOOLS.find((t) => t.name === name);
-  if (!tool46) {
+  const tool47 = TOOLS.find((t) => t.name === name);
+  if (!tool47) {
     return empty({ tool: name, scan_id: null, status: "failed", error: "not registered" }, [
       { name, status: "failed", reason: `tool ${name} is not registered` }
     ], false);
@@ -42700,7 +42738,7 @@ async function runChild(name, input, ctx, meta) {
   if (ctx.signal.aborted) return empty({ tool: name, scan_id: null, status: "cancelled" }, [], true);
   let r;
   try {
-    r = await tool46.handler(input, ctx.plugin, meta);
+    r = await tool47.handler(input, ctx.plugin, meta);
   } catch (e) {
     if (ctx.signal.aborted) return empty({ tool: name, scan_id: null, status: "cancelled" }, [], true);
     const reason = e instanceof Error ? e.message : String(e);
@@ -42873,8 +42911,8 @@ var hadolintParser = {
     const root = parseInputAsJson(input);
     const findings = [];
     for (const raw of asArray(root)) {
-      const finding3 = mapEntry(raw, ctx);
-      if (finding3) findings.push(finding3);
+      const finding4 = mapEntry(raw, ctx);
+      if (finding4) findings.push(finding4);
     }
     return { findings, cves: [] };
   }
@@ -43569,8 +43607,8 @@ var eslintParser = {
       const filePath = getString(file, "filePath");
       if (!filePath) continue;
       for (const msg of asArray(getProp(file, "messages"))) {
-        const finding3 = mapMessage(msg, filePath, ctx);
-        if (finding3) findings.push(finding3);
+        const finding4 = mapMessage(msg, filePath, ctx);
+        if (finding4) findings.push(finding4);
       }
     }
     return { findings, cves: [] };
@@ -43621,8 +43659,8 @@ var jscpdParser = {
     const root = parseInputAsJson(input);
     const findings = [];
     for (const dup of asArray(getProp(root, "duplicates"))) {
-      const finding3 = mapDuplicate(dup, ctx);
-      if (finding3) findings.push(finding3);
+      const finding4 = mapDuplicate(dup, ctx);
+      if (finding4) findings.push(finding4);
     }
     return { findings, cves: [] };
   }
@@ -43674,8 +43712,8 @@ var radonParser = {
     for (const [file, blocks] of fileEntries2(input)) {
       const seen = /* @__PURE__ */ new Set();
       for (const block of asArray(blocks)) {
-        const finding3 = mapBlock(block, file, ctx, seen);
-        if (finding3) findings.push(finding3);
+        const finding4 = mapBlock(block, file, ctx, seen);
+        if (finding4) findings.push(finding4);
       }
     }
     return { findings, cves: [] };
@@ -43735,8 +43773,8 @@ var ruffParser = {
     const items = Array.isArray(root) ? root : asArray(getProp(root, "results"));
     const findings = [];
     for (const raw of items) {
-      const finding3 = mapItem2(raw, ctx);
-      if (finding3) findings.push(finding3);
+      const finding4 = mapItem2(raw, ctx);
+      if (finding4) findings.push(finding4);
     }
     return { findings, cves: [] };
   }
@@ -43783,8 +43821,8 @@ var staticcheckParser = {
   parse(input, ctx = {}) {
     const findings = [];
     for (const entry of entries(input)) {
-      const finding3 = mapEntry2(entry, ctx);
-      if (finding3) findings.push(finding3);
+      const finding4 = mapEntry2(entry, ctx);
+      if (finding4) findings.push(finding4);
     }
     return { findings, cves: [] };
   }
@@ -44559,8 +44597,8 @@ var npmAuditParser = {
         const fixAvailable = fixIsAvailable(getProp(entry, "fixAvailable"));
         for (const via of asArray(getProp(entry, "via"))) {
           if (typeof via !== "object" || via === null) continue;
-          const finding3 = mapV2Advisory(via, fixAvailable, seen, ctx);
-          if (finding3) findings.push(finding3);
+          const finding4 = mapV2Advisory(via, fixAvailable, seen, ctx);
+          if (finding4) findings.push(finding4);
         }
       }
     }
@@ -48963,47 +49001,47 @@ async function handler17(input, ctx) {
   }
   const contextLines = inp.context_lines ?? 20;
   const latest = ctx.storage.scans.getLatest();
-  const finding3 = latest ? ctx.storage.findings.listByScan(latest.scan_id).find((f) => f.fingerprint === inp.finding_fingerprint) : null;
-  if (!finding3) {
+  const finding4 = latest ? ctx.storage.findings.listByScan(latest.scan_id).find((f) => f.fingerprint === inp.finding_fingerprint) : null;
+  if (!finding4) {
     return failDomain14("unknown_scan_id", `Finding ${inp.finding_fingerprint} not in the latest scan.`);
   }
   let surrounding_source = null;
   let source_start_line = 0;
   let source_end_line = 0;
-  if (finding3.file_path) {
-    const abs = join37(projectPath, finding3.file_path);
+  if (finding4.file_path) {
+    const abs = join37(projectPath, finding4.file_path);
     if (existsSync30(abs)) {
       try {
         const raw = readFileSync22(abs, "utf8");
         const lines = raw.split(/\r?\n/);
-        const start = Math.max(0, (finding3.line_start ?? 1) - 1 - contextLines);
-        const end = Math.min(lines.length, (finding3.line_end ?? finding3.line_start ?? 1) + contextLines);
+        const start = Math.max(0, (finding4.line_start ?? 1) - 1 - contextLines);
+        const end = Math.min(lines.length, (finding4.line_end ?? finding4.line_start ?? 1) + contextLines);
         source_start_line = start + 1;
         source_end_line = end;
         const slice = lines.slice(start, end);
         surrounding_source = slice.map((l, i2) => {
           const lineNo = start + 1 + i2;
-          const marker = lineNo >= (finding3.line_start ?? -1) && lineNo <= (finding3.line_end ?? -1) ? ">>" : "  ";
+          const marker = lineNo >= (finding4.line_start ?? -1) && lineNo <= (finding4.line_end ?? -1) ? ">>" : "  ";
           return `${marker} ${String(lineNo).padStart(5)}: ${l}`;
         }).join("\n");
       } catch {
       }
     }
   }
-  const priorSuppressions = finding3.rule_id ? ctx.storage.suppressions.listActive().filter((s) => s.finding_fingerprint !== finding3.fingerprint).slice(0, 10) : [];
+  const priorSuppressions = finding4.rule_id ? ctx.storage.suppressions.listActive().filter((s) => s.finding_fingerprint !== finding4.fingerprint).slice(0, 10) : [];
   return {
     ok: true,
     finding: {
-      fingerprint: finding3.fingerprint,
-      tool: finding3.tool,
-      rule_id: finding3.rule_id ?? null,
-      severity: finding3.severity,
-      category: finding3.category,
-      subcategory: finding3.subcategory ?? null,
-      title: finding3.title,
-      message: finding3.message ?? null,
-      file_path: finding3.file_path ?? null,
-      line_range: finding3.line_start !== void 0 ? { start: finding3.line_start, end: finding3.line_end ?? finding3.line_start } : null
+      fingerprint: finding4.fingerprint,
+      tool: finding4.tool,
+      rule_id: finding4.rule_id ?? null,
+      severity: finding4.severity,
+      category: finding4.category,
+      subcategory: finding4.subcategory ?? null,
+      title: finding4.title,
+      message: finding4.message ?? null,
+      file_path: finding4.file_path ?? null,
+      line_range: finding4.line_start !== void 0 ? { start: finding4.line_start, end: finding4.line_end ?? finding4.line_start } : null
     },
     surrounding_source,
     source_start_line,
@@ -50211,8 +50249,8 @@ var phpcsParser = {
       const messages = getProp(rawFileEntry, "messages");
       if (!Array.isArray(messages)) continue;
       for (const m of messages) {
-        const finding3 = mapMessage2(filePath, m, ctx);
-        if (finding3) findings.push(finding3);
+        const finding4 = mapMessage2(filePath, m, ctx);
+        if (finding4) findings.push(finding4);
       }
     }
     return { findings, cves: [] };
@@ -50749,7 +50787,7 @@ function pushVuln(raw, subcategory, componentLabel, findings, cves) {
   const fixedIn = getString(raw, "fixed_in");
   const severity = severityFromVuln(raw);
   const cveForRule = cveList[0] ?? title.slice(0, 64);
-  const finding3 = makeFinding({
+  const finding4 = makeFinding({
     tool: WPSCAN_TOOL_NAME,
     rule_id: cveForRule,
     severity,
@@ -50760,7 +50798,7 @@ function pushVuln(raw, subcategory, componentLabel, findings, cves) {
     file_path: componentLabel,
     snippet: `component:${componentLabel}`
   });
-  findings.push(finding3);
+  findings.push(finding4);
   for (const cveId of cveList) {
     const [pkgName, installedVersion] = componentLabel.split("@");
     const cveEntry = {
@@ -56089,7 +56127,7 @@ function originFingerprint(check2, origin, parts = []) {
 function buildFinding(args) {
   const { check: check2, severity, title, message: message3, route, request, origin, identityParts } = args;
   const path6 = route?.path_resolved ?? request.path;
-  const finding3 = {
+  const finding4 = {
     fingerprint: origin === void 0 ? dastFingerprint(check2, request.method, path6, route?.file) : originFingerprint(check2, origin, identityParts),
     tool: "dast",
     rule_id: origin === void 0 ? dastRuleId(check2, request.method, path6) : originRuleId(check2, origin, identityParts),
@@ -56103,10 +56141,10 @@ function buildFinding(args) {
     evidence_id: request.id
   };
   if (route !== void 0) {
-    finding3.file_path = route.file;
-    finding3.line_start = route.line;
+    finding4.file_path = route.file;
+    finding4.line_start = route.line;
   }
-  return finding3;
+  return finding4;
 }
 function routeFor(routes, routeIndex) {
   return routeIndex === null ? void 0 : routes[routeIndex];
@@ -56547,16 +56585,16 @@ function responsePart(result) {
     error: result.error
   };
 }
-function buildEvidence(finding3, origin, results) {
-  const primary = results.find((r) => r.request.id === finding3.evidence_id);
+function buildEvidence(finding4, origin, results) {
+  const primary = results.find((r) => r.request.id === finding4.evidence_id);
   const record4 = {
-    fingerprint: finding3.fingerprint,
-    check: finding3.check,
-    evidence_id: finding3.evidence_id,
+    fingerprint: finding4.fingerprint,
+    check: finding4.check,
+    evidence_id: finding4.evidence_id,
     origin,
     exchanges: []
   };
-  if (finding3.rule_id !== void 0) record4.rule_id = finding3.rule_id;
+  if (finding4.rule_id !== void 0) record4.rule_id = finding4.rule_id;
   if (primary === void 0) {
     record4.note = "No probe exchange recorded for this finding; it was reported by an external engine. See nuclei.jsonl in this directory for the raw output.";
     return record4;
@@ -56570,12 +56608,12 @@ function buildEvidence(finding3, origin, results) {
   }
   return record4;
 }
-function buildBurstEvidence(finding3, origin, burst, planned, observed) {
+function buildBurstEvidence(finding4, origin, burst, planned, observed) {
   const first = burst[0];
   const record4 = {
-    fingerprint: finding3.fingerprint,
-    check: finding3.check,
-    evidence_id: finding3.evidence_id,
+    fingerprint: finding4.fingerprint,
+    check: finding4.check,
+    evidence_id: finding4.evidence_id,
     origin,
     exchanges: first === void 0 ? [] : [toExchange(first)],
     burst: {
@@ -56585,11 +56623,11 @@ function buildBurstEvidence(finding3, origin, burst, planned, observed) {
       observed
     }
   };
-  if (finding3.rule_id !== void 0) record4.rule_id = finding3.rule_id;
+  if (finding4.rule_id !== void 0) record4.rule_id = finding4.rule_id;
   if (first === void 0) record4.note = "The burst produced no results at all.";
   return record4;
 }
-function writeEvidenceFiles(dir, records, redact) {
+function writeEvidenceFiles(dir, records, redact2) {
   const outcome = { written: /* @__PURE__ */ new Set(), capped: 0, failed: 0 };
   for (const [index, record4] of records.entries()) {
     if (index >= MAX_EVIDENCE_FILES) {
@@ -56599,7 +56637,7 @@ function writeEvidenceFiles(dir, records, redact) {
     try {
       writeFileSync13(
         join54(dir, `${record4.fingerprint}.json`),
-        redact(JSON.stringify(record4, null, 2)),
+        redact2(JSON.stringify(record4, null, 2)),
         "utf8"
       );
       outcome.written.add(record4.fingerprint);
@@ -56790,7 +56828,7 @@ function normalizeLine(line, routes) {
   const matchedAt = typeof matchedAtValue === "string" ? matchedAtValue : "";
   const pathname = pathnameOf(matchedAt);
   const route = matchRoute(pathname, routes);
-  const finding3 = {
+  const finding4 = {
     // `dastFingerprint`'s `method` slot plays the role of "the specific
     // signal at this path" — an HTTP verb for the own engine's checks, the
     // template-id here. Two different templates matching the SAME path must
@@ -56817,18 +56855,18 @@ function normalizeLine(line, routes) {
     evidence_id: `nuclei ${templateId} ${matchedAt}`
   };
   if (route !== void 0) {
-    finding3.file_path = route.file;
-    finding3.line_start = route.line;
+    finding4.file_path = route.file;
+    finding4.line_start = route.line;
   }
-  return finding3;
+  return finding4;
 }
 function normalizeNucleiJsonl(jsonl, routes) {
   const findings = [];
   for (const line of jsonl.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed === "") continue;
-    const finding3 = normalizeLine(trimmed, routes);
-    if (finding3 !== null) findings.push(finding3);
+    const finding4 = normalizeLine(trimmed, routes);
+    if (finding4 !== null) findings.push(finding4);
   }
   return findings;
 }
@@ -57073,7 +57111,7 @@ async function runRateLimitBurst(opts) {
     };
   }
   const path6 = substituteParams(selected.route.path_resolved).path;
-  const finding3 = noRateLimitObservedFinding({
+  const finding4 = noRateLimitObservedFinding({
     route: selected.route,
     path: path6,
     // Every burst request shares one id by design (see `buildBurst`), which
@@ -57086,12 +57124,12 @@ async function runRateLimitBurst(opts) {
   });
   return {
     outcome: "ran",
-    finding: finding3,
+    finding: finding4,
     summary: { ...base, sent: verdict.sent, observed: false },
     evidence: /* @__PURE__ */ new Map([
       [
-        finding3.fingerprint,
-        buildBurstEvidence(finding3, opts.origin, burstResults, RATE_LIMIT_BURST, false)
+        finding4.fingerprint,
+        buildBurstEvidence(finding4, opts.origin, burstResults, RATE_LIMIT_BURST, false)
       ]
     ])
   };
@@ -57187,10 +57225,10 @@ function makeRedactor(secrets) {
     return out;
   };
 }
-function redactObject(value, redact) {
+function redactObject(value, redact2) {
   const json = JSON.stringify(value);
   if (json === void 0) return value;
-  return JSON.parse(redact(json));
+  return JSON.parse(redact2(json));
 }
 
 // src/dast/target.ts
@@ -57347,7 +57385,7 @@ async function handler40(input, ctx, callMeta) {
   const snapshot = persisted.snapshot;
   const warnings = [];
   const credential = resolveCredential(inp, warnings);
-  const redact = makeRedactor(collectSecrets(credential.value));
+  const redact2 = makeRedactor(collectSecrets(credential.value));
   const timeoutMs = typeof inp.timeout_ms === "number" && inp.timeout_ms > 0 ? Math.floor(inp.timeout_ms) : DEFAULT_PROBE_TIMEOUT_MS;
   const maxRequests = typeof inp.max_requests === "number" && inp.max_requests > 0 ? Math.floor(inp.max_requests) : DEFAULT_MAX_REQUESTS;
   const wallClockMs = typeof inp.wall_clock_ms === "number" && inp.wall_clock_ms > 0 ? Math.floor(inp.wall_clock_ms) : DEFAULT_WALL_CLOCK_MS;
@@ -57492,7 +57530,7 @@ async function handler40(input, ctx, callMeta) {
   const records = ordered.map(
     (f) => burst.evidence.get(f.fingerprint) ?? buildEvidence(f, target.origin, results)
   );
-  const written = writeEvidenceFiles(evidenceDir, records, redact);
+  const written = writeEvidenceFiles(evidenceDir, records, redact2);
   if (written.capped > 0) {
     warnings.push(
       `${written.capped} finding(s) have no evidence file: the per-scan evidence cap was reached. The findings themselves are complete; only their raw request/response pairs were dropped.`
@@ -57505,7 +57543,7 @@ async function handler40(input, ctx, callMeta) {
     ordered.map(
       (f) => redactObject(
         toInsertInput(f, scanId, written.written.has(f.fingerprint) ? evidenceDir : null),
-        redact
+        redact2
       )
     )
   );
@@ -57544,10 +57582,10 @@ async function handler40(input, ctx, callMeta) {
     // one string this codebase does not author — nuclei's first stderr line,
     // stored verbatim (`nuclei.ts#interpretRun`) — and "we never put it
     // there" is the exact argument that failed for the evidence files.
-    tools_run: redactObject(toolsRun, redact),
-    missing_tools: redactObject(missingTools, redact),
+    tools_run: redactObject(toolsRun, redact2),
+    missing_tools: redactObject(missingTools, redact2),
     report_dir: evidenceDir,
-    meta: redactObject(meta, redact)
+    meta: redactObject(meta, redact2)
   });
   const record4 = ctx.storage.scans.getById(scanId);
   const payload = {
@@ -57607,7 +57645,7 @@ async function handler40(input, ctx, callMeta) {
       rate_limit: burst.summary
     }
   };
-  return { ok: true, ...redactObject(payload, redact) };
+  return { ok: true, ...redactObject(payload, redact2) };
 }
 function resolveCredential(inp, warnings) {
   const envName = inp.auth_header_env;
@@ -57641,21 +57679,21 @@ function specPaths(snapshot, side) {
   }
   return out;
 }
-function toInsertInput(finding3, scanId, evidenceDir) {
-  const { check: check2, evidence_id, ...rest } = finding3;
+function toInsertInput(finding4, scanId, evidenceDir) {
+  const { check: check2, evidence_id, ...rest } = finding4;
   return {
     ...rest,
     scan_id: scanId,
     raw: {
       check: check2,
       evidence_id,
-      evidence_file: evidenceDir === null ? null : join56(evidenceDir, `${finding3.fingerprint}.json`)
+      evidence_file: evidenceDir === null ? null : join56(evidenceDir, `${finding4.fingerprint}.json`)
     }
   };
 }
 function countBySeverity4(findings) {
   const out = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const finding3 of findings) out[finding3.severity] += 1;
+  for (const finding4 of findings) out[finding4.severity] += 1;
   return out;
 }
 function outcomeCounts(results) {
@@ -57744,7 +57782,7 @@ function validateStatically(input) {
   const reachCache = /* @__PURE__ */ new Map();
   const languagesWithEdges = languagesWithResolvedEdges(input);
   const context = { roots, routesByFile, exposedFiles, reachCache, languagesWithEdges };
-  return input.findings.map((finding3) => validateOne(finding3, input, context));
+  return input.findings.map((finding4) => validateOne(finding4, input, context));
 }
 function languagesWithResolvedEdges(input) {
   const languages = /* @__PURE__ */ new Set();
@@ -57769,21 +57807,21 @@ function groupRoutesByRelFile(routes, projectPath) {
   }
   return byFile;
 }
-function makeEnvelope(finding3, input) {
+function makeEnvelope(finding4, input) {
   return {
-    fingerprint: finding3.fingerprint,
+    fingerprint: finding4.fingerprint,
     provider: "static",
     snapshot_id: input.snapshotId,
     tree_hash: input.treeHash,
     computed_at: input.computedAt
   };
 }
-function validateOne(finding3, input, context) {
-  const envelope = makeEnvelope(finding3, input);
-  if (finding3.file_path === void 0) {
+function validateOne(finding4, input, context) {
+  const envelope = makeEnvelope(finding4, input);
+  if (finding4.file_path === void 0) {
     return unknownVerdict(envelope, ["finding has no file_path; nothing to evaluate"]);
   }
-  const relFile = toRelativeIfPossible(finding3.file_path, input.projectPath);
+  const relFile = toRelativeIfPossible(finding4.file_path, input.projectPath);
   const { language, entry, gaps } = resolveLanguageContext(relFile, input);
   const reach = cachedReachFrom(input.graph, context.roots, relFile, context.reachCache);
   if (reach.hops !== null) {
@@ -58234,7 +58272,7 @@ import { createHash as createHash10 } from "node:crypto";
 var DEP_SCANNER_TOOLS = ["trivy", "npm-audit", "wpscan"];
 function buildGroups(input) {
   const eligible = input.findings.filter(
-    (finding3) => finding3.fix_available && passes(finding3.severity, input.severityMin)
+    (finding4) => finding4.fix_available && passes(finding4.severity, input.severityMin)
   );
   const groups = [];
   if (input.sources.includes("deps")) {
@@ -58263,18 +58301,18 @@ function selectGroups(groups, maxPrs) {
 }
 function buildDepsGroups(findings, upgradeSteps) {
   const buckets = /* @__PURE__ */ new Map();
-  for (const finding3 of findings) {
-    if (!DEP_SCANNER_TOOLS.includes(finding3.tool)) continue;
-    const step = upgradeSteps.find((candidate) => mentionsPackage(finding3, candidate.package_name));
+  for (const finding4 of findings) {
+    if (!DEP_SCANNER_TOOLS.includes(finding4.tool)) continue;
+    const step = upgradeSteps.find((candidate) => mentionsPackage(finding4, candidate.package_name));
     if (step === void 0) continue;
     const bucketKey = `${step.ecosystem}::${step.package_name}`;
     const bucket = buckets.get(bucketKey);
     if (bucket === void 0) {
-      buckets.set(bucketKey, { step, fingerprints: [finding3.fingerprint], severity: finding3.severity });
+      buckets.set(bucketKey, { step, fingerprints: [finding4.fingerprint], severity: finding4.severity });
     } else {
-      bucket.fingerprints.push(finding3.fingerprint);
-      if (SEVERITY_ORDER[finding3.severity] > SEVERITY_ORDER[bucket.severity]) {
-        bucket.severity = finding3.severity;
+      bucket.fingerprints.push(finding4.fingerprint);
+      if (SEVERITY_ORDER[finding4.severity] > SEVERITY_ORDER[bucket.severity]) {
+        bucket.severity = finding4.severity;
       }
     }
   }
@@ -58295,8 +58333,8 @@ function buildDepsGroups(findings, upgradeSteps) {
     ([ecosystem, candidates2]) => makeGroup("deps", ecosystem, candidates2)
   );
 }
-function mentionsPackage(finding3, packageName) {
-  return containsWholePackageName(finding3.title, packageName) || containsWholePackageName(finding3.message ?? "", packageName);
+function mentionsPackage(finding4, packageName) {
+  return containsWholePackageName(finding4.title, packageName) || containsWholePackageName(finding4.message ?? "", packageName);
 }
 function containsWholePackageName(text, packageName) {
   if (packageName.length === 0) return false;
@@ -58314,14 +58352,14 @@ function isPackageNameChar(ch) {
   return ch !== void 0 && /[A-Za-z0-9_.@/-]/.test(ch);
 }
 function buildSemgrepGroup(findings) {
-  const candidates2 = findings.filter((finding3) => finding3.tool === "semgrep").map((finding3) => ({
+  const candidates2 = findings.filter((finding4) => finding4.tool === "semgrep").map((finding4) => ({
     source: "semgrep",
-    fingerprints: [finding3.fingerprint],
-    severity: finding3.severity,
+    fingerprints: [finding4.fingerprint],
+    severity: finding4.severity,
     command: null,
     // `||`, not `??`: an empty-string rule_id is exactly as unusable a
     // label as a missing one, and `??` would let '' straight through.
-    label: finding3.rule_id || finding3.title
+    label: finding4.rule_id || finding4.title
   }));
   return candidates2.length === 0 ? null : makeGroup("semgrep", "semgrep", candidates2);
 }
@@ -58350,14 +58388,14 @@ function summariseExclusions(input) {
   };
   const belowFloor = [];
   let candidates2 = 0;
-  for (const finding3 of input.findings) {
-    if (covered.has(finding3.fingerprint)) {
+  for (const finding4 of input.findings) {
+    if (covered.has(finding4.fingerprint)) {
       candidates2 += 1;
-    } else if (!finding3.fix_available) {
+    } else if (!finding4.fix_available) {
       by_reason.no_fix_available += 1;
-    } else if (!passes(finding3.severity, input.severityMin)) {
+    } else if (!passes(finding4.severity, input.severityMin)) {
       by_reason.below_severity_min += 1;
-      belowFloor.push(finding3);
+      belowFloor.push(finding4);
     } else {
       by_reason.no_fix_source += 1;
     }
@@ -58612,11 +58650,11 @@ function fromPyprojectToml(content) {
 // src/fixpr/verify.ts
 var OUTPUT_HEAD_LINES = 20;
 function judgeScan(targets, before, after) {
-  const beforeByFingerprint = new Map(before.findings.map((finding3) => [finding3.fingerprint, finding3]));
-  const afterFingerprints = new Set(after.findings.map((finding3) => finding3.fingerprint));
+  const beforeByFingerprint = new Map(before.findings.map((finding4) => [finding4.fingerprint, finding4]));
+  const afterFingerprints = new Set(after.findings.map((finding4) => finding4.fingerprint));
   const afterKeys = /* @__PURE__ */ new Set();
-  for (const finding3 of after.findings) {
-    const key = resolutionKey(finding3);
+  for (const finding4 of after.findings) {
+    const key = resolutionKey(finding4);
     if (key !== null) afterKeys.add(key);
   }
   const resolved = [];
@@ -58629,10 +58667,10 @@ function judgeScan(targets, before, after) {
     else resolved.push(target);
   }
   const newFindings = newByRuleAndFile(before.findings, after.findings);
-  const new_findings = newFindings.map((finding3) => ({
-    fingerprint: finding3.fingerprint,
-    severity: finding3.severity,
-    title: finding3.title
+  const new_findings = newFindings.map((finding4) => ({
+    fingerprint: finding4.fingerprint,
+    severity: finding4.severity,
+    title: finding4.title
   }));
   return {
     passed: still_present.length === 0 && newFindings.length === 0,
@@ -58645,17 +58683,17 @@ function newByRuleAndFile(before, after) {
   const beforeKeys = new Set(before.map(ruleFileKey));
   const seenNew = /* @__PURE__ */ new Set();
   const result = [];
-  for (const finding3 of after) {
-    const key = ruleFileKey(finding3);
+  for (const finding4 of after) {
+    const key = ruleFileKey(finding4);
     if (beforeKeys.has(key)) continue;
     if (seenNew.has(key)) continue;
     seenNew.add(key);
-    result.push(finding3);
+    result.push(finding4);
   }
   return result;
 }
-function ruleFileKey(finding3) {
-  return JSON.stringify([finding3.rule_id ?? null, finding3.file_path ?? null]);
+function ruleFileKey(finding4) {
+  return JSON.stringify([finding4.rule_id ?? null, finding4.file_path ?? null]);
 }
 async function judgeTests(opts) {
   const { derived, worktreePath, projectPath, timeoutMs } = opts;
@@ -59116,7 +59154,7 @@ async function rescanAfterFix(group, targetFindings, worktreePath, ctx, callMeta
   const missingTools = Array.isArray(r.missing_tools) ? r.missing_tools : [];
   const requiredTools = new Set(targetFindings.map((f) => f.tool));
   const uncheckable = [...requiredTools].filter(
-    (tool46) => scannerCouldNotBeVerified(group.source, tool46, missingTools)
+    (tool47) => scannerCouldNotBeVerified(group.source, tool47, missingTools)
   );
   if (uncheckable.length > 0) {
     return {
@@ -59126,11 +59164,11 @@ async function rescanAfterFix(group, targetFindings, worktreePath, ctx, callMeta
   }
   return { ok: true, scanId: r.scan_id, findings: ctx.storage.findings.listByScan(r.scan_id) };
 }
-function scannerCouldNotBeVerified(source, tool46, missingTools) {
+function scannerCouldNotBeVerified(source, tool47, missingTools) {
   if (source === "semgrep") {
-    return tool46 === "semgrep" && missingTools.includes("semgrep");
+    return tool47 === "semgrep" && missingTools.includes("semgrep");
   }
-  const missingToolsName = DEPS_AUDIT_MISSING_TOOLS_NAME[tool46];
+  const missingToolsName = DEPS_AUDIT_MISSING_TOOLS_NAME[tool47];
   if (missingToolsName === void 0) return false;
   if (missingToolsName === null) return true;
   return missingTools.includes(missingToolsName);
@@ -59198,6 +59236,801 @@ function failDomain24(code, message3) {
   return { ok: false, error: { code, message: message3 } };
 }
 
+// src/tools/auditAgentConfig.ts
+import { randomUUID as randomUUID17 } from "node:crypto";
+
+// src/agentaudit/hash.ts
+import { createHash as createHash11 } from "node:crypto";
+function stableStringify2(value) {
+  return JSON.stringify(sortKeys(value));
+}
+function sortKeys(value) {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value !== null && typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      out[key] = sortKeys(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+function hashConfigValue(value) {
+  return createHash11("sha256").update(stableStringify2(value)).digest("hex");
+}
+
+// src/agentaudit/mcpServers.ts
+function extractMcpServers(source) {
+  if (!source.exists || source.mcpServersField === null || source.json === void 0) return [];
+  const container = getObject(source.json, source.mcpServersField);
+  if (container === void 0) return [];
+  const out = [];
+  for (const [name, value] of Object.entries(container)) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
+    const raw = value;
+    const entry = { sourceLabel: source.label, name, raw };
+    const command = raw["command"];
+    if (typeof command === "string") entry.command = command;
+    const args = raw["args"];
+    if (Array.isArray(args) && args.every((a2) => typeof a2 === "string")) entry.args = args;
+    const cwd = raw["cwd"];
+    if (typeof cwd === "string") entry.cwd = cwd;
+    const url = raw["url"];
+    if (typeof url === "string") entry.url = url;
+    const type = raw["type"];
+    if (typeof type === "string") entry.type = type;
+    const env = raw["env"];
+    if (env !== null && typeof env === "object" && !Array.isArray(env)) {
+      entry.env = env;
+    }
+    out.push(entry);
+  }
+  return out;
+}
+function getObject(json, key) {
+  if (json === null || typeof json !== "object" || Array.isArray(json)) return void 0;
+  const value = json[key];
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
+
+// src/hooks/secretScan.ts
+var CONFIDENCE_RANK = { medium: 0, high: 1 };
+var SECRET_RULES = [
+  // ── Cloud / provider tokens (unambiguous shapes → 'high') ────────────────
+  { id: "aws-access-key-id", title: "AWS access key ID", confidence: "high", pattern: /\b(?:AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA)[0-9A-Z]{16}\b/ },
+  { id: "aws-secret-access-key", title: "AWS secret access key", confidence: "high", pattern: /\baws_?secret_?access_?key\b["'\s:=]+["']?[A-Za-z0-9/+]{40}\b/i },
+  { id: "github-token", title: "GitHub token", confidence: "high", pattern: /\bgh[pousr]_[A-Za-z0-9]{36}\b/ },
+  { id: "github-fine-grained-pat", title: "GitHub fine-grained PAT", confidence: "high", pattern: /\bgithub_pat_[A-Za-z0-9_]{82}\b/ },
+  { id: "gitlab-pat", title: "GitLab personal access token", confidence: "high", pattern: /\bglpat-[A-Za-z0-9_-]{20}\b/ },
+  { id: "slack-token", title: "Slack token", confidence: "high", pattern: /\bxox[baprs]-[A-Za-z0-9-]{10,48}\b/ },
+  { id: "slack-webhook", title: "Slack incoming webhook", confidence: "high", pattern: /https:\/\/hooks\.slack\.com\/services\/T[A-Za-z0-9_/]{6,}/ },
+  { id: "stripe-live-key", title: "Stripe live secret key", confidence: "high", pattern: /\b[rs]k_live_[A-Za-z0-9]{20,}\b/ },
+  { id: "google-api-key", title: "Google API key", confidence: "high", pattern: /\bAIza[0-9A-Za-z_-]{35}\b/ },
+  { id: "google-oauth-token", title: "Google OAuth access token", confidence: "high", pattern: /\bya29\.[0-9A-Za-z_-]{20,}\b/ },
+  { id: "anthropic-api-key", title: "Anthropic API key", confidence: "high", pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/ },
+  // `(?!ant-)` — an Anthropic key (`sk-ant-…`) otherwise also satisfies this
+  // shape (`sk-` + 32+ alnum/hyphen chars) and was reported twice, once under
+  // each rule id.
+  { id: "openai-api-key", title: "OpenAI API key", confidence: "high", pattern: /\bsk-(?!ant-)(?:proj-)?[A-Za-z0-9_-]{32,}\b/ },
+  { id: "sendgrid-key", title: "SendGrid API key", confidence: "high", pattern: /\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b/ },
+  { id: "npm-token", title: "npm access token", confidence: "high", pattern: /\bnpm_[A-Za-z0-9]{36}\b/ },
+  { id: "pypi-token", title: "PyPI upload token", confidence: "high", pattern: /\bpypi-AgEIcHlwaS[A-Za-z0-9_-]{10,}/ },
+  { id: "twilio-account-sid", title: "Twilio account SID", confidence: "high", pattern: /\bAC[0-9a-fA-F]{32}\b/ },
+  { id: "private-key-block", title: "Private key", confidence: "high", pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----/ },
+  // ── Heuristics (ambiguous → 'medium', warn only) ─────────────────────────
+  //
+  // Quantifiers bounded at 2000 (a real JWT segment is a few hundred base64
+  // chars at most) rather than unbounded `{8,}`: unbounded, three greedy
+  // classes each backed by a literal `.` that may not exist nearby turned
+  // `'eyJ-'.repeat(50000)` (no dot anywhere in it) into ~27s of backtracking.
+  // Bounding caps the work per candidate start at a constant instead of
+  // letting it grow with input size — the other half of the fix is the 16KB
+  // per-line cap below, which bounds input size itself.
+  { id: "jwt", title: "JSON Web Token (JWT)", confidence: "medium", pattern: /\beyJ[A-Za-z0-9_-]{8,2000}\.eyJ[A-Za-z0-9_-]{8,2000}\.[A-Za-z0-9_-]{8,2000}\b/ },
+  {
+    id: "generic-assignment",
+    title: "Hard-coded credential",
+    confidence: "medium",
+    // SCREAMING_SNAKE / kebab / bare key (DB_PASSWORD, api-key, password)
+    // assigned a quoted value. The key must sit at a name boundary — start of
+    // string or preceded by a non-alnum char — via the lookbehind, which is
+    // also what lets `DB_PASSWORD` match at all: a plain `\b` sits between
+    // two word characters at the `_` before PASSWORD ('_' and 'P' are both
+    // \w), so no boundary exists there for `\b` to find.
+    // An optional closing quote (`["'\`]?`) is allowed between the key and
+    // the separator so JSON's `"password":` — the key's own closing `"`
+    // sitting right before the colon — matches; that quote used to be
+    // unaccounted for and silently broke every JSON-shaped hit.
+    pattern: /(?<![A-Za-z0-9])(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)["'`]?\s*[:=]\s*["'`]([^"'`]{12,})["'`]/i
+  },
+  {
+    id: "generic-assignment-camel",
+    title: "Hard-coded credential",
+    confidence: "medium",
+    // camelCase key (stripeSecretKey, dbPassword, githubToken) assigned a
+    // quoted value. Case-SENSITIVE and gated on a lowercase letter right
+    // before the capitalised keyword (the camelCase boundary itself) —
+    // deliberately not folded into the rule above via a case-insensitive
+    // flag: that would also match the keyword in the MIDDLE of an ordinary
+    // lowercase word ("monkey", "donkey" both contain "key") with nothing to
+    // tell a real name boundary from a coincidence.
+    pattern: /(?<=[a-z])(?:ApiKey|SecretKey|Secret|AccessToken|AuthToken|ClientSecret|Passwd|Password|PrivateKey|Token)["'`]?\s*[:=]\s*["'`]([^"'`]{12,})["'`]/
+  },
+  {
+    id: "generic-assignment-env",
+    title: "Hard-coded credential",
+    confidence: "medium",
+    // Same SCREAMING_SNAKE/bare key, unquoted `.env`-style assignment
+    // (`DB_PASSWORD=hunter2hunter2`, `export ANTHROPIC_API_KEY=sk-ant-…`).
+    // `=` only, never `:` — a bare `token: string` TypeScript annotation is
+    // exactly this shape with `:`, and must stay silent. The value charset
+    // excludes `$`, `{`, `}`, `<`, `>`, `(`, `)` and whitespace, which is what
+    // keeps `${VAR}`, `<your-key>` and `password = getPassword()` unmatched
+    // without needing a placeholder check to catch them.
+    pattern: /(?<![A-Za-z0-9])(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)\s*=\s*([^\s"'`${}<>()]{8,})(?=\s|$)/i
+  },
+  {
+    id: "uri-credentials",
+    title: "Credentials embedded in a URI",
+    confidence: "medium",
+    // scheme://user:password@host — postgres://user:pass@host/db and the like.
+    pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:([^\s/:@]{3,})@[^\s/'"]+/i
+  }
+];
+var VALUE_CAPTURE_RULES = /* @__PURE__ */ new Set([
+  "generic-assignment",
+  "generic-assignment-camel",
+  "generic-assignment-env",
+  "uri-credentials"
+]);
+var PLACEHOLDER_MARKERS = [
+  "example",
+  "changeme",
+  "change-me",
+  "placeholder",
+  "your-",
+  "your_",
+  "yourkey",
+  "yourtoken",
+  "redacted",
+  "dummy",
+  "sample",
+  "xxxxx",
+  "test-token",
+  "fake",
+  "notreal",
+  "<your",
+  "${",
+  "{{",
+  "env.",
+  "process.env",
+  "os.environ"
+];
+function shannonEntropy(s) {
+  if (s.length === 0) return 0;
+  const freq = /* @__PURE__ */ new Map();
+  for (const ch of s) freq.set(ch, (freq.get(ch) ?? 0) + 1);
+  let h2 = 0;
+  for (const count2 of freq.values()) {
+    const p = count2 / s.length;
+    h2 -= p * Math.log2(p);
+  }
+  return h2;
+}
+function looksLikePlaceholder(value) {
+  const lower = value.toLowerCase();
+  if (PLACEHOLDER_MARKERS.some((m) => lower.includes(m))) return true;
+  if (/^(.)\1{6,}$/.test(value)) return true;
+  return false;
+}
+function redact(secret) {
+  const trimmed = secret.trim();
+  const head = trimmed.slice(0, 4);
+  const tail = trimmed.length >= 16 ? trimmed.slice(-2) : "";
+  return `${head}\u2026${tail} (${trimmed.length})`;
+}
+var MAX_LINE_LENGTH = 16 * 1024;
+function scanForSecrets(text, options = {}) {
+  if (!text) return [];
+  const minRank = CONFIDENCE_RANK[options.minConfidence ?? "medium"];
+  const allow = (options.allowlist ?? []).map((a2) => a2.toLowerCase()).filter(Boolean);
+  const lines = text.split(/\r?\n/);
+  const hits = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (let i2 = 0; i2 < lines.length; i2++) {
+    const rawLine = lines[i2];
+    if (rawLine === void 0 || rawLine.length === 0) continue;
+    const line = rawLine.length > MAX_LINE_LENGTH ? rawLine.slice(0, MAX_LINE_LENGTH) : rawLine;
+    const lowerLine = line.toLowerCase();
+    if (allow.some((a2) => lowerLine.includes(a2))) continue;
+    for (const rule of SECRET_RULES) {
+      if (CONFIDENCE_RANK[rule.confidence] < minRank) continue;
+      const re = new RegExp(rule.pattern.source, rule.pattern.flags.replace("g", ""));
+      const m = re.exec(line);
+      if (!m) continue;
+      if (VALUE_CAPTURE_RULES.has(rule.id)) {
+        const value = m[1] ?? "";
+        if (looksLikePlaceholder(value)) continue;
+        if (rule.id !== "generic-assignment-env" && shannonEntropy(value) < 3.2) continue;
+      }
+      const dedupeKey = `${rule.id}:${i2}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      const matched = VALUE_CAPTURE_RULES.has(rule.id) ? m[1] ?? m[0] : m[0];
+      hits.push({
+        ruleId: rule.id,
+        title: rule.title,
+        confidence: rule.confidence,
+        line: i2 + 1,
+        preview: redact(matched)
+      });
+    }
+  }
+  return hits;
+}
+
+// src/agentaudit/rules.ts
+var TOOL2 = "agent-audit";
+var DANGEROUS_BASH_PREFIXES = /* @__PURE__ */ new Set([
+  "rm",
+  "del",
+  "erase",
+  "rd",
+  "rmdir",
+  "remove-item",
+  "curl",
+  "wget",
+  "iwr",
+  "irm",
+  "invoke-webrequest",
+  "invoke-restmethod",
+  "sudo",
+  "su",
+  "chmod",
+  "chown",
+  "dd",
+  "mkfs",
+  "format",
+  "eval",
+  "iex",
+  "invoke-expression",
+  "ssh",
+  "scp",
+  "kill",
+  "killall",
+  "taskkill",
+  "shutdown",
+  "reboot"
+]);
+var NETWORK_EGRESS_RE = /\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b/i;
+var WRITE_OUTSIDE_RE = /(?:\d*>{1,2}|Out-File\s+-(?:Path\s+)?|Set-Content\s+-(?:Path\s+)?|Add-Content\s+-(?:Path\s+)?)\s*['"]?(?:~|\/(?!\/)|[A-Za-z]:[\\/]|\.\.[\\/])/i;
+var TEMPLATE_VAR_RE = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/;
+function finding3(input) {
+  return makeFinding({
+    tool: TOOL2,
+    rule_id: input.rule_id,
+    severity: input.severity,
+    category: input.category,
+    title: input.title,
+    message: input.message,
+    file_path: input.file_path,
+    fix_available: false,
+    ...input.snippet !== void 0 ? { snippet: input.snippet } : {}
+  });
+}
+function launcherName(command) {
+  if (!command) return void 0;
+  const base = command.replace(/\\/g, "/").split("/").pop() ?? command;
+  return base.replace(/\.(cmd|exe|ps1|bat)$/i, "").toLowerCase();
+}
+function firstNonFlag(args, fromIndex = 0) {
+  for (let i2 = fromIndex; i2 < args.length; i2++) {
+    const a2 = args[i2];
+    if (a2 !== void 0 && !a2.startsWith("-")) return a2;
+  }
+  return void 0;
+}
+function launchSpecFor(entry) {
+  const name = launcherName(entry.command);
+  const args = entry.args ?? [];
+  if (name === "npx") {
+    const pkg = firstNonFlag(args);
+    return pkg ? { launcher: "npx", packageSpec: pkg } : void 0;
+  }
+  if (name === "uvx") {
+    const pkg = firstNonFlag(args);
+    return pkg ? { launcher: "uvx", packageSpec: pkg } : void 0;
+  }
+  if (name === "pipx") {
+    const runIdx = args.findIndex((a2) => a2 === "run");
+    if (runIdx === -1) return void 0;
+    const pkg = firstNonFlag(args, runIdx + 1);
+    return pkg ? { launcher: "pipx", packageSpec: pkg } : void 0;
+  }
+  return void 0;
+}
+function isPinned(launcher, spec) {
+  if (launcher === "npx") {
+    const unscoped = spec.replace(/^@[^/@]+\//, "");
+    const at = unscoped.lastIndexOf("@");
+    if (at <= 0) return false;
+    const version2 = unscoped.slice(at + 1);
+    return version2.length > 0 && version2.toLowerCase() !== "latest";
+  }
+  const eq = spec.indexOf("==");
+  return eq > 0 && spec.slice(eq + 2).length > 0;
+}
+function checkUnpinnedLaunchers(entries2) {
+  const out = [];
+  for (const entry of entries2) {
+    const spec = launchSpecFor(entry);
+    if (!spec || isPinned(spec.launcher, spec.packageSpec)) continue;
+    out.push(
+      finding3({
+        rule_id: "agent-audit-unpinned-launcher",
+        severity: "medium",
+        category: "security",
+        title: `MCP server '${entry.name}' launches an unpinned package`,
+        message: `'${entry.name}' runs via ${spec.launcher} ${spec.packageSpec}, with no exact version pinned. A compromised or backdoored release published under this name runs automatically the next time this server starts. Pin an exact version.`,
+        file_path: entry.sourceLabel,
+        snippet: `${entry.command} ${(entry.args ?? []).join(" ")}`.trim()
+      })
+    );
+  }
+  return out;
+}
+function isLoopbackHost(hostname3) {
+  const h2 = hostname3.toLowerCase();
+  return h2 === "localhost" || h2 === "127.0.0.1" || h2 === "::1" || h2 === "0.0.0.0" || h2.endsWith(".localhost");
+}
+function checkPlainHttpRemotes(entries2) {
+  const out = [];
+  for (const entry of entries2) {
+    if (!entry.url) continue;
+    let parsed;
+    try {
+      parsed = new URL(entry.url);
+    } catch {
+      continue;
+    }
+    if (parsed.protocol !== "http:" || isLoopbackHost(parsed.hostname)) continue;
+    out.push(
+      finding3({
+        rule_id: "agent-audit-http-remote",
+        severity: "high",
+        category: "security",
+        title: `MCP server '${entry.name}' connects over plain HTTP`,
+        message: `'${entry.name}' points at ${entry.url} \u2014 an unencrypted transport. Tool calls, responses, and any bearer token/header this server is configured with travel in the clear and can be read or altered in transit. Use https:// instead.`,
+        file_path: entry.sourceLabel,
+        snippet: entry.url
+      })
+    );
+  }
+  return out;
+}
+function checkInlineSecrets(entries2) {
+  const out = [];
+  for (const entry of entries2) {
+    if (!entry.env) continue;
+    for (const [key, value] of Object.entries(entry.env)) {
+      if (typeof value !== "string") continue;
+      const hits = scanForSecrets(`${key}=${value}`);
+      for (const hit of hits) {
+        out.push(
+          finding3({
+            rule_id: "agent-audit-inline-secret",
+            severity: hit.confidence === "high" ? "critical" : "medium",
+            category: "security",
+            title: `Possible ${hit.title} inline in MCP server '${entry.name}''s env block`,
+            message: `env.${key} on '${entry.name}' (${entry.sourceLabel}) looks like a ${hit.title.toLowerCase()} written directly into the config file rather than referenced from a secret store or \${VAR} placeholder. ${redact(value)}`,
+            file_path: entry.sourceLabel,
+            snippet: hit.preview
+          })
+        );
+      }
+    }
+  }
+  return out;
+}
+function asObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+}
+function asArray4(value) {
+  return Array.isArray(value) ? value : void 0;
+}
+function bashSpecifier(rule) {
+  const m = /^Bash\((.*)\)$/.exec(rule);
+  return m?.[1];
+}
+function isDangerousWildcard(specifier) {
+  if (specifier === "*") return true;
+  const m = /^(\S+)(?:\s.*)?:\*$/.exec(specifier);
+  const leading = m?.[1];
+  if (leading === void 0) return false;
+  return DANGEROUS_BASH_PREFIXES.has(leading.toLowerCase());
+}
+function checkWildcardPermissions(source) {
+  const root = asObject(source.json);
+  const permissions = asObject(root?.["permissions"]);
+  const allow = asArray4(permissions?.["allow"]);
+  if (!allow) return [];
+  const out = [];
+  for (const rule of allow) {
+    if (typeof rule !== "string") continue;
+    const specifier = bashSpecifier(rule);
+    if (specifier === void 0 || !isDangerousWildcard(specifier)) continue;
+    out.push(
+      finding3({
+        rule_id: "agent-audit-wildcard-permission",
+        severity: specifier === "*" ? "critical" : "high",
+        category: "security",
+        title: `Wildcard Bash permission: ${rule}`,
+        message: `permissions.allow contains "${rule}", which auto-approves ${specifier === "*" ? "every Bash command" : `any Bash command starting with '${specifier.split(":")[0]}'`} with no confirmation prompt. Narrow it to the specific commands actually needed.`,
+        file_path: source.label,
+        snippet: rule
+      })
+    );
+  }
+  return out;
+}
+function checkBypassPermissions(source) {
+  const root = asObject(source.json);
+  if (!root) return [];
+  const permissions = asObject(root["permissions"]);
+  const mode = permissions?.["defaultMode"] ?? root["defaultMode"];
+  if (mode !== "bypassPermissions") return [];
+  return [
+    finding3({
+      rule_id: "agent-audit-bypass-permissions",
+      severity: "critical",
+      category: "security",
+      title: 'Permission prompts are fully disabled (defaultMode: "bypassPermissions")',
+      message: `${source.label} sets defaultMode to "bypassPermissions" \u2014 every tool call (including Bash, file writes, and any MCP server this workspace trusts) runs with no confirmation at all.`,
+      file_path: source.label
+    })
+  ];
+}
+function checkEnableAllProjectMcpServers(source) {
+  const root = asObject(source.json);
+  if (!root || root["enableAllProjectMcpServers"] !== true) return [];
+  return [
+    finding3({
+      rule_id: "agent-audit-enable-all-mcp-servers",
+      severity: "medium",
+      category: "security",
+      title: "Every project-declared MCP server is auto-trusted (enableAllProjectMcpServers: true)",
+      message: `${source.label} sets enableAllProjectMcpServers to true \u2014 any MCP server later added to this project's .mcp.json starts and is trusted automatically, with no per-server confirmation.`,
+      file_path: source.label
+    })
+  ];
+}
+function checkHookRisks(source) {
+  const root = asObject(source.json);
+  const hooksRoot = asObject(root?.["hooks"]);
+  if (!hooksRoot) return [];
+  const out = [];
+  for (const eventGroups of Object.values(hooksRoot)) {
+    const groups = asArray4(eventGroups);
+    if (!groups) continue;
+    for (const group of groups) {
+      const groupObj = asObject(group);
+      const hooks = asArray4(groupObj?.["hooks"]);
+      if (!hooks) continue;
+      for (const hook of hooks) {
+        const hookObj = asObject(hook);
+        const command = hookObj?.["command"];
+        if (typeof command !== "string") continue;
+        if (NETWORK_EGRESS_RE.test(command)) {
+          out.push(
+            finding3({
+              rule_id: "agent-audit-hook-network-egress",
+              severity: "high",
+              category: "security",
+              title: "A hook shells out to the network",
+              message: `${source.label} runs a hook whose command reaches out over the network (curl/wget/iwr/irm): "${command}". A hook runs on every matching tool call with no visible confirmation \u2014 this is where session data would leave silently.`,
+              file_path: source.label,
+              snippet: command
+            })
+          );
+        }
+        if (WRITE_OUTSIDE_RE.test(command)) {
+          out.push(
+            finding3({
+              rule_id: "agent-audit-hook-write-outside-project",
+              severity: "high",
+              category: "security",
+              title: "A hook writes outside the project directory",
+              message: `${source.label} runs a hook whose command writes to a path outside the project ("${command}"). Confirm this is intended \u2014 a hook is not sandboxed to the project root.`,
+              file_path: source.label,
+              snippet: command
+            })
+          );
+        }
+      }
+    }
+  }
+  return out;
+}
+function checkUnexpandedVars(source) {
+  if (source.label !== ".mcp.json") return [];
+  const root = asObject(source.json);
+  const servers = asObject(root?.["mcpServers"]);
+  if (!servers) return [];
+  const out = [];
+  for (const [name, value] of Object.entries(servers)) {
+    const entry = asObject(value);
+    if (!entry) continue;
+    const fields = [
+      ["command", entry["command"]],
+      ["cwd", entry["cwd"]]
+    ];
+    const args = asArray4(entry["args"]);
+    if (args) args.forEach((a2, i2) => fields.push([`args[${i2}]`, a2]));
+    for (const [field, value_] of fields) {
+      if (typeof value_ !== "string" || !TEMPLATE_VAR_RE.test(value_)) continue;
+      out.push(
+        finding3({
+          rule_id: "agent-audit-unexpanded-var",
+          severity: "medium",
+          category: "quality",
+          title: `MCP server '${name}' will not start: unexpanded \${VAR} in .mcp.json`,
+          message: `.mcp.json's "${name}".${field} is "${value_}". Claude Code does NOT expand \${VAR} placeholders for a project-scoped .mcp.json server entry \u2014 only \${CLAUDE_PLUGIN_ROOT} inside a plugin's own plugin.json is expanded there. The literal placeholder string becomes part of the spawned command and the server fails to start (MODULE_NOT_FOUND or similar). Use a path relative to the project root (Claude Code sets cwd to it) or an absolute path instead.`,
+          file_path: source.label,
+          snippet: value_
+        })
+      );
+      break;
+    }
+  }
+  return out;
+}
+
+// src/agentaudit/analyze.ts
+function entryKey(entry) {
+  return `${entry.sourceLabel}::${entry.name}`;
+}
+function expandNestedProjectSources(source) {
+  if (source.label !== "~/.claude.json" || !source.exists || source.json === void 0) return [];
+  const root = source.json;
+  if (root === null || typeof root !== "object" || Array.isArray(root)) return [];
+  const projects = root["projects"];
+  if (projects === null || typeof projects !== "object" || Array.isArray(projects)) return [];
+  const out = [];
+  for (const [projectKey, value] of Object.entries(projects)) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
+    const mcpServers = value["mcpServers"];
+    if (mcpServers === null || typeof mcpServers !== "object" || Array.isArray(mcpServers)) continue;
+    out.push({
+      label: `~/.claude.json (project: ${projectKey})`,
+      kind: "user",
+      absolutePath: source.absolutePath,
+      mcpServersField: "mcpServers",
+      exists: true,
+      json: { mcpServers }
+    });
+  }
+  return out;
+}
+function analyzeAgentConfig(sources, previousHashes) {
+  const warnings = [];
+  const sourcesRead = [];
+  const sourcesMissing = [];
+  const allSources = [];
+  for (const source of sources) {
+    if (source.parseError !== void 0) {
+      warnings.push(`${source.label}: ${source.parseError}`);
+      continue;
+    }
+    if (!source.exists) {
+      sourcesMissing.push(source.label);
+      continue;
+    }
+    sourcesRead.push(source.label);
+    allSources.push(source);
+    allSources.push(...expandNestedProjectSources(source));
+  }
+  const findings = [];
+  const entries2 = [];
+  for (const source of allSources) {
+    entries2.push(...extractMcpServers(source));
+    findings.push(...checkWildcardPermissions(source));
+    findings.push(...checkBypassPermissions(source));
+    findings.push(...checkEnableAllProjectMcpServers(source));
+    findings.push(...checkHookRisks(source));
+    findings.push(...checkUnexpandedVars(source));
+  }
+  findings.push(...checkUnpinnedLaunchers(entries2));
+  findings.push(...checkPlainHttpRemotes(entries2));
+  findings.push(...checkInlineSecrets(entries2));
+  const entryHashes = [];
+  let entriesChanged = 0;
+  for (const entry of entries2) {
+    const key = entryKey(entry);
+    const hash = hashConfigValue(entry.raw);
+    entryHashes.push({ entry_key: key, hash });
+    const previous = previousHashes.get(key);
+    if (previous !== void 0 && previous !== hash) {
+      entriesChanged += 1;
+      findings.push(
+        makeFinding({
+          tool: "agent-audit",
+          rule_id: "agent-audit-entry-changed",
+          severity: "low",
+          category: "security",
+          title: `MCP server '${entry.name}' changed since the previous audit`,
+          message: `'${entry.name}' in ${entry.sourceLabel} does not match what the previous audit_agent_config run recorded for it. Confirm the change was intentional.`,
+          file_path: entry.sourceLabel,
+          fix_available: false
+        })
+      );
+    }
+  }
+  return {
+    findings,
+    warnings,
+    mcpServersFound: entries2.length,
+    entryHashes,
+    entriesChanged,
+    sourcesRead,
+    sourcesMissing
+  };
+}
+
+// src/agentaudit/configSources.ts
+import { existsSync as existsSync44, readFileSync as readFileSync32 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { join as join59 } from "node:path";
+var PROJECT_DESCRIPTORS = [
+  { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join59(p, ".mcp.json") },
+  {
+    label: ".claude/settings.json",
+    kind: "project",
+    mcpServersField: null,
+    resolve: (p) => join59(p, ".claude", "settings.json")
+  },
+  {
+    label: ".claude/settings.local.json",
+    kind: "project",
+    mcpServersField: null,
+    resolve: (p) => join59(p, ".claude", "settings.local.json")
+  },
+  {
+    label: ".cursor/mcp.json",
+    kind: "project",
+    mcpServersField: "mcpServers",
+    resolve: (p) => join59(p, ".cursor", "mcp.json")
+  },
+  {
+    label: ".vscode/mcp.json",
+    kind: "project",
+    mcpServersField: "servers",
+    resolve: (p) => join59(p, ".vscode", "mcp.json")
+  },
+  {
+    label: ".gemini/settings.json",
+    kind: "project",
+    mcpServersField: "mcpServers",
+    resolve: (p) => join59(p, ".gemini", "settings.json")
+  }
+];
+var USER_DESCRIPTORS = [
+  { label: "~/.claude.json", kind: "user", mcpServersField: "mcpServers", resolve: () => join59(homedir2(), ".claude.json") },
+  {
+    label: "~/.claude/settings.json",
+    kind: "user",
+    mcpServersField: null,
+    resolve: () => join59(homedir2(), ".claude", "settings.json")
+  }
+];
+function configSourceDescriptors(includeUserConfig) {
+  return includeUserConfig ? [...PROJECT_DESCRIPTORS, ...USER_DESCRIPTORS] : [...PROJECT_DESCRIPTORS];
+}
+function readConfigSources(projectPath, includeUserConfig) {
+  return configSourceDescriptors(includeUserConfig).map((descriptor) => readOne2(descriptor, projectPath));
+}
+function readOne2(descriptor, projectPath) {
+  const absolutePath = descriptor.resolve(projectPath);
+  const base = {
+    label: descriptor.label,
+    kind: descriptor.kind,
+    absolutePath,
+    mcpServersField: descriptor.mcpServersField
+  };
+  if (!existsSync44(absolutePath)) return { ...base, exists: false };
+  let raw;
+  try {
+    raw = readFileSync32(absolutePath, "utf8");
+  } catch (e) {
+    return { ...base, exists: false, parseError: `could not read: ${e.message}` };
+  }
+  try {
+    const json = JSON.parse(raw);
+    return { ...base, exists: true, raw, json };
+  } catch (e) {
+    return { ...base, exists: true, raw, parseError: `invalid JSON: ${e.message}` };
+  }
+}
+
+// src/tools/auditAgentConfig.ts
+var inputSchema27 = {
+  project_path: external_exports.string().min(1).optional().describe("Absolute or relative path to the project to audit. Defaults to the current working directory."),
+  include_user_config: external_exports.boolean().optional().default(false).describe(
+    "Also read ~/.claude.json and ~/.claude/settings.json \u2014 the USER-level config, shared across every project on this machine. Off by default: it is outside this project and auditing it here would mix one project's report with settings that affect every other project too."
+  ),
+  severity_min: SeverityMin
+};
+var tool46 = {
+  name: "audit_agent_config",
+  title: "Audit the AI-agent workspace configuration (MCP servers, permissions, hooks)",
+  description: "Audit the AI-agent workspace configuration in this project (and, opt-in, the user-level config) for risk signals that would let an agent session run unpinned code, leak secrets, or bypass permission prompts. Reads .mcp.json, .claude/settings.json, .claude/settings.local.json, .cursor/mcp.json, .vscode/mcp.json, .gemini/settings.json, and with include_user_config also ~/.claude.json and ~/.claude/settings.json. Flags: MCP servers launched via npx/uvx/pipx with no version pinned; remote MCP servers over plain http://; secrets written inline in an env block (redacted in the response); wildcard Bash permission allowlists (Bash(*), Bash(rm:*), Bash(curl:*)); defaultMode: bypassPermissions; enableAllProjectMcpServers; hooks that shell out to the network (curl/wget/iwr/irm) or write outside the project; and ${VAR} placeholders in a project .mcp.json, which Claude Code does not expand there (a real defect this repo shipped). Hashes each MCP server entry and flags ones changed since the previous audit. No network access; nothing here is executed.",
+  inputSchema: inputSchema27,
+  handler: (input, ctx) => handler43(input, ctx)
+};
+registerToolModule(tool46);
+async function handler43(input, ctx) {
+  const inp = input;
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    if (e instanceof InvalidProjectPathError) {
+      return { ok: false, error: { code: "target_not_found", message: e.message } };
+    }
+    throw e;
+  }
+  const includeUserConfig = inp.include_user_config === true;
+  const sources = readConfigSources(projectPath, includeUserConfig);
+  const previousHashes = ctx.storage.agentAudit.getHashes(projectPath);
+  const result = analyzeAgentConfig(sources, previousHashes);
+  const findings = filterFindings(result.findings, inp.severity_min);
+  const scanId = randomUUID17();
+  ctx.storage.scans.insert({
+    scan_id: scanId,
+    scan_type: "agent_audit",
+    project_path: projectPath,
+    // Not a source-tree scan (nothing here is a git checkout of code), so
+    // there is no tree to hash — same convention `wp_cron_audit` uses.
+    tree_hash: ""
+  });
+  if (result.findings.length > 0) {
+    ctx.storage.findings.bulkInsert(result.findings.map((f) => ({ ...f, scan_id: scanId })));
+  }
+  ctx.storage.agentAudit.upsertHashes(projectPath, result.entryHashes);
+  ctx.storage.scans.finalize({
+    scan_id: scanId,
+    status: "completed",
+    tools_run: [{ name: "agent-audit", status: "ok" }],
+    missing_tools: [],
+    meta: {
+      include_user_config: includeUserConfig,
+      mcp_servers_found: result.mcpServersFound,
+      entries_changed: result.entriesChanged,
+      sources_read: result.sourcesRead,
+      sources_missing: result.sourcesMissing
+    }
+  });
+  return {
+    ok: true,
+    scan_id: scanId,
+    project_path: projectPath,
+    include_user_config: includeUserConfig,
+    findings_count: findings.length,
+    findings_by_severity: countBySeverity5(findings),
+    findings,
+    mcp_servers_found: result.mcpServersFound,
+    entries_changed_since_previous_audit: result.entriesChanged,
+    sources_read: result.sourcesRead,
+    sources_missing: result.sourcesMissing,
+    warnings: result.warnings
+  };
+}
+function countBySeverity5(findings) {
+  const out = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
+  for (const f of findings) out[f.severity] += 1;
+  return out;
+}
+
 // src/resources/scans.ts
 registerResourceModule({
   name: "guardian-scans-latest",
@@ -59240,7 +60073,7 @@ function enrich(scanId, ctx) {
   const record4 = ctx.storage.scans.getById(scanId);
   if (!record4) return { last_run: null };
   const findings = ctx.storage.findings.listByScan(scanId);
-  const counts = countBySeverity5(findings);
+  const counts = countBySeverity6(findings);
   const top = topFindings4(findings, 10);
   return {
     ...record4,
@@ -59248,7 +60081,7 @@ function enrich(scanId, ctx) {
     top_findings: top
   };
 }
-function countBySeverity5(findings) {
+function countBySeverity6(findings) {
   const out = {
     info: 0,
     low: 0,

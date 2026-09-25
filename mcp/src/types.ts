@@ -67,6 +67,8 @@ export const SCAN_TYPES = [
   'skill_audit',
   // Active DAST
   'dast',
+  // Agent workspace / host-config audit
+  'agent_audit',
 ] as const;
 export type ScanType = (typeof SCAN_TYPES)[number];
 

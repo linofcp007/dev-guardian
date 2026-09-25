@@ -16,6 +16,7 @@ beforeAll(async () => {
 });
 
 const EXPECTED_TOOLS = [
+  'audit_agent_config',
   'audit_executive',
   'bug_hunt',
   'bulk_audit_wordpress_sites',
@@ -102,8 +103,8 @@ describe('MCP surface — stability snapshot', () => {
     expect(RESOURCES.map((r) => r.name).sort()).toEqual(EXPECTED_RESOURCES);
   });
 
-  it('matches the counts documented in the README (54 tools, 18 resources)', () => {
-    expect(TOOLS).toHaveLength(54);
+  it('matches the counts documented in the README (55 tools, 18 resources)', () => {
+    expect(TOOLS).toHaveLength(55);
     expect(RESOURCES).toHaveLength(18);
   });
 });

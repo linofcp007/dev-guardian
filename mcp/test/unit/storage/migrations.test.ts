@@ -40,6 +40,16 @@ describe('the committed dist/', () => {
   });
 });
 
+// The version `runMigrations` leaves a DB at once every shipped migration has
+// applied — i.e. the highest version number on disk. Computed rather than
+// hardcoded: a hardcoded literal here is exactly the kind of thing a NEW
+// migration silently breaks (four assertions below used to read '7' and
+// broke the moment migration 009 shipped), and in a numbering scheme where a
+// concurrent branch's reserved number is renumbered at merge time (see
+// `migrations/runner.ts`'s own numbering-convention doc), a literal would go
+// stale again at that very merge.
+const LATEST_VERSION = String(listMigrations().at(-1)?.version ?? 0);
+
 describe('migrations runner', () => {
   it('applies initial schema on a brand-new DB', () => {
     const db = new Database(':memory:');
@@ -76,7 +86,7 @@ describe('migrations runner', () => {
     const row = db
       .prepare(`SELECT value FROM schema_meta WHERE key = 'version'`)
       .get() as { value: string } | undefined;
-    expect(row?.value).toBe('7');
+    expect(row?.value).toBe(LATEST_VERSION);
   });
 
   it('is idempotent (running twice does not throw and version stays the same)', () => {
@@ -86,7 +96,7 @@ describe('migrations runner', () => {
     const row = db
       .prepare(`SELECT value FROM schema_meta WHERE key = 'version'`)
       .get() as { value: string };
-    expect(row.value).toBe('7');
+    expect(row.value).toBe(LATEST_VERSION);
   });
 
   it('upgrades a version-5 database in place, leaving its rows readable and uncached (006)', () => {
@@ -112,7 +122,7 @@ describe('migrations runner', () => {
     const version = db
       .prepare(`SELECT value FROM schema_meta WHERE key = 'version'`)
       .get() as { value: string };
-    expect(version.value).toBe('7');
+    expect(version.value).toBe(LATEST_VERSION);
     const scan = db.prepare(`SELECT id, cache_key FROM scans`).get() as {
       id: string;
       cache_key: string | null;
@@ -149,7 +159,7 @@ describe('migrations runner', () => {
     runMigrations(db);
 
     const version = db.prepare(`SELECT value FROM schema_meta WHERE key = 'version'`).get() as { value: string };
-    expect(version.value).toBe('7');
+    expect(version.value).toBe(LATEST_VERSION);
     const rows = db.prepare(`SELECT fingerprint, identity, content_key FROM findings ORDER BY fingerprint`).all();
     expect(rows).toEqual([
       { fingerprint: 'fp-old', identity: null, content_key: null },

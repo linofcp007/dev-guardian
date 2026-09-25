@@ -59,6 +59,8 @@ export const SCAN_TYPES = [
     'skill_audit',
     // Active DAST
     'dast',
+    // Agent workspace / host-config audit
+    'agent_audit',
 ];
 /**
  * Scan types whose rows carry CVEs (`scan_cves`): the dependency scanners and
