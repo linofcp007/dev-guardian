@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  assessComponentCoverage,
   matchInventoryAgainstFeed,
   wordfenceMatchToFindingAndCve,
   type WordfenceFeed,
@@ -18,6 +19,7 @@ function inventory(over: Partial<WpSourceInventory> = {}): WpSourceInventory {
     core: { version: '6.4.0' },
     plugins: [],
     themes: [],
+    mu_plugins: [],
     warnings: [],
     ...over,
   };
@@ -167,6 +169,69 @@ describe('matchInventoryAgainstFeed', () => {
     });
     const matches = matchInventoryAgainstFeed(inv, FEED);
     expect(matches.some((m) => m.slug === 'not-installed-plugin')).toBe(false);
+  });
+
+  // Fix round 1, item 3: mu-plugins are matched against the feed as
+  // ordinary plugins (by slug), even though they are never wp.org-checked.
+  it('matches a mu-plugin against the feed the same way as a regular plugin', () => {
+    const inv = inventory({
+      core: { version: null },
+      mu_plugins: [{ slug: 'sample-plugin', name: 'Sample Plugin', version: '0.9', path: '/x' }],
+    });
+    const matches = matchInventoryAgainstFeed(inv, FEED);
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({ slug: 'sample-plugin', componentType: 'plugin', cve: 'CVE-2024-2222' });
+  });
+});
+
+describe('assessComponentCoverage', () => {
+  it('counts core + every plugin + every theme + every mu-plugin', () => {
+    const inv = inventory({
+      core: { version: '6.4.0' },
+      plugins: [
+        { slug: 'a', name: 'A', version: '1.0', path: '/a' },
+        { slug: 'b', name: 'B', version: null, path: '/b' },
+      ],
+      themes: [{ slug: 't', name: 'T', version: null, path: '/t' }],
+      mu_plugins: [{ slug: 'mu', name: 'MU', version: '1.0', path: '/mu' }],
+    });
+
+    const coverage = assessComponentCoverage(inv);
+
+    expect(coverage.total).toBe(5); // core + a + b + t + mu
+    expect(coverage.matchable).toBe(3); // core, a, mu
+    expect(coverage.unmatched).toEqual(
+      expect.arrayContaining([
+        { type: 'plugin', slug: 'b' },
+        { type: 'theme', slug: 't' },
+      ]),
+    );
+    expect(coverage.unmatched).toHaveLength(2);
+  });
+
+  it('reports 0 matchable of N when every component is unversioned', () => {
+    const inv = inventory({
+      core: { version: null },
+      plugins: [{ slug: 'a', name: 'A', version: null, path: '/a' }],
+    });
+
+    const coverage = assessComponentCoverage(inv);
+
+    expect(coverage.total).toBe(2);
+    expect(coverage.matchable).toBe(0);
+  });
+
+  it('reports full coverage when every component has a version', () => {
+    const inv = inventory({
+      core: { version: '6.4.0' },
+      plugins: [{ slug: 'a', name: 'A', version: '1.0', path: '/a' }],
+    });
+
+    const coverage = assessComponentCoverage(inv);
+
+    expect(coverage.total).toBe(2);
+    expect(coverage.matchable).toBe(2);
+    expect(coverage.unmatched).toEqual([]);
   });
 });
 

@@ -193,16 +193,27 @@ function describeFetchError(e) {
 }
 const CACHE_FILE_NAME = 'wordfence-vulnerabilities-production.json';
 /** `%LOCALAPPDATA%\dev-guardian\cache` on Windows, `~/Library/Caches/dev-guardian`
- *  on macOS, `$XDG_CACHE_HOME/dev-guardian` (default `~/.cache/dev-guardian`)
- *  elsewhere — the conventional per-OS user cache location, never the
- *  project directory (this feed is shared across every project scanned). */
+ *  (or `$XDG_CACHE_HOME/dev-guardian` when that is set — not the macOS
+ *  convention, but a cheap, harmless accommodation that also gives tests a
+ *  way to isolate cache state on macOS the same way they already can on
+ *  Windows/Linux) on macOS, `$XDG_CACHE_HOME/dev-guardian` (default
+ *  `~/.cache/dev-guardian`) elsewhere — the conventional per-OS user cache
+ *  location, never the project directory (this feed is shared across every
+ *  project scanned). `GUARDIAN_CACHE_DIR`, when set, overrides all of the
+ *  above on every OS and is used exactly as given (no `dev-guardian`
+ *  namespace appended) — the one deliberate, explicit escape hatch, mainly
+ *  for tests that want a single env var rather than a platform-specific one. */
 export function defaultWordfenceCacheDir(env = process.env) {
+    const override = env['GUARDIAN_CACHE_DIR'];
+    if (override !== undefined && override.length > 0)
+        return override;
     if (process.platform === 'win32') {
         const base = env['LOCALAPPDATA'] ?? join(homedir(), 'AppData', 'Local');
         return join(base, 'dev-guardian', 'cache');
     }
     if (process.platform === 'darwin') {
-        return join(homedir(), 'Library', 'Caches', 'dev-guardian');
+        const base = env['XDG_CACHE_HOME'] ?? join(homedir(), 'Library', 'Caches');
+        return join(base, 'dev-guardian');
     }
     const base = env['XDG_CACHE_HOME'] ?? join(homedir(), '.cache');
     return join(base, 'dev-guardian');
@@ -295,20 +306,43 @@ async function writeCachedFeed(cachePath, payload) {
  *  `SLUG_WORDPRESS = 'wordpress'`. */
 const CORE_SLUG = 'wordpress';
 const CORE_NAME = 'WordPress';
+function allComponents(inventory) {
+    const out = [
+        { type: 'core', slug: CORE_SLUG, name: CORE_NAME, version: inventory.core.version },
+    ];
+    for (const p of [...inventory.plugins, ...inventory.mu_plugins]) {
+        out.push({ type: 'plugin', slug: p.slug, name: p.name ?? p.slug, version: p.version });
+    }
+    for (const t of inventory.themes) {
+        out.push({ type: 'theme', slug: t.slug, name: t.name ?? t.slug, version: t.version });
+    }
+    return out;
+}
+/**
+ * How much of the installed inventory the Wordfence feed match could
+ * actually cover. Fix round 1 (GC3): previously, a component with no
+ * readable version was silently dropped from matching with no signal
+ * anywhere — if EVERY component was unreadable, `wordfence-feed` still
+ * reported `status: 'ok'`, `matched_count: 0`, indistinguishable from a
+ * genuinely clean scan. `wpVulnCheckSource.ts` uses `matchable === 0` (with
+ * `total > 0`) to mark that pass `failed` rather than `ok`, and a non-empty
+ * `unmatched` with `matchable > 0` to record a named, partial gap.
+ */
+export function assessComponentCoverage(inventory) {
+    const all = allComponents(inventory);
+    const unmatched = all.filter((c) => c.version === null).map((c) => ({ type: c.type, slug: c.slug }));
+    return { total: all.length, matchable: all.length - unmatched.length, unmatched };
+}
 /**
  * Every feed vulnerability whose `software[]` names an installed component
  * (by type + slug) at a version inside one of its `affected_versions`
  * ranges. A component with no readable version (inventory returned `null`)
- * cannot be matched against anything and is silently skipped — reported as
- * a coverage gap by the caller, not fabricated as "no vulnerabilities".
+ * cannot be matched against anything and is silently skipped here — see
+ * {@link assessComponentCoverage} for how a caller turns that into a real,
+ * reported coverage gap rather than a fabricated "no vulnerabilities".
  */
 export function matchInventoryAgainstFeed(inventory, feed) {
-    const targets = [];
-    if (inventory.core.version !== null) {
-        targets.push({ type: 'core', slug: CORE_SLUG, name: CORE_NAME, version: inventory.core.version });
-    }
-    pushTargets(targets, 'plugin', inventory.plugins);
-    pushTargets(targets, 'theme', inventory.themes);
+    const targets = allComponents(inventory).filter((c) => c.version !== null);
     const matches = [];
     for (const vuln of Object.values(feed)) {
         for (const software of vuln.software) {
@@ -335,13 +369,6 @@ export function matchInventoryAgainstFeed(inventory, feed) {
         }
     }
     return matches;
-}
-function pushTargets(targets, type, components) {
-    for (const c of components) {
-        if (c.version === null)
-            continue;
-        targets.push({ type, slug: c.slug, name: c.name ?? c.slug, version: c.version });
-    }
 }
 /** CVSS v3.1 rating thresholds, matching `scannerParsers/wpscan.ts`'s own
  *  `severityFromVuln` — the two sources should read the same finding the

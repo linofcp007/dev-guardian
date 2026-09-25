@@ -8,7 +8,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 import {
   defaultWordfenceCacheDir,
@@ -224,5 +224,42 @@ describe('defaultWordfenceCacheDir', () => {
   it('includes the dev-guardian namespace, regardless of platform', () => {
     const dir = defaultWordfenceCacheDir({});
     expect(dir).toMatch(/dev-guardian/);
+  });
+
+  // Fix round 1 (cheap item): GUARDIAN_CACHE_DIR overrides on every OS, and
+  // darwin honours XDG_CACHE_HOME when set — both exist so tests (and users)
+  // can isolate cache state on macOS the same way Windows/Linux already can.
+  it('GUARDIAN_CACHE_DIR overrides everything on the current platform, used exactly as given', () => {
+    const dir = defaultWordfenceCacheDir({
+      GUARDIAN_CACHE_DIR: '/custom/cache/root',
+      LOCALAPPDATA: 'C:\\Should\\Not\\Be\\Used',
+      XDG_CACHE_HOME: '/should/not/be/used',
+    });
+    expect(dir).toBe('/custom/cache/root');
+  });
+
+  describe('on darwin', () => {
+    const originalPlatform = process.platform;
+    beforeEach(() => {
+      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    });
+    afterEach(() => {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    });
+
+    it('uses ~/Library/Caches/dev-guardian by default', () => {
+      const dir = defaultWordfenceCacheDir({});
+      expect(dir).toMatch(/Library[/\\]Caches[/\\]dev-guardian$/);
+    });
+
+    it('honours XDG_CACHE_HOME when set, unlike before this fix', () => {
+      const dir = defaultWordfenceCacheDir({ XDG_CACHE_HOME: '/tmp/xdg-cache' });
+      expect(dir).toBe(join('/tmp/xdg-cache', 'dev-guardian'));
+    });
+
+    it('GUARDIAN_CACHE_DIR still wins over XDG_CACHE_HOME', () => {
+      const dir = defaultWordfenceCacheDir({ GUARDIAN_CACHE_DIR: '/g', XDG_CACHE_HOME: '/x' });
+      expect(dir).toBe('/g');
+    });
   });
 });

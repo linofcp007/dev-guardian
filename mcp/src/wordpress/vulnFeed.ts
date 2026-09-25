@@ -56,7 +56,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { makeFinding, type ParserCveInput } from '../runners/scannerParsers/index.js';
 import type { Finding, Severity } from '../types.js';
-import type { WpComponentInventory, WpSourceInventory } from './sourceInventory.js';
+import type { WpSourceInventory } from './sourceInventory.js';
 
 /** Written to `findings.tool` for every match this module produces. */
 export const WORDFENCE_TOOL_NAME = 'wordfence';
@@ -290,16 +290,26 @@ export interface GetWordfenceFeedOptions {
 const CACHE_FILE_NAME = 'wordfence-vulnerabilities-production.json';
 
 /** `%LOCALAPPDATA%\dev-guardian\cache` on Windows, `~/Library/Caches/dev-guardian`
- *  on macOS, `$XDG_CACHE_HOME/dev-guardian` (default `~/.cache/dev-guardian`)
- *  elsewhere — the conventional per-OS user cache location, never the
- *  project directory (this feed is shared across every project scanned). */
+ *  (or `$XDG_CACHE_HOME/dev-guardian` when that is set — not the macOS
+ *  convention, but a cheap, harmless accommodation that also gives tests a
+ *  way to isolate cache state on macOS the same way they already can on
+ *  Windows/Linux) on macOS, `$XDG_CACHE_HOME/dev-guardian` (default
+ *  `~/.cache/dev-guardian`) elsewhere — the conventional per-OS user cache
+ *  location, never the project directory (this feed is shared across every
+ *  project scanned). `GUARDIAN_CACHE_DIR`, when set, overrides all of the
+ *  above on every OS and is used exactly as given (no `dev-guardian`
+ *  namespace appended) — the one deliberate, explicit escape hatch, mainly
+ *  for tests that want a single env var rather than a platform-specific one. */
 export function defaultWordfenceCacheDir(env: Record<string, string | undefined> = process.env): string {
+  const override = env['GUARDIAN_CACHE_DIR'];
+  if (override !== undefined && override.length > 0) return override;
   if (process.platform === 'win32') {
     const base = env['LOCALAPPDATA'] ?? join(homedir(), 'AppData', 'Local');
     return join(base, 'dev-guardian', 'cache');
   }
   if (process.platform === 'darwin') {
-    return join(homedir(), 'Library', 'Caches', 'dev-guardian');
+    const base = env['XDG_CACHE_HOME'] ?? join(homedir(), 'Library', 'Caches');
+    return join(base, 'dev-guardian');
   }
   const base = env['XDG_CACHE_HOME'] ?? join(homedir(), '.cache');
   return join(base, 'dev-guardian');
@@ -408,23 +418,78 @@ export interface WordfenceMatch {
 const CORE_SLUG = 'wordpress';
 const CORE_NAME = 'WordPress';
 
+/** One installed component, in the shape both matching and coverage
+ *  assessment need — core, every plugin (mu-plugins included: WordPress
+ *  itself treats a must-use plugin as an ordinary plugin for versioning
+ *  purposes, it is just always-active and never wp.org-listed), every
+ *  theme. `version: null` means "found, but no usable version" — see
+ *  `sourceInventory.ts`'s per-component warnings for why that happens and
+ *  {@link assessComponentCoverage} for how a caller is meant to react to it. */
+interface InventoryComponent {
+  type: WordfenceSoftwareType;
+  slug: string;
+  name: string;
+  version: string | null;
+}
+
+function allComponents(inventory: WpSourceInventory): InventoryComponent[] {
+  const out: InventoryComponent[] = [
+    { type: 'core', slug: CORE_SLUG, name: CORE_NAME, version: inventory.core.version },
+  ];
+  for (const p of [...inventory.plugins, ...inventory.mu_plugins]) {
+    out.push({ type: 'plugin', slug: p.slug, name: p.name ?? p.slug, version: p.version });
+  }
+  for (const t of inventory.themes) {
+    out.push({ type: 'theme', slug: t.slug, name: t.name ?? t.slug, version: t.version });
+  }
+  return out;
+}
+
+export interface ComponentCoverage {
+  /** Every installed component considered: core + plugins (incl.
+   *  mu-plugins) + themes. */
+  total: number;
+  /** Components with a usable version — the ones the Wordfence feed match
+   *  could actually check. */
+  matchable: number;
+  /** Components found but never version-checkable (fix round 1, GC3): the
+   *  `wordfence-feed` pass ran and reported real matches for the rest, but
+   *  these specific components were never looked at, and a caller must not
+   *  let that read as "checked, clean". */
+  unmatched: Array<{ type: WordfenceSoftwareType; slug: string }>;
+}
+
+/**
+ * How much of the installed inventory the Wordfence feed match could
+ * actually cover. Fix round 1 (GC3): previously, a component with no
+ * readable version was silently dropped from matching with no signal
+ * anywhere — if EVERY component was unreadable, `wordfence-feed` still
+ * reported `status: 'ok'`, `matched_count: 0`, indistinguishable from a
+ * genuinely clean scan. `wpVulnCheckSource.ts` uses `matchable === 0` (with
+ * `total > 0`) to mark that pass `failed` rather than `ok`, and a non-empty
+ * `unmatched` with `matchable > 0` to record a named, partial gap.
+ */
+export function assessComponentCoverage(inventory: WpSourceInventory): ComponentCoverage {
+  const all = allComponents(inventory);
+  const unmatched = all.filter((c) => c.version === null).map((c) => ({ type: c.type, slug: c.slug }));
+  return { total: all.length, matchable: all.length - unmatched.length, unmatched };
+}
+
 /**
  * Every feed vulnerability whose `software[]` names an installed component
  * (by type + slug) at a version inside one of its `affected_versions`
  * ranges. A component with no readable version (inventory returned `null`)
- * cannot be matched against anything and is silently skipped — reported as
- * a coverage gap by the caller, not fabricated as "no vulnerabilities".
+ * cannot be matched against anything and is silently skipped here — see
+ * {@link assessComponentCoverage} for how a caller turns that into a real,
+ * reported coverage gap rather than a fabricated "no vulnerabilities".
  */
 export function matchInventoryAgainstFeed(
   inventory: WpSourceInventory,
   feed: WordfenceFeed,
 ): WordfenceMatch[] {
-  const targets: Array<{ type: WordfenceSoftwareType; slug: string; name: string; version: string }> = [];
-  if (inventory.core.version !== null) {
-    targets.push({ type: 'core', slug: CORE_SLUG, name: CORE_NAME, version: inventory.core.version });
-  }
-  pushTargets(targets, 'plugin', inventory.plugins);
-  pushTargets(targets, 'theme', inventory.themes);
+  const targets = allComponents(inventory).filter(
+    (c): c is InventoryComponent & { version: string } => c.version !== null,
+  );
 
   const matches: WordfenceMatch[] = [];
   for (const vuln of Object.values(feed)) {
@@ -452,17 +517,6 @@ export function matchInventoryAgainstFeed(
     }
   }
   return matches;
-}
-
-function pushTargets(
-  targets: Array<{ type: WordfenceSoftwareType; slug: string; name: string; version: string }>,
-  type: 'plugin' | 'theme',
-  components: readonly WpComponentInventory[],
-): void {
-  for (const c of components) {
-    if (c.version === null) continue;
-    targets.push({ type, slug: c.slug, name: c.name ?? c.slug, version: c.version });
-  }
 }
 
 /** CVSS v3.1 rating thresholds, matching `scannerParsers/wpscan.ts`'s own

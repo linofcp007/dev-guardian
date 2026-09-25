@@ -12,11 +12,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   checkWpOrgPlugin,
+  checkWpOrgPlugins,
   isStalePlugin,
   TWO_YEARS_MS,
   WP_ORG_CACHE_TTL_MS,
   type WpOrgHealthStorage,
 } from '../../../src/wordpress/wpOrgHealth.js';
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function fakeStorage(): WpOrgHealthStorage & { dump: () => Record<string, unknown> } {
   const store = new Map<string, unknown>();
@@ -165,5 +170,83 @@ describe('isStalePlugin', () => {
   it('is not stale within two years', () => {
     const now = Date.parse('2026-09-25T00:00:00Z');
     expect(isStalePlugin('2026-01-01T00:00:00.000Z', now)).toBe(false);
+  });
+});
+
+// Fix round 1, item 2: sequential, per-plugin-8s-timeout lookups had no
+// OVERALL budget — dozens of plugins against a slow wp.org could run for
+// many minutes. checkWpOrgPlugins adds bounded concurrency and a deadline;
+// anything not finished in time is reported, never silently dropped.
+describe('checkWpOrgPlugins (bounded concurrency + overall deadline)', () => {
+  it('never runs more lookups at once than the configured concurrency', async () => {
+    const storage = fakeStorage();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const fetchImpl = vi.fn(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await delay(15);
+      inFlight -= 1;
+      return jsonResponse(200, { last_updated: '2026-08-18 11:42pm GMT' });
+    });
+    const slugs = Array.from({ length: 10 }, (_, i) => `plugin-${i}`);
+
+    const { results, notChecked } = await checkWpOrgPlugins(storage, slugs, {
+      env: {},
+      fetchImpl,
+      concurrency: 3,
+      overallTimeoutMs: 10_000,
+    });
+
+    expect(maxInFlight).toBeLessThanOrEqual(3);
+    expect(results).toHaveLength(10);
+    expect(notChecked).toEqual([]);
+  });
+
+  it('reports plugins not checked before the overall deadline as a gap, not a silent skip', async () => {
+    const storage = fakeStorage();
+    const fetchImpl = vi.fn(async () => {
+      await delay(15);
+      return jsonResponse(200, { last_updated: '2026-08-18 11:42pm GMT' });
+    });
+    const slugs = Array.from({ length: 6 }, (_, i) => `plugin-${i}`);
+
+    const { results, notChecked } = await checkWpOrgPlugins(storage, slugs, {
+      env: {},
+      fetchImpl,
+      concurrency: 2,
+      overallTimeoutMs: 20,
+    });
+
+    // Deadline (20ms) is well short of the ~45ms three sequential batches of
+    // 2 (each 15ms) would need, and well past the first batch alone — some,
+    // but not all, plugins are left unchecked. Exact counts are timing-
+    // dependent; the invariants below are not.
+    expect(results.length).toBeGreaterThan(0);
+    expect(notChecked.length).toBeGreaterThan(0);
+    expect(results.length + notChecked.length).toBe(6);
+    expect(new Set([...results.map((r) => r.slug), ...notChecked])).toEqual(new Set(slugs));
+  }, 10_000);
+
+  it('an empty slug list returns immediately with no calls', async () => {
+    const storage = fakeStorage();
+    const fetchImpl = vi.fn();
+
+    const { results, notChecked } = await checkWpOrgPlugins(storage, [], { env: {}, fetchImpl });
+
+    expect(results).toEqual([]);
+    expect(notChecked).toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('honours GUARDIAN_OFFLINE=1 for every plugin, with no network calls at all', async () => {
+    const storage = fakeStorage();
+    const fetchImpl = vi.fn();
+
+    const { results, notChecked } = await checkWpOrgPlugins(storage, ['a', 'b'], { offline: true, fetchImpl });
+
+    expect(notChecked).toEqual([]);
+    expect(results.every((r) => r.status === 'unavailable')).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

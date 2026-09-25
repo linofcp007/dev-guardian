@@ -123,6 +123,22 @@ const WORDFENCE_FEED = {
     cve: 'CVE-2024-0003',
     cvss: { vector: 'x', score: 5.0, rating: 'Medium' },
   },
+  'mu-plugin-vuln': {
+    id: 'mu-plugin-vuln',
+    title: 'MU Sample <= 1.0 - Something',
+    software: [
+      {
+        type: 'plugin',
+        name: 'MU Sample',
+        slug: 'mu-sample',
+        affected_versions: { r: { from_version: '0', from_inclusive: true, to_version: '1.0', to_inclusive: true } },
+        patched: false,
+        patched_versions: [],
+      },
+    ],
+    cve: 'CVE-2024-0004',
+    cvss: { vector: 'x', score: 4.0, rating: 'Medium' },
+  },
 };
 
 /** Fakes both endpoints, dispatching on URL. */
@@ -292,5 +308,107 @@ describe('wp_vuln_check_source', () => {
 
     expect(r.ok).toBe(true);
     expect(r.warnings_extra?.some((w) => w.includes('not_a_wordpress_install_root'))).toBe(true);
+  });
+
+  // Fix round 1, item 1 (GC3): a component found but with no readable
+  // version used to vanish from matching with no signal anywhere.
+  describe('unmatched-version coverage gap (fix round 1, item 1)', () => {
+    it('marks wordfence-feed FAILED (not ok) when every installed component is unversioned', async () => {
+      const root = makeTempDir('wpvcs-allunversioned-');
+      writeFile(
+        join(root, 'wp-content', 'plugins', 'no-version', 'no-version.php'),
+        ['<?php', '/*', 'Plugin Name: No Version', '*/'].join('\n'),
+      );
+      // No wp-includes/version.php either — core is also unversioned.
+      const cacheDir = makeTempDir('wpvcs-cache-');
+      vi.stubEnv('GUARDIAN_OFFLINE', '0');
+      vi.stubEnv('WORDFENCE_API_KEY', 'test-token');
+      vi.stubEnv('LOCALAPPDATA', cacheDir);
+      vi.stubEnv('XDG_CACHE_HOME', cacheDir);
+      vi.stubGlobal('fetch', fakeFetch());
+
+      const tool = getTool('wp_vuln_check_source');
+      const r = (await tool.handler({ project_path: root }, makePlugin())) as {
+        ok: true;
+        tools_run: { name: string; status: string; reason?: string }[];
+        wordfence: { matched_count: number };
+      };
+
+      expect(r.ok).toBe(true);
+      const wfRun = r.tools_run.find((t) => t.name === 'wordfence-feed');
+      expect(wfRun?.status).toBe('failed');
+      expect(wfRun?.reason).toMatch(/0 of 2 installed component/);
+      expect(r.wordfence.matched_count).toBe(0);
+    });
+
+    it('records a named partial gap when some, but not all, components are unversioned', async () => {
+      const root = buildWpInstall(); // core + 3 versioned plugins + 1 versioned theme
+      writeFile(
+        join(root, 'wp-content', 'plugins', 'no-version', 'no-version.php'),
+        ['<?php', '/*', 'Plugin Name: No Version', '*/'].join('\n'),
+      );
+      const cacheDir = makeTempDir('wpvcs-cache-');
+      vi.stubEnv('GUARDIAN_OFFLINE', '0');
+      vi.stubEnv('WORDFENCE_API_KEY', 'test-token');
+      vi.stubEnv('LOCALAPPDATA', cacheDir);
+      vi.stubEnv('XDG_CACHE_HOME', cacheDir);
+      vi.stubGlobal('fetch', fakeFetch());
+
+      const tool = getTool('wp_vuln_check_source');
+      const r = (await tool.handler({ project_path: root }, makePlugin())) as {
+        ok: true;
+        coverage: string;
+        missing_tools: string[];
+        tools_run: { name: string; status: string }[];
+        warnings_extra?: string[];
+      };
+
+      expect(r.ok).toBe(true);
+      // The pass itself genuinely measured real matches, so it stays 'ok'…
+      expect(r.tools_run.find((t) => t.name === 'wordfence-feed')?.status).toBe('ok');
+      // …but the gap is still named and still moves coverage off 'full'.
+      expect(r.missing_tools).toContain('wordfence-feed:unmatched-version');
+      expect(r.coverage).toBe('partial');
+      expect(r.warnings_extra?.some((w) => w.includes('no-version') && w.includes('could not be checked'))).toBe(
+        true,
+      );
+    });
+  });
+
+  // Fix round 1, item 3: mu-plugins matched against Wordfence, never
+  // wp.org-checked.
+  it('matches a mu-plugin against the Wordfence feed but never checks it against wp.org', async () => {
+    const root = buildWpInstall();
+    writeFile(
+      join(root, 'wp-content', 'mu-plugins', 'mu-sample.php'),
+      ['<?php', '/*', 'Plugin Name: MU Sample', 'Version: 0.5', '*/'].join('\n'),
+    );
+    const cacheDir = makeTempDir('wpvcs-cache-');
+    vi.stubEnv('GUARDIAN_OFFLINE', '0');
+    vi.stubEnv('WORDFENCE_API_KEY', 'test-token');
+    vi.stubEnv('LOCALAPPDATA', cacheDir);
+    vi.stubEnv('XDG_CACHE_HOME', cacheDir);
+    const fetchMock = fakeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const tool = getTool('wp_vuln_check_source');
+    const r = (await tool.handler({ project_path: root }, makePlugin())) as {
+      ok: true;
+      wordfence: { matched_count: number };
+      wp_org: { checked: number };
+      inventory: { mu_plugins_count: number };
+    };
+
+    expect(r.ok).toBe(true);
+    expect(r.inventory.mu_plugins_count).toBe(1);
+    // 3 from buildWpInstall (core, sample-plugin, sample-theme) + the
+    // mu-plugin's own match against the same 'sample-plugin' feed entry.
+    expect(r.wordfence.matched_count).toBe(4);
+    // wp.org is only ever asked about the 3 REGULAR plugins.
+    expect(r.wp_org.checked).toBe(3);
+    const wpOrgSlugs = fetchMock.mock.calls
+      .filter((c) => (c[0] as string).includes('api.wordpress.org'))
+      .map((c) => /request%5Bslug%5D=([^&]+)/.exec(c[0] as string)?.[1]);
+    expect(wpOrgSlugs).not.toContain('mu-sample');
   });
 });

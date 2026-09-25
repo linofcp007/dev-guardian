@@ -124,6 +124,64 @@ export async function checkWpOrgPlugin(
   return { slug, status: 'unavailable', reason: fetched.reason };
 }
 
+/** How many lookups run at once, by default — polite to wp.org, cheap to
+ *  reason about. */
+const DEFAULT_CONCURRENCY = 5;
+/** The whole batch's wall-clock budget, by default — independent of each
+ *  individual lookup's own {@link DEFAULT_TIMEOUT_MS}: with a slow wp.org
+ *  and dozens of plugins, sequential 8s-per-plugin timeouts could run for
+ *  many minutes with no overall ceiling at all (fix round 1, item 2). */
+const DEFAULT_OVERALL_TIMEOUT_MS = 30_000;
+
+export interface CheckPluginsOptions extends WpOrgHealthOptions {
+  /** Lookups in flight at once. Default {@link DEFAULT_CONCURRENCY}. */
+  concurrency?: number;
+  /** Wall-clock budget for the WHOLE batch, starting when this call begins.
+   *  Default {@link DEFAULT_OVERALL_TIMEOUT_MS}. */
+  overallTimeoutMs?: number;
+}
+
+export interface CheckPluginsResult {
+  /** One entry per slug that was actually looked up (cache hit, fresh
+   *  fetch, or a failed/offline attempt — anything `checkWpOrgPlugin` itself
+   *  returned). */
+  results: WpOrgPluginResult[];
+  /** Slugs whose lookup never started because the overall deadline had
+   *  already passed — a real coverage gap, reported by name rather than
+   *  silently absent from `results`. */
+  notChecked: string[];
+}
+
+/**
+ * `checkWpOrgPlugin`, for many slugs at once: bounded concurrency
+ * ({@link CheckPluginsOptions.concurrency}, run in batches) and an OVERALL
+ * deadline ({@link CheckPluginsOptions.overallTimeoutMs}) on top of each
+ * individual lookup's own per-call timeout. The deadline is checked before
+ * each batch starts, never mid-batch — a batch already in flight is let to
+ * finish (each of its calls is separately bounded by its own `timeoutMs`),
+ * so real overshoot past the deadline is at most one batch's worth, not
+ * unbounded. Slugs the deadline cuts off end up in `notChecked`, never
+ * silently missing from the response.
+ */
+export async function checkWpOrgPlugins(
+  storage: WpOrgHealthStorage,
+  slugs: readonly string[],
+  opts: CheckPluginsOptions = {},
+): Promise<CheckPluginsResult> {
+  const concurrency = opts.concurrency ?? DEFAULT_CONCURRENCY;
+  const deadline = (opts.now ?? Date.now()) + (opts.overallTimeoutMs ?? DEFAULT_OVERALL_TIMEOUT_MS);
+  const results: WpOrgPluginResult[] = [];
+  let i = 0;
+  while (i < slugs.length) {
+    if (Date.now() >= deadline) break;
+    const batch = slugs.slice(i, i + concurrency);
+    const batchResults = await Promise.all(batch.map((slug) => checkWpOrgPlugin(storage, slug, opts)));
+    results.push(...batchResults);
+    i += batch.length;
+  }
+  return { results, notChecked: slugs.slice(i) };
+}
+
 function toResultFields(entry: CachedEntry): Omit<WpOrgPluginResult, 'slug' | 'status'> {
   const out: Omit<WpOrgPluginResult, 'slug' | 'status'> = {
     plugin_status: entry.plugin_status,

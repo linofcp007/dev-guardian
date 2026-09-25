@@ -49195,6 +49195,14 @@ var RUN_NAMES = {
   // wp_vuln_check_source: source-based WP vuln matching, no live URL.
   "wordfence-feed": scanner("wordfence"),
   "wp-plugin-api": scanner("wp-plugin-api"),
+  // Named, partial sub-gaps (fix round 1) — the pass itself stayed 'ok'
+  // (real matching/checking happened), but some installed components
+  // could not be covered. Same pattern as `trivy:<ecosystem>` below: an
+  // unlisted `base:suffix` would inherit `base`'s measures via
+  // `runNameEntry`'s fallback at runtime, but the exhaustiveness test
+  // requires an exact literal key, so both get their own entry.
+  "wordfence-feed:unmatched-version": scanner("wordfence"),
+  "wp-plugin-api:deadline": scanner("wp-plugin-api"),
   // .NET. `scan_dotnet_secrets` and `dotnet_target_framework_check` are
   // also audit_executive's entries for those sub-tools.
   scan_dotnet_secrets: scanner("scan_dotnet_secrets"),
@@ -54221,8 +54229,13 @@ function inventoryWordPressSource(wpPath) {
     core: { version: coreVersion },
     plugins: inventoryPlugins(wpPath, warnings),
     themes: inventoryThemes(wpPath, warnings),
+    mu_plugins: inventoryMuPlugins(wpPath, warnings),
     warnings
   };
+}
+function warnUnversioned(warnings, label, stableTag) {
+  const stableTagNote = stableTag === void 0 ? "" : stableTag === null ? " (no readme.txt Stable tag either)" : ` (readme.txt's Stable tag is "${stableTag}", not a usable version)`;
+  warnings.push(`${label}: version unknown \u2014 no Version: header${stableTagNote}. Cannot be matched against a vulnerability feed.`);
 }
 function readCoreVersion(wpPath) {
   const text = readTextSafe(join46(wpPath, "wp-includes", "version.php"));
@@ -54244,22 +54257,26 @@ function inventoryPlugins(wpPath, warnings) {
       const text = readTextSafe(main2, MAX_HEADER_BYTES) ?? "";
       const stableTag = readStableTag(join46(dir, "readme.txt"));
       const headerVersion = extractHeader(text, "Version");
+      const version2 = headerVersion ?? usableVersion(stableTag);
       const component = {
         slug: entry.name,
         name: extractHeader(text, "Plugin Name"),
-        version: headerVersion ?? usableVersion(stableTag),
+        version: version2,
         path: main2
       };
       if (stableTag !== null) component.stable_tag = stableTag;
+      if (version2 === null) warnUnversioned(warnings, `wp-content/plugins/${entry.name}`, stableTag);
       out.push(component);
     } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".php")) {
       const filePath = join46(pluginsDir, entry.name);
       const text = readTextSafe(filePath, MAX_HEADER_BYTES);
       if (text === null || !hasHeader(text, "Plugin Name")) continue;
+      const version2 = extractHeader(text, "Version");
+      if (version2 === null) warnUnversioned(warnings, `wp-content/plugins/${entry.name}`, void 0);
       out.push({
         slug: entry.name.slice(0, -".php".length),
         name: extractHeader(text, "Plugin Name"),
-        version: extractHeader(text, "Version"),
+        version: version2,
         path: filePath
       });
     }
@@ -54277,12 +54294,54 @@ function inventoryThemes(wpPath, warnings) {
       warnings.push(`wp-content/themes/${entry.name}: no readable style.css with a "Theme Name:" header \u2014 skipped.`);
       continue;
     }
+    const version2 = extractHeader(text, "Version");
+    if (version2 === null) warnUnversioned(warnings, `wp-content/themes/${entry.name}`, void 0);
     out.push({
       slug: entry.name,
       name: extractHeader(text, "Theme Name"),
-      version: extractHeader(text, "Version"),
+      version: version2,
       path: styleCssPath
     });
+  }
+  return out;
+}
+var MU_PLUGIN_LOADER_RE = /(?:require|include)(?:_once)?\s*\(?\s*(?:__DIR__|dirname\s*\(\s*__FILE__\s*\)|WPMU_PLUGIN_DIR|WP_PLUGIN_DIR)\s*\.\s*['"]\/?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+\.php)['"]/gi;
+function inventoryMuPlugins(wpPath, warnings) {
+  const muDir = join46(wpPath, "wp-content", "mu-plugins");
+  const out = [];
+  for (const entry of readDirSafe(muDir)) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".php")) continue;
+    const filePath = join46(muDir, entry.name);
+    const text = readTextSafe(filePath, MAX_HEADER_BYTES);
+    if (text === null) continue;
+    if (hasHeader(text, "Plugin Name")) {
+      const slug = entry.name.slice(0, -".php".length);
+      const version2 = extractHeader(text, "Version");
+      if (version2 === null) warnUnversioned(warnings, `wp-content/mu-plugins/${entry.name}`, void 0);
+      out.push({
+        slug,
+        name: extractHeader(text, "Plugin Name"),
+        version: version2,
+        path: filePath
+      });
+      continue;
+    }
+    for (const match of text.matchAll(MU_PLUGIN_LOADER_RE)) {
+      const subDir = match[1];
+      const subFile = match[2];
+      if (subDir === void 0 || subFile === void 0) continue;
+      const targetPath = join46(muDir, subDir, subFile);
+      const targetText = readTextSafe(targetPath, MAX_HEADER_BYTES);
+      if (targetText === null || !hasHeader(targetText, "Plugin Name")) continue;
+      const version2 = extractHeader(targetText, "Version");
+      if (version2 === null) warnUnversioned(warnings, `wp-content/mu-plugins/${subDir}`, void 0);
+      out.push({
+        slug: subDir,
+        name: extractHeader(targetText, "Plugin Name"),
+        version: version2,
+        path: targetPath
+      });
+    }
   }
   return out;
 }
@@ -54419,12 +54478,15 @@ function describeFetchError3(e) {
 }
 var CACHE_FILE_NAME = "wordfence-vulnerabilities-production.json";
 function defaultWordfenceCacheDir(env = process.env) {
+  const override = env["GUARDIAN_CACHE_DIR"];
+  if (override !== void 0 && override.length > 0) return override;
   if (process.platform === "win32") {
     const base2 = env["LOCALAPPDATA"] ?? join47(homedir2(), "AppData", "Local");
     return join47(base2, "dev-guardian", "cache");
   }
   if (process.platform === "darwin") {
-    return join47(homedir2(), "Library", "Caches", "dev-guardian");
+    const base2 = env["XDG_CACHE_HOME"] ?? join47(homedir2(), "Library", "Caches");
+    return join47(base2, "dev-guardian");
   }
   const base = env["XDG_CACHE_HOME"] ?? join47(homedir2(), ".cache");
   return join47(base, "dev-guardian");
@@ -54490,13 +54552,27 @@ async function writeCachedFeed(cachePath, payload) {
 }
 var CORE_SLUG = "wordpress";
 var CORE_NAME = "WordPress";
-function matchInventoryAgainstFeed(inventory, feed) {
-  const targets = [];
-  if (inventory.core.version !== null) {
-    targets.push({ type: "core", slug: CORE_SLUG, name: CORE_NAME, version: inventory.core.version });
+function allComponents(inventory) {
+  const out = [
+    { type: "core", slug: CORE_SLUG, name: CORE_NAME, version: inventory.core.version }
+  ];
+  for (const p of [...inventory.plugins, ...inventory.mu_plugins]) {
+    out.push({ type: "plugin", slug: p.slug, name: p.name ?? p.slug, version: p.version });
   }
-  pushTargets(targets, "plugin", inventory.plugins);
-  pushTargets(targets, "theme", inventory.themes);
+  for (const t of inventory.themes) {
+    out.push({ type: "theme", slug: t.slug, name: t.name ?? t.slug, version: t.version });
+  }
+  return out;
+}
+function assessComponentCoverage(inventory) {
+  const all = allComponents(inventory);
+  const unmatched = all.filter((c3) => c3.version === null).map((c3) => ({ type: c3.type, slug: c3.slug }));
+  return { total: all.length, matchable: all.length - unmatched.length, unmatched };
+}
+function matchInventoryAgainstFeed(inventory, feed) {
+  const targets = allComponents(inventory).filter(
+    (c3) => c3.version !== null
+  );
   const matches = [];
   for (const vuln of Object.values(feed)) {
     for (const software of vuln.software) {
@@ -54523,12 +54599,6 @@ function matchInventoryAgainstFeed(inventory, feed) {
     }
   }
   return matches;
-}
-function pushTargets(targets, type, components) {
-  for (const c3 of components) {
-    if (c3.version === null) continue;
-    targets.push({ type, slug: c3.slug, name: c3.name ?? c3.slug, version: c3.version });
-  }
 }
 function severityOf(cvss) {
   const rating = cvss?.rating?.toLowerCase();
@@ -54603,6 +54673,22 @@ async function checkWpOrgPlugin(storage, slug, opts = {}) {
   }
   if (cached2 !== null) return { slug, status: "ok", stale: true, reason: fetched.reason, ...toResultFields(cached2) };
   return { slug, status: "unavailable", reason: fetched.reason };
+}
+var DEFAULT_CONCURRENCY = 5;
+var DEFAULT_OVERALL_TIMEOUT_MS = 3e4;
+async function checkWpOrgPlugins(storage, slugs, opts = {}) {
+  const concurrency = opts.concurrency ?? DEFAULT_CONCURRENCY;
+  const deadline = (opts.now ?? Date.now()) + (opts.overallTimeoutMs ?? DEFAULT_OVERALL_TIMEOUT_MS);
+  const results = [];
+  let i2 = 0;
+  while (i2 < slugs.length) {
+    if (Date.now() >= deadline) break;
+    const batch = slugs.slice(i2, i2 + concurrency);
+    const batchResults = await Promise.all(batch.map((slug) => checkWpOrgPlugin(storage, slug, opts)));
+    results.push(...batchResults);
+    i2 += batch.length;
+  }
+  return { results, notChecked: slugs.slice(i2) };
 }
 function toResultFields(entry) {
   const out = {
@@ -54701,6 +54787,8 @@ function isStalePlugin(lastUpdatedIso, now) {
 // src/tools/wpVulnCheckSource.ts
 var WORDFENCE_TIMEOUT_MS = 6e4;
 var WP_ORG_TIMEOUT_MS = 8e3;
+var WP_ORG_CONCURRENCY = 5;
+var WP_ORG_OVERALL_TIMEOUT_MS = 6e4;
 registerToolModule(
   makeScanTool({
     name: "wp_vuln_check_source",
@@ -54736,6 +54824,7 @@ registerToolModule(
       const offline = ctx.scriptEnv["GUARDIAN_OFFLINE"] === "1";
       const apiKey = ctx.scriptEnv["WORDFENCE_API_KEY"];
       let matches = [];
+      const coverage = assessComponentCoverage(inventory);
       const wf = await getWordfenceFeed({
         ...apiKey !== void 0 ? { apiKey } : {},
         env: ctx.scriptEnv,
@@ -54751,6 +54840,17 @@ registerToolModule(
             `Wordfence feed: serving a cached copy from ${wf.fetched_at} (a refresh could not be completed this run) \u2014 results may be outdated.`
           );
         }
+        if (coverage.total > 0 && coverage.matchable === 0) {
+          entry.status = "failed";
+          entry.reason = `0 of ${coverage.total} installed component(s) have a readable version \u2014 nothing could be matched against the Wordfence feed.`;
+        } else if (coverage.unmatched.length > 0) {
+          missing_tools.push("wordfence-feed:unmatched-version");
+          const names = coverage.unmatched.slice(0, 5).map((c3) => `${c3.type}:${c3.slug}`);
+          const suffix = coverage.unmatched.length > 5 ? ", ..." : "";
+          warnings.push(
+            `Wordfence feed: ${coverage.unmatched.length} of ${coverage.total} installed component(s) have no readable version and could not be checked: ${names.join(", ")}${suffix}`
+          );
+        }
         tools_run.push(entry);
         for (const match of matches) {
           const { finding: finding4, cve } = wordfenceMatchToFindingAndCve(match);
@@ -54762,24 +54862,22 @@ registerToolModule(
         tools_run.push({ name: "wordfence-feed", status: configGap ? "skipped" : "failed", reason: wf.reason });
         if (configGap) missing_tools.push("wordfence-feed");
       }
-      const wpOrgResults = [];
-      for (const plugin of inventory.plugins) {
-        wpOrgResults.push(
-          await checkWpOrgPlugin(ctx.plugin.storage, plugin.slug, {
-            env: ctx.scriptEnv,
-            timeoutMs: WP_ORG_TIMEOUT_MS,
-            signal: ctx.signal
-          })
-        );
-      }
+      const pluginSlugs = inventory.plugins.map((p) => p.slug);
+      const { results: wpOrgResults, notChecked } = await checkWpOrgPlugins(ctx.plugin.storage, pluginSlugs, {
+        env: ctx.scriptEnv,
+        timeoutMs: WP_ORG_TIMEOUT_MS,
+        signal: ctx.signal,
+        concurrency: WP_ORG_CONCURRENCY,
+        overallTimeoutMs: WP_ORG_OVERALL_TIMEOUT_MS
+      });
       const unavailable = wpOrgResults.filter((r) => r.status === "unavailable");
-      if (inventory.plugins.length === 0) {
+      if (pluginSlugs.length === 0) {
         tools_run.push({ name: "wp-plugin-api", status: "skipped", reason: "no plugins to check" });
-      } else if (unavailable.length === inventory.plugins.length) {
+      } else if (unavailable.length + notChecked.length === pluginSlugs.length) {
         tools_run.push({
           name: "wp-plugin-api",
           status: offline ? "skipped" : "failed",
-          reason: unavailable[0]?.reason ?? "unavailable"
+          reason: unavailable[0]?.reason ?? "wp.org lookup did not finish within its overall time budget before any plugin could be checked"
         });
         if (offline) missing_tools.push("wp-plugin-api");
       } else {
@@ -54788,7 +54886,15 @@ registerToolModule(
           const names = unavailable.slice(0, 5).map((r) => r.slug);
           const suffix = unavailable.length > 5 ? ", ..." : "";
           warnings.push(
-            `wp.org plugin lookup failed for ${unavailable.length} of ${inventory.plugins.length} plugin(s): ${names.join(", ")}${suffix}`
+            `wp.org plugin lookup failed for ${unavailable.length} of ${pluginSlugs.length} plugin(s): ${names.join(", ")}${suffix}`
+          );
+        }
+        if (notChecked.length > 0) {
+          missing_tools.push("wp-plugin-api:deadline");
+          const names = notChecked.slice(0, 5);
+          const suffix = notChecked.length > 5 ? ", ..." : "";
+          warnings.push(
+            `wp.org plugin lookup did not finish within its overall time budget for ${notChecked.length} of ${pluginSlugs.length} plugin(s): ${names.join(", ")}${suffix}`
           );
         }
         const staleServed = wpOrgResults.filter((r) => r.stale === true);
@@ -54845,11 +54951,20 @@ registerToolModule(
         inventory: {
           core_version: inventory.core.version,
           plugins_count: inventory.plugins.length,
-          themes_count: inventory.themes.length
+          themes_count: inventory.themes.length,
+          mu_plugins_count: inventory.mu_plugins.length
         },
-        wordfence: wf.ok ? { status: "ok", stale: wf.stale, fetched_at: wf.fetched_at, matched_count: matches.length } : { status: "unavailable", reason: wf.reason },
+        wordfence: wf.ok ? {
+          status: "ok",
+          stale: wf.stale,
+          fetched_at: wf.fetched_at,
+          matched_count: matches.length,
+          components_checked: coverage.matchable,
+          components_total: coverage.total
+        } : { status: "unavailable", reason: wf.reason },
         wp_org: {
-          checked: inventory.plugins.length,
+          checked: wpOrgResults.length,
+          not_checked: notChecked.length,
           found: wpOrgResults.filter((r) => r.plugin_status === "found").length,
           closed: closedCount,
           stale: staleCount,
@@ -60808,7 +60923,7 @@ import { createHash as createHash9 } from "node:crypto";
 var BODY_PREFIX_BYTES = 8192;
 var BODY_READ_CAP_BYTES = 256 * 1024;
 var DEFAULT_PROBE_TIMEOUT_MS = 5e3;
-var DEFAULT_CONCURRENCY = 4;
+var DEFAULT_CONCURRENCY2 = 4;
 async function executeProbe(req, opts) {
   const started = Date.now();
   const controller = new AbortController();
@@ -61363,7 +61478,7 @@ async function handler40(input, ctx, callMeta) {
   const deadline = armDeadline(wallClockMs, callMeta?.signal);
   const probeOpts = {
     timeoutMs,
-    concurrency: DEFAULT_CONCURRENCY,
+    concurrency: DEFAULT_CONCURRENCY2,
     signal: deadline.signal
   };
   const cancel = () => {

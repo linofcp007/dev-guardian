@@ -172,4 +172,147 @@ describe('inventoryWordPressSource', () => {
     expect(inv.plugins.map((p) => p.slug).sort()).toEqual(['p1', 'p2']);
     expect(inv.themes.map((t) => t.slug)).toEqual(['t1']);
   });
+
+  // Global Constraint 3 fix round 1, item 1: a found-but-unversioned
+  // component used to yield `version: null` with NO warning — a silent gap
+  // indistinguishable from "checked, clean" once matched against a feed.
+  describe('unversioned components warn (GC3, fix round 1)', () => {
+    it('warns when a plugin main file has no Version: header and no readme.txt at all', () => {
+      const root = makeTempDir('wpinv-unversioned-plugin-');
+      writeFile(
+        join(root, 'wp-content', 'plugins', 'no-version', 'no-version.php'),
+        ['<?php', '/*', 'Plugin Name: No Version', '*/'].join('\n'),
+      );
+
+      const inv = inventoryWordPressSource(root);
+
+      expect(inv.plugins[0]?.version).toBeNull();
+      expect(inv.warnings.some((w) => w.includes('no-version') && w.includes('version unknown'))).toBe(true);
+    });
+
+    it('warns when a plugin readme.txt Stable tag is "trunk" (no other version source)', () => {
+      const root = makeTempDir('wpinv-unversioned-trunk-');
+      writeFile(
+        join(root, 'wp-content', 'plugins', 'trunk-only', 'trunk-only.php'),
+        ['<?php', '/*', 'Plugin Name: Trunk Only', '*/'].join('\n'),
+      );
+      writeFile(
+        join(root, 'wp-content', 'plugins', 'trunk-only', 'readme.txt'),
+        ['=== Trunk Only ===', 'Stable tag: trunk', ''].join('\n'),
+      );
+
+      const inv = inventoryWordPressSource(root);
+
+      expect(inv.plugins[0]?.version).toBeNull();
+      expect(inv.warnings.some((w) => w.includes('trunk-only') && w.includes('version unknown'))).toBe(true);
+    });
+
+    it('warns when a single-file plugin has no Version: header', () => {
+      const root = makeTempDir('wpinv-unversioned-singlefile-');
+      writeFile(
+        join(root, 'wp-content', 'plugins', 'bare.php'),
+        ['<?php', '/*', 'Plugin Name: Bare', '*/'].join('\n'),
+      );
+
+      const inv = inventoryWordPressSource(root);
+
+      expect(inv.plugins[0]?.version).toBeNull();
+      expect(inv.warnings.some((w) => w.includes('bare') && w.includes('version unknown'))).toBe(true);
+    });
+
+    it('warns when a theme style.css has no Version: header', () => {
+      const root = makeTempDir('wpinv-unversioned-theme-');
+      writeFile(
+        join(root, 'wp-content', 'themes', 'no-version-theme', 'style.css'),
+        ['/*', 'Theme Name: No Version Theme', '*/'].join('\n'),
+      );
+
+      const inv = inventoryWordPressSource(root);
+
+      expect(inv.themes[0]?.version).toBeNull();
+      expect(inv.warnings.some((w) => w.includes('no-version-theme') && w.includes('version unknown'))).toBe(true);
+    });
+
+    it('does NOT warn about version when a component has a real, readable version', () => {
+      const root = makeTempDir('wpinv-versioned-noise-');
+      writeFile(
+        join(root, 'wp-content', 'plugins', 'fine', 'fine.php'),
+        ['<?php', '/*', 'Plugin Name: Fine', 'Version: 1.0', '*/'].join('\n'),
+      );
+
+      const inv = inventoryWordPressSource(root);
+
+      // Excludes the substring core's OWN "…core version unknown." warning
+      // also carries — this asserts the per-COMPONENT warning specifically.
+      expect(inv.warnings.some((w) => w.includes('Cannot be matched against a vulnerability feed'))).toBe(false);
+    });
+  });
+
+  // Fix round 1, item 3: mu-plugins (wp-content/mu-plugins/) were unhandled.
+  describe('mu-plugins (fix round 1, item 3)', () => {
+    it('inventories a top-level mu-plugin with its own header', () => {
+      const root = makeTempDir('wpinv-muplugin-direct-');
+      writeFile(
+        join(root, 'wp-content', 'mu-plugins', 'force-ssl.php'),
+        ['<?php', '/*', 'Plugin Name: Force SSL', 'Version: 1.1', '*/'].join('\n'),
+      );
+
+      const inv = inventoryWordPressSource(root);
+
+      expect(inv.mu_plugins).toHaveLength(1);
+      expect(inv.mu_plugins[0]).toMatchObject({ slug: 'force-ssl', name: 'Force SSL', version: '1.1' });
+    });
+
+    it('follows a loader file that requires a subfolder plugin (the common mu-plugins convention)', () => {
+      const root = makeTempDir('wpinv-muplugin-loader-');
+      // WordPress only auto-loads TOP-LEVEL .php files under mu-plugins/, so
+      // real plugin code in a subfolder needs a tiny top-level loader.
+      writeFile(
+        join(root, 'wp-content', 'mu-plugins', 'autoload-real-plugin.php'),
+        ['<?php', "require_once __DIR__ . '/real-plugin/real-plugin.php';", ''].join('\n'),
+      );
+      writeFile(
+        join(root, 'wp-content', 'mu-plugins', 'real-plugin', 'real-plugin.php'),
+        ['<?php', '/*', 'Plugin Name: Real Plugin', 'Version: 4.2', '*/'].join('\n'),
+      );
+
+      const inv = inventoryWordPressSource(root);
+
+      expect(inv.mu_plugins).toHaveLength(1);
+      expect(inv.mu_plugins[0]).toMatchObject({ slug: 'real-plugin', name: 'Real Plugin', version: '4.2' });
+    });
+
+    it('a loader referencing a file that does not exist is skipped, not crashed on', () => {
+      const root = makeTempDir('wpinv-muplugin-badloader-');
+      writeFile(
+        join(root, 'wp-content', 'mu-plugins', 'broken-loader.php'),
+        ['<?php', "require_once __DIR__ . '/missing/missing.php';", ''].join('\n'),
+      );
+
+      const inv = inventoryWordPressSource(root);
+
+      expect(inv.mu_plugins).toHaveLength(0);
+    });
+
+    it('a top-level file with no header and no subfolder require is not inventoried', () => {
+      const root = makeTempDir('wpinv-muplugin-plain-');
+      writeFile(
+        join(root, 'wp-content', 'mu-plugins', 'just-some-code.php'),
+        ['<?php', "add_action('init', function () {});", ''].join('\n'),
+      );
+
+      const inv = inventoryWordPressSource(root);
+
+      expect(inv.mu_plugins).toHaveLength(0);
+    });
+
+    it('an install with no mu-plugins directory reports an empty list, not an error', () => {
+      const root = makeTempDir('wpinv-muplugin-none-');
+      mkdirSync(root, { recursive: true });
+
+      const inv = inventoryWordPressSource(root);
+
+      expect(inv.mu_plugins).toEqual([]);
+    });
+  });
 });
