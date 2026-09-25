@@ -32,9 +32,17 @@ import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { makeFinding } from '../../src/runners/scannerParsers/index.js';
+import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
+
+/**
+ * The project the shared seed helpers file scans under. The history readers
+ * answer for one project (`project_path`, default the working directory), so
+ * a test that seeds scans must name the same, real, project when it reads.
+ */
+const P = resolveProjectPath(makeTempDir('phase14-p-')).path;
 
 beforeAll(async () => {
   // Import everything once so TOOLS is populated.
@@ -77,7 +85,7 @@ beforeAll(async () => {
 });
 
 function tempProject(): string {
-  return makeTempDir('phase14-');
+  return resolveProjectPath(makeTempDir('phase14-')).path;
 }
 
 function getTool(name: string) {
@@ -103,11 +111,11 @@ function makePlugin(projectPath?: string): PluginContext {
   };
 }
 
-function seedFindings(plugin: PluginContext, scanId: string, n: number): void {
+function seedFindings(plugin: PluginContext, scanId: string, n: number, project = P): void {
   plugin.storage.scans.insert({
     scan_id: scanId,
     scan_type: 'sast',
-    project_path: '/p',
+    project_path: project,
     tree_hash: 'h',
   });
   plugin.storage.findings.bulkInsert(
@@ -133,11 +141,11 @@ function seedFindings(plugin: PluginContext, scanId: string, n: number): void {
 
 /** Like `seedFindings`, but the caller names each finding's severity — for
  *  the tools whose whole behaviour under test is a severity floor. */
-function seedSeverities(plugin: PluginContext, scanId: string, severities: Severity[]): void {
+function seedSeverities(plugin: PluginContext, scanId: string, severities: Severity[], project = P): void {
   plugin.storage.scans.insert({
     scan_id: scanId,
     scan_type: 'sast',
-    project_path: '/p',
+    project_path: project,
     tree_hash: 'h',
   });
   plugin.storage.findings.bulkInsert(
@@ -196,7 +204,7 @@ describe('phase 14 — registry', () => {
 describe('risk_score', () => {
   it('returns a low score for an empty project', async () => {
     const plugin = makePlugin();
-    const r = (await getTool('risk_score').handler({}, plugin)) as {
+    const r = (await getTool('risk_score').handler({ project_path: P }, plugin)) as {
       ok: true;
       score: number;
       band: string;
@@ -210,11 +218,13 @@ describe('risk_score', () => {
   it('scales with severity weighted findings', async () => {
     const plugin = makePlugin();
     seedFindings(plugin, 'A', 5);
-    const r = (await getTool('risk_score').handler({}, plugin)) as {
+    const r = (await getTool('risk_score').handler({ project_path: P }, plugin)) as {
       ok: true;
       score: number;
+      components: { findings: { open_findings: number } };
     };
     expect(r.score).toBeGreaterThan(0);
+    expect(r.components.findings.open_findings).toBe(5);
   });
 });
 
@@ -224,7 +234,7 @@ describe('triage_findings', () => {
     plugin.storage.scans.insert({
       scan_id: 'A',
       scan_type: 'sast',
-      project_path: '/p',
+      project_path: P,
       tree_hash: 'h',
     });
     plugin.storage.findings.bulkInsert([
@@ -258,13 +268,13 @@ describe('triage_findings', () => {
       missing_tools: [],
     });
 
-    const r = (await getTool('triage_findings').handler({}, plugin)) as {
+    const r = (await getTool('triage_findings').handler({ project_path: P }, plugin)) as {
       ok: true;
       likely_false_positive: unknown[];
-      keep_sample: unknown[];
+      keep: unknown[];
     };
     expect(r.likely_false_positive).toHaveLength(1);
-    expect(r.keep_sample).toHaveLength(1);
+    expect(r.keep).toHaveLength(1);
   });
 });
 
@@ -347,7 +357,7 @@ describe('regression_alert', () => {
     plugin.storage.scans.insert({
       scan_id: 'old',
       scan_type: 'sast',
-      project_path: '/p',
+      project_path: P,
       tree_hash: 'h1',
     });
     plugin.storage.scans.finalize({
@@ -359,7 +369,7 @@ describe('regression_alert', () => {
     seedFindings(plugin, 'new', 3);
 
     const r = (await getTool('regression_alert').handler(
-      { threshold: 0.5 },
+      { threshold: 0.5, project_path: P },
       plugin,
     )) as { ok: true; regressed: boolean; score_delta: number };
     expect(r.ok).toBe(true);
@@ -457,7 +467,7 @@ describe('report_export', () => {
   it('writes a branded HTML file with severity counts and findings table', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);
-    seedFindings(plugin, 'A', 2);
+    seedFindings(plugin, 'A', 2, project);
 
     const r = (await getTool('report_export').handler(
       { project_path: project, scan_id: 'A', format: 'html' },
@@ -475,7 +485,7 @@ describe('report_export', () => {
   it('defaults to markdown when no format is given', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);
-    seedFindings(plugin, 'A', 1);
+    seedFindings(plugin, 'A', 1, project);
 
     const r = (await getTool('report_export').handler(
       { project_path: project, scan_id: 'A' },
@@ -488,7 +498,7 @@ describe('report_export', () => {
   it('includes the CVEs of a deps_audit scan, which has its own scan type', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);
-    seedDepsAuditWithCve(plugin, 'DA');
+    seedDepsAuditWithCve(plugin, 'DA', project);
 
     const r = (await getTool('report_export').handler(
       { project_path: project, scan_id: 'DA' },
@@ -500,8 +510,8 @@ describe('report_export', () => {
 });
 
 /** A completed `deps_audit` scan (its own scan type) that saw one CVE. */
-function seedDepsAuditWithCve(plugin: PluginContext, scanId: string): void {
-  plugin.storage.scans.insert({ scan_id: scanId, scan_type: 'deps_audit', project_path: '/p', tree_hash: 'h' });
+function seedDepsAuditWithCve(plugin: PluginContext, scanId: string, project = P): void {
+  plugin.storage.scans.insert({ scan_id: scanId, scan_type: 'deps_audit', project_path: project, tree_hash: 'h' });
   plugin.storage.cves.upsert({
     cve_id: `CVE-2024-${scanId}`, package_name: 'lodash', severity: 'high', scan_id: scanId,
   });
@@ -536,7 +546,7 @@ describe('create_github_issues', () => {
   it('returns dry_run plan without invoking gh', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);
-    seedFindings(plugin, 'A', 3);
+    seedFindings(plugin, 'A', 3, project);
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/gh');
 
     const r = (await getTool('create_github_issues').handler(
@@ -567,7 +577,7 @@ describe('create_github_issues', () => {
     // project.
     const project = tempProject();
     const plugin = makePlugin(project);
-    seedSeverities(plugin, 'S1', ['critical', 'high', 'medium', 'medium', 'low']);
+    seedSeverities(plugin, 'S1', ['critical', 'high', 'medium', 'medium', 'low'], project);
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/gh');
 
     const r = (await getTool('create_github_issues').handler(
@@ -601,7 +611,7 @@ describe('create_github_issues', () => {
   it('leaves filtered_reason null when nothing was filtered at all', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);
-    seedSeverities(plugin, 'S2', ['critical', 'high']);
+    seedSeverities(plugin, 'S2', ['critical', 'high'], project);
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/gh');
 
     const r = (await getTool('create_github_issues').handler(

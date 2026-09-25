@@ -191,7 +191,7 @@ describe('one line inserted above a finding', () => {
     const alert = okResult<{
       new_findings_by_severity: Record<string, number>;
       resolved_findings_by_severity: Record<string, number>;
-    }>(await getTool('regression_alert').handler({}, plugin));
+    }>(await getTool('regression_alert').handler({ project_path: dir }, plugin));
     expect(Object.values(alert.new_findings_by_severity).reduce((a, b) => a + b, 0)).toBe(0);
     expect(Object.values(alert.resolved_findings_by_severity).reduce((a, b) => a + b, 0)).toBe(0);
   });

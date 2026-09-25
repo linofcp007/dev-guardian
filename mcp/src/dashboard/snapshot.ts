@@ -12,61 +12,42 @@
  *
  * Project scoping is not a preference here, it is the reason this module
  * exists: `findings.listOpen()` and `scans.getLatest()` answer "the latest
- * completed scan in the WHOLE database, from ANY project" (see the doc
- * comments at `storage/findingsRepo.ts:174-191` and `storage/scansRepo.ts`'s
- * `getLatest`) — correct for a caller with no project in scope, and silently
- * wrong for this one, which has resolved a `project_path` and must never let
- * another project's data stand in for it. This module therefore calls only
- * the `ForProject` repository variants (`scans.getLatestForProject`,
- * `scans.listHistoryForProject`, `findings.listOpenForProject`) plus
- * `findings.listByScan(scanId)`/`scans.getById(scanId)`, which are safe by
- * construction: they take an explicit id already resolved through a
- * project-scoped path (scan history, or a validated baseline — see
- * `resolveBaseline` below), never an implicit "latest" selection.
+ * completed scan in the WHOLE database, from ANY project" — silently wrong
+ * for a caller that has resolved a `project_path` and must never let
+ * another project's data stand in for it.
  *
- * The same scoping rule applies one level deeper than the original cut of
- * this module recognised: `risk_score`'s compliance signal, dependency-bot
- * signal and CVE source are all found by *searching scan history for a scan
- * of the right type* (`tools/riskScore.ts`'s own `findLatestOfType`, over
- * the unscoped `listHistory`). A caller with a project in scope must do that
- * same search scoped to its own history — never stub the answer, and never
- * search the whole database — so `findLatestOfType` below runs over the
- * project-scoped `history` fetched once at the top of `buildSnapshot`, and
- * is reused for the compliance scan, the deps-audit scan and the
- * deps-flavoured CVE source scan.
+ * Type scoping is the second half. The open findings are the project's OPEN
+ * SET (`history/openSet.ts`): the union of the newest usable scan of every
+ * finding-producing type, deduplicated, suppressions removed. "The latest
+ * scan of the project" alone was not enough: an SBOM, a stack detection or a
+ * diff review run after a SAST scan became "the scan", and the dashboard
+ * showed zero findings. The scan shown (`scan`) is the newest state scan the
+ * open set considered; the deltas compare the newest USABLE one against its
+ * previous scan of the same type, and against the project's baseline through
+ * the newest scan of the baseline's type.
  *
- * `baselines.getActive()` returns one row, globally — the `baselines` table
- * has no `project_path` column at all (schema fact, not an oversight of this
- * task). `BaselineState.active`'s own doc comment reads "null ⇒ no baseline
- * has ever been set for THIS PROJECT", so `resolveBaseline` below does not
- * stop at the single newest row: it walks `baselines.listAll()` (newest
- * first) and uses the first whose *scan* actually belongs to `projectPath`.
- * Stopping at `getActive()` alone gets the cross-project rejection right but
- * silently hides this project's own older baseline whenever another project
- * has set one more recently — correct in the sense that it never borrows
- * another project's data, but still wrong, because a baseline this project
- * genuinely has must not read as "no baseline set".
+ * Every "latest scan of type X" — the CVE source, the compliance scan, the
+ * deps-audit scan, the previous scan — is a project-scoped SQL query
+ * (`history/openSet.ts#findLatestUsable`), never a search of a window of
+ * recent scans. Baselines are per project and record their scan type
+ * (migration 008), so `baselines.getActiveForProject` answers directly.
  *
- * `suppressions.listActive()` similarly has no project-scoped variant — but
- * unlike baselines, filtering by `project_path` is not the relevant gap.
- * Suppressions are keyed by finding fingerprint (deliberately global: a
- * suppression is meant to apply everywhere that fingerprint appears) and
- * `listActive()` filters "not yet expired" against the real wall clock
- * (`nowIso()`), which is exactly right for its other, live callers (e.g.
- * `tools/complianceEvidence.ts`) but wrong for this module: `buildSnapshot`
- * takes an injected `now` so its result is a pure function of its inputs,
- * and a query that reaches past that for the ambient clock defeats the
- * whole point of injecting it — this module then behaves differently
- * depending on which real day it happens to run on, not just on what its
- * arguments say, and drifts out from under any test with a fixed `now`
- * as soon as real time passes the fixture's dates. `suppressions.listAll()`
- * (new, purely additive — `listActive()` and its other callers are
- * untouched) returns every row unfiltered, and `buildSuppressionState`
- * below decides "active" against `now` in JavaScript, once, so the entire
- * suppression-derived state — both the counts here and the fingerprints
- * used to filter the delta comparisons — comes from exactly one clock.
+ * Suppressions are decided against the injected `now`, once, by fingerprint
+ * OR identity (`openSet.ts#suppressionMatcher`) — for the open set and for
+ * both sides of both deltas alike. `suppressions.listActive()` filters
+ * against the real wall clock, which would make this function's result
+ * depend on the day it runs rather than on its arguments; and the delta
+ * filter used to match fingerprints only, so a finding suppressed by
+ * identity after a line shift came back as "resolved".
  */
 
+import {
+  findLatestUsable,
+  latestStateScan,
+  openSetForProject,
+  suppressionMatcher,
+} from '../history/openSet.js';
+import type { ProjectBaseline } from '../storage/baselinesRepo.js';
 import type { Storage } from '../storage/index.js';
 import {
   CVE_SOURCE_SCAN_TYPES,
@@ -98,75 +79,58 @@ import {
 const FINDINGS_CAP = 2000;
 /** Design §8: new-findings-per-delta are capped at 500, for EACH delta. */
 const DELTA_CAP = 500;
-/** How far back the project-scoped history search looks for a same-type
- *  previous scan, and for the compliance/deps/CVE source scans. Mirrors
- *  `tools/riskScore.ts`'s own `listHistory(50)` convention for "find the
- *  latest scan of a given type" — this feature does not invent a second
- *  policy for the same kind of lookup. */
-const HISTORY_LOOKBACK = 50;
 /** Design §5: "Active suppressions expiring within 7 days." */
 const EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+type IsSuppressed = (f: Pick<Finding, 'fingerprint' | 'identity'>) => boolean;
 
 export function buildSnapshot(
   storage: Storage,
   projectPath: string,
   now: number,
 ): DashboardSnapshot {
-  const currentScan = storage.scans.getLatestForProject(projectPath);
   const truncation: TruncationNotice[] = [];
 
-  // Fetched once, reused for the since_previous same-type lookup below and
-  // for the compliance/deps/CVE-source findLatestOfType searches. Empty
-  // (not fetched) when there is no current scan — nothing to search for.
-  const history = currentScan
-    ? storage.scans.listHistoryForProject(projectPath, HISTORY_LOOKBACK)
-    : [];
+  const open = openSetForProject(storage, projectPath, { now });
+  // The scan shown: the newest state scan considered, even one skipped for
+  // coverage none — it IS the latest attempt, and its gap is disclosed
+  // through `coverage`. The deltas start from the newest USABLE one.
+  const currentScan = open.newest;
+  const deltaScan = open.newestSource;
 
-  // The scan CVEs are actually sourced from — the latest deps-flavoured scan
-  // in this project's history, mirroring risk_score's own
-  // findLatestOfType(['deps', 'security_full']), not just "whatever the
-  // latest scan happens to be". `cveGap` is true exactly when this project
-  // HAS a current scan but none of its history (within the lookback window)
-  // is deps-flavoured — CVEs are then necessarily unmeasured, not zero, and
-  // that has to reach coverage or it renders as a clean "0 CVEs".
-  const cveSourceScan = findLatestOfType(history, CVE_SOURCE_SCAN_TYPES);
+  // The scan CVEs are actually sourced from — the newest deps-flavoured
+  // scan of this project that ran a dependency scanner. `cveGap` is true
+  // exactly when this project HAS a current scan but none of its scans
+  // measured dependencies — CVEs are then necessarily unmeasured, not zero,
+  // and that has to reach coverage or it renders as a clean "0 CVEs".
+  const cveSourceScan = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: 'deps' }).scan;
   const cveGap = currentScan !== null && cveSourceScan === null;
-  const coverage = buildCoverage(currentScan, cveGap);
+  const coverage = buildCoverage(open.scans, cveGap);
 
-  // Already project-scoped AND already suppression-filtered by
-  // listOpenForProjectStmt's own SQL — this is both the basis of
-  // `FindingsSummary` and the "to" side of `since_previous` below. Safe on a
-  // project with no completed scan: the underlying CTE then matches zero
-  // rows and the join returns [], never an error.
-  const openFindings = storage.findings.listOpenForProject(projectPath);
+  const openFindings = open.findings;
   const findings = buildFindingsSummary(openFindings, truncation);
 
   const cveItems: Cve[] = cveSourceScan ? storage.cves.listActive(cveSourceScan.scan_id) : [];
   const cves = buildCveSummary(cveItems);
 
-  // Suppression state, entirely against the injected `now` — see the module
-  // doc comment for why this is `listAll()` + a JS-side filter rather than
-  // `listActive()`. Reused for both the delta suppression-filtering below
-  // and `SuppressionState` itself, so — like `history` above — it is fetched
-  // and decided exactly once.
   const allSuppressions = storage.suppressions.listAll();
   const activeSuppressions = allSuppressions.filter((s) => isSuppressionActiveAt(s, now));
-  const suppressedFingerprints = new Set(activeSuppressions.map((s) => s.finding_fingerprint));
+  const isSuppressed = suppressionMatcher(allSuppressions, now);
 
-  const sincePrevious = currentScan
-    ? buildSincePrevious(storage, currentScan, history, openFindings, suppressedFingerprints, truncation)
+  const sincePrevious = deltaScan
+    ? buildSincePrevious(storage, deltaScan, isSuppressed, truncation)
     : null;
 
-  const resolvedBaseline = resolveBaseline(storage, projectPath);
+  const resolvedBaseline = storage.baselines.getActiveForProject(projectPath);
   const baseline = buildBaselineState(resolvedBaseline, now);
-  const sinceBaseline = currentScan && resolvedBaseline
-    ? buildSinceBaseline(storage, resolvedBaseline, currentScan, openFindings, suppressedFingerprints, truncation)
+  const sinceBaseline = deltaScan && resolvedBaseline
+    ? buildSinceBaseline(storage, resolvedBaseline, projectPath, isSuppressed, truncation)
     : null;
 
   const suppressions = buildSuppressionState(activeSuppressions, now);
 
-  const complianceSignals = resolveComplianceSignals(history);
+  const complianceSignals = resolveComplianceSignals(storage, projectPath);
 
   const risk = currentScan
     ? scoreRisk({
@@ -210,23 +174,34 @@ function toScanSummary(scan: ScanRecord, now: number): ScanSummary {
   };
 }
 
-function buildCoverage(currentScan: ScanRecord | null, cveGap: boolean): CoverageState {
-  const missingTools = currentScan?.missing_tools ?? [];
-  const toolsRunRecords = currentScan?.tools_run ?? [];
-  const toolsRun = toolsRunRecords.map((t) => t.name);
-  // A name can appear in BOTH missing_tools and tools_run at once (see
-  // bugHunt.ts's retry-success path): the tool itself ran ('ok'), but named
-  // a real, narrower gap anyway. That combination — not "tool absent
-  // entirely" — is what partial_tools flags, so the renderers can tell the
-  // two apart instead of reporting every missing_tools entry as "did not
-  // run this scan".
-  const okToolNames = new Set(
-    toolsRunRecords.filter((t) => t.status === 'ok').map((t) => t.name),
-  );
-  const partialTools = missingTools.filter((t) => okToolNames.has(t));
+/**
+ * Coverage of the numbers on screen: the scanners of every scan the open set
+ * considered (its sources, and the newer scans it skipped for coverage none
+ * — their gaps are exactly what the numbers lack), names de-duplicated in
+ * first-seen order.
+ */
+function buildCoverage(scans: readonly ScanRecord[], cveGap: boolean): CoverageState {
+  const toolsRun: string[] = [];
+  const missingTools: string[] = [];
+  const partialTools: string[] = [];
+  const addOnce = (list: string[], name: string): void => {
+    if (!list.includes(name)) list.push(name);
+  };
+  for (const scan of scans) {
+    for (const t of scan.tools_run) addOnce(toolsRun, t.name);
+    for (const t of scan.missing_tools) addOnce(missingTools, t);
+    // A name can appear in BOTH missing_tools and tools_run of one scan
+    // (see bugHunt.ts's retry-success path): the tool itself ran ('ok'), but
+    // named a real, narrower gap anyway. That combination — not "tool absent
+    // entirely" — is what partial_tools flags, so the renderers can tell the
+    // two apart instead of reporting every missing_tools entry as "did not
+    // run this scan". Judged per scan, never across two.
+    const okToolNames = new Set(scan.tools_run.filter((t) => t.status === 'ok').map((t) => t.name));
+    for (const t of scan.missing_tools) if (okToolNames.has(t)) addOnce(partialTools, t);
+  }
   const omittedCategories = omittedCategoriesFor(missingTools, cveGap);
   const level: CoverageState['level'] =
-    currentScan === null ? 'none' : omittedCategories.length > 0 ? 'partial' : 'full';
+    scans.length === 0 ? 'none' : omittedCategories.length > 0 ? 'partial' : 'full';
   return {
     level,
     tools_run: toolsRun,
@@ -301,37 +276,22 @@ function buildCveSummary(cveItems: readonly Cve[]): CveSummary {
   };
 }
 
-/**
- * The same shape as `tools/riskScore.ts`'s own `findLatestOfType` (also
- * duplicated in `resources/misc.ts`, `resources/dotnet.ts`,
- * `resources/wp.ts`) — "the newest completed scan of one of these types" —
- * but over an already project-scoped `history` array instead of that
- * helper's unscoped `listHistory(50)`. `listHistoryForProject`'s rows
- * already carry `meta` (via `rowToRecord`), so unlike those originals this
- * needs no separate `getById` call.
- */
-function findLatestOfType(history: readonly ScanRecord[], types: readonly string[]): ScanRecord | null {
-  return history.find((s) => s.status === 'completed' && types.includes(s.scan_type)) ?? null;
-}
-
 interface ComplianceSignals {
   policies_missing: number;
   dependency_bot_configured: boolean;
 }
 
 /**
- * Ported from `tools/riskScore.ts:47-67` verbatim, scoped by project via the
- * already-fetched `history` instead of that tool's unscoped `listHistory(50)`.
- * Same fallback, kept deliberately: no compliance/deps scan anywhere in this
- * project's (lookback-bounded) history ⇒ no signal ⇒ no penalty — "not
- * measured", not "0 missing" — matching `risk_score`'s own accepted
- * behaviour for the identical absence, since design §3.1 requires
- * `risk_score`'s public behaviour to stay unchanged and this is the exact
- * logic it already runs, just reached through a scoped history instead of
- * an unscoped one.
+ * The same signals, and the same arithmetic, as `tools/riskScore.ts`, over
+ * the same project-scoped queries. Same fallback, kept deliberately: no
+ * compliance/deps-audit scan of this project ⇒ no signal ⇒ no penalty —
+ * "not measured", not "0 missing". Both signals are read from files, not
+ * from scanner output, so a run's scanner coverage does not disqualify them.
  */
-function resolveComplianceSignals(history: readonly ScanRecord[]): ComplianceSignals {
-  const latestCompliance = findLatestOfType(history, ['compliance']);
+function resolveComplianceSignals(storage: Storage, projectPath: string): ComplianceSignals {
+  const latestCompliance = findLatestUsable(storage, projectPath, ['compliance'], {
+    skipCoverageNone: false,
+  }).scan;
   let policiesMissing = 0;
   if (latestCompliance?.meta) {
     const m = latestCompliance.meta as {
@@ -344,8 +304,10 @@ function resolveComplianceSignals(history: readonly ScanRecord[]): ComplianceSig
   }
 
   let dependencyBotConfigured = true;
-  const latestDepsAudit =
-    history.find((s) => s.status === 'completed' && isDepsAuditScan(s)) ?? null;
+  const latestDepsAudit = findLatestUsable(storage, projectPath, ['deps_audit', 'deps'], {
+    skipCoverageNone: false,
+    predicate: isDepsAuditScan,
+  }).scan;
   if (latestDepsAudit?.meta) {
     const m = latestDepsAudit.meta as { bot_configured?: { renovate?: boolean; dependabot?: boolean } };
     const bot = m.bot_configured ?? {};
@@ -358,91 +320,53 @@ function resolveComplianceSignals(history: readonly ScanRecord[]): ComplianceSig
 function buildSincePrevious(
   storage: Storage,
   currentScan: ScanRecord,
-  history: readonly ScanRecord[],
-  openFindings: readonly Finding[],
-  suppressedFingerprints: ReadonlySet<string>,
+  isSuppressed: IsSuppressed,
   truncation: TruncationNotice[],
 ): FindingDelta | null {
-  const previous = history.find(
-    (s) =>
-      s.status === 'completed' &&
-      s.scan_id !== currentScan.scan_id &&
-      s.scan_type === currentScan.scan_type,
-  );
-  if (previous === undefined) return null;
+  const previous = latestStateScan(storage, currentScan.project_path, currentScan.scan_type, {
+    beforeScanId: currentScan.scan_id,
+  }).scan;
+  if (previous === null) return null;
 
-  const previousFindings = filterSuppressed(
-    storage.findings.listByScan(previous.scan_id),
-    suppressedFingerprints,
-  );
   const { delta, truncation: cut } = compareFindings(
-    { scan_id: previous.scan_id, findings: previousFindings },
-    { scan_id: currentScan.scan_id, findings: openFindings },
+    { scan_id: previous.scan_id, findings: unsuppressed(storage, previous.scan_id, isSuppressed) },
+    { scan_id: currentScan.scan_id, findings: unsuppressed(storage, currentScan.scan_id, isSuppressed) },
     DELTA_CAP,
   );
   if (cut !== null) truncation.push({ ...cut, what: 'deltas.since_previous.new_findings' });
   return delta;
 }
 
+/**
+ * The baseline against the newest usable scan of the baseline's own type —
+ * never against a scan of another type, whose findings come from different
+ * rule families and would all read as new.
+ */
 function buildSinceBaseline(
   storage: Storage,
-  resolvedBaseline: ResolvedBaseline,
-  currentScan: ScanRecord,
-  openFindings: readonly Finding[],
-  suppressedFingerprints: ReadonlySet<string>,
+  baseline: ProjectBaseline,
+  projectPath: string,
+  isSuppressed: IsSuppressed,
   truncation: TruncationNotice[],
-): FindingDelta {
-  const baselineFindings = filterSuppressed(
-    storage.findings.listByScan(resolvedBaseline.scan_id),
-    suppressedFingerprints,
-  );
+): FindingDelta | null {
+  const baselineType = baseline.scan_type ?? storage.scans.getById(baseline.scan_id)?.scan_type;
+  if (baselineType === undefined) return null;
+  const target = latestStateScan(storage, projectPath, baselineType).scan;
+  if (target === null) return null;
   const { delta, truncation: cut } = compareFindings(
-    { scan_id: resolvedBaseline.scan_id, findings: baselineFindings },
-    { scan_id: currentScan.scan_id, findings: openFindings },
+    { scan_id: baseline.scan_id, findings: unsuppressed(storage, baseline.scan_id, isSuppressed) },
+    { scan_id: target.scan_id, findings: unsuppressed(storage, target.scan_id, isSuppressed) },
     DELTA_CAP,
   );
   if (cut !== null) truncation.push({ ...cut, what: 'deltas.since_baseline.new_findings' });
   return delta;
 }
 
-interface ResolvedBaseline {
-  id: number;
-  scan_id: string;
-  set_at: string;
-  note?: string;
+function unsuppressed(storage: Storage, scanId: string, isSuppressed: IsSuppressed): Finding[] {
+  return storage.findings.listByScan(scanId).filter((f) => !isSuppressed(f));
 }
 
-/**
- * The most recent baseline whose scan belongs to `projectPath` — NOT just
- * the single globally-newest baseline. `baselines` has no `project_path`
- * column, so `getActive()` alone can only ever see one row across every
- * project in the database; stopping there after rejecting a cross-project
- * mismatch (the correct, safe half of this check) leaves this project's own
- * older baseline permanently invisible whenever any other project sets one
- * more recently. `listAll()` returns every baseline, newest first
- * (`baselinesRepo.ts`), so walking it and returning the first whose scan's
- * `project_path` matches finds this project's real most-recent baseline
- * regardless of what else has been set since. `scans.getById` is safe to use
- * for the per-candidate check: it is an explicit-id lookup, not an implicit
- * "latest" one.
- */
-function resolveBaseline(storage: Storage, projectPath: string): ResolvedBaseline | null {
-  const candidates = storage.baselines.listAll();
-  for (const candidate of candidates) {
-    const scan = storage.scans.getById(candidate.scan_id);
-    if (scan === null || scan.project_path !== projectPath) continue;
-    const resolved: ResolvedBaseline = {
-      id: candidate.id,
-      scan_id: candidate.scan_id,
-      set_at: candidate.set_at,
-    };
-    if (candidate.note !== undefined) resolved.note = candidate.note;
-    return resolved;
-  }
-  return null;
-}
-
-function buildBaselineState(resolved: ResolvedBaseline | null, now: number): BaselineState {
+function buildBaselineState(resolved: ProjectBaseline | null, now: number): BaselineState {
   if (resolved === null) return { active: null, age_days: null };
   const active: BaselineState['active'] = {
     baseline_id: resolved.id,
@@ -484,7 +408,7 @@ function buildSuppressionState(
 }
 
 /** "Active" relative to the INJECTED clock, never the real one — see the
- *  module doc comment's `suppressions.listActive()` paragraph. */
+ *  module doc comment's suppression paragraph. */
 function isSuppressionActiveAt(s: Suppression, now: number): boolean {
   return s.expires_at === undefined || Date.parse(s.expires_at) > now;
 }
@@ -512,10 +436,6 @@ function noScanRisk(): RiskAssessment {
       'Run `dev-guardian scan` (or /guardian-scan) — this project has not been scanned yet.',
     coverage_caveat: true,
   };
-}
-
-function filterSuppressed(findings: readonly Finding[], suppressed: ReadonlySet<string>): Finding[] {
-  return findings.filter((f) => !suppressed.has(f.fingerprint));
 }
 
 function groupBy(findings: readonly Finding[], keyOf: (f: Finding) => string): Record<string, number> {

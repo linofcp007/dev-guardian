@@ -14,6 +14,13 @@
  *
  * The model then proposes the patch in its response. This separation
  * keeps us LLM-agnostic and free.
+ *
+ * The finding is looked up in `project_path`'s own completed scans, newest
+ * first — not only in the single latest scan of the whole database, which
+ * could not find a SAST finding once any other scan (a secrets run, an SBOM,
+ * another project's scan) had completed after it. The related suppressions
+ * are those of the same tool AND rule_id; it used to list any ten active
+ * suppressions, whatever they were about.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -45,8 +52,10 @@ const tool: ToolModule = {
   title: 'Gather fix context for the model',
   description:
     'Assemble structured context about a finding (source snippet, surrounding lines, rule metadata, ' +
-    'prior suppressions for the same rule_id) so the calling model can propose a patch. This tool ' +
-    'never calls an external LLM — the model that invoked it does the synthesis.',
+    'prior suppressions for the same tool and rule_id) so the calling model can propose a patch. ' +
+    "The finding is found in project_path's (default: the server's working directory) newest " +
+    'scan that reported it. This tool never calls an external LLM — the model that invoked it ' +
+    'does the synthesis.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -71,16 +80,15 @@ async function handler(
   }
   const contextLines = inp.context_lines ?? 20;
 
-  // Locate the finding via the latest scan that carries it.
-  const latest = ctx.storage.scans.getLatest();
-  const finding = latest
-    ? ctx.storage.findings
-        .listByScan(latest.scan_id)
-        .find((f) => f.fingerprint === inp.finding_fingerprint)
-    : null;
-  if (!finding) {
-    return failDomain('unknown_scan_id', `Finding ${inp.finding_fingerprint} not in the latest scan.`);
+  // Locate the finding in this project's newest scan that carries it.
+  const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);
+  if (!located) {
+    return failDomain(
+      'unknown_scan_id',
+      `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`,
+    );
   }
+  const finding = located.finding;
 
   // Pull the surrounding source.
   let surrounding_source: string | null = null;
@@ -113,18 +121,24 @@ async function handler(
     }
   }
 
-  // Prior suppressions for the same rule_id (historical "we've decided this
-  // is fine" pattern) — useful for the model to know "the team has
-  // suppressed similar findings; consider that pattern".
+  // Prior suppressions of the same tool + rule_id (historical "we've decided
+  // this is fine" pattern) — useful for the model to know "the team has
+  // suppressed similar findings; consider that pattern". Never the finding's
+  // own suppression, by either key.
   const priorSuppressions = finding.rule_id
     ? ctx.storage.suppressions
-        .listActive()
-        .filter((s) => s.finding_fingerprint !== finding.fingerprint)
+        .listActiveForRule(finding.tool, finding.rule_id, 20)
+        .filter(
+          (s) =>
+            s.finding_fingerprint !== finding.fingerprint &&
+            (finding.identity === undefined || s.finding_identity !== finding.identity),
+        )
         .slice(0, 10)
     : [];
 
   return {
     ok: true,
+    scan_id: located.scan_id,
     finding: {
       fingerprint: finding.fingerprint,
       tool: finding.tool,

@@ -42,24 +42,16 @@
 
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
+import { openSetForProject } from '../history/openSet.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { languageFromPath } from '../surface/extract.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
-import type { DomainErrorCode, ScanRecord, ToolResult } from '../types.js';
+import type { DomainErrorCode, ToolResult } from '../types.js';
 import { buildImportGraph } from '../validate/importGraph.js';
 import { validateStatically } from '../validate/staticProvider.js';
 import { buildSummary, type DastCrossReference } from '../validate/summary.js';
 import { registerToolModule, type ToolModule } from './index.js';
-
-/**
- * `scans.listHistory` is the only project-scoped window onto past runs, so the
- * DAST cross-reference searches a bounded slice of it. The bound is reported
- * (`summary.dast.scans_searched`) rather than applied silently: "no DAST scan
- * in the last 200 runs" and "no DAST scan ever" are different statements, and
- * neither is "nothing is exposed".
- */
-const DAST_SCAN_SEARCH_LIMIT = 200;
 
 /** The one `scan_dast` check whose finding is evidence of live, anonymous
  *  reachability — see `dast/analyze.ts`'s `checkAnonymousExposure`. */
@@ -148,9 +140,9 @@ function fail(
 
 const NO_OPEN_FINDINGS_NOTE =
   'No open findings to validate, so nothing was computed and nothing was persisted. This is NOT ' +
-  'a statement that the project is clean — it means the latest completed scan recorded no ' +
-  'unsuppressed findings. Run security_scan_full (or scan_sast) first, then re-run ' +
-  'validate_finding.';
+  "a statement that the project is clean — it means no usable scan of this project's " +
+  'finding-producing types left an unsuppressed finding open. Run security_scan_full (or ' +
+  'scan_sast) first, then re-run validate_finding.';
 
 async function handler(
   input: Record<string, unknown>,
@@ -201,8 +193,11 @@ async function handler(
   // listOpen() answers with the latest completed scan in the WHOLE
   // database, from any project, which would validate a different project's
   // findings under this run whenever that project's scan happened to
-  // complete more recently.
-  const open = ctx.storage.findings.listOpenForProject(projectPath);
+  // complete more recently. And the project's OPEN SET, not its single
+  // latest scan: that one could be an SBOM, or a DAST run standing in for
+  // the SAST findings the caller meant (`history/openSet.ts`).
+  const openSet = openSetForProject(ctx.storage, projectPath);
+  const open = openSet.findings;
   const selected =
     inp.fingerprint === undefined ? open : open.filter((f) => f.fingerprint === inp.fingerprint);
   if (inp.fingerprint !== undefined && selected.length === 0) {
@@ -244,12 +239,18 @@ async function handler(
       graph,
       validations,
       dast,
-      // The scan `listOpenForProject()` drew from — see `sourceScanOf`.
-      sourceScan: sourceScanOf(ctx, projectPath),
+      // The newest scan the open set read findings from, taken from the set
+      // itself so it cannot drift from it (each finding also carries its
+      // own `scan_id`). Present even when nothing was selected — the case
+      // where a reader most needs to know which scans came back empty.
+      sourceScan: openSet.newestSource,
       workingTreeHash,
       now: Date.now(),
     }),
     ...(selected.length === 0 ? { note: NO_OPEN_FINDINGS_NOTE } : {}),
+    // Newer scans the open set passed over because their scanners did not
+    // run: the findings validated come from the scan before each of them.
+    ...(openSet.skipped.length > 0 ? { skipped_scans: openSet.skipped } : {}),
   };
 }
 
@@ -280,32 +281,6 @@ function languageOfPath(filePath: string): string | null {
   return language === 'unknown' ? null : language;
 }
 
-/**
- * The scan whose findings this batch validated.
- *
- * `findings.listOpenForProject(projectPath)` selects from the latest
- * COMPLETED scan FOR THIS PROJECT, and `scans.getLatestForProject(
- * projectPath)` returns that same row — identical predicate (`status =
- * 'completed' AND project_path = ?`, identical `ORDER BY started_at DESC,
- * rowid DESC LIMIT 1`), both scoped to the same project. The two must stay in
- * lockstep: if one ever changes its ordering or its project filter, this
- * summary starts naming a scan the findings did not come from, which is worse
- * than naming none — including naming another project's scan entirely, which
- * `getLatest()` (no project filter) could do silently. Kept as a lookup
- * rather than derived from the selected findings because a finding carries no
- * scan id in its domain type, and because the answer must exist even when
- * zero findings were selected — the case where a reader most needs to know
- * WHICH scan came back empty.
- *
- * This is what makes the documented hazard detectable: `validate_finding`
- * validates whatever the latest completed scan left open FOR THIS PROJECT, so
- * running it immediately after `scan_dast` validates the DAST findings rather
- * than the SAST ones. The tool cannot know which the caller meant — it can,
- * and now does, say which it used.
- */
-function sourceScanOf(ctx: PluginContext, projectPath: string): ScanRecord | null {
-  return ctx.storage.scans.getLatestForProject(projectPath);
-}
 
 /**
  * The liveness cross-reference (design §7): a persisted `scan_dast` finding
@@ -321,17 +296,17 @@ function sourceScanOf(ctx: PluginContext, projectPath: string): ScanRecord | nul
  * one evidence clause the design calls out by name.
  */
 function collectAnonymousExposures(ctx: PluginContext, projectPath: string): DastCrossReference {
-  const history = ctx.storage.scans.listHistory(DAST_SCAN_SEARCH_LIMIT);
-  const scan =
-    history.find(
-      (s) => s.scan_type === 'dast' && s.status === 'completed' && s.project_path === projectPath,
-    ) ?? null;
-  if (scan === null) return { scan: null, files: new Set(), scansSearched: history.length };
+  // A project-scoped SQL query over ALL of this project's scans — it
+  // searched the 200 newest scans of the whole database, so enough scans of
+  // other projects hid this project's DAST run.
+  const scan = ctx.storage.scans.listCompletedOfTypes(projectPath, ['dast'], { limit: 1 })[0] ?? null;
+  const scansSearched = ctx.storage.scans.countForProject(projectPath);
+  if (scan === null) return { scan: null, files: new Set(), scansSearched };
 
   const files = new Set<string>();
   for (const f of ctx.storage.findings.listByScan(scan.scan_id)) {
     if (f.subcategory !== ANONYMOUS_EXPOSURE || f.file_path === undefined) continue;
     files.add(f.file_path);
   }
-  return { scan, files, scansSearched: history.length };
+  return { scan, files, scansSearched };
 }

@@ -27,6 +27,7 @@ vi.mock('../../src/tools/scanHelpers.js', async () => {
 import { runProcess } from '../../src/runners/processRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 import type { PluginContext } from '../../src/context.js';
+import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
@@ -315,10 +316,13 @@ describe('dotnet_efcore_audit', () => {
 describe('prioritize_findings', () => {
   it('ranks critical security above low quality', async () => {
     const plugin = makePlugin();
+    // prioritize_findings answers for one project, so the scan must belong
+    // to a real one and the call must name it.
+    const project = resolveProjectPath(makeTempDir('phase16-prio-')).path;
     plugin.storage.scans.insert({
       scan_id: 's1',
       scan_type: 'sast',
-      project_path: '/p',
+      project_path: project,
       tree_hash: 'h',
     });
     const fLow = makeFinding({
@@ -348,7 +352,7 @@ describe('prioritize_findings', () => {
       missing_tools: [],
     });
 
-    const r = (await getTool('prioritize_findings').handler({}, plugin)) as {
+    const r = (await getTool('prioritize_findings').handler({ project_path: project }, plugin)) as {
       ok: true;
       ranked: Array<{ finding: { severity: string; title: string }; priority_score: number }>;
     };

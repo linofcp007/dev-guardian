@@ -15,6 +15,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { latestStateScan } from '../history/openSet.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { escapeHtml, markdownToSafeHtml, renderHtmlDocument, severityBar, severityChip, } from '../report/htmlTheme.js';
 import { toSarif } from '../report/sarif.js';
@@ -23,7 +24,11 @@ import { CVE_SOURCE_SCAN_TYPES, } from '../types.js';
 import { registerToolModule } from './index.js';
 const inputSchema = {
     project_path: ProjectPath,
-    scan_id: z.string().uuid().optional().describe('Scan to export. Defaults to the latest completed.'),
+    scan_id: z
+        .string()
+        .uuid()
+        .optional()
+        .describe("Scan to export. Defaults to project_path's newest usable finding-producing scan."),
     format: z
         .enum(['html', 'sarif', 'markdown', 'json'])
         .optional()
@@ -95,10 +100,16 @@ async function handler(input, ctx) {
             bytes: Buffer.byteLength(content, 'utf8'),
         };
     }
-    // Scan mode.
-    const scanId = inp.scan_id ?? ctx.storage.scans.getLatest()?.scan_id;
+    // Scan mode. Default: THIS project's newest usable state scan — not the
+    // newest completed scan in the whole database, which exported another
+    // project's scan (or an SBOM) into this project's reports directory.
+    const latest = inp.scan_id === undefined ? latestStateScan(ctx.storage, projectPath) : null;
+    const scanId = inp.scan_id ?? latest?.scan?.scan_id;
     if (!scanId) {
-        return failDomain('unknown_scan_id', 'No completed scans to export.');
+        return failDomain('unknown_scan_id', `No usable completed scan of ${projectPath} to export.` +
+            ((latest?.skipped.length ?? 0) > 0
+                ? ` ${latest?.skipped.length ?? 0} scan(s) were skipped because their scanners did not run (coverage none).`
+                : ''));
     }
     const scan = ctx.storage.scans.getById(scanId);
     if (!scan)
@@ -121,6 +132,7 @@ async function handler(input, ctx) {
         bytes: Buffer.byteLength(content, 'utf8'),
         findings_count: findings.length,
         cves_count: cves.length,
+        ...((latest?.skipped.length ?? 0) > 0 ? { skipped_scans: latest?.skipped } : {}),
     };
 }
 function renderReport(format, scan, findings, cves, lang) {

@@ -12,13 +12,38 @@
  * even when `inMemory: true`).
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
+import { resolveProjectPath } from '../../../src/platform/projectPath.js';
 import { GuardianDatabase as Database } from '../../../src/storage/db.js';
 import { runMigrations } from '../../../src/storage/migrations/runner.js';
 import { Storage } from '../../../src/storage/index.js';
 import { TOOLS } from '../../../src/tools/index.js';
 import '../../../src/tools/riskScore.js';
 import { okResult } from '../../helpers/toolResult.js';
+import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
+
+/**
+ * The project every scan below belongs to. `risk_score` answers for one
+ * project (`project_path`, default the working directory) since it stopped
+ * reading "the newest scan in the whole database" — so the fixture's
+ * project must be a real directory the tool can resolve.
+ */
+const P = resolveProjectPath(makeTempDir('risk-char-')).path;
+
+/**
+ * The fields added when risk_score learned its real coverage — for these
+ * fixtures, complete: every scan they seed ran whatever it ran in full, and
+ * a deps-flavoured scan exists to source CVEs from.
+ */
+function measured(): Record<string, unknown> {
+  return {
+    coverage_caveat: false,
+    project_path: P,
+    coverage: expect.objectContaining({ level: 'full', skipped: [] }),
+  };
+}
 
 function seed() {
   const db = new Database(':memory:');
@@ -26,7 +51,7 @@ function seed() {
   const storage = new Storage(db);
   const scanId = 'char-scan-1';
   storage.scans.insert({
-    scan_id: scanId, scan_type: 'security_full', project_path: '/p', tree_hash: 'h',
+    scan_id: scanId, scan_type: 'security_full', project_path: P, tree_hash: 'h',
   });
   storage.scans.finalize({
     scan_id: scanId, status: 'completed', tools_run: [], missing_tools: [],
@@ -55,7 +80,7 @@ describe('risk_score — public behaviour is unchanged by the extraction', () =>
     const { storage, db } = seed();
     const mod = TOOLS.find((t) => t.name === 'risk_score');
     expect(mod).toBeTruthy();
-    const res = await mod?.handler({}, { storage } as never);
+    const res = await mod?.handler({ project_path: P }, { storage } as never);
     expect(res).toEqual({
       ok: true,
       score: 23,                      // 15 findings + 0 cves + 0 compliance + 8 no-baseline
@@ -68,6 +93,7 @@ describe('risk_score — public behaviour is unchanged by the extraction', () =>
       },
       recommended_next_action:
         'Set a baseline with set_baseline so diff_scans can track regressions.',
+      ...measured(),
     });
     db.close();
   });
@@ -91,7 +117,7 @@ function seedDepsOnly(botConfigured: { renovate: boolean; dependabot: boolean })
   const storage = new Storage(db);
   const scanId = 'char-scan-bot-1';
   storage.scans.insert({
-    scan_id: scanId, scan_type: 'deps', project_path: '/p', tree_hash: 'h',
+    scan_id: scanId, scan_type: 'deps', project_path: P, tree_hash: 'h',
   });
   storage.scans.finalize({
     scan_id: scanId, status: 'completed', tools_run: [], missing_tools: [],
@@ -110,12 +136,12 @@ describe('risk_score — reads the dependency-bot signal from deps_audit, whatev
     const db = new Database(':memory:');
     runMigrations(db);
     const storage = new Storage(db);
-    storage.scans.insert({ scan_id: 'audit', scan_type: auditType, project_path: '/p', tree_hash: 'h' });
+    storage.scans.insert({ scan_id: 'audit', scan_type: auditType, project_path: P, tree_hash: 'h' });
     storage.scans.finalize({
       scan_id: 'audit', status: 'completed', tools_run: [], missing_tools: [],
       meta: { bot_configured: { renovate: false, dependabot: false } },
     });
-    storage.scans.insert({ scan_id: 'scan-deps', scan_type: 'deps', project_path: '/p', tree_hash: 'h' });
+    storage.scans.insert({ scan_id: 'scan-deps', scan_type: 'deps', project_path: P, tree_hash: 'h' });
     storage.scans.finalize({ scan_id: 'scan-deps', status: 'completed', tools_run: [], missing_tools: [] });
     // Distinct start times, scan_deps last.
     db.prepare(`UPDATE scans SET started_at = '2026-01-01T00:00:00.000Z' WHERE id = 'audit'`).run();
@@ -130,7 +156,7 @@ describe('risk_score — reads the dependency-bot signal from deps_audit, whatev
       const mod = TOOLS.find((t) => t.name === 'risk_score');
       if (mod === undefined) throw new Error('risk_score is not registered');
       const res = okResult<{ components: { compliance: { score: number } } }>(
-        await mod.handler({}, { storage } as never),
+        await mod.handler({ project_path: P }, { storage } as never),
       );
       expect(res.components.compliance.score).toBe(6);
       db.close();
@@ -143,7 +169,7 @@ describe('risk_score — dependency-bot `||` regression coverage', () => {
     const { storage, db } = seedDepsOnly({ renovate: false, dependabot: true });
     const mod = TOOLS.find((t) => t.name === 'risk_score');
     expect(mod).toBeTruthy();
-    const res = await mod?.handler({}, { storage } as never);
+    const res = await mod?.handler({ project_path: P }, { storage } as never);
     expect(res).toEqual({
       ok: true,
       score: 8,                       // 0 findings + 0 cves + 0 compliance + 8 no-baseline
@@ -156,6 +182,7 @@ describe('risk_score — dependency-bot `||` regression coverage', () => {
       },
       recommended_next_action:
         'Set a baseline with set_baseline so diff_scans can track regressions.',
+      ...measured(),
     });
     db.close();
   });

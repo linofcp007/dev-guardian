@@ -1,23 +1,38 @@
 /**
- * `set_baseline` — mark a scan as the regression baseline.
+ * `set_baseline` — mark a scan as its project's regression baseline for its
+ * scan type.
  *
- * Pure SQL: inserts a new row in `baselines` whose `scan_id` is either the
- * argument (validated to exist) or the latest completed scan. The most
- * recently inserted row is always the active baseline — older rows are kept
- * for audit/history but ignored by `diff_scans from='baseline'`.
+ * Pure SQL: inserts a new row in `baselines` recording the scan, its project
+ * and its scan type (migration 008). The scan is either the argument
+ * (validated to exist and be completed) or `project_path`'s newest usable
+ * state scan — of `scan_type` when given (default project: the server's
+ * working directory). It used to default to the newest completed scan in the
+ * WHOLE database: another project's, or an SBOM.
+ *
+ * The most recently inserted row of a project and type is that type's
+ * active baseline; `diff_scans from='baseline'` and `regression_alert` read
+ * it. Older rows are kept for audit/history.
  */
 
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import type { DomainError, ToolResult } from '../types.js';
+import { latestStateScan } from '../history/openSet.js';
+import { resolveProjectPath } from '../platform/projectPath.js';
+import { ProjectPath } from '../schemas.js';
+import { SCAN_TYPES, type DomainError, type ScanType, type ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
 const inputSchema = {
+  project_path: ProjectPath,
   scan_id: z
     .string()
     .uuid()
     .optional()
-    .describe('Scan to mark as the baseline. Defaults to the latest completed scan.'),
+    .describe("Scan to mark as the baseline. Defaults to project_path's newest usable scan."),
+  scan_type: z
+    .enum(SCAN_TYPES)
+    .optional()
+    .describe('Without scan_id: baseline the newest scan of this type. Default: any finding-producing type.'),
   note: z.string().max(500).optional().describe('Free-form note attached to the baseline row.'),
 };
 
@@ -25,8 +40,11 @@ const tool: ToolModule = {
   name: 'set_baseline',
   title: 'Set regression baseline',
   description:
-    'Mark a scan as the active regression baseline. Future `diff_scans from=baseline` queries ' +
-    'use this row as the reference. Older baselines are kept for history but inactive.',
+    "Mark a scan as its project's regression baseline for its scan type. Without scan_id, uses " +
+    "project_path's (default: the server's working directory) newest usable scan — of scan_type " +
+    'when given — never an SBOM, stack detection, diff review or a scan whose scanners did not ' +
+    'run. Future `diff_scans from=baseline` and `regression_alert` calls compare scans of that ' +
+    'type against it. Older baselines are kept for history but inactive.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -37,7 +55,7 @@ async function handler(
   input: Record<string, unknown>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { scan_id?: string; note?: string };
+  const inp = input as { project_path?: string; scan_id?: string; scan_type?: ScanType; note?: string };
 
   let targetScanId: string;
   if (inp.scan_id) {
@@ -53,14 +71,24 @@ async function handler(
     }
     targetScanId = inp.scan_id;
   } else {
-    const latest = ctx.storage.scans.getLatest();
-    if (!latest) {
+    let projectPath: string;
+    try {
+      projectPath = resolveProjectPath(inp.project_path).path;
+    } catch (e) {
+      return failDomain('not_a_git_repo', (e as Error).message);
+    }
+    const latest = latestStateScan(ctx.storage, projectPath, inp.scan_type);
+    if (!latest.scan) {
       return failDomain(
         'unknown_scan_id',
-        'No completed scan exists yet; run a scan tool before setting a baseline.',
+        `No usable completed ${inp.scan_type ?? 'finding-producing'} scan exists for ${projectPath} ` +
+          'yet; run a scan tool before setting a baseline.' +
+          (latest.skipped.length > 0
+            ? ` Skipped ${latest.skipped.length} scan(s) whose scanners did not run (coverage none).`
+            : ''),
       );
     }
-    targetScanId = latest.scan_id;
+    targetScanId = latest.scan.scan_id;
   }
 
   const baseline = ctx.storage.baselines.set({
@@ -72,6 +100,8 @@ async function handler(
     ok: true,
     baseline_id: baseline.id,
     scan_id: baseline.scan_id,
+    project_path: baseline.project_path,
+    scan_type: baseline.scan_type,
     set_at: baseline.set_at,
     ...(baseline.note !== undefined ? { note: baseline.note } : {}),
   };
