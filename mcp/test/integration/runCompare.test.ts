@@ -18,7 +18,8 @@ import { openSetForProject } from '../../src/history/openSet.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { okResult } from '../helpers/toolResult.js';
 import { cleanupTempDirs } from '../helpers/tempDir.js';
-import { freshPlugin, projectDir, seedOrchestratedRun, type Seeded } from '../helpers/historySeed.js';
+import type { ToolRun } from '../../src/types.js';
+import { freshPlugin, projectDir, seedOrchestratedRun, seedScan, type Seeded } from '../helpers/historySeed.js';
 
 afterAll(cleanupTempDirs);
 
@@ -110,13 +111,13 @@ describe('a newer run whose scan_sast child failed', () => {
       summary: { new: number; resolved: number; unchanged: number; not_remeasured: number };
       resolved_findings: Array<{ fingerprint: string }>;
       not_remeasured_findings: Array<{ fingerprint: string }>;
-      not_remeasured_types: string[];
+      not_measured: string[];
     }>(await tool('diff_scans').handler({ project_path: p }, s.plugin));
     expect([r.from_scan_id, r.to_scan_id]).toEqual(['run1', 'run2']);
-    expect(r.summary).toEqual({ new: 1, resolved: 0, unchanged: 0, not_remeasured: 1 });
+    expect(r.summary).toEqual({ new: 1, resolved: 0, unchanged: 0, not_remeasured: 1, not_previously_measured: 0 });
     expect(r.resolved_findings).toEqual([]);
     expect(r.not_remeasured_findings.map((f) => f.fingerprint)).toEqual([S]);
-    expect(r.not_remeasured_types).toEqual(['sast']);
+    expect(r.not_measured).toEqual(['sast']);
   });
 
   it('regression_alert: the new high is not cancelled by a false resolution', async () => {
@@ -154,5 +155,141 @@ describe('a newer run whose scan_sast child failed', () => {
     expect(r.summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
     const b = okResult<Record<string, unknown>>(await tool('set_baseline').handler({ project_path: p }, s.plugin));
     expect(b['not_measured']).toBeUndefined();
+  });
+});
+
+/**
+ * Fix round 3: a PARTIAL child. A Python project with Bandit installed:
+ * Semgrep exit 7 leaves the sast child [semgrep failed, bandit ok] —
+ * coverage partial, status completed. "Did the child measure?" is yes; "did
+ * it measure Semgrep's findings?" is no. The check is per TOOL.
+ */
+const PARTIAL_SAST = {
+  runs: [
+    { name: 'semgrep', status: 'failed', reason: 'exit 7' },
+    { name: 'bandit', status: 'ok' },
+  ] satisfies ToolRun[],
+  missing: [],
+};
+
+function partialSastChild(): { s: Seeded; p: string } {
+  const s = freshPlugin();
+  const p = projectDir('runcmp-partial-');
+  seedOrchestratedRun(s, 'run1', p, {
+    sast: {
+      runs: [{ name: 'semgrep', status: 'ok' }, { name: 'bandit', status: 'ok' }],
+      findings: [{ fp: S, tool: 'semgrep', identity: 'I-S', severity: 'high' }],
+    },
+  });
+  seedOrchestratedRun(s, 'run2', p, {
+    sast: PARTIAL_SAST,
+    deps: { findings: [{ fp: D, tool: 'trivy', subcategory: 'cve', identity: 'I-D', severity: 'high' }] },
+  });
+  return { s, p };
+}
+
+describe("a newer run whose sast child is partial: Semgrep failed, Bandit ran", () => {
+  it('dashboard since_previous: not re-measured, never resolved; coverage is not full', () => {
+    const { s, p } = partialSastChild();
+    const snap = buildSnapshot(s.storage, p, Date.parse('2026-06-01T00:00:00.000Z'));
+    expect(snap.deltas.since_previous).toMatchObject({ new_count: 1, resolved_count: 0, not_remeasured_count: 1 });
+    // A 'failed' scanner is a gap even when missing_tools does not name it.
+    expect(snap.coverage.level).not.toBe('full');
+    expect(snap.coverage.missing_tools).toContain('semgrep');
+  });
+
+  it('diff_scans (default): not_remeasured, not resolved', async () => {
+    const { s, p } = partialSastChild();
+    const r = okResult<{ summary: Record<string, number>; not_measured: string[] }>(
+      await tool('diff_scans').handler({ project_path: p }, s.plugin),
+    );
+    expect(r.summary).toMatchObject({ new: 1, resolved: 0, not_remeasured: 1 });
+    expect(r.not_measured).toEqual(['semgrep']);
+  });
+
+  it('regression_alert: the new high still regresses', async () => {
+    const { s, p } = partialSastChild();
+    const r = okResult<{ regressed: boolean; score_delta: number }>(
+      await tool('regression_alert').handler({ project_path: p, threshold: 0 }, s.plugin),
+    );
+    expect(r.score_delta).toBe(5);
+    expect(r.regressed).toBe(true);
+  });
+
+  it('set_baseline (default): flags Semgrep as not measured', async () => {
+    const { s, p } = partialSastChild();
+    const r = okResult<{ not_measured: string[]; warning: string }>(
+      await tool('set_baseline').handler({ project_path: p }, s.plugin),
+    );
+    expect(r.not_measured).toEqual(['semgrep']);
+    expect(r.warning).toMatch(/semgrep/);
+  });
+
+  it('a script-era row whose Semgrep was missing but gitleaks ran does not resolve the Semgrep findings', async () => {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-script-');
+    seedScan(s, {
+      id: 'old', type: 'security_full', project: p,
+      tools_run: [{ name: 'semgrep', status: 'ok' }, { name: 'gitleaks', status: 'ok' }],
+      findings: [{ fp: S, tool: 'semgrep', severity: 'high' }],
+    });
+    seedScan(s, {
+      id: 'new', type: 'security_full', project: p,
+      tools_run: [{ name: 'semgrep', status: 'skipped', reason: 'not_installed' }, { name: 'gitleaks', status: 'ok' }],
+      missing_tools: ['semgrep'],
+      findings: [{ fp: D, tool: 'gitleaks', subcategory: 'secret', severity: 'high' }],
+    });
+    const diff = okResult<{ from_scan_id: string; to_scan_id: string; summary: Record<string, number> }>(
+      await tool('diff_scans').handler({ project_path: p }, s.plugin),
+    );
+    expect([diff.from_scan_id, diff.to_scan_id]).toEqual(['old', 'new']);
+    expect(diff.summary).toMatchObject({ new: 1, resolved: 0, not_remeasured: 1 });
+    const alert = okResult<{ score_delta: number }>(
+      await tool('regression_alert').handler({ project_path: p, threshold: 0 }, s.plugin),
+    );
+    expect(alert.score_delta).toBe(5);
+  });
+});
+
+describe('a reference that did not measure a tool: its findings in the newer run are not "new"', () => {
+  function partialBaseline(): { s: Seeded; p: string } {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-mirror-');
+    seedOrchestratedRun(s, 'run1', p, { sast: PARTIAL_SAST });
+    s.storage.baselines.set({ scan_id: 'run1' });
+    seedOrchestratedRun(s, 'run2', p, {
+      sast: {
+        runs: [{ name: 'semgrep', status: 'ok' }, { name: 'bandit', status: 'ok' }],
+        findings: [{ fp: S, tool: 'semgrep', identity: 'I-S', severity: 'high' }],
+      },
+    });
+    return { s, p };
+  }
+
+  it('regression_alert: no false alarm from a finding the baseline never looked for', async () => {
+    const { s, p } = partialBaseline();
+    const r = okResult<{
+      reference: string;
+      score_delta: number;
+      regressed: boolean;
+      not_previously_measured_by_severity: Record<string, number>;
+    }>(await tool('regression_alert').handler({ project_path: p, threshold: 0 }, s.plugin));
+    expect(r.reference).toBe('baseline');
+    expect(r.score_delta).toBe(0);
+    expect(r.regressed).toBe(false);
+    expect(r.not_previously_measured_by_severity['high']).toBe(1);
+  });
+
+  it('diff_scans from=baseline and the dashboard deltas label it, instead of counting it new', async () => {
+    const { s, p } = partialBaseline();
+    const diff = okResult<{ summary: Record<string, number>; not_previously_measured_findings: Array<{ fingerprint: string }> }>(
+      await tool('diff_scans').handler({ project_path: p, from: 'baseline' }, s.plugin),
+    );
+    expect(diff.summary).toMatchObject({ new: 0, not_previously_measured: 1 });
+    expect(diff.not_previously_measured_findings.map((f) => f.fingerprint)).toEqual([S]);
+
+    const snap = buildSnapshot(s.storage, p, Date.parse('2026-06-01T00:00:00.000Z'));
+    expect(snap.deltas.since_baseline).toMatchObject({ new_count: 0, not_previously_measured_count: 1 });
+    expect(snap.deltas.since_previous).toMatchObject({ new_count: 0, not_previously_measured_count: 1 });
   });
 });

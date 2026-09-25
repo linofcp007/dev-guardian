@@ -74,6 +74,9 @@ export interface ChildSpec {
   blind?: boolean;
   /** The child's scanner ran and failed (Semgrep exit 7): coverage none. */
   failed?: boolean;
+  /** Explicit bookkeeping (a partial child: [semgrep failed, bandit ok]). Wins over blind/failed. */
+  runs?: ToolRun[];
+  missing?: string[];
 }
 
 /**
@@ -100,12 +103,14 @@ export function seedOrchestratedRun(
     { type: 'deps' as const, tool: 'trivy', c: children.deps },
     { type: 'iac' as const, tool: 'trivy-config', c: children.iac },
   ];
+  const runsOf = (k: (typeof kids)[number]): ToolRun[] => k.c?.runs ?? [run(k.tool, k.c)];
+  const missingOf = (k: (typeof kids)[number]): string[] => k.c?.missing ?? (gap(k.c) ? [k.tool] : []);
   seedScan(s, {
     id,
     type: 'security_full',
     project,
-    tools_run: kids.map((k) => run(k.tool, k.c)),
-    missing_tools: kids.filter((k) => gap(k.c)).map((k) => k.tool),
+    tools_run: kids.flatMap(runsOf),
+    missing_tools: kids.flatMap(missingOf),
     findings: kids.flatMap((k) => k.c?.findings ?? []),
     meta: {
       child_scans: kids.map((k) => ({ tool: `scan_${k.type}`, scan_id: `${id}-${k.type}`, status: 'completed' })),
@@ -116,8 +121,8 @@ export function seedOrchestratedRun(
       id: `${id}-${k.type}`,
       type: k.type,
       project,
-      tools_run: [run(k.tool, k.c)],
-      missing_tools: gap(k.c) ? [k.tool] : [],
+      tools_run: runsOf(k),
+      missing_tools: missingOf(k),
       findings: k.c?.findings ?? [],
       meta: { parent_scan_id: id },
     });

@@ -250,8 +250,18 @@ function renderDelta(label: string, delta: FindingDelta | null, emptyMessage: st
   const table = delta.new_findings.length > 0
     ? `<table><thead><tr><th>Sev</th><th>Title</th><th>Location</th></tr></thead><tbody>${rows}</tbody></table>`
     : '';
+  // What the delta could not compare is shown beside its counts — a finding
+  // one side did not measure is neither resolved nor new (history/runCompare.ts).
+  const gaps: string[] = [];
+  if ((delta.not_remeasured_count ?? 0) > 0) gaps.push(`${delta.not_remeasured_count} not re-measured`);
+  if ((delta.not_previously_measured_count ?? 0) > 0) {
+    gaps.push(`${delta.not_previously_measured_count} not previously measured`);
+  }
+  const caveat = gaps.length === 0
+    ? ''
+    : ` · <span class="pdk-delta-caveat">⚠ ${escapeHtml(gaps.join(', '))} (a scanner did not run on one side)</span>`;
   return `<div>
-  <p><strong>${escapeHtml(label)}:</strong> +${delta.new_count} new · -${delta.resolved_count} resolved · ${delta.unchanged_count} unchanged</p>
+  <p><strong>${escapeHtml(label)}:</strong> +${delta.new_count} new · -${delta.resolved_count} resolved · ${delta.unchanged_count} unchanged${caveat}</p>
   ${table}
 </div>`;
 }

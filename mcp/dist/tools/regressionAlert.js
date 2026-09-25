@@ -23,9 +23,8 @@
  * — see `diff_scans`, which classifies the same way.
  */
 import { z } from 'zod';
-import { indexFindings } from '../fingerprint/findingIdentity.js';
 import { latestStateScan, summarizeSkipped } from '../history/openSet.js';
-import { describeNotMeasured, remeasureCheck } from '../history/runCompare.js';
+import { classifyDiff, compareScansFor, describeMeasurementGaps } from '../history/runCompare.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { SCAN_TYPES } from '../types.js';
@@ -132,22 +131,26 @@ async function handler(input, ctx) {
     }
     const prevFindings = ctx.storage.findings.listByScan(baselineId);
     const curFindings = ctx.storage.findings.listByScan(latest.scan_id);
-    const prevIndex = indexFindings(prevFindings);
-    const curIndex = indexFindings(curFindings);
-    const newFindings = curFindings.filter((f) => !prevIndex.has(f));
-    // A reference finding the current scan did not look at again (a failed
-    // child of an orchestrated run) is not resolved: counted as such, it
-    // cancelled a real new high and hid the regression.
+    // Per scanner (`history/runCompare.ts`): a reference finding whose scanner
+    // the current scan did not run ok is not resolved — counted as such it
+    // cancelled a real new high — and a current finding whose scanner the
+    // reference did not run ok is not new — counted as such a partial baseline
+    // raised a false alarm. Neither moves the score.
     const baselineScan = ctx.storage.scans.getById(baselineId);
     const check = baselineScan === null
-        ? { notMeasured: [], isNotRemeasured: () => false }
-        : remeasureCheck(ctx.storage, baselineScan, latest);
-    const gone = prevFindings.filter((f) => !curIndex.has(f));
-    const notRemeasured = gone.filter((f) => check.isNotRemeasured(f));
-    const resolvedFindings = gone.filter((f) => !check.isNotRemeasured(f));
+        ? {
+            isNotRemeasured: () => false,
+            isNotPreviouslyMeasured: () => false,
+            notMeasuredByTo: [],
+            notMeasuredByFrom: [],
+        }
+        : compareScansFor(ctx.storage, baselineScan, latest);
+    const d = classifyDiff(check, prevFindings, curFindings);
+    const newFindings = d.new;
+    const resolvedFindings = d.resolved;
     const score = weightedScore(newFindings) - weightedScore(resolvedFindings);
     const regressed = score > threshold;
-    const measuredNote = describeNotMeasured(latest, check.notMeasured);
+    const measuredNote = baselineScan === null ? null : describeMeasurementGaps(baselineScan, latest, check);
     return {
         ok: true,
         regressed,
@@ -160,8 +163,10 @@ async function handler(input, ctx) {
         current_scan_id: latest.scan_id,
         new_findings_by_severity: countBySeverity(newFindings),
         resolved_findings_by_severity: countBySeverity(resolvedFindings),
-        not_remeasured_by_severity: countBySeverity(notRemeasured),
-        ...(check.notMeasured.length > 0 ? { not_remeasured_types: check.notMeasured } : {}),
+        not_remeasured_by_severity: countBySeverity(d.notRemeasured),
+        not_previously_measured_by_severity: countBySeverity(d.notPreviouslyMeasured),
+        ...(check.notMeasuredByTo.length > 0 ? { not_measured: check.notMeasuredByTo } : {}),
+        ...(check.notMeasuredByFrom.length > 0 ? { reference_not_measured: check.notMeasuredByFrom } : {}),
         hint: regressed
             ? 'Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes.'
             : measuredNote !== null

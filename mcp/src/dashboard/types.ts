@@ -82,6 +82,12 @@ export interface FindingDelta {
    * a fix. See `history/runCompare.ts`. Absent when there were none.
    */
   not_remeasured_count?: number;
+  /**
+   * The mirror: findings of `to` whose scanner `from` did not run (a partial
+   * baseline, say). Counted here INSTEAD of as new — the reference never
+   * looked for them. Absent when there were none.
+   */
+  not_previously_measured_count?: number;
   /** Possibly capped for display — see `TruncationNotice`. */
   new_findings: Finding[];
 }

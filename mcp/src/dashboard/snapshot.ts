@@ -48,7 +48,7 @@ import {
   suppressionMatcher,
   type OpenSet,
 } from '../history/openSet.js';
-import { remeasureCheck } from '../history/runCompare.js';
+import { classifyDiff, compareScansFor } from '../history/runCompare.js';
 import type { ProjectBaseline } from '../storage/baselinesRepo.js';
 import type { Storage } from '../storage/index.js';
 import {
@@ -195,6 +195,14 @@ function buildCoverage(open: OpenSet, cveGap: boolean): CoverageState {
   for (const view of open.bookkeeping) {
     for (const t of view.tools_run) addOnce(toolsRun, t.name);
     for (const t of view.missing_tools) addOnce(missingTools, t);
+    // A scanner recorded as FAILED is a gap even when `missing_tools` does
+    // not name it — that is how Semgrep's exit 7 is recorded, and reading
+    // `missing_tools` alone left coverage 'full' over a scan that did not
+    // run (GC3). A not-applicable skip is not a gap and is not listed.
+    const okNames = new Set(view.tools_run.filter((t) => t.status === 'ok').map((t) => t.name));
+    for (const t of view.tools_run) {
+      if (t.status === 'failed' && !okNames.has(t.name)) addOnce(missingTools, t.name);
+    }
     // A name can appear in BOTH missing_tools and tools_run of one scan
     // (see bugHunt.ts's retry-success path): the tool itself ran ('ok'), but
     // named a real, narrower gap anyway. That combination — not "tool absent
@@ -336,10 +344,11 @@ function buildSincePrevious(
 }
 
 /**
- * `compareFindings` of two scans, except that a finding of `from` which `to`
- * did not measure again (`history/runCompare.ts` — an orchestrated run's
- * failed child) is left out of the comparison and counted in
- * `not_remeasured_count`: never resolved, never unchanged.
+ * `compareFindings` of two scans, except for what one side did not measure
+ * (`history/runCompare.ts`, per scanner): a finding of `from` whose scanner
+ * `to` did not run ok is left out and counted in `not_remeasured_count` —
+ * never resolved; a finding of `to` whose scanner `from` did not run ok is
+ * left out and counted in `not_previously_measured_count` — never new.
  */
 function compareScans(
   storage: Storage,
@@ -349,17 +358,23 @@ function compareScans(
   truncation: TruncationNotice[],
   what: string,
 ): FindingDelta {
-  const check = remeasureCheck(storage, from, to);
+  const check = compareScansFor(storage, from, to);
   const fromFindings = unsuppressed(storage, from.scan_id, isSuppressed);
-  const remeasured = fromFindings.filter((f) => !check.isNotRemeasured(f));
+  const toFindings = unsuppressed(storage, to.scan_id, isSuppressed);
+  const classified = classifyDiff(check, fromFindings, toFindings);
+  const skipFrom = new Set(classified.notRemeasured);
+  const skipTo = new Set(classified.notPreviouslyMeasured);
   const { delta, truncation: cut } = compareFindings(
-    { scan_id: from.scan_id, findings: remeasured },
-    { scan_id: to.scan_id, findings: unsuppressed(storage, to.scan_id, isSuppressed) },
+    { scan_id: from.scan_id, findings: fromFindings.filter((f) => !skipFrom.has(f)) },
+    { scan_id: to.scan_id, findings: toFindings.filter((f) => !skipTo.has(f)) },
     DELTA_CAP,
   );
   if (cut !== null) truncation.push({ ...cut, what });
-  const notRemeasured = fromFindings.length - remeasured.length;
-  return notRemeasured > 0 ? { ...delta, not_remeasured_count: notRemeasured } : delta;
+  return {
+    ...delta,
+    ...(skipFrom.size > 0 ? { not_remeasured_count: skipFrom.size } : {}),
+    ...(skipTo.size > 0 ? { not_previously_measured_count: skipTo.size } : {}),
+  };
 }
 
 /**

@@ -29,9 +29,8 @@
  * most {@link ITEMS_PER_BUCKET} findings and `truncated` says which were cut.
  */
 import { z } from 'zod';
-import { indexFindings } from '../fingerprint/findingIdentity.js';
 import { latestStateScan, summarizeSkipped } from '../history/openSet.js';
-import { describeNotMeasured, remeasureCheck } from '../history/runCompare.js';
+import { classifyDiff, compareScansFor, describeMeasurementGaps } from '../history/runCompare.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { SCAN_TYPES } from '../types.js';
@@ -86,30 +85,14 @@ async function handler(input, ctx) {
         return failDomain('unknown_scan_id', `from scan '${fromId.value}' not found`);
     const fromFindings = ctx.storage.findings.listByScan(fromId.value);
     const toFindings = ctx.storage.findings.listByScan(toScan.value.scan_id);
-    const fromIndex = indexFindings(fromFindings);
-    const toIndex = indexFindings(toFindings);
-    // A `from` finding absent from a `to` that never looked (a failed child of
-    // an orchestrated run, or a `to` at coverage none) is not resolved.
-    const check = remeasureCheck(ctx.storage, fromScan, toScan.value);
-    const new_findings = [];
-    const resolved_findings = [];
-    const unchanged_findings = [];
-    const not_remeasured_findings = [];
-    for (const f of toFindings) {
-        if (fromIndex.has(f))
-            unchanged_findings.push(f);
-        else
-            new_findings.push(f);
-    }
-    for (const f of fromFindings) {
-        if (toIndex.has(f))
-            continue;
-        if (check.isNotRemeasured(f))
-            not_remeasured_findings.push(f);
-        else
-            resolved_findings.push(f);
-    }
-    const note = describeNotMeasured(toScan.value, check.notMeasured);
+    // Per scanner: a `from` finding whose scanner `to` did not run ok is not
+    // resolved, and a `to` finding whose scanner `from` did not run ok is not
+    // new (`history/runCompare.ts`).
+    const check = compareScansFor(ctx.storage, fromScan, toScan.value);
+    const d = classifyDiff(check, fromFindings, toFindings);
+    const note = describeMeasurementGaps(fromScan, toScan.value, check);
+    const cap = (list) => list.slice(0, ITEMS_PER_BUCKET);
+    const cut = (list) => list.length > ITEMS_PER_BUCKET;
     return {
         ok: true,
         project_path: toScan.value.project_path,
@@ -117,22 +100,26 @@ async function handler(input, ctx) {
         from_scan_id: fromId.value,
         to_scan_id: toScan.value.scan_id,
         summary: {
-            new: new_findings.length,
-            resolved: resolved_findings.length,
-            unchanged: unchanged_findings.length,
-            not_remeasured: not_remeasured_findings.length,
+            new: d.new.length,
+            resolved: d.resolved.length,
+            unchanged: d.unchanged.length,
+            not_remeasured: d.notRemeasured.length,
+            not_previously_measured: d.notPreviouslyMeasured.length,
         },
-        new_findings: new_findings.slice(0, ITEMS_PER_BUCKET),
-        resolved_findings: resolved_findings.slice(0, ITEMS_PER_BUCKET),
-        unchanged_findings: unchanged_findings.slice(0, ITEMS_PER_BUCKET),
-        not_remeasured_findings: not_remeasured_findings.slice(0, ITEMS_PER_BUCKET),
+        new_findings: cap(d.new),
+        resolved_findings: cap(d.resolved),
+        unchanged_findings: cap(d.unchanged),
+        not_remeasured_findings: cap(d.notRemeasured),
+        not_previously_measured_findings: cap(d.notPreviouslyMeasured),
         truncated: {
-            new: new_findings.length > ITEMS_PER_BUCKET,
-            resolved: resolved_findings.length > ITEMS_PER_BUCKET,
-            unchanged: unchanged_findings.length > ITEMS_PER_BUCKET,
-            not_remeasured: not_remeasured_findings.length > ITEMS_PER_BUCKET,
+            new: cut(d.new),
+            resolved: cut(d.resolved),
+            unchanged: cut(d.unchanged),
+            not_remeasured: cut(d.notRemeasured),
+            not_previously_measured: cut(d.notPreviouslyMeasured),
         },
-        ...(check.notMeasured.length > 0 ? { not_remeasured_types: check.notMeasured } : {}),
+        ...(check.notMeasuredByTo.length > 0 ? { not_measured: check.notMeasuredByTo } : {}),
+        ...(check.notMeasuredByFrom.length > 0 ? { reference_not_measured: check.notMeasuredByFrom } : {}),
         ...(note !== null ? { note } : {}),
         ...(skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}),
     };

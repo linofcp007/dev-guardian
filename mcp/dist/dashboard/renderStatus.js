@@ -232,7 +232,22 @@ function renderSincePrevious(delta, scanType, color) {
     }
     const added = paint(`+${delta.new_count} new`, '31', color);
     const resolved = paint(`-${delta.resolved_count} resolved`, '32', color);
-    return `  SINCE LAST SCAN     ${added}   ${resolved}`;
+    return `  SINCE LAST SCAN     ${added}   ${resolved}${unmeasured(delta, color)}`;
+}
+/**
+ * What the delta could not compare, next to its counts — never only in the
+ * JSON. A finding one side did not measure (its scanner failed or was
+ * missing there) is neither resolved nor new, and a delta that stays silent
+ * about it reads as a complete comparison (`history/runCompare.ts`).
+ */
+function unmeasured(delta, color) {
+    const parts = [];
+    if ((delta.not_remeasured_count ?? 0) > 0)
+        parts.push(`${delta.not_remeasured_count} not re-measured`);
+    if ((delta.not_previously_measured_count ?? 0) > 0) {
+        parts.push(`${delta.not_previously_measured_count} not previously measured`);
+    }
+    return parts.length === 0 ? '' : `   ${paint(`⚠ ${parts.join(', ')}`, '33', color)}`;
 }
 function renderSinceBaseline(delta, ageDays, color) {
     if (delta === null) {
@@ -241,7 +256,7 @@ function renderSinceBaseline(delta, ageDays, color) {
     const added = paint(`+${delta.new_count} new`, '31', color);
     const resolved = paint(`-${delta.resolved_count} resolved`, '32', color);
     const suffix = ageDays === null ? '' : `   set ${ageDays}d ago`;
-    return `  SINCE BASELINE      ${added}   ${resolved}${suffix}`;
+    return `  SINCE BASELINE      ${added}   ${resolved}${suffix}${unmeasured(delta, color)}`;
 }
 // ---------------------------------------------------------------------------
 // HOTTEST — at most 3 files, remainder counted rather than dropped (§6)

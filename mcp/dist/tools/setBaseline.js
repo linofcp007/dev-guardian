@@ -15,7 +15,7 @@
  */
 import { z } from 'zod';
 import { latestStateScan } from '../history/openSet.js';
-import { notMeasuredTypes } from '../history/runCompare.js';
+import { notMeasured as notMeasuredBy } from '../history/runCompare.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { SCAN_TYPES } from '../types.js';
@@ -80,13 +80,15 @@ async function handler(input, ctx) {
         scan_id: targetScanId,
         ...(inp.note !== undefined ? { note: inp.note } : {}),
     });
-    // Set, but flagged: a baseline of a run that did not measure a type (a
-    // failed child of security_scan_full, a scanner at coverage none) holds no
-    // findings of that type, so every one found later will read as new. Not
-    // refused — a machine without Trivy would then never get a baseline — but
-    // never presented as a complete measurement either.
+    // Set, but flagged: a baseline of a scan that did not measure something —
+    // a failed child of security_scan_full, or one scanner that failed or was
+    // missing beside others that ran (Semgrep exit 7 next to Bandit) — holds no
+    // findings of it. The comparing readers report those as "not previously
+    // measured", never as new (`history/runCompare.ts`), but the baseline is
+    // still incomplete. Not refused — a machine without Trivy would then never
+    // get a baseline — and never presented as a complete measurement either.
     const target = ctx.storage.scans.getById(targetScanId);
-    const notMeasured = target === null ? [] : notMeasuredTypes(ctx.storage, target);
+    const notMeasured = target === null ? [] : notMeasuredBy(ctx.storage, target);
     return {
         ok: true,
         baseline_id: baseline.id,
@@ -98,10 +100,10 @@ async function handler(input, ctx) {
         ...(notMeasured.length > 0
             ? {
                 not_measured: notMeasured,
-                warning: `This baseline's scan did not measure ${notMeasured.join(', ')} (the scanner there did not ` +
-                    'run or failed: coverage none). It holds no findings of those types, so later scans will ' +
-                    'report every one of them as new. Re-run the scan once the scanner works and set the ' +
-                    'baseline again.',
+                warning: `This baseline's scan did not measure ${notMeasured.join(', ')} (the scanner did not run ` +
+                    'or failed). It holds no findings from it: later comparisons against this baseline report ' +
+                    'those as "not previously measured", not as new, so they neither alarm nor clear. Re-run ' +
+                    'the scan once the scanner works and set the baseline again.',
             }
             : {}),
     };
