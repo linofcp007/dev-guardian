@@ -15,7 +15,6 @@ import {
   mergeOwnedRulesFile,
   mergeRulesBlock,
   mergeTomlConfig,
-  type MergeResult,
   RULES_BLOCK_BEGIN,
   RULES_BLOCK_END,
   resolveMcpConfigPath,
@@ -34,7 +33,7 @@ const SRV = '/plugins/dev-guardian/mcp/dist/server.js';
  * clear message on the one path that would otherwise silently return
  * `undefined` at runtime (a real bug, not just a type-checker satisfaction).
  */
-function contentOrThrow(r: MergeResult): string {
+function contentOrThrow(r: { content?: string }): string {
   const { content } = r;
   if (content === undefined) throw new Error('expected .content to be set on this MergeResult');
   return content;
@@ -417,42 +416,124 @@ describe('mergeRulesBlock', () => {
     expect(r.content).toContain(rendered);
   });
 
-  // Fix round 1, item 2: an existing UNMARKED file that already looks like
-  // an older, whole-file dev-guardian install must never be silently
-  // duplicated by a plain append.
-  describe('legacy unmarked dev-guardian copy (item 2)', () => {
+  // Fix round 2, item 1 (CRITICAL data-loss regression from fix round 1's
+  // own item-2 fix): the round-1 version treated ANY file containing the
+  // substring "dev-guardian MCP server" ANYWHERE as "this whole file IS an
+  // old dev-guardian install" and, on force, discarded the ENTIRE existing
+  // content. Reproduced directly with the CLI: (A) the pre-Task-5
+  // host-rules/AGENTS.md with a user's own "## Team rules / Never touch
+  // prod." appended below it, and (B) a user's own AGENTS.md that merely
+  // says "We use the dev-guardian MCP server…" in passing — both reported
+  // needs_update ("pass --update-mcp to refresh it"), and --update-mcp then
+  // deleted "Never touch prod" / the user's own text. `mergeRulesBlock` now
+  // takes an explicit list of KNOWN, byte-exact legacy template bodies
+  // (`knownLegacyTemplates`) and only ever rewrites a region it can prove
+  // is ONE of them — exact, prefix, or suffix match. A file that merely
+  // CONTAINS the phrase without matching a known template gets a new,
+  // force-INDEPENDENT `manual_merge_required` status instead: never
+  // written, ever, by this function.
+  describe('legacy dev-guardian copy — known-template matching only (fix round 2, item 1)', () => {
     const legacyAgentsMd =
       'This repository has the **dev-guardian MCP server** registered. It exposes\n' +
       '54 tools and 18 resources for security...\n';
+    const knownTemplates = [legacyAgentsMd];
 
-    it('reports needs_update, not merged/append, when force is off', () => {
-      const r = mergeRulesBlock(legacyAgentsMd, rendered, false);
-      expect(r.status).toBe('needs_update');
-      expect(r.content).toBeUndefined();
+    describe('exact match — the whole file IS the known template', () => {
+      it('needs_update, not written, when force is off', () => {
+        const r = mergeRulesBlock(legacyAgentsMd, rendered, false, knownTemplates);
+        expect(r.status).toBe('needs_update');
+        expect(r.content).toBeUndefined();
+      });
+
+      it('replaced by the managed block when force is on', () => {
+        const r = mergeRulesBlock(legacyAgentsMd, rendered, true, knownTemplates);
+        expect(r.status).toBe('merged');
+        const content = contentOrThrow(r);
+        expect(content).toContain(rendered);
+        expect(content).not.toContain('54 tools and 18 resources');
+        expect(content).toContain(RULES_BLOCK_BEGIN);
+      });
     });
 
-    it('replaces the whole file — not a second copy beside it — when force is on', () => {
-      const r = mergeRulesBlock(legacyAgentsMd, rendered, true);
-      expect(r.status).toBe('merged');
-      const content = contentOrThrow(r);
-      expect(content).toContain(rendered);
-      // The exact regression: a stale ~220-line copy must not survive
-      // beside the fresh one.
-      expect(content).not.toContain('54 tools and 18 resources');
-      // Exactly one copy of our content, never two.
-      expect((content.match(new RegExp(RULES_BLOCK_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) ?? [])).toHaveLength(1);
+    // The exact regression reported: case A.
+    describe('PREFIX match — the known template with user content appended after it', () => {
+      const withUserContentAfter = `${legacyAgentsMd}\n## Team rules\nNever touch prod.\n`;
+
+      it('needs_update when force is off — and the file is completely untouched', () => {
+        const r = mergeRulesBlock(withUserContentAfter, rendered, false, knownTemplates);
+        expect(r.status).toBe('needs_update');
+        expect(r.content).toBeUndefined();
+      });
+
+      it('--update-mcp (force) preserves "Never touch prod" BYTE-FOR-BYTE, replacing only the matched region', () => {
+        const r = mergeRulesBlock(withUserContentAfter, rendered, true, knownTemplates);
+        expect(r.status).toBe('merged');
+        const content = contentOrThrow(r);
+        // The exact text the regression deleted, verbatim.
+        expect(content).toContain('## Team rules\nNever touch prod.\n');
+        expect(content).toContain(rendered);
+        expect(content).not.toContain('54 tools and 18 resources');
+        expect((content.match(/Never touch prod\./g) ?? [])).toHaveLength(1);
+      });
     });
 
-    it('a different legacy phrasing (old copilot-instructions.md wording) is caught too', () => {
-      const legacyCopilot = 'This project uses the **dev-guardian MCP server** — 54 tools and 18\n';
-      expect(mergeRulesBlock(legacyCopilot, rendered, false).status).toBe('needs_update');
+    describe('SUFFIX match — user content followed by the known template', () => {
+      const withUserContentBefore = `## Team rules\nNever touch prod.\n\n${legacyAgentsMd}`;
+
+      it('needs_update when force is off — and the file is completely untouched', () => {
+        const r = mergeRulesBlock(withUserContentBefore, rendered, false, knownTemplates);
+        expect(r.status).toBe('needs_update');
+        expect(r.content).toBeUndefined();
+      });
+
+      it('--update-mcp (force) preserves "Never touch prod" BYTE-FOR-BYTE, replacing only the matched region', () => {
+        const r = mergeRulesBlock(withUserContentBefore, rendered, true, knownTemplates);
+        expect(r.status).toBe('merged');
+        const content = contentOrThrow(r);
+        expect(content).toContain('## Team rules\nNever touch prod.');
+        expect(content).toContain(rendered);
+        expect(content).not.toContain('54 tools and 18 resources');
+      });
     });
 
-    it('genuinely foreign content (no dev-guardian signature) still safely appends, never needs_update', () => {
+    // The exact regression reported: case B. Mentions the phrase in passing
+    // but matches no known template exactly, as a prefix, or as a suffix —
+    // must never be auto-merged, with or without force.
+    describe('substring-only match — mentions dev-guardian but matches no known template (case B)', () => {
+      const usersOwnFile = 'This is our internal wiki page.\n\nWe use the dev-guardian MCP server for security scans.\n\nMore notes here.\n';
+
+      it('reports manual_merge_required, not needs_update, when force is off', () => {
+        const r = mergeRulesBlock(usersOwnFile, rendered, false, knownTemplates);
+        expect(r.status).toBe('manual_merge_required');
+        expect(r.content).toBeUndefined();
+      });
+
+      it('force does NOT override manual_merge_required — the file is never written, byte-for-byte preserved', () => {
+        const r = mergeRulesBlock(usersOwnFile, rendered, true, knownTemplates);
+        expect(r.status).toBe('manual_merge_required');
+        expect(r.content).toBeUndefined();
+      });
+
+      it('a different legacy phrasing that still matches no known template is caught the same way', () => {
+        const legacyCopilotStyle = 'This project uses the **dev-guardian MCP server** — 54 tools and 18\n';
+        const r = mergeRulesBlock(legacyCopilotStyle, rendered, true, knownTemplates);
+        expect(r.status).toBe('manual_merge_required');
+      });
+    });
+
+    it('genuinely foreign content (no dev-guardian mention at all) still safely appends, never needs_update or manual_merge_required', () => {
       const foreign = '# Totally unrelated project\n\nSome other tool wrote this.\n';
-      const r = mergeRulesBlock(foreign, rendered, false);
+      const r = mergeRulesBlock(foreign, rendered, false, knownTemplates);
       expect(r.status).toBe('merged');
       expect(contentOrThrow(r)).toContain('Some other tool wrote this.');
+    });
+
+    it('with no knownLegacyTemplates supplied at all (defensive default), a substring match still refuses rather than replacing the whole file', () => {
+      const r = mergeRulesBlock(legacyAgentsMd, rendered, true);
+      // No known templates means nothing can be an exact/prefix/suffix
+      // match, so this degrades to the safe manual_merge_required path —
+      // NEVER the old, unsafe "replace everything" behaviour.
+      expect(r.status).toBe('manual_merge_required');
     });
   });
 });

@@ -8,7 +8,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { previewMcpConfig, setupHost, type SetupOptions } from '../../src/hostsetup/setup.js';
@@ -159,17 +160,28 @@ describe('setupHost — rules files', () => {
     expect(content).not.toContain('# codex\n');
   });
 
-  // Fix round 1, item 2: a project that ran an OLDER `mcp-config --write`
+  // Fix round 1, item 2 / fix round 2, item 1 (CRITICAL data-loss regression
+  // in round 1's own fix): a project that ran an OLDER `mcp-config --write`
   // (back when it still `copyFileSync`d the whole file) has an AGENTS.md
-  // that is ENTIRELY unmarked dev-guardian text, no markers at all. Without
-  // legacy detection, the "no markers found" branch would append a second,
-  // freshly-wrapped copy underneath it on every future --write.
-  it('a legacy unmarked dev-guardian copy is never duplicated — needs_update without force, replaced (not doubled) with it', () => {
-    writeFileSync(
-      join(project, 'AGENTS.md'),
-      'This repository has the **dev-guardian MCP server** registered. Some old body.\n',
-      'utf8',
-    );
+  // that is ENTIRELY unmarked dev-guardian text, no markers at all — that
+  // must never be silently duplicated by a plain append. Round 1's OWN fix
+  // matched on a loose substring ("dev-guardian MCP server" ANYWHERE) and,
+  // on --update-mcp, discarded the WHOLE existing file — reproduced
+  // directly with the CLI: a real, historical AGENTS.md with a user's own
+  // "## Team rules / Never touch prod." appended below it reported
+  // needs_update, and --update-mcp then deleted "Never touch prod" along
+  // with everything else. `installRulesOne` now loads the REAL, byte-exact
+  // legacy template snapshots (`mcp/src/hostsetup/legacyRulesTemplates/`) —
+  // this test reads the actual shipped AGENTS.md one, so it exercises the
+  // real matching this project's own install path uses, not a fabricated
+  // stand-in.
+  const REAL_LEGACY_AGENTS_MD = readFileSync(
+    resolve(fileURLToPath(new URL('../../src/hostsetup/legacyRulesTemplates/AGENTS.md', import.meta.url))),
+    'utf8',
+  );
+
+  it('an EXACT legacy copy (byte-for-byte, nothing else in the file) is replaced by the managed block', () => {
+    writeFileSync(join(project, 'AGENTS.md'), REAL_LEGACY_AGENTS_MD, 'utf8');
     const blocked = run({ hosts: ['codex'], registerMcp: false })[0];
     expect(blocked?.status).toBe('needs_update');
     expect(readFileSync(join(project, 'AGENTS.md'), 'utf8')).not.toContain('<!-- dev-guardian:begin -->');
@@ -178,10 +190,43 @@ describe('setupHost — rules files', () => {
     expect(updated?.status).toBe('merged');
     const content = readFileSync(join(project, 'AGENTS.md'), 'utf8');
     expect(content).toContain('# codex');
-    // The exact regression: the OLD unmarked copy must be GONE, not sitting
-    // beside the new one.
-    expect(content).not.toContain('Some old body.');
     expect((content.match(/<!-- dev-guardian:begin -->/g) ?? [])).toHaveLength(1);
+  });
+
+  // The exact regression reported: case A.
+  it('case A — a legacy copy with the USER\'S OWN content appended after it: --update-mcp preserves "Never touch prod" byte-for-byte', () => {
+    const withUserContent = `${REAL_LEGACY_AGENTS_MD}\n## Team rules\nNever touch prod.\n`;
+    writeFileSync(join(project, 'AGENTS.md'), withUserContent, 'utf8');
+
+    const blocked = run({ hosts: ['codex'], registerMcp: false })[0];
+    expect(blocked?.status).toBe('needs_update');
+    // Completely untouched while blocked.
+    expect(readFileSync(join(project, 'AGENTS.md'), 'utf8')).toBe(withUserContent);
+
+    const updated = run({ hosts: ['codex'], registerMcp: false, force: true })[0];
+    expect(updated?.status).toBe('merged');
+    const content = readFileSync(join(project, 'AGENTS.md'), 'utf8');
+    // The exact text the round-1 regression deleted, verbatim.
+    expect(content).toContain('## Team rules\nNever touch prod.');
+    expect(content).toContain('# codex');
+    expect((content.match(/Never touch prod\./g) ?? [])).toHaveLength(1);
+  });
+
+  // The exact regression reported: case B.
+  it('case B — a user\'s own AGENTS.md that merely mentions dev-guardian in passing: never written, even with --update-mcp', () => {
+    const usersOwnFile =
+      '# Our internal engineering wiki\n\nWe use the dev-guardian MCP server for security scans.\n\nMore notes here.\n';
+    writeFileSync(join(project, 'AGENTS.md'), usersOwnFile, 'utf8');
+
+    const blocked = run({ hosts: ['codex'], registerMcp: false })[0];
+    expect(blocked?.status).toBe('manual_merge_required');
+    expect(blocked?.reason).toMatch(/will NOT be merged automatically/);
+    expect(readFileSync(join(project, 'AGENTS.md'), 'utf8')).toBe(usersOwnFile);
+
+    // force/--update-mcp does NOT override manual_merge_required.
+    const stillBlocked = run({ hosts: ['codex'], registerMcp: false, force: true })[0];
+    expect(stillBlocked?.status).toBe('manual_merge_required');
+    expect(readFileSync(join(project, 'AGENTS.md'), 'utf8')).toBe(usersOwnFile);
   });
 
   it('host="all" covers 7 hosts', () => {

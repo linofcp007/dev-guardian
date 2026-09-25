@@ -288,28 +288,71 @@ function wrapRulesBlock(rendered) {
     return `${RULES_BLOCK_BEGIN}\n${rendered.replace(/\s+$/, '')}\n${RULES_BLOCK_END}\n`;
 }
 /**
- * Recognises an UNMARKED dev-guardian rules file from BEFORE this task —
- * every host-specific body prior to item 7's unification opened with some
- * variant of "…the **dev-guardian MCP server**…registered" (`AGENTS.md`:
- * "This repository has the **dev-guardian MCP server** registered.";
- * `copilot-instructions.md`: "This project uses the **dev-guardian MCP
- * server**"; `clinerules`: "This project has the dev-guardian MCP server
- * registered."; today's canonical body: "This project has the
- * **dev-guardian MCP server** registered."), so a single substring survives
- * across every version, old or new, with or without the bold markers.
- *
- * Fix round 1, item 2: without this, a project that ran an OLDER
- * `mcp-config --write` (back when it still `copyFileSync`d the whole file)
- * has an `AGENTS.md`/etc. that is ENTIRELY unmarked dev-guardian text — the
- * "no markers found" branch below used to treat that exactly like foreign
- * content and blindly APPEND a second, freshly-wrapped copy underneath it:
- * a ~220-line duplicate sitting beside stale text, forever, on every future
- * `--write`. Detecting it here routes it through the SAME
- * needs_update/force-gated path a stale MARKED block already goes through,
- * so it is reported rather than silently doubled, and only replaced when
- * the caller explicitly opts in.
+ * A loose signal that a file MENTIONS dev-guardian somewhere — every
+ * host-specific body prior to item 7's unification opened with some variant
+ * of "…the **dev-guardian MCP server**…registered", so this substring
+ * survives across every old version and today's canonical body alike. On
+ * its own this is deliberately NOT enough to justify rewriting anything —
+ * see the fix-round-2 doc comment on `mergeRulesBlock` for why matching on
+ * this alone was itself the bug. It is used only to distinguish "mentions
+ * dev-guardian but isn't a known template" (`manual_merge_required`) from
+ * "genuinely unrelated content" (safe to append).
  */
-const LEGACY_UNMARKED_SIGNATURE = /dev-guardian MCP server/;
+const LEGACY_MENTION_SIGNATURE = /dev-guardian MCP server/;
+/** CRLF → LF, for comparing content that may have been written or hand-edited
+ *  on either platform. Comparisons/matching in `mergeRulesBlock` work
+ *  entirely in this normalised space; only KNOWN template text and (for a
+ *  prefix/suffix match) the untouched remainder ever reach the output, so no
+ *  information is lost — a CRLF file that fails every match still reaches
+ *  the caller with its ORIGINAL bytes on the safe "genuinely foreign, no
+ *  match at all" append path, which never re-serialises `existing`. */
+function normaliseLineEndings(text) {
+    return text.replace(/\r\n/g, '\n');
+}
+/**
+ * Finds whether `normalisedExisting` (CRLF already normalised, NOT yet
+ * trimmed) is byte-exactly a known legacy template, or has one as a strict
+ * prefix or suffix. Exact is checked before prefix/suffix (an exact match is
+ * unambiguous and cheapest to act on); among prefix/suffix, the first
+ * matching known template wins — the shipped set has no two templates that
+ * are prefixes of one another, so this ordering has no practical effect on
+ * which one is reported.
+ */
+function findLegacyTemplateMatch(normalisedExisting, knownLegacyTemplates) {
+    const trimmedExisting = normalisedExisting.trim();
+    const normalisedTemplates = knownLegacyTemplates
+        .map((t) => normaliseLineEndings(t).trim())
+        .filter((t) => t.length > 0);
+    for (const template of normalisedTemplates) {
+        if (trimmedExisting === template)
+            return { kind: 'exact', matchedLength: normalisedExisting.length };
+    }
+    for (const template of normalisedTemplates) {
+        if (normalisedExisting.startsWith(template))
+            return { kind: 'prefix', matchedLength: template.length };
+        if (normalisedExisting.trimEnd().endsWith(template)) {
+            return { kind: 'suffix', matchedLength: template.length };
+        }
+    }
+    return null;
+}
+/** Builds the `merged` content for a prefix/suffix legacy-template match —
+ *  the matched span becomes the wrapped block; the REST of the file (the
+ *  part that is NOT the known template) is preserved byte-for-byte, only
+ *  trimmed of the whitespace immediately touching the old boundary so the
+ *  join reads as one blank-line-separated document rather than accumulating
+ *  runs of blank lines. */
+function replaceLegacyTemplateSpan(normalisedExisting, match, block) {
+    if (match.kind === 'exact')
+        return block;
+    if (match.kind === 'prefix') {
+        const rest = normalisedExisting.slice(match.matchedLength).replace(/^\s+/, '');
+        return rest ? `${block}\n${rest}` : block;
+    }
+    // suffix
+    const before = normalisedExisting.slice(0, normalisedExisting.length - match.matchedLength).replace(/\s+$/, '');
+    return before ? `${before}\n\n${block}` : block;
+}
 /**
  * Merge dev-guardian's own rendered rules content into a (possibly
  * user-owned, possibly absent) target file, confined to a delimited block —
@@ -330,19 +373,38 @@ const LEGACY_UNMARKED_SIGNATURE = /dev-guardian MCP server/;
  * new Cursor/Windsurf install). Those two go through `mergeOwnedRulesFile`
  * instead, which writes the file whole.
  *
+ * `knownLegacyTemplates` (fix round 2, item 1 — CRITICAL data-loss
+ * regression in round 1's OWN fix): round 1 treated ANY file merely
+ * CONTAINING the substring "dev-guardian MCP server" anywhere as "this
+ * whole file IS an old dev-guardian install" and, on `--update-mcp`,
+ * discarded the entire existing content. Reproduced directly: (A) the
+ * pre-item-7 `host-rules/AGENTS.md` with a user's own "## Team rules /
+ * Never touch prod." appended below it, and (B) a user's own `AGENTS.md`
+ * that merely mentions "the dev-guardian MCP server" in passing — BOTH
+ * reported `needs_update`, and `--update-mcp` then deleted the user's own
+ * text in both. Never safe: the substring match alone proves nothing about
+ * how much of the file is actually dev-guardian's. This parameter instead
+ * supplies the EXACT, byte-known bodies of every legacy template this
+ * project has ever shipped (see `setup.ts`'s `loadKnownLegacyTemplates`),
+ * and nothing is ever rewritten unless a region of `existing` can be PROVEN
+ * to be one of them:
  *   - No existing file (or empty): write just the wrapped block. `written`.
- *   - Existing file, no markers found, no legacy signature: APPEND the
- *     block — every byte of the existing (genuinely foreign) content
- *     survives untouched, regardless of `force`. This is the
- *     non-destructive case `force` no longer needs to gate, because nothing
- *     is ever removed by it.
- *   - Existing file, no markers found, BUT the legacy signature IS present
- *     (an older, whole-file dev-guardian install): `needs_update` when
- *     `force` is off (refuse to touch it, rather than risk duplicating);
- *     `merged` when `force` is on — the WHOLE file is replaced with the
- *     freshly wrapped block, the same scope the pre-fix `copyFileSync` had,
- *     now gated behind an explicit, informed opt-in instead of silent by
- *     default.
+ *   - Existing file, no markers found, no known-template match anywhere,
+ *     and no mere MENTION of dev-guardian either: APPEND the block — every
+ *     byte of the existing (genuinely foreign) content survives untouched,
+ *     regardless of `force`.
+ *   - Existing file, no markers found, EXACTLY one known template
+ *     (possibly with unrelated content before or after it — a prefix or
+ *     suffix match): `needs_update` when `force` is off (nothing touched);
+ *     `merged` when `force` is on — ONLY the matched span is replaced by
+ *     the wrapped block, byte-for-byte preserving whatever else was there.
+ *   - Existing file, no markers found, no known-template match, but the
+ *     file DOES mention dev-guardian somewhere (case B: a coincidental or
+ *     paraphrased mention): `manual_merge_required` — a NEW status, and
+ *     unlike every other case here, `force` does NOT resolve it. This
+ *     function has no way to know how much of the file is safe to touch, so
+ *     it touches none of it, ever; the caller (`installRulesOne`) reports
+ *     where the block would need to go by hand.
  *   - Existing file, markers found, content already matches: no write.
  *     `already_present` (idempotent, same as the JSON/TOML mergers).
  *   - Existing file, markers found, content differs (template changed, or
@@ -352,7 +414,7 @@ const LEGACY_UNMARKED_SIGNATURE = /dev-guardian MCP server/;
  *     between the markers changes; everything before and after is copied
  *     through byte-for-byte.
  */
-export function mergeRulesBlock(existing, rendered, force) {
+export function mergeRulesBlock(existing, rendered, force, knownLegacyTemplates = []) {
     const block = wrapRulesBlock(rendered);
     if (existing == null || existing.trim() === '') {
         return { status: 'written', content: block };
@@ -360,10 +422,18 @@ export function mergeRulesBlock(existing, rendered, force) {
     const beginIdx = existing.indexOf(RULES_BLOCK_BEGIN);
     const endMarkerIdx = existing.indexOf(RULES_BLOCK_END);
     if (beginIdx === -1 || endMarkerIdx === -1 || endMarkerIdx < beginIdx) {
-        if (LEGACY_UNMARKED_SIGNATURE.test(existing)) {
+        const normalisedExisting = normaliseLineEndings(existing);
+        const legacyMatch = findLegacyTemplateMatch(normalisedExisting, knownLegacyTemplates);
+        if (legacyMatch) {
             if (!force)
                 return { status: 'needs_update' };
-            return { status: 'merged', content: block };
+            return { status: 'merged', content: replaceLegacyTemplateSpan(normalisedExisting, legacyMatch, block) };
+        }
+        if (LEGACY_MENTION_SIGNATURE.test(existing)) {
+            // Mentions dev-guardian, but not provably ONE of the known templates
+            // anywhere in the file — never safe to auto-merge. Force-independent
+            // on purpose: see the doc comment above.
+            return { status: 'manual_merge_required' };
         }
         // Genuinely foreign content: append, preserving everything — safe
         // regardless of `force`, since nothing is ever removed.

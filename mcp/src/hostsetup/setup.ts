@@ -13,11 +13,13 @@
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   ALL_HOSTS,
   effectiveScope,
@@ -34,9 +36,46 @@ import {
   mergeRulesBlock,
   mergeTomlConfig,
   resolveMcpConfigPath,
+  RULES_BLOCK_BEGIN,
+  RULES_BLOCK_END,
   type ResolveEnv,
 } from './mcpConfig.js';
 import { substituteCliPath } from './rulesTemplate.js';
+
+/**
+ * Directory of KNOWN, byte-exact legacy rules-template snapshots — every
+ * shared-host body (`AGENTS.md`, `GEMINI.md`, copilot instructions,
+ * `clinerules`) this project has ever shipped, from before item 7's
+ * canonical-body unification. Sits next to this module's own compiled
+ * location (`mcp/dist/hostsetup/legacyRulesTemplates/`, copied there by
+ * `scripts/copy-assets.mjs` — same convention as `storage/migrations/*.sql`)
+ * so it resolves correctly whether this file is running from `dist/`
+ * (production) or `src/` (dev, via tsx) without either needing to know
+ * which.
+ */
+const LEGACY_TEMPLATES_DIR = resolve(dirname(fileURLToPath(import.meta.url)), 'legacyRulesTemplates');
+
+/**
+ * Loads every known legacy template body, cached after the first call —
+ * `installRulesOne` runs once per host in `setupHost`'s own `.map()`, and
+ * re-reading a handful of small files from disk that many times has no
+ * value. Returns `[]` (never throws) when the directory is missing — a
+ * build that skipped `copy-assets.mjs` degrades to `mergeRulesBlock`'s own
+ * safe defaults (no known templates to match against — a file that mentions
+ * dev-guardian falls through to `manual_merge_required` rather than
+ * anything being silently rewritten), not a crash.
+ */
+let cachedLegacyTemplates: string[] | null = null;
+function loadKnownLegacyTemplates(): string[] {
+  if (cachedLegacyTemplates) return cachedLegacyTemplates;
+  try {
+    const files = readdirSync(LEGACY_TEMPLATES_DIR);
+    cachedLegacyTemplates = files.map((f) => readFileSync(join(LEGACY_TEMPLATES_DIR, f), 'utf8'));
+  } catch {
+    cachedLegacyTemplates = [];
+  }
+  return cachedLegacyTemplates;
+}
 
 /**
  * Hosts whose rules file dev-guardian owns EXCLUSIVELY — nothing else is
@@ -64,7 +103,11 @@ export type RulesStatus =
   | 'template_missing'
   | 'failed'
   | 'skipped'
-  | 'unsupported';
+  | 'unsupported'
+  // Fix round 2, item 1: the target file mentions dev-guardian but matches
+  // no known legacy template — see `mergeRulesBlock`'s own doc comment in
+  // mcpConfig.ts. Never written; force-independent.
+  | 'manual_merge_required';
 
 export interface RulesResult {
   template_file?: string;
@@ -274,7 +317,7 @@ function installRulesOne(
   const rendered = substituteCliPath(templateText, cliPath);
   const merged = OWNED_WHOLE_FILE_HOSTS.has(host)
     ? mergeOwnedRulesFile(existingText, rendered)
-    : mergeRulesBlock(existingText, rendered, force);
+    : mergeRulesBlock(existingText, rendered, force, loadKnownLegacyTemplates());
 
   if (merged.status === 'already_present') return { ...base, status: 'already_present' };
   if (merged.status === 'needs_update') {
@@ -282,6 +325,17 @@ function installRulesOne(
       ...base,
       status: 'needs_update',
       reason: 'the installed rules block differs from the current template; pass --update-mcp to refresh it',
+    };
+  }
+  if (merged.status === 'manual_merge_required') {
+    return {
+      ...base,
+      status: 'manual_merge_required',
+      reason:
+        `this file mentions dev-guardian but its content does not match a known dev-guardian template ` +
+        `exactly (whole, or as a leading/trailing region), so it will NOT be merged automatically — doing ` +
+        `so could destroy content that only coincidentally sits near the mention. Add the managed block ` +
+        `yourself at ${dst}, between ${RULES_BLOCK_BEGIN} and ${RULES_BLOCK_END}.`,
     };
   }
 
