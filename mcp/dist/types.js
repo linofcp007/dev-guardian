@@ -95,6 +95,7 @@ export const DOMAIN_ERROR_CODES = [
     'not_a_git_repo',
     'working_tree_dirty',
     'unknown_scan_id',
+    'unknown_finding',
     'requires_elevation',
     'unsupported_os',
     'output_too_large',

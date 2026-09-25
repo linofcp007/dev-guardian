@@ -151,7 +151,7 @@ describe('one line inserted above a finding', () => {
     const first = onlyFinding((await scan(plugin, dir)).findings);
     okResult(
       await getTool('suppress_finding').handler(
-        { finding_fingerprint: first.fingerprint, reason: 'reviewed: q is a constant' },
+        { project_path: dir, finding_fingerprint: first.fingerprint, reason: 'reviewed: q is a constant' },
         plugin,
       ),
     );
