@@ -12,8 +12,15 @@
  * scan is meaningless because the fingerprints come from different rule
  * families. Restricting the previous lookup to the same scan_type avoids
  * spurious resolves/news.
+ *
+ * Findings are matched by their line-independent `identity`, with the
+ * fingerprint as the fallback where either scan predates identities
+ * (`fingerprint/findingIdentity.ts#indexFindings`). By fingerprint alone,
+ * inserting one line above a finding reported it as one new plus one
+ * resolved.
  */
 import { z } from 'zod';
+import { indexFindings } from '../fingerprint/findingIdentity.js';
 import { registerToolModule } from './index.js';
 const FromEnum = z.enum(['baseline', 'previous']);
 const ToEnum = z.enum(['latest']);
@@ -26,9 +33,10 @@ const inputSchema = {
 const tool = {
     name: 'diff_scans',
     title: 'Diff scans (regression / resolution detection)',
-    description: 'Compare findings between two scans (same scan_type). Returns three lists by fingerprint: ' +
-        'new (in to but not in from), resolved (in from but not in to), unchanged (in both). ' +
-        'Default: from=previous, to=latest.',
+    description: 'Compare findings between two scans (same scan_type). Returns three lists: new (in to but not ' +
+        'in from), resolved (in from but not in to), unchanged (in both). Findings are matched by their ' +
+        'line-independent identity, so code moving above a finding does not make it new; scans from ' +
+        'before identities existed match by fingerprint. Default: from=previous, to=latest.',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -47,19 +55,19 @@ async function handler(input, ctx) {
     }
     const fromFindings = ctx.storage.findings.listByScan(fromId.value);
     const toFindings = ctx.storage.findings.listByScan(toId.value);
-    const fromMap = new Map(fromFindings.map((f) => [f.fingerprint, f]));
-    const toMap = new Map(toFindings.map((f) => [f.fingerprint, f]));
+    const fromIndex = indexFindings(fromFindings);
+    const toIndex = indexFindings(toFindings);
     const new_findings = [];
     const resolved_findings = [];
     const unchanged_findings = [];
     for (const f of toFindings) {
-        if (fromMap.has(f.fingerprint))
+        if (fromIndex.has(f))
             unchanged_findings.push(f);
         else
             new_findings.push(f);
     }
     for (const f of fromFindings) {
-        if (!toMap.has(f.fingerprint))
+        if (!toIndex.has(f))
             resolved_findings.push(f);
     }
     return {

@@ -14,10 +14,25 @@
  *
  * **The two halves compare by different keys, on purpose, per an amendment
  * to design §4.1 and §10 (2026-08-17, after task-7-review.md's I4).**
- * "Every target resolved" compares by fingerprint — plain set membership
- * against `targets`, since there we are asking about SPECIFIC findings we
- * set out to fix. "No new finding" compares by `(rule_id, file_path)`
- * instead. Fingerprints hash `line_start`/`line_end`/the snippet
+ *
+ * "Every target resolved" asks whether the SPECIFIC findings we set out to
+ * fix are gone, and a target is resolved only when NO after-finding has its
+ * `resolutionKey` (`../fingerprint/findingIdentity.ts`): the same (tool,
+ * rule_id, path, content) for a finding in source code, the same (CVE or
+ * rule, package) for a dependency. It used to be fingerprint set membership,
+ * and the fingerprint hashes the line: an autofix of a DIFFERENT finding
+ * above the target moved the unfixed target down one line, gave it a new
+ * fingerprint, and it was judged resolved (reproduced: `passed: true` with
+ * the bug still in the file). The key leaves out the occurrence on purpose —
+ * with it, fixing the first of two identical lines renumbers the second into
+ * the first one's identity — and, for a dependency, the installed version,
+ * which is exactly what an upgrade changes: an upgrade that is not enough
+ * must still read as present. A target stored before identities existed has
+ * no content key and is still compared by fingerprint; an after-finding with
+ * the target's fingerprint keeps it present either way.
+ *
+ * "No new finding" compares by `(rule_id, file_path)`. Fingerprints hash
+ * `line_start`/`line_end`/the snippet
  * (`../fingerprint/findingFingerprint.ts`), so ANY autofix pass that shifts a
  * line — or rewrites the matched line, changing the snippet — gives every
  * OTHER finding in that file a fresh fingerprint, measured at 4 of 4 on a
@@ -50,21 +65,33 @@
  * is exactly as falsy as any real failure code is truthy; this project has
  * hit that exact shape of bug five times before.
  */
+import { resolutionKey } from '../fingerprint/findingIdentity.js';
 import { runProcess } from '../runners/processRunner.js';
 /** How many lines of a failing run's output ride along in the verdict —
  *  enough for a reader to recognise which tests broke, not the whole log. */
 const OUTPUT_HEAD_LINES = 20;
 export function judgeScan(targets, before, after) {
-    // Set membership against `targets` — never "everything that disappeared",
-    // which would answer "how many" over ALL of `before`, not "which of MY
-    // targets". A fingerprint that disappeared but was never a target is
-    // neither resolved nor still_present here; it is simply not this
-    // differential's business.
+    // Decided per target — never "everything that disappeared", which would
+    // answer "how many" over ALL of `before`, not "which of MY targets". A
+    // finding that disappeared but was never a target is neither resolved nor
+    // still_present here; it is simply not this differential's business. The
+    // target's own Finding comes from `before` (targets are its fingerprints);
+    // see the module comment for the key it is looked for by.
+    const beforeByFingerprint = new Map(before.findings.map((finding) => [finding.fingerprint, finding]));
     const afterFingerprints = new Set(after.findings.map((finding) => finding.fingerprint));
+    const afterKeys = new Set();
+    for (const finding of after.findings) {
+        const key = resolutionKey(finding);
+        if (key !== null)
+            afterKeys.add(key);
+    }
     const resolved = [];
     const still_present = [];
     for (const target of targets) {
-        if (afterFingerprints.has(target))
+        const targetFinding = beforeByFingerprint.get(target);
+        const key = targetFinding === undefined ? null : resolutionKey(targetFinding);
+        const present = afterFingerprints.has(target) || (key !== null && afterKeys.has(key));
+        if (present)
             still_present.push(target);
         else
             resolved.push(target);

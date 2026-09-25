@@ -208,3 +208,51 @@ describe('FindingsRepo', () => {
     expect(crits).not.toContain('worktree-crit');
   });
 });
+
+describe('FindingsRepo — line-independent identity (schema 7)', () => {
+  it('stores identity and content_key and reads them back; a finding without one reads back without', () => {
+    const { scans, findings } = setup();
+    scans.insert({ scan_id: 's1', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
+    findings.bulkInsert([
+      { ...makeFinding({ fingerprint: 'a', identity: 'id-a', content_key: 'ck-a' }), scan_id: 's1' },
+      { ...makeFinding({ fingerprint: 'b' }), scan_id: 's1' },
+    ]);
+    const byFp = new Map(findings.listByScan('s1').map((f) => [f.fingerprint, f]));
+    expect(byFp.get('a')).toMatchObject({ identity: 'id-a', content_key: 'ck-a' });
+    expect(byFp.get('b')).not.toHaveProperty('identity');
+    expect(byFp.get('b')).not.toHaveProperty('content_key');
+  });
+
+  it('hides a finding whose identity an active suppression names, whatever its fingerprint now is', () => {
+    const { scans, findings, suppressions } = setup();
+    scans.insert({ scan_id: 's1', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
+    findings.bulkInsert([
+      { ...makeFinding({ fingerprint: 'moved', identity: 'id-suppressed' }), scan_id: 's1' },
+      { ...makeFinding({ fingerprint: 'other', identity: 'id-open' }), scan_id: 's1' },
+      { ...makeFinding({ fingerprint: 'legacy' }), scan_id: 's1' },
+    ]);
+    scans.finalize({ scan_id: 's1', status: 'completed', tools_run: [], missing_tools: [] });
+    suppressions.insert({ finding_fingerprint: 'before-the-move', finding_identity: 'id-suppressed', reason: 'fp' });
+    suppressions.insert({ finding_fingerprint: 'unrelated', reason: 'a 2.0.x suppression, no identity' });
+
+    expect(findings.listOpen().map((f) => f.fingerprint).sort()).toEqual(['legacy', 'other']);
+    expect(findings.listOpenForProject('/p').map((f) => f.fingerprint).sort()).toEqual(['legacy', 'other']);
+    expect(findings.listBySeverity('medium').map((f) => f.fingerprint).sort()).toEqual(['legacy', 'other']);
+  });
+
+  it('identityForFingerprint answers from the newest scan that has one', () => {
+    const { db, scans, findings } = setup();
+    scans.insert({ scan_id: 'old', scan_type: 'sast', project_path: '/p', tree_hash: 'h1' });
+    scans.insert({ scan_id: 'new', scan_type: 'sast', project_path: '/p', tree_hash: 'h2' });
+    db.prepare(`UPDATE scans SET started_at = ? WHERE id = ?`).run('2026-01-01T00:00:00.000Z', 'old');
+    db.prepare(`UPDATE scans SET started_at = ? WHERE id = ?`).run('2026-02-01T00:00:00.000Z', 'new');
+    findings.bulkInsert([
+      { ...makeFinding({ fingerprint: 'fp', identity: 'old-identity' }), scan_id: 'old' },
+      { ...makeFinding({ fingerprint: 'fp', identity: 'new-identity' }), scan_id: 'new' },
+      { ...makeFinding({ fingerprint: 'legacy-only' }), scan_id: 'new' },
+    ]);
+    expect(findings.identityForFingerprint('fp')).toBe('new-identity');
+    expect(findings.identityForFingerprint('legacy-only')).toBeNull();
+    expect(findings.identityForFingerprint('unknown')).toBeNull();
+  });
+});

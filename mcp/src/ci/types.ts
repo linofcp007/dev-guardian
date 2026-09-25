@@ -17,6 +17,13 @@ export const CI_EXIT = {
 export type CiExitCode = (typeof CI_EXIT)[keyof typeof CI_EXIT];
 
 export interface BaselineEntry {
+  /**
+   * The finding's line-independent identity (`fingerprint/findingIdentity.ts`)
+   * — what a version-2 file matches on first. Absent from every version-1
+   * entry, and from a v2 entry whose finding came from a tool that computes
+   * none; those match by `fingerprint`.
+   */
+  identity?: string;
   fingerprint: string;
   severity: Severity;
   title: string;
@@ -26,8 +33,15 @@ export interface BaselineEntry {
   added: string;
 }
 
+/**
+ * Version 1 (2.0.x) entries carry only a fingerprint, which changes when a
+ * line is inserted above the finding. Version 2 adds `identity`. Both are
+ * read; `buildBaseline` writes 2.
+ */
+export type BaselineVersion = 1 | 2;
+
 export interface BaselineFile {
-  version: 1;
+  version: BaselineVersion;
   generated_at: string;
   entries: BaselineEntry[];
 }

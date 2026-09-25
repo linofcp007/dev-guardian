@@ -1,11 +1,15 @@
 /**
  * Findings repository.
  *
- * Findings are stored per-scan but share a stable `fingerprint` across scans
- * (see [src/fingerprint/findingFingerprint.ts]), which is what lets us:
- *   - dedupe inside a scan,
- *   - compute diffs across scans,
- *   - apply suppressions across all future scans.
+ * Findings are stored per-scan, keyed by `fingerprint` within a scan (see
+ * [src/fingerprint/findingFingerprint.ts]), and carry a line-independent
+ * `identity` across scans (schema 7, [src/fingerprint/findingIdentity.ts]):
+ *   - the fingerprint dedupes inside a scan;
+ *   - diffs across scans match on the identity first, the fingerprint as the
+ *     fallback for rows that have no identity;
+ *   - a suppression hides a finding that matches it on EITHER key
+ *     (`SUPPRESSION_MATCHES_F`), so one written before identities existed
+ *     still works, and one written after survives a line shift.
  *
  * The `open` list is the canonical "what's wrong right now" view: it joins
  * the latest completed scan with the suppressions table.
@@ -45,6 +49,14 @@ import { boolToInt, intToBool } from './repoUtil.js';
 /** See the module comment. Wraps `fixpr/worktree.ts`'s `WORKTREE_DIR_PREFIX`. */
 const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
 
+/**
+ * Suppression `s` names finding `f`: same fingerprint, or — when both sides
+ * have one — the same identity. SQL's `NULL = NULL` is not true, so a legacy
+ * row or suppression without an identity only ever matches by fingerprint.
+ */
+const SUPPRESSION_MATCHES_F =
+  '(s.finding_fingerprint = f.fingerprint OR s.finding_identity = f.identity)';
+
 interface FindingRow {
   fingerprint: string;
   scan_id: string;
@@ -62,6 +74,8 @@ interface FindingRow {
   fix_available: number;
   fix_applied: number;
   raw: string | null;
+  identity: string | null;
+  content_key: string | null;
 }
 
 export interface InsertFindingInput extends Finding {
@@ -73,8 +87,9 @@ export class FindingsRepo {
   private readonly insertStmt: Statement<[
     string, string, string, string | null, string, string, string | null,
     string, string | null, string | null, number | null, number | null,
-    string | null, 0 | 1, 0 | 1, string | null,
+    string | null, 0 | 1, 0 | 1, string | null, string | null, string | null,
   ]>;
+  private readonly identityForFingerprintStmt: Statement<[string], { identity: string }>;
   private readonly listByScanStmt: Statement<[string], FindingRow>;
   private readonly listOpenLatestScanStmt: Statement<[], FindingRow>;
   private readonly listOpenForProjectStmt: Statement<[string], FindingRow>;
@@ -86,9 +101,21 @@ export class FindingsRepo {
       INSERT OR IGNORE INTO findings (
         fingerprint, scan_id, tool, rule_id, severity, category, subcategory,
         title, message, file_path, line_start, line_end,
-        snippet, fix_available, fix_applied, raw
+        snippet, fix_available, fix_applied, raw, identity, content_key
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    // The identity of the most recent scan's row for this fingerprint. Rows
+    // of older scans can share a fingerprint with a DIFFERENT identity (same
+    // rule and line under a redacted snippet, other code), so the newest one
+    // — the scan the caller just read the fingerprint from — wins.
+    this.identityForFingerprintStmt = db.prepare<[string], { identity: string }>(`
+      SELECT f.identity AS identity FROM findings f
+      JOIN scans s ON s.id = f.scan_id
+      WHERE f.fingerprint = ? AND f.identity IS NOT NULL
+      ORDER BY s.started_at DESC, s.rowid DESC
+      LIMIT 1
     `);
 
     this.listByScanStmt = db.prepare<[string], FindingRow>(`
@@ -115,7 +142,7 @@ export class FindingsRepo {
       JOIN latest l ON l.id = f.scan_id
       WHERE NOT EXISTS (
         SELECT 1 FROM suppressions s
-        WHERE s.finding_fingerprint = f.fingerprint
+        WHERE ${SUPPRESSION_MATCHES_F}
           AND (s.expires_at IS NULL OR s.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
       )
       ORDER BY
@@ -137,7 +164,7 @@ export class FindingsRepo {
       JOIN latest l ON l.id = f.scan_id
       WHERE NOT EXISTS (
         SELECT 1 FROM suppressions s
-        WHERE s.finding_fingerprint = f.fingerprint
+        WHERE ${SUPPRESSION_MATCHES_F}
           AND (s.expires_at IS NULL OR s.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
       )
       ORDER BY
@@ -160,7 +187,7 @@ export class FindingsRepo {
       WHERE f.severity = ?
         AND NOT EXISTS (
           SELECT 1 FROM suppressions s
-          WHERE s.finding_fingerprint = f.fingerprint
+          WHERE ${SUPPRESSION_MATCHES_F}
             AND (s.expires_at IS NULL OR s.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
         )
       ORDER BY f.fingerprint ASC
@@ -195,12 +222,19 @@ export class FindingsRepo {
           boolToInt(f.fix_available),
           boolToInt(f.fix_applied),
           f.raw === undefined ? null : JSON.stringify(f.raw),
+          f.identity ?? null,
+          f.content_key ?? null,
         );
         inserted += info.changes;
       }
       return inserted;
     });
     return tx(findings);
+  }
+
+  /** The identity stored with `fingerprint` by the newest scan that has one, or null. */
+  identityForFingerprint(fingerprint: string): string | null {
+    return this.identityForFingerprintStmt.get(fingerprint)?.identity ?? null;
   }
 
   listByScan(scanId: string): Finding[] {
@@ -299,5 +333,7 @@ function rowToFinding(row: FindingRow): Finding {
   if (row.line_start !== null) finding.line_start = row.line_start;
   if (row.line_end !== null) finding.line_end = row.line_end;
   if (row.snippet !== null) finding.snippet = row.snippet;
+  if (row.identity !== null) finding.identity = row.identity;
+  if (row.content_key !== null) finding.content_key = row.content_key;
   return finding;
 }

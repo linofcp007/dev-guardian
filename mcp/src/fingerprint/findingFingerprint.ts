@@ -1,5 +1,5 @@
 /**
- * Stable fingerprint for a finding.
+ * Per-scan fingerprint for a finding.
  *
  * Same finding produces the same fingerprint across:
  *   - re-runs (deterministic order, deterministic hash)
@@ -11,6 +11,14 @@
  *
  * Severity is intentionally NOT part of the fingerprint — the same finding
  * can be re-classified by a scanner update without changing identity.
+ *
+ * **It is NOT a cross-scan identity.** The line range is hashed, so inserting
+ * one line above a finding gives it a new fingerprint; so does Trivy learning
+ * a fixed version (its snippet carries it). Everything that compares findings
+ * ACROSS scans matches on `identity` first (`./findingIdentity.ts`) and uses
+ * this only as the fallback for rows and baseline entries that predate it.
+ * The algorithm below is therefore frozen: suppressions and `baseline.json`
+ * files written by 2.0.x name findings by these exact bytes.
  */
 
 import { createHash } from 'node:crypto';
@@ -43,7 +51,8 @@ export function computeFingerprint(input: FingerprintInput): string {
   return sha256(payload);
 }
 
-function normalizePathPosix(p: string): string {
+/** Exported for `findingIdentity.ts`, which must normalise paths the same way. */
+export function normalizePathPosix(p: string): string {
   if (p === '') return '';
   // Strip drive letter prefix entirely so c:\src\app.ts and /src/app.ts (the
   // same project mounted differently) hash to the same fingerprint.

@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "generated_at": "2026-09-01T10:00:00.000Z",
+  "entries": [
+    {
+      "fingerprint": "18025ab07e007ece3d5acb882cafac90def851ae0f98a3b3801c5658cafc8056",
+      "severity": "critical",
+      "title": "User input rendered without escaping (XSS).",
+      "file_path": "src/app.js",
+      "added": "2026-09-01T10:00:00.000Z"
+    },
+    {
+      "fingerprint": "1a218b0d43de1c3c3c14cefd114dd6074cb8a969c9fdf4dd9bcd5d8edc705242",
+      "severity": "high",
+      "title": "semver: ReDoS in node-semver",
+      "file_path": "package-lock.json",
+      "added": "2026-09-01T10:00:00.000Z"
+    },
+    {
+      "fingerprint": "202d242f11d736707ae791a0f40ea8f4c5db962779dee615d3db7b568307a56d",
+      "severity": "medium",
+      "title": "Prefer list comprehension over manual loop.",
+      "file_path": "lib/perf.py",
+      "added": "2026-09-01T10:00:00.000Z"
+    },
+    {
+      "fingerprint": "42f677a9d8912bb7ff3f5a964567058fb18e1fc378ef656a7730292384d791bc",
+      "severity": "high",
+      "title": "AWS Access Key",
+      "file_path": "src/config.js",
+      "added": "2026-09-01T10:00:00.000Z"
+    },
+    {
+      "fingerprint": "9f3793b1e16c0e35eb1dfbd1a6c4b9d03be831d19e28535210f994876f3bf177",
+      "severity": "high",
+      "title": "Starting a process with a shell, possible injection detected.",
+      "file_path": "src/runner.py",
+      "added": "2026-09-01T10:00:00.000Z"
+    },
+    {
+      "fingerprint": "afce21fef26bf897e1a0950c38f7ffbbe26d25c701bcb2cae3eaf984901ec406",
+      "severity": "medium",
+      "title": "Pickle library appears to be in use, possible security issue.",
+      "file_path": "src/loader.py",
+      "added": "2026-09-01T10:00:00.000Z"
+    },
+    {
+      "fingerprint": "be5160855b70ad2118927e5f5d142a2723a1e1bfa1d540e5255e98705da8b089",
+      "severity": "high",
+      "title": "Generic API Key",
+      "file_path": "scripts/deploy.sh",
+      "added": "2026-09-01T10:00:00.000Z"
+    },
+    {
+      "fingerprint": "c58ce6f692e1bb8f66334b0867c06e8af690c74419de2e75db4c9e0e1c298c3b",
+      "severity": "medium",
+      "title": "tough-cookie: prototype pollution",
+      "file_path": "package-lock.json",
+      "added": "2026-09-01T10:00:00.000Z"
+    },
+    {
+      "fingerprint": "d49943b1e9b53883e3b8e23a89d77534f9204985e213edfac9636a48bcc59fe2",
+      "severity": "high",
+      "title": "License 'AGPL-3.0-or-later' on evil-lib",
+      "file_path": "package-lock.json",
+      "added": "2026-09-01T10:00:00.000Z"
+    },
+    {
+      "fingerprint": "e5b5fe396a45189a1b30ae8fdbff01b09934b15d87fb9e1f783431d2cf43732d",
+      "severity": "info",
+      "title": "Constant should be UPPER_SNAKE_CASE.",
+      "file_path": "src/util.js",
+      "added": "2026-09-01T10:00:00.000Z"
+    }
+  ]
+}

@@ -42,10 +42,29 @@
  * than `null`: either would crash a CI run, or misreport a corrupted commit
  * as if nothing had ever been baselined, over a file humans hand-edit to
  * suppress findings.
+ *
+ * ---- Versions ------------------------------------------------------------
+ *
+ * Version 1 (2.0.x) named each finding by `fingerprint` alone. The
+ * fingerprint hashes the line range, so inserting one line above a baselined
+ * finding made the gate report it as new (reproduced: `newFindings after
+ * 1-line shift: 1`). Version 2 entries also carry the finding's
+ * line-independent `identity` and are matched identity-first, fingerprint as
+ * the fallback (`fingerprint/findingIdentity.ts#indexFindings`). Both
+ * versions are read — a v1 file keeps gating exactly as it did, because the
+ * fingerprint algorithm is frozen — and `buildBaseline` always writes 2,
+ * carrying every entry's `added` date across, so the first `baseline
+ * update` after upgrading converts the file without resetting any clock.
  */
+import { indexFindings } from '../fingerprint/findingIdentity.js';
 import { SEVERITIES } from '../types.js';
 /** Where the committed baseline lives, relative to the project root. */
 export const BASELINE_RELATIVE_PATH = '.guardian/baseline.json';
+/** The version `buildBaseline` writes. */
+export const BASELINE_VERSION = 2;
+function isBaselineVersion(value) {
+    return value === 1 || value === 2;
+}
 function isPlainObject(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -56,6 +75,8 @@ function isBaselineEntry(value) {
     if (!isPlainObject(value))
         return false;
     if (typeof value.fingerprint !== 'string')
+        return false;
+    if (value.identity !== undefined && typeof value.identity !== 'string')
         return false;
     if (!isSeverity(value.severity))
         return false;
@@ -70,11 +91,12 @@ function isBaselineEntry(value) {
 /**
  * See the module doc for the three return states in full. In short: `null`
  * means there is no file to salvage (absent, unparseable, or the wrong shape
- * at the DOCUMENT level — bad `version`, missing `generated_at`, `entries`
- * not an array). Otherwise every entry that fails validation is dropped
- * individually rather than failing the whole document, and `dropped` reports
- * how many were — a wrong-shaped ENTRY must never read as either a
- * wrong-shaped document or as "no baseline exists".
+ * at the DOCUMENT level — a `version` other than 1 or 2, missing
+ * `generated_at`, `entries` not an array). Otherwise every entry that fails
+ * validation is dropped individually rather than failing the whole document,
+ * and `dropped` reports how many were — a wrong-shaped ENTRY must never read
+ * as either a wrong-shaped document or as "no baseline exists". The file's
+ * own version is kept on the result.
  */
 export function parseBaseline(text) {
     if (text === null)
@@ -89,7 +111,7 @@ export function parseBaseline(text) {
     if (!isPlainObject(parsed))
         return null;
     const { version, generated_at, entries } = parsed;
-    if (version !== 1)
+    if (!isBaselineVersion(version))
         return null;
     if (typeof generated_at !== 'string')
         return null;
@@ -97,60 +119,75 @@ export function parseBaseline(text) {
         return null;
     const validEntries = entries.filter(isBaselineEntry);
     const dropped = entries.length - validEntries.length;
-    return { file: { version: 1, generated_at, entries: validEntries }, dropped };
+    return { file: { version, generated_at, entries: validEntries }, dropped };
 }
 /** Pretty-printed so the committed file is reviewable in a pull-request diff. */
 export function serialiseBaseline(file) {
     return `${JSON.stringify(file, null, 2)}\n`;
 }
 /**
- * Regenerate the baseline from the current findings.
+ * Regenerate the baseline from the current findings, as a version-2 file.
  *
- * A fingerprint already present in `previous` keeps its original `added`
- * date — a regeneration must not reset the clock on a suppression a reviewer
- * is already tracking the age of. Only a fingerprint with no prior entry is
- * stamped with `now`. A fingerprint that no longer appears in `findings` is
+ * A finding already recorded in `previous` — matched the way the gate
+ * matches (identity first, fingerprint as the fallback, so a v1 entry is
+ * found by its fingerprint) — keeps its original `added` date: a regeneration
+ * must not reset the clock on a suppression a reviewer is already tracking
+ * the age of, and neither may converting a v1 file or a line shift that gave
+ * the finding a new fingerprint. Only a finding with no prior entry is
+ * stamped with `now`. A finding that no longer appears in `findings` is
  * dropped: the loop below is driven by `findings`, so `previous` is consulted
  * only as a date lookup, never copied wholesale.
  *
- * Entries are accumulated in a `Map` keyed by fingerprint and only then
- * turned into an array, so two findings sharing a fingerprint can never
- * produce two entries — the second write simply replaces the first.
+ * Entries are accumulated in a `Map` keyed by identity (fingerprint when
+ * there is none) and only then turned into an array, so two findings that
+ * are the same finding can never produce two entries — the later write
+ * replaces the earlier. A fingerprint seen twice is likewise one entry.
  *
- * The array is sorted by fingerprint before being returned so the file's
- * line order is a function of the findings alone, not of scan order. A file
- * whose order moved on every regeneration would produce a diff nobody could
- * review, which is the same as not reviewing it.
+ * The array is sorted by that key before being returned so the file's line
+ * order is a function of the findings alone, not of scan order — and, since
+ * the identity survives a line shift, not of where in its file each finding
+ * sits either. A file whose order moved on every regeneration would produce
+ * a diff nobody could review, which is the same as not reviewing it.
  */
 export function buildBaseline(findings, previous, now) {
-    const previousByFingerprint = new Map((previous?.entries ?? []).map((entry) => [entry.fingerprint, entry]));
-    const byFingerprint = new Map();
+    const previousIndex = indexFindings(previous?.entries ?? []);
+    const byKey = new Map();
+    const keyOfFingerprint = new Map();
     for (const finding of findings) {
-        const added = previousByFingerprint.get(finding.fingerprint)?.added ?? now;
-        byFingerprint.set(finding.fingerprint, {
+        const added = previousIndex.find(finding)?.added ?? now;
+        const entry = {
+            ...(finding.identity !== undefined ? { identity: finding.identity } : {}),
             fingerprint: finding.fingerprint,
             severity: finding.severity,
             title: finding.title,
             file_path: finding.file_path,
             added,
-        });
+        };
+        const key = keyOfFingerprint.get(finding.fingerprint) ?? entryKey(entry);
+        keyOfFingerprint.set(finding.fingerprint, key);
+        byKey.set(key, entry);
     }
-    const entries = [...byFingerprint.values()].sort((a, b) => a.fingerprint.localeCompare(b.fingerprint));
-    return { version: 1, generated_at: now, entries };
+    const entries = [...byKey.values()].sort((a, b) => entryKey(a).localeCompare(entryKey(b)) || a.fingerprint.localeCompare(b.fingerprint));
+    return { version: BASELINE_VERSION, generated_at: now, entries };
+}
+function entryKey(entry) {
+    return entry.identity ?? entry.fingerprint;
 }
 /**
- * Findings whose fingerprint is not already recorded in the baseline.
+ * Findings not already recorded in the baseline.
  *
- * Matches on `fingerprint` alone — never severity, title, or any other
- * field — because a scanner re-wording a message or a rule pack changing a
- * severity must not resurface a finding someone already reviewed and
- * suppressed. A `null` baseline (file absent, see module doc) means nothing
- * is known yet, so everything is new.
+ * Matches on the finding's identity first and its fingerprint as the
+ * fallback (see the module doc's "Versions") — never on severity, title, or
+ * any other field — because a scanner re-wording a message or a rule pack
+ * changing a severity must not resurface a finding someone already reviewed
+ * and suppressed, and neither may a line inserted above it. A `null`
+ * baseline (file absent, see module doc) means nothing is known yet, so
+ * everything is new.
  */
 export function newFindings(findings, baseline) {
     if (baseline === null)
         return [...findings];
-    const known = new Set(baseline.entries.map((entry) => entry.fingerprint));
-    return findings.filter((finding) => !known.has(finding.fingerprint));
+    const known = indexFindings(baseline.entries);
+    return findings.filter((finding) => !known.has(finding));
 }
 //# sourceMappingURL=baseline.js.map

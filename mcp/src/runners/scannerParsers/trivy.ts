@@ -90,6 +90,15 @@ function mapVulnerability(raw: unknown, target: string, ctx: ParserContext): Fin
   if (description !== undefined) input.message = description;
   // Trivy "snippet" surrogate: enough package metadata to make the
   // fingerprint unique per (cve, package, installed_version) tuple.
+  //
+  // The `->fixed` half is also in the fingerprint, so the fingerprint changes
+  // when the advisory database learns of a fix — the project did not change
+  // at all. It stays, byte for byte, because suppressions and v1
+  // `baseline.json` files from 2.0.x name these findings by that
+  // fingerprint. The line-independent identity every cross-scan comparison
+  // matches on first reads only `pkg@installed` out of this string
+  // (`fingerprint/findingIdentity.ts#dependencyCoordinates`, which also
+  // relies on the name ending at the LAST `@` before `->`): keep that shape.
   input.snippet = `${pkg}@${installed ?? ''}->${fixed ?? ''}`;
   return makeFinding(input);
 }

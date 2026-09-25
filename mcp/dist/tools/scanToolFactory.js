@@ -10,7 +10,8 @@
  *   5. Cache hit? → return existing scan_id flagged as cached
  *   6. Insert scans(running)
  *   7. Invoke the scanner (the tool-specific bit)
- *   8. Apply parsers, persist findings/CVEs
+ *   8. Apply parsers, give each finding its line-independent identity,
+ *      persist findings/CVEs
  *   9. Finalize scans → completed / failed / cancelled / output_too_large
  *  10. Filter by severity_min, then build and return ScanResult
  *
@@ -54,6 +55,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { buildDriftAdvisory } from '../configdrift/advisory.js';
 import { detectConfigDrift } from '../configdrift/detect.js';
+import { assignIdentities, makeSourceReader } from '../fingerprint/findingIdentity.js';
 import { configsDirFromScriptsDir } from '../platform/configsDir.js';
 import { resolveVersion } from '../platform/version.js';
 import { makeProgressEmitter } from '../progress/progressEmitter.js';
@@ -269,6 +271,16 @@ async function runScanBody(args) {
     // before anything counts, persists, or filters the findings.
     if (invocation.dedupeFindings)
         findings = invocation.dedupeFindings(findings);
+    // Line-independent identity, over the scan's whole, final finding set —
+    // the occurrence it carries is counted across that set, so this runs once,
+    // after the dedupe and before anything persists. Source lines are read from
+    // the project on disk (Semgrep without login reports "requires login" in
+    // place of the text) and only ever hashed: nothing read here is stored or
+    // returned, which is what keeps a secret finding's line out of the database.
+    findings = assignIdentities(findings, {
+        projectPath,
+        readSource: makeSourceReader(projectPath),
+    });
     // Persist findings + CVEs (best-effort; one transaction per repo).
     //
     // ---- Why the severity floor is NOT applied before this ---------------
@@ -292,6 +304,8 @@ async function runScanBody(args) {
     // filter inside the parser and so never stored what it dropped).
     if (findings.length > 0) {
         plugin.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
+        // A suppression that predates identities follows its finding from now on.
+        plugin.storage.suppressions.adoptIdentities(scanId);
     }
     if (cves.length > 0) {
         plugin.storage.cves.bulkUpsert(cves.map((c) => ({ ...c, scan_id: scanId })));

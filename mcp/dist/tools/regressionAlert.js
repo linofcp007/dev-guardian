@@ -9,8 +9,13 @@
  *
  * The model decides what to do with `regressed: true` — open an issue,
  * call audit_executive, etc. We do not auto-trigger anything.
+ *
+ * New and resolved are decided by the findings' line-independent `identity`,
+ * with the fingerprint as the fallback where either scan predates identities
+ * — see `diff_scans`, which classifies the same way.
  */
 import { z } from 'zod';
+import { indexFindings } from '../fingerprint/findingIdentity.js';
 import { registerToolModule } from './index.js';
 const SEVERITY_WEIGHT = {
     info: 0.5,
@@ -72,10 +77,10 @@ async function handler(input, ctx) {
     }
     const prevFindings = ctx.storage.findings.listByScan(baselineId);
     const curFindings = ctx.storage.findings.listByScan(latest.scan_id);
-    const prevFp = new Set(prevFindings.map((f) => f.fingerprint));
-    const curFp = new Set(curFindings.map((f) => f.fingerprint));
-    const newFindings = curFindings.filter((f) => !prevFp.has(f.fingerprint));
-    const resolvedFindings = prevFindings.filter((f) => !curFp.has(f.fingerprint));
+    const prevIndex = indexFindings(prevFindings);
+    const curIndex = indexFindings(curFindings);
+    const newFindings = curFindings.filter((f) => !prevIndex.has(f));
+    const resolvedFindings = prevFindings.filter((f) => !curIndex.has(f));
     const score = weightedScore(newFindings) - weightedScore(resolvedFindings);
     const regressed = score > threshold;
     return {
