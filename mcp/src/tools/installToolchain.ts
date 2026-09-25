@@ -372,31 +372,48 @@ function describeSpec(spec: InstallSpec): string {
   return spec.description ?? `${spec.command} ${spec.args.join(' ')}`;
 }
 
+/**
+ * Every probe here is an independent `where`/`which` call (see
+ * `pkgManagerDetect.ts`'s own doc comment) with nothing for one to learn
+ * from another, so they run concurrently — `Promise.all` over a `.map()`
+ * preserves each list's ORDER in the result regardless of which probe
+ * actually finishes first, which matters: `pickInstallSpec` walks
+ * `availableManagers` in order and returns the FIRST match, so the array's
+ * order is this function's whole notion of "preferred manager first".
+ */
 async function listAvailableManagers(
   os: DetectedOs,
 ): Promise<PkgManagerCandidate[]> {
   if (os === 'win32') {
     const all = ['winget', 'scoop', 'choco'];
-    const out: PkgManagerCandidate[] = [];
-    for (const name of all) {
-      const path = await resolveBinary(name);
-      const candidate: PkgManagerCandidate = { name, available: path !== null };
-      if (path !== null) candidate.command_path = path;
-      out.push(candidate);
-    }
-    return out;
+    return Promise.all(
+      all.map(async (name): Promise<PkgManagerCandidate> => {
+        const path = await resolveBinary(name);
+        const candidate: PkgManagerCandidate = { name, available: path !== null };
+        if (path !== null) candidate.command_path = path;
+        return candidate;
+      }),
+    );
   }
-  // POSIX: probe the managers our catalogue can drive.
-  const order = os === 'darwin' ? ['brew', 'pipx', 'npm'] : ['apt', 'pipx', 'npm'];
-  const out: PkgManagerCandidate[] = [];
-  for (const name of order) {
-    const path = await resolveBinary(name === 'apt' ? 'apt-get' : name);
-    out.push({ name, available: path !== null });
-  }
-  // `curl` fallback at the bottom — most POSIX systems have it.
-  const curlPath = await resolveBinary('curl');
-  out.push({ name: 'curl', available: curlPath !== null });
-  return out;
+  // POSIX: probe the managers our catalogue can drive. `uv`, `cargo` and
+  // `go` are ranked below the OS package manager and pipx/npm — zizmor's
+  // and actionlint's catalog entries list them as fallbacks, not the first
+  // choice, so they are probed last (curl stays the true last resort).
+  const order =
+    os === 'darwin'
+      ? ['brew', 'pipx', 'npm', 'uv', 'cargo', 'go']
+      : ['apt', 'pipx', 'npm', 'uv', 'cargo', 'go'];
+  const [managers, curlPath] = await Promise.all([
+    Promise.all(
+      order.map(async (name): Promise<PkgManagerCandidate> => {
+        const path = await resolveBinary(name === 'apt' ? 'apt-get' : name);
+        return { name, available: path !== null };
+      }),
+    ),
+    // `curl` fallback at the bottom — most POSIX systems have it.
+    resolveBinary('curl'),
+  ]);
+  return [...managers, { name: 'curl', available: curlPath !== null }];
 }
 
 async function isWslUsable(): Promise<boolean> {

@@ -10,6 +10,51 @@ version bump.
 
 ### Added
 
+- CI workflow scanning and a CI config generator. `scan_iac` now also runs
+  zizmor (GitHub Actions security auditor: template injection, unpinned
+  `uses:`, excessive `permissions:`, credential persistence) and actionlint
+  (workflow schema/expression correctness) against `.github/workflows/*.yml`
+  when present, independently of Trivy and, between themselves, concurrently
+  — findings land at `category: security`, `subcategory: ci`; either tool
+  missing is a named gap (`missing_tools`, coverage `partial`), never
+  silence, and a `.guardianignore`-excluded workflow file is left out of
+  the file list handed to either scanner, the same way it is for every
+  other scan tool. A single scanner's own `output_too_large`/unconfirmed
+  `cancelled` outcome can no longer discard the whole scan's already-good
+  findings, and both write their raw output under the report dir so
+  `report_paths` is truthful for every scanner that ran, not just Trivy.
+  Both registered in the install catalogue with per-OS hints (zizmor:
+  pipx/uv/cargo/brew; actionlint: go/brew/scoop/choco).
+  `dev-guardian ci-init <github|gitlab|bitbucket> [--project <path>] [--branch <name>] [--write] [--force]`
+  generates a CI pipeline for the PROJECT BEING SCANNED (never for this
+  repo, and never through a symlink escaping it either way): every GitHub
+  Action pinned by full 40-hex commit SHA; Trivy/gitleaks/actionlint pinned
+  by version, a sha256 and an archive-layout path verified against the
+  tool's own GitHub release; bandit/semgrep/zizmor pinned by exact PyPI
+  version via pipx. The generated job resolves dev-guardian's own release
+  tag to its exact commit SHA at generation time (from this checkout's own
+  tags when present, else `git ls-remote`) and verifies it again with
+  `git rev-parse HEAD` after cloning — a moving tag is a supply-chain red
+  flag the pipeline refuses to trust silently — into a directory OUTSIDE
+  the checkout being scanned (`$RUNNER_TEMP`/`/tmp`), never into it, and
+  installs every scanner binary into the same scratch area, never the
+  working directory (an untracked 50 MB tarball there would otherwise read
+  to gitleaks as a coverage gap on every run). Full-history clones
+  (`fetch-depth: 0` / `GIT_DEPTH: 0` / `clone: depth: full`) so gitleaks'
+  own commit-scoped finding identity has real history to attribute secrets
+  to, not a shifting shallow boundary. The GitHub template additionally
+  sets `persist-credentials: false` and conditionally installs the .NET SDK
+  (`actions/setup-dotnet`, pinned by SHA) when a root .csproj/.fsproj/
+  .sln/.slnx is present; GitLab/Bitbucket document that requirement instead
+  of installing it. Runs `dev-guardian scan` gated against the committed
+  baseline, uploading SARIF to code scanning on GitHub (a plain artifact on
+  GitLab/Bitbucket, neither of which ingests raw SARIF). Every pinned value
+  lives in one data file, `configs/ci/pinned.json`, so a release can
+  refresh them together; `--write` uses an atomic exclusive create (`wx`)
+  and never overwrites an existing pipeline file without `--force`.
+  Templates are snapshot-tested and validated against real actionlint/
+  zizmor when installed (`mcp/test/e2e/ciInitCli.test.ts`).
+
 - `wp_vuln_check_source` — WordPress vulnerabilities from source: no live
   URL, no WP-CLI, no WPScan. Reads a local WordPress install's core version
   (`wp-includes/version.php`), plugin versions (main-file header, falling

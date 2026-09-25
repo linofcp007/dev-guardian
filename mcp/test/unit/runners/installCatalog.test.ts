@@ -94,6 +94,36 @@ describe('hadolint catalog entry', () => {
   });
 });
 
+describe('zizmor catalog entry', () => {
+  // scan_iac (task 21) runs zizmor against .github/workflows when it exists
+  // and zizmor is installed; check_toolchain/install_toolchain need to know
+  // about it too.
+  it('is registered with a probe and per-OS install hints', () => {
+    const meta = TOOL_CATALOG['zizmor'];
+    expect(meta).toBeDefined();
+    expect(meta?.probe.command).toBe('zizmor');
+    expect(meta?.required_by).toContain('scan_iac');
+    expect(meta?.install.linux.pipx?.args).toEqual(['install', 'zizmor']);
+    expect(meta?.install.linux.uv?.args).toEqual(['tool', 'install', 'zizmor']);
+    expect(meta?.install.linux.cargo?.args).toEqual(['install', '--locked', 'zizmor']);
+    expect(meta?.install.darwin.brew?.args).toEqual(['install', 'zizmor']);
+  });
+});
+
+describe('actionlint catalog entry', () => {
+  it('is registered with a probe and per-OS install hints', () => {
+    const meta = TOOL_CATALOG['actionlint'];
+    expect(meta).toBeDefined();
+    expect(meta?.probe.command).toBe('actionlint');
+    expect(meta?.probe.args).toEqual(['-version']); // single-dash: Go's flag package, not double-dash
+    expect(meta?.required_by).toContain('scan_iac');
+    expect(meta?.install.win32.scoop?.args).toEqual(['install', 'actionlint']);
+    expect(meta?.install.win32.choco?.args).toEqual(['install', '-y', 'actionlint']);
+    expect(meta?.install.darwin.brew?.args).toEqual(['install', 'actionlint']);
+    expect(meta?.install.linux.go?.args).toEqual(['install', 'github.com/rhysd/actionlint/cmd/actionlint@latest']);
+  });
+});
+
 describe('bandit install', () => {
   // The pre-commit template's bandit hook reads pyproject.toml's
   // [tool.bandit] section when the project has one (configs/pre-commit/

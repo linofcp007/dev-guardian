@@ -212,8 +212,10 @@ describe('check_toolchain', () => {
       expect(commands.has(cmd), cmd).toBe(true);
     }
     expect(vi.mocked(runShellScript)).not.toHaveBeenCalled();
-    expect(r.summary.total_catalogued).toBe(18);
-    expect(r.tools.filter((t) => t.required_by.length > 0 || t.expected_version_floor !== '')).toHaveLength(18);
+    // 20, not 18: Task 21 added zizmor and actionlint (scan_iac's GitHub
+    // Actions workflow scanners) to the catalogue.
+    expect(r.summary.total_catalogued).toBe(20);
+    expect(r.tools.filter((t) => t.required_by.length > 0 || t.expected_version_floor !== '')).toHaveLength(20);
   });
 
   it('reads each version correctly, including the outputs that broke the bash probe', async () => {
@@ -322,7 +324,8 @@ describe('check_toolchain', () => {
     expect(r.tools.find((t) => t.name === 'python')).toMatchObject({ installed: true, version: '3.12.1' });
     expect(r.tools.find((t) => t.name === 'docker')).toMatchObject({ installed: true, version: '29.8.0' });
     // Informational entries never count toward the catalogue summary.
-    expect(r.summary.installed + r.summary.missing).toBe(18);
+    // 20, not 18 — see the comment on the other total_catalogued assertion above.
+    expect(r.summary.installed + r.summary.missing).toBe(20);
   });
 });
 

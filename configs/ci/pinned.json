@@ -1,0 +1,64 @@
+{
+  "_comment": "Pinned values for `dev-guardian ci-init` (Task 21). One data file so a release can refresh every SHA/checksum here in one place, instead of hunting them through three per-host YAML templates. Every action is pinned by FULL commit SHA (never a floating major-version tag like `@v7`); every scanner binary is pinned by version and a sha256 verified against the tool's own GitHub release (downloaded and independently hashed, not merely copied from the release's own checksums file). `version` fields are the human-readable comment dev-guardian appends after each pinned SHA. See README below each block for how each value was obtained and when.",
+
+  "actions": {
+    "_readme": "Full commit SHA per action, verified via `gh api repos/<owner>/<repo>/tags` (2026-09-25) — NOT `.../git/refs/tags/<tag>`, which resolves an ANNOTATED tag object rather than the commit it points at for some of these repos. `tags` already resolves to the commit SHA GitHub Actions itself checks out for `uses: owner/repo@<tag>`.",
+    "checkout": {
+      "repo": "actions/checkout",
+      "version": "v7.0.1",
+      "sha": "3d3c42e5aac5ba805825da76410c181273ba90b1"
+    },
+    "setup_node": {
+      "repo": "actions/setup-node",
+      "version": "v7.0.0",
+      "sha": "820762786026740c76f36085b0efc47a31fe5020"
+    },
+    "upload_sarif": {
+      "repo": "github/codeql-action",
+      "version": "v4.38.2",
+      "sha": "2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
+      "_note": "github/codeql-action is a monorepo; upload-sarif is one action inside it, versioned with the whole repo's own release tags."
+    },
+    "setup_dotnet": {
+      "repo": "actions/setup-dotnet",
+      "version": "v6.0.0",
+      "sha": "a98b56852c35b8e3190ac28c8c2271da59106c68",
+      "_note": "GitHub-only: scan_sast's .NET analyzers need the SDK, which gitlab/bitbucket document as a requirement instead of installing (see each template's own header comment)."
+    }
+  },
+
+  "scanners": {
+    "_readme": "Linux amd64 binaries only — every generated pipeline template runs on a Linux CI image (ubuntu-latest / a Debian-based container). Each url/sha256 pair was downloaded and hashed independently with `sha256sum` (2026-09-25), then cross-checked against the release's own published checksums file; both agreed for all three. `archive_member` is the exact path this task found the binary at inside that same downloaded tarball (`tar -tzf`, 2026-09-25) — all three ship it bare at the archive root, not nested under a `<name>_<version>_<os>_<arch>/` directory the way some projects do; re-run `tar -tzf` against the new tarball and update this field (never assume it is unchanged) whenever a version bump changes `linux_amd64_url`. bandit/semgrep/zizmor are pip-distributed (pipx) rather than a single release binary, so they are pinned by exact version instead of a hand-fetched sha256 — pip DOES verify each downloaded wheel's hash against what PyPI's own index recorded for that exact version (real integrity: catches a corrupted or tampered-in-transit download), but that is a WEAKER guarantee than `--require-hashes` against a pinned constraints file, which also catches the index itself later serving something different under the same name+version; `--require-hashes` needs a full transitive dependency hash list and is out of scope for a two-line pipx install of an exact version.",
+    "trivy": {
+      "version": "0.74.0",
+      "linux_amd64_url": "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz",
+      "linux_amd64_sha256": "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a",
+      "archive_member": "trivy",
+      "_note": "Same tag as TRIVY_INSTALL_TAG in mcp/src/runners/installCatalog.ts — keep both in step when either is bumped; test/unit/configs/pinnedCiData.test.ts asserts they agree."
+    },
+    "gitleaks": {
+      "version": "8.30.1",
+      "linux_amd64_url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz",
+      "linux_amd64_sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+      "archive_member": "gitleaks"
+    },
+    "actionlint": {
+      "version": "1.7.12",
+      "linux_amd64_url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz",
+      "linux_amd64_sha256": "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
+      "archive_member": "actionlint"
+    },
+    "bandit": {
+      "version": "1.9.4",
+      "_note": "pipx install bandit[toml]==<version> — verified current on PyPI 2026-09-25; same version and [toml] extra as installCatalog.ts's own bandit entry (needed if the scanned project has a pyproject.toml `[tool.bandit]` section)."
+    },
+    "semgrep": {
+      "version": "1.178.0",
+      "_note": "pipx install semgrep==<version> — verified current on PyPI 2026-09-25."
+    },
+    "zizmor": {
+      "version": "1.30.1",
+      "_note": "pipx install zizmor==<version> — verified current on PyPI 2026-09-25."
+    }
+  }
+}

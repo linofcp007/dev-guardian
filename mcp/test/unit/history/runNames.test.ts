@@ -156,6 +156,8 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
   'tools/scanWordpress.ts:...secrets.missing_tools': "a copy of gitleaksScan's names",
   'tools/scanDeps.ts:...coverage.gaps.map((g': '`trivy:${g.ecosystem}`, one per MANIFEST_ECOSYSTEMS entry',
   'tools/depsAudit.ts:...coverage.gaps.map((g': '`trivy:${g.ecosystem}`, one per MANIFEST_ECOSYSTEMS entry',
+  'tools/scanIac.ts:spec.name': "runWorkflowScanner's own WorkflowScannerSpec.name — the caller only ever passes the literals 'zizmor' or 'actionlint'",
+  'tools/scanIac.ts:run.toolRun.name': "the missing_tools push for a workflow scanner runWorkflowScanner reported missing — copies that same run's own toolRun.name ('zizmor'/'actionlint')",
 };
 
 /** Every `tools_run` / `missing_tools` write whose name is an expression, as `file:expression`. */
@@ -197,6 +199,7 @@ describe('runNames: exhaustive over the source', () => {
         'npm-audit', 'dast', 'nuclei', 'trivy', 'semgrep', 'gitleaks', 'bandit', 'phpcs', 'security-code-scan',
         'guardian-scanskill', 'scan_dotnet_secrets', 'dotnet_efcore_audit', 'wpscan', 'eslint', 'ruff',
         'hadolint', 'docker-compose', 'budgets', 'pip-audit', 'dotnet-list-package', 'agent-audit',
+        'zizmor', 'actionlint',
       ]),
     );
     expect(names).toEqual(
@@ -206,6 +209,7 @@ describe('runNames: exhaustive over the source', () => {
         'semgrep-wp', 'phpcs-wpcs', 'phpcs', 'dotnet-sdk', 'security-code-scan', 'osv.dev', 'jscpd',
         'security_scan_full', 'deps_audit', 'quality_check', 'compliance_check', 'scan_wordpress',
         'hadolint', 'docker-compose', 'budgets', 'scan_sast', 'scan_iac', 'syft', 'dotnet', 'agent-audit',
+        'zizmor', 'actionlint',
         'trivy:npm', 'trivy:dotnet',
       ]),
     );
@@ -252,7 +256,9 @@ describe('runNames: the pairs that do not share a name', () => {
     ['docker-compose', ['docker-compose']],
     ['budgets', ['budgets']],
     ['scan_sast', ['semgrep', 'bandit', 'security-code-scan', 'dotnet-analyzers']],
-    ['scan_iac', [TRIVY_CONFIG]],
+    ['scan_iac', [TRIVY_CONFIG, 'zizmor', 'actionlint']],
+    ['zizmor', ['zizmor']],
+    ['actionlint', ['actionlint']],
     ['syft', []],
     ['trivy-config', [TRIVY_CONFIG]],
     ['trivy-dockerfile', [TRIVY_CONFIG]],
