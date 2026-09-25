@@ -1,17 +1,26 @@
 ---
-description: WordPress-focused audit (wp_audit + wp_vuln_check + scan_wordpress). Foco WordPress. Foco WordPress.
+description: WordPress audit — source scan, vulnerabilities from source or a live URL, live-install checks and hardening. Foco WordPress. Foco WordPress.
+argument-hint: "[WordPress install path or site URL]"
 ---
 
-Run the **WordPress-focused** Guardian flow. Use when the project is a WP site, plugin, theme, or any codebase with `wp-config.php` / `composer.json` referencing WP.
+Run the WordPress-focused flow. Use it for a WP site, plugin or theme — `detect_stack { project_path: "<project>" }` reports WordPress even without a `composer.json` (by `wp-config.php`, `wp-content/` or a plugin/theme header).
 
-The skill should invoke, in order:
+The argument is a local install path (the directory holding `wp-config.php`), a live URL, or nothing (the source tree only).
 
-1. `scan_wordpress` — source-side scan (Semgrep PHP + `p/wordpress` rule pack + Trivy on `composer.lock` + gitleaks + PHPCS-WPCS).
-2. `wp_audit` — if a live WP install path is provided, checksum core/plugins/themes, list admins, check `WP_DEBUG` / `DISALLOW_FILE_EDIT` / `FORCE_SSL_ADMIN`.
-3. `wp_vuln_check` — query WPScan's DB for known vulns in the installed plugins/themes/core.
-4. `wp_plugin_check`, `wp_rest_audit`, `wp_cron_audit` for deeper surface coverage.
-5. `wp_recommend_hardening` — concrete, copy-pasteable hardening tips.
+Arguments: $ARGUMENTS
 
-If WP-CLI / WPScan / PHPCS are missing, run what is available and explicitly list the skipped tools with install instructions (offer `install_toolchain`).
+1. **Source**: `scan_wordpress { project_path: "<project>", standard: "WordPress" }` — Semgrep PHP with the WP rule pack, Trivy on `composer.lock`, gitleaks, and PHPCS with the WordPress standard (`WordPress-Extra`, `WordPress-VIP-Go` or `WordPress-Core` on request). A scanner that is missing is skipped with a reason.
+2. **Vulnerabilities, no live site needed**: `wp_vuln_check_source { project_path: "<install root>" }` — core, plugin and theme versions read from disk and matched against the Wordfence Intelligence feed (needs `WORDFENCE_API_KEY`; without it, or offline, coverage is `partial` with the reason), plus wp.org's check for closed or abandoned plugins. `project_path` is the install root (`wp-includes/`, `wp-content/`), not a single plugin directory.
+3. **Live install**, when a path is given (needs WP-CLI):
+   - `wp_audit { wp_install_path: "<path>" }` — core/plugin/theme checksums, admin users, `WP_DEBUG` / `DISALLOW_FILE_EDIT` / `FORCE_SSL_ADMIN`;
+   - `wp_cron_audit { wp_install_path: "<path>" }` — scheduled events, where persistent backdoors usually live;
+   - `wp_plugin_check { slug: "<plugin slug>", wp_install_path: "<path>" }` for a plugin the user worries about.
+4. **Live site**, when a URL is given:
+   - `wp_vuln_check { target_url: "<url>" }` — WPScan (a token in `WPSCAN_API_TOKEN` avoids the public rate limit);
+   - `wp_rest_audit { target_url: "<url>" }` — read-only GETs against REST endpoints that commonly leak (user enumeration, drafts, comments, `xmlrpc.php`).
+5. **Hardening**: `wp_recommend_hardening {}` turns the latest `wp_audit` into a prioritised, copy-pasteable checklist; `wp_describe_setup {}` summarises everything gathered so far.
+6. Several installs at once: `bulk_audit_wordpress_sites { wp_install_paths: ["<path>"] }`.
 
-Live-install path (optional, e.g. `/var/www/html`): $ARGUMENTS
+When WP-CLI, WPScan or PHPCS are missing, run what is available, list what was skipped, and offer `install_toolchain { tools: ["wp-cli", "wpscan", "phpcs"], dry_run: true }` first.
+
+Respond in the user's language (EN/PT/ES).

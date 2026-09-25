@@ -1,5 +1,6 @@
 ---
 description: Project health dashboard — latest scans, deltas, baseline, expiring suppressions. Estado do projeto. Estado del proyecto.
+argument-hint: "[focus for the interpretation, e.g. only security]"
 ---
 
 Show the **current health** of the project in one screen. Read-only — no scan runs, no mutation.
@@ -20,6 +21,8 @@ Add, on top of that verbatim output:
 
 - **Interpretation** — which hotspot to fix first, whether the deltas are trending the right way, how much less a "looks clean" read is worth when a scanner is missing.
 - **Understanding gate** — read `.guardian/last-grill.md` (written by `guardian-grill`) directly; it's a file, not something `status` reports. Show its latest verdict 🟢 / 🟡 / 🔴 with scope and gap count — missing, or older than the current diff, show ⚪ "not run for current changes". A full gate needs both code metrics *and* understanding.
+
+If the CLI cannot run here (it needs Node.js >= 22.13 and says so), read the same database through the MCP tools instead — also read-only: `risk_score { project_path: "<project>" }` for the score, band and `coverage_caveat`; `diff_scans { project_path: "<project>" }` for the latest delta and `diff_scans { project_path: "<project>", from: "baseline" }` for the delta since the baseline; `health_status {}` for the last scan and the server state. Say that this is the fallback — the CLI screen is the canonical one.
 
 For the full page — filterable and sortable, everything this screen has no room for — point at `dev-guardian dashboard`. Both render the same snapshot, so they never disagree, and both are a picture of the **last scan**, not a live view: a new scan means re-running the command to see it.
 

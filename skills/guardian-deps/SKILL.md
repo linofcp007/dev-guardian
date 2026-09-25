@@ -1,198 +1,116 @@
 ---
 name: guardian-deps
-description: Dependency management — updates, CVEs, supply chain, licenses, Renovate/Dependabot setup. EN triggers — use when the user says "guardian deps", "update dependencies", "are deps secure?", "set up Renovate", "any CVEs?", "supply chain", "vulnerable libraries", "vulnerable packages", "update npm/pip", "review this Dependabot/Renovate PR", "outdated deps", "dependency audit", "blame a dep", "which lib broke the build?", "Renovate sent 17 PRs", "Dependabot spam". PT triggers — usa quando pedirem "guardian deps", "atualiza dependências", "estão seguras as deps?", "configura Renovate", "tem CVEs?", "supply chain", "vulnerabilidades nas libs", "packages vulneráveis", "atualizar npm/pip", "queres rever este PR do Dependabot/Renovate?", "deps desatualizadas", "auditoria de deps", "culpa de uma lib", "qual lib partiu o build?", "o Renovate enviou-me 17 PRs", "Dependabot fez spam". ES triggers — úsala cuando pidan "guardian deps", "actualiza dependencias", "¿las deps son seguras?", "configura Renovate", "¿tiene CVEs?", "supply chain", "librerías vulnerables", "paquetes vulnerables", "actualizar npm/pip", "¿revisas este PR de Dependabot/Renovate?", "deps desactualizadas", "auditoría de deps", "culpa a una lib", "¿qué librería rompió el build?", "Renovate me mandó 17 PRs", "Dependabot está spammeando". Trilingual EN/PT/ES — respond in the user's language.
+description: Dependency management through the dev-guardian MCP tools — CVE audit, ordered upgrade plan, upgrade PRs, vetting what an install just added, supply-chain checks, licences, SBOM, Renovate. EN triggers — "update dependencies", "any CVEs?", "vulnerable packages", "outdated deps", "I just ran npm install", "what did that install add?", "review this Dependabot / Renovate PR", "set up Renovate", "supply chain". PT — "atualiza as dependências", "tem CVEs?", "packages vulneráveis", "deps desatualizadas", "acabei de instalar deps", "o que entrou com este install?", "revê este PR do Dependabot / Renovate", "configura o Renovate". ES — "actualiza las dependencias", "¿tiene CVEs?", "paquetes vulnerables", "deps desactualizadas", "acabo de instalar deps", "¿qué entró con este install?", "revisa este PR de Dependabot / Renovate", "configura Renovate". Respond in the user's language.
 ---
 
 # Guardian Deps
 
-Gestão completa de dependências: atualizações automáticas, scanning de CVEs, supply chain protection, e gestão de licenças.
+Gestão de dependências: CVEs, plano de upgrades, vetting do que acabou de entrar, supply chain, licenças, SBOM e Renovate. Tudo passa pelas tools MCP do dev-guardian — são elas que guardam os CVEs em `.guardian/guardian.db`, e é daí que o plano de upgrades e o `create_fix_pr` os leem. Os comandos em bruto no fim são só o fallback de quando o servidor MCP não está disponível.
 
-## Funções principais
+## 1. Scan de vulnerabilidades
 
-1. **Configurar Renovate** (substituto open-source do Dependabot, mais inteligente)
-2. **Scan de vulnerabilidades** em dependências instaladas
-3. **Triagem de PRs** abertos por Renovate/Dependabot
-4. **Audit de supply chain** (typosquatting, packages maliciosos)
-5. **Licença compliance** (sem GPL em projeto comercial proprietário)
-6. **Geração de SBOM** (Software Bill of Materials)
+- Auditoria completa: `deps_audit { project_path: "<project>" }` — Trivy fs (vuln + licença) e, conforme o stack, `npm audit`, `pip-audit` (num virtualenv **temporário**, com acesso à rede; o build de um sdist corre lá) e, para `.sln`/`.csproj`, `dotnet restore --locked-mode` + `dotnet list package --vulnerable` (o restore **executa o MSBuild do projeto**). Devolve os findings, os CVEs indexados e `bot_configured` (se já há Renovate ou Dependabot). Avisa o utilizador do que corre antes de o chamar.
+- Rápido, só Trivy: `scan_deps { project_path: "<project>" }`.
 
-## Setup do Renovate
+### Triagem de cada CVE
 
-### 1. Detectar ecossistemas
-
-Verifica que package managers o projeto usa: `package.json`, `requirements.txt`/`poetry.lock`/`uv.lock`/`Pipfile`, `composer.json`, `go.mod`, `Cargo.toml`, `Gemfile`, `pom.xml`/`build.gradle`, `Dockerfile`, GitHub Actions.
-
-### 2. Copiar config base
-
-Copia `${CLAUDE_PLUGIN_ROOT}/configs/renovate/renovate.json` para a raiz do projeto. A config base:
-
-- Atualiza patches/minors automaticamente em PRs separados
-- Agrupa updates devDependencies semanalmente
-- Atualiza Dockerfiles e GitHub Actions
-- Liga "vulnerability alerts" para abrir PRs imediatos em CVE críticos
-- Auto-merge para patches em deps de teste/dev
-
-### 3. Customizar
-
-Pergunta ao utilizador:
-
-- Auto-merge para que tipo de updates? (default: patch dev-deps)
-- Que branches monitorar? (default: branch default)
-- Frequência? (default: semanal)
-- Há packages para ignorar? (e.g. `react@17` porque ainda não migraste)
-
-Aplica customizações ao `renovate.json`.
-
-### 4. Ativar no GitHub
-
-Renovate corre como GitHub App. Instruir o utilizador:
-
-1. Vai a `github.com/apps/renovate`
-2. Click "Install"
-3. Selecciona o repo
-4. Pronto — abre PR de "Configure Renovate" automaticamente
-
-Para self-hosted (sem GitHub.com), usa `renovate-runner` em CI.
-
-### 5. Migrar de Dependabot
-
-Se já existe `.github/dependabot.yml`:
-
-- Pergunta se quer migrar (recomendado) ou correr em paralelo
-- Se migrar: comenta o `dependabot.yml` (não apaga, para histórico) e ativa Renovate
-- Avisa que terá de fechar PRs antigos do Dependabot manualmente
-
-## Scan de vulnerabilidades
-
-### Comando principal
-
-```bash
-trivy fs --scanners vuln --severity HIGH,CRITICAL --format table .
-```
-
-Para JSON estruturado:
-
-```bash
-trivy fs --scanners vuln --format json --output .guardian/deps-cves.json .
-```
-
-### Triagem de findings
-
-Para cada CVE encontrado:
-
-1. **Verifica se é exploitable no contexto**:
-   - A função vulnerável é usada pelo teu código? (procura imports/calls)
-   - O input chega de fonte não-confiável? (utilizador / web / API externa)
-   - Se "não" para qualquer um → severidade reduzida
-
-2. **Verifica patch disponível**:
-   - Há versão `fixed`? Sugere update.
-   - Não há? Procura workarounds documentados no advisory.
-
-3. **Verifica se é dev-only**:
-   - Sim → severidade reduzida, mas não ignorada (build chain attacks são reais)
+1. **É explorável neste contexto?** A função vulnerável é usada pelo código (procura imports/calls)? O input chega de fonte não-confiável? Se "não" a qualquer uma → severidade reduzida.
+2. **Há versão corrigida?** Sim → entra no plano. Não → procura workarounds no advisory.
+3. **É dev-only?** Reduz a severidade, mas não ignora (ataques à build chain são reais).
+4. **Está explorado ativamente?** `prioritize_findings { project_path: "<project>" }` pesa os CVEs que estão no CISA KEV ou com EPSS alto (offline, não há boost — nunca inventado).
 
 ### Apresentar
 
 ```text
 Vulnerabilidades de dependências — N findings
 
-🔴 Crítico (exploitable no teu código):
+🔴 Crítico (explorável no teu código):
   - lodash@4.17.20 — CVE-2021-23337 (prototype pollution)
     Usado em: src/utils/merge.js
-    Fix: bump para >=4.17.21 (npm update lodash)
+    Fix: >= 4.17.21
 
-🟡 Alto (presente mas uso não confirmado):
-  - axios@0.21.0 — CVE-2021-3749 (DoS via regex)
-    Fix: bump para >=0.21.4
+🟡 Alto (presente, uso não confirmado):
+  - axios@0.21.0 — CVE-2021-3749 (ReDoS)
+    Fix: >= 0.21.4
 
 🟢 Médio (dev-only):
   - eslint-plugin-x@1.2 — divulgação de info
-    Bumping não-urgente
 
-ℹ️ Sem fix disponível ainda (monitorar):
+ℹ️ Sem fix disponível ainda (monitorizar):
   - some-lib@2.0 — CVE-2024-XXXX
 ```
 
-### Aplicar fixes
+## 2. Plano de upgrades e aplicação
 
-Para updates patch/minor seguros, oferece:
+1. `deps_update_plan { project_path: "<project>", prefer: "security" }` — plano ordenado por ecossistema (`package_name`, `installed_version`, `latest_version`, `cve_ids`, `upgrade_command`), classificado como security / patch / minor / major. Lê também:
+   - `unplanned` — cada CVE que não ganhou passo, e porquê. Projetos **pnpm e yarn** caem aqui: não há comandos npm para eles, e o fix (`pnpm.overrides` / `resolutions`) aplica-se à mão;
+   - `runner_failures` — cada comando de ecossistema que falhou, com o código (por exemplo NU1004, lock desatualizado, versus NU1301, feed inacessível).
+2. Para aplicar os upgrades com prova: `create_fix_pr { project_path: "<project>", sources: ["deps"], apply: false }` — dry run numa worktree isolada (npm com `--ignore-scripts`, pins de pip editados no sítio), re-scan e diferencial de testes. Só com um "sim" explícito, `apply: true` abre o PR. Maven e gradle ficam de fora (o plano não os cobre).
+3. Aplicação à mão, quando o utilizador prefere: usa o `upgrade_command` de cada entrada, mostra o que vai mudar, pede confirmação, corre os testes. Depois, `scan_deps { project_path: "<project>", force: true }` confirma que o CVE desapareceu.
 
-```bash
-# Node
-npm update <package>
+## 3. Depois de um install (o que acabou de entrar)
 
-# Python
-poetry update <package>
-# ou pip install -U <package> && pip freeze > requirements.txt
+Depois de `npm install`, `pip install`, `composer require`, `cargo add`, `gem install`, `dotnet add package`…:
 
-# PHP
-composer update <package>
-```
+1. Compara o lock file com o `HEAD` (`git diff HEAD -- package-lock.json` e equivalentes: `poetry.lock`, `uv.lock`, `composer.lock`, `Cargo.lock`, `Gemfile.lock`, `packages.lock.json`). Se não mudou, diz que não houve install real e para aí.
+2. Para os packages novos ou alterados: `scan_deps { project_path: "<project>", packages: ["<package>"] }` — o Trivy lê o projeto todo e a resposta é filtrada a esses packages; `package_filter.not_found` diz quais não tinham nada.
+3. Heurísticas de supply chain (secção 4) em cada package novo.
+4. Licenças novas: `compliance_check { project_path: "<project>" }` e depois `license_compatibility { project_path: "<project>" }` — copyleft ou licença desconhecida (`undetermined`) num projeto fechado é sinal.
+5. 🔴 se entrou algo sério; senão 🟢.
 
-Antes de aplicar, mostra que vai mudar e pergunta confirmação. Depois corre testes.
+## 4. Supply chain
 
-## Supply chain attacks
+Vulnerabilidades conhecidas não são o único risco — packages maliciosos também. Nenhuma tool deteta typosquatting; é verificação tua:
 
-Vulnerabilidades conhecidas não são o único risco — packages legitimamente maliciosos também. Detecção open-source disponível:
+- O nome é quase igual a um package popular? (typosquatting)
+- É popular (> 1k downloads/semana)? Tem repositório ligado e historial?
+- A última publicação foi sã (não um burst suspeito, não um maintainer novo)?
+- Os install scripts (`postinstall`, `setup.py`) fazem algo esquisito?
 
-- **`@socket/cli`** (Socket — tier free generoso) — apanha typosquatting, packages com install hooks suspeitos, maintainer changes
-- **Verificar manualmente packages novos**:
-  - É popular (>1k downloads/semana)?
-  - Última publicação foi sã (não burst suspeito)?
-  - Tem GitHub linked? Stars?
-  - Install scripts não fazem nada esquisito?
+`@socket/cli` (Socket, tier gratuito) ajuda com install hooks suspeitos e mudanças de maintainer, se o utilizador o quiser instalar. Lock files vão sempre para o git, e a CI usa `npm ci` / `pnpm install --frozen-lockfile`.
 
-Em projetos críticos, adicionar `package-lock.json`/`yarn.lock`/`pnpm-lock.yaml` ao git (sempre — nunca confiar em lockfile local-only) e usar `npm ci`/`pnpm install --frozen-lockfile` em CI.
+## 5. Renovate
 
-## Triagem de PRs do Renovate/Dependabot
+- `init_project { project_path: "<project>", apply: false }` mostra os ficheiros que instalaria, `renovate.json` incluído; com `apply: true` instala-o (nunca por cima de um ficheiro existente — um igual ao distribuído é adotado no manifesto).
+  - perfil `standard`: automerge de patches de dev-dependencies e de minors de tooling seguro (`@types`, eslint, prettier), sempre com **3 dias** de idade mínima; majors precisam de revisão;
+  - perfil `paranoid` (`profile: "paranoid"`): **nenhum** automerge e **7 dias** de idade mínima.
+- O Renovate corre como GitHub App: `github.com/apps/renovate` → Install → escolher o repo → ele abre o PR "Configure Renovate". Self-hosted: `renovate-runner` na CI.
+- Já há `.github/dependabot.yml`? Pergunta se migra (comenta o ficheiro, não o apaga) ou se corre em paralelo; os PRs antigos do Dependabot fecham-se à mão.
 
-Quando o utilizador pergunta "queres rever este PR?":
+## 6. Triagem de PRs do Renovate / Dependabot
 
-1. Lê o título — extrai package, from version, to version
-2. Determina tipo: **patch**, **minor**, **major** (semver)
-3. Para patch: muito provavelmente seguro. Verifica que CI passa, sugere merge.
-4. Para minor: lê release notes. Procura "breaking" / "deprecated". Sugere merge se nada relevante.
-5. Para major: lê o CHANGELOG completo. Procura usos no código das APIs alteradas. Lista breaking changes que afetam o teu código. Veredito pode ser:
-   - "Pode fazer merge" (não usas as APIs alteradas)
-   - "Atenção: usas X em N sítios, vais ter de mudar" (com diffs)
-   - "Não merge ainda — incompatível com Y"
+1. `review_pr { project_path: "<project>", base_ref: "<base branch>", head_ref: "<PR branch>" }` — Semgrep e gitleaks sobre o diff, Trivy porque o manifesto mudou.
+2. Tipo de update: **patch** (quase sempre seguro — CI verde, merge), **minor** (lê as release notes à procura de "breaking" / "deprecated"), **major** (lê o CHANGELOG, procura no código os usos das APIs alteradas).
+3. Veredito: "pode fazer merge" / "atenção: usas X em N sítios, vais ter de mudar" (com diffs) / "não fazer merge ainda — incompatível com Y".
 
-## Licença compliance
+## 7. Licenças
 
-Para projetos comerciais proprietários:
+`compliance_check { project_path: "<project>" }` (scan de licenças do Trivy) e depois `license_compatibility { project_path: "<project>" }`, que cruza a licença do projeto (sem licença declarada ou "proprietary" conta como proprietário) com as das dependências:
 
-```bash
-# Node
-npx license-checker --json > .guardian/licenses.json
+- 🔴 GPL / AGPL num projeto não-GPL
+- 🟡 LGPL (OK em dynamic linking, cuidado com static linking)
+- 🟢 MIT / Apache / BSD
+- `undetermined` (expressões SPDX OR/AND, licenças não reconhecidas) nunca conta como compatível
 
-# Python
-pip-licenses --format=json --output-file .guardian/licenses.json
-```
+## 8. SBOM
 
-Sinaliza:
-
-- 🔴 GPL/AGPL em projeto não-GPL (não pode misturar)
-- 🟡 LGPL (OK em dynamic linking mas precisa cuidado)
-- 🟢 MIT/Apache/BSD (OK na maioria dos contextos)
-
-## SBOM
-
-Gera Software Bill of Materials com Syft:
-
-```bash
-syft . -o cyclonedx-json > sbom.json
-```
-
-Útil para compliance e response rápido em emergências (ex: novo CVE crítico aparece — usas?).
+`generate_sbom { project_path: "<project>", format: "cyclonedx-json" }` (Syft; Trivy como fallback) — o ficheiro fica em `.guardian/reports/sbom-<scan>/` (`file_path`). Entre releases, `sbom_diff { project_path: "<project>" }` compara os dois SBOMs mais recentes. Útil para responder depressa a um CVE novo ("usamos a lib X?").
 
 ## Frequência sugerida
 
-- Scan de CVEs em CI: **a cada PR + nightly**
-- Update batch via Renovate: **semanal**
-- Audit de supply chain: **mensal**
-- SBOM regenerada: **a cada release**
+- Scan de CVEs: a cada PR que mexe em dependências e semanalmente
+- Upgrades em lote via Renovate: semanal
+- Vetting de supply chain: a cada dependência nova
+- SBOM: a cada release
 
-## Output persistente
+## Fallback sem servidor MCP
 
-Todos os relatórios em `.guardian/reports/deps-<timestamp>.json` para tracking histórico.
+Só quando as tools não estão disponíveis — diz ao utilizador que assim não há histórico, baseline nem plano ligado aos CVEs:
+
+```bash
+trivy fs --scanners vuln --severity HIGH,CRITICAL --format table .
+npm audit --json
+pip-audit -r requirements.txt
+npx license-checker --json --production
+syft . -o cyclonedx-json > sbom.json
+```

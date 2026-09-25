@@ -379,6 +379,87 @@ version bump.
   files for three minutes instead of ten seconds — found in review); the
   nine files that genuinely need longer opt in with their own
   `vi.setConfig({ testTimeout: 180_000 })`.
+- **BREAKING — the slash commands are consolidated from 48 to 10.** Nine
+  skills were unreachable: a command named like a skill shadows it, and each
+  of those commands (`/guardian-init`, `/guardian-review`, `/guardian-deps`,
+  …) told the model to "invoke the X skill", which it found already loaded,
+  and looped. Those commands are gone, so the same `/name` now invokes the
+  skill itself. Every remaining command names the MCP tools and parameters it
+  drives (or says it is a checklist with no automation), and
+  `mcp/test/unit/pluginSurface/docReferences.test.ts` holds every tool call
+  in `commands/` and `skills/` — parameter names, nested `scope` keys and enum
+  values — to the registered zod schemas, and every `/command` the docs, the
+  README and the hook messages name to a command or skill that exists.
+  Old → new:
+
+  | Old | New |
+  | --- | --- |
+  | `/guardian-scan` | `/guardian-scan` — no argument runs `security_scan_full` |
+  | `/guardian-diff` | `/guardian-scan --uncommitted` (or `--staged` for the index only) |
+  | `/guardian-prepush` | `/guardian-scan --unpushed` |
+  | `/guardian-branch [base]` | `/guardian-scan --branch [base]` |
+  | `/guardian-since <ref>` | `/guardian-scan --since <ref>` |
+  | `/guardian-incoming` | `/guardian-scan --incoming` |
+  | `/guardian-file <path>` | `/guardian-scan <path>` |
+  | `/guardian-fix` | `/guardian-fix` (`--pr` for `create_fix_pr`, a fingerprint for `suggest_fix`) |
+  | `/guardian-postfix` | `/guardian-fix --verify` |
+  | `/guardian-report`, `/guardian-audit` | `/guardian-report exec` (the default mode) |
+  | `/guardian-handoff` | `/guardian-report handoff` |
+  | `/guardian-trend` | `/guardian-report trend` |
+  | `/guardian-debt` | `/guardian-report debt` |
+  | `/guardian-changelog` | `/guardian-report changelog` |
+  | `/guardian-soc2` | `/guardian-report soc2` |
+  | `/guardian-panic` | `/guardian-incident panic` |
+  | `/guardian-leak` | `/guardian-incident leak` |
+  | `/guardian-rollback` | `/guardian-incident rollback` |
+  | `/guardian-postmortem` | `/guardian-incident postmortem` |
+  | `/guardian-predeploy` | `/guardian-release predeploy` |
+  | `/guardian-prerelease` | `/guardian-release prerelease` |
+  | `/guardian-docker` | `/guardian-infra docker` |
+  | `/guardian-iac` | `/guardian-infra iac` |
+  | `/guardian-status`, `/guardian-wp`, `/guardian-dotnet` | unchanged |
+  | `/guardian` | the `guardian` router skill; `/g` stays as its alias |
+  | `/guardian-init`, `/guardian-review`, `/guardian-deps`, `/guardian-quality`, `/guardian-compliance`, `/guardian-grill`, `/guardian-improve`, `/guardian-scanskill` | same name — now the skill itself |
+  | `/guardian-postinstall` | `/guardian-deps` (its after-install section: `scan_deps` with `packages`) |
+  | `/guardian-budget` | `/guardian-quality` (its budgets section) |
+  | `/guardian-perf` | `/guardian-performance` |
+  | `/guardian-observe` | `/guardian-observability` |
+  | `/gs`, `/gf`, `/gr`, `/gq`, `/gg`, `/gi` | `/guardian-scan`, `/guardian-fix`, `/guardian-review`, `/guardian-quality`, `/guardian-grill`, `/guardian-improve` |
+  | `/guardian-llm` | retracted: no tool backed it, and the skill it deferred to (`ai-product-spec-scale`) does not exist |
+
+- Skills route through the MCP tools. `guardian-deps`, `guardian-review`,
+  `guardian-quality`, `guardian-compliance`, `guardian-observability` and
+  `guardian-performance` told the model to run Trivy, license-checker,
+  Syft, k6 and friends by hand — no baseline, no delta, no history. They now
+  drive `deps_audit`, `deps_update_plan`, `scan_deps`, `create_fix_pr`,
+  `generate_sbom`, `license_compatibility`, `review_pr`, `bug_hunt` /
+  `quality_check` with `scope`, `compliance_check`, `compliance_evidence`,
+  `observability_setup` and `perf_check`, with raw commands only as a
+  labelled fallback for when the MCP server is unavailable. `guardian-init`
+  drives `check_toolchain`, `install_toolchain`, `init_project` and
+  `precommit_install`.
+- Skill `description`s are at most 1024 characters and valid YAML (18 939 →
+  11 145 characters across the 13; the router's alone was 4 487, now 958).
+  `guardian-grill`'s and `guardian-improve`'s carried an unquoted colon
+  followed by a space, which a strict YAML loader rejects. MCP tool descriptions are at most 1500:
+  `bug_hunt` 25 568 → 1 454, `validate_finding` 1 809 → 1 463. Everything
+  `bug_hunt`'s description carried as measurement history was already in
+  this file and in the rule packs' own comments. Both limits are enforced by
+  `mcp/test/unit/pluginSurface/descriptionLimits.test.ts`.
+- False or dead references removed from skills and commands: dashboards under
+  `configs/grafana/` (never shipped); `.guardian/perf-budget.yml` (nothing
+  read it — performance budgets are the `perf` section of
+  `.guardian/budgets.yml`); quality budgets "the gate reads" that the schema
+  never had (max file / function lines, coverage floor — `budgets.yml` has
+  `quality.duplication_pct` and `quality.complexity`, and the examples in
+  the skills are now checked with `loadBudgets`); FID, retired as a Core Web
+  Vital in favour of INP; a PII grep for `cpf` (a Brazilian id — now NIF, NISS
+  and Cartão de Cidadão) whose quoted brace glob in `--include` matched no
+  file; "Windows: use WSL2" (`install_toolchain` uses winget, scoop or
+  choco); brakeman, gosec, Checkov, SpotBugs and PHPStan presented as tools
+  the plugin runs or installs; `perf_check` results presented as scan
+  history (it writes a report, not a scan row). The PostToolUse hook's
+  secret warning now points at `/guardian-incident leak`.
 
 ## [2.0.0] - 2026-08-23
 
