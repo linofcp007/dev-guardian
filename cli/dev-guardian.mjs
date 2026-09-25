@@ -213,6 +213,10 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          health-check URL when --start-command is given —
                          they are the same origin, so one flag names both.
   --authorized-target   Confirm you are authorized to DAST-test that target
+  --local-only          Semgrep runs only the rules on disk (the project's
+                         .semgrep.yml and registered custom rules) with
+                         --metrics=off: no registry download, no telemetry.
+                         Fewer rules than the default registry ruleset.
   --start-command <cmd> [args…]
                          Start <cmd> (argv, never a shell) for the DAST pass
                          and stop it — whole process tree — when the scan
@@ -238,7 +242,7 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
 
 baseline update — regenerate .guardian/baseline.json from the current scan
   Same pipeline flags as scan: --project, --base-url, --authorized-target,
-  --start-command (same argv-only rule, --base-url requirement, and
+  --local-only, --start-command (same argv-only rule, --base-url requirement, and
   teardown). No --fail-on/--format/--sarif — this command does not gate or
   render a report, it writes a file.
   The ONLY dev-guardian command that writes the baseline; scan never does.
@@ -699,6 +703,7 @@ function parseScanArgs(argv) {
     sarif: undefined,
     baseUrl: undefined,
     authorizedTarget: false,
+    localOnly: false,
     startCommand: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -741,6 +746,7 @@ function parseScanArgs(argv) {
       i = r.nextIndex;
     } else if (a.startsWith('--base-url=')) out.baseUrl = a.slice('--base-url='.length);
     else if (a === '--authorized-target') out.authorizedTarget = true;
+    else if (a === '--local-only') out.localOnly = true;
     else if (a === '--start-command') {
       out.startCommand = consumeStartCommand(argv, i);
       break;
@@ -754,6 +760,7 @@ function parseBaselineUpdateArgs(argv) {
     project: process.cwd(),
     baseUrl: undefined,
     authorizedTarget: false,
+    localOnly: false,
     startCommand: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -771,6 +778,7 @@ function parseBaselineUpdateArgs(argv) {
       i = r.nextIndex;
     } else if (a.startsWith('--base-url=')) out.baseUrl = a.slice('--base-url='.length);
     else if (a === '--authorized-target') out.authorizedTarget = true;
+    else if (a === '--local-only') out.localOnly = true;
     else if (a === '--start-command') {
       out.startCommand = consumeStartCommand(argv, i);
       break;
@@ -996,6 +1004,7 @@ async function cmdScan(argv) {
       projectPath,
       baseUrl: opts.baseUrl,
       authorizedTarget: opts.authorizedTarget ? true : undefined,
+      localOnly: opts.localOnly ? true : undefined,
     });
   } catch (e) {
     pipelineError = e;
@@ -1113,6 +1122,7 @@ async function cmdBaseline(argv) {
       projectPath,
       baseUrl: opts.baseUrl,
       authorizedTarget: opts.authorizedTarget ? true : undefined,
+      localOnly: opts.localOnly ? true : undefined,
     });
   } catch (e) {
     pipelineError = e;

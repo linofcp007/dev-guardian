@@ -1,0 +1,17 @@
+{
+  "pkg/simple.py": [
+    { "type": "function", "rank": "A", "complexity": 2, "name": "tiny", "lineno": 1, "col_offset": 0, "endline": 3, "closures": [] }
+  ],
+  "pkg/heavy.py": [
+    { "type": "function", "rank": "C", "complexity": 14, "name": "parse", "lineno": 10, "col_offset": 0, "endline": 80, "closures": [] },
+    {
+      "type": "class", "rank": "B", "complexity": 8, "name": "Engine", "lineno": 90, "col_offset": 0, "endline": 200,
+      "methods": [
+        { "type": "method", "rank": "D", "complexity": 24, "name": "run", "lineno": 95, "col_offset": 4, "endline": 180, "classname": "Engine", "closures": [] }
+      ]
+    },
+    { "type": "method", "rank": "D", "complexity": 24, "name": "run", "lineno": 95, "col_offset": 4, "endline": 180, "classname": "Engine", "closures": [] },
+    { "type": "function", "rank": "F", "complexity": 57, "name": "monster", "lineno": 210, "col_offset": 0, "endline": 400, "closures": [] }
+  ],
+  "pkg/broken.py": { "error": "invalid syntax (<unknown>, line 3)" }
+}

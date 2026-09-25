@@ -77,12 +77,7 @@ async function handler(
     return failDomain('not_a_git_repo', (e as Error).message);
   }
 
-  if (ctx.shell === null) {
-    return failDomain(
-      'no_bash_shell',
-      'No usable bash shell found. Install Git Bash or WSL, then restart.',
-    );
-  }
+  // No bash check: none of the sub-tools runs a shell script any more.
 
   // Pre-record the audit scan so the children can be linked by id even if a
   // later step fails. tree_hash is captured up front so it reflects the

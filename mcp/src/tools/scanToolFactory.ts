@@ -67,7 +67,7 @@ import {
   type ScannerParser,
 } from '../runners/scannerParsers/index.js';
 import { getScanLimiter } from '../runners/concurrencyLimiter.js';
-import { runShellScript, type ShellRunResult } from '../runners/shellRunner.js';
+import type { ProcessOutcome } from '../runners/processRunner.js';
 import { describeShortfallTiers, severityShortfall } from '../severity/breakdown.js';
 import { filterFindings } from '../severity/filter.js';
 import { SEVERITY_ORDER } from '../types.js';
@@ -94,14 +94,13 @@ import { assessCoverage, computeCoverage } from './scanCoverage.js';
 import type { ToolCallMeta, ToolModule } from './index.js';
 
 /**
- * What `config.invoke` returns to the factory. Either a direct shell run
- * (most tools) plus the parser tasks for it, or a fully synthesised
- * outcome for tools that don't shell out at all (e.g. an internal
- * sequencer).
+ * What `config.invoke` returns to the factory: how the scanner run(s) ended,
+ * plus the parser tasks for their output — or a fully synthesised outcome for
+ * a tool that runs other tools (`security_scan_full`).
  */
 export interface ScannerInvocation {
   /** The runner outcome ('completed', 'failed', 'cancelled', etc.). */
-  outcome: ShellRunResult['outcome'];
+  outcome: ProcessOutcome;
   /** Status per scanner (semgrep ok, bandit skipped, …). */
   tools_run: ToolRun[];
   /** Scanners that were expected to run but were not installed. */
@@ -130,6 +129,13 @@ export interface ScannerInvocation {
 export interface InvokeContext extends ToolContext {
   /** Convenience: the env file scripts expect (PROJECT_PATH etc.). */
   scriptEnv: NodeJS.ProcessEnv;
+  /**
+   * What an orchestrator passes to each child tool it runs: this call's
+   * signal (so cancelling the parent stops every child's scanner), the host's
+   * progress token, and this scan's id as `parentScanId`, which the child
+   * records in its own row's `meta.parent_scan_id`.
+   */
+  childCallMeta: ToolCallMeta;
 }
 
 export interface ScanToolBaseInput {
@@ -191,8 +197,22 @@ export interface ScanToolConfig<TInput extends ScanToolBaseInput> {
    * edited pack is served from a stale cache entry.
    */
   rulePacks?: (input: TInput, ctx: RulePackContext) => readonly string[];
+  /**
+   * State outside the working tree that the scan reads, joined to the cache
+   * key — e.g. HEAD and every ref for a git-history scan, which a fetch or an
+   * empty-diff merge moves without changing one file. A throw makes the call
+   * uncacheable rather than failing it.
+   */
+  cacheState?: (input: TInput, ctx: RulePackContext) => Promise<Record<string, string>>;
   /** See {@link ResponseView}. Applied to fresh runs and cache hits alike. */
   responseView?: (input: TInput, findings: readonly Finding[], scanId: string) => ResponseView | null;
+  /**
+   * The tool runs other scan tools (`security_scan_full`) rather than a
+   * scanner. It takes no slot from the scan limiter itself: each child takes
+   * its own, and a parent holding one while its children wait for the rest
+   * deadlocks as soon as two parents run at the default limit of 2.
+   */
+  orchestrator?: boolean;
   /**
    * The tool-specific bit: actually run the scanner(s) and return the
    * parser inputs. Throw to signal a true failure; return outcome='failed'
@@ -212,7 +232,7 @@ const KEYLESS_INPUTS: readonly string[] = ['project_path', 'severity_min', 'forc
  * `extras`. A cache hit re-emits every OTHER meta key as an extra, so a key
  * added to `meta` here must be added to this set too.
  */
-const FACTORY_META_KEYS: ReadonlySet<string> = new Set(['severity_min']);
+const FACTORY_META_KEYS: ReadonlySet<string> = new Set(['severity_min', 'parent_scan_id']);
 
 /** Longest scanner stderr line forwarded into a progress message. */
 const MAX_LOG_LINE = 200;
@@ -270,15 +290,26 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
   const driftAdvisory = configDriftAdvisory(plugin, projectPath);
   if (driftAdvisory) warnings.push(driftAdvisory);
 
-  if (plugin.shell === null) {
-    return failDomain(
-      'no_bash_shell',
-      'No usable bash shell was found on this host. Run `install_toolchain` or install Git Bash / WSL.',
-    );
-  }
+  // No bash check here: no scan tool built on this factory runs a shell
+  // script any more — each invokes its scanners directly — so a host without
+  // Git Bash or WSL can still scan.
 
-  const treeHash = await computeTreeHash(projectPath);
-  const cacheKey = buildCacheKey(config, input, projectPath, treeHash, plugin);
+  // A child of an orchestrator reuses the hash its parent just computed for
+  // the same tree (see ToolCallMeta.treeHash) — five hashes of one tree per
+  // security_scan_full otherwise.
+  const treeHash =
+    callMeta?.parentScanId !== undefined && callMeta.treeHash !== undefined
+      ? callMeta.treeHash
+      : await computeTreeHash(projectPath);
+  let cacheState: Record<string, string> = {};
+  if (config.cacheState) {
+    try {
+      cacheState = await config.cacheState(input, { projectPath, plugin });
+    } catch {
+      cacheState = { uncacheable: randomUUID() };
+    }
+  }
+  const cacheKey = buildCacheKey(config, input, projectPath, treeHash, plugin, cacheState);
 
   // Cache check. Only a run whose every scanner ran is served again: one
   // with a scanner missing or failed is `completed` at coverage none or
@@ -297,14 +328,17 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     }
   }
 
-  // Insert running scan.
+  // Insert running scan. A child of an orchestrator records its parent from
+  // the start, so even a row that later fails or is reaped says whose it was.
   const scanId = randomUUID();
+  const parentScanId = callMeta?.parentScanId;
   const inserted = plugin.storage.scans.insert({
     scan_id: scanId,
     scan_type: config.scan_type,
     project_path: projectPath,
     tree_hash: treeHash,
     cache_key: cacheKey,
+    ...(parentScanId !== undefined ? { meta: { parent_scan_id: parentScanId } } : {}),
   });
   plugin.storage.scans.attachTreeCache({
     tree_hash: treeHash,
@@ -348,6 +382,13 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
       warnings,
       signal: controller.signal,
       progress,
+      childCallMeta: {
+        signal: controller.signal,
+        parentScanId: scanId,
+        treeHash,
+        ...(callMeta?.progressToken !== undefined ? { progressToken: callMeta.progressToken } : {}),
+      },
+      ...(parentScanId !== undefined ? { parentScanId } : {}),
     });
   } finally {
     progress.dispose();
@@ -366,6 +407,9 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   warnings: string[];
   signal: AbortSignal;
   progress: ProgressEmitter;
+  childCallMeta: ToolCallMeta;
+  /** Set when an orchestrator runs this scan as one of its children. */
+  parentScanId?: string;
 }): Promise<ToolResult<Record<string, unknown>>> {
   const { config, input, plugin, projectPath, treeHash, scanId, startedAt, warnings, progress } =
     args;
@@ -400,13 +444,17 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
       PROJECT_PATH: projectPath,
       GUARDIAN_SCAN_ID: scanId,
     },
+    childCallMeta: args.childCallMeta,
   };
 
   // Acquire a slot from the global concurrency limiter so 50 parallel
   // calls from the host don't fork 50 scanner processes. Default cap is 2.
-  report('waiting for a scanner slot');
-  const limiter = getScanLimiter();
-  await limiter.acquire();
+  // An orchestrator takes none — see `ScanToolConfig.orchestrator`.
+  const limiter = config.orchestrator === true ? null : getScanLimiter();
+  if (limiter) {
+    report('waiting for a scanner slot');
+    await limiter.acquire();
+  }
   let invocation: ScannerInvocation;
   try {
     report(`scanning ${projectPath}`);
@@ -424,7 +472,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
       e instanceof Error ? e.message : 'Scanner failed with an unknown error',
     );
   } finally {
-    limiter.release();
+    limiter?.release();
   }
   report('recording results');
 
@@ -518,6 +566,9 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   // is what keeps a cache hit from re-emitting it as an extra.
   const meta: Record<string, unknown> = { ...(invocation.extras ?? {}) };
   if (input.severity_min !== undefined) meta['severity_min'] = input.severity_min;
+  // `finalize` replaces the whole blob, so the parent written at insert time
+  // has to be written again.
+  if (args.parentScanId !== undefined) meta['parent_scan_id'] = args.parentScanId;
   if (Object.keys(meta).length > 0) finalize.meta = meta;
   const finishedAt = plugin.storage.scans.finalize(finalize);
 
@@ -596,6 +647,8 @@ function buildCacheKey<TInput extends ScanToolBaseInput>(
   projectPath: string,
   treeHash: string,
   plugin: PluginContext,
+  /** `config.cacheState`'s answer; empty leaves the key exactly as before it existed. */
+  cacheState: Record<string, string>,
 ): string {
   let rulePacksHash: string;
   try {
@@ -603,12 +656,15 @@ function buildCacheKey<TInput extends ScanToolBaseInput>(
   } catch {
     rulePacksHash = `uncacheable:${randomUUID()}`;
   }
+  const keyed = normaliseInput(config, input);
+  // `__`-prefixed: no schema field is spelt that way, so it cannot collide.
+  if (Object.keys(cacheState).length > 0) keyed['__cache_state'] = cacheState;
   return scanCacheKey({
     projectPath,
     tool: config.name,
     scanType: config.scan_type,
     treeHash,
-    inputHash: hashInput(normaliseInput(config, input)),
+    inputHash: hashInput(keyed),
     pluginVersion: resolveVersion(),
     rulePacksHash,
   });
@@ -851,6 +907,3 @@ function failDomain(
   if (retry_with !== undefined) error.retry_with = retry_with;
   return { ok: false, error };
 }
-
-// Re-export for tools to build their `parser_inputs` ergonomically.
-export { runShellScript };

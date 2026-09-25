@@ -22,17 +22,12 @@
  * passed, when the toolchain is not on PATH, and `GUARDIAN_REQUIRE_SEMGREP=1`
  * turns that absence into a hard failure instead of a quiet skip.
  *
- * ---- Why `gitleaks detect` forces the fixture to be a real git repo -------
+ * ---- Why the fixture is a real git repo ------------------------------------
  *
- * `scripts/scan/full-security-scan.sh` runs `gitleaks detect`, which (unlike
- * `gitleaks dir`) scans git history and errors on a non-repository. Without
- * `git init` + a commit, gitleaks would fail to produce `secrets.json`,
- * `security_scan_full` would record it as a missing tool it is NOT, and
- * `coverage` would read 'partial' even with every scanner installed —
- * exactly the kind of false negative this project's own tests exist to
- * catch, not produce. `map_attack_surface`'s `computeTreeHash` does not
- * share this requirement (it falls back to a filesystem walk outside git),
- * but building the fixture as a real repo once covers both.
+ * It is what a CI checkout is. `security_scan_full`'s secrets pass reads git
+ * history AND the uncommitted files of a repository (a directory that is not
+ * one is scanned as plain files — see `runners/gitleaksScan.ts`), so the
+ * fixture exercises the history pass a pipeline actually runs.
  */
 
 import { execa } from 'execa';
@@ -138,15 +133,18 @@ async function resolveBinDir(bin: string): Promise<string | null> {
   }
 }
 
-// security_scan_full unconditionally expects semgrep, gitleaks and trivy
-// (deps) on a project with no Dockerfile/Python — see securityScanFull.ts's
-// ROUTES table, where only 'trivy-dockerfile' and 'bandit' are conditional.
-// All three genuinely installed is what "coverage: full" requires here.
+// security_scan_full's children expect semgrep (scan_sast), gitleaks
+// (scan_secrets) and trivy (scan_deps, scan_iac) on a project with no
+// Python; bandit and the .NET analyzers are conditional. All three genuinely
+// installed is what "coverage: full" requires here.
 const SEMGREP_INSTALLED = await isInstalled('semgrep');
 const GITLEAKS_INSTALLED = await isInstalled('gitleaks');
 const TRIVY_INSTALLED = await isInstalled('trivy');
 const TOOLCHAIN_AVAILABLE = SEMGREP_INSTALLED && GITLEAKS_INSTALLED && TRIVY_INSTALLED;
 const SEMGREP_DIR = SEMGREP_INSTALLED ? await resolveBinDir('semgrep') : null;
+// scan_sast falls back to the Semgrep Docker image when semgrep is not on
+// PATH, so a run meant to be missing Semgrep must not see docker either.
+const DOCKER_DIR = await resolveBinDir('docker');
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
 /* ------------------------------------------------------------------ */
@@ -167,7 +165,8 @@ function runCli(
 }
 
 /**
- * `process.env` with `SEMGREP_DIR` filtered out of PATH — everything else
+ * `process.env` with `SEMGREP_DIR` (and `DOCKER_DIR`, which would otherwise
+ * run Semgrep from its image) filtered out of PATH — everything else
  * (gitleaks, Trivy, node itself) stays reachable, so the resulting run has a
  * genuine, targeted gap (semgrep specifically), not a wholesale broken
  * environment. `PATH`/`Path` casing: Node normalises env var name lookups
@@ -177,11 +176,11 @@ function runCli(
 function envWithoutSemgrep(): NodeJS.ProcessEnv {
   if (!SEMGREP_DIR) return process.env;
   const sep = detectOs() === 'win32' ? ';' : ':';
-  const target = resolve(SEMGREP_DIR);
+  const targets = new Set([resolve(SEMGREP_DIR), ...(DOCKER_DIR ? [resolve(DOCKER_DIR)] : [])]);
   const currentPath = process.env['PATH'] ?? '';
   const filtered = currentPath
     .split(sep)
-    .filter((segment) => segment.length === 0 || resolve(segment) !== target)
+    .filter((segment) => segment.length === 0 || !targets.has(resolve(segment)))
     .join(sep);
   return { ...process.env, PATH: filtered };
 }
@@ -483,6 +482,24 @@ describe('dev-guardian scan — usage and safety (no real scanner reached)', () 
       rmDir(dir);
     }
   });
+
+  it.each([['scan'], ['baseline', 'update']])(
+    'accepts --local-only on `%s` (a flag, not an unknown one) and documents it',
+    (...cmd) => {
+      // Paired with an invalid --fail-on / an unknown flag so the run stops at
+      // validation: if --local-only were not a known flag, parsing would fail
+      // on IT first and the message would name it.
+      const r =
+        cmd[0] === 'scan'
+          ? runCli(['scan', '--local-only', '--fail-on', 'totally-bogus'])
+          : runCli(['baseline', 'update', '--local-only', '--nope']);
+      expect(r.status).toBe(3);
+      expect(r.stderr).not.toMatch(/--local-only/);
+      expect(runCli(['scan', '--help']).stdout).toMatch(/--local-only/);
+    },
+    // Two CLI subprocesses; each is bounded by FAST_TIMEOUT_MS itself.
+    FAST_TIMEOUT_MS * 2 + 5_000,
+  );
 
   it('exits 3 on an invalid --fail-on value, naming it', () => {
     const r = runCli(['scan', '--fail-on', 'urgent']);

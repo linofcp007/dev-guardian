@@ -14,7 +14,8 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { gitleaksParser } from '../runners/scannerParsers/gitleaks.js';
+import { historyState } from '../runners/git.js';
+import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
@@ -50,6 +51,8 @@ registerToolModule(
       'standard. Each scanner that is missing is skipped with reason. Use wp_audit / wp_vuln_check ' +
       'for live-install scenarios.',
     scan_type: 'wordpress',
+    // Its secrets pass reads git history: HEAD and every ref join the key.
+    cacheState: (_input, { projectPath }) => historyState(projectPath),
     category: 'security',
     inputSchema: {
       project_path: ProjectPath,
@@ -84,9 +87,8 @@ registerToolModule(
 
       // The 4 scanners are independent: separate report files, separate
       // CLIs. Run in parallel — wall-clock drops from sum to max.
-      const [semgrepBin, gitleaksBin, trivyBin, phpcsBin] = await Promise.all([
+      const [semgrepBin, trivyBin, phpcsBin] = await Promise.all([
         scannerAvailable('semgrep'),
-        scannerAvailable('gitleaks'),
         scannerAvailable('trivy'),
         scannerAvailable('phpcs'),
       ]);
@@ -126,36 +128,34 @@ registerToolModule(
         missing_tools.push('semgrep');
       }
 
-      if (gitleaksBin) {
-        tasks.push(
-          (async () => {
-            const outFile = join(reportDir, 'secrets.json');
-            const r = await runProcess({
-              command: 'gitleaks',
-              args: [
-                'detect',
-                '--no-banner',
-                '--report-format=json',
-                `--report-path=${outFile}`,
-                '--redact',
-                '-s',
-                ctx.projectPath,
-              ],
-              cwd: ctx.projectPath,
+      // Secrets: history AND uncommitted files (or the whole directory when
+      // this is not a git repository — the common case for a WordPress site
+      // copied off a server). See runners/gitleaksScan.ts.
+      tasks.push(
+        (async () => {
+          // Inside Promise.all with the other scanners: an exception here
+          // must cost the secrets pass, never Semgrep's or Trivy's results.
+          try {
+            const secrets = await runGitleaksScan({
+              projectPath: ctx.projectPath,
+              reportDir,
+              scope: { kind: 'project' },
               env: ctx.scriptEnv,
               signal: ctx.signal,
               onLog: ctx.onLog,
             });
-            const raw = readJsonSafe(outFile);
-            if (raw) parser_inputs.push({ parser: gitleaksParser, input: raw });
-            const ok = r.outcome === 'completed' || r.exitCode === 1;
-            tools_run.push({ name: 'gitleaks', status: ok ? 'ok' : 'failed' });
-          })(),
-        );
-      } else {
-        tools_run.push({ name: 'gitleaks', status: 'skipped', reason: 'not_installed' });
-        missing_tools.push('gitleaks');
-      }
+            tools_run.push(...secrets.tools_run);
+            missing_tools.push(...secrets.missing_tools);
+            parser_inputs.push(...secrets.parser_inputs);
+          } catch (e) {
+            tools_run.push({
+              name: 'gitleaks',
+              status: 'failed',
+              reason: `secret scan failed: ${e instanceof Error ? e.message : String(e)}`,
+            });
+          }
+        })(),
+      );
 
       if (trivyBin) {
         tasks.push(

@@ -293,7 +293,7 @@ dev-guardian/
 ├── scripts/
 │   ├── detect/detect-stack.sh   # language/framework detection
 │   ├── install/                 # install-linux.sh, install-macos.sh
-│   └── scan/                    # full-security-scan, review-scan, etc.
+│   └── scan/                    # initial-scan (init_project's first status)
 ├── configs/
 │   ├── renovate/, gitleaks/, semgrep/, pre-commit/
 ├── host-rules/                  # AGENTS.md, cursor.mdc, copilot-instructions.md, …
@@ -599,7 +599,7 @@ dev-guardian/
 ├── scripts/
 │   ├── detect/detect-stack.sh   # deteção de linguagens/frameworks
 │   ├── install/                 # install-linux.sh, install-macos.sh
-│   └── scan/                    # full-security-scan, review-scan, etc.
+│   └── scan/                    # initial-scan (init_project's first status)
 ├── configs/
 │   ├── renovate/, gitleaks/, semgrep/, pre-commit/
 ├── host-rules/                  # AGENTS.md, cursor.mdc, copilot-instructions.md, …
@@ -905,7 +905,7 @@ dev-guardian/
 ├── scripts/
 │   ├── detect/detect-stack.sh   # detección de lenguajes/frameworks
 │   ├── install/                 # install-linux.sh, install-macos.sh
-│   └── scan/                    # full-security-scan, review-scan, etc.
+│   └── scan/                    # initial-scan (init_project's first status)
 ├── configs/
 │   ├── renovate/, gitleaks/, semgrep/, pre-commit/
 ├── host-rules/                  # AGENTS.md, cursor.mdc, copilot-instructions.md, …

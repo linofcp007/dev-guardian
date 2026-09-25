@@ -44,10 +44,10 @@ describe('resolveScriptsDir', () => {
 
   it('contains the scripts the tools actually invoke', () => {
     const dir = resolveScriptsDir();
-    // detect_stack's SCRIPT_REL_PATH (detectStack.ts) and
-    // security_scan_full's SCRIPT_REL_PATH (securityScanFull.ts).
+    // detect_stack's SCRIPT_REL_PATH (detectStack.ts) and the first-pass
+    // status init_project runs (initProject.ts).
     expect(existsSync(join(dir, 'detect', 'detect-stack.sh'))).toBe(true);
-    expect(existsSync(join(dir, 'scan', 'full-security-scan.sh'))).toBe(true);
+    expect(existsSync(join(dir, 'scan', 'initial-scan.sh'))).toBe(true);
   });
 
   it('is stable across repeated calls', () => {
