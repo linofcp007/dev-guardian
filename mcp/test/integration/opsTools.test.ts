@@ -2,7 +2,9 @@
  * Integration tests for detect_stack, init_project, observability_setup,
  * perf_check.
  *
- * detect_stack + init_project shell out → mock runShellScript.
+ * detect_stack is pure in-process filesystem detection now (no shell) — real
+ * temp directories, no mocking. init_project still shells out to
+ * initial-scan.sh → mock runShellScript.
  * perf_check spawns scanner CLI → mock runProcess + scannerAvailable.
  * observability_setup is pure file-system logic — no execa to mock.
  */
@@ -112,64 +114,42 @@ afterEach(() => {
 });
 
 describe('detect_stack', () => {
-  it('parses detect-stack.sh JSON output and persists a snapshot', async () => {
+  // detect_stack runs entirely in-process (`runners/stackDetect.ts`) — no
+  // bash, no runShellScript. Real filesystem, no mocking; see
+  // `test/unit/runners/stackDetect.test.ts` for the detection logic itself.
+  it('detects the project stack in-process and persists a snapshot', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);
-    const fakeSnapshot = {
-      os: 'windows',
-      arch: 'x86_64',
-      languages: ['javascript', 'typescript'],
-      package_managers: ['npm'],
-      frameworks: ['react', 'nextjs'],
-      existing_tools: [],
-      has_docker: false,
-      has_compose: false,
-      has_terraform: false,
-      has_kubernetes: false,
-      has_ansible: false,
-      has_github_actions: true,
-      has_gitlab_ci: false,
-    };
-    vi.mocked(runShellScript).mockResolvedValue({
-      outcome: 'completed',
-      exitCode: 0,
-      stdout: JSON.stringify(fakeSnapshot),
-      stderr: '',
-      truncated: false,
-    });
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({ name: 'x', dependencies: { react: '^18.0.0', next: '^14.0.0' } }),
+      'utf8',
+    );
+    mkdirSync(join(project, '.github', 'workflows'), { recursive: true });
 
     const tool = getTool('detect_stack');
     const r = (await tool.handler({ project_path: project }, plugin)) as {
       ok: true;
-      snapshot: typeof fakeSnapshot;
+      snapshot: { languages: string[]; frameworks: string[]; has_github_actions: boolean };
       snapshot_id: number;
     };
     expect(r.ok).toBe(true);
-    expect(r.snapshot.languages).toEqual(['javascript', 'typescript']);
+    expect(r.snapshot.languages).toEqual(['javascript']);
+    expect(r.snapshot.frameworks.sort()).toEqual(['nextjs', 'react']);
+    expect(r.snapshot.has_github_actions).toBe(true);
     // Persisted?
-    expect(plugin.storage.stack.getLatest()?.snapshot.languages).toEqual([
-      'javascript',
-      'typescript',
-    ]);
+    expect(plugin.storage.stack.getLatest()?.snapshot.languages).toEqual(['javascript']);
   });
 
-  it('returns scanner_failed when stdout is not valid JSON', async () => {
-    const project = tempProject();
-    const plugin = makePlugin(project);
-    vi.mocked(runShellScript).mockResolvedValue({
-      outcome: 'completed',
-      exitCode: 0,
-      stdout: 'not-json',
-      stderr: '',
-      truncated: false,
-    });
-
+  it('reports not_a_git_repo when project_path does not resolve (invalid path)', async () => {
+    const plugin = makePlugin(tempProject());
+    const missing = join(tempProject(), 'does-not-exist');
     const tool = getTool('detect_stack');
-    const r = (await tool.handler({ project_path: project }, plugin)) as
+    const r = (await tool.handler({ project_path: missing }, plugin)) as
       | { ok: true }
       | { ok: false; error: { code: string } };
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('scanner_failed');
+    if (!r.ok) expect(r.error.code).toBe('not_a_git_repo');
   });
 });
 
