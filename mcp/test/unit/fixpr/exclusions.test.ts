@@ -116,7 +116,7 @@ describe('summariseExclusions', () => {
     // offered no upgrade for that package. Silence here reads as "nothing
     // was wrong", which is the whole defect this report closes.
     const { exclusions } = report({
-      findings: [finding({ tool: 'trivy', title: 'axios vulnerable' })],
+      findings: [finding({ tool: 'trivy', title: 'axios vulnerable', subcategory: 'cve', snippet: 'axios@1.0.0->1.0.1', file_path: 'package-lock.json', line_start: undefined, line_end: undefined })],
       upgradeSteps: [step()],
       sources: ['deps'],
     });
@@ -127,7 +127,7 @@ describe('summariseExclusions', () => {
   it('reports a partial run, not only an empty one', () => {
     // A run that fixes 2 of 42 is nearly as opaque as one that fixes 0.
     const findings = [
-      finding({ tool: 'trivy', title: 'lodash vulnerable' }),
+      finding({ tool: 'trivy', title: 'lodash vulnerable', subcategory: 'cve', snippet: 'lodash@1.0.0->1.0.1', file_path: 'package-lock.json', line_start: undefined, line_end: undefined }),
       ...Array.from({ length: 40 }, () => finding({ severity: 'low' })),
     ];
     const { exclusions, reason } = report({ findings, upgradeSteps: [step()], sources: ['deps'] });
@@ -138,7 +138,7 @@ describe('summariseExclusions', () => {
 
   it('counts findings, not fingerprints, when two groups share none', () => {
     const findings = [
-      finding({ tool: 'trivy', title: 'lodash vulnerable' }),
+      finding({ tool: 'trivy', title: 'lodash vulnerable', subcategory: 'cve', snippet: 'lodash@1.0.0->1.0.1', file_path: 'package-lock.json', line_start: undefined, line_end: undefined }),
       finding({ tool: 'semgrep' }),
     ];
     const { exclusions } = report({ findings, upgradeSteps: [step()] });

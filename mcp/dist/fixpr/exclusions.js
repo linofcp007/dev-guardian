@@ -82,7 +82,7 @@ export function describeExclusions(exclusions, severityMin, sources) {
             'applies a fix the scanner itself emitted, and most rule packs emit none)');
     }
     if (no_fix_source > 0) {
-        parts.push(`${no_fix_source} that no requested source can act on (sources: ${sources.join(', ')})`);
+        parts.push(`${no_fix_source} that no requested source can act on or re-verify (sources: ${sources.join(', ')})`);
     }
     const head = `${exclusions.excluded} of ${exclusions.considered} open finding(s) were excluded; ` +
         `${exclusions.candidates} remain as fix candidate(s). Excluded: ${parts.join('; ')}.`;

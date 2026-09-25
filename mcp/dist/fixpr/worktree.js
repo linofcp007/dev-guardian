@@ -6,7 +6,9 @@
  * Two properties this module exists to hold:
  *
  *   1. The user's working tree is never touched. The worktree branches from
- *      committed HEAD, in a fresh directory, on a fresh branch — uncommitted
+ *      committed HEAD, in a fresh directory, on a fresh branch — or, with
+ *      `branch: null`, DETACHED at HEAD, writing no ref at all (a dry run,
+ *      and the base-commit tree of the test differential) — uncommitted
  *      work in the caller's own checkout is irrelevant and stays exactly as
  *      it was, because nothing here ever reads it.
  *   2. The worktree is removed on every path, including every failure path.
@@ -23,9 +25,9 @@
  * goes through `runProcess`: no shell, argv arrays end to end, and it never
  * throws — outcomes are inspected, not caught.
  */
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { runProcess } from '../runners/processRunner.js';
 /**
  * Exported only so the integration test can assert no directory bearing this
@@ -51,7 +53,9 @@ export async function createWorktree(opts) {
     }
     const add = await runProcess({
         command: 'git',
-        args: ['-C', opts.projectPath, 'worktree', 'add', '-b', opts.branch, dir, 'HEAD'],
+        args: opts.branch === null
+            ? ['-C', opts.projectPath, 'worktree', 'add', '--detach', dir, 'HEAD']
+            : ['-C', opts.projectPath, 'worktree', 'add', '-b', opts.branch, dir, 'HEAD'],
         cwd: opts.projectPath,
         timeoutMs: opts.timeoutMs,
     });
@@ -92,7 +96,7 @@ export async function createWorktree(opts) {
     // construction, on every platform at once — including whatever a
     // different platform's equivalent (e.g. a macOS `/tmp` -> `/private/tmp`
     // symlink) would otherwise additionally require guessing at.
-    const canonicalPath = (await resolveRegisteredPath(opts.projectPath, opts.branch, opts.timeoutMs)) ?? dir;
+    const canonicalPath = (await resolveRegisteredPath(opts.projectPath, opts.branch, dir, opts.timeoutMs)) ?? dir;
     return {
         ok: true,
         worktree: makeWorktree(opts.projectPath, canonicalPath, opts.branch, opts.timeoutMs),
@@ -158,7 +162,7 @@ async function removeWorktree(projectPath, path, timeoutMs) {
 /** The path git itself registered for `branch`, or null if it could not be
  *  determined (the `list` call itself failed, or — defensively, should
  *  never happen right after a successful `add` — no entry matched). */
-async function resolveRegisteredPath(projectPath, branch, timeoutMs) {
+async function resolveRegisteredPath(projectPath, branch, dir, timeoutMs) {
     const list = await runProcess({
         command: 'git',
         args: ['-C', projectPath, 'worktree', 'list', '--porcelain'],
@@ -167,11 +171,37 @@ async function resolveRegisteredPath(projectPath, branch, timeoutMs) {
     });
     if (list.outcome !== 'completed')
         return null;
-    for (const entry of parseWorktreeList(list.stdout)) {
-        if (entry.branch === branch)
+    const entries = parseWorktreeList(list.stdout);
+    if (branch !== null) {
+        for (const entry of entries) {
+            if (entry.branch === branch)
+                return entry.path;
+        }
+        return null;
+    }
+    // Detached: no branch names it, and several may exist at once (a dry run's
+    // fix tree and its base tree), so it is found by its directory — compared
+    // in canonical long form, since `dir` may be an 8.3 short path (see the
+    // comment in `createWorktree`).
+    const wanted = samePathKey(dir);
+    for (const entry of entries) {
+        if (samePathKey(entry.path) === wanted)
             return entry.path;
     }
     return null;
+}
+/** A path as a comparison key: real (long) form, `/` separators, and
+ *  case-folded on Windows. */
+function samePathKey(path) {
+    let real;
+    try {
+        real = realpathSync.native(path);
+    }
+    catch {
+        real = resolve(path);
+    }
+    const posix = real.replace(/\\/g, '/');
+    return process.platform === 'win32' ? posix.toLowerCase() : posix;
 }
 /**
  * `git worktree list --porcelain`: one block per worktree, blank-line

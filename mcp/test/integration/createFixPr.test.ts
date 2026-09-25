@@ -88,6 +88,7 @@ const REGISTRY_BACKED_TIMEOUT_MS = 120_000;
  */
 const TRIVY_INSTALLED = await isInstalled('trivy');
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
+const SEMGREP_INSTALLED = await isInstalled('semgrep');
 
 let repo: string; let binDir: string; let ghLog: string; let originDir: string | null;
 
@@ -755,15 +756,15 @@ describe('create_fix_pr', () => {
     expect(after).toEqual(before);
   }, REGISTRY_BACKED_TIMEOUT_MS);
 
-  it('I5: a deps target whose scanner deps_audit never covers at all (wpscan) is never judged resolved just because trivy ran fine', async () => {
+  it('I5 / Task 11 items 2-3: a WPScan finding that merely MENTIONS an npm package never becomes a candidate at all', async () => {
     // The review's own "worse than reported" case: deps_audit does not
     // attempt wpscan at all, so a wpscan-sourced target must never be
     // trusted as resolved merely because trivy (a DIFFERENT scanner)
-    // completed. mentionsPackage (candidates.ts) pairs by package-name text
-    // match only, not by ecosystem, so a wpscan-tool finding that happens to
-    // mention "lodash" pairs with the same real npm upgrade step the other
-    // tests here use — deliberately, to exercise this without needing a
-    // real WordPress install.
+    // completed. It used to pair by text ("lodash" in its title) with the
+    // real npm lodash step and reach verification; pairing is structural now
+    // (a WPScan component has no ecosystem this tool upgrades), and nothing
+    // can re-scan it with the scanner that found it — so it is accounted for
+    // in `filtered`, never processed.
     const c = ctx();
     setupLodashRepo();
     const scanId = randomUUID();
@@ -783,17 +784,138 @@ describe('create_fix_pr', () => {
     const res = await mod?.handler(
       { project_path: repo, sources: ['deps'], apply: false },
       c as never,
-    ) as { ok: true; groups: Array<{ outcome: string; scan: unknown; note: string }> };
+    ) as { ok: true; groups: unknown[]; filtered: { by_reason: { no_fix_source: number } } };
 
     expect(res.ok).toBe(true);
-    expect(res.groups).toHaveLength(1);
-    // Never verified, and specifically NOT via a passing scan differential —
-    // the wrong implementation this test guards against reports
-    // outcome: 'verified_dry_run' (or worse, on a real run, opens a PR)
-    // because it only ever checked whether trivy ran.
-    expect(res.groups[0]).toMatchObject({ outcome: 'verification_failed', scan: null });
-    expect(res.groups[0]?.note).toContain('wpscan');
+    expect(res.groups).toEqual([]);
+    expect(res.filtered.by_reason.no_fix_source).toBe(1);
   }, REGISTRY_BACKED_TIMEOUT_MS);
+
+  // ------------------------------------------------------------------
+  // Task 11 (2026-09-25 review), end to end with the REAL Semgrep and only
+  // local rules (no registry, metrics off): the project registers its own
+  // autofix rule, scan_sast finds a target, and create_fix_pr's dry run
+  //   - applies ONLY that rule's autofix (item 4),
+  //   - re-verifies with the SAME tool and packs — scan_sast, local_only,
+  //     the project's registered rules, which the worktree's own path does
+  //     not have (item 2),
+  //   - changes nothing outside its worktree: no ref written (a
+  //     reference-transaction hook logs every one), no test run in the
+  //     user's tree, no scan rows left behind (item 1).
+  // ------------------------------------------------------------------
+
+  const FIXABLE_RULE = [
+    '  - id: no-eval-fixable',
+    '    pattern: eval($X)',
+    '    message: eval is dangerous',
+    '    languages: [javascript]',
+    '    severity: ERROR',
+    '    fix: safeEval($X)',
+  ];
+  const RULE_ON_FIXED_CODE = [
+    '  - id: safe-eval-appeared',
+    '    pattern: safeEval($X)',
+    '    message: safeEval appeared',
+    '    languages: [javascript]',
+    '    severity: WARNING',
+  ];
+
+  /** Commits app.js (one eval) and a package.json whose test ALWAYS fails
+   *  after writing a marker into its working directory; registers a rules
+   *  file that lives OUTSIDE the repository; seeds the open set with a real
+   *  local-only scan_sast. Returns the reference-transaction log path. */
+  async function setupLocalRuleRepo(c: ReturnType<typeof ctx>, rules: string[]): Promise<string> {
+    writeFileSync(join(repo, 'app.js'), 'eval(userInput);\n');
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({
+      name: 'x', version: '1.0.0',
+      scripts: { test: 'node -e "require(\'fs\').writeFileSync(\'ran-here.txt\',\'x\');process.exit(1)"' },
+    }));
+    writeFileSync(join(repo, '.gitignore'), '.guardian/\n');
+    execFileSync('git', ['-C', repo, 'add', '.']);
+    execFileSync('git', ['-C', repo, 'commit', '-q', '-m', 'app']);
+
+    const rulesDir = mkdtempSync(join(tmpdir(), 'fixpr-rules-'));
+    extraDirs.push(rulesDir);
+    const rulesFile = join(rulesDir, 'house.yml');
+    writeFileSync(rulesFile, ['rules:', ...rules, ''].join('\n'));
+    const reg = await TOOLS.find((t) => t.name === 'register_custom_rules')?.handler(
+      { project_path: repo, paths: [rulesFile] }, c as never,
+    );
+    expect(reg).toMatchObject({ ok: true, registered: [rulesFile] });
+
+    const sast = await TOOLS.find((t) => t.name === 'scan_sast')?.handler(
+      { project_path: repo, local_only: true, force: true }, c as never,
+    ) as { ok: boolean; scan_id: string };
+    expect(sast.ok).toBe(true);
+    expect(c.storage.findings.listByScan(sast.scan_id).map((f) => f.title)).toContain('eval is dangerous');
+
+    const log = join(repo, '.git', 'ref-transactions.log');
+    const hook = join(repo, '.git', 'hooks', 'reference-transaction');
+    writeFileSync(hook, `#!/bin/sh\necho "$1" >> "${log.replace(/\\/g, '/')}"\ncat >> "${log.replace(/\\/g, '/')}"\n`);
+    if (process.platform !== 'win32') chmodSync(hook, 0o755);
+    return log;
+  }
+
+  const extraDirs: string[] = [];
+  afterEach(() => { for (const d of extraDirs.splice(0)) rmDir(d); });
+
+  it.skipIf(!REQUIRE_SEMGREP && !SEMGREP_INSTALLED)(
+    'Task 11: a dry run applies only the target rule, re-verifies with the same local packs, and changes nothing outside its worktree',
+    async () => {
+      const c = ctx();
+      const log = await setupLocalRuleRepo(c, FIXABLE_RULE);
+      const statusBefore = execFileSync('git', ['-C', repo, 'status', '--porcelain'], { encoding: 'utf8' });
+
+      const res = await TOOLS.find((t) => t.name === 'create_fix_pr')?.handler(
+        { project_path: repo, sources: ['semgrep'], apply: false }, c as never,
+      ) as { ok: true; groups: Array<{
+        outcome: string; note: string; commands: string[];
+        scan: { passed: boolean; resolved: string[] } | null; tests: { outcome: string } | null;
+      }> };
+
+      expect(res.ok).toBe(true);
+      const group = res.groups[0];
+      expect(group?.outcome, group?.note).toBe('verified_dry_run');
+      expect(group?.scan).toMatchObject({ passed: true });
+      expect(group?.scan?.resolved).toHaveLength(1);
+      // The autofix pass: this rule only, metrics off, never --config auto.
+      expect(group?.commands.join('\n')).toContain('--metrics=off');
+      expect(group?.commands.join('\n')).toContain('no-eval-fixable from house.yml');
+      expect(group?.commands.join('\n')).not.toMatch(/config[= ]auto/);
+      // The failing test was compared against a pristine base tree — the
+      // marker it writes never appeared in the user's project.
+      expect(group?.tests?.outcome).toBe('already_failing');
+      expect(existsSync(join(repo, 'ran-here.txt'))).toBe(false);
+      // Nothing outside the worktree changed: no ref, no file, no scan row.
+      const refs = existsSync(log) ? readFileSync(log, 'utf8') : '';
+      expect(refs).not.toContain('refs/heads/');
+      expect(execFileSync('git', ['-C', repo, 'status', '--porcelain'], { encoding: 'utf8' })).toBe(statusBefore);
+      expect(readFileSync(join(repo, 'app.js'), 'utf8')).toBe('eval(userInput);\n');
+      expect(c.storage.scans.listHistory(100).every((s) => s.project_path === repo)).toBe(true);
+      expect(worktreeCount()).toBe(1);
+    },
+    REGISTRY_BACKED_TIMEOUT_MS,
+  );
+
+  it.skipIf(!REQUIRE_SEMGREP && !SEMGREP_INSTALLED)(
+    "Task 11 item 2: the re-scan runs the project's own registered rules — a rule the fix trips is a new finding, not a pass",
+    async () => {
+      // The worktree is another path: registration does not follow it. Only
+      // a re-scan with the ORIGINAL project's rule configuration runs the
+      // second rule, which fires on exactly the code the fix wrote.
+      const c = ctx();
+      await setupLocalRuleRepo(c, [...FIXABLE_RULE, ...RULE_ON_FIXED_CODE]);
+
+      const res = await TOOLS.find((t) => t.name === 'create_fix_pr')?.handler(
+        { project_path: repo, sources: ['semgrep'], apply: false }, c as never,
+      ) as { ok: true; groups: Array<{ outcome: string; note: string; scan: { new_findings: Array<{ title: string }> } | null }> };
+
+      const group = res.groups[0];
+      expect(group?.outcome, group?.note).toBe('not_verified');
+      expect(group?.scan?.new_findings.map((f) => f.title)).toContain('safeEval appeared');
+    },
+    REGISTRY_BACKED_TIMEOUT_MS,
+  );
 });
 
 describe('buildPrBody (task-7-review.md M7)', () => {

@@ -2999,7 +2999,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve13.call(this, root, ref);
+      let _sch = resolve15.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3026,7 +3026,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve13(root, ref) {
+    function resolve15(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3856,7 +3856,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve13(baseURI, relativeURI, options) {
+    function resolve15(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -3889,49 +3889,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative18, options, skipNormalization) {
+    function resolveComponent(base, relative19, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse5(serialize2(base, options), options);
-        relative18 = parse5(serialize2(relative18, options), options);
+        relative19 = parse5(serialize2(relative19, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative18.scheme) {
-        target.scheme = relative18.scheme;
-        target.userinfo = relative18.userinfo;
-        target.host = relative18.host;
-        target.port = relative18.port;
-        target.path = removeDotSegments(relative18.path || "");
-        target.query = relative18.query;
+      if (!options.tolerant && relative19.scheme) {
+        target.scheme = relative19.scheme;
+        target.userinfo = relative19.userinfo;
+        target.host = relative19.host;
+        target.port = relative19.port;
+        target.path = removeDotSegments(relative19.path || "");
+        target.query = relative19.query;
       } else {
-        if (relative18.userinfo !== void 0 || relative18.host !== void 0 || relative18.port !== void 0) {
-          target.userinfo = relative18.userinfo;
-          target.host = relative18.host;
-          target.port = relative18.port;
-          target.path = removeDotSegments(relative18.path || "");
-          target.query = relative18.query;
+        if (relative19.userinfo !== void 0 || relative19.host !== void 0 || relative19.port !== void 0) {
+          target.userinfo = relative19.userinfo;
+          target.host = relative19.host;
+          target.port = relative19.port;
+          target.path = removeDotSegments(relative19.path || "");
+          target.query = relative19.query;
         } else {
-          if (!relative18.path) {
+          if (!relative19.path) {
             target.path = base.path;
-            if (relative18.query !== void 0) {
-              target.query = relative18.query;
+            if (relative19.query !== void 0) {
+              target.query = relative19.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative18.path[0] === "/") {
-              target.path = removeDotSegments(relative18.path);
+            if (relative19.path[0] === "/") {
+              target.path = removeDotSegments(relative19.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative18.path;
+                target.path = "/" + relative19.path;
               } else if (!base.path) {
-                target.path = relative18.path;
+                target.path = relative19.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative18.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative19.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative18.query;
+            target.query = relative19.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3939,7 +3939,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative18.fragment;
+      target.fragment = relative19.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -4225,7 +4225,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve13,
+      resolve: resolve15,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -8285,12 +8285,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve13, reject) {
+        return new Promise(function(resolve15, reject) {
           isexe(path6, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve13(is);
+              resolve15(is);
             }
           });
         });
@@ -8356,27 +8356,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve13, reject) => {
+      const step = (i2) => new Promise((resolve15, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve13(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve15(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path6.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve13(subStep(p, i2, 0));
+        resolve15(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve13, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve15, reject) => {
         if (ii === pathExt.length)
-          return resolve13(step(i2 + 1));
+          return resolve15(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve13(p + ext);
+              return resolve15(p + ext);
           }
-          return resolve13(subStep(p, i2, ii + 1));
+          return resolve15(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -9456,8 +9456,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve13, reject) => {
-        Object.assign(methods, { resolve: resolve13, reject });
+      const promise = new Promise((resolve15, reject) => {
+        Object.assign(methods, { resolve: resolve15, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -14755,11 +14755,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve13 = promise.resolve.bind(promise);
-      return { resolve: resolve13, promises };
+      const resolve15 = promise.resolve.bind(promise);
+      return { resolve: resolve15, promises };
     };
-    waitForConcurrentStreams = async ({ resolve: resolve13, promises }, subprocess) => {
-      resolve13();
+    waitForConcurrentStreams = async ({ resolve: resolve15, promises }, subprocess) => {
+      resolve15();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -19446,10 +19446,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep9, value } = collItem;
+        const { start, key, sep: sep10, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep9?.[0],
+          next: key ?? sep10?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -19463,7 +19463,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep9) {
+          if (!keyProps.anchor && !keyProps.tag && !sep10) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
@@ -19487,7 +19487,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep9 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep10 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -19503,7 +19503,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep9, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep10, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -19594,7 +19594,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep9 = "";
+        let sep10 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -19608,13 +19608,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep9 + cb;
-              sep9 = "";
+                comment += sep10 + cb;
+              sep10 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep9 += source;
+                sep10 += source;
               hasSpace = true;
               break;
             default:
@@ -19657,18 +19657,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i2 = 0; i2 < fc.items.length; ++i2) {
         const collItem = fc.items[i2];
-        const { start, key, sep: sep9, value } = collItem;
+        const { start, key, sep: sep10, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep9?.[0],
+          next: key ?? sep10?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep9 && !value) {
+          if (!props.anchor && !props.tag && !sep10 && !value) {
             if (i2 === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i2 < fc.items.length - 1)
@@ -19722,8 +19722,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap2 && !sep9 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep9, null, props, onError);
+        if (!isMap2 && !sep10 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep10, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -19735,7 +19735,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep9 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep10 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -19746,8 +19746,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap2 && !props.found && ctx.options.strict) {
-              if (sep9)
-                for (const st of sep9) {
+              if (sep10)
+                for (const st of sep10) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -19764,7 +19764,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep9, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep10, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -19944,7 +19944,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i2 + 1;
       }
       let value = "";
-      let sep9 = "";
+      let sep10 = "";
       let prevMoreIndented = false;
       for (let i2 = 0; i2 < contentStart; ++i2)
         value += lines[i2][0].slice(trimIndent) + "\n";
@@ -19961,24 +19961,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep9 + indent.slice(trimIndent) + content;
-          sep9 = "\n";
+          value += sep10 + indent.slice(trimIndent) + content;
+          sep10 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep9 === " ")
-            sep9 = "\n";
-          else if (!prevMoreIndented && sep9 === "\n")
-            sep9 = "\n\n";
-          value += sep9 + indent.slice(trimIndent) + content;
-          sep9 = "\n";
+          if (sep10 === " ")
+            sep10 = "\n";
+          else if (!prevMoreIndented && sep10 === "\n")
+            sep10 = "\n\n";
+          value += sep10 + indent.slice(trimIndent) + content;
+          sep10 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep9 === "\n")
+          if (sep10 === "\n")
             value += "\n";
           else
-            sep9 = "\n";
+            sep10 = "\n";
         } else {
-          value += sep9 + content;
-          sep9 = " ";
+          value += sep10 + content;
+          sep10 = " ";
           prevMoreIndented = false;
         }
       }
@@ -20161,25 +20161,25 @@ var require_resolve_flow_scalar = __commonJS({
         trimBoth = /^[ \t]+|[ \t]+$/g;
       }
       let res = match[1].replace(trimEnd, "");
-      let sep9 = " ";
+      let sep10 = " ";
       let pos = line.lastIndex;
       while (match = line.exec(source)) {
         const lm = match[1].replace(trimBoth, "");
         if (lm === "") {
-          if (sep9 === "\n")
-            res += sep9;
+          if (sep10 === "\n")
+            res += sep10;
           else
-            sep9 = "\n";
+            sep10 = "\n";
         } else {
-          res += sep9 + lm;
-          sep9 = " ";
+          res += sep10 + lm;
+          sep10 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep9 + (match?.[1] ?? "");
+      return res + sep10 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -20989,14 +20989,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep9, value }) {
+    function stringifyItem({ start, key, sep: sep10, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep9)
-        for (const st of sep9)
+      if (sep10)
+        for (const st of sep10)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -22163,18 +22163,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep9;
+          let sep10;
           if (scalar.end) {
-            sep9 = scalar.end;
-            sep9.push(this.sourceToken);
+            sep10 = scalar.end;
+            sep10.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep9 = [this.sourceToken];
+            sep10 = [this.sourceToken];
           const map = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep9 }]
+            items: [{ start, key: scalar, sep: sep10 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -22327,15 +22327,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep9 = it.sep;
-                  sep9.push(this.sourceToken);
+                  const sep10 = it.sep;
+                  sep10.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep9 }]
+                    items: [{ start: start2, key, sep: sep10 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -22529,13 +22529,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep9 = fc.end.splice(1, fc.end.length);
-            sep9.push(this.sourceToken);
+            const sep10 = fc.end.splice(1, fc.end.length);
+            sep10.push(this.sourceToken);
             const map = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep9 }]
+              items: [{ start, key: fc, sep: sep10 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map;
@@ -34920,7 +34920,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve13) => setTimeout(resolve13, pollInterval));
+        await new Promise((resolve15) => setTimeout(resolve15, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -34937,7 +34937,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve13, reject) => {
+    return new Promise((resolve15, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -35015,7 +35015,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve13(parseResult.data);
+            resolve15(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -35276,12 +35276,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve13, reject) => {
+    return new Promise((resolve15, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve13, interval);
+      const timeoutId = setTimeout(resolve15, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -36594,7 +36594,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve13) => setTimeout(resolve13, pollInterval));
+      await new Promise((resolve15) => setTimeout(resolve15, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -37282,19 +37282,19 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message3) {
-    return new Promise((resolve13) => {
+    return new Promise((resolve15) => {
       const json = serializeMessage(message3);
       if (this._stdout.write(json)) {
-        resolve13();
+        resolve15();
       } else {
-        this._stdout.once("drain", resolve13);
+        this._stdout.once("drain", resolve15);
       }
     });
   }
 };
 
 // src/server.ts
-import { resolve as resolve12 } from "node:path";
+import { resolve as resolve14 } from "node:path";
 
 // src/gitignoreGuard.ts
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -40493,7 +40493,7 @@ var Semaphore = class {
       this.active += 1;
       return;
     }
-    await new Promise((resolve13) => this.waiting.push(resolve13));
+    await new Promise((resolve15) => this.waiting.push(resolve15));
     this.active += 1;
   }
   release() {
@@ -44021,6 +44021,9 @@ function configuredPacksFor(input, plugin, projectPath) {
     customConfigs: resolveCustomSemgrepConfigs(plugin, projectPath)
   });
 }
+function bugHuntLocalConfigs(plugin, projectPath) {
+  return [...resolveBugfixRules(), ...resolveCustomSemgrepConfigs(plugin, projectPath)];
+}
 function buildPackList(opts) {
   const bugfixRulesPaths = opts.bugfixRulesPaths ?? resolveBugfixRules();
   return [
@@ -46104,7 +46107,7 @@ function readDependencyEvidence(projectPath) {
     e.declaredIn ??= file;
     if (version2) e.versions.add(version2);
   };
-  const resolve13 = (name, ecosystem, file, version2) => {
+  const resolve15 = (name, ecosystem, file, version2) => {
     const e = entry(name, ecosystem);
     if (!e) return;
     e.lockFile ??= file;
@@ -46171,7 +46174,7 @@ function readDependencyEvidence(projectPath) {
       const rec = p && typeof p === "object" ? p : void 0;
       const name = rec?.["name"];
       const version2 = rec?.["version"];
-      if (typeof name === "string") resolve13(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
+      if (typeof name === "string") resolve15(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
     }
   }
   let cargoName;
@@ -46181,7 +46184,7 @@ function readDependencyEvidence(projectPath) {
     if (n2?.[1]) cargoName = n2[1];
     const v = /^\s*version\s*=\s*"([^"]+)"/.exec(line);
     if (v?.[1] && cargoName !== void 0) {
-      resolve13(cargoName, "cargo", "Cargo.lock", v[1]);
+      resolve15(cargoName, "cargo", "Cargo.lock", v[1]);
       cargoName = void 0;
     }
   }
@@ -46189,10 +46192,10 @@ function readDependencyEvidence(projectPath) {
     const m = /^(\S+)\s+(v[^\s/]+)(\/go\.mod)?\s/.exec(line);
     if (!m?.[1]) continue;
     const inGoMod = out.get(m[1].toLowerCase())?.declaredIn === "go.mod";
-    resolve13(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
+    resolve15(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
   }
   for (const m of readText2("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
-    if (m[1]) resolve13(m[1], "rubygems", "Gemfile.lock", m[2]);
+    if (m[1]) resolve15(m[1], "rubygems", "Gemfile.lock", m[2]);
   }
   for (const project of projects) {
     for (const lock of lockFileCandidates(project)) {
@@ -46208,7 +46211,7 @@ function readDependencyEvidence(projectPath) {
         if (!deps || typeof deps !== "object") continue;
         for (const [name, info] of Object.entries(deps)) {
           const resolved = info && typeof info === "object" ? info["resolved"] : void 0;
-          resolve13(name, "dotnet", relative11(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
+          resolve15(name, "dotnet", relative11(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
         }
       }
     }
@@ -61311,69 +61314,164 @@ function collectAnonymousExposures(ctx, projectPath) {
 }
 
 // src/tools/createFixPr.ts
-import { existsSync as existsSync43, readFileSync as readFileSync34 } from "node:fs";
-import { join as join61 } from "node:path";
+import { existsSync as existsSync45, readFileSync as readFileSync36 } from "node:fs";
+import { join as join64 } from "node:path";
 
 // src/fixpr/apply.ts
+import { existsSync as existsSync42, readFileSync as readFileSync34, rmSync as rmSync7, writeFileSync as writeFileSync15 } from "node:fs";
+import { isAbsolute as isAbsolute8, join as join60, relative as relative18, resolve as resolve12, sep as sep9 } from "node:path";
 async function applyGroup(opts) {
   const run = opts.run ?? runProcess;
-  return opts.group.source === "semgrep" ? applySemgrepPass(run, opts.worktreePath, opts.timeoutMs) : applyDepsCandidates(
-    run,
-    opts.worktreePath,
-    opts.timeoutMs,
-    opts.lockfileOnly,
-    opts.group.candidates
-  );
-}
-async function applySemgrepPass(run, worktreePath, timeoutMs) {
-  const { invoked, result } = await runOne(run, worktreePath, timeoutMs, {
-    command: "semgrep",
-    args: ["--config", "auto", "--autofix", "--quiet"]
-  });
-  if (result.outcome !== "completed") {
-    return { applied: false, commands: [invoked], failure: buildFailure(invoked, result) };
+  if (opts.group.source === "semgrep") {
+    if (opts.semgrepFix === void 0) {
+      return {
+        applied: false,
+        commands: [],
+        failure: { command: "semgrep --autofix", outcome: "failed", exit_code: null, stderr_head: "no fix plan: the target rules were not resolved" }
+      };
+    }
+    return applySemgrepPass(run, opts.worktreePath, opts.timeoutMs, opts.semgrepFix);
   }
-  return { applied: true, commands: [invoked], failure: null };
+  return applyDepsCandidates(run, opts.worktreePath, opts.timeoutMs, opts.lockfileOnly, opts.group.candidates);
+}
+async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
+  const label = `semgrep --metrics=off --autofix [${plan.configLabels.join("; ")}]`;
+  const missing = plan.files.filter((f) => !existsSync42(join60(worktreePath, f)));
+  if (missing.length > 0) {
+    return {
+      applied: false,
+      commands: [],
+      failure: {
+        command: label,
+        outcome: "failed",
+        exit_code: null,
+        stderr_head: `target file(s) not in the committed tree: ${missing.join(", ")} \u2014 a finding in an uncommitted file can be neither fixed nor verified from HEAD`
+      }
+    };
+  }
+  const fixed = ["--metrics=off", ...plan.configs.map((c3) => `--config=${c3}`), "--autofix", "--json", "--quiet"];
+  const batches = batchArgs(plan.files, {
+    command: "semgrep",
+    fixedArgs: [...fixed, "--output", join60(plan.dir, "fix-000.json"), "--"]
+  });
+  const commands = [];
+  for (let i2 = 0; i2 < batches.length; i2++) {
+    const batch = batches[i2] ?? [];
+    const report = join60(plan.dir, `fix-${String(i2).padStart(3, "0")}.json`);
+    rmSync7(report, { force: true });
+    const result = await run({
+      command: "semgrep",
+      args: [...fixed, "--output", report, "--", ...batch],
+      cwd: worktreePath,
+      env: pythonUtf8Env(void 0),
+      timeoutMs
+    });
+    const invoked = `${label} -- ${batch.join(" ")}`;
+    commands.push(invoked);
+    const check2 = checkSemgrepReport({ raw: readJsonSafe(report), exitCode: result.exitCode, outcome: result.outcome, targets: batch.length });
+    if (!check2.ok) {
+      return {
+        applied: false,
+        commands,
+        failure: { command: invoked, outcome: result.outcome === "completed" ? "failed" : result.outcome, exit_code: result.exitCode, stderr_head: check2.reason ?? firstStderrLine(result.stderr) }
+      };
+    }
+  }
+  return { applied: true, commands, failure: null };
 }
 async function applyDepsCandidates(run, worktreePath, timeoutMs, lockfileOnly, candidates2) {
   const commands = [];
   for (const candidate of candidates2) {
-    const argv = candidate.command === null ? null : toArgv(candidate.command);
-    if (argv === null) {
+    const steps = candidate.steps ?? [];
+    if (steps.length === 0) {
       return {
         applied: false,
         commands,
-        failure: {
-          // `||`, not `??`: a present-but-empty command string is exactly as
-          // unrunnable as a missing one, and only `||` treats both as
-          // "nothing useful here" — this project's own recurring `??` trap.
-          command: candidate.command || candidate.label,
-          outcome: "failed",
-          exit_code: null,
-          stderr_head: `no runnable command for '${candidate.label}'`
-        }
+        failure: { command: candidate.label, outcome: "failed", exit_code: null, stderr_head: `no upgrade step for '${candidate.label}'` }
       };
     }
-    if (lockfileOnly && argv.command === "npm" && argv.args[0] === "install") {
-      argv.args.push("--package-lock-only");
-    }
-    const { invoked, result } = await runOne(run, worktreePath, timeoutMs, argv);
-    commands.push(invoked);
-    if (result.outcome !== "completed") {
-      return { applied: false, commands, failure: buildFailure(invoked, result) };
+    for (const step of steps) {
+      const failure = await applyStep(run, worktreePath, timeoutMs, lockfileOnly, step, commands);
+      if (failure !== null) return { applied: false, commands, failure };
     }
   }
   return { applied: true, commands, failure: null };
+}
+async function applyStep(run, worktreePath, timeoutMs, lockfileOnly, step, commands) {
+  if (step.ecosystem === "pip") {
+    const edit = editPipPin(worktreePath, step);
+    commands.push(edit.label);
+    if (!edit.ok) return { command: edit.label, outcome: "failed", exit_code: null, stderr_head: edit.reason };
+  } else {
+    const failure = await runCommand(run, worktreePath, timeoutMs, lockfileOnly, step.upgrade_command, commands);
+    if (failure !== null) return failure;
+  }
+  if (step.follow_up_command !== void 0 && step.follow_up_command.trim().length > 0) {
+    return runCommand(run, worktreePath, timeoutMs, lockfileOnly, step.follow_up_command, commands);
+  }
+  return null;
+}
+async function runCommand(run, worktreePath, timeoutMs, lockfileOnly, commandLine, commands) {
+  const argv = toArgv(commandLine);
+  if (argv === null) {
+    return { command: commandLine, outcome: "failed", exit_code: null, stderr_head: "empty command" };
+  }
+  harden(argv, lockfileOnly);
+  const result = await run({ command: argv.command, args: argv.args, cwd: worktreePath, timeoutMs });
+  const invoked = [argv.command, ...argv.args].join(" ");
+  commands.push(invoked);
+  return result.outcome === "completed" ? null : buildFailure(invoked, result);
+}
+var NPM_INSTALLING = /* @__PURE__ */ new Set(["install", "i", "add", "ci", "update", "up", "upgrade", "install-clean"]);
+var COMPOSER_INSTALLING = /* @__PURE__ */ new Set(["require", "install", "update", "upgrade"]);
+function harden(argv, lockfileOnly) {
+  const sub = argv.args[0] ?? "";
+  if (argv.command === "npm" && NPM_INSTALLING.has(sub)) {
+    if (!argv.args.includes("--ignore-scripts")) argv.args.push("--ignore-scripts");
+    if (lockfileOnly && (sub === "install" || sub === "i") && !argv.args.includes("--package-lock-only")) {
+      argv.args.push("--package-lock-only");
+    }
+  }
+  if (argv.command === "composer" && COMPOSER_INSTALLING.has(sub) && !argv.args.includes("--no-scripts")) {
+    argv.args.push("--no-scripts");
+  }
+}
+function editPipPin(worktreePath, step) {
+  const file = step.file ?? "";
+  const label = `edit ${file || "(no file)"}: ${step.package_name}==${step.installed_version} -> ${step.package_name}==${step.latest_version}`;
+  if (file.length === 0) return { ok: false, label, reason: "the pip step names no file to edit" };
+  const target = resolve12(worktreePath, file);
+  const rel2 = relative18(worktreePath, target);
+  if (isAbsolute8(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep9}`) || isAbsolute8(rel2)) {
+    return { ok: false, label, reason: `'${file}' is not a file inside the project` };
+  }
+  let text;
+  try {
+    text = readFileSync34(target, "utf8");
+  } catch {
+    return { ok: false, label, reason: `'${file}' is not in the committed tree` };
+  }
+  const name = step.package_name.split(/[-_.]+/).map(escapeRegExp2).join("[-_.]+");
+  const pin = new RegExp(
+    `(^|[\\s"'\\[,])(${name})(\\s*\\[[^\\]]*\\])?(\\s*==\\s*)${escapeRegExp2(step.installed_version)}(?=$|[\\s;"',#\\]\\\\])`,
+    "gim"
+  );
+  let count2 = 0;
+  const edited = text.replace(pin, (_m, lead, pkg, extras, op) => {
+    count2 += 1;
+    return `${lead}${pkg}${extras ?? ""}${op}${step.latest_version}`;
+  });
+  if (count2 === 0) {
+    return { ok: false, label, reason: `no '${step.package_name}==${step.installed_version}' pin in '${file}'` };
+  }
+  writeFileSync15(target, edited, "utf8");
+  return { ok: true, label };
 }
 function toArgv(commandLine) {
   const tokens = commandLine.trim().split(/\s+/).filter((token) => token.length > 0);
   const [command, ...args] = tokens;
   if (command === void 0) return null;
   return { command, args };
-}
-async function runOne(run, worktreePath, timeoutMs, argv) {
-  const result = await run({ command: argv.command, args: argv.args, cwd: worktreePath, timeoutMs });
-  return { invoked: [argv.command, ...argv.args].join(" "), result };
 }
 function buildFailure(invoked, result) {
   return {
@@ -61390,13 +61488,17 @@ function firstStderrLine(stderr) {
   }
   return "(no stderr output)";
 }
+function escapeRegExp2(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 // src/fixpr/candidates.ts
 import { createHash as createHash10 } from "node:crypto";
-var DEP_SCANNER_TOOLS = ["trivy", "npm-audit", "wpscan"];
+var DEP_SCANNER_TOOLS = ["trivy", "npm-audit", "pip-audit", "dotnet-list-package", "wpscan"];
 function buildGroups(input) {
+  const rescannable = input.rescannable ?? (() => true);
   const eligible = input.findings.filter(
-    (finding4) => finding4.fix_available && passes(finding4.severity, input.severityMin)
+    (finding4) => finding4.fix_available && passes(finding4.severity, input.severityMin) && rescannable(finding4)
   );
   const groups = [];
   if (input.sources.includes("deps")) {
@@ -61427,12 +61529,14 @@ function buildDepsGroups(findings, upgradeSteps) {
   const buckets = /* @__PURE__ */ new Map();
   for (const finding4 of findings) {
     if (!DEP_SCANNER_TOOLS.includes(finding4.tool)) continue;
-    const step = upgradeSteps.find((candidate) => mentionsPackage(finding4, candidate.package_name));
-    if (step === void 0) continue;
-    const bucketKey = `${step.ecosystem}::${step.package_name}`;
+    const steps = stepsFor(finding4, upgradeSteps);
+    if (steps.length === 0) continue;
+    const first = steps[0];
+    if (first === void 0) continue;
+    const bucketKey = `${first.ecosystem}::${normalisePackageName(first.ecosystem, first.package_name)}`;
     const bucket = buckets.get(bucketKey);
     if (bucket === void 0) {
-      buckets.set(bucketKey, { step, fingerprints: [finding4.fingerprint], severity: finding4.severity });
+      buckets.set(bucketKey, { steps, fingerprints: [finding4.fingerprint], severity: finding4.severity });
     } else {
       bucket.fingerprints.push(finding4.fingerprint);
       if (SEVERITY_ORDER[finding4.severity] > SEVERITY_ORDER[bucket.severity]) {
@@ -61442,38 +61546,62 @@ function buildDepsGroups(findings, upgradeSteps) {
   }
   const byEcosystem = /* @__PURE__ */ new Map();
   for (const bucket of buckets.values()) {
+    const first = bucket.steps[0];
+    if (first === void 0) continue;
     const candidate = {
       source: "deps",
       fingerprints: bucket.fingerprints,
       severity: bucket.severity,
-      command: bucket.step.upgrade_command,
-      label: `${bucket.step.package_name} ${bucket.step.installed_version} -> ${bucket.step.latest_version}`
+      command: first.upgrade_command,
+      label: `${first.package_name} ${first.installed_version} -> ${first.latest_version}`,
+      steps: bucket.steps
     };
-    const list2 = byEcosystem.get(bucket.step.ecosystem);
-    if (list2 === void 0) byEcosystem.set(bucket.step.ecosystem, [candidate]);
+    const list2 = byEcosystem.get(first.ecosystem);
+    if (list2 === void 0) byEcosystem.set(first.ecosystem, [candidate]);
     else list2.push(candidate);
   }
   return [...byEcosystem.entries()].map(
     ([ecosystem, candidates2]) => makeGroup("deps", ecosystem, candidates2)
   );
 }
-function mentionsPackage(finding4, packageName) {
-  return containsWholePackageName(finding4.title, packageName) || containsWholePackageName(finding4.message ?? "", packageName);
+function stepsFor(finding4, upgradeSteps) {
+  const coordinates = dependencyCoordinates(finding4);
+  if (coordinates === null) return [];
+  const ecosystem = findingEcosystem(finding4);
+  if (ecosystem === null) return [];
+  const name = normalisePackageName(ecosystem, coordinates.name);
+  return upgradeSteps.filter(
+    (step) => step.ecosystem === ecosystem && normalisePackageName(ecosystem, step.package_name) === name
+  );
 }
-function containsWholePackageName(text, packageName) {
-  if (packageName.length === 0) return false;
-  let from = 0;
-  for (; ; ) {
-    const index = text.indexOf(packageName, from);
-    if (index === -1) return false;
-    const before = text[index - 1];
-    const after = text[index + packageName.length];
-    if (!isPackageNameChar(before) && !isPackageNameChar(after)) return true;
-    from = index + 1;
+var TOOL_ECOSYSTEM = {
+  "npm-audit": "npm",
+  "pip-audit": "pip",
+  "dotnet-list-package": "dotnet"
+};
+function findingEcosystem(finding4) {
+  const byTool = TOOL_ECOSYSTEM[finding4.tool];
+  if (byTool !== void 0) return byTool;
+  if (finding4.tool !== "trivy") return null;
+  const base = (finding4.file_path ?? "").replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+  if (["package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "package.json", "bun.lock"].includes(base)) {
+    return "npm";
   }
+  if (/^requirements.*\.txt$/.test(base) || ["pipfile.lock", "poetry.lock", "pyproject.toml", "uv.lock", "setup.py"].includes(base)) {
+    return "pip";
+  }
+  if (base === "composer.lock" || base === "composer.json") return "composer";
+  if (base === "cargo.lock" || base === "cargo.toml") return "cargo";
+  if (base === "go.mod" || base === "go.sum") return "go";
+  if (base === "gemfile.lock" || base === "gemfile" || base.endsWith(".gemspec")) return "rubygems";
+  if (base === "packages.lock.json" || base === "packages.config" || /\.(csproj|fsproj|vbproj|deps\.json)$/.test(base)) {
+    return "dotnet";
+  }
+  return null;
 }
-function isPackageNameChar(ch) {
-  return ch !== void 0 && /[A-Za-z0-9_.@/-]/.test(ch);
+function normalisePackageName(ecosystem, name) {
+  const lower = name.toLowerCase();
+  return ecosystem === "pip" ? lower.replace(/[-_.]+/g, "-") : lower;
 }
 function buildSemgrepGroup(findings) {
   const candidates2 = findings.filter((finding4) => finding4.tool === "semgrep").map((finding4) => ({
@@ -61483,7 +61611,10 @@ function buildSemgrepGroup(findings) {
     command: null,
     // `||`, not `??`: an empty-string rule_id is exactly as unusable a
     // label as a missing one, and `??` would let '' straight through.
-    label: finding4.rule_id || finding4.title
+    label: finding4.rule_id || finding4.title,
+    // The fix pass applies exactly this rule to exactly this file.
+    ...finding4.rule_id ? { rule_id: finding4.rule_id } : {},
+    ...finding4.file_path ? { file_path: finding4.file_path } : {}
   }));
   return candidates2.length === 0 ? null : makeGroup("semgrep", "semgrep", candidates2);
 }
@@ -61548,7 +61679,7 @@ function describeExclusions(exclusions, severityMin, sources) {
   }
   if (no_fix_source > 0) {
     parts.push(
-      `${no_fix_source} that no requested source can act on (sources: ${sources.join(", ")})`
+      `${no_fix_source} that no requested source can act on or re-verify (sources: ${sources.join(", ")})`
     );
   }
   const head = `${exclusions.excluded} of ${exclusions.considered} open finding(s) were excluded; ${exclusions.candidates} remain as fix candidate(s). Excluded: ${parts.join("; ")}.`;
@@ -61724,6 +61855,102 @@ function errorMessage(e) {
   return e instanceof Error ? e.message : String(e);
 }
 
+// src/fixpr/semgrepFix.ts
+var import_yaml7 = __toESM(require_dist2(), 1);
+import { mkdirSync as mkdirSync10, mkdtempSync as mkdtempSync4, readFileSync as readFileSync35, rmSync as rmSync8, statSync as statSync18, writeFileSync as writeFileSync16 } from "node:fs";
+import { tmpdir as tmpdir5 } from "node:os";
+import { basename as basename7, dirname as dirname16, join as join61 } from "node:path";
+function checkIdMatches(checkId, ruleFile, id) {
+  if (checkId === id) return true;
+  if (!checkId.endsWith(`.${id}`)) return false;
+  const prefix = checkId.slice(0, checkId.length - id.length - 1);
+  const tail = basename7(dirname16(ruleFile)).replace(/[^A-Za-z0-9._-]/g, "");
+  return tail.length > 0 && (prefix === tail || prefix.endsWith(`.${tail}`));
+}
+function planSemgrepFix(sources, tmpRoot = tmpdir5()) {
+  const byFile = /* @__PURE__ */ new Map();
+  const registry2 = /* @__PURE__ */ new Set();
+  const files = /* @__PURE__ */ new Set();
+  const unresolved = [];
+  for (const source of sources) {
+    const rules = loadLocalRules(source.localConfigs);
+    for (const target of source.targets) {
+      if (target.file_path.length === 0) {
+        return { ok: false, reason: `the finding for rule '${target.rule_id}' names no file` };
+      }
+      files.add(target.file_path.replace(/\\/g, "/"));
+      const matches = rules.filter((r) => checkIdMatches(target.rule_id, r.file, r.id));
+      if (matches.length > 0) {
+        for (const m of matches) {
+          const picked = byFile.get(m.file) ?? /* @__PURE__ */ new Map();
+          picked.set(m.id, m.rule);
+          byFile.set(m.file, picked);
+        }
+      } else if (source.registryAllowed) {
+        registry2.add(target.rule_id);
+      } else {
+        unresolved.push(target.rule_id);
+      }
+    }
+  }
+  if (unresolved.length > 0) {
+    return {
+      ok: false,
+      reason: `rule(s) ${[...new Set(unresolved)].join(", ")} are in no local rule file the originating scan loaded, and that scan did not use the Semgrep registry \u2014 refusing to guess where the fix comes from`
+    };
+  }
+  const dir = mkdtempSync4(join61(tmpRoot, "guardian-fixpr-sg-"));
+  const configs = [];
+  const configLabels = [];
+  let n2 = 0;
+  for (const [file, picked] of byFile) {
+    const sub = join61(dir, `rules-${String(n2++).padStart(3, "0")}`);
+    mkdirSync10(sub);
+    const copy = join61(sub, basename7(file));
+    writeFileSync16(copy, (0, import_yaml7.stringify)({ rules: [...picked.values()] }), "utf8");
+    configs.push(copy);
+    configLabels.push(`${[...picked.keys()].join(", ")} from ${basename7(file)}`);
+  }
+  for (const id of [...registry2].sort()) {
+    configs.push(`r/${id}`);
+    configLabels.push(`r/${id}`);
+  }
+  return { ok: true, plan: { configs, configLabels, files: [...files].sort(), dir } };
+}
+function disposeSemgrepFixPlan(plan) {
+  try {
+    rmSync8(plan.dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  } catch {
+  }
+}
+function loadLocalRules(configs) {
+  const out = [];
+  for (const config2 of configs) {
+    let isDir;
+    try {
+      isDir = statSync18(config2).isDirectory();
+    } catch {
+      continue;
+    }
+    for (const file of isDir ? yamlFilesUnder(config2) : [config2]) {
+      let doc;
+      try {
+        doc = (0, import_yaml7.parse)(readFileSync35(file, "utf8"));
+      } catch {
+        continue;
+      }
+      const rules = typeof doc === "object" && doc !== null ? doc["rules"] : void 0;
+      if (!Array.isArray(rules)) continue;
+      for (const rule of rules) {
+        if (typeof rule !== "object" || rule === null) continue;
+        const id = rule["id"];
+        if (typeof id === "string" && id.length > 0) out.push({ file, id, rule });
+      }
+    }
+  }
+  return out;
+}
+
 // src/fixpr/testCommand.ts
 var NPM_PLACEHOLDER_TEST_SCRIPT = 'echo "Error: no test specified" && exit 1';
 var PYTEST_SECTION = /^[ \t]*\[tool\.pytest(?:\.|\])/m;
@@ -61769,6 +61996,74 @@ function fromGoMod2() {
 function fromPyprojectToml(content) {
   if (!PYTEST_SECTION.test(content)) return null;
   return { command: "pytest", args: [], origin: "pyproject.toml [tool.pytest]" };
+}
+
+// src/fixpr/testEnv.ts
+import { existsSync as existsSync43 } from "node:fs";
+import { join as join62 } from "node:path";
+var INSTALL_TIMEOUT_MS = 15 * 6e4;
+async function prepareTestEnvironment(opts) {
+  const { treePath, derived } = opts;
+  if (derived === null || derived.command !== "npm") return { ok: true, command: null };
+  const hasLock = existsSync43(join62(treePath, "package-lock.json")) || existsSync43(join62(treePath, "npm-shrinkwrap.json"));
+  if (!hasLock) return { ok: true, command: null };
+  const run = opts.run ?? runProcess;
+  const ignored = await run({ command: "git", args: ["-C", treePath, "check-ignore", "-q", "node_modules"], cwd: treePath });
+  if (ignored.outcome !== "completed") return { ok: true, command: null };
+  const command = "npm ci --ignore-scripts";
+  const result = await run({ command: "npm", args: ["ci", "--ignore-scripts"], cwd: treePath, timeoutMs: INSTALL_TIMEOUT_MS });
+  if (result.outcome !== "completed") {
+    const line = result.stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
+    return { ok: false, command, reason: `${command} ${result.outcome}${line !== void 0 ? `: ${line}` : ""}` };
+  }
+  return { ok: true, command };
+}
+
+// src/fixpr/rescan.ts
+function rescanOriginOf(f, scan2) {
+  if (f.tool === "semgrep") {
+    if (scan2.scan_type === "sast" || scan2.scan_type === "security_full") {
+      const localOnly = scan2.scan_type === "sast" && scan2.meta?.["local_only"] === true;
+      return { key: `scan_sast:${String(localOnly)}`, tool: "scan_sast", input: { local_only: localOnly } };
+    }
+    if (scan2.scan_type === "bugs") {
+      const languagePacks = scan2.meta?.["include_language_packs"] === true;
+      return {
+        key: `bug_hunt:${String(languagePacks)}`,
+        tool: "bug_hunt",
+        input: { include_language_packs: languagePacks }
+      };
+    }
+    return null;
+  }
+  if (DEP_SCANNER_TOOLS.includes(f.tool) && f.tool !== "wpscan") {
+    if (isDepsAuditScan(scan2) || scan2.scan_type === "security_full") {
+      return { key: "deps_audit", tool: "deps_audit", input: {} };
+    }
+    if (scan2.scan_type === "deps") return { key: "scan_deps", tool: "scan_deps", input: {} };
+  }
+  return null;
+}
+function scannerNotVerified(target, scan2) {
+  const ranOk = (name) => scan2.tools_run.some((t) => t.name === name && t.status === "ok") && !scan2.missing_tools.includes(name);
+  switch (target.tool) {
+    case "semgrep":
+      return ranOk("semgrep") ? null : "semgrep";
+    case "trivy": {
+      if (!ranOk("trivy")) return "trivy";
+      const ecosystem = findingEcosystem(target);
+      const gap = ecosystem === null ? null : `trivy:${ecosystem}`;
+      return gap !== null && scan2.missing_tools.includes(gap) ? gap : null;
+    }
+    case "npm-audit":
+      return ranOk("npm") ? null : "npm-audit";
+    case "pip-audit":
+      return ranOk("pip-audit") ? null : "pip-audit";
+    case "dotnet-list-package":
+      return ranOk("dotnet") ? null : "dotnet-list-package";
+    default:
+      return target.tool;
+  }
 }
 
 // src/fixpr/verify.ts
@@ -61820,7 +62115,7 @@ function ruleFileKey(finding4) {
   return JSON.stringify([finding4.rule_id ?? null, finding4.file_path ?? null]);
 }
 async function judgeTests(opts) {
-  const { derived, worktreePath, projectPath, timeoutMs } = opts;
+  const { derived, worktreePath, timeoutMs } = opts;
   if (derived === null) {
     return { outcome: "not_run", command: null, origin: null, output_head: null };
   }
@@ -61835,12 +62130,28 @@ async function judgeTests(opts) {
   if (!hasFailed2(worktreeResult)) {
     return { outcome: "passed", command, origin: derived.origin, output_head: null };
   }
-  const baseResult = await run({
-    command: derived.command,
-    args: derived.args,
-    cwd: projectPath,
-    timeoutMs
-  });
+  const baseTree = await opts.baseTree();
+  if (!baseTree.ok) {
+    const head = headOf(worktreeResult.stdout, worktreeResult.stderr);
+    return {
+      outcome: "unattributed",
+      command,
+      origin: derived.origin,
+      output_head: `could not build the base-commit tree to compare against (${baseTree.reason})${head !== null ? `
+${head}` : ""}`
+    };
+  }
+  let baseResult;
+  try {
+    baseResult = await run({
+      command: derived.command,
+      args: derived.args,
+      cwd: baseTree.path,
+      timeoutMs
+    });
+  } finally {
+    await baseTree.dispose();
+  }
   return {
     outcome: hasFailed2(baseResult) ? "already_failing" : "broken_by_fix",
     command,
@@ -61851,7 +62162,7 @@ async function judgeTests(opts) {
   };
 }
 function mayOpenPr(scan2, tests) {
-  return scan2.passed && tests.outcome !== "broken_by_fix";
+  return scan2.passed && tests.outcome !== "broken_by_fix" && tests.outcome !== "unattributed";
 }
 function hasFailed2(result) {
   return result.outcome !== "completed" || result.exitCode !== 0;
@@ -61863,20 +62174,20 @@ function headOf(stdout, stderr) {
 }
 
 // src/fixpr/worktree.ts
-import { existsSync as existsSync42, mkdtempSync as mkdtempSync4, rmSync as rmSync7 } from "node:fs";
-import { tmpdir as tmpdir5 } from "node:os";
-import { join as join60 } from "node:path";
+import { existsSync as existsSync44, mkdtempSync as mkdtempSync5, realpathSync as realpathSync6, rmSync as rmSync9 } from "node:fs";
+import { tmpdir as tmpdir6 } from "node:os";
+import { join as join63, resolve as resolve13 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
 async function createWorktree(opts) {
   let dir;
   try {
-    dir = mkdtempSync4(join60(tmpdir5(), WORKTREE_DIR_PREFIX));
+    dir = mkdtempSync5(join63(tmpdir6(), WORKTREE_DIR_PREFIX));
   } catch (e) {
     return { ok: false, reason: `could not create a temp directory: ${errorMessage2(e)}` };
   }
   const add = await runProcess({
     command: "git",
-    args: ["-C", opts.projectPath, "worktree", "add", "-b", opts.branch, dir, "HEAD"],
+    args: opts.branch === null ? ["-C", opts.projectPath, "worktree", "add", "--detach", dir, "HEAD"] : ["-C", opts.projectPath, "worktree", "add", "-b", opts.branch, dir, "HEAD"],
     cwd: opts.projectPath,
     timeoutMs: opts.timeoutMs
   });
@@ -61890,7 +62201,7 @@ async function createWorktree(opts) {
     });
     return { ok: false, reason: describeFailure3(add, "git worktree add") };
   }
-  const canonicalPath3 = await resolveRegisteredPath(opts.projectPath, opts.branch, opts.timeoutMs) ?? dir;
+  const canonicalPath3 = await resolveRegisteredPath(opts.projectPath, opts.branch, dir, opts.timeoutMs) ?? dir;
   return {
     ok: true,
     worktree: makeWorktree(opts.projectPath, canonicalPath3, opts.branch, opts.timeoutMs)
@@ -61920,7 +62231,7 @@ async function removeWorktree(projectPath, path6, timeoutMs) {
     cwd: projectPath,
     timeoutMs
   });
-  if (!existsSync42(path6)) {
+  if (!existsSync44(path6)) {
     return { removed: true, warning: null };
   }
   const detail = removeResult.outcome !== "completed" ? `: ${describeFailure3(removeResult, "git worktree remove")}` : "";
@@ -61929,7 +62240,7 @@ async function removeWorktree(projectPath, path6, timeoutMs) {
     warning: `'${path6}' still exists after 'git worktree remove --force' and 'git worktree prune'${detail}`
   };
 }
-async function resolveRegisteredPath(projectPath, branch, timeoutMs) {
+async function resolveRegisteredPath(projectPath, branch, dir, timeoutMs) {
   const list2 = await runProcess({
     command: "git",
     args: ["-C", projectPath, "worktree", "list", "--porcelain"],
@@ -61937,10 +62248,28 @@ async function resolveRegisteredPath(projectPath, branch, timeoutMs) {
     timeoutMs
   });
   if (list2.outcome !== "completed") return null;
-  for (const entry of parseWorktreeList(list2.stdout)) {
-    if (entry.branch === branch) return entry.path;
+  const entries2 = parseWorktreeList(list2.stdout);
+  if (branch !== null) {
+    for (const entry of entries2) {
+      if (entry.branch === branch) return entry.path;
+    }
+    return null;
+  }
+  const wanted = samePathKey(dir);
+  for (const entry of entries2) {
+    if (samePathKey(entry.path) === wanted) return entry.path;
   }
   return null;
+}
+function samePathKey(path6) {
+  let real;
+  try {
+    real = realpathSync6.native(path6);
+  } catch {
+    real = resolve13(path6);
+  }
+  const posix = real.replace(/\\/g, "/");
+  return process.platform === "win32" ? posix.toLowerCase() : posix;
 }
 function parseWorktreeList(porcelain) {
   const entries2 = [];
@@ -61985,7 +62314,7 @@ function firstNonEmptyLine2(text) {
 }
 function safeRmDir(dir) {
   try {
-    rmSync7(dir, { recursive: true, force: true });
+    rmSync9(dir, { recursive: true, force: true });
   } catch {
   }
 }
@@ -62013,7 +62342,7 @@ var KEEPS_BRANCH = /* @__PURE__ */ new Set([
 var tool45 = {
   name: "create_fix_pr",
   title: "Apply scanner-produced fixes and open a pull request",
-  description: "Apply fixes the scanners themselves already produced \u2014 deps_update_plan pinned upgrade commands and Semgrep --autofix \u2014 inside an isolated git worktree, prove them with a scan differential and a (lazy) test differential, and open one pull request per ecosystem or scanner. apply defaults to false: candidates, the worktree, the fix, and both differentials always run; only commit/push/gh pr create sit behind apply=true. Every open finding that did NOT become a candidate is accounted for in `filtered` (counts per reason: below severity_min, no scanner-produced fix, no requested source covers it) and in the one-line `filtered_reason` \u2014 an empty `groups` is never left unexplained.",
+  description: "Apply fixes the scanners themselves already produced \u2014 deps_update_plan pinned upgrade steps (npm with --ignore-scripts, pip pins edited in place) and the target rules' own Semgrep autofix (only those rules, --metrics=off) \u2014 inside an isolated git worktree, prove them by re-running the SAME tool and rule packs that found them (scan_sast, bug_hunt, deps_audit or scan_deps) plus a lazy test differential against a pristine base-commit tree, and open one pull request per ecosystem or scanner. apply defaults to false: a dry run works in a detached worktree, writes no branch, never runs tests in your tree and leaves no scan rows behind; only commit/push/gh pr create sit behind apply=true. Every open finding that did NOT become a candidate is accounted for in `filtered` (below severity_min, no scanner-produced fix, no requested source or re-scan covers it) and in `filtered_reason`. A cancelled call answers ok with cancelled: true and the groups it finished.",
   inputSchema: {
     project_path: ProjectPath,
     // .describe() override, not the shared SeverityMin as-is (M8): that
@@ -62053,9 +62382,25 @@ async function handler42(input, ctx, callMeta) {
   const sources = inp.sources ?? DEFAULT_SOURCES;
   const maxPrs = inp.max_prs ?? DEFAULT_MAX_PRS;
   const apply = inp.apply === true;
-  const allFindings = ctx.storage.findings.listOpenForProject(projectPath);
+  const openSet = openSetForProject(ctx.storage, projectPath);
+  const allFindings = openSet.findings;
+  const scansById = new Map(openSet.scans.map((s) => [s.scan_id, s]));
+  const origins = /* @__PURE__ */ new Map();
+  for (const f of allFindings) {
+    const scan2 = scansById.get(f.scan_id) ?? ctx.storage.scans.getById(f.scan_id);
+    const origin = scan2 === null || scan2 === void 0 ? null : rescanOriginOf(f, scan2);
+    if (origin !== null) origins.set(f.fingerprint, origin);
+  }
   const upgradeSteps = sources.includes("deps") ? await fetchUpgradeSteps(projectPath, ctx, callMeta) : [];
-  const groups = buildGroups({ findings: allFindings, upgradeSteps, sources, severityMin });
+  const groups = buildGroups({
+    findings: allFindings,
+    upgradeSteps,
+    sources,
+    severityMin,
+    // A finding no tool can re-scan with the packs that produced it is not
+    // a candidate: its fix could never be verified (Task 11 item 2).
+    rescannable: (f) => origins.has(f.fingerprint)
+  });
   const filtered = summariseExclusions({ findings: allFindings, groups, severityMin });
   const filtered_reason = describeExclusions(filtered, severityMin, sources);
   const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
@@ -62080,7 +62425,7 @@ async function handler42(input, ctx, callMeta) {
       continue;
     }
     try {
-      results.push(await processGroup({ group, allFindings, projectPath, apply, ctx, callMeta }));
+      results.push(await processGroup({ group, allFindings, origins, projectPath, apply, ctx, callMeta }));
     } catch (e) {
       results.push({
         key: group.key,
@@ -62120,12 +62465,28 @@ async function fetchUpgradeSteps(projectPath, ctx, callMeta) {
   return Array.isArray(r.plan) ? r.plan : [];
 }
 async function processGroup(opts) {
-  const { group, allFindings, projectPath, apply, ctx, callMeta } = opts;
+  const { group, allFindings, origins, projectPath, apply, ctx, callMeta } = opts;
   const branch = branchName(group.source, group.key, group.hash);
   const targets = group.candidates.flatMap((c3) => c3.fingerprints);
   const findings = findingsForGroup(allFindings, group);
   const base = { key: group.key, source: group.source, severity: group.severity, branch, findings };
-  const created = await createWorktree({ projectPath, branch });
+  if (!apply && await localBranchExists(projectPath, branch)) {
+    const existing = await prExists({ projectPath, branch });
+    if (existing.known && existing.exists) {
+      const pr = existsOutcome(branch);
+      return { ...base, commands: [], outcome: PR_STATUS_OUTCOME[pr.status], scan: null, tests: null, pr, note: prNote(pr) };
+    }
+    return {
+      ...base,
+      commands: [],
+      outcome: "worktree_failed",
+      scan: null,
+      tests: null,
+      pr: null,
+      note: `worktree_failed: branch '${branch}' already exists locally (kept by an earlier run) and no pull request was found for it \u2014 apply=true would collide on it`
+    };
+  }
+  const created = await createWorktree({ projectPath, branch: apply ? branch : null });
   if (!created.ok) {
     const existing = await prExists({ projectPath, branch });
     if (existing.known && existing.exists) {
@@ -62151,18 +62512,55 @@ async function processGroup(opts) {
     };
   }
   const { worktree } = created;
-  let keepBranch = false;
+  let keepBranch = !apply;
+  let semgrepFix;
   try {
     const derivedTest = deriveTestCommand(readManifests(worktree.path));
-    const applied = await applyGroup({
-      group,
-      worktreePath: worktree.path,
-      lockfileOnly: derivedTest === null
-    });
+    const commands = [];
+    const env = await prepareTestEnvironment({ treePath: worktree.path, derived: derivedTest });
+    if (env.command !== null) commands.push(`${env.command} (test environment)`);
+    if (!env.ok) {
+      return {
+        ...base,
+        commands,
+        outcome: "apply_failed",
+        scan: null,
+        tests: null,
+        pr: null,
+        note: `apply_failed: could not prepare the test environment \u2014 ${env.reason}`
+      };
+    }
+    if (group.source === "semgrep") {
+      const planned = planSemgrepFix(semgrepFixSources(findings, origins, projectPath, ctx));
+      if (!planned.ok) {
+        return {
+          ...base,
+          commands,
+          outcome: "apply_failed",
+          scan: null,
+          tests: null,
+          pr: null,
+          note: `apply_failed: the fix could not be applied \u2014 ${planned.reason}`
+        };
+      }
+      semgrepFix = planned.plan;
+    }
+    let applied;
+    try {
+      applied = await applyGroup({
+        group,
+        worktreePath: worktree.path,
+        lockfileOnly: derivedTest === null,
+        ...semgrepFix !== void 0 ? { semgrepFix } : {}
+      });
+    } finally {
+      if (semgrepFix !== void 0) disposeSemgrepFixPlan(semgrepFix);
+    }
+    commands.push(...applied.commands);
     if (!applied.applied) {
       return {
         ...base,
-        commands: applied.commands,
+        commands,
         outcome: "apply_failed",
         scan: null,
         tests: null,
@@ -62170,11 +62568,11 @@ async function processGroup(opts) {
         note: `apply_failed: the fix could not be applied \u2014 ${describeApplyFailure(applied.failure)}`
       };
     }
-    const rescan = await rescanAfterFix(group, findings, worktree.path, ctx, callMeta);
+    const rescan = await rescanAfterFix(findings, origins, worktree.path, projectPath, ctx, callMeta);
     if (!rescan.ok) {
       return {
         ...base,
-        commands: applied.commands,
+        commands,
         outcome: "verification_failed",
         scan: null,
         tests: null,
@@ -62182,22 +62580,23 @@ async function processGroup(opts) {
         note: `verification_failed: could not verify the fix \u2014 ${rescan.reason}`
       };
     }
-    const beforeScanId = ctx.storage.scans.getLatestForProject(projectPath)?.scan_id ?? "unknown";
+    const sourceScanIds = [...new Set(findings.map((f) => f.scan_id))].sort();
+    const before = sourceScanIds.flatMap((id) => ctx.storage.findings.listByScan(id));
     const scanVerdict = judgeScan(
       targets,
-      { scan_id: beforeScanId, findings: allFindings },
-      { scan_id: rescan.scanId, findings: rescan.findings }
+      { scan_id: sourceScanIds.join(","), findings: before },
+      { scan_id: rescan.scanIds.join(","), findings: rescan.findings }
     );
     const testVerdict = await judgeTests({
       derived: derivedTest,
       worktreePath: worktree.path,
-      projectPath
+      baseTree: baseTreeProvider(projectPath, derivedTest)
     });
     if (!mayOpenPr(scanVerdict, testVerdict)) {
-      const why = !scanVerdict.passed ? `the scan differential did not pass (${scanVerdict.still_present.length} target(s) still present, ${scanVerdict.new_findings.length} new finding(s))` : "the fix broke the test suite";
+      const why = !scanVerdict.passed ? `the scan differential did not pass (${scanVerdict.still_present.length} target(s) still present, ${scanVerdict.new_findings.length} new finding(s))` : testVerdict.outcome === "unattributed" ? "the test suite failed after the fix and the base-commit comparison could not be run" : "the fix broke the test suite";
       return {
         ...base,
-        commands: applied.commands,
+        commands,
         outcome: "not_verified",
         scan: scanVerdict,
         tests: testVerdict,
@@ -62208,7 +62607,7 @@ async function processGroup(opts) {
     if (!apply) {
       return {
         ...base,
-        commands: applied.commands,
+        commands,
         outcome: "verified_dry_run",
         scan: scanVerdict,
         tests: testVerdict,
@@ -62217,12 +62616,12 @@ async function processGroup(opts) {
       };
     }
     const title = buildPrTitle(group, targets.length);
-    const body = buildPrBody({ group, findings, commands: applied.commands, scan: scanVerdict, tests: testVerdict });
+    const body = buildPrBody({ group, findings, commands, scan: scanVerdict, tests: testVerdict });
     const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body });
     keepBranch = KEEPS_BRANCH.has(pr.status);
     return {
       ...base,
-      commands: applied.commands,
+      commands,
       outcome: PR_STATUS_OUTCOME[pr.status],
       scan: scanVerdict,
       tests: testVerdict,
@@ -62236,16 +62635,38 @@ async function processGroup(opts) {
     }
   }
 }
+async function localBranchExists(projectPath, branch) {
+  const r = await runProcess({
+    command: "git",
+    args: ["-C", projectPath, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`],
+    cwd: projectPath
+  });
+  return r.outcome === "completed";
+}
+function baseTreeProvider(projectPath, derived) {
+  return async () => {
+    const created = await createWorktree({ projectPath, branch: null });
+    if (!created.ok) return { ok: false, reason: created.reason };
+    const env = await prepareTestEnvironment({ treePath: created.worktree.path, derived });
+    if (!env.ok) {
+      await created.worktree.remove();
+      return { ok: false, reason: env.reason };
+    }
+    return { ok: true, path: created.worktree.path, dispose: async () => {
+      await created.worktree.remove();
+    } };
+  };
+}
 function prNote(pr) {
   return pr.status === "created" ? `pull request opened: ${pr.url ?? "(gh reported no URL)"}` : `pull request not opened (${pr.status}): ${pr.detail ?? "no further detail"}`;
 }
 function readManifests(worktreePath) {
   const files = {};
   for (const name of TEST_MANIFESTS) {
-    const path6 = join61(worktreePath, name);
-    if (!existsSync43(path6)) continue;
+    const path6 = join64(worktreePath, name);
+    if (!existsSync45(path6)) continue;
     try {
-      files[name] = readFileSync34(path6, "utf8");
+      files[name] = readFileSync36(path6, "utf8");
     } catch {
     }
   }
@@ -62256,46 +62677,69 @@ function describeApplyFailure(failure) {
   const exit = failure.exit_code !== null ? ` (exit ${failure.exit_code})` : "";
   return `'${failure.command}' ${failure.outcome}${exit}: ${failure.stderr_head}`;
 }
-var DEPS_AUDIT_MISSING_TOOLS_NAME = {
-  trivy: "trivy",
-  "npm-audit": "npm",
-  wpscan: null
-};
-async function rescanAfterFix(group, targetFindings, worktreePath, ctx, callMeta) {
-  const toolName = group.source === "semgrep" ? "scan_sast" : "deps_audit";
-  const subTool = TOOLS.find((t) => t.name === toolName);
-  if (subTool === void 0) {
-    return { ok: false, reason: `the '${toolName}' tool is not registered` };
+function semgrepFixSources(targets, origins, projectPath, ctx) {
+  const byKey = /* @__PURE__ */ new Map();
+  for (const f of targets) {
+    const origin = origins.get(f.fingerprint);
+    if (origin === void 0) continue;
+    const entry = byKey.get(origin.key) ?? { origin, targets: [] };
+    entry.targets.push({ rule_id: f.rule_id ?? "", file_path: f.file_path ?? "" });
+    byKey.set(origin.key, entry);
   }
-  const result = await subTool.handler({ project_path: worktreePath }, ctx, callMeta);
-  if (!result.ok) {
-    return { ok: false, reason: `${toolName} failed: ${result.error.message}` };
-  }
-  const r = result;
-  if (typeof r.scan_id !== "string") {
-    return { ok: false, reason: `${toolName} returned no scan_id` };
-  }
-  const missingTools = Array.isArray(r.missing_tools) ? r.missing_tools : [];
-  const requiredTools = new Set(targetFindings.map((f) => f.tool));
-  const uncheckable = [...requiredTools].filter(
-    (tool47) => scannerCouldNotBeVerified(group.source, tool47, missingTools)
-  );
-  if (uncheckable.length > 0) {
+  return [...byKey.values()].map(({ origin, targets: t }) => {
+    if (origin.tool === "bug_hunt") {
+      return { targets: t, localConfigs: bugHuntLocalConfigs(ctx, projectPath), registryAllowed: true };
+    }
+    const localOnly = origin.input["local_only"] === true;
+    const plan = planSemgrepConfigs(projectPath, ctx, localOnly);
     return {
-      ok: false,
-      reason: `${uncheckable.join(", ")} did not run inside the worktree (reported missing, or ${toolName} does not cover it at all) \u2014 cannot verify`
+      targets: t,
+      localConfigs: plan.rulePacks.filter((p) => !plan.registry.includes(p)),
+      registryAllowed: !localOnly
     };
-  }
-  return { ok: true, scanId: r.scan_id, findings: ctx.storage.findings.listByScan(r.scan_id) };
+  });
 }
-function scannerCouldNotBeVerified(source, tool47, missingTools) {
-  if (source === "semgrep") {
-    return tool47 === "semgrep" && missingTools.includes("semgrep");
+async function rescanAfterFix(targets, origins, worktreePath, projectPath, ctx, callMeta) {
+  const byKey = /* @__PURE__ */ new Map();
+  for (const f of targets) {
+    const origin = origins.get(f.fingerprint);
+    if (origin === void 0) return { ok: false, reason: `no tool can re-scan the target ${f.fingerprint.slice(0, 12)}` };
+    const entry = byKey.get(origin.key) ?? { origin, targets: [] };
+    entry.targets.push(f);
+    byKey.set(origin.key, entry);
   }
-  const missingToolsName = DEPS_AUDIT_MISSING_TOOLS_NAME[tool47];
-  if (missingToolsName === void 0) return false;
-  if (missingToolsName === null) return true;
-  return missingTools.includes(missingToolsName);
+  const meta = {
+    ...callMeta?.signal !== void 0 ? { signal: callMeta.signal } : {},
+    ...callMeta?.progressToken !== void 0 ? { progressToken: callMeta.progressToken } : {},
+    rulesProjectPath: projectPath
+  };
+  const scanIds = [];
+  const findings = [];
+  for (const { origin, targets: own } of byKey.values()) {
+    const subTool = TOOLS.find((t) => t.name === origin.tool);
+    if (subTool === void 0) return { ok: false, reason: `the '${origin.tool}' tool is not registered` };
+    const result = await subTool.handler({ project_path: worktreePath, force: true, ...origin.input }, ctx, meta);
+    if (!result.ok) return { ok: false, reason: `${origin.tool} failed: ${result.error.message}` };
+    const scanId = result.scan_id;
+    if (typeof scanId !== "string") return { ok: false, reason: `${origin.tool} returned no scan_id` };
+    const row = ctx.storage.scans.getById(scanId);
+    const rows = ctx.storage.findings.listByScan(scanId);
+    try {
+      deleteScans(ctx.storage.rawHandle(), [scanId]);
+    } catch {
+    }
+    if (row === null) return { ok: false, reason: `${origin.tool}'s scan row is missing` };
+    const unverified = [...new Set(own.map((t) => scannerNotVerified(t, row)).filter((x) => x !== null))];
+    if (unverified.length > 0) {
+      return {
+        ok: false,
+        reason: `${unverified.join(", ")} did not run ok inside the worktree (${origin.tool} reported it missing, failed or partial for this target, or cannot check it at all) \u2014 cannot verify`
+      };
+    }
+    scanIds.push(scanId);
+    findings.push(...rows);
+  }
+  return { ok: true, scanIds, findings };
 }
 function buildPrTitle(group, findingCount) {
   const noun = group.source === "deps" ? `${group.key} dependency` : "Semgrep";
@@ -62341,6 +62785,9 @@ function buildPrBody(opts) {
       break;
     case "broken_by_fix":
       lines.push("the fix broke the test suite; this pull request should not exist.");
+      break;
+    case "unattributed":
+      lines.push("the tests failed and the base-commit comparison could not run; this pull request should not exist.");
       break;
   }
   lines.push(
@@ -63042,9 +63489,9 @@ function analyzeAgentConfig(sources, previousHashes) {
 }
 
 // src/agentaudit/configSources.ts
-import { existsSync as existsSync44, readFileSync as readFileSync35, statSync as statSync18 } from "node:fs";
+import { existsSync as existsSync46, readFileSync as readFileSync37, statSync as statSync19 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { join as join62 } from "node:path";
+import { join as join65 } from "node:path";
 
 // src/agentaudit/jsonc.ts
 function stripComments(text) {
@@ -63134,45 +63581,45 @@ function parseJsonc(text) {
 
 // src/agentaudit/configSources.ts
 var PROJECT_DESCRIPTORS = [
-  { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join62(p, ".mcp.json") },
+  { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join65(p, ".mcp.json") },
   {
     label: ".claude/settings.json",
     kind: "project",
     mcpServersField: null,
-    resolve: (p) => join62(p, ".claude", "settings.json")
+    resolve: (p) => join65(p, ".claude", "settings.json")
   },
   {
     label: ".claude/settings.local.json",
     kind: "project",
     mcpServersField: null,
-    resolve: (p) => join62(p, ".claude", "settings.local.json")
+    resolve: (p) => join65(p, ".claude", "settings.local.json")
   },
   {
     label: ".cursor/mcp.json",
     kind: "project",
     mcpServersField: "mcpServers",
-    resolve: (p) => join62(p, ".cursor", "mcp.json")
+    resolve: (p) => join65(p, ".cursor", "mcp.json")
   },
   {
     label: ".vscode/mcp.json",
     kind: "project",
     mcpServersField: "servers",
-    resolve: (p) => join62(p, ".vscode", "mcp.json")
+    resolve: (p) => join65(p, ".vscode", "mcp.json")
   },
   {
     label: ".gemini/settings.json",
     kind: "project",
     mcpServersField: "mcpServers",
-    resolve: (p) => join62(p, ".gemini", "settings.json")
+    resolve: (p) => join65(p, ".gemini", "settings.json")
   }
 ];
 var USER_DESCRIPTORS = [
-  { label: "~/.claude.json", kind: "user", mcpServersField: "mcpServers", resolve: () => join62(homedir2(), ".claude.json") },
+  { label: "~/.claude.json", kind: "user", mcpServersField: "mcpServers", resolve: () => join65(homedir2(), ".claude.json") },
   {
     label: "~/.claude/settings.json",
     kind: "user",
     mcpServersField: null,
-    resolve: () => join62(homedir2(), ".claude", "settings.json")
+    resolve: () => join65(homedir2(), ".claude", "settings.json")
   }
 ];
 function configSourceDescriptors(includeUserConfig) {
@@ -63190,10 +63637,10 @@ function readOne2(descriptor, projectPath) {
     absolutePath,
     mcpServersField: descriptor.mcpServersField
   };
-  if (!existsSync44(absolutePath)) return { ...base, exists: false };
+  if (!existsSync46(absolutePath)) return { ...base, exists: false };
   let size;
   try {
-    size = statSync18(absolutePath).size;
+    size = statSync19(absolutePath).size;
   } catch (e) {
     return { ...base, exists: false, parseError: `could not read: ${e.message}` };
   }
@@ -63206,7 +63653,7 @@ function readOne2(descriptor, projectPath) {
   }
   let raw;
   try {
-    raw = readFileSync35(absolutePath, "utf8");
+    raw = readFileSync37(absolutePath, "utf8");
   } catch (e) {
     return { ...base, exists: false, parseError: `could not read: ${e.message}` };
   }
@@ -63721,7 +64168,7 @@ async function main() {
 `);
     process.exit(1);
   }
-  const projectPath = resolve12(process.cwd());
+  const projectPath = resolve14(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);

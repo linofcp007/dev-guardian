@@ -55,8 +55,10 @@
  * correctness property, not an optimisation.** A project whose tests already
  * fail will fail after the fix too, and blaming the fix for that would be
  * the same dishonesty in another costume. So the derived command runs once,
- * in the worktree; only when THAT run fails does it run a second time, in
- * `projectPath` (the base commit), to find out who is actually responsible.
+ * in the worktree; only when THAT run fails does it run a second time, in a
+ * disposable tree of the base commit prepared the same way minus the fix
+ * (never the user's own working tree — Task 11 item 1), to find out who is
+ * actually responsible.
  * `outcome !== 'completed'` and `exitCode !== 0` are both checked, and
  * neither subsumes the other: a process can complete normally and still exit
  * non-zero (a real test failure), and a process can fail to complete at all
@@ -148,7 +150,7 @@ function ruleFileKey(finding) {
     return JSON.stringify([finding.rule_id ?? null, finding.file_path ?? null]);
 }
 export async function judgeTests(opts) {
-    const { derived, worktreePath, projectPath, timeoutMs } = opts;
+    const { derived, worktreePath, timeoutMs } = opts;
     // No command derived: state the absence, touch nothing. Never inferred
     // from silence downstream — design §4.2's last table row.
     if (derived === null) {
@@ -167,15 +169,33 @@ export async function judgeTests(opts) {
     }
     // Lazy: this second run — the whole cost of the test differential — is
     // only ever paid once the worktree run has already produced a failure that
-    // needs an owner. It runs in `projectPath`, the base commit, NEVER
-    // `worktreePath` again — asking the same question of the tree that
-    // existed before the fix.
-    const baseResult = await run({
-        command: derived.command,
-        args: derived.args,
-        cwd: projectPath,
-        timeoutMs,
-    });
+    // needs an owner. It runs in a fresh tree of the base commit, NEVER
+    // `worktreePath` again and never the user's own project — asking the same
+    // question of the tree that existed before the fix.
+    const baseTree = await opts.baseTree();
+    if (!baseTree.ok) {
+        // Nobody can say whether the fix broke the suite. Not a pass, and not
+        // "already failing": unattributed, and `mayOpenPr` refuses it.
+        const head = headOf(worktreeResult.stdout, worktreeResult.stderr);
+        return {
+            outcome: 'unattributed',
+            command,
+            origin: derived.origin,
+            output_head: `could not build the base-commit tree to compare against (${baseTree.reason})${head !== null ? `\n${head}` : ''}`,
+        };
+    }
+    let baseResult;
+    try {
+        baseResult = await run({
+            command: derived.command,
+            args: derived.args,
+            cwd: baseTree.path,
+            timeoutMs,
+        });
+    }
+    finally {
+        await baseTree.dispose();
+    }
     return {
         outcome: hasFailed(baseResult) ? 'already_failing' : 'broken_by_fix',
         command,
@@ -187,7 +207,7 @@ export async function judgeTests(opts) {
 }
 /** A PR may be opened only when this is true. */
 export function mayOpenPr(scan, tests) {
-    return scan.passed && tests.outcome !== 'broken_by_fix';
+    return scan.passed && tests.outcome !== 'broken_by_fix' && tests.outcome !== 'unattributed';
 }
 // --------------------------------------------------------------- internal
 /**

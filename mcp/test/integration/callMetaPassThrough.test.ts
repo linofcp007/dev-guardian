@@ -179,12 +179,20 @@ describe('create_fix_pr stops between groups once the host cancels', () => {
     // Two groups: deps/npm (critical, processed first) and semgrep (high).
     const plugin = makePlugin();
     const projectPath = resolveProjectPath(repo).path;
-    plugin.storage.scans.insert({ scan_id: 'before', scan_type: 'sast', project_path: projectPath, tree_hash: 'h' });
+    // Each finding in the kind of scan that produces it — create_fix_pr
+    // re-verifies a target with the tool that found it (Task 11), and pairs a
+    // dependency finding by its structured package (Trivy's snippet).
+    plugin.storage.scans.insert({ scan_id: 'deps-before', scan_type: 'deps_audit', project_path: projectPath, tree_hash: 'h' });
     plugin.storage.findings.bulkInsert([
       {
-        scan_id: 'before', fingerprint: 'fp-dep', tool: 'trivy', severity: 'critical',
-        category: 'security', title: 'lodash: prototype pollution', fix_available: true,
+        scan_id: 'deps-before', fingerprint: 'fp-dep', tool: 'trivy', rule_id: 'CVE-2021-23337', severity: 'critical',
+        category: 'security', subcategory: 'cve', title: 'lodash: prototype pollution', fix_available: true,
+        file_path: 'package-lock.json', snippet: 'lodash@4.17.20->4.17.21',
       },
+    ]);
+    plugin.storage.scans.finalize({ scan_id: 'deps-before', status: 'completed', tools_run: [], missing_tools: [] });
+    plugin.storage.scans.insert({ scan_id: 'before', scan_type: 'sast', project_path: projectPath, tree_hash: 'h' });
+    plugin.storage.findings.bulkInsert([
       {
         scan_id: 'before', fingerprint: 'fp-sg', tool: 'semgrep', rule_id: 'js.rule', severity: 'high',
         category: 'security', title: 'x', file_path: 'index.js', line_start: 1, fix_available: true,

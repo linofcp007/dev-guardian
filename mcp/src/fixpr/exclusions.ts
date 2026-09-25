@@ -44,8 +44,9 @@ export type ExclusionReason =
   /** Carries a fix, but ranks below `severity_min`. A lower floor recovers it. */
   | 'below_severity_min'
   /** Cleared both gates, but no requested source can act on it — the tool
-   *  that found it is not one this run considers, or `deps_update_plan`
-   *  offered no upgrade for the package it names. */
+   *  that found it is not one this run considers, `deps_update_plan`
+   *  offered no upgrade for the package it names, or no tool can re-scan it
+   *  with the rule packs that produced it (so no fix could be verified). */
   | 'no_fix_source';
 
 export interface FixExclusions {
@@ -134,7 +135,7 @@ export function describeExclusions(
   }
   if (no_fix_source > 0) {
     parts.push(
-      `${no_fix_source} that no requested source can act on (sources: ${sources.join(', ')})`,
+      `${no_fix_source} that no requested source can act on or re-verify (sources: ${sources.join(', ')})`,
     );
   }
 
