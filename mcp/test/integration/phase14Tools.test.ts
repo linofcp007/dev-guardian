@@ -7,7 +7,7 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -492,6 +492,89 @@ describe('sbom_diff', () => {
     expect(r.added.length).toBeLessThan(60);
     expect(r.truncated).toBe(true);
   });
+
+  // ------------------------------------------------------------ fix round 1
+
+  it("item 6: TWO versions of the same package in the SAME ecosystem coexisting is reported per-version, not collapsed", async () => {
+    // The brief's own worked example: lodash@3 and lodash@4 present AT THE
+    // SAME TIME (a routine nested-duplicate-install shape), not a version
+    // bump from one to the other.
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedSbomScan(plugin, project, 'sbom1', [
+      { name: 'lodash', version: '3.10.1', purl: 'pkg:npm/lodash@3.10.1' },
+      { name: 'lodash', version: '4.17.20', purl: 'pkg:npm/lodash@4.17.20' },
+    ]);
+    seedSbomScan(plugin, project, 'sbom2', [
+      { name: 'lodash', version: '3.10.1', purl: 'pkg:npm/lodash@3.10.1' },
+      { name: 'lodash', version: '4.17.21', purl: 'pkg:npm/lodash@4.17.21' },
+    ]);
+
+    const r = (await getTool('sbom_diff').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      summary: { added: number; removed: number; changed: number; unchanged: number };
+      added: Array<{ name: string; version?: string; ecosystem: string }>;
+      removed: Array<{ name: string; version?: string; ecosystem: string }>;
+    };
+    // 4.17.20 removed, 4.17.21 added, 3.10.1 unchanged — reported as TWO
+    // per-version events, not as a spurious "changed 3.10.1 -> 4.17.21"
+    // (which would misreport the still-present 3.10.1 as gone) nor
+    // collapsed away entirely.
+    expect(r.summary).toEqual({ added: 1, removed: 1, changed: 0, unchanged: 1 });
+    expect(r.added).toEqual([{ name: 'lodash', version: '4.17.21', ecosystem: 'npm' }]);
+    expect(r.removed).toEqual([{ name: 'lodash', version: '4.17.20', ecosystem: 'npm' }]);
+  });
+
+  it('item 6: a simple single-version bump is still reported as one "changed" entry', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedSbomScan(plugin, project, 'sbom1', [{ name: 'lodash', version: '3.10.1', purl: 'pkg:npm/lodash@3.10.1' }]);
+    seedSbomScan(plugin, project, 'sbom2', [{ name: 'lodash', version: '4.17.21', purl: 'pkg:npm/lodash@4.17.21' }]);
+
+    const r = (await getTool('sbom_diff').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      summary: { added: number; removed: number; changed: number };
+      changed: Array<{ name: string; from_version: string; to_version: string }>;
+    };
+    expect(r.summary).toEqual({ added: 0, removed: 0, changed: 1, unchanged: 0 });
+    expect(r.changed).toEqual([{ name: 'lodash', ecosystem: 'npm', from_version: '3.10.1', to_version: '4.17.21' }]);
+  });
+
+  it('item 6: refuses a comparison that would mix a full SBOM file against a capped-summary fallback', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedSbomScan(plugin, project, 'sbom1', [{ name: 'lodash', version: '3.10.1' }]);
+    seedSbomScan(plugin, project, 'sbom2', [{ name: 'lodash', version: '4.17.21' }]);
+    // sbom2's SBOM file is gone — only sbom1's is still on disk.
+    unlinkSync(join(project, 'sbom2.cdx.json'));
+
+    const r = await getTool('sbom_diff').handler({ project_path: project }, plugin);
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('expected failure');
+    expect(r.error.message).toMatch(/full SBOM file/i);
+    expect(r.error.message).toMatch(/capped summary/i);
+  });
+
+  it('item 6: a both-files-gone comparison still runs, but is clearly flagged and never claims uncapped totals', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedSbomScan(plugin, project, 'sbom1', [{ name: 'lodash', version: '3.10.1' }]);
+    seedSbomScan(plugin, project, 'sbom2', [{ name: 'lodash', version: '4.17.21' }]);
+    unlinkSync(join(project, 'sbom1.cdx.json'));
+    unlinkSync(join(project, 'sbom2.cdx.json'));
+
+    const r = (await getTool('sbom_diff').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      component_source: string;
+      summary_caveat: string | null;
+      changed: Array<{ ecosystem: string }>;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.component_source).toBe('capped_summary_fallback');
+    expect(r.summary_caveat).toMatch(/not the true, uncapped/i);
+    // Both sides fell back uniformly to 'unknown' — no spurious mismatch.
+    expect(r.changed[0]?.ecosystem).toBe('unknown');
+  });
 });
 
 describe('license_compatibility', () => {
@@ -639,6 +722,104 @@ describe('license_compatibility', () => {
       plugin,
     )) as { ok: true; incompatibilities: Array<{ reason: string }> };
     expect(r.incompatibilities[0]?.reason).toMatch(/network/i);
+  });
+
+  // ------------------------------------------------------------ fix round 1
+
+  it('item 5: composer\'s documented "proprietary" / "Proprietary" / "SEE LICENSE IN …" are treated as proprietary, not left uncompatible-checked', async () => {
+    for (const label of ['proprietary', 'Proprietary', 'SEE LICENSE IN LICENSE.txt']) {
+      const project = tempProject();
+      writeFileSync(join(project, 'composer.json'), JSON.stringify({ name: 'x/y', license: label }), 'utf8');
+      const plugin = makePlugin(project);
+      seedComplianceLicenses(plugin, project, [{ license: 'AGPL-3.0', packages: ['risky-pkg'] }]);
+
+      const r = (await getTool('license_compatibility').handler(
+        { project_path: project },
+        plugin,
+      )) as { ok: true; treated_as_proprietary: boolean; incompatibilities: unknown[] };
+      expect(r.treated_as_proprietary, `label=${label}`).toBe(true);
+      expect(r.incompatibilities, `label=${label}`).toHaveLength(1);
+    }
+  });
+
+  it("item 5: an SPDX 'A OR B' dependency license is evaluated, not silently read as compatible", async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"MIT"}', 'utf8');
+    const plugin = makePlugin(project);
+    // Every option risky — the licensee cannot pick a safe one.
+    seedComplianceLicenses(plugin, project, [{ license: 'AGPL-3.0 OR SSPL-1.0', packages: ['dual-risky'] }]);
+
+    const r = (await getTool('license_compatibility').handler(
+      { project_path: project },
+      plugin,
+    )) as { ok: true; incompatibilities: Array<{ dep_license: string }> };
+    expect(r.incompatibilities).toHaveLength(1);
+    expect(r.incompatibilities[0]?.dep_license).toBe('AGPL-3.0 OR SSPL-1.0');
+  });
+
+  it("item 5: an SPDX 'A OR B' dependency license is compatible when EITHER option is safe", async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"MIT"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'MIT OR Apache-2.0', packages: ['dual-fine'] }]);
+
+    const r = (await getTool('license_compatibility').handler(
+      { project_path: project },
+      plugin,
+    )) as { ok: true; incompatibilities: unknown[]; undetermined: unknown[] };
+    expect(r.incompatibilities).toEqual([]);
+    expect(r.undetermined).toEqual([]);
+  });
+
+  it('item 5: an unrecognised dependency license is reported as undetermined, never silently compatible', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"MIT"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'Some-Custom-EULA-1.0', packages: ['mystery-pkg'] }]);
+
+    const r = (await getTool('license_compatibility').handler(
+      { project_path: project },
+      plugin,
+    )) as {
+      ok: true;
+      incompatibilities: unknown[];
+      undetermined: Array<{ dep_license: string; packages: string[]; reason: string }>;
+      summary: { undetermined_total: number };
+    };
+    expect(r.incompatibilities).toEqual([]);
+    expect(r.undetermined).toHaveLength(1);
+    expect(r.undetermined[0]).toMatchObject({ dep_license: 'Some-Custom-EULA-1.0', packages: ['mystery-pkg'] });
+    expect(r.summary.undetermined_total).toBe(1);
+  });
+
+  it('item 5: GPL-2.0-or-later + Apache-2.0 is ALSO flagged (not silently exempted the way -only is)', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"GPL-2.0-or-later"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'Apache-2.0', packages: ['dep'] }]);
+
+    const r = (await getTool('license_compatibility').handler(
+      { project_path: project },
+      plugin,
+    )) as { ok: true; incompatibilities: Array<{ reason: string }> };
+    expect(r.incompatibilities).toHaveLength(1);
+    expect(r.incompatibilities[0]?.reason).toMatch(/or-later/i);
+  });
+
+  it('item 5: findLatestCompliance is scoped to THIS project — another project\'s compliance scan never leaks in', async () => {
+    const projectA = tempProject();
+    const projectB = tempProject();
+    writeFileSync(join(projectB, 'package.json'), '{"name":"x","license":"MIT"}', 'utf8');
+    const plugin = makePlugin(projectB);
+    // Compliance scan recorded against project A only, with an AGPL dep.
+    seedComplianceLicenses(plugin, projectA, [{ license: 'AGPL-3.0', packages: ['a-only-pkg'] }]);
+
+    const r = (await getTool('license_compatibility').handler(
+      { project_path: projectB },
+      plugin,
+    )) as { ok: true; last_compliance_scan_id: string | null; dependencies_audited: number };
+    expect(r.last_compliance_scan_id).toBeNull();
+    expect(r.dependencies_audited).toBe(0);
   });
 });
 

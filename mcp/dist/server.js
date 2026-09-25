@@ -46637,7 +46637,7 @@ import { join as join32 } from "node:path";
 var tool14 = {
   name: "license_compatibility",
   title: "License compatibility check",
-  description: "Cross-check the project license (package.json incl. UNLICENSED, pyproject.toml, composer.json, .csproj PackageLicenseExpression, or LICENSE) against the licenses of installed deps captured by the most recent compliance_check. No declared license (or UNLICENSED) is treated as proprietary and still flags copyleft deps. Pure SQL read \u2014 does not spawn scanners.",
+  description: 'Cross-check the project license (package.json incl. UNLICENSED, pyproject.toml, composer.json incl. "proprietary"/"SEE LICENSE IN \u2026", .csproj PackageLicenseExpression, or LICENSE) against the licenses of installed deps captured by the most recent compliance_check OF THIS PROJECT. No declared license (or a proprietary label) is treated as proprietary and still flags copyleft deps; an unrecognised or SPDX OR/AND dependency license is reported as `undetermined`, never silently compatible. Pure SQL read \u2014 does not spawn scanners.',
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler13(input, ctx)
 };
@@ -46651,19 +46651,28 @@ async function handler13(input, ctx) {
     return failDomain12("not_a_git_repo", e.message);
   }
   const projectLicense = detectProjectLicense(projectPath);
-  const isProprietary = projectLicense === null || projectLicense.trim().toUpperCase() === "UNLICENSED";
-  const compliance = findLatestCompliance(ctx);
+  const isProprietary = projectLicense === null || isProprietaryLabel(projectLicense);
+  const compliance = findLatestCompliance(ctx, projectPath);
   const meta = compliance?.meta;
   const depLicenses = meta?.licenses_summary ?? [];
   const incompatibilities = [];
+  const undetermined = [];
+  const reportedProjectLicense = projectLicense ?? "proprietary (no license declared)";
   for (const entry of depLicenses) {
-    const reason = isProprietary ? proprietaryReason(entry.license) : incompatibleReason(projectLicense, entry.license);
-    if (reason) {
+    const verdict = evaluateDependencyLicense(projectLicense, isProprietary, entry.license);
+    if (verdict.kind === "incompatible") {
       incompatibilities.push({
-        project_license: projectLicense ?? "proprietary (no license declared)",
+        project_license: reportedProjectLicense,
         dep_license: entry.license,
         packages: entry.packages,
-        reason
+        reason: verdict.reason
+      });
+    } else if (verdict.kind === "undetermined") {
+      undetermined.push({
+        project_license: reportedProjectLicense,
+        dep_license: entry.license,
+        packages: entry.packages,
+        reason: verdict.reason
       });
     }
   }
@@ -46674,12 +46683,18 @@ async function handler13(input, ctx) {
     last_compliance_scan_id: compliance?.scan_id ?? null,
     dependencies_audited: depLicenses.length,
     incompatibilities,
+    undetermined,
     summary: {
       total: incompatibilities.length,
-      by_dep_license: groupByLicense(incompatibilities)
+      by_dep_license: groupByLicense(incompatibilities),
+      undetermined_total: undetermined.length
     },
-    notes: `Compatibility rules are heuristic \u2014 definitive guidance requires legal review. A "reciprocal" license (GPL/AGPL/SSPL) included in a permissive project requires the whole project to be released under the same terms when distributed. No declared license (and npm's UNLICENSED) is treated as proprietary/all-rights-reserved \u2014 the least tolerant position, not an exemption from these checks.`
+    notes: 'Compatibility rules are heuristic \u2014 definitive guidance requires legal review. A "reciprocal" license (GPL/AGPL/SSPL) included in a permissive project requires the whole project to be released under the same terms when distributed. No declared license (or a proprietary label) is treated as proprietary/all-rights-reserved \u2014 the least tolerant position, not an exemption from these checks. `undetermined` lists a dependency license this tool could not classify at all (unrecognised, or an SPDX OR/AND expression with an unrecognised operand) \u2014 never silently read as compatible.'
   };
+}
+function isProprietaryLabel(s) {
+  const t = s.trim();
+  return /^UNLICENSED$/i.test(t) || /^proprietary$/i.test(t) || /^SEE LICENSE IN /i.test(t);
 }
 function detectProjectLicense(projectPath) {
   try {
@@ -46737,12 +46752,21 @@ function detectProjectLicense(projectPath) {
   }
   return null;
 }
-function findLatestCompliance(ctx) {
-  const history = ctx.storage.scans.listHistory(50);
+function findLatestCompliance(ctx, projectPath) {
+  const history = ctx.storage.scans.listHistoryForProject(projectPath, 50);
   const row = history.find((s) => s.scan_type === "compliance" && s.status === "completed");
   if (!row) return null;
   const full = ctx.storage.scans.getById(row.scan_id);
   return full ? { scan_id: row.scan_id, meta: full.meta } : null;
+}
+function withSuffixes(...bases) {
+  const out = /* @__PURE__ */ new Set();
+  for (const b of bases) {
+    out.add(b);
+    out.add(`${b}-only`);
+    out.add(`${b}-or-later`);
+  }
+  return out;
 }
 var PERMISSIVE = /* @__PURE__ */ new Set([
   "MIT",
@@ -46754,10 +46778,11 @@ var PERMISSIVE = /* @__PURE__ */ new Set([
   "Unlicense",
   "0BSD"
 ]);
-var AGPL = /* @__PURE__ */ new Set(["AGPL-1.0", "AGPL-3.0"]);
-var VIRAL = /* @__PURE__ */ new Set(["AGPL-1.0", "AGPL-3.0", "GPL-2.0", "GPL-3.0", "SSPL-1.0", "OSL-3.0"]);
+var AGPL = withSuffixes("AGPL-1.0", "AGPL-3.0");
+var VIRAL = withSuffixes("AGPL-1.0", "AGPL-3.0", "GPL-2.0", "GPL-3.0", "SSPL-1.0", "OSL-3.0");
 var WEAK_COPYLEFT = /* @__PURE__ */ new Set(["LGPL-2.1", "LGPL-3.0", "MPL-2.0", "EPL-2.0"]);
 var COMMERCIAL = /* @__PURE__ */ new Set(["BUSL-1.1", "Elastic-2.0", "CommonsClause"]);
+var KNOWN_LICENSES = /* @__PURE__ */ new Set([...PERMISSIVE, ...VIRAL, ...WEAK_COPYLEFT, ...COMMERCIAL]);
 function incompatibleReason(projectLicense, depLicense) {
   const proj = normaliseLicense(projectLicense);
   const dep = normaliseLicense(depLicense);
@@ -46773,10 +46798,11 @@ function incompatibleReason(projectLicense, depLicense) {
   if (PERMISSIVE.has(proj) && COMMERCIAL.has(dep)) {
     return `Permissive project '${projectLicense}' includes a source-available-but-not-OSI license '${depLicense}'. Restricts deployment models \u2014 review the dep's specific terms.`;
   }
-  if (proj === "GPL-2.0" && dep === "Apache-2.0") {
-    return `GPL-2.0 project + Apache-2.0 dep: known incompatibility (patent termination clauses). Move to GPL-3.0 or replace the dep.`;
+  if ((proj === "GPL-2.0" || proj === "GPL-2.0-only" || proj === "GPL-2.0-or-later") && dep === "Apache-2.0") {
+    const escape2 = proj === "GPL-2.0-or-later" ? ' The project may avoid this by exercising its "or-later" option and relicensing under GPL-3.0, which has no such incompatibility with Apache-2.0 \u2014 until that relicensing is done explicitly, the two remain in tension.' : "";
+    return `GPL-2.0 project + Apache-2.0 dep: known incompatibility (patent termination clauses).${escape2} Move to GPL-3.0 or replace the dep.`;
   }
-  if (proj === "AGPL-3.0" && COMMERCIAL.has(dep)) {
+  if ((proj === "AGPL-3.0" || proj === "AGPL-3.0-only" || proj === "AGPL-3.0-or-later") && COMMERCIAL.has(dep)) {
     return `AGPL-3.0 project + commercial-source-available dep '${depLicense}': mutually exclusive distribution terms.`;
   }
   return null;
@@ -46797,8 +46823,56 @@ function proprietaryReason(depLicense) {
   }
   return null;
 }
+function classifySingleLicense(projectLicense, isProprietary, depLicenseRaw) {
+  const dep = normaliseLicense(depLicenseRaw);
+  if (!KNOWN_LICENSES.has(dep)) return { kind: "unknown" };
+  const reason = isProprietary ? proprietaryReason(depLicenseRaw) : incompatibleReason(projectLicense, depLicenseRaw);
+  return reason ? { kind: "risky", reason } : { kind: "ok" };
+}
+function evaluateDependencyLicense(projectLicense, isProprietary, depLicenseRaw) {
+  const expr = parseLicenseExpression(depLicenseRaw);
+  if (expr.kind === "single") {
+    const v = classifySingleLicense(projectLicense, isProprietary, expr.parts[0] ?? depLicenseRaw);
+    if (v.kind === "ok") return { kind: "ok" };
+    if (v.kind === "risky") return { kind: "incompatible", reason: v.reason };
+    return {
+      kind: "undetermined",
+      reason: `License '${depLicenseRaw}' is not one this tool recognises \u2014 compatibility could not be determined. Review manually.`
+    };
+  }
+  const verdicts = expr.parts.map((p) => classifySingleLicense(projectLicense, isProprietary, p));
+  if (expr.kind === "or") {
+    if (verdicts.some((v) => v.kind === "ok")) return { kind: "ok" };
+    if (verdicts.every((v) => v.kind === "risky")) {
+      const reasons = verdicts.flatMap((v) => v.kind === "risky" ? [v.reason] : []);
+      return { kind: "incompatible", reason: `Every option in SPDX OR expression '${depLicenseRaw}' is risky \u2014 ${reasons.join(" | ")}` };
+    }
+    return {
+      kind: "undetermined",
+      reason: `SPDX OR expression '${depLicenseRaw}' includes an unrecognised option \u2014 compatibility could not be fully determined. Review manually.`
+    };
+  }
+  const risky = verdicts.find((v) => v.kind === "risky");
+  if (risky && risky.kind === "risky") {
+    return { kind: "incompatible", reason: `SPDX AND expression '${depLicenseRaw}': ${risky.reason}` };
+  }
+  if (verdicts.some((v) => v.kind === "unknown")) {
+    return {
+      kind: "undetermined",
+      reason: `SPDX AND expression '${depLicenseRaw}' includes an unrecognised term \u2014 compatibility could not be fully determined. Review manually.`
+    };
+  }
+  return { kind: "ok" };
+}
+function parseLicenseExpression(raw) {
+  const orParts = raw.split(/\s+OR\s+/i).map((s) => s.trim()).filter(Boolean);
+  if (orParts.length > 1) return { kind: "or", parts: orParts };
+  const andParts = raw.split(/\s+AND\s+/i).map((s) => s.trim()).filter(Boolean);
+  if (andParts.length > 1) return { kind: "and", parts: andParts };
+  return { kind: "single", parts: [raw.trim()] };
+}
 function normaliseLicense(s) {
-  return s.trim().replace(/^["']|["']$/g, "").replace(/[-_]or[-_]later$/i, "").replace(/[-_]only$/i, "").replace(/\s+/g, "");
+  return s.trim().replace(/^["']|["']$/g, "").replace(/\s+/g, "");
 }
 function findFirstCsproj(projectPath) {
   try {
@@ -46968,7 +47042,7 @@ var inputSchema8 = {
 var tool16 = {
   name: "sbom_diff",
   title: "SBOM diff (added / removed / changed components)",
-  description: "Compare two generate_sbom scans, full component list, keyed by (ecosystem, name) so a version change is never confused with an unrelated same-named package. Default to/from: the two latest completed SBOM scans of project_path. Response arrays are capped; summary always carries the true, uncapped totals.",
+  description: "Compare two generate_sbom scans, full component list, keyed by (ecosystem, name) with a version SET per key so multiple versions of the same package in the same ecosystem are reported per-version, never collapsed. Default to/from: the two latest completed SBOM scans of project_path. Refuses a comparison that would mix a full component list against a capped 25-item summary (spurious results); response arrays are capped but summary carries the true, uncapped totals except on the (flagged) both-capped fallback path.",
   inputSchema: inputSchema8,
   handler: async (input, ctx) => handler15(input, ctx)
 };
@@ -46997,42 +47071,56 @@ async function handler15(input, ctx) {
   if (toId === fromId) {
     return failDomain13("unknown_scan_id", `Cannot diff a scan against itself (${toId}).`);
   }
-  const fromComps = loadComponents(ctx, fromId);
-  const toComps = loadComponents(ctx, toId);
-  if (!fromComps || !toComps) {
+  const fromLoaded = loadComponents(ctx, fromId);
+  const toLoaded = loadComponents(ctx, toId);
+  if (!fromLoaded || !toLoaded) {
     return failDomain13("unknown_scan_id", "One or both SBOM scans have no components recorded.");
   }
-  const key = (c3) => `${c3.ecosystem}:${c3.name}`;
-  const fromMap = new Map(fromComps.map((c3) => [key(c3), c3]));
-  const toMap = new Map(toComps.map((c3) => [key(c3), c3]));
+  if (fromLoaded.source !== toLoaded.source) {
+    const describe2 = (s) => s === "full_file" ? "its full SBOM file" : "a capped summary (its SBOM file no longer exists on disk)";
+    return failDomain13(
+      "unknown_scan_id",
+      `Refusing to compare: '${fromId}' was read from ${describe2(fromLoaded.source)}, while '${toId}' was read from ${describe2(toLoaded.source)}. Comparing a full component list against a capped, ecosystem-untagged summary would report every component as spuriously removed and re-added. Re-run generate_sbom for whichever scan lost its file, or pass two scan ids whose files are both still on disk.`
+    );
+  }
+  const source = fromLoaded.source;
+  const fromGrouped = groupByKey(fromLoaded.components);
+  const toGrouped = groupByKey(toLoaded.components);
+  const allKeys = /* @__PURE__ */ new Set([...fromGrouped.keys(), ...toGrouped.keys()]);
   const added = [];
   const removed = [];
   const changed = [];
   let unchangedCount = 0;
-  for (const [k, toComp] of toMap) {
-    const fromComp = fromMap.get(k);
-    if (!fromComp) {
-      added.push(toComp);
-    } else if ((fromComp.version ?? "") !== (toComp.version ?? "")) {
+  for (const key of allKeys) {
+    const fromEntry = fromGrouped.get(key);
+    const toEntry = toGrouped.get(key);
+    const fromVersions = fromEntry?.versions ?? /* @__PURE__ */ new Set();
+    const toVersions = toEntry?.versions ?? /* @__PURE__ */ new Set();
+    const meta = toEntry ?? fromEntry;
+    if (!meta) continue;
+    const addedVersions = [...toVersions].filter((v) => !fromVersions.has(v));
+    const removedVersions = [...fromVersions].filter((v) => !toVersions.has(v));
+    unchangedCount += [...toVersions].filter((v) => fromVersions.has(v)).length;
+    if (fromVersions.size === 1 && toVersions.size === 1 && addedVersions.length === 1 && removedVersions.length === 1) {
       changed.push({
-        name: toComp.name,
-        ecosystem: toComp.ecosystem,
-        from_version: fromComp.version ?? "",
-        to_version: toComp.version ?? ""
+        name: meta.name,
+        ecosystem: meta.ecosystem,
+        from_version: removedVersions[0] ?? "",
+        to_version: addedVersions[0] ?? ""
       });
-    } else {
-      unchangedCount += 1;
+      continue;
     }
+    for (const v of addedVersions) added.push({ name: meta.name, ecosystem: meta.ecosystem, ...v ? { version: v } : {} });
+    for (const v of removedVersions) removed.push({ name: meta.name, ecosystem: meta.ecosystem, ...v ? { version: v } : {} });
   }
-  for (const [k, fromComp] of fromMap) {
-    if (!toMap.has(k)) removed.push(fromComp);
-  }
-  const truncated = added.length > RESPONSE_CAP || removed.length > RESPONSE_CAP || changed.length > RESPONSE_CAP;
+  const truncated = source === "full_file" && (added.length > RESPONSE_CAP || removed.length > RESPONSE_CAP || changed.length > RESPONSE_CAP);
   return {
     ok: true,
     project_path: projectPath,
     from_scan_id: fromId,
     to_scan_id: toId,
+    component_source: source,
+    summary_caveat: source === "capped_summary_fallback" ? "Both SBOM files are gone from disk \u2014 this diff compares only the capped 25-item top_packages summaries, not the full component lists. Totals below are NOT the true, uncapped component counts, and ecosystem is unknown for every entry." : null,
     summary: {
       added: added.length,
       removed: removed.length,
@@ -47045,6 +47133,19 @@ async function handler15(input, ctx) {
     truncated
   };
 }
+function groupByKey(components) {
+  const out = /* @__PURE__ */ new Map();
+  for (const c3 of components) {
+    const key = `${c3.ecosystem}:${c3.name}`;
+    let entry = out.get(key);
+    if (!entry) {
+      entry = { name: c3.name, ecosystem: c3.ecosystem, versions: /* @__PURE__ */ new Set() };
+      out.set(key, entry);
+    }
+    entry.versions.add(c3.version ?? "");
+  }
+  return out;
+}
 function loadComponents(ctx, scanId) {
   const rec = ctx.storage.scans.getById(scanId);
   if (!rec) return null;
@@ -47052,13 +47153,20 @@ function loadComponents(ctx, scanId) {
   if (filePath && existsSync25(filePath)) {
     try {
       const raw = readFileSync17(filePath, "utf8");
-      return extractFromSbomJson(raw);
+      return { components: extractFromSbomJson(raw), source: "full_file" };
     } catch {
     }
   }
   const top = rec.meta?.top_packages;
   if (!top || top.length === 0) return null;
-  return top.map((c3) => ({ name: c3.name, ...c3.version !== void 0 ? { version: c3.version } : {}, ecosystem: "unknown" }));
+  return {
+    components: top.map((c3) => ({
+      name: c3.name,
+      ...c3.version !== void 0 ? { version: c3.version } : {},
+      ecosystem: "unknown"
+    })),
+    source: "capped_summary_fallback"
+  };
 }
 function ecosystemFromPurl(purl) {
   if (!purl) return "unknown";
