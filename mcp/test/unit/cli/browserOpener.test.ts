@@ -1,6 +1,7 @@
 /**
  * Unit test for `resolveOpenerCommand`, exported from `cli/dev-guardian.mjs`
- * — fix-round-1 addition (coordinator review of Task 6).
+ * — fix-round-1 addition (coordinator review of Task 6), fix-round-2
+ * correction (Task 5 of the 2026-09-25 full review).
  *
  * Every OTHER test that touches this file invokes it as a real subprocess
  * (see `test/e2e/dashboardCli.test.ts`, `test/e2e/ciCliFixture.test.ts`),
@@ -17,12 +18,23 @@
  * This file exists for exactly that gap: it asserts on `resolveOpenerCommand`'s
  * pure, no-I/O return value directly, without ever spawning a process itself.
  *
- * Context (coordinator review, Important 1): the ORIGINAL implementation
- * spawned the literal string `'start'` on win32. `start` is a `cmd.exe`
- * BUILT-IN, not a standalone executable, so that spawn failed ENOENT on
- * every real Windows machine — confirmed directly, and separately reconfirmed
- * here structurally: a wrong implementation that reverts to `command: 'start'`
- * fails the win32 test below on the command name alone.
+ * Context, round 1 (coordinator review, Important 1): the ORIGINAL
+ * implementation spawned the literal string `'start'` on win32. `start` is a
+ * `cmd.exe` BUILT-IN, not a standalone executable, so that spawn failed
+ * ENOENT on every real Windows machine.
+ *
+ * Context, round 2 (this task): the round-1 fix (`cmd.exe /c start ""
+ * <target>`) fixed the ENOENT but introduced a second bug — `cmd.exe`
+ * re-parses its own `/c` argument as a command line, where `&` (and `|`,
+ * `&&`, `%VAR%`, …) are live syntax regardless of how `spawn` quoted argv
+ * for `CreateProcess`. A target path containing `&` would silently split
+ * into two commands. `explorer.exe <target>`, spawned directly (like
+ * `open`/`xdg-open` below), never goes through that second parse — confirmed
+ * here structurally: a wrong implementation that reverts to routing through
+ * `cmd.exe` fails the win32 tests below on the command name, and a wrong
+ * implementation that still hands `target` to something that re-parses it
+ * fails the shell-metacharacter security-property test at the bottom of
+ * this file.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -40,23 +52,25 @@ import { describe, expect, it } from 'vitest';
 const { resolveOpenerCommand } = await import('../../../../cli/dev-guardian.mjs');
 
 describe('resolveOpenerCommand', () => {
-  it('win32: spawns cmd.exe (a real executable), not the bare "start" builtin', () => {
-    // The exact defect this test exists to catch: `start` alone is not
-    // spawnable with shell:false (no start.exe on PATH). cmd.exe IS a real,
-    // standalone executable.
+  it('win32: spawns explorer.exe (a real executable), never cmd.exe or the bare "start" builtin', () => {
+    // The defects this test exists to catch: `start` alone is not spawnable
+    // with shell:false (no start.exe on PATH), and cmd.exe — a real
+    // executable — re-parses its own /c argument as a second command line,
+    // where `&` and friends are live syntax. explorer.exe is a real,
+    // standalone executable that does neither.
     const { command } = resolveOpenerCommand('win32', 'C:\\p\\dashboard.html');
-    expect(command).toBe('cmd.exe');
+    expect(command).toBe('explorer.exe');
     expect(command).not.toBe('start');
+    expect(command).not.toBe('cmd.exe');
   });
 
-  it('win32: argv is exactly ["/c", "start", the empty-title placeholder, target] — four elements, in order', () => {
+  it('win32: argv is exactly [target] — one element, verbatim, nothing routed through cmd.exe', () => {
     const target = 'C:\\Users\\dev\\.guardian\\dashboard.html';
     const { args } = resolveOpenerCommand('win32', target);
     // The FULL shape, not a loose "contains" check — a wrong implementation
-    // that drops the '""' empty-title argument (start would then treat
-    // `target` itself as the window title and open nothing) or that joins
-    // '/c start' into one combined string both fail this exact-array check.
-    expect(args).toEqual(['/c', 'start', '""', target]);
+    // that still prefixes '/c', 'start', or any cmd.exe-style argument fails
+    // this exact-array check.
+    expect(args).toEqual([target]);
   });
 
   it('darwin: spawns "open" with target as its sole argument', () => {

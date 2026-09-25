@@ -16,4 +16,5 @@ declare module '*/cli/dev-guardian.mjs' {
     platform: string,
     target: string,
   ): { command: string; args: string[] };
+  export function isNodeSqliteUnavailable(error: unknown): boolean;
 }
