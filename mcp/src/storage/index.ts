@@ -7,6 +7,7 @@
  */
 
 import type { DB } from './db.js';
+import { AgentAuditRepo } from './agentAuditRepo.js';
 import { BaselinesRepo } from './baselinesRepo.js';
 import { CvesRepo } from './cvesRepo.js';
 import { FindingsRepo } from './findingsRepo.js';
@@ -27,6 +28,7 @@ export class Storage {
   readonly runtimeMeta: RuntimeMetaRepo;
   readonly surface: SurfaceRepo;
   readonly validations: ValidationsRepo;
+  readonly agentAudit: AgentAuditRepo;
 
   constructor(private readonly db: DB) {
     this.scans = new ScansRepo(db);
@@ -38,6 +40,7 @@ export class Storage {
     this.runtimeMeta = new RuntimeMetaRepo(db);
     this.surface = new SurfaceRepo(db);
     this.validations = new ValidationsRepo(db);
+    this.agentAudit = new AgentAuditRepo(db);
   }
 
   close(): void {

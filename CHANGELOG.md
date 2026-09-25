@@ -8,6 +8,25 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- `audit_agent_config` — audits the AI-agent WORKSPACE configuration itself
+  (`.mcp.json`, `.claude/settings.json` + `.claude/settings.local.json`,
+  `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, and with
+  `include_user_config: true` also `~/.claude.json` / `~/.claude/
+  settings.json`) rather than the project's own source. Flags: unpinned
+  `npx`/`uvx`/`pipx` MCP server launches (no exact version pinned); remote
+  servers over plain `http://`; secrets written inline in an `env` block
+  (reuses `hooks/secretScan.ts`, redacted in every finding); wildcard Bash
+  permission allowlists (`Bash(*)`, `Bash(rm:*)`, `Bash(curl:*)`);
+  `defaultMode: "bypassPermissions"`; `enableAllProjectMcpServers`; hooks
+  that shell out to the network (curl/wget/iwr/irm) or write outside the
+  project; and `${VAR}` placeholders in a project `.mcp.json` — which Claude
+  Code does not expand there, the exact defect this repo's own `.mcp.json`
+  shipped (see "Fixed" below). Hashes each MCP server entry
+  (`agent_config_hashes`, migration 009) and flags one that changed since
+  the previous audit. Offline; reads config, never executes anything in it.
+
 ### Fixed
 
 - `.mcp.json` used `${CLAUDE_PROJECT_DIR}`, which Claude Code does not expand

@@ -43,6 +43,14 @@ describe('the committed dist/', () => {
   });
 });
 
+// The version `runMigrations` leaves a DB at once every shipped migration has
+// applied — i.e. the highest version number on disk. Computed rather than
+// hardcoded: a hardcoded literal here is exactly the kind of thing a NEW
+// migration silently breaks (four assertions below used to read '7' and
+// broke the moment migration 009 shipped), and in a numbering scheme where a
+// concurrent branch's reserved number is renumbered at merge time (see
+// `migrations/runner.ts`'s own numbering-convention doc), a literal would go
+// stale again at that very merge.
 describe('migrations runner', () => {
   it('applies initial schema on a brand-new DB', () => {
     const db = new Database(':memory:');
