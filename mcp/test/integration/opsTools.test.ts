@@ -44,10 +44,21 @@ vi.mock('../../src/tools/scanHelpers.js', async () => {
     );
   return { ...actual, scannerAvailable: vi.fn() };
 });
+// init_project's secrets-status fix (see the 'reports uncommitted secrets'
+// test) drives runGitleaksScan, which reads repository state through
+// git.js. Mocked here rather than run against a real repo: `repoState` and
+// `uncommittedFiles` are swapped for controllable fakes, everything else
+// (log_opts helpers, etc.) passes through unchanged.
+vi.mock('../../src/runners/git.js', async () => {
+  const actual =
+    await vi.importActual<typeof import('../../src/runners/git.js')>('../../src/runners/git.js');
+  return { ...actual, repoState: vi.fn(), uncommittedFiles: vi.fn() };
+});
 
 import { runProcess } from '../../src/runners/processRunner.js';
 import { runShellScript } from '../../src/runners/shellRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
+import { repoState, uncommittedFiles } from '../../src/runners/git.js';
 
 import type { PluginContext } from '../../src/context.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
@@ -105,12 +116,16 @@ beforeEach(() => {
   vi.mocked(runProcess).mockReset();
   vi.mocked(runShellScript).mockReset();
   vi.mocked(scannerAvailable).mockReset();
+  vi.mocked(repoState).mockReset();
+  vi.mocked(uncommittedFiles).mockReset();
 });
 
 afterEach(() => {
   vi.mocked(runProcess).mockReset();
   vi.mocked(runShellScript).mockReset();
   vi.mocked(scannerAvailable).mockReset();
+  vi.mocked(repoState).mockReset();
+  vi.mocked(uncommittedFiles).mockReset();
 });
 
 describe('detect_stack', () => {
@@ -237,6 +252,162 @@ describe('init_project', () => {
     expect(r.applied).toBe(false);
     expect(r.files_written).toHaveLength(0);
     expect(existsSync(join(project, '.gitleaks.toml'))).toBe(false);
+  });
+
+  // --- task 15: paranoid is genuinely stricter, not a standard alias ------
+
+  function makeFullConfigsDir(scriptsDir: string): string {
+    const configsDir = join(scriptsDir, '..', 'configs');
+    for (const sub of ['gitleaks', 'renovate', 'semgrep', 'pre-commit']) {
+      mkdirSync(join(configsDir, sub), { recursive: true });
+    }
+    writeFileSync(join(configsDir, 'gitleaks', 'gitleaks.toml'), '# gl standard\n', 'utf8');
+    writeFileSync(join(configsDir, 'gitleaks', 'gitleaks-paranoid.toml'), '# gl paranoid\n', 'utf8');
+    writeFileSync(join(configsDir, 'renovate', 'renovate.json'), '{"standard":true}', 'utf8');
+    writeFileSync(join(configsDir, 'renovate', 'renovate-paranoid.json'), '{"paranoid":true}', 'utf8');
+    writeFileSync(join(configsDir, 'semgrep', 'base.yml'), 'rules: []\n', 'utf8');
+    writeFileSync(join(configsDir, 'pre-commit', 'pre-commit-config.yaml'), 'repos: []\n', 'utf8');
+    return configsDir;
+  }
+
+  it('paranoid installs the paranoid gitleaks/renovate variants, not the standard ones', async () => {
+    const project = tempProject();
+    const scriptsDir = makeTempDir('init-scripts-');
+    makeFullConfigsDir(scriptsDir);
+    mkdirSync(join(scriptsDir, 'scan'), { recursive: true });
+    writeFileSync(join(scriptsDir, 'scan', 'initial-scan.sh'), '#!/bin/sh\necho ok\n', 'utf8');
+
+    const plugin = makePlugin(project, scriptsDir);
+    vi.mocked(runShellScript).mockResolvedValue({
+      outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false,
+    });
+
+    const tool = getTool('init_project');
+    const r = (await tool.handler({ project_path: project, profile: 'paranoid' }, plugin)) as {
+      ok: true;
+      files_written: { target: string; source: string }[];
+    };
+    expect(r.ok).toBe(true);
+    const bySource = Object.fromEntries(r.files_written.map((f) => [f.target, f.source]));
+    expect(bySource['.gitleaks.toml']).toBe('gitleaks/gitleaks-paranoid.toml');
+    expect(bySource['renovate.json']).toBe('renovate/renovate-paranoid.json');
+    expect(readFileSync(join(project, '.gitleaks.toml'), 'utf8')).toContain('paranoid');
+    expect(readFileSync(join(project, 'renovate.json'), 'utf8')).toContain('paranoid');
+  });
+
+  it('standard installs the standard gitleaks/renovate files (not the paranoid ones)', async () => {
+    const project = tempProject();
+    const scriptsDir = makeTempDir('init-scripts-');
+    makeFullConfigsDir(scriptsDir);
+    mkdirSync(join(scriptsDir, 'scan'), { recursive: true });
+    writeFileSync(join(scriptsDir, 'scan', 'initial-scan.sh'), '#!/bin/sh\necho ok\n', 'utf8');
+
+    const plugin = makePlugin(project, scriptsDir);
+    vi.mocked(runShellScript).mockResolvedValue({
+      outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false,
+    });
+
+    const tool = getTool('init_project');
+    const r = (await tool.handler({ project_path: project, profile: 'standard' }, plugin)) as {
+      ok: true;
+      files_written: { target: string; source: string }[];
+    };
+    const bySource = Object.fromEntries(r.files_written.map((f) => [f.target, f.source]));
+    expect(bySource['.gitleaks.toml']).toBe('gitleaks/gitleaks.toml');
+    expect(bySource['renovate.json']).toBe('renovate/renovate.json');
+  });
+
+  // --- task 15: the first-pass status uses the TS secret scan helper ------
+  // (history + working tree), not just initial-scan.sh's own gitleaks call,
+  // which only reads commits — so an uncommitted .env used to show clean.
+
+  it("computes the secrets line from gitleaks directly, catching what the shell script's own history-only pass would miss", async () => {
+    const project = tempProject();
+    const scriptsDir = makeTempDir('init-scripts-');
+    const configsDir = join(scriptsDir, '..', 'configs');
+    mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
+    mkdirSync(join(configsDir, 'renovate'), { recursive: true });
+    writeFileSync(join(configsDir, 'gitleaks', 'gitleaks.toml'), '# gl\n', 'utf8');
+    writeFileSync(join(configsDir, 'renovate', 'renovate.json'), '{}', 'utf8');
+    mkdirSync(join(scriptsDir, 'scan'), { recursive: true });
+    writeFileSync(join(scriptsDir, 'scan', 'initial-scan.sh'), '#!/bin/sh\necho ok\n', 'utf8');
+    // `uncommittedFiles` is mocked below to CLAIM `.env` is uncommitted, but
+    // the copy step that follows (gitleaksScan.ts's filesPass) reads the
+    // real file from disk before handing it to gitleaks, so it has to
+    // actually be there.
+    writeFileSync(join(project, '.env'), 'API_KEY=sk_live_51ABCDEFGHIJKLMNOPQRSTUVWX\n', 'utf8');
+
+    const plugin = makePlugin(project, scriptsDir);
+    // The shell script's own (history-only) pass says clean — exactly the
+    // bug: an uncommitted .env is invisible to `gitleaks detect` alone.
+    vi.mocked(runShellScript).mockResolvedValue({
+      outcome: 'completed',
+      exitCode: 0,
+      stdout: 'Estado inicial do projeto:\n\n  Secrets: 0 findings\n',
+      stderr: '',
+      truncated: false,
+    });
+    vi.mocked(scannerAvailable).mockResolvedValue('/usr/bin/gitleaks');
+    vi.mocked(repoState).mockResolvedValue({ kind: 'has_commits', toplevel: project });
+    vi.mocked(uncommittedFiles).mockResolvedValue(['.env']);
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const args = opts.args ?? [];
+      const reportArg = args.find((a) => a.startsWith('--report-path='));
+      const reportPath = reportArg?.slice('--report-path='.length);
+      const isWorkingTree = args.includes('--no-git');
+      if (reportPath) {
+        const findings = isWorkingTree
+          ? [{ RuleID: 'generic-api-key-strict', Description: 'x', StartLine: 1, EndLine: 1, File: '.env' }]
+          : [];
+        writeFileSync(reportPath, JSON.stringify(findings), 'utf8');
+      }
+      return {
+        outcome: 'completed' as const,
+        exitCode: isWorkingTree ? 1 : 0,
+        stdout: '',
+        stderr: isWorkingTree ? '' : '1 commits scanned.\n',
+        truncated: false,
+      };
+    });
+
+    const tool = getTool('init_project');
+    const r = (await tool.handler({ project_path: project, profile: 'minimal' }, plugin)) as {
+      ok: true;
+      initial_state: string[];
+    };
+    expect(r.ok).toBe(true);
+    expect(r.initial_state.some((l) => /Secrets: 1 findings/.test(l))).toBe(true);
+    expect(r.initial_state.some((l) => /Secrets: 0 findings/.test(l))).toBe(false);
+  });
+
+  it('leaves the shell summary untouched when gitleaks is not installed (nothing to correct it with)', async () => {
+    const project = tempProject();
+    const scriptsDir = makeTempDir('init-scripts-');
+    const configsDir = join(scriptsDir, '..', 'configs');
+    mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
+    mkdirSync(join(configsDir, 'renovate'), { recursive: true });
+    writeFileSync(join(configsDir, 'gitleaks', 'gitleaks.toml'), '# gl\n', 'utf8');
+    writeFileSync(join(configsDir, 'renovate', 'renovate.json'), '{}', 'utf8');
+    mkdirSync(join(scriptsDir, 'scan'), { recursive: true });
+    writeFileSync(join(scriptsDir, 'scan', 'initial-scan.sh'), '#!/bin/sh\necho ok\n', 'utf8');
+
+    const plugin = makePlugin(project, scriptsDir);
+    vi.mocked(runShellScript).mockResolvedValue({
+      outcome: 'completed',
+      exitCode: 0,
+      stdout: 'Estado inicial do projeto:\n\n  Vulnerabilidades: 0\n',
+      stderr: '',
+      truncated: false,
+    });
+    vi.mocked(scannerAvailable).mockResolvedValue(null);
+
+    const tool = getTool('init_project');
+    const r = (await tool.handler({ project_path: project, profile: 'minimal' }, plugin)) as {
+      ok: true;
+      initial_state: string[];
+    };
+    expect(r.ok).toBe(true);
+    expect(r.initial_state).toEqual(['Estado inicial do projeto:', '  Vulnerabilidades: 0']);
   });
 });
 

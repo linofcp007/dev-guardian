@@ -204,11 +204,17 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
     name: 'bandit',
     version_floor: '1.7.0',
     probe: { command: 'bandit', args: ['--version'] },
-    required_by: ['scan_sast', 'security_scan_full'],
+    required_by: ['scan_sast', 'security_scan_full', 'init_project'],
     install: {
-      win32: { scoop: pipxInstall('bandit') },
-      linux: { pipx: pipxInstall('bandit') },
-      darwin: { brew: brewInstall('bandit'), pipx: pipxInstall('bandit') },
+      // `bandit[toml]` everywhere pipx is the installer: the pre-commit
+      // template's bandit hook (configs/pre-commit/pre-commit-config.yaml)
+      // passes `-c pyproject.toml` when the project has one, which needs the
+      // `toml` extra to parse it — plain `bandit` cannot read that file at
+      // all. brew's own formula does not expose extras, so darwin's brew
+      // entry stays as the base package.
+      win32: { scoop: pipxInstall('bandit[toml]') },
+      linux: { pipx: pipxInstall('bandit[toml]') },
+      darwin: { brew: brewInstall('bandit'), pipx: pipxInstall('bandit[toml]') },
     },
     default: false, // only when Python detected
   },

@@ -45640,6 +45640,7 @@ function anyDeepMatching(root, suffix, maxDepth) {
 
 // src/tools/initProject.ts
 import { existsSync as existsSync24 } from "node:fs";
+import { randomUUID as randomUUID4 } from "node:crypto";
 import { join as join31 } from "node:path";
 
 // src/configdrift/refresh.ts
@@ -45905,10 +45906,20 @@ var GITLEAKS = {
   target: ".gitleaks.toml",
   reason: "baseline secret scan rules"
 };
+var GITLEAKS_PARANOID = {
+  source: "gitleaks/gitleaks-paranoid.toml",
+  target: ".gitleaks.toml",
+  reason: "secret scan rules with no content-based allowlist (fixtures, placeholders, stopwords) \u2014 only generated/vendored trees stay excluded"
+};
 var RENOVATE = {
   source: "renovate/renovate.json",
   target: "renovate.json",
   reason: "dependency update bot config"
+};
+var RENOVATE_PARANOID = {
+  source: "renovate/renovate-paranoid.json",
+  target: "renovate.json",
+  reason: "dependency update bot config with automerge disabled everywhere and a 7-day minimum release age \u2014 every update waits for a human, not just the risky ones"
 };
 var SEMGREP = {
   source: "semgrep/base.yml",
@@ -45923,12 +45934,15 @@ var PRECOMMIT = {
 var PROFILE_FILES = {
   minimal: [GITLEAKS, RENOVATE],
   standard: [GITLEAKS, RENOVATE, SEMGREP, PRECOMMIT],
-  paranoid: [GITLEAKS, RENOVATE, SEMGREP, PRECOMMIT]
+  // Genuinely stricter than standard, not an alias of it — see the two
+  // *_PARANOID proposals above for exactly what differs and why. Semgrep and
+  // pre-commit are unchanged: their content is not profile-dependent.
+  paranoid: [GITLEAKS_PARANOID, RENOVATE_PARANOID, SEMGREP, PRECOMMIT]
 };
 var tool7 = {
   name: "init_project",
   title: "Bootstrap project with dev-guardian configs",
-  description: "Install gitleaks/renovate/semgrep/pre-commit configs into the project (idempotent), then run scripts/scan/initial-scan.sh for a first-pass status. Profile=minimal|standard|paranoid. Copied files are stamped with their source and plugin version in .dev-guardian/configs.json, so later scans can tell you when a shipped config has been fixed since yours was installed. refresh=true compares your copies against the current baselines: with apply=false it only reports what would change, and with apply=true it updates files you never edited in place and writes <name>.new alongside the ones you did. An edited file is never overwritten.",
+  description: "Install gitleaks/renovate/semgrep/pre-commit configs into the project (idempotent), then report a first-pass secrets/vuln/SAST status. Profile=minimal|standard|paranoid. paranoid is not an alias of standard: its gitleaks config drops every content-based allowlist entry (fixtures, known placeholders, stopwords \u2014 only generated/vendored trees stay excluded, for noise, not secrecy), and its Renovate config disables automerge everywhere (every update, not just major ones, waits for a human) with a 7-day minimum release age versus standard's 3. Copied files are stamped with their source and plugin version in .dev-guardian/configs.json, so later scans can tell you when a shipped config has been fixed since yours was installed. refresh=true compares your copies against the current baselines: with apply=false it only reports what would change, and with apply=true it updates files you never edited in place and writes <name>.new alongside the ones you did. An edited file is never overwritten.",
   inputSchema: {
     project_path: ProjectPath,
     profile: external_exports.enum(["minimal", "standard", "paranoid"]).optional(),
@@ -46029,6 +46043,14 @@ async function handler4(input, ctx) {
       initialStateLines = r.stdout.split(/\r?\n/).filter((l) => l.length > 0);
     }
   }
+  if (apply) {
+    const secretsLine = await computeSecretsStatusLine(projectPath);
+    if (secretsLine !== null) {
+      const idx = initialStateLines.findIndex((l) => /secrets:/i.test(l));
+      if (idx >= 0) initialStateLines[idx] = secretsLine;
+      else initialStateLines.splice(initialStateLines.length > 0 ? 1 : 0, 0, secretsLine);
+    }
+  }
   return {
     ok: true,
     profile,
@@ -46046,6 +46068,33 @@ async function handler4(input, ctx) {
 function readLatestStackSnapshot(ctx) {
   const latest = ctx.storage.stack.getLatest();
   return latest?.snapshot ?? null;
+}
+async function computeSecretsStatusLine(projectPath) {
+  try {
+    if (!await scannerAvailable("gitleaks")) return null;
+    const scanId = randomUUID4();
+    const reportDir = ensureReportDir(projectPath, scanId, "init-secrets");
+    const controller = new AbortController();
+    const scan2 = await runGitleaksScan({
+      projectPath,
+      reportDir,
+      scope: { kind: "project" },
+      env: process.env,
+      signal: controller.signal
+    });
+    const failed = scan2.tools_run.filter((t) => t.status === "failed");
+    if (failed.length > 0) {
+      const reasons = failed.map((t) => t.reason ?? t.status).join("; ");
+      return `  Secrets: failed (${reasons}) \u2014 corre /guardian-scan`;
+    }
+    let total = 0;
+    for (const { parser, input } of scan2.parser_inputs) {
+      total += parser.parse(input, { project_path: projectPath }).findings.length;
+    }
+    return `  Secrets: ${total} findings`;
+  } catch {
+    return null;
+  }
 }
 function failDomain5(code, message2) {
   return { ok: false, error: { code, message: message2 } };
@@ -46419,7 +46468,7 @@ function failDomain6(code, message2) {
 // src/tools/perfCheck.ts
 import { existsSync as existsSync26, readFileSync as readFileSync17, writeFileSync as writeFileSync8 } from "node:fs";
 import { join as join33 } from "node:path";
-import { randomUUID as randomUUID4 } from "node:crypto";
+import { randomUUID as randomUUID5 } from "node:crypto";
 var inputSchema3 = {
   project_path: ProjectPath,
   target_url: external_exports.string().url().optional().describe("URL to probe with Lighthouse. Mutually exclusive with k6_script_path."),
@@ -46450,7 +46499,7 @@ async function handler6(input, ctx) {
       "Provide exactly one of target_url (Lighthouse) or k6_script_path (k6)."
     );
   }
-  const scanId = randomUUID4();
+  const scanId = randomUUID5();
   const reportDir = ensureReportDir(projectPath, scanId, "perf");
   if (targetUrl !== void 0) {
     return runLighthouse({
@@ -46808,7 +46857,7 @@ function failDomain10(code, message2) {
 }
 
 // src/tools/auditExecutive.ts
-import { randomUUID as randomUUID5 } from "node:crypto";
+import { randomUUID as randomUUID6 } from "node:crypto";
 var BASE_SUB_TOOLS = ["security_scan_full", "quality_check", "deps_audit", "compliance_check"];
 var WP_EXTRA_SUB_TOOLS = ["scan_wordpress"];
 var DOTNET_EXTRA_SUB_TOOLS = ["scan_dotnet_secrets", "dotnet_target_framework_check"];
@@ -46831,7 +46880,7 @@ async function handler10(input, ctx, callMeta) {
   } catch (e) {
     return failDomain11("not_a_git_repo", e.message);
   }
-  const auditScanId = randomUUID5();
+  const auditScanId = randomUUID6();
   const treeHash = await computeTreeHash(projectPath);
   ctx.storage.scans.insert({
     scan_id: auditScanId,
@@ -47195,11 +47244,17 @@ var TOOL_CATALOG = {
     name: "bandit",
     version_floor: "1.7.0",
     probe: { command: "bandit", args: ["--version"] },
-    required_by: ["scan_sast", "security_scan_full"],
+    required_by: ["scan_sast", "security_scan_full", "init_project"],
     install: {
-      win32: { scoop: pipxInstall("bandit") },
-      linux: { pipx: pipxInstall("bandit") },
-      darwin: { brew: brewInstall("bandit"), pipx: pipxInstall("bandit") }
+      // `bandit[toml]` everywhere pipx is the installer: the pre-commit
+      // template's bandit hook (configs/pre-commit/pre-commit-config.yaml)
+      // passes `-c pyproject.toml` when the project has one, which needs the
+      // `toml` extra to parse it — plain `bandit` cannot read that file at
+      // all. brew's own formula does not expose extras, so darwin's brew
+      // entry stays as the base package.
+      win32: { scoop: pipxInstall("bandit[toml]") },
+      linux: { pipx: pipxInstall("bandit[toml]") },
+      darwin: { brew: brewInstall("bandit"), pipx: pipxInstall("bandit[toml]") }
     },
     default: false
     // only when Python detected
@@ -49946,7 +50001,7 @@ registerToolModule(
 
 // src/tools/wpAudit.ts
 import { existsSync as existsSync34 } from "node:fs";
-import { randomUUID as randomUUID6 } from "node:crypto";
+import { randomUUID as randomUUID7 } from "node:crypto";
 import { join as join41 } from "node:path";
 var RETRY_DELAYS_MS = [1e3, 3e3, 9e3];
 var DEFAULT_RISKY_LOGINS = ["admin", "administrator", "root", "wpadmin"];
@@ -50116,7 +50171,7 @@ async function handler25(input, ctx) {
       meta.warnings.push(`config get ${flag}: ${r.reason}`);
     }
   });
-  const scanId = randomUUID6();
+  const scanId = randomUUID7();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_audit",
@@ -50209,7 +50264,7 @@ function failDomain19(code, message2) {
 
 // src/tools/wpVulnCheck.ts
 import { existsSync as existsSync35, mkdirSync as mkdirSync8, readFileSync as readFileSync21, writeFileSync as writeFileSync10 } from "node:fs";
-import { randomUUID as randomUUID7 } from "node:crypto";
+import { randomUUID as randomUUID8 } from "node:crypto";
 import { join as join42 } from "node:path";
 
 // src/runners/scannerParsers/wpscan.ts
@@ -50362,7 +50417,7 @@ async function handler26(input, ctx) {
   }
   const token = inp.api_token ?? process.env["WPSCAN_API_TOKEN"] ?? "";
   if (!token) warnings.push("No WPSCAN_API_TOKEN \u2014 public-no-token rate limit applies.");
-  const scanId = randomUUID7();
+  const scanId = randomUUID8();
   const reportDir = join42(
     inp.wp_install_path ?? process.cwd(),
     ".guardian",
@@ -50459,7 +50514,7 @@ function failDomain20(code, message2) {
 
 // src/tools/wpCronAudit.ts
 import { existsSync as existsSync36 } from "node:fs";
-import { randomUUID as randomUUID8 } from "node:crypto";
+import { randomUUID as randomUUID9 } from "node:crypto";
 import { join as join43 } from "node:path";
 var inputSchema17 = {
   wp_install_path: external_exports.string().min(1).describe("Path to the directory containing wp-config.php.")
@@ -50566,7 +50621,7 @@ async function handler27(input, ctx) {
     }
     if (reasons.length > 0) flagged.push({ ...ev, reasons });
   }
-  const scanId = randomUUID8();
+  const scanId = randomUUID9();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_cron_audit",
@@ -50771,7 +50826,7 @@ function findLatestWpAudit(ctx) {
 }
 
 // src/tools/wpPluginCheck.ts
-import { randomUUID as randomUUID9 } from "node:crypto";
+import { randomUUID as randomUUID10 } from "node:crypto";
 var inputSchema18 = {
   slug: external_exports.string().min(1).describe('Plugin slug as known by wp.org (e.g. "contact-form-7").'),
   wp_install_path: external_exports.string().optional().describe("Optional path to a local WP install for version detection."),
@@ -50828,7 +50883,7 @@ async function handler29(input, ctx) {
     if (!cveMap.has(c3.cve_id)) cveMap.set(c3.cve_id, c3);
   }
   const knownCves = [...cveMap.values()];
-  const scanId = randomUUID9();
+  const scanId = randomUUID10();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_vuln_check",
@@ -50863,7 +50918,7 @@ function failDomain22(code, message2) {
 }
 
 // src/tools/wpRestAudit.ts
-import { randomUUID as randomUUID10 } from "node:crypto";
+import { randomUUID as randomUUID11 } from "node:crypto";
 var inputSchema19 = {
   target_url: external_exports.string().url().describe("Base URL of the WordPress site (e.g. https://example.com)."),
   timeout_ms: external_exports.number().int().min(1e3).max(6e4).optional()
@@ -50896,7 +50951,7 @@ async function handler30(input, ctx) {
     results.push(await probe(`${url}${ep.path}`, ep.label, ep.expectListing, timeoutMs));
   }
   const exposed = results.filter((r) => r.exposed);
-  const scanId = randomUUID10();
+  const scanId = randomUUID11();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_rest_audit",
@@ -51094,7 +51149,7 @@ function countChecksumIssues(meta) {
 }
 
 // src/tools/scanDotnetSecrets.ts
-import { randomUUID as randomUUID11 } from "node:crypto";
+import { randomUUID as randomUUID12 } from "node:crypto";
 import { existsSync as existsSync37, readFileSync as readFileSync22, readdirSync as readdirSync13, statSync as statSync9 } from "node:fs";
 import { join as join44, relative as relative6 } from "node:path";
 var PATTERNS = [
@@ -51236,7 +51291,7 @@ async function handler33(input, ctx) {
       }
     }
   }
-  const scanId = randomUUID11();
+  const scanId = randomUUID12();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "dotnet_secrets",
@@ -51293,7 +51348,7 @@ function collectConfigFiles(root, maxDepth) {
 }
 
 // src/tools/dotnetTargetFrameworkCheck.ts
-import { randomUUID as randomUUID12 } from "node:crypto";
+import { randomUUID as randomUUID13 } from "node:crypto";
 import { readFileSync as readFileSync23, readdirSync as readdirSync14, statSync as statSync10 } from "node:fs";
 import { join as join45, relative as relative7 } from "node:path";
 var SUPPORT = {
@@ -51350,7 +51405,7 @@ async function handler34(input, ctx) {
   }
   const eol = rows.flatMap((r) => r.statuses).filter((s) => s.status === "eol");
   const legacy = rows.flatMap((r) => r.statuses).filter((s) => s.status === "legacy");
-  const scanId = randomUUID12();
+  const scanId = randomUUID13();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "dotnet_target_framework",
@@ -51434,7 +51489,7 @@ function failDomain23(code, message2) {
 }
 
 // src/tools/dotnetEfcoreAudit.ts
-import { randomUUID as randomUUID13 } from "node:crypto";
+import { randomUUID as randomUUID14 } from "node:crypto";
 import { existsSync as existsSync38, readFileSync as readFileSync24, readdirSync as readdirSync15, statSync as statSync11 } from "node:fs";
 import { join as join46, relative as relative8 } from "node:path";
 var RULES = [
@@ -51532,7 +51587,7 @@ async function handler35(input, ctx) {
       }
     }
   }
-  const scanId = randomUUID13();
+  const scanId = randomUUID14();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "dotnet_efcore_audit",
@@ -51718,7 +51773,7 @@ function scoreRange(top) {
 }
 
 // src/tools/scanSkill.ts
-import { createHash as createHash8, randomUUID as randomUUID14 } from "node:crypto";
+import { createHash as createHash8, randomUUID as randomUUID15 } from "node:crypto";
 import { mkdirSync as mkdirSync9, writeFileSync as writeFileSync12 } from "node:fs";
 import { join as join48 } from "node:path";
 
@@ -53331,7 +53386,7 @@ async function handler38(input, ctx, callMeta) {
     if (callMeta?.signal) analyzeOpts.signal = callMeta.signal;
     const report = await analyzeSkill(ingest.files, analyzeOpts);
     const findings = filterFindings(report.findings, inp.severity_min);
-    const scanId = randomUUID14();
+    const scanId = randomUUID15();
     const treeHash = hashFiles(ingest.files.map((f) => `${f.relPath}:${f.bytes}`));
     ctx.storage.scans.insert({
       scan_id: scanId,
@@ -55451,7 +55506,7 @@ function degradedResult(toolsRun, missingTools, note, ctx) {
 }
 
 // src/tools/scanDast.ts
-import { randomUUID as randomUUID15 } from "node:crypto";
+import { randomUUID as randomUUID16 } from "node:crypto";
 import { join as join55 } from "node:path";
 
 // src/dast/plan.ts
@@ -56871,7 +56926,7 @@ async function handler40(input, ctx, callMeta) {
     if (aborted3()) return fail("cancelled", "Scan was cancelled by the host.");
     return fail("target_not_found", livenessMessage(target, liveness, timeoutMs));
   }
-  const scanId = randomUUID15();
+  const scanId = randomUUID16();
   const treeHash = await computeTreeHash(projectPath);
   if (persisted.tree_hash !== treeHash) {
     warnings.push(

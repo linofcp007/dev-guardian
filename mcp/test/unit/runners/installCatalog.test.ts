@@ -80,3 +80,18 @@ describe('knownCompromise (GHSA-69fq-xp46-6x23)', () => {
     expect(knownCompromise('trivy', '')).toBeNull();
   });
 });
+
+describe('bandit install', () => {
+  // The pre-commit template's bandit hook reads pyproject.toml's
+  // [tool.bandit] section when the project has one (configs/pre-commit/
+  // pre-commit-config.yaml) — which needs the `toml` extra installed, or
+  // bandit cannot parse the file at all. Every pipx-based install path
+  // should ask for it, so `install_toolchain` leaves a bandit that can
+  // actually do what the shipped hook asks of it.
+  it('installs the toml extra everywhere it uses pipx', () => {
+    const meta = TOOL_CATALOG['bandit'];
+    expect(meta?.install.win32.scoop?.args).toContain('bandit[toml]');
+    expect(meta?.install.linux.pipx?.args).toContain('bandit[toml]');
+    expect(meta?.install.darwin.pipx?.args).toContain('bandit[toml]');
+  });
+});

@@ -38,6 +38,7 @@
  */
 
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { ConfigFileSpec } from '../configdrift/refresh.js';
@@ -59,6 +60,7 @@ import type { PluginContext } from '../context.js';
 import { configsDirFromScriptsDir } from '../platform/configsDir.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
+import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { runShellScript } from '../runners/shellRunner.js';
 import { ProjectPath } from '../schemas.js';
 import type {
@@ -66,6 +68,7 @@ import type {
   StackSnapshot,
   ToolResult,
 } from '../types.js';
+import { ensureReportDir, scannerAvailable } from './scanHelpers.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
 type Profile = 'minimal' | 'standard' | 'paranoid';
@@ -77,10 +80,22 @@ const GITLEAKS: FileProposal = {
   target: '.gitleaks.toml',
   reason: 'baseline secret scan rules',
 };
+const GITLEAKS_PARANOID: FileProposal = {
+  source: 'gitleaks/gitleaks-paranoid.toml',
+  target: '.gitleaks.toml',
+  reason: 'secret scan rules with no content-based allowlist (fixtures, placeholders, stopwords) — ' +
+    'only generated/vendored trees stay excluded',
+};
 const RENOVATE: FileProposal = {
   source: 'renovate/renovate.json',
   target: 'renovate.json',
   reason: 'dependency update bot config',
+};
+const RENOVATE_PARANOID: FileProposal = {
+  source: 'renovate/renovate-paranoid.json',
+  target: 'renovate.json',
+  reason: 'dependency update bot config with automerge disabled everywhere and a 7-day minimum ' +
+    'release age — every update waits for a human, not just the risky ones',
 };
 const SEMGREP: FileProposal = {
   source: 'semgrep/base.yml',
@@ -96,7 +111,10 @@ const PRECOMMIT: FileProposal = {
 const PROFILE_FILES: Record<Profile, FileProposal[]> = {
   minimal: [GITLEAKS, RENOVATE],
   standard: [GITLEAKS, RENOVATE, SEMGREP, PRECOMMIT],
-  paranoid: [GITLEAKS, RENOVATE, SEMGREP, PRECOMMIT],
+  // Genuinely stricter than standard, not an alias of it — see the two
+  // *_PARANOID proposals above for exactly what differs and why. Semgrep and
+  // pre-commit are unchanged: their content is not profile-dependent.
+  paranoid: [GITLEAKS_PARANOID, RENOVATE_PARANOID, SEMGREP, PRECOMMIT],
 };
 
 const tool: ToolModule = {
@@ -104,7 +122,11 @@ const tool: ToolModule = {
   title: 'Bootstrap project with dev-guardian configs',
   description:
     'Install gitleaks/renovate/semgrep/pre-commit configs into the project (idempotent), then ' +
-    'run scripts/scan/initial-scan.sh for a first-pass status. Profile=minimal|standard|paranoid. ' +
+    'report a first-pass secrets/vuln/SAST status. Profile=minimal|standard|paranoid. paranoid is ' +
+    'not an alias of standard: its gitleaks config drops every content-based allowlist entry ' +
+    '(fixtures, known placeholders, stopwords — only generated/vendored trees stay excluded, for ' +
+    'noise, not secrecy), and its Renovate config disables automerge everywhere (every update, not ' +
+    'just major ones, waits for a human) with a 7-day minimum release age versus standard\'s 3. ' +
     'Copied files are stamped with their source and plugin version in .dev-guardian/configs.json, ' +
     'so later scans can tell you when a shipped config has been fixed since yours was installed. ' +
     'refresh=true compares your copies against the current baselines: with apply=false it only ' +
@@ -254,6 +276,27 @@ async function handler(
     }
   }
 
+  // initial-scan.sh's own "Secrets:" line runs plain `gitleaks detect`,
+  // which reads COMMITS ONLY — an uncommitted `.env`, the file most likely
+  // to hold a live secret, reports as clean. Replace it with a count from
+  // the shared TS helper (history + working tree; see gitleaksScan.ts's own
+  // doc comment for the full breakdown). Independent of `ctx.shell`: this
+  // runs even on a host with no bash/WSL, where the block above never ran at
+  // all and `initialStateLines` starts empty.
+  if (apply) {
+    const secretsLine = await computeSecretsStatusLine(projectPath);
+    if (secretsLine !== null) {
+      const idx = initialStateLines.findIndex((l) => /secrets:/i.test(l));
+      if (idx >= 0) initialStateLines[idx] = secretsLine;
+      else initialStateLines.splice(initialStateLines.length > 0 ? 1 : 0, 0, secretsLine);
+    }
+    // secretsLine === null: gitleaks is not on PATH, or the probe itself
+    // failed. Either way there is nothing more accurate to say than what
+    // initial-scan.sh already produced (or, when it's not installed, said
+    // nothing at all — the shell script's own `command -v gitleaks` guard),
+    // so the line is left exactly as it was.
+  }
+
   return {
     ok: true,
     profile,
@@ -274,6 +317,46 @@ async function handler(
 function readLatestStackSnapshot(ctx: PluginContext): StackSnapshot | null {
   const latest = ctx.storage.stack.getLatest();
   return latest?.snapshot ?? null;
+}
+
+/**
+ * The corrected "  Secrets: N findings" line for `initial_state`, or `null`
+ * when there is nothing more accurate to say (gitleaks is not installed, or
+ * the probe itself failed) — see the call site for why `null` means "leave
+ * the shell script's own line alone" rather than "delete it".
+ *
+ * Deliberately swallows every error: a status probe inside a bootstrap tool
+ * must never be the reason `init_project` itself fails.
+ */
+async function computeSecretsStatusLine(projectPath: string): Promise<string | null> {
+  try {
+    if (!(await scannerAvailable('gitleaks'))) return null;
+
+    const scanId = randomUUID();
+    const reportDir = ensureReportDir(projectPath, scanId, 'init-secrets');
+    const controller = new AbortController();
+    const scan = await runGitleaksScan({
+      projectPath,
+      reportDir,
+      scope: { kind: 'project' },
+      env: process.env,
+      signal: controller.signal,
+    });
+
+    const failed = scan.tools_run.filter((t) => t.status === 'failed');
+    if (failed.length > 0) {
+      const reasons = failed.map((t) => t.reason ?? t.status).join('; ');
+      return `  Secrets: failed (${reasons}) — corre /guardian-scan`;
+    }
+
+    let total = 0;
+    for (const { parser, input } of scan.parser_inputs) {
+      total += parser.parse(input, { project_path: projectPath }).findings.length;
+    }
+    return `  Secrets: ${total} findings`;
+  } catch {
+    return null;
+  }
 }
 
 function failDomain(
