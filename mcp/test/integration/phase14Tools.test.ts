@@ -1361,6 +1361,21 @@ describe('report_export', () => {
     expect(html).toContain('Pro Digital Key');
   });
 
+  it('states the qualified telemetry wording in the HTML export footer, not the bare claim', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedFindings(plugin, 'TELHTML', 1, project);
+
+    const r = (await getTool('report_export').handler(
+      { project_path: project, scan_id: 'TELHTML', format: 'html' },
+      plugin,
+    )) as { ok: true; file_path: string };
+    const html = readFileSync(r.file_path, 'utf8');
+    expect(html).toContain('no telemetry of its own');
+    expect(html).toContain('local_only');
+    expect(html).not.toMatch(/&middot;\s*no telemetry\b(?!\s*of its own)/);
+  });
+
   it('defaults to markdown when no format is given', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);

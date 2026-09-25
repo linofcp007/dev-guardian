@@ -1022,3 +1022,12 @@ describe('renderDashboard — credential findings never carry their snippet into
     expect(html).not.toContain('hunter2');
   });
 });
+
+describe('renderDashboard — footer telemetry wording (Task 12 fix round 1)', () => {
+  it('states the qualified telemetry wording, not the bare "no telemetry" claim', () => {
+    const html = renderDashboard(snap());
+    expect(html).toContain('no telemetry of its own');
+    expect(html).toContain('local_only');
+    expect(html).not.toMatch(/&middot;\s*no telemetry\b(?!\s*of its own)/);
+  });
+});

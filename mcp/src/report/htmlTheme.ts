@@ -177,10 +177,19 @@ function toggleScript(): string {
 
 export type Lang = 'en' | 'pt' | 'es';
 
+// Task 5's wording (hostsetup/rulesTemplate.ts): dev-guardian itself sends
+// nothing, but Semgrep's registry mode does unless local_only is set — the
+// bare "no telemetry" this footer printed before was simply false for that
+// mode. `local_only` is not wrapped in markdown backticks here: this string
+// is inserted straight into raw HTML (see renderHtmlDocument below), not
+// through the Markdown converter, so backticks would render literally.
 const FOOTER: Record<Lang, string> = {
-  en: 'generated locally &middot; no telemetry',
-  pt: 'gerado localmente &middot; sem telemetria',
-  es: 'generado localmente &middot; sin telemetría',
+  en: 'generated locally &middot; no telemetry of its own; Semgrep’s registry mode sends ' +
+    'metrics &mdash; pass <code>local_only: true</code> to avoid it',
+  pt: 'gerado localmente &middot; sem telemetria própria; o modo de registo do Semgrep envia ' +
+    'métricas &mdash; define <code>local_only: true</code> para o evitar',
+  es: 'generado localmente &middot; sin telemetría propia; el modo de registro de Semgrep envía ' +
+    'métricas &mdash; define <code>local_only: true</code> para evitarlo',
 };
 
 export interface HtmlDocument {

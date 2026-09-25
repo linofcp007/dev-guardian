@@ -62,13 +62,25 @@ describe('renderHtmlDocument', () => {
     expect(doc).toContain('.pdk-toggle { display: none');
   });
 
-  it('localises the footer and <html lang>', () => {
+  it('localises the footer and <html lang> with the qualified telemetry wording, not the bare claim', () => {
+    // Task 5's wording (mcp/src/hostsetup/rulesTemplate.ts): dev-guardian itself
+    // sends nothing, but Semgrep's registry mode does unless local_only is set.
+    // The bare "no telemetry" this footer used to print was simply false.
     const pt = renderHtmlDocument({ title: 'X', sections: [], lang: 'pt' });
     expect(pt).toContain('<html lang="pt">');
-    expect(pt).toContain('sem telemetria');
-    expect(renderHtmlDocument({ title: 'X', sections: [], lang: 'es' })).toContain('sin telemetría');
+    expect(pt).toContain('telemetria própria');
+    expect(pt).toContain('local_only');
+    expect(pt).not.toMatch(/&middot;\s*sem telemetria\b(?!\s*própria)/);
+
+    const es = renderHtmlDocument({ title: 'X', sections: [], lang: 'es' });
+    expect(es).toContain('telemetría propia');
+    expect(es).toContain('local_only');
+    expect(es).not.toMatch(/&middot;\s*sin telemetría\b(?!\s*propia)/);
+
     expect(doc).toContain('<html lang="en">');
-    expect(doc).toContain('no telemetry');
+    expect(doc).toContain('no telemetry of its own');
+    expect(doc).toContain('local_only');
+    expect(doc).not.toMatch(/&middot;\s*no telemetry\b(?!\s*of its own)/);
   });
 });
 
