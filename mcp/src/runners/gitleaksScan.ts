@@ -16,33 +16,46 @@
  *   | ------------------------- | -------------------------- | ----------------------------------- |
  *   | git, with commits         | every commit (or log_opts) | uncommitted + untracked-not-ignored |
  *   | git, no commits yet       | skipped — nothing to read  | index + untracked-not-ignored       |
- *   | not a git repository      | —                          | the whole directory                 |
- *   | a commit range (review)   | exactly that range         | —                                   |
+ *   | not a git repository      | —                          | the whole directory, in place       |
+ *   | a commit range (review)   | exactly that range         | uncommitted files, when asked       |
  *
- * The files pass copies the files to a temporary directory, keeping their
- * relative paths, and runs `gitleaks detect --no-git -s .` there, so the
- * paths gitleaks reports ARE project-relative, and the fingerprints in the
- * project's `.gitleaksignore` (`<file>:<rule>:<line>`) match. The temporary
- * directory is always removed. Directories no scan of the project's own files
- * should read (`node_modules`, `vendor`, `.git`, build output, `.guardian`)
- * are skipped; so is anything that is not a regular file.
+ * **Uncommitted files** are copied to a temporary directory, keeping their
+ * relative paths, and scanned there with `gitleaks detect --no-git -s .`, so
+ * the paths gitleaks reports ARE project-relative and the fingerprints in the
+ * project's `.gitleaksignore` (`<file>:<rule>:<line>`) match. The copy has a
+ * per-file and a total size limit; a file over either, or one that cannot be
+ * read (EACCES, EBUSY), is not scanned and the pass says so — it is a named
+ * gap (`ok` in `tools_run`, its name in `missing_tools`: "ran with reduced
+ * coverage"), never a crashed scan. The temporary directory is removed; a
+ * failure to remove it is noted, never allowed to discard results.
+ *
+ * **A directory that is not a repository** is scanned IN PLACE —
+ * `gitleaks detect --no-git -s .` in the project — with a generated config
+ * that extends the project's own `.gitleaks.toml` (or gitleaks' defaults) and
+ * allowlists the directories no scan of the project's own files reads
+ * (`node_modules`, `vendor`, `.git`, build output, `.guardian`). Copying it
+ * first is not an option: the common case is a WordPress site copied off a
+ * server, whose `wp-content/uploads` alone can be gigabytes.
  *
  * A history pass that reports "0 commits scanned" on a repository that HAS
  * commits did not scan — gitleaks prints exactly that when git itself failed
- * (a bad ref, "dubious ownership") and still exits 0 — and is `failed`.
+ * (a bad ref, "dubious ownership") and still exits 0 — and is `failed`. So is
+ * any pass git could not list files for: every git error becomes a `failed`
+ * pass, and nothing this helper meets is allowed to throw out of it and take
+ * the passes that did finish with it.
  *
  * Every finding says where it was found, in its `message`: `history`
  * (with the commit), `working_tree`, or `directory`.
  */
 
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import type { Finding, ToolRun } from '../types.js';
 import { scannerAvailable, readJsonSafe } from '../tools/scanHelpers.js';
 import { countCommits, repoState, resolveCommit, uncommittedFiles } from './git.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
-import { listProjectFiles, PROJECT_WALK_EXCLUDE } from './projectFiles.js';
+import { PROJECT_WALK_EXCLUDE } from './projectFiles.js';
 import { gitleaksParser } from './scannerParsers/gitleaks.js';
 import { parseInputAsJson, type ScannerParser } from './scannerParsers/index.js';
 
@@ -51,8 +64,11 @@ export type SecretLocation = 'history' | 'working_tree' | 'directory';
 export type SecretScanScope =
   /** The whole project: history (optionally narrowed by `logOpts`) + uncommitted files. */
   | { kind: 'project'; logOpts?: string }
-  /** Exactly the commits `base..head` (resolved ids) — `review_pr`. */
-  | { kind: 'range'; base: string; head: string };
+  /**
+   * Exactly the commits `base..head` (resolved ids) — `review_pr`; with
+   * `workingTree`, the uncommitted files too (head is what is checked out).
+   */
+  | { kind: 'range'; base: string; head: string; workingTree?: boolean };
 
 export interface GitleaksScanOptions {
   projectPath: string;
@@ -61,6 +77,8 @@ export interface GitleaksScanOptions {
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;
   onLog?: (line: string) => void;
+  /** Size limits of the uncommitted-files copy; defaults below (tests override). */
+  limits?: { maxFileBytes?: number; maxTotalBytes?: number };
 }
 
 export interface GitleaksScanResult {
@@ -76,66 +94,80 @@ export const GITLEAKS_HISTORY = 'gitleaks';
 /** Name of the uncommitted-files pass in `tools_run`. */
 export const GITLEAKS_WORKING_TREE = 'gitleaks-working-tree';
 
-/** Files larger than this are not copied into the files pass (and are counted). */
+/** Uncommitted files larger than this are not copied (a named gap). */
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
+/** The uncommitted-files copy stops at this many bytes in total (a named gap). */
+const MAX_TOTAL_BYTES = 512 * 1024 * 1024;
 
-/** Never copied into a files pass, wherever they sit. */
+/** Never scanned by a files pass, wherever they sit. */
 const EXCLUDED_DIRS: readonly string[] = [...PROJECT_WALK_EXCLUDE];
 
 export async function runGitleaksScan(opts: GitleaksScanOptions): Promise<GitleaksScanResult> {
   const result: GitleaksScanResult = { tools_run: [], missing_tools: [], parser_inputs: [], cancelled: false };
+  try {
+    await scan(opts, result);
+  } catch (e) {
+    // Every step below handles its own failures; this is the net under them,
+    // so a pass that did finish is never lost to one that did not.
+    result.tools_run.push({ name: GITLEAKS_HISTORY, status: 'failed', reason: `secret scan failed: ${message(e)}` });
+  }
+  return result;
+}
+
+async function scan(opts: GitleaksScanOptions, result: GitleaksScanResult): Promise<void> {
   if (!(await scannerAvailable('gitleaks'))) {
     result.tools_run.push({ name: GITLEAKS_HISTORY, status: 'skipped', reason: 'not_installed' });
     result.missing_tools.push('gitleaks');
-    return result;
+    return;
   }
 
   if (opts.scope.kind === 'range') {
     const range = `${opts.scope.base}..${opts.scope.head}`;
-    const commits = await countCommits(opts.projectPath, range);
+    let commits: number;
+    try {
+      commits = await countCommits(opts.projectPath, range);
+    } catch (e) {
+      result.tools_run.push({ name: GITLEAKS_HISTORY, status: 'failed', reason: message(e) });
+      return;
+    }
     if (commits === 0) {
       result.tools_run.push({
         name: GITLEAKS_HISTORY,
         status: 'skipped',
         reason: `no commits in ${short(opts.scope.base)}..${short(opts.scope.head)}`,
       });
-      return result;
+    } else {
+      await historyPass(opts, result, range, commits, await repoPrefix(opts.projectPath));
     }
-    await historyPass(opts, result, range, commits, await repoPrefix(opts.projectPath));
-    return result;
+    if (opts.scope.workingTree === true && !result.cancelled) await workingTreePass(opts, result, true);
+    return;
   }
 
   const state = await repoState(opts.projectPath);
   switch (state.kind) {
-    case 'has_commits': {
+    case 'has_commits':
       await historyPass(opts, result, opts.scope.logOpts, null, posixRelative(state.toplevel, opts.projectPath));
-      if (result.cancelled) return result;
-      const files = await uncommittedFiles(opts.projectPath, true, EXCLUDED_DIRS);
-      await filesPass(opts, result, files, 'working_tree', GITLEAKS_WORKING_TREE);
-      return result;
-    }
-    case 'no_commits': {
+      if (!result.cancelled) await workingTreePass(opts, result, true);
+      return;
+    case 'no_commits':
       result.tools_run.push({
         name: GITLEAKS_HISTORY,
         status: 'skipped',
         reason: 'the repository has no commits yet — no history to scan',
       });
-      const files = await uncommittedFiles(opts.projectPath, false, EXCLUDED_DIRS);
-      await filesPass(opts, result, files, 'working_tree', GITLEAKS_WORKING_TREE);
-      return result;
-    }
-    case 'error': {
+      await workingTreePass(opts, result, false);
+      return;
+    case 'error':
       result.tools_run.push({
         name: GITLEAKS_HISTORY,
         status: 'failed',
         reason: `git could not read the repository (${state.message}) — history not scanned`,
       });
-      await filesPass(opts, result, listProjectFiles(opts.projectPath), 'directory', GITLEAKS_WORKING_TREE);
-      return result;
-    }
+      await directoryPass(opts, result, GITLEAKS_WORKING_TREE);
+      return;
     case 'not_git':
-      await filesPass(opts, result, listProjectFiles(opts.projectPath), 'directory', GITLEAKS_HISTORY);
-      return result;
+      await directoryPass(opts, result, GITLEAKS_HISTORY);
+      return;
   }
 }
 
@@ -200,34 +232,50 @@ async function historyPass(
 }
 
 /**
- * gitleaks over a list of project files, copied to a temporary directory.
- * `location` is `working_tree` for a repository, `directory` otherwise; the
- * pass is recorded as `gitleaks-working-tree` or `gitleaks` respectively.
+ * The files of a repository that no commit holds: listed by git (a git error
+ * is a `failed` pass), copied, scanned — see {@link filesPass}.
  */
-async function filesPass(
-  opts: GitleaksScanOptions,
-  result: GitleaksScanResult,
-  files: readonly string[],
-  location: 'working_tree' | 'directory',
-  name: string,
-): Promise<void> {
-  const what = location === 'working_tree' ? 'uncommitted or untracked file(s)' : 'file(s)';
-  const prefix =
-    location === 'directory' ? 'not a git repository — scanned the directory: ' : 'working tree: ';
-  const candidates = files.filter((f) => !isExcluded(f));
-  if (candidates.length === 0) {
-    result.tools_run.push({
-      name,
-      status: 'skipped',
-      reason: location === 'working_tree' ? 'no uncommitted or untracked files' : 'the directory holds no files to scan',
-    });
+async function workingTreePass(opts: GitleaksScanOptions, result: GitleaksScanResult, hasCommits: boolean): Promise<void> {
+  let files: string[];
+  try {
+    files = await uncommittedFiles(opts.projectPath, hasCommits, EXCLUDED_DIRS);
+  } catch (e) {
+    result.tools_run.push({ name: GITLEAKS_WORKING_TREE, status: 'failed', reason: `working tree: ${message(e)}` });
     return;
   }
+  await filesPass(opts, result, files);
+}
 
-  const tmp = mkdtempSync(join(tmpdir(), 'guardian-gitleaks-'));
+/**
+ * gitleaks over a list of uncommitted project files, copied to a temporary
+ * directory (see the module comment for the size limits and what a file that
+ * cannot be read costs).
+ */
+async function filesPass(opts: GitleaksScanOptions, result: GitleaksScanResult, files: readonly string[]): Promise<void> {
+  const name = GITLEAKS_WORKING_TREE;
+  const candidates = files.filter((f) => !isExcluded(f));
+  if (candidates.length === 0) {
+    result.tools_run.push({ name, status: 'skipped', reason: 'no uncommitted or untracked files' });
+    return;
+  }
+  const maxFile = opts.limits?.maxFileBytes ?? MAX_FILE_BYTES;
+  const maxTotal = opts.limits?.maxTotalBytes ?? MAX_TOTAL_BYTES;
+
+  let tmp: string;
   try {
-    let copied = 0;
+    tmp = mkdtempSync(join(tmpdir(), 'guardian-gitleaks-'));
+  } catch (e) {
+    result.tools_run.push({ name, status: 'failed', reason: `working tree: no temporary directory: ${message(e)}` });
+    return;
+  }
+  const gaps: string[] = [];
+  const notes: string[] = [];
+  let copied = 0;
+  try {
+    const unreadable: string[] = [];
     let oversized = 0;
+    let overTotal = 0;
+    let total = 0;
     for (const rel of candidates) {
       const from = join(opts.projectPath, rel);
       let size: number;
@@ -236,28 +284,42 @@ async function filesPass(
         if (!st.isFile()) continue;
         size = st.size;
       } catch {
-        continue;
+        continue; // deleted since git listed it: nothing to read
       }
-      if (size > MAX_FILE_BYTES) {
+      if (size > maxFile) {
         oversized += 1;
         continue;
       }
-      const to = join(tmp, rel);
-      mkdirSync(dirname(to), { recursive: true });
-      copyFileSync(from, to);
-      copied += 1;
+      if (total + size > maxTotal) {
+        overTotal += 1;
+        continue;
+      }
+      try {
+        const to = join(tmp, rel);
+        mkdirSync(dirname(to), { recursive: true });
+        copyFileSync(from, to);
+        copied += 1;
+        total += size;
+      } catch (e) {
+        unreadable.push(`${rel} (${errorCode(e)})`);
+      }
     }
-    const notes = oversized > 0 ? `; ${oversized} file(s) over 25 MB not scanned` : '';
+    if (unreadable.length > 0) {
+      gaps.push(`${unreadable.length} file(s) could not be read: ${unreadable.slice(0, 5).join(', ')}${unreadable.length > 5 ? ', …' : ''}`);
+    }
+    if (oversized > 0) gaps.push(`${oversized} file(s) not scanned: over ${megabytes(maxFile)} each`);
+    if (overTotal > 0) gaps.push(`${overTotal} file(s) not scanned: over the ${bytesLabel(maxTotal)} total`);
+
     if (copied === 0) {
       result.tools_run.push({
         name,
-        status: 'skipped',
-        reason: `${prefix}no regular file to scan${notes}`,
+        status: gaps.length > 0 ? 'failed' : 'skipped',
+        reason: `working tree: no file to scan${gaps.length > 0 ? `; ${gaps.join('; ')}` : ''}`,
       });
       return;
     }
 
-    const outFile = join(opts.reportDir, location === 'working_tree' ? 'secrets-working-tree.json' : 'secrets.json');
+    const outFile = join(opts.reportDir, 'secrets-working-tree.json');
     rmSync(outFile, { force: true });
     const args = [
       'detect',
@@ -272,26 +334,128 @@ async function filesPass(
     ];
     const projectConfig = join(opts.projectPath, '.gitleaks.toml');
     if (existsSync(projectConfig)) args.push(`--config=${projectConfig}`);
-    const run = await runProcess({
-      command: 'gitleaks',
-      args,
-      cwd: tmp,
-      env: opts.env,
-      signal: opts.signal,
-      onLog: opts.onLog,
-    });
+    const run = await runProcess({ command: 'gitleaks', args, cwd: tmp, env: opts.env, signal: opts.signal, onLog: opts.onLog });
     if (run.outcome === 'cancelled') result.cancelled = true;
-    const raw = readJsonSafe(outFile);
-    const problems = runProblems(run, raw);
-    if (raw !== null && problems.length === 0) {
-      result.parser_inputs.push({ parser: locatedParser(location, ''), input: raw });
-      result.tools_run.push({ name, status: 'ok', reason: `${prefix}${copied} ${what} scanned${notes}` });
-    } else {
-      result.tools_run.push({ name, status: 'failed', reason: `${prefix}${problems.join('; ')}` });
-    }
+    recordFilesRun(result, name, run, readJsonSafe(outFile), 'working_tree', `working tree: ${copied} uncommitted or untracked file(s) scanned`, gaps, notes);
   } finally {
-    rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    try {
+      rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (e) {
+      // Leaves a directory behind; must never take the results with it.
+      const entry = result.tools_run.find((t) => t.name === name);
+      const note = `temporary copy ${tmp} could not be removed (${errorCode(e)})`;
+      if (entry) entry.reason = entry.reason ? `${entry.reason}; ${note}` : note;
+    }
   }
+}
+
+/**
+ * gitleaks over a directory that is not (readable as) a repository, in place:
+ * `--no-git -s .` in the project, with a generated config that extends the
+ * project's `.gitleaks.toml` (or gitleaks' defaults) and allowlists the
+ * excluded directories. The config is written next to the report.
+ */
+async function directoryPass(opts: GitleaksScanOptions, result: GitleaksScanResult, name: string): Promise<void> {
+  const prefix = 'not a git repository — scanned the directory in place';
+  let config: string;
+  try {
+    config = join(opts.reportDir, 'gitleaks-directory.toml');
+    writeFileSync(config, directoryConfig(opts.projectPath));
+  } catch (e) {
+    result.tools_run.push({ name, status: 'failed', reason: `${prefix}: could not write its config: ${message(e)}` });
+    return;
+  }
+  const outFile = join(opts.reportDir, 'secrets.json');
+  rmSync(outFile, { force: true });
+  const run = await runProcess({
+    command: 'gitleaks',
+    args: [
+      'detect',
+      '--no-git',
+      '--no-banner',
+      '--log-level=info',
+      '--report-format=json',
+      `--report-path=${outFile}`,
+      '--redact',
+      '-s',
+      '.',
+      `--config=${config}`,
+    ],
+    cwd: opts.projectPath,
+    env: opts.env,
+    signal: opts.signal,
+    onLog: opts.onLog,
+  });
+  if (run.outcome === 'cancelled') result.cancelled = true;
+  const bytes = bytesScanned(run.stderr);
+  if (bytes === 0 && runProblems(run, readJsonSafe(outFile)).length === 0) {
+    result.tools_run.push({ name, status: 'skipped', reason: `${prefix}: it holds nothing gitleaks reads (0 bytes)` });
+    return;
+  }
+  const excluded = EXCLUDED_DIRS.join(', ');
+  const scanned = bytes === null ? '' : ` (~${bytes} bytes)`;
+  recordFilesRun(result, name, run, readJsonSafe(outFile), 'directory', `${prefix}${scanned}, excluding ${excluded}`, [], []);
+}
+
+/** The config for {@link directoryPass}: the project's (or the default) plus the excluded directories. */
+export function directoryConfig(projectPath: string): string {
+  const own = join(projectPath, '.gitleaks.toml');
+  const names = EXCLUDED_DIRS.map((d) => d.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  return [
+    '# Generated by dev-guardian for one scan: the project\'s gitleaks config (or',
+    '# gitleaks\' defaults) plus the directories no scan of the project\'s own files reads.',
+    '[extend]',
+    existsSync(own) ? `path = '''${own}'''` : 'useDefault = true',
+    '',
+    '[allowlist]',
+    'description = "dev-guardian: vendored, generated and tool directories"',
+    `paths = ['''(^|/)(${names})/''']`,
+    '',
+  ].join('\n');
+}
+
+/** A files-pass run into `tools_run` / `parser_inputs`; `gaps` make an ok run "reduced coverage". */
+function recordFilesRun(
+  result: GitleaksScanResult,
+  name: string,
+  run: ProcessRunResult,
+  raw: string | null,
+  location: 'working_tree' | 'directory',
+  okReason: string,
+  gaps: readonly string[],
+  notes: readonly string[],
+): void {
+  const problems = runProblems(run, raw);
+  if (raw !== null && problems.length === 0) {
+    result.parser_inputs.push({ parser: locatedParser(location, ''), input: raw });
+    result.tools_run.push({ name, status: 'ok', reason: [okReason, ...gaps, ...notes].join('; ') });
+    if (gaps.length > 0) result.missing_tools.push(name);
+  } else {
+    result.tools_run.push({ name, status: 'failed', reason: [...problems, ...gaps, ...notes].join('; ') });
+  }
+}
+
+function message(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+function errorCode(e: unknown): string {
+  const code = typeof e === 'object' && e !== null && 'code' in e ? (e as { code: unknown }).code : undefined;
+  return typeof code === 'string' ? code : message(e);
+}
+
+function megabytes(n: number): string {
+  return `${Math.round(n / (1024 * 1024))} MB`;
+}
+
+function bytesLabel(n: number): string {
+  return n >= 1024 * 1024 ? megabytes(n) : `${n}-byte`;
+}
+
+/** The `scanned ~N bytes` gitleaks logs, or null. */
+function bytesScanned(stderr: string): number | null {
+  const m = /scanned ~(\d+) bytes/i.exec(stderr.replace(ANSI, ''));
+  return m?.[1] !== undefined ? Number(m[1]) : null;
 }
 
 /** Why a gitleaks run does not count: it did not finish, or wrote no JSON array. */

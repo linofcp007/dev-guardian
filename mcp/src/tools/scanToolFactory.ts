@@ -195,6 +195,13 @@ export interface ScanToolConfig<TInput extends ScanToolBaseInput> {
    * edited pack is served from a stale cache entry.
    */
   rulePacks?: (input: TInput, ctx: RulePackContext) => readonly string[];
+  /**
+   * State outside the working tree that the scan reads, joined to the cache
+   * key — e.g. HEAD and every ref for a git-history scan, which a fetch or an
+   * empty-diff merge moves without changing one file. A throw makes the call
+   * uncacheable rather than failing it.
+   */
+  cacheState?: (input: TInput, ctx: RulePackContext) => Promise<Record<string, string>>;
   /** See {@link ResponseView}. Applied to fresh runs and cache hits alike. */
   responseView?: (input: TInput, findings: readonly Finding[], scanId: string) => ResponseView | null;
   /**
@@ -292,7 +299,15 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     callMeta?.parentScanId !== undefined && callMeta.treeHash !== undefined
       ? callMeta.treeHash
       : await computeTreeHash(projectPath);
-  const cacheKey = buildCacheKey(config, input, projectPath, treeHash, plugin);
+  let cacheState: Record<string, string> = {};
+  if (config.cacheState) {
+    try {
+      cacheState = await config.cacheState(input, { projectPath, plugin });
+    } catch {
+      cacheState = { uncacheable: randomUUID() };
+    }
+  }
+  const cacheKey = buildCacheKey(config, input, projectPath, treeHash, plugin, cacheState);
 
   // Cache check. Only a run whose every scanner ran is served again: one
   // with a scanner missing or failed is `completed` at coverage none or
@@ -617,6 +632,8 @@ function buildCacheKey<TInput extends ScanToolBaseInput>(
   projectPath: string,
   treeHash: string,
   plugin: PluginContext,
+  /** `config.cacheState`'s answer; empty leaves the key exactly as before it existed. */
+  cacheState: Record<string, string>,
 ): string {
   let rulePacksHash: string;
   try {
@@ -624,12 +641,15 @@ function buildCacheKey<TInput extends ScanToolBaseInput>(
   } catch {
     rulePacksHash = `uncacheable:${randomUUID()}`;
   }
+  const keyed = normaliseInput(config, input);
+  // `__`-prefixed: no schema field is spelt that way, so it cannot collide.
+  if (Object.keys(cacheState).length > 0) keyed['__cache_state'] = cacheState;
   return scanCacheKey({
     projectPath,
     tool: config.name,
     scanType: config.scan_type,
     treeHash,
-    inputHash: hashInput(normaliseInput(config, input)),
+    inputHash: hashInput(keyed),
     pluginVersion: resolveVersion(),
     rulePacksHash,
   });

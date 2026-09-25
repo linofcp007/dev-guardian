@@ -301,6 +301,26 @@ describe('security_scan_full orchestrates the scan tools', () => {
     expect(rb.r.ok).toBe(true);
   }, 90_000);
 
+  it('a commit that changes no file makes the next full scan fresh — the secrets history moved', async () => {
+    const dir = project();
+    const git = (...a: string[]) =>
+      execa('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...a], {
+        cwd: dir,
+      });
+    await git('init', '-q');
+    writeFileSync(join(dir, '.gitignore'), '.guardian/\n');
+    await git('add', '-A');
+    await git('commit', '-q', '-m', 'x');
+    const p = plugin(dir);
+    const tool = TOOLS.find((t) => t.name === 'security_scan_full');
+    if (!tool) throw new Error('not registered');
+    const run = async () => (await tool.handler({ project_path: dir }, p)) as unknown as FullResult & { cached?: boolean };
+    expect((await run()).coverage).toBe('full');
+    expect((await run()).cached).toBe(true);
+    await git('commit', '-q', '--allow-empty', '-m', 'empty');
+    expect((await run()).cached).toBeUndefined();
+  });
+
   it('serves a repeat call from the cache, with the child scans it ran', async () => {
     const dir = project();
     const p = plugin(dir);

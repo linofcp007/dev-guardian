@@ -1379,12 +1379,12 @@ var require_errors = __commonJS({
       }
       return [E.schemaPath, schPath];
     }
-    function extraErrorProps(cxt, { params, message }, keyValues) {
+    function extraErrorProps(cxt, { params, message: message2 }, keyValues) {
       const { keyword, data, schemaValue, it } = cxt;
       const { opts, propertyName, topSchemaRef, schemaPath } = it;
       keyValues.push([E.keyword, keyword], [E.params, typeof params == "function" ? params(cxt) : params || (0, codegen_1._)`{}`]);
       if (opts.messages) {
-        keyValues.push([E.message, typeof message == "function" ? message(cxt) : message]);
+        keyValues.push([E.message, typeof message2 == "function" ? message2(cxt) : message2]);
       }
       if (opts.verbose) {
         keyValues.push([E.schema, schemaValue], [E.parentSchema, (0, codegen_1._)`${topSchemaRef}${schemaPath}`], [names_1.default.data, data]);
@@ -4514,11 +4514,11 @@ var require_core = __commonJS({
         }
         const valid = this.validate($schema, schema);
         if (!valid && throwOrLogError) {
-          const message = "schema is invalid: " + this.errorsText();
+          const message2 = "schema is invalid: " + this.errorsText();
           if (this.opts.validateSchema === "log")
-            this.logger.error(message);
+            this.logger.error(message2);
           else
-            throw new Error(message);
+            throw new Error(message2);
         }
         return valid;
       }
@@ -7999,7 +7999,7 @@ var init_default = __esm({
     init_yoctocolors();
     defaultVerboseFunction = ({
       type,
-      message,
+      message: message2,
       timestamp,
       piped,
       commandId,
@@ -8009,7 +8009,7 @@ var init_default = __esm({
       const timestampString = serializeTimestamp(timestamp);
       const icon = ICONS[type]({ failed, reject, piped });
       const color = COLORS[type]({ reject });
-      return `${gray(`[${timestampString}]`)} ${gray(`[${commandId}]`)} ${color(icon)} ${color(message)}`;
+      return `${gray(`[${timestampString}]`)} ${gray(`[${commandId}]`)} ${color(icon)} ${color(message2)}`;
     };
     serializeTimestamp = (timestamp) => `${padField(timestamp.getHours(), 2)}:${padField(timestamp.getMinutes(), 2)}:${padField(timestamp.getSeconds(), 2)}.${padField(timestamp.getMilliseconds(), 3)}`;
     padField = (field, padding) => String(field).padStart(padding, "0");
@@ -8089,13 +8089,13 @@ var init_log = __esm({
       result,
       options
     });
-    getPrintedLines = (verboseMessage, verboseObject) => verboseMessage.split("\n").map((message) => getPrintedLine({ ...verboseObject, message }));
+    getPrintedLines = (verboseMessage, verboseObject) => verboseMessage.split("\n").map((message2) => getPrintedLine({ ...verboseObject, message: message2 }));
     getPrintedLine = (verboseObject) => {
       const verboseLine = defaultVerboseFunction(verboseObject);
       return { verboseLine, verboseObject };
     };
-    serializeVerboseMessage = (message) => {
-      const messageString = typeof message === "string" ? message : inspect(message);
+    serializeVerboseMessage = (message2) => {
+      const messageString = typeof message2 === "string" ? message2 : inspect(message2);
       const escapedMessage = escapeLines(messageString);
       return escapedMessage.replaceAll("	", " ".repeat(TAB_SIZE));
     };
@@ -8794,10 +8794,10 @@ var init_npm_run_path = __esm({
 var getFinalError, DiscardedError, setErrorName, isExecaError, execaErrorSymbol, isErrorInstance, ExecaError, ExecaSyncError;
 var init_final_error = __esm({
   "node_modules/execa/lib/return/final-error.js"() {
-    getFinalError = (originalError, message, isSync) => {
+    getFinalError = (originalError, message2, isSync) => {
       const ErrorClass = isSync ? ExecaSyncError : ExecaError;
       const options = originalError instanceof DiscardedError ? {} : { cause: originalError };
-      return new ErrorClass(message, options);
+      return new ErrorClass(message2, options);
     };
     DiscardedError = class extends Error {
     };
@@ -9419,12 +9419,12 @@ const [receivedMessage] = await Promise.all([
         throw new Error(`${getMethodName(methodName, isSubprocess)} cannot be used: the ${getOtherProcessName(isSubprocess)} is disconnecting.`, { cause: error2 });
       }
     };
-    handleSerializationError = ({ error: error2, methodName, isSubprocess, message }) => {
+    handleSerializationError = ({ error: error2, methodName, isSubprocess, message: message2 }) => {
       if (isSerializationError(error2)) {
-        throw new Error(`${getMethodName(methodName, isSubprocess)}'s argument type is invalid: the message cannot be serialized: ${String(message)}.`, { cause: error2 });
+        throw new Error(`${getMethodName(methodName, isSubprocess)}'s argument type is invalid: the message cannot be serialized: ${String(message2)}.`, { cause: error2 });
       }
     };
-    isSerializationError = ({ code, message }) => SERIALIZATION_ERROR_CODES.has(code) || SERIALIZATION_ERROR_MESSAGES.some((serializationErrorMessage) => message.includes(serializationErrorMessage));
+    isSerializationError = ({ code, message: message2 }) => SERIALIZATION_ERROR_CODES.has(code) || SERIALIZATION_ERROR_MESSAGES.some((serializationErrorMessage) => message2.includes(serializationErrorMessage));
     SERIALIZATION_ERROR_CODES = /* @__PURE__ */ new Set([
       // Message is `undefined`
       "ERR_MISSING_ARGS",
@@ -9628,7 +9628,7 @@ var init_incoming = __esm({
       while (incomingMessages.length > 0) {
         await waitForOutgoingMessages(anyProcess, ipcEmitter, wrappedMessage);
         await scheduler.yield();
-        const message = await handleStrictRequest({
+        const message2 = await handleStrictRequest({
           wrappedMessage: incomingMessages[0],
           anyProcess,
           channel,
@@ -9636,7 +9636,7 @@ var init_incoming = __esm({
           ipcEmitter
         });
         incomingMessages.shift();
-        ipcEmitter.emit("message", message);
+        ipcEmitter.emit("message", message2);
         ipcEmitter.emit("message:done");
       }
     };
@@ -9713,16 +9713,16 @@ var init_strict = __esm({
     init_validation();
     init_forward();
     init_outgoing();
-    handleSendStrict = ({ anyProcess, channel, isSubprocess, message, strict }) => {
+    handleSendStrict = ({ anyProcess, channel, isSubprocess, message: message2, strict }) => {
       if (!strict) {
-        return message;
+        return message2;
       }
       const ipcEmitter = getIpcEmitter(anyProcess, channel, isSubprocess);
       const hasListeners = hasMessageListeners(anyProcess, ipcEmitter);
       return {
         id: count++,
         type: REQUEST_TYPE,
-        message,
+        message: message2,
         hasListeners
       };
     };
@@ -9741,7 +9741,7 @@ var init_strict = __esm({
       if (wrappedMessage?.type !== REQUEST_TYPE || !anyProcess.connected) {
         return wrappedMessage;
       }
-      const { id, message } = wrappedMessage;
+      const { id, message: message2 } = wrappedMessage;
       const response = { id, type: RESPONSE_TYPE, message: hasMessageListeners(anyProcess, ipcEmitter) };
       try {
         await sendMessage({
@@ -9753,7 +9753,7 @@ var init_strict = __esm({
       } catch (error2) {
         ipcEmitter.emit("strict:error", error2);
       }
-      return message;
+      return message2;
     };
     handleStrictResponse = (wrappedMessage) => {
       if (wrappedMessage?.type !== RESPONSE_TYPE) {
@@ -9841,7 +9841,7 @@ var init_send = __esm({
     init_validation();
     init_outgoing();
     init_strict();
-    sendMessage = ({ anyProcess, channel, isSubprocess, ipc }, message, { strict = false } = {}) => {
+    sendMessage = ({ anyProcess, channel, isSubprocess, ipc }, message2, { strict = false } = {}) => {
       const methodName = "sendMessage";
       validateIpcMethod({
         methodName,
@@ -9854,16 +9854,16 @@ var init_send = __esm({
         channel,
         methodName,
         isSubprocess,
-        message,
+        message: message2,
         strict
       });
     };
-    sendMessageAsync = async ({ anyProcess, channel, methodName, isSubprocess, message, strict }) => {
+    sendMessageAsync = async ({ anyProcess, channel, methodName, isSubprocess, message: message2, strict }) => {
       const wrappedMessage = handleSendStrict({
         anyProcess,
         channel,
         isSubprocess,
-        message,
+        message: message2,
         strict
       });
       const outgoingMessagesState = startSendMessage(anyProcess, wrappedMessage, strict);
@@ -9873,7 +9873,7 @@ var init_send = __esm({
           methodName,
           isSubprocess,
           wrappedMessage,
-          message
+          message: message2
         });
       } catch (error2) {
         disconnect(anyProcess);
@@ -9882,7 +9882,7 @@ var init_send = __esm({
         endSendMessage(outgoingMessagesState);
       }
     };
-    sendOneMessage = async ({ anyProcess, methodName, isSubprocess, wrappedMessage, message }) => {
+    sendOneMessage = async ({ anyProcess, methodName, isSubprocess, wrappedMessage, message: message2 }) => {
       const sendMethod = getSendMethod(anyProcess);
       try {
         await Promise.all([
@@ -9895,7 +9895,7 @@ var init_send = __esm({
           error: error2,
           methodName,
           isSubprocess,
-          message
+          message: message2
         });
         throw error2;
       }
@@ -9920,15 +9920,15 @@ var init_graceful = __esm({
     init_send();
     init_forward();
     init_validation();
-    sendAbort = (subprocess, message) => {
+    sendAbort = (subprocess, message2) => {
       const methodName = "cancelSignal";
       validateConnection(methodName, false, subprocess.connected);
       return sendOneMessage({
         anyProcess: subprocess,
         methodName,
         isSubprocess: false,
-        wrappedMessage: { type: GRACEFUL_CANCEL_TYPE, message },
-        message
+        wrappedMessage: { type: GRACEFUL_CANCEL_TYPE, message: message2 },
+        message: message2
       });
     };
     getCancelSignal = async ({ anyProcess, channel, isSubprocess, ipc }) => {
@@ -10900,14 +10900,14 @@ var init_message = __esm({
       timeout,
       cwd
     }) => {
-      const errorCode = originalError?.code;
+      const errorCode2 = originalError?.code;
       const prefix = getErrorPrefix({
         originalError,
         timedOut,
         timeout,
         isMaxBuffer,
         maxBuffer,
-        errorCode,
+        errorCode: errorCode2,
         signal,
         signalDescription,
         exitCode,
@@ -10922,13 +10922,13 @@ var init_message = __esm({
 ${originalMessage}`;
       const shortMessage = `${prefix}: ${escapedCommand}${suffix}`;
       const messageStdio = all === void 0 ? [stdio[2], stdio[1]] : [all];
-      const message = [
+      const message2 = [
         shortMessage,
         ...messageStdio,
         ...stdio.slice(3),
         ipcOutput.map((ipcMessage) => serializeIpcMessage(ipcMessage)).join("\n")
       ].map((messagePart) => escapeLines(stripFinalNewline(serializeMessagePart(messagePart)))).filter(Boolean).join("\n\n");
-      return { originalMessage, shortMessage, message };
+      return { originalMessage, shortMessage, message: message2 };
     };
     getErrorPrefix = ({
       originalError,
@@ -10936,7 +10936,7 @@ ${originalMessage}`;
       timeout,
       isMaxBuffer,
       maxBuffer,
-      errorCode,
+      errorCode: errorCode2,
       signal,
       signalDescription,
       exitCode,
@@ -10962,8 +10962,8 @@ ${originalMessage}`;
       if (isMaxBuffer) {
         return `${getMaxBufferMessage(originalError, maxBuffer)}${forcefulSuffix}`;
       }
-      if (errorCode !== void 0) {
-        return `Command failed with ${errorCode}${forcefulSuffix}`;
+      if (errorCode2 !== void 0) {
+        return `Command failed with ${errorCode2}${forcefulSuffix}`;
       }
       if (isForcefullyTerminated) {
         return `Command was killed with ${killSignal} (${getSignalDescription(killSignal)})${forcefulSuffix}`;
@@ -11084,7 +11084,7 @@ var init_result = __esm({
       isSync
     }) => {
       const { exitCode, signal, signalDescription } = normalizeExitPayload(rawExitCode, rawSignal);
-      const { originalMessage, shortMessage, message } = createMessages({
+      const { originalMessage, shortMessage, message: message2 } = createMessages({
         stdio,
         all,
         ipcOutput,
@@ -11104,7 +11104,7 @@ var init_result = __esm({
         timeout,
         cwd
       });
-      const error2 = getFinalError(originalError, message, isSync);
+      const error2 = getFinalError(originalError, message2, isSync);
       Object.assign(error2, getErrorProperties({
         error: error2,
         command,
@@ -13013,12 +13013,12 @@ var init_get_one = __esm({
     };
     getMessage = async (ipcEmitter, filter, { signal }) => {
       if (filter === void 0) {
-        const [message] = await once5(ipcEmitter, "message", { signal });
-        return message;
+        const [message2] = await once5(ipcEmitter, "message", { signal });
+        return message2;
       }
-      for await (const [message] of on2(ipcEmitter, "message", { signal })) {
-        if (filter(message)) {
-          return message;
+      for await (const [message2] of on2(ipcEmitter, "message", { signal })) {
+        if (filter(message2)) {
+          return message2;
         }
       }
     };
@@ -13095,9 +13095,9 @@ var init_get_each = __esm({
     };
     iterateOnMessages = async function* ({ anyProcess, channel, ipcEmitter, isSubprocess, shouldAwait, controller, state, reference }) {
       try {
-        for await (const [message] of on3(ipcEmitter, "message", { signal: controller.signal })) {
+        for await (const [message2] of on3(ipcEmitter, "message", { signal: controller.signal })) {
           throwIfStrictError(state);
-          yield message;
+          yield message2;
         }
       } catch {
         throwIfStrictError(state);
@@ -14543,8 +14543,8 @@ var init_ipc = __esm({
     init_log();
     init_values();
     shouldLogIpc = (verboseInfo) => isFullVerbose(verboseInfo, "ipc");
-    logIpcOutput = (message, verboseInfo) => {
-      const verboseMessage = serializeVerboseMessage(message);
+    logIpcOutput = (message2, verboseInfo) => {
+      const verboseMessage = serializeVerboseMessage(message2);
       verboseLog({
         type: "ipc",
         verboseMessage,
@@ -14577,7 +14577,7 @@ var init_buffer_messages = __esm({
       const isVerbose2 = shouldLogIpc(verboseInfo);
       const buffer = getFdSpecificValue(bufferArray, "ipc");
       const maxBuffer = getFdSpecificValue(maxBufferArray, "ipc");
-      for await (const message of loopOnMessages({
+      for await (const message2 of loopOnMessages({
         anyProcess: subprocess,
         channel: subprocess.channel,
         isSubprocess: false,
@@ -14587,10 +14587,10 @@ var init_buffer_messages = __esm({
       })) {
         if (buffer) {
           checkIpcMaxBuffer(subprocess, ipcOutput, maxBuffer);
-          ipcOutput.push(message);
+          ipcOutput.push(message2);
         }
         if (isVerbose2) {
-          logIpcOutput(message, verboseInfo);
+          logIpcOutput(message2, verboseInfo);
         }
       }
       return ipcOutput;
@@ -19157,22 +19157,22 @@ var require_errors2 = __commonJS({
   "node_modules/yaml/dist/errors.js"(exports) {
     "use strict";
     var YAMLError = class extends Error {
-      constructor(name, pos, code, message) {
+      constructor(name, pos, code, message2) {
         super();
         this.name = name;
         this.code = code;
-        this.message = message;
+        this.message = message2;
         this.pos = pos;
       }
     };
     var YAMLParseError = class extends YAMLError {
-      constructor(pos, code, message) {
-        super("YAMLParseError", pos, code, message);
+      constructor(pos, code, message2) {
+        super("YAMLParseError", pos, code, message2);
       }
     };
     var YAMLWarning = class extends YAMLError {
-      constructor(pos, code, message) {
-        super("YAMLWarning", pos, code, message);
+      constructor(pos, code, message2) {
+        super("YAMLWarning", pos, code, message2);
       }
     };
     var prettifyError2 = (src, lc) => (error2) => {
@@ -19852,8 +19852,8 @@ var require_compose_collection = __commonJS({
         const { anchor, newlineAfterProp: nl } = props;
         const lastProp = anchor && tagToken ? anchor.offset > tagToken.offset ? anchor : tagToken : anchor ?? tagToken;
         if (lastProp && (!nl || nl.offset < lastProp.offset)) {
-          const message = "Missing newline after block sequence props";
-          onError(lastProp, "MISSING_CHAR", message);
+          const message2 = "Missing newline after block sequence props";
+          onError(lastProp, "MISSING_CHAR", message2);
         }
       }
       const expType = token.type === "block-map" ? "map" : token.type === "block-seq" ? "seq" : token.start.source === "{" ? "map" : "seq";
@@ -19925,15 +19925,15 @@ var require_resolve_block_scalar = __commonJS({
             trimIndent = indent.length;
         } else {
           if (indent.length < trimIndent) {
-            const message = "Block scalars with more-indented leading empty lines must use an explicit indentation indicator";
-            onError(offset + indent.length, "MISSING_CHAR", message);
+            const message2 = "Block scalars with more-indented leading empty lines must use an explicit indentation indicator";
+            onError(offset + indent.length, "MISSING_CHAR", message2);
           }
           if (header.indent === 0)
             trimIndent = indent.length;
           contentStart = i2;
           if (trimIndent === 0 && !ctx.atRoot) {
-            const message = "Block scalar values in collections must be indented";
-            onError(offset, "BAD_INDENT", message);
+            const message2 = "Block scalar values in collections must be indented";
+            onError(offset, "BAD_INDENT", message2);
           }
           break;
         }
@@ -19956,8 +19956,8 @@ var require_resolve_block_scalar = __commonJS({
           content = content.slice(0, -1);
         if (content && indent.length < trimIndent) {
           const src = header.indent ? "explicit indentation indicator" : "first line";
-          const message = `Block scalar lines must not be less indented than their ${src}`;
-          onError(offset - content.length - (crlf ? 2 : 1), "BAD_INDENT", message);
+          const message2 = `Block scalar lines must not be less indented than their ${src}`;
+          onError(offset - content.length - (crlf ? 2 : 1), "BAD_INDENT", message2);
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
@@ -20035,8 +20035,8 @@ var require_resolve_block_scalar = __commonJS({
             break;
           case "comment":
             if (strict && !hasSpace) {
-              const message = "Comments must be separated from other tokens by white space characters";
-              onError(token, "MISSING_CHAR", message);
+              const message2 = "Comments must be separated from other tokens by white space characters";
+              onError(token, "MISSING_CHAR", message2);
             }
             length += token.source.length;
             comment = token.source.substring(1);
@@ -20047,8 +20047,8 @@ var require_resolve_block_scalar = __commonJS({
             break;
           /* istanbul ignore next should not happen */
           default: {
-            const message = `Unexpected token in block scalar header: ${token.type}`;
-            onError(token, "UNEXPECTED_TOKEN", message);
+            const message2 = `Unexpected token in block scalar header: ${token.type}`;
+            onError(token, "UNEXPECTED_TOKEN", message2);
             const ts = token.source;
             if (ts && typeof ts === "string")
               length += ts.length;
@@ -20441,13 +20441,13 @@ var require_compose_node = __commonJS({
             if (anchor)
               node.anchor = anchor.source.substring(1);
           } catch (error2) {
-            const message = error2 instanceof Error ? error2.message : String(error2);
-            onError(token, "RESOURCE_EXHAUSTION", message);
+            const message2 = error2 instanceof Error ? error2.message : String(error2);
+            onError(token, "RESOURCE_EXHAUSTION", message2);
           }
           break;
         default: {
-          const message = token.type === "error" ? token.message : `Unsupported token (type: ${token.type})`;
-          onError(token, "UNEXPECTED_TOKEN", message);
+          const message2 = token.type === "error" ? token.message : `Unsupported token (type: ${token.type})`;
+          onError(token, "UNEXPECTED_TOKEN", message2);
           isSrcToken = false;
         }
       }
@@ -20603,12 +20603,12 @@ var require_composer = __commonJS({
         this.prelude = [];
         this.errors = [];
         this.warnings = [];
-        this.onError = (source, code, message, warning) => {
+        this.onError = (source, code, message2, warning) => {
           const pos = getErrorPos(source);
           if (warning)
-            this.warnings.push(new errors.YAMLWarning(pos, code, message));
+            this.warnings.push(new errors.YAMLWarning(pos, code, message2));
           else
-            this.errors.push(new errors.YAMLParseError(pos, code, message));
+            this.errors.push(new errors.YAMLParseError(pos, code, message2));
         };
         this.directives = new directives.Directives({ version: options.version || "1.2" });
         this.options = options;
@@ -20678,10 +20678,10 @@ ${cb}` : comment;
           console.dir(token, { depth: null });
         switch (token.type) {
           case "directive":
-            this.directives.add(token.source, (offset, message, warning) => {
+            this.directives.add(token.source, (offset, message2, warning) => {
               const pos = getErrorPos(token);
               pos[0] += offset;
-              this.onError(pos, "BAD_DIRECTIVE", message, warning);
+              this.onError(pos, "BAD_DIRECTIVE", message2, warning);
             });
             this.prelude.push(token.source);
             this.atDirectives = true;
@@ -20770,12 +20770,12 @@ var require_cst_scalar = __commonJS({
     var stringifyString = require_stringifyString();
     function resolveAsScalar(token, strict = true, onError) {
       if (token) {
-        const _onError = (pos, code, message) => {
+        const _onError = (pos, code, message2) => {
           const offset = typeof pos === "number" ? pos : Array.isArray(pos) ? pos[0] : pos.offset;
           if (onError)
-            onError(offset, code, message);
+            onError(offset, code, message2);
           else
-            throw new errors.YAMLParseError([offset, offset + 1], code, message);
+            throw new errors.YAMLParseError([offset, offset + 1], code, message2);
         };
         switch (token.type) {
           case "scalar":
@@ -21935,8 +21935,8 @@ var require_parser = __commonJS({
         }
         const type = cst.tokenType(source);
         if (!type) {
-          const message = `Not a YAML token: ${source}`;
-          yield* this.pop({ type: "error", offset: this.offset, message, source });
+          const message2 = `Not a YAML token: ${source}`;
+          yield* this.pop({ type: "error", offset: this.offset, message: message2, source });
           this.offset += source.length;
         } else if (type === "scalar") {
           this.atNewLine = false;
@@ -22026,8 +22026,8 @@ var require_parser = __commonJS({
       *pop(error2) {
         const token = error2 ?? this.stack.pop();
         if (!token) {
-          const message = "Tried to pop an empty stack";
-          yield { type: "error", offset: this.offset, source: "", message };
+          const message2 = "Tried to pop an empty stack";
+          yield { type: "error", offset: this.offset, source: "", message: message2 };
         } else if (this.stack.length === 0) {
           yield token;
         } else {
@@ -23179,104 +23179,104 @@ ZodError.create = (issues) => {
 
 // node_modules/zod/v3/locales/en.js
 var errorMap = (issue2, _ctx) => {
-  let message;
+  let message2;
   switch (issue2.code) {
     case ZodIssueCode.invalid_type:
       if (issue2.received === ZodParsedType.undefined) {
-        message = "Required";
+        message2 = "Required";
       } else {
-        message = `Expected ${issue2.expected}, received ${issue2.received}`;
+        message2 = `Expected ${issue2.expected}, received ${issue2.received}`;
       }
       break;
     case ZodIssueCode.invalid_literal:
-      message = `Invalid literal value, expected ${JSON.stringify(issue2.expected, util.jsonStringifyReplacer)}`;
+      message2 = `Invalid literal value, expected ${JSON.stringify(issue2.expected, util.jsonStringifyReplacer)}`;
       break;
     case ZodIssueCode.unrecognized_keys:
-      message = `Unrecognized key(s) in object: ${util.joinValues(issue2.keys, ", ")}`;
+      message2 = `Unrecognized key(s) in object: ${util.joinValues(issue2.keys, ", ")}`;
       break;
     case ZodIssueCode.invalid_union:
-      message = `Invalid input`;
+      message2 = `Invalid input`;
       break;
     case ZodIssueCode.invalid_union_discriminator:
-      message = `Invalid discriminator value. Expected ${util.joinValues(issue2.options)}`;
+      message2 = `Invalid discriminator value. Expected ${util.joinValues(issue2.options)}`;
       break;
     case ZodIssueCode.invalid_enum_value:
-      message = `Invalid enum value. Expected ${util.joinValues(issue2.options)}, received '${issue2.received}'`;
+      message2 = `Invalid enum value. Expected ${util.joinValues(issue2.options)}, received '${issue2.received}'`;
       break;
     case ZodIssueCode.invalid_arguments:
-      message = `Invalid function arguments`;
+      message2 = `Invalid function arguments`;
       break;
     case ZodIssueCode.invalid_return_type:
-      message = `Invalid function return type`;
+      message2 = `Invalid function return type`;
       break;
     case ZodIssueCode.invalid_date:
-      message = `Invalid date`;
+      message2 = `Invalid date`;
       break;
     case ZodIssueCode.invalid_string:
       if (typeof issue2.validation === "object") {
         if ("includes" in issue2.validation) {
-          message = `Invalid input: must include "${issue2.validation.includes}"`;
+          message2 = `Invalid input: must include "${issue2.validation.includes}"`;
           if (typeof issue2.validation.position === "number") {
-            message = `${message} at one or more positions greater than or equal to ${issue2.validation.position}`;
+            message2 = `${message2} at one or more positions greater than or equal to ${issue2.validation.position}`;
           }
         } else if ("startsWith" in issue2.validation) {
-          message = `Invalid input: must start with "${issue2.validation.startsWith}"`;
+          message2 = `Invalid input: must start with "${issue2.validation.startsWith}"`;
         } else if ("endsWith" in issue2.validation) {
-          message = `Invalid input: must end with "${issue2.validation.endsWith}"`;
+          message2 = `Invalid input: must end with "${issue2.validation.endsWith}"`;
         } else {
           util.assertNever(issue2.validation);
         }
       } else if (issue2.validation !== "regex") {
-        message = `Invalid ${issue2.validation}`;
+        message2 = `Invalid ${issue2.validation}`;
       } else {
-        message = "Invalid";
+        message2 = "Invalid";
       }
       break;
     case ZodIssueCode.too_small:
       if (issue2.type === "array")
-        message = `Array must contain ${issue2.exact ? "exactly" : issue2.inclusive ? `at least` : `more than`} ${issue2.minimum} element(s)`;
+        message2 = `Array must contain ${issue2.exact ? "exactly" : issue2.inclusive ? `at least` : `more than`} ${issue2.minimum} element(s)`;
       else if (issue2.type === "string")
-        message = `String must contain ${issue2.exact ? "exactly" : issue2.inclusive ? `at least` : `over`} ${issue2.minimum} character(s)`;
+        message2 = `String must contain ${issue2.exact ? "exactly" : issue2.inclusive ? `at least` : `over`} ${issue2.minimum} character(s)`;
       else if (issue2.type === "number")
-        message = `Number must be ${issue2.exact ? `exactly equal to ` : issue2.inclusive ? `greater than or equal to ` : `greater than `}${issue2.minimum}`;
+        message2 = `Number must be ${issue2.exact ? `exactly equal to ` : issue2.inclusive ? `greater than or equal to ` : `greater than `}${issue2.minimum}`;
       else if (issue2.type === "bigint")
-        message = `Number must be ${issue2.exact ? `exactly equal to ` : issue2.inclusive ? `greater than or equal to ` : `greater than `}${issue2.minimum}`;
+        message2 = `Number must be ${issue2.exact ? `exactly equal to ` : issue2.inclusive ? `greater than or equal to ` : `greater than `}${issue2.minimum}`;
       else if (issue2.type === "date")
-        message = `Date must be ${issue2.exact ? `exactly equal to ` : issue2.inclusive ? `greater than or equal to ` : `greater than `}${new Date(Number(issue2.minimum))}`;
+        message2 = `Date must be ${issue2.exact ? `exactly equal to ` : issue2.inclusive ? `greater than or equal to ` : `greater than `}${new Date(Number(issue2.minimum))}`;
       else
-        message = "Invalid input";
+        message2 = "Invalid input";
       break;
     case ZodIssueCode.too_big:
       if (issue2.type === "array")
-        message = `Array must contain ${issue2.exact ? `exactly` : issue2.inclusive ? `at most` : `less than`} ${issue2.maximum} element(s)`;
+        message2 = `Array must contain ${issue2.exact ? `exactly` : issue2.inclusive ? `at most` : `less than`} ${issue2.maximum} element(s)`;
       else if (issue2.type === "string")
-        message = `String must contain ${issue2.exact ? `exactly` : issue2.inclusive ? `at most` : `under`} ${issue2.maximum} character(s)`;
+        message2 = `String must contain ${issue2.exact ? `exactly` : issue2.inclusive ? `at most` : `under`} ${issue2.maximum} character(s)`;
       else if (issue2.type === "number")
-        message = `Number must be ${issue2.exact ? `exactly` : issue2.inclusive ? `less than or equal to` : `less than`} ${issue2.maximum}`;
+        message2 = `Number must be ${issue2.exact ? `exactly` : issue2.inclusive ? `less than or equal to` : `less than`} ${issue2.maximum}`;
       else if (issue2.type === "bigint")
-        message = `BigInt must be ${issue2.exact ? `exactly` : issue2.inclusive ? `less than or equal to` : `less than`} ${issue2.maximum}`;
+        message2 = `BigInt must be ${issue2.exact ? `exactly` : issue2.inclusive ? `less than or equal to` : `less than`} ${issue2.maximum}`;
       else if (issue2.type === "date")
-        message = `Date must be ${issue2.exact ? `exactly` : issue2.inclusive ? `smaller than or equal to` : `smaller than`} ${new Date(Number(issue2.maximum))}`;
+        message2 = `Date must be ${issue2.exact ? `exactly` : issue2.inclusive ? `smaller than or equal to` : `smaller than`} ${new Date(Number(issue2.maximum))}`;
       else
-        message = "Invalid input";
+        message2 = "Invalid input";
       break;
     case ZodIssueCode.custom:
-      message = `Invalid input`;
+      message2 = `Invalid input`;
       break;
     case ZodIssueCode.invalid_intersection_types:
-      message = `Intersection results could not be merged`;
+      message2 = `Intersection results could not be merged`;
       break;
     case ZodIssueCode.not_multiple_of:
-      message = `Number must be a multiple of ${issue2.multipleOf}`;
+      message2 = `Number must be a multiple of ${issue2.multipleOf}`;
       break;
     case ZodIssueCode.not_finite:
-      message = "Number must be finite";
+      message2 = "Number must be finite";
       break;
     default:
-      message = _ctx.defaultError;
+      message2 = _ctx.defaultError;
       util.assertNever(issue2);
   }
-  return { message };
+  return { message: message2 };
 };
 var en_default = errorMap;
 
@@ -23402,8 +23402,8 @@ var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
 // node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil;
 (function(errorUtil2) {
-  errorUtil2.errToObj = (message) => typeof message === "string" ? { message } : message || {};
-  errorUtil2.toString = (message) => typeof message === "string" ? message : message?.message;
+  errorUtil2.errToObj = (message2) => typeof message2 === "string" ? { message: message2 } : message2 || {};
+  errorUtil2.toString = (message2) => typeof message2 === "string" ? message2 : message2?.message;
 })(errorUtil || (errorUtil = {}));
 
 // node_modules/zod/v3/types.js
@@ -23455,16 +23455,16 @@ function processCreateParams(params) {
   if (errorMap2)
     return { errorMap: errorMap2, description };
   const customMap = (iss, ctx) => {
-    const { message } = params;
+    const { message: message2 } = params;
     if (iss.code === "invalid_enum_value") {
-      return { message: message ?? ctx.defaultError };
+      return { message: message2 ?? ctx.defaultError };
     }
     if (typeof ctx.data === "undefined") {
-      return { message: message ?? required_error ?? ctx.defaultError };
+      return { message: message2 ?? required_error ?? ctx.defaultError };
     }
     if (iss.code !== "invalid_type")
       return { message: ctx.defaultError };
-    return { message: message ?? invalid_type_error ?? ctx.defaultError };
+    return { message: message2 ?? invalid_type_error ?? ctx.defaultError };
   };
   return { errorMap: customMap, description };
 }
@@ -23590,14 +23590,14 @@ var ZodType = class {
     const result = await (isAsync(maybeAsyncResult) ? maybeAsyncResult : Promise.resolve(maybeAsyncResult));
     return handleResult(ctx, result);
   }
-  refine(check2, message) {
+  refine(check2, message2) {
     const getIssueProperties = (val) => {
-      if (typeof message === "string" || typeof message === "undefined") {
-        return { message };
-      } else if (typeof message === "function") {
-        return message(val);
+      if (typeof message2 === "string" || typeof message2 === "undefined") {
+        return { message: message2 };
+      } else if (typeof message2 === "function") {
+        return message2(val);
       } else {
-        return message;
+        return message2;
       }
     };
     return this._refinement((val, ctx) => {
@@ -24133,11 +24133,11 @@ var ZodString = class _ZodString2 extends ZodType {
     }
     return { status: status.value, value: input.data };
   }
-  _regex(regex, validation, message) {
+  _regex(regex, validation, message2) {
     return this.refinement((data) => regex.test(data), {
       validation,
       code: ZodIssueCode.invalid_string,
-      ...errorUtil.errToObj(message)
+      ...errorUtil.errToObj(message2)
     });
   }
   _addCheck(check2) {
@@ -24146,37 +24146,37 @@ var ZodString = class _ZodString2 extends ZodType {
       checks: [...this._def.checks, check2]
     });
   }
-  email(message) {
-    return this._addCheck({ kind: "email", ...errorUtil.errToObj(message) });
+  email(message2) {
+    return this._addCheck({ kind: "email", ...errorUtil.errToObj(message2) });
   }
-  url(message) {
-    return this._addCheck({ kind: "url", ...errorUtil.errToObj(message) });
+  url(message2) {
+    return this._addCheck({ kind: "url", ...errorUtil.errToObj(message2) });
   }
-  emoji(message) {
-    return this._addCheck({ kind: "emoji", ...errorUtil.errToObj(message) });
+  emoji(message2) {
+    return this._addCheck({ kind: "emoji", ...errorUtil.errToObj(message2) });
   }
-  uuid(message) {
-    return this._addCheck({ kind: "uuid", ...errorUtil.errToObj(message) });
+  uuid(message2) {
+    return this._addCheck({ kind: "uuid", ...errorUtil.errToObj(message2) });
   }
-  nanoid(message) {
-    return this._addCheck({ kind: "nanoid", ...errorUtil.errToObj(message) });
+  nanoid(message2) {
+    return this._addCheck({ kind: "nanoid", ...errorUtil.errToObj(message2) });
   }
-  cuid(message) {
-    return this._addCheck({ kind: "cuid", ...errorUtil.errToObj(message) });
+  cuid(message2) {
+    return this._addCheck({ kind: "cuid", ...errorUtil.errToObj(message2) });
   }
-  cuid2(message) {
-    return this._addCheck({ kind: "cuid2", ...errorUtil.errToObj(message) });
+  cuid2(message2) {
+    return this._addCheck({ kind: "cuid2", ...errorUtil.errToObj(message2) });
   }
-  ulid(message) {
-    return this._addCheck({ kind: "ulid", ...errorUtil.errToObj(message) });
+  ulid(message2) {
+    return this._addCheck({ kind: "ulid", ...errorUtil.errToObj(message2) });
   }
-  base64(message) {
-    return this._addCheck({ kind: "base64", ...errorUtil.errToObj(message) });
+  base64(message2) {
+    return this._addCheck({ kind: "base64", ...errorUtil.errToObj(message2) });
   }
-  base64url(message) {
+  base64url(message2) {
     return this._addCheck({
       kind: "base64url",
-      ...errorUtil.errToObj(message)
+      ...errorUtil.errToObj(message2)
     });
   }
   jwt(options) {
@@ -24206,8 +24206,8 @@ var ZodString = class _ZodString2 extends ZodType {
       ...errorUtil.errToObj(options?.message)
     });
   }
-  date(message) {
-    return this._addCheck({ kind: "date", message });
+  date(message2) {
+    return this._addCheck({ kind: "date", message: message2 });
   }
   time(options) {
     if (typeof options === "string") {
@@ -24223,14 +24223,14 @@ var ZodString = class _ZodString2 extends ZodType {
       ...errorUtil.errToObj(options?.message)
     });
   }
-  duration(message) {
-    return this._addCheck({ kind: "duration", ...errorUtil.errToObj(message) });
+  duration(message2) {
+    return this._addCheck({ kind: "duration", ...errorUtil.errToObj(message2) });
   }
-  regex(regex, message) {
+  regex(regex, message2) {
     return this._addCheck({
       kind: "regex",
       regex,
-      ...errorUtil.errToObj(message)
+      ...errorUtil.errToObj(message2)
     });
   }
   includes(value, options) {
@@ -24241,46 +24241,46 @@ var ZodString = class _ZodString2 extends ZodType {
       ...errorUtil.errToObj(options?.message)
     });
   }
-  startsWith(value, message) {
+  startsWith(value, message2) {
     return this._addCheck({
       kind: "startsWith",
       value,
-      ...errorUtil.errToObj(message)
+      ...errorUtil.errToObj(message2)
     });
   }
-  endsWith(value, message) {
+  endsWith(value, message2) {
     return this._addCheck({
       kind: "endsWith",
       value,
-      ...errorUtil.errToObj(message)
+      ...errorUtil.errToObj(message2)
     });
   }
-  min(minLength, message) {
+  min(minLength, message2) {
     return this._addCheck({
       kind: "min",
       value: minLength,
-      ...errorUtil.errToObj(message)
+      ...errorUtil.errToObj(message2)
     });
   }
-  max(maxLength, message) {
+  max(maxLength, message2) {
     return this._addCheck({
       kind: "max",
       value: maxLength,
-      ...errorUtil.errToObj(message)
+      ...errorUtil.errToObj(message2)
     });
   }
-  length(len, message) {
+  length(len, message2) {
     return this._addCheck({
       kind: "length",
       value: len,
-      ...errorUtil.errToObj(message)
+      ...errorUtil.errToObj(message2)
     });
   }
   /**
    * Equivalent to `.min(1)`
    */
-  nonempty(message) {
-    return this.min(1, errorUtil.errToObj(message));
+  nonempty(message2) {
+    return this.min(1, errorUtil.errToObj(message2));
   }
   trim() {
     return new _ZodString2({
@@ -24473,19 +24473,19 @@ var ZodNumber = class _ZodNumber extends ZodType {
     }
     return { status: status.value, value: input.data };
   }
-  gte(value, message) {
-    return this.setLimit("min", value, true, errorUtil.toString(message));
+  gte(value, message2) {
+    return this.setLimit("min", value, true, errorUtil.toString(message2));
   }
-  gt(value, message) {
-    return this.setLimit("min", value, false, errorUtil.toString(message));
+  gt(value, message2) {
+    return this.setLimit("min", value, false, errorUtil.toString(message2));
   }
-  lte(value, message) {
-    return this.setLimit("max", value, true, errorUtil.toString(message));
+  lte(value, message2) {
+    return this.setLimit("max", value, true, errorUtil.toString(message2));
   }
-  lt(value, message) {
-    return this.setLimit("max", value, false, errorUtil.toString(message));
+  lt(value, message2) {
+    return this.setLimit("max", value, false, errorUtil.toString(message2));
   }
-  setLimit(kind, value, inclusive, message) {
+  setLimit(kind, value, inclusive, message2) {
     return new _ZodNumber({
       ...this._def,
       checks: [
@@ -24494,7 +24494,7 @@ var ZodNumber = class _ZodNumber extends ZodType {
           kind,
           value,
           inclusive,
-          message: errorUtil.toString(message)
+          message: errorUtil.toString(message2)
         }
       ]
     });
@@ -24505,68 +24505,68 @@ var ZodNumber = class _ZodNumber extends ZodType {
       checks: [...this._def.checks, check2]
     });
   }
-  int(message) {
+  int(message2) {
     return this._addCheck({
       kind: "int",
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
-  positive(message) {
+  positive(message2) {
     return this._addCheck({
       kind: "min",
       value: 0,
       inclusive: false,
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
-  negative(message) {
+  negative(message2) {
     return this._addCheck({
       kind: "max",
       value: 0,
       inclusive: false,
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
-  nonpositive(message) {
+  nonpositive(message2) {
     return this._addCheck({
       kind: "max",
       value: 0,
       inclusive: true,
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
-  nonnegative(message) {
+  nonnegative(message2) {
     return this._addCheck({
       kind: "min",
       value: 0,
       inclusive: true,
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
-  multipleOf(value, message) {
+  multipleOf(value, message2) {
     return this._addCheck({
       kind: "multipleOf",
       value,
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
-  finite(message) {
+  finite(message2) {
     return this._addCheck({
       kind: "finite",
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
-  safe(message) {
+  safe(message2) {
     return this._addCheck({
       kind: "min",
       inclusive: true,
       value: Number.MIN_SAFE_INTEGER,
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     })._addCheck({
       kind: "max",
       inclusive: true,
       value: Number.MAX_SAFE_INTEGER,
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
   get minValue() {
@@ -24689,19 +24689,19 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
     });
     return INVALID;
   }
-  gte(value, message) {
-    return this.setLimit("min", value, true, errorUtil.toString(message));
+  gte(value, message2) {
+    return this.setLimit("min", value, true, errorUtil.toString(message2));
   }
-  gt(value, message) {
-    return this.setLimit("min", value, false, errorUtil.toString(message));
+  gt(value, message2) {
+    return this.setLimit("min", value, false, errorUtil.toString(message2));
   }
-  lte(value, message) {
-    return this.setLimit("max", value, true, errorUtil.toString(message));
+  lte(value, message2) {
+    return this.setLimit("max", value, true, errorUtil.toString(message2));
   }
-  lt(value, message) {
-    return this.setLimit("max", value, false, errorUtil.toString(message));
+  lt(value, message2) {
+    return this.setLimit("max", value, false, errorUtil.toString(message2));
   }
-  setLimit(kind, value, inclusive, message) {
+  setLimit(kind, value, inclusive, message2) {
     return new _ZodBigInt({
       ...this._def,
       checks: [
@@ -24710,7 +24710,7 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
           kind,
           value,
           inclusive,
-          message: errorUtil.toString(message)
+          message: errorUtil.toString(message2)
         }
       ]
     });
@@ -24721,43 +24721,43 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
       checks: [...this._def.checks, check2]
     });
   }
-  positive(message) {
+  positive(message2) {
     return this._addCheck({
       kind: "min",
       value: BigInt(0),
       inclusive: false,
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
-  negative(message) {
+  negative(message2) {
     return this._addCheck({
       kind: "max",
       value: BigInt(0),
       inclusive: false,
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
-  nonpositive(message) {
+  nonpositive(message2) {
     return this._addCheck({
       kind: "max",
       value: BigInt(0),
       inclusive: true,
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
-  nonnegative(message) {
+  nonnegative(message2) {
     return this._addCheck({
       kind: "min",
       value: BigInt(0),
       inclusive: true,
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
-  multipleOf(value, message) {
+  multipleOf(value, message2) {
     return this._addCheck({
       kind: "multipleOf",
       value,
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
   get minValue() {
@@ -24880,18 +24880,18 @@ var ZodDate = class _ZodDate extends ZodType {
       checks: [...this._def.checks, check2]
     });
   }
-  min(minDate, message) {
+  min(minDate, message2) {
     return this._addCheck({
       kind: "min",
       value: minDate.getTime(),
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
-  max(maxDate, message) {
+  max(maxDate, message2) {
     return this._addCheck({
       kind: "max",
       value: maxDate.getTime(),
-      message: errorUtil.toString(message)
+      message: errorUtil.toString(message2)
     });
   }
   get minDate() {
@@ -25123,26 +25123,26 @@ var ZodArray = class _ZodArray extends ZodType {
   get element() {
     return this._def.type;
   }
-  min(minLength, message) {
+  min(minLength, message2) {
     return new _ZodArray({
       ...this._def,
-      minLength: { value: minLength, message: errorUtil.toString(message) }
+      minLength: { value: minLength, message: errorUtil.toString(message2) }
     });
   }
-  max(maxLength, message) {
+  max(maxLength, message2) {
     return new _ZodArray({
       ...this._def,
-      maxLength: { value: maxLength, message: errorUtil.toString(message) }
+      maxLength: { value: maxLength, message: errorUtil.toString(message2) }
     });
   }
-  length(len, message) {
+  length(len, message2) {
     return new _ZodArray({
       ...this._def,
-      exactLength: { value: len, message: errorUtil.toString(message) }
+      exactLength: { value: len, message: errorUtil.toString(message2) }
     });
   }
-  nonempty(message) {
-    return this.min(1, message);
+  nonempty(message2) {
+    return this.min(1, message2);
   }
 };
 ZodArray.create = (schema, params) => {
@@ -25285,17 +25285,17 @@ var ZodObject = class _ZodObject extends ZodType {
   get shape() {
     return this._def.shape();
   }
-  strict(message) {
+  strict(message2) {
     errorUtil.errToObj;
     return new _ZodObject({
       ...this._def,
       unknownKeys: "strict",
-      ...message !== void 0 ? {
+      ...message2 !== void 0 ? {
         errorMap: (issue2, ctx) => {
           const defaultError = this._def.errorMap?.(issue2, ctx).message ?? ctx.defaultError;
           if (issue2.code === "unrecognized_keys")
             return {
-              message: errorUtil.errToObj(message).message ?? defaultError
+              message: errorUtil.errToObj(message2).message ?? defaultError
             };
           return {
             message: defaultError
@@ -26051,23 +26051,23 @@ var ZodSet = class _ZodSet extends ZodType {
       return finalizeSet(elements);
     }
   }
-  min(minSize, message) {
+  min(minSize, message2) {
     return new _ZodSet({
       ...this._def,
-      minSize: { value: minSize, message: errorUtil.toString(message) }
+      minSize: { value: minSize, message: errorUtil.toString(message2) }
     });
   }
-  max(maxSize, message) {
+  max(maxSize, message2) {
     return new _ZodSet({
       ...this._def,
-      maxSize: { value: maxSize, message: errorUtil.toString(message) }
+      maxSize: { value: maxSize, message: errorUtil.toString(message2) }
     });
   }
-  size(size, message) {
-    return this.min(size, message).max(size, message);
+  size(size, message2) {
+    return this.min(size, message2).max(size, message2);
   }
-  nonempty(message) {
-    return this.min(1, message);
+  nonempty(message2) {
+    return this.min(1, message2);
   }
 };
 ZodSet.create = (valueType, params) => {
@@ -27380,14 +27380,14 @@ function prefixIssues(path6, issues) {
     return iss;
   });
 }
-function unwrapMessage(message) {
-  return typeof message === "string" ? message : message?.message;
+function unwrapMessage(message2) {
+  return typeof message2 === "string" ? message2 : message2?.message;
 }
 function finalizeIssue(iss, ctx, config2) {
   const full = { ...iss, path: iss.path ?? [] };
   if (!iss.message) {
-    const message = unwrapMessage(iss.inst?._zod.def?.error?.(iss)) ?? unwrapMessage(ctx?.error?.(iss)) ?? unwrapMessage(config2.customError?.(iss)) ?? unwrapMessage(config2.localeError?.(iss)) ?? "Invalid input";
-    full.message = message;
+    const message2 = unwrapMessage(iss.inst?._zod.def?.error?.(iss)) ?? unwrapMessage(ctx?.error?.(iss)) ?? unwrapMessage(config2.customError?.(iss)) ?? unwrapMessage(config2.localeError?.(iss)) ?? "Invalid input";
+    full.message = message2;
   }
   delete full.inst;
   delete full.continue;
@@ -33059,8 +33059,8 @@ var ServerResultSchema = union([
   CreateTaskResultSchema
 ]);
 var McpError = class _McpError extends Error {
-  constructor(code, message, data) {
-    super(`MCP error ${code}: ${message}`);
+  constructor(code, message2, data) {
+    super(`MCP error ${code}: ${message2}`);
     this.code = code;
     this.data = data;
     this.name = "McpError";
@@ -33068,19 +33068,19 @@ var McpError = class _McpError extends Error {
   /**
    * Factory method to create the appropriate error type based on the error code and data
    */
-  static fromError(code, message, data) {
+  static fromError(code, message2, data) {
     if (code === ErrorCode.UrlElicitationRequired && data) {
       const errorData = data;
       if (errorData.elicitations) {
-        return new UrlElicitationRequiredError(errorData.elicitations, message);
+        return new UrlElicitationRequiredError(errorData.elicitations, message2);
       }
     }
-    return new _McpError(code, message, data);
+    return new _McpError(code, message2, data);
   }
 };
 var UrlElicitationRequiredError = class extends McpError {
-  constructor(elicitations, message = `URL elicitation${elicitations.length > 1 ? "s" : ""} required`) {
-    super(ErrorCode.UrlElicitationRequired, message, {
+  constructor(elicitations, message2 = `URL elicitation${elicitations.length > 1 ? "s" : ""} required`) {
+    super(ErrorCode.UrlElicitationRequired, message2, {
       elicitations
     });
   }
@@ -33613,7 +33613,7 @@ function escapeNonAlphaNumeric(source) {
   }
   return result;
 }
-function addFormat(schema, value, message, refs) {
+function addFormat(schema, value, message2, refs) {
   if (schema.format || schema.anyOf?.some((x) => x.format)) {
     if (!schema.anyOf) {
       schema.anyOf = [];
@@ -33635,13 +33635,13 @@ function addFormat(schema, value, message, refs) {
     }
     schema.anyOf.push({
       format: value,
-      ...message && refs.errorMessages && { errorMessage: { format: message } }
+      ...message2 && refs.errorMessages && { errorMessage: { format: message2 } }
     });
   } else {
-    setResponseValueAndErrors(schema, "format", value, message, refs);
+    setResponseValueAndErrors(schema, "format", value, message2, refs);
   }
 }
-function addPattern(schema, regex, message, refs) {
+function addPattern(schema, regex, message2, refs) {
   if (schema.pattern || schema.allOf?.some((x) => x.pattern)) {
     if (!schema.allOf) {
       schema.allOf = [];
@@ -33663,10 +33663,10 @@ function addPattern(schema, regex, message, refs) {
     }
     schema.allOf.push({
       pattern: stringifyRegExpWithFlags(regex, refs),
-      ...message && refs.errorMessages && { errorMessage: { pattern: message } }
+      ...message2 && refs.errorMessages && { errorMessage: { pattern: message2 } }
     });
   } else {
-    setResponseValueAndErrors(schema, "pattern", stringifyRegExpWithFlags(regex, refs), message, refs);
+    setResponseValueAndErrors(schema, "pattern", stringifyRegExpWithFlags(regex, refs), message2, refs);
   }
 }
 function stringifyRegExpWithFlags(regex, refs) {
@@ -34465,15 +34465,15 @@ var Protocol = class {
             let queuedMessage;
             while (queuedMessage = await this._taskMessageQueue.dequeue(taskId, extra.sessionId)) {
               if (queuedMessage.type === "response" || queuedMessage.type === "error") {
-                const message = queuedMessage.message;
-                const requestId = message.id;
+                const message2 = queuedMessage.message;
+                const requestId = message2.id;
                 const resolver = this._requestResolvers.get(requestId);
                 if (resolver) {
                   this._requestResolvers.delete(requestId);
                   if (queuedMessage.type === "response") {
-                    resolver(message);
+                    resolver(message2);
                   } else {
-                    const errorMessage4 = message;
+                    const errorMessage4 = message2;
                     const error2 = new McpError(errorMessage4.error.code, errorMessage4.error.message, errorMessage4.error.data);
                     resolver(error2);
                   }
@@ -34612,16 +34612,16 @@ var Protocol = class {
       this._onerror(error2);
     };
     const _onmessage = this._transport?.onmessage;
-    this._transport.onmessage = (message, extra) => {
-      _onmessage?.(message, extra);
-      if (isJSONRPCResultResponse(message) || isJSONRPCErrorResponse(message)) {
-        this._onresponse(message);
-      } else if (isJSONRPCRequest(message)) {
-        this._onrequest(message, extra);
-      } else if (isJSONRPCNotification(message)) {
-        this._onnotification(message);
+    this._transport.onmessage = (message2, extra) => {
+      _onmessage?.(message2, extra);
+      if (isJSONRPCResultResponse(message2) || isJSONRPCErrorResponse(message2)) {
+        this._onresponse(message2);
+      } else if (isJSONRPCRequest(message2)) {
+        this._onrequest(message2, extra);
+      } else if (isJSONRPCNotification(message2)) {
+        this._onnotification(message2);
       } else {
-        this._onerror(new Error(`Unknown message type: ${JSON.stringify(message)}`));
+        this._onerror(new Error(`Unknown message type: ${JSON.stringify(message2)}`));
       }
     };
     await this._transport.start();
@@ -35231,12 +35231,12 @@ var Protocol = class {
    * the error appropriately (e.g., by failing the task, logging, etc.). The Protocol layer
    * simply propagates the error.
    */
-  async _enqueueTaskMessage(taskId, message, sessionId) {
+  async _enqueueTaskMessage(taskId, message2, sessionId) {
     if (!this._taskStore || !this._taskMessageQueue) {
       throw new Error("Cannot enqueue task message: taskStore and taskMessageQueue are not configured");
     }
     const maxQueueSize = this._options?.maxTaskQueueSize;
-    await this._taskMessageQueue.enqueue(taskId, message, sessionId, maxQueueSize);
+    await this._taskMessageQueue.enqueue(taskId, message2, sessionId, maxQueueSize);
   }
   /**
    * Clears the message queue for a task and rejects any pending request resolvers.
@@ -35246,9 +35246,9 @@ var Protocol = class {
   async _clearTaskQueue(taskId, sessionId) {
     if (this._taskMessageQueue) {
       const messages = await this._taskMessageQueue.dequeueAll(taskId, sessionId);
-      for (const message of messages) {
-        if (message.type === "request" && isJSONRPCRequest(message.message)) {
-          const requestId = message.message.id;
+      for (const message2 of messages) {
+        if (message2.type === "request" && isJSONRPCRequest(message2.message)) {
+          const requestId = message2.message.id;
           const resolver = this._requestResolvers.get(requestId);
           if (resolver) {
             resolver(new McpError(ErrorCode.InternalError, "Task cancelled or completed"));
@@ -37222,8 +37222,8 @@ var ReadBuffer = class {
 function deserializeMessage(line) {
   return JSONRPCMessageSchema.parse(JSON.parse(line));
 }
-function serializeMessage(message) {
-  return JSON.stringify(message) + "\n";
+function serializeMessage(message2) {
+  return JSON.stringify(message2) + "\n";
 }
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
@@ -37261,11 +37261,11 @@ var StdioServerTransport = class {
   processReadBuffer() {
     while (true) {
       try {
-        const message = this._readBuffer.readMessage();
-        if (message === null) {
+        const message2 = this._readBuffer.readMessage();
+        if (message2 === null) {
           break;
         }
-        this.onmessage?.(message);
+        this.onmessage?.(message2);
       } catch (error2) {
         this.onerror?.(error2);
       }
@@ -37281,9 +37281,9 @@ var StdioServerTransport = class {
     this._readBuffer.clear();
     this.onclose?.();
   }
-  send(message) {
+  send(message2) {
     return new Promise((resolve11) => {
-      const json = serializeMessage(message);
+      const json = serializeMessage(message2);
       if (this._stdout.write(json)) {
         resolve11();
       } else {
@@ -37995,9 +37995,9 @@ var CATEGORIES = [
   "performance"
 ];
 var CVE_SOURCE_SCAN_TYPES = ["deps_audit", "deps", "security_full"];
-function isDepsAuditScan(scan) {
-  if (scan.scan_type === "deps_audit") return true;
-  return scan.scan_type === "deps" && scan.meta?.["bot_configured"] !== void 0;
+function isDepsAuditScan(scan2) {
+  if (scan2.scan_type === "deps_audit") return true;
+  return scan2.scan_type === "deps" && scan2.meta?.["bot_configured"] !== void 0;
 }
 var DOMAIN_ERROR_CODES = [
   "missing_scanner",
@@ -39184,6 +39184,95 @@ function dedupeFindings(findings) {
   return out;
 }
 
+// src/runners/git.ts
+init_execa();
+import { createHash as createHash2 } from "node:crypto";
+var GIT_TIMEOUT_MS = 6e4;
+var CHECKOUT_TIMEOUT_MS = 10 * 6e4;
+async function git(cwd, args, timeoutMs = GIT_TIMEOUT_MS) {
+  try {
+    const r = await execa("git", ["-C", cwd, ...args], {
+      reject: false,
+      timeout: timeoutMs,
+      encoding: "utf8",
+      stripFinalNewline: false
+    });
+    if (r.exitCode === void 0) return { exitCode: 127, stdout: "", stderr: "git could not be run" };
+    return {
+      exitCode: r.exitCode,
+      stdout: typeof r.stdout === "string" ? r.stdout : "",
+      stderr: typeof r.stderr === "string" ? r.stderr : ""
+    };
+  } catch (e) {
+    return { exitCode: 127, stdout: "", stderr: e instanceof Error ? e.message : String(e) };
+  }
+}
+function splitNul(text) {
+  return text.split("\0").filter((s) => s.length > 0);
+}
+async function repoState(cwd) {
+  const top = await git(cwd, ["rev-parse", "--show-toplevel"]);
+  if (top.exitCode !== 0) {
+    if (/not a git repository/i.test(top.stderr) || top.exitCode === 127) return { kind: "not_git" };
+    return { kind: "error", message: firstLine(top.stderr) || `git exited ${top.exitCode}` };
+  }
+  const toplevel = top.stdout.trim();
+  const head = await git(cwd, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+  return head.exitCode === 0 ? { kind: "has_commits", toplevel } : { kind: "no_commits", toplevel };
+}
+async function resolveCommit(cwd, ref) {
+  const r = await git(cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
+  if (r.exitCode !== 0) return null;
+  const sha = r.stdout.trim();
+  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
+}
+async function changedFiles(cwd, base, head) {
+  const r = await git(cwd, [
+    "diff",
+    "-z",
+    "--name-only",
+    "--relative",
+    "--diff-filter=ACMR",
+    "--no-renames",
+    `${base}...${head}`,
+    "--"
+  ]);
+  if (r.exitCode !== 0) {
+    throw new Error(`git diff ${base}...${head} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+  }
+  return splitNul(r.stdout);
+}
+async function countCommits(cwd, range) {
+  const r = await git(cwd, ["rev-list", "--count", range, "--"]);
+  const n2 = Number(r.stdout.trim());
+  if (r.exitCode !== 0 || !Number.isInteger(n2)) {
+    throw new Error(`git rev-list --count ${range} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+  }
+  return n2;
+}
+async function uncommittedFiles(cwd, hasCommits, excludeDirs) {
+  const excludes = excludeDirs.map((d) => `--exclude=${d}/`);
+  const untracked = await git(cwd, ["ls-files", "-z", "--others", "--exclude-standard", ...excludes]);
+  if (untracked.exitCode !== 0) {
+    throw new Error(`git ls-files failed: ${firstLine(untracked.stderr) || `exit ${untracked.exitCode}`}`);
+  }
+  const tracked = hasCommits ? await git(cwd, ["diff", "-z", "--name-only", "--relative", "--diff-filter=d", "--no-renames", "HEAD", "--"]) : await git(cwd, ["ls-files", "-z", "--cached"]);
+  if (tracked.exitCode !== 0) {
+    throw new Error(`git failed listing changed files: ${firstLine(tracked.stderr) || `exit ${tracked.exitCode}`}`);
+  }
+  return [.../* @__PURE__ */ new Set([...splitNul(tracked.stdout), ...splitNul(untracked.stdout)])];
+}
+async function historyState(cwd) {
+  const head = await resolveCommit(cwd, "HEAD");
+  if (head === null) return {};
+  const refs = await git(cwd, ["for-each-ref", "--format=%(objectname) %(refname)"]);
+  if (refs.exitCode !== 0) throw new Error(`git for-each-ref failed: ${firstLine(refs.stderr)}`);
+  return { head, refs: createHash2("sha256").update(refs.stdout).digest("hex") };
+}
+function firstLine(text) {
+  return text.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
+}
+
 // src/runners/semgrepConfigs.ts
 import { readdirSync as readdirSync2 } from "node:fs";
 
@@ -39417,7 +39506,7 @@ import { existsSync as existsSync7 } from "node:fs";
 import { join as join7 } from "node:path";
 
 // src/configdrift/hash.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 import { readFileSync as readFileSync8 } from "node:fs";
 
 // src/configdrift/header.ts
@@ -39467,7 +39556,7 @@ function canonicaliseConfig(text) {
   return stripProvenanceHeader(lf).replace(/\n+$/, "");
 }
 function hashConfigText(text) {
-  return createHash2("sha256").update(canonicaliseConfig(text), "utf8").digest("hex");
+  return createHash3("sha256").update(canonicaliseConfig(text), "utf8").digest("hex");
 }
 function hashConfigFile(path6) {
   try {
@@ -39597,7 +39686,7 @@ function makeProgressEmitter(options) {
     interval.unref();
   }
   return {
-    emit: ({ step, total, message }) => {
+    emit: ({ step, total, message: message2 }) => {
       heartbeatCounter = 0;
       noted = null;
       const payload = {
@@ -39605,12 +39694,12 @@ function makeProgressEmitter(options) {
         progress: total ? Math.min(100, step / total * 100) : step
       };
       if (total !== void 0) payload.total = total;
-      if (message !== void 0) payload.message = message;
+      if (message2 !== void 0) payload.message = message2;
       lastPayload = payload;
       sendMonotonic(options.notifier, payload);
     },
-    note: (message) => {
-      noted = message;
+    note: (message2) => {
+      noted = message2;
     },
     dispose: () => {
       clearI(interval);
@@ -39706,11 +39795,11 @@ function filterFindings(items, min) {
 }
 
 // src/treeHash/cacheKey.ts
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 import { readFileSync as readFileSync9, readdirSync as readdirSync4, statSync as statSync3 } from "node:fs";
 import { join as join9, relative, sep } from "node:path";
 function sha256(text) {
-  return createHash3("sha256").update(text).digest("hex");
+  return createHash4("sha256").update(text).digest("hex");
 }
 function stableStringify(value) {
   if (value === null || typeof value !== "object") {
@@ -39804,7 +39893,7 @@ function surfaceCacheKey(parts) {
 
 // src/treeHash/computeTreeHash.ts
 init_execa();
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join as join10, relative as relative2, resolve as resolve3, sep as sep2 } from "node:path";
 var FS_EXCLUDE = /* @__PURE__ */ new Set([
@@ -39830,13 +39919,13 @@ async function computeTreeHash(projectPath, options = {}) {
   const root = resolve3(projectPath);
   const files = options.forceFilesystemWalk ? await walkFiles(root) : await tryGitListFiles(root) ?? await walkFiles(root);
   files.sort();
-  const hash = createHash4("sha256");
+  const hash = createHash5("sha256");
   for (const rel2 of files) {
     const abs = join10(root, rel2);
     let contentHash;
     try {
       const bytes = await readFile(abs);
-      contentHash = createHash4("sha256").update(bytes).digest("hex");
+      contentHash = createHash5("sha256").update(bytes).digest("hex");
     } catch {
       contentHash = "missing";
     }
@@ -40052,7 +40141,15 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
   const driftAdvisory = configDriftAdvisory(plugin, projectPath);
   if (driftAdvisory) warnings.push(driftAdvisory);
   const treeHash = callMeta?.parentScanId !== void 0 && callMeta.treeHash !== void 0 ? callMeta.treeHash : await computeTreeHash(projectPath);
-  const cacheKey = buildCacheKey(config2, input, projectPath, treeHash, plugin);
+  let cacheState = {};
+  if (config2.cacheState) {
+    try {
+      cacheState = await config2.cacheState(input, { projectPath, plugin });
+    } catch {
+      cacheState = { uncacheable: randomUUID() };
+    }
+  }
+  const cacheKey = buildCacheKey(config2, input, projectPath, treeHash, plugin, cacheState);
   const ttl = config2.cacheTtlMs ?? FIVE_MINUTES_MS;
   const fresh = new Date(Date.now() - ttl).toISOString();
   if (input.force !== true) {
@@ -40125,9 +40222,9 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
 async function runScanBody(args) {
   const { config: config2, input, plugin, projectPath, treeHash, scanId, startedAt: startedAt2, warnings, progress } = args;
   let step = 0;
-  const report = (message) => {
+  const report = (message2) => {
     step += 1;
-    progress.emit({ step, message: `${config2.name}: ${message}` });
+    progress.emit({ step, message: `${config2.name}: ${message2}` });
   };
   const ctx = {
     plugin,
@@ -40256,19 +40353,21 @@ async function runScanBody(args) {
   };
   return { ok: true, ...payload };
 }
-function buildCacheKey(config2, input, projectPath, treeHash, plugin) {
+function buildCacheKey(config2, input, projectPath, treeHash, plugin, cacheState) {
   let rulePacksHash;
   try {
     rulePacksHash = hashRulePacks(config2.rulePacks ? config2.rulePacks(input, { projectPath, plugin }) : []);
   } catch {
     rulePacksHash = `uncacheable:${randomUUID()}`;
   }
+  const keyed = normaliseInput(config2, input);
+  if (Object.keys(cacheState).length > 0) keyed["__cache_state"] = cacheState;
   return scanCacheKey({
     projectPath,
     tool: config2.name,
     scanType: config2.scan_type,
     treeHash,
-    inputHash: hashInput(normaliseInput(config2, input)),
+    inputHash: hashInput(keyed),
     pluginVersion: resolveVersion(),
     rulePacksHash
   });
@@ -40381,8 +40480,8 @@ function topFindings(findings, limit) {
     (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
   ).slice(0, limit);
 }
-function failDomain(code, message, retry_with) {
-  const error2 = { code, message };
+function failDomain(code, message2, retry_with) {
+  const error2 = { code, message: message2 };
   if (retry_with !== void 0) error2.retry_with = retry_with;
   return { ok: false, error: error2 };
 }
@@ -40392,7 +40491,7 @@ import { existsSync as existsSync12, readdirSync as readdirSync6, readFileSync a
 import { join as join14 } from "node:path";
 
 // src/fingerprint/findingFingerprint.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 var SNIPPET_MAX_BYTES = 1024;
 function computeFingerprint(input) {
   const pathPosix = normalizePathPosix(input.file_path ?? "");
@@ -40416,10 +40515,10 @@ function normalizePathPosix(p) {
   return stripped.replace(/\/+/g, "/").replace(/\/$/, "");
 }
 function sha1(s) {
-  return createHash5("sha1").update(s).digest("hex");
+  return createHash6("sha1").update(s).digest("hex");
 }
 function sha2562(s) {
-  return createHash5("sha256").update(s).digest("hex");
+  return createHash6("sha256").update(s).digest("hex");
 }
 
 // src/runners/scannerParsers/index.ts
@@ -40555,7 +40654,7 @@ function mapResult(raw, ctx) {
   const lineStart = line ?? (typeof lineRange[0] === "number" ? lineRange[0] : void 0);
   const lastRange = lineRange.at(-1);
   const lineEnd = typeof lastRange === "number" ? lastRange : lineStart;
-  const message = confidence && issueText ? `${issueText} (confidence: ${confidence.toLowerCase()})` : issueText;
+  const message2 = confidence && issueText ? `${issueText} (confidence: ${confidence.toLowerCase()})` : issueText;
   const input = {
     tool: BANDIT_TOOL_NAME,
     rule_id: testId,
@@ -40566,7 +40665,7 @@ function mapResult(raw, ctx) {
     file_path: toRelativeIfPossible(file, ctx.project_path),
     fix_available: false
   };
-  if (message !== void 0) input.message = message;
+  if (message2 !== void 0) input.message = message2;
   if (lineStart !== void 0) input.line_start = lineStart;
   if (lineEnd !== void 0) input.line_end = lineEnd;
   if (code !== void 0) input.snippet = code;
@@ -40629,7 +40728,7 @@ function mapResult2(raw, ctx) {
   const end = getProp(raw, "end");
   const metadata = getProp(extra, "metadata");
   const checkId = getString(raw, "check_id");
-  const message = getString(extra, "message");
+  const message2 = getString(extra, "message");
   const filePath = getString(raw, "path");
   if (!checkId || !filePath) return null;
   const severity = mapSeverity(getString(extra, "severity"), metadata);
@@ -40643,11 +40742,11 @@ function mapResult2(raw, ctx) {
     rule_id: checkId,
     severity,
     category,
-    title: shortenTitle(message, checkId),
+    title: shortenTitle(message2, checkId),
     fix_available: fixAvailable,
     file_path: relativePath(filePath, ctx.project_path)
   };
-  if (message !== void 0) input.message = message;
+  if (message2 !== void 0) input.message = message2;
   if (subcategory !== void 0) input.subcategory = subcategory;
   if (lineStart !== void 0) input.line_start = lineStart;
   if (lineEnd !== void 0) input.line_end = lineEnd;
@@ -40693,9 +40792,9 @@ function mapSubcategory(metadata, checkId) {
   const last = parts.at(-1);
   return last && last !== checkId ? last : void 0;
 }
-function shortenTitle(message, checkId) {
-  if (message && message.length > 0) {
-    const firstLine4 = message.split(/\r?\n/)[0] ?? message;
+function shortenTitle(message2, checkId) {
+  if (message2 && message2.length > 0) {
+    const firstLine4 = message2.split(/\r?\n/)[0] ?? message2;
     return firstLine4.length > 140 ? firstLine4.slice(0, 137) + "\u2026" : firstLine4;
   }
   return checkId;
@@ -40723,7 +40822,7 @@ var securityCodeScanParser = {
         continue;
       }
       const lineNo = Number(lineNoRaw);
-      const message = messageRaw.trim();
+      const message2 = messageRaw.trim();
       const type = typeRaw.toLowerCase();
       const severity = type === "error" ? "critical" : LOWER_SEVERITY.has(ruleId) ? "medium" : "high";
       const category = "security";
@@ -40733,8 +40832,8 @@ var securityCodeScanParser = {
         severity,
         category,
         subcategory: subcategoryFor(ruleId),
-        title: message,
-        message,
+        title: message2,
+        message: message2,
         file_path: toRelativeIfPossible(file, ctx.project_path),
         line_start: lineNo,
         line_end: lineNo,
@@ -41085,23 +41184,6 @@ function hasFileWithExtension(root, extensions, exclude = PROJECT_WALK_EXCLUDE) 
   }
   return false;
 }
-function listProjectFiles(root, exclude = PROJECT_WALK_EXCLUDE) {
-  const out = [];
-  const stack = [{ abs: root, rel: "" }];
-  while (stack.length > 0) {
-    const next = stack.pop();
-    if (next === void 0) break;
-    for (const entry of readDir(next.abs)) {
-      const rel2 = next.rel === "" ? entry.name : `${next.rel}/${entry.name}`;
-      if (entry.isDirectory()) {
-        if (!exclude.has(entry.name)) stack.push({ abs: join12(next.abs, entry.name), rel: rel2 });
-      } else if (entry.isFile()) {
-        out.push(rel2);
-      }
-    }
-  }
-  return out.sort();
-}
 
 // src/runners/semgrepReport.ts
 var MAX_ERROR_TEXT = 300;
@@ -41132,8 +41214,8 @@ function describeErrors(errors) {
   return errors.map((entry) => {
     const rawType = getProp(entry, "type");
     const type = typeof rawType === "string" ? rawType : Array.isArray(rawType) ? String(rawType[0]) : "error";
-    const message = getString(entry, "message") ?? "(no message)";
-    return `${type}: ${message.split(/\r?\n/)[0] ?? message}`;
+    const message2 = getString(entry, "message") ?? "(no message)";
+    return `${type}: ${message2.split(/\r?\n/)[0] ?? message2}`;
   });
 }
 function clip(text) {
@@ -41446,88 +41528,8 @@ function semgrepScannedFiles(raw) {
   }
 }
 
-// src/runners/git.ts
-init_execa();
-var GIT_TIMEOUT_MS = 6e4;
-async function git(cwd, args) {
-  try {
-    const r = await execa("git", ["-C", cwd, ...args], {
-      reject: false,
-      timeout: GIT_TIMEOUT_MS,
-      encoding: "utf8",
-      stripFinalNewline: false
-    });
-    if (r.exitCode === void 0) return { exitCode: 127, stdout: "", stderr: "git could not be run" };
-    return {
-      exitCode: r.exitCode,
-      stdout: typeof r.stdout === "string" ? r.stdout : "",
-      stderr: typeof r.stderr === "string" ? r.stderr : ""
-    };
-  } catch (e) {
-    return { exitCode: 127, stdout: "", stderr: e instanceof Error ? e.message : String(e) };
-  }
-}
-function splitNul(text) {
-  return text.split("\0").filter((s) => s.length > 0);
-}
-async function repoState(cwd) {
-  const top = await git(cwd, ["rev-parse", "--show-toplevel"]);
-  if (top.exitCode !== 0) {
-    if (/not a git repository/i.test(top.stderr) || top.exitCode === 127) return { kind: "not_git" };
-    return { kind: "error", message: firstLine(top.stderr) || `git exited ${top.exitCode}` };
-  }
-  const toplevel = top.stdout.trim();
-  const head = await git(cwd, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
-  return head.exitCode === 0 ? { kind: "has_commits", toplevel } : { kind: "no_commits", toplevel };
-}
-async function resolveCommit(cwd, ref) {
-  const r = await git(cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
-  if (r.exitCode !== 0) return null;
-  const sha = r.stdout.trim();
-  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
-}
-async function changedFiles(cwd, base, head) {
-  const r = await git(cwd, [
-    "diff",
-    "-z",
-    "--name-only",
-    "--relative",
-    "--diff-filter=ACMR",
-    "--no-renames",
-    `${base}...${head}`,
-    "--"
-  ]);
-  if (r.exitCode !== 0) {
-    throw new Error(`git diff ${base}...${head} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
-  }
-  return splitNul(r.stdout);
-}
-async function countCommits(cwd, range) {
-  const r = await git(cwd, ["rev-list", "--count", range, "--"]);
-  const n2 = Number(r.stdout.trim());
-  if (r.exitCode !== 0 || !Number.isInteger(n2)) {
-    throw new Error(`git rev-list --count ${range} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
-  }
-  return n2;
-}
-async function uncommittedFiles(cwd, hasCommits, excludeDirs) {
-  const excludes = excludeDirs.map((d) => `--exclude=${d}/`);
-  const untracked = await git(cwd, ["ls-files", "-z", "--others", "--exclude-standard", ...excludes]);
-  if (untracked.exitCode !== 0) {
-    throw new Error(`git ls-files failed: ${firstLine(untracked.stderr) || `exit ${untracked.exitCode}`}`);
-  }
-  const tracked = hasCommits ? await git(cwd, ["diff", "-z", "--name-only", "--relative", "--diff-filter=d", "--no-renames", "HEAD", "--"]) : await git(cwd, ["ls-files", "-z", "--cached"]);
-  if (tracked.exitCode !== 0) {
-    throw new Error(`git failed listing changed files: ${firstLine(tracked.stderr) || `exit ${tracked.exitCode}`}`);
-  }
-  return [.../* @__PURE__ */ new Set([...splitNul(tracked.stdout), ...splitNul(untracked.stdout)])];
-}
-function firstLine(text) {
-  return text.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
-}
-
 // src/runners/gitleaksScan.ts
-import { copyFileSync, existsSync as existsSync13, lstatSync, mkdirSync as mkdirSync4, mkdtempSync, rmSync as rmSync2 } from "node:fs";
+import { copyFileSync, existsSync as existsSync13, lstatSync, mkdirSync as mkdirSync4, mkdtempSync, rmSync as rmSync2, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { dirname as dirname8, join as join15, relative as relative3, resolve as resolve5 } from "node:path";
 
@@ -41574,59 +41576,69 @@ function mapItem(raw, ctx) {
 var GITLEAKS_HISTORY = "gitleaks";
 var GITLEAKS_WORKING_TREE = "gitleaks-working-tree";
 var MAX_FILE_BYTES = 25 * 1024 * 1024;
+var MAX_TOTAL_BYTES = 512 * 1024 * 1024;
 var EXCLUDED_DIRS = [...PROJECT_WALK_EXCLUDE];
 async function runGitleaksScan(opts) {
   const result = { tools_run: [], missing_tools: [], parser_inputs: [], cancelled: false };
+  try {
+    await scan(opts, result);
+  } catch (e) {
+    result.tools_run.push({ name: GITLEAKS_HISTORY, status: "failed", reason: `secret scan failed: ${message(e)}` });
+  }
+  return result;
+}
+async function scan(opts, result) {
   if (!await scannerAvailable("gitleaks")) {
     result.tools_run.push({ name: GITLEAKS_HISTORY, status: "skipped", reason: "not_installed" });
     result.missing_tools.push("gitleaks");
-    return result;
+    return;
   }
   if (opts.scope.kind === "range") {
     const range = `${opts.scope.base}..${opts.scope.head}`;
-    const commits = await countCommits(opts.projectPath, range);
+    let commits;
+    try {
+      commits = await countCommits(opts.projectPath, range);
+    } catch (e) {
+      result.tools_run.push({ name: GITLEAKS_HISTORY, status: "failed", reason: message(e) });
+      return;
+    }
     if (commits === 0) {
       result.tools_run.push({
         name: GITLEAKS_HISTORY,
         status: "skipped",
         reason: `no commits in ${short(opts.scope.base)}..${short(opts.scope.head)}`
       });
-      return result;
+    } else {
+      await historyPass(opts, result, range, commits, await repoPrefix(opts.projectPath));
     }
-    await historyPass(opts, result, range, commits, await repoPrefix(opts.projectPath));
-    return result;
+    if (opts.scope.workingTree === true && !result.cancelled) await workingTreePass(opts, result, true);
+    return;
   }
   const state = await repoState(opts.projectPath);
   switch (state.kind) {
-    case "has_commits": {
+    case "has_commits":
       await historyPass(opts, result, opts.scope.logOpts, null, posixRelative(state.toplevel, opts.projectPath));
-      if (result.cancelled) return result;
-      const files = await uncommittedFiles(opts.projectPath, true, EXCLUDED_DIRS);
-      await filesPass(opts, result, files, "working_tree", GITLEAKS_WORKING_TREE);
-      return result;
-    }
-    case "no_commits": {
+      if (!result.cancelled) await workingTreePass(opts, result, true);
+      return;
+    case "no_commits":
       result.tools_run.push({
         name: GITLEAKS_HISTORY,
         status: "skipped",
         reason: "the repository has no commits yet \u2014 no history to scan"
       });
-      const files = await uncommittedFiles(opts.projectPath, false, EXCLUDED_DIRS);
-      await filesPass(opts, result, files, "working_tree", GITLEAKS_WORKING_TREE);
-      return result;
-    }
-    case "error": {
+      await workingTreePass(opts, result, false);
+      return;
+    case "error":
       result.tools_run.push({
         name: GITLEAKS_HISTORY,
         status: "failed",
         reason: `git could not read the repository (${state.message}) \u2014 history not scanned`
       });
-      await filesPass(opts, result, listProjectFiles(opts.projectPath), "directory", GITLEAKS_WORKING_TREE);
-      return result;
-    }
+      await directoryPass(opts, result, GITLEAKS_WORKING_TREE);
+      return;
     case "not_git":
-      await filesPass(opts, result, listProjectFiles(opts.projectPath), "directory", GITLEAKS_HISTORY);
-      return result;
+      await directoryPass(opts, result, GITLEAKS_HISTORY);
+      return;
   }
 }
 async function historyPass(opts, result, logOpts, expectedCommits, projectPrefix) {
@@ -41670,22 +41682,40 @@ async function historyPass(opts, result, logOpts, expectedCommits, projectPrefix
     problems.length === 0 ? { name: GITLEAKS_HISTORY, status: "ok", reason: `history: ${describeCount(scanned, "commit")} scanned` } : { name: GITLEAKS_HISTORY, status: "failed", reason: problems.join("; ") }
   );
 }
-async function filesPass(opts, result, files, location, name) {
-  const what = location === "working_tree" ? "uncommitted or untracked file(s)" : "file(s)";
-  const prefix = location === "directory" ? "not a git repository \u2014 scanned the directory: " : "working tree: ";
-  const candidates2 = files.filter((f) => !isExcluded(f));
-  if (candidates2.length === 0) {
-    result.tools_run.push({
-      name,
-      status: "skipped",
-      reason: location === "working_tree" ? "no uncommitted or untracked files" : "the directory holds no files to scan"
-    });
+async function workingTreePass(opts, result, hasCommits) {
+  let files;
+  try {
+    files = await uncommittedFiles(opts.projectPath, hasCommits, EXCLUDED_DIRS);
+  } catch (e) {
+    result.tools_run.push({ name: GITLEAKS_WORKING_TREE, status: "failed", reason: `working tree: ${message(e)}` });
     return;
   }
-  const tmp = mkdtempSync(join15(tmpdir2(), "guardian-gitleaks-"));
+  await filesPass(opts, result, files);
+}
+async function filesPass(opts, result, files) {
+  const name = GITLEAKS_WORKING_TREE;
+  const candidates2 = files.filter((f) => !isExcluded(f));
+  if (candidates2.length === 0) {
+    result.tools_run.push({ name, status: "skipped", reason: "no uncommitted or untracked files" });
+    return;
+  }
+  const maxFile = opts.limits?.maxFileBytes ?? MAX_FILE_BYTES;
+  const maxTotal = opts.limits?.maxTotalBytes ?? MAX_TOTAL_BYTES;
+  let tmp;
   try {
-    let copied = 0;
+    tmp = mkdtempSync(join15(tmpdir2(), "guardian-gitleaks-"));
+  } catch (e) {
+    result.tools_run.push({ name, status: "failed", reason: `working tree: no temporary directory: ${message(e)}` });
+    return;
+  }
+  const gaps = [];
+  const notes = [];
+  let copied = 0;
+  try {
+    const unreadable = [];
     let oversized = 0;
+    let overTotal = 0;
+    let total = 0;
     for (const rel2 of candidates2) {
       const from = join15(opts.projectPath, rel2);
       let size;
@@ -41696,25 +41726,38 @@ async function filesPass(opts, result, files, location, name) {
       } catch {
         continue;
       }
-      if (size > MAX_FILE_BYTES) {
+      if (size > maxFile) {
         oversized += 1;
         continue;
       }
-      const to = join15(tmp, rel2);
-      mkdirSync4(dirname8(to), { recursive: true });
-      copyFileSync(from, to);
-      copied += 1;
+      if (total + size > maxTotal) {
+        overTotal += 1;
+        continue;
+      }
+      try {
+        const to = join15(tmp, rel2);
+        mkdirSync4(dirname8(to), { recursive: true });
+        copyFileSync(from, to);
+        copied += 1;
+        total += size;
+      } catch (e) {
+        unreadable.push(`${rel2} (${errorCode(e)})`);
+      }
     }
-    const notes = oversized > 0 ? `; ${oversized} file(s) over 25 MB not scanned` : "";
+    if (unreadable.length > 0) {
+      gaps.push(`${unreadable.length} file(s) could not be read: ${unreadable.slice(0, 5).join(", ")}${unreadable.length > 5 ? ", \u2026" : ""}`);
+    }
+    if (oversized > 0) gaps.push(`${oversized} file(s) not scanned: over ${megabytes(maxFile)} each`);
+    if (overTotal > 0) gaps.push(`${overTotal} file(s) not scanned: over the ${bytesLabel(maxTotal)} total`);
     if (copied === 0) {
       result.tools_run.push({
         name,
-        status: "skipped",
-        reason: `${prefix}no regular file to scan${notes}`
+        status: gaps.length > 0 ? "failed" : "skipped",
+        reason: `working tree: no file to scan${gaps.length > 0 ? `; ${gaps.join("; ")}` : ""}`
       });
       return;
     }
-    const outFile = join15(opts.reportDir, location === "working_tree" ? "secrets-working-tree.json" : "secrets.json");
+    const outFile = join15(opts.reportDir, "secrets-working-tree.json");
     rmSync2(outFile, { force: true });
     const args = [
       "detect",
@@ -41729,26 +41772,101 @@ async function filesPass(opts, result, files, location, name) {
     ];
     const projectConfig = join15(opts.projectPath, ".gitleaks.toml");
     if (existsSync13(projectConfig)) args.push(`--config=${projectConfig}`);
-    const run = await runProcess({
-      command: "gitleaks",
-      args,
-      cwd: tmp,
-      env: opts.env,
-      signal: opts.signal,
-      onLog: opts.onLog
-    });
+    const run = await runProcess({ command: "gitleaks", args, cwd: tmp, env: opts.env, signal: opts.signal, onLog: opts.onLog });
     if (run.outcome === "cancelled") result.cancelled = true;
-    const raw = readJsonSafe(outFile);
-    const problems = runProblems(run, raw);
-    if (raw !== null && problems.length === 0) {
-      result.parser_inputs.push({ parser: locatedParser(location, ""), input: raw });
-      result.tools_run.push({ name, status: "ok", reason: `${prefix}${copied} ${what} scanned${notes}` });
-    } else {
-      result.tools_run.push({ name, status: "failed", reason: `${prefix}${problems.join("; ")}` });
-    }
+    recordFilesRun(result, name, run, readJsonSafe(outFile), "working_tree", `working tree: ${copied} uncommitted or untracked file(s) scanned`, gaps, notes);
   } finally {
-    rmSync2(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    try {
+      rmSync2(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (e) {
+      const entry = result.tools_run.find((t) => t.name === name);
+      const note = `temporary copy ${tmp} could not be removed (${errorCode(e)})`;
+      if (entry) entry.reason = entry.reason ? `${entry.reason}; ${note}` : note;
+    }
   }
+}
+async function directoryPass(opts, result, name) {
+  const prefix = "not a git repository \u2014 scanned the directory in place";
+  let config2;
+  try {
+    config2 = join15(opts.reportDir, "gitleaks-directory.toml");
+    writeFileSync5(config2, directoryConfig(opts.projectPath));
+  } catch (e) {
+    result.tools_run.push({ name, status: "failed", reason: `${prefix}: could not write its config: ${message(e)}` });
+    return;
+  }
+  const outFile = join15(opts.reportDir, "secrets.json");
+  rmSync2(outFile, { force: true });
+  const run = await runProcess({
+    command: "gitleaks",
+    args: [
+      "detect",
+      "--no-git",
+      "--no-banner",
+      "--log-level=info",
+      "--report-format=json",
+      `--report-path=${outFile}`,
+      "--redact",
+      "-s",
+      ".",
+      `--config=${config2}`
+    ],
+    cwd: opts.projectPath,
+    env: opts.env,
+    signal: opts.signal,
+    onLog: opts.onLog
+  });
+  if (run.outcome === "cancelled") result.cancelled = true;
+  const bytes = bytesScanned(run.stderr);
+  if (bytes === 0 && runProblems(run, readJsonSafe(outFile)).length === 0) {
+    result.tools_run.push({ name, status: "skipped", reason: `${prefix}: it holds nothing gitleaks reads (0 bytes)` });
+    return;
+  }
+  const excluded = EXCLUDED_DIRS.join(", ");
+  const scanned = bytes === null ? "" : ` (~${bytes} bytes)`;
+  recordFilesRun(result, name, run, readJsonSafe(outFile), "directory", `${prefix}${scanned}, excluding ${excluded}`, [], []);
+}
+function directoryConfig(projectPath) {
+  const own = join15(projectPath, ".gitleaks.toml");
+  const names = EXCLUDED_DIRS.map((d) => d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  return [
+    "# Generated by dev-guardian for one scan: the project's gitleaks config (or",
+    "# gitleaks' defaults) plus the directories no scan of the project's own files reads.",
+    "[extend]",
+    existsSync13(own) ? `path = '''${own}'''` : "useDefault = true",
+    "",
+    "[allowlist]",
+    'description = "dev-guardian: vendored, generated and tool directories"',
+    `paths = ['''(^|/)(${names})/''']`,
+    ""
+  ].join("\n");
+}
+function recordFilesRun(result, name, run, raw, location, okReason, gaps, notes) {
+  const problems = runProblems(run, raw);
+  if (raw !== null && problems.length === 0) {
+    result.parser_inputs.push({ parser: locatedParser(location, ""), input: raw });
+    result.tools_run.push({ name, status: "ok", reason: [okReason, ...gaps, ...notes].join("; ") });
+    if (gaps.length > 0) result.missing_tools.push(name);
+  } else {
+    result.tools_run.push({ name, status: "failed", reason: [...problems, ...gaps, ...notes].join("; ") });
+  }
+}
+function message(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+function errorCode(e) {
+  const code = typeof e === "object" && e !== null && "code" in e ? e.code : void 0;
+  return typeof code === "string" ? code : message(e);
+}
+function megabytes(n2) {
+  return `${Math.round(n2 / (1024 * 1024))} MB`;
+}
+function bytesLabel(n2) {
+  return n2 >= 1024 * 1024 ? megabytes(n2) : `${n2}-byte`;
+}
+function bytesScanned(stderr) {
+  const m = /scanned ~(\d+) bytes/i.exec(stderr.replace(ANSI, ""));
+  return m?.[1] !== void 0 ? Number(m[1]) : null;
 }
 function runProblems(run, raw) {
   if (run.outcome === "cancelled" || run.outcome === "timed_out" || run.outcome === "output_too_large") {
@@ -41815,8 +41933,8 @@ function locate(f, location, projectPrefix) {
 var REF = /^[A-Za-z0-9][A-Za-z0-9._/@{}~^-]*$/;
 var SINCE = /^--since=[A-Za-z0-9][A-Za-z0-9:._+-]*$/;
 var LogOptsError = class extends Error {
-  constructor(message, kind) {
-    super(message);
+  constructor(message2, kind) {
+    super(message2);
     this.kind = kind;
     this.name = "LogOptsError";
   }
@@ -41857,6 +41975,8 @@ var scanSecrets = makeScanTool({
   title: "Secret scan (gitleaks)",
   description: "Detect secrets / API keys / tokens with gitleaks: in git history AND in files not committed yet (modified, staged, untracked-not-ignored), or the whole directory when the project is not a git repository (skipping node_modules, vendor, .git and build output). Each finding says where it was found: history (with the commit), working_tree or directory. A history pass that scanned 0 commits is reported as failed, never as clean. Always runs with --redact so the raw secret never reaches MCP output.",
   scan_type: "secrets",
+  // History is read beyond the working tree: HEAD and every ref join the key.
+  cacheState: (_input, { projectPath }) => historyState(projectPath),
   category: "security",
   supportsAutoFix: false,
   inputSchema: {
@@ -41869,7 +41989,7 @@ var scanSecrets = makeScanTool({
   invoke: async (input, ctx) => {
     const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, "secrets");
     const logOpts = input.log_opts !== void 0 ? await resolveLogOpts(ctx.projectPath, input.log_opts) : void 0;
-    const scan = await runGitleaksScan({
+    const scan2 = await runGitleaksScan({
       projectPath: ctx.projectPath,
       reportDir,
       scope: logOpts !== void 0 ? { kind: "project", logOpts } : { kind: "project" },
@@ -41878,10 +41998,10 @@ var scanSecrets = makeScanTool({
       onLog: ctx.onLog
     });
     return {
-      outcome: scan.cancelled ? "cancelled" : "completed",
-      tools_run: scan.tools_run,
-      missing_tools: scan.missing_tools,
-      parser_inputs: scan.parser_inputs,
+      outcome: scan2.cancelled ? "cancelled" : "completed",
+      tools_run: scan2.tools_run,
+      missing_tools: scan2.missing_tools,
+      parser_inputs: scan2.parser_inputs,
       report_paths: [reportDir]
     };
   }
@@ -42022,7 +42142,7 @@ function mapMisconfiguration(raw, target, ctx) {
   if (!id) return null;
   const severity = normalizeSeverity(getString(raw, "Severity"));
   const title = getString(raw, "Title") ?? id;
-  const message = getString(raw, "Description");
+  const message2 = getString(raw, "Description");
   const cause = getProp(raw, "CauseMetadata");
   const lineStart = getNumber(cause, "StartLine");
   const lineEnd = getNumber(cause, "EndLine") ?? lineStart;
@@ -42038,7 +42158,7 @@ function mapMisconfiguration(raw, target, ctx) {
     title,
     file_path: toRelativeIfPossible(target, ctx.project_path)
   };
-  if (message !== void 0) input.message = message;
+  if (message2 !== void 0) input.message = message2;
   if (lineStart !== void 0) input.line_start = lineStart;
   if (lineEnd !== void 0) input.line_end = lineEnd;
   const fixHint = getString(raw, "Resolution");
@@ -42201,6 +42321,8 @@ registerToolModule(
     scan_type: "security_full",
     category: "security",
     orchestrator: true,
+    // scan_secrets reads git history: HEAD and every ref join the key.
+    cacheState: (_input, { projectPath }) => historyState(projectPath),
     // The children's own rule packs: the cache key must move when a rule does.
     rulePacks: (input, { projectPath, plugin }) => planSemgrepConfigs(projectPath, plugin, input.local_only === true).rulePacks,
     inputSchema: {
@@ -42275,7 +42397,16 @@ async function runChild(name, input, ctx, meta) {
     ], false);
   }
   if (ctx.signal.aborted) return empty({ tool: name, scan_id: null, status: "cancelled" }, [], true);
-  const r = await tool46.handler(input, ctx.plugin, meta);
+  let r;
+  try {
+    r = await tool46.handler(input, ctx.plugin, meta);
+  } catch (e) {
+    if (ctx.signal.aborted) return empty({ tool: name, scan_id: null, status: "cancelled" }, [], true);
+    const reason = e instanceof Error ? e.message : String(e);
+    return empty({ tool: name, scan_id: null, status: "failed", error: "threw" }, [
+      { name, status: "failed", reason: `threw: ${reason}` }
+    ], false);
+  }
   if (!r.ok) {
     if (r.error.code === "cancelled") {
       return empty({ tool: name, scan_id: null, status: "cancelled", error: r.error.code }, [], true);
@@ -42476,18 +42607,18 @@ function findConfigDownloadFailures(raw) {
   const errors = asArray(getProp(root, "errors"));
   const failures = [];
   for (const entry of errors) {
-    const message = getString(entry, "message");
-    if (message === void 0) continue;
-    const downloadMatch = DOWNLOAD_FAILURE_RE.exec(message);
+    const message2 = getString(entry, "message");
+    if (message2 === void 0) continue;
+    const downloadMatch = DOWNLOAD_FAILURE_RE.exec(message2);
     if (downloadMatch) {
       const url = downloadMatch[1];
       const pack = url !== void 0 ? url.replace(REGISTRY_URL_PREFIX_RE, "") : null;
-      failures.push({ pack, message });
+      failures.push({ pack, message: message2 });
       continue;
     }
-    const localMatch = LOCAL_YAML_FAILURE_RE.exec(message);
+    const localMatch = LOCAL_YAML_FAILURE_RE.exec(message2);
     if (localMatch) {
-      failures.push({ pack: localMatch[1] ?? null, message });
+      failures.push({ pack: localMatch[1] ?? null, message: message2 });
       continue;
     }
   }
@@ -42515,10 +42646,10 @@ function describeRawErrors(raw) {
   const errors = asArray(getProp(root, "errors"));
   const parts = [];
   for (const entry of errors) {
-    const message = getString(entry, "message");
-    if (message === void 0) continue;
+    const message2 = getString(entry, "message");
+    if (message2 === void 0) continue;
     const ruleId = getString(entry, "rule_id");
-    parts.push(ruleId !== void 0 ? `${ruleId}: ${message}` : message);
+    parts.push(ruleId !== void 0 ? `${ruleId}: ${message2}` : message2);
   }
   return parts.length > 0 ? parts.join("; ") : null;
 }
@@ -42849,7 +42980,7 @@ function fileEntries(input) {
 function mapMessage(raw, filePath, ctx) {
   const ruleId = getString(raw, "ruleId");
   if (!ruleId) return null;
-  const message = getString(raw, "message") ?? `${ruleId} violation`;
+  const message2 = getString(raw, "message") ?? `${ruleId} violation`;
   const line = getNumber(raw, "line");
   const endLine = getNumber(raw, "endLine") ?? line;
   const input = {
@@ -42858,8 +42989,8 @@ function mapMessage(raw, filePath, ctx) {
     severity: getNumber(raw, "severity") === 2 ? "medium" : "low",
     category: "quality",
     subcategory: COMPLEXITY_RULES.has(ruleId) ? "complexity" : NAMING_RULES.has(ruleId) ? "naming" : "smell",
-    title: message,
-    message,
+    title: message2,
+    message: message2,
     file_path: toRelativeIfPossible(filePath, ctx.project_path),
     fix_available: getProp(raw, "fix") !== void 0
   };
@@ -42897,7 +43028,7 @@ function mapDuplicate(raw, ctx) {
   const secondEnd = getNumber(second, "end");
   const fragment = getString(raw, "fragment");
   const title = lines !== void 0 ? `Duplicated ${lines} line(s)${format2 ? " (" + format2 + ")" : ""}` : "Code duplication";
-  const message = secondPath ? `Mirror at ${toRelativeIfPossible(secondPath, ctx.project_path)}:${secondStart ?? "?"}-${secondEnd ?? "?"}` : void 0;
+  const message2 = secondPath ? `Mirror at ${toRelativeIfPossible(secondPath, ctx.project_path)}:${secondStart ?? "?"}-${secondEnd ?? "?"}` : void 0;
   const input = {
     tool: JSCPD_TOOL_NAME,
     rule_id: "duplicate-code",
@@ -42908,7 +43039,7 @@ function mapDuplicate(raw, ctx) {
     file_path: toRelativeIfPossible(firstPath, ctx.project_path),
     fix_available: false
   };
-  if (message !== void 0) input.message = message;
+  if (message2 !== void 0) input.message = message2;
   if (firstStart !== void 0) input.line_start = firstStart;
   if (firstEnd !== void 0) input.line_end = firstEnd;
   if (fragment !== void 0) {
@@ -43000,7 +43131,7 @@ function mapItem2(raw, ctx) {
   const code = getString(raw, "code");
   const filename = getString(raw, "filename");
   if (!code || !filename) return null;
-  const message = getString(raw, "message");
+  const message2 = getString(raw, "message");
   const location = getProp(raw, "location");
   const endLocation = getProp(raw, "end_location");
   const lineStart = getNumber(location, "row");
@@ -43014,11 +43145,11 @@ function mapItem2(raw, ctx) {
     category,
     subcategory: code.replace(/[0-9]+$/, ""),
     // 'F401' -> 'F'
-    title: message ?? `${code} violation`,
+    title: message2 ?? `${code} violation`,
     file_path: toRelativeIfPossible(filename, ctx.project_path),
     fix_available: hasFix
   };
-  if (message !== void 0) input.message = message;
+  if (message2 !== void 0) input.message = message2;
   if (lineStart !== void 0) input.line_start = lineStart;
   if (lineEnd !== void 0) input.line_end = lineEnd;
   return makeFinding(input);
@@ -43075,7 +43206,7 @@ function mapEntry(raw, ctx) {
   const location = getProp(raw, "location");
   const file = getString(location, "file");
   if (!file) return null;
-  const message = getString(raw, "message") ?? `${code} violation`;
+  const message2 = getString(raw, "message") ?? `${code} violation`;
   const line = getNumber(location, "line");
   const endLine = getNumber(getProp(raw, "end"), "line");
   const input = {
@@ -43084,8 +43215,8 @@ function mapEntry(raw, ctx) {
     severity: getString(raw, "severity") === "error" ? "medium" : "low",
     category: "quality",
     subcategory: NAMING_CODES.has(code) ? "naming" : "smell",
-    title: message,
-    message: `${code}: ${message}`,
+    title: message2,
+    message: `${code}: ${message2}`,
     file_path: toRelativeIfPossible(file, ctx.project_path),
     fix_available: false
   };
@@ -43634,8 +43765,8 @@ async function defaultBaseRef(cwd) {
   }
   return null;
 }
-function refused(code, message) {
-  return { ok: false, error: { code, message } };
+function refused(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 var tool3 = {
   ...reviewPr,
@@ -43740,8 +43871,8 @@ function mapV2Advisory(via, fixAvailable, seen, _ctx) {
     fix_available: fixAvailable,
     snippet: `${pkg ?? ""}@${range ?? ""}`
   };
-  const message = composeMessage(pkg, range, url);
-  if (message) input.message = message;
+  const message2 = composeMessage(pkg, range, url);
+  if (message2) input.message = message2;
   return makeFinding(input);
 }
 function mapV1Advisory(adv, seen) {
@@ -43767,8 +43898,8 @@ function mapV1Advisory(adv, seen) {
     fix_available: recommendation2 ? /upgrad|updat/i.test(recommendation2) : false,
     snippet: `${pkg ?? ""}@${range ?? ""}`
   };
-  const message = composeMessage(pkg, range, url ?? recommendation2);
-  if (message) input.message = message;
+  const message2 = composeMessage(pkg, range, url ?? recommendation2);
+  if (message2) input.message = message2;
   const cves = [];
   for (const cveId of asArray(getProp(adv, "cves"))) {
     if (typeof cveId === "string" && /^CVE-\d/i.test(cveId)) {
@@ -43937,8 +44068,8 @@ async function tryNativeAudit(opts) {
   });
   if (isNpmStdout && result.stdout.length > 0) {
     try {
-      const { writeFileSync: writeFileSync13 } = await import("node:fs");
-      writeFileSync13(opts.outFile, result.stdout, "utf8");
+      const { writeFileSync: writeFileSync14 } = await import("node:fs");
+      writeFileSync14(opts.outFile, result.stdout, "utf8");
     } catch {
     }
   }
@@ -44386,8 +44517,8 @@ function summarize(plan) {
     has_security_updates: by_classification.security > 0
   };
 }
-function failDomain2(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain2(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/complianceCheck.ts
@@ -44736,8 +44867,8 @@ async function handler2(input, ctx) {
   }
   return payload;
 }
-function failDomain3(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain3(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/detectStack.ts
@@ -44838,8 +44969,8 @@ async function handler3(input, ctx) {
     snapshot_id: persisted.id
   };
 }
-function failDomain4(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain4(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 function enrichDotnet(snap, projectPath) {
   const addOnce = (arr, value) => {
@@ -44915,7 +45046,7 @@ import { existsSync as existsSync22 } from "node:fs";
 import { join as join29 } from "node:path";
 
 // src/configdrift/refresh.ts
-import { copyFileSync as copyFileSync2, existsSync as existsSync21, mkdirSync as mkdirSync5, writeFileSync as writeFileSync5, readFileSync as readFileSync14 } from "node:fs";
+import { copyFileSync as copyFileSync2, existsSync as existsSync21, mkdirSync as mkdirSync5, writeFileSync as writeFileSync6, readFileSync as readFileSync14 } from "node:fs";
 import { dirname as dirname10, join as join28 } from "node:path";
 function alongsideName(target, version2) {
   return `${target}.dev-guardian-${version2}.new`;
@@ -45072,7 +45203,7 @@ function installFile(input) {
       pluginVersion: input.version,
       prefix
     });
-    writeFileSync5(input.dstPath, header + readFileSync14(input.srcPath, "utf8"), "utf8");
+    writeFileSync6(input.dstPath, header + readFileSync14(input.srcPath, "utf8"), "utf8");
     return true;
   } catch {
     return false;
@@ -45280,12 +45411,12 @@ function readLatestStackSnapshot(ctx) {
   const latest = ctx.storage.stack.getLatest();
   return latest?.snapshot ?? null;
 }
-function failDomain5(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain5(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/observabilitySetup.ts
-import { existsSync as existsSync23, mkdirSync as mkdirSync6, readdirSync as readdirSync10, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync23, mkdirSync as mkdirSync6, readdirSync as readdirSync10, writeFileSync as writeFileSync7 } from "node:fs";
 import { dirname as dirname11, join as join30 } from "node:path";
 var tool8 = {
   name: "observability_setup",
@@ -45321,7 +45452,7 @@ async function handler5(input, ctx) {
       }
       try {
         mkdirSync6(dirname11(abs), { recursive: true });
-        writeFileSync6(abs, p.contents, "utf8");
+        writeFileSync7(abs, p.contents, "utf8");
         written.push(p);
       } catch (e) {
         failed.push({ ...p, error: e.message });
@@ -45645,12 +45776,12 @@ public static class Metrics
     }
 }
 `;
-function failDomain6(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain6(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/perfCheck.ts
-import { existsSync as existsSync24, readFileSync as readFileSync15, writeFileSync as writeFileSync7 } from "node:fs";
+import { existsSync as existsSync24, readFileSync as readFileSync15, writeFileSync as writeFileSync8 } from "node:fs";
 import { join as join31 } from "node:path";
 import { randomUUID as randomUUID4 } from "node:crypto";
 var inputSchema3 = {
@@ -45793,7 +45924,7 @@ async function runK6(opts) {
     timeoutMs: 30 * 6e4
   });
   if (!existsSync24(summaryFile)) {
-    writeFileSync7(summaryFile, result.stdout || "{}", "utf8");
+    writeFileSync8(summaryFile, result.stdout || "{}", "utf8");
   }
   const raw = readFileSync15(summaryFile, "utf8");
   let parsed;
@@ -45826,8 +45957,8 @@ function summariseK6(root) {
     thresholds_configured: thresholds.filter((t) => t !== void 0)
   };
 }
-function failDomain7(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain7(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/setBaseline.ts
@@ -45847,14 +45978,14 @@ async function handler7(input, ctx) {
   const inp = input;
   let targetScanId;
   if (inp.scan_id) {
-    const scan = ctx.storage.scans.getById(inp.scan_id);
-    if (!scan) {
+    const scan2 = ctx.storage.scans.getById(inp.scan_id);
+    if (!scan2) {
       return failDomain8("unknown_scan_id", `No scan with id '${inp.scan_id}'.`);
     }
-    if (scan.status !== "completed") {
+    if (scan2.status !== "completed") {
       return failDomain8(
         "unknown_scan_id",
-        `Scan '${inp.scan_id}' is status='${scan.status}'. Baselines require completed scans.`
+        `Scan '${inp.scan_id}' is status='${scan2.status}'. Baselines require completed scans.`
       );
     }
     targetScanId = inp.scan_id;
@@ -45880,8 +46011,8 @@ async function handler7(input, ctx) {
     ...baseline.note !== void 0 ? { note: baseline.note } : {}
   };
 }
-function failDomain8(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain8(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/suppressFinding.ts
@@ -45919,8 +46050,8 @@ async function handler8(input, ctx) {
     expires_at: inp.expires_at ?? null
   };
 }
-function failDomain9(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain9(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/diffScans.ts
@@ -45982,8 +46113,8 @@ async function handler9(input, ctx) {
 }
 function resolveTo(inp, ctx) {
   if (inp.to_scan_id) {
-    const scan = ctx.storage.scans.getById(inp.to_scan_id);
-    if (!scan)
+    const scan2 = ctx.storage.scans.getById(inp.to_scan_id);
+    if (!scan2)
       return { ok: false, err: failDomain10("unknown_scan_id", `to scan '${inp.to_scan_id}' not found`) };
     return { ok: true, value: inp.to_scan_id };
   }
@@ -45993,8 +46124,8 @@ function resolveTo(inp, ctx) {
 }
 function resolveFrom(inp, toScanId, ctx) {
   if (inp.from_scan_id) {
-    const scan = ctx.storage.scans.getById(inp.from_scan_id);
-    if (!scan)
+    const scan2 = ctx.storage.scans.getById(inp.from_scan_id);
+    if (!scan2)
       return {
         ok: false,
         err: failDomain10("unknown_scan_id", `from scan '${inp.from_scan_id}' not found`)
@@ -46031,8 +46162,8 @@ function resolveFrom(inp, toScanId, ctx) {
     };
   return { ok: true, value: previous.scan_id };
 }
-function failDomain10(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain10(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/auditExecutive.ts
@@ -46255,8 +46386,8 @@ function topFindings2(findings, limit) {
     (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
   ).slice(0, limit);
 }
-function failDomain11(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain11(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/platform/semverCompare.ts
@@ -47334,8 +47465,8 @@ function groupByLicense(rows) {
   }
   return out;
 }
-function failDomain12(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain12(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/dashboard/risk.ts
@@ -47590,8 +47721,8 @@ function extractFromSbomJson(raw) {
   }
   return [];
 }
-function failDomain13(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain13(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/regressionAlert.ts
@@ -47757,8 +47888,8 @@ async function handler17(input, ctx) {
     instructions_for_model: "Propose a unified-diff patch (or describe the minimal edit) that addresses this finding without changing unrelated behaviour. Reference the line range, explain the fix, and call out any side effects the maintainer should review."
   };
 }
-function failDomain14(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain14(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/triageFindings.ts
@@ -47918,8 +48049,8 @@ async function handler19(input, _ctx) {
     stdout: result.stdout.split(/\r?\n/).slice(0, 20).join("\n")
   };
 }
-function failDomain15(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain15(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/registerCustomRules.ts
@@ -47979,8 +48110,8 @@ function autoDiscover(projectPath) {
   }
   return out;
 }
-function failDomain16(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain16(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/healthStatus.ts
@@ -48041,7 +48172,7 @@ async function handler21(ctx) {
 }
 
 // src/tools/reportExport.ts
-import { mkdirSync as mkdirSync7, writeFileSync as writeFileSync8 } from "node:fs";
+import { mkdirSync as mkdirSync7, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join37 } from "node:path";
 
 // src/report/htmlTheme.ts
@@ -48463,7 +48594,7 @@ async function handler22(input, ctx) {
     mkdirSync7(outDir2, { recursive: true });
     const fileName2 = narrativeFormat === "markdown" ? "report.md" : "report.html";
     const outFile2 = join37(outDir2, fileName2);
-    writeFileSync8(outFile2, content2, "utf8");
+    writeFileSync9(outFile2, content2, "utf8");
     return {
       ok: true,
       kind: "narrative",
@@ -48477,15 +48608,15 @@ async function handler22(input, ctx) {
   if (!scanId) {
     return failDomain17("unknown_scan_id", "No completed scans to export.");
   }
-  const scan = ctx.storage.scans.getById(scanId);
-  if (!scan) return failDomain17("unknown_scan_id", `Scan '${scanId}' not found.`);
+  const scan2 = ctx.storage.scans.getById(scanId);
+  if (!scan2) return failDomain17("unknown_scan_id", `Scan '${scanId}' not found.`);
   const findings = ctx.storage.findings.listByScan(scanId);
-  const cves = CVE_SOURCE_SCAN_TYPES.includes(scan.scan_type) ? ctx.storage.cves.listActive(scanId) : [];
-  const { content, fileName } = renderReport(format2, scan, findings, cves, lang);
+  const cves = CVE_SOURCE_SCAN_TYPES.includes(scan2.scan_type) ? ctx.storage.cves.listActive(scanId) : [];
+  const { content, fileName } = renderReport(format2, scan2, findings, cves, lang);
   const outDir = join37(projectPath, ".guardian", "reports", `export-${scanId.slice(0, 8)}`);
   mkdirSync7(outDir, { recursive: true });
   const outFile = join37(outDir, fileName);
-  writeFileSync8(outFile, content, "utf8");
+  writeFileSync9(outFile, content, "utf8");
   return {
     ok: true,
     kind: "scan",
@@ -48497,33 +48628,33 @@ async function handler22(input, ctx) {
     cves_count: cves.length
   };
 }
-function renderReport(format2, scan, findings, cves, lang) {
+function renderReport(format2, scan2, findings, cves, lang) {
   switch (format2) {
     case "sarif":
       return { content: toSarif(findings), fileName: "report.sarif" };
     case "json":
       return {
-        content: JSON.stringify({ scan, findings, cves }, null, 2),
+        content: JSON.stringify({ scan: scan2, findings, cves }, null, 2),
         fileName: "report.json"
       };
     case "markdown":
-      return { content: renderMarkdown(scan, findings, cves), fileName: "report.md" };
+      return { content: renderMarkdown(scan2, findings, cves), fileName: "report.md" };
     case "html":
     default:
-      return { content: renderHtml(scan, findings, cves, lang), fileName: "report.html" };
+      return { content: renderHtml(scan2, findings, cves, lang), fileName: "report.html" };
   }
 }
-function renderMarkdown(scan, findings, cves) {
+function renderMarkdown(scan2, findings, cves) {
   const counts = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const f of findings) counts[f.severity] += 1;
   const lines = [];
   lines.push(`# dev-guardian scan report`);
   lines.push("");
-  lines.push(`- **Scan ID:** ${scan.scan_id}`);
-  lines.push(`- **Type:** ${scan.scan_type}`);
-  lines.push(`- **Status:** ${scan.status}`);
-  lines.push(`- **Started:** ${scan.started_at}`);
-  lines.push(`- **Project:** \`${scan.project_path}\``);
+  lines.push(`- **Scan ID:** ${scan2.scan_id}`);
+  lines.push(`- **Type:** ${scan2.scan_type}`);
+  lines.push(`- **Status:** ${scan2.status}`);
+  lines.push(`- **Started:** ${scan2.started_at}`);
+  lines.push(`- **Project:** \`${scan2.project_path}\``);
   lines.push("");
   lines.push(
     `**Severity:** critical ${counts.critical} \xB7 high ${counts.high} \xB7 medium ${counts.medium} \xB7 low ${counts.low} \xB7 info ${counts.info}`
@@ -48567,16 +48698,16 @@ var SCAN_TITLE = {
   pt: "Relat\xF3rio de Seguran\xE7a",
   es: "Informe de Seguridad"
 };
-function renderHtml(scan, findings, cves, lang) {
+function renderHtml(scan2, findings, cves, lang) {
   const counts = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const f of findings) counts[f.severity] += 1;
   const meta = `<div class="pdk-meta">
-  <strong>Scan ID:</strong> ${escapeHtml(scan.scan_id)}<br>
-  <strong>Type:</strong> ${escapeHtml(scan.scan_type)}<br>
-  <strong>Status:</strong> ${escapeHtml(scan.status)}<br>
-  <strong>Started:</strong> ${escapeHtml(scan.started_at)}<br>
-  <strong>Finished:</strong> ${escapeHtml(scan.finished_at ?? "n/a")}<br>
-  <strong>Project:</strong> <code>${escapeHtml(scan.project_path)}</code>
+  <strong>Scan ID:</strong> ${escapeHtml(scan2.scan_id)}<br>
+  <strong>Type:</strong> ${escapeHtml(scan2.scan_type)}<br>
+  <strong>Status:</strong> ${escapeHtml(scan2.status)}<br>
+  <strong>Started:</strong> ${escapeHtml(scan2.started_at)}<br>
+  <strong>Finished:</strong> ${escapeHtml(scan2.finished_at ?? "n/a")}<br>
+  <strong>Project:</strong> <code>${escapeHtml(scan2.project_path)}</code>
 </div>`;
   const sevSection = `<h2>Severity distribution</h2>
 ` + (findings.length === 0 ? '<p class="pdk-empty">No findings.</p>' : severityBar(counts));
@@ -48604,7 +48735,7 @@ function renderHtml(scan, findings, cves, lang) {
 ` + (cves.length === 0 ? '<p class="pdk-empty">No CVEs indexed for this scan.</p>' : `<table><thead><tr><th>CVE</th><th>Sev</th><th>Package</th><th>Installed</th><th>Fixed</th></tr></thead><tbody>${cveRows}</tbody></table>`);
   return renderHtmlDocument({
     title: SCAN_TITLE[lang],
-    subtitle: `${scan.scan_type} \xB7 ${scan.started_at} \xB7 ${scan.status}`,
+    subtitle: `${scan2.scan_type} \xB7 ${scan2.started_at} \xB7 ${scan2.status}`,
     sections: [meta, sevSection, findingsSection, cveSection],
     lang
   });
@@ -48615,8 +48746,8 @@ function severityOrder(s) {
 function slugify(s) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "report";
 }
-function failDomain17(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain17(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/complianceEvidence.ts
@@ -48930,8 +49061,8 @@ async function createIssue(cwd, title, body, labels) {
     error: r.stderr.split(/\r?\n/)[0] ?? `gh exited ${r.outcome}`
   };
 }
-function failDomain18(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain18(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/scanWordpress.ts
@@ -48960,8 +49091,8 @@ var phpcsParser = {
 };
 function mapMessage2(filePath, raw, ctx) {
   const source = getString(raw, "source");
-  const message = getString(raw, "message");
-  if (!source || !message) return null;
+  const message2 = getString(raw, "message");
+  if (!source || !message2) return null;
   const sev = getNumber(raw, "severity");
   const severity = mapSeverity2(sev);
   const category = mapCategory2(source);
@@ -48974,8 +49105,8 @@ function mapMessage2(filePath, raw, ctx) {
     category,
     subcategory: source.split(".").slice(0, 3).join("."),
     // e.g. WordPress.Security.EscapeOutput
-    title: message,
-    message,
+    title: message2,
+    message: message2,
     file_path: toRelativeIfPossible(filePath, ctx.project_path),
     fix_available: getString(raw, "fixable")?.toLowerCase() === "true" || raw === void 0 ? false : false
   };
@@ -49004,6 +49135,8 @@ registerToolModule(
     title: "WordPress code scan (Semgrep + Trivy + gitleaks + PHPCS-WPCS)",
     description: "Aggregated source-side scan for a WordPress plugin / theme / site project: Semgrep PHP + WP rule pack, Trivy fs for composer.lock CVEs, gitleaks for secrets, PHPCS WordPress standard. Each scanner that is missing is skipped with reason. Use wp_audit / wp_vuln_check for live-install scenarios.",
     scan_type: "wordpress",
+    // Its secrets pass reads git history: HEAD and every ref join the key.
+    cacheState: (_input, { projectPath }) => historyState(projectPath),
     category: "security",
     inputSchema: {
       project_path: ProjectPath,
@@ -49068,17 +49201,25 @@ registerToolModule(
       }
       tasks.push(
         (async () => {
-          const secrets = await runGitleaksScan({
-            projectPath: ctx.projectPath,
-            reportDir,
-            scope: { kind: "project" },
-            env: ctx.scriptEnv,
-            signal: ctx.signal,
-            onLog: ctx.onLog
-          });
-          tools_run.push(...secrets.tools_run);
-          missing_tools.push(...secrets.missing_tools);
-          parser_inputs.push(...secrets.parser_inputs);
+          try {
+            const secrets = await runGitleaksScan({
+              projectPath: ctx.projectPath,
+              reportDir,
+              scope: { kind: "project" },
+              env: ctx.scriptEnv,
+              signal: ctx.signal,
+              onLog: ctx.onLog
+            });
+            tools_run.push(...secrets.tools_run);
+            missing_tools.push(...secrets.missing_tools);
+            parser_inputs.push(...secrets.parser_inputs);
+          } catch (e) {
+            tools_run.push({
+              name: "gitleaks",
+              status: "failed",
+              reason: `secret scan failed: ${e instanceof Error ? e.message : String(e)}`
+            });
+          }
         })()
       );
       if (trivyBin) {
@@ -49421,12 +49562,12 @@ function normaliseStatus(raw) {
   if (s.includes("added") || s.includes("extra") || s.includes("not in")) return "added";
   return "unknown";
 }
-function failDomain19(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain19(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/wpVulnCheck.ts
-import { existsSync as existsSync33, mkdirSync as mkdirSync8, readFileSync as readFileSync19, writeFileSync as writeFileSync9 } from "node:fs";
+import { existsSync as existsSync33, mkdirSync as mkdirSync8, readFileSync as readFileSync19, writeFileSync as writeFileSync10 } from "node:fs";
 import { randomUUID as randomUUID7 } from "node:crypto";
 import { join as join40 } from "node:path";
 
@@ -49630,7 +49771,7 @@ async function handler26(input, ctx) {
   if (!raw && r.stdout && r.stdout.trim().startsWith("{")) {
     raw = r.stdout;
     try {
-      writeFileSync9(outFile, raw, "utf8");
+      writeFileSync10(outFile, raw, "utf8");
     } catch {
     }
   }
@@ -49671,8 +49812,8 @@ async function handler26(input, ctx) {
     warnings
   };
 }
-function failDomain20(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain20(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/wpCronAudit.ts
@@ -49826,8 +49967,8 @@ function matchesInactivePlugin(hook, inactivePlugins) {
   }
   return false;
 }
-function failDomain21(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain21(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/wpRecommendHardening.ts
@@ -50076,8 +50217,8 @@ async function handler29(input, ctx) {
     hint: knownCves.length > 0 ? `Run wp_vuln_check or deps_audit for a fresh DB lookup before relying on this.` : "No CVEs for this slug in the local DB. Run wp_vuln_check for a fresh online lookup."
   };
 }
-function failDomain22(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain22(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/wpRestAudit.ts
@@ -50647,8 +50788,8 @@ function collectCsprojFiles(root, maxDepth) {
   walk4(root, 0);
   return out;
 }
-function failDomain23(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain23(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/tools/dotnetEfcoreAudit.ts
@@ -50936,8 +51077,8 @@ function scoreRange(top) {
 }
 
 // src/tools/scanSkill.ts
-import { createHash as createHash6, randomUUID as randomUUID14 } from "node:crypto";
-import { mkdirSync as mkdirSync9, writeFileSync as writeFileSync11 } from "node:fs";
+import { createHash as createHash7, randomUUID as randomUUID14 } from "node:crypto";
+import { mkdirSync as mkdirSync9, writeFileSync as writeFileSync12 } from "node:fs";
 import { join as join46 } from "node:path";
 
 // src/runners/osv.ts
@@ -52060,7 +52201,7 @@ function collectDescriptions(json, acc = []) {
   }
   return acc;
 }
-function finding(file, ruleId, severity, subcategory, title, message) {
+function finding(file, ruleId, severity, subcategory, title, message2) {
   return makeFinding({
     tool: TOOL,
     rule_id: ruleId,
@@ -52068,7 +52209,7 @@ function finding(file, ruleId, severity, subcategory, title, message) {
     category: "security",
     subcategory,
     title,
-    message,
+    message: message2,
     file_path: file.relPath,
     line_start: 1
   });
@@ -52086,12 +52227,12 @@ import {
   realpathSync as realpathSync3,
   rmSync as rmSync4,
   statSync as statSync11,
-  writeFileSync as writeFileSync10
+  writeFileSync as writeFileSync11
 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { basename as basename3, isAbsolute as isAbsolute2, join as join45, relative as relative8 } from "node:path";
 var MAX_FILES = 4e3;
-var MAX_TOTAL_BYTES = 25 * 1024 * 1024;
+var MAX_TOTAL_BYTES2 = 25 * 1024 * 1024;
 var MAX_FILE_BYTES2 = 2 * 1024 * 1024;
 var CODE_EXT = /* @__PURE__ */ new Set([
   ".sh",
@@ -52283,7 +52424,7 @@ async function ingestUrl(url) {
       const res = await fetch(url, { signal: controller.signal });
       if (!res.ok) throw new Error(`http ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
-      writeFileSync10(dest, buf);
+      writeFileSync11(dest, buf);
     } finally {
       clearTimeout(timeout);
     }
@@ -52381,7 +52522,7 @@ function collectDir(root) {
       continue;
     }
     for (const entry of entries2) {
-      if (files.length >= MAX_FILES || totalBytes >= MAX_TOTAL_BYTES) {
+      if (files.length >= MAX_FILES || totalBytes >= MAX_TOTAL_BYTES2) {
         truncated = true;
         break;
       }
@@ -52570,8 +52711,8 @@ async function handler38(input, ctx, callMeta) {
         mkdirSync9(outDir, { recursive: true });
         const sarifPath = join46(outDir, "report.sarif");
         const jsonPath = join46(outDir, "report.json");
-        writeFileSync11(sarifPath, toSarif(findings, { toolName: "guardian-scanskill" }), "utf8");
-        writeFileSync11(
+        writeFileSync12(sarifPath, toSarif(findings, { toolName: "guardian-scanskill" }), "utf8");
+        writeFileSync12(
           jsonPath,
           JSON.stringify(
             {
@@ -52669,7 +52810,7 @@ function topFindings3(findings, limit) {
   return [...findings].sort((a2, b) => order[b.severity] - order[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)).slice(0, limit);
 }
 function hashFiles(parts) {
-  const h2 = createHash6("sha256");
+  const h2 = createHash7("sha256");
   for (const p of [...parts].sort()) h2.update(p).update("\n");
   return h2.digest("hex").slice(0, 32);
 }
@@ -54817,7 +54958,7 @@ function originFingerprint(check2, origin, parts = []) {
   return computeFingerprint({ tool: "dast", rule_id: originRuleId(check2, origin, parts) });
 }
 function buildFinding(args) {
-  const { check: check2, severity, title, message, route, request, origin, identityParts } = args;
+  const { check: check2, severity, title, message: message2, route, request, origin, identityParts } = args;
   const path6 = route?.path_resolved ?? request.path;
   const finding2 = {
     fingerprint: origin === void 0 ? dastFingerprint(check2, request.method, path6, route?.file) : originFingerprint(check2, origin, identityParts),
@@ -54827,7 +54968,7 @@ function buildFinding(args) {
     category: "security",
     subcategory: check2,
     title,
-    message,
+    message: message2,
     fix_available: false,
     check: check2,
     evidence_id: request.id
@@ -54864,8 +55005,8 @@ function checkAnonymousExposure(input, findings) {
     }));
   }
 }
-function reachabilityFinding(route, r, severity, title, message) {
-  return buildFinding({ check: "reachability", severity, title, message, route, request: r.request });
+function reachabilityFinding(route, r, severity, title, message2) {
+  return buildFinding({ check: "reachability", severity, title, message: message2, route, request: r.request });
 }
 function checkReachability(input, findings) {
   for (const r of input.results) {
@@ -55088,8 +55229,8 @@ function versionBanner(headers) {
   }
   return null;
 }
-function infoDisclosureFinding(route, request, title, message) {
-  return buildFinding({ check: "info_disclosure", severity: "low", title, message, route, request });
+function infoDisclosureFinding(route, request, title, message2) {
+  return buildFinding({ check: "info_disclosure", severity: "low", title, message: message2, route, request });
 }
 function checkInfoDisclosure(input, findings) {
   const reportedBanners = /* @__PURE__ */ new Set();
@@ -55250,7 +55391,7 @@ function armDeadline(ms, hostSignal) {
 }
 
 // src/dast/evidence.ts
-import { writeFileSync as writeFileSync12 } from "node:fs";
+import { writeFileSync as writeFileSync13 } from "node:fs";
 import { join as join51 } from "node:path";
 var EVIDENCE_BODY_CHARS = 2e3;
 var MAX_EVIDENCE_FILES = 200;
@@ -55327,7 +55468,7 @@ function writeEvidenceFiles(dir, records, redact) {
       continue;
     }
     try {
-      writeFileSync12(
+      writeFileSync13(
         join51(dir, `${record4.fingerprint}.json`),
         redact(JSON.stringify(record4, null, 2)),
         "utf8"
@@ -55564,7 +55705,7 @@ function normalizeNucleiJsonl(jsonl, routes) {
 }
 
 // src/dast/probe.ts
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 var BODY_PREFIX_BYTES = 8192;
 var BODY_READ_CAP_BYTES = 256 * 1024;
 var DEFAULT_PROBE_TIMEOUT_MS = 5e3;
@@ -55601,7 +55742,7 @@ async function executeProbe(req, opts) {
       status: res.status,
       headers,
       body_prefix: text.slice(0, BODY_PREFIX_BYTES),
-      body_hash: createHash7("sha256").update(text).digest("hex"),
+      body_hash: createHash8("sha256").update(text).digest("hex"),
       elapsed_ms: Date.now() - started,
       error: null
     };
@@ -56047,10 +56188,10 @@ var tool43 = {
   handler: (input, ctx, callMeta) => handler40(input, ctx, callMeta)
 };
 registerToolModule(tool43);
-function fail(code, message, retryWith) {
+function fail(code, message2, retryWith) {
   return {
     ok: false,
-    error: { code, message, ...retryWith === void 0 ? {} : { retry_with: retryWith } }
+    error: { code, message: message2, ...retryWith === void 0 ? {} : { retry_with: retryWith } }
   };
 }
 async function handler40(input, ctx, callMeta) {
@@ -56711,14 +56852,14 @@ function buildSummary(input) {
   };
 }
 function describeSourceScan(input) {
-  const scan = input.sourceScan;
-  if (scan === null) return null;
+  const scan2 = input.sourceScan;
+  if (scan2 === null) return null;
   return {
-    scan_id: scan.scan_id,
-    scan_type: scan.scan_type,
-    tree_hash: scan.tree_hash,
-    finished_at: scan.finished_at,
-    matches_snapshot_tree: scan.tree_hash === input.persisted.tree_hash
+    scan_id: scan2.scan_id,
+    scan_type: scan2.scan_type,
+    tree_hash: scan2.tree_hash,
+    finished_at: scan2.finished_at,
+    matches_snapshot_tree: scan2.tree_hash === input.persisted.tree_hash
   };
 }
 function countByVerdict(validations) {
@@ -56731,8 +56872,8 @@ function edgeCount(graph) {
   for (const targets of graph.edges.values()) total += targets.size;
   return total;
 }
-function ageHours(scan, now) {
-  const stamp = Date.parse(scan.finished_at ?? scan.started_at);
+function ageHours(scan2, now) {
+  const stamp = Date.parse(scan2.finished_at ?? scan2.started_at);
   if (Number.isNaN(stamp)) return null;
   return Math.round((now - stamp) / 36e5 * 100) / 100;
 }
@@ -56792,10 +56933,10 @@ var tool44 = {
   handler: async (input, ctx) => handler41(input, ctx)
 };
 registerToolModule(tool44);
-function fail2(code, message, retryWith) {
+function fail2(code, message2, retryWith) {
   return {
     ok: false,
-    error: { code, message, ...retryWith === void 0 ? {} : { retry_with: retryWith } }
+    error: { code, message: message2, ...retryWith === void 0 ? {} : { retry_with: retryWith } }
   };
 }
 var NO_OPEN_FINDINGS_NOTE = "No open findings to validate, so nothing was computed and nothing was persisted. This is NOT a statement that the project is clean \u2014 it means the latest completed scan recorded no unsuppressed findings. Run security_scan_full (or scan_sast) first, then re-run validate_finding.";
@@ -56866,16 +57007,16 @@ function sourceScanOf(ctx, projectPath) {
 }
 function collectAnonymousExposures(ctx, projectPath) {
   const history = ctx.storage.scans.listHistory(DAST_SCAN_SEARCH_LIMIT);
-  const scan = history.find(
+  const scan2 = history.find(
     (s) => s.scan_type === "dast" && s.status === "completed" && s.project_path === projectPath
   ) ?? null;
-  if (scan === null) return { scan: null, files: /* @__PURE__ */ new Set(), scansSearched: history.length };
+  if (scan2 === null) return { scan: null, files: /* @__PURE__ */ new Set(), scansSearched: history.length };
   const files = /* @__PURE__ */ new Set();
-  for (const f of ctx.storage.findings.listByScan(scan.scan_id)) {
+  for (const f of ctx.storage.findings.listByScan(scan2.scan_id)) {
     if (f.subcategory !== ANONYMOUS_EXPOSURE || f.file_path === void 0) continue;
     files.add(f.file_path);
   }
-  return { scan, files, scansSearched: history.length };
+  return { scan: scan2, files, scansSearched: history.length };
 }
 
 // src/tools/createFixPr.ts
@@ -56960,7 +57101,7 @@ function firstStderrLine(stderr) {
 }
 
 // src/fixpr/candidates.ts
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 var DEP_SCANNER_TOOLS = ["trivy", "npm-audit", "wpscan"];
 function buildGroups(input) {
   const eligible = input.findings.filter(
@@ -57061,7 +57202,7 @@ function makeGroup(source, key, candidates2) {
     if (SEVERITY_ORDER[candidate.severity] > SEVERITY_ORDER[severity]) severity = candidate.severity;
   }
   const fingerprints = candidates2.flatMap((candidate) => candidate.fingerprints);
-  const hash = createHash8("sha256").update([...fingerprints].sort().join("\n")).digest("hex").slice(0, 12);
+  const hash = createHash9("sha256").update([...fingerprints].sort().join("\n")).digest("hex").slice(0, 12);
   return { source, key, candidates: candidates2, severity, hash };
 }
 function countFingerprints(group) {
@@ -57409,8 +57550,8 @@ async function judgeTests(opts) {
     output_head: headOf(worktreeResult.stdout, worktreeResult.stderr)
   };
 }
-function mayOpenPr(scan, tests) {
-  return scan.passed && tests.outcome !== "broken_by_fix";
+function mayOpenPr(scan2, tests) {
+  return scan2.passed && tests.outcome !== "broken_by_fix";
 }
 function hasFailed2(result) {
   return result.outcome !== "completed" || result.exitCode !== 0;
@@ -57862,7 +58003,7 @@ function buildPrTitle(group, findingCount) {
   return `dev-guardian: automated ${noun} fix (${findingCount} finding${plural})`;
 }
 function buildPrBody(opts) {
-  const { group, findings, commands, scan, tests } = opts;
+  const { group, findings, commands, scan: scan2, tests } = opts;
   const lines = [];
   lines.push(
     `Automated fix opened by dev-guardian's \`create_fix_pr\` for the **${group.key}** (${group.source}) group.`
@@ -57877,11 +58018,11 @@ function buildPrBody(opts) {
   lines.push(
     "",
     "## Scan differential",
-    `- Resolved: ${scan.resolved.length}`,
-    `- Still present: ${scan.still_present.length}`,
-    `- New findings introduced: ${scan.new_findings.length}`
+    `- Resolved: ${scan2.resolved.length}`,
+    `- Still present: ${scan2.still_present.length}`,
+    `- New findings introduced: ${scan2.new_findings.length}`
   );
-  for (const nf of scan.new_findings) {
+  for (const nf of scan2.new_findings) {
     lines.push(`  - \`${nf.fingerprint.slice(0, 12)}\` [${nf.severity}] ${nf.title}`);
   }
   lines.push("", "## Test verdict");
@@ -57915,8 +58056,8 @@ function findingsForGroup(allFindings, group) {
 function errorMessage3(e) {
   return e instanceof Error ? e.message : String(e);
 }
-function failDomain24(code, message) {
-  return { ok: false, error: { code, message } };
+function failDomain24(code, message2) {
+  return { ok: false, error: { code, message: message2 } };
 }
 
 // src/resources/scans.ts
@@ -57985,8 +58126,8 @@ function topFindings4(findings, limit) {
     (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
   ).slice(0, limit);
 }
-function mcpInvalidParams(message) {
-  const err = new Error(message);
+function mcpInvalidParams(message2) {
+  const err = new Error(message2);
   err.code = -32602;
   return err;
 }
@@ -58080,8 +58221,8 @@ function paginate(uri, all) {
   const items = all.slice(start, start + page_size);
   return { items, total, page, page_size };
 }
-function mcpInvalidParams2(message) {
-  const err = new Error(message);
+function mcpInvalidParams2(message2) {
+  const err = new Error(message2);
   err.code = -32602;
   return err;
 }
@@ -58197,16 +58338,16 @@ registerResourceModule({
     const raw = params["scan_id"];
     const scanId = Array.isArray(raw) ? raw[0] : raw;
     if (!scanId) throw mcpInvalidParams3("scan_id is required");
-    const scan = ctx.storage.scans.getById(scanId);
-    if (!scan) throw mcpInvalidParams3(`unknown scan_id '${scanId}'`);
-    if (scan.scan_type !== "wp_audit") {
-      throw mcpInvalidParams3(`scan '${scanId}' is not a wp_audit (type='${scan.scan_type}')`);
+    const scan2 = ctx.storage.scans.getById(scanId);
+    if (!scan2) throw mcpInvalidParams3(`unknown scan_id '${scanId}'`);
+    if (scan2.scan_type !== "wp_audit") {
+      throw mcpInvalidParams3(`scan '${scanId}' is not a wp_audit (type='${scan2.scan_type}')`);
     }
     return {
       json: {
         scan_id: scanId,
-        captured_at: scan.started_at,
-        ...scan.meta ?? {}
+        captured_at: scan2.started_at,
+        ...scan2.meta ?? {}
       }
     };
   }
@@ -58216,13 +58357,13 @@ registerResourceModule({
   uri: "guardian://wp/cron",
   description: "Latest wp_cron_audit result: total scheduled events + flagged ones (suspicious hooks, base64-looking args, hooks from inactive plugins).",
   handler: async (_uri, _params, ctx) => {
-    const scan = findLatestOfType3(ctx, "wp_cron_audit");
-    if (!scan) return { json: { last_run: null } };
+    const scan2 = findLatestOfType3(ctx, "wp_cron_audit");
+    if (!scan2) return { json: { last_run: null } };
     return {
       json: {
-        scan_id: scan.scan_id,
-        captured_at: scan.started_at,
-        ...scan.meta ?? {}
+        scan_id: scan2.scan_id,
+        captured_at: scan2.started_at,
+        ...scan2.meta ?? {}
       }
     };
   }
@@ -58235,8 +58376,8 @@ function findLatestOfType3(ctx, type) {
   const row = history.find((s) => s.scan_type === type && s.status === "completed");
   return row ? ctx.storage.scans.getById(row.scan_id) : null;
 }
-function mcpInvalidParams3(message) {
-  const err = new Error(message);
+function mcpInvalidParams3(message2) {
+  const err = new Error(message2);
   err.code = -32602;
   return err;
 }
@@ -58247,13 +58388,13 @@ registerResourceModule({
   uri: "guardian://dotnet/target-frameworks",
   description: "Latest dotnet_target_framework_check: per-project target framework moniker + EOL/legacy status.",
   handler: async (_uri, _params, ctx) => {
-    const scan = findLatestOfType4(ctx, "dotnet_target_framework");
-    if (!scan) return { json: { last_run: null } };
+    const scan2 = findLatestOfType4(ctx, "dotnet_target_framework");
+    if (!scan2) return { json: { last_run: null } };
     return {
       json: {
-        scan_id: scan.scan_id,
-        captured_at: scan.started_at,
-        ...scan.meta ?? {}
+        scan_id: scan2.scan_id,
+        captured_at: scan2.started_at,
+        ...scan2.meta ?? {}
       }
     };
   }
@@ -58263,13 +58404,13 @@ registerResourceModule({
   uri: "guardian://dotnet/efcore",
   description: "Latest dotnet_efcore_audit: dangerous migration patterns detected (DropTable, DropColumn, AlterColumn nullable=false without defaultValue, raw SQL with credentials).",
   handler: async (_uri, _params, ctx) => {
-    const scan = findLatestOfType4(ctx, "dotnet_efcore_audit");
-    if (!scan) return { json: { last_run: null } };
+    const scan2 = findLatestOfType4(ctx, "dotnet_efcore_audit");
+    if (!scan2) return { json: { last_run: null } };
     return {
       json: {
-        scan_id: scan.scan_id,
-        captured_at: scan.started_at,
-        ...scan.meta ?? {}
+        scan_id: scan2.scan_id,
+        captured_at: scan2.started_at,
+        ...scan2.meta ?? {}
       }
     };
   }

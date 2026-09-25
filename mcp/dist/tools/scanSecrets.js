@@ -18,7 +18,7 @@
  */
 import { z } from 'zod';
 import { resolveProjectPath, InvalidProjectPathError } from '../platform/projectPath.js';
-import { repoState } from '../runners/git.js';
+import { historyState, repoState } from '../runners/git.js';
 import { LogOptsError, resolveLogOpts, runGitleaksScan } from '../runners/gitleaksScan.js';
 import { Force, ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
@@ -34,6 +34,8 @@ const scanSecrets = makeScanTool({
         'is reported as failed, never as clean. Always runs with --redact so the raw secret never reaches ' +
         'MCP output.',
     scan_type: 'secrets',
+    // History is read beyond the working tree: HEAD and every ref join the key.
+    cacheState: (_input, { projectPath }) => historyState(projectPath),
     category: 'security',
     supportsAutoFix: false,
     inputSchema: {

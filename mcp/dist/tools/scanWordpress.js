@@ -13,6 +13,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { historyState } from '../runners/git.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
@@ -31,6 +32,8 @@ registerToolModule(makeScanTool({
         'standard. Each scanner that is missing is skipped with reason. Use wp_audit / wp_vuln_check ' +
         'for live-install scenarios.',
     scan_type: 'wordpress',
+    // Its secrets pass reads git history: HEAD and every ref join the key.
+    cacheState: (_input, { projectPath }) => historyState(projectPath),
     category: 'security',
     inputSchema: {
         project_path: ProjectPath,
@@ -103,17 +106,28 @@ registerToolModule(makeScanTool({
         // this is not a git repository — the common case for a WordPress site
         // copied off a server). See runners/gitleaksScan.ts.
         tasks.push((async () => {
-            const secrets = await runGitleaksScan({
-                projectPath: ctx.projectPath,
-                reportDir,
-                scope: { kind: 'project' },
-                env: ctx.scriptEnv,
-                signal: ctx.signal,
-                onLog: ctx.onLog,
-            });
-            tools_run.push(...secrets.tools_run);
-            missing_tools.push(...secrets.missing_tools);
-            parser_inputs.push(...secrets.parser_inputs);
+            // Inside Promise.all with the other scanners: an exception here
+            // must cost the secrets pass, never Semgrep's or Trivy's results.
+            try {
+                const secrets = await runGitleaksScan({
+                    projectPath: ctx.projectPath,
+                    reportDir,
+                    scope: { kind: 'project' },
+                    env: ctx.scriptEnv,
+                    signal: ctx.signal,
+                    onLog: ctx.onLog,
+                });
+                tools_run.push(...secrets.tools_run);
+                missing_tools.push(...secrets.missing_tools);
+                parser_inputs.push(...secrets.parser_inputs);
+            }
+            catch (e) {
+                tools_run.push({
+                    name: 'gitleaks',
+                    status: 'failed',
+                    reason: `secret scan failed: ${e instanceof Error ? e.message : String(e)}`,
+                });
+            }
         })());
         if (trivyBin) {
             tasks.push((async () => {

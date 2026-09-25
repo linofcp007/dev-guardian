@@ -133,7 +133,16 @@ async function runScanPipeline(config, input, plugin, callMeta) {
     const treeHash = callMeta?.parentScanId !== undefined && callMeta.treeHash !== undefined
         ? callMeta.treeHash
         : await computeTreeHash(projectPath);
-    const cacheKey = buildCacheKey(config, input, projectPath, treeHash, plugin);
+    let cacheState = {};
+    if (config.cacheState) {
+        try {
+            cacheState = await config.cacheState(input, { projectPath, plugin });
+        }
+        catch {
+            cacheState = { uncacheable: randomUUID() };
+        }
+    }
+    const cacheKey = buildCacheKey(config, input, projectPath, treeHash, plugin, cacheState);
     // Cache check. Only a run whose every scanner ran is served again: one
     // with a scanner missing or failed is `completed` at coverage none or
     // partial, and its own warning tells the caller to install the scanner and
@@ -413,7 +422,9 @@ async function runScanBody(args) {
  * and why. A `rulePacks` that throws leaves the call uncacheable (a key no
  * other call can produce) rather than failing the scan.
  */
-function buildCacheKey(config, input, projectPath, treeHash, plugin) {
+function buildCacheKey(config, input, projectPath, treeHash, plugin, 
+/** `config.cacheState`'s answer; empty leaves the key exactly as before it existed. */
+cacheState) {
     let rulePacksHash;
     try {
         rulePacksHash = hashRulePacks(config.rulePacks ? config.rulePacks(input, { projectPath, plugin }) : []);
@@ -421,12 +432,16 @@ function buildCacheKey(config, input, projectPath, treeHash, plugin) {
     catch {
         rulePacksHash = `uncacheable:${randomUUID()}`;
     }
+    const keyed = normaliseInput(config, input);
+    // `__`-prefixed: no schema field is spelt that way, so it cannot collide.
+    if (Object.keys(cacheState).length > 0)
+        keyed['__cache_state'] = cacheState;
     return scanCacheKey({
         projectPath,
         tool: config.name,
         scanType: config.scan_type,
         treeHash,
-        inputHash: hashInput(normaliseInput(config, input)),
+        inputHash: hashInput(keyed),
         pluginVersion: resolveVersion(),
         rulePacksHash,
     });

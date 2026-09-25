@@ -256,12 +256,11 @@ describe('scan_secrets (gitleaks)', () => {
       }
       // Verify gitleaks is invoked with --redact.
       expect(opts.args).toContain('--redact');
-      // Not a git repository: the files are scanned from a copy, never
+      // Not a git repository: the directory is scanned in place, never
       // through `gitleaks detect` on git history ("0 commits scanned").
       expect(opts.args).toContain('--no-git');
       expect(opts.args?.slice(opts.args.indexOf('-s'), opts.args.indexOf('-s') + 2)).toEqual(['-s', '.']);
       scannedFrom = opts.cwd;
-      expect(existsSync(join(opts.cwd, 'settings.ini'))).toBe(true);
       return fakeRunSuccess({ exitCode: 1 }); // gitleaks exits 1 when leaks found
     });
 
@@ -272,9 +271,37 @@ describe('scan_secrets (gitleaks)', () => {
     };
     expect(r.ok).toBe(true);
     expect(r.findings_count_by_severity.high).toBe(2); // 2 secret findings in fixture
-    // The temporary copy is gone once the scan is.
-    expect(scannedFrom).toBeDefined();
-    expect(existsSync(scannedFrom ?? project)).toBe(false);
+    expect(scannedFrom).toBe(project);
+  });
+
+  it('scans uncommitted files from a temporary copy that is gone once the scan is', async () => {
+    const project = tempProject();
+    await execa('git', ['init', '-q'], { cwd: project });
+    writeFileSync(join(project, '.gitignore'), '.guardian/\n', 'utf8');
+    await execa('git', ['add', '.gitignore'], { cwd: project });
+    await execa(
+      'git',
+      ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'x'],
+      { cwd: project },
+    );
+    writeFileSync(join(project, 'settings.ini'), 'x=1\n', 'utf8');
+    const plugin = makePlugin(project);
+    let copy: string | undefined;
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/gitleaks');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const reportArg = opts.args?.find((a) => a.startsWith('--report-path='));
+      if (reportArg) writeFileSync(reportArg.replace('--report-path=', ''), '[]', 'utf8');
+      if (opts.args?.includes('--no-git')) {
+        copy = opts.cwd;
+        expect(existsSync(join(opts.cwd, 'settings.ini'))).toBe(true);
+      }
+      return { ...fakeRunSuccess(), stderr: 'INF 1 commits scanned.' };
+    });
+    const r = await getTool('scan_secrets').handler({ project_path: project }, plugin);
+    expect(r.ok).toBe(true);
+    expect(copy).toBeDefined();
+    expect(copy).not.toBe(project);
+    expect(existsSync(copy ?? project)).toBe(false);
   });
 
   it('a history pass that reports "0 commits scanned" in a repository with commits is failed, never clean', async () => {
@@ -307,6 +334,43 @@ describe('scan_secrets (gitleaks)', () => {
     expect(history?.status).toBe('failed');
     expect(history?.reason).toMatch(/0 commits scanned/);
     expect(r.coverage).not.toBe('full');
+  });
+
+  it('a commit or a moved ref that changes no file is a new scan, never a stale cache hit', async () => {
+    const project = tempProject();
+    const git = (...a: string[]) =>
+      execa('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...a], {
+        cwd: project,
+      });
+    await git('init', '-q');
+    writeFileSync(join(project, '.gitignore'), '.guardian/\n', 'utf8');
+    await git('add', '.gitignore');
+    await git('commit', '-q', '-m', 'x');
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/gitleaks');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const reportArg = opts.args?.find((a) => a.startsWith('--report-path='));
+      if (reportArg) writeFileSync(reportArg.replace('--report-path=', ''), '[]', 'utf8');
+      return { ...fakeRunSuccess(), stderr: 'INF 1 commits scanned.' };
+    });
+    const tool = getTool('scan_secrets');
+    const run = async () =>
+      (await tool.handler({ project_path: project }, plugin)) as { ok: true; coverage: string; cached?: boolean };
+
+    const first = await run();
+    expect(first.coverage).toBe('full');
+    expect((await run()).cached).toBe(true);
+
+    // History grew; the tree did not.
+    await git('commit', '-q', '--allow-empty', '-m', 'empty');
+    expect((await run()).cached).toBeUndefined();
+    expect((await run()).cached).toBe(true);
+
+    // A ref moved (what a fetch does), HEAD and tree untouched.
+    const tree = (await execa('git', ['rev-parse', 'HEAD^{tree}'], { cwd: project })).stdout.trim();
+    const commit = (await git('commit-tree', tree, '-m', 'fetched')).stdout.trim();
+    await git('update-ref', 'refs/remotes/origin/main', commit);
+    expect((await run()).cached).toBeUndefined();
   });
 
   it('a history pass whose report was never written is failed even on exit 0', async () => {

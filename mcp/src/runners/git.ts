@@ -23,8 +23,14 @@
  */
 
 import { execa } from 'execa';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const GIT_TIMEOUT_MS = 60_000;
+/** A checkout writes the whole tree: a large repository needs longer than a query. */
+const CHECKOUT_TIMEOUT_MS = 10 * 60_000;
 
 export interface GitResult {
   exitCode: number;
@@ -33,11 +39,11 @@ export interface GitResult {
 }
 
 /** `git -C cwd …args`, never throwing; a missing git reads as exit 127. */
-export async function git(cwd: string, args: readonly string[]): Promise<GitResult> {
+export async function git(cwd: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS): Promise<GitResult> {
   try {
     const r = await execa('git', ['-C', cwd, ...args], {
       reject: false,
-      timeout: GIT_TIMEOUT_MS,
+      timeout: timeoutMs,
       encoding: 'utf8',
       stripFinalNewline: false,
     });
@@ -144,6 +150,66 @@ export async function uncommittedFiles(
     throw new Error(`git failed listing changed files: ${firstLine(tracked.stderr) || `exit ${tracked.exitCode}`}`);
   }
   return [...new Set([...splitNul(tracked.stdout), ...splitNul(untracked.stdout)])];
+}
+
+/**
+ * What a history scan reads that the working tree does not show: HEAD, and
+ * every ref (`gitleaks detect` reads `git log --all`). A fetch or a merge
+ * with an empty net diff moves these without changing a single file, so a
+ * cache keyed on the tree alone would serve the old history's answer. Empty
+ * for a directory without commits.
+ */
+export async function historyState(cwd: string): Promise<Record<string, string>> {
+  const head = await resolveCommit(cwd, 'HEAD');
+  if (head === null) return {};
+  const refs = await git(cwd, ['for-each-ref', '--format=%(objectname) %(refname)']);
+  if (refs.exitCode !== 0) throw new Error(`git for-each-ref failed: ${firstLine(refs.stderr)}`);
+  return { head, refs: createHash('sha256').update(refs.stdout).digest('hex') };
+}
+
+/** The project's path inside its repository, `/`-separated with a trailing `/` ('' at the root). */
+export async function showPrefix(cwd: string): Promise<string> {
+  const r = await git(cwd, ['rev-parse', '--show-prefix']);
+  if (r.exitCode !== 0) throw new Error(`git rev-parse --show-prefix failed: ${firstLine(r.stderr)}`);
+  return r.stdout.trim();
+}
+
+export interface MaterialisedTree {
+  /** The checkout's root (the repository root at `sha`). */
+  root: string;
+  /** Removes the checkout and git's record of it. Never throws; says what it could not remove. */
+  remove: () => Promise<string | null>;
+}
+
+/**
+ * Check out commit `sha` into a new temporary directory with `git worktree
+ * add --detach`, so its files can be scanned without touching the user's
+ * working tree. Hooks are disabled for the checkout (a `post-checkout` hook
+ * is the repository's code, and scanning must not run it). The caller must
+ * call `remove()` — in a `finally`.
+ */
+export async function materialiseCommit(cwd: string, sha: string): Promise<MaterialisedTree> {
+  const holder = mkdtempSync(join(tmpdir(), 'guardian-review-'));
+  const root = join(holder, 'head');
+  const noHooks = join(holder, 'no-hooks');
+  const r = await git(cwd, ['-c', `core.hooksPath=${noHooks}`, 'worktree', 'add', '--detach', '--quiet', root, sha], CHECKOUT_TIMEOUT_MS);
+  const remove = async (): Promise<string | null> => {
+    const problems: string[] = [];
+    const rm = await git(cwd, ['worktree', 'remove', '--force', root]);
+    if (rm.exitCode !== 0 && existsSync(root)) problems.push(firstLine(rm.stderr) || `git worktree remove exited ${rm.exitCode}`);
+    try {
+      rmSync(holder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (e) {
+      problems.push(e instanceof Error ? e.message : String(e));
+    }
+    await git(cwd, ['worktree', 'prune']);
+    return problems.length > 0 ? `temporary checkout ${root} not fully removed: ${problems.join('; ')}` : null;
+  };
+  if (r.exitCode !== 0) {
+    await remove();
+    throw new Error(`git worktree add ${sha.slice(0, 12)} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+  }
+  return { root, remove };
 }
 
 function firstLine(text: string): string {

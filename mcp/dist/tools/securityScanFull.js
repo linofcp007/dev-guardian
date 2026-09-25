@@ -26,6 +26,7 @@
  * slot, which is why this tool, an orchestrator, takes none.
  */
 import { dedupeFindings } from '../runners/findingMerge.js';
+import { historyState } from '../runners/git.js';
 import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
 import { z } from 'zod';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin } from '../schemas.js';
@@ -53,6 +54,8 @@ registerToolModule(makeScanTool({
     scan_type: 'security_full',
     category: 'security',
     orchestrator: true,
+    // scan_secrets reads git history: HEAD and every ref join the key.
+    cacheState: (_input, { projectPath }) => historyState(projectPath),
     // The children's own rule packs: the cache key must move when a rule does.
     rulePacks: (input, { projectPath, plugin }) => planSemgrepConfigs(projectPath, plugin, input.local_only === true).rulePacks,
     inputSchema: {
@@ -131,7 +134,20 @@ async function runChild(name, input, ctx, meta) {
     }
     if (ctx.signal.aborted)
         return empty({ tool: name, scan_id: null, status: 'cancelled' }, [], true);
-    const r = await tool.handler(input, ctx.plugin, meta);
+    // A child that throws costs that child — a failed entry — never the
+    // parent, and never its siblings' results (they run in Promise.all).
+    let r;
+    try {
+        r = await tool.handler(input, ctx.plugin, meta);
+    }
+    catch (e) {
+        if (ctx.signal.aborted)
+            return empty({ tool: name, scan_id: null, status: 'cancelled' }, [], true);
+        const reason = e instanceof Error ? e.message : String(e);
+        return empty({ tool: name, scan_id: null, status: 'failed', error: 'threw' }, [
+            { name, status: 'failed', reason: `threw: ${reason}` },
+        ], false);
+    }
     if (!r.ok) {
         if (r.error.code === 'cancelled') {
             return empty({ tool: name, scan_id: null, status: 'cancelled', error: r.error.code }, [], true);
