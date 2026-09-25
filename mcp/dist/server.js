@@ -416,11 +416,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants5);
+          this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -437,10 +437,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants5);
+        this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -501,8 +501,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants5) {
-        this.code = optimizeExpr(this.code, names, constants5);
+      optimizeNames(names, constants4) {
+        this.code = optimizeExpr(this.code, names, constants4);
         return this;
       }
       get names() {
@@ -531,12 +531,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         const { nodes } = this;
         let i2 = nodes.length;
         while (i2--) {
           const n2 = nodes[i2];
-          if (n2.optimizeNames(names, constants5))
+          if (n2.optimizeNames(names, constants4))
             continue;
           subtractNames(names, n2.names);
           nodes.splice(i2, 1);
@@ -589,12 +589,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants5);
-        if (!(super.optimizeNames(names, constants5) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
+        if (!(super.optimizeNames(names, constants4) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants5);
+        this.condition = optimizeExpr(this.condition, names, constants4);
         return this;
       }
       get names() {
@@ -617,10 +617,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants5) {
-        if (!super.optimizeNames(names, constants5))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants5);
+        this.iteration = optimizeExpr(this.iteration, names, constants4);
         return this;
       }
       get names() {
@@ -656,10 +656,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants5) {
-        if (!super.optimizeNames(names, constants5))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants5);
+        this.iterable = optimizeExpr(this.iterable, names, constants4);
         return this;
       }
       get names() {
@@ -701,11 +701,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants4) {
         var _a, _b;
-        super.optimizeNames(names, constants5);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants5);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants5);
+        super.optimizeNames(names, constants4);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants4);
         return this;
       }
       get names() {
@@ -1006,7 +1006,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants5) {
+    function optimizeExpr(expr, names, constants4) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1021,14 +1021,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n2) {
-        const c3 = constants5[n2.str];
+        const c3 = constants4[n2.str];
         if (c3 === void 0 || names[n2.str] !== 1)
           return n2;
         delete names[n2.str];
         return c3;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c3) => c3 instanceof code_1.Name && names[c3.str] === 1 && constants5[c3.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c3) => c3 instanceof code_1.Name && names[c3.str] === 1 && constants4[c3.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -9131,60 +9131,60 @@ var init_fd_options = __esm({
   "node_modules/execa/lib/arguments/fd-options.js"() {
     init_specific();
     getToStream = (destination, to = "stdin") => {
-      const isWritable2 = true;
+      const isWritable = true;
       const { options, fileDescriptors } = SUBPROCESS_OPTIONS.get(destination);
-      const fdNumber = getFdNumber(fileDescriptors, to, isWritable2);
+      const fdNumber = getFdNumber(fileDescriptors, to, isWritable);
       const destinationStream = destination.stdio[fdNumber];
       if (destinationStream === null) {
-        throw new TypeError(getInvalidStdioOptionMessage(fdNumber, to, options, isWritable2));
+        throw new TypeError(getInvalidStdioOptionMessage(fdNumber, to, options, isWritable));
       }
       return destinationStream;
     };
     getFromStream = (source, from = "stdout") => {
-      const isWritable2 = false;
+      const isWritable = false;
       const { options, fileDescriptors } = SUBPROCESS_OPTIONS.get(source);
-      const fdNumber = getFdNumber(fileDescriptors, from, isWritable2);
+      const fdNumber = getFdNumber(fileDescriptors, from, isWritable);
       const sourceStream = fdNumber === "all" ? source.all : source.stdio[fdNumber];
       if (sourceStream === null || sourceStream === void 0) {
-        throw new TypeError(getInvalidStdioOptionMessage(fdNumber, from, options, isWritable2));
+        throw new TypeError(getInvalidStdioOptionMessage(fdNumber, from, options, isWritable));
       }
       return sourceStream;
     };
     SUBPROCESS_OPTIONS = /* @__PURE__ */ new WeakMap();
-    getFdNumber = (fileDescriptors, fdName, isWritable2) => {
-      const fdNumber = parseFdNumber(fdName, isWritable2);
-      validateFdNumber(fdNumber, fdName, isWritable2, fileDescriptors);
+    getFdNumber = (fileDescriptors, fdName, isWritable) => {
+      const fdNumber = parseFdNumber(fdName, isWritable);
+      validateFdNumber(fdNumber, fdName, isWritable, fileDescriptors);
       return fdNumber;
     };
-    parseFdNumber = (fdName, isWritable2) => {
+    parseFdNumber = (fdName, isWritable) => {
       const fdNumber = parseFd(fdName);
       if (fdNumber !== void 0) {
         return fdNumber;
       }
-      const { validOptions, defaultValue } = isWritable2 ? { validOptions: '"stdin"', defaultValue: "stdin" } : { validOptions: '"stdout", "stderr", "all"', defaultValue: "stdout" };
-      throw new TypeError(`"${getOptionName(isWritable2)}" must not be "${fdName}".
+      const { validOptions, defaultValue } = isWritable ? { validOptions: '"stdin"', defaultValue: "stdin" } : { validOptions: '"stdout", "stderr", "all"', defaultValue: "stdout" };
+      throw new TypeError(`"${getOptionName(isWritable)}" must not be "${fdName}".
 It must be ${validOptions} or "fd3", "fd4" (and so on).
 It is optional and defaults to "${defaultValue}".`);
     };
-    validateFdNumber = (fdNumber, fdName, isWritable2, fileDescriptors) => {
+    validateFdNumber = (fdNumber, fdName, isWritable, fileDescriptors) => {
       const fileDescriptor = fileDescriptors[getUsedDescriptor(fdNumber)];
       if (fileDescriptor === void 0) {
-        throw new TypeError(`"${getOptionName(isWritable2)}" must not be ${fdName}. That file descriptor does not exist.
+        throw new TypeError(`"${getOptionName(isWritable)}" must not be ${fdName}. That file descriptor does not exist.
 Please set the "stdio" option to ensure that file descriptor exists.`);
       }
-      if (fileDescriptor.direction === "input" && !isWritable2) {
-        throw new TypeError(`"${getOptionName(isWritable2)}" must not be ${fdName}. It must be a readable stream, not writable.`);
+      if (fileDescriptor.direction === "input" && !isWritable) {
+        throw new TypeError(`"${getOptionName(isWritable)}" must not be ${fdName}. It must be a readable stream, not writable.`);
       }
-      if (fileDescriptor.direction !== "input" && isWritable2) {
-        throw new TypeError(`"${getOptionName(isWritable2)}" must not be ${fdName}. It must be a writable stream, not readable.`);
+      if (fileDescriptor.direction !== "input" && isWritable) {
+        throw new TypeError(`"${getOptionName(isWritable)}" must not be ${fdName}. It must be a writable stream, not readable.`);
       }
     };
-    getInvalidStdioOptionMessage = (fdNumber, fdName, options, isWritable2) => {
+    getInvalidStdioOptionMessage = (fdNumber, fdName, options, isWritable) => {
       if (fdNumber === "all" && !options.all) {
         return `The "all" option must be true to use "from: 'all'".`;
       }
       const { optionName, optionValue } = getInvalidStdioOption(fdNumber, options);
-      return `The "${optionName}: ${serializeOptionValue(optionValue)}" option is incompatible with using "${getOptionName(isWritable2)}: ${serializeOptionValue(fdName)}".
+      return `The "${optionName}: ${serializeOptionValue(optionValue)}" option is incompatible with using "${getOptionName(isWritable)}: ${serializeOptionValue(fdName)}".
 Please set this option with "pipe" instead.`;
     };
     getInvalidStdioOption = (fdNumber, { stdin, stdout, stderr, stdio }) => {
@@ -9201,7 +9201,7 @@ Please set this option with "pipe" instead.`;
       return { optionName: `stdio[${usedDescriptor}]`, optionValue: stdio[usedDescriptor] };
     };
     getUsedDescriptor = (fdNumber) => fdNumber === "all" ? 1 : fdNumber;
-    getOptionName = (isWritable2) => isWritable2 ? "to" : "from";
+    getOptionName = (isWritable) => isWritable ? "to" : "from";
     serializeOptionValue = (value) => {
       if (typeof value === "string") {
         return `'${value}'`;
@@ -38167,8 +38167,8 @@ function rowToValidation(row) {
 }
 
 // src/storage/db.ts
-import { createHash } from "node:crypto";
-import { existsSync as existsSync4, mkdirSync, accessSync, constants as constants4 } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync as existsSync4, mkdirSync, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname as dirname4, join as join4, resolve as resolve2 } from "node:path";
@@ -38372,26 +38372,72 @@ function openDatabase(options) {
     return { db: db2, path: ":memory:" };
   }
   const projectPath = resolve2(options.projectPath);
-  const preferredDir = join4(projectPath, ".guardian");
-  const preferredPath = join4(preferredDir, "guardian.db");
-  let chosenPath;
-  let warning;
-  if (isWritable(projectPath)) {
-    ensureDir(preferredDir);
-    chosenPath = preferredPath;
+  const preferredPath = join4(projectPath, ".guardian", "guardian.db");
+  let reason;
+  if (!isDirectory(projectPath)) {
+    reason = "it is not an existing directory";
   } else {
-    chosenPath = resolveFallbackDbPath(projectPath);
-    ensureDir(dirname4(chosenPath));
-    warning = `Project path '${projectPath}' is not writable; dev-guardian DB persisted to '${chosenPath}' instead. Scans will not be visible alongside the project.`;
+    try {
+      return { db: openWritable(preferredPath), path: preferredPath };
+    } catch (error2) {
+      if (!isNotWritableError(error2)) throw error2;
+      reason = error2 instanceof Error ? error2.message : String(error2);
+    }
   }
+  const chosenPath = resolveFallbackDbPath(projectPath);
+  ensureDir(dirname4(chosenPath));
   const db = new GuardianDatabase(chosenPath);
   applyPragmas(db);
   runMigrations(db);
-  const result = { db, path: chosenPath };
-  if (warning !== void 0) {
-    result.warning = warning;
+  return {
+    db,
+    path: chosenPath,
+    warning: `Project path '${projectPath}' is not writable (${reason}); dev-guardian DB persisted to '${chosenPath}' instead. Scans will not be visible alongside the project.`
+  };
+}
+function openWritable(dbPath) {
+  const dir = dirname4(dbPath);
+  ensureDir(dir);
+  probeDirectoryWritable(dir);
+  const db = new GuardianDatabase(dbPath);
+  try {
+    applyPragmas(db);
+    runMigrations(db);
+    probeDatabaseWritable(db);
+    return db;
+  } catch (error2) {
+    try {
+      db.close();
+    } catch {
+    }
+    throw error2;
   }
-  return result;
+}
+function probeDirectoryWritable(dir) {
+  const probe2 = join4(dir, `.write-probe-${process.pid}-${randomBytes(4).toString("hex")}`);
+  writeFileSync3(probe2, "", { flag: "wx" });
+  try {
+    rmSync(probe2, { force: true });
+  } catch {
+  }
+}
+function probeDatabaseWritable(db) {
+  db.exec("PRAGMA busy_timeout = 0");
+  try {
+    db.exec("UPDATE schema_meta SET value = value WHERE 0");
+  } catch (error2) {
+    if (!isBusyError(error2)) throw error2;
+  } finally {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  }
+}
+function isNotWritableError(error2) {
+  if (error2 instanceof Error && "code" in error2) {
+    const code = error2.code;
+    if (code === "EACCES" || code === "EPERM" || code === "EROFS") return true;
+  }
+  const sqlite = sqliteErrorCode(error2);
+  return sqlite === 8 || sqlite === 14;
 }
 function resolveFallbackDbPath(projectPath) {
   return join4(tmpdir(), "dev-guardian", shortHash(resolve2(projectPath)), "guardian.db");
@@ -38431,13 +38477,9 @@ function ensureDir(dir) {
     mkdirSync(dir, { recursive: true });
   }
 }
-function isWritable(dir) {
+function isDirectory(path6) {
   try {
-    if (!existsSync4(dir)) {
-      return false;
-    }
-    accessSync(dir, constants4.W_OK);
-    return true;
+    return statSync2(path6).isDirectory();
   } catch {
     return false;
   }
@@ -39280,7 +39322,7 @@ var BaseScanWithFixInput = BaseScanInput.extend({
 });
 
 // src/tools/scanHelpers.ts
-import { existsSync as existsSync5, mkdirSync as mkdirSync2, readFileSync as readFileSync6, readdirSync as readdirSync2, statSync as statSync2 } from "node:fs";
+import { existsSync as existsSync5, mkdirSync as mkdirSync2, readFileSync as readFileSync6, readdirSync as readdirSync2, statSync as statSync3 } from "node:fs";
 import { join as join5 } from "node:path";
 
 // src/platform/pkgManagerDetect.ts
@@ -39341,7 +39383,7 @@ function findNewestDir(parent, prefix, sinceMs) {
     if (!entry.startsWith(prefix)) continue;
     const abs = join5(parent, entry);
     try {
-      const s = statSync2(abs);
+      const s = statSync3(abs);
       if (!s.isDirectory()) continue;
       if (s.mtimeMs < sinceMs) continue;
       if (!best || s.mtimeMs > best.mtimeMs) best = { path: abs, mtimeMs: s.mtimeMs };
@@ -39465,7 +39507,7 @@ function hashConfigFile(path6) {
 }
 
 // src/configdrift/manifest.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync8, writeFileSync as writeFileSync3 } from "node:fs";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync8, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname5, join as join6 } from "node:path";
 var MANIFEST_RELATIVE_PATH = ".dev-guardian/configs.json";
 var MANIFEST_SCHEMA_VERSION = 1;
@@ -39502,7 +39544,7 @@ function writeManifest(projectPath, manifest) {
   try {
     const path6 = manifestPath(projectPath);
     mkdirSync3(dirname5(path6), { recursive: true });
-    writeFileSync3(path6, `${JSON.stringify(sorted, null, 2)}
+    writeFileSync4(path6, `${JSON.stringify(sorted, null, 2)}
 `, "utf8");
     return true;
   } catch {
@@ -39800,7 +39842,7 @@ async function walk(root, dir, out) {
 }
 
 // src/platform/projectPath.ts
-import { existsSync as existsSync8, statSync as statSync3 } from "node:fs";
+import { existsSync as existsSync8, realpathSync, statSync as statSync4 } from "node:fs";
 import { homedir } from "node:os";
 import { parse as parse3, resolve as resolve4 } from "node:path";
 var InvalidProjectPathError = class extends Error {
@@ -39818,19 +39860,32 @@ function resolveProjectPath(input) {
   if (!existsSync8(candidate)) {
     throw new InvalidProjectPathError("not_found", candidate);
   }
-  if (!statSync3(candidate).isDirectory()) {
+  if (!statSync4(candidate).isDirectory()) {
     throw new InvalidProjectPathError("not_a_directory", candidate);
   }
-  if (isRootOrHome(candidate)) {
-    throw new InvalidProjectPathError("root_or_home", candidate);
+  const canonical = canonicalPath(candidate);
+  if (isRootOrHome(canonical)) {
+    throw new InvalidProjectPathError("root_or_home", canonical);
   }
-  return { path: candidate };
+  return { path: canonical };
+}
+function canonicalPath(p) {
+  const resolved = resolve4(p);
+  let canonical = resolved;
+  try {
+    canonical = realpathSync.native(resolved);
+  } catch {
+  }
+  if (process.platform === "win32") {
+    if (canonical.startsWith("\\\\") && !resolved.startsWith("\\\\")) canonical = resolved;
+    canonical = canonical.replace(/\//g, "\\").replace(/^([a-z]):/, (_m, drive) => `${drive.toUpperCase()}:`);
+  }
+  return canonical;
 }
 function isRootOrHome(p) {
   if (parse3(p).root === p) return true;
   const home = resolve4(homedir());
-  if (p === home) return true;
-  return false;
+  return p === home || p === canonicalPath(home);
 }
 
 // src/tools/gitState.ts
@@ -41797,8 +41852,8 @@ async function tryNativeAudit(opts) {
   });
   if (isNpmStdout && result.stdout.length > 0) {
     try {
-      const { writeFileSync: writeFileSync12 } = await import("node:fs");
-      writeFileSync12(opts.outFile, result.stdout, "utf8");
+      const { writeFileSync: writeFileSync13 } = await import("node:fs");
+      writeFileSync13(opts.outFile, result.stdout, "utf8");
     } catch {
     }
   }
@@ -42251,7 +42306,7 @@ function failDomain2(code, message) {
 }
 
 // src/tools/complianceCheck.ts
-import { readdirSync as readdirSync6, statSync as statSync4 } from "node:fs";
+import { readdirSync as readdirSync6, statSync as statSync5 } from "node:fs";
 import { join as join22 } from "node:path";
 var RISKY_LICENSE_PATTERNS = [
   { pattern: /^AGPL/i, severity: "high" },
@@ -42310,7 +42365,7 @@ function walk2(root, dir, depth, maxDepth, out) {
       continue;
     const abs = join22(dir, entry);
     try {
-      const s = statSync4(abs);
+      const s = statSync5(abs);
       if (s.isDirectory()) {
         if (depth + 1 <= maxDepth) walk2(root, abs, depth + 1, maxDepth, out);
       } else if (s.isFile()) {
@@ -42435,7 +42490,7 @@ registerToolModule(
 );
 
 // src/tools/generateSbom.ts
-import { existsSync as existsSync17, readFileSync as readFileSync11, statSync as statSync5 } from "node:fs";
+import { existsSync as existsSync17, readFileSync as readFileSync11, statSync as statSync6 } from "node:fs";
 import { join as join23 } from "node:path";
 import { randomUUID as randomUUID2 } from "node:crypto";
 
@@ -42553,7 +42608,7 @@ async function handler2(input, ctx) {
       }
     };
   }
-  const stat2 = statSync5(outFile);
+  const stat2 = statSync6(outFile);
   const raw = readFileSync11(outFile, "utf8");
   const summary = summarize2(raw);
   ctx.storage.scans.insert({
@@ -42734,7 +42789,7 @@ import { existsSync as existsSync20 } from "node:fs";
 import { join as join26 } from "node:path";
 
 // src/configdrift/refresh.ts
-import { copyFileSync, existsSync as existsSync19, mkdirSync as mkdirSync4, writeFileSync as writeFileSync4, readFileSync as readFileSync12 } from "node:fs";
+import { copyFileSync, existsSync as existsSync19, mkdirSync as mkdirSync4, writeFileSync as writeFileSync5, readFileSync as readFileSync12 } from "node:fs";
 import { dirname as dirname7, join as join25 } from "node:path";
 function alongsideName(target, version2) {
   return `${target}.dev-guardian-${version2}.new`;
@@ -42891,7 +42946,7 @@ function installFile(input) {
       pluginVersion: input.version,
       prefix
     });
-    writeFileSync4(input.dstPath, header + readFileSync12(input.srcPath, "utf8"), "utf8");
+    writeFileSync5(input.dstPath, header + readFileSync12(input.srcPath, "utf8"), "utf8");
     return true;
   } catch {
     return false;
@@ -43104,7 +43159,7 @@ function failDomain5(code, message) {
 }
 
 // src/tools/observabilitySetup.ts
-import { existsSync as existsSync21, mkdirSync as mkdirSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync21, mkdirSync as mkdirSync5, writeFileSync as writeFileSync6 } from "node:fs";
 import { dirname as dirname8, join as join27 } from "node:path";
 var tool5 = {
   name: "observability_setup",
@@ -43140,7 +43195,7 @@ async function handler5(input, ctx) {
       }
       try {
         mkdirSync5(dirname8(abs), { recursive: true });
-        writeFileSync5(abs, p.contents, "utf8");
+        writeFileSync6(abs, p.contents, "utf8");
         written.push(p);
       } catch (e) {
         failed.push({ ...p, error: e.message });
@@ -43469,7 +43524,7 @@ function failDomain6(code, message) {
 }
 
 // src/tools/perfCheck.ts
-import { existsSync as existsSync22, readFileSync as readFileSync13, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync22, readFileSync as readFileSync13, writeFileSync as writeFileSync7 } from "node:fs";
 import { join as join28 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 var inputSchema3 = {
@@ -43612,7 +43667,7 @@ async function runK6(opts) {
     timeoutMs: 30 * 6e4
   });
   if (!existsSync22(summaryFile)) {
-    writeFileSync6(summaryFile, result.stdout || "{}", "utf8");
+    writeFileSync7(summaryFile, result.stdout || "{}", "utf8");
   }
   const raw = readFileSync13(summaryFile, "utf8");
   let parsed;
@@ -45630,7 +45685,7 @@ function failDomain17(code, message) {
 }
 
 // src/tools/healthStatus.ts
-import { existsSync as existsSync28, statSync as statSync6 } from "node:fs";
+import { existsSync as existsSync28, statSync as statSync7 } from "node:fs";
 var startedAt = Date.now();
 var SERVER_VERSION = resolveVersion();
 var tool21 = {
@@ -45648,7 +45703,7 @@ async function handler21(ctx) {
   let dbSizeBytes = null;
   if (dbPath && dbPath !== ":memory:" && existsSync28(dbPath)) {
     try {
-      dbSizeBytes = statSync6(dbPath).size;
+      dbSizeBytes = statSync7(dbPath).size;
     } catch {
     }
   }
@@ -45687,7 +45742,7 @@ async function handler21(ctx) {
 }
 
 // src/tools/reportExport.ts
-import { mkdirSync as mkdirSync6, writeFileSync as writeFileSync7 } from "node:fs";
+import { mkdirSync as mkdirSync6, writeFileSync as writeFileSync8 } from "node:fs";
 import { join as join35 } from "node:path";
 
 // src/report/htmlTheme.ts
@@ -46107,7 +46162,7 @@ async function handler22(input, ctx) {
     mkdirSync6(outDir2, { recursive: true });
     const fileName2 = narrativeFormat === "markdown" ? "report.md" : "report.html";
     const outFile2 = join35(outDir2, fileName2);
-    writeFileSync7(outFile2, content2, "utf8");
+    writeFileSync8(outFile2, content2, "utf8");
     return {
       ok: true,
       kind: "narrative",
@@ -46129,7 +46184,7 @@ async function handler22(input, ctx) {
   const outDir = join35(projectPath, ".guardian", "reports", `export-${scanId.slice(0, 8)}`);
   mkdirSync6(outDir, { recursive: true });
   const outFile = join35(outDir, fileName);
-  writeFileSync7(outFile, content, "utf8");
+  writeFileSync8(outFile, content, "utf8");
   return {
     ok: true,
     kind: "scan",
@@ -47086,7 +47141,7 @@ function failDomain20(code, message) {
 }
 
 // src/tools/wpVulnCheck.ts
-import { existsSync as existsSync31, mkdirSync as mkdirSync7, writeFileSync as writeFileSync8 } from "node:fs";
+import { existsSync as existsSync31, mkdirSync as mkdirSync7, writeFileSync as writeFileSync9 } from "node:fs";
 import { randomUUID as randomUUID6 } from "node:crypto";
 import { join as join38 } from "node:path";
 
@@ -47290,7 +47345,7 @@ async function handler26(input, ctx) {
   if (!raw && r.stdout && r.stdout.trim().startsWith("{")) {
     raw = r.stdout;
     try {
-      writeFileSync8(outFile, raw, "utf8");
+      writeFileSync9(outFile, raw, "utf8");
     } catch {
     }
   }
@@ -47971,7 +48026,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID10 } from "node:crypto";
-import { existsSync as existsSync33, readFileSync as readFileSync17, readdirSync as readdirSync9, statSync as statSync7 } from "node:fs";
+import { existsSync as existsSync33, readFileSync as readFileSync17, readdirSync as readdirSync9, statSync as statSync8 } from "node:fs";
 import { join as join40, relative as relative2 } from "node:path";
 var PATTERNS = [
   {
@@ -48153,7 +48208,7 @@ function collectConfigFiles(root, maxDepth) {
       const abs = join40(dir, name);
       let stat2;
       try {
-        stat2 = statSync7(abs);
+        stat2 = statSync8(abs);
       } catch {
         continue;
       }
@@ -48170,7 +48225,7 @@ function collectConfigFiles(root, maxDepth) {
 
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID11 } from "node:crypto";
-import { readFileSync as readFileSync18, readdirSync as readdirSync10, statSync as statSync8 } from "node:fs";
+import { readFileSync as readFileSync18, readdirSync as readdirSync10, statSync as statSync9 } from "node:fs";
 import { join as join41, relative as relative3 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
@@ -48295,7 +48350,7 @@ function collectCsprojFiles(root, maxDepth) {
       if (SKIP_DIRS2.has(name)) continue;
       const abs = join41(dir, name);
       try {
-        const s = statSync8(abs);
+        const s = statSync9(abs);
         if (s.isDirectory()) walk4(abs, depth + 1);
         else if (name.endsWith(".csproj") || name.endsWith(".fsproj")) out.push(abs);
       } catch {
@@ -48311,7 +48366,7 @@ function failDomain24(code, message) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
-import { existsSync as existsSync34, readFileSync as readFileSync19, readdirSync as readdirSync11, statSync as statSync9 } from "node:fs";
+import { existsSync as existsSync34, readFileSync as readFileSync19, readdirSync as readdirSync11, statSync as statSync10 } from "node:fs";
 import { join as join42, relative as relative4 } from "node:path";
 var RULES = [
   {
@@ -48450,7 +48505,7 @@ function findMigrationsDirs(root) {
       const abs = join42(dir, name);
       let s;
       try {
-        s = statSync9(abs);
+        s = statSync10(abs);
       } catch {
         continue;
       }
@@ -48595,7 +48650,7 @@ function scoreRange(top) {
 
 // src/tools/scanSkill.ts
 import { createHash as createHash5, randomUUID as randomUUID13 } from "node:crypto";
-import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync10 } from "node:fs";
+import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync11 } from "node:fs";
 import { join as join44 } from "node:path";
 
 // src/runners/osv.ts
@@ -49723,9 +49778,9 @@ import {
   mkdtempSync,
   readFileSync as readFileSync20,
   readdirSync as readdirSync12,
-  rmSync,
-  statSync as statSync10,
-  writeFileSync as writeFileSync9
+  rmSync as rmSync2,
+  statSync as statSync11,
+  writeFileSync as writeFileSync10
 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { basename, join as join43 } from "node:path";
@@ -49849,7 +49904,7 @@ async function ingestTarget(targetRaw) {
   if (!existsSync35(target)) {
     return { ok: false, code: "target_not_found", message: `Path does not exist: ${target}` };
   }
-  const st = statSync10(target);
+  const st = statSync11(target);
   if (st.isDirectory()) {
     const collected = collectDir(target);
     return {
@@ -49921,7 +49976,7 @@ async function ingestUrl(url) {
       const res = await fetch(url, { signal: controller.signal });
       if (!res.ok) throw new Error(`http ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
-      writeFileSync9(dest, buf);
+      writeFileSync10(dest, buf);
     } finally {
       clearTimeout(timeout);
     }
@@ -50014,7 +50069,7 @@ function collectDir(root) {
       const abs = join43(dir, entry);
       let s;
       try {
-        s = statSync10(abs);
+        s = statSync11(abs);
       } catch {
         continue;
       }
@@ -50087,7 +50142,7 @@ function looksBinary(buf) {
 }
 function safeRm(dir) {
   try {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync2(dir, { recursive: true, force: true });
   } catch {
   }
 }
@@ -50166,8 +50221,8 @@ async function handler38(input, ctx, callMeta) {
         mkdirSync8(outDir, { recursive: true });
         const sarifPath = join44(outDir, "report.sarif");
         const jsonPath = join44(outDir, "report.json");
-        writeFileSync10(sarifPath, toSarif(findings, { toolName: "guardian-scanskill" }), "utf8");
-        writeFileSync10(
+        writeFileSync11(sarifPath, toSarif(findings, { toolName: "guardian-scanskill" }), "utf8");
+        writeFileSync11(
           jsonPath,
           JSON.stringify(
             {
@@ -50308,7 +50363,7 @@ function numProp(value, key) {
 }
 
 // src/surface/collectors/ports.ts
-import { existsSync as existsSync36, readFileSync as readFileSync21, realpathSync } from "node:fs";
+import { existsSync as existsSync36, readFileSync as readFileSync21, realpathSync as realpathSync2 } from "node:fs";
 import { basename as basename2, join as join45 } from "node:path";
 var DOCKERFILES = ["Dockerfile", "dockerfile"];
 var COMPOSE_FILES = [
@@ -50330,7 +50385,7 @@ function collectPorts(projectPath) {
   const seenDockerfiles = /* @__PURE__ */ new Set();
   for (const name of DOCKERFILES) {
     const path6 = join45(projectPath, name);
-    const canonical = canonicalPath(path6);
+    const canonical = canonicalPath2(path6);
     if (canonical === void 0) continue;
     if (seenDockerfiles.has(canonical)) continue;
     seenDockerfiles.add(canonical);
@@ -50370,9 +50425,9 @@ function readLines(path6) {
     return [];
   }
 }
-function canonicalPath(path6) {
+function canonicalPath2(path6) {
   try {
-    return realpathSync.native(path6);
+    return realpathSync2.native(path6);
   } catch {
     return void 0;
   }
@@ -51361,7 +51416,7 @@ function buildToolRun(run, via) {
 }
 
 // src/surface/specDiscover.ts
-import { readFileSync as readFileSync22, readdirSync as readdirSync13, statSync as statSync11 } from "node:fs";
+import { readFileSync as readFileSync22, readdirSync as readdirSync13, statSync as statSync12 } from "node:fs";
 import { join as join47, relative as relative5, resolve as resolve6, sep as sep2 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
@@ -51393,7 +51448,7 @@ function readCandidates(paths) {
   for (const path6 of paths) {
     let size;
     try {
-      size = statSync11(path6).size;
+      size = statSync12(path6).size;
     } catch {
       continue;
     }
@@ -52791,7 +52846,7 @@ function armDeadline(ms, hostSignal) {
 }
 
 // src/dast/evidence.ts
-import { writeFileSync as writeFileSync11 } from "node:fs";
+import { writeFileSync as writeFileSync12 } from "node:fs";
 import { join as join49 } from "node:path";
 var EVIDENCE_BODY_CHARS = 2e3;
 var MAX_EVIDENCE_FILES = 200;
@@ -52868,7 +52923,7 @@ function writeEvidenceFiles(dir, records, redact) {
       continue;
     }
     try {
-      writeFileSync11(
+      writeFileSync12(
         join49(dir, `${record3.fingerprint}.json`),
         redact(JSON.stringify(record3, null, 2)),
         "utf8"
@@ -54956,7 +55011,7 @@ function headOf(stdout, stderr) {
 }
 
 // src/fixpr/worktree.ts
-import { existsSync as existsSync37, mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "node:fs";
+import { existsSync as existsSync37, mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join52 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
@@ -54983,10 +55038,10 @@ async function createWorktree(opts) {
     });
     return { ok: false, reason: describeFailure2(add, "git worktree add") };
   }
-  const canonicalPath2 = await resolveRegisteredPath(opts.projectPath, opts.branch, opts.timeoutMs) ?? dir;
+  const canonicalPath3 = await resolveRegisteredPath(opts.projectPath, opts.branch, opts.timeoutMs) ?? dir;
   return {
     ok: true,
-    worktree: makeWorktree(opts.projectPath, canonicalPath2, opts.branch, opts.timeoutMs)
+    worktree: makeWorktree(opts.projectPath, canonicalPath3, opts.branch, opts.timeoutMs)
   };
 }
 function makeWorktree(projectPath, path6, branch, timeoutMs) {
@@ -55078,7 +55133,7 @@ function firstNonEmptyLine2(text) {
 }
 function safeRmDir(dir) {
   try {
-    rmSync2(dir, { recursive: true, force: true });
+    rmSync3(dir, { recursive: true, force: true });
   } catch {
   }
 }

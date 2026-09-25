@@ -10,15 +10,18 @@
  * engine is node:sqlite; swapping it again only touches files in this folder.
  *
  * The DB lives at `<project_root>/.guardian/guardian.db`. When that path is
- * not writable (read-only mounts, missing permissions), we fall back to
+ * not writable (read-only mounts, missing permissions, a database left behind
+ * by a `sudo` or Docker run), we fall back to
  * `os.tmpdir()/dev-guardian/<sha1(project_root)>/guardian.db` and surface a
- * warning the caller can include in tool responses.
+ * warning the caller can include in tool responses. Writability is PROBED —
+ * a file is created in `.guardian/` and the database takes a real write — not
+ * asked of `accessSync`, which on Windows ignores ACLs entirely.
  *
  * The connection opens in WAL mode with foreign keys on; the resolver uses
  * `:memory:` when the caller asks for it, which the unit tests rely on.
  */
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, accessSync, constants } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -183,30 +186,110 @@ export function openDatabase(options) {
         return { db, path: ':memory:' };
     }
     const projectPath = resolve(options.projectPath);
-    const preferredDir = join(projectPath, '.guardian');
-    const preferredPath = join(preferredDir, 'guardian.db');
-    let chosenPath;
-    let warning;
-    if (isWritable(projectPath)) {
-        ensureDir(preferredDir);
-        chosenPath = preferredPath;
+    const preferredPath = join(projectPath, '.guardian', 'guardian.db');
+    let reason;
+    if (!isDirectory(projectPath)) {
+        // Caller's responsibility to have a real project dir; if it doesn't
+        // exist, we can't write there.
+        reason = 'it is not an existing directory';
     }
     else {
-        chosenPath = resolveFallbackDbPath(projectPath);
-        ensureDir(dirname(chosenPath));
-        warning =
-            `Project path '${projectPath}' is not writable; ` +
-                `dev-guardian DB persisted to '${chosenPath}' instead. ` +
-                `Scans will not be visible alongside the project.`;
+        try {
+            return { db: openWritable(preferredPath), path: preferredPath };
+        }
+        catch (error) {
+            if (!isNotWritableError(error))
+                throw error;
+            reason = error instanceof Error ? error.message : String(error);
+        }
     }
+    const chosenPath = resolveFallbackDbPath(projectPath);
+    ensureDir(dirname(chosenPath));
     const db = new GuardianDatabase(chosenPath);
     applyPragmas(db);
     runMigrations(db);
-    const result = { db, path: chosenPath };
-    if (warning !== undefined) {
-        result.warning = warning;
+    return {
+        db,
+        path: chosenPath,
+        warning: `Project path '${projectPath}' is not writable (${reason}); ` +
+            `dev-guardian DB persisted to '${chosenPath}' instead. ` +
+            `Scans will not be visible alongside the project.`,
+    };
+}
+/**
+ * Opens (and migrates) `dbPath` only if it can really be written: creates
+ * its directory, creates and removes a probe file there, then makes the
+ * database take a write. Throws otherwise — see {@link isNotWritableError}
+ * for the failures that mean "use the fallback".
+ */
+function openWritable(dbPath) {
+    const dir = dirname(dbPath);
+    ensureDir(dir);
+    probeDirectoryWritable(dir);
+    const db = new GuardianDatabase(dbPath);
+    try {
+        applyPragmas(db);
+        runMigrations(db);
+        probeDatabaseWritable(db);
+        return db;
     }
-    return result;
+    catch (error) {
+        try {
+            db.close();
+        }
+        catch {
+            /* the open failure is the one worth reporting */
+        }
+        throw error;
+    }
+}
+function probeDirectoryWritable(dir) {
+    const probe = join(dir, `.write-probe-${process.pid}-${randomBytes(4).toString('hex')}`);
+    writeFileSync(probe, '', { flag: 'wx' });
+    try {
+        rmSync(probe, { force: true });
+    }
+    catch {
+        /* a probe we could create but not delete is harmless; .guardian/ is git-ignored */
+    }
+}
+/**
+ * A read-only database FILE opens without complaint and serves every read —
+ * SQLite quietly opens it read-only — so only a write reveals it. An UPDATE
+ * that matches nothing still has to begin a write transaction, which is
+ * where SQLite answers SQLITE_READONLY, before and regardless of any lock.
+ *
+ * The busy timeout is dropped to 0 for the probe: SQLITE_BUSY means another
+ * process is writing this same file right now — proof enough that it is
+ * writable, and no reason to stall startup for 5 s.
+ */
+function probeDatabaseWritable(db) {
+    db.exec('PRAGMA busy_timeout = 0');
+    try {
+        db.exec('UPDATE schema_meta SET value = value WHERE 0');
+    }
+    catch (error) {
+        if (!isBusyError(error))
+            throw error;
+    }
+    finally {
+        db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    }
+}
+/**
+ * Failures that mean "this location cannot be written by us": the OS
+ * refusing (EACCES/EPERM, or EROFS on a read-only mount) or SQLite refusing
+ * (SQLITE_READONLY = 8, SQLITE_CANTOPEN = 14 — what an ACL-denied directory
+ * produces on Windows). Anything else is a real error and propagates.
+ */
+function isNotWritableError(error) {
+    if (error instanceof Error && 'code' in error) {
+        const code = error.code;
+        if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS')
+            return true;
+    }
+    const sqlite = sqliteErrorCode(error);
+    return sqlite === 8 || sqlite === 14;
 }
 /**
  * Where {@link openDatabase} redirects a project's database when
@@ -311,15 +394,9 @@ function ensureDir(dir) {
         mkdirSync(dir, { recursive: true });
     }
 }
-function isWritable(dir) {
+function isDirectory(path) {
     try {
-        if (!existsSync(dir)) {
-            // Caller's responsibility to have a real project dir; if it doesn't
-            // exist, we can't write there.
-            return false;
-        }
-        accessSync(dir, constants.W_OK);
-        return true;
+        return statSync(path).isDirectory();
     }
     catch {
         return false;

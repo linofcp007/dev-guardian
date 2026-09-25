@@ -12,7 +12,8 @@ export default defineConfig({
     // theoretical: it crashes Semgrep with an uncaught PermissionError and
     // the failure reads as a broken rule pack. See the file's own comment for
     // the mechanism and the measurements.
-    setupFiles: ['./test/setup/semgrepSettings.ts'],
+    // canonicalTmpdir.ts: os.tmpdir() in its canonical spelling — see the file.
+    setupFiles: ['./test/setup/canonicalTmpdir.ts', './test/setup/semgrepSettings.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
