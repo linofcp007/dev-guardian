@@ -2,10 +2,16 @@
  * `review_pr` — the scans of a pull request, scoped to what it changes.
  *
  *   - Semgrep over every file the PR adds, copies, modifies or renames
- *     (`git diff -z --diff-filter=ACMR base...head`) that is present in the
- *     working tree, with the same rule sources as `scan_sast`;
+ *     (`git diff -z --diff-filter=ACMR base...head`), with the same rule
+ *     sources as `scan_sast`. The files are read from the working tree when
+ *     head is what is checked out; otherwise from head's own tree, checked
+ *     out for the scan with `git worktree add --detach` and removed after —
+ *     the working tree would hold other versions of the files, and none of
+ *     the files only head has. A changed file missing from that tree is a
+ *     coverage gap;
  *   - gitleaks over exactly the PR's commits (`--log-opts=<base>..<head>`),
- *     so a secret added in one commit and removed in the next is still found;
+ *     so a secret added in one commit and removed in the next is still found,
+ *     plus the uncommitted files when head is what is checked out;
  *   - Bandit over the changed `.py` files;
  *   - Trivy over the project when a dependency manifest or lockfile changed.
  *
@@ -26,7 +32,7 @@ import { basename, join } from 'node:path';
 import { z } from 'zod';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
 import { banditOnFiles, semgrepOnFiles } from '../runners/fileBatchScan.js';
-import { changedFiles, git, repoState, resolveCommit } from '../runners/git.js';
+import { changedFiles, git, materialiseCommit, repoState, resolveCommit, showPrefix, } from '../runners/git.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { runProcess } from '../runners/processRunner.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
@@ -43,8 +49,10 @@ const reviewPr = makeScanTool({
     name: 'review_pr',
     title: 'Pre-PR diff review',
     description: 'Scan what a pull request changes: Semgrep (same rules as scan_sast) over every added/modified/' +
-        'renamed file between base_ref and head_ref, gitleaks over exactly those commits, Bandit over ' +
-        'changed .py files, and Trivy when a dependency manifest changed. base_ref defaults to ' +
+        'renamed file between base_ref and head_ref, gitleaks over exactly those commits (plus uncommitted ' +
+        'files when head is checked out), Bandit over changed .py files, and Trivy when a dependency ' +
+        'manifest changed. Files are read at head: from the working tree when head is checked out, else ' +
+        'from a temporary checkout of head. base_ref defaults to ' +
         'origin/HEAD, then main, then master; head_ref to HEAD. An unresolvable ref is an error, never ' +
         '"no files changed". Pass local_only=true to skip the Semgrep registry (no telemetry).',
     scan_type: 'review_pr',
@@ -74,143 +82,186 @@ const reviewPr = makeScanTool({
         if (base === null || head === null)
             throw new Error('review_pr: base_ref/head_ref do not name commits');
         const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'review');
-        const tools_run = [];
-        const missing_tools = [];
-        const parser_inputs = [];
-        let cancelled = false;
+        const out = { tools_run: [], missing_tools: [], parser_inputs: [], cancelled: false };
         const changed = await changedFiles(ctx.projectPath, base, head);
-        const present = changed.filter((f) => isFileOnDisk(join(ctx.projectPath, f)));
-        const notOnDisk = changed.length - present.length;
-        // --- Semgrep ---------------------------------------------------------
-        if (present.length === 0) {
-            tools_run.push({
-                name: 'semgrep',
-                status: 'skipped',
-                reason: changed.length === 0
-                    ? 'no changed file between base and head'
-                    : `no changed file is present in the working tree (${notOnDisk} missing)`,
-            });
-        }
-        else if (!(await scannerAvailable('semgrep'))) {
-            tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'not_installed' });
-            missing_tools.push('semgrep');
-        }
-        else {
-            const plan = planSemgrepConfigs(ctx.projectPath, ctx.plugin, input.local_only === true);
-            if (plan.nothingToRun) {
-                tools_run.push({
-                    name: 'semgrep',
-                    status: 'skipped',
-                    reason: 'local_only=true but this project has no local Semgrep rules — nothing to run',
-                });
-                missing_tools.push('semgrep');
+        // Which files ARE the head: the working tree only when head is what is
+        // checked out. Otherwise the head's own tree, checked out for this scan —
+        // the working tree would hold another version of every file, and no copy
+        // at all of the files only the head has.
+        const headIsCheckedOut = (await resolveCommit(ctx.projectPath, 'HEAD')) === head;
+        let tree = null;
+        let cleanupNote = null;
+        try {
+            let scanRoot = ctx.projectPath;
+            let unavailable = null;
+            if (!headIsCheckedOut && changed.length > 0) {
+                try {
+                    tree = await materialiseCommit(ctx.projectPath, head);
+                    scanRoot = join(tree.root, await showPrefix(ctx.projectPath));
+                }
+                catch (e) {
+                    unavailable = `could not check out head ${head.slice(0, 12)}: ${e instanceof Error ? e.message : String(e)}`;
+                }
+            }
+            const where = headIsCheckedOut ? 'the working tree' : `head ${head.slice(0, 12)}`;
+            if (unavailable !== null) {
+                // gitleaks reads commits, not files, and still runs below.
+                out.tools_run.push({ name: 'semgrep', status: 'failed', reason: unavailable });
+                if (changed.some(isPython))
+                    out.tools_run.push({ name: 'bandit', status: 'failed', reason: unavailable });
+                if (changed.some(isManifest))
+                    out.tools_run.push({ name: 'trivy', status: 'failed', reason: unavailable });
             }
             else {
-                const run = await semgrepOnFiles({
-                    configArgs: plan.args,
-                    files: present,
-                    cwd: ctx.projectPath,
+                const present = changed.filter((f) => isFileOnDisk(join(scanRoot, f)));
+                await runSemgrep(ctx, input, out, { scanRoot, reportDir, changed, present, where });
+                if (!out.cancelled)
+                    await runBandit(ctx, out, { scanRoot, reportDir, files: present.filter(isPython) });
+                if (!out.cancelled && changed.some(isManifest))
+                    await runTrivy(ctx, out, { scanRoot, reportDir });
+            }
+            // gitleaks over the PR's commits — and, when head is what is checked
+            // out, over the files no commit holds yet (`protect --staged` used to
+            // look at the index; this looks at everything uncommitted).
+            if (!out.cancelled) {
+                const secrets = await runGitleaksScan({
+                    projectPath: ctx.projectPath,
                     reportDir,
+                    scope: { kind: 'range', base, head, workingTree: headIsCheckedOut },
                     env: ctx.scriptEnv,
                     signal: ctx.signal,
                     ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
                 });
-                for (const raw of run.reports)
-                    parser_inputs.push({ parser: semgrepParser, input: raw });
-                const notes = [...plan.notes];
-                if (notOnDisk > 0)
-                    notes.push(`${notOnDisk} changed path(s) not in the working tree were skipped`);
-                tools_run.push(withNotes(run.toolRun, notes));
-                // Scanned nothing at all: not a clean result, a gap.
-                if (run.nothingScanned)
-                    missing_tools.push('semgrep');
-                cancelled ||= run.cancelled;
+                out.tools_run.push(...secrets.tools_run);
+                out.missing_tools.push(...secrets.missing_tools);
+                out.parser_inputs.push(...secrets.parser_inputs);
+                out.cancelled ||= secrets.cancelled;
             }
         }
-        // --- gitleaks over the PR's commits ----------------------------------
-        if (!cancelled) {
-            const secrets = await runGitleaksScan({
-                projectPath: ctx.projectPath,
-                reportDir,
-                scope: { kind: 'range', base, head },
-                env: ctx.scriptEnv,
-                signal: ctx.signal,
-                ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
-            });
-            tools_run.push(...secrets.tools_run);
-            missing_tools.push(...secrets.missing_tools);
-            parser_inputs.push(...secrets.parser_inputs);
-            cancelled ||= secrets.cancelled;
-        }
-        // --- Bandit over changed Python files --------------------------------
-        const python = present.filter((f) => f.toLowerCase().endsWith('.py'));
-        if (!cancelled && python.length > 0) {
-            if (!(await scannerAvailable('bandit'))) {
-                tools_run.push({ name: 'bandit', status: 'skipped', reason: 'not_installed' });
-                missing_tools.push('bandit');
-            }
-            else {
-                const run = await banditOnFiles({
-                    files: python,
-                    cwd: ctx.projectPath,
-                    reportDir,
-                    env: ctx.scriptEnv,
-                    signal: ctx.signal,
-                    ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
-                });
-                for (const raw of run.reports)
-                    parser_inputs.push({ parser: banditParser, input: raw });
-                tools_run.push(run.toolRun);
-                cancelled ||= run.cancelled;
-            }
-        }
-        // --- Trivy when the dependency set changed ---------------------------
-        if (!cancelled && changed.some((f) => MANIFEST_RE.test(basename(f)))) {
-            if (!(await scannerAvailable('trivy'))) {
-                tools_run.push({ name: 'trivy', status: 'skipped', reason: 'not_installed' });
-                missing_tools.push('trivy');
-            }
-            else {
-                const outFile = join(reportDir, 'deps.json');
-                const run = await runProcess({
-                    command: 'trivy',
-                    args: ['fs', '--scanners', 'vuln', '--format', 'json', '--output', outFile, '--quiet', ctx.projectPath],
-                    cwd: ctx.projectPath,
-                    env: ctx.scriptEnv,
-                    signal: ctx.signal,
-                    onLog: ctx.onLog,
-                });
-                const raw = readJsonSafe(outFile);
-                if (run.outcome === 'cancelled')
-                    cancelled = true;
-                if (run.outcome === 'completed' && raw !== null) {
-                    parser_inputs.push({ parser: trivyParser, input: raw });
-                    tools_run.push({ name: 'trivy', status: 'ok', reason: 'a dependency manifest changed' });
-                }
-                else {
-                    tools_run.push({
-                        name: 'trivy',
-                        status: 'failed',
-                        reason: raw === null ? `no report (${run.outcome}, exit ${String(run.exitCode)})` : run.outcome,
-                    });
-                }
-            }
+        finally {
+            if (tree)
+                cleanupNote = await tree.remove();
         }
         return {
-            outcome: cancelled ? 'cancelled' : 'completed',
-            tools_run,
-            missing_tools: [...new Set(missing_tools)],
-            parser_inputs,
+            outcome: out.cancelled ? 'cancelled' : 'completed',
+            tools_run: out.tools_run,
+            missing_tools: [...new Set(out.missing_tools)],
+            parser_inputs: out.parser_inputs,
             report_paths: [reportDir],
             extras: {
                 base_sha: base,
                 head_sha: head,
+                scanned_tree: headIsCheckedOut ? 'working_tree' : 'head_checkout',
                 changed_files: changed.length,
-                scanned_files: present.length,
+                ...(cleanupNote !== null ? { cleanup_warning: cleanupNote } : {}),
             },
         };
     },
 });
+const isPython = (f) => f.toLowerCase().endsWith('.py');
+const isManifest = (f) => MANIFEST_RE.test(basename(f));
+/**
+ * Semgrep over the changed files present in `scanRoot`. A changed file that
+ * is not there (deleted in the working tree since, a submodule) was not
+ * scanned: that is a gap in coverage, never a note on a full run.
+ */
+async function runSemgrep(ctx, input, out, args) {
+    const missing = args.changed.length - args.present.length;
+    const gap = missing > 0 ? `${missing} changed file(s) not in ${args.where} were not scanned` : null;
+    if (args.changed.length === 0) {
+        out.tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'no changed file between base and head' });
+        return;
+    }
+    if (args.present.length === 0) {
+        out.tools_run.push({ name: 'semgrep', status: 'skipped', reason: gap ?? 'nothing to scan' });
+        out.missing_tools.push('semgrep');
+        return;
+    }
+    if (!(await scannerAvailable('semgrep'))) {
+        out.tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'not_installed' });
+        out.missing_tools.push('semgrep');
+        return;
+    }
+    const plan = planSemgrepConfigs(ctx.projectPath, ctx.plugin, input.local_only === true);
+    if (plan.nothingToRun) {
+        out.tools_run.push({
+            name: 'semgrep',
+            status: 'skipped',
+            reason: 'local_only=true but this project has no local Semgrep rules — nothing to run',
+        });
+        out.missing_tools.push('semgrep');
+        return;
+    }
+    const run = await semgrepOnFiles({
+        configArgs: plan.args,
+        files: args.present,
+        cwd: args.scanRoot,
+        reportDir: args.reportDir,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+    });
+    for (const raw of run.reports)
+        out.parser_inputs.push({ parser: semgrepParser, input: raw });
+    out.tools_run.push(withNotes(run.toolRun, [...plan.notes, ...(gap !== null ? [gap] : [])]));
+    // Scanned nothing at all, or not every changed file: a gap, not a clean result.
+    if (run.nothingScanned || gap !== null)
+        out.missing_tools.push('semgrep');
+    out.cancelled ||= run.cancelled;
+}
+/** Bandit over the changed `.py` files present in `scanRoot`. */
+async function runBandit(ctx, out, args) {
+    if (args.files.length === 0)
+        return;
+    if (!(await scannerAvailable('bandit'))) {
+        out.tools_run.push({ name: 'bandit', status: 'skipped', reason: 'not_installed' });
+        out.missing_tools.push('bandit');
+        return;
+    }
+    const run = await banditOnFiles({
+        files: args.files,
+        cwd: args.scanRoot,
+        reportDir: args.reportDir,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+    });
+    for (const raw of run.reports)
+        out.parser_inputs.push({ parser: banditParser, input: raw });
+    out.tools_run.push(run.toolRun);
+    out.cancelled ||= run.cancelled;
+}
+/** Trivy over the head's dependency manifests, when one of them changed. */
+async function runTrivy(ctx, out, args) {
+    if (!(await scannerAvailable('trivy'))) {
+        out.tools_run.push({ name: 'trivy', status: 'skipped', reason: 'not_installed' });
+        out.missing_tools.push('trivy');
+        return;
+    }
+    const outFile = join(args.reportDir, 'deps.json');
+    const run = await runProcess({
+        command: 'trivy',
+        args: ['fs', '--scanners', 'vuln', '--format', 'json', '--output', outFile, '--quiet', args.scanRoot],
+        cwd: args.scanRoot,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        onLog: ctx.onLog,
+    });
+    const raw = readJsonSafe(outFile);
+    if (run.outcome === 'cancelled')
+        out.cancelled = true;
+    if (run.outcome === 'completed' && raw !== null) {
+        out.parser_inputs.push({ parser: trivyParser, input: raw });
+        out.tools_run.push({ name: 'trivy', status: 'ok', reason: 'a dependency manifest changed' });
+    }
+    else {
+        out.tools_run.push({
+            name: 'trivy',
+            status: 'failed',
+            reason: raw === null ? `no report (${run.outcome}, exit ${String(run.exitCode)})` : run.outcome,
+        });
+    }
+}
 function isFileOnDisk(path) {
     try {
         return lstatSync(path).isFile();

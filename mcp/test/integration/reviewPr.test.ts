@@ -17,7 +17,7 @@
  */
 
 import { execa } from 'execa';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -304,6 +304,76 @@ describe('review_pr — what reaches Semgrep', () => {
     expect(semgrep?.status).toBe('failed');
     expect(semgrep?.reason).toMatch(/exit 7/);
     expect(res.coverage).not.toBe('full');
+  });
+});
+
+describe('review_pr — which tree is scanned', () => {
+  it('reviews a head that is not checked out from its own tree, then removes that tree', async () => {
+    const dir = await repo('main', { 'a.py': 'a = 1\n' });
+    write(dir, 'a.py', 'eval(feature)\n');
+    write(dir, 'b.py', 'eval(b)\n');
+    await commitAll(dir);
+    await git(dir, 'checkout', '-q', 'main');
+
+    let seen: { cwd: string; targets: string[]; a: string } | undefined;
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const call: Call = { ...opts, args: opts.args ?? [] };
+      calls.push(call);
+      if (opts.command === 'semgrep') {
+        const { targets } = semgrepTargets(call.args);
+        // Line endings are the checkout's (core.autocrlf), the content is head's.
+        const a = readFileSync(join(opts.cwd, 'a.py'), 'utf8').replace(/\r\n/g, '\n');
+        seen = { cwd: opts.cwd, targets: [...targets].sort(), a };
+        return fakeSemgrep(call);
+      }
+      if (opts.command === 'gitleaks') return fakeGitleaks(call);
+      if (opts.command === 'bandit') {
+        writeFileSync(call.args[call.args.indexOf('-o') + 1] ?? '', JSON.stringify({ errors: [], results: [] }));
+        return ok(0);
+      }
+      return ok();
+    });
+
+    const { r } = await review(dir, { base_ref: 'main', head_ref: 'feature' });
+    expect(r.ok).toBe(true);
+    const res = r as unknown as ReviewResult;
+    // Both files, at the head's version — not "b.py not on disk", not main's a.py.
+    expect(seen?.targets).toEqual(['a.py', 'b.py']);
+    expect(seen?.a).toBe('eval(feature)\n');
+    expect(seen?.cwd).not.toBe(dir);
+    expect(res.missing_tools, JSON.stringify(res.tools_run)).toEqual([]);
+    expect(res.coverage, JSON.stringify(res.tools_run)).toBe('full');
+    // Uncommitted changes of whatever is checked out are not the PR's.
+    expect(calls.some((c) => c.args.includes('--no-git'))).toBe(false);
+    // The materialised tree is gone, and git no longer lists it.
+    expect(existsSync(seen?.cwd ?? dir)).toBe(false);
+    const worktrees = (await execa('git', ['worktree', 'list', '--porcelain'], { cwd: dir })).stdout;
+    expect(worktrees.match(/^worktree /gm)).toHaveLength(1);
+  });
+
+  it('a changed file missing from the checked-out tree is a coverage gap, not a note on a full run', async () => {
+    const dir = await repo('main', { 'a.py': 'a = 1\n' });
+    write(dir, 'a.py', 'a = 2\n');
+    write(dir, 'c.py', 'eval(c)\n');
+    await commitAll(dir);
+    rmSync(join(dir, 'c.py'));
+    const { r } = await review(dir, { base_ref: 'main' });
+    const res = r as unknown as ReviewResult;
+    expect(res.tools_run.find((t) => t.name === 'semgrep')?.reason).toMatch(/1 changed file\(s\) not in the working tree/);
+    expect(res.missing_tools).toContain('semgrep');
+    expect(res.coverage).toBe('partial');
+  });
+
+  it('when head is the checked-out HEAD, uncommitted files are scanned for secrets too', async () => {
+    const dir = await repo('main', { 'a.py': 'a = 1\n' });
+    write(dir, 'a.py', 'a = 2\n');
+    await commitAll(dir);
+    write(dir, '.env', 'TOKEN=x\n');
+    const { r } = await review(dir, { base_ref: 'main' });
+    const res = r as unknown as ReviewResult;
+    const noGit = calls.find((c) => c.command === 'gitleaks' && c.args.includes('--no-git'));
+    expect(noGit).toBeDefined();
+    expect(res.tools_run.find((t) => t.name === 'gitleaks-working-tree')?.status).toBe('ok');
   });
 });
 

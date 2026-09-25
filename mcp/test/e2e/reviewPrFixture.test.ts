@@ -100,6 +100,25 @@ describe('review_pr with real Semgrep', () => {
         .map((f) => f.file_path)
         .sort();
       expect(paths).toEqual([...changed].sort());
+
+      // The same branch reviewed while main is checked out: none of those
+      // files exists in the working tree, so they are read from a checkout of
+      // the head — and the same four findings come back.
+      await git(dir, 'checkout', '-q', 'main');
+      const again = await tool.handler(
+        { project_path: dir, base_ref: 'main', head_ref: 'feature', local_only: true, force: true },
+        plugin,
+      );
+      expect(again.ok, JSON.stringify(again)).toBe(true);
+      const res2 = again as unknown as { scan_id: string; tools_run: ToolRun[]; missing_tools: string[] };
+      expect(res2.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+      expect(res2.missing_tools).not.toContain('semgrep');
+      const paths2 = plugin.storage.findings
+        .listByScan(res2.scan_id)
+        .filter((f) => f.tool === 'semgrep')
+        .map((f) => f.file_path)
+        .sort();
+      expect(paths2).toEqual([...changed].sort());
     },
     SLOW,
   );
