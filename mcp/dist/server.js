@@ -37322,6 +37322,7 @@ ${BASELINE_NEGATION}
       return { updated: true, reason: "created" };
     }
     const original = readFileSync(gitignorePath, "utf8");
+    const eol = existingEol(original);
     const lines = original.split(/\r?\n/);
     const hasOldPattern = lines.some((l) => OLD_DIRECTORY_PATTERNS.has(l.trim()));
     const toDrop = /* @__PURE__ */ new Set();
@@ -37340,16 +37341,16 @@ ${BASELINE_NEGATION}
     const missing = [];
     if (!hasEntry) missing.push(ENTRY);
     if (!hasNegation) missing.push(BASELINE_NEGATION);
-    const trimmedBody = kept.join("\n").replace(/\n+$/, "");
-    const next = (trimmedBody.length > 0 ? `${trimmedBody}
-` : "") + (missing.length > 0 ? `${HEADER}
-${missing.join("\n")}
-` : "");
+    const trimmedBody = kept.join(eol).replace(/[\r\n]+$/, "");
+    const next = (trimmedBody.length > 0 ? `${trimmedBody}${eol}` : "") + (missing.length > 0 ? `${HEADER}${eol}${missing.join(eol)}${eol}` : "");
     writeFileSync(gitignorePath, next, "utf8");
     return { updated: true, reason: hasOldPattern ? "upgraded" : "added" };
   } catch {
     return { updated: false, reason: "unwritable" };
   }
+}
+function existingEol(content) {
+  return content.includes("\r\n") ? "\r\n" : "\n";
 }
 
 // src/platform/scriptsDir.ts
@@ -38921,6 +38922,7 @@ var SuppressionsRepo = class {
     this.listActiveForRuleStmt = db.prepare(`
       SELECT s.* FROM suppressions s
       WHERE (s.expires_at IS NULL OR s.expires_at > ?)
+        AND (s.project_path IS NULL OR s.project_path = ?)
         AND EXISTS (
           SELECT 1 FROM findings f
           WHERE (f.fingerprint = s.finding_fingerprint OR f.identity = s.finding_identity)
@@ -38941,6 +38943,7 @@ var SuppressionsRepo = class {
         AND finding_fingerprint IN (
           SELECT fingerprint FROM findings WHERE scan_id = ? AND identity IS NOT NULL
         )
+        AND (project_path IS NULL OR project_path = (SELECT project_path FROM scans WHERE id = ?))
     `);
   }
   insert(input) {
@@ -38972,19 +38975,21 @@ var SuppressionsRepo = class {
     return this.listForFingerprintStmt.all(fingerprint).map(rowToSuppression);
   }
   /**
-   * Active suppressions of findings reported by `tool` under `ruleId` —
-   * matched through the findings table on either key, since a suppression
-   * stores only the finding's fingerprint/identity. Newest first.
+   * Active suppressions of findings reported by `tool` under `ruleId`,
+   * scoped to `projectPath` (or to no project at all) — matched through the
+   * findings table on either key, since a suppression stores only the
+   * finding's fingerprint/identity. Newest first.
    */
-  listActiveForRule(tool47, ruleId, limit) {
-    return this.listActiveForRuleStmt.all(nowIso(), tool47, ruleId, limit).map(rowToSuppression);
+  listActiveForRule(tool47, ruleId, limit, projectPath) {
+    return this.listActiveForRuleStmt.all(nowIso(), projectPath, tool47, ruleId, limit).map(rowToSuppression);
   }
   /**
    * Give every identity-less suppression whose fingerprint `scanId` reported
-   * that finding's identity. Returns how many suppressions were upgraded.
+   * that finding's identity — restricted to a suppression scoped to no
+   * project or to `scanId`'s own project. Returns how many were upgraded.
    */
   adoptIdentities(scanId) {
-    return Number(this.adoptIdentitiesStmt.run(scanId, scanId).changes);
+    return Number(this.adoptIdentitiesStmt.run(scanId, scanId, scanId).changes);
   }
 };
 function rowToSuppression(row) {
@@ -53948,7 +53953,7 @@ async function handler17(input, ctx) {
       }
     }
   }
-  const priorSuppressions = finding4.rule_id ? ctx.storage.suppressions.listActiveForRule(finding4.tool, finding4.rule_id, 20).filter(
+  const priorSuppressions = finding4.rule_id ? ctx.storage.suppressions.listActiveForRule(finding4.tool, finding4.rule_id, 20, projectPath).filter(
     (s) => s.finding_fingerprint !== finding4.fingerprint && (finding4.identity === void 0 || s.finding_identity !== finding4.identity)
   ).slice(0, 10) : [];
   return {
@@ -54478,9 +54483,9 @@ function toggleScript() {
 </script>`;
 }
 var FOOTER = {
-  en: "generated locally &middot; no telemetry of its own; Semgrep\u2019s registry mode sends metrics &mdash; pass <code>local_only: true</code> to avoid it",
-  pt: "gerado localmente &middot; sem telemetria pr\xF3pria; o modo de registo do Semgrep envia m\xE9tricas &mdash; define <code>local_only: true</code> para o evitar",
-  es: "generado localmente &middot; sin telemetr\xEDa propia; el modo de registro de Semgrep env\xEDa m\xE9tricas &mdash; define <code>local_only: true</code> para evitarlo"
+  en: "generated locally &middot; dev-guardian sends no telemetry of its own; Semgrep\u2019s registry mode sends metrics &mdash; pass <code>local_only: true</code> to avoid it",
+  pt: "gerado localmente &middot; o dev-guardian n\xE3o envia telemetria pr\xF3pria; o modo de registo do Semgrep envia m\xE9tricas &mdash; define <code>local_only: true</code> para o evitar",
+  es: "generado localmente &middot; dev-guardian no env\xEDa telemetr\xEDa propia; el modo de registro de Semgrep env\xEDa m\xE9tricas &mdash; define <code>local_only: true</code> para evitarlo"
 };
 function renderHtmlDocument(doc) {
   const lang = doc.lang ?? "en";
