@@ -24,12 +24,13 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { z } from 'zod';
+import { budgetViolationFindings, evaluateQualityBudgets, loadBudgets, type QualityBudgets } from '../budgets/budgets.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { eslintFatalErrors, eslintParser } from '../runners/scannerParsers/eslint.js';
-import { parseInputAsJson, type ScannerParser } from '../runners/scannerParsers/index.js';
+import { asArray, getNumber, getProp, parseInputAsJson, type ScannerParser } from '../runners/scannerParsers/index.js';
 import { jscpdParser } from '../runners/scannerParsers/jscpd.js';
 import { radonErrors, radonParser } from '../runners/scannerParsers/radon.js';
 import { ruffParser } from '../runners/scannerParsers/ruff.js';
@@ -86,7 +87,8 @@ registerToolModule(
       'npx); staticcheck when there is a go.mod. Findings are classified duplicate / complexity / smell / ' +
       'naming; `categories` narrows the response to those classes while every finding is still recorded ' +
       '(`category_filter` counts what was withheld). An applicable analyser that is missing or fails is ' +
-      'reported as such and coverage is partial, never full.',
+      'reported as such and coverage is partial, never full. Also reads .guardian/budgets.yml, when ' +
+      'present, and reports an exceeded duplication % or complexity budget as a finding.',
     scan_type: 'quality',
     category: 'quality',
     supportsAutoFix: false,
@@ -114,6 +116,10 @@ registerToolModule(
       }
       if (!out.cancelled && hasEslintConfig(ctx.projectPath)) await runEslint(ctx, reportDir, out);
       if (!out.cancelled && existsSync(join(ctx.projectPath, 'go.mod'))) await runStaticcheck(ctx, out);
+      // Separated step, deliberately: reads the jscpd/radon reports jscpd and
+      // radon already wrote above (never re-runs a scanner), and is the only
+      // part of this file that knows about .guardian/budgets.yml at all.
+      if (!out.cancelled) runBudgets(ctx.projectPath, reportDir, out);
 
       return {
         outcome: out.cancelled ? 'cancelled' : 'completed',
@@ -125,6 +131,91 @@ registerToolModule(
     },
   }),
 );
+
+/** Wraps a precomputed `Finding[]` as a `ScannerParser` — no parsing left to do, but this is what lets it flow through the same `parser_inputs` pipeline as every other analyser's output. */
+const budgetsPassthroughParser: ScannerParser = {
+  name: 'budgets',
+  parse(input: unknown) {
+    return { findings: input as Finding[], cves: [] };
+  },
+};
+
+/**
+ * `.guardian/budgets.yml`'s `quality` section (duplication %, complexity),
+ * evaluated against THIS scan's own jscpd/radon reports — re-read from the
+ * files `runJscpd`/`runRadon` already wrote above, never a second scanner
+ * run. A clearly separate step on purpose (task 15 brief): everything else
+ * in this file is "run an analyser, parse its report"; this is "read two of
+ * those reports again and compare them to a budget".
+ *
+ * No `.guardian/budgets.yml` at all is not a gap — nothing was asked for, so
+ * nothing is reported (no `tools_run` entry). A budgets file that fails to
+ * parse IS reported, `failed`, with why: a typo'd budget must not silently
+ * stop firing.
+ */
+function runBudgets(projectPath: string, reportDir: string, out: Collected): void {
+  const loaded = loadBudgets(projectPath);
+  if (loaded.kind === 'none') return;
+  if (loaded.kind === 'invalid') {
+    out.tools_run.push({ name: 'budgets', status: 'failed', reason: `${loaded.path}: ${loaded.error}` });
+    return;
+  }
+  const budgets = loaded.budgets.quality;
+  if (!budgets) return;
+
+  const measured = measureQuality(reportDir);
+  const violations = evaluateQualityBudgets(measured, budgets);
+  const findings = budgetViolationFindings(violations, relative(projectPath, loaded.path));
+  if (findings.length > 0) out.parser_inputs.push({ parser: budgetsPassthroughParser, input: findings });
+  out.tools_run.push({
+    name: 'budgets',
+    status: 'ok',
+    ...(findings.length > 0 ? { reason: `${findings.length} violation(s) — ${loaded.path}` } : {}),
+  });
+}
+
+/** jscpd's project-wide duplication %, and radon's highest function/method complexity — read straight back out of the JSON reports both scanners already wrote for this scan. Either is absent when its scanner did not run (radon: no `.py` files) — `evaluateQualityBudgets` skips a metric it has no measurement for. */
+function measureQuality(reportDir: string): Partial<Record<keyof QualityBudgets, number>> {
+  const measured: Partial<Record<keyof QualityBudgets, number>> = {};
+
+  const dup = parseInputAsJson(readJsonSafe(join(reportDir, 'dup', 'jscpd-report.json')));
+  const total = getProp(dup, 'statistics') ? getProp(getProp(dup, 'statistics'), 'total') : undefined;
+  const reportedPct = getNumber(total, 'percentage');
+  if (reportedPct !== undefined) {
+    measured.duplication_pct = reportedPct;
+  } else {
+    // The fixture-shaped jscpd report this ships with carries no
+    // `percentage` field (only the counts it is computed from); real jscpd
+    // output normally has one, but fall back to computing it rather than
+    // silently never measuring duplication at all.
+    const lines = getNumber(total, 'lines');
+    const duplicatedLines = getNumber(total, 'duplicatedLines');
+    if (lines !== undefined && lines > 0 && duplicatedLines !== undefined) {
+      measured.duplication_pct = (duplicatedLines / lines) * 100;
+    }
+  }
+
+  const radon = parseInputAsJson(readJsonSafe(join(reportDir, 'radon-cc.json')));
+  const maxComplexity = highestComplexity(radon);
+  if (maxComplexity !== null) measured.complexity = maxComplexity;
+
+  return measured;
+}
+
+/** The highest `complexity` among radon's function/method blocks (mirrors radonParser's own filter, minus the per-block Finding shaping). */
+function highestComplexity(root: unknown): number | null {
+  if (root === null || typeof root !== 'object' || Array.isArray(root)) return null;
+  let max: number | null = null;
+  for (const blocks of Object.values(root as Record<string, unknown>)) {
+    for (const block of asArray(blocks)) {
+      const type = getProp(block, 'type');
+      if (type !== 'function' && type !== 'method') continue;
+      const complexity = getNumber(block, 'complexity');
+      if (complexity !== undefined && (max === null || complexity > max)) max = complexity;
+    }
+  }
+  return max;
+}
 
 /** The analyser is not on PATH: a named gap, never silence. */
 function notInstalled(out: Collected, name: string, reason = 'not_installed'): void {
@@ -335,6 +426,15 @@ export function qualityCategoryOf(f: Finding): QualityCategory {
     const code = f.rule_id ?? '';
     if (/^C9\d/.test(code)) return 'complexity';
     if (/^N\d/.test(code)) return 'naming';
+  }
+  // A budget violation (subcategory 'budget', shared with perf_check's own
+  // budget findings — see budgets/budgets.ts) names which budget it is in
+  // `rule_id`: "quality.duplication_pct" / "quality.complexity". Classified
+  // by that, not left in the 'smell' catch-all, so `categories: [duplicate]`
+  // shows a duplication-budget breach alongside jscpd's own findings.
+  if (f.tool === 'budgets') {
+    if (f.rule_id === 'quality.duplication_pct') return 'duplicate';
+    if (f.rule_id === 'quality.complexity') return 'complexity';
   }
   return 'smell';
 }

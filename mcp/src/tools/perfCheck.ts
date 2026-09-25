@@ -9,17 +9,23 @@
  * TTFB) plus the 5 high-level scores (performance, a11y, best-practices,
  * SEO, PWA). k6 summary surfaces request count, error rate, p95/p99
  * latency, plus the names of every configured threshold.
+ *
+ * A Lighthouse run additionally reads `.guardian/budgets.yml` (when present)
+ * and reports any Core Web Vital / bundle-size budget it exceeds as a
+ * Finding in `findings` — see `budgets/budgets.ts`. Not run for k6: none of
+ * LCP/INP/CLS/TBT/bundle-size describe a load test's own metrics.
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
+import { budgetViolationFindings, evaluatePerfBudgets, loadBudgets, type PerfBudgets } from '../budgets/budgets.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
-import type { DomainError, ToolResult } from '../types.js';
+import type { DomainError, Finding, ToolResult } from '../types.js';
 import { ensureReportDir, scannerAvailable } from './scanHelpers.js';
 import {
   asArray,
@@ -52,7 +58,9 @@ const tool: ToolModule = {
   description:
     'Run Lighthouse against target_url, or k6 against k6_script_path. Returns parsed metrics ' +
     '(Core Web Vitals for Lighthouse; request count + p95/p99 + thresholds for k6) and the ' +
-    'absolute path to the raw JSON report.',
+    'absolute path to the raw JSON report. A Lighthouse run also reads .guardian/budgets.yml, when ' +
+    'present, and reports any exceeded perf budget (LCP/INP/CLS/TBT/bundle size) as a Finding in ' +
+    '`findings`.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -165,16 +173,50 @@ async function runLighthouse(
   }
 
   const summary = summariseLighthouse(parsed);
+  const findings = evaluateLighthouseBudgets(opts.projectPath, summary.core_web_vitals);
   return {
     ok: true,
     tool: 'lighthouse',
     url: opts.url,
     report_path: outFile,
     summary,
+    findings,
   };
 }
 
-function summariseLighthouse(root: unknown): Record<string, unknown> {
+/**
+ * `.guardian/budgets.yml`'s `perf` section, evaluated against this run's
+ * Core Web Vitals. Never fails the scan: a missing or invalid budgets file
+ * just means no findings (`loadBudgets` already distinguishes the two —
+ * `kind: 'none'` vs `'invalid'` — but a probe like this one degrading the
+ * whole perf check over a typo'd YAML file would be worse than saying
+ * nothing about budgets for this run).
+ */
+function evaluateLighthouseBudgets(
+  projectPath: string,
+  cwv: Record<string, number | null>,
+): Finding[] {
+  const loaded = loadBudgets(projectPath);
+  if (loaded.kind !== 'loaded' || !loaded.budgets.perf) return [];
+
+  const totalByteWeight = cwv['total-byte-weight'];
+  const measured: PerfBudgets = {
+    lcp_ms: cwv['largest-contentful-paint'] ?? undefined,
+    inp_ms: cwv['interaction-to-next-paint'] ?? undefined,
+    cls: cwv['cumulative-layout-shift'] ?? undefined,
+    tbt_ms: cwv['total-blocking-time'] ?? undefined,
+    bundle_size_kb: totalByteWeight !== null && totalByteWeight !== undefined ? totalByteWeight / 1024 : undefined,
+  };
+  const violations = evaluatePerfBudgets(measured, loaded.budgets.perf);
+  return budgetViolationFindings(violations, relative(projectPath, loaded.path));
+}
+
+interface LighthouseSummary {
+  scores: Record<string, number | null>;
+  core_web_vitals: Record<string, number | null>;
+}
+
+function summariseLighthouse(root: unknown): LighthouseSummary {
   const categories = getProp(root, 'categories');
   const scores: Record<string, number | null> = {};
   if (categories && typeof categories === 'object') {
@@ -194,6 +236,10 @@ function summariseLighthouse(root: unknown): Record<string, unknown> {
     'first-contentful-paint',
     'speed-index',
     'server-response-time',
+    // Total page weight in bytes — the closest thing Lighthouse measures to
+    // "bundle size" without a bundler-stats integration; see
+    // evaluateLighthouseBudgets, which converts it to bundle_size_kb.
+    'total-byte-weight',
   ]) {
     const audit = getProp(audits, key);
     const numeric = getNumber(audit, 'numericValue');

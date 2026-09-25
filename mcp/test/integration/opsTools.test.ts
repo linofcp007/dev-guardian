@@ -555,6 +555,84 @@ describe('perf_check', () => {
     expect(r.ok).toBe(false);
     expect(r.error.code).toBe('missing_scanner');
   });
+
+  // --- task 15: perf_check reads .guardian/budgets.yml ---------------------
+
+  function mockLighthouseRun(audits: Record<string, { numericValue: number }>): void {
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'lighthouse' ? '/fake/bin/lighthouse' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const outFlag = opts.args?.find((a) => a.startsWith('--output-path='));
+      const outFile = outFlag?.replace('--output-path=', '');
+      if (outFile) {
+        writeFileSync(outFile, JSON.stringify({ categories: {}, audits }), 'utf8');
+      }
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+  }
+
+  it('reports a finding when a Core Web Vital exceeds .guardian/budgets.yml', async () => {
+    const project = tempProject();
+    mkdirSync(join(project, '.guardian'), { recursive: true });
+    writeFileSync(join(project, '.guardian', 'budgets.yml'), 'perf:\n  lcp_ms: 2500\n', 'utf8');
+    const plugin = makePlugin(project);
+    mockLighthouseRun({ 'largest-contentful-paint': { numericValue: 4000 } });
+
+    const tool = getTool('perf_check');
+    const r = (await tool.handler(
+      { project_path: project, target_url: 'https://example.com' },
+      plugin,
+    )) as { ok: true; findings: { rule_id: string; category: string }[] };
+    expect(r.ok).toBe(true);
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0]).toMatchObject({ rule_id: 'perf.lcp_ms', category: 'performance' });
+  });
+
+  it('reports no findings when every measured vital is within budget', async () => {
+    const project = tempProject();
+    mkdirSync(join(project, '.guardian'), { recursive: true });
+    writeFileSync(join(project, '.guardian', 'budgets.yml'), 'perf:\n  lcp_ms: 2500\n', 'utf8');
+    const plugin = makePlugin(project);
+    mockLighthouseRun({ 'largest-contentful-paint': { numericValue: 1200 } });
+
+    const tool = getTool('perf_check');
+    const r = (await tool.handler(
+      { project_path: project, target_url: 'https://example.com' },
+      plugin,
+    )) as { ok: true; findings: unknown[] };
+    expect(r.ok).toBe(true);
+    expect(r.findings).toEqual([]);
+  });
+
+  it('reports no findings (and does not fail) when there is no budgets file at all', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    mockLighthouseRun({ 'largest-contentful-paint': { numericValue: 999999 } });
+
+    const tool = getTool('perf_check');
+    const r = (await tool.handler(
+      { project_path: project, target_url: 'https://example.com' },
+      plugin,
+    )) as { ok: true; findings: unknown[] };
+    expect(r.ok).toBe(true);
+    expect(r.findings).toEqual([]);
+  });
+
+  it('derives bundle_size_kb from the total-byte-weight audit', async () => {
+    const project = tempProject();
+    mkdirSync(join(project, '.guardian'), { recursive: true });
+    writeFileSync(join(project, '.guardian', 'budgets.yml'), 'perf:\n  bundle_size_kb: 500\n', 'utf8');
+    const plugin = makePlugin(project);
+    // 600 KB, over the 500 KB budget.
+    mockLighthouseRun({ 'total-byte-weight': { numericValue: 600 * 1024 } });
+
+    const tool = getTool('perf_check');
+    const r = (await tool.handler(
+      { project_path: project, target_url: 'https://example.com' },
+      plugin,
+    )) as { ok: true; findings: { rule_id: string }[] };
+    expect(r.ok).toBe(true);
+    expect(r.findings.some((f) => f.rule_id === 'perf.bundle_size_kb')).toBe(true);
+  });
 });
 
 // silence unused-import warnings
