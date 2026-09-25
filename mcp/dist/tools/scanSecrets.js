@@ -15,9 +15,16 @@
  * and every ref is resolved to its commit id before gitleaks sees it — the
  * resolved form is also what the cache key holds, so a moved branch is a new
  * scan rather than a stale hit.
+ *
+ * `scope` (`platform/scope.ts`) is the general form of the same question —
+ * `/guardian-prepush`, `-branch`, `-since`, `-diff`: the history pass reads
+ * the commits `scope.diff.base` / `scope.since` name, and the files pass
+ * reads exactly the files `scope.paths` or an uncommitted/staged diff names.
+ * `log_opts` and `scope` together are refused: two answers to one question.
  */
 import { z } from 'zod';
 import { resolveProjectPath, InvalidProjectPathError } from '../platform/projectPath.js';
+import { ScanScopeInput } from '../platform/scope.js';
 import { historyState, repoState } from '../runners/git.js';
 import { LogOptsError, resolveLogOpts, runGitleaksScan } from '../runners/gitleaksScan.js';
 import { Force, ProjectPath } from '../schemas.js';
@@ -32,12 +39,15 @@ const scanSecrets = makeScanTool({
         'repository (skipping node_modules, vendor, .git and build output). Each finding says where it was ' +
         'found: history (with the commit), working_tree or directory. A history pass that scanned 0 commits ' +
         'is reported as failed, never as clean. Always runs with --redact so the raw secret never reaches ' +
-        'MCP output.',
+        'MCP output. Pass scope to scan only some files or commits: paths and uncommitted/staged diffs are ' +
+        'scanned as files, diff.base and since as exactly those commits. .guardianignore paths are ' +
+        'filtered out.',
     scan_type: 'secrets',
     // History is read beyond the working tree: HEAD and every ref join the key.
     cacheState: (_input, { projectPath }) => historyState(projectPath),
     category: 'security',
     supportsAutoFix: false,
+    supportsScope: true,
     inputSchema: {
         project_path: ProjectPath,
         log_opts: z
@@ -46,18 +56,27 @@ const scanSecrets = makeScanTool({
             .optional()
             .describe('Narrow the history pass. Only --all, <ref>..<ref> (or ...) and --since=<date> are accepted, ' +
             'space-separated; every ref must resolve to a commit. Example: "--since=2026-01-01" or ' +
-            '"v1.2.0..HEAD". The uncommitted-files pass always runs.'),
+            '"v1.2.0..HEAD". The uncommitted-files pass always runs. Not with scope.'),
         force: Force,
+        scope: ScanScopeInput,
     },
     invoke: async (input, ctx) => {
         const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'secrets');
         // Validated by the handler below; re-checked so no other caller of
         // `invoke` can pass an unvalidated string to `git log`.
         const logOpts = input.log_opts !== undefined ? await resolveLogOpts(ctx.projectPath, input.log_opts) : undefined;
+        let scope = logOpts !== undefined ? { kind: 'project', logOpts } : { kind: 'project' };
+        if (ctx.scope !== null) {
+            const h = ctx.scope.history;
+            // A `--since=` built by the scope still goes through the same
+            // validation as a caller's log_opts before gitleaks hands it to git.
+            const history = h === null ? null : 'base' in h ? h : { logOpts: (await resolveLogOpts(ctx.projectPath, h.logOpts)) ?? h.logOpts };
+            scope = { kind: 'scoped', history, files: ctx.scope.contentFiles };
+        }
         const scan = await runGitleaksScan({
             projectPath: ctx.projectPath,
             reportDir,
-            scope: logOpts !== undefined ? { kind: 'project', logOpts } : { kind: 'project' },
+            scope,
             env: ctx.scriptEnv,
             signal: ctx.signal,
             onLog: ctx.onLog,
@@ -75,6 +94,17 @@ const tool = {
     ...scanSecrets,
     handler: async (input, plugin, callMeta) => {
         const raw = input.log_opts;
+        const scope = input.scope;
+        if (scope !== undefined && scope !== null && typeof raw === 'string' && raw.trim().length > 0) {
+            return {
+                ok: false,
+                error: {
+                    code: 'unsupported_target',
+                    message: 'log_opts and scope both narrow what is scanned — pass one: scope.since or scope.diff.base ' +
+                        'for commits, scope.paths or scope.diff for files.',
+                },
+            };
+        }
         if (typeof raw !== 'string' || raw.trim().length === 0) {
             const { log_opts: _drop, ...rest } = input;
             return scanSecrets.handler(rest, plugin, callMeta);
