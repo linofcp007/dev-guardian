@@ -410,6 +410,103 @@ describe('deps_audit: the npm auditor is recorded as `npm`, its findings say `np
   });
 });
 
+describe('a Trivy ecosystem gap (`trivy:<ecosystem>`) vetoes that ecosystem only', () => {
+  // scan_deps / deps_audit write `trivy:dotnet` to missing_tools when Trivy
+  // ran ok but produced no NuGet Result for a root .csproj/.sln — e.g. its
+  // packages.lock.json was deleted. A NuGet CVE the older run found in that
+  // lock file was then not looked for, so it is not resolved; an npm CVE
+  // from package-lock.json WAS looked for, so its absence is a resolution.
+  const NUGET = 'u'.repeat(64);
+  const NPM = 'p'.repeat(64);
+  const CONFIG = 'k'.repeat(64);
+
+  function lockFileGone(type: 'deps' | 'deps_audit'): { s: Seeded; p: string } {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-trivy-eco-');
+    seedScan(s, {
+      id: 'a', type, project: p,
+      tools_run: [{ name: 'trivy', status: 'ok' }],
+      findings: [
+        { fp: NUGET, tool: 'trivy', subcategory: 'cve', file: 'src/Api/packages.lock.json', severity: 'high' },
+        { fp: NPM, tool: 'trivy', subcategory: 'cve', file: 'package-lock.json', severity: 'high' },
+      ],
+    });
+    seedScan(s, {
+      id: 'b', type, project: p,
+      tools_run: [{ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' }],
+      missing_tools: ['trivy:dotnet'],
+    });
+    return { s, p };
+  }
+
+  it.each(['deps', 'deps_audit'] as const)('%s: the NuGet CVE is not re-measured; the npm CVE is resolved', async (type) => {
+    const { s, p } = lockFileGone(type);
+    const r = okResult<DiffOut & { resolved_findings: Array<{ fingerprint: string }> }>(
+      await tool('diff_scans').handler({ project_path: p, scan_type: type }, s.plugin),
+    );
+    expect(r.summary).toMatchObject({ resolved: 1, not_remeasured: 1 });
+    expect(r.not_remeasured_findings.map((f) => f.fingerprint)).toEqual([NUGET]);
+    expect(r.resolved_findings.map((f) => f.fingerprint)).toEqual([NPM]);
+    expect(r.not_measured).toEqual(['trivy:dotnet']);
+  });
+
+  it("an audit whose security_scan_full sub-scan carries the gap: the IaC misconfiguration is not vetoed by it", async () => {
+    // An audit is judged by its sub-scan's merged bookkeeping, where scan_deps'
+    // `trivy:dotnet` sits beside scan_iac's `trivy-config`. Before the
+    // ecosystem entries, `trivy:dotnet` fell back to the `trivy` entry's
+    // not-ok keys — every Trivy key, misconfigurations included.
+    const s = freshPlugin();
+    const p = projectDir('runcmp-trivy-eco-audit-');
+    const findings: SeedFinding[] = [
+      { fp: NUGET, tool: 'trivy', subcategory: 'cve', file: 'packages.lock.json', severity: 'high' },
+      { fp: CONFIG, tool: 'trivy', subcategory: 'misconfiguration', file: 'main.tf', severity: 'high' },
+    ];
+    seedScan(s, {
+      id: 'full1', type: 'security_full', project: p,
+      tools_run: [{ name: 'trivy', status: 'ok' }, { name: 'trivy-config', status: 'ok' }],
+      findings,
+    });
+    seedScan(s, {
+      id: 'audit1', type: 'audit', project: p,
+      tools_run: [{ name: 'security_scan_full', status: 'ok' }],
+      findings,
+      meta: { sub_scan_ids: { security_scan_full: 'full1' } },
+    });
+    seedScan(s, {
+      id: 'full2', type: 'security_full', project: p,
+      tools_run: [{ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' }, { name: 'trivy-config', status: 'ok' }],
+      missing_tools: ['trivy:dotnet'],
+    });
+    seedScan(s, {
+      id: 'audit2', type: 'audit', project: p,
+      tools_run: [{ name: 'security_scan_full', status: 'ok' }],
+      meta: { sub_scan_ids: { security_scan_full: 'full2' } },
+    });
+    const r = okResult<DiffOut & { resolved_findings: Array<{ fingerprint: string }> }>(
+      await tool('diff_scans').handler({ from_scan_id: 'audit1', to_scan_id: 'audit2' }, s.plugin),
+    );
+    expect(r.not_remeasured_findings.map((f) => f.fingerprint)).toEqual([NUGET]);
+    expect(r.resolved_findings.map((f) => f.fingerprint)).toEqual([CONFIG]);
+    expect(r.not_measured).toEqual(['trivy:dotnet']);
+  });
+
+  it('control: without the gap, both CVEs are resolved', async () => {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-trivy-eco-ctl-');
+    seedScan(s, {
+      id: 'a', type: 'deps', project: p,
+      tools_run: [{ name: 'trivy', status: 'ok' }],
+      findings: [
+        { fp: NUGET, tool: 'trivy', subcategory: 'cve', file: 'packages.lock.json', severity: 'high' },
+        { fp: NPM, tool: 'trivy', subcategory: 'cve', file: 'package-lock.json', severity: 'high' },
+      ],
+    });
+    seedScan(s, { id: 'b', type: 'deps', project: p, tools_run: [{ name: 'trivy', status: 'ok' }] });
+    const r = okResult<DiffOut>(await tool('diff_scans').handler({ project_path: p, scan_type: 'deps' }, s.plugin));
+    expect(r.summary).toMatchObject({ resolved: 2, not_remeasured: 0 });
+  });
+});
+
 describe('scan_dast: the engine is recorded as `guardian-dast`, its findings say `dast`', () => {
   function dast(second: ToolRun[], missing: string[] = []): { s: Seeded; p: string } {
     const s = freshPlugin();

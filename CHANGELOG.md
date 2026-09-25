@@ -29,6 +29,25 @@ version bump.
 
 ### Fixed
 
+- `dev-guardian scan` / `baseline update` exited 2 ("INCOMPLETE SCAN —
+  security_scan_full: trivy not installed") on a clean project with Trivy
+  installed. Two defects met there. `scan_deps`' manifest-coverage check
+  counted a `package.json` that declares no dependency as a manifest Trivy
+  missed — Trivy 0.69.3 reports nothing for one, lock file or not, so the
+  "gap" could never be closed; it is no longer a gap (npm only: a `.csproj`
+  draws packages from outside itself). And the CI gate worded every
+  `missing_tools` name without an `ok` run of its own as "not installed":
+  Trivy skipped for want of a readable manifest now reads
+  `trivy skipped (no_supported_manifest)`, an ecosystem gap reads
+  `trivy ran with reduced coverage — dotnet not covered (…)`, and a scanner
+  that failed is reported once, as failed. Coverage and exit codes are
+  unchanged: a real gap is still `partial` and exit 2.
+- Scan comparisons: a `trivy:<ecosystem>` gap now leaves only that
+  ecosystem's Trivy findings (keyed by the lock file they came from) not
+  re-measured. It used to fall back to every Trivy finding, IaC
+  misconfigurations included. `pip-audit` and `dotnet` (whose findings say
+  `dotnet-list-package`) and `agent-audit` are placed in the bookkeeping
+  table, so a failed one no longer resolves its findings.
 - `.mcp.json` used `${CLAUDE_PROJECT_DIR}`, which Claude Code does not expand
   there (only `${CLAUDE_PLUGIN_ROOT}`, used by `plugin.json`, is) — the
   literal placeholder string became part of the path and the server failed
