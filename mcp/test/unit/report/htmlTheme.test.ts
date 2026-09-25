@@ -68,17 +68,21 @@ describe('renderHtmlDocument', () => {
     // The bare "no telemetry" this footer used to print was simply false.
     const pt = renderHtmlDocument({ title: 'X', sections: [], lang: 'pt' });
     expect(pt).toContain('<html lang="pt">');
+    expect(pt).toContain('dev-guardian');
     expect(pt).toContain('telemetria própria');
     expect(pt).toContain('local_only');
     expect(pt).not.toMatch(/&middot;\s*sem telemetria\b(?!\s*própria)/);
 
     const es = renderHtmlDocument({ title: 'X', sections: [], lang: 'es' });
+    expect(es).toContain('dev-guardian');
     expect(es).toContain('telemetría propia');
     expect(es).toContain('local_only');
     expect(es).not.toMatch(/&middot;\s*sin telemetría\b(?!\s*propia)/);
 
     expect(doc).toContain('<html lang="en">');
-    expect(doc).toContain('no telemetry of its own');
+    // Fix round 2: "no telemetry of its own" had no subject — must NAME
+    // dev-guardian, exactly like Task 5's wording, in every language.
+    expect(doc).toContain('dev-guardian sends no telemetry of its own');
     expect(doc).toContain('local_only');
     expect(doc).not.toMatch(/&middot;\s*no telemetry\b(?!\s*of its own)/);
   });

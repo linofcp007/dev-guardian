@@ -4,8 +4,10 @@
  * One shell, two consumers (the scan `report_export` HTML and the stakeholder
  * `/guardian-report` narrative) so every report looks identical. Self-contained:
  * inline CSS + a ~15-line inline theme toggle, NO external assets (no web fonts,
- * no <link>, no network) so it honours the "local · no telemetry" promise and
- * opens offline in any browser.
+ * no <link>, no network) so it honours dev-guardian's own telemetry posture —
+ * see `FOOTER` below for the qualified claim (dev-guardian itself sends none;
+ * Semgrep's registry mode does, unless `local_only` is set) — and opens
+ * offline in any browser.
  *
  * Theming mirrors the website (src/assets/css/styles.css): dark-first with a
  * `[data-theme]` override. Default follows the OS via prefers-color-scheme;
@@ -180,16 +182,19 @@ export type Lang = 'en' | 'pt' | 'es';
 // Task 5's wording (hostsetup/rulesTemplate.ts): dev-guardian itself sends
 // nothing, but Semgrep's registry mode does unless local_only is set — the
 // bare "no telemetry" this footer printed before was simply false for that
-// mode. `local_only` is not wrapped in markdown backticks here: this string
-// is inserted straight into raw HTML (see renderHtmlDocument below), not
-// through the Markdown converter, so backticks would render literally.
+// mode. NAMES dev-guardian as the subject in every language (fix round 2:
+// "no telemetry of its own" said whose? of nothing — a dangling possessive
+// with no noun for "its" to refer to). `local_only` is not wrapped in
+// markdown backticks here: this string is inserted straight into raw HTML
+// (see renderHtmlDocument below), not through the Markdown converter, so
+// backticks would render literally.
 const FOOTER: Record<Lang, string> = {
-  en: 'generated locally &middot; no telemetry of its own; Semgrep’s registry mode sends ' +
-    'metrics &mdash; pass <code>local_only: true</code> to avoid it',
-  pt: 'gerado localmente &middot; sem telemetria própria; o modo de registo do Semgrep envia ' +
-    'métricas &mdash; define <code>local_only: true</code> para o evitar',
-  es: 'generado localmente &middot; sin telemetría propia; el modo de registro de Semgrep envía ' +
-    'métricas &mdash; define <code>local_only: true</code> para evitarlo',
+  en: 'generated locally &middot; dev-guardian sends no telemetry of its own; Semgrep’s registry ' +
+    'mode sends metrics &mdash; pass <code>local_only: true</code> to avoid it',
+  pt: 'gerado localmente &middot; o dev-guardian não envia telemetria própria; o modo de registo ' +
+    'do Semgrep envia métricas &mdash; define <code>local_only: true</code> para o evitar',
+  es: 'generado localmente &middot; dev-guardian no envía telemetría propia; el modo de registro ' +
+    'de Semgrep envía métricas &mdash; define <code>local_only: true</code> para evitarlo',
 };
 
 export interface HtmlDocument {
