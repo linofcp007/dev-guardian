@@ -116,7 +116,7 @@ import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath, SeverityMin } from '../schemas.js';
 import type { DomainError, Finding, Severity, ToolResult } from '../types.js';
 import { isGitRepo } from './gitState.js';
-import { registerToolModule, TOOLS, type ToolModule } from './index.js';
+import { registerToolModule, TOOLS, type ToolCallMeta, type ToolModule } from './index.js';
 
 const DEFAULT_SOURCES: readonly FixSource[] = ['deps', 'semgrep'];
 const DEFAULT_SEVERITY_MIN: Severity = 'high';
@@ -233,7 +233,7 @@ const tool: ToolModule = {
           'worktree, and runs both differentials, but never leaves the machine.',
       ),
   },
-  handler: async (input, ctx) => handler(input, ctx),
+  handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };
 
 registerToolModule(tool);
@@ -241,6 +241,7 @@ registerToolModule(tool);
 async function handler(
   input: Record<string, unknown>,
   ctx: PluginContext,
+  callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
   const inp = input as {
     project_path?: string;
@@ -269,7 +270,9 @@ async function handler(
   const apply = inp.apply === true;
 
   const allFindings = ctx.storage.findings.listOpenForProject(projectPath);
-  const upgradeSteps = sources.includes('deps') ? await fetchUpgradeSteps(projectPath, ctx) : [];
+  const upgradeSteps = sources.includes('deps')
+    ? await fetchUpgradeSteps(projectPath, ctx, callMeta)
+    : [];
 
   const groups = buildGroups({ findings: allFindings, upgradeSteps, sources, severityMin });
   // Every open finding this run did NOT turn into a candidate, and why —
@@ -284,7 +287,7 @@ async function handler(
   const results: GroupResult[] = [];
   for (const group of selected) {
     try {
-      results.push(await processGroup({ group, allFindings, projectPath, apply, ctx }));
+      results.push(await processGroup({ group, allFindings, projectPath, apply, ctx, callMeta }));
     } catch (e) {
       // Every ANTICIPATED failure mode (worktree creation, apply, re-scan,
       // push, gh pr create) is reported by processGroup as a normal return,
@@ -336,10 +339,14 @@ async function handler(
  * nothing to group, which `buildGroups` already reports honestly (no group
  * silently invents a fix).
  */
-async function fetchUpgradeSteps(projectPath: string, ctx: PluginContext): Promise<UpgradeStep[]> {
+async function fetchUpgradeSteps(
+  projectPath: string,
+  ctx: PluginContext,
+  callMeta: ToolCallMeta | undefined,
+): Promise<UpgradeStep[]> {
   const depsPlanTool = TOOLS.find((t) => t.name === 'deps_update_plan');
   if (depsPlanTool === undefined) return [];
-  const result = await depsPlanTool.handler({ project_path: projectPath }, ctx);
+  const result = await depsPlanTool.handler({ project_path: projectPath }, ctx, callMeta);
   if (!result.ok) return [];
   const r = result as unknown as { plan?: unknown };
   return Array.isArray(r.plan) ? (r.plan as UpgradeStep[]) : [];
@@ -351,8 +358,10 @@ async function processGroup(opts: {
   projectPath: string;
   apply: boolean;
   ctx: PluginContext;
+  /** The host's, handed to the re-scan so cancelling this call aborts it. */
+  callMeta: ToolCallMeta | undefined;
 }): Promise<GroupResult> {
-  const { group, allFindings, projectPath, apply, ctx } = opts;
+  const { group, allFindings, projectPath, apply, ctx, callMeta } = opts;
   const branch = branchName(group.source, group.key, group.hash);
   const targets = group.candidates.flatMap((c) => c.fingerprints);
   const findings = findingsForGroup(allFindings, group);
@@ -423,7 +432,7 @@ async function processGroup(opts: {
       };
     }
 
-    const rescan = await rescanAfterFix(group, findings, worktree.path, ctx);
+    const rescan = await rescanAfterFix(group, findings, worktree.path, ctx, callMeta);
     if (!rescan.ok) {
       return {
         ...base,
@@ -596,6 +605,7 @@ async function rescanAfterFix(
   targetFindings: readonly Finding[],
   worktreePath: string,
   ctx: PluginContext,
+  callMeta: ToolCallMeta | undefined,
 ): Promise<{ ok: true; scanId: string; findings: Finding[] } | { ok: false; reason: string }> {
   const toolName = group.source === 'semgrep' ? 'scan_sast' : 'deps_audit';
 
@@ -604,7 +614,7 @@ async function rescanAfterFix(
     return { ok: false, reason: `the '${toolName}' tool is not registered` };
   }
 
-  const result = await subTool.handler({ project_path: worktreePath }, ctx);
+  const result = await subTool.handler({ project_path: worktreePath }, ctx, callMeta);
   if (!result.ok) {
     return { ok: false, reason: `${toolName} failed: ${result.error.message}` };
   }

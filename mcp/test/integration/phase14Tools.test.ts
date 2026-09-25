@@ -484,7 +484,29 @@ describe('report_export', () => {
     expect(r.format).toBe('markdown');
     expect(r.file_path).toMatch(/report\.md$/);
   });
+
+  it('includes the CVEs of a deps_audit scan, which has its own scan type', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedDepsAuditWithCve(plugin, 'DA');
+
+    const r = (await getTool('report_export').handler(
+      { project_path: project, scan_id: 'DA' },
+      plugin,
+    )) as { ok: true; cves_count: number; file_path: string };
+    expect(r.cves_count).toBe(1);
+    expect(readFileSync(r.file_path, 'utf8')).toContain('CVE-2024-DA');
+  });
 });
+
+/** A completed `deps_audit` scan (its own scan type) that saw one CVE. */
+function seedDepsAuditWithCve(plugin: PluginContext, scanId: string): void {
+  plugin.storage.scans.insert({ scan_id: scanId, scan_type: 'deps_audit', project_path: '/p', tree_hash: 'h' });
+  plugin.storage.cves.upsert({
+    cve_id: `CVE-2024-${scanId}`, package_name: 'lodash', severity: 'high', scan_id: scanId,
+  });
+  plugin.storage.scans.finalize({ scan_id: scanId, status: 'completed', tools_run: [], missing_tools: [] });
+}
 
 describe('compliance_evidence', () => {
   it('produces a Markdown evidence pack even with no scans yet', async () => {
@@ -496,6 +518,17 @@ describe('compliance_evidence', () => {
     expect(r.framework).toBe('gdpr');
     expect(r.markdown).toContain('# Compliance evidence — GDPR');
     expect(r.markdown).toContain('(no data — run');
+  });
+
+  it('reads the dependency section from a deps_audit scan', async () => {
+    const plugin = makePlugin();
+    seedDepsAuditWithCve(plugin, 'EV');
+    const r = (await getTool('compliance_evidence').handler({}, plugin)) as {
+      ok: true;
+      markdown: string;
+    };
+    expect(r.markdown).toContain('`EV`');
+    expect(r.markdown).not.toContain('run `scan_deps` or `deps_audit` first');
   });
 });
 

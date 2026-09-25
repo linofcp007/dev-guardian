@@ -32,10 +32,10 @@ const tool = {
         project_path: ProjectPath,
         severity_min: SeverityMin,
     },
-    handler: async (input, ctx) => handler(input, ctx),
+    handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };
 registerToolModule(tool);
-async function handler(input, ctx) {
+async function handler(input, ctx, callMeta) {
     const inp = input;
     let projectPath;
     try {
@@ -83,7 +83,10 @@ async function handler(input, ctx) {
                 },
             ];
         }
-        const result = await subTool.handler(subInput, ctx);
+        // The host's callMeta, so cancelling the audit aborts every sub-scan's
+        // scanner processes and their progress reaches the host (the emitter
+        // keeps one shared token's progress increasing across all four).
+        const result = await subTool.handler(subInput, ctx, callMeta);
         if (result.ok) {
             const r = result;
             const summary = { tool: toolName, ok: true };

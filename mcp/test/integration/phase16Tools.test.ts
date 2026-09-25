@@ -110,6 +110,23 @@ describe('Phase 16 — registry', () => {
   });
 });
 
+describe('wp_plugin_check', () => {
+  it('finds a plugin CVE recorded by a deps_audit scan, which has its own scan type', async () => {
+    const plugin = makePlugin();
+    plugin.storage.scans.insert({ scan_id: 'da', scan_type: 'deps_audit', project_path: '/p', tree_hash: 'h' });
+    plugin.storage.cves.upsert({
+      cve_id: 'CVE-2024-WP', package_name: 'contact-form-7', severity: 'high', scan_id: 'da',
+    });
+    plugin.storage.scans.finalize({ scan_id: 'da', status: 'completed', tools_run: [], missing_tools: [] });
+
+    const r = (await getTool('wp_plugin_check').handler({ slug: 'contact-form-7' }, plugin)) as {
+      ok: true;
+      known_cves: Array<{ cve_id: string }>;
+    };
+    expect(r.known_cves.map((c) => c.cve_id)).toEqual(['CVE-2024-WP']);
+  });
+});
+
 describe('wp_recommend_hardening', () => {
   it('returns audit_found=false when no wp_audit exists', async () => {
     const plugin = makePlugin();

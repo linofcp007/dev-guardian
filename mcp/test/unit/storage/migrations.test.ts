@@ -75,7 +75,7 @@ describe('migrations runner', () => {
     const row = db
       .prepare(`SELECT value FROM schema_meta WHERE key = 'version'`)
       .get() as { value: string } | undefined;
-    expect(row?.value).toBe('5');
+    expect(row?.value).toBe('6');
   });
 
   it('is idempotent (running twice does not throw and version stays the same)', () => {
@@ -85,6 +85,41 @@ describe('migrations runner', () => {
     const row = db
       .prepare(`SELECT value FROM schema_meta WHERE key = 'version'`)
       .get() as { value: string };
-    expect(row.value).toBe('5');
+    expect(row.value).toBe('6');
+  });
+
+  it('upgrades a version-5 database in place, leaving its rows readable and uncached (006)', () => {
+    // A 2.0.0-era database: schema 1–5 applied, one completed scan and one
+    // surface snapshot. After 006 both rows are still there, with a NULL
+    // cache key — history, never a cache hit.
+    const db = new Database(':memory:');
+    for (const m of listMigrations().filter((x) => x.version <= 5)) {
+      db.exec(readFileSync(m.filePath, 'utf8'));
+    }
+    db.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '5')`);
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('old', 'deps', '/p', 'h', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO surface_snapshots (project_path, captured_at, tree_hash, json)
+       VALUES ('/p', '2026-01-01T00:00:00.000Z', 'h', '{}')`,
+    );
+
+    runMigrations(db);
+
+    const version = db
+      .prepare(`SELECT value FROM schema_meta WHERE key = 'version'`)
+      .get() as { value: string };
+    expect(version.value).toBe('6');
+    const scan = db.prepare(`SELECT id, cache_key FROM scans`).get() as {
+      id: string;
+      cache_key: string | null;
+    };
+    expect(scan).toEqual({ id: 'old', cache_key: null });
+    const snap = db.prepare(`SELECT cache_key FROM surface_snapshots`).get() as {
+      cache_key: string | null;
+    };
+    expect(snap.cache_key).toBeNull();
   });
 });

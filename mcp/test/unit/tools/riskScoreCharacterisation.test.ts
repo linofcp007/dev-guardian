@@ -18,6 +18,7 @@ import { runMigrations } from '../../../src/storage/migrations/runner.js';
 import { Storage } from '../../../src/storage/index.js';
 import { TOOLS } from '../../../src/tools/index.js';
 import '../../../src/tools/riskScore.js';
+import { okResult } from '../../helpers/toolResult.js';
 
 function seed() {
   const db = new Database(':memory:');
@@ -98,6 +99,44 @@ function seedDepsOnly(botConfigured: { renovate: boolean; dependabot: boolean })
   });
   return { storage, db };
 }
+
+/**
+ * `deps_audit` now writes its own scan type. Its bot signal must still be
+ * found — and the latest `scan_deps` run (type 'deps', never any
+ * bot_configured) must not shadow it and silently drop the signal.
+ */
+describe('risk_score — reads the dependency-bot signal from deps_audit, whatever ran after it', () => {
+  function seedAuditThenScanDeps(auditType: 'deps_audit' | 'deps') {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    const storage = new Storage(db);
+    storage.scans.insert({ scan_id: 'audit', scan_type: auditType, project_path: '/p', tree_hash: 'h' });
+    storage.scans.finalize({
+      scan_id: 'audit', status: 'completed', tools_run: [], missing_tools: [],
+      meta: { bot_configured: { renovate: false, dependabot: false } },
+    });
+    storage.scans.insert({ scan_id: 'scan-deps', scan_type: 'deps', project_path: '/p', tree_hash: 'h' });
+    storage.scans.finalize({ scan_id: 'scan-deps', status: 'completed', tools_run: [], missing_tools: [] });
+    // Distinct start times, scan_deps last.
+    db.prepare(`UPDATE scans SET started_at = '2026-01-01T00:00:00.000Z' WHERE id = 'audit'`).run();
+    db.prepare(`UPDATE scans SET started_at = '2026-01-02T00:00:00.000Z' WHERE id = 'scan-deps'`).run();
+    return { storage, db };
+  }
+
+  it.each(['deps_audit', 'deps'] as const)(
+    'penalises the missing bot recorded by a %s-typed deps_audit row',
+    async (auditType) => {
+      const { storage, db } = seedAuditThenScanDeps(auditType);
+      const mod = TOOLS.find((t) => t.name === 'risk_score');
+      if (mod === undefined) throw new Error('risk_score is not registered');
+      const res = okResult<{ components: { compliance: { score: number } } }>(
+        await mod.handler({}, { storage } as never),
+      );
+      expect(res.components.compliance.score).toBe(6);
+      db.close();
+    },
+  );
+});
 
 describe('risk_score — dependency-bot `||` regression coverage', () => {
   it('treats ANY one bot configured as configured — {renovate:false, dependabot:true} must not be penalised', async () => {

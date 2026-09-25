@@ -37,6 +37,7 @@ vi.mock('../../src/tools/scanHelpers.js', async () => {
 });
 
 import type { PluginContext } from '../../src/context.js';
+import { CUSTOM_RULES_META_KEY } from '../../src/platform/customRules.js';
 import { runProcess } from '../../src/runners/processRunner.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
@@ -213,6 +214,45 @@ describe('scan_sast loads the project’s own Semgrep rules', () => {
     // The container cannot see host paths — it must be the /src form.
     expect(call.args).toContain('--config=/src/.semgrep.yml');
     expect(call.args.some((a) => a.startsWith(`--config=${project}`))).toBe(false);
+  });
+});
+
+describe('scan_sast cache key covers the rules it loads', () => {
+  it('re-scans when a registered custom rule file OUTSIDE the project changes', async () => {
+    // The file is outside the project, so the tree hash cannot see it: only
+    // the rule-pack part of the cache key can.
+    const project = makeTempDir('sast-cache-');
+    const rulesDir = makeTempDir('sast-cache-rules-');
+    const rules = join(rulesDir, 'team.yml');
+    writeFileSync(rules, RULES, 'utf8');
+    const plugin = makePlugin(project);
+    plugin.storage.runtimeMeta.setJson(CUSTOM_RULES_META_KEY, [rules]);
+    mockSemgrepOnPath();
+    const tool = getTool('scan_sast');
+
+    await tool.handler({ project_path: project }, plugin);
+    const hit = okResult<{ cached?: boolean }>(await tool.handler({ project_path: project }, plugin));
+    expect(hit.cached).toBe(true);
+
+    writeFileSync(rules, RULES.replace('foo(...)', 'bar(...)'), 'utf8');
+    const miss = okResult<{ cached?: boolean }>(await tool.handler({ project_path: project }, plugin));
+    expect(miss.cached).toBeUndefined();
+    expect(captured.filter((c) => c.command === 'semgrep')).toHaveLength(2);
+  });
+
+  it('never answers local_only from a registry-backed scan, or the reverse', async () => {
+    const project = makeTempDir('sast-cache-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    const plugin = makePlugin(project);
+    mockSemgrepOnPath();
+    const tool = getTool('scan_sast');
+
+    await tool.handler({ project_path: project }, plugin);
+    const local = okResult<{ cached?: boolean }>(
+      await tool.handler({ project_path: project, local_only: true }, plugin),
+    );
+    expect(local.cached).toBeUndefined();
+    expect(captured.filter((c) => c.command === 'semgrep')).toHaveLength(2);
   });
 });
 

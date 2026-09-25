@@ -46,6 +46,7 @@ import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 
 import type { PluginContext } from '../../src/context.js';
 import { resolveBugfixRules } from '../../src/platform/configsDir.js';
+import { CUSTOM_RULES_META_KEY } from '../../src/platform/customRules.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
@@ -971,6 +972,72 @@ describe('bug_hunt', () => {
       plugin,
     )) as { ok: true; top_findings: { subcategory?: string }[] };
     expect(r.top_findings.map((f) => f.subcategory).sort()).toEqual(['edge_case', 'null_safety']);
+  });
+
+  it('categories filters the RESPONSE only: every finding is recorded, and what was withheld is reported', async () => {
+    // It used to filter inside the parser, so the withheld findings were
+    // never stored: a baseline taken from a filtered bug_hunt forgot them,
+    // and the next unfiltered run reported them as new.
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      writeOutput(opts, multiSubcategorySemgrepJson());
+      return { outcome: 'completed' as const, exitCode: 1, stdout: '', stderr: '', truncated: false };
+    });
+    const tool = getTool('bug_hunt');
+
+    const r = (await tool.handler(
+      { project_path: project, categories: ['null_safety'] },
+      plugin,
+    )) as {
+      ok: true;
+      scan_id: string;
+      top_findings: { subcategory?: string }[];
+      warnings: string[];
+      category_filter?: { categories: string[]; withheld: number; withheld_by_subcategory: Record<string, number> };
+    };
+    expect(r.top_findings.map((f) => f.subcategory)).toEqual(['null_safety']);
+    expect(plugin.storage.findings.listByScan(r.scan_id)).toHaveLength(3);
+    expect(r.category_filter?.categories).toEqual(['null_safety']);
+    expect(r.category_filter?.withheld).toBe(2);
+    expect(r.category_filter?.withheld_by_subcategory['edge_case']).toBe(1);
+    expect(r.warnings.join('\n')).toMatch(/categories .* withheld 2 finding/);
+
+    // `categories` is not part of the cache key: another filter on the same
+    // tree is answered from the SAME scan, re-filtered for this caller.
+    const again = (await tool.handler(
+      { project_path: project, categories: ['edge_case'] },
+      plugin,
+    )) as { ok: true; cached?: boolean; cached_from?: string; top_findings: { subcategory?: string }[] };
+    expect(again.cached).toBe(true);
+    expect(again.cached_from).toBe(r.scan_id);
+    expect(again.top_findings.map((f) => f.subcategory)).toEqual(['edge_case']);
+    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-scans when a rule pack it loads changes, even outside the project', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    const rulesDir = tempProject();
+    const rules = join(rulesDir, 'team.yml');
+    writeFileSync(rules, 'rules: []\n', 'utf8');
+    plugin.storage.runtimeMeta.setJson(CUSTOM_RULES_META_KEY, [rules]);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      writeOutput(opts, semgrepFx());
+      return { outcome: 'completed' as const, exitCode: 1, stdout: '', stderr: '', truncated: false };
+    });
+    const tool = getTool('bug_hunt');
+
+    await tool.handler({ project_path: project }, plugin);
+    const hit = (await tool.handler({ project_path: project }, plugin)) as { cached?: boolean };
+    expect(hit.cached).toBe(true);
+
+    writeFileSync(rules, 'rules:\n  - id: changed\n', 'utf8');
+    const miss = (await tool.handler({ project_path: project }, plugin)) as { cached?: boolean };
+    expect(miss.cached).toBeUndefined();
+    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
   });
 
   // --- fix round 2: the assertion that matters most ------------------------

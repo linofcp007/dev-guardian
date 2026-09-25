@@ -28,7 +28,7 @@ import {
   type Severity,
   type ToolResult,
 } from '../types.js';
-import { registerToolModule, TOOLS, type ToolModule } from './index.js';
+import { registerToolModule, TOOLS, type ToolCallMeta, type ToolModule } from './index.js';
 
 const BASE_SUB_TOOLS = ['security_scan_full', 'quality_check', 'deps_audit', 'compliance_check'] as const;
 const WP_EXTRA_SUB_TOOLS = ['scan_wordpress'] as const;
@@ -57,7 +57,7 @@ const tool: ToolModule = {
     project_path: ProjectPath,
     severity_min: SeverityMin,
   },
-  handler: async (input, ctx) => handler(input, ctx),
+  handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };
 
 registerToolModule(tool);
@@ -65,6 +65,7 @@ registerToolModule(tool);
 async function handler(
   input: Record<string, unknown>,
   ctx: PluginContext,
+  callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
   const inp = input as { project_path?: string; severity_min?: Severity };
 
@@ -122,7 +123,10 @@ async function handler(
           } satisfies SubScanSummary,
         ] as const;
       }
-      const result = await subTool.handler(subInput, ctx);
+      // The host's callMeta, so cancelling the audit aborts every sub-scan's
+      // scanner processes and their progress reaches the host (the emitter
+      // keeps one shared token's progress increasing across all four).
+      const result = await subTool.handler(subInput, ctx, callMeta);
       if (result.ok) {
         const r = result as unknown as {
           ok: true;

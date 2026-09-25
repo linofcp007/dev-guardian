@@ -1,9 +1,13 @@
 import { GuardianDatabase as Database } from '../../../src/storage/db.js';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { PluginContext } from '../../../src/context.js';
+import type { ProgressPayload } from '../../../src/progress/progressEmitter.js';
 import {
   makeScanTool,
+  type InvokeContext,
   type ScannerInvocation,
 } from '../../../src/tools/scanToolFactory.js';
 import type { ShellChoice } from '../../../src/platform/shellProbe.js';
@@ -310,6 +314,325 @@ describe('makeScanTool', () => {
     expect(r.ok).toBe(true);
     expect(r.findings_count_by_severity.low).toBe(0);
     expect(r.findings_count_by_severity.high).toBe(1);
+  });
+});
+
+/** A completed, finding-free invocation. */
+function emptyRun(extras?: Record<string, unknown>): ScannerInvocation {
+  const run: ScannerInvocation = {
+    outcome: 'completed',
+    tools_run: [{ name: 'mock', status: 'ok' }],
+    missing_tools: [],
+    parser_inputs: [],
+    report_paths: [],
+  };
+  if (extras !== undefined) run.extras = extras;
+  return run;
+}
+
+interface CachePayload {
+  scan_id: string;
+  scan_type: string;
+  cached?: boolean;
+  cached_from?: string;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms?: number | null;
+  [key: string]: unknown;
+}
+
+/**
+ * The cache key used to be (tree_hash, scan_type) and nothing else. Every
+ * test here is a reproduction of a call that was answered from somebody
+ * else's scan.
+ */
+describe('makeScanTool: the cache key covers everything that shapes a scan', () => {
+  let projectPath: string;
+  let plugin: PluginContext;
+
+  beforeEach(() => {
+    projectPath = tempProject();
+    plugin = buildPlugin(projectPath);
+  });
+
+  function countingTool(name: string, extraSchema: Record<string, z.ZodTypeAny> = {}) {
+    const calls: Array<Record<string, unknown>> = [];
+    const tool = makeScanTool<{ project_path?: string; [k: string]: unknown }>({
+      name,
+      scan_type: 'containers',
+      category: 'security',
+      description: '',
+      inputSchema: { ...tinySchema, ...extraSchema },
+      invoke: async (input) => {
+        calls.push({ ...input });
+        return emptyRun();
+      },
+    });
+    return { tool, calls };
+  }
+
+  it('does not answer a call for another input from the cache (scan_containers image vs Dockerfile)', async () => {
+    const { tool, calls } = countingTool('key_input_scan', {
+      image: z.string().optional(),
+      dockerfile_path: z.string().optional(),
+    });
+    const first = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    const second = okResult<CachePayload>(
+      await tool.handler({ project_path: projectPath, image: 'nginx:1.19' }, plugin),
+    );
+    expect(calls).toHaveLength(2);
+    expect(second.cached).toBeUndefined();
+    expect(second.scan_id).not.toBe(first.scan_id);
+
+    // The same input again IS a hit — the key is precise, not disabled.
+    const third = okResult<CachePayload>(
+      await tool.handler({ project_path: projectPath, image: 'nginx:1.19' }, plugin),
+    );
+    expect(third.cached).toBe(true);
+    expect(third.cached_from).toBe(second.scan_id);
+    expect(calls).toHaveLength(2);
+  });
+
+  it('ignores response-only inputs (severity_min, force) and input key order when keying', async () => {
+    const { tool, calls } = countingTool('key_order_scan', {
+      base_ref: z.string().optional(),
+      head_ref: z.string().optional(),
+    });
+    await tool.handler({ project_path: projectPath, base_ref: 'main', head_ref: 'HEAD' }, plugin);
+    const hit = okResult<CachePayload>(
+      await tool.handler(
+        { head_ref: 'HEAD', severity_min: 'high', base_ref: 'main', project_path: projectPath },
+        plugin,
+      ),
+    );
+    expect(hit.cached).toBe(true);
+    expect(calls).toHaveLength(1);
+
+    const otherRef = okResult<CachePayload>(
+      await tool.handler({ project_path: projectPath, base_ref: 'develop', head_ref: 'HEAD' }, plugin),
+    );
+    expect(otherRef.cached).toBeUndefined();
+    expect(calls).toHaveLength(2);
+  });
+
+  it('treats an omitted input with a schema default the same as the default passed explicitly', async () => {
+    const { tool, calls } = countingTool('key_default_scan', {
+      include_language_packs: z.boolean().optional().default(false),
+    });
+    await tool.handler({ project_path: projectPath }, plugin);
+    const hit = okResult<CachePayload>(
+      await tool.handler({ project_path: projectPath, include_language_packs: false }, plugin),
+    );
+    expect(hit.cached).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('never shares a cache entry between two projects whose trees hash the same', async () => {
+    // Two empty directories have the same tree hash. The second project used
+    // to be handed the first one's scan — findings, report paths and all.
+    const { tool, calls } = countingTool('key_project_scan');
+    const otherProject = tempProject();
+    const first = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    const second = okResult<CachePayload>(await tool.handler({ project_path: otherProject }, plugin));
+    expect(calls).toHaveLength(2);
+    expect(second.cached).toBeUndefined();
+    expect(first.scan_id).not.toBe(second.scan_id);
+  });
+
+  it('never shares a cache entry between two tools, even with the same scan_type', async () => {
+    const a = countingTool('key_tool_a');
+    const b = countingTool('key_tool_b');
+    await a.tool.handler({ project_path: projectPath }, plugin);
+    const other = okResult<CachePayload>(await b.tool.handler({ project_path: projectPath }, plugin));
+    expect(other.cached).toBeUndefined();
+    expect(b.calls).toHaveLength(1);
+  });
+
+  it('misses when a rule pack the tool loads changes on disk', async () => {
+    const pack = join(tempProject(), 'rules.yml');
+    writeFileSync(pack, 'rules: []\n');
+    let invokes = 0;
+    const tool = makeScanTool({
+      name: 'key_pack_scan',
+      scan_type: 'bugs',
+      category: 'bug',
+      description: '',
+      inputSchema: tinySchema,
+      rulePacks: () => [pack, 'p/r2c-bug-scan'],
+      invoke: async () => {
+        invokes += 1;
+        return emptyRun();
+      },
+    });
+    await tool.handler({ project_path: projectPath }, plugin);
+    const hit = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(hit.cached).toBe(true);
+
+    writeFileSync(pack, 'rules:\n  - id: new-rule\n');
+    const miss = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(miss.cached).toBeUndefined();
+    expect(invokes).toBe(2);
+  });
+
+  it('never serves a row written before the cache key existed', async () => {
+    // A 2.0.0 database: a completed scan of this very tree, same type, no
+    // cache key. Nothing records which inputs or rule packs produced it.
+    const { tool, calls } = countingTool('key_legacy_scan');
+    const probe = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    plugin.storage
+      .rawHandle()
+      .prepare('UPDATE scans SET cache_key = NULL WHERE id = ?')
+      .run(probe.scan_id);
+    const again = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(again.cached).toBeUndefined();
+    expect(calls).toHaveLength(2);
+  });
+});
+
+describe('makeScanTool: a cache hit is shaped like the run it came from', () => {
+  let projectPath: string;
+  let plugin: PluginContext;
+
+  beforeEach(() => {
+    projectPath = tempProject();
+    plugin = buildPlugin(projectPath);
+  });
+
+  it('re-emits the extras the original run returned', async () => {
+    const extras = {
+      bot_configured: { renovate: true, dependabot: false },
+      licenses_summary: { MIT: 2 },
+      wordpress_layout_detected: false,
+    };
+    const tool = makeScanTool({
+      name: 'extras_scan',
+      scan_type: 'deps_audit',
+      category: 'security',
+      description: '',
+      inputSchema: tinySchema,
+      invoke: async () => emptyRun(extras),
+    });
+    const fresh = okResult<CachePayload>(
+      await tool.handler({ project_path: projectPath, severity_min: 'low' }, plugin),
+    );
+    const cached = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+
+    expect(cached.cached).toBe(true);
+    expect(cached['bot_configured']).toEqual(extras.bot_configured);
+    expect(cached['licenses_summary']).toEqual(extras.licenses_summary);
+    expect(cached['wordpress_layout_detected']).toBe(false);
+    // The first call's floor is not an extra and must not leak into the
+    // second call's payload; nor is the raw `meta` blob part of a result.
+    expect(cached['severity_min']).toBeUndefined();
+    expect(cached['meta']).toBeUndefined();
+    for (const key of Object.keys(fresh)) {
+      if (key === 'severity_filter' || key === 'warnings') continue;
+      expect(Object.keys(cached)).toContain(key);
+    }
+  });
+
+  it('returns the scan row\'s real start and finish times and the duration between them', async () => {
+    const tool = makeScanTool({
+      name: 'timing_scan',
+      scan_type: 'sast',
+      category: 'security',
+      description: '',
+      inputSchema: tinySchema,
+      invoke: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return emptyRun();
+      },
+    });
+    const fresh = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    const row = plugin.storage.scans.getById(fresh.scan_id);
+    expect(row).not.toBeNull();
+    if (row === null || row.finished_at === null) throw new Error('scan row not finalized');
+
+    expect(fresh.started_at).toBe(row.started_at);
+    expect(fresh.finished_at).toBe(row.finished_at);
+    expect(fresh.started_at).not.toBe(fresh.finished_at);
+    expect(fresh.duration_ms).toBe(Date.parse(row.finished_at) - Date.parse(row.started_at));
+    expect(fresh.duration_ms).toBeGreaterThanOrEqual(30);
+
+    const cached = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(cached.cached).toBe(true);
+    expect(cached.started_at).toBe(row.started_at);
+    expect(cached.finished_at).toBe(row.finished_at);
+    expect(cached.duration_ms).toBe(fresh.duration_ms);
+  });
+});
+
+describe('makeScanTool: progress while a scan runs', () => {
+  let projectPath: string;
+  let plugin: PluginContext;
+
+  beforeEach(() => {
+    projectPath = tempProject();
+    plugin = buildPlugin(projectPath);
+  });
+
+  it('emits a boundary event, heartbeats during the scanner, and forwards scanner stderr', async () => {
+    // Only the heartbeat's interval is faked: the tree hash spawns `git`,
+    // whose own timers must stay real.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const sent: ProgressPayload[] = [];
+      plugin.progressNotifier = { send: (p) => sent.push(p) };
+      let sentBeforeScanner = -1;
+      let sentDuringScanner = -1;
+      const tool = makeScanTool({
+        name: 'progress_scan',
+        scan_type: 'sast',
+        category: 'security',
+        description: '',
+        inputSchema: tinySchema,
+        invoke: async (_input, ctx: InvokeContext) => {
+          sentBeforeScanner = sent.length;
+          expect(typeof ctx.onLog).toBe('function');
+          ctx.onLog?.('semgrep: scanning 12 files');
+          vi.advanceTimersByTime(35_000);
+          sentDuringScanner = sent.length - sentBeforeScanner;
+          return emptyRun();
+        },
+      });
+
+      await tool.handler({ project_path: projectPath }, plugin, { progressToken: 'tok-scan' });
+
+      expect(sentBeforeScanner).toBeGreaterThan(0);
+      expect(sentDuringScanner).toBeGreaterThanOrEqual(3);
+      expect(sent.some((p) => p.message?.includes('semgrep: scanning 12 files'))).toBe(true);
+      for (const p of sent) expect(p.progressToken).toBe('tok-scan');
+      for (let i = 1; i < sent.length; i++) {
+        const prev = sent[i - 1];
+        const cur = sent[i];
+        if (prev === undefined || cur === undefined) continue;
+        expect(cur.progress).toBeGreaterThan(prev.progress);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops sending once the scan has returned', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const sent: ProgressPayload[] = [];
+      plugin.progressNotifier = { send: (p) => sent.push(p) };
+      const tool = makeScanTool({
+        name: 'progress_stop_scan',
+        scan_type: 'sast',
+        category: 'security',
+        description: '',
+        inputSchema: tinySchema,
+        invoke: async () => emptyRun(),
+      });
+      await tool.handler({ project_path: projectPath }, plugin, { progressToken: 7 });
+      const after = sent.length;
+      vi.advanceTimersByTime(60_000);
+      expect(sent.length).toBe(after);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -20,21 +20,45 @@
  * **`severity_min` filters the response, never the history.** Step 8 stores
  * everything the scan found and step 10 shows the caller the slice they
  * asked for; the order used to be the other way round, which threw the rest
- * away. See the comment above `bulkInsert` for what that cost.
+ * away. See the comment above `bulkInsert` for what that cost. A tool's own
+ * `responseView` (bug_hunt's `categories`) follows the same rule.
+ *
+ * ---- The cache key: every input field, except the response-only ones ----
+ *
+ * A scan is served from the cache only under exactly the same key
+ * (`treeHash/cacheKey.ts#scanCacheKey`): the canonical project path, the tool
+ * name and scan type, the tree hash, the plugin version, the content of every
+ * rule pack the tool declares in `rulePacks`, and a hash of the NORMALISED
+ * input. The rule for the input is deliberately blunt, because every
+ * exception to it was a reproduced wrong answer (see cacheKey.ts): EVERY
+ * input field takes part, after the tool's own zod schema has applied its
+ * defaults, EXCEPT
+ *
+ *   - `project_path` — keyed separately, in canonical form, so `.` and the
+ *     absolute path of the same directory agree;
+ *   - `severity_min` and `force` — they shape the response or the lookup,
+ *     never the scan;
+ *   - whatever the tool lists in `responseOnlyInputs`.
+ *
+ * A new input field is therefore part of the key the moment it is added to a
+ * tool's schema, with no change here — which is what keeps, say, a scoped scan
+ * from ever sharing a cache entry with an unscoped one. A field may be listed
+ * in `responseOnlyInputs` only if it is applied by `responseView` (or later,
+ * on the response) and changes nothing about what is scanned or stored.
  *
  * The factory is single-tenant per process: concurrent calls for the same
- * tree_hash are serialised by SQLite's transactions, but the runtime
- * doesn't attempt to coalesce two in-flight calls into a single run.
+ * key are serialised by SQLite's transactions, but the runtime doesn't
+ * attempt to coalesce two in-flight calls into a single run.
  */
 
 import { randomUUID } from 'node:crypto';
-import type { ZodRawShape } from 'zod';
+import { z, type ZodRawShape } from 'zod';
 import { buildDriftAdvisory } from '../configdrift/advisory.js';
 import { detectConfigDrift } from '../configdrift/detect.js';
 import type { PluginContext, ToolContext } from '../context.js';
 import { configsDirFromScriptsDir } from '../platform/configsDir.js';
 import { resolveVersion } from '../platform/version.js';
-import { makeProgressEmitter } from '../progress/progressEmitter.js';
+import { makeProgressEmitter, type ProgressEmitter } from '../progress/progressEmitter.js';
 import {
   type ParserContext,
   type ParserCveInput,
@@ -57,6 +81,7 @@ import type {
   ToolResult,
   ToolRun,
 } from '../types.js';
+import { hashInput, hashRulePacks, scanCacheKey } from '../treeHash/cacheKey.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import {
   InvalidProjectPathError,
@@ -64,7 +89,7 @@ import {
 } from '../platform/projectPath.js';
 import { isWorkingTreeClean } from './gitState.js';
 import { assessCoverage } from './scanCoverage.js';
-import type { ToolModule } from './index.js';
+import type { ToolCallMeta, ToolModule } from './index.js';
 
 /**
  * What `config.invoke` returns to the factory. Either a direct shell run
@@ -113,6 +138,27 @@ export interface ScanToolBaseInput {
   allow_dirty?: boolean;
 }
 
+/** What `rulePacks` gets to decide which packs a call would load. */
+export interface RulePackContext {
+  /** Canonical project path. */
+  projectPath: string;
+  plugin: PluginContext;
+}
+
+/**
+ * A response-only view over a scan's stored findings, applied before
+ * `severity_min`. Everything the scan found is still persisted; the view
+ * decides what this one response shows, and says what it withheld.
+ */
+export interface ResponseView {
+  /** The findings this response shows (before `severity_min`). */
+  visible: Finding[];
+  /** Merged into the payload, e.g. `{ category_filter: {...} }`. */
+  disclosure: Record<string, unknown>;
+  /** Added to `warnings` when the view withheld something, else null. */
+  warning: string | null;
+}
+
 export interface ScanToolConfig<TInput extends ScanToolBaseInput> {
   name: string;
   description: string;
@@ -131,6 +177,21 @@ export interface ScanToolConfig<TInput extends ScanToolBaseInput> {
    */
   supportsAutoFix?: boolean;
   /**
+   * Input fields, beyond `severity_min` and `force`, that shape only the
+   * response and so stay out of the cache key — see the module comment for
+   * the rule a field must meet to be listed here.
+   */
+  responseOnlyInputs?: readonly string[];
+  /**
+   * Every rule pack this call would load: local files and directories are
+   * keyed by content, anything else (a registry pack such as `p/php`) by
+   * name. Must name the same packs `invoke` passes to the scanner, or an
+   * edited pack is served from a stale cache entry.
+   */
+  rulePacks?: (input: TInput, ctx: RulePackContext) => readonly string[];
+  /** See {@link ResponseView}. Applied to fresh runs and cache hits alike. */
+  responseView?: (input: TInput, findings: readonly Finding[], scanId: string) => ResponseView | null;
+  /**
    * The tool-specific bit: actually run the scanner(s) and return the
    * parser inputs. Throw to signal a true failure; return outcome='failed'
    * + an error string to signal a soft failure that should still finalize
@@ -140,6 +201,19 @@ export interface ScanToolConfig<TInput extends ScanToolBaseInput> {
 }
 
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
+
+/** Inputs that never enter the cache key — see the module comment. */
+const KEYLESS_INPUTS: readonly string[] = ['project_path', 'severity_min', 'force'];
+
+/**
+ * Keys the factory itself writes into `scans.meta`, as opposed to a tool's
+ * `extras`. A cache hit re-emits every OTHER meta key as an extra, so a key
+ * added to `meta` here must be added to this set too.
+ */
+const FACTORY_META_KEYS: ReadonlySet<string> = new Set(['severity_min']);
+
+/** Longest scanner stderr line forwarded into a progress message. */
+const MAX_LOG_LINE = 200;
 
 export function makeScanTool<TInput extends ScanToolBaseInput>(
   config: ScanToolConfig<TInput>,
@@ -158,7 +232,7 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
   config: ScanToolConfig<TInput>,
   input: TInput,
   plugin: PluginContext,
-  callMeta?: import('./index.js').ToolCallMeta,
+  callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
   if (config.supportsAutoFix !== false && input.auto_fix === true) {
     if (input.allow_dirty !== true) {
@@ -202,28 +276,29 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
   }
 
   const treeHash = await computeTreeHash(projectPath);
+  const cacheKey = buildCacheKey(config, input, projectPath, treeHash, plugin);
 
   // Cache check.
   const ttl = config.cacheTtlMs ?? FIVE_MINUTES_MS;
   const fresh = new Date(Date.now() - ttl).toISOString();
   if (input.force !== true) {
     const cached = plugin.storage.scans.findCacheHit({
-      tree_hash: treeHash,
-      scan_type: config.scan_type,
+      cache_key: cacheKey,
       freshThreshold: fresh,
     });
     if (cached) {
-      return cachedResult(plugin, cached.scan_id, warnings, input.severity_min);
+      return cachedResult(config, input, plugin, cached.scan_id, warnings);
     }
   }
 
   // Insert running scan.
   const scanId = randomUUID();
-  plugin.storage.scans.insert({
+  const inserted = plugin.storage.scans.insert({
     scan_id: scanId,
     scan_type: config.scan_type,
     project_path: projectPath,
     tree_hash: treeHash,
+    cache_key: cacheKey,
   });
   plugin.storage.scans.attachTreeCache({
     tree_hash: treeHash,
@@ -255,12 +330,65 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     token: callMeta?.progressToken,
     notifier: plugin.progressNotifier,
   });
+  try {
+    return await runScanBody({
+      config,
+      input,
+      plugin,
+      projectPath,
+      treeHash,
+      scanId,
+      startedAt: inserted.started_at,
+      warnings,
+      signal: controller.signal,
+      progress,
+    });
+  } finally {
+    progress.dispose();
+  }
+}
+
+/** Everything after the scan row exists: run, persist, finalize, respond. */
+async function runScanBody<TInput extends ScanToolBaseInput>(args: {
+  config: ScanToolConfig<TInput>;
+  input: TInput;
+  plugin: PluginContext;
+  projectPath: string;
+  treeHash: string;
+  scanId: string;
+  startedAt: string;
+  warnings: string[];
+  signal: AbortSignal;
+  progress: ProgressEmitter;
+}): Promise<ToolResult<Record<string, unknown>>> {
+  const { config, input, plugin, projectPath, treeHash, scanId, startedAt, warnings, progress } =
+    args;
+
+  // Boundary events, each with a higher step than the last; the emitter
+  // heartbeats in between (every 10 s) for as long as the scanner runs, with
+  // the scanner's latest stderr line in its message — see `onLog` below.
+  let step = 0;
+  const report = (message: string): void => {
+    step += 1;
+    progress.emit({ step, message: `${config.name}: ${message}` });
+  };
+
   const ctx: InvokeContext = {
     plugin,
     scanId,
     projectPath,
-    signal: controller.signal,
+    signal: args.signal,
     progress,
+    // Every runner forwards stderr here line by line. A line becomes the
+    // message of the next heartbeat, never a notification of its own: a
+    // chatty scanner would otherwise send hundreds per second.
+    onLog: (line: string) => {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) return;
+      const clipped =
+        trimmed.length > MAX_LOG_LINE ? `${trimmed.slice(0, MAX_LOG_LINE - 1)}…` : trimmed;
+      progress.note(`${config.name}: ${clipped}`);
+    },
     scriptEnv: {
       ...process.env,
       PROJECT_PATH: projectPath,
@@ -270,10 +398,12 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
 
   // Acquire a slot from the global concurrency limiter so 50 parallel
   // calls from the host don't fork 50 scanner processes. Default cap is 2.
+  report('waiting for a scanner slot');
   const limiter = getScanLimiter();
   await limiter.acquire();
   let invocation: ScannerInvocation;
   try {
+    report(`scanning ${projectPath}`);
     invocation = await config.invoke(input, ctx);
   } catch (e) {
     plugin.storage.scans.finalize({
@@ -283,16 +413,14 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
       missing_tools: [],
       error: e instanceof Error ? e.message : String(e),
     });
-    progress.dispose();
-    limiter.release();
     return failDomain(
       'scanner_failed',
       e instanceof Error ? e.message : 'Scanner failed with an unknown error',
     );
   } finally {
-    progress.dispose();
+    limiter.release();
   }
-  limiter.release();
+  report('recording results');
 
   // Apply parsers.
   let findings: Finding[] = [];
@@ -326,7 +454,9 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
   // place in `guardian://cves/active`) while its Finding was dropped.
   //
   // The floor is a property of the REQUEST. History records the TREE. The
-  // filtering now happens once, below, on the response only.
+  // filtering now happens once, below, on the response only. The same holds
+  // for a tool's `responseView` (bug_hunt's `categories`, which used to
+  // filter inside the parser and so never stored what it dropped).
   if (findings.length > 0) {
     plugin.storage.findings.bulkInsert(
       findings.map((f) => ({ ...f, scan_id: scanId })),
@@ -352,7 +482,8 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
   if (invocation.report_paths[0] !== undefined) finalize.report_dir = invocation.report_paths[0];
   if (invocation.error !== undefined) finalize.error = invocation.error;
   // Persist extras into scans.meta so resources (compliance/status, etc.)
-  // can read them without forcing a re-run.
+  // can read them without forcing a re-run, and so a cache hit can re-emit
+  // them (`cachedResult`).
   //
   // `severity_min` rides along in the same object. Now that the floor no
   // longer touches what is stored, a later reader of this scan row needs it
@@ -364,11 +495,12 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
   // licenseCompatibility, the dotnet/wp resources, the dashboard snapshot)
   // picks named keys out of it, so an extra key is inert for all of them and
   // no migration is needed. No tool puts `severity_min` in `extras`, so
-  // there is nothing to collide with.
+  // there is nothing to collide with. It is listed in FACTORY_META_KEYS, which
+  // is what keeps a cache hit from re-emitting it as an extra.
   const meta: Record<string, unknown> = { ...(invocation.extras ?? {}) };
   if (input.severity_min !== undefined) meta['severity_min'] = input.severity_min;
   if (Object.keys(meta).length > 0) finalize.meta = meta;
-  plugin.storage.scans.finalize(finalize);
+  const finishedAt = plugin.storage.scans.finalize(finalize);
 
   if (status === 'cancelled') {
     return failDomain('cancelled', 'Scan was cancelled by the host.');
@@ -382,12 +514,14 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     );
   }
 
-  // Build the ScanResult response. THIS is where the severity floor lands:
-  // it shapes the view, never the history persisted above.
-  const visible = filterFindings(findings, input.severity_min);
+  // Build the ScanResult response. THIS is where the response-only filters
+  // land: the tool's own view first, then the severity floor, on the view.
+  const view = applyResponseView(config, input, findings, scanId);
+  const visible = filterFindings(view.visible, input.severity_min);
   const counts = countBySeverity(visible);
   const top = topFindings(visible, 10);
-  const floor = severityFloorNotice(findings, input.severity_min, scanId);
+  const floor = severityFloorNotice(view.visible, input.severity_min, scanId);
+  if (view.warning) warnings.push(view.warning);
   if (floor?.warning) warnings.push(floor.warning);
 
   // Coverage: did the scanners that were supposed to run actually run? A
@@ -401,13 +535,17 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
   );
   if (coverageWarning) warnings.unshift(coverageWarning);
 
+  // The row's own times: `started_at` as `insert` wrote it, `finished_at` as
+  // `finalize` wrote it. Both used to be `new Date()` taken here, twice, a
+  // microsecond apart — every scan reported that it took no time at all.
   const result: ScanResult = {
     scan_id: scanId,
     scan_type: config.scan_type,
     project_path: projectPath,
     tree_hash: treeHash,
-    started_at: new Date().toISOString(), // best-effort; real value lives in DB
-    finished_at: new Date().toISOString(),
+    started_at: startedAt,
+    finished_at: finishedAt,
+    duration_ms: durationMs(startedAt, finishedAt),
     status,
     tools_run: invocation.tools_run,
     missing_tools: invocation.missing_tools,
@@ -419,11 +557,83 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     ...(floor ? { severity_filter: floor.disclosure } : {}),
   };
 
+  report('done');
   const payload: Record<string, unknown> = {
     ...(result as unknown as Record<string, unknown>),
+    ...view.disclosure,
     ...(invocation.extras ?? {}),
   };
   return { ok: true, ...payload };
+}
+
+/**
+ * The cache key for this call — see the module comment for what it covers
+ * and why. A `rulePacks` that throws leaves the call uncacheable (a key no
+ * other call can produce) rather than failing the scan.
+ */
+function buildCacheKey<TInput extends ScanToolBaseInput>(
+  config: ScanToolConfig<TInput>,
+  input: TInput,
+  projectPath: string,
+  treeHash: string,
+  plugin: PluginContext,
+): string {
+  let rulePacksHash: string;
+  try {
+    rulePacksHash = hashRulePacks(config.rulePacks ? config.rulePacks(input, { projectPath, plugin }) : []);
+  } catch {
+    rulePacksHash = `uncacheable:${randomUUID()}`;
+  }
+  return scanCacheKey({
+    projectPath,
+    tool: config.name,
+    scanType: config.scan_type,
+    treeHash,
+    inputHash: hashInput(normaliseInput(config, input)),
+    pluginVersion: resolveVersion(),
+    rulePacksHash,
+  });
+}
+
+/**
+ * The input as the tool's schema reads it — defaults applied, unknown keys
+ * dropped — minus the fields that never enter the key. Falls back to the raw
+ * input when it does not parse (an in-process caller the MCP layer never
+ * validated); `undefined` members are dropped either way.
+ */
+function normaliseInput<TInput extends ScanToolBaseInput>(
+  config: ScanToolConfig<TInput>,
+  input: TInput,
+): Record<string, unknown> {
+  const parsed = z.object(config.inputSchema).safeParse(input);
+  const source: Record<string, unknown> = parsed.success
+    ? (parsed.data as Record<string, unknown>)
+    : { ...(input as Record<string, unknown>) };
+  const excluded = new Set([...KEYLESS_INPUTS, ...(config.responseOnlyInputs ?? [])]);
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (excluded.has(key) || value === undefined) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+/** The tool's `responseView`, or the identity view when it has none. */
+function applyResponseView<TInput extends ScanToolBaseInput>(
+  config: ScanToolConfig<TInput>,
+  input: TInput,
+  findings: readonly Finding[],
+  scanId: string,
+): ResponseView {
+  const view = config.responseView?.(input, findings, scanId) ?? null;
+  return view ?? { visible: [...findings], disclosure: {}, warning: null };
+}
+
+/** `finished - started` in ms, or null when either is missing or unparseable. */
+function durationMs(startedAt: string, finishedAt: string | null): number | null {
+  if (finishedAt === null) return null;
+  const ms = Date.parse(finishedAt) - Date.parse(startedAt);
+  return Number.isFinite(ms) ? ms : null;
 }
 
 /**
@@ -475,27 +685,42 @@ function configDriftAdvisory(plugin: PluginContext, projectPath: string): string
  * view is re-derived per caller. Without that, a cache hit ignored the floor
  * the caller had just passed and answered with everything.
  *
+ * The same goes for the tool's `responseView` (bug_hunt's `categories`),
+ * which is why such a field is response-only and out of the cache key.
+ *
+ * The run's `extras` come back too: they are persisted in `meta`, and every
+ * meta key the factory did not write itself (FACTORY_META_KEYS) is one. A hit
+ * used to drop them, so `deps_audit` lost `bot_configured`, `compliance_check`
+ * its `policy_documents_found`, `scan_wordpress` its
+ * `wordpress_layout_detected` — on every call inside the cache window. The
+ * raw `meta` blob itself is not part of a result: a fresh run never has one.
+ *
+ * `started_at`, `finished_at` and `duration_ms` are the ORIGINAL run's, which
+ * is what produced these findings; `cached_from` says so.
+ *
  * One case it cannot repair: a scan row written by a version of this file
  * that filtered before persisting holds only the above-floor subset, and
  * nothing here can tell that apart from a tree with nothing else in it.
- * Those rows age out of the 5-minute cache window immediately; they persist
- * in history.
+ * Those rows have no cache key (migration 006), so they are never served
+ * from the cache; they persist in history.
  */
-function cachedResult(
+function cachedResult<TInput extends ScanToolBaseInput>(
+  config: ScanToolConfig<TInput>,
+  input: TInput,
   plugin: PluginContext,
   scanId: string,
   warnings: string[],
-  severityMin?: Severity,
 ): ToolResult<Record<string, unknown>> {
   const record = plugin.storage.scans.getById(scanId);
   if (!record) {
     return failDomain('unknown_scan_id', `Cached scan ${scanId} could not be loaded.`);
   }
   const stored = plugin.storage.findings.listByScan(scanId);
-  const visible = filterFindings(stored, severityMin);
+  const view = applyResponseView(config, input, stored, scanId);
+  const visible = filterFindings(view.visible, input.severity_min);
   const counts = countBySeverity(visible);
   const top = topFindings(visible, 10);
-  const floor = severityFloorNotice(stored, severityMin, scanId);
+  const floor = severityFloorNotice(view.visible, input.severity_min, scanId);
 
   // Re-derive coverage from the persisted tools_run/missing_tools so a cached
   // scan carries the same honest signal as a fresh one.
@@ -505,10 +730,18 @@ function cachedResult(
     record.missing_tools,
   );
   const allWarnings = coverageWarning ? [coverageWarning, ...warnings] : [...warnings];
+  if (view.warning) allWarnings.push(view.warning);
   if (floor?.warning) allWarnings.push(floor.warning);
 
-  const payload: ScanResult = {
-    ...record,
+  const { meta, ...row } = record;
+  const extras: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(meta ?? {})) {
+    if (!FACTORY_META_KEYS.has(key)) extras[key] = value;
+  }
+
+  const result: ScanResult = {
+    ...row,
+    duration_ms: durationMs(record.started_at, record.finished_at),
     cached: true,
     cached_from: scanId,
     findings_count_by_severity: counts,
@@ -517,7 +750,12 @@ function cachedResult(
     coverage,
     ...(floor ? { severity_filter: floor.disclosure } : {}),
   };
-  return { ok: true, ...(payload as unknown as Record<string, unknown>) };
+  return {
+    ok: true,
+    ...(result as unknown as Record<string, unknown>),
+    ...view.disclosure,
+    ...extras,
+  };
 }
 
 /**

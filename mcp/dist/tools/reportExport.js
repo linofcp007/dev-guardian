@@ -19,6 +19,7 @@ import { resolveProjectPath } from '../platform/projectPath.js';
 import { escapeHtml, markdownToSafeHtml, renderHtmlDocument, severityBar, severityChip, } from '../report/htmlTheme.js';
 import { toSarif } from '../report/sarif.js';
 import { ProjectPath } from '../schemas.js';
+import { CVE_SOURCE_SCAN_TYPES, } from '../types.js';
 import { registerToolModule } from './index.js';
 const inputSchema = {
     project_path: ProjectPath,
@@ -103,7 +104,7 @@ async function handler(input, ctx) {
     if (!scan)
         return failDomain('unknown_scan_id', `Scan '${scanId}' not found.`);
     const findings = ctx.storage.findings.listByScan(scanId);
-    const cves = scan.scan_type === 'deps' || scan.scan_type === 'security_full'
+    const cves = CVE_SOURCE_SCAN_TYPES.includes(scan.scan_type)
         ? ctx.storage.cves.listActive(scanId)
         : [];
     const { content, fileName } = renderReport(format, scan, findings, cves, lang);

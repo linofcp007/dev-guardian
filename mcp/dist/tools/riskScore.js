@@ -18,6 +18,7 @@
  * Output is a JSON `{ score, band, components, recommended_next_action }`.
  * Read-only — does not spawn scanners.
  */
+import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan } from '../types.js';
 import { scoreRisk } from '../dashboard/risk.js';
 import { registerToolModule } from './index.js';
 const tool = {
@@ -33,7 +34,7 @@ registerToolModule(tool);
 async function handler(ctx) {
     const open = ctx.storage.findings.listOpen();
     // CVEs — use the latest deps-flavoured scan as the source.
-    const latestDeps = findLatestOfType(ctx, ['deps', 'security_full']);
+    const latestDeps = findLatestOfType(ctx, CVE_SOURCE_SCAN_TYPES);
     const cves = latestDeps ? ctx.storage.cves.listActive(latestDeps.scan_id) : [];
     // Compliance signals — missing policy docs and CI dependency bots.
     const latestCompliance = findLatestOfType(ctx, ['compliance']);
@@ -49,7 +50,9 @@ async function handler(ctx) {
     // No deps-audit scan yet ⇒ no signal ⇒ no penalty, matching this tool's
     // pre-extraction behaviour (it used to skip the whole bot check in that case).
     let dependencyBotConfigured = true;
-    const latestDepsAudit = findLatestOfType(ctx, ['deps']);
+    const latestDepsAudit = ctx.storage.scans
+        .listHistory(50)
+        .find((s) => s.status === 'completed' && isDepsAuditScan(s));
     if (latestDepsAudit?.meta) {
         const m = latestDepsAudit.meta;
         const bot = m.bot_configured ?? {};

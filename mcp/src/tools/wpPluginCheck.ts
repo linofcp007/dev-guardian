@@ -87,7 +87,9 @@ async function handler(
   const slugLower = inp.slug.toLowerCase();
   const allActive = ctx.storage.scans
     .listHistory(50)
-    .filter((s) => s.scan_type === 'wp_vuln_check' || s.scan_type === 'deps')
+    .filter(
+      (s) => s.scan_type === 'wp_vuln_check' || s.scan_type === 'deps' || s.scan_type === 'deps_audit',
+    )
     .map((s) => ctx.storage.cves.listActive(s.scan_id))
     .flat()
     .filter((c) => c.package_name.toLowerCase() === slugLower);

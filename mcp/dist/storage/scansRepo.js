@@ -68,9 +68,9 @@ export class ScansRepo {
       INSERT INTO scans (
         id, scan_type, project_path, tree_hash,
         started_at, status, tools_run, missing_tools, report_dir, meta,
-        owner_pid, owner_host
+        owner_pid, owner_host, cache_key
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
         this.finalizeStmt = db.prepare(`
       UPDATE scans
@@ -141,9 +141,12 @@ export class ScansRepo {
       ORDER BY started_at DESC, rowid DESC
       LIMIT ?
     `);
+        // Matched on the whole key, never on the tree hash: see
+        // `treeHash/cacheKey.ts` for what the tree hash alone let through. A NULL
+        // key (every row written before migration 006) never equals anything.
         this.findCacheStmt = db.prepare(`
       SELECT * FROM scans
-      WHERE tree_hash = ? AND scan_type = ? AND status = 'completed' AND started_at >= ?
+      WHERE cache_key = ? AND status = 'completed' AND started_at >= ?
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);
@@ -154,7 +157,7 @@ export class ScansRepo {
     }
     insert(input) {
         const started = nowIso();
-        this.insertStmt.run(input.scan_id, input.scan_type, input.project_path, input.tree_hash, started, 'running', '[]', '[]', input.report_dir ?? null, JSON.stringify(input.meta ?? {}), process.pid, hostname());
+        this.insertStmt.run(input.scan_id, input.scan_type, input.project_path, input.tree_hash, started, 'running', '[]', '[]', input.report_dir ?? null, JSON.stringify(input.meta ?? {}), process.pid, hostname(), input.cache_key ?? null);
         return {
             scan_id: input.scan_id,
             scan_type: input.scan_type,
@@ -168,8 +171,11 @@ export class ScansRepo {
             report_paths: input.report_dir ? [input.report_dir] : [],
         };
     }
+    /** Returns the `finished_at` it wrote, so a caller can report the row's real time. */
     finalize(input) {
-        this.finalizeStmt.run(input.status, nowIso(), JSON.stringify(input.tools_run), JSON.stringify(input.missing_tools), input.report_dir ?? null, input.error ?? null, input.meta !== undefined ? JSON.stringify(input.meta) : null, input.scan_id);
+        const finishedAt = nowIso();
+        this.finalizeStmt.run(input.status, finishedAt, JSON.stringify(input.tools_run), JSON.stringify(input.missing_tools), input.report_dir ?? null, input.error ?? null, input.meta !== undefined ? JSON.stringify(input.meta) : null, input.scan_id);
+        return finishedAt;
     }
     markCancelled(scanId) {
         this.markCancelledStmt.run(nowIso(), scanId);
@@ -255,12 +261,13 @@ export class ScansRepo {
         return this.listHistoryForProjectStmt.all(projectPath, limit).map(rowToRecord);
     }
     /**
-     * Returns the most recent completed scan of the given type whose tree_hash
-     * matches and which started no earlier than `freshThreshold`. The factory
-     * uses this to honour US-8 AC-2 (5-minute cache window).
+     * Returns the most recent completed scan stored under exactly `cache_key`
+     * which started no earlier than `freshThreshold`. The factory uses this to
+     * honour US-8 AC-2 (5-minute cache window); the key is built by
+     * `treeHash/cacheKey.ts#scanCacheKey`.
      */
     findCacheHit(args) {
-        const row = this.findCacheStmt.get(args.tree_hash, args.scan_type, args.freshThreshold);
+        const row = this.findCacheStmt.get(args.cache_key, args.freshThreshold);
         return row ? rowToRecord(row) : null;
     }
     attachTreeCache(args) {

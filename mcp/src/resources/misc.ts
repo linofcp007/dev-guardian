@@ -11,6 +11,7 @@
  */
 
 import type { PluginContext } from '../context.js';
+import { CVE_SOURCE_SCAN_TYPES } from '../types.js';
 import { registerResourceModule } from './index.js';
 
 registerResourceModule({
@@ -20,7 +21,7 @@ registerResourceModule({
     'CVEs pinned to the most recent deps-flavoured scan (deps / deps_audit / security_full). ' +
     'Returns `{ cves: [] }` when no deps scan has run.',
   handler: async (_uri, _params, ctx) => {
-    const latestDeps = findLatestOfType(ctx, ['deps', 'security_full']);
+    const latestDeps = findLatestOfType(ctx, CVE_SOURCE_SCAN_TYPES);
     if (!latestDeps) return { json: { cves: [], last_run: null } };
     const cves = ctx.storage.cves.listActive(latestDeps.scan_id);
     return { json: { cves, last_run: latestDeps.started_at, scan_id: latestDeps.scan_id } };
@@ -107,7 +108,7 @@ registerResourceModule({
 
 function findLatestOfType(
   ctx: PluginContext,
-  acceptedTypes: string[],
+  acceptedTypes: readonly string[],
 ): ReturnType<typeof ctx.storage.scans.getById> {
   const history = ctx.storage.scans.listHistory(50);
   const found = history.find(
