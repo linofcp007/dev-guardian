@@ -100,11 +100,13 @@ describe('cache + concurrency + progress', () => {
     vi.mocked(runShellScript).mockImplementation(async () => {
       const dir = join(project, '.guardian', 'reports', `security-${Date.now()}`);
       mkdirSync(dir, { recursive: true });
-      const fxRaw = (await import('node:fs')).readFileSync(
-        join(FIX, 'semgrep.json'),
-        'utf8',
-      );
-      writeFileSync(join(dir, 'sast.json'), fxRaw, 'utf8');
+      // Every scanner's report, not only Semgrep's: only a fully covered run
+      // is served from the cache (a run with gitleaks or Trivy missing must
+      // scan again once they are installed — see scanToolFactory.ts).
+      const { readFileSync } = await import('node:fs');
+      writeFileSync(join(dir, 'sast.json'), readFileSync(join(FIX, 'semgrep.json'), 'utf8'), 'utf8');
+      writeFileSync(join(dir, 'secrets.json'), readFileSync(join(FIX, 'gitleaks.json'), 'utf8'), 'utf8');
+      writeFileSync(join(dir, 'deps.json'), readFileSync(join(FIX, 'trivy-fs.json'), 'utf8'), 'utf8');
       return {
         outcome: 'completed' as const,
         exitCode: 0,

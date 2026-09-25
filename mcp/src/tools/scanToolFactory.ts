@@ -88,7 +88,7 @@ import {
   resolveProjectPath,
 } from '../platform/projectPath.js';
 import { isWorkingTreeClean } from './gitState.js';
-import { assessCoverage } from './scanCoverage.js';
+import { assessCoverage, computeCoverage } from './scanCoverage.js';
 import type { ToolCallMeta, ToolModule } from './index.js';
 
 /**
@@ -278,7 +278,11 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
   const treeHash = await computeTreeHash(projectPath);
   const cacheKey = buildCacheKey(config, input, projectPath, treeHash, plugin);
 
-  // Cache check.
+  // Cache check. Only a run whose every scanner ran is served again: one
+  // with a scanner missing or failed is `completed` at coverage none or
+  // partial, and its own warning tells the caller to install the scanner and
+  // re-run. That re-run, inside the window, used to get the same gap back —
+  // after `install_toolchain` had already made the scanner visible.
   const ttl = config.cacheTtlMs ?? FIVE_MINUTES_MS;
   const fresh = new Date(Date.now() - ttl).toISOString();
   if (input.force !== true) {
@@ -286,7 +290,7 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
       cache_key: cacheKey,
       freshThreshold: fresh,
     });
-    if (cached) {
+    if (cached && computeCoverage(cached.tools_run, cached.missing_tools) === 'full') {
       return cachedResult(config, input, plugin, cached.scan_id, warnings);
     }
   }
@@ -696,7 +700,9 @@ function configDriftAdvisory(plugin: PluginContext, projectPath: string): string
  * raw `meta` blob itself is not part of a result: a fresh run never has one.
  *
  * `started_at`, `finished_at` and `duration_ms` are the ORIGINAL run's, which
- * is what produced these findings; `cached_from` says so.
+ * is what produced these findings; `cached_from` says so. Only a run at
+ * coverage `full` gets here (see the lookup); coverage is still re-derived
+ * below rather than assumed, so the two can never drift apart silently.
  *
  * One case it cannot repair: a scan row written by a version of this file
  * that filtered before persisting holds only the above-floor subset, and

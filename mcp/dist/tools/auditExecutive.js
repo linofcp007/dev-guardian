@@ -111,14 +111,31 @@ async function handler(input, ctx, callMeta) {
     }));
     for (const [name, summary] of subResultsArr) {
         subResults[name] = summary;
-        if (summary.ok && summary.scan_id) {
-            aggregateFindings.push(...ctx.storage.findings.listByScan(summary.scan_id));
-        }
     }
     // Update audit row meta to link children.
     const subScanIds = {};
     for (const [name, summary] of Object.entries(subResults)) {
         subScanIds[name] = summary.scan_id ?? null;
+    }
+    // Cancelled by the host: the sub-scans were aborted (they share its
+    // signal), so there is nothing to aggregate. The row is finalised
+    // `cancelled`, never `completed` — a completed audit with zero findings
+    // became the previous audit of the next one, whose delta then reported
+    // every finding as new and nothing as resolved.
+    if (callMeta?.signal?.aborted === true) {
+        ctx.storage.scans.finalize({
+            scan_id: auditScanId,
+            status: 'cancelled',
+            tools_run: subToolRuns(subTools, subResults),
+            missing_tools: [],
+            meta: { sub_scan_ids: subScanIds },
+        });
+        return failDomain('cancelled', 'The audit was cancelled by the host; its sub-scans were stopped and nothing was aggregated.');
+    }
+    for (const summary of Object.values(subResults)) {
+        if (summary.ok && summary.scan_id) {
+            aggregateFindings.push(...ctx.storage.findings.listByScan(summary.scan_id));
+        }
     }
     // Severity floor: re-apply at the aggregate level so audit_executive's own
     // counts match what the model asked for. The floor stops at the RESPONSE —
@@ -189,15 +206,7 @@ async function handler(input, ctx, callMeta) {
     ctx.storage.scans.finalize({
         scan_id: auditScanId,
         status: 'completed',
-        tools_run: subTools.map((name) => {
-            const sub = subResults[name];
-            const reason = sub?.error?.code;
-            return {
-                name,
-                status: sub?.ok ? 'ok' : 'failed',
-                ...(reason !== undefined ? { reason } : {}),
-            };
-        }),
+        tools_run: subToolRuns(subTools, subResults),
         missing_tools: [...aggregateMissing],
         // `sub_scan_ids` was computed above and never written — the insert-time
         // placeholder `{}` was all the row ever carried. It is written here
@@ -222,6 +231,18 @@ async function handler(input, ctx, callMeta) {
         top_findings,
         ...(deltas ? { deltas } : {}),
     };
+}
+/** One `tools_run` entry per sub-tool: `ok`, or `failed` with its error code. */
+function subToolRuns(subTools, subResults) {
+    return subTools.map((name) => {
+        const sub = subResults[name];
+        const reason = sub?.error?.code;
+        return {
+            name,
+            status: sub?.ok ? 'ok' : 'failed',
+            ...(reason !== undefined ? { reason } : {}),
+        };
+    });
 }
 /** none < partial < full — the executive roll-up is only as trustworthy as
  * its least-covered sub-scan. */

@@ -16,6 +16,7 @@ vi.mock('../../src/fixpr/apply.js', () => ({
 }));
 
 import type { PluginContext } from '../../src/context.js';
+import { applyGroup } from '../../src/fixpr/apply.js';
 import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
@@ -91,6 +92,145 @@ describe('audit_executive hands the host callMeta to every sub-scan', () => {
       expect(calls[0]?.progressToken, name).toBe('tok-audit');
     }
   });
+});
+
+const AUDIT_SUB_TOOLS = ['security_scan_full', 'quality_check', 'deps_audit', 'compliance_check'];
+
+describe('a cancelled audit_executive is recorded as cancelled, not as a clean audit', () => {
+  function cancelAll(controller: AbortController): void {
+    for (const name of AUDIT_SUB_TOOLS) {
+      const t = tool(name);
+      const original: Handler = t.handler;
+      t.handler = async () => {
+        controller.abort();
+        return CANCELLED;
+      };
+      restore.push(() => {
+        t.handler = original;
+      });
+    }
+  }
+
+  it('finalises the audit row as cancelled and returns the cancelled failure', async () => {
+    const project = makeTempDir('callmeta-audit-cancel-');
+    const plugin = makePlugin();
+    const controller = new AbortController();
+    cancelAll(controller);
+
+    const result = await tool('audit_executive').handler({ project_path: project }, plugin, {
+      signal: controller.signal,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected the cancelled failure');
+    expect(result.error.code).toBe('cancelled');
+    const audit = plugin.storage.scans.listHistory(10).find((s) => s.scan_type === 'audit');
+    expect(audit?.status).toBe('cancelled');
+    expect(audit === undefined ? [] : plugin.storage.findings.listByScan(audit.scan_id)).toEqual([]);
+  });
+
+  it('never becomes the baseline of the next audit\'s delta', async () => {
+    // It used to be finalised `completed` with zero findings, so the next real
+    // audit reported every finding as new and nothing as resolved.
+    const project = makeTempDir('callmeta-audit-delta-');
+    const plugin = makePlugin();
+    const controller = new AbortController();
+    cancelAll(controller);
+    await tool('audit_executive').handler({ project_path: project }, plugin, { signal: controller.signal });
+    for (const undo of restore.splice(0)) undo();
+
+    // A real sub-scan with two findings, reported by the next audit.
+    plugin.storage.scans.insert({ scan_id: 'sub', scan_type: 'security_full', project_path: project, tree_hash: 'h' });
+    plugin.storage.findings.bulkInsert(
+      ['a', 'b'].map((fp) => ({
+        scan_id: 'sub',
+        fingerprint: `fp-${fp}`,
+        tool: 'semgrep',
+        severity: 'high' as const,
+        category: 'security' as const,
+        title: fp,
+        fix_available: false,
+      })),
+    );
+    plugin.storage.scans.finalize({ scan_id: 'sub', status: 'completed', tools_run: [], missing_tools: [] });
+    record('security_scan_full', { ok: true, scan_id: 'sub', coverage: 'full', missing_tools: [] });
+    for (const name of AUDIT_SUB_TOOLS.slice(1)) record(name, { ok: true, coverage: 'full', missing_tools: [] });
+
+    const next = await tool('audit_executive').handler({ project_path: project }, plugin);
+    expect(next.ok).toBe(true);
+    // No COMPLETED audit precedes it, so there is nothing to diff against.
+    expect((next as unknown as { deltas?: unknown }).deltas).toBeUndefined();
+  });
+});
+
+describe('create_fix_pr stops between groups once the host cancels', () => {
+  it('creates no further worktree, applies nothing more, and reports the rest as cancelled', async () => {
+    const repo = makeTempDir('callmeta-fixpr-cancel-');
+    const git = (...args: string[]): string =>
+      execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 't@example.com');
+    git('config', 'user.name', 'T');
+    git('config', 'core.autocrlf', 'false');
+    writeFileSync(join(repo, 'index.js'), 'console.log(1);\n');
+    git('add', '.');
+    git('commit', '-q', '-m', 'first');
+
+    // Two groups: deps/npm (critical, processed first) and semgrep (high).
+    const plugin = makePlugin();
+    const projectPath = resolveProjectPath(repo).path;
+    plugin.storage.scans.insert({ scan_id: 'before', scan_type: 'sast', project_path: projectPath, tree_hash: 'h' });
+    plugin.storage.findings.bulkInsert([
+      {
+        scan_id: 'before', fingerprint: 'fp-dep', tool: 'trivy', severity: 'critical',
+        category: 'security', title: 'lodash: prototype pollution', fix_available: true,
+      },
+      {
+        scan_id: 'before', fingerprint: 'fp-sg', tool: 'semgrep', rule_id: 'js.rule', severity: 'high',
+        category: 'security', title: 'x', file_path: 'index.js', line_start: 1, fix_available: true,
+      },
+    ]);
+    plugin.storage.scans.finalize({ scan_id: 'before', status: 'completed', tools_run: [], missing_tools: [] });
+
+    const controller = new AbortController();
+    record('deps_update_plan', {
+      ok: true,
+      plan: [
+        {
+          package_name: 'lodash', installed_version: '4.17.20', latest_version: '4.17.21',
+          classification: 'security', ecosystem: 'npm', upgrade_command: 'npm install lodash@4.17.21',
+        },
+      ],
+    });
+    // The host cancels while the first group's verification re-scan runs.
+    const depsAudit = tool('deps_audit');
+    const originalDepsAudit: Handler = depsAudit.handler;
+    depsAudit.handler = async () => {
+      controller.abort();
+      return CANCELLED;
+    };
+    restore.push(() => {
+      depsAudit.handler = originalDepsAudit;
+    });
+    const sastCalls = record('scan_sast', CANCELLED);
+    vi.mocked(applyGroup).mockClear();
+
+    const result = await tool('create_fix_pr').handler({ project_path: repo }, plugin, {
+      signal: controller.signal,
+    });
+
+    expect(result.ok).toBe(true);
+    const r = result as unknown as {
+      cancelled?: boolean;
+      groups: Array<{ key: string; outcome: string }>;
+    };
+    expect(r.cancelled).toBe(true);
+    expect(r.groups.map((g) => g.key)).toEqual(['npm', 'semgrep']);
+    expect(r.groups[1]?.outcome).toBe('cancelled');
+    expect(vi.mocked(applyGroup)).toHaveBeenCalledTimes(1);
+    expect(sastCalls).toHaveLength(0);
+    expect(git('worktree', 'list').trim().split('\n')).toHaveLength(1);
+  }, 60_000);
 });
 
 describe('create_fix_pr hands the host callMeta to its sub-tools', () => {

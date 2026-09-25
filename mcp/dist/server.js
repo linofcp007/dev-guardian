@@ -40480,7 +40480,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
       cache_key: cacheKey,
       freshThreshold: fresh
     });
-    if (cached2) {
+    if (cached2 && computeCoverage(cached2.tools_run, cached2.missing_tools) === "full") {
       return cachedResult(config2, input, plugin, cached2.scan_id, warnings);
     }
   }
@@ -44598,13 +44598,28 @@ async function handler10(input, ctx, callMeta) {
   );
   for (const [name, summary] of subResultsArr) {
     subResults[name] = summary;
-    if (summary.ok && summary.scan_id) {
-      aggregateFindings.push(...ctx.storage.findings.listByScan(summary.scan_id));
-    }
   }
   const subScanIds = {};
   for (const [name, summary] of Object.entries(subResults)) {
     subScanIds[name] = summary.scan_id ?? null;
+  }
+  if (callMeta?.signal?.aborted === true) {
+    ctx.storage.scans.finalize({
+      scan_id: auditScanId,
+      status: "cancelled",
+      tools_run: subToolRuns(subTools, subResults),
+      missing_tools: [],
+      meta: { sub_scan_ids: subScanIds }
+    });
+    return failDomain11(
+      "cancelled",
+      "The audit was cancelled by the host; its sub-scans were stopped and nothing was aggregated."
+    );
+  }
+  for (const summary of Object.values(subResults)) {
+    if (summary.ok && summary.scan_id) {
+      aggregateFindings.push(...ctx.storage.findings.listByScan(summary.scan_id));
+    }
   }
   const filteredAggregate = filterFindings(aggregateFindings, inp.severity_min);
   const aggregate_counts = countBySeverity2(filteredAggregate);
@@ -44654,15 +44669,7 @@ async function handler10(input, ctx, callMeta) {
   ctx.storage.scans.finalize({
     scan_id: auditScanId,
     status: "completed",
-    tools_run: subTools.map((name) => {
-      const sub = subResults[name];
-      const reason = sub?.error?.code;
-      return {
-        name,
-        status: sub?.ok ? "ok" : "failed",
-        ...reason !== void 0 ? { reason } : {}
-      };
-    }),
+    tools_run: subToolRuns(subTools, subResults),
     missing_tools: [...aggregateMissing],
     // `sub_scan_ids` was computed above and never written — the insert-time
     // placeholder `{}` was all the row ever carried. It is written here
@@ -44687,6 +44694,17 @@ async function handler10(input, ctx, callMeta) {
     top_findings,
     ...deltas ? { deltas } : {}
   };
+}
+function subToolRuns(subTools, subResults) {
+  return subTools.map((name) => {
+    const sub = subResults[name];
+    const reason = sub?.error?.code;
+    return {
+      name,
+      status: sub?.ok ? "ok" : "failed",
+      ...reason !== void 0 ? { reason } : {}
+    };
+  });
 }
 function worstCoverage(list2) {
   const rank = { none: 0, partial: 1, full: 2 };
@@ -56108,7 +56126,25 @@ async function handler42(input, ctx, callMeta) {
   const filtered_reason = describeExclusions(filtered, severityMin, sources);
   const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
   const results = [];
+  let cancelled = false;
   for (const group of selected) {
+    if (callMeta?.signal?.aborted === true) {
+      cancelled = true;
+      results.push({
+        key: group.key,
+        source: group.source,
+        severity: group.severity,
+        branch: branchName(group.source, group.key, group.hash),
+        findings: findingsForGroup(allFindings, group),
+        commands: [],
+        outcome: "cancelled",
+        scan: null,
+        tests: null,
+        pr: null,
+        note: "cancelled: the host cancelled this call before this group started \u2014 no worktree was created and nothing was applied"
+      });
+      continue;
+    }
     try {
       results.push(await processGroup({ group, allFindings, projectPath, apply, ctx, callMeta }));
     } catch (e) {
@@ -56133,6 +56169,7 @@ async function handler42(input, ctx, callMeta) {
     project_path: projectPath,
     severity_min: severityMin,
     sources,
+    ...cancelled ? { cancelled: true } : {},
     filtered,
     filtered_reason,
     groups: results,

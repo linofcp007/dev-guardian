@@ -210,7 +210,30 @@ async function handler(input, ctx, callMeta) {
     const filtered_reason = describeExclusions(filtered, severityMin, sources);
     const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
     const results = [];
+    let cancelled = false;
     for (const group of selected) {
+        // Checked before each group: once the host cancels, no further worktree
+        // is created and no further fix is applied. The group in flight when the
+        // cancel arrived has already stopped (its re-scan shares the signal) and
+        // cleaned up in processGroup's own `finally`; the rest are reported, not
+        // dropped — groups before the cancel may already have opened a PR.
+        if (callMeta?.signal?.aborted === true) {
+            cancelled = true;
+            results.push({
+                key: group.key,
+                source: group.source,
+                severity: group.severity,
+                branch: branchName(group.source, group.key, group.hash),
+                findings: findingsForGroup(allFindings, group),
+                commands: [],
+                outcome: 'cancelled',
+                scan: null,
+                tests: null,
+                pr: null,
+                note: 'cancelled: the host cancelled this call before this group started — no worktree was created and nothing was applied',
+            });
+            continue;
+        }
         try {
             results.push(await processGroup({ group, allFindings, projectPath, apply, ctx, callMeta }));
         }
@@ -245,6 +268,7 @@ async function handler(input, ctx, callMeta) {
         project_path: projectPath,
         severity_min: severityMin,
         sources,
+        ...(cancelled ? { cancelled: true } : {}),
         filtered,
         filtered_reason,
         groups: results,

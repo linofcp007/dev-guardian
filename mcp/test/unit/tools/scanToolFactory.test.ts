@@ -474,6 +474,77 @@ describe('makeScanTool: the cache key covers everything that shapes a scan', () 
     expect(invokes).toBe(2);
   });
 
+  it('never serves a run whose scanner was missing or failed — install, re-run, and the re-run scans', async () => {
+    // A run with the scanner not installed is `completed` with coverage
+    // `none`, and its own warning says "install … and re-run". The re-run,
+    // inside the cache window, used to get that very result back.
+    let scannerInstalled = false;
+    let invokes = 0;
+    const tool = makeScanTool({
+      name: 'key_coverage_scan',
+      scan_type: 'sast',
+      category: 'security',
+      description: '',
+      inputSchema: tinySchema,
+      invoke: async () => {
+        invokes += 1;
+        return scannerInstalled
+          ? emptyRun()
+          : {
+              outcome: 'completed' as const,
+              tools_run: [{ name: 'semgrep', status: 'skipped' as const, reason: 'not_installed' }],
+              missing_tools: ['semgrep'],
+              parser_inputs: [],
+              report_paths: [],
+            };
+      },
+    });
+
+    const missing = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(missing['coverage']).toBe('none');
+
+    scannerInstalled = true;
+    const rerun = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(rerun.cached).toBeUndefined();
+    expect(rerun['coverage']).toBe('full');
+    expect(invokes).toBe(2);
+
+    // A full-coverage run is still cached.
+    const hit = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(hit.cached).toBe(true);
+    expect(hit.cached_from).toBe(rerun.scan_id);
+    expect(invokes).toBe(2);
+  });
+
+  it('never serves a partial run (one scanner failed) either', async () => {
+    let invokes = 0;
+    const tool = makeScanTool({
+      name: 'key_partial_scan',
+      scan_type: 'deps',
+      category: 'security',
+      description: '',
+      inputSchema: tinySchema,
+      invoke: async () => {
+        invokes += 1;
+        return {
+          outcome: 'completed' as const,
+          tools_run: [
+            { name: 'trivy', status: 'ok' as const },
+            { name: 'npm', status: 'failed' as const, reason: 'failed to run' },
+          ],
+          missing_tools: ['npm'],
+          parser_inputs: [],
+          report_paths: [],
+        };
+      },
+    });
+    await tool.handler({ project_path: projectPath }, plugin);
+    const again = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(again.cached).toBeUndefined();
+    expect(again['coverage']).toBe('partial');
+    expect(invokes).toBe(2);
+  });
+
   it('never serves a row written before the cache key existed', async () => {
     // A 2.0.0 database: a completed scan of this very tree, same type, no
     // cache key. Nothing records which inputs or rule packs produced it.

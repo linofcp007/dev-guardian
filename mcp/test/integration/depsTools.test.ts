@@ -388,6 +388,31 @@ describe('deps_audit', () => {
     expect(depsAgain.cached_from).toBe(deps.scan_id);
   });
 
+  it('scans again once Trivy is installed, instead of serving the not_installed run from the cache', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const outIdx = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const path = outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
+      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    vi.mocked(scannerAvailable).mockResolvedValue(null);
+    const before = okResult<{ coverage: string; missing_tools: string[] }>(
+      await getTool('scan_deps').handler({ project_path: project }, plugin),
+    );
+    expect(before.missing_tools).toContain('trivy');
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy'); // install_toolchain ran
+    const after = okResult<{ cached?: boolean; coverage: string; findings_count_by_severity: Record<string, number> }>(
+      await getTool('scan_deps').handler({ project_path: project }, plugin),
+    );
+    expect(after.cached).toBeUndefined();
+    expect(after.coverage).toBe('full');
+    expect(Object.values(after.findings_count_by_severity).reduce((a, b) => a + b, 0)).toBe(3);
+  });
+
   it('detects .github/dependabot.yml when present', async () => {
     const project = tempProject();
     mkdirSync(join(project, '.github'));
