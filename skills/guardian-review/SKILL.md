@@ -94,13 +94,9 @@ Para cada PR, valida explicitamente:
 
 ### 3. Executar verificações automáticas
 
-Em paralelo (não em série) corre o subset relevante das verificações:
+Corre a ferramenta MCP `review_pr` (`base_ref` opcional — por omissão `origin/HEAD`, depois `main`, depois `master`; `head_ref` por omissão `HEAD`).
 
-```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/scan/review-scan.sh "$(git diff --name-only origin/main...HEAD)"
-```
-
-Este script corre Semgrep só nos ficheiros do diff, gitleaks só no diff, Trivy se `package*.json`/`requirements*.txt`/etc. mudaram, e testes só dos módulos afetados (quando suportado).
+Corre Semgrep (as mesmas regras do `scan_sast`) sobre cada ficheiro adicionado, modificado ou renomeado no diff, gitleaks sobre os commits do PR (`base..head`), Bandit sobre os `.py` alterados e Trivy se um manifesto de dependências mudou. Um ref que não existe é um erro, nunca "sem ficheiros alterados". Os testes dos módulos afetados corres tu, à parte.
 
 ### 4. Apresentar veredito
 

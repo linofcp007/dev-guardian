@@ -283,7 +283,7 @@ describe('makeScanTool', () => {
     expect(history[0]?.status).toBe('cancelled');
   });
 
-  it('returns no_bash_shell when no shell is available', async () => {
+  it('scans on a host with no bash shell — no factory tool runs a shell script any more', async () => {
     plugin.shell = null;
     const tool = makeScanTool({
       name: 'no_shell_scan',
@@ -293,17 +293,48 @@ describe('makeScanTool', () => {
       inputSchema: tinySchema,
       invoke: async () => ({
         outcome: 'completed',
-        tools_run: [],
+        tools_run: [{ name: 'mock', status: 'ok' }],
         missing_tools: [],
         parser_inputs: [],
         report_paths: [],
       }),
     });
     const r = (await tool.handler({ project_path: projectPath }, plugin)) as
-      | { ok: true }
+      | { ok: true; status: string }
       | { ok: false; error: { code: string } };
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('no_bash_shell');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.status).toBe('completed');
+  });
+
+  it('records the orchestrator that ran it in meta.parent_scan_id, and hands its children its own id', async () => {
+    let seen: InvokeContext['childCallMeta'] | undefined;
+    const child = makeScanTool({
+      name: 'child_scan',
+      scan_type: 'sast',
+      category: 'security',
+      description: '',
+      inputSchema: tinySchema,
+      invoke: async (_input, ctx) => {
+        seen = ctx.childCallMeta;
+        return { outcome: 'completed', tools_run: [{ name: 'mock', status: 'ok' }], missing_tools: [], parser_inputs: [], report_paths: [] };
+      },
+    });
+    const controller = new AbortController();
+    const r = okResult<ToolOkPayload>(
+      await child.handler({ project_path: projectPath }, plugin, {
+        parentScanId: 'parent-1',
+        progressToken: 'tok',
+        signal: controller.signal,
+      }),
+    );
+    const row = plugin.storage.scans.getById(r.scan_id);
+    expect(row?.meta?.['parent_scan_id']).toBe('parent-1');
+    // Not an extra of the response: it is the factory's own bookkeeping.
+    expect((r as unknown as Record<string, unknown>)['parent_scan_id']).toBeUndefined();
+    expect(seen?.parentScanId).toBe(r.scan_id);
+    expect(seen?.progressToken).toBe('tok');
+    controller.abort();
+    expect(seen?.signal?.aborted).toBe(true);
   });
 
   it('applies severity_min to the response', async () => {

@@ -58,7 +58,6 @@ import { configsDirFromScriptsDir } from '../platform/configsDir.js';
 import { resolveVersion } from '../platform/version.js';
 import { makeProgressEmitter } from '../progress/progressEmitter.js';
 import { getScanLimiter } from '../runners/concurrencyLimiter.js';
-import { runShellScript } from '../runners/shellRunner.js';
 import { describeShortfallTiers, severityShortfall } from '../severity/breakdown.js';
 import { filterFindings } from '../severity/filter.js';
 import { SEVERITY_ORDER } from '../types.js';
@@ -75,7 +74,7 @@ const KEYLESS_INPUTS = ['project_path', 'severity_min', 'force'];
  * `extras`. A cache hit re-emits every OTHER meta key as an extra, so a key
  * added to `meta` here must be added to this set too.
  */
-const FACTORY_META_KEYS = new Set(['severity_min']);
+const FACTORY_META_KEYS = new Set(['severity_min', 'parent_scan_id']);
 /** Longest scanner stderr line forwarded into a progress message. */
 const MAX_LOG_LINE = 200;
 export function makeScanTool(config) {
@@ -125,10 +124,15 @@ async function runScanPipeline(config, input, plugin, callMeta) {
     const driftAdvisory = configDriftAdvisory(plugin, projectPath);
     if (driftAdvisory)
         warnings.push(driftAdvisory);
-    if (plugin.shell === null) {
-        return failDomain('no_bash_shell', 'No usable bash shell was found on this host. Run `install_toolchain` or install Git Bash / WSL.');
-    }
-    const treeHash = await computeTreeHash(projectPath);
+    // No bash check here: no scan tool built on this factory runs a shell
+    // script any more — each invokes its scanners directly — so a host without
+    // Git Bash or WSL can still scan.
+    // A child of an orchestrator reuses the hash its parent just computed for
+    // the same tree (see ToolCallMeta.treeHash) — five hashes of one tree per
+    // security_scan_full otherwise.
+    const treeHash = callMeta?.parentScanId !== undefined && callMeta.treeHash !== undefined
+        ? callMeta.treeHash
+        : await computeTreeHash(projectPath);
     const cacheKey = buildCacheKey(config, input, projectPath, treeHash, plugin);
     // Cache check. Only a run whose every scanner ran is served again: one
     // with a scanner missing or failed is `completed` at coverage none or
@@ -146,14 +150,17 @@ async function runScanPipeline(config, input, plugin, callMeta) {
             return cachedResult(config, input, plugin, cached.scan_id, warnings);
         }
     }
-    // Insert running scan.
+    // Insert running scan. A child of an orchestrator records its parent from
+    // the start, so even a row that later fails or is reaped says whose it was.
     const scanId = randomUUID();
+    const parentScanId = callMeta?.parentScanId;
     const inserted = plugin.storage.scans.insert({
         scan_id: scanId,
         scan_type: config.scan_type,
         project_path: projectPath,
         tree_hash: treeHash,
         cache_key: cacheKey,
+        ...(parentScanId !== undefined ? { meta: { parent_scan_id: parentScanId } } : {}),
     });
     plugin.storage.scans.attachTreeCache({
         tree_hash: treeHash,
@@ -193,6 +200,13 @@ async function runScanPipeline(config, input, plugin, callMeta) {
             warnings,
             signal: controller.signal,
             progress,
+            childCallMeta: {
+                signal: controller.signal,
+                parentScanId: scanId,
+                treeHash,
+                ...(callMeta?.progressToken !== undefined ? { progressToken: callMeta.progressToken } : {}),
+            },
+            ...(parentScanId !== undefined ? { parentScanId } : {}),
         });
     }
     finally {
@@ -231,12 +245,16 @@ async function runScanBody(args) {
             PROJECT_PATH: projectPath,
             GUARDIAN_SCAN_ID: scanId,
         },
+        childCallMeta: args.childCallMeta,
     };
     // Acquire a slot from the global concurrency limiter so 50 parallel
     // calls from the host don't fork 50 scanner processes. Default cap is 2.
-    report('waiting for a scanner slot');
-    const limiter = getScanLimiter();
-    await limiter.acquire();
+    // An orchestrator takes none — see `ScanToolConfig.orchestrator`.
+    const limiter = config.orchestrator === true ? null : getScanLimiter();
+    if (limiter) {
+        report('waiting for a scanner slot');
+        await limiter.acquire();
+    }
     let invocation;
     try {
         report(`scanning ${projectPath}`);
@@ -253,7 +271,7 @@ async function runScanBody(args) {
         return failDomain('scanner_failed', e instanceof Error ? e.message : 'Scanner failed with an unknown error');
     }
     finally {
-        limiter.release();
+        limiter?.release();
     }
     report('recording results');
     // Apply parsers.
@@ -330,6 +348,10 @@ async function runScanBody(args) {
     const meta = { ...(invocation.extras ?? {}) };
     if (input.severity_min !== undefined)
         meta['severity_min'] = input.severity_min;
+    // `finalize` replaces the whole blob, so the parent written at insert time
+    // has to be written again.
+    if (args.parentScanId !== undefined)
+        meta['parent_scan_id'] = args.parentScanId;
     if (Object.keys(meta).length > 0)
         finalize.meta = meta;
     const finishedAt = plugin.storage.scans.finalize(finalize);
@@ -611,6 +633,4 @@ function failDomain(code, message, retry_with) {
         error.retry_with = retry_with;
     return { ok: false, error };
 }
-// Re-export for tools to build their `parser_inputs` ergonomically.
-export { runShellScript };
 //# sourceMappingURL=scanToolFactory.js.map
