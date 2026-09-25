@@ -101,6 +101,171 @@ version bump.
   (the CLI lives in `<plugin>/cli`).
 - `plugin.json`'s description claimed it installs/configures Playwright;
   nothing in the plugin does, so the claim is removed.
+- **Dependency/license/SBOM pipeline:**
+  - Trivy fs silently reports "0 findings" for a bare `.csproj` (no
+    `packages.lock.json`) or a bare `package.json`/`composer.json` (no
+    lockfile) — reproduced against Trivy 0.69.3: the JSON report omits
+    `Results` entirely, identical to an empty project. `scan_deps` and
+    `deps_audit` now compare every manifest present at the project root
+    against what Trivy's own output actually covers and mark the scanner
+    `skipped`/`no_supported_manifest` (never `ok` with a clean 0) when a
+    manifest goes unrecognised; `requirements.txt` and `go.mod` are
+    excluded from this check since Trivy scans both from the bare
+    manifest, no lockfile required. When Trivy DID cover some ecosystems
+    but not all (e.g. npm scanned fine, NuGet did not), the gap is now
+    named `trivy:<ecosystem>` in `missing_tools`, never the bare `trivy` —
+    `create_fix_pr`'s own verification treats a literal `trivy` there as
+    "trivy did not run at all", which used to block every trivy-sourced fix
+    PR in the repo (e.g. an unrelated npm CVE) over one uncovered ecosystem.
+  - **New: .NET SCA.** `deps_audit` now runs `dotnet list <target> package
+    --vulnerable --include-transitive --format json` for every `.sln`/
+    `.csproj` found, gated on the SDK — the only source of NuGet findings,
+    since Trivy cannot cover it at all without a lockfile. Restore runs
+    EXPLICITLY, FIRST, every time — never "try `dotnet list --no-restore`,
+    restore only if that fails" (a stale-but-present `obj/`, the routine
+    "pulled a PR that bumped a `PackageReference`, never re-restored" case,
+    makes `dotnet list --no-restore` exit 0 with valid-looking JSON built
+    from the OLD resolution). Every restore is `dotnet restore <target>
+    --locked-mode`, which fails an out-of-sync lock (`NU1004`) instead of
+    rewriting it and is a no-op on a project without one. Lock files are
+    found from the solution's own project list (`.sln`/`.slnx`, plus every
+    `ProjectReference`), never a depth-limited walk that missed a project
+    five directories down and let a plain restore rewrite its lock, and
+    NuGet's `packages.<project>.lock.json` counts too. `--locked-mode` does
+    NOT stop a project that sets `RestorePackagesWithLockFile=true` without
+    a committed lock from CREATING one (measured), so when no project the
+    restore touches has a lock, `-p:RestorePackagesWithLockFile=false` is
+    passed as well; a solution that mixes a locked project with an opted-in
+    lock-less one is not restored at all and reported as a gap, and a lock
+    file that appears anyway is deleted again and reported. Only once the
+    restore has succeeded does `dotnet list --no-restore` run. A restore
+    failure carries NuGet's own code, so an out-of-sync lock (`NU1004`)
+    reads differently from a missing package (`NU1101`) or an unreachable
+    feed (`NU1301`). `requestedVersion` is no longer compared with
+    `resolvedVersion`: after a fresh restore they legitimately differ for
+    every floating (`12.*`), range, two-part or not-on-the-feed reference,
+    and treating that as staleness dropped real findings (one `Serilog 2.*`
+    emptied the whole .NET upgrade plan). `deps_update_plan`'s dotnet
+    branch shares the same targets and restore plan.
+  - `pip-audit` ran bare, auditing the MCP host's own Python, and its output
+    was never parsed; an exit-1 resolution failure with no valid report was
+    also misread as a clean, successful scan. Now run once PER
+    `requirements*.txt` file (so every finding is attributed to its real
+    source file, not a hardcoded `requirements.txt`) or once against the
+    project directory for a `pyproject.toml`-only project, with an exit
+    code alone never enough to call it `ok` — the captured output must
+    actually parse as a report.
+  - `deps_update_plan`'s pip branch ran `pip list --outdated` / `pip
+    install -U` against the host interpreter. Now reads the project's own
+    `requirements*.txt` pins — including pip-compile's hash-pinned
+    continuation lines, extras, and environment markers — and PEP 621
+    `[project] dependencies` (scoped to that one TOML table, and with
+    environment markers stripped before matching — a `[tool.uv]
+    dev-dependencies` array earlier in the same file used to win the
+    search outright, since "dev-dependencies" ends in "dependencies"), and
+    proposes a step only for an exact pin with an active CVE and a fix
+    version genuinely ABOVE what is installed (never a downgrade: a
+    scanner's own "fixed_version" can be an older release branch's backport,
+    stale, or a pre-release install compared with real semver pre-release
+    precedence rather than being rejected outright as unparseable). The npm
+    branch upgrades to the same minimum-above-installed fixed version
+    rather than `npm outdated`'s own "latest", every `npm install` it
+    proposes carries `--ignore-scripts`, and a vulnerable TRANSITIVE
+    dependency this npm install's own lockfile (or `node_modules`) actually
+    resolves gets an `npm pkg set overrides[<pkg>]=<version>` step (bracket
+    notation: a dotted package name would otherwise become a nested key;
+    the key uses the LOCKFILE's own spelling of the name, never a CVE
+    scanner's own casing) followed by a `npm install --ignore-scripts` to
+    re-resolve the lockfile. `upgrade_command` stays completely unquoted —
+    `create_fix_pr` runs it without a shell, and a quoted form there
+    corrupted `package.json` while still reporting success; a shell-quoted,
+    paste-safe copy of the same command is in the new `shell_command` field
+    instead. A CVE whose recorded fix is already at or below the installed
+    version is reported `already_fixed` — including for a direct dependency
+    `npm outdated` does not list because it is already at latest, whose
+    version is read from `package-lock.json` / `node_modules`. A pnpm or
+    yarn project gets NO npm command at all: pnpm ignores npm's top-level
+    `overrides` (measured on pnpm 10.33.2) and an `npm install` there writes
+    a `package-lock.json` while `pnpm-lock.yaml` / `yarn.lock` stays
+    vulnerable, so each CVE'd package is reported with the manual
+    `pnpm.overrides` / `resolutions` fix instead, and the manager is named
+    in `unsupported_ecosystems_present`. A workspace member is recognised
+    too: without a lockfile of its own, each directory up to the
+    repository root is checked for `pnpm-workspace.yaml` /
+    `pnpm-lock.yaml` / `yarn.lock`, the root lock is read, and the fix
+    names the workspace ROOT `package.json`, where pnpm and yarn read
+    overrides. Only the npm and pip branches target the minimum fixed
+    version; the other stacks' security steps keep their "outdated"
+    command's latest version, and the tool description says so. Every
+    package with an active CVE
+    that could not become a step (a range specifier, an unfixable
+    downgrade, an already-resolved/stale CVE, an untraceable transitive
+    dependency) is reported in a new `unplanned` list instead of silently
+    dropped, and a new `runner_failures` list names every ecosystem command
+    that could not do its job (not installed, a failing exit, empty or
+    unparseable output, a refused or failed .NET restore with its NuGet
+    code). As a final catch-all, a CVE'd package no runner claimed is
+    attributed from the project's manifests AND its `composer.lock` /
+    `Cargo.lock` / `go.mod` + `go.sum` / `Gemfile.lock` / NuGet
+    `packages.lock.json` — `already_fixed` when every recorded version is
+    past the fix, as on npm — and reported with the reason that actually
+    applies: its runner failed, it is declared but its runner only plans
+    what its own "outdated" command lists (composer/cargo/go/bundler, .NET
+    top-level references), it is only a transitive entry in a lockfile, or
+    no manifest declares it and no runner listed it (ecosystem
+    `unknown`). The CVE source for both branches is the latest `deps` /
+    `deps_audit` / `security_full` scan of the SAME project
+    (`listHistoryForProject`), not an unscoped "latest scan in the whole
+    database" lookup that a different project's scan could win.
+  - `license_compatibility` returned zero issues whenever no project
+    license was found — the normal case for proprietary client work — and
+    never read npm's `UNLICENSED`, composer's own documented `"proprietary"`
+    / `"SEE LICENSE IN …"` labels, or a `.csproj`'s
+    `PackageLicenseExpression`. All of those are now treated as
+    proprietary/all-rights-reserved and still flag copyleft dependencies. An
+    SPDX `OR`/`AND` expression is now evaluated on BOTH sides — the
+    project's own declared license, not only the dependency's — instead of
+    silently reading as compatible once whitespace-collapsed into an
+    unrecognisable string (the project side was never parsed at all before
+    this), and any dependency license this tool does not recognise at all
+    is reported in a new `undetermined` list — never silently compatible.
+    `GPL`/`LGPL`/`AGPL` are now matched in all three SPDX forms (bare,
+    `-only`, `-or-later`, plus the deprecated `+`) instead of normalising
+    the suffix away, which used to exempt `-or-later` from every check
+    entirely. GNU-family pairs are decided by VERSION: a combination is
+    fine when one version of the license is allowed by both sides, so the
+    same license on both sides is compatible (it used to read
+    `undetermined`), `GPL-2.0-only` + `GPL-3.0-only` is incompatible in
+    either direction, and a `GPL-2.0-or-later` project — which can elect
+    GPL-3.0 — is compatible with both a GPL-3.0 and an Apache-2.0
+    dependency (it used to pass one and flag the other); an LGPL dependency
+    in a GPL project is judged by the GPL versions it may be relicensed
+    under. An AGPL dependency's reason is version-accurate: AGPL-1.0 is
+    GPL-2.0 plus its own section 2(d), not "GPL-3.0-compatible licensing".
+    A small explicit matrix covers the remaining pairs the earlier fix's
+    whole-FAMILY "is this project license one I understand" flag silently
+    treated as decided; every other pair is `undetermined`, never silently
+    fine. A dependency or project license mixing `AND`/`OR` with
+    parentheses beyond one redundant outer wrap (`"(MIT OR Apache-2.0) AND
+    GPL-3.0-only"`) is reported `undetermined` by design — this tool does
+    not evaluate such expressions, and the naive OR-first split it replaces
+    silently dropped the `AND GPL-3.0-only` term, reading the whole thing as
+    compatible. `findLatestCompliance` is now scoped to the
+    project (`listHistoryForProject`), not the latest compliance scan in the
+    whole database.
+  - `sbom_diff` compared only the first 25 components in document order
+    (`top_packages`), keyed by name only (so `lodash@3` and `lodash@4`
+    coexisting in the SAME ecosystem — a routine nested-duplicate-install
+    shape — collapsed into one row and hid one of the two versions),
+    against an unscoped default pair. Now always reads the full SBOM
+    document already on disk, keys components by (ecosystem, name) with a
+    VERSION SET per key so coexisting versions are reported per-version
+    rather than collapsed, scopes the default pair to `project_path`'s own
+    latest two SBOM scans, and refuses (rather than silently running) a
+    comparison that would mix a full component list against a capped,
+    ecosystem-untagged summary fallback — the response arrays are capped
+    but `summary` carries the true, uncapped totals except on the
+    (explicitly flagged) both-files-gone fallback path.
 
 ### Changed
 

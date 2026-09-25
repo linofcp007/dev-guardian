@@ -1,25 +1,55 @@
 /**
- * `deps_audit` — dependency audit (Trivy + bot detection + optional
- * stack-specific auditors).
+ * `deps_audit` — dependency audit (Trivy + bot detection + stack-specific
+ * auditors).
  *
- * Builds on `scan_deps` (same Trivy invocation) and adds:
+ * Builds on `scan_deps` (same Trivy invocation, plus a manifest-coverage
+ * check — see `trivy.ts`'s own module comment for the bare-`.csproj` /
+ * bare-`package.json` silent gap it closes) and adds:
+ *
  *   - `bot_configured` flag — whether the project already has renovate.json
  *     or .github/dependabot.yml in place;
  *   - `npm audit --json` (npm 7+/6 both supported) parsed into Findings via
  *     `npmAuditParser` — npm's GitHub-advisory coverage is complementary to
- *     Trivy's, so its vulnerabilities are now counted rather than merely
+ *     Trivy's, so its vulnerabilities are counted rather than merely
  *     captured. To avoid double-counting, an npm finding for a package Trivy
  *     already reported as a CVE is dropped (Trivy is canonical); npm findings
- *     for packages Trivy missed are kept. `pip-audit -f json` is still captured
- *     as evidence only (no parser yet). All raw outputs are persisted under
- *     .guardian/reports/depsaudit-<scan>/. Adding the pip-audit parser later
- *     is the same one-line wiring used for npm here.
+ *     for packages Trivy missed are kept;
+ *   - `pip-audit --format json`, run per `requirements*.txt` file (`-r`) when
+ *     any exist, else against the project directory for a `pyproject.toml`
+ *     project — NEVER bare, which audits whatever Python is on PATH (the MCP
+ *     host's own interpreter, not this project's dependencies). Parsed via
+ *     `pipAuditParser`;
+ *   - `dotnet list <target> package --vulnerable --include-transitive
+ *     --format json --no-restore`, one call per root `.sln`/`.slnx`
+ *     (preferred) or `.csproj`, when the .NET SDK is on PATH. **Each one is
+ *     preceded by `dotnet restore <target> --locked-mode`**, which evaluates
+ *     and runs the project's own MSBuild and reaches its NuGet feeds — the
+ *     same trust boundary `deps_update_plan`'s own dotnet branch crosses.
+ *     `../deps/dotnetRestore.ts` has the measured rules that keep that
+ *     restore from creating or rewriting a lock file. Parsed via
+ *     `dotnetScaParser`. Trivy cannot cover this stack at all without a
+ *     `packages.lock.json` (see `trivy.ts`), so this is NuGet's only source
+ *     of CVE-adjacent findings, not a complementary one like npm's.
+ *
+ * pip-audit resolves `-r` requirements by building a temporary virtualenv
+ * and installing them into it from PyPI — network access, and an sdist's own
+ * build step runs there. The tool description says so, next to the restore.
+ *
+ * All raw outputs are persisted under `.guardian/reports/depsaudit-<scan>/`.
  */
 
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import {
+  classifyRestoreFailure,
+  findDotnetTargets,
+  planDotnetRestore,
+  removeCreatedLockFiles,
+} from '../deps/dotnetRestore.js';
+import { dotnetScaParser } from '../runners/scannerParsers/dotnetSca.js';
 import { NPM_AUDIT_TOOL_NAME, npmAuditParser } from '../runners/scannerParsers/npmAudit.js';
-import { TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
+import { pipAuditParser } from '../runners/scannerParsers/pipAudit.js';
+import { assessManifestCoverage, TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { Finding, ToolRun } from '../types.js';
@@ -91,9 +121,16 @@ registerToolModule(
     name: 'deps_audit',
     title: 'Dependency audit (Trivy + native auditors + bot detection)',
     description:
-      'Run Trivy fs (vuln+license) plus stack-specific auditors (npm audit, pip-audit) when ' +
-      'applicable. Returns Findings, indexed CVEs, and a `bot_configured` flag indicating whether ' +
-      'Renovate or Dependabot is set up in this repo.',
+      'Run Trivy fs (vuln+license) plus stack-specific auditors when applicable: npm audit; ' +
+      'pip-audit, once per requirements*.txt (or the project dir for pyproject.toml), never the ' +
+      'host Python — it builds a TEMPORARY virtualenv and installs those requirements into it ' +
+      'from PyPI (network access; an sdist\'s build step runs there); and for any .sln/.csproj, ' +
+      '`dotnet restore --locked-mode` then `dotnet list package --vulnerable --include-transitive ' +
+      '--no-restore`. That restore EXECUTES the project\'s own MSBuild (targets, imported .props) ' +
+      'and contacts its NuGet feeds; it never rewrites or creates a packages.lock.json (an ' +
+      'out-of-sync lock, or one a restore would create, is reported as a gap). Returns Findings, ' +
+      'indexed CVEs, and a `bot_configured` flag indicating whether Renovate or Dependabot is set ' +
+      'up in this repo.',
     // Its own type, not scan_deps' 'deps': the two shared cache entries and
     // answered for each other. Readers that want "the latest deps_audit" use
     // `isDepsAuditScan`, which also recognises the 2.0.x rows typed 'deps'.
@@ -112,6 +149,7 @@ registerToolModule(
       const parser_inputs: ScannerInvocation['parser_inputs'] = [];
 
       // --- Trivy fs (canonical CVE source for all stacks) ---------------
+      let manifestCoverageGaps: ReturnType<typeof assessManifestCoverage>['gaps'] = [];
       const trivyBin = await scannerAvailable('trivy');
       if (trivyBin) {
         const outFile = join(reportDir, 'deps.json');
@@ -135,17 +173,47 @@ registerToolModule(
         });
         const raw = readJsonSafe(outFile);
         if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
-        tools_run.push({
-          name: 'trivy',
-          status: result.outcome === 'completed' ? 'ok' : 'failed',
-        });
+        if (result.outcome !== 'completed') {
+          tools_run.push({ name: 'trivy', status: 'failed' });
+        } else {
+          // See scanDeps.ts / trivy.ts's own module comment: a manifest
+          // Trivy recognises nothing for (e.g. a bare .csproj with no
+          // packages.lock.json) must never read as a clean scan.
+          const coverage = assessManifestCoverage(ctx.projectPath, raw ?? '');
+          manifestCoverageGaps = coverage.gaps;
+          if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
+            // PARTIAL: trivy genuinely ran and covered SOME ecosystems (its
+            // own tools_run status stays 'ok') but not this one. Fix round
+            // 1, item 4: the gap is named `trivy:<ecosystem>`, never the
+            // bare 'trivy' — `create_fix_pr`'s own verification
+            // (`DEPS_AUDIT_MISSING_TOOLS_NAME`) treats a literal 'trivy' in
+            // `missing_tools` as "trivy did not run at all, nothing it
+            // found can be re-verified", which would block EVERY
+            // trivy-sourced fix (e.g. an unrelated npm CVE) just because
+            // one ecosystem (e.g. NuGet) went uncovered. A pseudo-name that
+            // matches no `tools_run` entry still forces coverage to
+            // 'partial' (missing_tools.length > 0), without colliding with
+            // the exact-string check downstream.
+            tools_run.push({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' });
+            missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`));
+          } else if (coverage.gaps.length > 0) {
+            // FULL SKIP: trivy's own Results were entirely empty — nothing
+            // it reports can be trusted as re-verified, so the bare 'trivy'
+            // name is correct here (unchanged from before this fix round).
+            tools_run.push({ name: 'trivy', status: 'skipped', reason: 'no_supported_manifest' });
+            missing_tools.push('trivy');
+          } else {
+            tools_run.push({ name: 'trivy', status: 'ok' });
+          }
+        }
       } else {
         tools_run.push({ name: 'trivy', status: 'skipped', reason: 'not_installed' });
         missing_tools.push('trivy');
       }
 
       // --- Native auditors ----------------------------------------------
-      // npm audit is parsed into Findings; pip-audit is captured as evidence.
+      // npm audit is parsed into Findings; so is pip-audit, now that it is
+      // pointed at this project's own manifests instead of the host Python.
       if (existsSync(join(ctx.projectPath, 'package.json'))) {
         await tryNativeAudit({
           command: 'npm',
@@ -158,19 +226,21 @@ registerToolModule(
           parser: npmAuditParser,
         });
       }
-      if (
-        existsSync(join(ctx.projectPath, 'pyproject.toml')) ||
-        existsSync(join(ctx.projectPath, 'requirements.txt'))
-      ) {
-        await tryNativeAudit({
-          command: 'pip-audit',
-          args: ['-f', 'json', '-o', join(reportDir, 'pip-audit.json')],
-          outFile: join(reportDir, 'pip-audit.json'),
-          ctx,
-          tools_run,
-          missing_tools,
-        });
-      }
+
+      // pip-audit: NEVER invoked bare — a bare `pip-audit` audits whatever
+      // Python is on PATH (the MCP host's own interpreter), not this
+      // project's dependencies. One invocation PER requirements file (so
+      // each finding is attributed to its REAL source file, fix round 1
+      // item 9 — pip-audit's own JSON output never says which file a
+      // dependency came from when several are combined into one call), or
+      // the project directory for a pyproject.toml-only project.
+      await runPipAudit({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
+
+      // .NET SCA: Trivy cannot cover NuGet at all without a
+      // packages.lock.json (trivy.ts's own module comment), so this is the
+      // stack's only source of dependency findings, run whenever a
+      // .sln/.csproj exists and the SDK is on PATH.
+      const dotnetFailures = await runDotnetSca({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
 
       const bot_configured = detectBots(ctx.projectPath);
 
@@ -181,7 +251,11 @@ registerToolModule(
         parser_inputs,
         dedupeFindings: dropNpmDuplicatesOfTrivy,
         report_paths: [reportDir],
-        extras: { bot_configured },
+        extras: {
+          bot_configured,
+          ...(manifestCoverageGaps.length > 0 ? { manifest_coverage_gaps: manifestCoverageGaps } : {}),
+          ...(dotnetFailures.length > 0 ? { dotnet_restore_failures: dotnetFailures } : {}),
+        },
       };
     },
   }),
@@ -249,7 +323,6 @@ async function tryNativeAudit(opts: NativeAuditOptions): Promise<void> {
   // npm audit writes to stdout; redirect ourselves.
   if (isNpmStdout && result.stdout.length > 0) {
     try {
-      const { writeFileSync } = await import('node:fs');
       writeFileSync(opts.outFile, result.stdout, 'utf8');
     } catch {
       /* swallow */
@@ -292,4 +365,280 @@ async function tryNativeAudit(opts: NativeAuditOptions): Promise<void> {
     // executive summary do not read the result as fully covered.
     opts.missing_tools?.push(opts.command);
   }
+}
+
+// --------------------------------------------------------------- pip-audit
+
+/**
+ * `requirements*.txt` at the project root, plus one level into a
+ * `requirements/` directory (the common `requirements/base.txt` +
+ * `requirements/dev.txt` split) — never a recursive walk, matching this
+ * file's other manifest checks (`package.json`, `pyproject.toml`), which are
+ * root-level existence checks too.
+ */
+function findRequirementsFiles(projectPath: string): string[] {
+  const out: string[] = [];
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(projectPath);
+  } catch {
+    return out;
+  }
+  for (const name of entries) {
+    if (/^requirements.*\.txt$/i.test(name)) out.push(join(projectPath, name));
+  }
+  const reqDir = join(projectPath, 'requirements');
+  if (existsSync(reqDir)) {
+    try {
+      for (const name of readdirSync(reqDir)) {
+        if (name.toLowerCase().endsWith('.txt')) out.push(join(reqDir, name));
+      }
+    } catch {
+      /* ignore — best-effort */
+    }
+  }
+  return out;
+}
+
+/**
+ * A real `pip-audit --format json` report has a `dependencies` array — even
+ * an empty one on a clean project. pip-audit exits 1 on a resolution
+ * failure (a Poetry-only `pyproject.toml` it cannot read, a broken
+ * requirements file, a network error reaching PyPI) the SAME way it exits 1
+ * when vulnerabilities are found, and on that failure path the `-o` file is
+ * either never written or contains something that is not this shape (fix
+ * round 1, item 3 / Global Constraint 3: "a scanner that failed is never
+ * reported as ok"). Mirrors `looksLikeNpmAuditReport` above for the same
+ * reason: exit code alone cannot tell a real report apart from a masked
+ * error.
+ */
+function looksLikePipAuditReport(raw: string): boolean {
+  try {
+    const j = JSON.parse(raw) as Record<string, unknown>;
+    return !!j && typeof j === 'object' && Array.isArray(j['dependencies']);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Runs `pip-audit --format json` once PER requirements file (never bare —
+ * see this file's own module comment), or once against the project
+ * directory for a `pyproject.toml`-only project. One call per file, not one
+ * call with several `-r` flags, so `pipAuditParser` can attribute every
+ * finding to the REAL file it came from (fix round 1, item 9) — pip-audit's
+ * own JSON says nothing about which requirements file a dependency was
+ * read from, so a combined call cannot be attributed at all. The captured
+ * JSON is annotated with `__source_file` before being handed to the parser
+ * (`scanToolFactory.ts` builds one shared `ParserContext` for a whole scan,
+ * so a per-call override cannot go through `ctx` — see `pipAuditParser`'s
+ * own doc comment).
+ *
+ * Aggregated into ONE `tools_run` entry across every file (`ok` if at least
+ * one call produced a real report, `failed` only if every call did not) —
+ * `create_fix_pr` and every other consumer of `tools_run` expect one entry
+ * per named tool, the same pattern `runDotnetSca` already uses for multiple
+ * `.csproj` targets.
+ */
+async function runPipAudit(opts: {
+  ctx: Parameters<NonNullable<Parameters<typeof makeScanTool>[0]['invoke']>>[1];
+  reportDir: string;
+  tools_run: ToolRun[];
+  missing_tools: string[];
+  parser_inputs: ScannerInvocation['parser_inputs'];
+}): Promise<void> {
+  const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = opts;
+  const requirementsFiles = findRequirementsFiles(ctx.projectPath);
+  const hasPyproject = existsSync(join(ctx.projectPath, 'pyproject.toml'));
+  if (requirementsFiles.length === 0 && !hasPyproject) return; // nothing to audit — not a gap
+
+  const bin = await scannerAvailable('pip-audit');
+  if (!bin) {
+    tools_run.push({ name: 'pip-audit', status: 'skipped', reason: 'not_installed' });
+    missing_tools.push('pip-audit');
+    return;
+  }
+
+  // One "target" per invocation: each requirements file individually, or
+  // the project directory itself when there is no requirements file at all.
+  const targets: Array<{ arg: string; sourceFile: string }> =
+    requirementsFiles.length > 0
+      ? requirementsFiles.map((f) => ({ arg: f, sourceFile: relative(ctx.projectPath, f) || f }))
+      : [{ arg: ctx.projectPath, sourceFile: 'pyproject.toml' }];
+
+  let anyOk = false;
+  let anyFailed = false;
+  for (const [i, target] of targets.entries()) {
+    const outFile = join(reportDir, `pip-audit-${i}.json`);
+    const args =
+      requirementsFiles.length > 0
+        ? ['-r', target.arg, '--format', 'json', '-o', outFile]
+        : ['--format', 'json', '-o', outFile, target.arg];
+    const result = await runProcess({
+      command: 'pip-audit',
+      args,
+      cwd: ctx.projectPath,
+      env: ctx.scriptEnv,
+      signal: ctx.signal,
+      onLog: ctx.onLog,
+    });
+    // Exit 0/1 alone is not success — pip-audit exits 1 on a genuine
+    // failure the same way it does on "vulnerabilities found" (item 3).
+    const exitOk = result.outcome === 'completed' || result.exitCode === 0 || result.exitCode === 1;
+    const raw = exitOk ? readJsonSafe(outFile) : null;
+    if (raw && looksLikePipAuditReport(raw)) {
+      anyOk = true;
+      let annotated = raw;
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        parsed['__source_file'] = target.sourceFile;
+        annotated = JSON.stringify(parsed);
+      } catch {
+        /* raw already passed looksLikePipAuditReport, so this is unreachable
+         * in practice; fall back to the unannotated text rather than drop it */
+      }
+      parser_inputs.push({ parser: pipAuditParser, input: annotated });
+    } else {
+      anyFailed = true;
+    }
+  }
+
+  if (anyOk) {
+    tools_run.push({
+      name: 'pip-audit',
+      status: 'ok',
+      reason: anyFailed ? 'parsed into findings (failed for at least one target)' : 'parsed into findings',
+    });
+    if (anyFailed) missing_tools.push('pip-audit');
+  } else {
+    tools_run.push({
+      name: 'pip-audit',
+      status: 'failed',
+      reason: 'ran but produced no audit report for any target (resolution failure or unsupported project?)',
+    });
+    missing_tools.push('pip-audit');
+  }
+}
+
+
+// --------------------------------------------------------------- .NET SCA
+
+/** One target's restore/list failure, surfaced structurally in the scan's
+ *  extras (`dotnet_restore_failures`) as well as in the tool's reason. */
+interface DotnetTargetFailure {
+  target: string;
+  code: string;
+  reason: string;
+}
+
+/**
+ * Runs `dotnet list <target> package --vulnerable --include-transitive
+ * --format json --no-restore` for every target `findDotnetTargets` finds,
+ * each one preceded by an explicit `dotnet restore` planned by
+ * `planDotnetRestore` (`../deps/dotnetRestore.ts` — its module comment has
+ * the measured rules): `--locked-mode` on every restore, lock files found from
+ * the solution/project list rather than a depth-limited walk, and a restore
+ * that would create a lock file is either prevented
+ * (`-p:RestorePackagesWithLockFile=false`) or not run at all. `dotnet list`
+ * never restores on its own (`--no-restore`), so the listing is always built
+ * from the restore this call just ran — which is also why no
+ * `requestedVersion`/`resolvedVersion` comparison is made any more: after a
+ * fresh restore the two legitimately differ for every floating (`12.*`),
+ * range (`[12.0.1,13.0)`), two-part (`12.0`) or not-on-the-feed (`12.0.0`
+ * resolving to `12.0.1`) reference, and treating that as staleness threw real
+ * findings away.
+ *
+ * A failed target is one coverage gap, not a whole-scan failure — the other
+ * targets still run — and its reason carries NuGet's own code, so an
+ * out-of-sync lock (`NU1004`) reads differently from a missing package
+ * (`NU1101`) or an unreachable feed (`NU1301`).
+ */
+async function runDotnetSca(opts: {
+  ctx: Parameters<NonNullable<Parameters<typeof makeScanTool>[0]['invoke']>>[1];
+  reportDir: string;
+  tools_run: ToolRun[];
+  missing_tools: string[];
+  parser_inputs: ScannerInvocation['parser_inputs'];
+}): Promise<DotnetTargetFailure[]> {
+  const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = opts;
+  const targets = findDotnetTargets(ctx.projectPath);
+  if (targets.length === 0) return []; // no .sln/.csproj — nothing to do, not a gap
+
+  const dotnetBin = await scannerAvailable('dotnet');
+  if (!dotnetBin) {
+    tools_run.push({ name: 'dotnet', status: 'skipped', reason: 'not_installed' });
+    missing_tools.push('dotnet');
+    return [];
+  }
+
+  let anyOk = false;
+  const failures: DotnetTargetFailure[] = [];
+  for (const [i, target] of targets.entries()) {
+    const rel = relative(ctx.projectPath, target) || target;
+    const plan = planDotnetRestore(ctx.projectPath, target);
+    if (plan.blocked) {
+      failures.push({ target: rel, code: plan.blocked.code, reason: plan.blocked.reason });
+      continue;
+    }
+    const restore = await runProcess({
+      command: 'dotnet',
+      args: plan.args,
+      cwd: ctx.projectPath,
+      env: ctx.scriptEnv,
+      signal: ctx.signal,
+      onLog: ctx.onLog,
+    });
+    const created = removeCreatedLockFiles(plan);
+    if (created.length > 0) {
+      failures.push({
+        target: rel,
+        code: 'lock_file_would_be_created',
+        reason:
+          `restore created ${created.map((c) => relative(ctx.projectPath, c) || c).join(', ')} ` +
+          '(a RestorePackagesWithLockFile opt-in this scan could not see) — deleted again; results not used',
+      });
+      continue;
+    }
+    if (restore.outcome !== 'completed') {
+      // Never retried without --locked-mode: that retry would be exactly the
+      // lock rewrite this whole sequence exists to prevent.
+      const failure = classifyRestoreFailure(restore.stdout, restore.stderr);
+      failures.push({ target: rel, code: failure.code, reason: failure.reason });
+      continue;
+    }
+
+    const list = await runProcess({
+      command: 'dotnet',
+      args: ['list', target, 'package', '--vulnerable', '--include-transitive', '--format', 'json', '--no-restore'],
+      cwd: ctx.projectPath,
+      env: ctx.scriptEnv,
+      signal: ctx.signal,
+      onLog: ctx.onLog,
+    });
+    if (list.outcome !== 'completed' || list.stdout.trim().length === 0) {
+      failures.push({ target: rel, code: 'list_failed', reason: 'restored, but `dotnet list package --vulnerable` failed' });
+      continue;
+    }
+    anyOk = true;
+    parser_inputs.push({ parser: dotnetScaParser, input: list.stdout });
+    try {
+      writeFileSync(join(reportDir, `dotnet-list-${i}.json`), list.stdout, 'utf8');
+    } catch {
+      /* best-effort evidence copy */
+    }
+  }
+
+  const gapReason = failures.map((f) => `${f.target}: ${f.reason}`).join('; ');
+  if (anyOk) {
+    tools_run.push({
+      name: 'dotnet',
+      status: 'ok',
+      reason: failures.length > 0 ? `parsed into findings (gap — ${gapReason})` : 'parsed into findings',
+    });
+    if (failures.length > 0) missing_tools.push('dotnet');
+  } else {
+    tools_run.push({ name: 'dotnet', status: 'failed', reason: gapReason || 'no target could be listed' });
+    missing_tools.push('dotnet');
+  }
+  return failures;
 }
