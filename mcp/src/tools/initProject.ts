@@ -18,7 +18,12 @@
  *      difference. See `configdrift/refresh.ts` for why an edited file is
  *      never overwritten, under any flag.
  *   5. Run `scripts/scan/initial-scan.sh` so the response includes a
- *      first-pass summary of the project's current security state.
+ *      first-pass summary of the project's current security state — except
+ *      its own "Secrets:" line, which is replaced with one computed from
+ *      `runGitleaksScan` (history AND working tree; see
+ *      `computeSecretsStatusLine` below): the shell script's own
+ *      `gitleaks detect` reads commits only, so an uncommitted `.env` used
+ *      to read "0 findings".
  *
  * ---- Why step 3 grew a provenance stamp -------------------------------
  *
@@ -33,8 +38,12 @@
  * Profiles:
  *   - minimal   → gitleaks + renovate
  *   - standard  → minimal + semgrep + pre-commit
- *   - paranoid  → standard (placeholder — extra hardening tracked as
- *                  follow-up; see notes in CHANGELOG when added)
+ *   - paranoid  → standard's files, but the gitleaks and Renovate configs are
+ *                  profile-specific variants (GITLEAKS_PARANOID,
+ *                  RENOVATE_PARANOID below): no content-based secret
+ *                  allowlist, and no automerge anywhere. Genuinely stricter,
+ *                  not an alias — see the tool description for exactly what
+ *                  differs.
  */
 
 import { existsSync } from 'node:fs';
