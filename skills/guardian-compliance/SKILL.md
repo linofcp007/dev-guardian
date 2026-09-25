@@ -1,196 +1,118 @@
 ---
 name: guardian-compliance
-description: Compliance check — GDPR/RGPD, OSS licenses, SBOM (Syft), privacy policy scaffolding. EN triggers — use when the user says "guardian compliance", "GDPR", "personal data handling", "licenses", "can you check the licenses?", "I need an SBOM", "cookie consent", "privacy policy", "terms of use", "data retention", "anonymization", "DPO", "right to be forgotten", "SOC 2 prep", "ISO 27001". PT triggers — usa quando disserem "guardian compliance", "GDPR", "RGPD", "tratamento de dados pessoais", "licenças", "podes verificar as licenças?", "preciso de SBOM", "cookie consent", "privacy policy", "termos de utilização", "data retention", "anonimização", "DPO", "right to be forgotten", "SOC 2 prep", "ISO 27001". ES triggers — úsala cuando digan "guardian compliance", "RGPD", "LOPD", "tratamiento de datos personales", "licencias", "¿puedes revisar las licencias?", "necesito un SBOM", "cookie consent", "política de privacidad", "términos de uso", "retención de datos", "anonimización", "DPO", "derecho al olvido", "preparación SOC 2", "ISO 27001". Trilingual EN/PT/ES — respond in the user's language.
+description: Compliance through the dev-guardian MCP tools — GDPR / RGPD technical checklist, open-source licence audit and compatibility, SBOM, policy documents, and audit evidence for SOC 2 / ISO 27001. EN triggers — "GDPR", "personal data", "check the licences", "I need an SBOM", "cookie consent", "privacy policy", "data retention", "right to be forgotten", "SOC 2 prep", "ISO 27001". PT — "RGPD", "dados pessoais", "verifica as licenças", "preciso de um SBOM", "cookie consent", "política de privacidade", "retenção de dados", "direito ao esquecimento", "preparar SOC 2". ES — "RGPD", "LOPD", "datos personales", "revisa las licencias", "necesito un SBOM", "política de privacidad", "retención de datos", "derecho al olvido", "preparar SOC 2". Respond in the user's language.
 ---
 
 # Guardian Compliance
 
-Compliance check pragmático para projetos web/SaaS. Foca em GDPR (utilizadores na UE), licenças open-source, e prontidão básica para auditorias.
+Compliance pragmático para projetos web/SaaS: RGPD (utilizadores na UE), licenças open-source e prontidão básica para auditorias. As partes mensuráveis passam pelas tools MCP do dev-guardian — ficam em `.guardian/guardian.db` e alimentam a evidência de auditoria; o resto é uma checklist técnica que se percorre no código.
 
-> Esta skill orienta tecnicamente. **Não substitui aconselhamento legal.** Para questões específicas de direito português/europeu, sugerir a skill `advogado-pt` se disponível.
+> Esta skill orienta tecnicamente. **Não substitui aconselhamento jurídico.** Para questões de direito português/europeu, sugere a skill `advogado-pt` se estiver disponível.
 
-## GDPR / RGPD — checklist técnica
+## 0. Estado atual (sempre primeiro)
 
-Para apps que tratam dados de utilizadores na UE:
+`compliance_check { project_path: "<project>" }` — scan de licenças do Trivy e deteção dos documentos de política na raiz do projeto (PRIVACY, TERMS, COOKIES, DPA, SECURITY, CODE_OF_CONDUCT). Devolve findings para licenças de risco e, em `extras`, `licenses_summary`, `risky_licenses` e `policy_documents_found`.
+
+## RGPD — checklist técnica
+
+Para apps que tratam dados de utilizadores na UE. Nenhuma tool faz esta parte — é leitura do código, guiada pelo que se segue.
 
 ### 1. Mapeamento de dados pessoais
 
-Identifica que dados pessoais a app guarda. Procura no código:
+Procura no código onde se guardam dados pessoais. Um ponto de partida — cada extensão com o seu próprio `--include`, porque o bash não expande chaves dentro de aspas e um glob com chaves passado ao grep não casa nenhum ficheiro:
 
 ```bash
-# Padrões comuns
-grep -rE "(email|phone|address|name|cpf|nif|birthday|ip|cookie)" --include="*.{ts,js,py,php}"
+grep -rniE "email|phone|telefone|morada|address|birth|nascimento|\bnif\b|\bniss\b|cart[aã]o.?de.?cidad[aã]o|\bcc_?num|\biban\b|ip_?addr" \
+  --include="*.ts" --include="*.js" --include="*.py" --include="*.php" --include="*.cs" --include="*.go" --include="*.java" --include="*.rb" \
+  --exclude-dir=node_modules --exclude-dir=vendor --exclude-dir=.git .
 ```
+
+Identificadores portugueses a procurar pelo nome e pelo formato: **NIF** (9 dígitos), **NISS** (11 dígitos), **Cartão de Cidadão** (número de identificação civil + dígitos de controlo). Depois, os modelos, schemas e migrations (é lá que os dados vivem, não só nas variáveis).
 
 Lista no formato:
 
 ```text
-| Dado          | Onde guardado | Quem acede | Retenção | Base legal       |
-| ------------- | ------------- | ---------- | -------- | ---------------- |
-| Email         | users table   | App+admin  | Indef.   | Contrato         |
-| IP            | logs Loki     | Admin      | 90 dias  | Legítimo interesse |
+| Dado          | Onde guardado | Quem acede | Retenção | Base legal         |
+| ------------- | ------------- | ---------- | -------- | ------------------ |
+| Email         | users table   | App+admin  | Indef.   | Contrato           |
+| IP            | logs          | Admin      | 90 dias  | Interesse legítimo |
 ```
 
 ### 2. Cookies e tracking
 
-Verifica:
+- Há cookie banner **antes** de definir cookies não-essenciais?
+- Há opt-out para analytics? (Plausible / Umami são RGPD-friendly por design, sem banner)
+- Há scripts de terceiros (Google Analytics, Facebook Pixel)? O GA4 não é trivialmente conforme — considera Plausible / Umami / PostHog self-hosted.
+- Cookies essenciais (auth) com `HttpOnly; Secure; SameSite=Strict`.
 
-- Há cookie banner antes de set cookies não-essenciais?
-- Há opt-out para analytics? (Plausible/Umami são GDPR-friendly por design, sem banner)
-- Há third-party scripts (Google Analytics, Facebook Pixel)?
-  - GA4 não é trivialmente GDPR-compliant — considera Plausible/Umami/PostHog self-hosted
-- Cookies essenciais (auth) podem usar `HttpOnly; Secure; SameSite=Strict`
+Templates em `${CLAUDE_PLUGIN_ROOT}/configs/compliance/cookie-banner/` (HTML+JS mínimo, sem dependências).
 
-Templates em `${CLAUDE_PLUGIN_ROOT}/configs/compliance/cookie-banner/` (HTML+JS minimal sem dependências).
+### 3. Direitos do titular
 
-### 3. Direitos do utilizador
-
-A app suporta?
-
-- **Acesso** — pode o utilizador descarregar os seus dados? (endpoint `/me/export`)
-- **Retificação** — pode atualizar perfil?
-- **Apagamento** — endpoint `/me/delete` que apaga ou anonimiza?
-- **Portabilidade** — export em formato standard (JSON/CSV)?
-- **Oposição** — pode desativar marketing? Opt-out de profiling?
-
-Para cada um em falta, propõe endpoint + UI mínimos.
+A app suporta **acesso** (exportar os dados, por exemplo `/me/export`), **retificação**, **apagamento** (`/me/delete` que apaga ou anonimiza), **portabilidade** (JSON / CSV) e **oposição** (desligar marketing e profiling)? Para cada um em falta, propõe o endpoint e a UI mínimos.
 
 ### 4. Logs e PII
 
-Verifica que logs **não** guardam:
-
-- Passwords (mesmo hashed em logs é mau)
-- Tokens completos (mascara: `tok_abc...xyz`)
-- Body de requests com PII
-- IPs completos (anonimiza: 192.168.1.0)
-
-Usa Semgrep para procurar:
+Os logs **não** guardam passwords (nem em hash), tokens completos (mascara: `tok_abc...xyz`), bodies de requests com PII, nem IPs completos sem necessidade (anonimiza: `192.168.1.0`). Uma regra Semgrep local ajuda — regista-a com `register_custom_rules { project_path: "<project>", paths: [".semgrep/log-pii.yml"] }` para o `scan_sast` a correr em cada scan:
 
 ```yaml
 rules:
   - id: log-pii
-    patterns:
-      - pattern-either:
-          - pattern: logger.$LEVEL(..., password=..., ...)
-          - pattern: logger.$LEVEL(..., token=..., ...)
-    message: Possível PII/secret a ir para logs
+    languages: [python]
+    severity: WARNING
+    message: Possível PII ou secret a ir para os logs
+    pattern-either:
+      - pattern: logger.$LEVEL(..., password=$X, ...)
+      - pattern: logger.$LEVEL(..., token=$X, ...)
 ```
 
-### 5. Encryption
+### 5. Encriptação
 
-- **Em trânsito** — HTTPS sempre, HSTS header
-- **Em repouso** — DB encriptada (Postgres `pgcrypto` para colunas sensíveis; ou full-disk)
-- **Backups** — encriptados (não em S3 público!)
+- **Em trânsito** — HTTPS sempre, header HSTS, TLS 1.2+, sem cifras fracas (`testssl.sh`, open-source)
+- **Em repouso** — DB encriptada (por exemplo `pgcrypto` para colunas sensíveis, ou full-disk)
+- **Backups** — encriptados, nunca num bucket público
 
-Verifica configs:
+### 6. Política de privacidade
 
-- TLS 1.2+ no servidor
-- Sem cifras fracas (testar com `testssl.sh` open-source)
-
-### 6. Privacy policy
-
-Se não existe, gera template em `${CLAUDE_PLUGIN_ROOT}/configs/compliance/privacy-policy-template.md` com:
-
-- Que dados recolhe
-- Para quê
-- Quanto tempo mantém
-- Com quem partilha
-- Direitos do utilizador e como exercer
-- Contacto do controlador
-
-Avisa: **rever com advogado antes de publicar**.
+Se não existe (o `compliance_check` diz em `policy_documents_found`), parte do template `${CLAUDE_PLUGIN_ROOT}/configs/compliance/privacy-policy-template.md`: que dados recolhe, para quê, durante quanto tempo, com quem partilha, os direitos do titular e como exercê-los, o contacto do responsável. **Rever com um advogado antes de publicar.**
 
 ## Licenças open-source
 
-### Scan
+1. `compliance_check { project_path: "<project>" }` (se ainda não correu).
+2. `license_compatibility { project_path: "<project>" }` — cruza a licença do projeto (`package.json` incluindo `UNLICENSED`, `pyproject.toml`, `composer.json` incluindo `proprietary`, `PackageLicenseExpression` do `.csproj`, ou `LICENSE`) com as das dependências. Sem licença declarada conta como proprietário.
 
-```bash
-# Node
-npx license-checker --json --production > .guardian/licenses.json
-
-# Python
-pip-licenses --format=json --output-file .guardian/licenses.json --with-license-file
-
-# PHP
-composer licenses --format=json > .guardian/licenses.json
-
-# Go
-go-licenses report ./... > .guardian/licenses.csv
-```
-
-### Análise
-
-Para cada dependência, classifica:
-
-| Tipo                 | Exemplos                  | Compat. com projeto comercial proprietário? |
+| Tipo                 | Exemplos                  | Compatível com produto comercial fechado?   |
 | -------------------- | ------------------------- | ------------------------------------------- |
-| Permissive           | MIT, BSD, ISC, Apache 2.0 | Sim                                         |
-| Weak copyleft        | LGPL, MPL                 | Sim com cuidado (dynamic linking)           |
-| Strong copyleft      | GPL v2/v3, AGPL           | Não (excepto se libertares o teu)           |
-| Non-OSS / commercial | Custom EULAs              | Verificar cada um                           |
+| Permissiva           | MIT, BSD, ISC, Apache 2.0 | Sim                                         |
+| Copyleft fraca       | LGPL, MPL                 | Sim, com cuidado (dynamic linking)          |
+| Copyleft forte       | GPL v2/v3, AGPL           | Não (exceto se libertares o teu código)     |
+| Não-OSS / comercial  | EULAs próprias            | Verificar cada uma                          |
 
-Sinaliza imediatamente:
+- 🔴 GPL / AGPL num produto fechado
+- 🟡 LGPL — OK como biblioteca dinâmica, problemático em static linking
+- 🟢 MIT / Apache / BSD
+- `undetermined` (expressões SPDX OR/AND, licenças não reconhecidas) **nunca** é "compatível" — lista-as para decisão humana.
 
-- 🔴 GPL/AGPL detetada — incompatível com produto fechado
-- 🟡 LGPL — OK se usado como dynamic lib, problemático se static link
-- 🟢 MIT/Apache/BSD — OK
+## SBOM
 
-Output em formato lista clara, com link ao licença e package.
+`generate_sbom { project_path: "<project>", format: "cyclonedx-json" }` — ou `format: "spdx-json"`. Syft, com Trivy como fallback; o ficheiro completo fica em `.guardian/reports/sbom-<scan>/` (`file_path` na resposta). Entre releases, `sbom_diff { project_path: "<project>" }`. Útil para responder em minutos a um CVE crítico novo ("usamos a lib X?") e para certificações que o exigem.
 
-## SBOM (Software Bill of Materials)
+## Evidência para auditoria (SOC 2 / ISO 27001 / RGPD)
 
-Útil para:
+`compliance_evidence { framework: "gdpr" }` — ou `framework: "soc2"` / `framework: "iso27001"` — gera um documento Markdown a partir do estado acumulado: último scan de compliance, resumo de licenças, contagens de CVEs, baseline e supressões. Para o pacote completo de controlos, `/guardian-report soc2`.
 
-- Resposta rápida a CVE críticos (sei se uso a lib X em 30 segundos)
-- Compliance (algumas certificações exigem)
-- Auditoria de supply chain
+Preparação básica que nenhuma tool verifica (checklist):
 
-Gera com Syft:
-
-```bash
-syft . -o cyclonedx-json > sbom.json
-syft . -o spdx-json > sbom-spdx.json   # SPDX format
-syft . -o table                         # human readable
-```
-
-Inclui no CI para regenerar a cada release.
-
-## SOC 2 / ISO 27001 — preparação básica
-
-Não é objetivo desta skill conduzir auditoria. Mas pode preparar o terreno:
-
-- [ ] Inventário de subprocessadores (lista de SaaS usados, propósito, DPA assinado)
+- [ ] Inventário de subprocessadores (SaaS usados, propósito, DPA assinado)
 - [ ] Política de passwords e MFA
 - [ ] Backup e disaster recovery testados
-- [ ] Logs de acesso preservados ≥1 ano
-- [ ] Process de onboarding/offboarding de pessoas
+- [ ] Logs de acesso preservados ≥ 1 ano
+- [ ] Onboarding / offboarding de pessoas
 - [ ] Revisões de acesso periódicas
-
-Para cada item, propõe o mínimo viável (template em Markdown) e marca como "rever em auditoria".
-
-## Cookie banner mínimo
-
-Template open-source pronto a colar (sem dependências externas, GDPR-friendly):
-
-```html
-<!-- ${CLAUDE_PLUGIN_ROOT}/configs/compliance/cookie-banner/banner.html -->
-```
-
-Comportamento:
-
-- Mostra na primeira visita
-- 3 opções: Aceitar todos · Só essenciais · Configurar
-- Bloqueia tracking até decisão (não set scripts)
-- Decisão persiste em localStorage por 6 meses
-- Link permanente "Cookie settings" no footer
 
 ## Frequência
 
-- Privacy/cookies review: **a cada release menor**
-- Licença scan: **a cada PR que muda dependências**
-- SBOM regen: **a cada release**
-- Audit completa: **anual**
-
-## Output
-
-Sumário em `.guardian/reports/compliance-<timestamp>.md` com checklist completa, status de cada item, ações pendentes.
+- Privacidade / cookies: a cada release menor
+- Licenças: a cada PR que muda dependências
+- SBOM: a cada release
+- Auditoria completa: anual

@@ -10,6 +10,65 @@ version bump.
 
 ### Added
 
+- `wp_vuln_check_source` — WordPress vulnerabilities from source: no live
+  URL, no WP-CLI, no WPScan. Reads a local WordPress install's core version
+  (`wp-includes/version.php`), plugin versions (main-file header, falling
+  back to `readme.txt`'s `Stable tag:`) and theme versions (`style.css`
+  header), and matches them against the Wordfence Intelligence v3
+  vulnerability feed (`WORDFENCE_API_KEY`; v1/v2 are gone, HTTP 410 — v3
+  requires a token for every caller) using PHP's own `version_compare()`
+  ordering, not semver (`1.2`, `1.2.3.4`, `-beta`, `2.0-RC1` all handled).
+  The ~100+ MB production feed is cached whole in the OS user cache
+  directory (`%LOCALAPPDATA%`/`~/.cache`/`~/Library/Caches`, never SQLite),
+  refreshed at most once per 24h in aggregate across every caller. Also
+  queries wp.org's plugin directory (no key needed) for a plugin that is
+  closed/removed or not updated in over two years. No key, or
+  `GUARDIAN_OFFLINE=1`, is a real coverage gap (`partial`, with a stated
+  reason) — never a silent "0 vulnerabilities"; wp.org's own checks run
+  regardless of whether a Wordfence key is configured. Complements
+  `wp_vuln_check` (WPScan, needs a live URL) for offline/CI-only projects.
+
+- Scoped scans: `scan_sast`, `scan_secrets`, `bug_hunt` and `quality_check`
+  take `scope: { paths?, diff?: { base?, head?, staged?, include_untracked? },
+  since? }` — named files/directories/globs inside the project, a git change
+  set (every uncommitted change, the index, or `base...HEAD`), or what changed
+  since a commit/tag/date. The file set is computed with git (`-z`,
+  `--relative`, refs verified with `--end-of-options`; an unresolvable ref is
+  an error, never an empty diff); Semgrep, Bandit, ruff, radon, ESLint and
+  jscpd get the files as explicit, batched targets; gitleaks reads exactly the
+  scope's commits (`base..head`, `--since=`) or its files; findings outside
+  the scope are dropped and counted. A scoped scan is recorded with
+  `meta.scope`: it never becomes a baseline (`set_baseline` refuses one by
+  id), never feeds the open findings, never supersedes a whole-project scan
+  in a comparison, and never shares a cache entry with one. `.NET` build
+  analysis and quality budgets are project-level and are reported as skipped
+  for a scope, not run. A `project_path` that is a file is answered with the
+  scoped call to make (`retry_with`). The scoped commands (`diff`,
+  `prepush`, `branch`, `since`, `incoming`, `file`) can now ask for what they
+  describe instead of a whole-project scan.
+- `scan_deps` takes `packages` (a response filter, like `categories`): every
+  finding is still recorded; `package_filter.not_found` names requested
+  packages Trivy reported nothing for.
+- `.guardianignore` at a project root (gitignore syntax, verified against
+  `git check-ignore`) is honoured by every scan: Semgrep `--exclude`, Trivy
+  `--skip-dirs`/`--skip-files`, Bandit `-x`, and a result filter for every
+  scanner (gitleaks, jscpd, ruff, …). Every response of a project that has one
+  carries `exclusions` — files excluded, findings dropped — so exclusion is
+  never silent. This repo ships one excluding its deliberately vulnerable
+  fixture trees (`mcp/test/fixtures/`, `mcp/test/e2e/eval-vuln-fixture/`),
+  which a self-scan used to report as critical and high findings.
+
+- CVE exploitability intel: CISA KEV membership and FIRST EPSS score, cached
+  24h in a new `cve_intel` table (migration 010, keyed by `cve_id` alone — no
+  scan/project scope, so it survives retention pruning). `prioritize_findings`
+  and `risk_score` now weigh a finding/CVE up when it is KEV-listed or has a
+  high EPSS score; `guardian://cves/active` shows both when already cached
+  (cache only — it never makes a network call itself). Fully offline-safe:
+  `GUARDIAN_OFFLINE=1` skips the network, every fetch is timeout-bounded, and
+  a CVE the network could not measure is reported `unavailable` and left
+  unenriched, never scored as "not exploited". `create_fix_pr` ordering is
+  not yet wired to this — `intel/rank.ts#rankByExploitability` is ready for
+  the integrator to call from `fixpr/candidates.ts#selectGroups`.
 - `audit_agent_config` — audits the AI-agent WORKSPACE configuration itself
   (`.mcp.json`, `.claude/settings.json` + `.claude/settings.local.json`,
   `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, and with
@@ -68,6 +127,25 @@ version bump.
     looks the fingerprint up within that project's own scans, and answers
     `unknown_finding` when no completed scan of it ever reported one.
 
+- `dev-guardian scan` / `baseline update` exited 2 ("INCOMPLETE SCAN —
+  security_scan_full: trivy not installed") on a clean project with Trivy
+  installed. Two defects met there. `scan_deps`' manifest-coverage check
+  counted a `package.json` that declares no dependency as a manifest Trivy
+  missed — Trivy 0.69.3 reports nothing for one, lock file or not, so the
+  "gap" could never be closed; it is no longer a gap (npm only: a `.csproj`
+  draws packages from outside itself). And the CI gate worded every
+  `missing_tools` name without an `ok` run of its own as "not installed":
+  Trivy skipped for want of a readable manifest now reads
+  `trivy skipped (no_supported_manifest)`, an ecosystem gap reads
+  `trivy ran with reduced coverage — dotnet not covered (…)`, and a scanner
+  that failed is reported once, as failed. Coverage and exit codes are
+  unchanged: a real gap is still `partial` and exit 2.
+- Scan comparisons: a `trivy:<ecosystem>` gap now leaves only that
+  ecosystem's Trivy findings (keyed by the lock file they came from) not
+  re-measured. It used to fall back to every Trivy finding, IaC
+  misconfigurations included. `pip-audit` and `dotnet` (whose findings say
+  `dotnet-list-package`) and `agent-audit` are placed in the bookkeeping
+  table, so a failed one no longer resolves its findings.
 - `.mcp.json` used `${CLAUDE_PROJECT_DIR}`, which Claude Code does not expand
   there (only `${CLAUDE_PLUGIN_ROOT}`, used by `plugin.json`, is) — the
   literal placeholder string became part of the path and the server failed
@@ -340,6 +418,87 @@ version bump.
   files for three minutes instead of ten seconds — found in review); the
   nine files that genuinely need longer opt in with their own
   `vi.setConfig({ testTimeout: 180_000 })`.
+- **BREAKING — the slash commands are consolidated from 48 to 10.** Nine
+  skills were unreachable: a command named like a skill shadows it, and each
+  of those commands (`/guardian-init`, `/guardian-review`, `/guardian-deps`,
+  …) told the model to "invoke the X skill", which it found already loaded,
+  and looped. Those commands are gone, so the same `/name` now invokes the
+  skill itself. Every remaining command names the MCP tools and parameters it
+  drives (or says it is a checklist with no automation), and
+  `mcp/test/unit/pluginSurface/docReferences.test.ts` holds every tool call
+  in `commands/` and `skills/` — parameter names, nested `scope` keys and enum
+  values — to the registered zod schemas, and every `/command` the docs, the
+  README and the hook messages name to a command or skill that exists.
+  Old → new:
+
+  | Old | New |
+  | --- | --- |
+  | `/guardian-scan` | `/guardian-scan` — no argument runs `security_scan_full` |
+  | `/guardian-diff` | `/guardian-scan --uncommitted` (or `--staged` for the index only) |
+  | `/guardian-prepush` | `/guardian-scan --unpushed` |
+  | `/guardian-branch [base]` | `/guardian-scan --branch [base]` |
+  | `/guardian-since <ref>` | `/guardian-scan --since <ref>` |
+  | `/guardian-incoming` | `/guardian-scan --incoming` |
+  | `/guardian-file <path>` | `/guardian-scan <path>` |
+  | `/guardian-fix` | `/guardian-fix` (`--pr` for `create_fix_pr`, a fingerprint for `suggest_fix`) |
+  | `/guardian-postfix` | `/guardian-fix --verify` |
+  | `/guardian-report`, `/guardian-audit` | `/guardian-report exec` (the default mode) |
+  | `/guardian-handoff` | `/guardian-report handoff` |
+  | `/guardian-trend` | `/guardian-report trend` |
+  | `/guardian-debt` | `/guardian-report debt` |
+  | `/guardian-changelog` | `/guardian-report changelog` |
+  | `/guardian-soc2` | `/guardian-report soc2` |
+  | `/guardian-panic` | `/guardian-incident panic` |
+  | `/guardian-leak` | `/guardian-incident leak` |
+  | `/guardian-rollback` | `/guardian-incident rollback` |
+  | `/guardian-postmortem` | `/guardian-incident postmortem` |
+  | `/guardian-predeploy` | `/guardian-release predeploy` |
+  | `/guardian-prerelease` | `/guardian-release prerelease` |
+  | `/guardian-docker` | `/guardian-infra docker` |
+  | `/guardian-iac` | `/guardian-infra iac` |
+  | `/guardian-status`, `/guardian-wp`, `/guardian-dotnet` | unchanged |
+  | `/guardian` | the `guardian` router skill; `/g` stays as its alias |
+  | `/guardian-init`, `/guardian-review`, `/guardian-deps`, `/guardian-quality`, `/guardian-compliance`, `/guardian-grill`, `/guardian-improve`, `/guardian-scanskill` | same name — now the skill itself |
+  | `/guardian-postinstall` | `/guardian-deps` (its after-install section: `scan_deps` with `packages`) |
+  | `/guardian-budget` | `/guardian-quality` (its budgets section) |
+  | `/guardian-perf` | `/guardian-performance` |
+  | `/guardian-observe` | `/guardian-observability` |
+  | `/gs`, `/gf`, `/gr`, `/gq`, `/gg`, `/gi` | `/guardian-scan`, `/guardian-fix`, `/guardian-review`, `/guardian-quality`, `/guardian-grill`, `/guardian-improve` |
+  | `/guardian-llm` | retracted: no tool backed it, and the skill it deferred to (`ai-product-spec-scale`) does not exist |
+
+- Skills route through the MCP tools. `guardian-deps`, `guardian-review`,
+  `guardian-quality`, `guardian-compliance`, `guardian-observability` and
+  `guardian-performance` told the model to run Trivy, license-checker,
+  Syft, k6 and friends by hand — no baseline, no delta, no history. They now
+  drive `deps_audit`, `deps_update_plan`, `scan_deps`, `create_fix_pr`,
+  `generate_sbom`, `license_compatibility`, `review_pr`, `bug_hunt` /
+  `quality_check` with `scope`, `compliance_check`, `compliance_evidence`,
+  `observability_setup` and `perf_check`, with raw commands only as a
+  labelled fallback for when the MCP server is unavailable. `guardian-init`
+  drives `check_toolchain`, `install_toolchain`, `init_project` and
+  `precommit_install`.
+- Skill `description`s are at most 1024 characters and valid YAML (18 939 →
+  11 145 characters across the 13; the router's alone was 4 487, now 958).
+  `guardian-grill`'s and `guardian-improve`'s carried an unquoted colon
+  followed by a space, which a strict YAML loader rejects. MCP tool descriptions are at most 1500:
+  `bug_hunt` 25 568 → 1 454, `validate_finding` 1 809 → 1 463. Everything
+  `bug_hunt`'s description carried as measurement history was already in
+  this file and in the rule packs' own comments. Both limits are enforced by
+  `mcp/test/unit/pluginSurface/descriptionLimits.test.ts`.
+- False or dead references removed from skills and commands: dashboards under
+  `configs/grafana/` (never shipped); `.guardian/perf-budget.yml` (nothing
+  read it — performance budgets are the `perf` section of
+  `.guardian/budgets.yml`); quality budgets "the gate reads" that the schema
+  never had (max file / function lines, coverage floor — `budgets.yml` has
+  `quality.duplication_pct` and `quality.complexity`, and the examples in
+  the skills are now checked with `loadBudgets`); FID, retired as a Core Web
+  Vital in favour of INP; a PII grep for `cpf` (a Brazilian id — now NIF, NISS
+  and Cartão de Cidadão) whose quoted brace glob in `--include` matched no
+  file; "Windows: use WSL2" (`install_toolchain` uses winget, scoop or
+  choco); brakeman, gosec, Checkov, SpotBugs and PHPStan presented as tools
+  the plugin runs or installs; `perf_check` results presented as scan
+  history (it writes a report, not a scan row). The PostToolUse hook's
+  secret warning now points at `/guardian-incident leak`.
 
 ## [2.0.0] - 2026-08-23
 

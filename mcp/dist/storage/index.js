@@ -7,6 +7,7 @@
  */
 import { AgentAuditRepo } from './agentAuditRepo.js';
 import { BaselinesRepo } from './baselinesRepo.js';
+import { CveIntelRepo } from './cveIntelRepo.js';
 import { CvesRepo } from './cvesRepo.js';
 import { FindingsRepo } from './findingsRepo.js';
 import { RuntimeMetaRepo } from './runtimeMetaRepo.js';
@@ -20,6 +21,7 @@ export class Storage {
     scans;
     findings;
     cves;
+    cveIntel;
     suppressions;
     baselines;
     stack;
@@ -32,6 +34,7 @@ export class Storage {
         this.scans = new ScansRepo(db);
         this.findings = new FindingsRepo(db);
         this.cves = new CvesRepo(db);
+        this.cveIntel = new CveIntelRepo(db);
         this.suppressions = new SuppressionsRepo(db);
         this.baselines = new BaselinesRepo(db);
         this.stack = new StackRepo(db);

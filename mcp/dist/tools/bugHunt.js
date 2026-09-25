@@ -19,9 +19,9 @@
  *
  * `p/r2c-bug-scan`'s own content is Python-heavy (32 of 44 rules) and thin
  * for JS/TypeScript (3 rules, none of which are the race/null/off-by-one/
- * leak/error-handling classes the tool's category vocabulary names) — see
- * `title`/`description` below, which say this to the model reading them
- * rather than only in this comment.
+ * leak/error-handling classes the tool's category vocabulary names). The
+ * description below says which languages the local packs cover; the
+ * registry-pack numbers are kept here, not in the model-facing text.
  *
  * `buildPackList` (below) is where every `--config=` value gets assembled,
  * and it always appends every local `configs/semgrep/bugfix-*.yml` pack —
@@ -85,8 +85,9 @@
  * `p/r2c-bug-scan` leaves in JS/TS or any other language. Overlap with the
  * always-on `p/security-audit` is real but partial (measured: 22% exact
  * rule-id duplication overall, ~9% for JS/TS specifically, up to 40-43% for
- * Java/Go) — not "largely redundant". See `title`/`description`, which say
- * all of this plainly to the model reading them.
+ * Java/Go) — not "largely redundant". The description and the
+ * `include_language_packs` schema text tell the model the conclusion
+ * (security bundles, not bug classes); the measurements stay here.
  *
  * `mapSubcategory`'s classification and the `categories` input (which
  * filters findings to specific subcategories) are exercised together: a
@@ -109,7 +110,10 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { resolveBugfixRules } from '../platform/configsDir.js';
-import { resolveCustomSemgrepConfigs } from '../platform/customRules.js';
+import { legacyRegistrationNote, legacyRegistrationsNotApplied, resolveCustomSemgrepConfigs, } from '../platform/customRules.js';
+import { semgrepExcludeArgs } from '../platform/guardianIgnore.js';
+import { ScanScopeInput } from '../platform/scope.js';
+import { semgrepOnFiles } from '../runners/fileBatchScan.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { runProcess } from '../runners/processRunner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
@@ -141,9 +145,8 @@ export const BUG_HUNT_BASE_PACKS = ['p/r2c-bug-scan', 'p/security-audit'];
  * against a fixture containing real instances of every canonical bug
  * subcategory: zero matches. Adding these widens SECURITY coverage per
  * language; it does not add race-condition, null-safety, off-by-one,
- * memory-leak or error-handling coverage for that language. See
- * `title`/`description` below, which say this to the model reading them
- * rather than only in this comment.
+ * memory-leak or error-handling coverage for that language. The description
+ * and the `include_language_packs` schema text below say so to the model.
  */
 const LANGUAGE_PACKS = new Map([
     ['javascript', 'p/javascript'],
@@ -226,8 +229,18 @@ function configuredPacksFor(input, plugin, projectPath) {
     return buildPackList({
         includeLanguagePacks,
         languages: includeLanguagePacks ? detectLanguages(plugin, projectPath) : [],
-        customConfigs: resolveCustomSemgrepConfigs(plugin),
+        customConfigs: resolveCustomSemgrepConfigs(plugin, projectPath),
     });
+}
+/**
+ * The LOCAL rule files a `bug_hunt` of `projectPath` loads — the shipped
+ * bugfix packs plus the project's registered rules. Everything else it runs
+ * is a registry pack. `create_fix_pr` needs this split to apply exactly one
+ * rule's autofix: a local rule comes from a filtered copy of its file, a
+ * registry rule from `r/<rule-id>`.
+ */
+export function bugHuntLocalConfigs(plugin, projectPath) {
+    return [...resolveBugfixRules(), ...resolveCustomSemgrepConfigs(plugin, projectPath)];
 }
 /**
  * Assembles the full `--config=` pack list `bug_hunt` runs with. Extracted
@@ -394,335 +407,43 @@ registerToolModule(makeScanTool({
     title: 'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python, Go, ' +
         'Java, C# and PHP bug rules, plus ONE Rust rule; optional language packs, off by ' +
         'default; other languages still registry-only)',
-    description: 'Semgrep with p/r2c-bug-scan + p/security-audit always on, plus local, always-on ' +
-        'JS/TS, Python, Go, Java, C# and PHP rule packs: `configs/semgrep/bugfix-js.yml` (thirteen ' +
-        'rules), `configs/semgrep/bugfix-py.yml` (ten rules), `configs/semgrep/bugfix-go.yml` (nine ' +
-        'rules), `configs/semgrep/bugfix-java.yml` (seven rules), `configs/semgrep/bugfix-cs.yml` ' +
-        '(eleven rules) and `configs/semgrep/bugfix-php.yml` (six rules), each covering the six ' +
-        'subcategories ' +
-        'below for its language — race_condition, null_safety, off_by_one, memory_leak, ' +
-        'error_handling, edge_case — EXCEPT the PHP pack, where `memory_leak` is EMPTY and stated ' +
-        'as such: resource tracking (fopen/curl handles) needs escape analysis Semgrep OSS does ' +
-        'not have, and both ends of the dial were measured — with the escape exclusions the rule ' +
-        'finds nothing at all, without them it fires on correct code. The PHP pack is also the ' +
-        'first measured against an external corpus (WordPress 6.9, 1467 files) from the start, ' +
-        'and ZERO of its six rules sit at ERROR: the closest candidate, `empty-catch`, produced ' +
-        'ten findings there and every one is a deliberate empty catch carrying an explanatory ' +
-        'comment, which Semgrep cannot read. The C# pack was TWELVE rules until ' +
-        '`null-safety-as-cast-deref` was DELETED for the same kind of reason, on the same ' +
-        'kind of evidence: 6490 findings on dotnet/runtime (11 800 files, against 402 for ' +
-        'empty-catch on that corpus) and no true positives in a 75-finding hand-read ' +
-        "sample. 67.6% of them were not about `as` at all — Semgrep's C# frontend puts " +
-        "`o as T` and `(T)o` on the SAME node, so the rule's premise (an `as` yields null " +
-        'where a cast throws) is not expressible in this engine. Rust is NOT one of those ' +
-        'languages: ' +
-        '`configs/semgrep/bugfix-rs.yml` holds exactly ONE rule, ' +
-        '`blocking-sleep-in-async` (a `std::thread::sleep` inside an `async fn`, which blocks ' +
-        'the executor thread and stalls every other task on it), and covers one of the six ' +
-        'subcategories, race_condition. It is not partial Rust coverage and must not be ' +
-        'reported as such: four of the six classes are COMPILE ERRORS in Rust (E0502, E0515, ' +
-        'E0373, E0599) and for the rest the answer is `cargo clippy` — default already catches ' +
-        '`await_holding_lock`, `-W clippy::pedantic` adds more, and the `restriction` group ' +
-        'adds `unwrap_used`, `mem_forget`, `indexing_slicing`. Tell Rust users to configure ' +
-        'clippy; dev-guardian adds exactly the one rule clippy has no equivalent for. ' +
-        '`commands/guardian-fix.md` also ' +
-        'names "broken happy paths" as a bug-hunting focus; that is not a syntactic pattern, ' +
-        'so only its commonest concrete form is covered (an un-awaited mutating call inside ' +
-        'an async function — rule `floating-mutation`, the race_condition entry, covering async ' +
-        'declarations, arrow functions, and class/object methods, but NOT async function expressions ' +
-        '— a Semgrep engine limitation, not an oversight) and nothing covers the rest of it. ' +
-        "These are Semgrep OSS pattern rules: they match syntax, not " +
-        'dataflow, so this finds the shapes bugs take, not bugs proven by analysis — a null ' +
-        'dereference two functions from its guard is invisible to them. The heuristic-tier ' +
-        'rules (WARNING/INFO) produce false positives by construction, which is what ' +
-        '`severity_min` exists to filter. The JS/TS pack was audited in 1.9.0 against ~600 ' +
-        'lines written by someone who had not written the rules: ~40 false positives across 14 ' +
-        'rules, including `unchecked-find` firing at ERROR on every Mongoose query and every ' +
-        'jQuery `.find()` (nine reproductions, zero true positives) and `floating-mutation` ' +
-        'firing on `res.send(rows)` and on `void repo.save(a)` — the fix its own message ' +
-        'prescribes. `unchecked-find` now requires a literal callback argument, and ' +
-        '`floating-mutation` requires the receiver name to look like a persistence boundary as ' +
-        'well as the method name. A follow-up scan against this repo OWN `mcp/src` (183 files ' +
-        'of TypeScript nobody wrote as a fixture) then measured the wave: it confirmed the ' +
-        '`floating-mutation` fix (20 findings to 0), caught a regression the wave introduced ' +
-        '(`unchecked-match` 0 to 13 — the new `exec` branch had not inherited the ' +
-        'optional-chaining exclusion the `match` branch had; now fixed), DELETED ' +
-        '`catch-returns-null` (25 findings on `mcp/src`, every one correct code, on top of zero ' +
-        'true positives in the audit corpus — INFO is not a tier for a rule that has never been ' +
-        'right), and moved `empty-catch` and `empty-promise-catch` from ERROR to WARNING (45 ' +
-        'findings on `mcp/src`, all 45 deliberate comment-documented fail-open; they are marked, ' +
-        'with a comment Semgrep cannot read, and ES2019 optional catch binding removed the ' +
-        'identifier a naming convention would attach to — 41 of the 42 are written `catch {`). ' +
-        'That leaves ONE rule at `high` (`index-at-length`, which finds nothing on `mcp/src`), so ' +
-        'a caller who wants this pack fixed by `create_fix_pr` must ask for `severity_min: ' +
-        '"medium"`. What the JS/TS pack still cannot do, stated ' +
-        'rather than implied: `unchecked-find` is ' +
-        'blind to a named predicate (`users.find(byId).name`); `floating-mutation` is blind to a ' +
-        'repository whose variable is not named like one, and to a captured-but-never-awaited ' +
-        'promise; `loop-lte-length` does not cover while/do-while or a cached length; ' +
-        '`unchecked-match` still collides with a non-string `.match()`; and the ' +
-        'listener/subscribe rules cannot tell a cleanup that removes nothing from one that ' +
-        'works, nor see a second uncleaned registration beside a cleaned one, nor reach any ' +
-        'lifecycle that is not `useEffect` (componentDidMount, ngOnInit, onMounted, ' +
-        'useLayoutEffect). Go is where the registry pack leaves the biggest hole among the ' +
-        'languages it partially covers: p/r2c-bug-scan ' +
-        'ships 5 Go rules and only 2 land in a bug class, both integer-overflow, so ' +
-        'error_handling, race_condition, null_safety, memory_leak and edge_case were all empty ' +
-        'before this local pack. Its own gaps: no goroutine-leak rule; no loop-variable-capture ' +
-        'rule (built and verified working, then deliberately excluded — Go 1.22 made loop ' +
-        'variables per-iteration and Semgrep cannot read go.mod, so on a modern module it would ' +
-        'fire on correct code); the pack shipped a tenth rule, `edge-case-append-discarded`, ' +
-        'which was DELETED in the 2026-08 audit — it matched `append(xs, 1)` in statement ' +
-        'position, which the Go spec forbids and the compiler rejects, so its true-positive set ' +
-        'was empty in any project that compiles and everything it emitted in a real repository ' +
-        'was a false positive (for the bug that does compile, `xs = append(xs, v)` on a ' +
-        'parameter, use staticcheck/ineffassign, which have the dataflow a syntactic rule does ' +
-        'not); `body-not-closed` and `ticker-not-stopped` match only the := declaration form, ' +
-        'so the var-then-assign form is silent for both; `nil-map-write` catches a locally ' +
-        'var-declared map and a map field of a struct built with `&T{}`, but not a nil map ' +
-        'arriving as a function parameter or returned by a constructor — neither is always a ' +
-        'bug, since it depends on the caller; `type-assert-no-ok` still fires on ' +
-        '`var s, ok = v.(string)`, because the pattern `var $X, $OK = ...` matches nothing in ' +
-        "Semgrep 1.164's Go parser (verified as a bare positive pattern); `err-discarded` " +
-        'cannot tell a project function returning (T, bool) from a discarded error — the ' +
-        'standard library is covered by a short deny-list (sync.Map, strings.Cut*, ' +
-        'utf8.Decode*), nothing else is; and `err-blank-assign` fires on deliberate discards ' +
-        'like `_ = os.Remove(tmp)` in a cleanup path, which is why it is WARNING. Java is the ' +
-        'emptiest language of the four: p/r2c-bug-scan ships 4 Java rules and NONE land in a ' +
-        'bug class — all four are equality and comparison style — so every subcategory was at ' +
-        'zero, in the language whose most famous defect is the NullPointerException. Its own ' +
-        'gaps: no `Integer ==` rule — expressing it needs type inference Semgrep OSS does not ' +
-        'have, and the attempt fired on `v == null` and on primitive comparison, so it was ' +
-        'dropped rather than shipped as a rule that would be uninstalled within a day; ' +
-        '`stream-not-closed` only recognises `new FileInputStream(...)`, and only by that ' +
-        'simple name, so `FileOutputStream`, `FileReader`, `Socket` and every other closeable ' +
-        'leak identically and are not covered — as does a fully-qualified ' +
-        '`new java.io.FileInputStream(...)`, which the pattern does not see (measured); ' +
-        '`static-dateformat` only recognises `SimpleDateFormat`, so a shared `Calendar` or ' +
-        '`Matcher` in a static field is not covered, but it ships a single FULLY-QUALIFIED ' +
-        'pattern, so a `static final java.text.SimpleDateFormat` field in a file with no import ' +
-        'IS seen — it was not before (measured across four import shapes: the qualified pattern ' +
-        'also matches the short forms whenever an import lets Semgrep resolve them, while the ' +
-        'short pattern never matched the qualified one, so the short branch was inert and was ' +
-        'deleted); and `modify-during-iteration` only matches the ' +
-        'enhanced-for form, so an indexed loop removing from the list it indexes has the same ' +
-        'defect and is missed. `modify-during-iteration` restricts the receiver by DECLARED ' +
-        'type, which buys precision ' +
-        'and costs recall: `metavariable-type` matches the exact declared type with no ' +
-        'subtyping (measured — `type: List` does NOT match a CopyOnWriteArrayList, which is ' +
-        'precisely what keeps the rule off it), so the rule, enumerating ' +
-        'List, ArrayList, LinkedList, Set, HashSet, LinkedHashSet and Collection, is silent on ' +
-        'a Deque, a Queue, a SortedSet or a project collection type. It binds the receiver ' +
-        'through a ' +
-        '`metavariable-pattern` accepting a bare name OR a `this.`-qualified one; before that, ' +
-        '`cache.get(k).trim()` fired while `this.cache.get(k).trim()` was invisible — same ' +
-        'class, same field, same bug (measured). AN EIGHTH RULE, ' +
-        '`null-safety-map-get-deref`, was DELETED by the application-corpus round and its ' +
-        'reasoning is worth keeping because the same trap will be laid again. It shipped with NO guard ' +
-        'exclusion at all, so the canonical Java guard `if (m.containsKey(k)) { ... ' +
-        'm.get(k).trim() ... }` fired at ERROR and advised `getOrDefault` on already-guarded ' +
-        'code. Ten waves of work then enumerated the guard shapes that prove a key present — ' +
-        'inline `containsKey` and `get() != null` in an `if` condition, the same tests as ' +
-        'expressions and as De Morgan duals, chains, all four ternary polarities, early exits, ' +
-        'population by put/putIfAbsent/computeIfAbsent, and iteration over the map own ' +
-        'keySet() — every one arm-scoped, and each one added because a perfectly correct guard ' +
-        'was firing. The rule was measured on OpenJDK and Spring (55 findings, ZERO live ' +
-        'defects) and KEPT anyway, on the argument that both are LIBRARY code where a ' +
-        'dereferenced map is one the class filled itself, and that application Java was a ' +
-        'different distribution nobody had measured. That was the right call to defer and the ' +
-        'wrong answer: the application corpora were then run — Kafka 224 findings / 3 892 ' +
-        'files, Elasticsearch 749 / 20 485, Jenkins 1 / 1 274 — 45 read by hand and FIVE ' +
-        'defensible defects. What decided it was not the count but the shape of the misses: ' +
-        '88% of the Elasticsearch findings and 97% of the Kafka ones have no guard anywhere ' +
-        'near the dereference. They are correct for SEMANTIC reasons — parallel maps kept in ' +
-        'sync, a map the class filled in another method, a constant key, an API contract — and ' +
-        'no exclusion clause reaches any of that, so narrowing was never available (measured: ' +
-        "the one closable family, Elasticsearch's `containsKey(k) == false` negation style, is " +
-        '34 of 749). Two things the read showed that outlive the rule: it was BLIND to the more ' +
-        'dangerous idiom, `X v = m.get(k); v.foo();`, because the dereference is not chained — ' +
-        'so it flagged the safe derived lookup and missed the risky original beside it; and all ' +
-        'five true positives had ONE shape, a map parsed from external input (HTTP JSON, ' +
-        '/sys/fs/cgroup, JVM output) read with a literal key. That is provenance, not syntax, ' +
-        'and is outside Semgrep OSS — recorded as a candidate for a future rule measured from ' +
-        'scratch, never as a tightening of this one. Deleted on the same criterion as ' +
-        "C#'s `as-cast-deref` and `catch-returns-null`, with one honest difference: this rule's " +
-        'true-positive rate was NOT zero, it was about 1%. `modify-during-iteration` had ' +
-        'a false negative worth more than any of its false positives — a `remove()` inside a ' +
-        '`switch` followed by `break;` is a real ConcurrentModificationException, because that ' +
-        'break leaves the SWITCH and not the loop, and the paired `remove(); break;` exclusion ' +
-        'swallowed it whole; the plain-break exclusion now applies only when the removal sits in ' +
-        'a `switch` that is itself INSIDE the for-each over that collection. The nesting ORDER is ' +
-        'what the clause tests, and it used to test mere lexical containment — any removal ' +
-        'anywhere inside a `case` re-armed the rule, including one inside a LOOP written in that ' +
-        'case, where a plain `break` exits the loop and the code is correct; a switch dispatching ' +
-        'a command with a search-and-remove loop in one arm fired three times. return, throw and ' +
-        'a LABELLED break do leave the method or the loop from inside a switch and ' +
-        'stay excluded everywhere. `loop-lte-length` restricts its array metavariable to an ' +
-        'ARRAY TYPE, because `$A.length` otherwise matches any int field named `length` and ' +
-        "fired at ERROR on a domain object's deliberately inclusive loop; measured, that costs " +
-        'no recall — parameter, local, field, `this.`-qualified field and `var`-inferred local ' +
-        'arrays are all still matched. The exit-terminated exclusions in ' +
-        '`optional-get-no-ispresent` and `modify-during-iteration` tolerate exactly ONE ' +
-        'statement between the guard (or the removal) and the exit rather than an arbitrary ' +
-        'ellipsis: measured, the ellipsis form matches DEEP, so ' +
-        '`if (!m.containsKey(k)) { if (strict) { return ""; } }` and ' +
-        '`items.remove(s); if (done) { break; }` both stop firing — and both are real bugs. ' +
-        '`empty-catch` honours the ' +
-        'Checkstyle/IntelliJ convention and never fires when the exception variable is named ' +
-        '`ignore`, `ignored` or `expected` — the flip side being that a genuinely swallowed ' +
-        'exception escapes the rule simply by being named `ignored`. The same trade has a second ' +
-        'edge: the JUnit expected-exception idiom (call the ' +
-        'code, `throw new AssertionError` if it did not throw, empty `catch`) fires when ' +
-        'the caught variable is named `e`, and is silent when it is named `expected` — the test ' +
-        'idiom has to use the conventional name. `empty-catch` was the LAST Java rule at ERROR ' +
-        'and it moved to WARNING once it was measured against an external corpus, which no ' +
-        'earlier round had done. On OpenJDK (12 593 files of `src/*/share/classes`) it produces ' +
-        '1589 findings in 770 files, and 903 of them — 56.8% — declare the intent in a COMMENT ' +
-        'inside the empty catch, which Semgrep cannot read (`// ignore`, `// Expected or ' +
-        'ignored`, `// swallow, since it should never happen`); another 27 declare it in a name ' +
-        'the rule does not recognise (`cannotHappen` x13, `_` x10 — Java 21 unnamed variable — ' +
-        '`unused` x2). An inverted-regex probe puts the recognised spelling at 139, so the ' +
-        'Checkstyle/IntelliJ convention the ERROR tier rested on covers 8.0% (139/1728) of the ' +
-        'corpus empty catches. 45 findings were read individually; about 39 were deliberate. ' +
-        'Four languages have now tested that premise and four have refuted it. ' +
-        'READ THIS BEFORE WONDERING WHY A JAVA FIX PR CAME BACK EMPTY: ALL SEVEN of these ' +
-        'rules are WARNING, and create_fix_pr defaults severity_min to `high`, so the Java pack ' +
-        'contributes NOTHING AT ALL to the DEFAULT fix-PR set — ask for it with ' +
-        '`severity_min: "medium"`. bug_hunt itself does not filter by default, so nothing ' +
-        'disappears from a SCAN; only the fix PR is affected. That default was deliberately NOT ' +
-        'changed here: it affects all four language packs and is a separate decision. The tier ' +
-        "split applies this pack's own criterion cold, stated as a question about the OUTPUT " +
-        'rather than the pattern — is what the rule EMITS always a bug? A rule whose ' +
-        'correctness depends on having recognised a GUARD emits a false positive every time it ' +
-        'meets a guard shape nobody enumerated, and no exclusion list closes that, because the ' +
-        'guard can always be one method away. NOTHING clears that bar in Java. `empty-catch` ' +
-        'held it longest on the one reason available — its escape hatch is not a guard but a ' +
-        'DECLARATION OF INTENT the rule itself reads (the Checkstyle/IntelliJ ' +
-        'ignore/ignored/expected convention), so what it emits afterwards would be an UNMARKED ' +
-        'silent swallow — and the OpenJDK measurement above refutes the "unmarked" half: the ' +
-        'mark is a comment, and the name the rule reads covers 8% of real occurrences. ' +
-        'Zero rules in seven is the honest result for a syntactic ' +
-        'matcher with no dataflow, not a failure of the pack. ' +
-        '`modify-during-iteration`, `static-dateformat` and `loop-lte-length` were demoted on ' +
-        'that criterion. `loop-lte-length` only after the obvious tightening was MEASURED and ' +
-        'rejected: requiring the body to index `a[i]` fixes the loop that never indexes `a`, ' +
-        'does NOT fix the sentinel loop that fills a longer array ' +
-        '(`b[i] = (i < a.length) ? a[i] : -1` is correct, and the guarded `a[i]` sits right ' +
-        'there inside the ternary), and LOSES a real bug where the out-of-bounds index is ' +
-        'passed to a helper (`sum += at(a, i)`) — a false positive traded for a false ' +
-        'negative, so the patterns were left alone and only the tier moved. ' +
-        '`optional-get-no-ispresent` is WARNING for the same reason, a round earlier: ERROR is ' +
-        'for a pattern that is a bug regardless of ' +
-        'intent, and `o.get()` is a bug only when UNGUARDED. It recognises exactly these guard ' +
-        'shapes, enumerated rather than summarised because the summary that stood here — ' +
-        '"inline against the same Optional variable" — was falsifiable and was falsified by a ' +
-        'compound condition, a multi-statement exit, a `while` and an `Optional.of`: ' +
-        '`if (o.isPresent())` alone OR as either operand of a conjunction, IN THE CONDITION OF AN ' +
-        '`if`, with the `get()` in the THEN branch, braced or braceless — the ELSE arm is a ' +
-        'guaranteed NoSuchElementException and still fires; `while (o.isPresent())`; the same ' +
-        'test used as an EXPRESSION rather than as the condition of anything, ' +
-        '`return o.isPresent() && o.get().isEmpty();`, plus the negative-first disjunctions ' +
-        '`!o.isPresent() || ...` and `o.isEmpty() || ...`, which short-circuit the same way; an ' +
-        'early return/throw/continue/break under `!isPresent()` or ' +
-        '`isEmpty()`, with or without one statement before the exit; the three ternary ' +
-        'forms, with the `get()` in the arm the condition PROVES safe (a ternary needs its own ' +
-        'clauses because it is a conditional EXPRESSION, a ' +
-        'different AST node from an `if` statement); `if (o.filter(p).isPresent())`; and an ' +
-        '`Optional<T> o = Optional.of(...)` construction, which cannot be empty — `ofNullable` ' +
-        'can, and still fires. It misses any guard that reaches the check through another ' +
-        'method, and it deliberately does not treat `a.isPresent() || b` as a guard — that ' +
-        'proves nothing about `a`, unlike the negative-first form above. ' +
-        'The concrete missed case is a guard delegated to a helper, ' +
-        '`if (!present(o)) { return d; }`, which needs interprocedural analysis Semgrep OSS ' +
-        'does not do; that shape is a false positive and always will be, which is why the rule ' +
-        'is WARNING instead of carrying an ever-longer exclusion list. ' +
-        'Eight Java limitations are accepted rather than fixed, each reproduced against the ' +
-        'review fixtures, and EACH STATES ITS DIRECTION — for six waves this list had nine ' +
-        'entries and all nine were false positives, which is the asymmetry that let a wave close ' +
-        'a false positive, silently delete recall, and still go green. One entry LEFT the list ' +
-        'when it was re-measured: the conjunction-chain false positive was never a limitation, ' +
-        'only an unexamined metavariable. THREE MORE left with `map-get-deref` when the ' +
-        'application-corpus round deleted it — the map filled in a static initialiser, the ' +
-        'total enum mapping declared as a `Map`, and the two keySet()-adjacent idioms — and ' +
-        'that is the shape of the whole argument for deleting it: three of eleven accepted ' +
-        'limitations belonged to one rule of eight. FALSE POSITIVES: (1) `stream-not-closed` on `open(); try {} finally { close(); }` (already ' +
-        'the stated reason it is WARNING); (2) `static-dateformat` on a static final ' +
-        'SimpleDateFormat whose every access goes through a synchronized method (proving ALL ' +
-        'accesses are synchronized is whole-program analysis, which Semgrep OSS does not do; ' +
-        'this used to add "and a shared formatter serialises every caller anyway", which is a ' +
-        'PRODUCT argument rather than the tier criterion, and is why the rule sat at ERROR for ' +
-        'four rounds carrying a documented un-fixable false positive); (3) `loop-lte-length` on ' +
-        '`i <= a.length` where the body guards with `i < a.length` or never indexes `a` (the ' +
-        'tightening was tried and rejected — see the tier note above); (4) ' +
-        '`printstacktrace-only` on the one place the call is right — the fallback when the ' +
-        'logger itself threw; (5) `optional-get-no-ispresent` and ' +
-        '`modify-during-iteration` where TWO OR MORE statements sit between the guard (or the ' +
-        'removal) and the exit — `if (o.isEmpty()) { log(); metric(); return ""; }`, ' +
-        '`items.remove(s); log(s); n++; break;` — the deliberate price of not using a ' +
-        'deep-matching ellipsis, which would hide real bugs instead; (6) both of those ' +
-        'rules on any guard reached THROUGH A HELPER METHOD, `if (!present(o)) { return d; }`, ' +
-        'which needs interprocedural analysis; and (7) ' +
-        '`optional-get-no-ispresent` on a guard held in a LOCAL BOOLEAN — ' +
-        '`boolean present = o.isPresent(); if (!present) { return ""; }` — which is dataflow, ' +
-        'not syntax, and outside Semgrep OSS. FALSE NEGATIVES, the ' +
-        'direction nobody was writing down for six waves: (8) the INVALIDATED-GUARANTEE class ' +
-        '— a guarantee the guard establishes and the code then destroys INSIDE the region the ' +
-        'exclusion covers, `if (o.isPresent()) { clear(o); return o.get(); }` and ' +
-        'four more measured shapes, all guaranteed throws, all silent. Same root cause as the ' +
-        'else-arm bug — pattern-not-inside excludes the whole node it matched — but on the ' +
-        'TEMPORAL axis rather than the branch axis, and not fixable without dataflow; and (9) ' +
-        'the same rule on a guard held in a LOCAL BOOLEAN, the recall mirror of (7). ' +
-        'JS/TS, Python, Go, Java, C# and PHP only: Rust has a single rule and no other ' +
-        'language has a local rule pack yet, so Ruby gets only the ' +
-        'registry coverage described below, same as before these packs existed. The local ' +
-        'packs degrade rather than failing the whole scan if one is ever hand-edited into a bad ' +
-        'state — a YAML syntax error drops just that file and retries with everything else, a ' +
-        'single bad rule pattern inside an otherwise-valid file is dropped alone and every other ' +
-        "rule's findings still return — verified against the real built server, not assumed. " +
-        "These rules do not make bug_hunt a substitute for the model-driven guardian-fix " +
-        'path: they catch shapes, reading the code catches reasons. Optional ' +
-        '`include_language_packs` (off by default) also runs one per-language pack for each ' +
-        'language family `detect_stack` finds in the project (or, absent a snapshot, a quick ' +
-        'package.json/tsconfig.json/pyproject.toml/pom.xml/go.mod check): p/javascript OR ' +
-        'p/typescript for a JS/TS project — never both, they are the identical 74 rules under ' +
-        'two registry names, so only p/typescript runs once TypeScript is detected — plus ' +
-        "p/python, p/java, p/golang. Read this before turning it on: every one of those is " +
-        "Semgrep's per-language SECURITY bundle (XSS, SQL/command injection, crypto, auth, " +
-        'SSRF, hard-coded secrets, …) — verified against their 327 distinct rules and a live ' +
-        'scan of a fixture built to trigger every canonical subcategory below: zero ' +
-        'matches, in any language. They widen security coverage per language; they add no ' +
-        'race-condition, null/undefined-safety, off-by-one, memory-leak or swallowed-error ' +
-        'coverage. Overlap with the always-on p/security-audit is real but partial, not "largely ' +
-        'redundant" — measured (exact rule-id duplication): 22% overall, but only ~9% for the ' +
-        'JS/TS packs specifically (up to 40-43% for Java/Go) — most of what they add, especially ' +
-        'for JS/TS, is net-new security scanning, not duplicate coverage. Beyond the local ' +
-        'JS/TS, Python, Go, Java, C# and PHP packs, p/r2c-bug-scan (44 rules: 32 Python, 5 Go, 4 Java, 3 JS/TS) is the only ' +
-        'registry pack reaching these six classes, and only for Python and Go — Java, C#, ' +
-        'PHP, Ruby and Rust get none of them from the registry. Locally, Java, C# and PHP now ' +
-        'have full packs (described above), Rust has exactly one rule and no more, and Ruby ' +
-        'has nothing at all — by measurement rather than backlog: Semgrep\'s Ruby ' +
-        'frontend erases `&.` and the `..`/`...` distinction, so a nil-safety or off-by-one ' +
-        'rule matches the CORRECT code identically, and RuboCop plus the registry\'s p/ruby is ' +
-        'the honest answer there. On any of those languages, a quiet or security-only result (with or ' +
-        'without the language packs) is not evidence of a bug-free project; pair with ' +
-        "`scan_sast` or the guardian-bugfix skill's manual review. " +
-        'Findings are categorised as `bug`, with subcategories (race_condition, null_safety, ' +
-        'edge_case, error_handling, memory_leak, off_by_one) attached where the matching rule\'s ' +
-        'own id says so — everything else keeps its own raw, tool-specific tag instead of being ' +
-        'forced into one of those six. `categories` and `include_language_packs` are ' +
-        'independent inputs on purpose: `include_language_packs` decides which scanners RUN, ' +
-        '`categories` decides which findings already found are RETURNED — use ' +
-        '`categories: ["null_safety", "edge_case"]` to narrow to the six bug classes regardless ' +
-        'of which packs ran. If a configured pack is retired from the Semgrep registry, the ' +
-        'scan re-runs with whichever packs still resolve and reports the gap via `missing_tools` ' +
-        'instead of silently scanning nothing.',
+    // What the tool does, its inputs, what it returns and its limits — nothing
+    // else. The measurement history behind every rule (corpora, counts, the
+    // rules deleted and why, each accepted false positive and false negative)
+    // lives in the packs' own comments (configs/semgrep/bugfix-*.yml) and in
+    // CHANGELOG.md; the registry-pack composition lives in this file's header.
+    // A description is loaded into every session, so it stays under 1500
+    // characters (test/unit/pluginSurface/descriptionLimits.test.ts).
+    description: 'Hunt implementation bugs with Semgrep: the registry packs p/r2c-bug-scan + p/security-audit, plus ' +
+        'local always-on packs (configs/semgrep/bugfix-*.yml) covering six classes — race_condition, ' +
+        'null_safety, off_by_one, memory_leak, error_handling, edge_case — for JS/TS (13 rules), Python (10), ' +
+        'Go (9), Java (7), C# (11) and PHP (6; no memory_leak rule). Rust has one rule (a blocking sleep ' +
+        'inside an async fn; use cargo clippy for the rest); Ruby has none (use RuboCop). Rules registered ' +
+        'with register_custom_rules also run. Findings are category bug, with a subcategory when the rule id ' +
+        'names one; other findings keep their own tag. `categories` filters the RESPONSE only (every finding is ' +
+        'recorded; category_filter counts the rest). `include_language_packs` (off by default) also runs ' +
+        'p/typescript or p/javascript, p/python, p/java and p/golang — security bundles, not bug classes. ' +
+        '`scope` limits the scan to paths, a git diff, or what changed since a ref or date. Limits: pattern ' +
+        'rules match syntax, not dataflow, so a quiet result is not a bug-free project; most local rules are ' +
+        'WARNING (medium) heuristics; none ships an autofix, so create_fix_pr cannot fix them — use ' +
+        'suggest_fix. A retired registry pack or a broken local rule file degrades to the packs that still ' +
+        'load and is reported in tools_run / missing_tools, never as a clean scan. Per-rule measurements and ' +
+        "known false positives and negatives live in each pack's comments and in CHANGELOG.md.",
     scan_type: 'bugs',
     category: 'bug',
+    // `scope`: the packs run over exactly the scoped files (`invokeBugHuntOnScope`).
+    supportsScope: true,
     // `categories` filters the response (see `categoriesView`), so it stays
     // out of the cache key: every filter over the same tree is one scan.
     responseOnlyInputs: ['categories'],
     responseView: (input, findings, scanId) => categoriesView(input.categories, findings, scanId),
-    rulePacks: (input, { plugin, projectPath }) => configuredPacksFor(input, plugin, projectPath),
+    // `rulesProjectPath`: the scanned path itself, except when create_fix_pr
+    // re-scans a worktree of a project and needs that project's rules.
+    rulePacks: (input, { plugin, rulesProjectPath }) => configuredPacksFor(input, plugin, rulesProjectPath),
+    configWarnings: (_input, { plugin, rulesProjectPath }) => {
+        const note = legacyRegistrationNote(legacyRegistrationsNotApplied(plugin, rulesProjectPath));
+        return note === null ? [] : [note];
+    },
     inputSchema: {
         project_path: ProjectPath,
         severity_min: SeverityMin,
@@ -748,166 +469,72 @@ registerToolModule(makeScanTool({
             '(output). Turn on when you specifically want broader per-language security ' +
             'scanning alongside the bug hunt.'),
         force: Force,
+        scope: ScanScopeInput,
     },
-    invoke: async (input, ctx) => {
-        const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'bugs');
-        const tools_run = [];
-        const missing_tools = [];
-        const parser_inputs = [];
-        const semgrepBin = await scannerAvailable('semgrep');
-        if (!semgrepBin) {
-            tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'not_installed' });
-            missing_tools.push('semgrep');
-            return {
-                outcome: 'completed',
-                tools_run,
-                missing_tools,
-                parser_inputs,
-                report_paths: [reportDir],
-            };
-        }
-        // Language packs are off by default (§ BugHuntInput above: this is
-        // deliberately not part of `categories`, which filters output, not
-        // input). Detection only runs when asked — a project with a
-        // persisted JS/TS stack snapshot does NOT get p/javascript/p/typescript
-        // added unless the caller opts in. The local bugfix-*.yml rules, by
-        // contrast, are NOT gated behind a flag — `buildPackList` appends
-        // all of them by default (omitting them only if resolveBugfixRules()
-        // finds none); see this file's header comment.
-        const configuredPacks = configuredPacksFor(input, ctx.plugin, ctx.projectPath);
-        const categoryParser = bugCategoryParser;
-        const outFile = join(reportDir, 'bugs.json');
-        const runWithPacks = (packs) => {
-            const args = packs.map((pack) => `--config=${pack}`);
-            args.push('--json', '--quiet', '--output', outFile);
-            if (input.auto_fix === true)
-                args.push('--autofix');
-            args.push(ctx.projectPath);
-            return runProcess({
-                command: 'semgrep',
-                args,
-                cwd: ctx.projectPath,
-                env: ctx.scriptEnv,
-                signal: ctx.signal,
-                onLog: ctx.onLog,
-            });
+    // The pack choice is recorded on the scan row (meta, via extras) so
+    // create_fix_pr can re-scan a fix with the SAME packs that found it.
+    invoke: async (input, ctx) => recordPackChoice(input, await invokeBugHunt(input, ctx)),
+}));
+async function invokeBugHunt(input, ctx) {
+    const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'bugs');
+    const tools_run = [];
+    const missing_tools = [];
+    const parser_inputs = [];
+    const semgrepBin = await scannerAvailable('semgrep');
+    if (!semgrepBin) {
+        tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'not_installed' });
+        missing_tools.push('semgrep');
+        return {
+            outcome: 'completed',
+            tools_run,
+            missing_tools,
+            parser_inputs,
+            report_paths: [reportDir],
         };
-        // A gap that survives every retry attempt: nothing scanned, and that
-        // must never be reported as a clean bug report. `outcome: 'completed'`
-        // matches scan_sast's convention for an expected, named gap — the
-        // signal lives in `missing_tools` / `coverage`, not in `outcome`.
-        // `missing_tools` gets the bare tool name only (never
-        // `semgrep:<pack>`) — see the header comment for why; the pack-level
-        // detail lives in the `reason` string below instead.
-        const reportGap = (failures) => {
-            tools_run.push({
-                name: 'semgrep',
-                status: 'failed',
-                reason: `no configured pack could be scanned (${describeConfigFailures(failures)})`,
-            });
-            missing_tools.push('semgrep');
-            return {
-                outcome: 'completed',
-                tools_run,
-                missing_tools,
-                parser_inputs,
-                report_paths: [reportDir],
-            };
-        };
-        const result = await runWithPacks(configuredPacks);
-        const raw = readJsonSafe(outFile);
-        const failures = findConfigDownloadFailures(raw);
-        if (failures.length === 0) {
-            // The ordinary case: no WHOLE `--config=` failed to load —
-            // findConfigDownloadFailures found nothing whole-config-fatal. That
-            // does NOT mean the exit code is clean: a single bad RULE inside an
-            // otherwise-valid local file (e.g. a typo'd bugfix-js.yml pattern)
-            // also exits non-zero/non-one, but Semgrep still scans with
-            // everything else that loaded — verified live, not assumed (see
-            // semgrepConfigFailure.ts's header comment). wasAnythingScanned is
-            // what tells the two apart; exit code/outcome alone cannot (same
-            // file, same comment).
-            if (raw)
-                parser_inputs.push({ parser: categoryParser, input: raw });
-            const okByExit = result.outcome === 'completed' || result.exitCode === 1;
-            const ok = okByExit || wasAnythingScanned(raw);
-            const toolRun = { name: 'semgrep', status: ok ? 'ok' : 'failed' };
-            if (!okByExit) {
-                // Either genuinely failed, or "ok" only because something was
-                // scanned anyway despite a non-clean exit — both need the
-                // human-readable reason attached. Before this, a malformed local
-                // rule file reported status:'failed' with NO reason at all,
-                // alongside assessCoverage's "install semgrep" warning — which
-                // sends a user chasing their toolchain instead of their own rule
-                // file (bugfix-rules-jsts task-3 fix round).
-                const reason = describeRawErrors(raw);
-                if (reason !== null)
-                    toolRun.reason = reason;
-            }
-            tools_run.push(toolRun);
-            return {
-                outcome: ok ? 'completed' : result.outcome,
-                tools_run,
-                missing_tools,
-                parser_inputs,
-                report_paths: [reportDir],
-            };
-        }
-        // At least one configured pack failed to download (registry
-        // retirement, outage, typo). A single bad `--config=` aborts the
-        // WHOLE invocation — `raw` above has empty results/paths.scanned even
-        // for packs that resolved fine — so it cannot be reused as-is. Re-run
-        // with whatever survives rather than reporting a scan that covered
-        // nothing.
-        const survivors = survivingPacks(configuredPacks, failures);
-        if (survivors.length === 0 || survivors.length === configuredPacks.length) {
-            // Nothing to retry with (every pack failed), or the failure(s)
-            // could not be attributed to a specific configured pack (so a retry
-            // would just reproduce the same result).
-            return reportGap(failures);
-        }
-        const retry = await runWithPacks(survivors);
-        // A cancelled/timed-out/oversized retry never produced a genuine
-        // second attempt — the child was killed before (or while) writing
-        // `--output`, so `outFile` may still hold attempt one's STALE content,
-        // or nothing at all. Reading that as "the retry also hit a download
-        // failure" would duplicate attempt one's own failure, and forcing
-        // `outcome: 'completed'` below would misreport a cancelled/timed-out
-        // run as having finished normally — the same family of untruth this
-        // whole fix exists to close. Propagate the retry's real outcome
-        // instead, and report only what attempt one actually found (never
-        // touching `outFile` in this branch at all).
-        if (retry.outcome !== 'completed' && retry.outcome !== 'failed') {
-            tools_run.push({
-                name: 'semgrep',
-                status: 'failed',
-                reason: `retry with ${survivors.join(', ')} did not finish (${retry.outcome}) — ` +
-                    `original gap: ${describeConfigFailures(failures)}`,
-            });
-            missing_tools.push('semgrep');
-            return {
-                outcome: retry.outcome,
-                tools_run,
-                missing_tools,
-                parser_inputs,
-                report_paths: [reportDir],
-            };
-        }
-        const retryRaw = readJsonSafe(outFile);
-        const retryFailures = findConfigDownloadFailures(retryRaw);
-        const retryOk = retryFailures.length === 0 && (retry.outcome === 'completed' || retry.exitCode === 1);
-        if (!retryOk) {
-            // The retry ran to a real exit but didn't help either (network
-            // flake, or the "survivor" just got retired too) — combine every
-            // failure we saw and refuse to trust either attempt's output.
-            return reportGap([...failures, ...retryFailures]);
-        }
-        if (retryRaw)
-            parser_inputs.push({ parser: categoryParser, input: retryRaw });
+    }
+    // Language packs are off by default (§ BugHuntInput above: this is
+    // deliberately not part of `categories`, which filters output, not
+    // input). Detection only runs when asked — a project with a
+    // persisted JS/TS stack snapshot does NOT get p/javascript/p/typescript
+    // added unless the caller opts in. The local bugfix-*.yml rules, by
+    // contrast, are NOT gated behind a flag — `buildPackList` appends
+    // all of them by default (omitting them only if resolveBugfixRules()
+    // finds none); see this file's header comment.
+    const configuredPacks = configuredPacksFor(input, ctx.plugin, ctx.rulesProjectPath);
+    const categoryParser = bugCategoryParser;
+    if (ctx.scope !== null) {
+        return invokeBugHuntOnScope({ input, ctx, reportDir, packs: configuredPacks, files: ctx.scope.files });
+    }
+    const outFile = join(reportDir, 'bugs.json');
+    const runWithPacks = (packs) => {
+        const args = packs.map((pack) => `--config=${pack}`);
+        // `.guardianignore` — see `platform/guardianIgnore.ts`.
+        args.push(...semgrepExcludeArgs(ctx.exclusions));
+        args.push('--json', '--quiet', '--output', outFile);
+        if (input.auto_fix === true)
+            args.push('--autofix');
+        args.push(ctx.projectPath);
+        return runProcess({
+            command: 'semgrep',
+            args,
+            cwd: ctx.projectPath,
+            env: ctx.scriptEnv,
+            signal: ctx.signal,
+            onLog: ctx.onLog,
+        });
+    };
+    // A gap that survives every retry attempt: nothing scanned, and that
+    // must never be reported as a clean bug report. `outcome: 'completed'`
+    // matches scan_sast's convention for an expected, named gap — the
+    // signal lives in `missing_tools` / `coverage`, not in `outcome`.
+    // `missing_tools` gets the bare tool name only (never
+    // `semgrep:<pack>`) — see the header comment for why; the pack-level
+    // detail lives in the `reason` string below instead.
+    const reportGap = (failures) => {
         tools_run.push({
             name: 'semgrep',
-            status: 'ok',
-            reason: `ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`,
+            status: 'failed',
+            reason: `no configured pack could be scanned (${describeConfigFailures(failures)})`,
         });
         missing_tools.push('semgrep');
         return {
@@ -917,6 +544,200 @@ registerToolModule(makeScanTool({
             parser_inputs,
             report_paths: [reportDir],
         };
-    },
-}));
+    };
+    const result = await runWithPacks(configuredPacks);
+    const raw = readJsonSafe(outFile);
+    const failures = findConfigDownloadFailures(raw);
+    if (failures.length === 0) {
+        // The ordinary case: no WHOLE `--config=` failed to load —
+        // findConfigDownloadFailures found nothing whole-config-fatal. That
+        // does NOT mean the exit code is clean: a single bad RULE inside an
+        // otherwise-valid local file (e.g. a typo'd bugfix-js.yml pattern)
+        // also exits non-zero/non-one, but Semgrep still scans with
+        // everything else that loaded — verified live, not assumed (see
+        // semgrepConfigFailure.ts's header comment). wasAnythingScanned is
+        // what tells the two apart; exit code/outcome alone cannot (same
+        // file, same comment).
+        if (raw)
+            parser_inputs.push({ parser: categoryParser, input: raw });
+        const okByExit = result.outcome === 'completed' || result.exitCode === 1;
+        const ok = okByExit || wasAnythingScanned(raw);
+        const toolRun = { name: 'semgrep', status: ok ? 'ok' : 'failed' };
+        if (!okByExit) {
+            // Either genuinely failed, or "ok" only because something was
+            // scanned anyway despite a non-clean exit — both need the
+            // human-readable reason attached. Before this, a malformed local
+            // rule file reported status:'failed' with NO reason at all,
+            // alongside assessCoverage's "install semgrep" warning — which
+            // sends a user chasing their toolchain instead of their own rule
+            // file (bugfix-rules-jsts task-3 fix round).
+            const reason = describeRawErrors(raw);
+            if (reason !== null)
+                toolRun.reason = reason;
+        }
+        tools_run.push(toolRun);
+        return {
+            outcome: ok ? 'completed' : result.outcome,
+            tools_run,
+            missing_tools,
+            parser_inputs,
+            report_paths: [reportDir],
+        };
+    }
+    // At least one configured pack failed to download (registry
+    // retirement, outage, typo). A single bad `--config=` aborts the
+    // WHOLE invocation — `raw` above has empty results/paths.scanned even
+    // for packs that resolved fine — so it cannot be reused as-is. Re-run
+    // with whatever survives rather than reporting a scan that covered
+    // nothing.
+    const survivors = survivingPacks(configuredPacks, failures);
+    if (survivors.length === 0 || survivors.length === configuredPacks.length) {
+        // Nothing to retry with (every pack failed), or the failure(s)
+        // could not be attributed to a specific configured pack (so a retry
+        // would just reproduce the same result).
+        return reportGap(failures);
+    }
+    const retry = await runWithPacks(survivors);
+    // A cancelled/timed-out/oversized retry never produced a genuine
+    // second attempt — the child was killed before (or while) writing
+    // `--output`, so `outFile` may still hold attempt one's STALE content,
+    // or nothing at all. Reading that as "the retry also hit a download
+    // failure" would duplicate attempt one's own failure, and forcing
+    // `outcome: 'completed'` below would misreport a cancelled/timed-out
+    // run as having finished normally — the same family of untruth this
+    // whole fix exists to close. Propagate the retry's real outcome
+    // instead, and report only what attempt one actually found (never
+    // touching `outFile` in this branch at all).
+    if (retry.outcome !== 'completed' && retry.outcome !== 'failed') {
+        tools_run.push({
+            name: 'semgrep',
+            status: 'failed',
+            reason: `retry with ${survivors.join(', ')} did not finish (${retry.outcome}) — ` +
+                `original gap: ${describeConfigFailures(failures)}`,
+        });
+        missing_tools.push('semgrep');
+        return {
+            outcome: retry.outcome,
+            tools_run,
+            missing_tools,
+            parser_inputs,
+            report_paths: [reportDir],
+        };
+    }
+    const retryRaw = readJsonSafe(outFile);
+    const retryFailures = findConfigDownloadFailures(retryRaw);
+    const retryOk = retryFailures.length === 0 && (retry.outcome === 'completed' || retry.exitCode === 1);
+    if (!retryOk) {
+        // The retry ran to a real exit but didn't help either (network
+        // flake, or the "survivor" just got retired too) — combine every
+        // failure we saw and refuse to trust either attempt's output.
+        return reportGap([...failures, ...retryFailures]);
+    }
+    if (retryRaw)
+        parser_inputs.push({ parser: categoryParser, input: retryRaw });
+    tools_run.push({
+        name: 'semgrep',
+        status: 'ok',
+        reason: `ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`,
+    });
+    missing_tools.push('semgrep');
+    return {
+        outcome: 'completed',
+        tools_run,
+        missing_tools,
+        parser_inputs,
+        report_paths: [reportDir],
+    };
+}
+/**
+ * `bug_hunt` over a scope's files: the same packs, as explicit targets
+ * (`semgrepOnFiles` — batched, every batch judged by its report), and the
+ * same retry when a registry pack fails to load: a dead `--config=` aborts
+ * every batch it is passed to, so the survivors are re-run over the whole
+ * file list and the gap is named.
+ */
+async function invokeBugHuntOnScope(args) {
+    const { input, ctx, reportDir, packs, files } = args;
+    const tools_run = [];
+    const missing_tools = [];
+    const parser_inputs = [];
+    const finish = (outcome) => ({
+        outcome,
+        tools_run,
+        missing_tools,
+        parser_inputs,
+        report_paths: [reportDir],
+    });
+    if (files.length === 0) {
+        tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'the scope holds no file — nothing to scan' });
+        return finish('completed');
+    }
+    const runOn = (use) => semgrepOnFiles({
+        configArgs: [...use.map((pack) => `--config=${pack}`), ...(input.auto_fix === true ? ['--autofix'] : [])],
+        files,
+        cwd: ctx.projectPath,
+        reportDir,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+    });
+    // Every batch reports the same dead `--config=`: once each.
+    const failuresOf = (reports) => {
+        const seen = new Map();
+        for (const f of reports.flatMap((raw) => findConfigDownloadFailures(raw)))
+            seen.set(`${f.pack ?? ''}\0${f.message}`, f);
+        return [...seen.values()];
+    };
+    const reportGap = (failures) => {
+        tools_run.push({
+            name: 'semgrep',
+            status: 'failed',
+            reason: `no configured pack could be scanned (${describeConfigFailures(failures)})`,
+        });
+        missing_tools.push('semgrep');
+        return finish('completed');
+    };
+    const first = await runOn(packs);
+    const failures = failuresOf(first.reports);
+    if (failures.length === 0) {
+        for (const raw of first.reports)
+            parser_inputs.push({ parser: bugCategoryParser, input: raw });
+        tools_run.push(first.toolRun);
+        if (first.nothingScanned)
+            missing_tools.push('semgrep');
+        return finish(first.cancelled ? 'cancelled' : 'completed');
+    }
+    const survivors = survivingPacks(packs, failures);
+    if (survivors.length === 0 || survivors.length === packs.length)
+        return reportGap(failures);
+    const retry = await runOn(survivors);
+    if (retry.cancelled) {
+        tools_run.push({
+            name: 'semgrep',
+            status: 'failed',
+            reason: `retry with ${survivors.join(', ')} did not finish (cancelled) — original gap: ${describeConfigFailures(failures)}`,
+        });
+        missing_tools.push('semgrep');
+        return finish('cancelled');
+    }
+    const retryFailures = failuresOf(retry.reports);
+    if (retryFailures.length > 0)
+        return reportGap([...failures, ...retryFailures]);
+    for (const raw of retry.reports)
+        parser_inputs.push({ parser: bugCategoryParser, input: raw });
+    tools_run.push({
+        ...retry.toolRun,
+        reason: [`ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`, retry.toolRun.reason]
+            .filter((s) => s !== undefined)
+            .join('; '),
+    });
+    missing_tools.push('semgrep');
+    return finish('completed');
+}
+function recordPackChoice(input, invocation) {
+    return {
+        ...invocation,
+        extras: { ...(invocation.extras ?? {}), include_language_packs: input.include_language_packs === true },
+    };
+}
 //# sourceMappingURL=bugHunt.js.map

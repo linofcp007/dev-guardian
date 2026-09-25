@@ -57,6 +57,7 @@ export const SCAN_TYPE_ROLE = {
   perf: 'state',
   wordpress: 'state',
   wp_vuln_check: 'state',
+  wp_vuln_check_source: 'state',
   dotnet_secrets: 'state',
   dotnet_efcore_audit: 'state',
 

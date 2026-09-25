@@ -18,6 +18,13 @@
  *   | git, no commits yet       | skipped — nothing to read  | index + untracked-not-ignored       |
  *   | not a git repository      | —                          | the whole directory, in place       |
  *   | a commit range (review)   | exactly that range         | uncommitted files, when asked       |
+ *   | a scoped scan             | the scope's range/--since  | exactly the scope's files           |
+ *
+ * **A scoped scan** (`platform/scope.ts`) reads only what its scope names:
+ * `scope.diff.base` / `scope.since` are commit ranges (or `--since=<date>`)
+ * for the history pass, and the scope's files — `paths`, or the staged /
+ * uncommitted changes — go through the same copy-and-scan as uncommitted
+ * files, whether or not a commit holds them.
  *
  * **Uncommitted files** are copied to a temporary directory, keeping their
  * relative paths, and scanned there with `gitleaks detect --no-git -s .`, so
@@ -53,7 +60,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import type { Finding, ToolRun } from '../types.js';
 import { scannerAvailable, readJsonSafe } from '../tools/scanHelpers.js';
-import { countCommits, repoState, resolveCommit, uncommittedFiles } from './git.js';
+import { countCommits, git, repoState, resolveCommit, uncommittedFiles } from './git.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
 import { PROJECT_WALK_EXCLUDE } from './projectFiles.js';
 import { gitleaksParser } from './scannerParsers/gitleaks.js';
@@ -68,7 +75,17 @@ export type SecretScanScope =
    * Exactly the commits `base..head` (resolved ids) — `review_pr`; with
    * `workingTree`, the uncommitted files too (head is what is checked out).
    */
-  | { kind: 'range'; base: string; head: string; workingTree?: boolean };
+  | { kind: 'range'; base: string; head: string; workingTree?: boolean }
+  /**
+   * A scoped scan: the commits the scope names (a resolved range, or a
+   * validated `--since=<date>`), or none; and the files it names, read from
+   * the working tree. Both empty is a skipped files pass.
+   */
+  | {
+      kind: 'scoped';
+      history: { base: string; head: string } | { logOpts: string } | null;
+      files: readonly string[];
+    };
 
 export interface GitleaksScanOptions {
   projectPath: string;
@@ -121,6 +138,11 @@ async function scan(opts: GitleaksScanOptions, result: GitleaksScanResult): Prom
     return;
   }
 
+  if (opts.scope.kind === 'scoped') {
+    await scopedScan(opts, result, opts.scope);
+    return;
+  }
+
   if (opts.scope.kind === 'range') {
     const range = `${opts.scope.base}..${opts.scope.head}`;
     let commits: number;
@@ -169,6 +191,54 @@ async function scan(opts: GitleaksScanOptions, result: GitleaksScanResult): Prom
       await directoryPass(opts, result, GITLEAKS_HISTORY);
       return;
   }
+}
+
+/**
+ * A scoped scan — see the module comment. A history the scope names that
+ * holds no commit is `skipped` (nothing changed there), never a failed
+ * "0 commits scanned".
+ */
+async function scopedScan(
+  opts: GitleaksScanOptions,
+  result: GitleaksScanResult,
+  scope: Extract<SecretScanScope, { kind: 'scoped' }>,
+): Promise<void> {
+  const { history, files } = scope;
+  if (history !== null) {
+    const logOpts = 'base' in history ? `${history.base}..${history.head}` : history.logOpts;
+    const label = 'base' in history ? `${short(history.base)}..${short(history.head)}` : history.logOpts;
+    let commits: number | null = null;
+    try {
+      commits =
+        'base' in history
+          ? await countCommits(opts.projectPath, logOpts)
+          : await countCommitsSince(opts.projectPath, logOpts);
+    } catch (e) {
+      result.tools_run.push({ name: GITLEAKS_HISTORY, status: 'failed', reason: message(e) });
+    }
+    if (commits === 0) {
+      result.tools_run.push({ name: GITLEAKS_HISTORY, status: 'skipped', reason: `no commits in ${label}` });
+    } else if (commits !== null) {
+      await historyPass(opts, result, logOpts, commits, await repoPrefix(opts.projectPath));
+    }
+  }
+  if (result.cancelled) return;
+  // A commit-range scope with no untracked additions has nothing more to read.
+  if (history !== null && files.length === 0) return;
+  await filesPass(opts, result, files, {
+    none: 'the scope holds no file',
+    scanned: (n) => `scope: ${n} file(s) scanned, read from the working tree`,
+  });
+}
+
+/** `git rev-list --count <--since=…> HEAD` — `logOpts` is one validated `--since=` option. */
+async function countCommitsSince(cwd: string, logOpts: string): Promise<number> {
+  const r = await git(cwd, ['rev-list', '--count', logOpts, 'HEAD', '--']);
+  const n = Number(r.stdout.trim());
+  if (r.exitCode !== 0 || !Number.isInteger(n)) {
+    throw new Error(`git rev-list --count ${logOpts} failed: ${r.stderr.trim() || `exit ${r.exitCode}`}`);
+  }
+  return n;
 }
 
 /**
@@ -251,11 +321,19 @@ async function workingTreePass(opts: GitleaksScanOptions, result: GitleaksScanRe
  * directory (see the module comment for the size limits and what a file that
  * cannot be read costs).
  */
-async function filesPass(opts: GitleaksScanOptions, result: GitleaksScanResult, files: readonly string[]): Promise<void> {
+async function filesPass(
+  opts: GitleaksScanOptions,
+  result: GitleaksScanResult,
+  files: readonly string[],
+  labels: { none: string; scanned: (n: number) => string } = {
+    none: 'no uncommitted or untracked files',
+    scanned: (n) => `working tree: ${n} uncommitted or untracked file(s) scanned`,
+  },
+): Promise<void> {
   const name = GITLEAKS_WORKING_TREE;
   const candidates = files.filter((f) => !isExcluded(f));
   if (candidates.length === 0) {
-    result.tools_run.push({ name, status: 'skipped', reason: 'no uncommitted or untracked files' });
+    result.tools_run.push({ name, status: 'skipped', reason: labels.none });
     return;
   }
   const maxFile = opts.limits?.maxFileBytes ?? MAX_FILE_BYTES;
@@ -336,7 +414,7 @@ async function filesPass(opts: GitleaksScanOptions, result: GitleaksScanResult, 
     if (existsSync(projectConfig)) args.push(`--config=${projectConfig}`);
     const run = await runProcess({ command: 'gitleaks', args, cwd: tmp, env: opts.env, signal: opts.signal, onLog: opts.onLog });
     if (run.outcome === 'cancelled') result.cancelled = true;
-    recordFilesRun(result, name, run, readJsonSafe(outFile), 'working_tree', `working tree: ${copied} uncommitted or untracked file(s) scanned`, gaps, notes);
+    recordFilesRun(result, name, run, readJsonSafe(outFile), 'working_tree', labels.scanned(copied), gaps, notes);
   } finally {
     try {
       rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

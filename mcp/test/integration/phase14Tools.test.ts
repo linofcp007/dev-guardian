@@ -7,7 +7,7 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
-import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -34,6 +34,7 @@ import { TOOLS } from '../../src/tools/index.js';
 import { makeFinding } from '../../src/runners/scannerParsers/index.js';
 import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+import { legacyRegistrationsNotApplied, resolveCustomSemgrepConfigs } from '../../src/platform/customRules.js';
 
 afterAll(cleanupTempDirs);
 
@@ -463,19 +464,116 @@ describe('regression_alert', () => {
 });
 
 describe('register_custom_rules', () => {
-  it('auto-discovers .semgrep/ when present and persists the path', async () => {
+  const VALID_RULES =
+    'rules:\n  - id: no-eval\n    message: no eval\n    languages: [javascript]\n    severity: ERROR\n    pattern: eval(...)\n';
+
+  type RegisterResult = {
+    ok: true;
+    registered: string[];
+    rejected: Array<{ path: string; reason: string }>;
+    note: string;
+  };
+
+  async function register(plugin: PluginContext, input: Record<string, unknown>): Promise<RegisterResult> {
+    return (await getTool('register_custom_rules').handler(input, plugin)) as RegisterResult;
+  }
+
+  it('auto-discovers .semgrep/ when present and persists the path for THIS project', async () => {
     const project = tempProject();
     const semDir = join(project, '.semgrep');
-    require('node:fs').mkdirSync(semDir, { recursive: true });
-    writeFileSync(join(semDir, 'rules.yml'), 'rules: []\n', 'utf8');
+    mkdirSync(semDir, { recursive: true });
+    writeFileSync(join(semDir, 'rules.yml'), VALID_RULES, 'utf8');
     const plugin = makePlugin();
 
-    const r = (await getTool('register_custom_rules').handler(
-      { project_path: project },
-      plugin,
-    )) as { ok: true; registered: string[] };
-    expect(r.registered).toHaveLength(1);
-    expect(plugin.storage.runtimeMeta.getJson('custom_semgrep_configs')).toBeDefined();
+    const r = await register(plugin, { project_path: project });
+    expect(r.registered).toEqual([semDir]);
+    expect(resolveCustomSemgrepConfigs(plugin, project)).toEqual([join(semDir, 'rules.yml')]);
+  });
+
+  it('never registers auto-discovered YAML that is not Semgrep rules (Prometheus alerts in rules/)', async () => {
+    // Reproduced: registering this made every later scan_sast exit 7 with
+    // 0 files scanned.
+    const project = tempProject();
+    const rulesDir = join(project, 'rules');
+    mkdirSync(rulesDir, { recursive: true });
+    writeFileSync(join(rulesDir, 'alerts.yml'), 'groups:\n  - name: node\n    rules:\n      - alert: Down\n        expr: up == 0\n', 'utf8');
+    const plugin = makePlugin();
+
+    const r = await register(plugin, { project_path: project });
+    expect(r.ok).toBe(true);
+    expect(r.registered).toEqual([]);
+    expect(r.rejected).toEqual([{ path: join(rulesDir, 'alerts.yml'), reason: 'no `rules:` list' }]);
+    expect(resolveCustomSemgrepConfigs(plugin, project)).toEqual([]);
+  });
+
+  it('rejects an empty rules list — exit 0, 0 files scanned', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'empty.yml'), 'rules: []\n', 'utf8');
+    const plugin = makePlugin();
+    const r = await register(plugin, { project_path: project, paths: ['empty.yml'] });
+    expect(r.registered).toEqual([]);
+    expect(r.rejected).toEqual([{ path: join(project, 'empty.yml'), reason: 'empty `rules:` list' }]);
+  });
+
+  it('expands a glob to the files it matches instead of storing the pattern literally', async () => {
+    const project = tempProject();
+    mkdirSync(join(project, 'sg', 'more'), { recursive: true });
+    writeFileSync(join(project, 'sg', 'a.yml'), VALID_RULES, 'utf8');
+    writeFileSync(join(project, 'sg', 'more', 'b.yml'), VALID_RULES, 'utf8');
+    writeFileSync(join(project, 'sg', 'notes.txt'), 'x', 'utf8');
+    const plugin = makePlugin();
+
+    const r = await register(plugin, { project_path: project, paths: ['sg/**/*.yml'] });
+    expect(r.registered).toEqual([join(project, 'sg', 'a.yml'), join(project, 'sg', 'more', 'b.yml')]);
+    expect(resolveCustomSemgrepConfigs(plugin, project)).toEqual(r.registered);
+  });
+
+  it('a glob that matches nothing is rejected with a reason, and the previous registration survives', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'keep.yml'), VALID_RULES, 'utf8');
+    const plugin = makePlugin();
+    await register(plugin, { project_path: project, paths: ['keep.yml'] });
+
+    const r = await register(plugin, { project_path: project, paths: ['nothing/*.yml'] });
+    expect(r.registered).toEqual([]);
+    expect(r.rejected).toEqual([{ path: 'nothing/*.yml', reason: 'matched no file' }]);
+    expect(r.note).toMatch(/unchanged/);
+    expect(resolveCustomSemgrepConfigs(plugin, project)).toEqual([join(project, 'keep.yml')]);
+  });
+
+  it("project A's rules never run on project B", async () => {
+    const a = tempProject();
+    const b = tempProject();
+    writeFileSync(join(a, 'a-rules.yml'), VALID_RULES, 'utf8');
+    const plugin = makePlugin();
+    await register(plugin, { project_path: a, paths: ['a-rules.yml'] });
+    expect(resolveCustomSemgrepConfigs(plugin, a)).toEqual([join(a, 'a-rules.yml')]);
+    expect(resolveCustomSemgrepConfigs(plugin, b)).toEqual([]);
+  });
+
+  it('clear=true removes this project\'s registration only', async () => {
+    const a = tempProject();
+    const b = tempProject();
+    writeFileSync(join(a, 'r.yml'), VALID_RULES, 'utf8');
+    writeFileSync(join(b, 'r.yml'), VALID_RULES, 'utf8');
+    const plugin = makePlugin();
+    await register(plugin, { project_path: a, paths: ['r.yml'] });
+    await register(plugin, { project_path: b, paths: ['r.yml'] });
+    await getTool('register_custom_rules').handler({ project_path: a, clear: true }, plugin);
+    expect(resolveCustomSemgrepConfigs(plugin, a)).toEqual([]);
+    expect(resolveCustomSemgrepConfigs(plugin, b)).toEqual([join(b, 'r.yml')]);
+  });
+
+  it('clear=true also removes the 2.0.x global registration — what clear meant in 2.0.x — and with it the notice', async () => {
+    const a = tempProject();
+    const elsewhere = tempProject();
+    writeFileSync(join(elsewhere, 'r.yml'), VALID_RULES, 'utf8');
+    const plugin = makePlugin();
+    plugin.storage.runtimeMeta.setJson('custom_semgrep_configs', [join(elsewhere, 'r.yml')]);
+    expect(legacyRegistrationsNotApplied(plugin, a)).toEqual([join(elsewhere, 'r.yml')]);
+    await getTool('register_custom_rules').handler({ project_path: a, clear: true }, plugin);
+    expect(plugin.storage.runtimeMeta.getJson('custom_semgrep_configs')).toBeNull();
+    expect(legacyRegistrationsNotApplied(plugin, a)).toEqual([]);
   });
 });
 

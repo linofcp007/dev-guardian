@@ -49,6 +49,8 @@ export const SCAN_TYPES = [
     'wordpress',
     'wp_audit',
     'wp_vuln_check',
+    // Source-based vulnerability matching (no live URL): wp_vuln_check_source.
+    'wp_vuln_check_source',
     'wp_cron_audit',
     'wp_rest_audit',
     // .NET family

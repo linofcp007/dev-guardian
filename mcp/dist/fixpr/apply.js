@@ -1,7 +1,6 @@
 /**
- * `applyGroup` — runs a `FixGroup`'s fix commands inside an already-created
- * worktree (design doc the design of record
- * §2 and §4.3).
+ * `applyGroup` — runs a `FixGroup`'s fix inside an already-created worktree
+ * (design doc the design of record §2 and §4.3).
  *
  * The property this module exists to hold: a command STRING never reaches a
  * shell. `runProcess` is `shell: false` end to end, so every command run
@@ -13,122 +12,245 @@
  *
  * Two fix sources, two shapes (design doc §2):
  *
- *   - `deps`: each candidate carries its own pinned `command` — a full
- *     `npm install pkg@version` / `pip install -U pkg==version` / … string
- *     `deps_update_plan` already computed. Split on whitespace into argv and
- *     run ONE PROCESS PER CANDIDATE, in order, stopping at the first
- *     failure so a later candidate never runs against a tree a failed
- *     upgrade already left half-modified.
- *   - `semgrep`: candidates carry `command: null` — there is nothing to
- *     split, because `--autofix` rewrites everything its rules match across
- *     the whole tree in a SINGLE pass. Running it once per candidate would
- *     invoke Semgrep repeatedly over a tree it (partly) already rewrote on
- *     the previous pass. So the semgrep branch never looks at `candidates`
- *     at all: the group's mere existence is the trigger for exactly one call.
+ *   - `deps`: each candidate carries the structured `UpgradeStep`s
+ *     `deps_update_plan` planned for its package (Task 10), run ONE STEP AT A
+ *     TIME, in order, stopping at the first failure so a later step never runs
+ *     against a tree a failed upgrade already left half-modified:
+ *       - a pip step is an EDIT of the pin in the step's structured `file`,
+ *         inside the worktree — never `pip install` (it would upgrade the
+ *         host's own site-packages; the step's `upgrade_command` is a
+ *         human-readable label that fails closed if executed);
+ *       - every other step's `upgrade_command` is split into argv and run,
+ *         then its `follow_up_command` when it has one (an npm `overrides`
+ *         step only edits package.json; `npm install` re-resolves the lock).
+ *     Every npm command that installs runs with `--ignore-scripts`, and every
+ *     composer command that installs with `--no-scripts`, added here when the
+ *     plan's command lacks it: a dependency's lifecycle script is arbitrary
+ *     code, and a dry run must never execute it (Task 11 items 1 and 5).
+ *     Bundler runs only as `bundle lock` — `bundle update` would install
+ *     gems into the host's GEM_HOME (see `harden`).
+ *   - `semgrep`: ONE `--autofix` pass for the whole group, with ONLY the
+ *     target rules (`./semgrepFix.ts` — filtered copies of local rule files,
+ *     `r/<rule-id>` for registry rules), `--metrics=off`, over the targets'
+ *     files only, and judged by its report (Global Constraint 3): a pass that
+ *     scanned nothing or reported errors did not apply the fix. A target file
+ *     that is not in the worktree (uncommitted in the user's tree) fails the
+ *     group — it can be neither fixed nor verified from committed HEAD.
  *
  * `lockfileOnly` (design doc §4.3): when no test command was derived for the
  * project, verification never needs an installed `node_modules` tree — only
  * the manifest and lockfile, which `npm audit`/Trivy read directly — so
  * `--package-lock-only` is added to an `npm install` step and the whole
- * verification stays in seconds. When a test command DOES exist, the suite
- * needs a real install to run against, so the flag is withheld and the cost
- * moves from seconds to minutes. That trade is `create_fix_pr`'s decision,
- * not this module's — `applyGroup` only ever does what `lockfileOnly` says,
- * and only on npm's `install` subcommand: the flag is npm-install-specific,
- * and no other ecosystem's upgrade command has an equivalent shortcut.
+ * verification stays in seconds. `applyGroup` only ever does what
+ * `lockfileOnly` says, and only on npm's `install` subcommand.
  */
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { batchArgs } from '../runners/argBatches.js';
 import { runProcess } from '../runners/processRunner.js';
+import { checkSemgrepReport, pythonUtf8Env } from '../runners/semgrepReport.js';
+import { readJsonSafe } from '../tools/scanHelpers.js';
 export async function applyGroup(opts) {
     const run = opts.run ?? runProcess;
-    return opts.group.source === 'semgrep'
-        ? applySemgrepPass(run, opts.worktreePath, opts.timeoutMs)
-        : applyDepsCandidates(run, opts.worktreePath, opts.timeoutMs, opts.lockfileOnly, opts.group.candidates);
+    if (opts.group.source === 'semgrep') {
+        if (opts.semgrepFix === undefined) {
+            return {
+                applied: false,
+                commands: [],
+                failure: { command: 'semgrep --autofix', outcome: 'failed', exit_code: null, stderr_head: 'no fix plan: the target rules were not resolved' },
+            };
+        }
+        return applySemgrepPass(run, opts.worktreePath, opts.timeoutMs, opts.semgrepFix);
+    }
+    return applyDepsCandidates(run, opts.worktreePath, opts.timeoutMs, opts.lockfileOnly, opts.group.candidates);
 }
 // --------------------------------------------------------------- semgrep
-async function applySemgrepPass(run, worktreePath, timeoutMs) {
-    // One pass for the WHOLE group, never one per candidate — see the module
-    // comment. How many findings the group covers has no bearing on how many
-    // times this runs, so `candidates` is deliberately not a parameter here.
-    const { invoked, result } = await runOne(run, worktreePath, timeoutMs, {
-        command: 'semgrep',
-        args: ['--config', 'auto', '--autofix', '--quiet'],
-    });
-    if (result.outcome !== 'completed') {
-        return { applied: false, commands: [invoked], failure: buildFailure(invoked, result) };
+async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
+    const label = `semgrep --metrics=off --autofix [${plan.configLabels.join('; ')}]`;
+    const missing = plan.files.filter((f) => !existsSync(join(worktreePath, f)));
+    if (missing.length > 0) {
+        return {
+            applied: false,
+            commands: [],
+            failure: {
+                command: label,
+                outcome: 'failed',
+                exit_code: null,
+                stderr_head: `target file(s) not in the committed tree: ${missing.join(', ')} — a finding in an ` +
+                    'uncommitted file can be neither fixed nor verified from HEAD',
+            },
+        };
     }
-    return { applied: true, commands: [invoked], failure: null };
+    const fixed = ['--metrics=off', ...plan.configs.map((c) => `--config=${c}`), '--autofix', '--json', '--quiet'];
+    const batches = batchArgs(plan.files, {
+        command: 'semgrep',
+        fixedArgs: [...fixed, '--output', join(plan.dir, 'fix-000.json'), '--'],
+    });
+    const commands = [];
+    for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i] ?? [];
+        const report = join(plan.dir, `fix-${String(i).padStart(3, '0')}.json`);
+        rmSync(report, { force: true });
+        const result = await run({
+            command: 'semgrep',
+            args: [...fixed, '--output', report, '--', ...batch],
+            cwd: worktreePath,
+            env: pythonUtf8Env(undefined),
+            timeoutMs,
+        });
+        const invoked = `${label} -- ${batch.join(' ')}`;
+        commands.push(invoked);
+        const check = checkSemgrepReport({ raw: readJsonSafe(report), exitCode: result.exitCode, outcome: result.outcome, targets: batch.length });
+        if (!check.ok) {
+            return {
+                applied: false,
+                commands,
+                failure: { command: invoked, outcome: result.outcome === 'completed' ? 'failed' : result.outcome, exit_code: result.exitCode, stderr_head: check.reason ?? firstStderrLine(result.stderr) },
+            };
+        }
+    }
+    return { applied: true, commands, failure: null };
 }
 // --------------------------------------------------------------- deps
 async function applyDepsCandidates(run, worktreePath, timeoutMs, lockfileOnly, candidates) {
     const commands = [];
     for (const candidate of candidates) {
-        const argv = candidate.command === null ? null : toArgv(candidate.command);
-        if (argv === null) {
-            // Never happens for a `deps` group in practice — `buildGroups` (Task 1)
-            // always sets a real, non-empty `upgrade_command` here; `command: null`
-            // is the SEMGREP shape, the other branch of this same union. Handled
-            // anyway, with a NAMED failure rather than a silent skip: a `continue`
-            // here would let this candidate's fix simply not happen while the
-            // group still reports `applied: true` for the others — exactly the
-            // "something that did not happen acquiring the appearance of having
-            // happened" this feature exists to rule out (design doc §4.1).
+        const steps = candidate.steps ?? [];
+        if (steps.length === 0) {
+            // Never happens for a `deps` group in practice — `buildGroups` pairs a
+            // finding only with a real step. Handled anyway, with a NAMED failure
+            // rather than a silent skip: a `continue` here would let this fix not
+            // happen while the group still reported `applied: true`.
             return {
                 applied: false,
                 commands,
-                failure: {
-                    // `||`, not `??`: a present-but-empty command string is exactly as
-                    // unrunnable as a missing one, and only `||` treats both as
-                    // "nothing useful here" — this project's own recurring `??` trap.
-                    command: candidate.command || candidate.label,
-                    outcome: 'failed',
-                    exit_code: null,
-                    stderr_head: `no runnable command for '${candidate.label}'`,
-                },
+                failure: { command: candidate.label, outcome: 'failed', exit_code: null, stderr_head: `no upgrade step for '${candidate.label}'` },
             };
         }
-        // npm-only, and only its `install` subcommand — see the module comment.
-        if (lockfileOnly && argv.command === 'npm' && argv.args[0] === 'install') {
-            argv.args.push('--package-lock-only');
-        }
-        const { invoked, result } = await runOne(run, worktreePath, timeoutMs, argv);
-        commands.push(invoked);
-        if (result.outcome !== 'completed') {
-            // Stop here — see the module comment on why a later candidate must
-            // never run against what this failed upgrade may have left behind.
-            return { applied: false, commands, failure: buildFailure(invoked, result) };
+        for (const step of steps) {
+            const failure = await applyStep(run, worktreePath, timeoutMs, lockfileOnly, step, commands);
+            if (failure !== null)
+                return { applied: false, commands, failure };
         }
     }
     return { applied: true, commands, failure: null };
 }
+/** One step, then its follow-up. Null on success, the failure otherwise. */
+async function applyStep(run, worktreePath, timeoutMs, lockfileOnly, step, commands) {
+    if (step.ecosystem === 'pip') {
+        const edit = editPipPin(worktreePath, step);
+        commands.push(edit.label);
+        if (!edit.ok)
+            return { command: edit.label, outcome: 'failed', exit_code: null, stderr_head: edit.reason };
+    }
+    else {
+        const failure = await runCommand(run, worktreePath, timeoutMs, lockfileOnly, step.upgrade_command, commands);
+        if (failure !== null)
+            return failure;
+    }
+    if (step.follow_up_command !== undefined && step.follow_up_command.trim().length > 0) {
+        return runCommand(run, worktreePath, timeoutMs, lockfileOnly, step.follow_up_command, commands);
+    }
+    return null;
+}
+async function runCommand(run, worktreePath, timeoutMs, lockfileOnly, commandLine, commands) {
+    const argv = toArgv(commandLine);
+    if (argv === null) {
+        return { command: commandLine, outcome: 'failed', exit_code: null, stderr_head: 'empty command' };
+    }
+    const refused = harden(argv, lockfileOnly);
+    if (refused !== null) {
+        return { command: commandLine, outcome: 'failed', exit_code: null, stderr_head: refused };
+    }
+    const result = await run({ command: argv.command, args: argv.args, cwd: worktreePath, timeoutMs });
+    const invoked = [argv.command, ...argv.args].join(' ');
+    commands.push(invoked);
+    // `outcome !== 'completed'`, never a list of failure outcomes: a
+    // timed_out or output_too_large step did not finish either.
+    return result.outcome === 'completed' ? null : buildFailure(invoked, result);
+}
+/** npm subcommands that install packages — and so run lifecycle scripts. */
+const NPM_INSTALLING = new Set(['install', 'i', 'add', 'ci', 'update', 'up', 'upgrade', 'install-clean']);
+/** composer subcommands that install packages — and so run package scripts. */
+const COMPOSER_INSTALLING = new Set(['require', 'install', 'update', 'upgrade']);
+/**
+ * `--ignore-scripts` on every installing npm command and `--no-scripts` on
+ * every installing composer command (see the module comment), and
+ * `--package-lock-only` on `npm install` when `lockfileOnly`. Bundler runs
+ * only as `bundle lock` (re-resolving Gemfile.lock): `bundle update <gem>` is
+ * rewritten to `bundle lock --update <gem>`, and any other subcommand is
+ * refused — they install gems into the host's GEM_HOME and compile native
+ * extensions. Returns why the command was refused, or null.
+ */
+function harden(argv, lockfileOnly) {
+    const sub = argv.args[0] ?? '';
+    if (argv.command === 'bundle') {
+        if (sub === 'update')
+            argv.args.splice(0, 1, 'lock', '--update');
+        else if (sub !== 'lock') {
+            return `refused: 'bundle ${sub}' would install gems into the host (only 'bundle lock' runs)`;
+        }
+    }
+    if (argv.command === 'npm' && NPM_INSTALLING.has(sub)) {
+        if (!argv.args.includes('--ignore-scripts'))
+            argv.args.push('--ignore-scripts');
+        if (lockfileOnly && (sub === 'install' || sub === 'i') && !argv.args.includes('--package-lock-only')) {
+            argv.args.push('--package-lock-only');
+        }
+    }
+    if (argv.command === 'composer' && COMPOSER_INSTALLING.has(sub) && !argv.args.includes('--no-scripts')) {
+        argv.args.push('--no-scripts');
+    }
+    return null;
+}
+/**
+ * The pip step, as an edit: the exact pin `name==installed` in the step's
+ * `file` (a requirements file or pyproject.toml, relative to the project)
+ * becomes `name==latest`. The name matches the way pip compares names
+ * (PEP 503: case-insensitive, `-`/`_`/`.` interchangeable); extras and
+ * environment markers are kept. A file outside the worktree, a missing file
+ * or a pin that is not there fails the step by name.
+ */
+function editPipPin(worktreePath, step) {
+    const file = step.file ?? '';
+    const label = `edit ${file || '(no file)'}: ${step.package_name}==${step.installed_version} -> ${step.package_name}==${step.latest_version}`;
+    if (file.length === 0)
+        return { ok: false, label, reason: 'the pip step names no file to edit' };
+    const target = resolve(worktreePath, file);
+    const rel = relative(worktreePath, target);
+    if (isAbsolute(file) || rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+        return { ok: false, label, reason: `'${file}' is not a file inside the project` };
+    }
+    let text;
+    try {
+        text = readFileSync(target, 'utf8');
+    }
+    catch {
+        return { ok: false, label, reason: `'${file}' is not in the committed tree` };
+    }
+    const name = step.package_name.split(/[-_.]+/).map(escapeRegExp).join('[-_.]+');
+    const pin = new RegExp(`(^|[\\s"'\\[,])(${name})(\\s*\\[[^\\]]*\\])?(\\s*==\\s*)${escapeRegExp(step.installed_version)}(?=$|[\\s;"',#\\]\\\\])`, 'gim');
+    let count = 0;
+    const edited = text.replace(pin, (_m, lead, pkg, extras, op) => {
+        count += 1;
+        return `${lead}${pkg}${extras ?? ''}${op}${step.latest_version}`;
+    });
+    if (count === 0) {
+        return { ok: false, label, reason: `no '${step.package_name}==${step.installed_version}' pin in '${file}'` };
+    }
+    writeFileSync(target, edited, 'utf8');
+    return { ok: true, label };
+}
 // --------------------------------------------------------------- shared
 /**
  * Splits a command STRING into `{ command, args }` for `runProcess`, which
- * is `shell: false` end to end — the same plain-whitespace idiom
- * `bashGuard.ts` already uses elsewhere in this repo to tokenise a shell
- * command for INSPECTION (never execution).
- *
- * This is exact, not merely convenient, for every command this feature
- * actually receives: every `upgrade_command` template in
- * `depsUpdatePlan.ts` (all seven ecosystems — npm, pip, composer, cargo, go,
- * rubygems, dotnet) interpolates only a package/crate/gem/module identifier
- * and a version string between fixed literal tokens (`npm install
- * ${pkg}@${latest}`, `pip install -U ${name}==${latest}`, `cargo update -p
- * ${name} --precise ${latest}`, `composer require ${name}:^${latest}`, `go
- * get ${name}@${latest}`, `bundle update ${name}`, `dotnet add package
- * ${name} --version ${latest}`) — and none of those ecosystems' naming rules
- * allow whitespace inside a package identifier or a version string. A
- * quoted, space-containing argument such as `pip install
- * "requests>=2.32,<3"` never comes out of `depsUpdatePlan.ts` today: its pip
- * branch always emits an exact `==` pin, never a range, and never wraps
- * anything in quotes.
- *
- * This function is NOT a general shell-quoting parser and does not try to
- * become one: `runProcess` never invokes a shell, so "parsing quotes
- * correctly" is the wrong frame to begin with — there is no shell on the
- * other end whose quoting rules would need reproducing. If a future
- * ecosystem generator ever needs a compound argument, the fix belongs
- * upstream — hand `{ command, args }` over directly instead of a joined
- * string — not here, reverse-engineering intent out of text.
+ * is `shell: false` end to end. Exact for every command this feature
+ * receives: `deps_update_plan`'s templates interpolate only a package
+ * identifier and a version between fixed literal tokens, and neither may
+ * contain whitespace. It is NOT a shell-quoting parser — there is no shell on
+ * the other end whose quoting rules would need reproducing
+ * (`deps_update_plan` keeps `upgrade_command` unquoted for exactly this
+ * reason; its `shell_command` is the quoted, human copy).
  */
 function toArgv(commandLine) {
     const tokens = commandLine
@@ -140,19 +262,11 @@ function toArgv(commandLine) {
         return null;
     return { command, args };
 }
-async function runOne(run, worktreePath, timeoutMs, argv) {
-    const result = await run({ command: argv.command, args: argv.args, cwd: worktreePath, timeoutMs });
-    return { invoked: [argv.command, ...argv.args].join(' '), result };
-}
 /**
  * `result.outcome` is reported verbatim, whatever it is — including
- * `timed_out` and `output_too_large`, both non-'completed' outcomes from
- * `runProcess` and both failures here, exactly like `failed`. Branching on
- * `outcome !== 'completed'` (the caller's job, not this function's) rather
- * than enumerating the failure outcomes one by one is what keeps every one
- * of them caught: a silently-swallowed timeout would report a fix as
- * applied when the process that was supposed to apply it never actually
- * finished.
+ * `timed_out` and `output_too_large`: a silently-swallowed timeout would
+ * report a fix as applied when the process that was supposed to apply it
+ * never finished.
  */
 function buildFailure(invoked, result) {
     return {
@@ -162,12 +276,7 @@ function buildFailure(invoked, result) {
         stderr_head: firstStderrLine(result.stderr),
     };
 }
-/**
- * The first non-blank line of stderr — not the whole blob. npm's error
- * output routinely runs to dozens of lines; the first is the one that says
- * what happened ("npm ERR! 404 Not Found"), and everything after is detail
- * a PR body has no room for.
- */
+/** The first non-blank line of stderr — the one that says what happened. */
 function firstStderrLine(stderr) {
     for (const line of stderr.split(/\r?\n/)) {
         const trimmed = line.trim();
@@ -175,5 +284,8 @@ function firstStderrLine(stderr) {
             return trimmed;
     }
     return '(no stderr output)';
+}
+function escapeRegExp(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 //# sourceMappingURL=apply.js.map

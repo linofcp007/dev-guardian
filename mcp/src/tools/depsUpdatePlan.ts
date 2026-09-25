@@ -114,8 +114,10 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { execa } from 'execa';
+import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
+import { matchesAny } from '../platform/glob.js';
 import {
   classifyRestoreFailure,
   findDotnetTargets,
@@ -136,7 +138,7 @@ import {
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, type DomainError, type ToolResult } from '../types.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { registerToolModule, type ToolCallMeta, type ToolModule } from './index.js';
 
 type Classification = 'security' | 'patch' | 'minor' | 'major';
 
@@ -286,7 +288,7 @@ const tool: ToolModule = {
     '`unplanned` (every CVE that got no step, with why) and `runner_failures` (every ecosystem ' +
     'command that failed, with its code — e.g. NU1004 lock out of sync vs NU1301 feed unreachable).',
   inputSchema,
-  handler: async (input, ctx) => handler(input, ctx),
+  handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };
 
 registerToolModule(tool);
@@ -294,6 +296,7 @@ registerToolModule(tool);
 async function handler(
   input: Record<string, unknown>,
   ctx: PluginContext,
+  callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
   const inp = input as { project_path?: string; prefer?: Classification };
   let projectPath: string;
@@ -303,7 +306,9 @@ async function handler(
     return failDomain('not_a_git_repo', (e as Error).message);
   }
 
-  const cves = listActiveCves(ctx, projectPath);
+  // create_fix_pr plans on a disposable checkout of HEAD (Task 11): the
+  // files are the checkout's, the CVE history is the origin project's.
+  const cves = listActiveCves(ctx, callMeta?.originProjectPath ?? projectPath);
   const ecosystems = detectEcosystems(projectPath);
   const plansByEcosystem = await Promise.all(
     ecosystems.map(async (eco): Promise<EcosystemPlan> => {
@@ -808,13 +813,19 @@ async function runNpmOutdated(
 
   const directDeps = readNpmDirectDependencies(projectPath);
   const handled = new Set<string>(); // lowercased names pass 1 already decided
+  const resolved = readNpmResolvedPackages(projectPath, 'npm');
 
   // Pass 1: npm outdated's own entries — direct dependencies only, on a
   // real npm 7+ install (see this function's own doc comment).
   for (const [pkg, raw] of Object.entries(outdatedObj)) {
     if (!raw || typeof raw !== 'object') continue;
     const row = raw as Record<string, unknown>;
-    const installed = typeof row['current'] === 'string' ? (row['current'] as string) : '';
+    // With no node_modules — a fresh checkout, which is where create_fix_pr
+    // plans (Task 11) — npm reports no `current` at all (measured, npm 11,
+    // with or without --package-lock-only); the lockfile's top-level version
+    // is the installed one then.
+    const installed =
+      typeof row['current'] === 'string' ? (row['current'] as string) : (resolved.get(pkg.toLowerCase())?.topLevel ?? '');
     const npmLatest = typeof row['latest'] === 'string' ? (row['latest'] as string) : '';
     if (!installed) continue;
     const pkgLower = pkg.toLowerCase();
@@ -876,7 +887,6 @@ async function runNpmOutdated(
   // graph contains them (fix round 2, item 10: the `cves` table has no
   // ecosystem column — a pip `django` or composer `laravel/framework` must
   // never become an npm override step).
-  const resolved = readNpmResolvedPackages(projectPath, 'npm');
   for (const [pkgLower, cve] of cves) {
     if (handled.has(pkgLower)) continue;
     const info = resolved.get(pkgLower);
@@ -1016,10 +1026,13 @@ interface NpmPackageManager {
  * decides first (`pnpm-lock.yaml`, `yarn.lock`, then `package-lock.json` /
  * `npm-shrinkwrap.json`). Without one, the project may be a WORKSPACE MEMBER
  * whose lock lives at the workspace root: each ancestor up to the repository
- * root (the nearest directory holding `.git`, else the filesystem root) is
- * checked for `pnpm-workspace.yaml` / `pnpm-lock.yaml` / `yarn.lock` — the
- * nearest one decides, and an ancestor `package-lock.json` /
- * `npm-shrinkwrap.json` stops the walk as npm. Only then the project's own
+ * root (the nearest directory holding `.git`) is checked for
+ * `pnpm-workspace.yaml` / `pnpm-lock.yaml` / `yarn.lock` — the nearest one
+ * decides, and an ancestor `package-lock.json` / `npm-shrinkwrap.json` stops
+ * the walk as npm. With no repository above the project at all, an ancestor
+ * is consulted only when its `pnpm-workspace.yaml` / `package.json`
+ * `workspaces` globs include the project (Task 11 item 9 — a stray lock in an
+ * unrelated ancestor decided otherwise). Only then the project's own
  * `packageManager` field, then a pnpm store in `node_modules/.pnpm`; npm
  * otherwise. (Fix round 5: a member of a pnpm or yarn workspace used to fall
  * through to npm and get `npm install … --ignore-scripts` steps.)
@@ -1035,12 +1048,26 @@ function detectNpmPackageManager(projectPath: string): NpmPackageManager {
     const rel = toPosix(relative(projectPath, join(dir, file)));
     return dir === projectPath ? file : `${rel}, the workspace root`;
   };
+  // Task 11 item 9: with a repository above (or at) the project, the walk
+  // stops at its root, as before. With NO `.git` anywhere above, there is no
+  // root to stop at and the walk used to reach the filesystem root — a stray
+  // `pnpm-lock.yaml` in some unrelated ancestor (a home directory, a
+  // downloads folder) turned an npm project into a "pnpm workspace member"
+  // with an empty plan. There, an ancestor counts only when its own
+  // workspace declaration actually includes this directory.
+  const inRepository = gitRootAbove(projectPath) !== null;
   for (let dir = projectPath; ; ) {
-    if (has(dir, 'pnpm-lock.yaml')) return { name: 'pnpm', evidence: at(dir, 'pnpm-lock.yaml'), root: dir };
-    if (has(dir, 'pnpm-workspace.yaml')) return { name: 'pnpm', evidence: at(dir, 'pnpm-workspace.yaml'), root: dir };
-    if (has(dir, 'yarn.lock')) return { name: 'yarn', evidence: at(dir, 'yarn.lock'), root: dir };
-    if (has(dir, 'package-lock.json') || has(dir, 'npm-shrinkwrap.json')) {
-      return { name: 'npm', evidence: 'package-lock.json', root: projectPath };
+    const trusted = dir === projectPath || inRepository || workspaceIncludes(dir, projectPath);
+    if (trusted) {
+      if (has(dir, 'pnpm-lock.yaml')) return { name: 'pnpm', evidence: at(dir, 'pnpm-lock.yaml'), root: dir };
+      if (has(dir, 'pnpm-workspace.yaml')) return { name: 'pnpm', evidence: at(dir, 'pnpm-workspace.yaml'), root: dir };
+      if (has(dir, 'yarn.lock')) return { name: 'yarn', evidence: at(dir, 'yarn.lock'), root: dir };
+      if (has(dir, 'package-lock.json') || has(dir, 'npm-shrinkwrap.json')) {
+        return { name: 'npm', evidence: 'package-lock.json', root: projectPath };
+      }
+      // A workspace root that declares this project but has no lock yet is
+      // still the workspace: nothing above it can be.
+      if (dir !== projectPath && !inRepository) break;
     }
     if (has(dir, '.git')) break;
     const parent = dirname(dir);
@@ -1061,6 +1088,49 @@ function detectNpmPackageManager(projectPath: string): NpmPackageManager {
     return { name: 'pnpm', evidence: 'node_modules/.pnpm', root: projectPath };
   }
   return { name: 'npm', evidence: 'default', root: projectPath };
+}
+
+/** The nearest directory at or above `start` holding `.git` (a directory, or
+ *  a worktree's `.git` file), or null when there is none. */
+function gitRootAbove(start: string): string | null {
+  for (let dir = start; ; ) {
+    if (existsSync(join(dir, '.git'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
+ * Whether `root` declares `projectPath` as one of its workspace packages:
+ * `pnpm-workspace.yaml` `packages:`, or the root `package.json` `workspaces`
+ * (an array, or yarn's `{ packages: [...] }`). Globs are matched against the
+ * project's path relative to `root`, `!` negations honoured.
+ */
+function workspaceIncludes(root: string, projectPath: string): boolean {
+  const rel = toPosix(relative(root, projectPath));
+  if (rel === '' || rel.startsWith('..')) return false;
+  const patterns: string[] = [];
+  try {
+    const doc: unknown = parseYaml(readFileSync(join(root, 'pnpm-workspace.yaml'), 'utf8'));
+    const packages = typeof doc === 'object' && doc !== null ? (doc as Record<string, unknown>)['packages'] : undefined;
+    if (Array.isArray(packages)) patterns.push(...packages.filter((p): p is string => typeof p === 'string'));
+  } catch {
+    /* absent or unparseable — no pnpm declaration */
+  }
+  try {
+    const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as Record<string, unknown>;
+    const ws = pkg['workspaces'];
+    const list = Array.isArray(ws)
+      ? ws
+      : typeof ws === 'object' && ws !== null
+        ? (ws as Record<string, unknown>)['packages']
+        : undefined;
+    if (Array.isArray(list)) patterns.push(...list.filter((p): p is string => typeof p === 'string'));
+  } catch {
+    /* absent or unparseable — no npm/yarn declaration */
+  }
+  return patterns.length > 0 && matchesAny(rel, patterns);
 }
 
 /**
@@ -1779,19 +1849,35 @@ async function runComposerOutdated(
   projectPath: string,
   cves: Map<string, CveInfo>,
 ): Promise<EcosystemPlan> {
-  const result = await execa('composer', ['outdated', '--format=json'], {
+  // `--locked`: planned from composer.lock, not from vendor/ (Task 11 fix
+  // round 2). create_fix_pr plans on a fresh checkout of HEAD, which has no
+  // vendor/ — measured on Composer 2.10.2 there, plain `composer outdated`
+  // prints `[]` with exit 0 ("No dependencies installed") and every Composer
+  // step vanished; `--locked` lists the lock's packages with their latest.
+  // It is also the right source: the lock is what the fix edits and what CI
+  // installs from.
+  const result = await execa('composer', ['outdated', '--locked', '--format=json'], {
     cwd: projectPath,
     reject: false,
     timeout: 90_000,
   });
   const failures: RunnerFailure[] = [];
-  const exitFailure = describeExecFailure('composer outdated', result, [0]);
+  const exitFailure = describeExecFailure('composer outdated --locked', result, [0]);
   if (exitFailure) return { steps: [], unplanned: [], failures: [{ ecosystem: 'composer', ...exitFailure }] };
-  const parsed = parseRunnerJson('composer', 'composer outdated --format=json', result.stdout, failures);
-  const installed = (parsed as { installed?: unknown[] } | undefined)?.installed;
+  const stderr = typeof result.stderr === 'string' ? result.stderr : '';
+  if (/No dependencies installed/i.test(stderr)) {
+    return {
+      steps: [],
+      unplanned: [],
+      failures: [{ ecosystem: 'composer', code: 'no_output', reason: `composer outdated listed nothing: ${stderr.trim().split(/\r?\n/)[0] ?? ''}` }],
+    };
+  }
+  const parsed = parseRunnerJson('composer', 'composer outdated --locked --format=json', result.stdout, failures);
+  const record = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
+  const installed = record?.['locked'] ?? record?.['installed'];
   if (!Array.isArray(installed)) {
     if (failures.length === 0) {
-      failures.push({ ecosystem: 'composer', code: 'unparseable_output', reason: 'composer outdated printed no "installed" list' });
+      failures.push({ ecosystem: 'composer', code: 'unparseable_output', reason: 'composer outdated --locked printed no "locked" list' });
     }
     return { steps: [], unplanned: [], failures };
   }
@@ -1940,7 +2026,10 @@ async function runBundlerOutdated(
         latest_version: latest,
         ecosystem: 'rubygems',
         cves,
-        upgrade_command: `bundle update ${name}`,
+        // Lockfile only (Task 11): `bundle update` INSTALLS the gems — into
+        // the host's GEM_HOME, compiling native extensions — which create_fix_pr
+        // must never do; `bundle lock --update` re-resolves Gemfile.lock alone.
+        upgrade_command: `bundle lock --update ${name}`,
       }),
     );
   }

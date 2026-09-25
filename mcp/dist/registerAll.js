@@ -50,6 +50,8 @@ import './tools/createGithubIssues.js';
 import './tools/scanWordpress.js';
 import './tools/wpAudit.js';
 import './tools/wpVulnCheck.js';
+// Source-based WP vulnerability matching, no live URL (Task 18):
+import './tools/wpVulnCheckSource.js';
 // Phase 16 — extended WP / .NET / cross-cutting:
 import './tools/wpCronAudit.js';
 import './tools/wpRecommendHardening.js';

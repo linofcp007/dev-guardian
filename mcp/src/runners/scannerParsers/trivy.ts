@@ -12,7 +12,8 @@
  * without re-deriving them from `findings`.
  */
 
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { Category, Finding, Severity } from '../../types.js';
 import {
   asArray,
@@ -205,6 +206,30 @@ function mapSecret(raw: unknown, target: string, ctx: ParserContext): Finding | 
 // (go): both are scanned by Trivy from the bare manifest alone, no lockfile
 // required — also confirmed against 0.69.3 — so they are deliberately
 // excluded from this table; flagging them would be a false alarm.
+//
+// Nor is there a gap for a `package.json` that declares no dependency at
+// all. Measured against 0.69.3: such a manifest produces no `Results` key
+// WITH a `package-lock.json` beside it as much as without one, so the
+// report is byte-for-byte the bare-manifest gap above — but nothing was
+// missed, and no lock file a user could add would change what Trivy says.
+// Flagged, it turned every package.json kept only for `scripts` (and the
+// CI CLI's own clean e2e fixture) into a permanently INCOMPLETE scan. Only
+// npm gets this test: its manifest is the whole declaration. A `.csproj`
+// with no `PackageReference` still draws packages from
+// `Directory.Packages.props`, `Directory.Build.props` and the SDK's own
+// framework reference, so an empty-looking one stays a gap.
+//
+// The boundary of that exclusion: it takes the manifest out BEFORE the
+// "did Trivy cover it?" question, so it must hold only where nothing could
+// be missed — the manifest AND every root lock file lock nothing. A lock
+// file that still locks packages (a stale one, left behind when a
+// dependency was deleted from package.json) is something to audit: `npm ci`
+// installs from it. Trivy 0.69.3 does report such a lock file (v1, v3 and
+// yarn.lock measured), so npm reads covered either way today; if a Trivy
+// ever stops, the gap is reported instead of hidden. A lock file this code
+// does not read (pnpm-lock.yaml, bun.lock, bun.lockb) or cannot parse
+// counts as locking something. test/e2e/trivyManifestCoverage.test.ts pins
+// both measured facts on the Trivy on PATH.
 
 interface EcosystemManifest {
   /** Human label used in `ManifestCoverageGap.ecosystem`. */
@@ -216,19 +241,131 @@ interface EcosystemManifest {
    *  necessarily the manifest file itself — Trivy reports the LOCKFILE as
    *  `Target`, so matching is done on `Type`, never on `Target`). */
   trivyTypes: readonly string[];
+  /** The file names Trivy reads for those Types — the `Target` of their
+   *  Results, and so the `file_path` of every CVE / license finding they
+   *  produce. `history/runNames.ts` keys those findings by ecosystem with
+   *  it, so a gap here vetoes exactly the findings it could have hidden. */
+  lockfiles: readonly string[];
+  /** True when the manifest at this path declares nothing Trivy could
+   *  report on, so its missing Result is not a gap. Absent: always a gap. */
+  declaresNothing?: (path: string) => boolean;
 }
 
 const ECOSYSTEM_MANIFESTS: readonly EcosystemManifest[] = [
-  { ecosystem: 'npm', matches: (n) => n === 'package.json', trivyTypes: ['npm', 'yarn', 'pnpm', 'bun'] },
-  { ecosystem: 'composer', matches: (n) => n === 'composer.json', trivyTypes: ['composer'] },
+  {
+    ecosystem: 'npm',
+    matches: (n) => n === 'package.json',
+    trivyTypes: ['npm', 'yarn', 'pnpm', 'bun'],
+    lockfiles: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock'],
+    declaresNothing: npmManifestDeclaresNothing,
+  },
+  { ecosystem: 'composer', matches: (n) => n === 'composer.json', trivyTypes: ['composer'], lockfiles: ['composer.lock'] },
   {
     ecosystem: 'dotnet',
     matches: (n) => /\.(csproj|sln)$/i.test(n),
     trivyTypes: ['nuget'],
+    lockfiles: ['packages.lock.json', 'packages.config'],
   },
-  { ecosystem: 'rubygems', matches: (n) => n === 'Gemfile', trivyTypes: ['bundler'] },
-  { ecosystem: 'cargo', matches: (n) => n === 'Cargo.toml', trivyTypes: ['cargo'] },
+  { ecosystem: 'rubygems', matches: (n) => n === 'Gemfile', trivyTypes: ['bundler'], lockfiles: ['Gemfile.lock'] },
+  { ecosystem: 'cargo', matches: (n) => n === 'Cargo.toml', trivyTypes: ['cargo'], lockfiles: ['Cargo.lock'] },
 ];
+
+/** Every ecosystem the coverage check can report a gap for (`ManifestCoverageGap.ecosystem`). */
+export const MANIFEST_ECOSYSTEMS: readonly string[] = ECOSYSTEM_MANIFESTS.map((e) => e.ecosystem);
+
+/** Each ecosystem with the lock file names Trivy reports its Results under. */
+export const MANIFEST_ECOSYSTEM_LOCKFILES: ReadonlyArray<{ ecosystem: string; lockfiles: readonly string[] }> =
+  ECOSYSTEM_MANIFESTS.map((e) => ({ ecosystem: e.ecosystem, lockfiles: e.lockfiles }));
+
+/**
+ * The ecosystem whose lock file a Trivy Result `Target` (a finding's
+ * `file_path`) names, at any depth, or null — an OS package in an image, a
+ * `go.mod`, a `requirements.txt`: nothing the coverage check reports on.
+ */
+export function manifestEcosystemOfTarget(target: string): string | null {
+  const base = target.slice(Math.max(target.lastIndexOf('/'), target.lastIndexOf('\\')) + 1).toLowerCase();
+  const eco = ECOSYSTEM_MANIFESTS.find((e) => e.lockfiles.some((l) => l.toLowerCase() === base));
+  return eco?.ecosystem ?? null;
+}
+
+/** npm dependency fields; `workspaces` because the members declare theirs. */
+const NPM_DECLARING_FIELDS = [
+  'dependencies',
+  'devDependencies',
+  'optionalDependencies',
+  'peerDependencies',
+  'bundleDependencies',
+  'bundledDependencies',
+  'workspaces',
+] as const;
+
+/** `undefined`, `{}` and `[]`; anything else (`null`, `true`, entries) may hold something. */
+function isEmptyField(v: unknown): boolean {
+  if (v === undefined) return true;
+  if (Array.isArray(v)) return v.length === 0;
+  return typeof v === 'object' && v !== null && Object.keys(v).length === 0;
+}
+
+/** Parsed JSON, BOM tolerated, or `undefined` when the file does not parse. */
+function readJsonFile(path: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, '')) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Root npm lock files this code reads: they lock nothing when every `packages` key is the root (`''`) and v1's `dependencies` is empty. */
+const NPM_JSON_LOCKFILES = ['package-lock.json', 'npm-shrinkwrap.json'] as const;
+/** Root npm lock files this code does not read: present, each may lock something. */
+const NPM_UNREAD_LOCKFILES = ['pnpm-lock.yaml', 'bun.lock', 'bun.lockb'] as const;
+
+/**
+ * Whether every npm lock file at the root of `dir` is absent or locks
+ * nothing. A lock file that does not parse, or one this code does not read,
+ * may lock something: see the module comment on this exclusion's boundary.
+ */
+function npmLockFilesLockNothing(dir: string): boolean {
+  for (const name of NPM_UNREAD_LOCKFILES) if (existsSync(join(dir, name))) return false;
+  for (const name of NPM_JSON_LOCKFILES) {
+    const path = join(dir, name);
+    if (!existsSync(path)) continue;
+    const lock = readJsonFile(path);
+    if (typeof lock !== 'object' || lock === null || Array.isArray(lock)) return false;
+    const { packages, dependencies } = lock as Record<string, unknown>;
+    if (packages !== undefined) {
+      if (typeof packages !== 'object' || packages === null || Array.isArray(packages)) return false;
+      if (Object.keys(packages).some((k) => k !== '')) return false;
+    }
+    if (!isEmptyField(dependencies)) return false;
+  }
+  const yarnLock = join(dir, 'yarn.lock');
+  if (existsSync(yarnLock)) {
+    let text: string;
+    try {
+      text = readFileSync(yarnLock, 'utf8');
+    } catch {
+      return false;
+    }
+    // Only the `# ...` header and blank lines: what yarn writes with nothing to lock.
+    if (text.split(/\r?\n/).some((line) => line.trim() !== '' && !line.trimStart().startsWith('#'))) return false;
+  }
+  return true;
+}
+
+/**
+ * A `package.json` that parses to an object, whose every dependency field
+ * (and `workspaces`) is absent, `{}` or `[]`, and beside which no root lock
+ * file locks anything. Anything else (a field with entries,
+ * `bundleDependencies: true`, a manifest that does not parse, a stale lock
+ * file still locking packages) may declare something, and stays a gap.
+ */
+function npmManifestDeclaresNothing(path: string): boolean {
+  const manifest = readJsonFile(path);
+  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) return false;
+  const fields = manifest as Record<string, unknown>;
+  return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(dirname(path));
+}
 
 export interface ManifestCoverageGap {
   ecosystem: string;
@@ -278,7 +415,7 @@ export function assessManifestCoverage(
 
   const gaps: ManifestCoverageGap[] = [];
   for (const eco of ECOSYSTEM_MANIFESTS) {
-    const files = entries.filter((n) => eco.matches(n));
+    const files = entries.filter((n) => eco.matches(n) && !(eco.declaresNothing?.(join(projectPath, n)) ?? false));
     if (files.length === 0) continue;
     const covered = eco.trivyTypes.some((t) => coveredTypes.has(t));
     if (!covered) gaps.push({ ecosystem: eco.ecosystem, files });

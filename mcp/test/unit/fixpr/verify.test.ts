@@ -213,18 +213,62 @@ describe('judgeTests', () => {
   const derived = { command: 'npm', args: ['test', '--silent'],
     origin: 'package.json scripts.test' };
 
+  /** A disposable base-commit tree at `path`, recording that it was made and disposed. */
+  function base(path: string) {
+    const log = { created: 0, disposed: 0 };
+    const tree = async () => {
+      log.created += 1;
+      return { ok: true as const, path, dispose: async () => { log.disposed += 1; } };
+    };
+    return { tree, log };
+  }
+
   it('is not_run when no command could be derived', async () => {
     const v = await judgeTests({ derived: null, worktreePath: '/w',
-      projectPath: '/p', run: fakeRun([]).run });
+      baseTree: base('/p').tree, run: fakeRun([]).run });
     expect(v.outcome).toBe('not_run');
     expect(v.command).toBeNull();
+  });
+
+  it('Task 11 item 1: runs the base-commit comparison in a disposable base tree — never the user\'s project — and disposes it', async () => {
+    // It used to run the project's test command in `projectPath` itself:
+    // the user's working tree, dirty or not, where a test run writes caches,
+    // coverage and snapshots — during a DRY run.
+    const b = base('/base-tree');
+    const { run, calls } = fakeRun([
+      { outcome: 'failed', exitCode: 1, stdout: '1 failing\n' },
+      { outcome: 'completed', exitCode: 0 },
+    ]);
+    const v = await judgeTests({ derived, worktreePath: '/w', baseTree: b.tree, run });
+    expect(v.outcome).toBe('broken_by_fix');
+    expect(calls).toEqual(['/w', '/base-tree']);
+    expect(b.log).toEqual({ created: 1, disposed: 1 });
+  });
+
+  it('never builds a base tree when the fix\'s own run passed', async () => {
+    const b = base('/base-tree');
+    const { run } = fakeRun([{ outcome: 'completed', exitCode: 0 }]);
+    await judgeTests({ derived, worktreePath: '/w', baseTree: b.tree, run });
+    expect(b.log.created).toBe(0);
+  });
+
+  it('a base tree that cannot be built leaves the failure unattributed — and that opens no PR', async () => {
+    const { run, calls } = fakeRun([{ outcome: 'failed', exitCode: 1, stdout: 'x\n' }]);
+    const v = await judgeTests({
+      derived, worktreePath: '/w', run,
+      baseTree: async () => ({ ok: false as const, reason: 'git worktree add failed' }),
+    });
+    expect(v.outcome).toBe('unattributed');
+    expect(v.output_head).toContain('git worktree add failed');
+    expect(calls).toEqual(['/w']);
+    expect(mayOpenPr({ passed: true, resolved: [A], still_present: [], new_findings: [] }, v)).toBe(false);
   });
 
   it('passes without ever touching the base commit', async () => {
     // The laziness is the point: the second run costs minutes and is only
     // needed to assign blame for a failure that has not happened.
     const { run, calls } = fakeRun([{ outcome: 'completed', exitCode: 0 }]);
-    const v = await judgeTests({ derived, worktreePath: '/w', projectPath: '/p', run });
+    const v = await judgeTests({ derived, worktreePath: '/w', baseTree: base('/p').tree, run });
     expect(v.outcome).toBe('passed');
     expect(calls).toEqual(['/w']);
   });
@@ -234,7 +278,7 @@ describe('judgeTests', () => {
       { outcome: 'failed', exitCode: 1, stdout: '3 failing\n' },   // worktree
       { outcome: 'completed', exitCode: 0 },                        // base
     ]);
-    const v = await judgeTests({ derived, worktreePath: '/w', projectPath: '/p', run });
+    const v = await judgeTests({ derived, worktreePath: '/w', baseTree: base('/p').tree, run });
     expect(v.outcome).toBe('broken_by_fix');
     expect(calls).toEqual(['/w', '/p']);
     expect(v.output_head).toContain('3 failing');
@@ -247,7 +291,7 @@ describe('judgeTests', () => {
       { outcome: 'failed', exitCode: 1 },
       { outcome: 'failed', exitCode: 1 },
     ]);
-    const v = await judgeTests({ derived, worktreePath: '/w', projectPath: '/p', run });
+    const v = await judgeTests({ derived, worktreePath: '/w', baseTree: base('/p').tree, run });
     expect(v.outcome).toBe('already_failing');
   });
 
@@ -256,7 +300,7 @@ describe('judgeTests', () => {
       { outcome: 'timed_out', exitCode: null },
       { outcome: 'completed', exitCode: 0 },
     ]);
-    const v = await judgeTests({ derived, worktreePath: '/w', projectPath: '/p', run });
+    const v = await judgeTests({ derived, worktreePath: '/w', baseTree: base('/p').tree, run });
     expect(v.outcome).toBe('broken_by_fix');
   });
 
@@ -271,14 +315,14 @@ describe('judgeTests', () => {
 
   it('never calls run at all when no command was derived', async () => {
     const { run, calls } = fakeRun([]);
-    const v = await judgeTests({ derived: null, worktreePath: '/w', projectPath: '/p', run });
+    const v = await judgeTests({ derived: null, worktreePath: '/w', baseTree: base('/p').tree, run });
     expect(v.outcome).toBe('not_run');
     expect(calls).toEqual([]);
   });
 
   it('nulls out origin too, not just command, when not_run', async () => {
     const v = await judgeTests({ derived: null, worktreePath: '/w',
-      projectPath: '/p', run: fakeRun([]).run });
+      baseTree: base('/p').tree, run: fakeRun([]).run });
     expect(v.origin).toBeNull();
     expect(v.output_head).toBeNull();
   });
@@ -294,14 +338,14 @@ describe('judgeTests', () => {
       { outcome: 'completed', exitCode: 2, stdout: '2 failing\n' },
       { outcome: 'completed', exitCode: 0 },
     ]);
-    const v = await judgeTests({ derived, worktreePath: '/w', projectPath: '/p', run });
+    const v = await judgeTests({ derived, worktreePath: '/w', baseTree: base('/p').tree, run });
     expect(v.outcome).toBe('broken_by_fix');
     expect(calls).toEqual(['/w', '/p']);
   });
 
   it('leaves command/origin populated and output_head null on a passing run', async () => {
     const { run } = fakeRun([{ outcome: 'completed', exitCode: 0, stdout: 'ok\n' }]);
-    const v = await judgeTests({ derived, worktreePath: '/w', projectPath: '/p', run });
+    const v = await judgeTests({ derived, worktreePath: '/w', baseTree: base('/p').tree, run });
     expect(v.command).toBe('npm test --silent');
     expect(v.origin).toBe('package.json scripts.test');
     expect(v.output_head).toBeNull();
@@ -315,7 +359,7 @@ describe('judgeTests', () => {
         ? { outcome: 'failed', exitCode: 1, stdout: '', stderr: '', truncated: false }
         : { outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false };
     };
-    const v = await judgeTests({ derived, worktreePath: '/w', projectPath: '/p',
+    const v = await judgeTests({ derived, worktreePath: '/w', baseTree: base('/p').tree,
       run: run as never, timeoutMs: 5_000 });
     expect(v.outcome).toBe('broken_by_fix');
     expect(seen).toEqual([5_000, 5_000]);

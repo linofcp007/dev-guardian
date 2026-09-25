@@ -88,28 +88,28 @@ const tool: ToolModule = {
   // the honest limits, not just the capability: the ways a caller misuses
   // this tool are trusting `unreachable` in a stack where it cannot be
   // earned, and expecting it to close findings.
+  //
+  // At most 1500 characters (descriptionLimits.test.ts). Shortened from 1809
+  // by tightening wording only: every limit below survived, each one tested
+  // in validateFinding.test.ts.
   description:
     'Answers, per finding, whether anything outside the process can reach the FILE the finding ' +
     'lives in. Builds a file-level import graph from the latest map_attack_surface snapshot, ' +
-    'roots it at the route-declaring files, and returns one verdict per finding — reachable / ' +
-    'unreachable / unknown — with concrete evidence (nearest route and its hop count, how many ' +
-    'routes reach the file, any live-confirmed anonymous exposure) plus the coverage gaps behind ' +
-    'it. REQUIRES a prior map_attack_surface run and refuses with no_surface_snapshot when there ' +
-    'is none. Validates every open finding by default; pass a fingerprint for one, and an ' +
-    'unknown fingerprint is an error rather than an empty result. REPORT ONLY: it never ' +
-    'suppresses a finding, never writes a suppression, and never changes a severity — closing a ' +
-    'finding stays a human decision. Honest limits, every one of them load-bearing: granularity ' +
-    'is the file, not the function, so "reachable" means a route imports the file and NOT that ' +
-    'the vulnerable line is called; "unreachable" is never emitted for Ruby, Java, C# or PHP, ' +
-    'which resolve code at runtime (autoload, annotation injection, DI/service container) rather ' +
-    'than by import; reachability is measured from HTTP route entry points only, so a file ' +
-    'reached solely by a CLI, a cron job or a queue consumer reads as unreachable-by-route, ' +
-    'which is not a claim that the code never runs; and NOTHING here detects dynamic imports — ' +
-    'import(expr), require(variable), reflection, plugin registries — so IN A CODEBASE USING ' +
-    'THEM "unreachable" CAN BE WRONG AND THIS TOOL CANNOT TELL YOU WHEN. Verdicts persist ' +
-    'against the snapshot id and tree hash they were computed from and come back flagged stale ' +
-    'once the working tree moves. Read summary.coverage_gaps beside the counts: a verdict count ' +
-    'without them is not an answer.',
+    'rooted at the route-declaring files, and returns reachable / unreachable / unknown per ' +
+    'finding with evidence (nearest route and hop count, how many routes reach the file, any ' +
+    'live-confirmed anonymous exposure) plus the coverage gaps behind it. REQUIRES a prior ' +
+    'map_attack_surface run (refuses with no_surface_snapshot). Validates every open finding by ' +
+    'default; a fingerprint validates one, and an unknown fingerprint is an error, not an empty ' +
+    'result. REPORT ONLY: it never suppresses a finding and never changes a severity — closing a ' +
+    'finding stays a human decision. Limits: granularity is the file, not the function ' +
+    '("reachable" means a route imports the file, NOT that the vulnerable line runs); ' +
+    '"unreachable" is never emitted for Ruby, Java, C# or PHP, which resolve code at runtime ' +
+    '(autoload, annotation injection, DI container); only HTTP routes are entry points, so a ' +
+    'file reached solely by a CLI, cron job or queue consumer reads unreachable-by-route; and ' +
+    'NOTHING detects dynamic imports (import(expr), require(variable), reflection, plugin ' +
+    'registries) — where they are used, "unreachable" CAN BE WRONG AND THIS TOOL CANNOT TELL YOU ' +
+    'WHEN. Verdicts are stored against the snapshot and tree hash and flagged stale once the tree ' +
+    'moves. Read summary.coverage_gaps beside the counts.',
   inputSchema: {
     project_path: ProjectPath,
     fingerprint: Fingerprint,
