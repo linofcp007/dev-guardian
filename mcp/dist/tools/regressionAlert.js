@@ -132,10 +132,13 @@ async function handler(input, ctx) {
     const prevFindings = ctx.storage.findings.listByScan(baselineId);
     const curFindings = ctx.storage.findings.listByScan(latest.scan_id);
     // Per scanner (`history/runCompare.ts`): a reference finding whose scanner
-    // the current scan did not run ok is not resolved — counted as such it
+    // the current scan did not measure is not resolved — counted as such it
     // cancelled a real new high — and a current finding whose scanner the
-    // reference did not run ok is not new — counted as such a partial baseline
-    // raised a false alarm. Neither moves the score.
+    // reference named and did not run ok is not new — counted as such a
+    // partial baseline raised a false alarm. Neither moves the score. A
+    // scanner the reference did not run at all (Bandit before the project had
+    // Python, nuclei before it was requested) is no gap: its findings are new,
+    // and they do move it.
     const baselineScan = ctx.storage.scans.getById(baselineId);
     const check = baselineScan === null ? COMPLETE_COMPARISON : compareScansFor(ctx.storage, baselineScan, latest);
     const d = classifyDiff(check, prevFindings, curFindings);

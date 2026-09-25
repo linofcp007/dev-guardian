@@ -84,14 +84,17 @@ async function handler(input, ctx) {
     // something — a failed child of security_scan_full, one scanner that failed
     // or was missing beside others that ran (Semgrep exit 7 next to Bandit), or
     // one failed pass of a scanner (guardian-dast:unanswered) — holds none, or
-    // only some, of its findings. `notMeasured` names exactly what the
-    // comparing readers treat as unmeasured (`history/runCompare.ts`), so the
-    // warning's promise is theirs: a later finding from it that the baseline
-    // does not hold is "not previously measured", never new, and never scored.
-    // Not refused — a machine without Trivy would then never get a baseline —
-    // and never presented as a complete measurement either.
+    // only some, of its findings. `notMeasured(…, 'gaps')` names exactly what
+    // the comparing readers treat as unmeasured in a REFERENCE
+    // (`history/runCompare.ts`), so the warning's promise is theirs: a later
+    // finding from it that the baseline does not hold is "not previously
+    // measured", never new, and never scored. A scanner the scan did not run at
+    // all — not applicable, or not requested — is no gap: what it finds later is
+    // new, so it is not flagged here. Not refused — a machine without Trivy
+    // would then never get a baseline — and never presented as a complete
+    // measurement either.
     const target = ctx.storage.scans.getById(targetScanId);
-    const notMeasured = target === null ? [] : notMeasuredBy(ctx.storage, target);
+    const notMeasured = target === null ? [] : notMeasuredBy(ctx.storage, target, 'gaps');
     return {
         ok: true,
         baseline_id: baseline.id,
@@ -104,7 +107,7 @@ async function handler(input, ctx) {
             ? {
                 not_measured: notMeasured,
                 warning: `This baseline's scan did not fully measure ${notMeasured.join(', ')} (a scanner, or a pass ` +
-                    'of one, did not run or failed), so it holds only some of their findings, or none. Later ' +
+                    'of one, failed or was not installed), so it holds only some of their findings, or none. Later ' +
                     'comparisons against this baseline report a finding from them that it does not hold as ' +
                     '"not previously measured" — never as new, and never counted in regression_alert\'s ' +
                     'score. Re-run the scan once the scanner works and set the baseline again.',

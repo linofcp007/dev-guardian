@@ -86,9 +86,11 @@ export interface FindingDelta {
    */
   not_remeasured_count?: number;
   /**
-   * The mirror: findings of `to` whose scanner did not run ok in `from` (a
-   * partial baseline, say). Counted here INSTEAD of as new — the reference
-   * never looked for them. Absent when there were none.
+   * Findings of `to` whose scanner `from` named and did not run ok — it
+   * failed, or was missing (a partial baseline, say). Counted here INSTEAD
+   * of as new: the reference tried to look and could not. A scanner `from`
+   * did not run at all (not applicable, or not requested, then) makes its
+   * findings new instead. Absent when there were none.
    */
   not_previously_measured_count?: number;
   /** Possibly capped for display — see `TruncationNotice`. */

@@ -15,11 +15,22 @@
  * round 3). So the question is asked per SCANNER:
  *
  *   - NOT RE-MEASURED: a finding of `from` whose scanner the newer scan did
- *     not run ok (for the child that covers it). Never resolved, never
- *     unchanged.
- *   - NOT PREVIOUSLY MEASURED: the mirror — a finding of `to` whose scanner
- *     the reference (a baseline, the previous run) did not run ok. Not "new":
- *     a partial baseline would otherwise raise a false regression alarm.
+ *     not measure (for the child that covers it) — it failed, was missing,
+ *     or did not run at all. Never resolved, never unchanged.
+ *   - NOT PREVIOUSLY MEASURED: a finding of `to` whose scanner the reference
+ *     (a baseline, the previous run) NAMED and did not run ok — it failed, or
+ *     was listed missing. Not "new": a partial baseline would otherwise raise
+ *     a false regression alarm.
+ *
+ * The two are not mirrors (fix round 5). A reference that did not run a
+ * scanner at all — not applicable then (no Python for Bandit, no
+ * package.json for npm, no Dockerfile for Trivy's config pass) or not
+ * requested (nuclei, security-code-scan's opt-in) — looked at everything it
+ * had to, and what that scanner finds now is NEW: read as "not previously
+ * measured", regression_alert stayed silent on Bandit's first high the day
+ * Python was added. The newer side cannot make the same call — a scanner
+ * that stopped running may simply be absent this time — so there a scanner
+ * that did not run still leaves its findings not re-measured, never resolved.
  *
  * "Ran ok" is read from the scan's bookkeeping (`tools_run`, `missing_tools`)
  * through the explicit name table in `history/runNames.ts` — the names are
@@ -32,8 +43,13 @@
  *     and no `missing_tools` entry names it — unless that same name also ran
  *     ok, which is a run with a narrower gap inside it (bug_hunt's pack
  *     retry, gitleaks' size limits);
+ *   - UNMEASURED — a gap — when it is named, but a naming entry failed, or a
+ *     `missing_tools` entry names it (outside the retry shape above), or no
+ *     entry naming it ran ok;
  *   - NOT RUN when the bookkeeping never names a scanner the table knows —
- *     nuclei not requested, no image given: the scan did not look — and
+ *     nuclei not requested, no image given: the scan did not look — or names
+ *     it only in passes skipped with no gap recorded (`trivy` skipped for
+ *     want of a Dockerfile: `computeCoverage`'s "nothing to scan"), and
  *     when the older scan ran a pass with a target of its own
  *     (`trivy-image`) that may have produced the finding, and the newer one
  *     did not run that pass again: its Dockerfile pass measures the same
@@ -57,6 +73,7 @@ export const COMPLETE_COMPARISON = {
     notRunByTo: () => null,
     notRunByFrom: () => null,
     notMeasuredByTo: [],
+    gapsByTo: [],
     notMeasuredByFrom: [],
 };
 /** An orchestrated run's children, as its parent row lists them. */
@@ -142,8 +159,13 @@ function keyVerdict(book, key) {
         if (!okNames.has(name))
             missing = true;
     }
-    if (named)
-        return anyOk && !anyFailed && !missing ? 'measured' : 'unmeasured';
+    if (named) {
+        if (anyFailed || missing)
+            return 'unmeasured';
+        // Named only by passes skipped with no gap recorded — nothing for them to
+        // scan (no Dockerfile, no uncommitted files) — is the same as not named.
+        return anyOk ? 'measured' : 'not_run';
+    }
     if (KNOWN_FINDING_KEYS.has(key))
         return 'not_run';
     // A tool no bookkeeping name is known to measure: only a scan with no gap
@@ -195,48 +217,54 @@ function booksOf(storage, scan) {
     };
 }
 /**
- * The own-target pass (`runNames.ts`: `trivy-image`) that `older` ran ok,
- * that may have produced `f`, and that `newer` did not run ok again — or
- * null. `f` shares its key with passes that look elsewhere (an image's
+ * The own-target pass (`runNames.ts`: `trivy-image`) that `holder` ran ok,
+ * that may have produced `f`, and that `asked` did not run ok — or null.
+ * `f` shares its key with passes that look elsewhere (an image's
  * misconfiguration and a Dockerfile's are both `trivy:config`), so the
- * newer scan's Dockerfile pass says nothing about the image.
+ * other scan's Dockerfile pass says nothing about the image. A scan with no
+ * bookkeeping at all measured everything, as everywhere else here.
  */
-function ownTargetNotRerun(older, newer, f) {
-    if (older === null)
+function ownTargetNotRun(holder, asked, f) {
+    if (holder === null || (asked.tools_run.length === 0 && asked.missing_tools.length === 0))
         return null;
     const key = findingKey(f);
-    for (const run of older.tools_run) {
+    for (const run of holder.tools_run) {
         if (run.status !== 'ok' || runNameEntry(run.name)?.ownTarget !== true)
             continue;
         if (!(keysOfRun(run.name, true)?.includes(key) ?? false))
             continue;
-        if (!newer.tools_run.some((r) => r.name === run.name && r.status === 'ok'))
+        if (!asked.tools_run.some((r) => r.name === run.name && r.status === 'ok'))
             return run.name;
     }
     return null;
 }
-/** How `newer` answers for `f`, a finding of `older` (both already narrowed to `f`'s child). */
-function answerFor(older, newer, f) {
-    if (newer === null)
+/**
+ * How `asked` answers for `f`, a finding of `holder` — `to` for a finding
+ * of `from`, and the other way round — both already narrowed to `f`'s child.
+ */
+function answerFor(holder, asked, f) {
+    if (asked === null)
         return { verdict: 'unmeasured', notRun: null };
-    const verdict = bookkeepingVerdict(newer, f);
+    const verdict = bookkeepingVerdict(asked, f);
     if (verdict !== 'measured')
         return { verdict, notRun: verdict === 'not_run' ? f.tool : null };
-    const pass = ownTargetNotRerun(older, newer, f);
+    const pass = ownTargetNotRun(holder, asked, f);
     return pass === null ? { verdict, notRun: null } : { verdict: 'not_run', notRun: pass };
 }
 /**
  * What `scan` did not measure, for a caller to name — exactly the names
- * whose findings a comparison treats as unmeasured, so a reader that
- * promises "reported as not re-measured / not previously measured" keeps
- * the promise: the whole type of an orchestrated run's missing, unfinished
- * or blind child; the scan's own type when it measured nothing at all;
- * otherwise each bookkeeping name that did not run ok and leaves its
- * findings unmeasured (`npm`, `guardian-dast:unanswered`), or reports none
- * (`pip-audit`). A pass that was merely skipped beside one that ran (no
- * uncommitted files for gitleaks' working-tree pass) is not a gap.
+ * whose findings a comparison treats as unmeasured on the side `scope`
+ * says, so a reader that promises "reported as not re-measured / not
+ * previously measured" keeps the promise: the whole type of an orchestrated
+ * run's missing, unfinished or blind child; the scan's own type when it
+ * measured nothing at all; otherwise each bookkeeping name that failed or
+ * is missing (`npm`, `guardian-dast:unanswered`, `pip-audit`), and — for
+ * `any` — each one skipped with no gap recorded whose findings are then not
+ * re-measured (`trivy` with no Dockerfile). A pass that was merely skipped
+ * beside one that ran (no uncommitted files for gitleaks' working-tree pass)
+ * is neither.
  */
-export function notMeasured(storage, scan) {
+export function notMeasured(storage, scan, scope = 'any') {
     const out = [];
     const add = (x) => {
         if (!out.includes(x))
@@ -249,6 +277,11 @@ export function notMeasured(storage, scan) {
         }
         const names = [...book.tools_run.filter((t) => t.status !== 'ok').map((t) => t.name), ...book.missing_tools];
         for (const name of names) {
+            if (scope === 'gaps') {
+                if (isGap(book, name))
+                    add(name);
+                continue;
+            }
             const keys = keysOfRun(name, false);
             if (keys === null || keys.length === 0 || keys.some((k) => keyVerdict(book, k) !== 'measured'))
                 add(name);
@@ -266,6 +299,15 @@ export function notMeasured(storage, scan) {
     }
     return out;
 }
+/**
+ * A name the bookkeeping records as a gap: it failed, or is listed missing
+ * without also having run ok (the retry shape, `keyVerdict`). Whatever it
+ * speaks for then reads `unmeasured`, never `not_run`.
+ */
+function isGap(book, name) {
+    const as = (status) => book.tools_run.some((t) => t.name === name && t.status === status);
+    return as('failed') || (book.missing_tools.includes(name) && !as('ok'));
+}
 export function compareScansFor(storage, from, to) {
     const typeOfFrom = typeResolver(storage, from);
     const typeOfTo = typeResolver(storage, to);
@@ -282,12 +324,17 @@ export function compareScansFor(storage, from, to) {
         return answerFor(toBooks(t), fromBooks(t), f);
     };
     return {
+        // Anything short of measured: the newer scan cannot resolve what it did
+        // not look for, whether the scanner failed or did not run.
         isNotRemeasured: (f) => inTo(f).verdict !== 'measured',
-        isNotPreviouslyMeasured: (f) => inFrom(f).verdict !== 'measured',
+        // Only a gap: a reference that did not run the scanner at all looked at
+        // everything it had to, and the finding is new.
+        isNotPreviouslyMeasured: (f) => inFrom(f).verdict === 'unmeasured',
         notRunByTo: (f) => inTo(f).notRun,
         notRunByFrom: (f) => inFrom(f).notRun,
-        notMeasuredByTo: notMeasured(storage, to),
-        notMeasuredByFrom: notMeasured(storage, from),
+        notMeasuredByTo: notMeasured(storage, to, 'any'),
+        gapsByTo: notMeasured(storage, to, 'gaps'),
+        notMeasuredByFrom: notMeasured(storage, from, 'gaps'),
     };
 }
 /**
@@ -314,12 +361,12 @@ export function classifyDiff(check, fromFindings, toFindings) {
     for (const f of toFindings) {
         if (fromIndex.has(f))
             out.unchanged.push(f);
-        else if (check.isNotPreviouslyMeasured(f)) {
+        else if (check.isNotPreviouslyMeasured(f))
             out.notPreviouslyMeasured.push(f);
+        else {
+            out.new.push(f);
             note(out.notRunByFrom, check.notRunByFrom(f));
         }
-        else
-            out.new.push(f);
     }
     for (const f of fromFindings) {
         if (toIndex.has(f))
@@ -334,20 +381,39 @@ export function classifyDiff(check, fromFindings, toFindings) {
     return out;
 }
 export function measurementGaps(check, d) {
-    const union = (a, b) => [...a, ...b.filter((x) => !a.includes(x))];
-    return { byTo: union(check.notMeasuredByTo, d.notRunByTo), byFrom: union(check.notMeasuredByFrom, d.notRunByFrom) };
+    const byTo = [...check.notMeasuredByTo, ...d.notRunByTo.filter((x) => !check.notMeasuredByTo.includes(x))];
+    return {
+        byTo,
+        notRunByTo: byTo.filter((x) => !check.gapsByTo.includes(x)),
+        byFrom: check.notMeasuredByFrom,
+        notRunByFrom: d.notRunByFrom.filter((x) => !check.notMeasuredByFrom.includes(x)),
+    };
 }
-/** A human line for a response, or null when both scans measured everything. */
+/**
+ * A human line for a response, or null when both scans measured everything
+ * they ran. A scanner that failed is one to fix; one that did not run is not
+ * — it was not requested, or had nothing to scan — so the two are worded
+ * apart, and neither tells the reader to wait for a scanner that works.
+ */
 export function describeMeasurementGaps(from, to, gaps) {
     const parts = [];
-    if (gaps.byTo.length > 0) {
-        parts.push(`Scan ${to.scan_id} did not measure ${gaps.byTo.join(', ')} (did not run, or failed): ` +
-            'earlier findings there are reported as not re-measured, never as resolved.');
+    const failedByTo = gaps.byTo.filter((x) => !gaps.notRunByTo.includes(x));
+    if (failedByTo.length > 0) {
+        parts.push(`Scan ${to.scan_id} did not measure ${failedByTo.join(', ')} (it failed, or is not installed): ` +
+            'earlier findings from it are reported as not re-measured, never as resolved — re-run once the scanner works.');
+    }
+    if (gaps.notRunByTo.length > 0) {
+        parts.push(`Scan ${to.scan_id} did not run ${gaps.notRunByTo.join(', ')} (not requested, or nothing for it to scan): ` +
+            'earlier findings from it are reported as not re-measured, never as resolved — run it again to re-measure them.');
     }
     if (gaps.byFrom.length > 0) {
-        parts.push(`The reference scan ${from.scan_id} did not measure ${gaps.byFrom.join(', ')}: ` +
-            'findings there are reported as not previously measured, never as new.');
+        parts.push(`The reference scan ${from.scan_id} did not measure ${gaps.byFrom.join(', ')} (it failed, or was not ` +
+            'installed): findings from it are reported as not previously measured, never as new.');
     }
-    return parts.length > 0 ? `${parts.join(' ')} Re-run once the scanner works.` : null;
+    if (gaps.notRunByFrom.length > 0) {
+        parts.push(`The reference scan ${from.scan_id} did not run ${gaps.notRunByFrom.join(', ')} (not applicable, or not ` +
+            'requested, then): findings from it are new.');
+    }
+    return parts.length > 0 ? parts.join(' ') : null;
 }
 //# sourceMappingURL=runCompare.js.map

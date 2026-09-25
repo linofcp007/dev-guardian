@@ -47712,6 +47712,7 @@ var COMPLETE_COMPARISON = {
   notRunByTo: () => null,
   notRunByFrom: () => null,
   notMeasuredByTo: [],
+  gapsByTo: [],
   notMeasuredByFrom: []
 };
 function childrenOf(storage, parent) {
@@ -47773,7 +47774,10 @@ function keyVerdict(book, key) {
     named = true;
     if (!okNames.has(name)) missing = true;
   }
-  if (named) return anyOk && !anyFailed && !missing ? "measured" : "unmeasured";
+  if (named) {
+    if (anyFailed || missing) return "unmeasured";
+    return anyOk ? "measured" : "not_run";
+  }
   if (KNOWN_FINDING_KEYS.has(key)) return "not_run";
   return computeCoverage(book.tools_run, book.missing_tools) === "full" ? "measured" : "unmeasured";
 }
@@ -47807,24 +47811,24 @@ function booksOf(storage, scan2) {
     return child !== void 0 && usableChild(child) ? child.row : null;
   };
 }
-function ownTargetNotRerun(older, newer, f) {
-  if (older === null) return null;
+function ownTargetNotRun(holder, asked, f) {
+  if (holder === null || asked.tools_run.length === 0 && asked.missing_tools.length === 0) return null;
   const key = findingKey(f);
-  for (const run of older.tools_run) {
+  for (const run of holder.tools_run) {
     if (run.status !== "ok" || runNameEntry(run.name)?.ownTarget !== true) continue;
     if (!(keysOfRun(run.name, true)?.includes(key) ?? false)) continue;
-    if (!newer.tools_run.some((r) => r.name === run.name && r.status === "ok")) return run.name;
+    if (!asked.tools_run.some((r) => r.name === run.name && r.status === "ok")) return run.name;
   }
   return null;
 }
-function answerFor(older, newer, f) {
-  if (newer === null) return { verdict: "unmeasured", notRun: null };
-  const verdict = bookkeepingVerdict(newer, f);
+function answerFor(holder, asked, f) {
+  if (asked === null) return { verdict: "unmeasured", notRun: null };
+  const verdict = bookkeepingVerdict(asked, f);
   if (verdict !== "measured") return { verdict, notRun: verdict === "not_run" ? f.tool : null };
-  const pass = ownTargetNotRerun(older, newer, f);
+  const pass = ownTargetNotRun(holder, asked, f);
   return pass === null ? { verdict, notRun: null } : { verdict: "not_run", notRun: pass };
 }
-function notMeasured(storage, scan2) {
+function notMeasured(storage, scan2, scope = "any") {
   const out = [];
   const add = (x) => {
     if (!out.includes(x)) out.push(x);
@@ -47836,6 +47840,10 @@ function notMeasured(storage, scan2) {
     }
     const names = [...book.tools_run.filter((t) => t.status !== "ok").map((t) => t.name), ...book.missing_tools];
     for (const name of names) {
+      if (scope === "gaps") {
+        if (isGap(book, name)) add(name);
+        continue;
+      }
       const keys = keysOfRun(name, false);
       if (keys === null || keys.length === 0 || keys.some((k) => keyVerdict(book, k) !== "measured")) add(name);
     }
@@ -47849,6 +47857,10 @@ function notMeasured(storage, scan2) {
     else gapsOf(child.row, child.type);
   }
   return out;
+}
+function isGap(book, name) {
+  const as = (status) => book.tools_run.some((t) => t.name === name && t.status === status);
+  return as("failed") || book.missing_tools.includes(name) && !as("ok");
 }
 function compareScansFor(storage, from, to) {
   const typeOfFrom = typeResolver(storage, from);
@@ -47864,12 +47876,17 @@ function compareScansFor(storage, from, to) {
     return answerFor(toBooks(t), fromBooks(t), f);
   };
   return {
+    // Anything short of measured: the newer scan cannot resolve what it did
+    // not look for, whether the scanner failed or did not run.
     isNotRemeasured: (f) => inTo(f).verdict !== "measured",
-    isNotPreviouslyMeasured: (f) => inFrom(f).verdict !== "measured",
+    // Only a gap: a reference that did not run the scanner at all looked at
+    // everything it had to, and the finding is new.
+    isNotPreviouslyMeasured: (f) => inFrom(f).verdict === "unmeasured",
     notRunByTo: (f) => inTo(f).notRun,
     notRunByFrom: (f) => inFrom(f).notRun,
-    notMeasuredByTo: notMeasured(storage, to),
-    notMeasuredByFrom: notMeasured(storage, from)
+    notMeasuredByTo: notMeasured(storage, to, "any"),
+    gapsByTo: notMeasured(storage, to, "gaps"),
+    notMeasuredByFrom: notMeasured(storage, from, "gaps")
   };
 }
 function classifyDiff(check2, fromFindings, toFindings) {
@@ -47889,10 +47906,11 @@ function classifyDiff(check2, fromFindings, toFindings) {
   };
   for (const f of toFindings) {
     if (fromIndex.has(f)) out.unchanged.push(f);
-    else if (check2.isNotPreviouslyMeasured(f)) {
-      out.notPreviouslyMeasured.push(f);
+    else if (check2.isNotPreviouslyMeasured(f)) out.notPreviouslyMeasured.push(f);
+    else {
+      out.new.push(f);
       note(out.notRunByFrom, check2.notRunByFrom(f));
-    } else out.new.push(f);
+    }
   }
   for (const f of fromFindings) {
     if (toIndex.has(f)) continue;
@@ -47904,22 +47922,38 @@ function classifyDiff(check2, fromFindings, toFindings) {
   return out;
 }
 function measurementGaps(check2, d) {
-  const union2 = (a2, b) => [...a2, ...b.filter((x) => !a2.includes(x))];
-  return { byTo: union2(check2.notMeasuredByTo, d.notRunByTo), byFrom: union2(check2.notMeasuredByFrom, d.notRunByFrom) };
+  const byTo = [...check2.notMeasuredByTo, ...d.notRunByTo.filter((x) => !check2.notMeasuredByTo.includes(x))];
+  return {
+    byTo,
+    notRunByTo: byTo.filter((x) => !check2.gapsByTo.includes(x)),
+    byFrom: check2.notMeasuredByFrom,
+    notRunByFrom: d.notRunByFrom.filter((x) => !check2.notMeasuredByFrom.includes(x))
+  };
 }
 function describeMeasurementGaps(from, to, gaps) {
   const parts = [];
-  if (gaps.byTo.length > 0) {
+  const failedByTo = gaps.byTo.filter((x) => !gaps.notRunByTo.includes(x));
+  if (failedByTo.length > 0) {
     parts.push(
-      `Scan ${to.scan_id} did not measure ${gaps.byTo.join(", ")} (did not run, or failed): earlier findings there are reported as not re-measured, never as resolved.`
+      `Scan ${to.scan_id} did not measure ${failedByTo.join(", ")} (it failed, or is not installed): earlier findings from it are reported as not re-measured, never as resolved \u2014 re-run once the scanner works.`
+    );
+  }
+  if (gaps.notRunByTo.length > 0) {
+    parts.push(
+      `Scan ${to.scan_id} did not run ${gaps.notRunByTo.join(", ")} (not requested, or nothing for it to scan): earlier findings from it are reported as not re-measured, never as resolved \u2014 run it again to re-measure them.`
     );
   }
   if (gaps.byFrom.length > 0) {
     parts.push(
-      `The reference scan ${from.scan_id} did not measure ${gaps.byFrom.join(", ")}: findings there are reported as not previously measured, never as new.`
+      `The reference scan ${from.scan_id} did not measure ${gaps.byFrom.join(", ")} (it failed, or was not installed): findings from it are reported as not previously measured, never as new.`
     );
   }
-  return parts.length > 0 ? `${parts.join(" ")} Re-run once the scanner works.` : null;
+  if (gaps.notRunByFrom.length > 0) {
+    parts.push(
+      `The reference scan ${from.scan_id} did not run ${gaps.notRunByFrom.join(", ")} (not applicable, or not requested, then): findings from it are new.`
+    );
+  }
+  return parts.length > 0 ? parts.join(" ") : null;
 }
 
 // src/tools/setBaseline.ts
@@ -47973,7 +48007,7 @@ async function handler7(input, ctx) {
     ...inp.note !== void 0 ? { note: inp.note } : {}
   });
   const target = ctx.storage.scans.getById(targetScanId);
-  const notMeasured2 = target === null ? [] : notMeasured(ctx.storage, target);
+  const notMeasured2 = target === null ? [] : notMeasured(ctx.storage, target, "gaps");
   return {
     ok: true,
     baseline_id: baseline.id,
@@ -47984,7 +48018,7 @@ async function handler7(input, ctx) {
     ...baseline.note !== void 0 ? { note: baseline.note } : {},
     ...notMeasured2.length > 0 ? {
       not_measured: notMeasured2,
-      warning: `This baseline's scan did not fully measure ${notMeasured2.join(", ")} (a scanner, or a pass of one, did not run or failed), so it holds only some of their findings, or none. Later comparisons against this baseline report a finding from them that it does not hold as "not previously measured" \u2014 never as new, and never counted in regression_alert's score. Re-run the scan once the scanner works and set the baseline again.`
+      warning: `This baseline's scan did not fully measure ${notMeasured2.join(", ")} (a scanner, or a pass of one, failed or was not installed), so it holds only some of their findings, or none. Later comparisons against this baseline report a finding from them that it does not hold as "not previously measured" \u2014 never as new, and never counted in regression_alert's score. Re-run the scan once the scanner works and set the baseline again.`
     } : {}
   };
 }

@@ -85,9 +85,10 @@ async function handler(input, ctx) {
         return failDomain('unknown_scan_id', `from scan '${fromId.value}' not found`);
     const fromFindings = ctx.storage.findings.listByScan(fromId.value);
     const toFindings = ctx.storage.findings.listByScan(toScan.value.scan_id);
-    // Per scanner: a `from` finding whose scanner `to` did not run ok is not
-    // resolved, and a `to` finding whose scanner `from` did not run ok is not
-    // new (`history/runCompare.ts`).
+    // Per scanner (`history/runCompare.ts`): a `from` finding whose scanner `to`
+    // did not measure is not resolved, and a `to` finding whose scanner `from`
+    // named and did not run ok is not new. A scanner `from` did not run at all
+    // (not applicable, or not requested, then) leaves its findings new.
     const check = compareScansFor(ctx.storage, fromScan, toScan.value);
     const d = classifyDiff(check, fromFindings, toFindings);
     const gaps = measurementGaps(check, d);

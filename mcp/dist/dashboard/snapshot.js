@@ -281,9 +281,10 @@ function buildSincePrevious(storage, currentScan, isSuppressed, truncation) {
 /**
  * `compareFindings` of two scans, except for what one side did not measure
  * (`history/runCompare.ts`, per scanner): a finding of `from` whose scanner
- * `to` did not run ok is left out and counted in `not_remeasured_count` —
- * never resolved; a finding of `to` whose scanner `from` did not run ok is
- * left out and counted in `not_previously_measured_count` — never new.
+ * `to` did not measure is left out and counted in `not_remeasured_count` —
+ * never resolved; a finding of `to` whose scanner `from` named and did not
+ * run ok is left out and counted in `not_previously_measured_count` — never
+ * new. One whose scanner `from` did not run at all is new.
  */
 function compareScans(storage, from, to, isSuppressed, truncation, what) {
     const check = compareScansFor(storage, from, to);
