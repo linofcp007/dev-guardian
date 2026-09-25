@@ -31,6 +31,15 @@
  * header. The upgrade removes a bare entry's paired header too, when it is
  * the line immediately above it — never any OTHER occurrence of that exact
  * comment, since nothing else in this file ever writes it.
+ *
+ * **Line endings.** An upgrade/append re-splits the file into bare lines
+ * and rejoins them, which must use the SAME separator the file already
+ * had — a CRLF `.gitignore` (Windows default; also common wherever
+ * `core.autocrlf` is on) rewritten with a bare `\n` comes back as LF, and
+ * git then shows the WHOLE file as changed for what was functionally a
+ * two-line edit. `existingEol` detects it once, from whatever line ending
+ * appears first; a brand-new file (`created`) has no existing convention to
+ * follow and keeps the plain `\n` it always used.
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -65,6 +74,7 @@ export function ensureGuardianIgnored(projectPath: string): GitignoreGuardResult
     }
 
     const original = readFileSync(gitignorePath, 'utf8');
+    const eol = existingEol(original);
     const lines = original.split(/\r?\n/);
     const hasOldPattern = lines.some((l) => OLD_DIRECTORY_PATTERNS.has(l.trim()));
     // Every old bare line is dropped outright — see the module comment on
@@ -92,13 +102,18 @@ export function ensureGuardianIgnored(projectPath: string): GitignoreGuardResult
     if (!hasEntry) missing.push(ENTRY);
     if (!hasNegation) missing.push(BASELINE_NEGATION);
 
-    const trimmedBody = kept.join('\n').replace(/\n+$/, '');
+    const trimmedBody = kept.join(eol).replace(/[\r\n]+$/, '');
     const next =
-      (trimmedBody.length > 0 ? `${trimmedBody}\n` : '') +
-      (missing.length > 0 ? `${HEADER}\n${missing.join('\n')}\n` : '');
+      (trimmedBody.length > 0 ? `${trimmedBody}${eol}` : '') +
+      (missing.length > 0 ? `${HEADER}${eol}${missing.join(eol)}${eol}` : '');
     writeFileSync(gitignorePath, next, 'utf8');
     return { updated: true, reason: hasOldPattern ? 'upgraded' : 'added' };
   } catch {
     return { updated: false, reason: 'unwritable' };
   }
+}
+
+/** The file's own line-ending convention — CRLF if its first line break is one, else LF. */
+function existingEol(content: string): '\r\n' | '\n' {
+  return content.includes('\r\n') ? '\r\n' : '\n';
 }

@@ -133,6 +133,39 @@ describe('ensureGuardianIgnored', () => {
     });
   });
 
+  // Coordinator fix round 2: the rewrite always joined/wrote with a bare
+  // `\n`, so a CRLF `.gitignore` (the Windows default; also common wherever
+  // `core.autocrlf` is on) came back as LF — every line's ending flips, and
+  // git shows the WHOLE file as changed for a two-line functional edit.
+  describe("preserves the file's existing line-ending style", () => {
+    it('keeps a CRLF .gitignore CRLF when adding the missing entry', () => {
+      const dir = fixture('git-empty'); // overwritten below with a CRLF file
+      writeFileSync(join(dir, '.gitignore'), '# header\r\nnode_modules/\r\n');
+
+      const r = ensureGuardianIgnored(dir);
+      expect(r).toEqual({ updated: true, reason: 'added' });
+
+      const content = readFileSync(join(dir, '.gitignore'), 'utf8');
+      expect(content).toBe(
+        '# header\r\nnode_modules/\r\n# dev-guardian outputs\r\n.guardian/*\r\n!.guardian/baseline.json\r\n',
+      );
+      // No bare LF anywhere — every line ending stayed CRLF.
+      expect(content).not.toMatch(/(?<!\r)\n/);
+    });
+
+    it('keeps a CRLF .gitignore CRLF when upgrading the legacy header+entry pair', () => {
+      const dir = fixture('git-no-gitignore');
+      writeFileSync(join(dir, '.gitignore'), '# dev-guardian outputs\r\n.guardian/\r\n');
+
+      const r = ensureGuardianIgnored(dir);
+      expect(r).toEqual({ updated: true, reason: 'upgraded' });
+
+      const content = readFileSync(join(dir, '.gitignore'), 'utf8');
+      expect(content).toBe('# dev-guardian outputs\r\n.guardian/*\r\n!.guardian/baseline.json\r\n');
+      expect(content).not.toMatch(/(?<!\r)\n/);
+    });
+  });
+
   it('leaves .guardian/baseline.json re-includable by git (a same-behaviour check-ignore proxy)', () => {
     // A behavioural pin on WHY .guardian/* was chosen over .guardian/: with
     // the bare directory form, `!.guardian/baseline.json` can never apply —
