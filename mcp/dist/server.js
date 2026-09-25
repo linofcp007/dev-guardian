@@ -46801,7 +46801,7 @@ import { join as join32 } from "node:path";
 var tool14 = {
   name: "license_compatibility",
   title: "License compatibility check",
-  description: 'Cross-check the project license (package.json incl. UNLICENSED, pyproject.toml, composer.json incl. "proprietary"/"SEE LICENSE IN \u2026", .csproj PackageLicenseExpression, or LICENSE) against the licenses of installed deps captured by the most recent compliance_check OF THIS PROJECT. No declared license (or a proprietary label) is treated as proprietary and still flags copyleft deps; an unrecognised or SPDX OR/AND dependency license is reported as `undetermined`, never silently compatible. Pure SQL read \u2014 does not spawn scanners.',
+  description: 'Cross-check the project license (package.json incl. UNLICENSED, pyproject.toml, composer.json incl. "proprietary"/"SEE LICENSE IN \u2026", .csproj PackageLicenseExpression, or LICENSE) against the licenses of installed deps captured by the most recent compliance_check OF THIS PROJECT. No declared license (or a proprietary label) is treated as proprietary and still flags copyleft deps; an unrecognised or SPDX OR/AND expression on EITHER side (project or dependency) is reported as `undetermined`, never silently compatible. Pure SQL read \u2014 does not spawn scanners.',
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler13(input, ctx)
 };
@@ -46947,6 +46947,7 @@ var VIRAL = withSuffixes("AGPL-1.0", "AGPL-3.0", "GPL-2.0", "GPL-3.0", "SSPL-1.0
 var WEAK_COPYLEFT = /* @__PURE__ */ new Set(["LGPL-2.1", "LGPL-3.0", "MPL-2.0", "EPL-2.0"]);
 var COMMERCIAL = /* @__PURE__ */ new Set(["BUSL-1.1", "Elastic-2.0", "CommonsClause"]);
 var KNOWN_LICENSES = /* @__PURE__ */ new Set([...PERMISSIVE, ...VIRAL, ...WEAK_COPYLEFT, ...COMMERCIAL]);
+var GPL2_FAMILY = withSuffixes("GPL-2.0");
 function incompatibleReason(projectLicense, depLicense) {
   const proj = normaliseLicense(projectLicense);
   const dep = normaliseLicense(depLicense);
@@ -46987,24 +46988,58 @@ function proprietaryReason(depLicense) {
   }
   return null;
 }
-function classifySingleLicense(projectLicense, isProprietary, depLicenseRaw) {
+function isModeledProjectLicense(proj) {
+  return PERMISSIVE.has(proj) || GPL2_FAMILY.has(proj) || AGPL.has(proj);
+}
+function classifySingleLicensePair(projectLicenseSingle, depLicenseRaw) {
   const dep = normaliseLicense(depLicenseRaw);
   if (!KNOWN_LICENSES.has(dep)) return { kind: "unknown" };
-  const reason = isProprietary ? proprietaryReason(depLicenseRaw) : incompatibleReason(projectLicense, depLicenseRaw);
-  return reason ? { kind: "risky", reason } : { kind: "ok" };
+  const proj = normaliseLicense(projectLicenseSingle);
+  const reason = incompatibleReason(projectLicenseSingle, depLicenseRaw);
+  if (reason) return { kind: "risky", reason };
+  if (isModeledProjectLicense(proj) || PERMISSIVE.has(dep)) return { kind: "ok" };
+  return { kind: "unknown" };
+}
+function evaluateAgainstProject(projectLicense, isProprietary, depLicenseSingle) {
+  if (isProprietary) {
+    const dep = normaliseLicense(depLicenseSingle);
+    if (!KNOWN_LICENSES.has(dep)) return { kind: "unknown" };
+    const reason = proprietaryReason(depLicenseSingle);
+    return reason ? { kind: "risky", reason } : { kind: "ok" };
+  }
+  const projExpr = parseLicenseExpression(projectLicense);
+  if (projExpr.kind === "single") {
+    return classifySingleLicensePair(projExpr.parts[0], depLicenseSingle);
+  }
+  const verdicts = projExpr.parts.map((p) => classifySingleLicensePair(p, depLicenseSingle));
+  if (projExpr.kind === "or") {
+    if (verdicts.some((v) => v.kind === "ok")) return { kind: "ok" };
+    if (verdicts.every((v) => v.kind === "risky")) {
+      const reasons = verdicts.flatMap((v) => v.kind === "risky" ? [v.reason] : []);
+      return {
+        kind: "risky",
+        reason: `Every license option the project may be released under ('${projectLicense}') is incompatible with dependency '${depLicenseSingle}': ${reasons.join(" | ")}`
+      };
+    }
+    return { kind: "unknown" };
+  }
+  const risky = verdicts.find((v) => v.kind === "risky");
+  if (risky && risky.kind === "risky") return risky;
+  if (verdicts.some((v) => v.kind === "unknown")) return { kind: "unknown" };
+  return { kind: "ok" };
 }
 function evaluateDependencyLicense(projectLicense, isProprietary, depLicenseRaw) {
   const expr = parseLicenseExpression(depLicenseRaw);
   if (expr.kind === "single") {
-    const v = classifySingleLicense(projectLicense, isProprietary, expr.parts[0] ?? depLicenseRaw);
+    const v = evaluateAgainstProject(projectLicense, isProprietary, expr.parts[0] ?? depLicenseRaw);
     if (v.kind === "ok") return { kind: "ok" };
     if (v.kind === "risky") return { kind: "incompatible", reason: v.reason };
     return {
       kind: "undetermined",
-      reason: `License '${depLicenseRaw}' is not one this tool recognises \u2014 compatibility could not be determined. Review manually.`
+      reason: `Compatibility between project license '${projectLicense ?? "proprietary (no license declared)"}' and dependency license '${depLicenseRaw}' could not be determined \u2014 either side (or both) is not one this tool recognises. Review manually.`
     };
   }
-  const verdicts = expr.parts.map((p) => classifySingleLicense(projectLicense, isProprietary, p));
+  const verdicts = expr.parts.map((p) => evaluateAgainstProject(projectLicense, isProprietary, p));
   if (expr.kind === "or") {
     if (verdicts.some((v) => v.kind === "ok")) return { kind: "ok" };
     if (verdicts.every((v) => v.kind === "risky")) {
@@ -47036,7 +47071,7 @@ function parseLicenseExpression(raw) {
   return { kind: "single", parts: [raw.trim()] };
 }
 function normaliseLicense(s) {
-  return s.trim().replace(/^["']|["']$/g, "").replace(/\s+/g, "");
+  return s.trim().replace(/^["']|["']$/g, "").replace(/[()]/g, "").replace(/\s+/g, "");
 }
 function findFirstCsproj(projectPath) {
   try {

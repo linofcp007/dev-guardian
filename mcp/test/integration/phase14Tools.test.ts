@@ -821,6 +821,125 @@ describe('license_compatibility', () => {
     expect(r.last_compliance_scan_id).toBeNull();
     expect(r.dependencies_audited).toBe(0);
   });
+
+  // ------------------------------------------------------------ fix round 2
+
+  it('item 5 (round 2): an SPDX "A OR B" PROJECT license is parsed — every alternative risky against an AGPL dep is incompatible, not silently compatible', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"MIT OR Apache-2.0"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'AGPL-3.0', packages: ['risky-pkg'] }]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: Array<{ dep_license: string }>;
+      undetermined: unknown[];
+    };
+    // Reproduces the coordinator's own probe: the OLD normaliseLicense
+    // whitespace-collapsed "MIT OR Apache-2.0" into "MITORApache-2.0",
+    // matching no rule for ANY dependency — 0 incompatibilities, 0
+    // undetermined, for a project license that is, in fact, two known
+    // permissive alternatives, BOTH of which conflict with AGPL.
+    expect(r.incompatibilities).toHaveLength(1);
+    expect(r.incompatibilities[0]?.dep_license).toBe('AGPL-3.0');
+    expect(r.undetermined).toEqual([]);
+  });
+
+  it('item 5 (round 2): the same "A OR B" project-license parsing applies when the license comes from composer.json — GPL-2.0-only dep is incompatible', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'composer.json'), JSON.stringify({ name: 'x/y', license: 'MIT OR Apache-2.0' }), 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'GPL-2.0-only', packages: ['risky-pkg'] }]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: Array<{ dep_license: string }>;
+    };
+    expect(r.incompatibilities).toHaveLength(1);
+    expect(r.incompatibilities[0]?.dep_license).toBe('GPL-2.0-only');
+  });
+
+  it('item 5 (round 2): a parenthesised "(A OR B)" PROJECT license still parses — parens are stripped, not left as stray characters that match nothing', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"(MIT OR Apache-2.0)"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'AGPL-3.0', packages: ['risky-pkg'] }]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: Array<{ dep_license: string }>;
+    };
+    expect(r.incompatibilities).toHaveLength(1);
+  });
+
+  it('item 5 (round 2): a parenthesised "(A OR B)" DEPENDENCY license also parses — stripped parens, not undetermined', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"MIT"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: '(MIT OR Apache-2.0)', packages: ['dual-fine'] }]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: unknown[];
+      undetermined: unknown[];
+    };
+    expect(r.incompatibilities).toEqual([]);
+    expect(r.undetermined).toEqual([]);
+  });
+
+  it('item 5 (round 2): an UNMODELLED single project license (MPL-2.0) reports undetermined for a copyleft dep, never silently compatible', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"MPL-2.0"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [
+      { license: 'AGPL-3.0', packages: ['agpl-pkg'] },
+      { license: 'GPL-2.0-only', packages: ['gpl2-pkg'] },
+    ]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: unknown[];
+      undetermined: Array<{ dep_license: string }>;
+    };
+    // This table has no pairwise rule at all for an MPL-2.0 PROJECT license
+    // — it is not "fine", it is genuinely not checked, and must read that
+    // way rather than as a silent pass.
+    expect(r.undetermined).toHaveLength(2);
+    const depLicenses = r.undetermined.map((u) => u.dep_license).sort();
+    expect(depLicenses).toEqual(['AGPL-3.0', 'GPL-2.0-only']);
+  });
+
+  it('item 5 (round 2): an UNMODELLED single project license (GPL-3.0-only) reports undetermined too — not just MPL-2.0', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"GPL-3.0-only"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [
+      { license: 'AGPL-3.0', packages: ['agpl-pkg'] },
+      { license: 'GPL-2.0-only', packages: ['gpl2-pkg'] },
+    ]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: unknown[];
+      undetermined: Array<{ dep_license: string }>;
+    };
+    expect(r.undetermined).toHaveLength(2);
+  });
+
+  it('item 5 (round 2): an unmodelled project license still reads a PERMISSIVE dependency as compatible (no false undetermined)', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"MPL-2.0"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'MIT', packages: ['fine-pkg'] }]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: unknown[];
+      undetermined: unknown[];
+    };
+    expect(r.incompatibilities).toEqual([]);
+    expect(r.undetermined).toEqual([]);
+  });
 });
 
 describe('report_export', () => {

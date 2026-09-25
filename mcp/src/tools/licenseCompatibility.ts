@@ -59,8 +59,9 @@ const tool: ToolModule = {
     'incl. "proprietary"/"SEE LICENSE IN …", .csproj PackageLicenseExpression, or LICENSE) against ' +
     'the licenses of installed deps captured by the most recent compliance_check OF THIS PROJECT. ' +
     'No declared license (or a proprietary label) is treated as proprietary and still flags ' +
-    'copyleft deps; an unrecognised or SPDX OR/AND dependency license is reported as ' +
-    '`undetermined`, never silently compatible. Pure SQL read — does not spawn scanners.',
+    'copyleft deps; an unrecognised or SPDX OR/AND expression on EITHER side (project or ' +
+    'dependency) is reported as `undetermined`, never silently compatible. Pure SQL read — does ' +
+    'not spawn scanners.',
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -286,6 +287,10 @@ const COMMERCIAL = new Set(['BUSL-1.1', 'Elastic-2.0', 'CommonsClause']);
 /** Every license id this table has an opinion about — anything else is
  *  `undetermined`, never silently compatible (fix round 1, item 5). */
 const KNOWN_LICENSES = new Set<string>([...PERMISSIVE, ...VIRAL, ...WEAK_COPYLEFT, ...COMMERCIAL]);
+/** GPL-2.0 (all three SPDX suffix forms) as a PROJECT license — `incompatibleReason`
+ *  only has a specific pairwise rule for it against an Apache-2.0 dependency;
+ *  used by `isModeledProjectLicense` to recognise the family regardless. */
+const GPL2_FAMILY = withSuffixes('GPL-2.0');
 
 function incompatibleReason(projectLicense: string, depLicense: string): string | null {
   const proj = normaliseLicense(projectLicense);
@@ -373,21 +378,93 @@ function proprietaryReason(depLicense: string): string | null {
 
 type SingleVerdict = { kind: 'ok' } | { kind: 'risky'; reason: string } | { kind: 'unknown' };
 
-/** Verdict for one, already-split license id — never an OR/AND expression.
- *  'unknown' when `dep` is not in ANY of the tables above at all: this is
- *  the case `incompatibleReason`/`proprietaryReason` used to collapse into
- *  "returns null" (indistinguishable from "checked, and it's fine"). */
-function classifySingleLicense(
-  projectLicense: string | null,
-  isProprietary: boolean,
-  depLicenseRaw: string,
-): SingleVerdict {
+/** Project-license categories `incompatibleReason` actually has a rule for
+ *  (whole families, not every pairwise combination within them — see that
+ *  function's own branches). Fix round 2, item 5: `classifySingleLicensePair`
+ *  used to read "no rule fired" as "fine" unconditionally, which is only
+ *  true when the PROJECT side is one this table actually understands.
+ *  `MPL-2.0`, `GPL-3.0-only`, and any SPDX expression the old code
+ *  whitespace-collapsed into an unrecognisable string (`MIT OR Apache-2.0`
+ *  -> `MITORApache-2.0`) are NOT modelled, and silently read as "no
+ *  incompatibility with any dependency, ever" — reported to the coordinator
+ *  with AGPL-3.0/GPL-2.0-only dependencies producing 0 incompatibilities AND
+ *  0 undetermined against exactly those project licenses. */
+function isModeledProjectLicense(proj: string): boolean {
+  return PERMISSIVE.has(proj) || GPL2_FAMILY.has(proj) || AGPL.has(proj);
+}
+
+/** Verdict for one, already-split project license id against one,
+ *  already-split dependency license id — never an OR/AND expression on
+ *  either side (that composition lives in `evaluateAgainstProject` /
+ *  `evaluateDependencyLicense`). 'unknown' when `dep` is not in ANY of the
+ *  tables above at all, OR when `incompatibleReason` found no matching rule
+ *  AND the project license itself is not one this table models (a
+ *  permissive dependency is the one exception: it is fine against anything,
+ *  modelled or not — the whole POINT of "permissive" is that it imposes no
+ *  terms the project side could conflict with). Both cases used to
+ *  collapse into "returns null" from `incompatibleReason`/`proprietaryReason`
+ *  — indistinguishable from "checked, and it's fine". */
+function classifySingleLicensePair(projectLicenseSingle: string, depLicenseRaw: string): SingleVerdict {
   const dep = normaliseLicense(depLicenseRaw);
   if (!KNOWN_LICENSES.has(dep)) return { kind: 'unknown' };
-  const reason = isProprietary
-    ? proprietaryReason(depLicenseRaw)
-    : incompatibleReason(projectLicense as string, depLicenseRaw);
-  return reason ? { kind: 'risky', reason } : { kind: 'ok' };
+  const proj = normaliseLicense(projectLicenseSingle);
+  const reason = incompatibleReason(projectLicenseSingle, depLicenseRaw);
+  if (reason) return { kind: 'risky', reason };
+  if (isModeledProjectLicense(proj) || PERMISSIVE.has(dep)) return { kind: 'ok' };
+  return { kind: 'unknown' };
+}
+
+/**
+ * Resolves ONE (already-split) dependency license id against the project's
+ * FULL license — which may itself be an SPDX `OR`/`AND` expression (fix
+ * round 2, item 5: the project side was never parsed at all before this;
+ * `"MIT OR Apache-2.0"` went through `normaliseLicense` as one opaque
+ * string, `MITORApache-2.0`, matching no rule for any dependency).
+ *
+ *   - **OR** (the project may be released under whichever alternative the
+ *     distributor picks): compatible if the distributor COULD pick an
+ *     alternative the dependency is fine under — i.e. compatible if ANY
+ *     alternative is ok, same "the licensee gets to choose" semantics
+ *     `evaluateDependencyLicense` already applies to a dependency-side OR.
+ *     Incompatible only when EVERY alternative is risky (no escape route).
+ *   - **AND** (a dual-licensed project; both sets of terms apply at once):
+ *     risky if ANY alternative is risky.
+ */
+function evaluateAgainstProject(
+  projectLicense: string | null,
+  isProprietary: boolean,
+  depLicenseSingle: string,
+): SingleVerdict {
+  if (isProprietary) {
+    const dep = normaliseLicense(depLicenseSingle);
+    if (!KNOWN_LICENSES.has(dep)) return { kind: 'unknown' };
+    const reason = proprietaryReason(depLicenseSingle);
+    return reason ? { kind: 'risky', reason } : { kind: 'ok' };
+  }
+
+  const projExpr = parseLicenseExpression(projectLicense as string);
+  if (projExpr.kind === 'single') {
+    return classifySingleLicensePair(projExpr.parts[0], depLicenseSingle);
+  }
+
+  const verdicts = projExpr.parts.map((p) => classifySingleLicensePair(p, depLicenseSingle));
+  if (projExpr.kind === 'or') {
+    if (verdicts.some((v) => v.kind === 'ok')) return { kind: 'ok' };
+    if (verdicts.every((v) => v.kind === 'risky')) {
+      const reasons = verdicts.flatMap((v) => (v.kind === 'risky' ? [v.reason] : []));
+      return {
+        kind: 'risky',
+        reason: `Every license option the project may be released under ('${projectLicense}') is incompatible with dependency '${depLicenseSingle}': ${reasons.join(' | ')}`,
+      };
+    }
+    return { kind: 'unknown' };
+  }
+
+  // AND: every project term applies simultaneously.
+  const risky = verdicts.find((v) => v.kind === 'risky');
+  if (risky && risky.kind === 'risky') return risky;
+  if (verdicts.some((v) => v.kind === 'unknown')) return { kind: 'unknown' };
+  return { kind: 'ok' };
 }
 
 type DependencyVerdict =
@@ -423,16 +500,19 @@ function evaluateDependencyLicense(
   const expr = parseLicenseExpression(depLicenseRaw);
 
   if (expr.kind === 'single') {
-    const v = classifySingleLicense(projectLicense, isProprietary, expr.parts[0] ?? depLicenseRaw);
+    const v = evaluateAgainstProject(projectLicense, isProprietary, expr.parts[0] ?? depLicenseRaw);
     if (v.kind === 'ok') return { kind: 'ok' };
     if (v.kind === 'risky') return { kind: 'incompatible', reason: v.reason };
     return {
       kind: 'undetermined',
-      reason: `License '${depLicenseRaw}' is not one this tool recognises — compatibility could not be determined. Review manually.`,
+      reason:
+        `Compatibility between project license '${projectLicense ?? 'proprietary (no license declared)'}' and ` +
+        `dependency license '${depLicenseRaw}' could not be determined — either side (or both) is not one this ` +
+        `tool recognises. Review manually.`,
     };
   }
 
-  const verdicts = expr.parts.map((p) => classifySingleLicense(projectLicense, isProprietary, p));
+  const verdicts = expr.parts.map((p) => evaluateAgainstProject(projectLicense, isProprietary, p));
   if (expr.kind === 'or') {
     if (verdicts.some((v) => v.kind === 'ok')) return { kind: 'ok' };
     if (verdicts.every((v) => v.kind === 'risky')) {
@@ -479,6 +559,14 @@ function normaliseLicense(s: string): string {
   return s
     .trim()
     .replace(/^["']|["']$/g, '')
+    // Strip parens ANYWHERE, not just a matched leading/trailing pair (fix
+    // round 2, item 5): `parseLicenseExpression` splits on ` OR `/` AND `
+    // BEFORE this runs, so a wrapping `(MIT OR Apache-2.0)` becomes the two
+    // parts `(MIT` and `Apache-2.0)` — each individually unrecognisable
+    // unless the stray paren on each is removed here. This tool never
+    // attempts parenthesised precedence (see `parseLicenseExpression`'s own
+    // comment), so a paren is always noise once a single term is reached.
+    .replace(/[()]/g, '')
     .replace(/\s+/g, '');
 }
 
