@@ -11,8 +11,8 @@
  * `guardian://cves/active` resource can serve dedicated CVE queries
  * without re-deriving them from `findings`.
  */
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { asArray, getNumber, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
 export const TRIVY_TOOL_NAME = 'trivy';
 export const trivyParser = {
@@ -220,31 +220,81 @@ const NPM_DECLARING_FIELDS = [
     'bundledDependencies',
     'workspaces',
 ];
-/**
- * A `package.json` that parses to an object and whose every dependency field
- * (and `workspaces`) is absent, `{}` or `[]`. Anything else — a field with
- * entries, `bundleDependencies: true`, a manifest that does not parse — may
- * declare something, and stays a gap.
- */
-function npmManifestDeclaresNothing(path) {
-    let manifest;
+/** `undefined`, `{}` and `[]`; anything else (`null`, `true`, entries) may hold something. */
+function isEmptyField(v) {
+    if (v === undefined)
+        return true;
+    if (Array.isArray(v))
+        return v.length === 0;
+    return typeof v === 'object' && v !== null && Object.keys(v).length === 0;
+}
+/** Parsed JSON, BOM tolerated, or `undefined` when the file does not parse. */
+function readJsonFile(path) {
     try {
-        manifest = JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''));
+        return JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''));
     }
     catch {
-        return false;
+        return undefined;
     }
+}
+/** Root npm lock files this code reads: they lock nothing when every `packages` key is the root (`''`) and v1's `dependencies` is empty. */
+const NPM_JSON_LOCKFILES = ['package-lock.json', 'npm-shrinkwrap.json'];
+/** Root npm lock files this code does not read: present, each may lock something. */
+const NPM_UNREAD_LOCKFILES = ['pnpm-lock.yaml', 'bun.lock', 'bun.lockb'];
+/**
+ * Whether every npm lock file at the root of `dir` is absent or locks
+ * nothing. A lock file that does not parse, or one this code does not read,
+ * may lock something: see the module comment on this exclusion's boundary.
+ */
+function npmLockFilesLockNothing(dir) {
+    for (const name of NPM_UNREAD_LOCKFILES)
+        if (existsSync(join(dir, name)))
+            return false;
+    for (const name of NPM_JSON_LOCKFILES) {
+        const path = join(dir, name);
+        if (!existsSync(path))
+            continue;
+        const lock = readJsonFile(path);
+        if (typeof lock !== 'object' || lock === null || Array.isArray(lock))
+            return false;
+        const { packages, dependencies } = lock;
+        if (packages !== undefined) {
+            if (typeof packages !== 'object' || packages === null || Array.isArray(packages))
+                return false;
+            if (Object.keys(packages).some((k) => k !== ''))
+                return false;
+        }
+        if (!isEmptyField(dependencies))
+            return false;
+    }
+    const yarnLock = join(dir, 'yarn.lock');
+    if (existsSync(yarnLock)) {
+        let text;
+        try {
+            text = readFileSync(yarnLock, 'utf8');
+        }
+        catch {
+            return false;
+        }
+        // Only the `# ...` header and blank lines: what yarn writes with nothing to lock.
+        if (text.split(/\r?\n/).some((line) => line.trim() !== '' && !line.trimStart().startsWith('#')))
+            return false;
+    }
+    return true;
+}
+/**
+ * A `package.json` that parses to an object, whose every dependency field
+ * (and `workspaces`) is absent, `{}` or `[]`, and beside which no root lock
+ * file locks anything. Anything else (a field with entries,
+ * `bundleDependencies: true`, a manifest that does not parse, a stale lock
+ * file still locking packages) may declare something, and stays a gap.
+ */
+function npmManifestDeclaresNothing(path) {
+    const manifest = readJsonFile(path);
     if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest))
         return false;
     const fields = manifest;
-    return NPM_DECLARING_FIELDS.every((k) => {
-        const v = fields[k];
-        if (v === undefined)
-            return true;
-        if (Array.isArray(v))
-            return v.length === 0;
-        return typeof v === 'object' && v !== null && Object.keys(v).length === 0;
-    });
+    return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(dirname(path));
 }
 /**
  * Assess whether Trivy's fs-scan output covers every dependency manifest
