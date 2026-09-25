@@ -37324,7 +37324,14 @@ ${BASELINE_NEGATION}
     const original = readFileSync(gitignorePath, "utf8");
     const lines = original.split(/\r?\n/);
     const hasOldPattern = lines.some((l) => OLD_DIRECTORY_PATTERNS.has(l.trim()));
-    const kept = lines.filter((l) => !OLD_DIRECTORY_PATTERNS.has(l.trim()));
+    const toDrop = /* @__PURE__ */ new Set();
+    lines.forEach((line, i2) => {
+      if (!OLD_DIRECTORY_PATTERNS.has(line.trim())) return;
+      toDrop.add(i2);
+      const prev = lines[i2 - 1];
+      if (prev !== void 0 && prev.trim() === HEADER) toDrop.add(i2 - 1);
+    });
+    const kept = lines.filter((_, i2) => !toDrop.has(i2));
     const hasEntry = kept.some((l) => l.trim() === ENTRY);
     const hasNegation = kept.some((l) => l.trim() === BASELINE_NEGATION);
     if (!hasOldPattern && hasEntry && hasNegation) {
@@ -38201,7 +38208,7 @@ var DOMAIN_ERROR_CODES = [
 
 // src/storage/findingsRepo.ts
 var WORKTREE_PATH_EXCLUSION = "%guardian-fixpr-wt-%";
-var SUPPRESSION_MATCHES_F = "(s.finding_fingerprint = f.fingerprint OR s.finding_identity = f.identity)";
+var SUPPRESSION_MATCHES_F = "(s.finding_fingerprint = f.fingerprint OR s.finding_identity = f.identity) AND (s.project_path IS NULL OR s.project_path = l.project_path)";
 var FindingsRepo = class {
   constructor(db) {
     this.db = db;
@@ -38230,7 +38237,7 @@ var FindingsRepo = class {
     `);
     this.listOpenLatestScanStmt = db.prepare(`
       WITH latest AS (
-        SELECT id FROM scans
+        SELECT id, project_path FROM scans
         WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
@@ -38249,7 +38256,7 @@ var FindingsRepo = class {
     `);
     this.listOpenForProjectStmt = db.prepare(`
       WITH latest AS (
-        SELECT id FROM scans WHERE status = 'completed' AND project_path = ?
+        SELECT id, project_path FROM scans WHERE status = 'completed' AND project_path = ?
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -38267,7 +38274,7 @@ var FindingsRepo = class {
     `);
     this.listBySeverityLatestStmt = db.prepare(`
       WITH latest AS (
-        SELECT id FROM scans
+        SELECT id, project_path FROM scans
         WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
@@ -38889,9 +38896,9 @@ var SuppressionsRepo = class {
   constructor(db) {
     this.insertStmt = db.prepare(`
       INSERT INTO suppressions (
-        finding_fingerprint, finding_identity, reason, created_at, expires_at, created_by
+        finding_fingerprint, finding_identity, reason, created_at, expires_at, created_by, project_path
       )
-      VALUES (?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     this.listActiveStmt = db.prepare(`
       SELECT * FROM suppressions
@@ -38943,7 +38950,8 @@ var SuppressionsRepo = class {
       input.reason,
       nowIso(),
       input.expires_at ?? null,
-      input.created_by ?? null
+      input.created_by ?? null,
+      input.project_path ?? null
     );
     return Number(info.lastInsertRowid);
   }
@@ -38989,6 +38997,7 @@ function rowToSuppression(row) {
   if (row.finding_identity !== null) s.finding_identity = row.finding_identity;
   if (row.expires_at !== null) s.expires_at = row.expires_at;
   if (row.created_by !== null) s.created_by = row.created_by;
+  if (row.project_path !== null) s.project_path = row.project_path;
   return s;
 }
 
@@ -50767,11 +50776,12 @@ function summarizeSkipped(hits) {
   }
   return { count: all.length, by_reason, newest };
 }
-function suppressionMatcher(suppressions, now) {
+function suppressionMatcher(suppressions, now, projectPath) {
   const fingerprints = /* @__PURE__ */ new Set();
   const identities = /* @__PURE__ */ new Set();
   for (const s of suppressions) {
     if (s.expires_at !== void 0 && !(Date.parse(s.expires_at) > now)) continue;
+    if (s.project_path !== void 0 && s.project_path !== projectPath) continue;
     fingerprints.add(s.finding_fingerprint);
     if (s.finding_identity !== void 0) identities.add(s.finding_identity);
   }
@@ -50800,7 +50810,7 @@ function slotSources(storage, projectPath, slot) {
   return { picks, hits: [...dedicated.hits, ...legacy.hits] };
 }
 function openSetForProject(storage, projectPath, opts = {}) {
-  const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now());
+  const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
   const picked = [];
   const hits = [];
   const considered = /* @__PURE__ */ new Map();
@@ -51396,7 +51406,10 @@ async function handler8(input, ctx) {
     ...identity3 !== void 0 ? { finding_identity: identity3 } : {},
     reason: inp.reason,
     ...inp.expires_at !== void 0 ? { expires_at: inp.expires_at } : {},
-    created_by: "user"
+    created_by: "user",
+    // Scopes the suppression to THIS project at match time (migration 011) —
+    // already resolved above to look the finding up, so no extra lookup.
+    project_path: projectPath
   });
   return {
     ok: true,
@@ -53906,7 +53919,7 @@ async function handler17(input, ctx) {
   const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);
   if (!located) {
     return failDomain14(
-      "unknown_scan_id",
+      "unknown_finding",
       `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`
     );
   }
@@ -54465,9 +54478,9 @@ function toggleScript() {
 </script>`;
 }
 var FOOTER = {
-  en: "generated locally &middot; no telemetry",
-  pt: "gerado localmente &middot; sem telemetria",
-  es: "generado localmente &middot; sin telemetr\xEDa"
+  en: "generated locally &middot; no telemetry of its own; Semgrep\u2019s registry mode sends metrics &mdash; pass <code>local_only: true</code> to avoid it",
+  pt: "gerado localmente &middot; sem telemetria pr\xF3pria; o modo de registo do Semgrep envia m\xE9tricas &mdash; define <code>local_only: true</code> para o evitar",
+  es: "generado localmente &middot; sin telemetr\xEDa propia; el modo de registro de Semgrep env\xEDa m\xE9tricas &mdash; define <code>local_only: true</code> para evitarlo"
 };
 function renderHtmlDocument(doc) {
   const lang = doc.lang ?? "en";
