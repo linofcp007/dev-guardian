@@ -12608,7 +12608,7 @@ var init_output = __esm({
 });
 
 // node_modules/execa/lib/io/output-sync.js
-import { writeFileSync as writeFileSync2, appendFileSync as appendFileSync2 } from "node:fs";
+import { writeFileSync as writeFileSync2, appendFileSync } from "node:fs";
 var transformOutputSync, transformOutputResultSync, runOutputGeneratorsSync, serializeChunks, logOutputSync, writeToFiles;
 var init_output_sync = __esm({
   "node_modules/execa/lib/io/output-sync.js"() {
@@ -12712,7 +12712,7 @@ var init_output_sync = __esm({
       for (const { path: path6, append } of stdioItems.filter(({ type }) => FILE_TYPES.has(type))) {
         const pathString = typeof path6 === "string" ? path6 : path6.toString();
         if (append || outputFiles.has(pathString)) {
-          appendFileSync2(path6, serializedResult);
+          appendFileSync(path6, serializedResult);
         } else {
           outputFiles.add(pathString);
           writeFileSync2(path6, serializedResult);
@@ -37297,10 +37297,17 @@ var StdioServerTransport = class {
 import { resolve as resolve12 } from "node:path";
 
 // src/gitignoreGuard.ts
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 var HEADER = "# dev-guardian outputs";
-var ENTRY = ".guardian/";
+var ENTRY = ".guardian/*";
+var BASELINE_NEGATION = "!.guardian/baseline.json";
+var OLD_DIRECTORY_PATTERNS = /* @__PURE__ */ new Set([
+  ".guardian",
+  ".guardian/",
+  "/.guardian",
+  "/.guardian/"
+]);
 function ensureGuardianIgnored(projectPath) {
   const gitignorePath = join(projectPath, ".gitignore");
   if (!existsSync(join(projectPath, ".git"))) {
@@ -37310,28 +37317,32 @@ function ensureGuardianIgnored(projectPath) {
     if (!existsSync(gitignorePath)) {
       writeFileSync(gitignorePath, `${HEADER}
 ${ENTRY}
+${BASELINE_NEGATION}
 `, "utf8");
       return { updated: true, reason: "created" };
     }
-    const content = readFileSync(gitignorePath, "utf8");
-    if (alreadyIgnored(content)) {
+    const original = readFileSync(gitignorePath, "utf8");
+    const lines = original.split(/\r?\n/);
+    const hasOldPattern = lines.some((l) => OLD_DIRECTORY_PATTERNS.has(l.trim()));
+    const kept = lines.filter((l) => !OLD_DIRECTORY_PATTERNS.has(l.trim()));
+    const hasEntry = kept.some((l) => l.trim() === ENTRY);
+    const hasNegation = kept.some((l) => l.trim() === BASELINE_NEGATION);
+    if (!hasOldPattern && hasEntry && hasNegation) {
       return { updated: false, reason: "already_present" };
     }
-    const suffix = content.endsWith("\n") ? "" : "\n";
-    appendFileSync(gitignorePath, `${suffix}
-${HEADER}
-${ENTRY}
-`, "utf8");
-    return { updated: true, reason: "added" };
+    const missing = [];
+    if (!hasEntry) missing.push(ENTRY);
+    if (!hasNegation) missing.push(BASELINE_NEGATION);
+    const trimmedBody = kept.join("\n").replace(/\n+$/, "");
+    const next = (trimmedBody.length > 0 ? `${trimmedBody}
+` : "") + (missing.length > 0 ? `${HEADER}
+${missing.join("\n")}
+` : "");
+    writeFileSync(gitignorePath, next, "utf8");
+    return { updated: true, reason: hasOldPattern ? "upgraded" : "added" };
   } catch {
     return { updated: false, reason: "unwritable" };
   }
-}
-function alreadyIgnored(content) {
-  const lines = content.split(/\r?\n/).map((l) => l.trim());
-  return lines.some(
-    (l) => l === ".guardian" || l === ".guardian/" || l === "/.guardian" || l === "/.guardian/"
-  );
 }
 
 // src/platform/scriptsDir.ts
@@ -38118,6 +38129,7 @@ var DOMAIN_ERROR_CODES = [
   "not_a_git_repo",
   "working_tree_dirty",
   "unknown_scan_id",
+  "unknown_finding",
   "requires_elevation",
   "unsupported_os",
   "output_too_large",
@@ -40249,6 +40261,19 @@ function sha2562(text) {
   return createHash5("sha256").update(text).digest("hex");
 }
 
+// src/redaction/secretFindingRedaction.ts
+var REDACTED_SECRET_SNIPPET = "[redacted \u2014 credential value omitted; see rule_id and file_path]";
+function redactCredentialSnippet(f) {
+  if (f.snippet === void 0) return f;
+  if (f.tool.toLowerCase() === "gitleaks") return f;
+  if (f.snippet.toLowerCase() === REDACTED_SNIPPET) return f;
+  if (!isCredentialFinding(f)) return f;
+  return { ...f, snippet: REDACTED_SECRET_SNIPPET };
+}
+function redactCredentialSnippets(findings) {
+  return findings.map(redactCredentialSnippet);
+}
+
 // src/platform/configsDir.ts
 import { existsSync as existsSync10, readdirSync as readdirSync3 } from "node:fs";
 import { dirname as dirname6, join as join9 } from "node:path";
@@ -40890,6 +40915,7 @@ async function runScanBody(args) {
     projectPath,
     readSource: makeSourceReader(projectPath)
   });
+  findings = redactCredentialSnippets(findings);
   if (findings.length > 0) {
     plugin.storage.findings.bulkInsert(
       findings.map((f) => ({ ...f, scan_id: scanId }))
@@ -41247,7 +41273,7 @@ function mapResult(raw, ctx) {
   if (lineStart !== void 0) input.line_start = lineStart;
   if (lineEnd !== void 0) input.line_end = lineEnd;
   if (code !== void 0) input.snippet = code;
-  return makeFinding(input);
+  return redactCredentialSnippet(makeFinding(input));
 }
 
 // src/runners/dockerScanner.ts
@@ -41330,7 +41356,7 @@ function mapResult2(raw, ctx) {
   if (lineEnd !== void 0) input.line_end = lineEnd;
   const snippet = getString(extra, "lines");
   if (snippet !== void 0) input.snippet = snippet;
-  return makeFinding(input);
+  return redactCredentialSnippet(makeFinding(input));
 }
 function relativePath(filePath, projectPath) {
   const rel2 = toRelativeIfPossible(filePath, projectPath);
@@ -49409,6 +49435,7 @@ function failDomain8(code, message3) {
 
 // src/tools/suppressFinding.ts
 var inputSchema5 = {
+  project_path: ProjectPath,
   finding_fingerprint: external_exports.string().regex(/^[0-9a-f]{64}$/).describe("SHA-256 fingerprint of the finding to suppress (from a previous scan response)."),
   reason: external_exports.string().min(1).max(1e3).describe("Why this finding is being suppressed. Required."),
   expires_at: external_exports.string().datetime().optional().describe("ISO-8601 expiry. When omitted, the suppression never expires.")
@@ -49416,7 +49443,7 @@ var inputSchema5 = {
 var tool11 = {
   name: "suppress_finding",
   title: "Suppress finding",
-  description: "Mark a finding (by the fingerprint a scan response shows) as a false positive. Resources that surface open findings exclude it while the suppression is active \u2014 including after the code around it moves: the finding's line-independent identity is recorded alongside the fingerprint and either one matches. Pass expires_at for a temporary snooze.",
+  description: "Mark a finding of project_path (default: the server's working directory) \u2014 named by the fingerprint a scan response shows \u2014 as a false positive. Resources that surface open findings exclude it while the suppression is active \u2014 including after the code around it moves: the finding's line-independent identity is recorded alongside the fingerprint and either one matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. Pass expires_at for a temporary snooze.",
   inputSchema: inputSchema5,
   handler: async (input, ctx) => handler8(input, ctx)
 };
@@ -49425,14 +49452,27 @@ async function handler8(input, ctx) {
   const inp = input;
   if (!inp.finding_fingerprint || !inp.reason) {
     return failDomain9(
-      "unknown_scan_id",
+      "unknown_finding",
       "finding_fingerprint and reason are required."
     );
   }
-  const identity3 = ctx.storage.findings.identityForFingerprint(inp.finding_fingerprint);
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return failDomain9("not_a_git_repo", e.message);
+  }
+  const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);
+  if (!located) {
+    return failDomain9(
+      "unknown_finding",
+      `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`
+    );
+  }
+  const identity3 = located.finding.identity;
   const id = ctx.storage.suppressions.insert({
     finding_fingerprint: inp.finding_fingerprint,
-    ...identity3 !== null ? { finding_identity: identity3 } : {},
+    ...identity3 !== void 0 ? { finding_identity: identity3 } : {},
     reason: inp.reason,
     ...inp.expires_at !== void 0 ? { expires_at: inp.expires_at } : {},
     created_by: "user"
@@ -49441,9 +49481,10 @@ async function handler8(input, ctx) {
     ok: true,
     suppression_id: id,
     finding_fingerprint: inp.finding_fingerprint,
-    // Null: no stored scan has an identity for this fingerprint, so the
+    // Null: this project's stored row for this fingerprint has no identity
+    // (written before schema 7, or by a tool that computes none), so the
     // suppression matches it by fingerprint only and lapses if lines shift.
-    finding_identity: identity3,
+    finding_identity: identity3 ?? null,
     expires_at: inp.expires_at ?? null
   };
 }
@@ -51597,6 +51638,7 @@ function countBySeverity3(findings) {
 // src/tools/suggestFix.ts
 import { existsSync as existsSync31, readFileSync as readFileSync24 } from "node:fs";
 import { join as join38 } from "node:path";
+var ROTATION_GUIDANCE = "This finding flags a credential (a password, key or token), not a code-shape bug \u2014 suggest_fix withholds surrounding source for it so the value is never echoed back into this response. Do not ask for or paste the secret value into further tooling. Rotate/revoke it at its source (the provider dashboard or secret manager), remove it from the file, and replace it with a reference to a secret store or an environment variable placeholder.";
 var inputSchema10 = {
   project_path: ProjectPath,
   finding_fingerprint: external_exports.string().regex(/^[0-9a-f]{64}$/).describe("Fingerprint of the finding to gather context for."),
@@ -51627,10 +51669,11 @@ async function handler17(input, ctx) {
     );
   }
   const finding4 = located.finding;
+  const credential = isCredentialFinding(finding4);
   let surrounding_source = null;
   let source_start_line = 0;
   let source_end_line = 0;
-  if (finding4.file_path) {
+  if (!credential && finding4.file_path) {
     const abs = join38(projectPath, finding4.file_path);
     if (existsSync31(abs)) {
       try {
@@ -51671,13 +51714,14 @@ async function handler17(input, ctx) {
     surrounding_source,
     source_start_line,
     source_end_line,
+    rotation_guidance: credential ? ROTATION_GUIDANCE : null,
     prior_related_suppressions: priorSuppressions.map((s) => ({
       reason: s.reason,
       created_at: s.created_at,
       ...s.expires_at !== void 0 ? { expires_at: s.expires_at } : {}
     })),
     docs_hint: "If the rule_id or message references CWE/OWASP, link to the official write-up in the proposed fix.",
-    instructions_for_model: "Propose a unified-diff patch (or describe the minimal edit) that addresses this finding without changing unrelated behaviour. Reference the line range, explain the fix, and call out any side effects the maintainer should review."
+    instructions_for_model: credential ? "Do not propose a patch that echoes, logs or re-derives the credential value \u2014 none was given here on purpose. Recommend removing the hardcoded value, referencing a secret store or an environment variable instead, and rotating the credential at its source; see rotation_guidance." : "Propose a unified-diff patch (or describe the minimal edit) that addresses this finding without changing unrelated behaviour. Reference the line range, explain the fix, and call out any side effects the maintainer should review."
   };
 }
 function failDomain14(code, message3) {
@@ -51731,6 +51775,10 @@ async function handler18(input, ctx) {
   const probably_safe = [];
   const keep = [];
   for (const f of open) {
+    if (isCredentialFinding(f)) {
+      keep.push(toBucket(f, "credential finding \u2014 suppression is never suggested; rotate the secret instead"));
+      continue;
+    }
     const path6 = f.file_path ?? "";
     const bucket = classifyByPath(f, path6);
     if (bucket === "likely_fp") {
@@ -52421,7 +52469,7 @@ async function handler22(input, ctx) {
   }
   const scan2 = ctx.storage.scans.getById(scanId);
   if (!scan2) return failDomain17("unknown_scan_id", `Scan '${scanId}' not found.`);
-  const findings = ctx.storage.findings.listByScan(scanId);
+  const findings = redactCredentialSnippets(ctx.storage.findings.listByScan(scanId));
   const cves = CVE_SOURCE_SCAN_TYPES.includes(scan2.scan_type) ? ctx.storage.cves.listActive(scanId) : [];
   const { content, fileName } = renderReport(format2, scan2, findings, cves, lang);
   const outDir = join41(projectPath, ".guardian", "reports", `export-${scanId.slice(0, 8)}`);
@@ -52499,7 +52547,9 @@ function renderMarkdown(scan2, findings, cves) {
     }
   }
   lines.push("");
-  lines.push("_Generated by dev-guardian \u2014 open-source, no telemetry._");
+  lines.push(
+    "_Generated by dev-guardian \u2014 open-source. dev-guardian sends no telemetry of its own; Semgrep's registry mode sends metrics \u2014 pass `local_only: true` to avoid it._"
+  );
   return lines.join("\n");
 }
 function mdEscape(s) {
@@ -52601,6 +52651,81 @@ async function handler23(input, ctx) {
     instructions_for_model: 'Save this to docs/compliance/<framework>-evidence.md or hand to the auditor directly. Sections without underlying scans are flagged as "(no data \u2014 run X)".'
   };
 }
+function complianceMeta(compliance) {
+  return compliance?.meta;
+}
+var FRAMEWORK_LABEL = {
+  gdpr: "GDPR",
+  soc2: "SOC 2",
+  iso27001: "ISO 27001"
+};
+function frameworkControls(framework, args) {
+  const meta = complianceMeta(args.compliance);
+  const hasPolicyDocs = meta?.policy_documents_found !== void 0;
+  const hasLicenses = meta?.licenses_summary !== void 0;
+  const hasDeps = args.deps !== null;
+  const hasBaseline = args.baseline !== null;
+  const hasSbom = args.sbom !== null;
+  switch (framework) {
+    case "gdpr":
+      return [
+        {
+          id: "Article 25",
+          description: "privacy by design and by default",
+          evidenced: hasPolicyDocs,
+          note: hasPolicyDocs ? 'privacy and security policy presence \u2014 see "Latest compliance scan" above' : "no `compliance_check` scan on file \u2014 policy-document presence was never checked"
+        },
+        {
+          id: "Article 32",
+          description: "security of processing",
+          evidenced: hasDeps,
+          note: hasDeps ? 'dependency CVE posture \u2014 see "Dependency vulnerability posture" above' : "no `scan_deps`/`deps_audit` scan on file \u2014 vulnerability posture was never measured"
+        }
+      ];
+    case "soc2":
+      return [
+        {
+          id: "CC7.1 / CC7.2",
+          description: "vulnerability management",
+          evidenced: hasDeps,
+          note: hasDeps ? 'CVE counts \u2014 see "Dependency vulnerability posture" above' : "no `scan_deps`/`deps_audit` scan on file \u2014 vulnerability posture was never measured"
+        },
+        {
+          id: "CC8.1",
+          description: "change management",
+          evidenced: hasBaseline,
+          note: hasBaseline ? 'baseline + suppressions traceability \u2014 see "Change-tracking / baseline" above' : "no baseline set \u2014 run `set_baseline`"
+        },
+        {
+          id: "CC9.1",
+          description: "risk mitigation",
+          evidenced: hasLicenses,
+          note: hasLicenses ? 'license posture \u2014 see "Latest compliance scan" above' : "no `compliance_check` scan on file \u2014 license posture was never measured"
+        }
+      ];
+    case "iso27001":
+      return [
+        {
+          id: "A.8.8",
+          description: "management of technical vulnerabilities",
+          evidenced: hasDeps,
+          note: hasDeps ? 'CVE counts \u2014 see "Dependency vulnerability posture" above' : "no `scan_deps`/`deps_audit` scan on file \u2014 vulnerability posture was never measured"
+        },
+        {
+          id: "A.5.20",
+          description: "supplier relationships",
+          evidenced: hasSbom,
+          note: hasSbom ? 'SBOM \u2014 see "Software Bill of Materials (SBOM)" above' : "no SBOM on file \u2014 run `generate_sbom`"
+        },
+        {
+          id: "A.5.32",
+          description: "intellectual property",
+          evidenced: hasLicenses,
+          note: hasLicenses ? 'license compatibility findings \u2014 see "Latest compliance scan" above' : "no `compliance_check` scan on file \u2014 license posture was never measured"
+        }
+      ];
+  }
+}
 function build(args) {
   const out = [];
   out.push(`# Compliance evidence \u2014 ${args.framework.toUpperCase()}`);
@@ -52617,7 +52742,7 @@ function build(args) {
   if (args.compliance) {
     out.push(`- Scan id: \`${args.compliance.scan_id}\``);
     out.push(`- Run at: ${args.compliance.started_at}`);
-    const meta = args.compliance.meta;
+    const meta = complianceMeta(args.compliance);
     if (meta?.licenses_summary) {
       out.push(`- Licenses observed: ${meta.licenses_summary.length}`);
       const risky = meta.risky_licenses ?? [];
@@ -52670,30 +52795,34 @@ function build(args) {
   }
   out.push("");
   out.push("## Frameworks");
-  switch (args.framework) {
-    case "gdpr":
-      out.push(
-        "### GDPR mapping\n- Article 5 (data minimisation): see SBOM components and license posture.\n- Article 25 (privacy by design): privacy policy + security policy presence above.\n- Article 32 (security of processing): CVE posture + scan cadence (see scan history)."
-      );
-      break;
-    case "soc2":
-      out.push(
-        "### SOC 2 trust services criteria\n- CC7.1 / CC7.2 (vulnerability mgmt): CVE counts + baseline above.\n- CC8.1 (change mgmt): baseline + suppressions traceability.\n- CC9.1 (risk mitigation): license posture + dep update plan."
-      );
-      break;
-    case "iso27001":
-      out.push(
-        "### ISO 27001 Annex A controls\n- A.8.8 (technical vulnerabilities): scan cadence + CVE counts.\n- A.5.20 (supplier relationships): SBOM + license posture.\n- A.5.32 (intellectual property): license compatibility findings."
-      );
-      break;
-    default:
-      out.push(
-        "No framework specified. Re-run with `framework=gdpr|soc2|iso27001` for a labelled mapping."
-      );
+  if (args.framework === "generic") {
+    out.push(
+      "No framework specified. Re-run with `framework=gdpr|soc2|iso27001` for a labelled mapping."
+    );
+  } else {
+    const label = FRAMEWORK_LABEL[args.framework] ?? args.framework.toUpperCase();
+    const controls = frameworkControls(args.framework, args);
+    const evidenced = controls.filter((c3) => c3.evidenced);
+    const notCovered = controls.filter((c3) => !c3.evidenced);
+    out.push(`### ${label} controls evidenced by this document`);
+    if (evidenced.length === 0) {
+      out.push('(none \u2014 see "not covered" below)');
+    } else {
+      for (const c3 of evidenced) out.push(`- ${c3.id} (${c3.description}): ${c3.note}`);
+    }
+    out.push("");
+    out.push(`### ${label} controls NOT covered by this document`);
+    if (notCovered.length === 0) {
+      out.push("(none)");
+    } else {
+      for (const c3 of notCovered) out.push(`- ${c3.id} (${c3.description}): NOT COVERED \u2014 ${c3.note}`);
+    }
   }
   out.push("");
   out.push("---");
-  out.push("_Generated by dev-guardian. All scans local, no telemetry._");
+  out.push(
+    "_Generated by dev-guardian. dev-guardian sends no telemetry of its own; Semgrep's registry mode sends metrics \u2014 pass `local_only: true` to avoid it._"
+  );
   return out.join("\n");
 }
 function findLatest(ctx, type) {
@@ -52846,6 +52975,7 @@ function buildTitle(f) {
   return `${head} ${tag}`;
 }
 function buildBody(f, scanId) {
+  const showSnippet = f.snippet && !isCredentialFinding(f);
   return [
     `**Severity:** ${f.severity}`,
     `**Category:** ${f.category}${f.subcategory ? ` / ${f.subcategory}` : ""}`,
@@ -52854,11 +52984,12 @@ function buildBody(f, scanId) {
     f.message ? `
 ${f.message}
 ` : "",
-    f.snippet ? `
+    showSnippet ? `
 \`\`\`
 ${f.snippet}
 \`\`\`
 ` : "",
+    isCredentialFinding(f) ? "\n_This finding flags a credential. Rotate/revoke it at its source and remove it from the file \u2014 dev-guardian withholds the matched value from this issue._\n" : "",
     `
 ---`,
     `Fingerprint: \`${f.fingerprint}\``,
@@ -54502,6 +54633,7 @@ async function handler33(input, ctx) {
       }
     }
   }
+  const redacted = redactCredentialSnippets(findings);
   const scanId = randomUUID12();
   ctx.storage.scans.insert({
     scan_id: scanId,
@@ -54509,8 +54641,8 @@ async function handler33(input, ctx) {
     project_path: projectPath,
     tree_hash: ""
   });
-  if (findings.length > 0) {
-    ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
+  if (redacted.length > 0) {
+    ctx.storage.findings.bulkInsert(redacted.map((f) => ({ ...f, scan_id: scanId })));
   }
   ctx.storage.scans.finalize({
     scan_id: scanId,
@@ -54519,7 +54651,7 @@ async function handler33(input, ctx) {
     missing_tools: [],
     meta: { files_scanned: files.length, findings_count: findings.length }
   });
-  const parserOutput = { findings, cves: [] };
+  const parserOutput = { findings: redacted, cves: [] };
   return {
     ok: true,
     scan_id: scanId,
@@ -54784,7 +54916,12 @@ async function handler35(input, ctx) {
                 rule_id: rule.id,
                 severity: rule.severity,
                 category: rule.id === "efcore-raw-sql-creds" ? "security" : "bug",
-                subcategory: "migration-risk",
+                // 'secret' rather than the generic 'migration-risk' for
+                // efcore-raw-sql-creds: it is what makes `isCredentialFinding`
+                // (and so this file's own redaction below) recognise the
+                // finding — `-creds` does not match the credential-word list
+                // that classifier tests rule_id against.
+                subcategory: rule.id === "efcore-raw-sql-creds" ? "secret" : "migration-risk",
                 title: rule.description,
                 file_path: relative13(projectPath, abs).replace(/\\/g, "/"),
                 line_start: i2 + 1,
@@ -54798,6 +54935,7 @@ async function handler35(input, ctx) {
       }
     }
   }
+  const redacted = redactCredentialSnippets(findings);
   const scanId = randomUUID14();
   ctx.storage.scans.insert({
     scan_id: scanId,
@@ -54805,22 +54943,22 @@ async function handler35(input, ctx) {
     project_path: projectPath,
     tree_hash: ""
   });
-  if (findings.length > 0) {
-    ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
+  if (redacted.length > 0) {
+    ctx.storage.findings.bulkInsert(redacted.map((f) => ({ ...f, scan_id: scanId })));
   }
   ctx.storage.scans.finalize({
     scan_id: scanId,
     status: "completed",
     tools_run: [{ name: "dotnet_efcore_audit", status: "ok" }],
     missing_tools: [],
-    meta: { migration_dirs_scanned: migrationDirs.length, findings_count: findings.length }
+    meta: { migration_dirs_scanned: migrationDirs.length, findings_count: redacted.length }
   });
   return {
     ok: true,
     scan_id: scanId,
     migration_dirs_scanned: migrationDirs.length,
-    findings_count: findings.length,
-    findings,
+    findings_count: redacted.length,
+    findings: redacted,
     hint: findings.length === 0 ? migrationDirs.length === 0 ? "No Migrations/ directory found." : "No dangerous patterns detected in EF Core migrations." : "Review each finding. DropTable/DropColumn require explicit data-backup confirmation; AlterColumn nullable=false needs a defaultValue."
   };
 }

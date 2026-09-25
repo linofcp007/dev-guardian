@@ -29,6 +29,45 @@ version bump.
 
 ### Fixed
 
+- Secret hygiene in outputs and honest compliance evidence:
+  - Raw secrets no longer reach a response, the database, an exported
+    report, a GitHub issue body or the dashboard HTML. A new
+    `redaction/secretFindingRedaction.ts` clears a credential finding's
+    `snippet` (Bandit B105-B107's `code`, Semgrep `extra.lines` when logged
+    in or via Docker, `scan_dotnet_secrets`' matched connection-string line,
+    `dotnet_efcore_audit`'s `efcore-raw-sql-creds`) once, before
+    persistence, in the scan-tool factory and in every tool that inserts
+    findings outside it; `create_github_issues`, `report_export` and the
+    dashboard payload apply it again independently as a second line of
+    defence. `suggest_fix` withholds `surrounding_source` for a credential
+    finding entirely and returns rotation guidance instead — reading the
+    file back would have defeated gitleaks' own `--redact`.
+  - `compliance_evidence` no longer prints three hard-coded bullets per
+    framework regardless of what was actually scanned, and no longer maps
+    GDPR Article 5 (data minimisation) to "SBOM components and license
+    posture" — a wrong mapping, dropped rather than gated. Each remaining
+    control is listed as evidenced (with a pointer to the section that backs
+    it) or NOT COVERED (naming the scan that was never run), and its footer
+    and `report_export`'s now state the real telemetry posture instead of
+    the false "All scans local, no telemetry" claim.
+  - `triage_findings` no longer suggests suppressing a credential finding —
+    a leaked secret under a `test/`/`fixtures/` path used to be bucketed
+    `likely_false_positive` exactly like a real test fixture.
+  - `gitignoreGuard.ts` wrote a bare `.guardian/` line, which excludes the
+    whole directory: git cannot re-include a file under an already-excluded
+    directory, so the CI gate's committed `.guardian/baseline.json` could
+    never actually be committed. Now writes `.guardian/*` +
+    `!.guardian/baseline.json`, and upgrades a project that already has the
+    old bare line (in any of its four spellings) instead of leaving it in
+    place.
+  - `suppress_finding` accepted any 64-hex-character string as `ok: true`,
+    under `unknown_scan_id` — a code that names a different failure — and
+    matched a fingerprint against the whole database, so a suppression
+    could silently apply to another project's finding. Now resolves
+    `project_path` (default: the working directory) like every other tool,
+    looks the fingerprint up within that project's own scans, and answers
+    `unknown_finding` when no completed scan of it ever reported one.
+
 - `.mcp.json` used `${CLAUDE_PROJECT_DIR}`, which Claude Code does not expand
   there (only `${CLAUDE_PLUGIN_ROOT}`, used by `plugin.json`, is) — the
   literal placeholder string became part of the path and the server failed
