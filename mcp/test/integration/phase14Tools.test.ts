@@ -940,6 +940,157 @@ describe('license_compatibility', () => {
     expect(r.incompatibilities).toEqual([]);
     expect(r.undetermined).toEqual([]);
   });
+
+  // ------------------------------------------------------------ fix round 3
+
+  it('N4 (round 3): a dependency license mixing AND/OR with a non-wrapping paren is undetermined, never silently compatible', async () => {
+    // The coordinator's own probe, reproduced exactly: a naive OR-first
+    // split on "(MIT OR Apache-2.0) AND GPL-3.0-only" reads it as OR with
+    // parts "(MIT" and "Apache-2.0) AND GPL-3.0-only" — the FIRST part
+    // alone (a recognised permissive license once its stray paren strips)
+    // made the WHOLE expression read compatible, silently dropping the
+    // "AND GPL-3.0-only" term for a proprietary (no license) project.
+    const project = tempProject(); // no package.json — proprietary
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [
+      { license: '(MIT OR Apache-2.0) AND GPL-3.0-only', packages: ['pkg-a'] },
+      { license: 'GPL-3.0-only AND (MIT OR Apache-2.0)', packages: ['pkg-b'] },
+    ]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: unknown[];
+      undetermined: Array<{ dep_license: string }>;
+    };
+    expect(r.incompatibilities).toEqual([]);
+    expect(r.undetermined).toHaveLength(2);
+    const depLicenses = r.undetermined.map((u) => u.dep_license).sort();
+    expect(depLicenses).toEqual([
+      '(MIT OR Apache-2.0) AND GPL-3.0-only',
+      'GPL-3.0-only AND (MIT OR Apache-2.0)',
+    ]);
+  });
+
+  it('N4 (round 3): the same mixed AND/OR/paren expression is undetermined against a real (MIT) project too, not just proprietary', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"MIT"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [
+      { license: '(MIT OR Apache-2.0) AND GPL-3.0-only', packages: ['pkg-a'] },
+    ]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: unknown[];
+      undetermined: Array<{ dep_license: string }>;
+    };
+    expect(r.incompatibilities).toEqual([]);
+    expect(r.undetermined).toHaveLength(1);
+  });
+
+  it('N4 (round 3): a single fully-wrapped OR expression on the DEPENDENCY side still parses correctly (no regression)', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"MIT"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: '(MIT OR Apache-2.0)', packages: ['pkg-a'] }]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: unknown[];
+      undetermined: unknown[];
+    };
+    expect(r.incompatibilities).toEqual([]);
+    expect(r.undetermined).toEqual([]);
+  });
+
+  it('N5 (round 3): GPL-2.0-only project vs GPL-3.0-only / AGPL-3.0 deps are a real incompatibility, not silently compatible', async () => {
+    // The fix round 2 shape's `isModeledProjectLicense` treated the WHOLE
+    // GPL-2.0 family as "understood", so a dependency category the rule
+    // table had no actual rule for (anything except Apache-2.0) fell
+    // through to "ok" purely because the project side was recognised.
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"GPL-2.0-only"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [
+      { license: 'GPL-3.0-only', packages: ['gpl3-pkg'] },
+      { license: 'AGPL-3.0', packages: ['agpl-pkg'] },
+    ]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: Array<{ dep_license: string; reason: string }>;
+    };
+    expect(r.incompatibilities).toHaveLength(2);
+    const byDep = Object.fromEntries(r.incompatibilities.map((i) => [i.dep_license, i.reason]));
+    expect(byDep['GPL-3.0-only']).toMatch(/GPL-3\.0/);
+    expect(byDep['AGPL-3.0']).toMatch(/AGPL/);
+  });
+
+  it('N5 (round 3): GPL-2.0-only project vs SSPL-1.0 / BUSL-1.1 deps — no explicit rule for THIS pair — reads undetermined, not compatible', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"GPL-2.0-only"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [
+      { license: 'SSPL-1.0', packages: ['sspl-pkg'] },
+      { license: 'BUSL-1.1', packages: ['busl-pkg'] },
+    ]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: unknown[];
+      undetermined: Array<{ dep_license: string }>;
+    };
+    expect(r.incompatibilities).toEqual([]);
+    expect(r.undetermined).toHaveLength(2);
+  });
+
+  it('N5 (round 3): GPL-2.0-or-later project vs GPL-3.0 dep IS compatible — the -or-later escape the -only form lacks', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"GPL-2.0-or-later"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'GPL-3.0', packages: ['gpl3-pkg'] }]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: unknown[];
+      undetermined: unknown[];
+    };
+    expect(r.incompatibilities).toEqual([]);
+    expect(r.undetermined).toEqual([]);
+  });
+
+  it('N5 (round 3): AGPL-3.0-only project vs GPL-2.0-only / SSPL-1.0 deps — no explicit rule — undetermined, not compatible', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"AGPL-3.0-only"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [
+      { license: 'GPL-2.0-only', packages: ['gpl2-pkg'] },
+      { license: 'SSPL-1.0', packages: ['sspl-pkg'] },
+    ]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: unknown[];
+      undetermined: Array<{ dep_license: string }>;
+    };
+    expect(r.incompatibilities).toEqual([]);
+    expect(r.undetermined).toHaveLength(2);
+  });
+
+  it('N5 (round 3): AGPL-3.0-only project vs Apache-2.0 dep stays compatible (permissive is fine against anything — no regression)', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"AGPL-3.0-only"}', 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: 'Apache-2.0', packages: ['dep'] }]);
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: unknown[];
+      undetermined: unknown[];
+    };
+    expect(r.incompatibilities).toEqual([]);
+    expect(r.undetermined).toEqual([]);
+  });
 });
 
 describe('report_export', () => {

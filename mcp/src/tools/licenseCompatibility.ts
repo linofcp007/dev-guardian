@@ -287,10 +287,9 @@ const COMMERCIAL = new Set(['BUSL-1.1', 'Elastic-2.0', 'CommonsClause']);
 /** Every license id this table has an opinion about — anything else is
  *  `undetermined`, never silently compatible (fix round 1, item 5). */
 const KNOWN_LICENSES = new Set<string>([...PERMISSIVE, ...VIRAL, ...WEAK_COPYLEFT, ...COMMERCIAL]);
-/** GPL-2.0 (all three SPDX suffix forms) as a PROJECT license — `incompatibleReason`
- *  only has a specific pairwise rule for it against an Apache-2.0 dependency;
- *  used by `isModeledProjectLicense` to recognise the family regardless. */
-const GPL2_FAMILY = withSuffixes('GPL-2.0');
+/** GPL-3.0, all three SPDX suffix forms — used only by `explicitPairVerdict`'s
+ *  GPL-2.0-vs-GPL-3.0 rules below. */
+const GPL3_FAMILY = withSuffixes('GPL-3.0');
 
 function incompatibleReason(projectLicense: string, depLicense: string): string | null {
   const proj = normaliseLicense(projectLicense);
@@ -378,39 +377,78 @@ function proprietaryReason(depLicense: string): string | null {
 
 type SingleVerdict = { kind: 'ok' } | { kind: 'risky'; reason: string } | { kind: 'unknown' };
 
-/** Project-license categories `incompatibleReason` actually has a rule for
- *  (whole families, not every pairwise combination within them — see that
- *  function's own branches). Fix round 2, item 5: `classifySingleLicensePair`
- *  used to read "no rule fired" as "fine" unconditionally, which is only
- *  true when the PROJECT side is one this table actually understands.
- *  `MPL-2.0`, `GPL-3.0-only`, and any SPDX expression the old code
- *  whitespace-collapsed into an unrecognisable string (`MIT OR Apache-2.0`
- *  -> `MITORApache-2.0`) are NOT modelled, and silently read as "no
- *  incompatibility with any dependency, ever" — reported to the coordinator
- *  with AGPL-3.0/GPL-2.0-only dependencies producing 0 incompatibilities AND
- *  0 undetermined against exactly those project licenses. */
-function isModeledProjectLicense(proj: string): boolean {
-  return PERMISSIVE.has(proj) || GPL2_FAMILY.has(proj) || AGPL.has(proj);
+/**
+ * A small, EXPLICIT compatibility matrix for (project, dependency) pairs
+ * `incompatibleReason` does not cover at all — fix round 3, item N5.
+ *
+ * The fix round 2 shape used a whole-FAMILY "is this project license one I
+ * understand" flag (`isModeledProjectLicense`): any GPL-2.0 suffix form, or
+ * any AGPL suffix form, read as "modelled", so "no rule fired" there meant
+ * "fine" — but `incompatibleReason` only actually has a rule for GPL-2.0
+ * project + Apache-2.0 dependency, and AGPL-3.0 project + a COMMERCIAL
+ * dependency. Every OTHER dependency against a GPL-2.0/AGPL-3.0 project
+ * silently read "ok" purely because the PROJECT side happened to be a
+ * recognised family name — reproduced by the coordinator: a GPL-2.0-only
+ * project against GPL-3.0-only / AGPL-3.0 / SSPL-1.0 / BUSL-1.1
+ * dependencies, and an AGPL-3.0-only project against GPL-2.0-only /
+ * SSPL-1.0, all read compatible.
+ *
+ * Only the pairs below have a real answer; everything else a GPL-2.0/
+ * AGPL-3.0 project pulls in — SSPL-1.0, BUSL-1.1, MPL-2.0, and so on — falls
+ * through to `classifySingleLicensePair`'s own `unknown` (-> undetermined),
+ * which is the honest answer: this tool does not model that combination,
+ * and "undetermined" is not the same finding as "checked, and it's fine".
+ */
+function explicitPairVerdict(proj: string, dep: string): SingleVerdict | null {
+  // GPL-2.0 with NO "or later" escape: incompatible with GPL-3.0 (a
+  // different, non-interchangeable copyleft license) and with AGPL (whose
+  // terms require GPL-3.0-compatible licensing, which GPL-2.0-only cannot
+  // provide).
+  if (proj === 'GPL-2.0' || proj === 'GPL-2.0-only') {
+    if (GPL3_FAMILY.has(dep)) {
+      return {
+        kind: 'risky',
+        reason:
+          `GPL-2.0 project + GPL-3.0 dependency '${dep}': different, non-interchangeable copyleft ` +
+          `terms — a GPL-2.0-only project has no "or later" escape into GPL-3.0.`,
+      };
+    }
+    if (AGPL.has(dep)) {
+      return {
+        kind: 'risky',
+        reason:
+          `GPL-2.0 project + AGPL dependency '${dep}': AGPL's terms require GPL-3.0-compatible ` +
+          `licensing, which a GPL-2.0-only project cannot provide.`,
+      };
+    }
+  }
+  // GPL-2.0-or-later MAY relicense to GPL-3.0 — the escape the bare/-only
+  // forms lack — so a GPL-3.0 dependency is compatible as GPL-3.0.
+  if (proj === 'GPL-2.0-or-later' && GPL3_FAMILY.has(dep)) {
+    return { kind: 'ok' };
+  }
+  return null;
 }
 
 /** Verdict for one, already-split project license id against one,
  *  already-split dependency license id — never an OR/AND expression on
  *  either side (that composition lives in `evaluateAgainstProject` /
  *  `evaluateDependencyLicense`). 'unknown' when `dep` is not in ANY of the
- *  tables above at all, OR when `incompatibleReason` found no matching rule
- *  AND the project license itself is not one this table models (a
- *  permissive dependency is the one exception: it is fine against anything,
- *  modelled or not — the whole POINT of "permissive" is that it imposes no
- *  terms the project side could conflict with). Both cases used to
- *  collapse into "returns null" from `incompatibleReason`/`proprietaryReason`
- *  — indistinguishable from "checked, and it's fine". */
+ *  tables above at all, or when neither `incompatibleReason` nor
+ *  `explicitPairVerdict` has a rule for this exact pair AND the dependency
+ *  is not itself permissive (which is fine against anything — the whole
+ *  point of "permissive" is that it imposes no terms to conflict with).
+ *  These cases used to collapse into "returns null", indistinguishable from
+ *  "checked, and it's fine". */
 function classifySingleLicensePair(projectLicenseSingle: string, depLicenseRaw: string): SingleVerdict {
   const dep = normaliseLicense(depLicenseRaw);
   if (!KNOWN_LICENSES.has(dep)) return { kind: 'unknown' };
   const proj = normaliseLicense(projectLicenseSingle);
   const reason = incompatibleReason(projectLicenseSingle, depLicenseRaw);
   if (reason) return { kind: 'risky', reason };
-  if (isModeledProjectLicense(proj) || PERMISSIVE.has(dep)) return { kind: 'ok' };
+  if (PERMISSIVE.has(proj) || PERMISSIVE.has(dep)) return { kind: 'ok' };
+  const explicit = explicitPairVerdict(proj, dep);
+  if (explicit) return explicit;
   return { kind: 'unknown' };
 }
 
@@ -443,6 +481,7 @@ function evaluateAgainstProject(
   }
 
   const projExpr = parseLicenseExpression(projectLicense as string);
+  if (projExpr.kind === 'complex') return { kind: 'unknown' };
   if (projExpr.kind === 'single') {
     return classifySingleLicensePair(projExpr.parts[0], depLicenseSingle);
   }
@@ -499,6 +538,16 @@ function evaluateDependencyLicense(
 ): DependencyVerdict {
   const expr = parseLicenseExpression(depLicenseRaw);
 
+  if (expr.kind === 'complex') {
+    return {
+      kind: 'undetermined',
+      reason:
+        `Dependency license '${depLicenseRaw}' mixes AND/OR with parentheses in a way this tool does ` +
+        `not attempt to resolve (real SPDX operator precedence, not just a flat OR-then-AND split) — ` +
+        `review manually rather than risk misreading which term actually applies.`,
+    };
+  }
+
   if (expr.kind === 'single') {
     const v = evaluateAgainstProject(projectLicense, isProprietary, expr.parts[0] ?? depLicenseRaw);
     if (v.kind === 'ok') return { kind: 'ok' };
@@ -542,17 +591,62 @@ function evaluateDependencyLicense(
 type LicenseExpression =
   | { kind: 'single'; parts: [string] }
   | { kind: 'or'; parts: string[] }
-  | { kind: 'and'; parts: string[] };
+  | { kind: 'and'; parts: string[] }
+  | { kind: 'complex'; raw: string };
 
-/** Splits on a top-level ` OR ` / ` AND ` (case-insensitive, whichever
- *  appears — SPDX expressions do not mix the two without parentheses to
- *  disambiguate precedence, which this parser does not attempt). */
+/**
+ * Strips exactly ONE wrapping pair of parentheses when the ENTIRE string is
+ * that one pair — `"(MIT OR Apache-2.0)"` -> `"MIT OR Apache-2.0"` —
+ * verified by depth-counting, not just checking the first/last characters:
+ * `"(MIT) OR (Apache-2.0)"` also starts with `(` and ends with `)`, but the
+ * first `(` closes well before the string ends, so it is NOT one wrap and
+ * is returned unchanged (and then caught by the `/[()]/` check below).
+ */
+function stripSingleOuterWrap(raw: string): string {
+  const s = raw.trim();
+  if (s.length < 2 || s[0] !== '(' || s[s.length - 1] !== ')') return s;
+  let depth = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    if (s[i] === '(') depth += 1;
+    else if (s[i] === ')') {
+      depth -= 1;
+      if (depth === 0 && i !== s.length - 1) return s; // closed early — not one wrap
+    }
+  }
+  return depth === 0 ? s.slice(1, -1).trim() : s; // unbalanced — leave as-is
+}
+
+/**
+ * Splits on a top-level ` OR ` / ` AND ` (case-insensitive, whichever
+ * appears) after stripping AT MOST one fully-wrapping outer parenthesis
+ * pair. Fix round 3, item N4: this parser does not attempt real operator
+ * precedence (SPDX gives `AND` higher precedence than `OR`, with
+ * parentheses able to override it) — `"(MIT OR Apache-2.0) AND
+ * GPL-3.0-only"` needs that precedence to read as `AND` at the top level,
+ * but a naive split-on-OR-first reads it as `OR` with parts `"(MIT"` and
+ * `"Apache-2.0) AND GPL-3.0-only"`, and the FIRST part alone (a recognised
+ * permissive license once its stray paren is stripped) made the whole
+ * expression read compatible — silently dropping the `AND GPL-3.0-only`
+ * term entirely. Reproduced by the coordinator against a proprietary and an
+ * MIT project alike.
+ *
+ * Rather than implement full precedence, any string that still contains a
+ * `(` or `)` after the single-outer-wrap strip is reported `complex` and
+ * resolves to `undetermined` wherever it is used (never guessed at) — the
+ * coordinator's own offered alternative to a full parser. This covers every
+ * case that actually matters here: a SINGLE license or a flat `OR`/`AND`
+ * list, optionally wrapped in one redundant outer pair, parses exactly as
+ * before; anything with a nested or non-wrapping paren — the case that
+ * silently misparsed — is now refused rather than guessed at.
+ */
 function parseLicenseExpression(raw: string): LicenseExpression {
-  const orParts = raw.split(/\s+OR\s+/i).map((s) => s.trim()).filter(Boolean);
+  const stripped = stripSingleOuterWrap(raw);
+  if (/[()]/.test(stripped)) return { kind: 'complex', raw };
+  const orParts = stripped.split(/\s+OR\s+/i).map((s) => s.trim()).filter(Boolean);
   if (orParts.length > 1) return { kind: 'or', parts: orParts };
-  const andParts = raw.split(/\s+AND\s+/i).map((s) => s.trim()).filter(Boolean);
+  const andParts = stripped.split(/\s+AND\s+/i).map((s) => s.trim()).filter(Boolean);
   if (andParts.length > 1) return { kind: 'and', parts: andParts };
-  return { kind: 'single', parts: [raw.trim()] };
+  return { kind: 'single', parts: [stripped] };
 }
 
 function normaliseLicense(s: string): string {

@@ -47113,7 +47113,7 @@ var VIRAL = withSuffixes("AGPL-1.0", "AGPL-3.0", "GPL-2.0", "GPL-3.0", "SSPL-1.0
 var WEAK_COPYLEFT = /* @__PURE__ */ new Set(["LGPL-2.1", "LGPL-3.0", "MPL-2.0", "EPL-2.0"]);
 var COMMERCIAL = /* @__PURE__ */ new Set(["BUSL-1.1", "Elastic-2.0", "CommonsClause"]);
 var KNOWN_LICENSES = /* @__PURE__ */ new Set([...PERMISSIVE, ...VIRAL, ...WEAK_COPYLEFT, ...COMMERCIAL]);
-var GPL2_FAMILY = withSuffixes("GPL-2.0");
+var GPL3_FAMILY = withSuffixes("GPL-3.0");
 function incompatibleReason(projectLicense, depLicense) {
   const proj = normaliseLicense(projectLicense);
   const dep = normaliseLicense(depLicense);
@@ -47154,8 +47154,25 @@ function proprietaryReason(depLicense) {
   }
   return null;
 }
-function isModeledProjectLicense(proj) {
-  return PERMISSIVE.has(proj) || GPL2_FAMILY.has(proj) || AGPL.has(proj);
+function explicitPairVerdict(proj, dep) {
+  if (proj === "GPL-2.0" || proj === "GPL-2.0-only") {
+    if (GPL3_FAMILY.has(dep)) {
+      return {
+        kind: "risky",
+        reason: `GPL-2.0 project + GPL-3.0 dependency '${dep}': different, non-interchangeable copyleft terms \u2014 a GPL-2.0-only project has no "or later" escape into GPL-3.0.`
+      };
+    }
+    if (AGPL.has(dep)) {
+      return {
+        kind: "risky",
+        reason: `GPL-2.0 project + AGPL dependency '${dep}': AGPL's terms require GPL-3.0-compatible licensing, which a GPL-2.0-only project cannot provide.`
+      };
+    }
+  }
+  if (proj === "GPL-2.0-or-later" && GPL3_FAMILY.has(dep)) {
+    return { kind: "ok" };
+  }
+  return null;
 }
 function classifySingleLicensePair(projectLicenseSingle, depLicenseRaw) {
   const dep = normaliseLicense(depLicenseRaw);
@@ -47163,7 +47180,9 @@ function classifySingleLicensePair(projectLicenseSingle, depLicenseRaw) {
   const proj = normaliseLicense(projectLicenseSingle);
   const reason = incompatibleReason(projectLicenseSingle, depLicenseRaw);
   if (reason) return { kind: "risky", reason };
-  if (isModeledProjectLicense(proj) || PERMISSIVE.has(dep)) return { kind: "ok" };
+  if (PERMISSIVE.has(proj) || PERMISSIVE.has(dep)) return { kind: "ok" };
+  const explicit = explicitPairVerdict(proj, dep);
+  if (explicit) return explicit;
   return { kind: "unknown" };
 }
 function evaluateAgainstProject(projectLicense, isProprietary, depLicenseSingle) {
@@ -47174,6 +47193,7 @@ function evaluateAgainstProject(projectLicense, isProprietary, depLicenseSingle)
     return reason ? { kind: "risky", reason } : { kind: "ok" };
   }
   const projExpr = parseLicenseExpression(projectLicense);
+  if (projExpr.kind === "complex") return { kind: "unknown" };
   if (projExpr.kind === "single") {
     return classifySingleLicensePair(projExpr.parts[0], depLicenseSingle);
   }
@@ -47196,6 +47216,12 @@ function evaluateAgainstProject(projectLicense, isProprietary, depLicenseSingle)
 }
 function evaluateDependencyLicense(projectLicense, isProprietary, depLicenseRaw) {
   const expr = parseLicenseExpression(depLicenseRaw);
+  if (expr.kind === "complex") {
+    return {
+      kind: "undetermined",
+      reason: `Dependency license '${depLicenseRaw}' mixes AND/OR with parentheses in a way this tool does not attempt to resolve (real SPDX operator precedence, not just a flat OR-then-AND split) \u2014 review manually rather than risk misreading which term actually applies.`
+    };
+  }
   if (expr.kind === "single") {
     const v = evaluateAgainstProject(projectLicense, isProprietary, expr.parts[0] ?? depLicenseRaw);
     if (v.kind === "ok") return { kind: "ok" };
@@ -47229,12 +47255,27 @@ function evaluateDependencyLicense(projectLicense, isProprietary, depLicenseRaw)
   }
   return { kind: "ok" };
 }
+function stripSingleOuterWrap(raw) {
+  const s = raw.trim();
+  if (s.length < 2 || s[0] !== "(" || s[s.length - 1] !== ")") return s;
+  let depth = 0;
+  for (let i2 = 0; i2 < s.length; i2 += 1) {
+    if (s[i2] === "(") depth += 1;
+    else if (s[i2] === ")") {
+      depth -= 1;
+      if (depth === 0 && i2 !== s.length - 1) return s;
+    }
+  }
+  return depth === 0 ? s.slice(1, -1).trim() : s;
+}
 function parseLicenseExpression(raw) {
-  const orParts = raw.split(/\s+OR\s+/i).map((s) => s.trim()).filter(Boolean);
+  const stripped = stripSingleOuterWrap(raw);
+  if (/[()]/.test(stripped)) return { kind: "complex", raw };
+  const orParts = stripped.split(/\s+OR\s+/i).map((s) => s.trim()).filter(Boolean);
   if (orParts.length > 1) return { kind: "or", parts: orParts };
-  const andParts = raw.split(/\s+AND\s+/i).map((s) => s.trim()).filter(Boolean);
+  const andParts = stripped.split(/\s+AND\s+/i).map((s) => s.trim()).filter(Boolean);
   if (andParts.length > 1) return { kind: "and", parts: andParts };
-  return { kind: "single", parts: [raw.trim()] };
+  return { kind: "single", parts: [stripped] };
 }
 function normaliseLicense(s) {
   return s.trim().replace(/^["']|["']$/g, "").replace(/[()]/g, "").replace(/\s+/g, "");
