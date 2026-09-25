@@ -20,12 +20,14 @@
  *     excessive `permissions:`, credential persistence, and the rest of its
  *     rule set.
  *   - actionlint (`-format '{{json .}}'`, `-pyflakes=`, `-shellcheck=`, one
- *     positional arg per workflow file) — schema/expression/shellcheck
+ *     positional arg per workflow file) — workflow schema/expression
  *     correctness, run independently: it catches a class of bug (a
  *     misspelled context, an `${{ }}` referring to nothing) zizmor's own
- *     rule set does not attempt. `-pyflakes=` and `-shellcheck=` disable
- *     actionlint's own shelling out to those two linters, neither of which
- *     is in dev-guardian's tool catalogue — leaving them on would make a
+ *     rule set does not attempt. Its `shellcheck`/`pyflakes` integrations —
+ *     linting the shell of a `run:` step, or a `python` step's own script —
+ *     are explicitly NOT what this pass checks: `-pyflakes=` and
+ *     `-shellcheck=` disable both, because neither underlying linter is in
+ *     dev-guardian's tool catalogue and leaving them on would make a
  *     workflow scan's result depend on binaries we never check for.
  *
  * ---- Explicit paths, for both -----------------------------------------
@@ -100,20 +102,38 @@ const WORKFLOW_EXTENSIONS = ['.yml', '.yaml'];
  * "Explicit paths" section). Non-recursive: GitHub itself only ever reads
  * workflows directly inside this directory, never a subdirectory of it.
  *
- * A symlinked workflow file counts too, not just a plain one: `Dirent`
- * reports a symlink's own type (`isFile()` false, `isSymbolicLink()` true)
- * regardless of what it points at, so a directory of nothing but symlinks —
- * a shared workflow template linked in from elsewhere, a legitimate and not
- * even unusual layout — would otherwise leave `workflowFiles` empty, and
- * with it the whole zizmor/actionlint pass silently `skipped/no_workflows`
- * even though real workflows are right there. Followed only when the link
- * resolves to a regular file INSIDE the project (same containment rule
- * `scanContainers.ts`'s own `isInside` applies to `dockerfile_path`) — a
- * link escaping the project is excluded rather than handed to a scanner as
- * if it were project-local.
+ * `exclusions` — the project's `.guardianignore` (`platform/guardianIgnore.ts`),
+ * or null when it has none — is applied HERE, not left to the factory's own
+ * result filter alone: unlike Semgrep/Trivy/Bandit's native `--exclude`
+ * flags, zizmor and actionlint have no such flag at all, but this function
+ * already builds an explicit file list, so leaving an ignored file OUT of
+ * that list before either scanner ever runs is the equivalent mechanism —
+ * cheaper (never spawns a process over a file whose findings would be
+ * dropped anyway) and, unlike the result filter, also affects whether the
+ * pass runs AT ALL: a `.github/workflows` holding only ignored files must
+ * read `skipped/no_workflows`, not run the scanners over nothing.
+ *
+ * Two symlink hazards, both containment-checked the same way
+ * `scanContainers.ts`'s own `isInside` checks `dockerfile_path`:
+ *
+ *   - A symlinked WORKFLOW FILE counts, not just a plain one: `Dirent`
+ *     reports a symlink's own type (`isFile()` false, `isSymbolicLink()`
+ *     true) regardless of what it points at, so a directory of nothing but
+ *     symlinks — a shared workflow template linked in from elsewhere, a
+ *     legitimate and not even unusual layout — would otherwise leave
+ *     `workflowFiles` empty even though real workflows are right there.
+ *     Followed only when it resolves to a regular file INSIDE the project.
+ *   - `.github/workflows` ITSELF can be a symlink (or `.github` can), and
+ *     `readdirSync` follows symlinks that lie on the path to the directory
+ *     it is asked to read — so without a check here, a `.github/workflows`
+ *     symlinked to, say, `/etc` would have this function list (and hand to
+ *     two scanners) files that are not part of this project at all. Checked
+ *     before the directory is ever read.
  */
-function listWorkflowFiles(projectPath) {
+function listWorkflowFiles(projectPath, exclusions) {
     const dir = join(projectPath, WORKFLOWS_DIR);
+    if (!realWithinProject(projectPath, dir, false))
+        return [];
     let entries;
     try {
         entries = readdirSync(dir, { withFileTypes: true });
@@ -129,27 +149,39 @@ function listWorkflowFiles(projectPath) {
         if (e.isFile()) {
             abs.push(candidate);
         }
-        else if (e.isSymbolicLink() && resolvesToFileInside(projectPath, candidate)) {
+        else if (e.isSymbolicLink() && realWithinProject(projectPath, candidate, true)) {
             abs.push(candidate);
         }
     }
-    return abs.map((a) => toPosixPath(relative(projectPath, a))).sort();
+    const relPaths = abs.map((a) => toPosixPath(relative(projectPath, a))).sort();
+    if (exclusions === null)
+        return relPaths;
+    return relPaths.filter((p) => !exclusions.ignores(p));
 }
-/** Whether `candidate` (already known to exist) resolves — following any symlink — to a regular file inside `root`. */
-function resolvesToFileInside(root, candidate) {
+/**
+ * Whether `candidate` (already known to exist) resolves — following any
+ * symlink on its own path or at its end — to something inside `root`.
+ * `requireFile` additionally requires the resolved target to be a regular
+ * file (for a workflow FILE candidate); false for a directory candidate
+ * (`.github/workflows` itself), which only needs to resolve inside the
+ * project, not be any particular type.
+ */
+function realWithinProject(root, candidate, requireFile) {
     let real;
     try {
         real = realpathSync.native(candidate);
     }
     catch {
-        return false; // broken link
+        return false; // does not exist, or a broken link
     }
-    try {
-        if (!statSync(real).isFile())
+    if (requireFile) {
+        try {
+            if (!statSync(real).isFile())
+                return false;
+        }
+        catch {
             return false;
-    }
-    catch {
-        return false;
+        }
     }
     let realRoot;
     try {
@@ -265,7 +297,7 @@ registerToolModule(makeScanTool({
             });
             absorbOutcome(result.outcome);
         }
-        const workflowFiles = listWorkflowFiles(ctx.projectPath);
+        const workflowFiles = listWorkflowFiles(ctx.projectPath, ctx.exclusions);
         if (workflowFiles.length === 0) {
             // Explicit, never silently absent — mirrors scan_containers' own
             // `trivy`/`no_dockerfile_or_image` entry for "nothing to scan".

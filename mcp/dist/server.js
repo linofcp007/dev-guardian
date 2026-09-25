@@ -44893,8 +44893,9 @@ function stripDotSlash(p) {
 // src/tools/scanIac.ts
 var WORKFLOWS_DIR = ".github/workflows";
 var WORKFLOW_EXTENSIONS = [".yml", ".yaml"];
-function listWorkflowFiles(projectPath) {
+function listWorkflowFiles(projectPath, exclusions) {
   const dir = join25(projectPath, WORKFLOWS_DIR);
+  if (!realWithinProject(projectPath, dir, false)) return [];
   let entries2;
   try {
     entries2 = readdirSync11(dir, { withFileTypes: true });
@@ -44907,23 +44908,27 @@ function listWorkflowFiles(projectPath) {
     const candidate = join25(dir, e.name);
     if (e.isFile()) {
       abs.push(candidate);
-    } else if (e.isSymbolicLink() && resolvesToFileInside(projectPath, candidate)) {
+    } else if (e.isSymbolicLink() && realWithinProject(projectPath, candidate, true)) {
       abs.push(candidate);
     }
   }
-  return abs.map((a2) => toPosixPath(relative10(projectPath, a2))).sort();
+  const relPaths = abs.map((a2) => toPosixPath(relative10(projectPath, a2))).sort();
+  if (exclusions === null) return relPaths;
+  return relPaths.filter((p) => !exclusions.ignores(p));
 }
-function resolvesToFileInside(root, candidate) {
+function realWithinProject(root, candidate, requireFile) {
   let real;
   try {
     real = realpathSync4.native(candidate);
   } catch {
     return false;
   }
-  try {
-    if (!statSync8(real).isFile()) return false;
-  } catch {
-    return false;
+  if (requireFile) {
+    try {
+      if (!statSync8(real).isFile()) return false;
+    } catch {
+      return false;
+    }
   }
   let realRoot;
   try {
@@ -45014,7 +45019,7 @@ registerToolModule(
         });
         absorbOutcome(result.outcome);
       }
-      const workflowFiles = listWorkflowFiles(ctx.projectPath);
+      const workflowFiles = listWorkflowFiles(ctx.projectPath, ctx.exclusions);
       if (workflowFiles.length === 0) {
         tools_run.push({ name: "zizmor", status: "skipped", reason: "no_workflows" });
         tools_run.push({ name: "actionlint", status: "skipped", reason: "no_workflows" });

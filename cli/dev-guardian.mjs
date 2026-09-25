@@ -35,8 +35,11 @@
  *                           binaries pinned by version and a sha256
  *                           verified against the tool's own GitHub release.
  *                             --project <path>   default: cwd
+ *                             --branch <name>     GitHub push trigger branch, default main
  *                             --write             write the file (default: preview to stdout)
  *                             --force             overwrite an existing pipeline file (with --write)
+ *                             Needs network + git: resolves the release tag to its
+ *                             commit SHA and pins that, not just the tag.
  *                             Exit codes: 0 done, 1 missing/unknown target or
  *                             refused overwrite, 3 usage error
  *   status                  One-screen terminal summary of the latest scan
@@ -93,7 +96,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 
 import { ALL_HOSTS } from '../mcp/dist/hostsetup/hostSpecs.js';
 import { previewMcpConfig, setupHost } from '../mcp/dist/hostsetup/setup.js';
@@ -264,20 +267,36 @@ baseline update — regenerate .guardian/baseline.json from the current scan
 
 ci-init <github|gitlab|bitbucket> — generate a CI pipeline for the project being scanned
   --project <path>     Target project directory (default: current directory)
+  --branch <name>       Branch the GitHub template triggers on push for (default: main);
+                        no effect on gitlab/bitbucket, which trigger on the repo's own
+                        default branch without naming one
   --write               Write the pipeline file (default: preview to stdout)
   --force               With --write, overwrite an existing pipeline file
                         (without it, an existing file is left untouched)
   Writes: github -> .github/workflows/dev-guardian.yml
           gitlab -> .gitlab-ci.yml
           bitbucket -> bitbucket-pipelines.yml
-  The generated pipeline clones dev-guardian itself at a pinned release tag,
-  installs the scanner binaries \`dev-guardian scan\` drives (Trivy, gitleaks,
-  actionlint pinned by version + sha256; semgrep/zizmor pinned by exact
-  version via pipx), then runs \`dev-guardian scan\` gated against the
-  COMMITTED baseline — run \`dev-guardian baseline update\` once locally and
-  commit .guardian/baseline.json before relying on the generated gate.
+  Needs a \`git\` binary: resolves dev-guardian's release tag to its exact
+  commit SHA (from this checkout's own tags when present — no network
+  needed then — else over the network via \`git ls-remote\`) and bakes that
+  SHA into the pipeline, which verifies it again with \`git rev-parse HEAD\`
+  after cloning — a moving tag is a supply-chain risk (see the module's own
+  doc comment); the resolved commit cannot move.
+  The generated pipeline clones dev-guardian itself (outside the checkout
+  being scanned — never into it, which would make the scan audit
+  dev-guardian's own source as part of the target project) at that pinned
+  commit, installs the scanner binaries \`dev-guardian scan\` drives (Trivy,
+  gitleaks, actionlint pinned by version + sha256 + archive layout; bandit
+  and semgrep/zizmor pinned by exact version via pipx), then runs
+  \`dev-guardian scan\` gated against the COMMITTED baseline — run
+  \`dev-guardian baseline update\` once locally and commit
+  .guardian/baseline.json before relying on the generated gate. A .NET
+  project needs the .NET SDK too: installed via actions/setup-dotnet on the
+  github target; gitlab/bitbucket document the requirement instead of
+  installing it (see each template's own header comment).
   NEVER generates a pipeline for dev-guardian's own repository — only for
-  the project passed via --project (default: current directory).
+  the project passed via --project (default: current directory), and
+  never through a symlink that escapes it either way (read or write).
   Exit codes: 0 preview/write completed, 1 missing/unknown target or an
               existing pipeline file refused without --force, 3 usage or
               configuration error (same convention as scan/baseline update).
@@ -1257,16 +1276,28 @@ async function cmdBaseline(argv) {
 //
 // `dev-guardian ci-init <github|gitlab|bitbucket>` writes a CI pipeline for
 // the project being scanned — NEVER for this repo, which has none of its
-// own (Global Constraint 7). Deliberately kept free of `node:sqlite`: it
-// renders a static template with values read from two JSON files
+// own (Global Constraint 7). Kept free of `node:sqlite`: it renders a
+// static template with values read from two JSON files
 // (.claude-plugin/plugin.json, configs/ci/pinned.json) and writes a file —
 // no scan runs, so there is nothing here that needs `loadCiModules()`/
 // `loadDashboardModules()`'s lazy-import dance at all, and `ci-init` works
-// on any supported Node version, not just >= 22.13.
+// on any supported Node version, not just >= 22.13. It DOES need a `git`
+// binary now (fix round 1, "pin the one component that runs everything"):
+// it resolves the release tag to its exact commit SHA at generation time —
+// from THIS checkout's own tags when it has the tag (no network at all,
+// the common case), else over the network via `git ls-remote` — and bakes
+// that SHA into the template, which then verifies it with `git rev-parse
+// HEAD` in the pipeline itself, after cloning by tag — the tag is a moving
+// pointer an attacker who compromised the release process (or force-pushed
+// over it) could repoint after this file was generated; the resolved commit cannot
+// move without changing its own hash. Same reasoning Trivy's own
+// GHSA-69fq-xp46-6x23 lesson already lives in this codebase for
+// (`installCatalog.ts`'s `TRIVY_INSTALL_TAG` comment).
 
 const CONFIGS_CI_DIR = resolve(ROOT, 'configs', 'ci');
 const PINNED_PATH = resolve(CONFIGS_CI_DIR, 'pinned.json');
 const PLUGIN_JSON_PATH = resolve(ROOT, '.claude-plugin', 'plugin.json');
+const DEFAULT_CI_BRANCH = 'main';
 
 /**
  * One entry per `ci-init` target: which template under `configs/ci/` to
@@ -1281,7 +1312,7 @@ const CI_TARGETS = {
 };
 
 function parseCiInitArgs(argv) {
-  const out = { _: [], project: process.cwd(), write: false, force: false };
+  const out = { _: [], project: process.cwd(), write: false, force: false, branch: DEFAULT_CI_BRANCH };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--write') out.write = true;
@@ -1292,7 +1323,16 @@ function parseCiInitArgs(argv) {
       out.project = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else if (a.startsWith('--')) return { error: `Unknown flag: ${a}` };
+    else if (a === '--branch') {
+      const r = takeOperand(argv, i, a, true); // requireNonEmpty — an empty branch name is never meaningful
+      if (r.error) return { error: r.error };
+      out.branch = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--branch=')) {
+      const value = a.slice('--branch='.length);
+      if (value.length === 0) return { error: '--branch requires a value' };
+      out.branch = value;
+    } else if (a.startsWith('--')) return { error: `Unknown flag: ${a}` };
     else out._.push(a);
   }
   return { value: out };
@@ -1378,8 +1418,90 @@ function placeholdersFromSection(pinned, sectionName, fieldSuffix) {
   return out;
 }
 
+/** A plain git ref/branch name: no whitespace, none of the characters YAML flow syntax or a shell would read specially. */
+const BRANCH_NAME_SHAPE = /^[A-Za-z0-9._/-]+$/;
+/** A full, lower-hex, 40-character commit SHA. */
+const COMMIT_SHA_SHAPE = /^[0-9a-f]{40}$/;
+
+/**
+ * Resolves `tag` on `repoUrl` to the commit it actually names — tried
+ * locally first (`resolveTagLocally`, no network at all, the common case),
+ * falling back to the network only when the local checkout cannot answer
+ * (`resolveTagRemotely`). Returns null when NEITHER can — no `git` at all,
+ * offline with no local tag either, or an unknown tag — never throws.
+ */
+function resolveDevGuardianCommitSha(repoUrl, tag) {
+  return resolveTagLocally(tag) ?? resolveTagRemotely(repoUrl, tag);
+}
+
+/**
+ * `tag` resolved from THIS CLI's own checkout (`ROOT`) — no network at all.
+ * `ci-init` normally runs from inside a clone of dev-guardian itself, and
+ * that clone's own refs already carry the answer whenever it is a full,
+ * unmodified clone/fetch — confirmed directly against this repo's own
+ * checkout. `^{commit}` peels either tag shape (lightweight or annotated)
+ * down to the commit in one call, so there is no separate-line parsing to
+ * get wrong the way a raw `ls-remote` listing needs (see
+ * `resolveTagRemotely`). Null when `ROOT` is not a git repo, or does not
+ * have this tag (a shallow or tag-less install) — `resolveDevGuardianCommitSha`
+ * falls back to the network in either case, never assumes offline means
+ * "unknown".
+ */
+function resolveTagLocally(tag) {
+  try {
+    const sha = execFileSync(
+      'git',
+      ['-C', ROOT, 'rev-parse', '--verify', `refs/tags/${tag}^{commit}`],
+      { encoding: 'utf8', timeout: 10_000, windowsHide: true },
+    ).trim();
+    return COMMIT_SHA_SHAPE.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `tag` on `repoUrl`, resolved over the network via `git ls-remote --tags`
+ * — the fallback when `resolveTagLocally` cannot answer. Deliberately NOT
+ * `git ls-remote --tags <url> <tag>` (a single-ref query): dev-guardian's
+ * own release tags are ANNOTATED — confirmed directly (`git ls-remote
+ * --tags` against the real repo lists TWO lines per tag) — and a
+ * single-ref query returns only the tag OBJECT's own SHA, not the commit
+ * it points at and `git checkout`/`git clone --branch` actually resolves
+ * to; verified they differ for this project's own v2.0.0 tag. The full
+ * listing includes a second, `^{}`-suffixed line for an annotated tag's
+ * dereferenced commit; this prefers that line when present and falls back
+ * to the plain one only for a lightweight tag (no such line at all).
+ * Returns null on any failure — no network, no `git`, unknown tag, or an
+ * answer not shaped like a commit SHA — never throws.
+ */
+function resolveTagRemotely(repoUrl, tag) {
+  let out;
+  try {
+    out = execFileSync('git', ['ls-remote', '--tags', repoUrl], {
+      encoding: 'utf8',
+      timeout: 20_000,
+      windowsHide: true,
+    });
+  } catch {
+    return null;
+  }
+  let plain;
+  let peeled;
+  for (const line of out.split('\n')) {
+    const tab = line.indexOf('\t');
+    if (tab < 0) continue;
+    const sha = line.slice(0, tab).trim();
+    const ref = line.slice(tab + 1).trim();
+    if (ref === `refs/tags/${tag}`) plain = sha;
+    else if (ref === `refs/tags/${tag}^{}`) peeled = sha;
+  }
+  const sha = peeled ?? plain;
+  return sha !== undefined && COMMIT_SHA_SHAPE.test(sha) ? sha : null;
+}
+
 /** Builds the placeholder table every `configs/ci/*.yml` template draws from — see `renderCiTemplate`. */
-function ciTemplateVars(plugin, pinned) {
+function ciTemplateVars(plugin, pinned, branch) {
   if (typeof plugin !== 'object' || plugin === null || Array.isArray(plugin)) {
     return usageError(`ci-init: ${PLUGIN_JSON_PATH} does not contain a JSON object`);
   }
@@ -1399,6 +1521,19 @@ function ciTemplateVars(plugin, pinned) {
         'release version — refusing to render a `git clone --branch` target this loosely shaped.',
     );
   }
+  if (!BRANCH_NAME_SHAPE.test(branch)) {
+    return usageError(`ci-init: --branch ${JSON.stringify(branch)} is not a plain branch name`);
+  }
+  const sha = resolveDevGuardianCommitSha(repo, tag);
+  if (sha === null) {
+    return usageError(
+      `ci-init: could not resolve ${tag} to a commit SHA — neither this checkout's own tags nor ` +
+        `\`git ls-remote --tags ${repo}\` had an answer. ci-init needs a \`git\` binary (found on PATH?) ` +
+        'and, unless this checkout already has the tag, network access — it pins the exact commit the ' +
+        'generated pipeline verifies against, not just the tag name (a moving tag is a supply-chain risk; ' +
+        'see the module doc comment).',
+    );
+  }
   let actionVars;
   let scannerVars;
   try {
@@ -1415,6 +1550,8 @@ function ciTemplateVars(plugin, pinned) {
   return {
     DEV_GUARDIAN_REPO: repo,
     DEV_GUARDIAN_TAG: tag,
+    DEV_GUARDIAN_SHA: sha,
+    DEFAULT_BRANCH: branch,
     ...actionVars,
     ...scannerVars,
   };
@@ -1449,6 +1586,42 @@ function isDevGuardianOwnRepo(projectPath) {
   }
 }
 
+function safeRealpath(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The first ALREADY-EXISTING ancestor directory of `outPath`, between
+ * `projectPath` and `outPath`'s own parent, that resolves outside
+ * `projectPath` — or null when every existing one stays inside (an
+ * ancestor that does not exist yet is not checked: `mkdirSync` creates it
+ * fresh, with nothing to escape through). Github's nested output
+ * (`.github/workflows/dev-guardian.yml`) is the case this matters for: a
+ * `.github` that is already a symlink pointing outside the project would
+ * otherwise have `mkdirSync(..., { recursive: true })` silently create
+ * `workflows/` THROUGH it, and the write would land outside the project
+ * entirely. gitlab/bitbucket's flat, root-level output paths have no
+ * intermediate ancestor to check at all.
+ */
+function firstEscapingAncestor(projectPath, outPath) {
+  const rootReal = safeRealpath(projectPath) ?? resolve(projectPath);
+  const segments = relative(projectPath, outPath).split(sep).filter((s) => s.length > 0);
+  let current = projectPath;
+  for (let i = 0; i < segments.length - 1; i++) {
+    current = join(current, segments[i]);
+    if (!existsSync(current)) continue;
+    const real = safeRealpath(current);
+    if (real === null) continue;
+    const rel = relative(rootReal, real);
+    if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return current;
+  }
+  return null;
+}
+
 function cmdCiInit(argv) {
   const parsed = parseCiInitArgs(argv);
   if (parsed.error) return usageError(parsed.error);
@@ -1476,7 +1649,7 @@ function cmdCiInit(argv) {
 
   const plugin = readJsonOrExit(PLUGIN_JSON_PATH, 'dev-guardian plugin.json');
   const pinned = readJsonOrExit(PINNED_PATH, 'configs/ci/pinned.json');
-  const vars = ciTemplateVars(plugin, pinned);
+  const vars = ciTemplateVars(plugin, pinned, args.branch);
 
   const templatePath = resolve(CONFIGS_CI_DIR, target.templateFile);
   if (!existsSync(templatePath)) {
@@ -1494,16 +1667,34 @@ function cmdCiInit(argv) {
     return;
   }
 
-  if (existsSync(outPath) && !args.force) {
-    process.stderr.write(
-      `ci-init: refusing to overwrite existing pipeline file: ${outPath}\n` +
-        `Re-run with --force to overwrite it, or remove it first.\n`,
+  // Never follow a symlinked ancestor (e.g. a `.github` that is itself a
+  // symlink) out of the project — same containment rule `scanIac.ts`
+  // applies on the READ side to a symlinked `.github/workflows`, applied
+  // here on the WRITE side before anything is created.
+  const escapee = firstEscapingAncestor(projectPath, outPath);
+  if (escapee !== null) {
+    return usageError(
+      `ci-init: refusing to write through ${escapee} — it exists and resolves outside the project ` +
+        `(${projectPath}). Remove or fix that path first.`,
     );
-    process.exit(1);
   }
-
   mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, rendered, 'utf8');
+
+  // `wx`: atomically fail with EEXIST if the path already exists (including
+  // a symlink, dangling or not) — no separate `existsSync` check first,
+  // which would leave a TOCTOU window between the check and the write.
+  try {
+    writeFileSync(outPath, rendered, { encoding: 'utf8', flag: args.force ? 'w' : 'wx' });
+  } catch (e) {
+    if (e instanceof Error && 'code' in e && e.code === 'EEXIST') {
+      process.stderr.write(
+        `ci-init: refusing to overwrite existing pipeline file: ${outPath}\n` +
+          `Re-run with --force to overwrite it, or remove it first.\n`,
+      );
+      process.exit(1);
+    }
+    throw e;
+  }
   process.stdout.write(`Wrote ${targetArg} pipeline to ${outPath}\n`);
   if (targetArg === 'github') {
     process.stdout.write(

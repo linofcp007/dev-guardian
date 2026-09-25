@@ -61,7 +61,7 @@ const SHA256 = /^[0-9a-f]{64}$/;
 describe('configs/ci/pinned.json: actions', () => {
   const pinned = readPinned();
 
-  it.each(['checkout', 'setup_node', 'upload_sarif'])('%s is pinned by a full 40-hex commit SHA, never a floating tag', (key) => {
+  it.each(['checkout', 'setup_node', 'upload_sarif', 'setup_dotnet'])('%s is pinned by a full 40-hex commit SHA, never a floating tag', (key) => {
     expect(pinned.actions[key]?.sha).toMatch(FULL_SHA);
     expect(pinned.actions[key]?.version).toMatch(/^v\d+\.\d+\.\d+$/);
   });
@@ -92,7 +92,7 @@ describe('configs/ci/pinned.json: scanners with a downloaded binary', () => {
 describe('configs/ci/pinned.json: pip-distributed scanners', () => {
   const pinned = readPinned();
 
-  it.each(['semgrep', 'zizmor'])('%s is pinned by exact version, no downloaded binary', (key) => {
+  it.each(['bandit', 'semgrep', 'zizmor'])('%s is pinned by exact version, no downloaded binary', (key) => {
     expect(pinned.scanners[key]?.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(pinned.scanners[key]?.linux_amd64_url).toBeUndefined();
     expect(pinned.scanners[key]?.linux_amd64_sha256).toBeUndefined();

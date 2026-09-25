@@ -2,9 +2,13 @@
  * zizmor `--format json` (v1) output parser.
  *
  * A flat array of findings (confirmed against zizmorcore/zizmor's own
- * `crates/zizmor/src/output/json/v1.rs` and the worked example in
- * `docs/usage.md`, and against a real fixture, both reproduced in
- * `test/fixtures/scanIac/`):
+ * `crates/zizmor/src/output/json/v1.rs`, the worked example in
+ * `docs/usage.md`, and a real fixture from the project's own e2e snapshot
+ * test suite — `crates/zizmor/tests/integration/e2e/snapshots/
+ * integration__e2e__json_v1__json_v1.snap` — all three reproduced as inline
+ * fixtures in `test/unit/runners/scannerParsers/zizmor.test.ts` and
+ * `test/integration/scanIacWorkflows.test.ts`; there is no separate
+ * `test/fixtures/scanIac/` directory):
  *
  *   {
  *     ident, desc, url,

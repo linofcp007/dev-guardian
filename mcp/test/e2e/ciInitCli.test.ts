@@ -10,16 +10,19 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { afterEach, describe, expect, it } from 'vitest';
+import { isInstalled } from '../helpers/toolchain.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 const TIMEOUT_MS = 15_000;
+const ACTIONLINT_INSTALLED = await isInstalled('actionlint');
+const ZIZMOR_INSTALLED = await isInstalled('zizmor');
 
 const tempDirs: string[] = [];
 function makeProject(): string {
@@ -224,5 +227,189 @@ describe('ci-init: snapshot of the rendered templates', () => {
     // never stable across runs/machines) before snapshotting.
     const body = r.stdout.split('\n').slice(2).join('\n');
     expect(body).toMatchSnapshot();
+  });
+});
+
+/** The rendered pipeline body, banner and trailer stripped, as the real YAML document a host would read. */
+function renderedBody(project: string, target: string): string {
+  const r = runCli(['ci-init', target, '--project', project]);
+  expect(r.status, r.stderr).toBe(0);
+  return r.stdout.split('\n').slice(2, -2).join('\n');
+}
+
+describe('ci-init fix round 1: the GitHub template is accepted by real actionlint/zizmor (skip when not installed)', () => {
+  // Regression: the workflow-level `env: DEV_GUARDIAN_HOME: ${{ runner.temp }}/…`
+  // this template used to have is rejected outright by GitHub itself —
+  // "context 'runner' is not allowed here" — actionlint catches the exact
+  // same defect. Fixed by moving it into a step that appends to
+  // $GITHUB_ENV instead of a workflow/job-level `env:` block.
+  it('no `runner.` context expression appears in the workflow-level env: block (static, no tool needed)', () => {
+    const project = makeProject();
+    const body = renderedBody(project, 'github');
+    const doc = parseYaml(body) as { env?: unknown; jobs?: Record<string, { env?: unknown }> };
+    if (doc.env !== undefined) {
+      expect(JSON.stringify(doc.env)).not.toMatch(/runner\./);
+    }
+    for (const job of Object.values(doc.jobs ?? {})) {
+      if (job.env !== undefined) expect(JSON.stringify(job.env)).not.toMatch(/runner\./);
+    }
+  });
+
+  it.skipIf(!ACTIONLINT_INSTALLED)('actionlint accepts the rendered GitHub template with zero errors', () => {
+    const project = makeProject();
+    const r = runCli(['ci-init', 'github', '--project', project, '--write']);
+    expect(r.status).toBe(0);
+    const workflowPath = join(project, '.github', 'workflows', 'dev-guardian.yml');
+    const result = spawnSync('actionlint', [workflowPath], { encoding: 'utf8' });
+    expect(result.status, `actionlint stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
+  });
+
+  it.skipIf(!ZIZMOR_INSTALLED)('zizmor accepts the rendered GitHub template with zero findings', () => {
+    const project = makeProject();
+    const r = runCli(['ci-init', 'github', '--project', project, '--write']);
+    expect(r.status).toBe(0);
+    const workflowPath = join(project, '.github', 'workflows', 'dev-guardian.yml');
+    const result = spawnSync('zizmor', ['--format=json', workflowPath], { encoding: 'utf8' });
+    const findings: unknown = JSON.parse(result.stdout.trim().length > 0 ? result.stdout : '[]');
+    expect(findings, `zizmor findings:\n${JSON.stringify(findings, null, 2)}`).toEqual([]);
+  });
+});
+
+describe('ci-init fix round 1: scanner installs never write into the scanned checkout', () => {
+  // Regression: every template used to curl/tar straight into the CURRENT
+  // DIRECTORY (the checkout, since every step here runs with it as cwd) —
+  // leaving untracked trivy/trivy.tar.gz (~50 MB)/gitleaks/actionlint
+  // files there. gitleaks' own working-tree pass then saw those as
+  // untracked files well over its size limit, which is a gap
+  // (missing_tools), which drops `dev-guardian scan`'s own coverage below
+  // `full` and exits 2 on EVERY run, on any project, regardless of the
+  // project's own content.
+  it.each(['github', 'gitlab', 'bitbucket'] as const)('%s: curl/tar/install all target a scratch directory, never a bare relative filename', (target) => {
+    const project = makeProject();
+    const body = renderedBody(project, target);
+    expect(body).not.toMatch(/-o\s+"\$name\.tar\.gz"/);
+    expect(body).not.toMatch(/tar -xzf\s+"\$name\.tar\.gz"\s+"\$member"/);
+    expect(body).not.toMatch(/install -m 0755\s+"\$member"/);
+    expect(body).toMatch(/dir="(\$RUNNER_TEMP\/dev-guardian-scanners|\/tmp\/dev-guardian-scanners)"/);
+    expect(body).toMatch(/-o "\$dir\/\$name\.tar\.gz"/);
+    expect(body).toMatch(/tar -xzf "\$dir\/\$name\.tar\.gz" -C "\$dir" "\$member"/);
+    expect(body).toMatch(/install -m 0755 "\$dir\/\$member"/);
+  });
+});
+
+describe('ci-init fix round 1: full-history clone (gitleaks needs commit history, not a shallow grafted boundary)', () => {
+  it('github: actions/checkout sets fetch-depth: 0', () => {
+    const project = makeProject();
+    const doc = parseYaml(renderedBody(project, 'github')) as {
+      jobs: Record<string, { steps: Array<{ uses?: string; with?: Record<string, unknown> }> }>;
+    };
+    const checkout = Object.values(doc.jobs)
+      .flatMap((j) => j.steps)
+      .find((s) => s.uses?.startsWith('actions/checkout@'));
+    expect(checkout?.with?.['fetch-depth']).toBe(0);
+    expect(checkout?.with?.['persist-credentials']).toBe(false);
+  });
+
+  it('gitlab: GIT_DEPTH is "0"', () => {
+    const project = makeProject();
+    const doc = parseYaml(renderedBody(project, 'gitlab')) as {
+      ['dev-guardian']: { variables: Record<string, unknown> };
+    };
+    expect(doc['dev-guardian'].variables['GIT_DEPTH']).toBe('0');
+  });
+
+  it('bitbucket: clone.depth is "full" at the top level', () => {
+    const project = makeProject();
+    const doc = parseYaml(renderedBody(project, 'bitbucket')) as { clone: { depth: unknown } };
+    expect(doc.clone.depth).toBe('full');
+  });
+});
+
+describe('ci-init fix round 1: bandit always installed; .NET SDK conditional (github) or documented (gitlab/bitbucket)', () => {
+  it.each(['github', 'gitlab', 'bitbucket'] as const)('%s: bandit[toml] is pipx-installed unconditionally', (target) => {
+    const project = makeProject();
+    const body = renderedBody(project, target);
+    expect(body).toMatch(/pipx install "bandit\[toml\]==\d+\.\d+\.\d+"/);
+  });
+
+  it('github: .NET SDK setup is present, gated on a root .csproj/.fsproj/.sln/.slnx probe', () => {
+    const project = makeProject();
+    const doc = parseYaml(renderedBody(project, 'github')) as {
+      jobs: Record<string, { steps: Array<{ uses?: string; if?: string; run?: string; id?: string }> }>;
+    };
+    const steps = Object.values(doc.jobs).flatMap((j) => j.steps);
+    const probe = steps.find((s) => s.id === 'dotnet_probe');
+    expect(probe?.run).toMatch(/\*\.csproj \*\.fsproj \*\.sln \*\.slnx/);
+    const setup = steps.find((s) => s.uses?.startsWith('actions/setup-dotnet@'));
+    expect(setup?.if).toBe("steps.dotnet_probe.outputs.found == 'true'");
+  });
+
+  it.each(['gitlab', 'bitbucket'] as const)('%s: documents the .NET SDK requirement instead of installing it', (target) => {
+    const project = makeProject();
+    const body = renderedBody(project, target);
+    expect(body.toLowerCase()).toMatch(/\.net sdk/);
+    expect(body).toContain('dotnet-sdk');
+    // Header prose wraps across comment lines, so this checks the two
+    // words are both present near each other rather than requiring an
+    // exact "named gap" substring the YAML line-wrap would break.
+    expect(body).toMatch(/named\s*\n?#?\s*gap/);
+    expect(body).toContain('exit 2');
+  });
+});
+
+describe('ci-init fix round 1: --branch controls the GitHub push trigger (default main)', () => {
+  it('defaults to main', () => {
+    const project = makeProject();
+    const doc = parseYaml(renderedBody(project, 'github')) as { on: { push: { branches: string[] } } };
+    expect(doc.on.push.branches).toEqual(['main']);
+  });
+
+  it('--branch overrides it', () => {
+    const project = makeProject();
+    const r = runCli(['ci-init', 'github', '--project', project, '--branch', 'release']);
+    expect(r.status).toBe(0);
+    const body = r.stdout.split('\n').slice(2, -2).join('\n');
+    const doc = parseYaml(body) as { on: { push: { branches: string[] } } };
+    expect(doc.on.push.branches).toEqual(['release']);
+  });
+
+  it('refuses a --branch value shaped like a shell/YAML injection attempt', () => {
+    const project = makeProject();
+    const r = runCli(['ci-init', 'github', '--project', project, '--branch', 'main"; rm -rf /']);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/--branch/);
+  });
+});
+
+describe('ci-init fix round 1: the dev-guardian clone is verified against its resolved commit SHA', () => {
+  it.each(['github', 'gitlab', 'bitbucket'] as const)('%s: clones by tag, then verifies git rev-parse HEAD against the resolved SHA', (target) => {
+    const project = makeProject();
+    const body = renderedBody(project, target);
+    const plugin = JSON.parse(readFileSync(resolve(REPO_ROOT, '.claude-plugin', 'plugin.json'), 'utf8')) as {
+      version: string;
+    };
+    expect(body).toMatch(/rev-parse HEAD/);
+    // The expected SHA is a real, resolved 40-hex commit, not a placeholder or the tag itself.
+    const shaMatch = /expected ([0-9a-f]{40})/.exec(body);
+    expect(shaMatch, body).not.toBeNull();
+    expect(body).toContain(`clone at v${plugin.version}`);
+  });
+});
+
+describe('ci-init fix round 1: a symlinked .github escaping the project is refused on write, never followed', () => {
+  it('refuses to write through a `.github` that is a symlink pointing outside the project', (t) => {
+    const project = makeProject();
+    const outside = mkdtempSync(join(tmpdir(), 'guardian-ci-init-outside-'));
+    tempDirs.push(outside);
+    try {
+      symlinkSync(outside, join(project, '.github'), 'dir');
+    } catch {
+      t.skip(); // no symlink privilege on this host
+      return;
+    }
+    const r = runCli(['ci-init', 'github', '--project', project, '--write']);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/resolves outside the project/);
+    expect(existsSync(join(outside, 'workflows'))).toBe(false);
   });
 });

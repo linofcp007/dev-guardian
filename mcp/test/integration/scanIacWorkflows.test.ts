@@ -337,4 +337,63 @@ describe('scan_iac: workflow scanners gated on .github/workflows', () => {
     // Nothing project-local to scan — the link resolves outside the project.
     expect(r.tools_run.find((t2) => t2.name === 'actionlint')).toMatchObject({ status: 'skipped', reason: 'no_workflows' });
   });
+
+  it('a symlinked `.github/workflows` DIRECTORY (not just a file inside it) pointing outside the project is excluded', async (t) => {
+    const project = makeTempDir('iac-');
+    const outside = makeTempDir('iac-outside-');
+    mkdirSync(join(project, '.github'), { recursive: true });
+    mkdirSync(join(outside, 'workflows'), { recursive: true });
+    writeFileSync(join(outside, 'workflows', 'external.yml'), 'on: push\njobs: {}\n', 'utf8');
+    try {
+      symlinkSync(join(outside, 'workflows'), join(project, '.github', 'workflows'), 'dir');
+    } catch {
+      t.skip(); // no symlink privilege on this host
+      return;
+    }
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'actionlint' ? '/fake/bin/actionlint' : null));
+    const r = (await tool().handler({ project_path: project }, plugin(project))) as ToolsRunResult;
+    expect(r.ok).toBe(true);
+    // readdirSync would otherwise happily follow the symlink and list
+    // "external.yml" as if it were a project file — the directory itself
+    // must be containment-checked before it is ever read.
+    expect(r.tools_run.find((t2) => t2.name === 'actionlint')).toMatchObject({ status: 'skipped', reason: 'no_workflows' });
+    expect(vi.mocked(runProcess)).not.toHaveBeenCalled();
+  });
+});
+
+describe('scan_iac: .guardianignore', () => {
+  it('a workflow file matched by .guardianignore is excluded from the scan (never passed to either scanner)', async () => {
+    const project = makeTempDir('iac-');
+    writeWorkflow(project);
+    writeFileSync(join(project, '.github', 'workflows', 'legacy.yml'), 'on: push\njobs: {}\n', 'utf8');
+    writeFileSync(join(project, '.guardianignore'), '.github/workflows/legacy.yml\n', 'utf8');
+    vi.mocked(scannerAvailable).mockImplementation(async (name) =>
+      name === 'zizmor' || name === 'actionlint' ? `/fake/bin/${name}` : null,
+    );
+    const r = (await tool().handler({ project_path: project }, plugin(project))) as ToolsRunResult;
+    expect(r.ok).toBe(true);
+    expect(r.tools_run.find((t) => t.name === 'zizmor')?.status).toBe('ok');
+    const zizmorCall = vi.mocked(runProcess).mock.calls.find((c) => c[0].command === 'zizmor');
+    const actionlintCall = vi.mocked(runProcess).mock.calls.find((c) => c[0].command === 'actionlint');
+    expect(zizmorCall?.[0].args).toContain('.github/workflows/ci.yml');
+    expect(zizmorCall?.[0].args).not.toContain('.github/workflows/legacy.yml');
+    expect(actionlintCall?.[0].args).toContain('.github/workflows/ci.yml');
+    expect(actionlintCall?.[0].args).not.toContain('.github/workflows/legacy.yml');
+  });
+
+  it('.guardianignore excluding the WHOLE workflows directory reads skipped/no_workflows, not just an empty result', async () => {
+    const project = makeTempDir('iac-');
+    writeWorkflow(project);
+    writeFileSync(join(project, '.guardianignore'), '.github/workflows/\n', 'utf8');
+    vi.mocked(scannerAvailable).mockImplementation(async (name) =>
+      name === 'zizmor' || name === 'actionlint' || name === 'trivy' ? `/fake/bin/${name}` : null,
+    );
+    const r = (await tool().handler({ project_path: project }, plugin(project))) as ToolsRunResult;
+    expect(r.ok).toBe(true);
+    expect(r.tools_run.find((t) => t.name === 'zizmor')).toMatchObject({ status: 'skipped', reason: 'no_workflows' });
+    expect(r.tools_run.find((t) => t.name === 'actionlint')).toMatchObject({ status: 'skipped', reason: 'no_workflows' });
+    expect(vi.mocked(runProcess).mock.calls.some((c) => c[0].command === 'zizmor')).toBe(false);
+    expect(vi.mocked(runProcess).mock.calls.some((c) => c[0].command === 'actionlint')).toBe(false);
+    expect(r.coverage).toBe('full'); // nothing to scan, not a gap
+  });
 });
