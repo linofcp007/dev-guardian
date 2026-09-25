@@ -8,26 +8,40 @@
 
 All-in-one **100% open-source** plugin for Claude Code / Cowork. Handles security, bug detection and fixing, code quality, dependency management, observability, performance and compliance for any dev project. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), trilingual triggers (EN + PT + ES) — responds in the user's language.
 
-Under the hood it ships a Claude Code plugin (13 skills + 48 slash commands) **and** an MCP server with **56 tools and 18 resources**, with persistent SQLite state for baselines, deltas and suppressions. It also vets **third-party AI skills / MCP servers / agents before you install them** — the supply-chain check for the agent ecosystem.
+Under the hood it ships a Claude Code plugin (13 skills + 10 slash commands) **and** an MCP server with **56 tools and 18 resources**, with persistent SQLite state for baselines, deltas and suppressions. It also vets **third-party AI skills / MCP servers / agents before you install them** — the supply-chain check for the agent ecosystem.
 
-### Skills (Claude Code front-end)
+### Skills and slash commands (Claude Code front-end)
 
-| Skill                    | Slash command          | What it does                                              |
-| ------------------------ | ---------------------- | --------------------------------------------------------- |
-| `guardian`               | `/guardian`            | Main router — dispatches to the right module              |
-| `guardian-init`          | `/guardian-init`       | Initial bootstrap — installs and configures everything    |
-| `guardian-security`      | `/guardian-scan`       | SAST + secrets + CVEs + container + IaC                   |
-| `guardian-bugfix`        | `/guardian-fix`        | Hunts and fixes implementation bugs                       |
-| `guardian-quality`       | `/guardian-quality`    | Complexity, duplication, tech debt                        |
-| `guardian-review`        | `/guardian-review`     | Deep pre-PR / pre-deploy review                           |
-| `guardian-deps`          | `/guardian-deps`       | Renovate setup + CVE scan + supply chain                  |
-| `guardian-observability` | `/guardian-observe`    | Structured logging, metrics, error tracking               |
-| `guardian-performance`   | `/guardian-perf`       | Performance budgets, k6, Lighthouse                       |
-| `guardian-compliance`    | `/guardian-compliance` | GDPR, licenses, SBOM, privacy policy                      |
-| `guardian-scanskill`     | `/guardian-scanskill`  | Vet a 3rd-party skill / MCP server / agent before install |
-| `guardian-grill`         | `/guardian-grill`      | Understanding gate — grills you on the diff before merge  |
-| `guardian-improve`       | `/guardian-improve`    | Turns measured tech debt into improvement specs           |
-| (combines 3 of them)     | `/guardian-audit`      | Executive report: security + quality + deps               |
+Every skill is invocable directly as `/<skill name>`, and fires on natural language too.
+
+| Skill | What it does |
+| --- | --- |
+| `/guardian` | Main router — dispatches to the right command or skill (`/g` for short) |
+| `/guardian-security` | SAST + secrets + CVEs + container + IaC, with triage |
+| `/guardian-bugfix` | Hunts and fixes implementation bugs |
+| `/guardian-init` | Initial bootstrap — installs and configures everything |
+| `/guardian-review` | Deep pre-PR / pre-deploy review |
+| `/guardian-deps` | CVE audit, upgrade plan, post-install vetting, Renovate, licences, SBOM |
+| `/guardian-quality` | Complexity, duplication, tech debt, `.guardian/budgets.yml` |
+| `/guardian-compliance` | GDPR, licences, SBOM, audit evidence |
+| `/guardian-observability` | Structured logging, metrics, error tracking |
+| `/guardian-performance` | Lighthouse, k6, performance budgets |
+| `/guardian-grill` | Understanding gate — grills you on the diff before merge |
+| `/guardian-improve` | Turns measured tech debt into improvement specs |
+| `/guardian-scanskill` | Vet a 3rd-party skill / MCP server / agent before install |
+
+| Command | Modes | What it does |
+| --- | --- | --- |
+| `/guardian-scan` | none, `--staged`, `--uncommitted`, `--unpushed`, `--branch`, `--since`, `--incoming`, paths | Security scan of the whole project, or only what changed |
+| `/guardian-fix` | hint, fingerprint, `--pr`, `--verify` | Fix bugs, apply scanner-produced fixes as PRs, verify |
+| `/guardian-report` | `exec`, `handoff`, `trend`, `debt`, `changelog`, `soc2` | Reports from the scans and their history |
+| `/guardian-incident` | `panic`, `leak`, `rollback`, `postmortem` | Incident response |
+| `/guardian-release` | `predeploy`, `prerelease` | Go / no-go gates |
+| `/guardian-status` | — | One-screen project health |
+| `/guardian-infra` | `docker`, `iac` | Containers and infrastructure as code |
+| `/guardian-wp`, `/guardian-dotnet` | install path or URL | WordPress and C# / .NET audits |
+
+The commands retired in this consolidation map onto these — see `CHANGELOG.md`, *Unreleased*.
 
 You can also trigger everything via **natural language** (EN, PT or ES). Skills fire on descriptions — *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*, *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*.
 
@@ -256,7 +270,7 @@ node cli/dev-guardian.mjs dashboard --project .      # self-contained HTML, open
 
 `status` prints the risk score and band, open findings and CVEs by severity, both deltas (since the previous scan of the same type, since the active baseline), up to 3 finding hotspots (ranked by count, not severity), which scanners are missing and what that leaves out of the numbers, and active suppressions — one screen, no more. `dashboard` renders the identical snapshot as `.guardian/dashboard.html` — no CDN, no font fetch, no network call of any kind — with client-side filtering and column sorting; it opens automatically only when stdout is a TTY (`--no-open` suppresses that, `--out <path>` relocates the file). Neither command runs a scan, mutates the database, or opens a socket, and **both always exit `0` once they render** — including over a project full of criticals, or one that's never been scanned (`3` on a usage error only). They report; `scan` is what gates.
 
-Worth knowing before trusting what's on screen: **the page is a snapshot, not live** — it reflects the scan that had completed when you ran the command and does not update when a later scan runs, so regenerate it to see one — and the window itself is just as bounded: the latest scan plus two deltas, never a multi-week trend (`/guardian-trend` still asks for history nothing here computes). A clean screen is also only as clean as `missing_tools` says: a scanner that ran and silently produced nothing looks identical, at this layer, to one that found nothing wrong.
+Worth knowing before trusting what's on screen: **the page is a snapshot, not live** — it reflects the scan that had completed when you ran the command and does not update when a later scan runs, so regenerate it to see one — and the window itself is just as bounded: the latest scan plus two deltas, never a multi-week trend (`/guardian-report trend` reads the scan history for that). A clean screen is also only as clean as `missing_tools` says: a scanner that ran and silently produced nothing looks identical, at this layer, to one that found nothing wrong.
 
 ### Philosophy
 
@@ -281,7 +295,7 @@ dev-guardian/
 ├── .claude-plugin/
 │   ├── plugin.json              # declares the MCP server + plugin metadata
 │   └── marketplace.json
-├── commands/                    # 48 slash commands
+├── commands/                    # 10 slash commands
 ├── skills/                      # 13 skills (one per router target)
 ├── hooks/                       # hooks.json + guardian-hook.mjs (auto-active guardrails)
 ├── cli/                         # dev-guardian.mjs CLI (mcp-config, check, scan, baseline)
@@ -314,26 +328,40 @@ Carlos Pereira · prodigitalkey.com
 
 Plugin all-in-one **100% open-source** para Claude Code / Cowork. Faz segurança, deteção e correção de bugs, qualidade de código, gestão de dependências, observability, performance e compliance em qualquer projeto de desenvolvimento. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), triggers trilingues (EN + PT + ES) — responde no idioma do utilizador.
 
-Por baixo do capot fornece um plugin Claude Code (13 skills + 48 slash commands) **e** um servidor MCP com **56 tools e 18 resources**, com estado persistente em SQLite para baselines, deltas e supressões. Também faz **vet de skills / MCP servers / agentes de terceiros antes de os instalares** — a verificação de supply-chain do ecossistema de agentes.
+Por baixo do capot fornece um plugin Claude Code (13 skills + 10 slash commands) **e** um servidor MCP com **56 tools e 18 resources**, com estado persistente em SQLite para baselines, deltas e supressões. Também faz **vet de skills / MCP servers / agentes de terceiros antes de os instalares** — a verificação de supply-chain do ecossistema de agentes.
 
-### Skills (front-end Claude Code)
+### Skills e slash commands (front-end Claude Code)
 
-| Skill                    | Slash command          | O que faz                                                |
-| ------------------------ | ---------------------- | -------------------------------------------------------- |
-| `guardian`               | `/guardian`            | Router principal — encaminha para o módulo certo         |
-| `guardian-init`          | `/guardian-init`       | Bootstrap inicial — instala e configura tudo             |
-| `guardian-security`      | `/guardian-scan`       | SAST + secrets + CVEs + container + IaC                  |
-| `guardian-bugfix`        | `/guardian-fix`        | Caça e corrige bugs de implementação                     |
-| `guardian-quality`       | `/guardian-quality`    | Complexidade, duplicação, tech debt                      |
-| `guardian-review`        | `/guardian-review`     | Revisão profunda pré-PR / pré-deploy                     |
-| `guardian-deps`          | `/guardian-deps`       | Renovate setup + scan de CVEs + supply chain             |
-| `guardian-observability` | `/guardian-observe`    | Logging estruturado, métricas, error tracking            |
-| `guardian-performance`   | `/guardian-perf`       | Performance budgets, k6, Lighthouse                      |
-| `guardian-compliance`    | `/guardian-compliance` | RGPD, licenças, SBOM, privacy policy                     |
-| `guardian-scanskill`     | `/guardian-scanskill`  | Vet de skill / MCP / agente antes de instalar            |
-| `guardian-grill`         | `/guardian-grill`      | Sabatina de compreensão ao diff antes do merge           |
-| `guardian-improve`       | `/guardian-improve`    | Transforma dívida técnica medida em specs de melhoria    |
-| (combina os 3)           | `/guardian-audit`      | Relatório executivo: security + quality + deps           |
+Cada skill invoca-se diretamente como `/<nome da skill>`, e também dispara por linguagem natural.
+
+| Skill | O que faz |
+| --- | --- |
+| `/guardian` | Router principal — encaminha para o comando ou a skill certa (`/g` curto) |
+| `/guardian-security` | SAST + secrets + CVEs + container + IaC, com triagem |
+| `/guardian-bugfix` | Caça e corrige bugs de implementação |
+| `/guardian-init` | Bootstrap inicial — instala e configura tudo |
+| `/guardian-review` | Revisão profunda pré-PR / pré-deploy |
+| `/guardian-deps` | Auditoria de CVEs, plano de upgrades, vetting pós-install, Renovate, SBOM |
+| `/guardian-quality` | Complexidade, duplicação, dívida técnica, `.guardian/budgets.yml` |
+| `/guardian-compliance` | RGPD, licenças, SBOM, evidência para auditoria |
+| `/guardian-observability` | Logging estruturado, métricas, error tracking |
+| `/guardian-performance` | Lighthouse, k6, budgets de performance |
+| `/guardian-grill` | Sabatina de compreensão ao diff antes do merge |
+| `/guardian-improve` | Transforma dívida técnica medida em specs de melhoria |
+| `/guardian-scanskill` | Vet de skill / MCP / agente antes de instalar |
+
+| Comando | Modos | O que faz |
+| --- | --- | --- |
+| `/guardian-scan` | nenhum, `--staged`, `--uncommitted`, `--unpushed`, `--branch`, `--since`, `--incoming`, caminhos | Scan de segurança do projeto inteiro ou só do que mudou |
+| `/guardian-fix` | hint, fingerprint, `--pr`, `--verify` | Corrige bugs, aplica fixes dos scanners em PRs, verifica |
+| `/guardian-report` | `exec`, `handoff`, `trend`, `debt`, `changelog`, `soc2` | Relatórios a partir dos scans e do histórico |
+| `/guardian-incident` | `panic`, `leak`, `rollback`, `postmortem` | Resposta a incidentes |
+| `/guardian-release` | `predeploy`, `prerelease` | Gates de go / no-go |
+| `/guardian-status` | — | Estado do projeto num ecrã |
+| `/guardian-infra` | `docker`, `iac` | Containers e infraestrutura como código |
+| `/guardian-wp`, `/guardian-dotnet` | caminho da instalação ou URL | Auditorias WordPress e C# / .NET |
+
+Os comandos retirados nesta consolidação correspondem a estes — ver `CHANGELOG.md`, *Unreleased*.
 
 Também podes invocar tudo em **linguagem natural** (PT, EN ou ES). As skills disparam por descrição — *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*, *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*.
 
@@ -562,7 +590,7 @@ node cli/dev-guardian.mjs dashboard --project .      # HTML autocontido, abre no
 
 O `status` imprime o risk score e a banda, os findings abertos e os CVEs por severidade, os dois deltas (desde o scan anterior do mesmo tipo, desde a baseline ativa), até 3 hotspots de findings (ordenados por contagem, não por severidade), quais scanners faltam e o que isso deixa de fora dos números, e as supressões ativas — um ecrã, nada mais. O `dashboard` renderiza o mesmo snapshot como `.guardian/dashboard.html` — sem CDN, sem fetch de fontes, sem nenhuma chamada de rede — com filtragem e ordenação de colunas no client-side; abre automaticamente só quando o stdout é um TTY (`--no-open` suprime isso, `--out <path>` muda o destino do ficheiro). Nenhum dos dois comandos corre um scan, altera a base de dados ou abre um socket, e **ambos terminam sempre com exit `0` assim que renderizam** — mesmo num projeto cheio de críticos, ou nunca scaneado (`3` só num erro de uso). Eles reportam; quem faz gate é o `scan`.
 
-Vale a pena saber antes de confiar no que está no ecrã: **a página é um snapshot, não é ao vivo** — reflete o scan que tinha terminado quando correste o comando, e não atualiza quando um scan posterior corre, por isso volta a gerá-la para veres um novo — e a janela em si é igualmente limitada: o último scan mais dois deltas, nunca uma tendência de várias semanas (`/guardian-trend` continua a pedir um histórico que nada aqui calcula). Um ecrã limpo também só é tão fiável quanto o `missing_tools` que o acompanha: um scanner que correu e não produziu nada em silêncio parece, a este nível, idêntico a um que não encontrou nada de errado.
+Vale a pena saber antes de confiar no que está no ecrã: **a página é um snapshot, não é ao vivo** — reflete o scan que tinha terminado quando correste o comando, e não atualiza quando um scan posterior corre, por isso volta a gerá-la para veres um novo — e a janela em si é igualmente limitada: o último scan mais dois deltas, nunca uma tendência de várias semanas (para isso, `/guardian-report trend` lê o histórico de scans). Um ecrã limpo também só é tão fiável quanto o `missing_tools` que o acompanha: um scanner que correu e não produziu nada em silêncio parece, a este nível, idêntico a um que não encontrou nada de errado.
 
 ### Filosofia
 
@@ -587,7 +615,7 @@ dev-guardian/
 ├── .claude-plugin/
 │   ├── plugin.json              # declara o servidor MCP + metadata
 │   └── marketplace.json
-├── commands/                    # 48 slash commands
+├── commands/                    # 10 slash commands
 ├── skills/                      # 13 skills (uma por destino do router)
 ├── hooks/                       # hooks.json + guardian-hook.mjs (guardrails auto-ativos)
 ├── cli/                         # CLI dev-guardian.mjs (mcp-config, check, scan, baseline)
@@ -620,26 +648,40 @@ Carlos Pereira · prodigitalkey.com
 
 Plugin todo-en-uno **100% open-source** para Claude Code / Cowork. Cubre seguridad, detección y corrección de bugs, calidad de código, gestión de dependencias, observabilidad, rendimiento y cumplimiento para cualquier proyecto de desarrollo. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), triggers trilingües (EN + PT + ES) — responde en el idioma del usuario.
 
-Bajo el capó incluye un plugin Claude Code (13 skills + 48 slash commands) **y** un servidor MCP con **54 herramientas y 18 recursos**, con estado persistente en SQLite para baselines, deltas y supresiones. También hace **vet de skills / MCP servers / agentes de terceros antes de instalarlos** — la verificación de supply-chain del ecosistema de agentes.
+Bajo el capó incluye un plugin Claude Code (13 skills + 10 slash commands) **y** un servidor MCP con **56 herramientas y 18 recursos**, con estado persistente en SQLite para baselines, deltas y supresiones. También hace **vet de skills / MCP servers / agentes de terceros antes de instalarlos** — la verificación de supply-chain del ecosistema de agentes.
 
-### Skills (front-end de Claude Code)
+### Skills y slash commands (front-end de Claude Code)
 
-| Skill                    | Slash command          | Qué hace                                                 |
-| ------------------------ | ---------------------- | -------------------------------------------------------- |
-| `guardian`               | `/guardian`            | Router principal — dirige al módulo adecuado             |
-| `guardian-init`          | `/guardian-init`       | Bootstrap inicial — instala y configura todo             |
-| `guardian-security`      | `/guardian-scan`       | SAST + secretos + CVEs + contenedor + IaC                |
-| `guardian-bugfix`        | `/guardian-fix`        | Caza y corrige bugs de implementación                    |
-| `guardian-quality`       | `/guardian-quality`    | Complejidad, duplicación, deuda técnica                  |
-| `guardian-review`        | `/guardian-review`     | Revisión profunda pre-PR / pre-despliegue                |
-| `guardian-deps`          | `/guardian-deps`       | Setup de Renovate + escaneo de CVEs + supply chain       |
-| `guardian-observability` | `/guardian-observe`    | Logging estructurado, métricas, error tracking           |
-| `guardian-performance`   | `/guardian-perf`       | Performance budgets, k6, Lighthouse                      |
-| `guardian-compliance`    | `/guardian-compliance` | RGPD/LOPD, licencias, SBOM, política de privacidad       |
-| `guardian-scanskill`     | `/guardian-scanskill`  | Vet de skill / servidor MCP / agente antes de instalar   |
-| `guardian-grill`         | `/guardian-grill`      | Interrogatorio de comprensión del diff antes del merge   |
-| `guardian-improve`       | `/guardian-improve`    | Convierte deuda técnica medida en specs de mejora        |
-| (combina 3 de ellas)     | `/guardian-audit`      | Informe ejecutivo: seguridad + calidad + deps            |
+Cada skill se invoca directamente como `/<nombre de la skill>`, y también se dispara con lenguaje natural.
+
+| Skill | Qué hace |
+| --- | --- |
+| `/guardian` | Router principal — dirige al comando o skill adecuado (`/g` corto) |
+| `/guardian-security` | SAST + secretos + CVEs + contenedor + IaC, con triaje |
+| `/guardian-bugfix` | Caza y corrige bugs de implementación |
+| `/guardian-init` | Bootstrap inicial — instala y configura todo |
+| `/guardian-review` | Revisión profunda pre-PR / pre-despliegue |
+| `/guardian-deps` | Auditoría de CVEs, plan de upgrades, vetting post-install, Renovate, SBOM |
+| `/guardian-quality` | Complejidad, duplicación, deuda técnica, `.guardian/budgets.yml` |
+| `/guardian-compliance` | RGPD/LOPD, licencias, SBOM, evidencia para auditoría |
+| `/guardian-observability` | Logging estructurado, métricas, error tracking |
+| `/guardian-performance` | Lighthouse, k6, presupuestos de rendimiento |
+| `/guardian-grill` | Interrogatorio de comprensión del diff antes del merge |
+| `/guardian-improve` | Convierte deuda técnica medida en specs de mejora |
+| `/guardian-scanskill` | Vet de skill / servidor MCP / agente antes de instalar |
+
+| Comando | Modos | Qué hace |
+| --- | --- | --- |
+| `/guardian-scan` | ninguno, `--staged`, `--uncommitted`, `--unpushed`, `--branch`, `--since`, `--incoming`, rutas | Escaneo de seguridad del proyecto o solo de lo que cambió |
+| `/guardian-fix` | hint, fingerprint, `--pr`, `--verify` | Corrige bugs, aplica fixes de los escáneres en PRs |
+| `/guardian-report` | `exec`, `handoff`, `trend`, `debt`, `changelog`, `soc2` | Informes a partir de los escaneos y su historial |
+| `/guardian-incident` | `panic`, `leak`, `rollback`, `postmortem` | Respuesta a incidentes |
+| `/guardian-release` | `predeploy`, `prerelease` | Gates de go / no-go |
+| `/guardian-status` | — | Estado del proyecto en una pantalla |
+| `/guardian-infra` | `docker`, `iac` | Contenedores e infraestructura como código |
+| `/guardian-wp`, `/guardian-dotnet` | ruta de instalación o URL | Auditorías WordPress y C# / .NET |
+
+Los comandos retirados en esta consolidación corresponden a estos — ver `CHANGELOG.md`, *Unreleased*.
 
 También puedes invocarlo todo en **lenguaje natural** (ES, EN o PT). Las skills se disparan por descripción — *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*, *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*.
 
@@ -868,7 +910,7 @@ node cli/dev-guardian.mjs dashboard --project .      # HTML autocontenido, se ab
 
 `status` imprime la puntuación de riesgo y su banda, los findings abiertos y los CVEs por severidad, ambos deltas (desde el escaneo anterior del mismo tipo, desde la baseline activa), hasta 3 hotspots de findings (ordenados por recuento, no por severidad), qué escáneres faltan y qué deja eso fuera de los números, y las supresiones activas — una pantalla, nada más. `dashboard` renderiza el mismo snapshot como `.guardian/dashboard.html` — sin CDN, sin fetch de fuentes, sin ninguna llamada de red — con filtrado y ordenación de columnas en el cliente; se abre automáticamente solo cuando stdout es un TTY (`--no-open` lo suprime, `--out <path>` reubica el archivo). Ninguno de los dos comandos ejecuta un escaneo, modifica la base de datos ni abre un socket, y **ambos siempre terminan con exit `0` en cuanto renderizan** — incluso en un proyecto lleno de críticos, o uno nunca escaneado (`3` solo ante un error de uso). Informan; quien hace de gate es `scan`.
 
-Vale la pena saber antes de confiar en lo que hay en pantalla: **la página es un snapshot, no algo en vivo** — refleja el escaneo que había terminado cuando ejecutaste el comando, y no se actualiza cuando corre un escaneo posterior, así que vuelve a generarla para ver uno nuevo — y la ventana en sí está igual de acotada: el último escaneo más dos deltas, nunca una tendencia de varias semanas (`/guardian-trend` sigue pidiendo un historial que nada aquí calcula). Una pantalla limpia también es solo tan fiable como el `missing_tools` que la acompaña: un escáner que corrió y no produjo nada en silencio se ve, a este nivel, idéntico a uno que no encontró nada erróneo.
+Vale la pena saber antes de confiar en lo que hay en pantalla: **la página es un snapshot, no algo en vivo** — refleja el escaneo que había terminado cuando ejecutaste el comando, y no se actualiza cuando corre un escaneo posterior, así que vuelve a generarla para ver uno nuevo — y la ventana en sí está igual de acotada: el último escaneo más dos deltas, nunca una tendencia de varias semanas (para eso, `/guardian-report trend` lee el historial de escaneos). Una pantalla limpia también es solo tan fiable como el `missing_tools` que la acompaña: un escáner que corrió y no produjo nada en silencio se ve, a este nivel, idéntico a uno que no encontró nada erróneo.
 
 ### Filosofía
 
@@ -893,7 +935,7 @@ dev-guardian/
 ├── .claude-plugin/
 │   ├── plugin.json              # declara el servidor MCP + metadatos
 │   └── marketplace.json
-├── commands/                    # 48 slash commands
+├── commands/                    # 10 slash commands
 ├── skills/                      # 13 skills (una por destino del router)
 ├── hooks/                       # hooks.json + guardian-hook.mjs (guardrails auto-activos)
 ├── cli/                         # CLI dev-guardian.mjs (mcp-config, check, scan, baseline)

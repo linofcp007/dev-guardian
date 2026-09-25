@@ -336,7 +336,7 @@ async function handlePostToolUse(toolName, input, cwd, cfg, allowlist) {
     `⚠️ dev-guardian: possible secret(s) just written${where}:\n${list}\n` +
     `If real, REMOVE it now, move it to an env var / secret manager, and rotate the credential — ` +
     `it may already be in your shell history or an editor swap file. ` +
-    `Run \`/guardian-leak\` for the rotation checklist, or \`/guardian-scan\` for the authoritative gitleaks pass. ` +
+    `Run \`/guardian-incident leak\` for the rotation checklist, or \`/guardian-scan\` for the authoritative gitleaks pass. ` +
     `False positive? add a substring to \`.guardian/hooks-allowlist.json\`.`;
 
   emit('PostToolUse', { additionalContext: context });
