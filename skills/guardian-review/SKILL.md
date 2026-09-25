@@ -75,6 +75,14 @@ Para cada PR, valida explicitamente:
 - [ ] Licenças compatíveis (sem GPL em projeto comercial não-GPL)?
 - [ ] Sem `*` ou ranges abertos
 
+#### Features de AI / LLM (se o diff chama um modelo)
+
+Nenhuma tool verifica isto — é leitura do diff:
+
+- [ ] **Prompt injection**: input do utilizador (ou de documentos, páginas web, resultados de tools) não chega ao prompt misturado com as instruções — há separação clara entre instruções do sistema e conteúdo não confiável, e os argumentos de tool calls vindos do modelo são validados
+- [ ] **Output do modelo com efeitos**: nada do que o modelo devolve é executado, escrito na DB, enviado a uma API externa ou renderizado como HTML sem validação — e cada ação com efeitos tem um limite ou uma confirmação humana proporcional ao estrago possível
+- [ ] **Tokens e custo limitados**: `max_tokens` definido, retries com teto, quotas por utilizador ou por pedido, e nenhum ciclo agêntico sem limite de iterações
+
 #### Migrations / breaking changes
 
 - [ ] Migrations DB são reversíveis e não fazem lock prolongado

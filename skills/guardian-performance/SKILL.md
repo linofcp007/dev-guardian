@@ -17,7 +17,7 @@ Validação de performance contínua: define performance budgets, corre load tes
 ## Medir com a tool
 
 - **Frontend**: `perf_check { project_path: "<project>", target_url: "<url>" }` corre o Lighthouse (as cinco categorias por omissão; `lighthouse_categories: ["performance"]` para só a performance) e devolve as Core Web Vitals e o caminho do relatório JSON bruto. Se o Lighthouse não estiver instalado, `install_toolchain { tools: ["lighthouse"], dry_run: true }`.
-- **Carga**: `perf_check { project_path: "<project>", k6_script_path: "<script.js>" }` corre um script k6 que já exista e devolve o número de pedidos, p95 / p99 e os thresholds do script. O k6 não está no catálogo do `install_toolchain` — instala-se à mão (grafana.com/docs/k6).
+- **Carga**: `perf_check { project_path: "<project>", k6_script_path: "<script.js>" }` corre um script k6 que já exista e devolve o número de pedidos, p95 / p99 e os thresholds do script. Se o k6 não estiver instalado, `install_toolchain { tools: ["k6"], dry_run: true }`.
 - `target_url` e `k6_script_path` excluem-se: uma coisa de cada vez.
 
 ## Definir performance budgets

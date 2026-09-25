@@ -15,14 +15,14 @@ Arguments: $ARGUMENTS
 | `--staged` | the files staged in the index | `{ diff: { staged: true } }` |
 | `--uncommitted` | every uncommitted change: staged, unstaged, untracked | `{ diff: {} }` |
 | `--unpushed` | the commits not on the upstream branch yet | `{ diff: { base: "@{upstream}" } }` |
-| `--branch [base]` | this branch against its base (default: the repository's default branch) | `{ diff: { base: "<base>" } }` |
+| `--branch [base]` | this branch against its base (default: the remote's default branch, `origin/<default>`) | `{ diff: { base: "<base>" } }` |
 | `--since <ref>` | what changed since a tag, a SHA or a date (`2026-01-31`, `2 weeks ago`, `yesterday`) | `{ since: "<ref>" }` |
 | `--incoming` | what the last pull or merge brought in | `{ diff: { base: "HEAD@{1}" } }` |
 | `<path>…` | those files, directories or globs | `{ paths: ["<path>"] }` |
 
 Resolve the refs before calling anything:
 
-- `--branch` with no base: `git symbolic-ref --short refs/remotes/origin/HEAD` (drop the `origin/`), else `main`, else `master`. On the default branch itself there is no branch diff — say so and offer `--unpushed` or a full scan.
+- `--branch` with no base: the remote's default branch, `git symbolic-ref --short refs/remotes/origin/HEAD` (for example `origin/main`) — prefer the remote-tracking ref, because a local `main` can be stale or missing. Without `origin/HEAD`, try `origin/main`, then `origin/master`, and only then a local `main` / `master` (`git rev-parse --verify --quiet <ref>` tells which exist). A base the user names is used as given. On the default branch itself there is no branch diff — say so and offer `--unpushed` or a full scan.
 - `--unpushed`: `git rev-parse --abbrev-ref @{upstream}` must name a branch. With no upstream, say so and offer `--branch`.
 - `--since` with no value: the last tag, `git describe --tags --abbrev=0`.
 - `--incoming`: show `git log --oneline HEAD@{1}..HEAD` first — `HEAD@{1}` is where HEAD was before the last pull, merge or checkout, so confirm with the user when the reflog says otherwise.

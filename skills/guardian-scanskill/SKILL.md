@@ -104,7 +104,8 @@ The tool returns a **0-100 risk score** (severity-weighted; findings in
 - For AI features *inside* the user's app (the prompt-injection surface of their
   own RAG or chatbot) → there is no dedicated module: `/guardian-scan` finds
   exposed keys and dangerous sinks, and the rest is a manual review with the
-  `guardian-review` checklist. Say so rather than running `scan_skill` on it.
+  "Features de AI / LLM" section of the `guardian-review` checklist. Say so
+  rather than running `scan_skill` on it.
 - For the AI-agent **workspace configuration** of this project (`.mcp.json`,
   `.claude/settings.json`: unpinned MCP servers, inline secrets, wildcard Bash
   permissions) → `audit_agent_config { project_path: "<project>" }`.

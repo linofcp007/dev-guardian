@@ -49,10 +49,15 @@ Load the `guardian-bugfix` skill (Skill tool, `dev-guardian:guardian-bugfix`) an
    | `bugs` | `bug_hunt { project_path: "<project>", force: true }` |
    | `secrets` | `scan_secrets { project_path: "<project>", force: true }` |
    | `deps` | `scan_deps { project_path: "<project>", force: true }` |
+   | `deps_audit` | `deps_audit { project_path: "<project>", force: true }` |
    | `quality` | `quality_check { project_path: "<project>", force: true }` |
    | `iac` | `scan_iac { project_path: "<project>", force: true }` |
-   | `containers` | `scan_containers { project_path: "<project>", force: true }` |
+   | `containers` | `scan_containers { project_path: "<project>", dockerfile_path: "<same as the original>", image: "<same as the original>", force: true }` |
+   | `wordpress` | `scan_wordpress { project_path: "<project>", force: true }` |
+   | `wp_vuln_check_source` | `wp_vuln_check_source { project_path: "<install root>", force: true }` |
    | `security_full` | `security_scan_full { project_path: "<project>", force: true }` |
+
+   `scan_containers` must be re-run with the same `dockerfile_path` and/or `image` the original scan used (pass only the ones it had) — a different target is a different scan, and its silence says nothing about the original finding.
 
 3. `diff_scans { project_path: "<project>", scan_type: "<type>", from: "previous" }` — or `from: "baseline"` to compare against the accepted reference. Read `resolved` (the fix), `new` (regressions of the same category) and `not_remeasured` (a scanner that did not run this time — not a resolution).
 4. Verdict: ✅ fix verified, no regressions / ⚠️ verified, but N new findings / 🔴 the original finding is still there.

@@ -39,7 +39,8 @@ Every skill is invocable directly as `/<skill name>`, and fires on natural langu
 | `/guardian-release` | `predeploy`, `prerelease` | Go / no-go gates |
 | `/guardian-status` | — | One-screen project health |
 | `/guardian-infra` | `docker`, `iac` | Containers and infrastructure as code |
-| `/guardian-wp`, `/guardian-dotnet` | install path or URL | WordPress and C# / .NET audits |
+| `/guardian-wp` | WordPress install path or site URL | WordPress audit |
+| `/guardian-dotnet` | project or solution path | C# / .NET audit |
 
 The commands retired in this consolidation map onto these — see `CHANGELOG.md`, *Unreleased*.
 
@@ -359,7 +360,8 @@ Cada skill invoca-se diretamente como `/<nome da skill>`, e também dispara por 
 | `/guardian-release` | `predeploy`, `prerelease` | Gates de go / no-go |
 | `/guardian-status` | — | Estado do projeto num ecrã |
 | `/guardian-infra` | `docker`, `iac` | Containers e infraestrutura como código |
-| `/guardian-wp`, `/guardian-dotnet` | caminho da instalação ou URL | Auditorias WordPress e C# / .NET |
+| `/guardian-wp` | caminho da instalação WordPress ou URL do site | Auditoria WordPress |
+| `/guardian-dotnet` | caminho do projeto ou da solução | Auditoria C# / .NET |
 
 Os comandos retirados nesta consolidação correspondem a estes — ver `CHANGELOG.md`, *Unreleased*.
 
@@ -679,7 +681,8 @@ Cada skill se invoca directamente como `/<nombre de la skill>`, y también se di
 | `/guardian-release` | `predeploy`, `prerelease` | Gates de go / no-go |
 | `/guardian-status` | — | Estado del proyecto en una pantalla |
 | `/guardian-infra` | `docker`, `iac` | Contenedores e infraestructura como código |
-| `/guardian-wp`, `/guardian-dotnet` | ruta de instalación o URL | Auditorías WordPress y C# / .NET |
+| `/guardian-wp` | ruta de la instalación WordPress o URL del sitio | Auditoría WordPress |
+| `/guardian-dotnet` | ruta del proyecto o de la solución | Auditoría C# / .NET |
 
 Los comandos retirados en esta consolidación corresponden a estos — ver `CHANGELOG.md`, *Unreleased*.
 

@@ -82,7 +82,7 @@ O Guardian opera em **EN, PT e ES**. Responde sempre no idioma da última mensag
 | "esta skill é segura?" | `guardian-scanskill` |
 | "o `.mcp.json` / as settings do agente são seguras?" | `audit_agent_config { project_path: "<project>" }` |
 
-**Features de AI / LLM dentro da app** (prompt injection, custo, evals): não há módulo dedicado. `/guardian-scan` apanha chaves expostas e sinks perigosos; o resto — input do utilizador a chegar ao prompt sem isolamento, ações do modelo com efeitos (escritas na DB, chamadas externas), limites de tokens e de custo — revê-se à mão com a checklist do `guardian-review`. Di-lo ao utilizador em vez de fingir cobertura.
+**Features de AI / LLM dentro da app** (prompt injection, custo, evals): não há módulo dedicado. `/guardian-scan` apanha chaves expostas e sinks perigosos; o resto — input do utilizador a chegar ao prompt sem isolamento, output do modelo a causar efeitos (escritas na DB, chamadas externas), limites de tokens e de custo — revê-se à mão com a secção "Features de AI / LLM" da checklist do `guardian-review`. Di-lo ao utilizador em vez de fingir cobertura.
 
 **Checkup completo** ("faz um checkup", "verifica tudo", "diagnóstico do projeto", "do a full checkup", "haz un chequeo"): `audit_executive { project_path: "<project>" }` (segurança, qualidade, dependências, compliance) mais `bug_hunt { project_path: "<project>" }`, num único relatório consolidado.
 

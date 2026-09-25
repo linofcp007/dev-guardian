@@ -12,8 +12,9 @@
  *     and nine skills were unreachable that way (the command said "invoke the
  *     X skill", the model found X already loaded, and looped);
  *   - every `tool { key: … }` / `tool(key=…)` call names a registered tool,
- *     only parameters its schema has (nested `scope.diff.base` included), and
- *     only enum values the schema allows;
+ *     only parameters its schema has (nested `scope.diff.base` included),
+ *     only enum values the schema allows, and every parameter it requires;
+ *   - every `guardian://` resource named is a registered resource;
  *   - every backticked tool-shaped identifier is a tool or a parameter;
  *   - every `/command` a command, skill or hook message points at exists;
  *   - every `${CLAUDE_PLUGIN_ROOT}/…` path exists;
@@ -25,6 +26,8 @@ import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ZodTypeAny } from 'zod';
 import { loadBudgets } from '../../../src/budgets/budgets.js';
+import { RESOURCES } from '../../../src/resources/index.js';
+import { TOOL_CATALOG } from '../../../src/runners/installCatalog.js';
 import { TOOLS } from '../../../src/tools/index.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 import {
@@ -193,6 +196,42 @@ describe('tool calls in commands and skills', () => {
   );
 
   it.each(docs.map((d) => [d.rel, d] as const))(
+    '%s: every call passes the parameters the schema requires',
+    (_rel, doc: PluginDoc) => {
+      const missing: string[] = [];
+      for (const call of toolCalls(doc.text, (n) => toolByName.has(n))) {
+        const tool = toolByName.get(call.tool);
+        if (tool === undefined) continue;
+        const named = new Set(call.keys.map((k) => k.path.join('.')));
+        // Top-level required keys always; a nested object's required keys
+        // only when the call names that object.
+        const check = (shape: Record<string, ZodTypeAny>, prefix: string[]): void => {
+          for (const [key, field] of Object.entries(shape)) {
+            const path = [...prefix, key].join('.');
+            if (!field.isOptional() && !named.has(path)) missing.push(`${call.tool}: ${path} — in ${call.snippet}`);
+            const nested = objectShape(field);
+            if (nested !== null && named.has(path)) check(nested, [...prefix, key]);
+          }
+        };
+        check(tool.inputSchema, []);
+      }
+      expect(missing).toEqual([]);
+    },
+  );
+
+  it.each(docs.map((d) => [d.rel, d] as const))(
+    '%s: every scanner offered to install_toolchain is in its catalogue',
+    (_rel, doc: PluginDoc) => {
+      // `tools` is a plain string[] in the schema, so the enum check above
+      // cannot see a scanner the catalogue does not have.
+      const unknown = toolCalls(doc.text, (n) => n === 'install_toolchain')
+        .flatMap((c) => c.keys.filter((k) => k.path.join('.') === 'tools').flatMap((k) => k.literals))
+        .filter((name) => !(name in TOOL_CATALOG));
+      expect(unknown).toEqual([]);
+    },
+  );
+
+  it.each(docs.map((d) => [d.rel, d] as const))(
     '%s: every backticked tool-shaped name is a tool or a parameter',
     (_rel, doc) => {
       const unknown = inlineCode(doc.text)
@@ -218,6 +257,35 @@ describe('cross-references', () => {
       }
     }
     expect([...new Set(dangling)]).toEqual([]);
+  });
+
+  it('every guardian:// resource a command, skill or the README names is registered', () => {
+    // A registered URI (or template) as a regex: `{?page,page_size}` query
+    // templates are optional, `{scan_id}` path params match one segment — and
+    // the doc may also spell the template literally.
+    const patterns = RESOURCES.map((r) => {
+      const base = r.uri.replace(/\{\?[^}]*\}$/, '');
+      const source = base
+        .split(/(\{[a-z_]+\})/)
+        .map((part) => (/^\{[a-z_]+\}$/.test(part) ? '(?:[^/{}]+|\\{[a-z_]+\\})' : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+        .join('');
+      return new RegExp(`^${source}$`);
+    });
+    const texts = [
+      ...allDocs().map((d) => [d.rel, d.text] as const),
+      ['README.md', readFileSync(resolve(REPO_ROOT, 'README.md'), 'utf8')] as const,
+    ];
+    const seen: string[] = [];
+    const unknown: string[] = [];
+    for (const [rel, text] of texts) {
+      for (const m of text.matchAll(/guardian:\/\/[A-Za-z0-9_/{}-]+/g)) {
+        const uri = m[0].replace(/[/.]+$/, '');
+        seen.push(uri);
+        if (!patterns.some((p) => p.test(uri))) unknown.push(`${rel}: ${uri}`);
+      }
+    }
+    expect(seen.length).toBeGreaterThan(0);
+    expect([...new Set(unknown)]).toEqual([]);
   });
 
   it('the router skill lists every command', () => {
