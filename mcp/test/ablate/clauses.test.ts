@@ -18,11 +18,25 @@
  *    behind.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse } from 'yaml';
 import { AblationError, ablate, ablateAll, clauseLabel, enumerateClauses, roundTrip } from './clauses.js';
+
+// Fix round 2, item 2 (2026-09-25 full review, Task 5): "every enumerated
+// clause either ablates cleanly or says why it cannot" (below) enumerates
+// and round-trips EVERY clause across all nine shipped rule packs
+// synchronously — measured at 3.3s alone, 7.3s under v8 coverage
+// instrumentation, and over the unit-test default of 10s once a parallel
+// coverage run adds CPU contention from other workers. Not a Semgrep
+// subprocess call (so it isn't one of the nine `test/integration/*Rules*`
+// files this same fix already applies to), but the identical mechanism:
+// synchronous, CPU-heavy work that vitest's default per-test budget was
+// never sized for. See `test/integration/baseRules.test.ts`'s matching
+// comment for the full reasoning on why this is a per-file override, not a
+// change to the global default.
+vi.setConfig({ testTimeout: 180_000 });
 import { REPO_ROOT } from './packs.js';
 
 const SAMPLE = `rules:
