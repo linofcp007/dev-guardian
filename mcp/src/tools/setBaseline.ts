@@ -97,13 +97,16 @@ async function handler(
     ...(inp.note !== undefined ? { note: inp.note } : {}),
   });
 
-  // Set, but flagged: a baseline of a scan that did not measure something —
-  // a failed child of security_scan_full, or one scanner that failed or was
-  // missing beside others that ran (Semgrep exit 7 next to Bandit) — holds no
-  // findings of it. The comparing readers report those as "not previously
-  // measured", never as new (`history/runCompare.ts`), but the baseline is
-  // still incomplete. Not refused — a machine without Trivy would then never
-  // get a baseline — and never presented as a complete measurement either.
+  // Set, but flagged: a baseline of a scan that did not fully measure
+  // something — a failed child of security_scan_full, one scanner that failed
+  // or was missing beside others that ran (Semgrep exit 7 next to Bandit), or
+  // one failed pass of a scanner (guardian-dast:unanswered) — holds none, or
+  // only some, of its findings. `notMeasured` names exactly what the
+  // comparing readers treat as unmeasured (`history/runCompare.ts`), so the
+  // warning's promise is theirs: a later finding from it that the baseline
+  // does not hold is "not previously measured", never new, and never scored.
+  // Not refused — a machine without Trivy would then never get a baseline —
+  // and never presented as a complete measurement either.
   const target = ctx.storage.scans.getById(targetScanId);
   const notMeasured = target === null ? [] : notMeasuredBy(ctx.storage, target);
 
@@ -119,10 +122,11 @@ async function handler(
       ? {
           not_measured: notMeasured,
           warning:
-            `This baseline's scan did not measure ${notMeasured.join(', ')} (the scanner did not run ` +
-            'or failed). It holds no findings from it: later comparisons against this baseline report ' +
-            'those as "not previously measured", not as new, so they neither alarm nor clear. Re-run ' +
-            'the scan once the scanner works and set the baseline again.',
+            `This baseline's scan did not fully measure ${notMeasured.join(', ')} (a scanner, or a pass ` +
+            'of one, did not run or failed), so it holds only some of their findings, or none. Later ' +
+            'comparisons against this baseline report a finding from them that it does not hold as ' +
+            '"not previously measured" — never as new, and never counted in regression_alert\'s ' +
+            'score. Re-run the scan once the scanner works and set the baseline again.',
         }
       : {}),
   };

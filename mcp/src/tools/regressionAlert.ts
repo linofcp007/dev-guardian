@@ -26,7 +26,13 @@
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { latestStateScan, type SkipHit, summarizeSkipped } from '../history/openSet.js';
-import { classifyDiff, compareScansFor, describeMeasurementGaps } from '../history/runCompare.js';
+import {
+  COMPLETE_COMPARISON,
+  classifyDiff,
+  compareScansFor,
+  describeMeasurementGaps,
+  measurementGaps,
+} from '../history/runCompare.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { SCAN_TYPES, type Finding, type ScanType, type Severity, type ToolResult } from '../types.js';
@@ -153,21 +159,14 @@ async function handler(
   // reference did not run ok is not new — counted as such a partial baseline
   // raised a false alarm. Neither moves the score.
   const baselineScan = ctx.storage.scans.getById(baselineId);
-  const check =
-    baselineScan === null
-      ? {
-          isNotRemeasured: () => false,
-          isNotPreviouslyMeasured: () => false,
-          notMeasuredByTo: [],
-          notMeasuredByFrom: [],
-        }
-      : compareScansFor(ctx.storage, baselineScan, latest);
+  const check = baselineScan === null ? COMPLETE_COMPARISON : compareScansFor(ctx.storage, baselineScan, latest);
   const d = classifyDiff(check, prevFindings, curFindings);
+  const gaps = measurementGaps(check, d);
   const newFindings = d.new;
   const resolvedFindings = d.resolved;
   const score = weightedScore(newFindings) - weightedScore(resolvedFindings);
   const regressed = score > threshold;
-  const measuredNote = baselineScan === null ? null : describeMeasurementGaps(baselineScan, latest, check);
+  const measuredNote = baselineScan === null ? null : describeMeasurementGaps(baselineScan, latest, gaps);
 
   return {
     ok: true,
@@ -183,8 +182,8 @@ async function handler(
     resolved_findings_by_severity: countBySeverity(resolvedFindings),
     not_remeasured_by_severity: countBySeverity(d.notRemeasured),
     not_previously_measured_by_severity: countBySeverity(d.notPreviouslyMeasured),
-    ...(check.notMeasuredByTo.length > 0 ? { not_measured: check.notMeasuredByTo } : {}),
-    ...(check.notMeasuredByFrom.length > 0 ? { reference_not_measured: check.notMeasuredByFrom } : {}),
+    ...(gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {}),
+    ...(gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {}),
     hint: regressed
       ? 'Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes.'
       : measuredNote !== null

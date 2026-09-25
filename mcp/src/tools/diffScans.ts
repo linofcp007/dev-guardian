@@ -32,7 +32,7 @@
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { latestStateScan, type SkipHit, summarizeSkipped, type SkippedSummary } from '../history/openSet.js';
-import { classifyDiff, compareScansFor, describeMeasurementGaps } from '../history/runCompare.js';
+import { classifyDiff, compareScansFor, describeMeasurementGaps, measurementGaps } from '../history/runCompare.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { SCAN_TYPES, type DomainError, type Finding, type ScanType, type ToolResult } from '../types.js';
@@ -114,7 +114,8 @@ async function handler(
   // new (`history/runCompare.ts`).
   const check = compareScansFor(ctx.storage, fromScan, toScan.value);
   const d = classifyDiff(check, fromFindings, toFindings);
-  const note = describeMeasurementGaps(fromScan, toScan.value, check);
+  const gaps = measurementGaps(check, d);
+  const note = describeMeasurementGaps(fromScan, toScan.value, gaps);
   const cap = (list: readonly Finding[]): Finding[] => list.slice(0, ITEMS_PER_BUCKET);
   const cut = (list: readonly Finding[]): boolean => list.length > ITEMS_PER_BUCKET;
 
@@ -143,8 +144,8 @@ async function handler(
       not_remeasured: cut(d.notRemeasured),
       not_previously_measured: cut(d.notPreviouslyMeasured),
     },
-    ...(check.notMeasuredByTo.length > 0 ? { not_measured: check.notMeasuredByTo } : {}),
-    ...(check.notMeasuredByFrom.length > 0 ? { reference_not_measured: check.notMeasuredByFrom } : {}),
+    ...(gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {}),
+    ...(gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {}),
     ...(note !== null ? { note } : {}),
     ...(skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}),
   };

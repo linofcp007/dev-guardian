@@ -46850,7 +46850,108 @@ function describeOpenSet(set) {
   };
 }
 
+// src/history/runNames.ts
+var TRIVY_FS = "trivy:fs";
+var TRIVY_CONFIG = "trivy:config";
+var SKILL_OSV = "guardian-scanskill:osv";
+var SKILL_TOOL = "guardian-scanskill";
+var SKILL_OSV_RULE = "osv-vulnerable-dependency";
+function findingKey(f) {
+  if (f.tool === "trivy") {
+    return f.category === "license" || f.subcategory === "cve" || f.subcategory === "secret" ? TRIVY_FS : TRIVY_CONFIG;
+  }
+  if (f.tool === SKILL_TOOL && f.rule_id === SKILL_OSV_RULE) return SKILL_OSV;
+  return f.tool;
+}
+var scanner = (...measures) => ({ measures });
+var RUN_NAMES = {
+  // SAST — scan_sast, bug_hunt, review_pr, map_attack_surface, security_scan_full.
+  semgrep: scanner("semgrep"),
+  "semgrep-wp": scanner("semgrep"),
+  bandit: scanner("bandit"),
+  "security-code-scan": scanner("security-code-scan"),
+  // scan_sast's missing_tools entry when the SDK that runs security-code-scan is absent.
+  "dotnet-sdk": scanner("security-code-scan"),
+  // Secrets — scan_secrets, scan_wordpress, review_pr (runners/gitleaksScan.ts).
+  gitleaks: scanner("gitleaks"),
+  "gitleaks-working-tree": scanner("gitleaks"),
+  // Trivy, by pass.
+  trivy: { measures: [TRIVY_FS], whenNotOk: [TRIVY_FS, TRIVY_CONFIG] },
+  "trivy-image": scanner(TRIVY_FS),
+  "trivy-config": scanner(TRIVY_CONFIG),
+  "trivy-dockerfile": scanner(TRIVY_CONFIG),
+  // deps_audit's native auditors, recorded by command.
+  npm: scanner("npm-audit"),
+  "pip-audit": scanner(),
+  // captured as evidence only: no findings
+  // quality_check.
+  eslint: scanner("eslint"),
+  ruff: scanner("ruff"),
+  radon: scanner("radon"),
+  jscpd: scanner("jscpd"),
+  staticcheck: scanner("staticcheck"),
+  // scan_wordpress's PHPCS pass, and its missing_tools name.
+  "phpcs-wpcs": scanner("phpcs"),
+  phpcs: scanner("phpcs"),
+  // scan_dast: the own engine, its partial-run markers, and nuclei.
+  "guardian-dast": scanner("dast"),
+  "guardian-dast:unanswered": scanner("dast"),
+  "guardian-dast:wall-clock": scanner("dast"),
+  nuclei: scanner("nuclei"),
+  // WordPress.
+  wpscan: scanner("wpscan"),
+  wp_plugin_check: scanner(),
+  // a findings-less lookup
+  "wp-cli": scanner(),
+  // wp_audit, wp_cron_audit: report through meta
+  "http-probe": scanner(),
+  // wp_rest_audit: reports through meta
+  // .NET. `scan_dotnet_secrets` and `dotnet_target_framework_check` are
+  // also audit_executive's entries for those sub-tools.
+  scan_dotnet_secrets: scanner("scan_dotnet_secrets"),
+  dotnet_efcore_audit: scanner("dotnet_efcore_audit"),
+  dotnet_target_framework_check: scanner(),
+  // compliance_check.
+  "policy-docs": scanner(),
+  // scan_skill.
+  "guardian-scanskill:patterns": scanner(SKILL_TOOL),
+  "guardian-scanskill:yara": scanner(SKILL_TOOL),
+  "guardian-scanskill:taint": scanner(SKILL_TOOL),
+  "osv.dev": scanner(SKILL_OSV),
+  // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
+  // sub-scan's own bookkeeping instead whenever the row still exists; these
+  // speak for a sub-tool that failed before it wrote one.
+  security_scan_full: scanner("semgrep", "bandit", "security-code-scan", "gitleaks", TRIVY_FS, TRIVY_CONFIG),
+  quality_check: scanner("eslint", "ruff", "radon", "jscpd", "staticcheck"),
+  deps_audit: scanner(TRIVY_FS, "npm-audit"),
+  compliance_check: scanner(TRIVY_FS),
+  scan_wordpress: scanner("semgrep", "gitleaks", TRIVY_FS, "phpcs")
+};
+var BY_NAME = new Map(Object.entries(RUN_NAMES));
+function runNameEntry(name) {
+  const listed = BY_NAME.get(name);
+  if (listed !== void 0) return listed;
+  const colon = name.indexOf(":");
+  return colon > 0 ? BY_NAME.get(name.slice(0, colon)) ?? null : null;
+}
+function keysOfRun(name, ok) {
+  const entry = runNameEntry(name);
+  if (entry === null) return null;
+  return ok ? entry.measures : entry.whenNotOk ?? entry.measures;
+}
+var KNOWN_FINDING_KEYS = new Set(
+  [...BY_NAME.values()].flatMap((e) => [...e.measures, ...e.whenNotOk ?? []])
+);
+
 // src/history/runCompare.ts
+var COMPLETE_COMPARISON = {
+  isNotRemeasured: () => false,
+  isNotPreviouslyMeasured: () => false,
+  isNotRunByTo: () => false,
+  isNotRunByFrom: () => false,
+  notMeasuredByTo: [],
+  notMeasuredByFrom: []
+};
 function childrenOf(storage, parent) {
   const listed = parent.meta?.["child_scans"];
   if (!Array.isArray(listed)) return [];
@@ -46867,38 +46968,56 @@ function childrenOf(storage, parent) {
 function usableChild(c3) {
   return c3.row !== null && c3.row.status === "completed";
 }
-var TRIVY_CONFIG_PASSES = /* @__PURE__ */ new Set(["trivy-config", "trivy-dockerfile"]);
-function findingKey(f) {
-  if (f.tool !== "trivy") return f.tool;
-  if (f.category === "license" || f.subcategory === "cve" || f.subcategory === "secret") return "trivy:fs";
-  return "trivy:config";
+function auditBookkeeping(storage, audit) {
+  const ids2 = audit.meta?.["sub_scan_ids"];
+  if (ids2 === null || typeof ids2 !== "object" || Array.isArray(ids2)) return audit;
+  const byTool = ids2;
+  const tools_run = [];
+  const missing_tools = [...audit.missing_tools];
+  for (const entry of audit.tools_run) {
+    const id = Object.hasOwn(byTool, entry.name) ? byTool[entry.name] : void 0;
+    const sub = entry.status === "ok" && typeof id === "string" ? storage.scans.getById(id) : null;
+    if (sub === null || sub.tools_run.length === 0 && sub.missing_tools.length === 0) {
+      tools_run.push(entry);
+      continue;
+    }
+    tools_run.push(...sub.tools_run);
+    missing_tools.push(...sub.missing_tools);
+  }
+  return { tools_run, missing_tools };
 }
-function keysOfRun(name, ok) {
-  if (TRIVY_CONFIG_PASSES.has(name)) return ["trivy:config"];
-  if (name === "trivy-image") return ["trivy:fs"];
-  if (name === "trivy") return ok ? ["trivy:fs"] : ["trivy:fs", "trivy:config"];
-  const dash = name.indexOf("-");
-  return dash > 0 ? [name, name.slice(0, dash)] : [name];
+function bookkeepingOf(storage, scan2) {
+  return scan2.scan_type === "audit" ? auditBookkeeping(storage, scan2) : scan2;
 }
-function toolMeasured(book, f) {
-  const key = findingKey(f);
+function keyVerdict(book, key) {
   let named = false;
-  let ok = false;
+  let anyOk = false;
+  let anyFailed = false;
+  const okNames = /* @__PURE__ */ new Set();
   for (const run of book.tools_run) {
-    if (!keysOfRun(run.name, run.status === "ok").includes(key)) continue;
+    const ok = run.status === "ok";
+    if (!(keysOfRun(run.name, ok)?.includes(key) ?? false)) continue;
     named = true;
-    if (run.status === "ok") ok = true;
+    if (ok) {
+      anyOk = true;
+      okNames.add(run.name);
+    } else if (run.status === "failed") {
+      anyFailed = true;
+    }
   }
+  let missing = false;
   for (const name of book.missing_tools) {
-    if (!keysOfRun(name, false).includes(key)) continue;
+    if (!(keysOfRun(name, false)?.includes(key) ?? false)) continue;
     named = true;
+    if (!okNames.has(name)) missing = true;
   }
-  if (!named) return null;
-  return ok;
+  if (named) return anyOk && !anyFailed && !missing ? "measured" : "unmeasured";
+  if (KNOWN_FINDING_KEYS.has(key)) return "not_run";
+  return computeCoverage(book.tools_run, book.missing_tools) === "full" ? "measured" : "unmeasured";
 }
-function bookkeepingMeasures(book, f) {
-  if (book.tools_run.length === 0 && book.missing_tools.length === 0) return true;
-  return toolMeasured(book, f) ?? computeCoverage(book.tools_run, book.missing_tools) !== "none";
+function bookkeepingVerdict(book, f) {
+  if (book.tools_run.length === 0 && book.missing_tools.length === 0) return "measured";
+  return keyVerdict(book, findingKey(f));
 }
 function typeResolver(storage, scan2) {
   if (isOrchestratedFullScan(scan2)) {
@@ -46915,13 +47034,16 @@ function typeResolver(storage, scan2) {
   return () => scan2.scan_type;
 }
 function measurer(storage, scan2) {
-  if (!isOrchestratedFullScan(scan2)) return (f) => bookkeepingMeasures(scan2, f);
+  if (!isOrchestratedFullScan(scan2)) {
+    const book = bookkeepingOf(storage, scan2);
+    return (f) => bookkeepingVerdict(book, f);
+  }
   const children = childrenOf(storage, scan2);
   return (f, fType) => {
-    if (fType === null) return bookkeepingMeasures(scan2, f);
+    if (fType === null) return bookkeepingVerdict(scan2, f);
     const child = children.find((c3) => c3.type === fType);
-    if (child === void 0 || !usableChild(child)) return false;
-    return bookkeepingMeasures(child.row, f);
+    if (child === void 0 || !usableChild(child)) return "unmeasured";
+    return bookkeepingVerdict(child.row, f);
   };
 }
 function notMeasured(storage, scan2) {
@@ -46934,12 +47056,14 @@ function notMeasured(storage, scan2) {
       add(wholeType);
       return;
     }
-    const ok = new Set(book.tools_run.filter((t) => t.status === "ok").map((t) => t.name));
-    for (const t of book.tools_run) if (t.status === "failed" && !ok.has(t.name)) add(t.name);
-    for (const t of book.missing_tools) if (!ok.has(t)) add(t);
+    const names = [...book.tools_run.filter((t) => t.status !== "ok").map((t) => t.name), ...book.missing_tools];
+    for (const name of names) {
+      const keys = keysOfRun(name, false);
+      if (keys === null || keys.length === 0 || keys.some((k) => keyVerdict(book, k) !== "measured")) add(name);
+    }
   };
   if (!isOrchestratedFullScan(scan2)) {
-    gapsOf(scan2, scan2.scan_type);
+    gapsOf(bookkeepingOf(storage, scan2), scan2.scan_type);
     return out;
   }
   for (const child of childrenOf(storage, scan2)) {
@@ -46951,11 +47075,13 @@ function notMeasured(storage, scan2) {
 function compareScansFor(storage, from, to) {
   const typeOfFrom = typeResolver(storage, from);
   const typeOfTo = typeResolver(storage, to);
-  const toMeasures = measurer(storage, to);
-  const fromMeasures = measurer(storage, from);
+  const inTo = measurer(storage, to);
+  const inFrom = measurer(storage, from);
   return {
-    isNotRemeasured: (f) => !toMeasures(f, typeOfFrom(f)),
-    isNotPreviouslyMeasured: (f) => !fromMeasures(f, typeOfTo(f)),
+    isNotRemeasured: (f) => inTo(f, typeOfFrom(f)) !== "measured",
+    isNotPreviouslyMeasured: (f) => inFrom(f, typeOfTo(f)) !== "measured",
+    isNotRunByTo: (f) => inTo(f, typeOfFrom(f)) === "not_run",
+    isNotRunByFrom: (f) => inFrom(f, typeOfTo(f)) === "not_run",
     notMeasuredByTo: notMeasured(storage, to),
     notMeasuredByFrom: notMeasured(storage, from)
   };
@@ -46963,29 +47089,48 @@ function compareScansFor(storage, from, to) {
 function classifyDiff(check2, fromFindings, toFindings) {
   const fromIndex = indexFindings(fromFindings);
   const toIndex = indexFindings(toFindings);
-  const out = { new: [], resolved: [], unchanged: [], notRemeasured: [], notPreviouslyMeasured: [] };
+  const out = {
+    new: [],
+    resolved: [],
+    unchanged: [],
+    notRemeasured: [],
+    notPreviouslyMeasured: [],
+    notRunByTo: [],
+    notRunByFrom: []
+  };
+  const note = (list2, tool46) => {
+    if (!list2.includes(tool46)) list2.push(tool46);
+  };
   for (const f of toFindings) {
     if (fromIndex.has(f)) out.unchanged.push(f);
-    else if (check2.isNotPreviouslyMeasured(f)) out.notPreviouslyMeasured.push(f);
-    else out.new.push(f);
+    else if (check2.isNotPreviouslyMeasured(f)) {
+      out.notPreviouslyMeasured.push(f);
+      if (check2.isNotRunByFrom(f)) note(out.notRunByFrom, f.tool);
+    } else out.new.push(f);
   }
   for (const f of fromFindings) {
     if (toIndex.has(f)) continue;
-    if (check2.isNotRemeasured(f)) out.notRemeasured.push(f);
-    else out.resolved.push(f);
+    if (check2.isNotRemeasured(f)) {
+      out.notRemeasured.push(f);
+      if (check2.isNotRunByTo(f)) note(out.notRunByTo, f.tool);
+    } else out.resolved.push(f);
   }
   return out;
 }
-function describeMeasurementGaps(from, to, check2) {
+function measurementGaps(check2, d) {
+  const union2 = (a2, b) => [...a2, ...b.filter((x) => !a2.includes(x))];
+  return { byTo: union2(check2.notMeasuredByTo, d.notRunByTo), byFrom: union2(check2.notMeasuredByFrom, d.notRunByFrom) };
+}
+function describeMeasurementGaps(from, to, gaps) {
   const parts = [];
-  if (check2.notMeasuredByTo.length > 0) {
+  if (gaps.byTo.length > 0) {
     parts.push(
-      `Scan ${to.scan_id} did not measure ${check2.notMeasuredByTo.join(", ")} (did not run or failed): earlier findings there are reported as not re-measured, never as resolved.`
+      `Scan ${to.scan_id} did not measure ${gaps.byTo.join(", ")} (did not run, or failed): earlier findings there are reported as not re-measured, never as resolved.`
     );
   }
-  if (check2.notMeasuredByFrom.length > 0) {
+  if (gaps.byFrom.length > 0) {
     parts.push(
-      `The reference scan ${from.scan_id} did not measure ${check2.notMeasuredByFrom.join(", ")}: findings there are reported as not previously measured, never as new.`
+      `The reference scan ${from.scan_id} did not measure ${gaps.byFrom.join(", ")}: findings there are reported as not previously measured, never as new.`
     );
   }
   return parts.length > 0 ? `${parts.join(" ")} Re-run once the scanner works.` : null;
@@ -47053,7 +47198,7 @@ async function handler7(input, ctx) {
     ...baseline.note !== void 0 ? { note: baseline.note } : {},
     ...notMeasured2.length > 0 ? {
       not_measured: notMeasured2,
-      warning: `This baseline's scan did not measure ${notMeasured2.join(", ")} (the scanner did not run or failed). It holds no findings from it: later comparisons against this baseline report those as "not previously measured", not as new, so they neither alarm nor clear. Re-run the scan once the scanner works and set the baseline again.`
+      warning: `This baseline's scan did not fully measure ${notMeasured2.join(", ")} (a scanner, or a pass of one, did not run or failed), so it holds only some of their findings, or none. Later comparisons against this baseline report a finding from them that it does not hold as "not previously measured" \u2014 never as new, and never counted in regression_alert's score. Re-run the scan once the scanner works and set the baseline again.`
     } : {}
   };
 }
@@ -47144,7 +47289,8 @@ async function handler9(input, ctx) {
   const toFindings = ctx.storage.findings.listByScan(toScan.value.scan_id);
   const check2 = compareScansFor(ctx.storage, fromScan, toScan.value);
   const d = classifyDiff(check2, fromFindings, toFindings);
-  const note = describeMeasurementGaps(fromScan, toScan.value, check2);
+  const gaps = measurementGaps(check2, d);
+  const note = describeMeasurementGaps(fromScan, toScan.value, gaps);
   const cap = (list2) => list2.slice(0, ITEMS_PER_BUCKET);
   const cut = (list2) => list2.length > ITEMS_PER_BUCKET;
   return {
@@ -47172,8 +47318,8 @@ async function handler9(input, ctx) {
       not_remeasured: cut(d.notRemeasured),
       not_previously_measured: cut(d.notPreviouslyMeasured)
     },
-    ...check2.notMeasuredByTo.length > 0 ? { not_measured: check2.notMeasuredByTo } : {},
-    ...check2.notMeasuredByFrom.length > 0 ? { reference_not_measured: check2.notMeasuredByFrom } : {},
+    ...gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {},
+    ...gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {},
     ...note !== null ? { note } : {},
     ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}
   };
@@ -48916,18 +49062,14 @@ async function handler16(input, ctx) {
   const prevFindings = ctx.storage.findings.listByScan(baselineId);
   const curFindings = ctx.storage.findings.listByScan(latest.scan_id);
   const baselineScan = ctx.storage.scans.getById(baselineId);
-  const check2 = baselineScan === null ? {
-    isNotRemeasured: () => false,
-    isNotPreviouslyMeasured: () => false,
-    notMeasuredByTo: [],
-    notMeasuredByFrom: []
-  } : compareScansFor(ctx.storage, baselineScan, latest);
+  const check2 = baselineScan === null ? COMPLETE_COMPARISON : compareScansFor(ctx.storage, baselineScan, latest);
   const d = classifyDiff(check2, prevFindings, curFindings);
+  const gaps = measurementGaps(check2, d);
   const newFindings = d.new;
   const resolvedFindings = d.resolved;
   const score = weightedScore(newFindings) - weightedScore(resolvedFindings);
   const regressed = score > threshold;
-  const measuredNote = baselineScan === null ? null : describeMeasurementGaps(baselineScan, latest, check2);
+  const measuredNote = baselineScan === null ? null : describeMeasurementGaps(baselineScan, latest, gaps);
   return {
     ok: true,
     regressed,
@@ -48942,8 +49084,8 @@ async function handler16(input, ctx) {
     resolved_findings_by_severity: countBySeverity3(resolvedFindings),
     not_remeasured_by_severity: countBySeverity3(d.notRemeasured),
     not_previously_measured_by_severity: countBySeverity3(d.notPreviouslyMeasured),
-    ...check2.notMeasuredByTo.length > 0 ? { not_measured: check2.notMeasuredByTo } : {},
-    ...check2.notMeasuredByFrom.length > 0 ? { reference_not_measured: check2.notMeasuredByFrom } : {},
+    ...gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {},
+    ...gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {},
     hint: regressed ? "Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes." : measuredNote !== null ? `No significant regression among the types that were measured. ${measuredNote}` : "No significant regression.",
     ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {},
     ...note,

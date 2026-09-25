@@ -293,3 +293,278 @@ describe('a reference that did not measure a tool: its findings in the newer run
     expect(snap.deltas.since_previous).toMatchObject({ new_count: 0, not_previously_measured_count: 1 });
   });
 });
+
+/**
+ * Fix round 4: scanners whose bookkeeping name is not their findings' tool.
+ * deps_audit records its native auditor by COMMAND (`npm`) while its
+ * findings say `npm-audit`; scan_dast records its engine as `guardian-dast`
+ * while its findings say `dast`. Round 3 fell back to the scan's overall
+ * coverage for a tool the bookkeeping never named — `partial` counted as
+ * measured — so a failed `npm` resolved every npm-audit finding, and a
+ * baseline whose npm failed raised a false alarm on the first npm finding.
+ */
+const N = 'n'.repeat(64);
+const A = 'a'.repeat(64);
+const T = 't'.repeat(64);
+const NOW = Date.parse('2026-06-01T00:00:00.000Z');
+
+interface DiffOut {
+  summary: Record<string, number>;
+  not_remeasured_findings: Array<{ fingerprint: string }>;
+  not_previously_measured_findings: Array<{ fingerprint: string }>;
+  not_measured?: string[];
+  reference_not_measured?: string[];
+  note?: string;
+}
+interface AlertOut {
+  reference: string;
+  score_delta: number;
+  regressed: boolean;
+  resolved_findings_by_severity: Record<string, number>;
+  not_remeasured_by_severity: Record<string, number>;
+  not_previously_measured_by_severity: Record<string, number>;
+}
+
+describe('deps_audit: the npm auditor is recorded as `npm`, its findings say `npm-audit`', () => {
+  function npmFailedAfterOk(): { s: Seeded; p: string } {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-npm-');
+    seedScan(s, {
+      id: 'a', type: 'deps_audit', project: p,
+      tools_run: [{ name: 'trivy', status: 'ok' }, { name: 'npm', status: 'ok', reason: 'parsed into findings' }],
+      findings: [{ fp: N, tool: 'npm-audit', subcategory: 'cve', severity: 'high' }],
+    });
+    seedScan(s, {
+      id: 'b', type: 'deps_audit', project: p,
+      tools_run: [
+        { name: 'trivy', status: 'ok' },
+        { name: 'npm', status: 'failed', reason: 'ran but produced no audit report (missing lockfile?)' },
+      ],
+      missing_tools: ['npm'],
+      findings: [{ fp: D, tool: 'trivy', subcategory: 'cve', severity: 'high' }],
+    });
+    return { s, p };
+  }
+
+  it('diff_scans: the npm-audit finding is not re-measured, never resolved', async () => {
+    const { s, p } = npmFailedAfterOk();
+    const r = okResult<DiffOut>(await tool('diff_scans').handler({ project_path: p, scan_type: 'deps_audit' }, s.plugin));
+    expect(r.summary).toMatchObject({ new: 1, resolved: 0, not_remeasured: 1 });
+    expect(r.not_remeasured_findings.map((f) => f.fingerprint)).toEqual([N]);
+    expect(r.not_measured).toEqual(['npm']);
+  });
+
+  it('regression_alert: the new Trivy high is not cancelled by a false npm resolution', async () => {
+    const { s, p } = npmFailedAfterOk();
+    const r = okResult<AlertOut>(
+      await tool('regression_alert').handler({ project_path: p, scan_type: 'deps_audit', threshold: 0 }, s.plugin),
+    );
+    expect(r.resolved_findings_by_severity['high']).toBe(0);
+    expect(r.not_remeasured_by_severity['high']).toBe(1);
+    expect(r.score_delta).toBe(5);
+    expect(r.regressed).toBe(true);
+  });
+
+  it('dashboard since_previous: not re-measured, never resolved', () => {
+    const { s, p } = npmFailedAfterOk();
+    const snap = buildSnapshot(s.storage, p, NOW);
+    expect(snap.deltas.since_previous).toMatchObject({ new_count: 1, resolved_count: 0, not_remeasured_count: 1 });
+  });
+
+  it('mirror: a baseline whose npm failed raises no alarm on the first npm-audit finding', async () => {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-npm-mirror-');
+    seedScan(s, {
+      id: 'a', type: 'deps_audit', project: p,
+      tools_run: [{ name: 'trivy', status: 'ok' }, { name: 'npm', status: 'failed', reason: 'failed to run' }],
+      missing_tools: ['npm'],
+    });
+    const b = okResult<{ not_measured: string[]; warning: string }>(
+      await tool('set_baseline').handler({ project_path: p, scan_type: 'deps_audit' }, s.plugin),
+    );
+    expect(b.not_measured).toEqual(['npm']);
+    // The warning's promise — "not previously measured", never new — is what the readers below do.
+    expect(b.warning).toMatch(/not previously measured/);
+    seedScan(s, {
+      id: 'b', type: 'deps_audit', project: p,
+      tools_run: [{ name: 'trivy', status: 'ok' }, { name: 'npm', status: 'ok', reason: 'parsed into findings' }],
+      findings: [{ fp: N, tool: 'npm-audit', subcategory: 'cve', severity: 'high' }],
+    });
+
+    const diff = okResult<DiffOut>(
+      await tool('diff_scans').handler({ project_path: p, scan_type: 'deps_audit', from: 'baseline' }, s.plugin),
+    );
+    expect(diff.summary).toMatchObject({ new: 0, not_previously_measured: 1 });
+    expect(diff.reference_not_measured).toEqual(['npm']);
+
+    const alert = okResult<AlertOut>(
+      await tool('regression_alert').handler({ project_path: p, scan_type: 'deps_audit', threshold: 0 }, s.plugin),
+    );
+    expect(alert.reference).toBe('baseline');
+    expect(alert.score_delta).toBe(0);
+    expect(alert.regressed).toBe(false);
+    expect(alert.not_previously_measured_by_severity['high']).toBe(1);
+
+    const snap = buildSnapshot(s.storage, p, NOW);
+    expect(snap.deltas.since_baseline).toMatchObject({ new_count: 0, not_previously_measured_count: 1 });
+  });
+});
+
+describe('scan_dast: the engine is recorded as `guardian-dast`, its findings say `dast`', () => {
+  function dast(second: ToolRun[], missing: string[] = []): { s: Seeded; p: string } {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-dast-');
+    seedScan(s, {
+      id: 'a', type: 'dast', project: p,
+      tools_run: [{ name: 'guardian-dast', status: 'ok' }, { name: 'nuclei', status: 'ok' }],
+      findings: [{ fp: A, tool: 'dast', severity: 'high' }],
+    });
+    seedScan(s, { id: 'b', type: 'dast', project: p, tools_run: second, missing_tools: missing });
+    return { s, p };
+  }
+
+  it('the engine failed, nuclei ran: the engine finding is not re-measured', async () => {
+    const { s, p } = dast([{ name: 'guardian-dast', status: 'failed' }, { name: 'nuclei', status: 'ok' }]);
+    const r = okResult<DiffOut>(await tool('diff_scans').handler({ project_path: p, scan_type: 'dast' }, s.plugin));
+    expect(r.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+    expect(r.not_measured).toEqual(['guardian-dast']);
+    const alert = okResult<AlertOut>(
+      await tool('regression_alert').handler({ project_path: p, scan_type: 'dast', threshold: 0 }, s.plugin),
+    );
+    expect(alert.score_delta).toBe(0);
+    expect(alert.resolved_findings_by_severity['high']).toBe(0);
+    const snap = buildSnapshot(s.storage, p, NOW);
+    expect(snap.deltas.since_previous).toMatchObject({ resolved_count: 0, not_remeasured_count: 1 });
+  });
+
+  it.each(['guardian-dast:unanswered', 'guardian-dast:wall-clock'])(
+    'the engine ran but %s failed: a failed sub-pass vetoes "resolved"',
+    async (subPass) => {
+      const { s, p } = dast([
+        { name: 'guardian-dast', status: 'ok' },
+        { name: subPass, status: 'failed', reason: 'most probes reached no verdict' },
+      ]);
+      const r = okResult<DiffOut>(await tool('diff_scans').handler({ project_path: p, scan_type: 'dast' }, s.plugin));
+      expect(r.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+      expect(r.not_measured).toEqual([subPass]);
+      const alert = okResult<AlertOut>(
+        await tool('regression_alert').handler({ project_path: p, scan_type: 'dast', threshold: 0 }, s.plugin),
+      );
+      expect(alert.score_delta).toBe(0);
+    },
+  );
+
+  it('nuclei not requested this time: its earlier finding is not re-measured, and the note says why', async () => {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-dast-nuclei-');
+    seedScan(s, {
+      id: 'a', type: 'dast', project: p,
+      tools_run: [{ name: 'guardian-dast', status: 'ok' }, { name: 'nuclei', status: 'ok' }],
+      findings: [{ fp: T, tool: 'nuclei', severity: 'high' }],
+    });
+    seedScan(s, { id: 'b', type: 'dast', project: p, tools_run: [{ name: 'guardian-dast', status: 'ok' }] });
+    const r = okResult<DiffOut>(await tool('diff_scans').handler({ project_path: p, scan_type: 'dast' }, s.plugin));
+    expect(r.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+    expect(r.note).toMatch(/nuclei/);
+  });
+
+  it('control: both runs measured everything, so a missing finding is resolved', async () => {
+    const { s, p } = dast([{ name: 'guardian-dast', status: 'ok' }, { name: 'nuclei', status: 'ok' }]);
+    const r = okResult<DiffOut>(await tool('diff_scans').handler({ project_path: p, scan_type: 'dast' }, s.plugin));
+    expect(r.summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+    expect(r.not_measured).toBeUndefined();
+  });
+});
+
+describe('a finding tool no bookkeeping name is known to measure', () => {
+  function unknownTool(second: ToolRun[]): { s: Seeded; p: string } {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-unknown-');
+    seedScan(s, {
+      id: 'a', type: 'quality', project: p,
+      tools_run: [{ name: 'eslint', status: 'ok' }],
+      findings: [{ fp: A, tool: 'some-future-linter', severity: 'high', category: 'quality' }],
+    });
+    seedScan(s, { id: 'b', type: 'quality', project: p, tools_run: second });
+    return { s, p };
+  }
+
+  it('is never counted as re-measured by a PARTIAL scan', async () => {
+    const { s, p } = unknownTool([{ name: 'eslint', status: 'ok' }, { name: 'ruff', status: 'failed' }]);
+    const r = okResult<DiffOut>(await tool('diff_scans').handler({ project_path: p, scan_type: 'quality' }, s.plugin));
+    expect(r.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+  });
+
+  it('is by a FULL one (it ran everything it tried)', async () => {
+    const { s, p } = unknownTool([{ name: 'eslint', status: 'ok' }]);
+    const r = okResult<DiffOut>(await tool('diff_scans').handler({ project_path: p, scan_type: 'quality' }, s.plugin));
+    expect(r.summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+  });
+});
+
+describe('a scanner recorded as several passes', () => {
+  const G = 'g'.repeat(64);
+  function secrets(second: ToolRun[]): { s: Seeded; p: string } {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-gitleaks-');
+    seedScan(s, {
+      id: 'a', type: 'secrets', project: p,
+      tools_run: [{ name: 'gitleaks', status: 'ok' }, { name: 'gitleaks-working-tree', status: 'ok' }],
+      findings: [{ fp: G, tool: 'gitleaks', subcategory: 'secret', severity: 'high' }],
+    });
+    seedScan(s, { id: 'b', type: 'secrets', project: p, tools_run: second });
+    return { s, p };
+  }
+
+  it("gitleaks' history pass failed, its working-tree pass ran: the secret is not re-measured", async () => {
+    const { s, p } = secrets([
+      { name: 'gitleaks', status: 'failed', reason: 'git: bad object' },
+      { name: 'gitleaks-working-tree', status: 'ok' },
+    ]);
+    const r = okResult<DiffOut>(await tool('diff_scans').handler({ project_path: p, scan_type: 'secrets' }, s.plugin));
+    expect(r.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+    expect(r.not_measured).toEqual(['gitleaks']);
+  });
+
+  it('a working-tree pass skipped for want of uncommitted files is no gap: the secret is resolved', async () => {
+    const { s, p } = secrets([
+      { name: 'gitleaks', status: 'ok' },
+      { name: 'gitleaks-working-tree', status: 'skipped', reason: 'no uncommitted or untracked files' },
+    ]);
+    const r = okResult<DiffOut>(await tool('diff_scans').handler({ project_path: p, scan_type: 'secrets' }, s.plugin));
+    expect(r.summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+    expect(r.not_measured).toBeUndefined();
+  });
+});
+
+describe('an audit_executive row is judged by its sub-scans, not by "the sub-tool answered"', () => {
+  it("security_scan_full answered ok, but its Semgrep failed: the audit's SAST finding is not re-measured", async () => {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-audit-');
+    seedScan(s, {
+      id: 'sast1', type: 'sast', project: p,
+      tools_run: [{ name: 'semgrep', status: 'ok' }],
+      findings: [{ fp: S, tool: 'semgrep', severity: 'high' }],
+    });
+    seedScan(s, {
+      id: 'audit1', type: 'audit', project: p,
+      tools_run: [{ name: 'security_scan_full', status: 'ok' }],
+      findings: [{ fp: S, tool: 'semgrep', severity: 'high' }],
+      meta: { sub_scan_ids: { security_scan_full: 'sast1' } },
+    });
+    seedScan(s, {
+      id: 'sast2', type: 'sast', project: p,
+      tools_run: [{ name: 'semgrep', status: 'failed', reason: 'exit 7' }, { name: 'bandit', status: 'ok' }],
+    });
+    seedScan(s, {
+      id: 'audit2', type: 'audit', project: p,
+      tools_run: [{ name: 'security_scan_full', status: 'ok' }],
+      meta: { sub_scan_ids: { security_scan_full: 'sast2' } },
+    });
+    const r = okResult<DiffOut>(
+      await tool('diff_scans').handler({ from_scan_id: 'audit1', to_scan_id: 'audit2' }, s.plugin),
+    );
+    expect(r.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+    expect(r.not_measured).toEqual(['semgrep']);
+  });
+});
