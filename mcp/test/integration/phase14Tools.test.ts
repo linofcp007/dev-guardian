@@ -402,6 +402,18 @@ describe('suggest_fix', () => {
     expect(r.rotation_guidance).toBeTruthy();
     expect(r.rotation_guidance?.toLowerCase()).toContain('rotate');
   });
+
+  it('answers unknown_finding for a fingerprint not in any completed scan of the project (consistency with suppress_finding)', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+
+    const r = await getTool('suggest_fix').handler(
+      { project_path: project, finding_fingerprint: 'a'.repeat(64) },
+      plugin,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('unknown_finding');
+  });
 });
 
 describe('health_status', () => {

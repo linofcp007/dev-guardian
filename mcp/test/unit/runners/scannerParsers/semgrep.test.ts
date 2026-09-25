@@ -137,12 +137,10 @@ describe('semgrepParser — secret redaction', () => {
   });
 
   it('does not redact a non-secret rule’s snippet', () => {
-    const raw = 'db.query(`SELECT * FROM users WHERE id = ${id}`)';
     const f = semgrepParser.parse(oneResult({ check_id: 'rules.sql-injection', path: 'a.js' })).findings[0];
     // oneResult's fixture body sets lines: 'x' — assert the pass-through path
-    // (not this literal raw string) is untouched by the redactor.
+    // is untouched by the redactor.
     expect(f?.snippet).toBe('x');
-    void raw;
   });
 
   it('still reports the "requires login" placeholder unchanged for an anonymous run', () => {

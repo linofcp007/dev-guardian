@@ -73,7 +73,7 @@ async function handler(input, ctx) {
     // Locate the finding in this project's newest scan that carries it.
     const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);
     if (!located) {
-        return failDomain('unknown_scan_id', `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`);
+        return failDomain('unknown_finding', `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`);
     }
     const finding = located.finding;
     const credential = isCredentialFinding(finding);

@@ -92,7 +92,7 @@ async function handler(
   const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);
   if (!located) {
     return failDomain(
-      'unknown_scan_id',
+      'unknown_finding',
       `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`,
     );
   }
