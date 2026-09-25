@@ -81,6 +81,19 @@ describe('knownCompromise (GHSA-69fq-xp46-6x23)', () => {
   });
 });
 
+describe('hadolint catalog entry', () => {
+  // scan_containers (task 15) runs hadolint on a Dockerfile when it is
+  // installed; check_toolchain/install_toolchain need to know about it too.
+  it('is registered with a probe and per-OS install hints', () => {
+    const meta = TOOL_CATALOG['hadolint'];
+    expect(meta).toBeDefined();
+    expect(meta?.probe.command).toBe('hadolint');
+    expect(meta?.required_by).toContain('scan_containers');
+    expect(meta?.install.darwin.brew?.args).toEqual(['install', 'hadolint']);
+    expect(meta?.install.win32.scoop?.args).toEqual(['install', 'hadolint']);
+  });
+});
+
 describe('bandit install', () => {
   // The pre-commit template's bandit hook reads pyproject.toml's
   // [tool.bandit] section when the project has one (configs/pre-commit/

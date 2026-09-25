@@ -258,6 +258,25 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
     },
     default: false,
   },
+  // ---------- Containers ----------
+  hadolint: {
+    name: 'hadolint',
+    version_floor: '2.0.0',
+    probe: { command: 'hadolint', args: ['--version'] },
+    required_by: ['scan_containers'],
+    install: {
+      // No install.sh on hadolint/hadolint (verified: no `install` entry in
+      // its repo tree) — releases are prebuilt binaries only, so per
+      // curlInstaller's own doc comment this is left unfabricated.
+      win32: {
+        scoop: scoopInstall('hadolint'),
+        winget: wingetInstall('hadolint.hadolint'),
+      },
+      linux: {},
+      darwin: { brew: brewInstall('hadolint') },
+    },
+    default: false, // only when a Dockerfile is present
+  },
   // ---------- DAST ----------
   nuclei: {
     name: 'nuclei',
