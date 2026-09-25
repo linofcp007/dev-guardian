@@ -101,6 +101,56 @@ version bump.
   (the CLI lives in `<plugin>/cli`).
 - `plugin.json`'s description claimed it installs/configures Playwright;
   nothing in the plugin does, so the claim is removed.
+- **Dependency/license/SBOM pipeline:**
+  - Trivy fs silently reports "0 findings" for a bare `.csproj` (no
+    `packages.lock.json`) or a bare `package.json`/`composer.json` (no
+    lockfile) — reproduced against Trivy 0.69.3: the JSON report omits
+    `Results` entirely, identical to an empty project. `scan_deps` and
+    `deps_audit` now compare every manifest present at the project root
+    against what Trivy's own output actually covers and mark the scanner
+    `skipped`/`no_supported_manifest` (never `ok` with a clean 0) when a
+    manifest goes unrecognised; `requirements.txt` and `go.mod` are
+    excluded from this check since Trivy scans both from the bare
+    manifest, no lockfile required.
+  - **New: .NET SCA.** `deps_audit` now runs `dotnet list <target> package
+    --vulnerable --include-transitive --format json` (restoring first) for
+    every `.sln`/`.csproj` found, gated on the SDK — the only source of
+    NuGet findings, since Trivy cannot cover it at all without a lockfile.
+  - `pip-audit` ran bare (`depsAudit.ts:163-164`), auditing the MCP host's
+    own Python, and its output was never parsed. Now run with `-r` per
+    `requirements*.txt` file or against the project directory for a
+    `pyproject.toml`-only project, parsed into Findings.
+  - `deps_update_plan`'s pip branch ran `pip list --outdated` / `pip
+    install -U` against the host interpreter. Now reads the project's own
+    `requirements*.txt` exact pins and PEP 621 `pyproject.toml`
+    dependencies and proposes a step only for a pin with an active CVE and
+    a known fixed version — never touching the host environment. The npm
+    branch now upgrades to the CVE's MINIMUM fixed version rather than
+    `npm outdated`'s own "latest", every `npm install` it proposes carries
+    `--ignore-scripts`, and a vulnerable TRANSITIVE package gets an
+    `overrides` step (`npm pkg set overrides.<pkg>=<version>`) instead of
+    an install. The CVE source for both is now the latest `deps` /
+    `deps_audit` / `security_full` scan of the SAME project
+    (`listHistoryForProject`), not an unscoped "latest scan in the whole
+    database" lookup that a different project's scan could win.
+  - `license_compatibility` returned zero issues whenever no project
+    license was found — the normal case for proprietary client work — and
+    never read npm's `UNLICENSED` or a `.csproj`'s
+    `PackageLicenseExpression`. No declared license (and `UNLICENSED`) is
+    now treated as proprietary/all-rights-reserved and still flags
+    copyleft dependencies; a `.csproj`'s `PackageLicenseExpression` is now
+    also read (`composer.json` already was); `GPL-2.0-only` now normalises
+    the same as `GPL-2.0` (the SPDX `-only` suffix was not stripped, only
+    `-or-later` was); AGPL's network-use clause is now modelled with its
+    own message, distinct from ordinary viral copyleft.
+  - `sbom_diff` compared only the first 25 components in document order
+    (`top_packages`), keyed by name only (so `lodash@3`/`lodash@4` in two
+    different ecosystems could collapse into one row), against an unscoped
+    default pair. Now always reads the full SBOM document already on disk,
+    keys components by (ecosystem, name) via each component's purl, scopes
+    the default pair to `project_path`'s own latest two SBOM scans, and
+    caps only the response arrays — `summary` always carries the true,
+    uncapped totals.
 
 ### Changed
 
