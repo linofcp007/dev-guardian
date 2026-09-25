@@ -80,3 +80,31 @@ describe('knownCompromise (GHSA-69fq-xp46-6x23)', () => {
     expect(knownCompromise('trivy', '')).toBeNull();
   });
 });
+
+describe('hadolint catalog entry', () => {
+  // scan_containers (task 15) runs hadolint on a Dockerfile when it is
+  // installed; check_toolchain/install_toolchain need to know about it too.
+  it('is registered with a probe and per-OS install hints', () => {
+    const meta = TOOL_CATALOG['hadolint'];
+    expect(meta).toBeDefined();
+    expect(meta?.probe.command).toBe('hadolint');
+    expect(meta?.required_by).toContain('scan_containers');
+    expect(meta?.install.darwin.brew?.args).toEqual(['install', 'hadolint']);
+    expect(meta?.install.win32.scoop?.args).toEqual(['install', 'hadolint']);
+  });
+});
+
+describe('bandit install', () => {
+  // The pre-commit template's bandit hook reads pyproject.toml's
+  // [tool.bandit] section when the project has one (configs/pre-commit/
+  // pre-commit-config.yaml) — which needs the `toml` extra installed, or
+  // bandit cannot parse the file at all. Every pipx-based install path
+  // should ask for it, so `install_toolchain` leaves a bandit that can
+  // actually do what the shipped hook asks of it.
+  it('installs the toml extra everywhere it uses pipx', () => {
+    const meta = TOOL_CATALOG['bandit'];
+    expect(meta?.install.win32.scoop?.args).toContain('bandit[toml]');
+    expect(meta?.install.linux.pipx?.args).toContain('bandit[toml]');
+    expect(meta?.install.darwin.pipx?.args).toContain('bandit[toml]');
+  });
+});

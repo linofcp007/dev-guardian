@@ -470,7 +470,10 @@ describe('scan_containers (Trivy Dockerfile)', () => {
     writeFileSync(join(project, 'Dockerfile'), 'FROM node:20\n', 'utf8');
     const plugin = makePlugin(project);
 
-    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
+    // Only trivy — hadolint sits behind the same `dockerfile !== undefined`
+    // gate and would otherwise also run (task 15), tripping the `args?.[0]
+    // === 'config'` assertion below with its own, differently-shaped call.
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'trivy' ? '/fake/bin/trivy' : null));
     vi.mocked(runProcess).mockImplementation(async (opts) => {
       expect(opts.args?.[0]).toBe('config');
       const outIdx = opts.args?.findIndex((a) => a === '--output');
@@ -483,11 +486,12 @@ describe('scan_containers (Trivy Dockerfile)', () => {
     const r = (await tool.handler({ project_path: project }, plugin)) as {
       ok: true;
       findings_count_by_severity: Record<string, number>;
-      tools_run: { name: string }[];
+      tools_run: { name: string; status: string }[];
     };
     expect(r.ok).toBe(true);
     expect(r.findings_count_by_severity.high).toBe(1);
     expect(r.tools_run.some((t) => t.name === 'trivy-dockerfile')).toBe(true);
+    expect(r.tools_run.find((t) => t.name === 'hadolint')).toMatchObject({ status: 'skipped' });
   });
 
   it('reports skipped when neither Dockerfile nor image is provided', async () => {

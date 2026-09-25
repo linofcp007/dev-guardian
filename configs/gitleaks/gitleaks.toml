@@ -23,9 +23,14 @@ regex = '''eyJ[a-zA-Z0-9_\-]{20,}\.eyJ[a-zA-Z0-9_\-]{200,}\.[a-zA-Z0-9_\-]{40,}'
 tags = ["supabase", "jwt", "key"]
 
 [allowlist]
-description = "Despromover FPs comuns"
+description = "Despromover FPs comuns — só nas árvores de fixtures, nunca em docs/examples/tests reais"
+# Isto costumava excluir "(test|tests|__tests__|spec|specs|fixtures?|examples?|docs?|samples?)/"
+# por inteiro, o que despromovia uma chave viva em docs/ tanto quanto um dummy
+# num fixture — silenciosamente. Uma fixture é deliberadamente falsa (é para
+# isso que serve); um exemplo em docs/ ou um teste real podem conter um
+# segredo verdadeiro copiado por engano, e esses continuam a ser reportados.
 paths = [
-  '''(?i)(test|tests|__tests__|spec|specs|fixtures?|examples?|docs?|samples?)/''',
+  '''(?i)(^|/)(fixtures?|__fixtures__)/''',
   '''node_modules/''',
   '''vendor/''',
   '''\.lock$''',

@@ -1,0 +1,46 @@
+# dev-guardian gitleaks config — paranoid profile
+# Estende o default do gitleaks com as mesmas regras extra do perfil standard,
+# mas sem nenhuma supressão por conteúdo: nem a árvore de fixtures, nem os
+# placeholders conhecidos (example.com, "dummy-key", etc.), nem as stopwords.
+# O standard supõe que um valor ao lado de "dummy" ou "placeholder" nunca é
+# um segredo real; o paranoid não assume isso — prefere um falso positivo a
+# perder um segredo verdadeiro que por coincidência está perto dessas palavras.
+#
+# node_modules/, vendor/ e os lockfiles continuam de fora: não é uma supressão
+# por conteúdo, é código de terceiros e gerado que este projeto não escreveu,
+# e teria o mesmo custo (ruído, tempo de scan) em qualquer perfil.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key-strict"
+description = "Generic API key heuristic (chars longos com prefixos suspeitos)"
+regex = '''(?i)(api[_-]?key|api[_-]?secret|access[_-]?token)[\s:=]+["']?[A-Za-z0-9_\-]{32,}["']?'''
+tags = ["key", "generic"]
+
+[[rules]]
+id = "stripe-live-key"
+description = "Stripe live secret key"
+regex = '''sk_live_[0-9a-zA-Z]{24,}'''
+tags = ["stripe", "key", "production"]
+
+[[rules]]
+id = "supabase-service-key"
+description = "Supabase service role key"
+regex = '''eyJ[a-zA-Z0-9_\-]{20,}\.eyJ[a-zA-Z0-9_\-]{200,}\.[a-zA-Z0-9_\-]{40,}'''
+tags = ["supabase", "jwt", "key"]
+
+[allowlist]
+description = "Paranoid: sem supressao por conteudo, so os diretorios gerados/vendorizados"
+paths = [
+  '''node_modules/''',
+  '''vendor/''',
+  '''\.lock$''',
+  '''package-lock\.json''',
+  '''pnpm-lock\.yaml''',
+  '''yarn\.lock'''
+]
+regexes = []
+commits = []
+stopwords = []

@@ -160,7 +160,7 @@ const LANGUAGE_PACKS = new Map([
  * `javascript` and `typescript` collapse to ONE pack, never both: since
  * `p/javascript` and `p/typescript` are the identical 74 rules under two
  * registry names (see `LANGUAGE_PACKS`'s doc comment), running both against
- * a TypeScript project — which is the common case, since `detect-stack.sh`
+ * a TypeScript project — which is the common case, since `detect_stack`
  * (mirrored by `fallbackLanguages` below) only ever sets `typescript`
  * alongside `javascript`, never in place of it — used to pay for two
  * registry fetches and configure the same rule set twice for zero extra
@@ -179,7 +179,7 @@ export function languagePacksFor(languages) {
     return packs;
 }
 /**
- * Cheap, top-level-only filesystem signals, reusing `detect-stack.sh`'s own
+ * Cheap, top-level-only filesystem signals, reusing `detect_stack`'s own
  * per-language marker files rather than inventing new heuristics — same
  * shape as `scanSast.ts`'s own `anyCsprojInProject`. Only consulted when no
  * stack snapshot has ever been persisted for this project (`detect_stack`

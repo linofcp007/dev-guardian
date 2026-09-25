@@ -11,13 +11,9 @@ Inicializa um projeto com toda a infraestrutura de segurança, qualidade e CI us
 
 ### 1. Detectar o stack
 
-Corre o script de detecção:
+Chama a tool `detect_stack(project_path=<project-path>)` — corre em processo, sem shell.
 
-```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/detect/detect-stack.sh <project-path>
-```
-
-Output esperado: JSON com `languages`, `package_managers`, `frameworks`, `existing_tools`, `os`, `has_docker`, `has_iac`.
+Output esperado: JSON com `languages`, `package_managers`, `frameworks`, `existing_tools`, `os`, `has_docker`, `has_iac`, `projects` (detalhe por sub-projeto, quando há manifestos aninhados).
 
 Lê o output para decidir o que instalar.
 

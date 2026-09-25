@@ -9,11 +9,26 @@
  * TTFB) plus the 5 high-level scores (performance, a11y, best-practices,
  * SEO, PWA). k6 summary surfaces request count, error rate, p95/p99
  * latency, plus the names of every configured threshold.
+ *
+ * A Lighthouse run additionally reads `.guardian/budgets.yml` (when present)
+ * and reports any Core Web Vital / bundle-size budget it exceeds as a
+ * Finding in `findings` — see `budgets/budgets.ts`. Not run for k6: none of
+ * LCP/INP/CLS/TBT/bundle-size describe a load test's own metrics.
+ *
+ * `budgets` on the response says what happened with the budgets file itself
+ * — `'none'` (nothing configured), `'ok'` (evaluated; `violations` counts
+ * this run's breaches, possibly 0), or `'invalid'` (broken YAML, an
+ * unrecognised key, a non-numeric value — `reason` says which). This exists
+ * so `findings: []` is never ambiguous between "within budget" and "the
+ * budgets file is broken and nothing was actually checked" — an earlier
+ * version of this tool collapsed both into an empty `findings` array, which
+ * read a typo'd budget as "all clear".
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { budgetViolationFindings, evaluatePerfBudgets, loadBudgets } from '../budgets/budgets.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
@@ -41,7 +56,10 @@ const tool = {
     title: 'Performance probe (Lighthouse or k6)',
     description: 'Run Lighthouse against target_url, or k6 against k6_script_path. Returns parsed metrics ' +
         '(Core Web Vitals for Lighthouse; request count + p95/p99 + thresholds for k6) and the ' +
-        'absolute path to the raw JSON report.',
+        'absolute path to the raw JSON report. A Lighthouse run also reads .guardian/budgets.yml, when ' +
+        'present, and reports any exceeded perf budget (LCP/INP/CLS/TBT/bundle size) as a Finding in ' +
+        '`findings`. `budgets.status` says none/ok/invalid — an invalid file is never reported the same ' +
+        'as "no budgets" or "within budget".',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -116,13 +134,57 @@ async function runLighthouse(opts) {
         return failDomain('scanner_failed', 'Lighthouse output was not valid JSON.');
     }
     const summary = summariseLighthouse(parsed);
+    const budgetResult = evaluateLighthouseBudgets(opts.projectPath, summary.core_web_vitals);
     return {
         ok: true,
         tool: 'lighthouse',
         url: opts.url,
         report_path: outFile,
         summary,
+        findings: budgetResult.findings,
+        budgets: budgetResult.budgets,
+        ...(budgetResult.warnings.length > 0 ? { warnings: budgetResult.warnings } : {}),
     };
+}
+/**
+ * `.guardian/budgets.yml`'s `perf` section, evaluated against this run's
+ * Core Web Vitals. Never fails the whole perf check over a typo'd YAML
+ * file — but, unlike an early version of this function, never silently
+ * treats an INVALID file the same as a MISSING one either: both used to
+ * fall into "no findings", which made a broken budgets.yml read as "within
+ * budget" instead of "not evaluated". `budgets.status` now tells the two
+ * apart explicitly, and an invalid file also gets a `warnings` entry.
+ */
+function evaluateLighthouseBudgets(projectPath, cwv) {
+    const loaded = loadBudgets(projectPath);
+    if (loaded.kind === 'none') {
+        return { findings: [], budgets: { status: 'none' }, warnings: [] };
+    }
+    if (loaded.kind === 'invalid') {
+        return {
+            findings: [],
+            budgets: { status: 'invalid', path: loaded.path, reason: loaded.error },
+            warnings: [
+                `.guardian/budgets.yml is invalid and was NOT evaluated (perf budgets, if any were set, ` +
+                    `were not checked): ${loaded.error}`,
+            ],
+        };
+    }
+    const relPath = relative(projectPath, loaded.path);
+    if (!loaded.budgets.perf) {
+        return { findings: [], budgets: { status: 'ok', path: relPath, violations: 0 }, warnings: [] };
+    }
+    const totalByteWeight = cwv['total-byte-weight'];
+    const measured = {
+        lcp_ms: cwv['largest-contentful-paint'] ?? undefined,
+        inp_ms: cwv['interaction-to-next-paint'] ?? undefined,
+        cls: cwv['cumulative-layout-shift'] ?? undefined,
+        tbt_ms: cwv['total-blocking-time'] ?? undefined,
+        bundle_size_kb: totalByteWeight !== null && totalByteWeight !== undefined ? totalByteWeight / 1024 : undefined,
+    };
+    const violations = evaluatePerfBudgets(measured, loaded.budgets.perf);
+    const findings = budgetViolationFindings(violations, relPath);
+    return { findings, budgets: { status: 'ok', path: relPath, violations: findings.length }, warnings: [] };
 }
 function summariseLighthouse(root) {
     const categories = getProp(root, 'categories');
@@ -144,6 +206,10 @@ function summariseLighthouse(root) {
         'first-contentful-paint',
         'speed-index',
         'server-response-time',
+        // Total page weight in bytes — the closest thing Lighthouse measures to
+        // "bundle size" without a bundler-stats integration; see
+        // evaluateLighthouseBudgets, which converts it to bundle_size_kb.
+        'total-byte-weight',
     ]) {
         const audit = getProp(audits, key);
         const numeric = getNumber(audit, 'numericValue');
