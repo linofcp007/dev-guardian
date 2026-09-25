@@ -120,29 +120,33 @@ version bump.
   - **New: .NET SCA.** `deps_audit` now runs `dotnet list <target> package
     --vulnerable --include-transitive --format json` for every `.sln`/
     `.csproj` found, gated on the SDK — the only source of NuGet findings,
-    since Trivy cannot cover it at all without a lockfile. Restore now runs
+    since Trivy cannot cover it at all without a lockfile. Restore runs
     EXPLICITLY, FIRST, every time — never "try `dotnet list --no-restore`,
-    restore only if that fails" (two changelog entries in a row got this
-    wrong: a stale-but-present `obj/`, the routine "pulled a PR that bumped
-    a `PackageReference`, never re-restored" case, makes `dotnet list
-    --no-restore` exit 0 with valid-looking JSON built from the OLD
-    resolution — no failure for "try list first" to ever catch, so the scan
-    read a clean `ok` from data that was already wrong). `dotnet restore
-    <target> --locked-mode` runs whenever any `packages.lock.json` belongs
-    to the target — discovered per `.csproj`, not by checking next to a
-    `.sln` itself (a solution's own directory is almost never where a lock
-    file lives) — a plain `dotnet restore <target>` otherwise; only once
-    that restore has genuinely succeeded does `dotnet list --no-restore`
-    run at all, so its JSON is always built from a restore this call just
-    performed. A restore failure's reason distinguishes an out-of-sync lock
-    (NuGet's own `NU1004` code) from an ordinary network/feed failure, and —
-    as a second line of defence even after a successful restore — a
-    `requestedVersion` != `resolvedVersion` mismatch anywhere in the list
-    JSON is treated as stale and reported as a gap rather than trusted.
-    `deps_update_plan`'s own dotnet branch got the identical fix, though
-    with no `unplanned` channel of its own — a CVE'd package that ecosystem
-    cannot place now surfaces through the project-wide catch-all below
-    instead of vanishing.
+    restore only if that fails" (a stale-but-present `obj/`, the routine
+    "pulled a PR that bumped a `PackageReference`, never re-restored" case,
+    makes `dotnet list --no-restore` exit 0 with valid-looking JSON built
+    from the OLD resolution). Every restore is `dotnet restore <target>
+    --locked-mode`, which fails an out-of-sync lock (`NU1004`) instead of
+    rewriting it and is a no-op on a project without one. Lock files are
+    found from the solution's own project list (`.sln`/`.slnx`, plus every
+    `ProjectReference`), never a depth-limited walk that missed a project
+    five directories down and let a plain restore rewrite its lock, and
+    NuGet's `packages.<project>.lock.json` counts too. `--locked-mode` does
+    NOT stop a project that sets `RestorePackagesWithLockFile=true` without
+    a committed lock from CREATING one (measured), so when no project the
+    restore touches has a lock, `-p:RestorePackagesWithLockFile=false` is
+    passed as well; a solution that mixes a locked project with an opted-in
+    lock-less one is not restored at all and reported as a gap, and a lock
+    file that appears anyway is deleted again and reported. Only once the
+    restore has succeeded does `dotnet list --no-restore` run. A restore
+    failure carries NuGet's own code, so an out-of-sync lock (`NU1004`)
+    reads differently from a missing package (`NU1101`) or an unreachable
+    feed (`NU1301`). `requestedVersion` is no longer compared with
+    `resolvedVersion`: after a fresh restore they legitimately differ for
+    every floating (`12.*`), range, two-part or not-on-the-feed reference,
+    and treating that as staleness dropped real findings (one `Serilog 2.*`
+    emptied the whole .NET upgrade plan). `deps_update_plan`'s dotnet
+    branch shares the same targets and restore plan.
   - `pip-audit` ran bare, auditing the MCP host's own Python, and its output
     was never parsed; an exit-1 resolution failure with no valid report was
     also misread as a clean, successful scan. Now run once PER
@@ -167,25 +171,37 @@ version bump.
     branch upgrades to the same minimum-above-installed fixed version
     rather than `npm outdated`'s own "latest", every `npm install` it
     proposes carries `--ignore-scripts`, and a vulnerable TRANSITIVE
-    dependency this npm install's own lockfile (or `node_modules`,
-    including pnpm's own flat `.pnpm` store) actually resolves gets an
-    `npm pkg set overrides[<pkg>]=<version>` step (bracket notation: a
-    dotted package name would otherwise become a nested key; the key uses
-    the LOCKFILE's own spelling of the name, never a CVE scanner's own
-    casing) followed by a `npm install --ignore-scripts` to re-resolve the
-    lockfile. `upgrade_command` stays completely unquoted — `create_fix_pr`
-    runs it without a shell, and a quoted form there corrupted
-    `package.json` while still reporting success; a shell-quoted, paste-safe
-    copy of the same command is in the new `shell_command` field instead.
-    Every package with an active CVE that could not become a step (a range
-    specifier, an unfixable downgrade, an already-resolved/stale CVE, an
-    untraceable transitive dependency) is reported in a new `unplanned`
-    list instead of silently dropped — and, as a final catch-all, ANY CVE'd
-    package no ecosystem runner in the project could place at all (no
-    runner of its own, like composer/cargo/go/rubygems; a `.NET` target
-    whose restore failed) is now reported `unplanned` with ecosystem
-    `unknown` rather than vanishing from both `plan` and `unplanned`
-    together. The CVE source for both branches is the latest `deps` /
+    dependency this npm install's own lockfile (or `node_modules`) actually
+    resolves gets an `npm pkg set overrides[<pkg>]=<version>` step (bracket
+    notation: a dotted package name would otherwise become a nested key;
+    the key uses the LOCKFILE's own spelling of the name, never a CVE
+    scanner's own casing) followed by a `npm install --ignore-scripts` to
+    re-resolve the lockfile. `upgrade_command` stays completely unquoted —
+    `create_fix_pr` runs it without a shell, and a quoted form there
+    corrupted `package.json` while still reporting success; a shell-quoted,
+    paste-safe copy of the same command is in the new `shell_command` field
+    instead. A CVE whose recorded fix is already at or below the installed
+    version is reported `already_fixed` — including for a direct dependency
+    `npm outdated` does not list because it is already at latest, whose
+    version is read from `package-lock.json` / `node_modules`. A pnpm or
+    yarn project gets NO npm command at all: pnpm ignores npm's top-level
+    `overrides` (measured on pnpm 10.33.2) and an `npm install` there writes
+    a `package-lock.json` while `pnpm-lock.yaml` / `yarn.lock` stays
+    vulnerable, so each CVE'd package is reported with the manual
+    `pnpm.overrides` / `resolutions` fix instead, and the manager is named
+    in `unsupported_ecosystems_present`. Every package with an active CVE
+    that could not become a step (a range specifier, an unfixable
+    downgrade, an already-resolved/stale CVE, an untraceable transitive
+    dependency) is reported in a new `unplanned` list instead of silently
+    dropped, and a new `runner_failures` list names every ecosystem command
+    that could not do its job (not installed, a failing exit, empty or
+    unparseable output, a refused or failed .NET restore with its NuGet
+    code). As a final catch-all, a CVE'd package no runner claimed is
+    reported with the reason that actually applies: declared in a manifest
+    whose runner failed, declared in a manifest whose runner only plans what
+    its own "outdated" command lists (composer/cargo/go/bundler, .NET
+    top-level references), or declared nowhere in the project (ecosystem
+    `unknown`). The CVE source for both branches is the latest `deps` /
     `deps_audit` / `security_full` scan of the SAME project
     (`listHistoryForProject`), not an unscoped "latest scan in the whole
     database" lookup that a different project's scan could win.
@@ -201,22 +217,28 @@ version bump.
     unrecognisable string (the project side was never parsed at all before
     this), and any dependency license this tool does not recognise at all
     is reported in a new `undetermined` list — never silently compatible.
-    `GPL-2.0`/`GPL-3.0`/`AGPL` are now matched in all three SPDX forms
-    (bare, `-only`, `-or-later`) instead of normalising the suffix away,
-    which used to exempt `-or-later` from every check entirely, and a small
-    explicit compatibility matrix now covers pairs the earlier fix's
+    `GPL`/`LGPL`/`AGPL` are now matched in all three SPDX forms (bare,
+    `-only`, `-or-later`, plus the deprecated `+`) instead of normalising
+    the suffix away, which used to exempt `-or-later` from every check
+    entirely. GNU-family pairs are decided by VERSION: a combination is
+    fine when one version of the license is allowed by both sides, so the
+    same license on both sides is compatible (it used to read
+    `undetermined`), `GPL-2.0-only` + `GPL-3.0-only` is incompatible in
+    either direction, and a `GPL-2.0-or-later` project — which can elect
+    GPL-3.0 — is compatible with both a GPL-3.0 and an Apache-2.0
+    dependency (it used to pass one and flag the other); an LGPL dependency
+    in a GPL project is judged by the GPL versions it may be relicensed
+    under. An AGPL dependency's reason is version-accurate: AGPL-1.0 is
+    GPL-2.0 plus its own section 2(d), not "GPL-3.0-compatible licensing".
+    A small explicit matrix covers the remaining pairs the earlier fix's
     whole-FAMILY "is this project license one I understand" flag silently
-    treated as fully decided even though only one specific dependency
-    category per family actually had a rule (a GPL-2.0-only project against
-    a GPL-3.0 or AGPL dependency, for one, used to read compatible with no
-    rule backing it at all — now either a real GPL-2.0-vs-GPL-3.0
-    incompatibility or `undetermined`, never silently fine). A dependency
-    or project license mixing `AND`/`OR` with parentheses beyond one
-    redundant outer wrap (`"(MIT OR Apache-2.0) AND GPL-3.0-only"`) is now
-    reported `undetermined` rather than mis-split by a parser with no real
-    operator precedence — a naive OR-first split on that exact expression
-    silently dropped its `AND GPL-3.0-only` term entirely, reading the whole
-    thing as compatible. `findLatestCompliance` is now scoped to the
+    treated as decided; every other pair is `undetermined`, never silently
+    fine. A dependency or project license mixing `AND`/`OR` with
+    parentheses beyond one redundant outer wrap (`"(MIT OR Apache-2.0) AND
+    GPL-3.0-only"`) is reported `undetermined` by design — this tool does
+    not evaluate such expressions, and the naive OR-first split it replaces
+    silently dropped the `AND GPL-3.0-only` term, reading the whole thing as
+    compatible. `findLatestCompliance` is now scoped to the
     project (`listHistoryForProject`), not the latest compliance scan in the
     whole database.
   - `sbom_diff` compared only the first 25 components in document order
