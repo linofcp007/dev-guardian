@@ -35,17 +35,23 @@ export function attachAllTools(server, ctx) {
                 callMeta.signal = typedExtra.signal;
             }
             const result = await tool.handler(input, ctx, callMeta);
-            return toCallToolResult(result);
+            return toCallToolResult(result, tool.contentOnlyKeys ?? []);
         });
     }
 }
-function toCallToolResult(result) {
+function toCallToolResult(result, contentOnlyKeys) {
     if (result.ok) {
         const { ok: _ok, ...rest } = result;
         const payload = { ok: true, ...rest };
+        const structured = { ...payload };
+        for (const key of contentOnlyKeys)
+            delete structured[key];
+        // A tool with a bulky content-only payload is serialised compactly too:
+        // re-indenting an inlined document adds whitespace to every line of it.
+        const indent = contentOnlyKeys.length > 0 ? undefined : 2;
         return {
-            content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
-            structuredContent: payload,
+            content: [{ type: 'text', text: JSON.stringify(payload, null, indent) }],
+            structuredContent: structured,
         };
     }
     const errorPayload = { ok: false, error: result.error };

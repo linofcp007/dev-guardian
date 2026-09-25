@@ -47,6 +47,14 @@ export interface ToolModule {
     ctx: PluginContext,
     callMeta?: ToolCallMeta,
   ) => Promise<ToolResult<Record<string, unknown>>>;
+  /**
+   * Result keys sent ONCE, in the text content the model reads, and left
+   * out of `structuredContent`. Every result otherwise travels twice (the
+   * JSON text block and the structured copy), which for a bulky payload —
+   * an inlined SBOM — doubles the response for nothing. Declaring any also
+   * makes the text block compact JSON.
+   */
+  contentOnlyKeys?: readonly string[];
 }
 
 /**
@@ -86,7 +94,7 @@ export function attachAllTools(server: McpServer, ctx: PluginContext): void {
           callMeta.signal = typedExtra.signal;
         }
         const result = await tool.handler(input as Record<string, unknown>, ctx, callMeta);
-        return toCallToolResult(result);
+        return toCallToolResult(result, tool.contentOnlyKeys ?? []);
       },
     );
   }
@@ -94,6 +102,7 @@ export function attachAllTools(server: McpServer, ctx: PluginContext): void {
 
 function toCallToolResult<T extends Record<string, unknown>>(
   result: ToolResult<T>,
+  contentOnlyKeys: readonly string[],
 ): {
   content: Array<{ type: 'text'; text: string }>;
   structuredContent: Record<string, unknown>;
@@ -102,9 +111,14 @@ function toCallToolResult<T extends Record<string, unknown>>(
   if (result.ok) {
     const { ok: _ok, ...rest } = result;
     const payload = { ok: true, ...rest } as Record<string, unknown>;
+    const structured: Record<string, unknown> = { ...payload };
+    for (const key of contentOnlyKeys) delete structured[key];
+    // A tool with a bulky content-only payload is serialised compactly too:
+    // re-indenting an inlined document adds whitespace to every line of it.
+    const indent = contentOnlyKeys.length > 0 ? undefined : 2;
     return {
-      content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
-      structuredContent: payload,
+      content: [{ type: 'text', text: JSON.stringify(payload, null, indent) }],
+      structuredContent: structured,
     };
   }
   const errorPayload = { ok: false, error: result.error } as Record<string, unknown>;

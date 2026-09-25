@@ -3,8 +3,12 @@
  *
  * - guardian://dotnet/target-frameworks  — most recent dotnet_target_framework_check
  * - guardian://dotnet/efcore             — most recent dotnet_efcore_audit
+ *
+ * Both answer for the server's working-directory project.
  */
+import { findLatestUsable } from '../history/openSet.js';
 import { registerResourceModule } from './index.js';
+import { serverProjectPath } from './paging.js';
 registerResourceModule({
     name: 'guardian-dotnet-target-frameworks',
     uri: 'guardian://dotnet/target-frameworks',
@@ -40,9 +44,12 @@ registerResourceModule({
         };
     },
 });
+/**
+ * The server's project's newest completed scan of `type` — a project-scoped
+ * SQL query, not a search of the 50 newest scans of the whole database. Both
+ * report through `meta`, so a run's scanner coverage does not disqualify it.
+ */
 function findLatestOfType(ctx, type) {
-    const history = ctx.storage.scans.listHistory(50);
-    const row = history.find((s) => s.scan_type === type && s.status === 'completed');
-    return row ? ctx.storage.scans.getById(row.scan_id) : null;
+    return findLatestUsable(ctx.storage, serverProjectPath(), [type], { skipCoverageNone: false }).scan;
 }
 //# sourceMappingURL=dotnet.js.map
