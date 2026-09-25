@@ -10,6 +10,29 @@ version bump.
 
 ### Added
 
+- CI workflow scanning and a CI config generator. `scan_iac` now also runs
+  zizmor (GitHub Actions security auditor: template injection, unpinned
+  `uses:`, excessive `permissions:`, credential persistence) and actionlint
+  (workflow schema/expression correctness) against `.github/workflows/*.yml`
+  when present, independently of Trivy and of each other — findings land at
+  `category: security`, `subcategory: ci`; either tool missing is a named
+  gap (`missing_tools`, coverage `partial`), never silence. Both registered
+  in the install catalogue with per-OS hints (zizmor: pipx/uv/cargo/brew;
+  actionlint: go/brew/scoop/choco).
+  `dev-guardian ci-init <github|gitlab|bitbucket> [--project <path>] [--write] [--force]`
+  generates a CI pipeline for the PROJECT BEING SCANNED (never for this
+  repo): every GitHub Action pinned by full 40-hex commit SHA, Trivy/
+  gitleaks/actionlint pinned by version and a sha256 verified against the
+  tool's own GitHub release, semgrep/zizmor pinned by exact PyPI version.
+  The generated job clones dev-guardian itself at this build's own release
+  tag (`.claude-plugin/plugin.json`'s `version`) and runs
+  `dev-guardian scan` gated against the committed baseline, uploading SARIF
+  to code scanning on GitHub (a plain artifact on GitLab/Bitbucket, neither
+  of which ingests raw SARIF). Every pinned value lives in one data file,
+  `configs/ci/pinned.json`, so a release can refresh them together; `--write`
+  never overwrites an existing pipeline file without `--force`. Templates are
+  snapshot-tested (`mcp/test/e2e/ciInitCli.test.ts`).
+
 - `wp_vuln_check_source` — WordPress vulnerabilities from source: no live
   URL, no WP-CLI, no WPScan. Reads a local WordPress install's core version
   (`wp-includes/version.php`), plugin versions (main-file header, falling

@@ -16,7 +16,7 @@ import { compareSemver } from '../platform/semverCompare.js';
 import type { VersionProbe } from './toolProbe.js';
 
 export type WindowsPkgManager = 'winget' | 'scoop' | 'choco' | 'wsl';
-export type PosixPkgManager = 'apt' | 'brew' | 'pipx' | 'npm' | 'curl';
+export type PosixPkgManager = 'apt' | 'brew' | 'pipx' | 'npm' | 'curl' | 'uv' | 'cargo' | 'go';
 
 export interface InstallSpec {
   /** Shell command (as a tokenised argv) to install. */
@@ -277,6 +277,57 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
     },
     default: false, // only when a Dockerfile is present
   },
+  // ---------- GitHub Actions workflows ----------
+  zizmor: {
+    name: 'zizmor',
+    // 1.0.0 marks zizmor's own API-stability baseline; `--format=json`,
+    // `--no-exit-codes` and `--collect=workflows` (scan_iac.ts's invocation)
+    // are all long-stable CLI surface with no "available in vX" note of
+    // their own in the project's usage docs, unlike `--format=json-v1`
+    // (v1.6.0+) and `--strict-collection` (v1.7.0+), neither of which this
+    // repo uses. Not enforced strictly — see the module doc comment.
+    version_floor: '1.0.0',
+    probe: { command: 'zizmor', args: ['--version'] },
+    required_by: ['scan_iac'],
+    install: {
+      // Verified on docs.zizmor.sh/installation (2026-09-25): zizmor is a
+      // Rust tool also published to PyPI as prebuilt wheels (pip/pipx/uv)
+      // and to crates.io. No scoop/choco/winget manifest was found, so
+      // Windows gets the same pipx-via-scoop heuristic semgrep's and
+      // bandit's win32 entries already use — a Windows box with scoop
+      // almost always has Python, hence pipx, on it too.
+      win32: { scoop: pipxInstall('zizmor') },
+      linux: { pipx: pipxInstall('zizmor'), uv: uvInstall('zizmor'), cargo: cargoInstall('zizmor') },
+      darwin: {
+        brew: brewInstall('zizmor'),
+        pipx: pipxInstall('zizmor'),
+        uv: uvInstall('zizmor'),
+        cargo: cargoInstall('zizmor'),
+      },
+    },
+    default: false, // only when .github/workflows exists
+  },
+  actionlint: {
+    name: 'actionlint',
+    // 1.6.0: conservative floor a couple of minor releases back from the
+    // current 1.7.12 (verified via the GitHub releases API, 2026-09-25);
+    // nothing scan_iac.ts uses (`-format`, `-pyflakes=`, `-shellcheck=`)
+    // needs a newer one.
+    version_floor: '1.6.0',
+    probe: { command: 'actionlint', args: ['-version'] },
+    required_by: ['scan_iac'],
+    install: {
+      // Verified against rhysd/actionlint's docs/install.md (2026-09-25):
+      // choco/scoop/winget package ids are all literally `actionlint`; the
+      // Homebrew formula is official (`brew install actionlint`, no tap);
+      // no apt/pacman package, so linux falls back to `go install`, the
+      // README's own primary install path.
+      win32: { scoop: scoopInstall('actionlint'), choco: chocoInstall('actionlint') },
+      linux: { go: goInstall('github.com/rhysd/actionlint/cmd/actionlint@latest') },
+      darwin: { brew: brewInstall('actionlint') },
+    },
+    default: false, // only when .github/workflows exists
+  },
   // ---------- DAST ----------
   nuclei: {
     name: 'nuclei',
@@ -484,6 +535,36 @@ function curlInstaller(url: string, tag?: string): InstallSpec {
     args: ['-c', `curl -sSfL ${url} | sh -s -- -b "$HOME/.local/bin"${pinned}`],
     needs_elevation: false,
     description: `curl ${url} | sh${pinned}`,
+  };
+}
+
+function uvInstall(pkg: string): InstallSpec {
+  return {
+    command: 'uv',
+    args: ['tool', 'install', pkg],
+    needs_elevation: false,
+    description: `uv tool install ${pkg}`,
+  };
+}
+
+function cargoInstall(pkg: string): InstallSpec {
+  return {
+    // `--locked` is documented upstream (zizmor's own installation guide) as
+    // strongly recommended: an unlocked build can pull different dependency
+    // versions than the ones actually tested for that release.
+    command: 'cargo',
+    args: ['install', '--locked', pkg],
+    needs_elevation: false,
+    description: `cargo install --locked ${pkg}`,
+  };
+}
+
+function goInstall(modulePath: string): InstallSpec {
+  return {
+    command: 'go',
+    args: ['install', modulePath],
+    needs_elevation: false,
+    description: `go install ${modulePath}`,
   };
 }
 

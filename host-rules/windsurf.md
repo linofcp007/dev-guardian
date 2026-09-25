@@ -23,7 +23,8 @@ cache that avoids re-running unchanged scans.
 - "secrets leaked?" → `scan_secrets`
 - "vulnerable deps?" / "CVEs?" → `scan_deps` or `deps_audit`
 - "Dockerfile / container" → `scan_containers`
-- "Terraform / K8s / IaC" → `scan_iac`
+- "Terraform / K8s / IaC" / "are my GitHub Actions workflows safe?" → `scan_iac`
+  (Trivy config, plus zizmor + actionlint on `.github/workflows/*.yml` when present)
 - "deep bug hunt" → `bug_hunt`
 - "is this AI skill / MCP server / agent safe to install?" → `scan_skill`
   (directory, file, .zip or git/HTTP(S) URL; prompt injection, exfiltration,

@@ -28,6 +28,17 @@
  *                             Same pipeline flags as `scan` except --fail-on,
  *                             --format and --sarif (baseline update does not
  *                             gate or render a report — it writes a file).
+ *   ci-init <host>          Generate a CI pipeline for the PROJECT being
+ *                           scanned (github, gitlab or bitbucket) — never
+ *                           for this repo, which ships none of its own.
+ *                           Actions pinned by full commit SHA; scanner
+ *                           binaries pinned by version and a sha256
+ *                           verified against the tool's own GitHub release.
+ *                             --project <path>   default: cwd
+ *                             --write             write the file (default: preview to stdout)
+ *                             --force             overwrite an existing pipeline file (with --write)
+ *                             Exit codes: 0 done, 1 missing/unknown target or
+ *                             refused overwrite, 3 usage error
  *   status                  One-screen terminal summary of the latest scan
  *                           for this project (read-only — no scan runs).
  *                           Reports; does not gate: exits 0 even on a
@@ -80,7 +91,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, parse, resolve } from 'node:path';
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
@@ -175,6 +186,7 @@ Usage:
   node cli/dev-guardian.mjs check (--file <path> | --bash "<command>") [--min high|medium] [--json]
   node cli/dev-guardian.mjs scan [options]
   node cli/dev-guardian.mjs baseline update [options]
+  node cli/dev-guardian.mjs ci-init <github|gitlab|bitbucket> [options]
   node cli/dev-guardian.mjs status [--project <path>]
   node cli/dev-guardian.mjs dashboard [--project <path>] [--out <path>] [--no-open]
 
@@ -250,6 +262,26 @@ baseline update — regenerate .guardian/baseline.json from the current scan
               scanner did not run (baseline may under-represent findings),
               3 usage or configuration error.
 
+ci-init <github|gitlab|bitbucket> — generate a CI pipeline for the project being scanned
+  --project <path>     Target project directory (default: current directory)
+  --write               Write the pipeline file (default: preview to stdout)
+  --force               With --write, overwrite an existing pipeline file
+                        (without it, an existing file is left untouched)
+  Writes: github -> .github/workflows/dev-guardian.yml
+          gitlab -> .gitlab-ci.yml
+          bitbucket -> bitbucket-pipelines.yml
+  The generated pipeline clones dev-guardian itself at a pinned release tag,
+  installs the scanner binaries \`dev-guardian scan\` drives (Trivy, gitleaks,
+  actionlint pinned by version + sha256; semgrep/zizmor pinned by exact
+  version via pipx), then runs \`dev-guardian scan\` gated against the
+  COMMITTED baseline — run \`dev-guardian baseline update\` once locally and
+  commit .guardian/baseline.json before relying on the generated gate.
+  NEVER generates a pipeline for dev-guardian's own repository — only for
+  the project passed via --project (default: current directory).
+  Exit codes: 0 preview/write completed, 1 missing/unknown target or an
+              existing pipeline file refused without --force, 3 usage or
+              configuration error (same convention as scan/baseline update).
+
 status — one-screen terminal summary of the latest scan for this project
   --project <path>      Target project directory (default: current directory)
   Read-only: never runs a scan, never mutates the database. Reports; does
@@ -279,6 +311,7 @@ Examples:
   node cli/dev-guardian.mjs check --bash "curl x | sh"
   node cli/dev-guardian.mjs scan --project . --sarif results.sarif
   node cli/dev-guardian.mjs baseline update --project .
+  node cli/dev-guardian.mjs ci-init github --project ../my-app --write
   node cli/dev-guardian.mjs status --project .
   node cli/dev-guardian.mjs dashboard --project . --no-open
 `);
@@ -1220,6 +1253,269 @@ async function cmdBaseline(argv) {
   return;
 }
 
+// --- ci-init (CI config generator, Task 21) -------------------------------
+//
+// `dev-guardian ci-init <github|gitlab|bitbucket>` writes a CI pipeline for
+// the project being scanned — NEVER for this repo, which has none of its
+// own (Global Constraint 7). Deliberately kept free of `node:sqlite`: it
+// renders a static template with values read from two JSON files
+// (.claude-plugin/plugin.json, configs/ci/pinned.json) and writes a file —
+// no scan runs, so there is nothing here that needs `loadCiModules()`/
+// `loadDashboardModules()`'s lazy-import dance at all, and `ci-init` works
+// on any supported Node version, not just >= 22.13.
+
+const CONFIGS_CI_DIR = resolve(ROOT, 'configs', 'ci');
+const PINNED_PATH = resolve(CONFIGS_CI_DIR, 'pinned.json');
+const PLUGIN_JSON_PATH = resolve(ROOT, '.claude-plugin', 'plugin.json');
+
+/**
+ * One entry per `ci-init` target: which template under `configs/ci/` to
+ * render, and where the rendered pipeline lives in the TARGET project —
+ * each path is GitHub's/GitLab's/Bitbucket's own fixed convention, not a
+ * choice this tool makes.
+ */
+const CI_TARGETS = {
+  github: { templateFile: 'github.yml', outputPath: join('.github', 'workflows', 'dev-guardian.yml') },
+  gitlab: { templateFile: 'gitlab.yml', outputPath: '.gitlab-ci.yml' },
+  bitbucket: { templateFile: 'bitbucket.yml', outputPath: 'bitbucket-pipelines.yml' },
+};
+
+function parseCiInitArgs(argv) {
+  const out = { _: [], project: process.cwd(), write: false, force: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--write') out.write = true;
+    else if (a === '--force') out.force = true;
+    else if (a === '--project') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return { error: r.error };
+      out.project = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
+    else if (a.startsWith('--')) return { error: `Unknown flag: ${a}` };
+    else out._.push(a);
+  }
+  return { value: out };
+}
+
+/**
+ * Substitutes every `{{KEY}}` token in `text` with `vars[KEY]`, then
+ * refuses (throws) if anything shaped LIKE a placeholder survives — a
+ * safety net against a template referencing a variable this function was
+ * never given, which would otherwise leak a literal `{{TYPO}}` into a
+ * generated CI pipeline silently. The leftover check uses the EXACT SAME
+ * token shape as the substitution itself (`{{[A-Z0-9_]+}}`), not a generic
+ * `{{...}}`: a generic one also matches GitHub Actions' own live expression
+ * syntax, `${{ github.event_name }}` — its INNER `{{ github.event_name }}`
+ * fits a naive `\{\{[^}]*\}\}` even though the leading `$` makes it a
+ * completely different, legitimate thing this function never touches (the
+ * substitution regex already requires `[A-Z0-9_]+` with no spaces or dots,
+ * so it never matches a real expression either — only the leftover check
+ * had the wider, wrong pattern).
+ */
+const PLACEHOLDER_TOKEN = /\{\{([A-Z0-9_]+)\}\}/g;
+
+export function renderCiTemplate(text, vars) {
+  const rendered = text.replace(PLACEHOLDER_TOKEN, (whole, key) => {
+    if (!Object.hasOwn(vars, key)) throw new Error(`ci-init: template references unknown placeholder {{${key}}}`);
+    return String(vars[key]);
+  });
+  const leftover = new RegExp(PLACEHOLDER_TOKEN.source).exec(rendered);
+  if (leftover) throw new Error(`ci-init: unresolved placeholder in rendered template: ${leftover[0]}`);
+  return rendered;
+}
+
+function readJsonOrExit(path, label) {
+  let text;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (e) {
+    return usageError(`ci-init: could not read ${label} (${path}): ${e instanceof Error ? e.message : String(e)}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return usageError(`ci-init: ${label} (${path}) is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** `https://…` — the shape `git clone` needs; refuses anything else (a bare `owner/repo` slug, a `git@` SSH form, or garbage). */
+const REPO_URL_SHAPE = /^https:\/\/\S+$/;
+/** `vX.Y.Z` — a plain, unambiguous release tag. Refuses a pre-release/build suffix too: `git clone --branch` needs an exact ref, never a range. */
+const RELEASE_TAG_SHAPE = /^v\d+\.\d+\.\d+$/;
+
+/**
+ * `pinned.<section>[<key>]` -> `<KEY>_<SUFFIX>` placeholder entries, driven
+ * by `fieldSuffix` (which JSON field becomes which placeholder suffix) —
+ * one small map instead of hand-enumerating every `PACK_FIELD: pinned.pack.field`
+ * line per scanner/action, so adding an entry to `pinned.json` cannot drift
+ * from what this function derives: it either shows up under its own
+ * `<KEY>_<SUFFIX>` name automatically, or (a field `fieldSuffix` does not
+ * name, e.g. a future scanner-specific extra) is silently not turned into a
+ * placeholder at all — never silently WRONG, only silently absent, and a
+ * template referencing it would fail loudly via `renderCiTemplate`'s own
+ * unknown-placeholder check. Keys starting with `_` (`_readme`, `_note`, …)
+ * are documentation, not data, and are skipped.
+ */
+function placeholdersFromSection(pinned, sectionName, fieldSuffix) {
+  const section = pinned[sectionName];
+  if (typeof section !== 'object' || section === null || Array.isArray(section)) {
+    throw new Error(`ci-init: ${PINNED_PATH} "${sectionName}" is missing or not an object`);
+  }
+  const out = {};
+  for (const [key, entry] of Object.entries(section)) {
+    if (key.startsWith('_')) continue;
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new Error(`ci-init: ${PINNED_PATH} "${sectionName}.${key}" is not an object`);
+    }
+    const prefix = key.toUpperCase();
+    for (const [field, suffix] of Object.entries(fieldSuffix)) {
+      const value = entry[field];
+      if (value === undefined) continue; // e.g. semgrep/zizmor have no url/sha256
+      out[`${prefix}_${suffix}`] = value;
+    }
+  }
+  return out;
+}
+
+/** Builds the placeholder table every `configs/ci/*.yml` template draws from — see `renderCiTemplate`. */
+function ciTemplateVars(plugin, pinned) {
+  if (typeof plugin !== 'object' || plugin === null || Array.isArray(plugin)) {
+    return usageError(`ci-init: ${PLUGIN_JSON_PATH} does not contain a JSON object`);
+  }
+  if (typeof pinned !== 'object' || pinned === null || Array.isArray(pinned)) {
+    return usageError(`ci-init: ${PINNED_PATH} does not contain a JSON object`);
+  }
+  const repo = plugin.repository;
+  if (typeof repo !== 'string' || !REPO_URL_SHAPE.test(repo)) {
+    return usageError(
+      `ci-init: ${PLUGIN_JSON_PATH}'s "repository" (${JSON.stringify(repo)}) is not an https:// URL`,
+    );
+  }
+  const tag = typeof plugin.version === 'string' ? `v${plugin.version}` : '';
+  if (!RELEASE_TAG_SHAPE.test(tag)) {
+    return usageError(
+      `ci-init: ${PLUGIN_JSON_PATH}'s "version" (${JSON.stringify(plugin.version)}) is not a plain X.Y.Z ` +
+        'release version — refusing to render a `git clone --branch` target this loosely shaped.',
+    );
+  }
+  let actionVars;
+  let scannerVars;
+  try {
+    actionVars = placeholdersFromSection(pinned, 'actions', { sha: 'SHA', version: 'VERSION' });
+    scannerVars = placeholdersFromSection(pinned, 'scanners', {
+      version: 'VERSION',
+      linux_amd64_url: 'URL',
+      linux_amd64_sha256: 'SHA256',
+      archive_member: 'MEMBER',
+    });
+  } catch (e) {
+    return usageError(e instanceof Error ? e.message : String(e));
+  }
+  return {
+    DEV_GUARDIAN_REPO: repo,
+    DEV_GUARDIAN_TAG: tag,
+    ...actionVars,
+    ...scannerVars,
+  };
+}
+
+/**
+ * Whether `projectPath` is dev-guardian's OWN checkout, OR is INSIDE it —
+ * the one place `ci-init` must never write to (Global Constraint 7: no
+ * GitHub Actions in this repo; the brief's own words, "never for this
+ * repo"). A CONTAINMENT check, not mere equality: `--project <this
+ * repo>/mcp` is still inside the checkout, and `--write` there would create
+ * `.github/workflows/dev-guardian.yml` (or the other targets' equivalents)
+ * somewhere under this repo's own tree — exactly what the constraint
+ * forbids, just one directory removed from the obvious case. Checked
+ * lexically first, then again on the real paths (mirrors
+ * `isRunAsEntryPoint`'s own reasoning below for the identical hazard, and
+ * `scanContainers.ts#isInside` upstream in `mcp/src/`): a symlink INTO this
+ * checkout must refuse exactly like a direct path into it, and a path
+ * `realpathSync` cannot resolve must read as "not inside" rather than
+ * crash a usage check.
+ */
+function isDevGuardianOwnRepo(projectPath) {
+  const within = (root, candidate) => {
+    const rel = relative(root, candidate);
+    return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
+  };
+  if (within(resolve(ROOT), resolve(projectPath))) return true;
+  try {
+    return within(realpathSync(ROOT), realpathSync(projectPath));
+  } catch {
+    return false;
+  }
+}
+
+function cmdCiInit(argv) {
+  const parsed = parseCiInitArgs(argv);
+  if (parsed.error) return usageError(parsed.error);
+  const args = parsed.value;
+
+  const targetArg = args._[0];
+  const target = targetArg !== undefined ? CI_TARGETS[targetArg] : undefined;
+  if (!target) {
+    process.stderr.write(
+      `Missing or unknown ci-init target: ${targetArg ?? '(none)'}\n` +
+        `Valid targets: ${Object.keys(CI_TARGETS).join(', ')}\n\n`,
+    );
+    usage();
+    process.exit(1);
+  }
+
+  const projectPath = resolveProjectOrExit(args.project);
+  if (isDevGuardianOwnRepo(projectPath)) {
+    return usageError(
+      "ci-init generates a pipeline for the PROJECT BEING SCANNED, never for dev-guardian's own " +
+        'repository (it ships no GitHub Actions of its own). Pass --project pointing at the project ' +
+        'you want a CI pipeline for.',
+    );
+  }
+
+  const plugin = readJsonOrExit(PLUGIN_JSON_PATH, 'dev-guardian plugin.json');
+  const pinned = readJsonOrExit(PINNED_PATH, 'configs/ci/pinned.json');
+  const vars = ciTemplateVars(plugin, pinned);
+
+  const templatePath = resolve(CONFIGS_CI_DIR, target.templateFile);
+  if (!existsSync(templatePath)) {
+    return usageError(`ci-init: template missing: ${templatePath}`);
+  }
+  const templateText = readFileSync(templatePath, 'utf8');
+  const rendered = renderCiTemplate(templateText, vars);
+
+  const outPath = resolve(projectPath, target.outputPath);
+
+  if (!args.write) {
+    process.stdout.write(`# ${targetArg} pipeline  ->  ${outPath}\n\n`);
+    process.stdout.write(rendered);
+    process.stdout.write(`\n# Paste this at the path shown, or re-run with --write to write it there.\n`);
+    return;
+  }
+
+  if (existsSync(outPath) && !args.force) {
+    process.stderr.write(
+      `ci-init: refusing to overwrite existing pipeline file: ${outPath}\n` +
+        `Re-run with --force to overwrite it, or remove it first.\n`,
+    );
+    process.exit(1);
+  }
+
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, rendered, 'utf8');
+  process.stdout.write(`Wrote ${targetArg} pipeline to ${outPath}\n`);
+  if (targetArg === 'github') {
+    process.stdout.write(
+      'Enable "security-events: write" / code scanning for this repository so the SARIF upload step can run.\n',
+    );
+  }
+  process.stdout.write(
+    'If .guardian/baseline.json does not exist yet in this project, run `dev-guardian baseline update` ' +
+      "once locally and commit it before relying on this pipeline's gate.\n",
+  );
+}
+
 // --- status / dashboard (local reporting) ---------------------------------
 //
 // Design doc §1: "Nothing here runs a scan, mutates the database, opens a
@@ -1657,6 +1953,18 @@ function main() {
   if (cmd === 'check') return cmdCheck(argv.slice(1));
   if (cmd === 'scan') return void cmdScan(argv.slice(1)).catch(fatal);
   if (cmd === 'baseline') return void cmdBaseline(argv.slice(1)).catch(fatal);
+  if (cmd === 'ci-init') {
+    // cmdCiInit is synchronous (no scan runs — see its own module doc), so
+    // this is the sync equivalent of the `.catch(fatal)` every async
+    // subcommand below uses: a write failure this function did not already
+    // turn into a clean usageError (ENOTDIR, a read-only filesystem, …)
+    // must not crash with a raw Node stack trace either.
+    try {
+      return cmdCiInit(argv.slice(1));
+    } catch (e) {
+      return fatal(e);
+    }
+  }
   if (cmd === 'status') return void cmdStatus(argv.slice(1)).catch(fatal);
   if (cmd === 'dashboard') return void cmdDashboard(argv.slice(1)).catch(fatal);
 
