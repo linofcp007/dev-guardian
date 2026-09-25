@@ -64,6 +64,16 @@
  * grew a scanner. Fail-open is the design; a missed warning is the failure
  * mode we accept, and no block rule was narrowed to get here.
  *
+ * ## ReDoS
+ *
+ * `assessBashCommand` caps every LINE of its input at 16 KB before doing
+ * anything else (`capLines`) — measured, a 100 KB single-line unquoted
+ * command took 2-3.6s against several of the `[^\n]*`-shaped BASH_RULES
+ * patterns above, each restarting its search at every position in a haystack
+ * with nothing for it to find. Capping first bounds that to a small, fixed
+ * constant regardless of how large the real input is, the same fix applied
+ * in `secretScan.ts`.
+ *
  * Pure functions. No I/O. No dependencies.
  */
 /**
@@ -88,24 +98,82 @@ export const BASH_RULES = [
         id: 'remote-pipe-to-shell',
         level: 'block',
         reason: 'Pipes a downloaded script directly into a shell (curl|wget … | sh/bash)',
-        pattern: /\b(?:curl|wget)\b[^\n]*?\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b/i,
+        // `sudo -E bash`, `sudo -H -E bash` etc. — flags between `sudo` and the
+        // shell name — used to fall through this pattern, which only allowed
+        // `sudo` directly followed by the shell.
+        pattern: /\b(?:curl|wget)\b[^\n]*?\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:ba|z|da)?sh\b/i,
     },
     {
         id: 'powershell-iex-download',
         level: 'block',
         reason: 'Downloads and executes remote code via Invoke-Expression',
-        pattern: /(?:iwr|invoke-webrequest|invoke-restmethod|wget|curl)[^\n]*\|\s*(?:iex|invoke-expression)/i,
+        // `irm`/`iwr` are PowerShell's own built-in aliases for
+        // Invoke-RestMethod/Invoke-WebRequest — as common in the wild as the
+        // full names, and the piped-download shape is identical either way.
+        pattern: /(?:iwr|irm|invoke-webrequest|invoke-restmethod|wget|curl)[^\n]*\|\s*(?:iex|invoke-expression)/i,
+    },
+    {
+        id: 'powershell-iex-nested',
+        level: 'block',
+        reason: 'Downloads and executes remote code via Invoke-Expression',
+        // `iex (irm …)` / `Invoke-Expression (Invoke-RestMethod …)` is the same
+        // hazard as the piped form above, spelled with the download as a nested
+        // call instead of a pipe. `(` is a statement boundary everywhere else in
+        // this file (subshells, command substitution), so this must be
+        // scope:'command' to see across it — narrow enough (iex/Invoke-Expression
+        // immediately opening a paren around a download cmdlet) that it does not
+        // reopen the cross-separator false positives scope:'command' otherwise
+        // reintroduces the download and the pipe are never split across `&&`/`;`
+        // for the same reason the fork-bomb signature needs scope:'command'.
+        pattern: /\b(?:iex|invoke-expression)\s*\(\s*(?:irm|iwr|invoke-restmethod|invoke-webrequest)\b/i,
+        scope: 'command',
+    },
+    {
+        id: 'powershell-disk-format',
+        level: 'block',
+        reason: 'Formats or clears an entire disk/volume',
+        pattern: /\b(?:Format-Volume|Clear-Disk)\b/i,
+    },
+    {
+        id: 'process-substitution-remote-fetch',
+        level: 'block',
+        reason: 'Executes a downloaded script via process substitution (bash <(curl …))',
+        // `bash <(curl …)` hands bash a fake file whose content is curl's stdout
+        // — the same hazard as `curl … | sh`, spelled with process substitution
+        // instead of a pipe. `<(` is not a statement separator anywhere else in
+        // this file, so scope:'command' (which sees the un-split text) is enough
+        // here and no tokenizer change is needed — unlike `sh -c "$(curl …)"`,
+        // where the whole thing sits inside quotes and is handled separately, by
+        // `isBareRemoteFetch` on the extracted `-c` script text.
+        pattern: /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b[^\n]*<\(\s*(?:curl|wget)\b/i,
+        scope: 'command',
     },
     {
         id: 'disk-overwrite',
         level: 'block',
-        reason: 'Writes raw bytes to a block device (dd/mkfs/shred on /dev/…)',
+        reason: 'Writes raw bytes to a block device (dd/mkfs/wipefs/shred on /dev/…)',
         // The `\b` used to sit in front of the whole group, and a leading `\b`
         // before `>` demands a word character immediately to its left — so the
         // redirect alternative matched `cat x>/dev/sda` and never the
         // `cat x > /dev/sda` anybody actually writes. Each alternative anchors
         // itself now.
-        pattern: /(?:\bdd\b[^\n]*\bof=\/dev\/|\bmkfs(?:\.\w+)?\s+\/dev\/|\bshred\b[^\n]*\/dev\/|>\s*\/dev\/(?:sd|nvme|hd|disk))/i,
+        //
+        // `dd … of=` is deliberately narrower than the rest: it only blocks a
+        // handful of real block-device name families (`sd`/`hd`/`vd`/`xvd`/
+        // `nvme`/`mmcblk`/`disk`/`md`/`dm-`, plus the Windows `\\.\PhysicalDriveN`
+        // spelling) — `dd … of=/dev/null`, `of=/dev/stdout`, `of=/dev/zero` and
+        // an ordinary regular-file target are all common, harmless uses of dd
+        // that this used to block outright by matching any `/dev/` path.
+        // `mkfs`/`wipefs`/`shred` keep matching any `/dev/…` target: unlike dd,
+        // there is no ordinary reason to run any of them against something that
+        // is not a device, so narrowing them has no false positive to fix.
+        // `mkfs`'s target used to have to sit immediately after the command
+        // (`mkfs\s+\/dev\/`), so `mkfs -t ext4 /dev/sdb` — flags between the
+        // command and its target — never matched; `[^\n]*` between them (already
+        // safe here: this rule runs per masked *statement*, so it cannot cross a
+        // `&&`/`;`/newline) fixes that the same way the rest of this alternation
+        // already tolerates flags before its target.
+        pattern: /(?:\bdd\b[^\n]*\bof=(?:\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)[\w-]*|\\\\\.\\PhysicalDrive\d*)|\bmkfs(?:\.\w+)?\b[^\n]*\/dev\/|\bwipefs\b[^\n]*\/dev\/|\bshred\b[^\n]*\/dev\/|>\s*\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-))/i,
     },
     {
         id: 'fork-bomb',
@@ -122,14 +190,19 @@ export const BASH_RULES = [
         id: 'chmod-777-root',
         level: 'block',
         reason: 'Recursively makes the filesystem root world-writable',
-        pattern: /\bchmod\b[^\n]*-[a-z]*R[a-z]*\s+0?777\s+\/(?:\s|$)/i,
+        // `chmod 777 -R /` is the same hazard as `chmod -R 777 /` with the flag
+        // and the mode swapped — both orders are real, so both are matched.
+        pattern: /\bchmod\b[^\n]*(?:-[a-z]*R[a-z]*\s+0?777\s+\/(?:\s|$)|0?777\s+-[a-z]*R[a-z]*\s+\/(?:\s|$))/i,
     },
     // ── Risky: warn only ─────────────────────────────────────────────────────
     {
         id: 'git-force-push',
         level: 'warn',
         reason: 'Force-push can overwrite remote history',
-        pattern: /\bgit\s+push\b[^\n]*?(?:--force\b|--force-with-lease\b|\s-f\b)/i,
+        // `+main`/`+master` is git's own shorthand for a forced update of that
+        // ref (a `+` prefix on a push refspec), and `--mirror` force-overwrites
+        // every ref on the remote — same hazard as `--force`, different spelling.
+        pattern: /\bgit\s+push\b[^\n]*?(?:--force\b|--force-with-lease\b|\s-f\b|\s\+\S|--mirror\b)/i,
     },
     {
         id: 'git-hard-reset',
@@ -236,9 +309,41 @@ function readHeredocOperator(source, start) {
     return { word, next: i };
 }
 /**
- * Skips the bodies of every heredoc opened on the line just ended. The body is
- * data on the command's stdin, never shell code; a commit message written
- * through `git commit -F - <<'EOF'` is the shape that made this necessary.
+ * Attaches a captured heredoc body to the statement that opened it
+ * ({@link PendingHeredoc.statement}), appending rather than overwriting —
+ * `bash <<A; bash <<B` opens two heredocs on the SAME statement's command
+ * list in principle (two simple commands, but if a single command opened
+ * two, e.g. via redirection tricks, both bodies belong to it).
+ */
+function attachHeredocBody(heredoc, body) {
+    const target = heredoc.statement;
+    if (target.heredocBodies === undefined)
+        target.heredocBodies = [];
+    target.heredocBodies.push(body);
+}
+/**
+ * Skips the bodies of every heredoc opened on the line just ended, CAPTURING
+ * each body's text along the way and attaching it to the STATEMENT THAT
+ * OPENED IT (`heredoc.statement`, set when `<<` was parsed) — never to
+ * whichever statement happens to be last on the source line. That
+ * distinction matters the moment a line carries more than one statement:
+ * `bash <<EOF; echo done` opens its heredoc on `bash`, and `echo done` is a
+ * second, unrelated statement that follows it on the same line; attaching by
+ * position (`statements[statements.length - 1]`) attached to `echo done`
+ * instead, so `bash`'s own heredoc — the one shape this file exists to
+ * assess as a command — silently lost its body. `bash <<A; cat <<B` was the
+ * other failure mode of that same bug: two heredocs opened on one line, both
+ * bodies landing on the second statement (`cat`) and none on the first.
+ *
+ * The body is data on the command's stdin, never shell code in general; a
+ * commit message written through `git commit -F - <<'EOF'` is the shape that
+ * made skipping necessary in the first place. It is captured, not just
+ * skipped, because that stops being true for exactly one shape — `bash
+ * <<EOF … EOF` hands the body to bash as the script it runs — and
+ * `collect()` is what tells the two apart, by whether the statement's own
+ * command is a bare shell reading stdin ({@link isBareShellStdin}); this
+ * function has no way to know that itself, since it only ever sees raw
+ * source text, not resolved commands.
  *
  * The delimiter is matched on the trimmed line, which covers `<<` and `<<-`
  * alike and errs toward ending the heredoc *early*. That is the safe side:
@@ -251,17 +356,24 @@ function skipHeredocBodies(source, from, pending) {
         const heredoc = pending.shift();
         if (heredoc === undefined)
             break;
+        const lines = [];
         for (;;) {
-            if (pos >= source.length)
+            if (pos >= source.length) {
+                attachHeredocBody(heredoc, lines.join('\n'));
                 return source.length;
+            }
             const newline = source.indexOf('\n', pos);
             const line = newline === -1 ? source.slice(pos) : source.slice(pos, newline);
             pos = newline === -1 ? source.length : newline + 1;
             if (line.trim() === heredoc.word)
                 break;
-            if (newline === -1)
+            lines.push(line);
+            if (newline === -1) {
+                attachHeredocBody(heredoc, lines.join('\n'));
                 return source.length;
+            }
         }
+        attachHeredocBody(heredoc, lines.join('\n'));
     }
     return pos;
 }
@@ -281,6 +393,18 @@ export function splitShell(command) {
     /** Last code character emitted, to tell a background `&` from `2>&1`. */
     let lastCode = '';
     const heredocs = [];
+    /**
+     * The `ShellStatement` object for whatever statement is currently being
+     * built — created up front, then mutated (not replaced) by `endStatement`
+     * once its `masked`/`commands` are known, and pushed by that SAME
+     * reference. A heredoc opened mid-statement (`<<` is parsed by
+     * `heredocs.push`, below) records a reference to this object — the object
+     * identity is what lets its body attach to the right statement later, once
+     * `skipHeredocBodies` reads it, even though the two events (opening a
+     * heredoc, and reading its body) happen many characters apart and possibly
+     * after other statements/heredocs on the same source line.
+     */
+    let currentStatement = { masked: '', commands: [] };
     const endWord = () => {
         if (hasWord)
             words.push({ value: buf, quoted: bufQuoted });
@@ -297,11 +421,15 @@ export function splitShell(command) {
     const endStatement = () => {
         endCommand();
         const text = masked.trim();
-        if (text.length > 0 || commands.length > 0)
-            statements.push({ masked: text, commands });
+        if (text.length > 0 || commands.length > 0) {
+            currentStatement.masked = text;
+            currentStatement.commands = commands;
+            statements.push(currentStatement);
+        }
         masked = '';
         commands = [];
         lastCode = '';
+        currentStatement = { masked: '', commands: [] };
     };
     const emitCode = (ch) => {
         buf += ch;
@@ -348,6 +476,12 @@ export function splitShell(command) {
         if (ch === '\n') {
             endStatement();
             maskedCommand += '\n';
+            // skipHeredocBodies attaches each body directly, via the statement
+            // reference each PendingHeredoc recorded when its `<<` was parsed —
+            // not to whichever statement is last here. `endStatement()` above may
+            // have just pushed several statements onto a single line before this
+            // point (every `;` on the line already ran it), so "last" would be
+            // wrong whenever more than one statement shares this line.
             i = heredocs.length > 0 ? skipHeredocBodies(command, i + 1, heredocs) : i + 1;
             continue;
         }
@@ -403,7 +537,7 @@ export function splitShell(command) {
         if (ch === '<' && command.charAt(i + 1) === '<' && command.charAt(i + 2) !== '<') {
             const heredoc = readHeredocOperator(command, i);
             if (heredoc !== null) {
-                heredocs.push({ word: heredoc.word });
+                heredocs.push({ word: heredoc.word, statement: currentStatement });
                 endWord();
                 masked += ' ';
                 maskedCommand += ' ';
@@ -499,29 +633,57 @@ function resolveCommand(words) {
 function stripQuotes(token) {
     return token.replace(/^['"`]+|['"`]+$/g, '');
 }
-/** Filesystem locations whose recursive deletion is effectively never intended. */
+/**
+ * Filesystem locations whose recursive deletion is effectively never
+ * intended. Covers POSIX roots and home, macOS's `/Users`/`/System`, Git
+ * Bash / WSL drive-root spellings (`/c`, `/c/*`, `/mnt/c`, `/mnt/c/*`) and
+ * native Windows drive roots (`C:/`, `C:\`, `C:/*`) — the same set applies
+ * whether the command deleting them is `rm`, PowerShell's `Remove-Item`, or
+ * `rd`/`del`, so this is shared by every delete-assessing function below.
+ */
 function isCatastrophicTarget(raw) {
     const t = stripQuotes(raw);
     if (t === '/' || /^\/\*+$/.test(t))
         return true; // root, or everything under root
-    if (t === '~' || t === '~/')
-        return true; // home root
-    if (/^\$\{?HOME\}?\/?$/.test(t))
-        return true; // $HOME / ${HOME}
-    // Top-level system directories (exact, optionally trailing / or /*).
-    if (/^\/(?:etc|usr|bin|sbin|var|lib|lib64|boot|sys|proc|root|home|opt|dev)(?:\/\*?)?$/.test(t)) {
+    if (t === '~' || t === '~/' || t === '~/*')
+        return true; // home root, incl. everything under it
+    if (/^\$\{?HOME\}?(?:\/\*?)?$/.test(t))
+        return true; // $HOME, $HOME/, $HOME/*, ${HOME}, …
+    // Git Bash / WSL drive-root spellings: /c, /c/, /c/*, /mnt/c, /mnt/c/*.
+    if (/^\/[a-z](?:\/\*?)?$/i.test(t))
+        return true;
+    if (/^\/mnt\/[a-z](?:\/\*?)?$/i.test(t))
+        return true;
+    // Native Windows drive roots: C:/, C:\, C:/*, C:\*.
+    if (/^[A-Za-z]:[\\/]\*?$/.test(t))
+        return true;
+    // Top-level system directories (exact, optionally trailing / or /*),
+    // including macOS's capitalised ones.
+    if (/^\/(?:etc|usr|bin|sbin|var|lib|lib64|boot|sys|proc|root|home|opt|dev|Users|System)(?:\/\*?)?$/.test(t)) {
         return true;
     }
     return false;
 }
+/** `rm`/PowerShell's `Remove-Item` (and its `ri` alias) — dash-style flags. */
+const DASH_DELETE_HEADS = new Set(['rm', 'ri', 'remove-item']);
+/** cmd.exe-style delete commands, also reachable from PowerShell — slash flags. */
+const SLASH_DELETE_HEADS = new Set(['rd', 'rmdir', 'del', 'erase']);
 /**
  * Tokenised assessment of one simple command. The *target* — not just the
  * flags — decides severity: `rm -rf /` is catastrophic, `rm -rf node_modules`
- * is merely risky.
+ * is merely risky. Covers both `rm`/`Remove-Item`/`ri` (dash flags: GNU-style
+ * clusters like `-rf`/`-fo`, `--recursive`/`--force`, and PowerShell's
+ * whole-word `-Recurse`/`-Force`) and `rd`/`rmdir`/`del`/`erase` (cmd.exe-
+ * style slash flags: `/s` recurse, `/q` quiet-force).
  */
-function assessRm(words, start) {
+function assessRecursiveDelete(words, start) {
     const head = words[start];
-    if (head === undefined || basename(head.value) !== 'rm')
+    if (head === undefined)
+        return null;
+    const name = basename(head.value).toLowerCase();
+    const dashStyle = DASH_DELETE_HEADS.has(name);
+    const slashStyle = !dashStyle && SLASH_DELETE_HEADS.has(name);
+    if (!dashStyle && !slashStyle)
         return null;
     let recursive = false;
     let force = false;
@@ -529,23 +691,51 @@ function assessRm(words, start) {
     const targets = [];
     for (const word of words.slice(start + 1)) {
         const token = word.value;
-        if (token === '--no-preserve-root')
-            noPreserve = true;
-        else if (token === '--recursive')
-            recursive = true;
-        else if (token === '--force')
-            force = true;
-        else if (token.startsWith('--'))
-            continue;
-        else if (token.startsWith('-')) {
-            const flags = token.slice(1);
-            if (/r/i.test(flags))
+        if (dashStyle) {
+            if (token === '--no-preserve-root')
+                noPreserve = true;
+            else if (token === '--recursive')
                 recursive = true;
-            if (/f/.test(flags))
+            else if (token === '--force')
                 force = true;
+            else if (token.startsWith('--'))
+                continue;
+            else if (token.startsWith('-')) {
+                const flags = token.slice(1);
+                const lower = flags.toLowerCase();
+                // PowerShell's whole-word parameter names first — `-Recurse`,
+                // `-Force`, and their common abbreviations. Checked before the
+                // GNU-cluster heuristic below because that heuristic (does the flag
+                // text contain the letter r/f anywhere?) is right for a *cluster* of
+                // single-letter flags like `-rf`/`-fo`, where every character really
+                // is its own flag, and wrong for a whole parameter name — `-Filter`
+                // or `-Confirm` both contain an 'f', and would otherwise read as
+                // `-Force` by accident.
+                if (lower === 'recurse' || lower === 'rec')
+                    recursive = true;
+                else if (lower === 'force' || lower === 'fo')
+                    force = true;
+                else if (flags.length <= 3) {
+                    if (/r/i.test(flags))
+                        recursive = true;
+                    if (/f/i.test(flags))
+                        force = true;
+                }
+            }
+            else
+                targets.push(token);
         }
-        else
-            targets.push(token);
+        else {
+            const lower = token.toLowerCase();
+            if (lower === '/s')
+                recursive = true;
+            else if (lower === '/q')
+                force = true;
+            else if (token.startsWith('/'))
+                continue;
+            else
+                targets.push(token);
+        }
     }
     if (!((recursive && force) || noPreserve))
         return null;
@@ -562,7 +752,66 @@ function assessRm(words, start) {
         reason: 'Recursive force-delete — confirm the target path is intended',
     };
 }
-const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash', 'mksh', 'su']);
+/**
+ * `find … -delete` — like `rm`/`Remove-Item`, the *target* decides severity:
+ * the filesystem root is catastrophic, the home directory is merely risky
+ * (an ordinary `find some/path -delete` is neither and stays 'ok'). Only the
+ * leading, non-flag operands are read as paths — `find / -name foo -delete`
+ * still targets `/`, but a flag value that happens to equal `/` or `~` after
+ * a primary (e.g. `-path /`) is not mistaken for `find`'s own start path.
+ */
+function assessFind(words, start) {
+    const head = words[start];
+    if (head === undefined || basename(head.value) !== 'find')
+        return null;
+    const rest = words.slice(start + 1);
+    if (!rest.some((w) => w.value === '-delete'))
+        return null;
+    const targets = [];
+    for (const word of rest) {
+        if (word.value.startsWith('-'))
+            break; // first primary/flag ends the path list
+        targets.push(stripQuotes(word.value));
+    }
+    if (targets.length === 0)
+        return null;
+    if (targets.some((t) => t === '/' || /^\/\*+$/.test(t))) {
+        return {
+            id: 'find-delete-root',
+            level: 'block',
+            reason: 'find … -delete on the filesystem root deletes everything under it',
+        };
+    }
+    if (targets.some((t) => t === '~' || t === '~/' || /^\$\{?HOME\}?\/?$/.test(t))) {
+        return {
+            id: 'find-delete-home',
+            level: 'warn',
+            reason: 'find … -delete targets the home directory — confirm this is intended',
+        };
+    }
+    return null;
+}
+/**
+ * True when `script` (already dequoted) IS a remote download, rather than
+ * merely containing one — the entire text is a bare `curl`/`wget` invocation,
+ * or one wrapped in `$( … )`/backticks. This is what `bash <(curl …)` hands
+ * to bash as its script argument, and what `sh -c "$(curl …)"` hands to `-c`:
+ * both execute the downloaded bytes without ever spelling `| sh`, so neither
+ * is caught by `remote-pipe-to-shell`, and neither should be confused with
+ * the ordinary, harmless `x=$(curl …)` (captures output into a variable;
+ * never executed) — which is exactly why this checks the *whole* trimmed
+ * script rather than searching for `curl`/`wget` anywhere inside it.
+ */
+function isBareRemoteFetch(script) {
+    const s = script.trim();
+    const unwrapped = s.startsWith('$(') && s.endsWith(')')
+        ? s.slice(2, -1).trim()
+        : s.startsWith('`') && s.endsWith('`')
+            ? s.slice(1, -1).trim()
+            : s;
+    return /^(?:curl|wget)\b/i.test(unwrapped);
+}
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash', 'mksh', 'su', 'pwsh', 'powershell']);
 const DASH_C = /^-[A-Za-z]*c$/;
 /**
  * Scripts this command hands to a shell — `sh -c '…'`, `bash -lc '…'`,
@@ -592,6 +841,61 @@ function nestedScripts(words, start) {
     }
     return [];
 }
+/**
+ * True when `words` is a bare shell invocation reading its script from
+ * stdin — the shell name and, at most, flags after it; no `-c` script (that
+ * is `nestedScripts`'s job) and no script-file argument. This is what
+ * `bash <<EOF … EOF` and `… | bash` both hand a shell: the fed text IS the
+ * script, executed exactly as if it were typed at an interactive prompt.
+ */
+function isBareShellStdin(words) {
+    const head = words[0];
+    if (head === undefined || !SHELLS.has(basename(head.value)))
+        return false;
+    return words.slice(1).every((w) => w.value.startsWith('-'));
+}
+/**
+ * Text a statement hands to a shell to execute, other than through `-c` —
+ * finding 4: text is data only until something feeds it to a shell as its
+ * *script*, and the existing heredoc-is-data behaviour (`git commit -F -
+ * <<'EOF'`) must not change for any command that is not itself a shell.
+ * Two shapes:
+ *
+ *   - `bash <<EOF … EOF` — the heredoc IS the script. `splitShell` captures
+ *     the body on the statement (`heredocBodies`) precisely so this can
+ *     recognise it; every other command's heredoc stays inert, as before.
+ *   - `echo '…' | bash` / `printf '…' | sh` — the shell is the LAST member
+ *     of the pipeline and reads the PREVIOUS member's output as its script.
+ *     `printf`'s own format-vs-arguments split is not modelled; the last
+ *     argument is used, which is exactly right for the common single- or
+ *     two-argument form (`printf '%s' 'rm -rf ~'`) and merely imprecise,
+ *     not wrong, for anything fancier.
+ */
+function fedShellScripts(statement) {
+    const scripts = [];
+    if (statement.commands.length === 1 && statement.heredocBodies) {
+        const only = statement.commands[0];
+        if (only !== undefined && isBareShellStdin(only))
+            scripts.push(...statement.heredocBodies);
+    }
+    if (statement.commands.length >= 2) {
+        const last = statement.commands[statement.commands.length - 1];
+        const prev = statement.commands[statement.commands.length - 2];
+        if (last !== undefined && prev !== undefined && isBareShellStdin(last)) {
+            const prevHead = prev[0];
+            const prevName = prevHead === undefined ? '' : basename(prevHead.value);
+            const args = prev.slice(1);
+            let fed = '';
+            if (prevName === 'echo')
+                fed = args.map((w) => w.value).join(' ').trim();
+            else if (prevName === 'printf')
+                fed = (args[args.length - 1]?.value ?? '').trim();
+            if (fed.length > 0)
+                scripts.push(fed);
+        }
+    }
+    return scripts;
+}
 // ──────────────────────────────────────────────────────────── assessment
 const MAX_NESTING = 3;
 function collect(command, depth, out) {
@@ -614,21 +918,59 @@ function collect(command, depth, out) {
             const resolved = resolveCommand(words);
             if (resolved.elevated)
                 out.push({ ...SUDO_RULE });
-            const rm = assessRm(words, resolved.index);
-            if (rm !== null)
-                out.push(rm);
+            const del = assessRecursiveDelete(words, resolved.index);
+            if (del !== null)
+                out.push(del);
+            const find = assessFind(words, resolved.index);
+            if (find !== null)
+                out.push(find);
             if (depth < MAX_NESTING) {
-                for (const script of nestedScripts(words, resolved.index))
+                for (const script of nestedScripts(words, resolved.index)) {
+                    // `sh -c "$(curl …)"` / `bash -c "$(wget -qO- …)"` — the whole -c
+                    // script IS a download, executed without ever spelling `| sh`.
+                    // Recursing alone would not catch this: the extracted script is
+                    // just "curl …" with no pipe to a shell inside it, so nothing in
+                    // BASH_RULES fires on it at the next depth. Checked directly, in
+                    // addition to (not instead of) recursing.
+                    if (isBareRemoteFetch(script)) {
+                        out.push({
+                            id: 'remote-pipe-to-shell',
+                            level: 'block',
+                            reason: 'Executes the output of a remote download (curl/wget via $(…) or `…`)',
+                        });
+                    }
                     collect(script, depth + 1, out);
+                }
             }
         }
+        // Finding 4: text a shell actually reads as its script — `bash <<EOF …
+        // EOF`, `echo '…' | bash`, `printf '…' | sh` — is assessed as a command
+        // in its own right, the same way a `-c` script already is above. Scoped
+        // to the STATEMENT rather than any one command in its pipeline, since
+        // both shapes this covers depend on more than one command
+        // (`isBareShellStdin` on the shell, plus either a heredoc on the same
+        // statement or the *preceding* pipeline member).
+        if (depth < MAX_NESTING) {
+            for (const script of fedShellScripts(statement))
+                collect(script, depth + 1, out);
+        }
     }
+}
+/** Each scanned line is capped here — see the module doc's ReDoS note. */
+const MAX_LINE_LENGTH = 16 * 1024;
+function capLines(text) {
+    if (text.length <= MAX_LINE_LENGTH)
+        return text; // common case: no line can exceed the whole string
+    return text
+        .split('\n')
+        .map((line) => (line.length > MAX_LINE_LENGTH ? line.slice(0, MAX_LINE_LENGTH) : line))
+        .join('\n');
 }
 /**
  * Assess a shell command. The overall level is the most severe rule matched.
  */
 export function assessBashCommand(command) {
-    const cmd = (command ?? '').trim();
+    const cmd = capLines((command ?? '').trim());
     if (!cmd)
         return { level: 'ok', reasons: [], rules: [] };
     const matched = [];
