@@ -139,7 +139,7 @@ async function handler(
   // own suppression, by either key.
   const priorSuppressions = finding.rule_id
     ? ctx.storage.suppressions
-        .listActiveForRule(finding.tool, finding.rule_id, 20)
+        .listActiveForRule(finding.tool, finding.rule_id, 20, projectPath)
         .filter(
           (s) =>
             s.finding_fingerprint !== finding.fingerprint &&

@@ -117,7 +117,15 @@ export function buildSnapshot(
   const cves = buildCveSummary(cveItems);
 
   const allSuppressions = storage.suppressions.listAll();
-  const activeSuppressions = allSuppressions.filter((s) => isSuppressionActiveAt(s, now));
+  // The panel (active_count, expiring_soon) is scoped the same way matching
+  // already is (fix round 1): a suppression naming a DIFFERENT project
+  // (migration 011) belongs on that project's dashboard, not this one's,
+  // even though it is genuinely active. NULL still means "every project".
+  const activeSuppressions = allSuppressions.filter(
+    (s) =>
+      isSuppressionActiveAt(s, now) &&
+      (s.project_path === undefined || s.project_path === projectPath),
+  );
   const isSuppressed = suppressionMatcher(allSuppressions, now, projectPath);
 
   const sincePrevious = deltaScan

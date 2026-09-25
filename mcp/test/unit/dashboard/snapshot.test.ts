@@ -235,6 +235,30 @@ describe('buildSnapshot', () => {
     db.close();
   });
 
+  // Coordinator fix round 2: the suppression PANEL (active_count,
+  // expiring_soon) filtered only by expiry, never by project — a
+  // suppression belonging to a completely different project counted toward
+  // THIS project's panel, even though (since fix round 1)
+  // `suppressionMatcher` already stopped it from hiding a finding here.
+  it("does not count another project's suppression toward active_count / expiring_soon", () => {
+    const { storage, db } = fresh();
+    const scan = completedScan(storage, '/p');
+    insertFinding(storage, scan, 'visible', 'high', 'a.ts');
+    insertFinding(storage, scan, 'hidden', 'critical', 'b.ts');
+    storage.suppressions.insert({
+      finding_fingerprint: 'hidden', reason: 'suppressed in a different project',
+      created_by: 'test', project_path: '/other',
+    });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    // Not suppressed here (fix round 1): both findings are open.
+    expect(snap.findings.total).toBe(2);
+    expect(snap.findings.by_severity.critical).toBe(1);
+    // Not counted in THIS project's panel either (fix round 2).
+    expect(snap.suppressions.active_count).toBe(0);
+    expect(snap.suppressions.expiring_soon).toEqual([]);
+    db.close();
+  });
+
   it('excludes a suppressed finding from a since_previous delta too, on both sides', () => {
     // The brief's own suppression test only has one scan, so it cannot
     // exercise "suppressed on both sides of a delta" — this closes that gap.

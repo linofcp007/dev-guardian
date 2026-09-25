@@ -116,7 +116,7 @@ async function handler(input, ctx) {
     // own suppression, by either key.
     const priorSuppressions = finding.rule_id
         ? ctx.storage.suppressions
-            .listActiveForRule(finding.tool, finding.rule_id, 20)
+            .listActiveForRule(finding.tool, finding.rule_id, 20, projectPath)
             .filter((s) => s.finding_fingerprint !== finding.fingerprint &&
             (finding.identity === undefined || s.finding_identity !== finding.identity))
             .slice(0, 10)

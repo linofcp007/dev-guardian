@@ -14,16 +14,15 @@
  * belongs to — the caller's own resolved project, at the moment
  * `suppress_finding` looked the target up. NULL means "matches every
  * project" (every row written before this column existed, and any row an
- * older build still inserts without it), never "no project": the readers
- * that actually hide findings by suppression (`findingsRepo.ts`'s
- * `SUPPRESSION_MATCHES_F`, `history/openSet.ts`'s `suppressionMatcher`)
- * treat a NULL project_path as matching whatever project they are asked
- * about. This file's own `isSuppressed`/`listActiveForRule` are unaffected —
- * neither hides a finding from a caller: `isSuppressed` has no production
- * caller left (its own SQL predicate is the pre-011 fingerprint/identity
- * match, kept for what it is — a yes/no lookup, not a listing), and
- * `listActiveForRule` only surfaces informational "similar findings were
- * suppressed before" history to `suggest_fix`, never hides anything.
+ * older build still inserts without it), never "no project": every method
+ * here that reads or writes MORE than one suppression at a time by
+ * fingerprint/identity applies `project_path IS NULL OR project_path = ?`
+ * (`listActiveForRule`, `adoptIdentities`) — the same rule the readers that
+ * actually hide findings apply (`findingsRepo.ts`'s `SUPPRESSION_MATCHES_F`,
+ * `history/openSet.ts`'s `suppressionMatcher`). `isSuppressed` alone is
+ * unscoped: it has no production caller left (its SQL predicate is the
+ * pre-011 fingerprint/identity match, kept for what it is — a yes/no lookup,
+ * not a listing), so there is no project in scope to filter by.
  */
 import { nowIso } from './repoUtil.js';
 export class SuppressionsRepo {
@@ -70,6 +69,7 @@ export class SuppressionsRepo {
         this.listActiveForRuleStmt = db.prepare(`
       SELECT s.* FROM suppressions s
       WHERE (s.expires_at IS NULL OR s.expires_at > ?)
+        AND (s.project_path IS NULL OR s.project_path = ?)
         AND EXISTS (
           SELECT 1 FROM findings f
           WHERE (f.fingerprint = s.finding_fingerprint OR f.identity = s.finding_identity)
@@ -81,6 +81,10 @@ export class SuppressionsRepo {
         // A suppression written before schema 7 knows only a fingerprint. When a
         // scan reports that fingerprint again, its row carries the identity: copy
         // it onto the suppression, once, so the next line shift does not lapse it.
+        // Restricted to a suppression scoped to no project (NULL) or to THIS
+        // scan's own project — otherwise a scan in project A could adopt an
+        // identity computed in A onto a suppression that names project B, purely
+        // because both happen to share a fingerprint.
         this.adoptIdentitiesStmt = db.prepare(`
       UPDATE suppressions
       SET finding_identity = (
@@ -93,6 +97,7 @@ export class SuppressionsRepo {
         AND finding_fingerprint IN (
           SELECT fingerprint FROM findings WHERE scan_id = ? AND identity IS NOT NULL
         )
+        AND (project_path IS NULL OR project_path = (SELECT project_path FROM scans WHERE id = ?))
     `);
     }
     insert(input) {
@@ -116,19 +121,23 @@ export class SuppressionsRepo {
         return this.listForFingerprintStmt.all(fingerprint).map(rowToSuppression);
     }
     /**
-     * Active suppressions of findings reported by `tool` under `ruleId` —
-     * matched through the findings table on either key, since a suppression
-     * stores only the finding's fingerprint/identity. Newest first.
+     * Active suppressions of findings reported by `tool` under `ruleId`,
+     * scoped to `projectPath` (or to no project at all) — matched through the
+     * findings table on either key, since a suppression stores only the
+     * finding's fingerprint/identity. Newest first.
      */
-    listActiveForRule(tool, ruleId, limit) {
-        return this.listActiveForRuleStmt.all(nowIso(), tool, ruleId, limit).map(rowToSuppression);
+    listActiveForRule(tool, ruleId, limit, projectPath) {
+        return this.listActiveForRuleStmt
+            .all(nowIso(), projectPath, tool, ruleId, limit)
+            .map(rowToSuppression);
     }
     /**
      * Give every identity-less suppression whose fingerprint `scanId` reported
-     * that finding's identity. Returns how many suppressions were upgraded.
+     * that finding's identity — restricted to a suppression scoped to no
+     * project or to `scanId`'s own project. Returns how many were upgraded.
      */
     adoptIdentities(scanId) {
-        return Number(this.adoptIdentitiesStmt.run(scanId, scanId).changes);
+        return Number(this.adoptIdentitiesStmt.run(scanId, scanId, scanId).changes);
     }
 }
 function rowToSuppression(row) {
