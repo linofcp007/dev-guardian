@@ -98,6 +98,11 @@ export interface InsertScanInput {
   tree_hash: string;
   report_dir?: string;
   meta?: Record<string, unknown>;
+  /**
+   * What the run was computed from — `treeHash/cacheKey.ts#scanCacheKey`.
+   * Omitted (NULL) for a scan that must never be served from the cache.
+   */
+  cache_key?: string;
 }
 
 export interface FinalizeScanInput {
@@ -113,7 +118,7 @@ export interface FinalizeScanInput {
 export class ScansRepo {
   private readonly insertStmt: Statement<[
     string, string, string, string, string, string, string, string, string | null, string,
-    number, string,
+    number, string, string | null,
   ]>;
   private readonly finalizeStmt: Statement<[
     string, string, string, string, string | null, string | null, string | null, string
@@ -126,7 +131,7 @@ export class ScansRepo {
   private readonly getLatestForProjectStmt: Statement<[string], ScanRow>;
   private readonly listHistoryStmt: Statement<[number], ScanRow>;
   private readonly listHistoryForProjectStmt: Statement<[string, number], ScanRow>;
-  private readonly findCacheStmt: Statement<[string, string, string], ScanRow>;
+  private readonly findCacheStmt: Statement<[string, string], ScanRow>;
   private readonly attachCacheStmt: Statement<[string, string, string, string]>;
 
   constructor(db: DB) {
@@ -134,9 +139,9 @@ export class ScansRepo {
       INSERT INTO scans (
         id, scan_type, project_path, tree_hash,
         started_at, status, tools_run, missing_tools, report_dir, meta,
-        owner_pid, owner_host
+        owner_pid, owner_host, cache_key
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     this.finalizeStmt = db.prepare(`
@@ -217,9 +222,12 @@ export class ScansRepo {
       LIMIT ?
     `);
 
-    this.findCacheStmt = db.prepare<[string, string, string], ScanRow>(`
+    // Matched on the whole key, never on the tree hash: see
+    // `treeHash/cacheKey.ts` for what the tree hash alone let through. A NULL
+    // key (every row written before migration 006) never equals anything.
+    this.findCacheStmt = db.prepare<[string, string], ScanRow>(`
       SELECT * FROM scans
-      WHERE tree_hash = ? AND scan_type = ? AND status = 'completed' AND started_at >= ?
+      WHERE cache_key = ? AND status = 'completed' AND started_at >= ?
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);
@@ -245,6 +253,7 @@ export class ScansRepo {
       JSON.stringify(input.meta ?? {}),
       process.pid,
       hostname(),
+      input.cache_key ?? null,
     );
     return {
       scan_id: input.scan_id,
@@ -260,10 +269,12 @@ export class ScansRepo {
     };
   }
 
-  finalize(input: FinalizeScanInput): void {
+  /** Returns the `finished_at` it wrote, so a caller can report the row's real time. */
+  finalize(input: FinalizeScanInput): string {
+    const finishedAt = nowIso();
     this.finalizeStmt.run(
       input.status,
-      nowIso(),
+      finishedAt,
       JSON.stringify(input.tools_run),
       JSON.stringify(input.missing_tools),
       input.report_dir ?? null,
@@ -271,6 +282,7 @@ export class ScansRepo {
       input.meta !== undefined ? JSON.stringify(input.meta) : null,
       input.scan_id,
     );
+    return finishedAt;
   }
 
   markCancelled(scanId: string): void {
@@ -363,16 +375,13 @@ export class ScansRepo {
   }
 
   /**
-   * Returns the most recent completed scan of the given type whose tree_hash
-   * matches and which started no earlier than `freshThreshold`. The factory
-   * uses this to honour US-8 AC-2 (5-minute cache window).
+   * Returns the most recent completed scan stored under exactly `cache_key`
+   * which started no earlier than `freshThreshold`. The factory uses this to
+   * honour US-8 AC-2 (5-minute cache window); the key is built by
+   * `treeHash/cacheKey.ts#scanCacheKey`.
    */
-  findCacheHit(args: {
-    tree_hash: string;
-    scan_type: ScanType;
-    freshThreshold: string;
-  }): ScanRecord | null {
-    const row = this.findCacheStmt.get(args.tree_hash, args.scan_type, args.freshThreshold);
+  findCacheHit(args: { cache_key: string; freshThreshold: string }): ScanRecord | null {
+    const row = this.findCacheStmt.get(args.cache_key, args.freshThreshold);
     return row ? rowToRecord(row) : null;
   }
 

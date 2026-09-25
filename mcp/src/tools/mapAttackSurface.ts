@@ -59,7 +59,9 @@ import {
 } from '../surface/specDiscover.js';
 import { diffSpecRoutes } from '../surface/specDiff.js';
 import { importSpec } from '../surface/specImport.js';
+import { resolveVersion } from '../platform/version.js';
 import { toRelativeIfPossible } from '../runners/scannerParsers/index.js';
+import { hashRulePacks, surfaceCacheKey } from '../treeHash/cacheKey.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import type {
   AttackSurfaceSnapshot,
@@ -75,6 +77,14 @@ import { ensureReportDir, readJsonSafe } from './scanHelpers.js';
 
 const SAMPLE_SIZE = 20;
 const WEBHOOK_PATTERN = /webhook|callback|hook/i;
+
+/**
+ * How long a snapshot may be reused for an unchanged key. Everything a
+ * snapshot depends on inside the project is in the tree hash, but a spec
+ * resolved from outside it, the stack snapshot behind `coverage[]` and the
+ * Semgrep binary are not; a day bounds how long any of those can go stale.
+ */
+const SURFACE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** Languages the rule pack covers, for honest `no_rules` reporting. */
 const COVERED_LANGUAGES = new Set([
@@ -173,28 +183,44 @@ async function handler(
   }
 
   const treeHash = await computeTreeHash(projectPath);
+  const includeEnvVars = inp.include_env_vars !== false;
+  const rulesPath = join(ctx.scriptsDir, '..', 'configs', 'semgrep', 'routes.yml');
 
-  // The cache key is the project's tree hash, which says nothing about which
-  // document an explicit `spec_paths` argument names — an out-of-tree spec
-  // path in particular can change without the tree hash moving at all.
-  // Serving a cached snapshot in that case would silently diff against the
-  // wrong document (or the auto-discovered one) and misattribute shadow
-  // endpoints / dead documentation. So `spec_paths` bypasses the cache read
-  // exactly like `force` does. (`include_env_vars` has an analogous,
-  // narrower gap — a cache hit can return env_vars collected under a
-  // different value of that flag — but that only omits data, never
-  // misattributes a finding, so it is left as-is here.)
+  // The cache key: this project, this tree, this routes.yml (by content),
+  // this plugin version, and whether env vars were collected — see
+  // `surfaceCacheKey`. It used to be the tree hash alone, which served one
+  // project's routes to another whose tree hashed the same and kept a
+  // snapshot mapped with a since-fixed rule pack forever. Reuse is also
+  // bounded in time (SURFACE_CACHE_TTL_MS).
+  //
+  // It still says nothing about which document an explicit `spec_paths`
+  // argument names — an out-of-tree spec path in particular can change
+  // without the tree hash moving at all. Serving a cached snapshot in that
+  // case would silently diff against the wrong document (or the
+  // auto-discovered one) and misattribute shadow endpoints / dead
+  // documentation. So `spec_paths` bypasses the cache read exactly like
+  // `force` does.
+  const cacheKey = surfaceCacheKey({
+    projectPath,
+    treeHash,
+    routesPackHash: hashRulePacks([rulesPath]),
+    pluginVersion: resolveVersion(),
+    includeEnvVars,
+  });
   if (inp.force !== true && inp.spec_paths === undefined) {
-    const cached = ctx.storage.surface.getByTreeHash(treeHash);
+    const cached = ctx.storage.surface.findCacheHit({
+      cache_key: cacheKey,
+      project_path: projectPath,
+      tree_hash: treeHash,
+      freshThreshold: new Date(Date.now() - SURFACE_CACHE_TTL_MS).toISOString(),
+    });
     if (cached) {
       return summarize(cached.snapshot, cached.id, cachedToolsRun(cached.snapshot), ctx);
     }
   }
 
-  const includeEnvVars = inp.include_env_vars !== false;
   const reportDir = ensureReportDir(projectPath, treeHash, 'surface');
   const outFile = join(reportDir, 'surface.json');
-  const rulesPath = join(ctx.scriptsDir, '..', 'configs', 'semgrep', 'routes.yml');
 
   const invocation = await invokeSemgrep({ projectPath, rulesPath, outFile, reportDir });
   if (invocation === null) {
@@ -299,6 +325,7 @@ async function handler(
     project_path: projectPath,
     tree_hash: treeHash,
     snapshot,
+    cache_key: cacheKey,
   });
 
   return summarize(snapshot, persisted.id, toolsRun, ctx);

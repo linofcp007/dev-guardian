@@ -68,7 +68,15 @@
  */
 
 import type { Storage } from '../storage/index.js';
-import type { Cve, Finding, ScanRecord, Severity, Suppression } from '../types.js';
+import {
+  CVE_SOURCE_SCAN_TYPES,
+  isDepsAuditScan,
+  type Cve,
+  type Finding,
+  type ScanRecord,
+  type Severity,
+  type Suppression,
+} from '../types.js';
 import { compareFindings } from './delta.js';
 import { rankFiles } from './hotspots.js';
 import { scoreRisk } from './risk.js';
@@ -122,7 +130,7 @@ export function buildSnapshot(
   // HAS a current scan but none of its history (within the lookback window)
   // is deps-flavoured — CVEs are then necessarily unmeasured, not zero, and
   // that has to reach coverage or it renders as a clean "0 CVEs".
-  const cveSourceScan = findLatestOfType(history, ['deps', 'security_full']);
+  const cveSourceScan = findLatestOfType(history, CVE_SOURCE_SCAN_TYPES);
   const cveGap = currentScan !== null && cveSourceScan === null;
   const coverage = buildCoverage(currentScan, cveGap);
 
@@ -336,7 +344,8 @@ function resolveComplianceSignals(history: readonly ScanRecord[]): ComplianceSig
   }
 
   let dependencyBotConfigured = true;
-  const latestDepsAudit = findLatestOfType(history, ['deps']);
+  const latestDepsAudit =
+    history.find((s) => s.status === 'completed' && isDepsAuditScan(s)) ?? null;
   if (latestDepsAudit?.meta) {
     const m = latestDepsAudit.meta as { bot_configured?: { renovate?: boolean; dependabot?: boolean } };
     const bot = m.bot_configured ?? {};

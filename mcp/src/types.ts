@@ -38,6 +38,9 @@ export const SCAN_TYPES = [
   'sast',
   'secrets',
   'deps',
+  // `deps_audit` wrote 'deps' until 2.0.x, sharing its cache entries with
+  // `scan_deps`; see `isDepsAuditScan` for reading those older rows.
+  'deps_audit',
   'containers',
   'iac',
   'bugs',
@@ -66,6 +69,25 @@ export const SCAN_TYPES = [
   'dast',
 ] as const;
 export type ScanType = (typeof SCAN_TYPES)[number];
+
+/**
+ * Scan types whose rows carry CVEs (`scan_cves`): the dependency scanners and
+ * the full security scan, which runs Trivy too. For readers that want "the
+ * latest scan that measured CVEs".
+ */
+export const CVE_SOURCE_SCAN_TYPES: readonly ScanType[] = ['deps_audit', 'deps', 'security_full'];
+
+/**
+ * Whether a scan row was written by `deps_audit` — the only tool that records
+ * `bot_configured`. Rows from 2.0.x carry scan type 'deps', the type
+ * `scan_deps` also writes, and are told apart by that very key: `scan_deps`
+ * never wrote it. Without this, the latest `scan_deps` run shadowed the
+ * latest `deps_audit` and read as "no dependency bot configured".
+ */
+export function isDepsAuditScan(scan: { scan_type: string; meta?: Record<string, unknown> }): boolean {
+  if (scan.scan_type === 'deps_audit') return true;
+  return scan.scan_type === 'deps' && scan.meta?.['bot_configured'] !== undefined;
+}
 
 export const TOOL_RUN_STATUSES = ['ok', 'skipped', 'failed'] as const;
 export type ToolRunStatus = (typeof TOOL_RUN_STATUSES)[number];
@@ -149,6 +171,12 @@ export interface SeverityFilterDisclosure {
 }
 
 export interface ScanResult extends ScanRecord {
+  /**
+   * `finished_at` minus `started_at` of the scan row, in ms — the scan that
+   * produced these findings, which for a cache hit is the original run.
+   * Null when the row has no finish time.
+   */
+  duration_ms?: number | null;
   findings_count_by_severity: FindingsCountBySeverity;
   top_findings: Finding[];
   warnings: string[];

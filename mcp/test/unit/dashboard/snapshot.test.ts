@@ -454,6 +454,35 @@ describe('buildSnapshot', () => {
     db.close();
   });
 
+  it('reads the bot signal from a deps_audit scan, and a later scan_deps run does not shadow it', () => {
+    // deps_audit writes its own scan type now; scan_deps writes 'deps' and
+    // never records bot_configured, so picking "the latest 'deps' scan"
+    // silently dropped the signal deps_audit had measured.
+    const { storage, db } = fresh();
+    completedScan(storage, '/p', {
+      scan_type: 'deps_audit',
+      meta: { bot_configured: { renovate: false, dependabot: false } },
+    });
+    completedScan(storage, '/p', { scan_type: 'deps' });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.risk.components.compliance).toEqual({ score: 6, policies_missing: 0 });
+    db.close();
+  });
+
+  it('sources CVEs from a deps_audit scan too', () => {
+    const { storage, db } = fresh();
+    const audit = completedScan(storage, '/p', { scan_type: 'deps_audit' });
+    storage.cves.upsert({
+      cve_id: 'CVE-2026-9', package_name: 'lodash', severity: 'high', scan_id: audit,
+    });
+    completedScan(storage, '/p', {
+      scan_type: 'secrets', tools_run: [{ name: 'gitleaks', status: 'ok' }],
+    });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.cves.items.map((c) => c.cve_id)).toEqual(['CVE-2026-9']);
+    db.close();
+  });
+
   it('leaves compliance signals at "no penalty" when this project has no compliance/deps scan at all', () => {
     // The other half of finding 1: an absent signal must stay "not
     // measured, no penalty" (risk_score's own accepted fallback), never a

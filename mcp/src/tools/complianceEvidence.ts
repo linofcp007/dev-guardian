@@ -41,7 +41,8 @@ async function handler(
   const framework = inp.framework ?? 'generic';
 
   const compliance = findLatest(ctx, 'compliance');
-  const deps = findLatest(ctx, 'deps') ?? findLatest(ctx, 'security_full');
+  const deps =
+    findLatest(ctx, 'deps_audit') ?? findLatest(ctx, 'deps') ?? findLatest(ctx, 'security_full');
   const sbom = findLatest(ctx, 'sbom');
   const baseline = ctx.storage.baselines.getActive();
   const suppressions = ctx.storage.suppressions.listActive();

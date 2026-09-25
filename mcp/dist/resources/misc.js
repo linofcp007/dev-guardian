@@ -9,6 +9,7 @@
  * All return `{}` / nulled shapes when no underlying data exists yet — per
  * US-7 AC-2, missing data is not an error.
  */
+import { CVE_SOURCE_SCAN_TYPES } from '../types.js';
 import { registerResourceModule } from './index.js';
 registerResourceModule({
     name: 'guardian-cves-active',
@@ -16,7 +17,7 @@ registerResourceModule({
     description: 'CVEs pinned to the most recent deps-flavoured scan (deps / deps_audit / security_full). ' +
         'Returns `{ cves: [] }` when no deps scan has run.',
     handler: async (_uri, _params, ctx) => {
-        const latestDeps = findLatestOfType(ctx, ['deps', 'security_full']);
+        const latestDeps = findLatestOfType(ctx, CVE_SOURCE_SCAN_TYPES);
         if (!latestDeps)
             return { json: { cves: [], last_run: null } };
         const cves = ctx.storage.cves.listActive(latestDeps.scan_id);

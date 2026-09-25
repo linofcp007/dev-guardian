@@ -30,6 +30,9 @@ export const SCAN_TYPES = [
     'sast',
     'secrets',
     'deps',
+    // `deps_audit` wrote 'deps' until 2.0.x, sharing its cache entries with
+    // `scan_deps`; see `isDepsAuditScan` for reading those older rows.
+    'deps_audit',
     'containers',
     'iac',
     'bugs',
@@ -57,6 +60,24 @@ export const SCAN_TYPES = [
     // Active DAST
     'dast',
 ];
+/**
+ * Scan types whose rows carry CVEs (`scan_cves`): the dependency scanners and
+ * the full security scan, which runs Trivy too. For readers that want "the
+ * latest scan that measured CVEs".
+ */
+export const CVE_SOURCE_SCAN_TYPES = ['deps_audit', 'deps', 'security_full'];
+/**
+ * Whether a scan row was written by `deps_audit` — the only tool that records
+ * `bot_configured`. Rows from 2.0.x carry scan type 'deps', the type
+ * `scan_deps` also writes, and are told apart by that very key: `scan_deps`
+ * never wrote it. Without this, the latest `scan_deps` run shadowed the
+ * latest `deps_audit` and read as "no dependency bot configured".
+ */
+export function isDepsAuditScan(scan) {
+    if (scan.scan_type === 'deps_audit')
+        return true;
+    return scan.scan_type === 'deps' && scan.meta?.['bot_configured'] !== undefined;
+}
 export const TOOL_RUN_STATUSES = ['ok', 'skipped', 'failed'];
 export const HTTP_METHODS = [
     'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'ANY',

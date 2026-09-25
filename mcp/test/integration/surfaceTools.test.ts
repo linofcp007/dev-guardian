@@ -468,6 +468,88 @@ describe('map_attack_surface', () => {
     expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(1);
   });
 
+  it('never reuses another project\'s snapshot, even when both trees hash the same', async () => {
+    // Two empty directories hash the same. The cache used to be keyed by the
+    // tree hash alone, across every project in the database.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const first = okResult<{ snapshot_id: number }>(
+      await tool().handler({ project_path: makeTempDir('guardian-surface-') }, ctx),
+    );
+    const second = okResult<{ snapshot_id: number; tools_run: { reason?: string }[] }>(
+      await tool().handler({ project_path: makeTempDir('guardian-surface-') }, ctx),
+    );
+    expect(second.snapshot_id).not.toBe(first.snapshot_id);
+    expect(second.tools_run[0]?.reason).not.toBe('cached');
+    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reuse a snapshot older than 24 h', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = makeTempDir('guardian-surface-');
+    const first = okResult<{ snapshot_id: number }>(
+      await tool().handler({ project_path: projectPath }, ctx),
+    );
+    ctx.storage
+      .rawHandle()
+      .prepare('UPDATE surface_snapshots SET captured_at = ? WHERE id = ?')
+      .run(new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(), first.snapshot_id);
+
+    const second = okResult<{ snapshot_id: number }>(
+      await tool().handler({ project_path: projectPath }, ctx),
+    );
+    expect(second.snapshot_id).not.toBe(first.snapshot_id);
+    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reuse a snapshot mapped with another routes.yml', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    // A plugin root of our own, so the pack can be edited.
+    const root = makeTempDir('guardian-surface-root-');
+    mkdirSync(join(root, 'scripts'));
+    mkdirSync(join(root, 'configs', 'semgrep'), { recursive: true });
+    const pack = join(root, 'configs', 'semgrep', 'routes.yml');
+    writeFileSync(pack, 'rules: []\n');
+    const ctx = { ...makeCtx(), scriptsDir: join(root, 'scripts') };
+    const projectPath = makeTempDir('guardian-surface-');
+
+    const first = okResult<{ snapshot_id: number }>(await tool().handler({ project_path: projectPath }, ctx));
+    const hit = okResult<{ snapshot_id: number }>(await tool().handler({ project_path: projectPath }, ctx));
+    expect(hit.snapshot_id).toBe(first.snapshot_id);
+
+    writeFileSync(pack, 'rules:\n  - id: guardian-route-new\n');
+    const miss = okResult<{ snapshot_id: number }>(await tool().handler({ project_path: projectPath }, ctx));
+    expect(miss.snapshot_id).not.toBe(first.snapshot_id);
+    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not answer include_env_vars:true from a snapshot mapped without env vars', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = makeTempDir('guardian-surface-');
+    const without = okResult<{ snapshot_id: number }>(
+      await tool().handler({ project_path: projectPath, include_env_vars: false }, ctx),
+    );
+    const withVars = okResult<{ snapshot_id: number }>(
+      await tool().handler({ project_path: projectPath, include_env_vars: true }, ctx),
+    );
+    expect(withVars.snapshot_id).not.toBe(without.snapshot_id);
+    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
+  });
+
   it('force:true bypasses the cache and re-runs semgrep', async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockResolvedValue(okRun());

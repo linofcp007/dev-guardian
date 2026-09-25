@@ -48,6 +48,7 @@ import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+import { okResult } from '../helpers/toolResult.js';
 
 afterAll(cleanupTempDirs);
 
@@ -338,6 +339,78 @@ describe('deps_audit', () => {
     const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
     expect(total).toBe(3);
     expect(r.coverage).toBe('partial');
+  });
+
+  it('has its own scan_type, so scan_deps and deps_audit never answer for each other from the cache', async () => {
+    // Reproduced: both wrote scan_type 'deps', so whichever ran second inside
+    // the cache window got the other's scan — and deps_audit's answer then
+    // had no bot_configured at all.
+    const project = tempProject();
+    writeFileSync(join(project, 'renovate.json'), '{}', 'utf8');
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'trivy' ? '/fake/bin/trivy' : null,
+    );
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const outIdx = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const path = outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
+      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const deps = okResult<{ scan_id: string; scan_type: string; cached?: boolean }>(
+      await getTool('scan_deps').handler({ project_path: project }, plugin),
+    );
+    const audit = okResult<{
+      scan_id: string;
+      scan_type: string;
+      cached?: boolean;
+      bot_configured?: { renovate: boolean };
+    }>(await getTool('deps_audit').handler({ project_path: project }, plugin));
+
+    expect(deps.scan_type).toBe('deps');
+    expect(audit.scan_type).toBe('deps_audit');
+    expect(audit.cached).toBeUndefined();
+    expect(audit.scan_id).not.toBe(deps.scan_id);
+    expect(audit.bot_configured?.renovate).toBe(true);
+
+    // Each is still a cache hit for ITSELF, and a deps_audit hit keeps its
+    // bot_configured (it used to be dropped on every hit).
+    const auditAgain = okResult<{ cached?: boolean; cached_from?: string; bot_configured?: { renovate: boolean } }>(
+      await getTool('deps_audit').handler({ project_path: project }, plugin),
+    );
+    expect(auditAgain.cached).toBe(true);
+    expect(auditAgain.cached_from).toBe(audit.scan_id);
+    expect(auditAgain.bot_configured?.renovate).toBe(true);
+    const depsAgain = okResult<{ cached?: boolean; cached_from?: string }>(
+      await getTool('scan_deps').handler({ project_path: project }, plugin),
+    );
+    expect(depsAgain.cached_from).toBe(deps.scan_id);
+  });
+
+  it('scans again once Trivy is installed, instead of serving the not_installed run from the cache', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const outIdx = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const path = outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
+      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    vi.mocked(scannerAvailable).mockResolvedValue(null);
+    const before = okResult<{ coverage: string; missing_tools: string[] }>(
+      await getTool('scan_deps').handler({ project_path: project }, plugin),
+    );
+    expect(before.missing_tools).toContain('trivy');
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy'); // install_toolchain ran
+    const after = okResult<{ cached?: boolean; coverage: string; findings_count_by_severity: Record<string, number> }>(
+      await getTool('scan_deps').handler({ project_path: project }, plugin),
+    );
+    expect(after.cached).toBeUndefined();
+    expect(after.coverage).toBe('full');
+    expect(Object.values(after.findings_count_by_severity).reduce((a, b) => a + b, 0)).toBe(3);
   });
 
   it('detects .github/dependabot.yml when present', async () => {

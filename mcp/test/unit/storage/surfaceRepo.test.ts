@@ -56,7 +56,14 @@ describe('SurfaceRepo', () => {
     const repo = setup();
     expect(repo.getLatest()).toBeNull();
     expect(repo.getById(1)).toBeNull();
-    expect(repo.getByTreeHash('deadbeef')).toBeNull();
+    expect(
+      repo.findCacheHit({
+        cache_key: 'k',
+        project_path: '/p',
+        tree_hash: 'deadbeef',
+        freshThreshold: '1970-01-01T00:00:00.000Z',
+      }),
+    ).toBeNull();
   });
 
   it('round-trips a snapshot through JSON storage', () => {
@@ -113,11 +120,22 @@ describe('SurfaceRepo', () => {
     expect(repo.getLatestForProject('/mine')).toBeNull();
   });
 
-  it('getByTreeHash finds a snapshot by hash — the cache lookup', () => {
+  it('findCacheHit matches key, project and tree exactly, within the freshness window', () => {
     const repo = setup();
+    const past = '1970-01-01T00:00:00.000Z';
+    const hit = repo.insert({ project_path: '/p', tree_hash: 'h1', snapshot: makeSnapshot(), cache_key: 'k1' });
+    // Same tree hash, another project — the case the old tree-hash-only
+    // lookup answered with the wrong project's routes.
+    repo.insert({ project_path: '/other', tree_hash: 'h1', snapshot: makeSnapshot(), cache_key: 'k2' });
+    // A pre-006 row: no key, never a hit.
     repo.insert({ project_path: '/p', tree_hash: 'h1', snapshot: makeSnapshot() });
-    expect(repo.getByTreeHash('h1')?.tree_hash).toBe('h1');
-    expect(repo.getByTreeHash('nope')).toBeNull();
+
+    const args = { cache_key: 'k1', project_path: '/p', tree_hash: 'h1', freshThreshold: past };
+    expect(repo.findCacheHit(args)?.id).toBe(hit.id);
+    expect(repo.findCacheHit({ ...args, cache_key: 'k2' })).toBeNull();
+    expect(repo.findCacheHit({ ...args, project_path: '/other' })).toBeNull();
+    expect(repo.findCacheHit({ ...args, tree_hash: 'h2' })).toBeNull();
+    expect(repo.findCacheHit({ ...args, freshThreshold: '2999-01-01T00:00:00.000Z' })).toBeNull();
   });
 
   it('tolerates malformed stored JSON instead of throwing', () => {

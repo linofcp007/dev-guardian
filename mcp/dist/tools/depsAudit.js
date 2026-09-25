@@ -78,7 +78,10 @@ registerToolModule(makeScanTool({
     description: 'Run Trivy fs (vuln+license) plus stack-specific auditors (npm audit, pip-audit) when ' +
         'applicable. Returns Findings, indexed CVEs, and a `bot_configured` flag indicating whether ' +
         'Renovate or Dependabot is set up in this repo.',
-    scan_type: 'deps',
+    // Its own type, not scan_deps' 'deps': the two shared cache entries and
+    // answered for each other. Readers that want "the latest deps_audit" use
+    // `isDepsAuditScan`, which also recognises the 2.0.x rows typed 'deps'.
+    scan_type: 'deps_audit',
     category: 'security',
     supportsAutoFix: false,
     inputSchema: {

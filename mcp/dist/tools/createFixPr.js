@@ -175,10 +175,10 @@ const tool = {
             'Default: false — a dry run that still computes candidates, applies the fix in a ' +
             'worktree, and runs both differentials, but never leaves the machine.'),
     },
-    handler: async (input, ctx) => handler(input, ctx),
+    handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };
 registerToolModule(tool);
-async function handler(input, ctx) {
+async function handler(input, ctx, callMeta) {
     const inp = input;
     let projectPath;
     try {
@@ -197,7 +197,9 @@ async function handler(input, ctx) {
     const maxPrs = inp.max_prs ?? DEFAULT_MAX_PRS;
     const apply = inp.apply === true;
     const allFindings = ctx.storage.findings.listOpenForProject(projectPath);
-    const upgradeSteps = sources.includes('deps') ? await fetchUpgradeSteps(projectPath, ctx) : [];
+    const upgradeSteps = sources.includes('deps')
+        ? await fetchUpgradeSteps(projectPath, ctx, callMeta)
+        : [];
     const groups = buildGroups({ findings: allFindings, upgradeSteps, sources, severityMin });
     // Every open finding this run did NOT turn into a candidate, and why —
     // computed from `groups`, i.e. BEFORE `max_prs` defers any of them, so the
@@ -208,9 +210,32 @@ async function handler(input, ctx) {
     const filtered_reason = describeExclusions(filtered, severityMin, sources);
     const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
     const results = [];
+    let cancelled = false;
     for (const group of selected) {
+        // Checked before each group: once the host cancels, no further worktree
+        // is created and no further fix is applied. The group in flight when the
+        // cancel arrived has already stopped (its re-scan shares the signal) and
+        // cleaned up in processGroup's own `finally`; the rest are reported, not
+        // dropped — groups before the cancel may already have opened a PR.
+        if (callMeta?.signal?.aborted === true) {
+            cancelled = true;
+            results.push({
+                key: group.key,
+                source: group.source,
+                severity: group.severity,
+                branch: branchName(group.source, group.key, group.hash),
+                findings: findingsForGroup(allFindings, group),
+                commands: [],
+                outcome: 'cancelled',
+                scan: null,
+                tests: null,
+                pr: null,
+                note: 'cancelled: the host cancelled this call before this group started — no worktree was created and nothing was applied',
+            });
+            continue;
+        }
         try {
-            results.push(await processGroup({ group, allFindings, projectPath, apply, ctx }));
+            results.push(await processGroup({ group, allFindings, projectPath, apply, ctx, callMeta }));
         }
         catch (e) {
             // Every ANTICIPATED failure mode (worktree creation, apply, re-scan,
@@ -243,6 +268,7 @@ async function handler(input, ctx) {
         project_path: projectPath,
         severity_min: severityMin,
         sources,
+        ...(cancelled ? { cancelled: true } : {}),
         filtered,
         filtered_reason,
         groups: results,
@@ -261,18 +287,18 @@ async function handler(input, ctx) {
  * nothing to group, which `buildGroups` already reports honestly (no group
  * silently invents a fix).
  */
-async function fetchUpgradeSteps(projectPath, ctx) {
+async function fetchUpgradeSteps(projectPath, ctx, callMeta) {
     const depsPlanTool = TOOLS.find((t) => t.name === 'deps_update_plan');
     if (depsPlanTool === undefined)
         return [];
-    const result = await depsPlanTool.handler({ project_path: projectPath }, ctx);
+    const result = await depsPlanTool.handler({ project_path: projectPath }, ctx, callMeta);
     if (!result.ok)
         return [];
     const r = result;
     return Array.isArray(r.plan) ? r.plan : [];
 }
 async function processGroup(opts) {
-    const { group, allFindings, projectPath, apply, ctx } = opts;
+    const { group, allFindings, projectPath, apply, ctx, callMeta } = opts;
     const branch = branchName(group.source, group.key, group.hash);
     const targets = group.candidates.flatMap((c) => c.fingerprints);
     const findings = findingsForGroup(allFindings, group);
@@ -338,7 +364,7 @@ async function processGroup(opts) {
                 note: `apply_failed: the fix could not be applied — ${describeApplyFailure(applied.failure)}`,
             };
         }
-        const rescan = await rescanAfterFix(group, findings, worktree.path, ctx);
+        const rescan = await rescanAfterFix(group, findings, worktree.path, ctx, callMeta);
         if (!rescan.ok) {
             return {
                 ...base,
@@ -497,13 +523,13 @@ const DEPS_AUDIT_MISSING_TOOLS_NAME = {
  * scanner didn't run" as "nothing is wrong any more" — exactly the false
  * positive the scan differential exists to prevent, in a new costume.
  */
-async function rescanAfterFix(group, targetFindings, worktreePath, ctx) {
+async function rescanAfterFix(group, targetFindings, worktreePath, ctx, callMeta) {
     const toolName = group.source === 'semgrep' ? 'scan_sast' : 'deps_audit';
     const subTool = TOOLS.find((t) => t.name === toolName);
     if (subTool === undefined) {
         return { ok: false, reason: `the '${toolName}' tool is not registered` };
     }
-    const result = await subTool.handler({ project_path: worktreePath }, ctx);
+    const result = await subTool.handler({ project_path: worktreePath }, ctx, callMeta);
     if (!result.ok) {
         return { ok: false, reason: `${toolName} failed: ${result.error.message}` };
     }

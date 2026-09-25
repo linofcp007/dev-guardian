@@ -116,7 +116,7 @@ import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath, SeverityMin } from '../schemas.js';
 import type { DomainError, Finding, Severity, ToolResult } from '../types.js';
 import { isGitRepo } from './gitState.js';
-import { registerToolModule, TOOLS, type ToolModule } from './index.js';
+import { registerToolModule, TOOLS, type ToolCallMeta, type ToolModule } from './index.js';
 
 const DEFAULT_SOURCES: readonly FixSource[] = ['deps', 'semgrep'];
 const DEFAULT_SEVERITY_MIN: Severity = 'high';
@@ -140,7 +140,9 @@ type GroupOutcome =
   | 'pr_no_changes'
   | 'pr_push_failed'
   | 'pr_create_failed'
-  | 'internal_error';
+  | 'internal_error'
+  /** The host cancelled the call before this group started. */
+  | 'cancelled';
 
 /** `PrOutcome.status` → `GroupOutcome`, once `openPr` has actually been
  *  called. A plain `Record`, not a switch: exhaustiveness is enforced by
@@ -233,7 +235,7 @@ const tool: ToolModule = {
           'worktree, and runs both differentials, but never leaves the machine.',
       ),
   },
-  handler: async (input, ctx) => handler(input, ctx),
+  handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };
 
 registerToolModule(tool);
@@ -241,6 +243,7 @@ registerToolModule(tool);
 async function handler(
   input: Record<string, unknown>,
   ctx: PluginContext,
+  callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
   const inp = input as {
     project_path?: string;
@@ -269,7 +272,9 @@ async function handler(
   const apply = inp.apply === true;
 
   const allFindings = ctx.storage.findings.listOpenForProject(projectPath);
-  const upgradeSteps = sources.includes('deps') ? await fetchUpgradeSteps(projectPath, ctx) : [];
+  const upgradeSteps = sources.includes('deps')
+    ? await fetchUpgradeSteps(projectPath, ctx, callMeta)
+    : [];
 
   const groups = buildGroups({ findings: allFindings, upgradeSteps, sources, severityMin });
   // Every open finding this run did NOT turn into a candidate, and why —
@@ -282,9 +287,32 @@ async function handler(
   const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
 
   const results: GroupResult[] = [];
+  let cancelled = false;
   for (const group of selected) {
+    // Checked before each group: once the host cancels, no further worktree
+    // is created and no further fix is applied. The group in flight when the
+    // cancel arrived has already stopped (its re-scan shares the signal) and
+    // cleaned up in processGroup's own `finally`; the rest are reported, not
+    // dropped — groups before the cancel may already have opened a PR.
+    if (callMeta?.signal?.aborted === true) {
+      cancelled = true;
+      results.push({
+        key: group.key,
+        source: group.source,
+        severity: group.severity,
+        branch: branchName(group.source, group.key, group.hash),
+        findings: findingsForGroup(allFindings, group),
+        commands: [],
+        outcome: 'cancelled',
+        scan: null,
+        tests: null,
+        pr: null,
+        note: 'cancelled: the host cancelled this call before this group started — no worktree was created and nothing was applied',
+      });
+      continue;
+    }
     try {
-      results.push(await processGroup({ group, allFindings, projectPath, apply, ctx }));
+      results.push(await processGroup({ group, allFindings, projectPath, apply, ctx, callMeta }));
     } catch (e) {
       // Every ANTICIPATED failure mode (worktree creation, apply, re-scan,
       // push, gh pr create) is reported by processGroup as a normal return,
@@ -317,6 +345,7 @@ async function handler(
     project_path: projectPath,
     severity_min: severityMin,
     sources,
+    ...(cancelled ? { cancelled: true } : {}),
     filtered,
     filtered_reason,
     groups: results,
@@ -336,10 +365,14 @@ async function handler(
  * nothing to group, which `buildGroups` already reports honestly (no group
  * silently invents a fix).
  */
-async function fetchUpgradeSteps(projectPath: string, ctx: PluginContext): Promise<UpgradeStep[]> {
+async function fetchUpgradeSteps(
+  projectPath: string,
+  ctx: PluginContext,
+  callMeta: ToolCallMeta | undefined,
+): Promise<UpgradeStep[]> {
   const depsPlanTool = TOOLS.find((t) => t.name === 'deps_update_plan');
   if (depsPlanTool === undefined) return [];
-  const result = await depsPlanTool.handler({ project_path: projectPath }, ctx);
+  const result = await depsPlanTool.handler({ project_path: projectPath }, ctx, callMeta);
   if (!result.ok) return [];
   const r = result as unknown as { plan?: unknown };
   return Array.isArray(r.plan) ? (r.plan as UpgradeStep[]) : [];
@@ -351,8 +384,10 @@ async function processGroup(opts: {
   projectPath: string;
   apply: boolean;
   ctx: PluginContext;
+  /** The host's, handed to the re-scan so cancelling this call aborts it. */
+  callMeta: ToolCallMeta | undefined;
 }): Promise<GroupResult> {
-  const { group, allFindings, projectPath, apply, ctx } = opts;
+  const { group, allFindings, projectPath, apply, ctx, callMeta } = opts;
   const branch = branchName(group.source, group.key, group.hash);
   const targets = group.candidates.flatMap((c) => c.fingerprints);
   const findings = findingsForGroup(allFindings, group);
@@ -423,7 +458,7 @@ async function processGroup(opts: {
       };
     }
 
-    const rescan = await rescanAfterFix(group, findings, worktree.path, ctx);
+    const rescan = await rescanAfterFix(group, findings, worktree.path, ctx, callMeta);
     if (!rescan.ok) {
       return {
         ...base,
@@ -596,6 +631,7 @@ async function rescanAfterFix(
   targetFindings: readonly Finding[],
   worktreePath: string,
   ctx: PluginContext,
+  callMeta: ToolCallMeta | undefined,
 ): Promise<{ ok: true; scanId: string; findings: Finding[] } | { ok: false; reason: string }> {
   const toolName = group.source === 'semgrep' ? 'scan_sast' : 'deps_audit';
 
@@ -604,7 +640,7 @@ async function rescanAfterFix(
     return { ok: false, reason: `the '${toolName}' tool is not registered` };
   }
 
-  const result = await subTool.handler({ project_path: worktreePath }, ctx);
+  const result = await subTool.handler({ project_path: worktreePath }, ctx, callMeta);
   if (!result.ok) {
     return { ok: false, reason: `${toolName} failed: ${result.error.message}` };
   }

@@ -20,7 +20,7 @@
  */
 
 import type { PluginContext } from '../context.js';
-import type { ToolResult } from '../types.js';
+import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan, type ToolResult } from '../types.js';
 import { scoreRisk } from '../dashboard/risk.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
@@ -41,7 +41,7 @@ async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, un
   const open = ctx.storage.findings.listOpen();
 
   // CVEs — use the latest deps-flavoured scan as the source.
-  const latestDeps = findLatestOfType(ctx, ['deps', 'security_full']);
+  const latestDeps = findLatestOfType(ctx, CVE_SOURCE_SCAN_TYPES);
   const cves = latestDeps ? ctx.storage.cves.listActive(latestDeps.scan_id) : [];
 
   // Compliance signals — missing policy docs and CI dependency bots.
@@ -59,7 +59,9 @@ async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, un
   // No deps-audit scan yet ⇒ no signal ⇒ no penalty, matching this tool's
   // pre-extraction behaviour (it used to skip the whole bot check in that case).
   let dependencyBotConfigured = true;
-  const latestDepsAudit = findLatestOfType(ctx, ['deps']);
+  const latestDepsAudit = ctx.storage.scans
+    .listHistory(50)
+    .find((s) => s.status === 'completed' && isDepsAuditScan(s));
   if (latestDepsAudit?.meta) {
     const m = latestDepsAudit.meta as { bot_configured?: { renovate?: boolean; dependabot?: boolean } };
     const bot = m.bot_configured ?? {};
@@ -90,7 +92,7 @@ async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, un
 
 function findLatestOfType(
   ctx: PluginContext,
-  types: string[],
+  types: readonly string[],
 ): ReturnType<typeof ctx.storage.scans.getById> {
   const history = ctx.storage.scans.listHistory(50);
   const found = history.find((s) => s.status === 'completed' && types.includes(s.scan_type));

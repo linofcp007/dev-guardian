@@ -78,45 +78,42 @@ describe('ScansRepo', () => {
     expect(repo.getById('clean')?.status).toBe('completed');
   });
 
-  it('findCacheHit returns the most recent matching completed scan within the freshness window', () => {
+  it('findCacheHit returns the most recent completed scan under the same key within the freshness window', () => {
     const { repo } = freshRepo();
-    repo.insert({ scan_id: 'old', scan_type: 'sast', project_path: '/p', tree_hash: 'same' });
+    repo.insert({ scan_id: 'old', scan_type: 'sast', project_path: '/p', tree_hash: 'same', cache_key: 'k1' });
     repo.finalize({ scan_id: 'old', status: 'completed', tools_run: [], missing_tools: [] });
 
-    repo.insert({ scan_id: 'newer', scan_type: 'sast', project_path: '/p', tree_hash: 'same' });
+    repo.insert({ scan_id: 'newer', scan_type: 'sast', project_path: '/p', tree_hash: 'same', cache_key: 'k1' });
     repo.finalize({ scan_id: 'newer', status: 'completed', tools_run: [], missing_tools: [] });
 
-    // Freshness threshold in the past — both qualify; newest wins.
-    const hit = repo.findCacheHit({
-      tree_hash: 'same',
-      scan_type: 'sast',
-      freshThreshold: '1970-01-01T00:00:00.000Z',
-    });
+    // Same tree, same type, but another key (other inputs, packs, project…).
+    repo.insert({ scan_id: 'other', scan_type: 'sast', project_path: '/p', tree_hash: 'same', cache_key: 'k2' });
+    repo.finalize({ scan_id: 'other', status: 'completed', tools_run: [], missing_tools: [] });
+
+    // No key at all: a row from before migration 006.
+    repo.insert({ scan_id: 'legacy', scan_type: 'sast', project_path: '/p', tree_hash: 'same' });
+    repo.finalize({ scan_id: 'legacy', status: 'completed', tools_run: [], missing_tools: [] });
+
+    // Freshness threshold in the past — both k1 rows qualify; newest wins.
+    const hit = repo.findCacheHit({ cache_key: 'k1', freshThreshold: '1970-01-01T00:00:00.000Z' });
     expect(hit?.scan_id).toBe('newer');
 
     // Threshold in the future — nothing fresh enough.
-    const miss = repo.findCacheHit({
-      tree_hash: 'same',
-      scan_type: 'sast',
-      freshThreshold: '2999-01-01T00:00:00.000Z',
-    });
+    const miss = repo.findCacheHit({ cache_key: 'k1', freshThreshold: '2999-01-01T00:00:00.000Z' });
     expect(miss).toBeNull();
 
-    // Different scan_type or different tree_hash means no hit either.
-    expect(
-      repo.findCacheHit({
-        tree_hash: 'same',
-        scan_type: 'security_full',
-        freshThreshold: '1970-01-01T00:00:00.000Z',
-      }),
-    ).toBeNull();
-    expect(
-      repo.findCacheHit({
-        tree_hash: 'other',
-        scan_type: 'sast',
-        freshThreshold: '1970-01-01T00:00:00.000Z',
-      }),
-    ).toBeNull();
+    expect(repo.findCacheHit({ cache_key: 'k2', freshThreshold: '1970-01-01T00:00:00.000Z' })?.scan_id)
+      .toBe('other');
+    expect(repo.findCacheHit({ cache_key: 'k3', freshThreshold: '1970-01-01T00:00:00.000Z' })).toBeNull();
+  });
+
+  it('finalize returns the finished_at it wrote', () => {
+    const { repo } = freshRepo();
+    const inserted = repo.insert({ scan_id: 'f', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
+    const finishedAt = repo.finalize({ scan_id: 'f', status: 'completed', tools_run: [], missing_tools: [] });
+    const row = repo.getById('f');
+    expect(row?.finished_at).toBe(finishedAt);
+    expect(row?.started_at).toBe(inserted.started_at);
   });
 
   it('listHistory returns scans in start-time descending order, capped by limit', () => {

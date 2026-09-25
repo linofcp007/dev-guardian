@@ -28,7 +28,14 @@ import {
 } from '../report/htmlTheme.js';
 import { toSarif } from '../report/sarif.js';
 import { ProjectPath } from '../schemas.js';
-import type { Cve, DomainError, Finding, Severity, ToolResult } from '../types.js';
+import {
+  CVE_SOURCE_SCAN_TYPES,
+  type Cve,
+  type DomainError,
+  type Finding,
+  type Severity,
+  type ToolResult,
+} from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
 const inputSchema = {
@@ -135,10 +142,9 @@ async function handler(
   if (!scan) return failDomain('unknown_scan_id', `Scan '${scanId}' not found.`);
 
   const findings = ctx.storage.findings.listByScan(scanId);
-  const cves =
-    scan.scan_type === 'deps' || scan.scan_type === 'security_full'
-      ? ctx.storage.cves.listActive(scanId)
-      : [];
+  const cves = CVE_SOURCE_SCAN_TYPES.includes(scan.scan_type)
+    ? ctx.storage.cves.listActive(scanId)
+    : [];
 
   const { content, fileName } = renderReport(format, scan, findings, cves, lang);
   const outDir = join(projectPath, '.guardian', 'reports', `export-${scanId.slice(0, 8)}`);

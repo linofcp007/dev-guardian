@@ -144,9 +144,10 @@ import {
   wasAnythingScanned,
   type ConfigDownloadFailure,
 } from './semgrepConfigFailure.js';
+import type { PluginContext } from '../context.js';
 import {
   makeScanTool,
-  type InvokeContext,
+  type ResponseView,
   type ScannerInvocation,
   type ScanToolBaseInput,
 } from './scanToolFactory.js';
@@ -266,9 +267,27 @@ function fallbackLanguages(projectPath: string): string[] {
  * via `languagePacksFor`, so the mapping step stays testable in isolation
  * from storage/filesystem access.
  */
-function detectLanguages(ctx: InvokeContext): string[] {
-  const snapshotLanguages = ctx.plugin.storage.stack.getLatest()?.snapshot.languages;
-  return snapshotLanguages ?? fallbackLanguages(ctx.projectPath);
+function detectLanguages(plugin: PluginContext, projectPath: string): string[] {
+  const snapshotLanguages = plugin.storage.stack.getLatest()?.snapshot.languages;
+  return snapshotLanguages ?? fallbackLanguages(projectPath);
+}
+
+/**
+ * The exact `--config=` list a call runs with first — `invoke` and the cache
+ * key (`rulePacks`) both read it from here, so an edited local pack can
+ * never be served from a cache entry computed with its old content.
+ */
+function configuredPacksFor(
+  input: BugHuntInput,
+  plugin: PluginContext,
+  projectPath: string,
+): string[] {
+  const includeLanguagePacks = input.include_language_packs === true;
+  return buildPackList({
+    includeLanguagePacks,
+    languages: includeLanguagePacks ? detectLanguages(plugin, projectPath) : [],
+    customConfigs: resolveCustomSemgrepConfigs(plugin),
+  });
 }
 
 /** Options for {@link buildPackList}. */
@@ -329,33 +348,66 @@ export const BUG_SUBCATEGORIES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Wraps the semgrep parser to re-tag every finding as `category=bug`,
+ * Wraps the semgrep parser to re-tag every finding as `category=bug` and
  * normalise the subcategory to the BUG_SUBCATEGORIES vocabulary where the
- * matching rule's own id says so (see `mapSubcategory`), and — when the
- * caller passed `categories` — drop every finding whose subcategory is not
- * in that list. Filtering happens here, inside the parser, rather than as a
- * generic post-filter in `scanToolFactory.ts`: `categories` is a `bug_hunt`
- * concept (its six-name vocabulary), not something every scan tool has.
- * Built per-invoke (not a module-level constant) because it closes over the
- * caller's `categories` input. Fingerprints are recomputed because the
- * original parser ran with `category=security`/`quality`/etc — but tool,
- * rule_id, file_path, line range and snippet are unchanged, so the
- * fingerprint identity stays stable across `bug_hunt` invocations.
+ * matching rule's own id says so (see `mapSubcategory`). Fingerprints are
+ * recomputed because the original parser ran with
+ * `category=security`/`quality`/etc — but tool, rule_id, file_path, line
+ * range and snippet are unchanged, so the fingerprint identity stays stable
+ * across `bug_hunt` invocations.
+ *
+ * It does NOT apply `categories`. It used to, and the findings it dropped
+ * were therefore never stored: a baseline taken from a filtered run forgot
+ * them, and the next unfiltered run reported them as `new` — the defect
+ * `severity_min` had already been fixed for (see `scanToolFactory.ts`).
+ * `categories` is now a response-only view, {@link categoriesView}.
  */
-function makeBugCategoryParser(categories: readonly string[] | undefined): ScannerParser {
+const bugCategoryParser: ScannerParser = {
+  name: semgrepParser.name,
+  parse(input, ctx): ParserOutput {
+    const out = semgrepParser.parse(input, ctx);
+    return { findings: out.findings.map((f) => recategoriseAsBug(f)), cves: out.cves };
+  },
+};
+
+/**
+ * `categories` as a view over the stored findings: the ones whose
+ * subcategory is not listed are withheld from THIS response, counted by
+ * subcategory, and named in a warning — never dropped from the scan. `null`
+ * when no filter was asked for. Exported for tests.
+ */
+export function categoriesView(
+  categories: readonly string[] | undefined,
+  findings: readonly Finding[],
+  scanId: string,
+): ResponseView | null {
+  if (categories === undefined || categories.length === 0) return null;
+  const visible: Finding[] = [];
+  const withheldBySubcategory: Record<string, number> = {};
+  for (const f of findings) {
+    if (f.subcategory !== undefined && categories.includes(f.subcategory)) {
+      visible.push(f);
+    } else {
+      const key = f.subcategory ?? '(none)';
+      withheldBySubcategory[key] = (withheldBySubcategory[key] ?? 0) + 1;
+    }
+  }
+  const withheld = findings.length - visible.length;
   return {
-    name: semgrepParser.name,
-    parse(input, ctx): ParserOutput {
-      const out = semgrepParser.parse(input, ctx);
-      const recategorised: Finding[] = out.findings.map((f) => recategoriseAsBug(f));
-      const findings =
-        categories !== undefined && categories.length > 0
-          ? recategorised.filter(
-              (f) => f.subcategory !== undefined && categories.includes(f.subcategory),
-            )
-          : recategorised;
-      return { findings, cves: out.cves };
+    visible,
+    disclosure: {
+      category_filter: {
+        categories: [...categories],
+        withheld,
+        withheld_by_subcategory: withheldBySubcategory,
+      },
     },
+    warning:
+      withheld === 0
+        ? null
+        : `categories ${JSON.stringify(categories)} withheld ${withheld} finding(s) from this ` +
+          `response only; they are recorded in scan ${scanId}, and baselines and diffs against ` +
+          'it include them.',
   };
 }
 
@@ -776,6 +828,13 @@ registerToolModule(
       'instead of silently scanning nothing.',
     scan_type: 'bugs',
     category: 'bug',
+    // `categories` filters the response (see `categoriesView`), so it stays
+    // out of the cache key: every filter over the same tree is one scan.
+    responseOnlyInputs: ['categories'],
+    responseView: (input: BugHuntInput, findings, scanId) =>
+      categoriesView(input.categories, findings, scanId),
+    rulePacks: (input: BugHuntInput, { plugin, projectPath }) =>
+      configuredPacksFor(input, plugin, projectPath),
     inputSchema: {
       project_path: ProjectPath,
       severity_min: SeverityMin,
@@ -784,7 +843,10 @@ registerToolModule(
       categories: z
         .array(z.string())
         .optional()
-        .describe('Restrict to these bug subcategories (e.g. race_condition, null_safety).'),
+        .describe(
+          'Show only these bug subcategories (e.g. race_condition, null_safety) in the response. ' +
+            'Every finding is still recorded; `category_filter` counts what was withheld.',
+        ),
       include_language_packs: z
         .boolean()
         .optional()
@@ -830,12 +892,12 @@ registerToolModule(
       // contrast, are NOT gated behind a flag — `buildPackList` appends
       // all of them by default (omitting them only if resolveBugfixRules()
       // finds none); see this file's header comment.
-      const configuredPacks: readonly string[] = buildPackList({
-        includeLanguagePacks: input.include_language_packs === true,
-        languages: input.include_language_packs === true ? detectLanguages(ctx) : [],
-        customConfigs: resolveCustomSemgrepConfigs(ctx.plugin),
-      });
-      const categoryParser = makeBugCategoryParser(input.categories);
+      const configuredPacks: readonly string[] = configuredPacksFor(
+        input,
+        ctx.plugin,
+        ctx.projectPath,
+      );
+      const categoryParser = bugCategoryParser;
 
       const outFile = join(reportDir, 'bugs.json');
       const runWithPacks = (packs: readonly string[]): Promise<ProcessRunResult> => {

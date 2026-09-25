@@ -66,6 +66,7 @@
  * suppression-derived state — both the counts here and the fingerprints
  * used to filter the delta comparisons — comes from exactly one clock.
  */
+import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan, } from '../types.js';
 import { compareFindings } from './delta.js';
 import { rankFiles } from './hotspots.js';
 import { scoreRisk } from './risk.js';
@@ -99,7 +100,7 @@ export function buildSnapshot(storage, projectPath, now) {
     // HAS a current scan but none of its history (within the lookback window)
     // is deps-flavoured — CVEs are then necessarily unmeasured, not zero, and
     // that has to reach coverage or it renders as a clean "0 CVEs".
-    const cveSourceScan = findLatestOfType(history, ['deps', 'security_full']);
+    const cveSourceScan = findLatestOfType(history, CVE_SOURCE_SCAN_TYPES);
     const cveGap = currentScan !== null && cveSourceScan === null;
     const coverage = buildCoverage(currentScan, cveGap);
     // Already project-scoped AND already suppression-filtered by
@@ -285,7 +286,7 @@ function resolveComplianceSignals(history) {
         }
     }
     let dependencyBotConfigured = true;
-    const latestDepsAudit = findLatestOfType(history, ['deps']);
+    const latestDepsAudit = history.find((s) => s.status === 'completed' && isDepsAuditScan(s)) ?? null;
     if (latestDepsAudit?.meta) {
         const m = latestDepsAudit.meta;
         const bot = m.bot_configured ?? {};

@@ -224,6 +224,19 @@ describe('guardian://cves/active', () => {
     const r = await getResource('guardian-cves-active').handler(fakeUri, {}, plugin);
     expect((r.json as { cves: unknown[] }).cves).toEqual([]);
   });
+
+  it('returns CVEs pinned to a deps_audit scan, which has its own scan type', async () => {
+    plugin.storage.scans.insert({ scan_id: 'a1', scan_type: 'deps_audit', project_path: '/p', tree_hash: 'h' });
+    plugin.storage.cves.upsert({
+      cve_id: 'CVE-2024-Y', package_name: 'minimist', severity: 'critical', scan_id: 'a1',
+    });
+    plugin.storage.scans.finalize({ scan_id: 'a1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    const r = await getResource('guardian-cves-active').handler(fakeUri, {}, plugin);
+    const payload = r.json as { cves: Array<{ cve_id: string }>; scan_id?: string };
+    expect(payload.scan_id).toBe('a1');
+    expect(payload.cves.map((c) => c.cve_id)).toEqual(['CVE-2024-Y']);
+  });
 });
 
 describe('guardian://stack', () => {

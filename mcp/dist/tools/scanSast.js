@@ -66,6 +66,16 @@ registerToolModule(makeScanTool({
         'contacts nothing and runs with --metrics=off, using only rules already on disk.',
     scan_type: 'sast',
     category: 'security',
+    // For the cache key: every config the native Semgrep run below passes.
+    // Registered custom rules can live outside the project, where the tree
+    // hash cannot see an edit to them.
+    rulePacks: (input, { projectPath, plugin }) => [
+        ...(input.local_only === true
+            ? []
+            : ['auto', ...(anyCsprojInProject(projectPath) ? ['p/csharp'] : [])]),
+        ...inspectProjectSemgrepConfigs(projectPath).usable.map((c) => c.path),
+        ...resolveCustomSemgrepConfigs(plugin),
+    ],
     inputSchema: {
         project_path: ProjectPath,
         severity_min: SeverityMin,
