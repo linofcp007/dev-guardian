@@ -229,7 +229,9 @@ describe('check_toolchain', () => {
     expect(v('semgrep')?.required_by).toEqual(
       expect.arrayContaining(['scan_sast', 'security_scan_full', 'bug_hunt', 'review_pr']),
     );
-    expect(v('nuclei')?.install_command).toBeTruthy();
+    // Each entry carries this OS's install hint. semgrep has one on every
+    // OS; nuclei, for instance, has none on linux.
+    expect(v('semgrep')?.install_command).toBeTruthy();
   });
 
   it('sees the .NET SDK, and treats dotnet-format as provided by SDK >= 6', async () => {
