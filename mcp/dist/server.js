@@ -47425,15 +47425,54 @@ var PERMISSIVE = /* @__PURE__ */ new Set([
 ]);
 var AGPL = withSuffixes("AGPL-1.0", "AGPL-3.0");
 var VIRAL = withSuffixes("AGPL-1.0", "AGPL-3.0", "GPL-2.0", "GPL-3.0", "SSPL-1.0", "OSL-3.0");
-var WEAK_COPYLEFT = /* @__PURE__ */ new Set(["LGPL-2.1", "LGPL-3.0", "MPL-2.0", "EPL-2.0"]);
+var WEAK_COPYLEFT = /* @__PURE__ */ new Set([...withSuffixes("LGPL-2.0", "LGPL-2.1", "LGPL-3.0"), "MPL-2.0", "EPL-2.0"]);
 var COMMERCIAL = /* @__PURE__ */ new Set(["BUSL-1.1", "Elastic-2.0", "CommonsClause"]);
 var KNOWN_LICENSES = /* @__PURE__ */ new Set([...PERMISSIVE, ...VIRAL, ...WEAK_COPYLEFT, ...COMMERCIAL]);
-var GPL3_FAMILY = withSuffixes("GPL-3.0");
+var GNU_VERSIONS = {
+  GPL: ["1.0", "2.0", "3.0"],
+  AGPL: ["1.0", "3.0"],
+  LGPL: ["2.0", "2.1", "3.0"]
+};
+function gnuVersions(id) {
+  const m = /^(AGPL|LGPL|GPL)-(\d\.\d)(-only|-or-later)?$/.exec(id);
+  const family = m?.[1];
+  const version2 = m?.[2];
+  if (family !== "GPL" && family !== "AGPL" && family !== "LGPL" || version2 === void 0) return null;
+  const all = GNU_VERSIONS[family];
+  if (!all.includes(version2)) return null;
+  const versions = m?.[3] === "-or-later" ? all.filter((v) => Number(v) >= Number(version2)) : [version2];
+  return { family, versions };
+}
+function lgplAsGpl(lgpl) {
+  return lgpl.versions.some((v) => v !== "3.0") ? ["2.0", "3.0"] : ["3.0"];
+}
+function gnuPairVerdict(proj, dep) {
+  const p = gnuVersions(proj);
+  const d = gnuVersions(dep);
+  if (!p || !d) return null;
+  let depVersions;
+  if (p.family === d.family) depVersions = d.versions;
+  else if (p.family === "GPL" && d.family === "LGPL") depVersions = lgplAsGpl(d);
+  else return null;
+  const common2 = p.versions.filter((v) => depVersions.includes(v));
+  if (common2.length > 0) return { kind: "ok" };
+  const fam = p.family;
+  return {
+    kind: "risky",
+    reason: `${proj} project + ${dep} dependency: no ${fam} version both allow \u2014 the project can only be distributed under ${fam}-${p.versions.join(`/${fam}-`)}, the dependency only under ${fam}-${depVersions.join(`/${fam}-`)}.`
+  };
+}
+function agplNetworkClause(dep) {
+  if (dep.startsWith("AGPL-1.0")) {
+    return `AGPL-1.0 (Affero GPL v1: GPL-2.0 plus section 2(d)) requires that a program which lets network users download its source keeps that facility in place \u2014 review before any network deployment.`;
+  }
+  return `Unlike GPL, AGPL-3.0's section 13 is triggered by making the software available over a network (e.g. SaaS) even without ever distributing binaries: users interacting with it must be offered the source.`;
+}
 function incompatibleReason(projectLicense, depLicense) {
   const proj = normaliseLicense(projectLicense);
   const dep = normaliseLicense(depLicense);
   if (PERMISSIVE.has(proj) && AGPL.has(dep)) {
-    return `Permissive project '${projectLicense}' includes AGPL dependency '${depLicense}'. Unlike GPL, AGPL's network-use clause is triggered by making the software available over a network (e.g. SaaS) even without ever distributing binaries \u2014 review before any network deployment.`;
+    return `Permissive project '${projectLicense}' includes AGPL dependency '${depLicense}'. ${agplNetworkClause(dep)}`;
   }
   if (PERMISSIVE.has(proj) && VIRAL.has(dep)) {
     return `Permissive project '${projectLicense}' includes viral copyleft dep '${depLicense}'. Distributing the combined work requires releasing the whole project under '${depLicense}'.`;
@@ -47444,9 +47483,8 @@ function incompatibleReason(projectLicense, depLicense) {
   if (PERMISSIVE.has(proj) && COMMERCIAL.has(dep)) {
     return `Permissive project '${projectLicense}' includes a source-available-but-not-OSI license '${depLicense}'. Restricts deployment models \u2014 review the dep's specific terms.`;
   }
-  if ((proj === "GPL-2.0" || proj === "GPL-2.0-only" || proj === "GPL-2.0-or-later") && dep === "Apache-2.0") {
-    const escape2 = proj === "GPL-2.0-or-later" ? ' The project may avoid this by exercising its "or-later" option and relicensing under GPL-3.0, which has no such incompatibility with Apache-2.0 \u2014 until that relicensing is done explicitly, the two remain in tension.' : "";
-    return `GPL-2.0 project + Apache-2.0 dep: known incompatibility (patent termination clauses).${escape2} Move to GPL-3.0 or replace the dep.`;
+  if ((proj === "GPL-2.0" || proj === "GPL-2.0-only") && dep === "Apache-2.0") {
+    return `GPL-2.0-only project + Apache-2.0 dep: known incompatibility (patent termination clauses). Move to GPL-2.0-or-later / GPL-3.0 or replace the dep.`;
   }
   if ((proj === "AGPL-3.0" || proj === "AGPL-3.0-only" || proj === "AGPL-3.0-or-later") && COMMERCIAL.has(dep)) {
     return `AGPL-3.0 project + commercial-source-available dep '${depLicense}': mutually exclusive distribution terms.`;
@@ -47456,7 +47494,7 @@ function incompatibleReason(projectLicense, depLicense) {
 function proprietaryReason(depLicense) {
   const dep = normaliseLicense(depLicense);
   if (AGPL.has(dep)) {
-    return `No project license declared (treated as proprietary/all-rights-reserved). AGPL dependency '${depLicense}' triggers its network-use clause: even SaaS deployment without redistributing binaries requires releasing source to users interacting with it over a network \u2014 incompatible with a closed-source project.`;
+    return `No project license declared (treated as proprietary/all-rights-reserved). AGPL dependency '${depLicense}' is copyleft \u2014 incompatible with a closed-source project. ${agplNetworkClause(dep)}`;
   }
   if (VIRAL.has(dep)) {
     return `No project license declared (treated as proprietary). Viral copyleft dependency '${depLicense}' requires the combined work to be released under '${depLicense}' when distributed \u2014 incompatible with closed-source distribution.`;
@@ -47470,23 +47508,13 @@ function proprietaryReason(depLicense) {
   return null;
 }
 function explicitPairVerdict(proj, dep) {
-  if (proj === "GPL-2.0" || proj === "GPL-2.0-only") {
-    if (GPL3_FAMILY.has(dep)) {
-      return {
-        kind: "risky",
-        reason: `GPL-2.0 project + GPL-3.0 dependency '${dep}': different, non-interchangeable copyleft terms \u2014 a GPL-2.0-only project has no "or later" escape into GPL-3.0.`
-      };
-    }
-    if (AGPL.has(dep)) {
-      return {
-        kind: "risky",
-        reason: `GPL-2.0 project + AGPL dependency '${dep}': AGPL's terms require GPL-3.0-compatible licensing, which a GPL-2.0-only project cannot provide.`
-      };
-    }
+  if ((proj === "GPL-2.0" || proj === "GPL-2.0-only") && AGPL.has(dep)) {
+    return {
+      kind: "risky",
+      reason: dep.startsWith("AGPL-1.0") ? `GPL-2.0-only project + AGPL dependency '${dep}': AGPL-1.0 is GPL-2.0 plus an extra network-use requirement (its section 2(d)), and GPL-2.0 forbids imposing further restrictions on the combined work \u2014 the two cannot be combined.` : `GPL-2.0-only project + AGPL dependency '${dep}': AGPL-3.0 is built on GPL-3.0, and a GPL-2.0-only project has no "or later" route to GPL-3.0-family terms.`
+    };
   }
-  if (proj === "GPL-2.0-or-later" && GPL3_FAMILY.has(dep)) {
-    return { kind: "ok" };
-  }
+  if (proj === dep && (VIRAL.has(dep) || WEAK_COPYLEFT.has(dep))) return { kind: "ok" };
   return null;
 }
 function classifySingleLicensePair(projectLicenseSingle, depLicenseRaw) {
@@ -47496,6 +47524,8 @@ function classifySingleLicensePair(projectLicenseSingle, depLicenseRaw) {
   const reason = incompatibleReason(projectLicenseSingle, depLicenseRaw);
   if (reason) return { kind: "risky", reason };
   if (PERMISSIVE.has(proj) || PERMISSIVE.has(dep)) return { kind: "ok" };
+  const gnu = gnuPairVerdict(proj, dep);
+  if (gnu) return gnu;
   const explicit = explicitPairVerdict(proj, dep);
   if (explicit) return explicit;
   return { kind: "unknown" };
@@ -47543,7 +47573,7 @@ function evaluateDependencyLicense(projectLicense, isProprietary, depLicenseRaw)
     if (v.kind === "risky") return { kind: "incompatible", reason: v.reason };
     return {
       kind: "undetermined",
-      reason: `Compatibility between project license '${projectLicense ?? "proprietary (no license declared)"}' and dependency license '${depLicenseRaw}' could not be determined \u2014 either side (or both) is not one this tool recognises. Review manually.`
+      reason: `Compatibility between project license '${projectLicense ?? "proprietary (no license declared)"}' and dependency license '${depLicenseRaw}' could not be determined \u2014 this tool has no rule for that pair, or does not recognise one of the two licenses. Review manually.`
     };
   }
   const verdicts = expr.parts.map((p) => evaluateAgainstProject(projectLicense, isProprietary, p));
@@ -47593,7 +47623,7 @@ function parseLicenseExpression(raw) {
   return { kind: "single", parts: [stripped] };
 }
 function normaliseLicense(s) {
-  return s.trim().replace(/^["']|["']$/g, "").replace(/[()]/g, "").replace(/\s+/g, "");
+  return s.trim().replace(/^["']|["']$/g, "").replace(/[()]/g, "").replace(/\s+/g, "").replace(/^((?:A|L)?GPL-\d\.\d)\+$/, "$1-or-later");
 }
 function findFirstCsproj(projectPath) {
   try {

@@ -792,20 +792,6 @@ describe('license_compatibility', () => {
     expect(r.summary.undetermined_total).toBe(1);
   });
 
-  it('item 5: GPL-2.0-or-later + Apache-2.0 is ALSO flagged (not silently exempted the way -only is)', async () => {
-    const project = tempProject();
-    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"GPL-2.0-or-later"}', 'utf8');
-    const plugin = makePlugin(project);
-    seedComplianceLicenses(plugin, project, [{ license: 'Apache-2.0', packages: ['dep'] }]);
-
-    const r = (await getTool('license_compatibility').handler(
-      { project_path: project },
-      plugin,
-    )) as { ok: true; incompatibilities: Array<{ reason: string }> };
-    expect(r.incompatibilities).toHaveLength(1);
-    expect(r.incompatibilities[0]?.reason).toMatch(/or-later/i);
-  });
-
   it('item 5: findLatestCompliance is scoped to THIS project — another project\'s compliance scan never leaks in', async () => {
     const projectA = tempProject();
     const projectB = tempProject();
@@ -909,7 +895,7 @@ describe('license_compatibility', () => {
     expect(depLicenses).toEqual(['AGPL-3.0', 'GPL-2.0-only']);
   });
 
-  it('item 5 (round 2): an UNMODELLED single project license (GPL-3.0-only) reports undetermined too — not just MPL-2.0', async () => {
+  it('item 5 (round 2): a GPL-3.0-only project is never silently compatible — AGPL-3.0 undetermined, GPL-2.0-only (round 4: no common GPL version) incompatible', async () => {
     const project = tempProject();
     writeFileSync(join(project, 'package.json'), '{"name":"x","license":"GPL-3.0-only"}', 'utf8');
     const plugin = makePlugin(project);
@@ -920,10 +906,11 @@ describe('license_compatibility', () => {
 
     const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
       ok: true;
-      incompatibilities: unknown[];
+      incompatibilities: Array<{ dep_license: string }>;
       undetermined: Array<{ dep_license: string }>;
     };
-    expect(r.undetermined).toHaveLength(2);
+    expect(r.undetermined.map((u) => u.dep_license)).toEqual(['AGPL-3.0']);
+    expect(r.incompatibilities.map((i) => i.dep_license)).toEqual(['GPL-2.0-only']);
   });
 
   it('item 5 (round 2): an unmodelled project license still reads a PERMISSIVE dependency as compatible (no false undetermined)', async () => {
@@ -1090,6 +1077,76 @@ describe('license_compatibility', () => {
     };
     expect(r.incompatibilities).toEqual([]);
     expect(r.undetermined).toEqual([]);
+  });
+
+  // ------------------------------------------------------------ fix round 4
+
+  async function verdict(projectLicense: string, depLicense: string) {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'x', license: projectLicense }), 'utf8');
+    const plugin = makePlugin(project);
+    seedComplianceLicenses(plugin, project, [{ license: depLicense, packages: ['dep'] }]);
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      incompatibilities: Array<{ reason: string }>;
+      undetermined: Array<{ reason: string }>;
+    };
+    if (r.incompatibilities.length > 0) return { kind: 'incompatible', reason: r.incompatibilities[0]?.reason ?? '' };
+    if (r.undetermined.length > 0) return { kind: 'undetermined', reason: r.undetermined[0]?.reason ?? '' };
+    return { kind: 'ok', reason: '' };
+  }
+
+  it('F (round 4): the SAME license on both sides is compatible, never undetermined', async () => {
+    const pairs: Array<[string, string]> = [
+      ['GPL-2.0-only', 'GPL-2.0-only'],
+      ['GPL-2.0', 'GPL-2.0-only'], // the bare SPDX id IS -only
+      ['GPL-3.0-only', 'GPL-3.0-only'],
+      ['GPL-3.0-or-later', 'GPL-3.0-or-later'],
+      ['AGPL-3.0-only', 'AGPL-3.0'],
+      ['LGPL-2.1-only', 'LGPL-2.1-only'],
+      ['MPL-2.0', 'MPL-2.0'],
+      ['SSPL-1.0', 'SSPL-1.0'],
+    ];
+    for (const [proj, dep] of pairs) {
+      expect((await verdict(proj, dep)).kind, `${proj} + ${dep}`).toBe('ok');
+    }
+  });
+
+  it('F (round 4): "or later" is decided by version — the same answer for an Apache-2.0 and a GPL-3.0 dependency', async () => {
+    // A GPL-2.0-or-later project can elect GPL-3.0, which is compatible with
+    // both. Round 3 flagged the Apache-2.0 case and passed the GPL-3.0 one.
+    expect((await verdict('GPL-2.0-or-later', 'Apache-2.0')).kind).toBe('ok');
+    expect((await verdict('GPL-2.0-or-later', 'GPL-3.0')).kind).toBe('ok');
+    expect((await verdict('GPL-2.0+', 'GPL-3.0-only')).kind).toBe('ok'); // deprecated spelling of -or-later
+    expect((await verdict('GPL-2.0-only', 'GPL-2.0-or-later')).kind).toBe('ok');
+    expect((await verdict('GPL-3.0-only', 'GPL-2.0-or-later')).kind).toBe('ok');
+    // …and -only has no such route.
+    expect((await verdict('GPL-2.0-only', 'Apache-2.0')).kind).toBe('incompatible');
+    expect((await verdict('GPL-2.0-only', 'GPL-3.0-only')).kind).toBe('incompatible');
+    expect((await verdict('GPL-3.0-only', 'GPL-2.0-only')).kind).toBe('incompatible');
+  });
+
+  it('F (round 4): an LGPL dependency in a GPL project is judged by the GPL versions it may become', async () => {
+    expect((await verdict('GPL-2.0-only', 'LGPL-2.1-only')).kind).toBe('ok');
+    expect((await verdict('GPL-3.0-only', 'LGPL-2.1-or-later')).kind).toBe('ok');
+    expect((await verdict('GPL-3.0-only', 'LGPL-3.0-only')).kind).toBe('ok');
+    const lgpl3 = await verdict('GPL-2.0-only', 'LGPL-3.0-only');
+    expect(lgpl3.kind).toBe('incompatible');
+    expect(lgpl3.reason).toMatch(/no GPL version both allow/);
+  });
+
+  it('F (round 4): AGPL-1.0 gets its own reason — it is GPL-2.0-based, not "GPL-3.0-compatible licensing"', async () => {
+    const inGpl2 = await verdict('GPL-2.0-only', 'AGPL-1.0-only');
+    expect(inGpl2.kind).toBe('incompatible');
+    expect(inGpl2.reason).toMatch(/section 2\(d\)/);
+    expect(inGpl2.reason).not.toMatch(/GPL-3\.0/);
+    const inMit = await verdict('MIT', 'AGPL-1.0-only');
+    expect(inMit.kind).toBe('incompatible');
+    expect(inMit.reason).toMatch(/AGPL-1\.0/);
+    expect(inMit.reason).not.toMatch(/section 13/);
+    // AGPL-3.0 keeps the section-13 wording and the GPL-3.0 explanation.
+    expect((await verdict('MIT', 'AGPL-3.0-only')).reason).toMatch(/section 13/);
+    expect((await verdict('GPL-2.0-only', 'AGPL-3.0-only')).reason).toMatch(/built on GPL-3\.0/);
   });
 });
 

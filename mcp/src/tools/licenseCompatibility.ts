@@ -242,23 +242,11 @@ function findLatestCompliance(ctx: PluginContext, projectPath: string): Complian
 }
 
 /**
- * Heuristic compatibility table. Returns the reason as a string when the
- * combination is risky/incompatible, or null when it's fine.
- *
- * The rule of thumb: more permissive project + more restrictive dep = risk.
- * The same dep is fine in a project of the same or stricter terms.
- *
- * Every GPL-family id is listed in all three SPDX forms — bare (the
- * deprecated, ambiguous form), `-only` and `-or-later` — rather than
- * normalising away the suffix. `normaliseLicense` used to strip BOTH
- * suffixes, treating `GPL-2.0-or-later` identically to `GPL-2.0-only`; that
- * silently exempted `-or-later` from the checks below entirely (a stale
- * assumption a previous version of this file's own comment asserted
- * without a test — fix round 1, item 5). `-or-later` still carries the SAME
- * risk here: the recipient must actually exercise the "or later" option and
- * relicense before the specific incompatibility goes away, which this tool
- * cannot verify happened, so it is flagged too — with a different reason
- * than `-only`, which has no such escape at all.
+ * Every GNU-family id is listed in all three SPDX forms — bare (the
+ * deprecated form, which SPDX defines as `-only`), `-only` and `-or-later` —
+ * rather than normalising the suffix away: `GPL-2.0-or-later` and
+ * `GPL-2.0-only` are different licenses for compatibility purposes (see
+ * `gnuVersions`).
  */
 function withSuffixes(...bases: string[]): Set<string> {
   const out = new Set<string>();
@@ -282,30 +270,107 @@ const PERMISSIVE = new Set([
 ]);
 const AGPL = withSuffixes('AGPL-1.0', 'AGPL-3.0');
 const VIRAL = withSuffixes('AGPL-1.0', 'AGPL-3.0', 'GPL-2.0', 'GPL-3.0', 'SSPL-1.0', 'OSL-3.0');
-const WEAK_COPYLEFT = new Set(['LGPL-2.1', 'LGPL-3.0', 'MPL-2.0', 'EPL-2.0']);
+const WEAK_COPYLEFT = new Set([...withSuffixes('LGPL-2.0', 'LGPL-2.1', 'LGPL-3.0'), 'MPL-2.0', 'EPL-2.0']);
 const COMMERCIAL = new Set(['BUSL-1.1', 'Elastic-2.0', 'CommonsClause']);
 /** Every license id this table has an opinion about — anything else is
  *  `undetermined`, never silently compatible (fix round 1, item 5). */
 const KNOWN_LICENSES = new Set<string>([...PERMISSIVE, ...VIRAL, ...WEAK_COPYLEFT, ...COMMERCIAL]);
-/** GPL-3.0, all three SPDX suffix forms — used only by `explicitPairVerdict`'s
- *  GPL-2.0-vs-GPL-3.0 rules below. */
-const GPL3_FAMILY = withSuffixes('GPL-3.0');
 
+/** The versions each GNU license family was published in. */
+const GNU_VERSIONS: Record<'GPL' | 'AGPL' | 'LGPL', string[]> = {
+  GPL: ['1.0', '2.0', '3.0'],
+  AGPL: ['1.0', '3.0'],
+  LGPL: ['2.0', '2.1', '3.0'],
+};
+
+interface GnuTerms {
+  family: 'GPL' | 'AGPL' | 'LGPL';
+  /** Every version a work under this id may be distributed under: one for
+   *  `-only` (and the bare form, which SPDX defines as `-only`), that one and
+   *  every later one for `-or-later`. */
+  versions: string[];
+}
+
+function gnuVersions(id: string): GnuTerms | null {
+  const m = /^(AGPL|LGPL|GPL)-(\d\.\d)(-only|-or-later)?$/.exec(id);
+  const family = m?.[1];
+  const version = m?.[2];
+  if ((family !== 'GPL' && family !== 'AGPL' && family !== 'LGPL') || version === undefined) return null;
+  const all = GNU_VERSIONS[family];
+  if (!all.includes(version)) return null;
+  const versions = m?.[3] === '-or-later' ? all.filter((v) => Number(v) >= Number(version)) : [version];
+  return { family, versions };
+}
+
+/** The GPL versions an LGPL-licensed work may be relicensed under — LGPL-2.x
+ *  section 3 allows GPL-2.0 "or any later version"; LGPL-3.0 is GPL-3.0 plus
+ *  extra permissions, so GPL-3.0 only. */
+function lgplAsGpl(lgpl: GnuTerms): string[] {
+  return lgpl.versions.some((v) => v !== '3.0') ? ['2.0', '3.0'] : ['3.0'];
+}
+
+/**
+ * GNU-family pairs, decided by VERSION rather than by name: a combination is
+ * fine when some one version of the license is allowed by both sides — the
+ * combined work is distributed under that version. This is what makes
+ * `GPL-2.0-only` + `GPL-2.0-only` fine (it was `undetermined`), `GPL-2.0-only`
+ * + `GPL-3.0-only` incompatible (no common version), and
+ * `GPL-2.0-or-later` + `GPL-3.0` fine (the project elects GPL-3.0). An LGPL
+ * dependency in a GPL project is read as the GPL versions it may be
+ * relicensed under. `null` for any pair outside those families.
+ */
+function gnuPairVerdict(proj: string, dep: string): SingleVerdict | null {
+  const p = gnuVersions(proj);
+  const d = gnuVersions(dep);
+  if (!p || !d) return null;
+  let depVersions: string[];
+  if (p.family === d.family) depVersions = d.versions;
+  else if (p.family === 'GPL' && d.family === 'LGPL') depVersions = lgplAsGpl(d);
+  else return null;
+  const common = p.versions.filter((v) => depVersions.includes(v));
+  if (common.length > 0) return { kind: 'ok' };
+  const fam = p.family;
+  return {
+    kind: 'risky',
+    reason:
+      `${proj} project + ${dep} dependency: no ${fam} version both allow — the project can only be ` +
+      `distributed under ${fam}-${p.versions.join(`/${fam}-`)}, the dependency only under ` +
+      `${fam}-${depVersions.join(`/${fam}-`)}.`,
+  };
+}
+
+/** A version-accurate description of an AGPL dependency's network clause:
+ *  AGPL-3.0's section 13 and AGPL-1.0's section 2(d) are different
+ *  obligations, and AGPL-1.0 is built on GPL-2.0, not GPL-3.0. */
+function agplNetworkClause(dep: string): string {
+  if (dep.startsWith('AGPL-1.0')) {
+    return (
+      `AGPL-1.0 (Affero GPL v1: GPL-2.0 plus section 2(d)) requires that a program which lets network ` +
+      `users download its source keeps that facility in place — review before any network deployment.`
+    );
+  }
+  return (
+    `Unlike GPL, AGPL-3.0's section 13 is triggered by making the software available over a network ` +
+    `(e.g. SaaS) even without ever distributing binaries: users interacting with it must be offered the source.`
+  );
+}
+
+/**
+ * Heuristic compatibility table. Returns the reason as a string when the
+ * combination is risky/incompatible, or null when it's fine or not covered
+ * here (`classifySingleLicensePair` tells those two apart).
+ *
+ * The rule of thumb: more permissive project + more restrictive dep = risk.
+ */
 function incompatibleReason(projectLicense: string, depLicense: string): string | null {
   const proj = normaliseLicense(projectLicense);
   const dep = normaliseLicense(depLicense);
 
-  // AGPL is checked before the generic viral case: unlike GPL, its network-
-  // use clause is triggered by making the software available over a
-  // network (a SaaS deployment) even when nothing is ever distributed —
-  // the generic "distributing the combined work" wording below would
-  // understate the risk for exactly this dependency.
+  // AGPL is checked before the generic viral case: its network clause
+  // applies even when nothing is ever distributed, which the generic
+  // "distributing the combined work" wording below would understate.
   if (PERMISSIVE.has(proj) && AGPL.has(dep)) {
-    return (
-      `Permissive project '${projectLicense}' includes AGPL dependency '${depLicense}'. Unlike GPL, ` +
-      `AGPL's network-use clause is triggered by making the software available over a network ` +
-      `(e.g. SaaS) even without ever distributing binaries — review before any network deployment.`
-    );
+    return `Permissive project '${projectLicense}' includes AGPL dependency '${depLicense}'. ${agplNetworkClause(dep)}`;
   }
   if (PERMISSIVE.has(proj) && VIRAL.has(dep)) {
     return `Permissive project '${projectLicense}' includes viral copyleft dep '${depLicense}'. Distributing the combined work requires releasing the whole project under '${depLicense}'.`;
@@ -316,19 +381,13 @@ function incompatibleReason(projectLicense: string, depLicense: string): string 
   if (PERMISSIVE.has(proj) && COMMERCIAL.has(dep)) {
     return `Permissive project '${projectLicense}' includes a source-available-but-not-OSI license '${depLicense}'. Restricts deployment models — review the dep's specific terms.`;
   }
-  // GPL-2.0 (any SPDX suffix form) vs Apache-2.0: the patent-termination
-  // incompatibility. `-or-later` gets a DIFFERENT reason: the project could
-  // avoid it by actually relicensing under GPL-3.0, which this tool cannot
-  // confirm happened, so it is flagged with that escape named rather than
-  // silently exempted.
-  if ((proj === 'GPL-2.0' || proj === 'GPL-2.0-only' || proj === 'GPL-2.0-or-later') && dep === 'Apache-2.0') {
-    const escape =
-      proj === 'GPL-2.0-or-later'
-        ? ' The project may avoid this by exercising its "or-later" option and relicensing under ' +
-          'GPL-3.0, which has no such incompatibility with Apache-2.0 — until that relicensing is ' +
-          'done explicitly, the two remain in tension.'
-        : '';
-    return `GPL-2.0 project + Apache-2.0 dep: known incompatibility (patent termination clauses).${escape} Move to GPL-3.0 or replace the dep.`;
+  // GPL-2.0-only vs Apache-2.0: the patent-termination incompatibility. Only
+  // the -only form (and the bare id, which SPDX defines as -only): a
+  // GPL-2.0-or-later project can be distributed under GPL-3.0, which is
+  // compatible with Apache-2.0 — the same election that makes it compatible
+  // with a GPL-3.0 dependency (`gnuPairVerdict`), so the two answers agree.
+  if ((proj === 'GPL-2.0' || proj === 'GPL-2.0-only') && dep === 'Apache-2.0') {
+    return `GPL-2.0-only project + Apache-2.0 dep: known incompatibility (patent termination clauses). Move to GPL-2.0-or-later / GPL-3.0 or replace the dep.`;
   }
   if ((proj === 'AGPL-3.0' || proj === 'AGPL-3.0-only' || proj === 'AGPL-3.0-or-later') && COMMERCIAL.has(dep)) {
     return `AGPL-3.0 project + commercial-source-available dep '${depLicense}': mutually exclusive distribution terms.`;
@@ -347,9 +406,7 @@ function proprietaryReason(depLicense: string): string | null {
   if (AGPL.has(dep)) {
     return (
       `No project license declared (treated as proprietary/all-rights-reserved). AGPL dependency ` +
-      `'${depLicense}' triggers its network-use clause: even SaaS deployment without redistributing ` +
-      `binaries requires releasing source to users interacting with it over a network — incompatible ` +
-      `with a closed-source project.`
+      `'${depLicense}' is copyleft — incompatible with a closed-source project. ${agplNetworkClause(dep)}`
     );
   }
   if (VIRAL.has(dep)) {
@@ -379,54 +436,35 @@ type SingleVerdict = { kind: 'ok' } | { kind: 'risky'; reason: string } | { kind
 
 /**
  * A small, EXPLICIT compatibility matrix for (project, dependency) pairs
- * `incompatibleReason` does not cover at all — fix round 3, item N5.
+ * `incompatibleReason` and `gnuPairVerdict` do not cover.
  *
- * The fix round 2 shape used a whole-FAMILY "is this project license one I
- * understand" flag (`isModeledProjectLicense`): any GPL-2.0 suffix form, or
- * any AGPL suffix form, read as "modelled", so "no rule fired" there meant
- * "fine" — but `incompatibleReason` only actually has a rule for GPL-2.0
- * project + Apache-2.0 dependency, and AGPL-3.0 project + a COMMERCIAL
- * dependency. Every OTHER dependency against a GPL-2.0/AGPL-3.0 project
- * silently read "ok" purely because the PROJECT side happened to be a
- * recognised family name — reproduced by the coordinator: a GPL-2.0-only
- * project against GPL-3.0-only / AGPL-3.0 / SSPL-1.0 / BUSL-1.1
- * dependencies, and an AGPL-3.0-only project against GPL-2.0-only /
- * SSPL-1.0, all read compatible.
- *
- * Only the pairs below have a real answer; everything else a GPL-2.0/
- * AGPL-3.0 project pulls in — SSPL-1.0, BUSL-1.1, MPL-2.0, and so on — falls
- * through to `classifySingleLicensePair`'s own `unknown` (-> undetermined),
- * which is the honest answer: this tool does not model that combination,
- * and "undetermined" is not the same finding as "checked, and it's fine".
+ * Only the pairs below have a real answer; everything else a copyleft
+ * project pulls in — SSPL-1.0, BUSL-1.1, MPL-2.0 into GPL, GPL into AGPL,
+ * and so on — falls through to `classifySingleLicensePair`'s own `unknown`
+ * (-> undetermined), which is the honest answer: this tool does not model
+ * that combination, and "undetermined" is not the same finding as "checked,
+ * and it's fine".
  */
 function explicitPairVerdict(proj: string, dep: string): SingleVerdict | null {
-  // GPL-2.0 with NO "or later" escape: incompatible with GPL-3.0 (a
-  // different, non-interchangeable copyleft license) and with AGPL (whose
-  // terms require GPL-3.0-compatible licensing, which GPL-2.0-only cannot
-  // provide).
-  if (proj === 'GPL-2.0' || proj === 'GPL-2.0-only') {
-    if (GPL3_FAMILY.has(dep)) {
-      return {
-        kind: 'risky',
-        reason:
-          `GPL-2.0 project + GPL-3.0 dependency '${dep}': different, non-interchangeable copyleft ` +
-          `terms — a GPL-2.0-only project has no "or later" escape into GPL-3.0.`,
-      };
-    }
-    if (AGPL.has(dep)) {
-      return {
-        kind: 'risky',
-        reason:
-          `GPL-2.0 project + AGPL dependency '${dep}': AGPL's terms require GPL-3.0-compatible ` +
-          `licensing, which a GPL-2.0-only project cannot provide.`,
-      };
-    }
+  // A GPL-2.0-only project cannot take on any AGPL: AGPL-3.0 is built on
+  // GPL-3.0 (a version GPL-2.0-only cannot move to), and AGPL-1.0 adds a
+  // network requirement GPL-2.0 does not allow on top of its own terms.
+  if ((proj === 'GPL-2.0' || proj === 'GPL-2.0-only') && AGPL.has(dep)) {
+    return {
+      kind: 'risky',
+      reason: dep.startsWith('AGPL-1.0')
+        ? `GPL-2.0-only project + AGPL dependency '${dep}': AGPL-1.0 is GPL-2.0 plus an extra network-use ` +
+          `requirement (its section 2(d)), and GPL-2.0 forbids imposing further restrictions on the ` +
+          `combined work — the two cannot be combined.`
+        : `GPL-2.0-only project + AGPL dependency '${dep}': AGPL-3.0 is built on GPL-3.0, and a ` +
+          `GPL-2.0-only project has no "or later" route to GPL-3.0-family terms.`,
+    };
   }
-  // GPL-2.0-or-later MAY relicense to GPL-3.0 — the escape the bare/-only
-  // forms lack — so a GPL-3.0 dependency is compatible as GPL-3.0.
-  if (proj === 'GPL-2.0-or-later' && GPL3_FAMILY.has(dep)) {
-    return { kind: 'ok' };
-  }
+  // The same license on both sides: the combined work is distributed under
+  // exactly those terms. (GNU families are decided by version above; the
+  // commercial source-available licenses are left undetermined — their
+  // terms carry per-licensor parameters, so "same id" is not "same terms".)
+  if (proj === dep && (VIRAL.has(dep) || WEAK_COPYLEFT.has(dep))) return { kind: 'ok' };
   return null;
 }
 
@@ -434,12 +472,10 @@ function explicitPairVerdict(proj: string, dep: string): SingleVerdict | null {
  *  already-split dependency license id — never an OR/AND expression on
  *  either side (that composition lives in `evaluateAgainstProject` /
  *  `evaluateDependencyLicense`). 'unknown' when `dep` is not in ANY of the
- *  tables above at all, or when neither `incompatibleReason` nor
- *  `explicitPairVerdict` has a rule for this exact pair AND the dependency
- *  is not itself permissive (which is fine against anything — the whole
- *  point of "permissive" is that it imposes no terms to conflict with).
- *  These cases used to collapse into "returns null", indistinguishable from
- *  "checked, and it's fine". */
+ *  tables above at all, or when no rule covers this exact pair AND the
+ *  dependency is not itself permissive (which is fine against anything —
+ *  the whole point of "permissive" is that it imposes no terms to conflict
+ *  with). */
 function classifySingleLicensePair(projectLicenseSingle: string, depLicenseRaw: string): SingleVerdict {
   const dep = normaliseLicense(depLicenseRaw);
   if (!KNOWN_LICENSES.has(dep)) return { kind: 'unknown' };
@@ -447,6 +483,8 @@ function classifySingleLicensePair(projectLicenseSingle: string, depLicenseRaw: 
   const reason = incompatibleReason(projectLicenseSingle, depLicenseRaw);
   if (reason) return { kind: 'risky', reason };
   if (PERMISSIVE.has(proj) || PERMISSIVE.has(dep)) return { kind: 'ok' };
+  const gnu = gnuPairVerdict(proj, dep);
+  if (gnu) return gnu;
   const explicit = explicitPairVerdict(proj, dep);
   if (explicit) return explicit;
   return { kind: 'unknown' };
@@ -556,8 +594,8 @@ function evaluateDependencyLicense(
       kind: 'undetermined',
       reason:
         `Compatibility between project license '${projectLicense ?? 'proprietary (no license declared)'}' and ` +
-        `dependency license '${depLicenseRaw}' could not be determined — either side (or both) is not one this ` +
-        `tool recognises. Review manually.`,
+        `dependency license '${depLicenseRaw}' could not be determined — this tool has no rule for that pair, ` +
+        `or does not recognise one of the two licenses. Review manually.`,
     };
   }
 
@@ -661,7 +699,9 @@ function normaliseLicense(s: string): string {
     // attempts parenthesised precedence (see `parseLicenseExpression`'s own
     // comment), so a paren is always noise once a single term is reached.
     .replace(/[()]/g, '')
-    .replace(/\s+/g, '');
+    .replace(/\s+/g, '')
+    // SPDX's deprecated `GPL-2.0+` spelling IS `GPL-2.0-or-later`.
+    .replace(/^((?:A|L)?GPL-\d\.\d)\+$/, '$1-or-later');
 }
 
 /** First `.csproj` at the project root, in directory listing order — same
