@@ -4,6 +4,24 @@ import type { CveIntelRow } from '../../../src/storage/cveIntelRepo.js';
 
 const NOW = Date.parse('2026-09-25T12:00:00.000Z');
 
+/** A runtimeMeta fake that actually persists state across calls, in memory —
+ *  needed so a SECOND `enrichCveIntel` call sees the first call's cached KEV
+ *  catalog (`intel/kevCache.ts`'s own tests cover that module directly; the
+ *  cross-call assertions here live where the reviewer asked for them: at
+ *  `enrichCveIntel` itself). */
+function fakeRuntimeMeta() {
+  const store = new Map<string, string>();
+  return {
+    getJson: vi.fn((key: string): unknown => {
+      const raw = store.get(key);
+      return raw === undefined ? null : (JSON.parse(raw) as unknown);
+    }),
+    setJson: vi.fn((key: string, value: unknown): void => {
+      store.set(key, JSON.stringify(value));
+    }),
+  };
+}
+
 function fakeStorage(rows: CveIntelRow[] = []) {
   const byId = new Map(rows.map((r) => [r.cve_id, r]));
   const getMany = vi.fn((ids: readonly string[]) => {
@@ -15,7 +33,7 @@ function fakeStorage(rows: CveIntelRow[] = []) {
     return out;
   });
   const upsertMany = vi.fn();
-  return { cveIntel: { getMany, upsertMany } };
+  return { cveIntel: { getMany, upsertMany }, runtimeMeta: fakeRuntimeMeta() };
 }
 
 function freshRow(over: Partial<CveIntelRow> = {}): CveIntelRow {
@@ -132,5 +150,38 @@ describe('enrichCveIntel', () => {
     });
     expect(queryEpss).not.toHaveBeenCalled();
     expect(result.get('CVE-NEW')?.status).toBe('unavailable');
+  });
+
+  describe('the KEV catalog download is bounded in aggregate, not per CVE (review round 1, Important #1)', () => {
+    it('two calls with DISJOINT CVE ids, within the TTL, download the KEV feed only ONCE', async () => {
+      // The exact scenario the review named: "CI calling risk_score per
+      // commit" — a later call about a brand-new CVE must not re-download
+      // the whole feed just because that CVE's own cve_intel row is new.
+      const storage = fakeStorage();
+      const queryEpss = vi.fn().mockResolvedValue({ ok: true, scores: new Map() });
+      const fetchKevCatalog = vi.fn().mockResolvedValue({ ok: true, entries: new Map([['CVE-A', '2026-01-01']]) });
+
+      await enrichCveIntel(storage, ['CVE-A'], { now: NOW, env: {}, queryEpssImpl: queryEpss, fetchKevCatalogImpl: fetchKevCatalog });
+      const second = await enrichCveIntel(storage, ['CVE-B'], {
+        now: NOW + 60_000, env: {}, queryEpssImpl: queryEpss, fetchKevCatalogImpl: fetchKevCatalog,
+      });
+
+      expect(fetchKevCatalog).toHaveBeenCalledTimes(1);
+      // CVE-B is answered from the (still-fresh) cached catalog: not KEV-listed.
+      expect(second.get('CVE-B')).toMatchObject({ status: 'ok', kev: false });
+    });
+
+    it('a call past the catalog TTL downloads it again', async () => {
+      const storage = fakeStorage();
+      const queryEpss = vi.fn().mockResolvedValue({ ok: true, scores: new Map() });
+      const fetchKevCatalog = vi.fn().mockResolvedValue({ ok: true, entries: new Map() });
+
+      await enrichCveIntel(storage, ['CVE-A'], { now: NOW, env: {}, queryEpssImpl: queryEpss, fetchKevCatalogImpl: fetchKevCatalog });
+      await enrichCveIntel(storage, ['CVE-B'], {
+        now: NOW + INTEL_TTL_MS + 60_000, env: {}, queryEpssImpl: queryEpss, fetchKevCatalogImpl: fetchKevCatalog,
+      });
+
+      expect(fetchKevCatalog).toHaveBeenCalledTimes(2);
+    });
   });
 });

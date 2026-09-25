@@ -32,7 +32,7 @@
 import { z } from 'zod';
 import { describeOpenSet, openSetForProject } from '../history/openSet.js';
 import { enrichCveIntel } from '../intel/enrich.js';
-import { exploitabilitySignal, findingCveIds } from '../intel/rank.js';
+import { exploitabilitySignal, findingCveIds, isUncorrelatedFinding } from '../intel/rank.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
@@ -79,8 +79,10 @@ const tool = {
         'the newest usable scan of every finding-producing type, suppressions removed) by a weighted ' +
         'heuristic: severity + category + fix_available + age, boosted when a finding is linked to a ' +
         'CVE that is CISA KEV-listed or has a high FIRST EPSS score (cached 24h; offline or unmeasured ' +
-        'CVEs get no boost, never a fabricated one). Returns top-N with explanation. No LLM call — the ' +
-        'calling model uses the ranking to drive follow-ups.',
+        'CVEs get no boost, never a fabricated one). `cve_intel.uncorrelated` counts findings from a ' +
+        'CVE-capable scanner (e.g. npm-audit v2) that carry no extractable CVE id and so cannot be ' +
+        'weighted yet. Returns top-N with explanation. No LLM call — the calling model uses the ' +
+        'ranking to drive follow-ups.',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -146,12 +148,34 @@ async function handler(input, ctx) {
         summary,
         ranked: top,
         open_set: describeOpenSet(set),
+        cve_intel: uncorrelatedCoverage(open),
         instructions_for_model: 'Pick the first 3-5 entries to action. For each, prefer `suggest_fix(finding_fingerprint)` ' +
             'over speculation. If most top entries are security/critical, call `audit_executive` to ' +
             'understand cross-cutting impact first.',
         // unused reference to keep the time variable from being dead-code'd by
         // future maintainers who add age-weighting.
         _recent_scan_ts: recentScanTs,
+    };
+}
+/**
+ * How many open findings come from a CVE-capable scanner (`intel/rank.ts
+ * #CVE_CAPABLE_TOOLS`) but carry no CVE id at all — review round 1,
+ * Important #2: npm-audit's v2 parser is the main source today (see
+ * `intel/rank.ts#isUncorrelatedFinding`'s own doc comment), and those
+ * findings silently never got a KEV/EPSS boost with nothing saying so.
+ * Always reports the count (0 included); the `note` is added only when it
+ * is non-zero, so a project with nothing uncorrelated gets a quiet `{
+ * uncorrelated: 0 }` rather than an unconditional sentence about a gap that
+ * does not apply to it.
+ */
+function uncorrelatedCoverage(open) {
+    const uncorrelated = open.filter(isUncorrelatedFinding).length;
+    if (uncorrelated === 0)
+        return { uncorrelated };
+    return {
+        uncorrelated,
+        note: `${uncorrelated} finding(s) come from a CVE-capable scanner but carry no extractable CVE id, ` +
+            'so they cannot be weighted by KEV/EPSS yet.',
     };
 }
 /**

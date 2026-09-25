@@ -33,6 +33,7 @@
 import { scoreRisk } from '../dashboard/risk.js';
 import { findLatestUsable, openSetForProject } from '../history/openSet.js';
 import { enrichCveIntel } from '../intel/enrich.js';
+import { isUncorrelatedFinding } from '../intel/rank.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan } from '../types.js';
@@ -46,7 +47,8 @@ const tool = {
         'are weighted up when CISA KEV-listed or high FIRST EPSS (cached 24h, offline-safe). Returns ' +
         'the score, a band (low/medium/high/critical), per-component breakdown, the next action to ' +
         'recommend, and `coverage` — which scans it read, which newer scans it skipped because they ' +
-        'measured nothing, `coverage.cve_intel` (KEV/EPSS measured vs unavailable), and ' +
+        'measured nothing, `coverage.cve_intel` (KEV/EPSS measured vs unavailable, plus `uncorrelated`: ' +
+        'findings from a CVE-capable scanner with no extractable CVE id, e.g. npm-audit v2), and ' +
         '`coverage_caveat` when the numbers are incomplete.',
     inputSchema: { project_path: ProjectPath },
     handler: async (input, ctx) => handler(input, ctx),
@@ -69,7 +71,7 @@ async function handler(input, ctx) {
     const cveSource = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: 'deps' });
     const cves = cveSource.scan ? storage.cves.listActive(cveSource.scan.scan_id) : [];
     const cveIntel = await enrichCveIntel(storage, cves.map((c) => c.cve_id));
-    const cveIntelCoverage = summariseCveIntel(cves, cveIntel);
+    const cveIntelCoverage = summariseCveIntel(cves, cveIntel, open.findings);
     // Compliance signals — missing policy docs and CI dependency bots. Both are
     // read from files, not scanner output, so a run's scanner coverage does
     // not disqualify them.
@@ -134,7 +136,7 @@ async function handler(input, ctx) {
 /** `intel` keyed by `cve_id`, same as `enrichCveIntel` returns — a `cve_id`
  *  absent from it (should not happen; `enrichCveIntel` answers for every id
  *  it is asked about) is treated the same as `status: 'unavailable'`. */
-function summariseCveIntel(cves, intel) {
+function summariseCveIntel(cves, intel, findings) {
     let kevCount = 0;
     let epssMeasured = 0;
     let unavailable = 0;
@@ -149,6 +151,19 @@ function summariseCveIntel(cves, intel) {
         if (entry.epss_score !== undefined)
             epssMeasured += 1;
     }
-    return { active_cves: cves.length, kev_count: kevCount, epss_measured: epssMeasured, unavailable };
+    const uncorrelated = findings.filter(isUncorrelatedFinding).length;
+    return {
+        active_cves: cves.length,
+        kev_count: kevCount,
+        epss_measured: epssMeasured,
+        unavailable,
+        uncorrelated,
+        ...(uncorrelated > 0
+            ? {
+                note: `${uncorrelated} finding(s) come from a CVE-capable scanner but carry no extractable CVE id, ` +
+                    'so they cannot be weighted by KEV/EPSS yet.',
+            }
+            : {}),
+    };
 }
 //# sourceMappingURL=riskScore.js.map

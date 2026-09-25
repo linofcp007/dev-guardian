@@ -35,10 +35,11 @@ import type { PluginContext } from '../context.js';
 import { scoreRisk } from '../dashboard/risk.js';
 import { findLatestUsable, openSetForProject } from '../history/openSet.js';
 import { enrichCveIntel } from '../intel/enrich.js';
+import { isUncorrelatedFinding } from '../intel/rank.js';
 import type { CveIntelResult } from '../intel/types.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
-import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan, type Cve, type ToolResult } from '../types.js';
+import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan, type Cve, type Finding, type ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
 const tool: ToolModule = {
@@ -51,7 +52,8 @@ const tool: ToolModule = {
     'are weighted up when CISA KEV-listed or high FIRST EPSS (cached 24h, offline-safe). Returns ' +
     'the score, a band (low/medium/high/critical), per-component breakdown, the next action to ' +
     'recommend, and `coverage` — which scans it read, which newer scans it skipped because they ' +
-    'measured nothing, `coverage.cve_intel` (KEV/EPSS measured vs unavailable), and ' +
+    'measured nothing, `coverage.cve_intel` (KEV/EPSS measured vs unavailable, plus `uncorrelated`: ' +
+    'findings from a CVE-capable scanner with no extractable CVE id, e.g. npm-audit v2), and ' +
     '`coverage_caveat` when the numbers are incomplete.',
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler(input, ctx),
@@ -80,7 +82,7 @@ async function handler(
   const cveSource = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: 'deps' });
   const cves = cveSource.scan ? storage.cves.listActive(cveSource.scan.scan_id) : [];
   const cveIntel = await enrichCveIntel(storage, cves.map((c) => c.cve_id));
-  const cveIntelCoverage = summariseCveIntel(cves, cveIntel);
+  const cveIntelCoverage = summariseCveIntel(cves, cveIntel, open.findings);
 
   // Compliance signals — missing policy docs and CI dependency bots. Both are
   // read from files, not scanner output, so a run's scanner coverage does
@@ -163,12 +165,27 @@ export interface CveIntelCoverage {
    *  reported, even when 0, on the same "coverage over silence" footing as
    *  `cve_source_skipped` above. */
   unavailable: number;
+  /** Open findings from a CVE-capable scanner (`intel/rank.ts
+   *  #CVE_CAPABLE_TOOLS`) that carry no extractable CVE id at all — review
+   *  round 1, Important #2: npm-audit's v2 parser is the main source today
+   *  (`intel/rank.ts#isUncorrelatedFinding`'s own doc comment). These never
+   *  get a KEV/EPSS bonus; this count is how a caller learns that gap exists
+   *  rather than silently never seeing it. A DIFFERENT population from
+   *  `active_cves` above (findings, not `scan_cves` rows), always reported. */
+  uncorrelated: number;
+  /** Present only when `uncorrelated > 0` — no sentence about a gap that
+   *  does not apply to this project. */
+  note?: string;
 }
 
 /** `intel` keyed by `cve_id`, same as `enrichCveIntel` returns — a `cve_id`
  *  absent from it (should not happen; `enrichCveIntel` answers for every id
  *  it is asked about) is treated the same as `status: 'unavailable'`. */
-function summariseCveIntel(cves: readonly Cve[], intel: ReadonlyMap<string, CveIntelResult>): CveIntelCoverage {
+function summariseCveIntel(
+  cves: readonly Cve[],
+  intel: ReadonlyMap<string, CveIntelResult>,
+  findings: readonly Finding[],
+): CveIntelCoverage {
   let kevCount = 0;
   let epssMeasured = 0;
   let unavailable = 0;
@@ -181,5 +198,19 @@ function summariseCveIntel(cves: readonly Cve[], intel: ReadonlyMap<string, CveI
     if (entry.kev) kevCount += 1;
     if (entry.epss_score !== undefined) epssMeasured += 1;
   }
-  return { active_cves: cves.length, kev_count: kevCount, epss_measured: epssMeasured, unavailable };
+  const uncorrelated = findings.filter(isUncorrelatedFinding).length;
+  return {
+    active_cves: cves.length,
+    kev_count: kevCount,
+    epss_measured: epssMeasured,
+    unavailable,
+    uncorrelated,
+    ...(uncorrelated > 0
+      ? {
+          note:
+            `${uncorrelated} finding(s) come from a CVE-capable scanner but carry no extractable CVE id, ` +
+            'so they cannot be weighted by KEV/EPSS yet.',
+        }
+      : {}),
+  };
 }

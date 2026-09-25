@@ -23,9 +23,19 @@
  * this module's own tests for why: a partial success that persisted only
  * half a row would make the NEXT call's freshness check believe the other
  * half was checked today too, when it was not.
+ *
+ * The KEV half of that refresh does NOT mean "download the feed again": it
+ * calls `kevCache.ts#getKevCatalog`, which caches the whole ~1700-entry
+ * catalog as ONE shared blob (its own 24h TTL, independent of any one CVE's
+ * `cve_intel` row) — see that module's own header for the defect this
+ * fixed: the first version of this file called {@link fetchKevCatalog}
+ * itself, once per call, whenever ANY id was stale, so a CI pipeline calling
+ * `risk_score` once per commit re-downloaded the whole feed on every commit
+ * that introduced a new dependency's CVE.
  */
 
-import { fetchKevCatalog, type KevCatalogOptions, type KevCatalogResult } from './kev.js';
+import { getKevCatalog, type KevCatalogStorage } from './kevCache.js';
+import type { KevCatalogOptions, KevCatalogResult } from './kev.js';
 import { queryEpss, type EpssQueryOptions, type EpssQueryResult } from './epss.js';
 import type { CveIntelResult } from './types.js';
 import type { CveIntelRepo, CveIntelRow, UpsertCveIntelInput } from '../storage/cveIntelRepo.js';
@@ -33,7 +43,7 @@ import type { CveIntelRepo, CveIntelRow, UpsertCveIntelInput } from '../storage/
 /** How long a cached row is served without attempting a refresh. */
 export const INTEL_TTL_MS = 24 * 60 * 60 * 1000;
 
-export interface EnrichStorage {
+export interface EnrichStorage extends KevCatalogStorage {
   cveIntel: Pick<CveIntelRepo, 'getMany' | 'upsertMany'>;
 }
 
@@ -85,10 +95,11 @@ export async function enrichCveIntel(
 
   const netOpts = { fetchImpl: opts.fetchImpl, timeoutMs: opts.timeoutMs, signal: opts.signal };
   const queryEpssImpl = opts.queryEpssImpl ?? queryEpss;
-  const fetchKevCatalogImpl = opts.fetchKevCatalogImpl ?? fetchKevCatalog;
   const [epssResult, kevResult] = await Promise.all([
     queryEpssImpl(staleIds, netOpts),
-    fetchKevCatalogImpl(netOpts),
+    // Shared, catalog-level cache — NOT a per-call fetch. See this module's
+    // header and `kevCache.ts`'s own.
+    getKevCatalog(storage, { ...netOpts, now, ...(opts.fetchKevCatalogImpl ? { fetchKevCatalogImpl: opts.fetchKevCatalogImpl } : {}) }),
   ]);
 
   if (epssResult.ok && kevResult.ok) {

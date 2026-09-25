@@ -59,6 +59,32 @@ export function findingCveIds(finding) {
     }
     return [...ids];
 }
+/**
+ * Tools whose findings are vulnerability-shaped and may legitimately carry a
+ * CVE — the same set `fixpr/candidates.ts#DEP_SCANNER_TOOLS` treats as
+ * "dependency-upgrade-fixable", plus `pip-audit` (whose parser records a
+ * `cve_id` on `cves[]` the same way, per `runners/scannerParsers/pipAudit.ts`).
+ * Used only to decide whether a finding with NO extracted CVE (see
+ * `isUncorrelatedFinding`) is a real coverage gap or an ordinary
+ * code-quality finding that was never expected to have one.
+ */
+export const CVE_CAPABLE_TOOLS = ['trivy', 'npm-audit', 'wpscan', 'pip-audit'];
+/**
+ * True for a finding from a {@link CVE_CAPABLE_TOOLS} scanner that
+ * {@link findingCveIds} could not extract a CVE id from at all — a real
+ * advisory dev-guardian cannot yet weigh by KEV/EPSS (review round 1,
+ * Important #2), not an ordinary finding that was never expected to have
+ * one. The main source today: npm-audit's v2 parser (`mapV2Advisory`,
+ * `runners/scannerParsers/npmAudit.ts`) records no CVE at all for a
+ * finding even when the underlying advisory has one — `rule_id` is a
+ * GHSA id or advisory URL instead. `prioritize_findings` and `risk_score`
+ * both surface a COUNT of these (never silently drop them from the
+ * boost — a finding that cannot be weighted is reported as such, not
+ * left unexplained).
+ */
+export function isUncorrelatedFinding(finding) {
+    return CVE_CAPABLE_TOOLS.includes(finding.tool) && findingCveIds(finding).length === 0;
+}
 /** Combines every correlated CVE's intel into one signal for ranking. */
 export function exploitabilitySignal(cveIds, intel) {
     let kev = false;

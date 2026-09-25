@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { exploitabilitySignal, findingCveIds, rankByExploitability } from '../../../src/intel/rank.js';
+import { exploitabilitySignal, findingCveIds, isUncorrelatedFinding, rankByExploitability } from '../../../src/intel/rank.js';
 import type { CveIntelResult } from '../../../src/intel/types.js';
 import type { Finding } from '../../../src/types.js';
 
@@ -110,5 +110,29 @@ describe('rankByExploitability', () => {
     const copy = [...items];
     rankByExploitability(items, cveIdsOf, new Map());
     expect(items).toEqual(copy);
+  });
+});
+
+describe('isUncorrelatedFinding (review round 1, Important #2)', () => {
+  it('is true for a dependency-scanner finding with an advisory id but no extractable CVE', () => {
+    // npm-audit v2's own defect (runners/scannerParsers/npmAudit.ts
+    // mapV2Advisory): rule_id is a GHSA/advisory url or id, never a CVE, and
+    // no CVE is recorded anywhere else on the finding either.
+    expect(isUncorrelatedFinding(finding({ tool: 'npm-audit', rule_id: 'GHSA-xxxx-yyyy-zzzz', title: 'Prototype pollution in lodash' }))).toBe(true);
+  });
+
+  it('is false once a CVE IS extractable, even from the same tool', () => {
+    expect(isUncorrelatedFinding(finding({ tool: 'npm-audit', rule_id: 'CVE-2020-8203' }))).toBe(false);
+    expect(isUncorrelatedFinding(finding({ tool: 'trivy', rule_id: 'CVE-2021-44228' }))).toBe(false);
+  });
+
+  it('is false for a tool that was never expected to carry a CVE (an ordinary Semgrep finding)', () => {
+    expect(isUncorrelatedFinding(finding({ tool: 'semgrep', rule_id: 'no-eval', title: 'Use of eval()' }))).toBe(false);
+  });
+
+  it('covers every CVE-capable scanner: trivy, npm-audit, wpscan, pip-audit', () => {
+    for (const tool of ['trivy', 'npm-audit', 'wpscan', 'pip-audit']) {
+      expect(isUncorrelatedFinding(finding({ tool, rule_id: 'advisory-only-id', title: 'no cve here' }))).toBe(true);
+    }
   });
 });

@@ -17,8 +17,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fetchKevCatalog } from '../../src/intel/kev.js';
 import { queryEpss } from '../../src/intel/epss.js';
 import { enrichCveIntel } from '../../src/intel/enrich.js';
-import { CveIntelRepo } from '../../src/storage/cveIntelRepo.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
+import { Storage } from '../../src/storage/index.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 
 const LIVE = process.env['GUARDIAN_TEST_LIVE_CVE_INTEL'] === '1';
@@ -49,7 +49,7 @@ describe('CVE intel — live network (gated)', () => {
     vi.stubEnv('GUARDIAN_OFFLINE', '0');
     const db = new Database(':memory:');
     runMigrations(db);
-    const storage = { cveIntel: new CveIntelRepo(db) };
+    const storage = new Storage(db);
 
     const first = await enrichCveIntel(storage, [LOG4SHELL]);
     const entry = first.get(LOG4SHELL);

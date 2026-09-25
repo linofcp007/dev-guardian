@@ -51428,6 +51428,50 @@ function describeFetchError(e) {
   return "CISA KEV feed request failed";
 }
 
+// src/intel/kevCache.ts
+var KEV_CATALOG_TTL_MS = 24 * 60 * 60 * 1e3;
+var KEV_CATALOG_KEY = "intel:kev_catalog";
+async function getKevCatalog(storage, opts = {}) {
+  const now = opts.now ?? Date.now();
+  const cached2 = parseStoredCatalog(storage.runtimeMeta.getJson(KEV_CATALOG_KEY));
+  const cachedFresh = cached2 !== null && now - Date.parse(cached2.fetched_at) < KEV_CATALOG_TTL_MS;
+  if (cachedFresh && cached2 !== null) {
+    return { ok: true, entries: toMap(cached2.entries), stale: false, fetched_at: cached2.fetched_at };
+  }
+  if (opts.offline === true) {
+    if (cached2 !== null) return { ok: true, entries: toMap(cached2.entries), stale: true, fetched_at: cached2.fetched_at };
+    return { ok: false, reason: "network disabled (GUARDIAN_OFFLINE=1)" };
+  }
+  const fetchKevCatalogImpl = opts.fetchKevCatalogImpl ?? fetchKevCatalog;
+  const netOpts = {};
+  if (opts.fetchImpl !== void 0) netOpts.fetchImpl = opts.fetchImpl;
+  if (opts.timeoutMs !== void 0) netOpts.timeoutMs = opts.timeoutMs;
+  if (opts.signal !== void 0) netOpts.signal = opts.signal;
+  const fetched = await fetchKevCatalogImpl(netOpts);
+  if (fetched.ok) {
+    const fetchedAt = new Date(now).toISOString();
+    const stored = { fetched_at: fetchedAt, entries: Object.fromEntries(fetched.entries) };
+    storage.runtimeMeta.setJson(KEV_CATALOG_KEY, stored);
+    return { ok: true, entries: fetched.entries, stale: false, fetched_at: fetchedAt };
+  }
+  if (cached2 !== null) return { ok: true, entries: toMap(cached2.entries), stale: true, fetched_at: cached2.fetched_at };
+  return { ok: false, reason: fetched.reason };
+}
+function toMap(entries2) {
+  return new Map(Object.entries(entries2));
+}
+function parseStoredCatalog(raw) {
+  if (raw === null || typeof raw !== "object") return null;
+  const rec = raw;
+  if (typeof rec["fetched_at"] !== "string") return null;
+  if (rec["entries"] === null || typeof rec["entries"] !== "object" || Array.isArray(rec["entries"])) return null;
+  const entries2 = {};
+  for (const [k, v] of Object.entries(rec["entries"])) {
+    if (typeof v === "string") entries2[k] = v;
+  }
+  return { fetched_at: rec["fetched_at"], entries: entries2 };
+}
+
 // src/intel/epss.ts
 var EPSS_URL = "https://api.first.org/data/v1/epss";
 var DEFAULT_TIMEOUT_MS3 = 6e3;
@@ -51522,10 +51566,11 @@ async function enrichCveIntel(storage, cveIds, opts = {}) {
   }
   const netOpts = { fetchImpl: opts.fetchImpl, timeoutMs: opts.timeoutMs, signal: opts.signal };
   const queryEpssImpl = opts.queryEpssImpl ?? queryEpss;
-  const fetchKevCatalogImpl = opts.fetchKevCatalogImpl ?? fetchKevCatalog;
   const [epssResult, kevResult] = await Promise.all([
     queryEpssImpl(staleIds, netOpts),
-    fetchKevCatalogImpl(netOpts)
+    // Shared, catalog-level cache — NOT a per-call fetch. See this module's
+    // header and `kevCache.ts`'s own.
+    getKevCatalog(storage, { ...netOpts, now, ...opts.fetchKevCatalogImpl ? { fetchKevCatalogImpl: opts.fetchKevCatalogImpl } : {} })
   ]);
   if (epssResult.ok && kevResult.ok) {
     const nowIso2 = new Date(now).toISOString();
@@ -51577,11 +51622,50 @@ function fallbackResult(id, row, reason) {
   return entry;
 }
 
+// src/intel/rank.ts
+var CVE_ID_RE = /CVE-\d{4}-\d+/gi;
+var CVE_ID_ONLY_RE = /^CVE-\d{4}-\d+$/i;
+function findingCveIds(finding4) {
+  const ids2 = /* @__PURE__ */ new Set();
+  if (finding4.rule_id !== void 0 && CVE_ID_ONLY_RE.test(finding4.rule_id)) {
+    ids2.add(finding4.rule_id.toUpperCase());
+  }
+  for (const text of [finding4.title, finding4.message]) {
+    if (text === void 0) continue;
+    for (const match of text.matchAll(CVE_ID_RE)) ids2.add(match[0].toUpperCase());
+  }
+  return [...ids2];
+}
+var CVE_CAPABLE_TOOLS = ["trivy", "npm-audit", "wpscan", "pip-audit"];
+function isUncorrelatedFinding(finding4) {
+  return CVE_CAPABLE_TOOLS.includes(finding4.tool) && findingCveIds(finding4).length === 0;
+}
+function exploitabilitySignal(cveIds, intel) {
+  let kev = false;
+  let maxEpss = null;
+  const contributed = [];
+  for (const id of cveIds) {
+    const entry = intel.get(id);
+    if (entry === void 0 || entry.status !== "ok") continue;
+    let matters = false;
+    if (entry.kev) {
+      kev = true;
+      matters = true;
+    }
+    if (entry.epss_score !== void 0) {
+      if (maxEpss === null || entry.epss_score > maxEpss) maxEpss = entry.epss_score;
+      matters = true;
+    }
+    if (matters) contributed.push(id);
+  }
+  return { kev, max_epss: maxEpss, cve_ids: contributed };
+}
+
 // src/tools/riskScore.ts
 var tool17 = {
   name: "risk_score",
   title: "Risk score (0-100)",
-  description: "Compute a single 0-100 risk score for one project (project_path, default: the server's working directory) from its persisted scans/findings/CVEs/baseline. Open findings are the union of the newest usable scan of every finding-producing type, suppressions removed. CVEs are weighted up when CISA KEV-listed or high FIRST EPSS (cached 24h, offline-safe). Returns the score, a band (low/medium/high/critical), per-component breakdown, the next action to recommend, and `coverage` \u2014 which scans it read, which newer scans it skipped because they measured nothing, `coverage.cve_intel` (KEV/EPSS measured vs unavailable), and `coverage_caveat` when the numbers are incomplete.",
+  description: "Compute a single 0-100 risk score for one project (project_path, default: the server's working directory) from its persisted scans/findings/CVEs/baseline. Open findings are the union of the newest usable scan of every finding-producing type, suppressions removed. CVEs are weighted up when CISA KEV-listed or high FIRST EPSS (cached 24h, offline-safe). Returns the score, a band (low/medium/high/critical), per-component breakdown, the next action to recommend, and `coverage` \u2014 which scans it read, which newer scans it skipped because they measured nothing, `coverage.cve_intel` (KEV/EPSS measured vs unavailable, plus `uncorrelated`: findings from a CVE-capable scanner with no extractable CVE id, e.g. npm-audit v2), and `coverage_caveat` when the numbers are incomplete.",
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler14(input, ctx)
 };
@@ -51600,7 +51684,7 @@ async function handler14(input, ctx) {
   const cveSource = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: "deps" });
   const cves = cveSource.scan ? storage.cves.listActive(cveSource.scan.scan_id) : [];
   const cveIntel = await enrichCveIntel(storage, cves.map((c3) => c3.cve_id));
-  const cveIntelCoverage = summariseCveIntel(cves, cveIntel);
+  const cveIntelCoverage = summariseCveIntel(cves, cveIntel, open.findings);
   const latestCompliance = findLatestUsable(storage, projectPath, ["compliance"], {
     skipCoverageNone: false
   }).scan;
@@ -51653,7 +51737,7 @@ async function handler14(input, ctx) {
     }
   };
 }
-function summariseCveIntel(cves, intel) {
+function summariseCveIntel(cves, intel, findings) {
   let kevCount = 0;
   let epssMeasured = 0;
   let unavailable = 0;
@@ -51666,7 +51750,17 @@ function summariseCveIntel(cves, intel) {
     if (entry.kev) kevCount += 1;
     if (entry.epss_score !== void 0) epssMeasured += 1;
   }
-  return { active_cves: cves.length, kev_count: kevCount, epss_measured: epssMeasured, unavailable };
+  const uncorrelated = findings.filter(isUncorrelatedFinding).length;
+  return {
+    active_cves: cves.length,
+    kev_count: kevCount,
+    epss_measured: epssMeasured,
+    unavailable,
+    uncorrelated,
+    ...uncorrelated > 0 ? {
+      note: `${uncorrelated} finding(s) come from a CVE-capable scanner but carry no extractable CVE id, so they cannot be weighted by KEV/EPSS yet.`
+    } : {}
+  };
 }
 
 // src/tools/sbomDiff.ts
@@ -55287,41 +55381,6 @@ function findLatest3(ctx, type) {
   return row ? ctx.storage.scans.getById(row.scan_id) : null;
 }
 
-// src/intel/rank.ts
-var CVE_ID_RE = /CVE-\d{4}-\d+/gi;
-var CVE_ID_ONLY_RE = /^CVE-\d{4}-\d+$/i;
-function findingCveIds(finding4) {
-  const ids2 = /* @__PURE__ */ new Set();
-  if (finding4.rule_id !== void 0 && CVE_ID_ONLY_RE.test(finding4.rule_id)) {
-    ids2.add(finding4.rule_id.toUpperCase());
-  }
-  for (const text of [finding4.title, finding4.message]) {
-    if (text === void 0) continue;
-    for (const match of text.matchAll(CVE_ID_RE)) ids2.add(match[0].toUpperCase());
-  }
-  return [...ids2];
-}
-function exploitabilitySignal(cveIds, intel) {
-  let kev = false;
-  let maxEpss = null;
-  const contributed = [];
-  for (const id of cveIds) {
-    const entry = intel.get(id);
-    if (entry === void 0 || entry.status !== "ok") continue;
-    let matters = false;
-    if (entry.kev) {
-      kev = true;
-      matters = true;
-    }
-    if (entry.epss_score !== void 0) {
-      if (maxEpss === null || entry.epss_score > maxEpss) maxEpss = entry.epss_score;
-      matters = true;
-    }
-    if (matters) contributed.push(id);
-  }
-  return { kev, max_epss: maxEpss, cve_ids: contributed };
-}
-
 // src/tools/prioritizeFindings.ts
 var KEV_BOOST = 220;
 var EPSS_BOOST_MAX = 100;
@@ -55347,7 +55406,7 @@ var inputSchema24 = {
 var tool40 = {
   name: "prioritize_findings",
   title: "Prioritise open findings (heuristic)",
-  description: "Rank one project's open findings (project_path, default: the server's working directory; the newest usable scan of every finding-producing type, suppressions removed) by a weighted heuristic: severity + category + fix_available + age, boosted when a finding is linked to a CVE that is CISA KEV-listed or has a high FIRST EPSS score (cached 24h; offline or unmeasured CVEs get no boost, never a fabricated one). Returns top-N with explanation. No LLM call \u2014 the calling model uses the ranking to drive follow-ups.",
+  description: "Rank one project's open findings (project_path, default: the server's working directory; the newest usable scan of every finding-producing type, suppressions removed) by a weighted heuristic: severity + category + fix_available + age, boosted when a finding is linked to a CVE that is CISA KEV-listed or has a high FIRST EPSS score (cached 24h; offline or unmeasured CVEs get no boost, never a fabricated one). `cve_intel.uncorrelated` counts findings from a CVE-capable scanner (e.g. npm-audit v2) that carry no extractable CVE id and so cannot be weighted yet. Returns top-N with explanation. No LLM call \u2014 the calling model uses the ranking to drive follow-ups.",
   inputSchema: inputSchema24,
   handler: async (input, ctx) => handler37(input, ctx)
 };
@@ -55408,10 +55467,19 @@ async function handler37(input, ctx) {
     summary,
     ranked: top,
     open_set: describeOpenSet(set),
+    cve_intel: uncorrelatedCoverage(open),
     instructions_for_model: "Pick the first 3-5 entries to action. For each, prefer `suggest_fix(finding_fingerprint)` over speculation. If most top entries are security/critical, call `audit_executive` to understand cross-cutting impact first.",
     // unused reference to keep the time variable from being dead-code'd by
     // future maintainers who add age-weighting.
     _recent_scan_ts: recentScanTs
+  };
+}
+function uncorrelatedCoverage(open) {
+  const uncorrelated = open.filter(isUncorrelatedFinding).length;
+  if (uncorrelated === 0) return { uncorrelated };
+  return {
+    uncorrelated,
+    note: `${uncorrelated} finding(s) come from a CVE-capable scanner but carry no extractable CVE id, so they cannot be weighted by KEV/EPSS yet.`
   };
 }
 function scoreRange(top) {

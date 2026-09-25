@@ -47,10 +47,16 @@ function trivyFinding(over: { rule_id: string }) {
   };
 }
 
+/** Calls a registered tool by name, for tests naming a different result
+ *  shape than `runPrioritize`'s own `RankedRow[]`. */
+async function runToolRaw(name: string, storage: Storage): ReturnType<(typeof TOOLS)[number]['handler']> {
+  const mod = TOOLS.find((t) => t.name === name);
+  if (mod === undefined) throw new Error(`${name} not registered`);
+  return mod.handler({ project_path: P }, { storage } as never);
+}
+
 async function runPrioritize(storage: Storage) {
-  const mod = TOOLS.find((t) => t.name === 'prioritize_findings');
-  if (mod === undefined) throw new Error('prioritize_findings not registered');
-  return okResult<{ ranked: RankedRow[] }>(await mod.handler({ project_path: P }, { storage } as never));
+  return okResult<{ ranked: RankedRow[] }>(await runToolRaw('prioritize_findings', storage));
 }
 
 describe('prioritize_findings — KEV/EPSS weighting', () => {
@@ -115,6 +121,51 @@ describe('prioritize_findings — KEV/EPSS weighting', () => {
     const res = await runPrioritize(storage);
     expect(res.ranked).toHaveLength(1);
     expect(res.ranked[0]?.factors.some((f) => /kev|epss/i.test(f))).toBe(false);
+    db.close();
+  });
+});
+
+describe('prioritize_findings — uncorrelated CVE-capable findings (review round 1, Important #2)', () => {
+  it('counts an npm-audit v2 finding (advisory id, no CVE) as uncorrelated', async () => {
+    const { storage, scanId, db } = seed();
+    storage.findings.bulkInsert([
+      { scan_id: scanId, fingerprint: 'npm-1', tool: 'npm-audit', rule_id: 'GHSA-xxxx-yyyy-zzzz',
+        severity: 'high', category: 'security', title: 'Prototype pollution in lodash', message: 'm',
+        file_path: 'package.json', line_start: 1, line_end: 1, fix_available: true, raw: {} },
+    ]);
+    const res = await okResult<{ cve_intel: { uncorrelated: number; note?: string } }>(
+      await runToolRaw('prioritize_findings', storage),
+    );
+    expect(res.cve_intel).toEqual({
+      uncorrelated: 1,
+      note: '1 finding(s) come from a CVE-capable scanner but carry no extractable CVE id, so they cannot be weighted by KEV/EPSS yet.',
+    });
+    db.close();
+  });
+
+  it('a Trivy finding with a real CVE is not counted as uncorrelated', async () => {
+    const { storage, scanId, db } = seed();
+    storage.findings.bulkInsert([
+      { scan_id: scanId, fingerprint: 'trivy-1', ...trivyFinding({ rule_id: 'CVE-2024-7777' }) },
+    ]);
+    const res = await okResult<{ cve_intel: { uncorrelated: number } }>(
+      await runToolRaw('prioritize_findings', storage),
+    );
+    expect(res.cve_intel.uncorrelated).toBe(0);
+    db.close();
+  });
+
+  it('a plain Semgrep finding (never CVE-capable) does not count as uncorrelated, and no note is added at zero', async () => {
+    const { storage, scanId, db } = seed();
+    storage.findings.bulkInsert([
+      { scan_id: scanId, fingerprint: 'semgrep-2', tool: 'semgrep', rule_id: 'no-eval', severity: 'high',
+        category: 'security', title: 't', message: 'm', file_path: 'x', line_start: 1, line_end: 1,
+        fix_available: false, raw: {} },
+    ]);
+    const res = await okResult<{ cve_intel: { uncorrelated: number; note?: string } }>(
+      await runToolRaw('prioritize_findings', storage),
+    );
+    expect(res.cve_intel).toEqual({ uncorrelated: 0 });
     db.close();
   });
 });
