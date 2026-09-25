@@ -144,16 +144,17 @@ async function runScanPipeline(config, input, plugin, callMeta) {
     const treeHash = callMeta?.parentScanId !== undefined && callMeta.treeHash !== undefined
         ? callMeta.treeHash
         : await computeTreeHash(projectPath);
+    const rulesProjectPath = callMeta?.rulesProjectPath ?? projectPath;
     let cacheState = {};
     if (config.cacheState) {
         try {
-            cacheState = await config.cacheState(input, { projectPath, plugin });
+            cacheState = await config.cacheState(input, { projectPath, plugin, rulesProjectPath });
         }
         catch {
             cacheState = { uncacheable: randomUUID() };
         }
     }
-    const cacheKey = buildCacheKey(config, input, projectPath, treeHash, plugin, cacheState);
+    const cacheKey = buildCacheKey(config, input, { projectPath, plugin, rulesProjectPath }, treeHash, cacheState);
     // Cache check. Only a run whose every scanner ran is served again: one
     // with a scanner missing or failed is `completed` at coverage none or
     // partial, and its own warning tells the caller to install the scanner and
@@ -225,7 +226,9 @@ async function runScanPipeline(config, input, plugin, callMeta) {
                 parentScanId: scanId,
                 treeHash,
                 ...(callMeta?.progressToken !== undefined ? { progressToken: callMeta.progressToken } : {}),
+                ...(callMeta?.rulesProjectPath !== undefined ? { rulesProjectPath: callMeta.rulesProjectPath } : {}),
             },
+            rulesProjectPath,
             ...(parentScanId !== undefined ? { parentScanId } : {}),
         });
     }
@@ -266,6 +269,7 @@ async function runScanBody(args) {
             GUARDIAN_SCAN_ID: scanId,
         },
         childCallMeta: args.childCallMeta,
+        rulesProjectPath: args.rulesProjectPath,
     };
     // Acquire a slot from the global concurrency limiter so 50 parallel
     // calls from the host don't fork 50 scanner processes. Default cap is 2.
@@ -445,12 +449,13 @@ async function runScanBody(args) {
  * and why. A `rulePacks` that throws leaves the call uncacheable (a key no
  * other call can produce) rather than failing the scan.
  */
-function buildCacheKey(config, input, projectPath, treeHash, plugin, 
+function buildCacheKey(config, input, packCtx, treeHash, 
 /** `config.cacheState`'s answer; empty leaves the key exactly as before it existed. */
 cacheState) {
+    const { projectPath } = packCtx;
     let rulePacksHash;
     try {
-        rulePacksHash = hashRulePacks(config.rulePacks ? config.rulePacks(input, { projectPath, plugin }) : []);
+        rulePacksHash = hashRulePacks(config.rulePacks ? config.rulePacks(input, packCtx) : []);
     }
     catch {
         rulePacksHash = `uncacheable:${randomUUID()}`;

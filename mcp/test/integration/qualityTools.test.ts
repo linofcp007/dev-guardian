@@ -47,7 +47,11 @@ import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 
 import type { PluginContext } from '../../src/context.js';
 import { resolveBugfixRules } from '../../src/platform/configsDir.js';
-import { CUSTOM_RULES_META_KEY } from '../../src/platform/customRules.js';
+import { customRulesMetaKey } from '../../src/platform/customRules.js';
+
+/** A rules file `register_custom_rules` and its reader accept. */
+const HOUSE_RULES =
+  'rules:\n  - id: house\n    message: m\n    languages: [javascript]\n    severity: WARNING\n    pattern: foo()\n';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
@@ -826,7 +830,7 @@ describe('bug_hunt', () => {
     const plugin = makePlugin(project);
     const ruleDir = join(project, '.semgrep');
     mkdirSync(ruleDir, { recursive: true });
-    writeFileSync(join(ruleDir, 'house-rules.yml'), 'rules: []\n', 'utf8');
+    writeFileSync(join(ruleDir, 'house-rules.yml'), HOUSE_RULES, 'utf8');
 
     const reg = (await getTool('register_custom_rules').handler(
       { project_path: project },
@@ -842,7 +846,8 @@ describe('bug_hunt', () => {
       plugin,
     )) as { ok: true };
     expect(r.ok).toBe(true);
-    expect(getArgs()).toContain(`--config=${ruleDir}`);
+    // Registered as the directory; run as its validated rule files.
+    expect(getArgs()).toContain(`--config=${join(ruleDir, 'house-rules.yml')}`);
   });
 
   it('skips a registered rule path that has since been deleted', async () => {
@@ -1020,8 +1025,8 @@ describe('bug_hunt', () => {
     const plugin = makePlugin(project);
     const rulesDir = tempProject();
     const rules = join(rulesDir, 'team.yml');
-    writeFileSync(rules, 'rules: []\n', 'utf8');
-    plugin.storage.runtimeMeta.setJson(CUSTOM_RULES_META_KEY, [rules]);
+    writeFileSync(rules, HOUSE_RULES, 'utf8');
+    plugin.storage.runtimeMeta.setJson(customRulesMetaKey(project), [rules]);
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockImplementation(async (opts) => {
       writeOutput(opts, semgrepFx());
@@ -1033,7 +1038,7 @@ describe('bug_hunt', () => {
     const hit = (await tool.handler({ project_path: project }, plugin)) as { cached?: boolean };
     expect(hit.cached).toBe(true);
 
-    writeFileSync(rules, 'rules:\n  - id: changed\n', 'utf8');
+    writeFileSync(rules, HOUSE_RULES.replace('id: house', 'id: changed'), 'utf8');
     const miss = (await tool.handler({ project_path: project }, plugin)) as { cached?: boolean };
     expect(miss.cached).toBeUndefined();
     expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);

@@ -15,6 +15,7 @@ describe('checkSemgrepReport', () => {
     expect(checkSemgrepReport({ raw: report(), exitCode: 0, outcome: 'completed', targets: 1 })).toEqual({
       ok: true,
       scanned: 1,
+      errors: 0,
     });
   });
 

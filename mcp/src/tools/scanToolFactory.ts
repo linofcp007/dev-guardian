@@ -136,6 +136,12 @@ export interface InvokeContext extends ToolContext {
    * records in its own row's `meta.parent_scan_id`.
    */
   childCallMeta: ToolCallMeta;
+  /**
+   * The project whose rule configuration this scan uses — `projectPath`
+   * itself, unless `create_fix_pr` is re-scanning a worktree of another
+   * project (`ToolCallMeta.rulesProjectPath`).
+   */
+  rulesProjectPath: string;
 }
 
 export interface ScanToolBaseInput {
@@ -151,6 +157,8 @@ export interface RulePackContext {
   /** Canonical project path. */
   projectPath: string;
   plugin: PluginContext;
+  /** See `InvokeContext.rulesProjectPath`. */
+  rulesProjectPath: string;
 }
 
 /**
@@ -314,15 +322,16 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     callMeta?.parentScanId !== undefined && callMeta.treeHash !== undefined
       ? callMeta.treeHash
       : await computeTreeHash(projectPath);
+  const rulesProjectPath = callMeta?.rulesProjectPath ?? projectPath;
   let cacheState: Record<string, string> = {};
   if (config.cacheState) {
     try {
-      cacheState = await config.cacheState(input, { projectPath, plugin });
+      cacheState = await config.cacheState(input, { projectPath, plugin, rulesProjectPath });
     } catch {
       cacheState = { uncacheable: randomUUID() };
     }
   }
-  const cacheKey = buildCacheKey(config, input, projectPath, treeHash, plugin, cacheState);
+  const cacheKey = buildCacheKey(config, input, { projectPath, plugin, rulesProjectPath }, treeHash, cacheState);
 
   // Cache check. Only a run whose every scanner ran is served again: one
   // with a scanner missing or failed is `completed` at coverage none or
@@ -400,7 +409,9 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
         parentScanId: scanId,
         treeHash,
         ...(callMeta?.progressToken !== undefined ? { progressToken: callMeta.progressToken } : {}),
+        ...(callMeta?.rulesProjectPath !== undefined ? { rulesProjectPath: callMeta.rulesProjectPath } : {}),
       },
+      rulesProjectPath,
       ...(parentScanId !== undefined ? { parentScanId } : {}),
     });
   } finally {
@@ -421,6 +432,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   signal: AbortSignal;
   progress: ProgressEmitter;
   childCallMeta: ToolCallMeta;
+  rulesProjectPath: string;
   /** Set when an orchestrator runs this scan as one of its children. */
   parentScanId?: string;
 }): Promise<ToolResult<Record<string, unknown>>> {
@@ -458,6 +470,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
       GUARDIAN_SCAN_ID: scanId,
     },
     childCallMeta: args.childCallMeta,
+    rulesProjectPath: args.rulesProjectPath,
   };
 
   // Acquire a slot from the global concurrency limiter so 50 parallel
@@ -657,15 +670,15 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
 function buildCacheKey<TInput extends ScanToolBaseInput>(
   config: ScanToolConfig<TInput>,
   input: TInput,
-  projectPath: string,
+  packCtx: RulePackContext,
   treeHash: string,
-  plugin: PluginContext,
   /** `config.cacheState`'s answer; empty leaves the key exactly as before it existed. */
   cacheState: Record<string, string>,
 ): string {
+  const { projectPath } = packCtx;
   let rulePacksHash: string;
   try {
-    rulePacksHash = hashRulePacks(config.rulePacks ? config.rulePacks(input, { projectPath, plugin }) : []);
+    rulePacksHash = hashRulePacks(config.rulePacks ? config.rulePacks(input, packCtx) : []);
   } catch {
     rulePacksHash = `uncacheable:${randomUUID()}`;
   }

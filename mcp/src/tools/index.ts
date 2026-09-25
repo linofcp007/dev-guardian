@@ -42,6 +42,15 @@ export interface ToolCallMeta {
    * (a Semgrep autofix) since.
    */
   treeHash?: string;
+  /**
+   * Set only by `create_fix_pr`'s verification, which scans a disposable
+   * worktree of a project: the project whose rule configuration — its own
+   * Semgrep config, its registered custom rules, its stack — the scan must
+   * use, so the re-scan runs the same rule packs that produced the targets.
+   * Omitted: the scanned path is its own rules project. Never set by the MCP
+   * host.
+   */
+  rulesProjectPath?: string;
 }
 
 export interface ToolModule {

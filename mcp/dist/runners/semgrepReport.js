@@ -25,14 +25,14 @@ const MAX_ERROR_TEXT = 300;
 export function checkSemgrepReport(args) {
     const { raw, exitCode, outcome, targets } = args;
     if (outcome === 'cancelled' || outcome === 'timed_out' || outcome === 'output_too_large') {
-        return { ok: false, scanned: 0, reason: `semgrep did not finish (${outcome})` };
+        return { ok: false, scanned: 0, errors: 0, reason: `semgrep did not finish (${outcome})` };
     }
     if (raw === null) {
-        return { ok: false, scanned: 0, reason: `semgrep wrote no JSON report (exit ${String(exitCode)})` };
+        return { ok: false, scanned: 0, errors: 0, reason: `semgrep wrote no JSON report (exit ${String(exitCode)})` };
     }
     const root = parseInputAsJson(raw);
     if (root === null || typeof root !== 'object' || Array.isArray(root)) {
-        return { ok: false, scanned: 0, reason: `semgrep report is not valid JSON (exit ${String(exitCode)})` };
+        return { ok: false, scanned: 0, errors: 0, reason: `semgrep report is not valid JSON (exit ${String(exitCode)})` };
     }
     const scanned = asArray(getProp(getProp(root, 'paths'), 'scanned')).length;
     const errors = describeErrors(asArray(getProp(root, 'errors')));
@@ -45,8 +45,8 @@ export function checkSemgrepReport(args) {
         problems.push(`${errors.length} Semgrep error(s): ${clip(errors.join('; '))}`);
     }
     if (problems.length > 0)
-        return { ok: false, scanned, reason: problems.join('; ') };
-    return { ok: true, scanned };
+        return { ok: false, scanned, errors: errors.length, reason: problems.join('; ') };
+    return { ok: true, scanned, errors: 0 };
 }
 /** `type: message` per `errors[]` entry (`type` may be a string or `[name, …]`). */
 function describeErrors(errors) {
