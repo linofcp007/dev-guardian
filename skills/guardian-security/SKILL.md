@@ -23,11 +23,7 @@ A skill suporta quatro tipos. Pergunta ao utilizador qual (ou faz `--all` se ele
 
 ### 1. Pré-requisitos
 
-Antes de scanar, garante que as ferramentas estão instaladas. Se não estiverem, sugere correr `guardian init` primeiro. Verifica com:
-
-```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/scan/check-tools.sh
-```
+Antes de scanar, garante que as ferramentas estão instaladas. Se não estiverem, sugere correr `guardian init` primeiro. Verifica com a ferramenta MCP `check_toolchain` (versão de cada scanner, versões comprometidas conhecidas e o comando de instalação para este sistema).
 
 ### 2. Executar scans
 

@@ -38777,8 +38777,8 @@ function mapSubcategory(metadata, checkId) {
 }
 function shortenTitle(message, checkId) {
   if (message && message.length > 0) {
-    const firstLine = message.split(/\r?\n/)[0] ?? message;
-    return firstLine.length > 140 ? firstLine.slice(0, 137) + "\u2026" : firstLine;
+    const firstLine2 = message.split(/\r?\n/)[0] ?? message;
+    return firstLine2.length > 140 ? firstLine2.slice(0, 137) + "\u2026" : firstLine2;
   }
   return checkId;
 }
@@ -39293,8 +39293,8 @@ async function resolveBinary(name) {
   try {
     const result = await execa(finder, [name], { timeout: 2e3, reject: false });
     if (result.exitCode !== 0) return null;
-    const firstLine = result.stdout.split(/\r?\n/)[0]?.trim();
-    return firstLine && firstLine.length > 0 ? firstLine : null;
+    const firstLine2 = result.stdout.split(/\r?\n/)[0]?.trim();
+    return firstLine2 && firstLine2.length > 0 ? firstLine2 : null;
   } catch {
     return null;
   }
@@ -44061,9 +44061,6 @@ function failDomain11(code, message) {
   return { ok: false, error: { code, message } };
 }
 
-// src/tools/checkToolchain.ts
-import { join as join30 } from "node:path";
-
 // src/platform/semverCompare.ts
 function compareSemver(a2, b) {
   const pa = parse4(a2);
@@ -44093,10 +44090,12 @@ function parse4(input) {
 }
 
 // src/runners/installCatalog.ts
+var TRIVY_INSTALL_TAG = "v0.74.0";
 var TOOL_CATALOG = {
   semgrep: {
     name: "semgrep",
     version_floor: "1.0.0",
+    probe: { command: "semgrep", args: ["--version"] },
     required_by: ["scan_sast", "security_scan_full", "bug_hunt", "review_pr"],
     install: {
       win32: {
@@ -44111,6 +44110,25 @@ var TOOL_CATALOG = {
   trivy: {
     name: "trivy",
     version_floor: "0.40.0",
+    probe: { command: "trivy", args: ["--version"] },
+    compromised: [
+      {
+        // Verified against the primary source, the GitHub advisory
+        // (https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23,
+        // published 2026-03-21, CVE-2026-33634): v0.69.4 binaries and images
+        // were published with credential-stealing code on 2026-03-19, and
+        // malicious v0.69.5 / v0.69.6 images were pushed to Docker Hub on
+        // 2026-03-22 with no matching GitHub release. The advisory names
+        // v0.69.2 and v0.69.3 as known-safe. A binary reporting any of the
+        // three versions came from one of those artifacts.
+        from: "0.69.4",
+        to: "0.69.6",
+        advisory: "GHSA-69fq-xp46-6x23",
+        cve: "CVE-2026-33634",
+        url: "https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23",
+        action: "Remove this Trivy build now, install a release the advisory lists as safe (or a later one), and rotate every secret it could read \u2014 it exfiltrated credentials."
+      }
+    ],
     required_by: [
       "scan_deps",
       "scan_containers",
@@ -44129,7 +44147,8 @@ var TOOL_CATALOG = {
       linux: {
         apt: aptInstall("trivy"),
         curl: curlInstaller(
-          "https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh"
+          `https://raw.githubusercontent.com/aquasecurity/trivy/${TRIVY_INSTALL_TAG}/contrib/install.sh`,
+          TRIVY_INSTALL_TAG
         )
       },
       darwin: { brew: brewInstall("aquasecurity/trivy/trivy") }
@@ -44139,6 +44158,7 @@ var TOOL_CATALOG = {
   gitleaks: {
     name: "gitleaks",
     version_floor: "8.0.0",
+    probe: { command: "gitleaks", args: ["version"] },
     required_by: ["scan_secrets", "security_scan_full", "review_pr"],
     install: {
       win32: {
@@ -44156,7 +44176,7 @@ var TOOL_CATALOG = {
         // install-linux.sh, which resolves the real download URL itself;
         // only an explicit install_toolchain(tools:["gitleaks"]) call on
         // Linux reaches this empty bucket, and degrades to manual_steps
-        // the same way nuclei's win32 entry below already does.
+        // the same way nuclei's linux entry below does.
       },
       darwin: { brew: brewInstall("gitleaks") }
     },
@@ -44165,6 +44185,7 @@ var TOOL_CATALOG = {
   syft: {
     name: "syft",
     version_floor: "0.80.0",
+    probe: { command: "syft", args: ["version"] },
     required_by: ["generate_sbom"],
     install: {
       win32: { scoop: scoopInstall("syft"), choco: chocoInstall("syft") },
@@ -44178,6 +44199,7 @@ var TOOL_CATALOG = {
   "pre-commit": {
     name: "pre-commit",
     version_floor: "3.0.0",
+    probe: { command: "pre-commit", args: ["--version"] },
     required_by: ["init_project"],
     install: {
       win32: { scoop: pipxInstall("pre-commit") },
@@ -44189,6 +44211,7 @@ var TOOL_CATALOG = {
   ruff: {
     name: "ruff",
     version_floor: "0.1.0",
+    probe: { command: "ruff", args: ["--version"] },
     required_by: ["quality_check"],
     install: {
       win32: { scoop: pipxInstall("ruff") },
@@ -44201,6 +44224,7 @@ var TOOL_CATALOG = {
   bandit: {
     name: "bandit",
     version_floor: "1.7.0",
+    probe: { command: "bandit", args: ["--version"] },
     required_by: ["scan_sast", "security_scan_full"],
     install: {
       win32: { scoop: pipxInstall("bandit") },
@@ -44213,6 +44237,7 @@ var TOOL_CATALOG = {
   jscpd: {
     name: "jscpd",
     version_floor: "3.0.0",
+    probe: { command: "jscpd", args: ["--version"] },
     required_by: ["quality_check"],
     install: {
       win32: { choco: npmInstallGlobal("jscpd") },
@@ -44225,6 +44250,7 @@ var TOOL_CATALOG = {
   lighthouse: {
     name: "lighthouse",
     version_floor: "11.0.0",
+    probe: { command: "lighthouse", args: ["--version"] },
     required_by: ["perf_check"],
     install: {
       win32: { choco: npmInstallGlobal("lighthouse") },
@@ -44237,6 +44263,7 @@ var TOOL_CATALOG = {
   k6: {
     name: "k6",
     version_floor: "0.50.0",
+    probe: { command: "k6", args: ["version"] },
     required_by: ["perf_check"],
     install: {
       win32: {
@@ -44253,24 +44280,21 @@ var TOOL_CATALOG = {
   nuclei: {
     name: "nuclei",
     version_floor: "3.0.0",
+    probe: { command: "nuclei", args: ["-version"] },
     required_by: ["scan_dast"],
     install: {
-      // No verified scoop/choco/winget package exists for nuclei: it is not
-      // among ProjectDiscovery's own documented install methods (go install,
-      // brew, docker, GitHub release binaries, Helm — checked against
-      // docs.projectdiscovery.io/opensource/nuclei/install), the
-      // ScoopInstaller/Extras bucket has no `nuclei.json` manifest, and
-      // winget's community repo returns zero results for it. Every other
-      // entry in this catalogue is a real, working command; pointing win32
-      // at a package manager that does not carry the tool would be exactly
-      // the kind of fabrication this project's whole DAST feature exists to
-      // avoid, so it is left empty rather than guessed at. `check_toolchain`
-      // / `install_toolchain` already degrade gracefully to "no known
-      // install command" when an OS bucket has none.
-      win32: {},
+      // Scoop's MAIN bucket — the one every scoop install has by default —
+      // carries `bucket/nuclei.json` (verified 2026-09-25 through the GitHub
+      // API on ScoopInstaller/Main: version 3.11.1, the official
+      // `nuclei_<v>_windows_amd64.zip` from projectdiscovery/nuclei's own
+      // releases). An earlier check here looked only at the Extras bucket,
+      // found nothing, and left win32 empty. No ProjectDiscovery manifest was
+      // found in microsoft/winget-pkgs (path lookup and code search, same
+      // day), so scoop is the only entry.
+      win32: { scoop: scoopInstall("nuclei") },
       linux: {
         // No curl entry, for the same reason as gitleaks' linux entry
-        // above and this tool's own win32 bucket: `.../releases/latest`
+        // above: `.../releases/latest`
         // resolves to the release's HTML page, not an install script
         // (measured: Content-Type: text/html on the final 200). Left
         // empty rather than fabricated, per curlInstaller's doc comment.
@@ -44283,6 +44307,9 @@ var TOOL_CATALOG = {
   "wp-cli": {
     name: "wp-cli",
     version_floor: "2.8.0",
+    // The binary is `wp`. `--allow-root` because WP-CLI refuses to run as
+    // root without it, which is the normal case inside a container.
+    probe: { command: "wp", args: ["--version", "--allow-root"] },
     required_by: ["wp_audit", "wp_vuln_check"],
     install: {
       win32: { scoop: scoopInstall("wp-cli"), choco: chocoInstall("wp-cli") },
@@ -44294,6 +44321,7 @@ var TOOL_CATALOG = {
   wpscan: {
     name: "wpscan",
     version_floor: "3.8.0",
+    probe: { command: "wpscan", args: ["--version"] },
     required_by: ["wp_vuln_check"],
     install: {
       // wpscan is a Ruby gem. Windows native needs Ruby; we recommend WSL.
@@ -44306,6 +44334,7 @@ var TOOL_CATALOG = {
   phpcs: {
     name: "phpcs",
     version_floor: "3.7.0",
+    probe: { command: "phpcs", args: ["--version"] },
     required_by: ["scan_wordpress"],
     install: {
       win32: { choco: chocoInstall("php-codesniffer") },
@@ -44318,11 +44347,16 @@ var TOOL_CATALOG = {
   "dotnet-sdk": {
     name: "dotnet-sdk",
     version_floor: "6.0.0",
+    probe: { command: "dotnet", args: ["--list-sdks"], parse: "dotnet-sdks" },
     required_by: ["scan_sast", "deps_update_plan"],
     install: {
       // dev-guardian NEVER auto-installs the .NET SDK. These specs only
-      // exist so check_toolchain surfaces install hints.
-      win32: { winget: dotnetSdkHint("winget install Microsoft.DotNet.SDK.6") },
+      // exist so check_toolchain surfaces install hints. The hint names the
+      // current LTS: .NET 10 (released 2025-11-11, supported to 2028-11-14 —
+      // dotnet.microsoft.com support policy); .NET 6, which it used to name,
+      // left support in November 2024. winget id verified in
+      // microsoft/winget-pkgs (manifests/m/Microsoft/DotNet/SDK/10).
+      win32: { winget: dotnetSdkHint("winget install Microsoft.DotNet.SDK.10") },
       linux: { apt: dotnetSdkHint("see https://learn.microsoft.com/dotnet/core/install/linux") },
       darwin: { brew: dotnetSdkHint("brew install --cask dotnet-sdk") }
     },
@@ -44331,6 +44365,7 @@ var TOOL_CATALOG = {
   "dotnet-outdated": {
     name: "dotnet-outdated",
     version_floor: "4.0.0",
+    probe: { command: "dotnet-outdated", args: ["--version"] },
     required_by: ["deps_update_plan"],
     install: {
       win32: { winget: dotnetGlobalTool("dotnet-outdated-tool") },
@@ -44342,6 +44377,9 @@ var TOOL_CATALOG = {
   "dotnet-format": {
     name: "dotnet-format",
     version_floor: "5.0.0",
+    // The standalone global tool. Since .NET 6 `dotnet format` ships inside
+    // the SDK, and check_toolchain treats an SDK >= 6 as providing it.
+    probe: { command: "dotnet-format", args: ["--version"] },
     required_by: ["quality_check"],
     install: {
       win32: { winget: dotnetGlobalTool("dotnet-format") },
@@ -44407,12 +44445,13 @@ function npmInstallGlobal(pkg) {
     description: `npm install -g ${pkg}`
   };
 }
-function curlInstaller(url) {
+function curlInstaller(url, tag) {
+  const pinned = tag !== void 0 ? ` ${tag}` : "";
   return {
     command: "bash",
-    args: ["-c", `curl -sSfL ${url} | sh -s -- -b "$HOME/.local/bin"`],
+    args: ["-c", `curl -sSfL ${url} | sh -s -- -b "$HOME/.local/bin"${pinned}`],
     needs_elevation: false,
-    description: `curl ${url} | sh`
+    description: `curl ${url} | sh${pinned}`
   };
 }
 function gemInstall(pkg) {
@@ -44472,97 +44511,203 @@ function suggestedInstallCommandString(toolName, os) {
   const first = Object.values(candidates2)[0];
   return first?.description ?? null;
 }
+function knownCompromise(toolName, version2) {
+  for (const range of TOOL_CATALOG[toolName]?.compromised ?? []) {
+    const low = compareSemver(version2, range.from);
+    const high = compareSemver(version2, range.to);
+    if (low !== null && high !== null && low >= 0 && high <= 0) return range;
+  }
+  return null;
+}
+
+// src/runners/toolProbe.ts
+var PROBE_TIMEOUT_MS = 3e4;
+function extractVersion(text) {
+  const line = /^\s*Version:\s*v?(\d+\.\d+(?:\.\d+)?)/im.exec(text);
+  if (line?.[1] !== void 0) return line[1];
+  const token = /(?<![\w.])v?(\d+\.\d+(?:\.\d+)?)/.exec(text);
+  return token?.[1] ?? null;
+}
+function highestDotnetSdk(text) {
+  let best = null;
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^\s*(\d+\.\d+\.\d+)/.exec(line);
+    const v = m?.[1];
+    if (v === void 0) continue;
+    if (best === null || (compareSemver(v, best) ?? 0) > 0) best = v;
+  }
+  return best;
+}
+async function runVersionProbe(probe2, cwd) {
+  const r = await runProcess({
+    command: probe2.command,
+    args: probe2.args,
+    cwd,
+    timeoutMs: PROBE_TIMEOUT_MS,
+    stdoutCapBytes: 256 * 1024
+  });
+  if (r.outcome === "timed_out") {
+    return { installed: false, version: "", error: `version probe timed out after ${PROBE_TIMEOUT_MS / 1e3} s` };
+  }
+  if (r.outcome !== "completed") {
+    const onPath = await resolveBinary(probe2.command);
+    if (!onPath) return { installed: false, version: "" };
+    const why = firstLine(r.stderr) ?? firstLine(r.stdout) ?? r.outcome;
+    let error2 = `found at ${onPath}, but \`${[probe2.command, ...probe2.args].join(" ")}\` exited ${r.exitCode ?? "(no exit code)"}: ${why}`;
+    if (process.platform === "win32" && !/\.(exe|cmd|bat|com)$/i.test(onPath)) {
+      error2 += " \u2014 the first match has no .exe/.cmd/.bat extension; if it is a bash shim it runs only inside bash and cannot be started by this server: put the real executable on PATH";
+    }
+    return { installed: false, version: "", error: error2 };
+  }
+  const text = `${r.stdout}
+${r.stderr}`;
+  if (probe2.parse === "dotnet-sdks") {
+    const sdk = highestDotnetSdk(r.stdout);
+    return sdk === null ? { installed: false, version: "", error: "dotnet is present but lists no SDK (runtime only)" } : { installed: true, version: sdk };
+  }
+  return { installed: true, version: extractVersion(text) ?? (firstLine(text) ?? "").slice(0, 80) };
+}
+function firstLine(text) {
+  return text.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
+}
 
 // src/tools/checkToolchain.ts
-var SCRIPT_REL_PATH5 = ["scan", "check-tools.sh"];
+var INFORMATIONAL = [
+  { name: "node", probes: [{ command: "node", args: ["--version"] }] },
+  {
+    name: "python",
+    probes: [
+      { command: "python3", args: ["--version"] },
+      { command: "python", args: ["--version"] }
+    ]
+  },
+  { name: "docker", probes: [{ command: "docker", args: ["--version"] }] }
+];
+var PROBE_CONCURRENCY = 6;
 var tool11 = {
   name: "check_toolchain",
   title: "Check toolchain status",
-  description: "Run scripts/scan/check-tools.sh and report per-scanner status: installed, version, expected version floor, the MCP tools that depend on it, and the suggested install command for this OS.",
+  description: "Probe every catalogued scanner directly (its binary and version command; no bash needed) and report per-scanner status: installed, version, expected version floor, known-compromised releases (with the advisory id), the MCP tools that depend on it, and the suggested install command for this OS.",
   inputSchema: {},
   handler: async (_input, ctx) => handler11(ctx)
 };
 registerToolModule(tool11);
 async function handler11(ctx) {
-  if (ctx.shell === null) {
-    return failDomain12(
-      "no_bash_shell",
-      "No usable bash shell found. Install Git Bash or WSL, then restart."
-    );
-  }
-  const scriptPath = join30(ctx.scriptsDir, ...SCRIPT_REL_PATH5);
-  const result = await runShellScript({
-    shell: ctx.shell,
-    scriptPath,
-    cwd: ctx.scriptsDir
-  });
-  if (result.outcome !== "completed") {
-    return failDomain12(
-      "scanner_failed",
-      `check-tools.sh exited with outcome=${result.outcome}: ${result.stderr.split(/\r?\n/)[0] ?? ""}`
-    );
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(result.stdout);
-  } catch (e) {
-    return failDomain12("scanner_failed", `check-tools.sh output not JSON: ${e.message}`);
-  }
   const os = detectOs();
+  const cwd = ctx.scriptsDir;
+  const catalogue = Object.values(TOOL_CATALOG);
+  const probed = await mapLimited(
+    catalogue,
+    PROBE_CONCURRENCY,
+    (meta) => runVersionProbe(meta.probe, cwd)
+  );
+  const extras = await mapLimited(INFORMATIONAL, PROBE_CONCURRENCY, (x) => firstFound(x.probes, cwd));
+  const byName = /* @__PURE__ */ new Map();
+  catalogue.forEach((meta, i2) => {
+    const r = probed[i2];
+    if (r !== void 0) byName.set(meta.name, r);
+  });
   const tools = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const [toolName, meta] of Object.entries(TOOL_CATALOG)) {
-    const version2 = (parsed[toolName] ?? "").trim();
-    const installed = version2.length > 0;
-    tools.push({
-      name: toolName,
-      installed,
-      version: version2,
+  for (const meta of catalogue) {
+    let result = byName.get(meta.name) ?? { installed: false, version: "" };
+    let providedBy;
+    if (meta.name === "dotnet-format" && !result.installed) {
+      const sdk = byName.get("dotnet-sdk");
+      if (sdk?.installed && (compareSemver(sdk.version, "6.0.0") ?? -1) >= 0) {
+        result = { installed: true, version: sdk.version };
+        providedBy = "dotnet-sdk";
+      }
+    }
+    const compromise = result.installed ? knownCompromise(meta.name, result.version) : null;
+    const status = {
+      name: meta.name,
+      installed: result.installed,
+      version: result.version,
       expected_version_floor: meta.version_floor,
-      meets_version_floor: installed ? meetsFloor(version2, meta.version_floor) : null,
+      meets_version_floor: result.installed ? meetsFloor(result.version, meta.version_floor) : null,
       required_by: meta.required_by,
-      install_command: suggestedInstallCommandString(toolName, os)
-    });
-    seen.add(toolName);
+      install_command: suggestedInstallCommandString(meta.name, os),
+      compromised: compromise !== null
+    };
+    if (compromise) {
+      status.advisory = {
+        id: compromise.advisory,
+        ...compromise.cve ? { cve: compromise.cve } : {},
+        url: compromise.url,
+        action: compromise.action
+      };
+    }
+    if (providedBy) status.provided_by = providedBy;
+    if (result.error && !result.installed) status.probe_error = result.error;
+    tools.push(status);
   }
-  for (const [toolName, versionRaw] of Object.entries(parsed)) {
-    if (seen.has(toolName)) continue;
-    const version2 = (versionRaw ?? "").trim();
-    tools.push({
-      name: toolName,
-      installed: version2.length > 0,
-      version: version2,
+  INFORMATIONAL.forEach((x, i2) => {
+    const r = extras[i2] ?? { installed: false, version: "" };
+    const status = {
+      name: x.name,
+      installed: r.installed,
+      version: r.version,
       expected_version_floor: "",
       meets_version_floor: null,
       required_by: [],
-      install_command: null
-    });
-  }
+      install_command: null,
+      compromised: false
+    };
+    if (r.error && !r.installed) status.probe_error = r.error;
+    tools.push(status);
+  });
   tools.sort((a2, b) => {
     const aRequired = a2.required_by.length > 0 ? 0 : 1;
     const bRequired = b.required_by.length > 0 ? 0 : 1;
     const aMissing = a2.installed ? 1 : 0;
     const bMissing = b.installed ? 1 : 0;
-    return aMissing - bMissing || aRequired - bRequired || a2.name.localeCompare(b.name);
+    const aBad = a2.compromised ? 0 : 1;
+    const bBad = b.compromised ? 0 : 1;
+    return aBad - bBad || aMissing - bMissing || aRequired - bRequired || a2.name.localeCompare(b.name);
   });
+  const compromised = tools.filter((t) => t.compromised);
+  const warnings = compromised.map(
+    (t) => `${t.name} ${t.version} is a known-compromised release (${t.advisory?.id ?? "advisory"}): ` + `${t.advisory?.action ?? ""} ${t.advisory?.url ?? ""}`.trim()
+  );
   return {
     ok: true,
     os,
     tools,
     summary: {
-      total_catalogued: Object.keys(TOOL_CATALOG).length,
+      total_catalogued: catalogue.length,
       installed: tools.filter((t) => t.installed && TOOL_CATALOG[t.name]).length,
       missing: tools.filter((t) => !t.installed && TOOL_CATALOG[t.name]).length,
-      below_floor: tools.filter((t) => t.meets_version_floor === false).length
-    }
+      below_floor: tools.filter((t) => t.meets_version_floor === false).length,
+      compromised: compromised.length
+    },
+    ...warnings.length > 0 ? { warnings } : {}
   };
 }
-function failDomain12(code, message) {
-  return { ok: false, error: { code, message } };
+async function firstFound(probes, cwd) {
+  let last = { installed: false, version: "" };
+  for (const probe2 of probes) {
+    last = await runVersionProbe(probe2, cwd);
+    if (last.installed) return last;
+  }
+  return last;
+}
+async function mapLimited(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i2 = next++;
+      const item = items[i2];
+      if (item === void 0) continue;
+      out[i2] = await fn(item);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
 }
 
 // src/tools/installToolchain.ts
-import { join as join31 } from "node:path";
+import { join as join30 } from "node:path";
 var inputSchema7 = {
   tools: external_exports.array(external_exports.string()).optional().describe(
     "When set, install only these scanners (must exist in the catalogue). When omitted, install the default set: semgrep, trivy, gitleaks, syft, pre-commit (+ ruff/bandit/jscpd if stack detected)."
@@ -44659,7 +44804,7 @@ async function installDefaults(opts) {
     });
     return;
   }
-  const scriptPath = join31(opts.ctx.scriptsDir, "install", "install-linux.sh");
+  const scriptPath = join30(opts.ctx.scriptsDir, "install", "install-linux.sh");
   const r = await runShellScript({
     shell: WSL_SHELL,
     scriptPath,
@@ -44687,7 +44832,7 @@ async function runPosixInstaller(opts) {
     return;
   }
   const scriptName = opts.os === "darwin" ? "install-macos.sh" : "install-linux.sh";
-  const scriptPath = join31(opts.ctx.scriptsDir, "install", scriptName);
+  const scriptPath = join30(opts.ctx.scriptsDir, "install", scriptName);
   const extraArgs = opts.elevation ? [] : ["--no-sudo"];
   if (opts.dryRun) {
     opts.result.would_install.push({
@@ -44839,7 +44984,7 @@ async function runCheckToolchain(ctx) {
 
 // src/tools/licenseCompatibility.ts
 import { existsSync as existsSync24, readFileSync as readFileSync14 } from "node:fs";
-import { join as join32 } from "node:path";
+import { join as join31 } from "node:path";
 var tool13 = {
   name: "license_compatibility",
   title: "License compatibility check",
@@ -44854,7 +44999,7 @@ async function handler13(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain13("not_a_git_repo", e.message);
+    return failDomain12("not_a_git_repo", e.message);
   }
   const projectLicense = detectProjectLicense(projectPath);
   const compliance = findLatestCompliance(ctx);
@@ -44889,7 +45034,7 @@ async function handler13(input, ctx) {
 }
 function detectProjectLicense(projectPath) {
   try {
-    const pkgPath = join32(projectPath, "package.json");
+    const pkgPath = join31(projectPath, "package.json");
     if (existsSync24(pkgPath)) {
       const pkg = JSON.parse(readFileSync14(pkgPath, "utf8"));
       if (typeof pkg.license === "string") return pkg.license;
@@ -44897,7 +45042,7 @@ function detectProjectLicense(projectPath) {
   } catch {
   }
   try {
-    const pyProject = join32(projectPath, "pyproject.toml");
+    const pyProject = join31(projectPath, "pyproject.toml");
     if (existsSync24(pyProject)) {
       const raw = readFileSync14(pyProject, "utf8");
       const m = /license\s*=\s*["']([^"']+)["']/i.exec(raw) ?? /license-expression\s*=\s*["']([^"']+)["']/i.exec(raw);
@@ -44906,7 +45051,7 @@ function detectProjectLicense(projectPath) {
   } catch {
   }
   try {
-    const composer = join32(projectPath, "composer.json");
+    const composer = join31(projectPath, "composer.json");
     if (existsSync24(composer)) {
       const cjson = JSON.parse(readFileSync14(composer, "utf8"));
       if (typeof cjson.license === "string") return cjson.license;
@@ -44916,7 +45061,7 @@ function detectProjectLicense(projectPath) {
   } catch {
   }
   for (const name of ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"]) {
-    const p = join32(projectPath, name);
+    const p = join31(projectPath, name);
     if (!existsSync24(p)) continue;
     try {
       const head = readFileSync14(p, "utf8").slice(0, 500);
@@ -44991,7 +45136,7 @@ function groupByLicense(rows) {
   }
   return out;
 }
-function failDomain13(code, message) {
+function failDomain12(code, message) {
   return { ok: false, error: { code, message } };
 }
 
@@ -45149,7 +45294,7 @@ async function handler15(input, ctx) {
   const inp = input;
   const sboms = ctx.storage.scans.listHistory(50).filter((s) => s.scan_type === "sbom" && s.status === "completed");
   if (sboms.length < 2 && (!inp.from_scan_id || !inp.to_scan_id)) {
-    return failDomain14(
+    return failDomain13(
       "unknown_scan_id",
       `Need at least two completed SBOM scans (found ${sboms.length}). Call generate_sbom twice or pass explicit ids.`
     );
@@ -45157,15 +45302,15 @@ async function handler15(input, ctx) {
   const toId = inp.to_scan_id ?? sboms[0]?.scan_id;
   const fromId = inp.from_scan_id ?? sboms[1]?.scan_id;
   if (!toId || !fromId) {
-    return failDomain14("unknown_scan_id", "Could not resolve both ends of the SBOM diff.");
+    return failDomain13("unknown_scan_id", "Could not resolve both ends of the SBOM diff.");
   }
   if (toId === fromId) {
-    return failDomain14("unknown_scan_id", `Cannot diff a scan against itself (${toId}).`);
+    return failDomain13("unknown_scan_id", `Cannot diff a scan against itself (${toId}).`);
   }
   const fromComps = await loadComponents(ctx, fromId, inp.use_full_file === true);
   const toComps = await loadComponents(ctx, toId, inp.use_full_file === true);
   if (!fromComps || !toComps) {
-    return failDomain14("unknown_scan_id", "One or both SBOM scans have no components recorded.");
+    return failDomain13("unknown_scan_id", "One or both SBOM scans have no components recorded.");
   }
   const fromMap = new Map(fromComps.map((c3) => [c3.name, c3.version ?? ""]));
   const toMap = new Map(toComps.map((c3) => [c3.name, c3.version ?? ""]));
@@ -45247,7 +45392,7 @@ function extractFromSbomJson(raw) {
   }
   return [];
 }
-function failDomain14(code, message) {
+function failDomain13(code, message) {
   return { ok: false, error: { code, message } };
 }
 
@@ -45336,7 +45481,7 @@ function countBySeverity3(findings) {
 
 // src/tools/suggestFix.ts
 import { existsSync as existsSync26, readFileSync as readFileSync16 } from "node:fs";
-import { join as join33 } from "node:path";
+import { join as join32 } from "node:path";
 var inputSchema10 = {
   project_path: ProjectPath,
   finding_fingerprint: external_exports.string().regex(/^[0-9a-f]{64}$/).describe("Fingerprint of the finding to gather context for."),
@@ -45356,19 +45501,19 @@ async function handler17(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain15("not_a_git_repo", e.message);
+    return failDomain14("not_a_git_repo", e.message);
   }
   const contextLines = inp.context_lines ?? 20;
   const latest = ctx.storage.scans.getLatest();
   const finding2 = latest ? ctx.storage.findings.listByScan(latest.scan_id).find((f) => f.fingerprint === inp.finding_fingerprint) : null;
   if (!finding2) {
-    return failDomain15("unknown_scan_id", `Finding ${inp.finding_fingerprint} not in the latest scan.`);
+    return failDomain14("unknown_scan_id", `Finding ${inp.finding_fingerprint} not in the latest scan.`);
   }
   let surrounding_source = null;
   let source_start_line = 0;
   let source_end_line = 0;
   if (finding2.file_path) {
-    const abs = join33(projectPath, finding2.file_path);
+    const abs = join32(projectPath, finding2.file_path);
     if (existsSync26(abs)) {
       try {
         const raw = readFileSync16(abs, "utf8");
@@ -45414,7 +45559,7 @@ async function handler17(input, ctx) {
     instructions_for_model: "Propose a unified-diff patch (or describe the minimal edit) that addresses this finding without changing unrelated behaviour. Reference the line range, explain the fix, and call out any side effects the maintainer should review."
   };
 }
-function failDomain15(code, message) {
+function failDomain14(code, message) {
   return { ok: false, error: { code, message } };
 }
 
@@ -45501,7 +45646,7 @@ function toBucket(f, reason) {
 
 // src/tools/precommitInstall.ts
 import { existsSync as existsSync27 } from "node:fs";
-import { join as join34 } from "node:path";
+import { join as join33 } from "node:path";
 var tool19 = {
   name: "precommit_install",
   title: "Install pre-commit hooks",
@@ -45516,20 +45661,20 @@ async function handler19(input, _ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain16("not_a_git_repo", e.message);
+    return failDomain15("not_a_git_repo", e.message);
   }
-  if (!existsSync27(join34(projectPath, ".pre-commit-config.yaml"))) {
-    return failDomain16(
+  if (!existsSync27(join33(projectPath, ".pre-commit-config.yaml"))) {
+    return failDomain15(
       "scanner_failed",
       "No .pre-commit-config.yaml in project. Run init_project first."
     );
   }
-  if (!existsSync27(join34(projectPath, ".git"))) {
-    return failDomain16("not_a_git_repo", "pre-commit needs a git repo to install hooks into.");
+  if (!existsSync27(join33(projectPath, ".git"))) {
+    return failDomain15("not_a_git_repo", "pre-commit needs a git repo to install hooks into.");
   }
   const bin = await scannerAvailable("pre-commit");
   if (!bin) {
-    return failDomain16(
+    return failDomain15(
       "missing_scanner",
       'pre-commit is not installed. Run install_toolchain with tools=["pre-commit"].'
     );
@@ -45541,7 +45686,7 @@ async function handler19(input, _ctx) {
     timeoutMs: 6e4
   });
   if (result.outcome !== "completed") {
-    return failDomain16(
+    return failDomain15(
       "scanner_failed",
       `pre-commit install failed: ${result.stderr.split(/\r?\n/)[0] ?? "(no stderr)"}`
     );
@@ -45561,13 +45706,13 @@ async function handler19(input, _ctx) {
     stdout: result.stdout.split(/\r?\n/).slice(0, 20).join("\n")
   };
 }
-function failDomain16(code, message) {
+function failDomain15(code, message) {
   return { ok: false, error: { code, message } };
 }
 
 // src/tools/registerCustomRules.ts
 import { existsSync as existsSync28, readdirSync as readdirSync10 } from "node:fs";
-import { join as join35, resolve as resolve5 } from "node:path";
+import { join as join34, resolve as resolve5 } from "node:path";
 var inputSchema11 = {
   project_path: ProjectPath,
   paths: external_exports.array(external_exports.string()).optional().describe("Explicit paths or globs to register. When omitted, auto-discovers .semgrep/ etc."),
@@ -45588,7 +45733,7 @@ async function handler20(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain17("not_a_git_repo", e.message);
+    return failDomain16("not_a_git_repo", e.message);
   }
   if (inp.clear) {
     ctx.storage.runtimeMeta.delete(META_KEY);
@@ -45612,7 +45757,7 @@ async function handler20(input, ctx) {
 function autoDiscover(projectPath) {
   const out = [];
   for (const dir of [".semgrep", "semgrep", "rules"]) {
-    const abs = join35(projectPath, dir);
+    const abs = join34(projectPath, dir);
     if (!existsSync28(abs)) continue;
     try {
       const hasYaml = readdirSync10(abs).some((f) => /\.ya?ml$/.test(f));
@@ -45622,7 +45767,7 @@ function autoDiscover(projectPath) {
   }
   return out;
 }
-function failDomain17(code, message) {
+function failDomain16(code, message) {
   return { ok: false, error: { code, message } };
 }
 
@@ -45685,7 +45830,7 @@ async function handler21(ctx) {
 
 // src/tools/reportExport.ts
 import { mkdirSync as mkdirSync6, writeFileSync as writeFileSync7 } from "node:fs";
-import { join as join36 } from "node:path";
+import { join as join35 } from "node:path";
 
 // src/report/htmlTheme.ts
 var SHARED = { "--accent": "#00AAFF", "--brand-blue": "#11689B" };
@@ -46089,7 +46234,7 @@ async function handler22(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain18("not_a_git_repo", e.message);
+    return failDomain17("not_a_git_repo", e.message);
   }
   if (inp.content_markdown != null) {
     const title = inp.title ?? "Pro Digital Key \u2014 Report";
@@ -46100,10 +46245,10 @@ async function handler22(input, ctx) {
       sections: [markdownToSafeHtml(inp.content_markdown)],
       lang
     });
-    const outDir2 = join36(projectPath, ".guardian", "reports", `report-${slugify(title)}`);
+    const outDir2 = join35(projectPath, ".guardian", "reports", `report-${slugify(title)}`);
     mkdirSync6(outDir2, { recursive: true });
     const fileName2 = narrativeFormat === "markdown" ? "report.md" : "report.html";
-    const outFile2 = join36(outDir2, fileName2);
+    const outFile2 = join35(outDir2, fileName2);
     writeFileSync7(outFile2, content2, "utf8");
     return {
       ok: true,
@@ -46116,16 +46261,16 @@ async function handler22(input, ctx) {
   }
   const scanId = inp.scan_id ?? ctx.storage.scans.getLatest()?.scan_id;
   if (!scanId) {
-    return failDomain18("unknown_scan_id", "No completed scans to export.");
+    return failDomain17("unknown_scan_id", "No completed scans to export.");
   }
   const scan = ctx.storage.scans.getById(scanId);
-  if (!scan) return failDomain18("unknown_scan_id", `Scan '${scanId}' not found.`);
+  if (!scan) return failDomain17("unknown_scan_id", `Scan '${scanId}' not found.`);
   const findings = ctx.storage.findings.listByScan(scanId);
   const cves = scan.scan_type === "deps" || scan.scan_type === "security_full" ? ctx.storage.cves.listActive(scanId) : [];
   const { content, fileName } = renderReport(format2, scan, findings, cves, lang);
-  const outDir = join36(projectPath, ".guardian", "reports", `export-${scanId.slice(0, 8)}`);
+  const outDir = join35(projectPath, ".guardian", "reports", `export-${scanId.slice(0, 8)}`);
   mkdirSync6(outDir, { recursive: true });
-  const outFile = join36(outDir, fileName);
+  const outFile = join35(outDir, fileName);
   writeFileSync7(outFile, content, "utf8");
   return {
     ok: true,
@@ -46256,7 +46401,7 @@ function severityOrder(s) {
 function slugify(s) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "report";
 }
-function failDomain18(code, message) {
+function failDomain17(code, message) {
   return { ok: false, error: { code, message } };
 }
 
@@ -46426,11 +46571,11 @@ async function handler24(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain19("not_a_git_repo", e.message);
+    return failDomain18("not_a_git_repo", e.message);
   }
   const ghBin = await scannerAvailable("gh");
   if (!ghBin) {
-    return failDomain19(
+    return failDomain18(
       "missing_scanner",
       "GitHub CLI (`gh`) is not installed. See https://cli.github.com/. No API keys are handled here \u2014 gh uses your local auth."
     );
@@ -46441,7 +46586,7 @@ async function handler24(input, ctx) {
   const labels = inp.labels ?? ["dev-guardian", "security"];
   const latest = ctx.storage.scans.getLatest();
   if (!latest) {
-    return failDomain19("unknown_scan_id", "No completed scans yet \u2014 nothing to file as issues.");
+    return failDomain18("unknown_scan_id", "No completed scans yet \u2014 nothing to file as issues.");
   }
   const all = ctx.storage.findings.listByScan(latest.scan_id);
   const sevFloor = SEVERITY_ORDER[sevMin];
@@ -46571,13 +46716,13 @@ async function createIssue(cwd, title, body, labels) {
     error: r.stderr.split(/\r?\n/)[0] ?? `gh exited ${r.outcome}`
   };
 }
-function failDomain19(code, message) {
+function failDomain18(code, message) {
   return { ok: false, error: { code, message } };
 }
 
 // src/tools/scanWordpress.ts
 import { existsSync as existsSync30 } from "node:fs";
-import { join as join37 } from "node:path";
+import { join as join36 } from "node:path";
 
 // src/runners/scannerParsers/phpcs.ts
 var PHPCS_TOOL_NAME = "phpcs";
@@ -46661,8 +46806,8 @@ registerToolModule(
       const parser_inputs = [];
       const inp = input;
       const standard = inp.standard ?? "WordPress";
-      const looksWp = existsSync30(join37(ctx.projectPath, "wp-config.php")) || existsSync30(join37(ctx.projectPath, "wp-config-sample.php")) || existsSync30(join37(ctx.projectPath, "style.css")) || // theme root
-      existsSync30(join37(ctx.projectPath, "readme.txt"));
+      const looksWp = existsSync30(join36(ctx.projectPath, "wp-config.php")) || existsSync30(join36(ctx.projectPath, "wp-config-sample.php")) || existsSync30(join36(ctx.projectPath, "style.css")) || // theme root
+      existsSync30(join36(ctx.projectPath, "readme.txt"));
       const warnings = [];
       if (!looksWp) {
         warnings.push(
@@ -46679,7 +46824,7 @@ registerToolModule(
       if (semgrepBin) {
         tasks.push(
           (async () => {
-            const outFile = join37(reportDir, "sast.json");
+            const outFile = join36(reportDir, "sast.json");
             const args = [
               "--config=p/php",
               "--config=p/wordpress",
@@ -46711,7 +46856,7 @@ registerToolModule(
       if (gitleaksBin) {
         tasks.push(
           (async () => {
-            const outFile = join37(reportDir, "secrets.json");
+            const outFile = join36(reportDir, "secrets.json");
             const r = await runProcess({
               command: "gitleaks",
               args: [
@@ -46741,7 +46886,7 @@ registerToolModule(
       if (trivyBin) {
         tasks.push(
           (async () => {
-            const outFile = join37(reportDir, "deps.json");
+            const outFile = join36(reportDir, "deps.json");
             const r = await runProcess({
               command: "trivy",
               args: [
@@ -46775,7 +46920,7 @@ registerToolModule(
       if (phpcsBin) {
         tasks.push(
           (async () => {
-            const outFile = join37(reportDir, "phpcs.json");
+            const outFile = join36(reportDir, "phpcs.json");
             const r = await runProcess({
               command: "phpcs",
               args: [
@@ -46822,7 +46967,7 @@ registerToolModule(
 // src/tools/wpAudit.ts
 import { existsSync as existsSync31 } from "node:fs";
 import { randomUUID as randomUUID6 } from "node:crypto";
-import { join as join38 } from "node:path";
+import { join as join37 } from "node:path";
 var RETRY_DELAYS_MS = [1e3, 3e3, 9e3];
 var DEFAULT_RISKY_LOGINS = ["admin", "administrator", "root", "wpadmin"];
 var inputSchema15 = {
@@ -46842,23 +46987,23 @@ registerToolModule(tool25);
 async function handler25(input, ctx) {
   const inp = input;
   if (!inp.wp_install_path) {
-    return failDomain20("not_a_wordpress_install", "wp_install_path is required.");
+    return failDomain19("not_a_wordpress_install", "wp_install_path is required.");
   }
   let installPath;
   try {
     installPath = resolveProjectPath(inp.wp_install_path).path;
   } catch (e) {
-    return failDomain20("not_a_wordpress_install", e.message);
+    return failDomain19("not_a_wordpress_install", e.message);
   }
-  if (!existsSync31(join38(installPath, "wp-config.php"))) {
-    return failDomain20(
+  if (!existsSync31(join37(installPath, "wp-config.php"))) {
+    return failDomain19(
       "not_a_wordpress_install",
       `No wp-config.php in ${installPath}`
     );
   }
   const wpBin = await scannerAvailable("wp");
   if (!wpBin) {
-    return failDomain20(
+    return failDomain19(
       "missing_scanner",
       'WP-CLI (`wp`) is not installed. Run install_toolchain with tools=["wp-cli"].'
     );
@@ -47078,14 +47223,14 @@ function normaliseStatus(raw) {
   if (s.includes("added") || s.includes("extra") || s.includes("not in")) return "added";
   return "unknown";
 }
-function failDomain20(code, message) {
+function failDomain19(code, message) {
   return { ok: false, error: { code, message } };
 }
 
 // src/tools/wpVulnCheck.ts
 import { existsSync as existsSync32, mkdirSync as mkdirSync7, readFileSync as readFileSync17, writeFileSync as writeFileSync8 } from "node:fs";
 import { randomUUID as randomUUID7 } from "node:crypto";
-import { join as join39 } from "node:path";
+import { join as join38 } from "node:path";
 
 // src/runners/scannerParsers/wpscan.ts
 var WPSCAN_TOOL_NAME = "wpscan";
@@ -47195,14 +47340,14 @@ registerToolModule(tool26);
 async function handler26(input, ctx) {
   const inp = input;
   if (!inp.target_url && !inp.wp_install_path) {
-    return failDomain21(
+    return failDomain20(
       "unknown_scan_id",
       "Provide either target_url or wp_install_path."
     );
   }
   const wpscanBin = await scannerAvailable("wpscan");
   if (!wpscanBin) {
-    return failDomain21(
+    return failDomain20(
       "missing_scanner",
       'wpscan CLI is not installed. Run install_toolchain with tools=["wpscan"].'
     );
@@ -47212,7 +47357,7 @@ async function handler26(input, ctx) {
   if (!url && inp.wp_install_path) {
     const wpBin = await scannerAvailable("wp");
     if (!wpBin) {
-      return failDomain21(
+      return failDomain20(
         "missing_scanner",
         "wp_install_path was provided but WP-CLI is missing to read the URL. Install wp-cli or provide target_url."
       );
@@ -47226,26 +47371,26 @@ async function handler26(input, ctx) {
     if (r2.outcome === "completed") {
       url = r2.stdout.trim();
     } else {
-      return failDomain21(
+      return failDomain20(
         "scanner_failed",
         `wp option get home failed: ${r2.stderr.split(/\r?\n/)[0] ?? r2.outcome}`
       );
     }
   }
   if (!url) {
-    return failDomain21("scanner_failed", "Could not resolve a target URL for WPScan.");
+    return failDomain20("scanner_failed", "Could not resolve a target URL for WPScan.");
   }
   const token = inp.api_token ?? process.env["WPSCAN_API_TOKEN"] ?? "";
   if (!token) warnings.push("No WPSCAN_API_TOKEN \u2014 public-no-token rate limit applies.");
   const scanId = randomUUID7();
-  const reportDir = join39(
+  const reportDir = join38(
     inp.wp_install_path ?? process.cwd(),
     ".guardian",
     "reports",
     `wpvuln-${scanId.slice(0, 8)}`
   );
   mkdirSync7(reportDir, { recursive: true });
-  const outFile = join39(reportDir, "wpscan.json");
+  const outFile = join38(reportDir, "wpscan.json");
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_vuln_check",
@@ -47328,14 +47473,14 @@ async function handler26(input, ctx) {
     warnings
   };
 }
-function failDomain21(code, message) {
+function failDomain20(code, message) {
   return { ok: false, error: { code, message } };
 }
 
 // src/tools/wpCronAudit.ts
 import { existsSync as existsSync33 } from "node:fs";
 import { randomUUID as randomUUID8 } from "node:crypto";
-import { join as join40 } from "node:path";
+import { join as join39 } from "node:path";
 var inputSchema17 = {
   wp_install_path: external_exports.string().min(1).describe("Path to the directory containing wp-config.php.")
 };
@@ -47374,14 +47519,14 @@ async function handler27(input, ctx) {
   try {
     installPath = resolveProjectPath(inp.wp_install_path).path;
   } catch (e) {
-    return failDomain22("not_a_wordpress_install", e.message);
+    return failDomain21("not_a_wordpress_install", e.message);
   }
-  if (!existsSync33(join40(installPath, "wp-config.php"))) {
-    return failDomain22("not_a_wordpress_install", `No wp-config.php in ${installPath}`);
+  if (!existsSync33(join39(installPath, "wp-config.php"))) {
+    return failDomain21("not_a_wordpress_install", `No wp-config.php in ${installPath}`);
   }
   const wpBin = await scannerAvailable("wp");
   if (!wpBin) {
-    return failDomain22(
+    return failDomain21(
       "missing_scanner",
       'WP-CLI (`wp`) is required for wp_cron_audit. Run install_toolchain with tools=["wp-cli"].'
     );
@@ -47393,7 +47538,7 @@ async function handler27(input, ctx) {
     timeoutMs: 6e4
   });
   if (cronResult.outcome !== "completed") {
-    return failDomain22(
+    return failDomain21(
       "scanner_failed",
       `wp cron event list failed: ${cronResult.stderr.split(/\r?\n/)[0] ?? cronResult.outcome}`
     );
@@ -47483,7 +47628,7 @@ function matchesInactivePlugin(hook, inactivePlugins) {
   }
   return false;
 }
-function failDomain22(code, message) {
+function failDomain21(code, message) {
   return { ok: false, error: { code, message } };
 }
 
@@ -47662,7 +47807,7 @@ var tool29 = {
 registerToolModule(tool29);
 async function handler29(input, ctx) {
   const inp = input;
-  if (!inp.slug) return failDomain23("unknown_scan_id", "slug is required.");
+  if (!inp.slug) return failDomain22("unknown_scan_id", "slug is required.");
   let installedVersion = null;
   let active = null;
   if (inp.wp_install_path) {
@@ -47731,7 +47876,7 @@ async function handler29(input, ctx) {
     hint: knownCves.length > 0 ? `Run wp_vuln_check or deps_audit for a fresh DB lookup before relying on this.` : "No CVEs for this slug in the local DB. Run wp_vuln_check for a fresh online lookup."
   };
 }
-function failDomain23(code, message) {
+function failDomain22(code, message) {
   return { ok: false, error: { code, message } };
 }
 
@@ -47969,7 +48114,7 @@ function countChecksumIssues(meta) {
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID11 } from "node:crypto";
 import { existsSync as existsSync34, readFileSync as readFileSync18, readdirSync as readdirSync11, statSync as statSync7 } from "node:fs";
-import { join as join41, relative as relative2 } from "node:path";
+import { join as join40, relative as relative2 } from "node:path";
 var PATTERNS = [
   {
     id: "dotnet-sql-server-conn",
@@ -48147,7 +48292,7 @@ function collectConfigFiles(root, maxDepth) {
     }
     for (const name of entries) {
       if (SKIP_DIRS.has(name)) continue;
-      const abs = join41(dir, name);
+      const abs = join40(dir, name);
       let stat2;
       try {
         stat2 = statSync7(abs);
@@ -48168,7 +48313,7 @@ function collectConfigFiles(root, maxDepth) {
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
 import { readFileSync as readFileSync19, readdirSync as readdirSync12, statSync as statSync8 } from "node:fs";
-import { join as join42, relative as relative3 } from "node:path";
+import { join as join41, relative as relative3 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
   "net9.0": { tfm: "net9.0", status: "sts-current", hint: "STS until May 2026." },
@@ -48201,7 +48346,7 @@ async function handler34(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain24("not_a_git_repo", e.message);
+    return failDomain23("not_a_git_repo", e.message);
   }
   const projects = collectCsprojFiles(projectPath, 6);
   const rows = [];
@@ -48290,7 +48435,7 @@ function collectCsprojFiles(root, maxDepth) {
     }
     for (const name of entries) {
       if (SKIP_DIRS2.has(name)) continue;
-      const abs = join42(dir, name);
+      const abs = join41(dir, name);
       try {
         const s = statSync8(abs);
         if (s.isDirectory()) walk4(abs, depth + 1);
@@ -48302,14 +48447,14 @@ function collectCsprojFiles(root, maxDepth) {
   walk4(root, 0);
   return out;
 }
-function failDomain24(code, message) {
+function failDomain23(code, message) {
   return { ok: false, error: { code, message } };
 }
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
 import { existsSync as existsSync35, readFileSync as readFileSync20, readdirSync as readdirSync13, statSync as statSync9 } from "node:fs";
-import { join as join43, relative as relative4 } from "node:path";
+import { join as join42, relative as relative4 } from "node:path";
 var RULES = [
   {
     id: "efcore-drop-table",
@@ -48372,7 +48517,7 @@ async function handler35(input, ctx) {
       continue;
     }
     for (const fname of files) {
-      const abs = join43(dir, fname);
+      const abs = join42(dir, fname);
       let content;
       try {
         content = readFileSync20(abs, "utf8");
@@ -48444,7 +48589,7 @@ function findMigrationsDirs(root) {
     }
     for (const name of entries) {
       if (SKIP.has(name)) continue;
-      const abs = join43(dir, name);
+      const abs = join42(dir, name);
       let s;
       try {
         s = statSync9(abs);
@@ -48593,7 +48738,7 @@ function scoreRange(top) {
 // src/tools/scanSkill.ts
 import { createHash as createHash5, randomUUID as randomUUID14 } from "node:crypto";
 import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync10 } from "node:fs";
-import { join as join45 } from "node:path";
+import { join as join44 } from "node:path";
 
 // src/runners/osv.ts
 var OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
@@ -49725,7 +49870,7 @@ import {
   writeFileSync as writeFileSync9
 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { basename as basename2, join as join44 } from "node:path";
+import { basename as basename2, join as join43 } from "node:path";
 var MAX_FILES = 4e3;
 var MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 var MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -49882,7 +50027,7 @@ function looksLikeGitHost(url) {
   return /(github\.com|gitlab\.com|bitbucket\.org)\/[^/]+\/[^/]+\/?$/.test(url);
 }
 async function ingestGit(url) {
-  const dir = mkdtempSync(join44(tmpdir2(), "guardian-scanskill-git-"));
+  const dir = mkdtempSync(join43(tmpdir2(), "guardian-scanskill-git-"));
   try {
     await execa("git", ["clone", "--depth", "1", "--quiet", url, dir], { timeout: 12e4 });
   } catch (e) {
@@ -49907,10 +50052,10 @@ async function ingestUrl(url) {
   if (typeof fetch !== "function") {
     return { ok: false, code: "unsupported_target", message: "No fetch available to download URL." };
   }
-  const dir = mkdtempSync(join44(tmpdir2(), "guardian-scanskill-url-"));
+  const dir = mkdtempSync(join43(tmpdir2(), "guardian-scanskill-url-"));
   const isZip = /\.zip($|\?)/i.test(url);
   const fileName = isZip ? "download.zip" : basename2(url.split("?")[0] ?? "download") || "download";
-  const dest = join44(dir, fileName);
+  const dest = join43(dir, fileName);
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6e4);
@@ -49951,7 +50096,7 @@ async function ingestUrl(url) {
   };
 }
 async function ingestZip(zipPath, ownsParent, parentDir) {
-  const extractDir = mkdtempSync(join44(tmpdir2(), "guardian-scanskill-zip-"));
+  const extractDir = mkdtempSync(join43(tmpdir2(), "guardian-scanskill-zip-"));
   const extracted = await tryExtract(zipPath, extractDir);
   if (!extracted) {
     safeRm(extractDir);
@@ -50008,7 +50153,7 @@ function collectDir(root) {
         truncated = true;
         break;
       }
-      const abs = join44(dir, entry);
+      const abs = join43(dir, entry);
       let s;
       try {
         s = statSync10(abs);
@@ -50158,11 +50303,11 @@ async function handler38(input, ctx, callMeta) {
     }
     const reportPaths = [];
     if (inp.write_reports !== false) {
-      const outDir = join45(basePath, ".guardian", "reports", `skill-audit-${scanId.slice(0, 8)}`);
+      const outDir = join44(basePath, ".guardian", "reports", `skill-audit-${scanId.slice(0, 8)}`);
       try {
         mkdirSync8(outDir, { recursive: true });
-        const sarifPath = join45(outDir, "report.sarif");
-        const jsonPath = join45(outDir, "report.json");
+        const sarifPath = join44(outDir, "report.sarif");
+        const jsonPath = join44(outDir, "report.json");
         writeFileSync10(sarifPath, toSarif(findings, { toolName: "guardian-scanskill" }), "utf8");
         writeFileSync10(
           jsonPath,
@@ -50269,7 +50414,7 @@ function hashFiles(parts) {
 
 // src/tools/mapAttackSurface.ts
 import { readFileSync as readFileSync24 } from "node:fs";
-import { isAbsolute, join as join49, resolve as resolve7 } from "node:path";
+import { isAbsolute, join as join48, resolve as resolve7 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -50306,7 +50451,7 @@ function numProp(value, key) {
 
 // src/surface/collectors/ports.ts
 import { existsSync as existsSync37, readFileSync as readFileSync22, realpathSync } from "node:fs";
-import { basename as basename3, join as join46 } from "node:path";
+import { basename as basename3, join as join45 } from "node:path";
 var DOCKERFILES = ["Dockerfile", "dockerfile"];
 var COMPOSE_FILES = [
   "docker-compose.yml",
@@ -50326,7 +50471,7 @@ function collectPorts(projectPath) {
   };
   const seenDockerfiles = /* @__PURE__ */ new Set();
   for (const name of DOCKERFILES) {
-    const path6 = join46(projectPath, name);
+    const path6 = join45(projectPath, name);
     const canonical = canonicalPath(path6);
     if (canonical === void 0) continue;
     if (seenDockerfiles.has(canonical)) continue;
@@ -50345,7 +50490,7 @@ function collectPorts(projectPath) {
     }
   }
   for (const name of COMPOSE_FILES) {
-    for (const line of readLines(join46(projectPath, name))) {
+    for (const line of readLines(join45(projectPath, name))) {
       const published = /^\s*published:\s*"?(\d+)"?\s*$/.exec(line);
       if (published?.[1] !== void 0) {
         push(Number.parseInt(published[1], 10), name);
@@ -51306,7 +51451,7 @@ function resolveWordpressRoutes(routes) {
 
 // src/surface/scanSemgrep.ts
 import { copyFileSync as copyFileSync2 } from "node:fs";
-import { join as join47 } from "node:path";
+import { join as join46 } from "node:path";
 async function invokeSemgrep(options) {
   const { projectPath, rulesPath, outFile, reportDir } = options;
   const semgrepBin = await scannerAvailable("semgrep");
@@ -51322,7 +51467,7 @@ async function invokeSemgrep(options) {
   if (dockerBin === null) return null;
   let containerRules;
   try {
-    const stagedRules = join47(reportDir, "routes.yml");
+    const stagedRules = join46(reportDir, "routes.yml");
     copyFileSync2(rulesPath, stagedRules);
     containerRules = toContainerPath(projectPath, stagedRules);
   } catch (e) {
@@ -51352,14 +51497,14 @@ function buildToolRun(run, via) {
   if (ok) {
     return via ? { name: "semgrep", status: "ok", reason: `ran via ${via}` } : { name: "semgrep", status: "ok" };
   }
-  const firstLine = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  const reason = via ? `${via}: ${firstLine ?? "fallback failed"}` : firstLine ?? "unknown";
+  const firstLine2 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  const reason = via ? `${via}: ${firstLine2 ?? "fallback failed"}` : firstLine2 ?? "unknown";
   return { name: "semgrep", status: "failed", reason };
 }
 
 // src/surface/specDiscover.ts
 import { readFileSync as readFileSync23, readdirSync as readdirSync15, statSync as statSync11 } from "node:fs";
-import { join as join48, relative as relative5, resolve as resolve6, sep as sep2 } from "node:path";
+import { join as join47, relative as relative5, resolve as resolve6, sep as sep2 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
 var SPEC_BASENAMES = /* @__PURE__ */ new Set(["openapi", "swagger", "api-docs"]);
@@ -51418,10 +51563,10 @@ function walk3(root, dir) {
   for (const entry of entries) {
     if (entry.isDirectory()) {
       if (FS_EXCLUDE.has(entry.name)) continue;
-      out.push(...walk3(root, join48(dir, entry.name)));
+      out.push(...walk3(root, join47(dir, entry.name)));
     } else if (entry.isFile()) {
       if (isSpecCandidate(root, dir, entry.name)) {
-        out.push(join48(dir, entry.name));
+        out.push(join47(dir, entry.name));
       }
     }
   }
@@ -51825,8 +51970,8 @@ async function handler39(input, ctx) {
   }
   const includeEnvVars = inp.include_env_vars !== false;
   const reportDir = ensureReportDir(projectPath, treeHash, "surface");
-  const outFile = join49(reportDir, "surface.json");
-  const rulesPath = join49(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
+  const outFile = join48(reportDir, "surface.json");
+  const rulesPath = join48(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
   const invocation = await invokeSemgrep({ projectPath, rulesPath, outFile, reportDir });
   if (invocation === null) {
     return degradedResult(
@@ -51907,7 +52052,7 @@ function readSources(parsed, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path6 of collectAllFiles(parsed)) {
     try {
-      const buffer = readFileSync24(isAbsolute(path6) ? path6 : join49(projectPath, path6));
+      const buffer = readFileSync24(isAbsolute(path6) ? path6 : join48(projectPath, path6));
       const text = buffer.toString("utf8");
       if (Buffer.byteLength(text, "utf8") !== buffer.length) continue;
       sources.set(path6, text);
@@ -52049,7 +52194,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path6) {
-  return resolve7(isAbsolute(path6) ? path6 : join49(projectPath, path6));
+  return resolve7(isAbsolute(path6) ? path6 : join48(projectPath, path6));
 }
 function resultsArrayOf(parsed) {
   const results = parsed.results;
@@ -52235,7 +52380,7 @@ function degradedResult(toolsRun, missingTools, note, ctx) {
 
 // src/tools/scanDast.ts
 import { randomUUID as randomUUID15 } from "node:crypto";
-import { join as join52 } from "node:path";
+import { join as join51 } from "node:path";
 
 // src/dast/plan.ts
 var READ_METHODS = ["GET", "HEAD", "OPTIONS"];
@@ -52789,7 +52934,7 @@ function armDeadline(ms, hostSignal) {
 
 // src/dast/evidence.ts
 import { writeFileSync as writeFileSync11 } from "node:fs";
-import { join as join50 } from "node:path";
+import { join as join49 } from "node:path";
 var EVIDENCE_BODY_CHARS = 2e3;
 var MAX_EVIDENCE_FILES = 200;
 function toExchange(result) {
@@ -52866,7 +53011,7 @@ function writeEvidenceFiles(dir, records, redact) {
     }
     try {
       writeFileSync11(
-        join50(dir, `${record3.fingerprint}.json`),
+        join49(dir, `${record3.fingerprint}.json`),
         redact(JSON.stringify(record3, null, 2)),
         "utf8"
       );
@@ -52899,7 +53044,7 @@ function livenessMessage(target, liveness, timeoutMs) {
 }
 
 // src/dast/passes.ts
-import { join as join51 } from "node:path";
+import { join as join50 } from "node:path";
 
 // src/dast/nuclei.ts
 import { dirname as dirname10 } from "node:path";
@@ -52993,8 +53138,8 @@ async function invokeNuclei(opts) {
 }
 function interpretRun(run) {
   if (run.outcome === "completed") return { ok: true };
-  const firstLine = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  return { ok: false, reason: firstLine ?? `nuclei ${run.outcome}` };
+  const firstLine2 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  return { ok: false, reason: firstLine2 ?? `nuclei ${run.outcome}` };
 }
 
 // src/dast/normalizeNuclei.ts
@@ -53385,7 +53530,7 @@ async function runNuclei(opts) {
       missing: true
     };
   }
-  const outputPath = join51(opts.outputDir, "nuclei.jsonl");
+  const outputPath = join50(opts.outputDir, "nuclei.jsonl");
   const run = await invokeNuclei({
     binaryPath: opts.binaryPath,
     targetUrl: opts.origin,
@@ -53910,7 +54055,7 @@ function toInsertInput(finding2, scanId, evidenceDir) {
     raw: {
       check: check2,
       evidence_id,
-      evidence_file: evidenceDir === null ? null : join52(evidenceDir, `${finding2.fingerprint}.json`)
+      evidence_file: evidenceDir === null ? null : join51(evidenceDir, `${finding2.fingerprint}.json`)
     }
   };
 }
@@ -54411,7 +54556,7 @@ function collectAnonymousExposures(ctx, projectPath) {
 
 // src/tools/createFixPr.ts
 import { existsSync as existsSync39, readFileSync as readFileSync25 } from "node:fs";
-import { join as join54 } from "node:path";
+import { join as join53 } from "node:path";
 
 // src/fixpr/apply.ts
 async function applyGroup(opts) {
@@ -54955,12 +55100,12 @@ function headOf(stdout, stderr) {
 // src/fixpr/worktree.ts
 import { existsSync as existsSync38, mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { join as join53 } from "node:path";
+import { join as join52 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
 async function createWorktree(opts) {
   let dir;
   try {
-    dir = mkdtempSync2(join53(tmpdir3(), WORKTREE_DIR_PREFIX));
+    dir = mkdtempSync2(join52(tmpdir3(), WORKTREE_DIR_PREFIX));
   } catch (e) {
     return { ok: false, reason: `could not create a temp directory: ${errorMessage2(e)}` };
   }
@@ -55134,10 +55279,10 @@ async function handler42(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain25("not_a_git_repo", e.message);
+    return failDomain24("not_a_git_repo", e.message);
   }
   if (!await isGitRepo(projectPath)) {
-    return failDomain25("not_a_git_repo", `'${projectPath}' is not inside a git working tree.`);
+    return failDomain24("not_a_git_repo", `'${projectPath}' is not inside a git working tree.`);
   }
   const severityMin = inp.severity_min ?? DEFAULT_SEVERITY_MIN;
   const sources = inp.sources ?? DEFAULT_SOURCES;
@@ -55313,7 +55458,7 @@ function prNote(pr) {
 function readManifests(worktreePath) {
   const files = {};
   for (const name of TEST_MANIFESTS) {
-    const path6 = join54(worktreePath, name);
+    const path6 = join53(worktreePath, name);
     if (!existsSync39(path6)) continue;
     try {
       files[name] = readFileSync25(path6, "utf8");
@@ -55427,7 +55572,7 @@ function findingsForGroup(allFindings, group) {
 function errorMessage3(e) {
   return e instanceof Error ? e.message : String(e);
 }
-function failDomain25(code, message) {
+function failDomain24(code, message) {
   return { ok: false, error: { code, message } };
 }
 
