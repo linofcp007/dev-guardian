@@ -14,7 +14,7 @@
  *   when one scanner inside a composite run was skipped.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveBinary } from '../platform/pkgManagerDetect.js';
 
@@ -65,28 +65,4 @@ export function readJsonSafe(path: string): string | null {
   } catch {
     return null;
   }
-}
-
-/**
- * Find the newest direct child directory of `parent` whose name starts with
- * `prefix` and was created at or after `sinceMs`. Used by `security_scan_full`
- * to locate the timestamped output of `scripts/scan/full-security-scan.sh`
- * without modifying the script.
- */
-export function findNewestDir(parent: string, prefix: string, sinceMs: number): string | null {
-  if (!existsSync(parent)) return null;
-  let best: { path: string; mtimeMs: number } | null = null;
-  for (const entry of readdirSync(parent)) {
-    if (!entry.startsWith(prefix)) continue;
-    const abs = join(parent, entry);
-    try {
-      const s = statSync(abs);
-      if (!s.isDirectory()) continue;
-      if (s.mtimeMs < sinceMs) continue;
-      if (!best || s.mtimeMs > best.mtimeMs) best = { path: abs, mtimeMs: s.mtimeMs };
-    } catch {
-      /* skip transient */
-    }
-  }
-  return best?.path ?? null;
 }

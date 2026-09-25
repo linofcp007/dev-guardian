@@ -1,5 +1,6 @@
 /**
- * Integration tests for `bug_hunt`, `quality_check`, and `review_pr`.
+ * Integration tests for `bug_hunt`. (`quality_check` and `review_pr` have
+ * their own files: `qualityCheck.test.ts`, `reviewPr.test.ts`.)
  *
  * Same pattern as `securityTools.test.ts`: mock `runProcess`,
  * `runShellScript`, and `scannerAvailable` to drop canned reports and
@@ -26,8 +27,8 @@ vi.mock('../../src/tools/scanHelpers.js', async () => {
   return { ...actual, scannerAvailable: vi.fn() };
 });
 
-// review_pr also calls execa directly (to resolve refs + diff files), so
-// stub that module too.
+// execa is stubbed too: git (the tree hash) answers with canned output, so
+// no test here depends on the host's git.
 vi.mock('execa', () => ({
   execa: vi.fn(async (_cmd: string, args: string[]) => {
     if (args.includes('symbolic-ref')) {
@@ -99,10 +100,6 @@ function makePlugin(projectPath: string): PluginContext {
 }
 
 const semgrepFx = () => readFileSync(join(FIX, 'semgrep.json'), 'utf8');
-const ruffFx = () => readFileSync(join(FIX, 'ruff.json'), 'utf8');
-const jscpdFx = () => readFileSync(join(FIX, 'jscpd.json'), 'utf8');
-const gitleaksFx = () => readFileSync(join(FIX, 'gitleaks.json'), 'utf8');
-const trivyFsFx = () => readFileSync(join(FIX, 'trivy-fs.json'), 'utf8');
 
 beforeEach(() => {
   vi.mocked(runProcess).mockReset();
@@ -1190,91 +1187,4 @@ describe('bug_hunt', () => {
       expect(getArgs()).not.toContain('--config=p/javascript');
     },
   );
-});
-
-describe('quality_check', () => {
-  it('routes jscpd subdir + ruff.json to their parsers', async () => {
-    const project = tempProject();
-    const plugin = makePlugin(project);
-
-    vi.mocked(runShellScript).mockImplementation(async () => {
-      const reportDir = join(project, '.guardian', 'reports', 'quality-20260526');
-      mkdirSync(join(reportDir, 'dup'), { recursive: true });
-      writeFileSync(join(reportDir, 'dup', 'jscpd-report.json'), jscpdFx(), 'utf8');
-      writeFileSync(join(reportDir, 'ruff.json'), ruffFx(), 'utf8');
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
-
-    const tool = getTool('quality_check');
-    const r = (await tool.handler({ project_path: project }, plugin)) as {
-      ok: true;
-      tools_run: { name: string; status: string }[];
-      findings_count_by_severity: Record<string, number>;
-    };
-    expect(r.ok).toBe(true);
-    expect(r.tools_run.map((t) => t.name)).toEqual(expect.arrayContaining(['jscpd', 'ruff']));
-    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
-    // 2 jscpd duplicates + 3 ruff = 5
-    expect(total).toBe(5);
-  });
-
-  it('surfaces missing_tools when the script produced no reports', async () => {
-    const project = tempProject();
-    const plugin = makePlugin(project);
-    vi.mocked(runShellScript).mockResolvedValue({
-      outcome: 'completed',
-      exitCode: 0,
-      stdout: '',
-      stderr: '',
-      truncated: false,
-    });
-
-    const tool = getTool('quality_check');
-    const r = (await tool.handler({ project_path: project }, plugin)) as {
-      ok: true;
-      missing_tools: string[];
-    };
-    expect(r.ok).toBe(true);
-    expect(r.missing_tools).toEqual(expect.arrayContaining(['jscpd', 'ruff']));
-  });
-});
-
-describe('review_pr', () => {
-  it('resolves base_ref + diff and routes diff-scoped reports to parsers', async () => {
-    const project = tempProject();
-    const plugin = makePlugin(project);
-
-    vi.mocked(runShellScript).mockImplementation(async () => {
-      const reportDir = join(project, '.guardian', 'reports', 'review-20260526');
-      mkdirSync(reportDir, { recursive: true });
-      writeFileSync(join(reportDir, 'sast.json'), semgrepFx(), 'utf8');
-      writeFileSync(join(reportDir, 'secrets.json'), gitleaksFx(), 'utf8');
-      writeFileSync(join(reportDir, 'deps.json'), trivyFsFx(), 'utf8');
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
-
-    const tool = getTool('review_pr');
-    const r = (await tool.handler({ project_path: project }, plugin)) as {
-      ok: true;
-      tools_run: { name: string; status: string }[];
-      findings_count_by_severity: Record<string, number>;
-    };
-    expect(r.ok).toBe(true);
-    expect(r.tools_run.map((t) => t.name).sort()).toEqual(['gitleaks', 'semgrep', 'trivy']);
-    // 3 semgrep + 2 gitleaks + 3 trivy fs = 8 findings
-    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
-    expect(total).toBe(8);
-  });
 });

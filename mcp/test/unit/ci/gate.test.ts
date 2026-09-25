@@ -144,6 +144,25 @@ describe('evaluateGate — coverage gaps beyond "missing" (guards computeCoverag
     expect(v.coverageGaps.some((g) => g.includes('scan_sast'))).toBe(true);
   });
 
+  it('says a scanner that ran with reduced coverage did so — not that it is "not installed"', () => {
+    // The convention scanCoverage.ts documents: an `ok` entry whose name is
+    // also in missing_tools ran, but did not cover everything (e.g. files
+    // gitleaks could not read). The gap must be reported — and truthfully.
+    const v = evaluateGate(input({
+      steps: [
+        step({
+          tool: 'security_scan_full',
+          tools_run: [{ name: 'gitleaks-working-tree', status: 'ok', reason: '1 file(s) could not be read' }],
+          missing_tools: ['gitleaks-working-tree'],
+        }),
+      ],
+    }));
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.coverageGaps).toEqual([
+      'security_scan_full: gitleaks-working-tree ran with reduced coverage (1 file(s) could not be read)',
+    ]);
+  });
+
   it('reports a failed tool without a parenthetical when no reason is given', () => {
     // Companion to the "reason given" failed-tool case above: pins the other
     // side of the `run.reason ? ... : ''` branch so both are exercised.

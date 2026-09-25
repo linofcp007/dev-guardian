@@ -10,7 +10,6 @@
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import {
-  mkdirSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs';
@@ -114,7 +113,6 @@ function makePlugin(projectPath: string): PluginContext {
 const semgrepFx = () => readFileSync(join(FIX, 'semgrep.json'), 'utf8');
 const trivyFsFx = () => readFileSync(join(FIX, 'trivy-fs.json'), 'utf8');
 const gitleaksFx = () => readFileSync(join(FIX, 'gitleaks.json'), 'utf8');
-const banditFx = () => readFileSync(join(FIX, 'bandit.json'), 'utf8');
 
 beforeEach(() => {
   vi.mocked(runProcess).mockReset();
@@ -343,63 +341,46 @@ describe('diff_scans', () => {
 
 // ---------------------------------------------------------------------- audit_executive
 
+/**
+ * The scanners every audit sub-tool runs, answered by command: each writes
+ * its fixture where the tool asked for it. `security_scan_full` and
+ * `quality_check` run their scanners directly now, not through a script.
+ */
+function fakeScanners(semgrepReport: () => string) {
+  return async (opts: { command: string; args?: string[] }) => {
+    const args = opts.args ?? [];
+    const after = (flag: string): string | undefined => {
+      const i = args.indexOf(flag);
+      return i >= 0 ? args[i + 1] : undefined;
+    };
+    if (opts.command === 'semgrep') {
+      const out = after('--output');
+      if (out) writeFileSync(out, semgrepReport(), 'utf8');
+      return { outcome: 'failed' as const, exitCode: 1, stdout: '', stderr: '', truncated: false };
+    }
+    if (opts.command === 'gitleaks') {
+      const report = args.find((a) => a.startsWith('--report-path='));
+      if (report) writeFileSync(report.slice('--report-path='.length), gitleaksFx(), 'utf8');
+      return { outcome: 'failed' as const, exitCode: 1, stdout: '', stderr: '', truncated: false };
+    }
+    const out = after('--output');
+    if (out) writeFileSync(out, trivyFsFx(), 'utf8');
+    return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+  };
+}
+
 describe('audit_executive', () => {
-  it('sequences the 4 sub-tools and aggregates counts', async () => {
+  it('sequences the 4 sub-tools and aggregates counts — with no bash shell on the host', async () => {
     const project = tempProject();
+    writeFileSync(join(project, 'app.js'), 'res.send(req.query.q);\n', 'utf8');
     const plugin = makePlugin(project);
+    // None of the sub-tools runs a shell script any more.
+    plugin.shell = null;
 
-    // Mock scannerAvailable so deps_audit / compliance_check see Trivy.
-    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
-
-    // security_scan_full uses runShellScript with full-security-scan.sh and
-    // drops a reports directory containing 5 JSON files. We also handle
-    // quality_check (the same mock fires) by detecting its scriptPath via
-    // the args.
-    vi.mocked(runShellScript).mockImplementation(async (opts) => {
-      if (opts.scriptPath.endsWith('full-security-scan.sh')) {
-        const reportDir = join(
-          project,
-          '.guardian',
-          'reports',
-          `security-${Date.now()}`,
-        );
-        mkdirSync(reportDir, { recursive: true });
-        writeFileSync(join(reportDir, 'sast.json'), semgrepFx(), 'utf8');
-        writeFileSync(join(reportDir, 'secrets.json'), gitleaksFx(), 'utf8');
-        writeFileSync(join(reportDir, 'deps.json'), trivyFsFx(), 'utf8');
-        writeFileSync(join(reportDir, 'bandit.json'), banditFx(), 'utf8');
-      } else if (opts.scriptPath.endsWith('quality-scan.sh')) {
-        const reportDir = join(
-          project,
-          '.guardian',
-          'reports',
-          `quality-${Date.now()}`,
-        );
-        mkdirSync(reportDir, { recursive: true });
-        // No reports → quality_check surfaces tools as missing.
-      }
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
-
-    // deps_audit + compliance_check both spawn `trivy fs ...` via runProcess.
-    vi.mocked(runProcess).mockImplementation(async (opts) => {
-      const outIdx = opts.args?.findIndex((a) => a === '--output');
-      const path = outIdx !== undefined && outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
-      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'docker' || name === 'dotnet' ? null : `/fake/bin/${name}`,
+    );
+    vi.mocked(runProcess).mockImplementation(fakeScanners(semgrepFx));
 
     const r = (await getTool('audit_executive').handler(
       { project_path: project },
@@ -428,46 +409,18 @@ describe('audit_executive', () => {
 
     // The audit scan row exists and is completed.
     expect(plugin.storage.scans.getById(r.scan_id)?.status).toBe('completed');
+    expect(vi.mocked(runShellScript)).not.toHaveBeenCalled();
   });
 
   it('emits deltas on the second consecutive audit', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);
-    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'docker' || name === 'dotnet' ? null : `/fake/bin/${name}`,
+    );
 
     let semgrepFindings = semgrepFx();
-
-    vi.mocked(runShellScript).mockImplementation(async (opts) => {
-      if (opts.scriptPath.endsWith('full-security-scan.sh')) {
-        const reportDir = join(
-          project,
-          '.guardian',
-          'reports',
-          `security-${Date.now()}-${Math.random()}`,
-        );
-        mkdirSync(reportDir, { recursive: true });
-        writeFileSync(join(reportDir, 'sast.json'), semgrepFindings, 'utf8');
-      }
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
-    vi.mocked(runProcess).mockImplementation(async (opts) => {
-      const outIdx = opts.args?.findIndex((a) => a === '--output');
-      const path = outIdx !== undefined && outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
-      if (path) writeFileSync(path, '{}', 'utf8');
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
+    vi.mocked(runProcess).mockImplementation(fakeScanners(() => semgrepFindings));
 
     const r1 = (await getTool('audit_executive').handler(
       { project_path: project },

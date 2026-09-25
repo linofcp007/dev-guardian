@@ -112,9 +112,21 @@ export function evaluateGate(input: GateInput): GateVerdict {
       continue;
     }
 
+    // A name in missing_tools that ALSO has an `ok` run ran, but did not
+    // cover everything (files it could not read, packages that did not
+    // compile) — scanCoverage.ts's own convention. Calling that "not
+    // installed" would send the reader to reinstall a working scanner.
+    const ranOk = new Map(
+      step.tools_run.filter((run) => run.status === 'ok').map((run) => [run.name, run.reason] as const),
+    );
     for (const missing of step.missing_tools) {
       allMissingTools.push(missing);
-      coverageGaps.push(`${step.tool}: ${missing} not installed`);
+      if (ranOk.has(missing)) {
+        const reason = ranOk.get(missing);
+        coverageGaps.push(`${step.tool}: ${missing} ran with reduced coverage${reason ? ` (${reason})` : ''}`);
+      } else {
+        coverageGaps.push(`${step.tool}: ${missing} not installed`);
+      }
     }
 
     for (const run of step.tools_run) {

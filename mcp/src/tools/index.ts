@@ -29,6 +29,19 @@ export interface ToolCallMeta {
    * SIGTERM the child process tree.
    */
   signal?: AbortSignal;
+  /**
+   * Set only by an orchestrator (`security_scan_full`) running this tool as
+   * one of its children: the scan-tool factory records it in the child's
+   * `meta.parent_scan_id`. Never set by the MCP host.
+   */
+  parentScanId?: string;
+  /**
+   * Set only with `parentScanId`: the tree hash the orchestrator computed for
+   * the same project moments before, so its children do not re-hash the
+   * whole tree once each. Omitted when a child may have changed the tree
+   * (a Semgrep autofix) since.
+   */
+  treeHash?: string;
 }
 
 export interface ToolModule {

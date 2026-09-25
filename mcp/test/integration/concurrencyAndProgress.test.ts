@@ -17,7 +17,7 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -36,6 +36,7 @@ vi.mock('../../src/tools/scanHelpers.js', async () => {
   return { ...actual, scannerAvailable: vi.fn() };
 });
 
+import { runProcess, type ProcessRunOptions, type ProcessRunResult } from '../../src/runners/processRunner.js';
 import { runShellScript } from '../../src/runners/shellRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 
@@ -82,46 +83,73 @@ function getTool(name: string) {
   return t;
 }
 
+/** Every scanner the children run writes its fixture where it was asked to. */
+let scannerCalls = 0;
+async function fakeScanner(opts: ProcessRunOptions): Promise<ProcessRunResult> {
+  scannerCalls += 1;
+  const args = opts.args ?? [];
+  const after = (flag: string): string | undefined => {
+    const i = args.indexOf(flag);
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+  const fixture = (name: string): string => readFileSync(join(FIX, name), 'utf8');
+  if (opts.command === 'semgrep') {
+    const out = after('--output');
+    if (out) {
+      writeFileSync(out, JSON.stringify({ ...JSON.parse(fixture('semgrep.json')), paths: { scanned: ['a.js'] } }));
+    }
+  } else if (opts.command === 'gitleaks') {
+    const report = args.find((a) => a.startsWith('--report-path='));
+    if (report) writeFileSync(report.slice('--report-path='.length), fixture('gitleaks.json'));
+  } else if (opts.command === 'trivy') {
+    const out = after('--output');
+    if (out) writeFileSync(out, fixture(args[0] === 'fs' ? 'trivy-fs.json' : 'trivy-dockerfile.json'));
+  }
+  // Yield so two parallel scans interleave.
+  await new Promise((r) => setTimeout(r, 5));
+  return { outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false };
+}
+
 beforeEach(() => {
+  scannerCalls = 0;
   vi.mocked(runShellScript).mockReset();
+  vi.mocked(runProcess).mockReset();
+  vi.mocked(runProcess).mockImplementation(fakeScanner);
   vi.mocked(scannerAvailable).mockReset();
+  vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+    name === 'docker' || name === 'dotnet' ? null : `/fake/bin/${name}`,
+  );
 });
 
 afterEach(() => {
   vi.mocked(runShellScript).mockReset();
+  vi.mocked(runProcess).mockReset();
   vi.mocked(scannerAvailable).mockReset();
 });
 
+function projectWithFile(): string {
+  const project = tempProject();
+  writeFileSync(join(project, 'a.js'), 'res.send(req.query.q);\n');
+  return project;
+}
+
 describe('cache + concurrency + progress', () => {
   it('second call within the cache window returns cached scan_id', async () => {
-    const project = tempProject();
+    const project = projectWithFile();
     const plugin = makePlugin(project, []);
-
-    vi.mocked(runShellScript).mockImplementation(async () => {
-      const dir = join(project, '.guardian', 'reports', `security-${Date.now()}`);
-      mkdirSync(dir, { recursive: true });
-      // Every scanner's report, not only Semgrep's: only a fully covered run
-      // is served from the cache (a run with gitleaks or Trivy missing must
-      // scan again once they are installed — see scanToolFactory.ts).
-      const { readFileSync } = await import('node:fs');
-      writeFileSync(join(dir, 'sast.json'), readFileSync(join(FIX, 'semgrep.json'), 'utf8'), 'utf8');
-      writeFileSync(join(dir, 'secrets.json'), readFileSync(join(FIX, 'gitleaks.json'), 'utf8'), 'utf8');
-      writeFileSync(join(dir, 'deps.json'), readFileSync(join(FIX, 'trivy-fs.json'), 'utf8'), 'utf8');
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
 
     const tool = getTool('security_scan_full');
     const r1 = (await tool.handler({ project_path: project }, plugin)) as {
       ok: true;
       scan_id: string;
       cached?: boolean;
+      coverage?: string;
     };
+    // Every scanner ran: only a fully covered run is served from the cache
+    // (a run with gitleaks or Trivy missing must scan again once they are
+    // installed — see scanToolFactory.ts).
+    expect(r1.coverage).toBe('full');
+    const callsAfterFirst = scannerCalls;
     const r2 = (await tool.handler({ project_path: project }, plugin)) as {
       ok: true;
       scan_id: string;
@@ -133,40 +161,14 @@ describe('cache + concurrency + progress', () => {
     expect(r2.ok).toBe(true);
     expect(r2.cached).toBe(true);
     expect(r2.scan_id).toBe(r1.scan_id);
-    // runShellScript called exactly once — second call was a cache hit.
-    expect(vi.mocked(runShellScript)).toHaveBeenCalledTimes(1);
+    // No scanner ran again — the second call was a cache hit.
+    expect(scannerCalls).toBe(callsAfterFirst);
+    expect(vi.mocked(runShellScript)).not.toHaveBeenCalled();
   });
 
   it('two parallel scans against the same project both complete OK', async () => {
-    const project = tempProject();
+    const project = projectWithFile();
     const plugin = makePlugin(project, []);
-
-    let invocations = 0;
-    vi.mocked(runShellScript).mockImplementation(async () => {
-      invocations += 1;
-      const dir = join(
-        project,
-        '.guardian',
-        'reports',
-        `security-${Date.now()}-${invocations}`,
-      );
-      mkdirSync(dir, { recursive: true });
-      const fxRaw = (await import('node:fs')).readFileSync(
-        join(FIX, 'semgrep.json'),
-        'utf8',
-      );
-      writeFileSync(join(dir, 'sast.json'), fxRaw, 'utf8');
-      // Yield to the event loop so the second scan's tree-hash check runs
-      // before this one completes — simulates a tight race.
-      await new Promise((r) => setTimeout(r, 5));
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
 
     const tool = getTool('security_scan_full');
     const [r1, r2] = await Promise.all([
@@ -177,9 +179,9 @@ describe('cache + concurrency + progress', () => {
     expect(r1.ok).toBe(true);
     expect(r2.ok).toBe(true);
     // Both completed without crashing the storage — verify by inspecting
-    // history.
-    const history = plugin.storage.scans.listHistory(10);
-    expect(history.length).toBeGreaterThanOrEqual(2);
+    // history: two parents and their children, every one completed.
+    const history = plugin.storage.scans.listHistory(20);
+    expect(history.filter((s) => s.scan_type === 'security_full')).toHaveLength(2);
     expect(history.every((s) => s.status === 'completed')).toBe(true);
   });
 
@@ -187,23 +189,6 @@ describe('cache + concurrency + progress', () => {
     const project = tempProject();
     const sent: ProgressPayload[] = [];
     const plugin = makePlugin(project, sent);
-
-    vi.mocked(runShellScript).mockImplementation(async () => {
-      const dir = join(project, '.guardian', 'reports', `security-${Date.now()}`);
-      mkdirSync(dir, { recursive: true });
-      const fxRaw = (await import('node:fs')).readFileSync(
-        join(FIX, 'semgrep.json'),
-        'utf8',
-      );
-      writeFileSync(join(dir, 'sast.json'), fxRaw, 'utf8');
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
 
     // For this test we synthesise a progress emitter manually because the
     // factory wires its own. To force the factory's emitter to actually
