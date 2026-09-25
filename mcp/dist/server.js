@@ -37116,6 +37116,341 @@ function resolveVersion() {
   return FALLBACK_VERSION;
 }
 
+// src/storage/db.ts
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync as existsSync4, mkdirSync, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { dirname as dirname4, join as join4, resolve as resolve2 } from "node:path";
+
+// src/storage/migrations/runner.ts
+import { existsSync as existsSync3, readdirSync, readFileSync as readFileSync5 } from "node:fs";
+import { dirname as dirname3, join as join3 } from "node:path";
+import { fileURLToPath as fileURLToPath5 } from "node:url";
+function resolveMigrationsDir() {
+  const here = dirname3(fileURLToPath5(import.meta.url));
+  const candidates2 = [here, join3(here, "storage", "migrations"), join3(here, "migrations")];
+  for (const dir of candidates2) {
+    try {
+      if (existsSync3(dir) && readdirSync(dir).some((f) => MIGRATION_FILE.test(f))) return dir;
+    } catch {
+    }
+  }
+  return here;
+}
+var MIGRATION_FILE = /^(\d+)_(.+)\.sql$/;
+var MIGRATIONS_DIR = resolveMigrationsDir();
+function runMigrations(db) {
+  const migrations = listMigrations();
+  ensureSchemaMetaTable(db);
+  for (const migration of migrations) {
+    if (migration.version <= getCurrentVersion(db)) continue;
+    applyMigration(db, migration);
+  }
+}
+function ensureSchemaMetaTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_meta (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `);
+}
+function getCurrentVersion(db) {
+  const row = db.prepare("SELECT value FROM schema_meta WHERE key = 'version'").get();
+  if (!row) return 0;
+  const n2 = Number.parseInt(row.value, 10);
+  return Number.isFinite(n2) ? n2 : 0;
+}
+function setVersion(db, version2) {
+  db.prepare(
+    `INSERT INTO schema_meta(key, value) VALUES('version', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run(String(version2));
+}
+function listMigrations(dir = MIGRATIONS_DIR) {
+  const migrations = [];
+  for (const f of readdirSync(dir)) {
+    const match = MIGRATION_FILE.exec(f);
+    if (!match) continue;
+    const versionPart = match[1];
+    const namePart = match[2];
+    if (versionPart === void 0 || namePart === void 0) continue;
+    migrations.push({
+      version: Number.parseInt(versionPart, 10),
+      name: namePart,
+      filePath: join3(dir, f)
+    });
+  }
+  migrations.sort((a2, b) => a2.version - b.version);
+  for (let i2 = 1; i2 < migrations.length; i2++) {
+    const prev = migrations[i2 - 1];
+    const cur = migrations[i2];
+    if (prev !== void 0 && cur !== void 0 && prev.version === cur.version) {
+      throw new Error(
+        `Duplicate migration number ${cur.version}: '${prev.name}' and '${cur.name}' in ${dir}. Renumber one of them to the next unused number.`
+      );
+    }
+  }
+  return migrations;
+}
+function applyMigration(db, migration) {
+  const sql = readFileSync5(migration.filePath, "utf8");
+  db.transaction(() => {
+    if (migration.version <= getCurrentVersion(db)) return;
+    db.exec(sql);
+    setVersion(db, migration.version);
+  })();
+}
+
+// src/storage/db.ts
+var sqliteModule;
+function loadSqlite() {
+  sqliteModule ??= createRequire(import.meta.url)("node:sqlite");
+  return sqliteModule;
+}
+var NODE_SQLITE_REQUIRED = "dev-guardian requires Node.js >= 22.13 (node:sqlite)";
+function nodeSqliteAvailable() {
+  try {
+    loadSqlite();
+    return true;
+  } catch {
+    return false;
+  }
+}
+var BUSY_TIMEOUT_MS = 5e3;
+var GuardianStatement = class {
+  constructor(stmt) {
+    this.stmt = stmt;
+  }
+  stmt;
+  run(...params) {
+    const info = this.stmt.run(...params);
+    return { changes: Number(info.changes), lastInsertRowid: info.lastInsertRowid };
+  }
+  get(...params) {
+    return this.stmt.get(...params);
+  }
+  all(...params) {
+    return this.stmt.all(...params);
+  }
+};
+var GuardianDatabase = class {
+  raw;
+  txDepth = 0;
+  /**
+   * The path passed to the constructor (or `':memory:'`). Mirrors
+   * better-sqlite3's `db.name`, which `healthStatus` reads to stat the DB file.
+   */
+  name;
+  constructor(source) {
+    if (typeof source === "string") {
+      this.raw = new (loadSqlite()).DatabaseSync(source);
+      this.name = source;
+    } else {
+      this.raw = source;
+      this.name = "";
+    }
+    this.raw.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  }
+  prepare(source) {
+    return new GuardianStatement(this.raw.prepare(source));
+  }
+  /** Run one or more statements for their side effects (DDL, PRAGMA, BEGIN…). */
+  exec(sql) {
+    this.raw.exec(sql);
+  }
+  /** better-sqlite3-style PRAGMA setter. Any returned row is intentionally ignored. */
+  pragma(source) {
+    this.raw.exec(`PRAGMA ${source}`);
+  }
+  /**
+   * Wraps `fn` in a transaction and returns a callable, mirroring
+   * better-sqlite3's `db.transaction(fn)`. Nesting-aware: the outermost call
+   * uses BEGIN IMMEDIATE/COMMIT/ROLLBACK, inner calls use SAVEPOINTs — so the
+   * repos' `tx(args)` semantics carry over unchanged.
+   *
+   * `BEGIN IMMEDIATE`, not a deferred `BEGIN`: a deferred transaction takes
+   * the write lock only at its first write, and if another connection wrote
+   * in between, that upgrade fails with SQLITE_BUSY without ever consulting
+   * the busy timeout. Taking the lock up front is what lets the timeout work.
+   *
+   * On failure, the ORIGINAL error is what the caller sees. SQLite rolls the
+   * whole transaction back by itself on some errors (`RAISE(ROLLBACK)`, a full
+   * disk, I/O errors); an unconditional `ROLLBACK` then throws
+   * `cannot rollback - no transaction is active`, which replaced the error
+   * that explained what went wrong and skipped the depth reset, leaving every
+   * later "transaction" on this connection a deferred SAVEPOINT.
+   */
+  transaction(fn) {
+    return (...args) => {
+      const depth = this.txDepth;
+      const top = depth === 0;
+      this.raw.exec(top ? "BEGIN IMMEDIATE" : `SAVEPOINT sp_${depth}`);
+      this.txDepth = depth + 1;
+      try {
+        const result = fn(...args);
+        this.raw.exec(top ? "COMMIT" : `RELEASE sp_${depth}`);
+        return result;
+      } catch (error2) {
+        this.rollbackAfterFailure(top, depth);
+        throw error2;
+      } finally {
+        this.txDepth = depth;
+      }
+    };
+  }
+  /** Best-effort undo for {@link transaction}; never throws over the caller's error. */
+  rollbackAfterFailure(top, depth) {
+    if (this.inTransaction() === false) return;
+    try {
+      if (top) {
+        this.raw.exec("ROLLBACK");
+      } else {
+        this.raw.exec(`ROLLBACK TO sp_${depth}`);
+        this.raw.exec(`RELEASE sp_${depth}`);
+      }
+    } catch {
+    }
+  }
+  /**
+   * `DatabaseSync#isTransaction` exists from Node 22.16 / 24.0. On 22.13–22.15
+   * it reads `undefined` at runtime (whatever the type declarations say), and
+   * the answer is "unknown": the rollback is then attempted and its own
+   * failure swallowed.
+   */
+  inTransaction() {
+    const flag = this.raw.isTransaction;
+    return typeof flag === "boolean" ? flag : void 0;
+  }
+  close() {
+    this.raw.close();
+  }
+};
+function openDatabase(options) {
+  if (options.inMemory) {
+    const db2 = new GuardianDatabase(":memory:");
+    applyPragmas(db2);
+    runMigrations(db2);
+    return { db: db2, path: ":memory:" };
+  }
+  const projectPath = resolve2(options.projectPath);
+  const preferredPath = join4(projectPath, ".guardian", "guardian.db");
+  let reason;
+  if (!isDirectory(projectPath)) {
+    reason = "it is not an existing directory";
+  } else {
+    try {
+      return { db: openWritable(preferredPath), path: preferredPath };
+    } catch (error2) {
+      if (!isNotWritableError(error2)) throw error2;
+      reason = error2 instanceof Error ? error2.message : String(error2);
+    }
+  }
+  const chosenPath = resolveFallbackDbPath(projectPath);
+  ensureDir(dirname4(chosenPath));
+  const db = new GuardianDatabase(chosenPath);
+  applyPragmas(db);
+  runMigrations(db);
+  return {
+    db,
+    path: chosenPath,
+    warning: `Project path '${projectPath}' is not writable (${reason}); dev-guardian DB persisted to '${chosenPath}' instead. Scans will not be visible alongside the project.`
+  };
+}
+function openWritable(dbPath) {
+  const dir = dirname4(dbPath);
+  ensureDir(dir);
+  probeDirectoryWritable(dir);
+  const db = new GuardianDatabase(dbPath);
+  try {
+    applyPragmas(db);
+    runMigrations(db);
+    probeDatabaseWritable(db);
+    return db;
+  } catch (error2) {
+    try {
+      db.close();
+    } catch {
+    }
+    throw error2;
+  }
+}
+function probeDirectoryWritable(dir) {
+  const probe2 = join4(dir, `.write-probe-${process.pid}-${randomBytes(4).toString("hex")}`);
+  writeFileSync3(probe2, "", { flag: "wx" });
+  try {
+    rmSync(probe2, { force: true });
+  } catch {
+  }
+}
+function probeDatabaseWritable(db) {
+  db.exec("PRAGMA busy_timeout = 0");
+  try {
+    db.exec("UPDATE schema_meta SET value = value WHERE 0");
+  } catch (error2) {
+    if (!isBusyError(error2)) throw error2;
+  } finally {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  }
+}
+function isNotWritableError(error2) {
+  if (error2 instanceof Error && "code" in error2) {
+    const code = error2.code;
+    if (code === "EACCES" || code === "EPERM" || code === "EROFS") return true;
+  }
+  const sqlite = sqliteErrorCode(error2);
+  return sqlite === 8 || sqlite === 14;
+}
+function resolveFallbackDbPath(projectPath) {
+  return join4(tmpdir(), "dev-guardian", shortHash(resolve2(projectPath)), "guardian.db");
+}
+function applyPragmas(db) {
+  retryWhileBusy(() => db.pragma("journal_mode = WAL"));
+  db.pragma("foreign_keys = ON");
+  db.pragma("mmap_size = 67108864");
+  db.pragma("synchronous = NORMAL");
+}
+function retryWhileBusy(op) {
+  const deadline = Date.now() + BUSY_TIMEOUT_MS;
+  for (; ; ) {
+    try {
+      op();
+      return;
+    } catch (error2) {
+      if (!isBusyError(error2) || Date.now() >= deadline) throw error2;
+      sleepSync(20 + Math.floor(Math.random() * 30));
+    }
+  }
+}
+function isBusyError(error2) {
+  const primary = sqliteErrorCode(error2);
+  return primary === 5 || primary === 6;
+}
+function sqliteErrorCode(error2) {
+  if (typeof error2 !== "object" || error2 === null || !("errcode" in error2)) return void 0;
+  const code = error2.errcode;
+  return typeof code === "number" ? code & 255 : void 0;
+}
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function ensureDir(dir) {
+  if (!existsSync4(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+}
+function isDirectory(path6) {
+  try {
+    return statSync2(path6).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function shortHash(input) {
+  return createHash("sha1").update(input).digest("hex").slice(0, 16);
+}
+
 // src/storage/repoUtil.ts
 function nowIso() {
   return (/* @__PURE__ */ new Date()).toISOString();
@@ -38164,328 +38499,6 @@ function rowToValidation(row) {
     tree_hash: row.tree_hash,
     computed_at: row.computed_at
   };
-}
-
-// src/storage/db.ts
-import { createHash, randomBytes } from "node:crypto";
-import { existsSync as existsSync4, mkdirSync, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { dirname as dirname4, join as join4, resolve as resolve2 } from "node:path";
-
-// src/storage/migrations/runner.ts
-import { existsSync as existsSync3, readdirSync, readFileSync as readFileSync5 } from "node:fs";
-import { dirname as dirname3, join as join3 } from "node:path";
-import { fileURLToPath as fileURLToPath5 } from "node:url";
-function resolveMigrationsDir() {
-  const here = dirname3(fileURLToPath5(import.meta.url));
-  const candidates2 = [here, join3(here, "storage", "migrations"), join3(here, "migrations")];
-  for (const dir of candidates2) {
-    try {
-      if (existsSync3(dir) && readdirSync(dir).some((f) => MIGRATION_FILE.test(f))) return dir;
-    } catch {
-    }
-  }
-  return here;
-}
-var MIGRATION_FILE = /^(\d+)_(.+)\.sql$/;
-var MIGRATIONS_DIR = resolveMigrationsDir();
-function runMigrations(db) {
-  const migrations = listMigrations();
-  ensureSchemaMetaTable(db);
-  for (const migration of migrations) {
-    if (migration.version <= getCurrentVersion(db)) continue;
-    applyMigration(db, migration);
-  }
-}
-function ensureSchemaMetaTable(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS schema_meta (
-      key   TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    )
-  `);
-}
-function getCurrentVersion(db) {
-  const row = db.prepare("SELECT value FROM schema_meta WHERE key = 'version'").get();
-  if (!row) return 0;
-  const n2 = Number.parseInt(row.value, 10);
-  return Number.isFinite(n2) ? n2 : 0;
-}
-function setVersion(db, version2) {
-  db.prepare(
-    `INSERT INTO schema_meta(key, value) VALUES('version', ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-  ).run(String(version2));
-}
-function listMigrations(dir = MIGRATIONS_DIR) {
-  const migrations = [];
-  for (const f of readdirSync(dir)) {
-    const match = MIGRATION_FILE.exec(f);
-    if (!match) continue;
-    const versionPart = match[1];
-    const namePart = match[2];
-    if (versionPart === void 0 || namePart === void 0) continue;
-    migrations.push({
-      version: Number.parseInt(versionPart, 10),
-      name: namePart,
-      filePath: join3(dir, f)
-    });
-  }
-  migrations.sort((a2, b) => a2.version - b.version);
-  for (let i2 = 1; i2 < migrations.length; i2++) {
-    const prev = migrations[i2 - 1];
-    const cur = migrations[i2];
-    if (prev !== void 0 && cur !== void 0 && prev.version === cur.version) {
-      throw new Error(
-        `Duplicate migration number ${cur.version}: '${prev.name}' and '${cur.name}' in ${dir}. Renumber one of them to the next unused number.`
-      );
-    }
-  }
-  return migrations;
-}
-function applyMigration(db, migration) {
-  const sql = readFileSync5(migration.filePath, "utf8");
-  db.transaction(() => {
-    if (migration.version <= getCurrentVersion(db)) return;
-    db.exec(sql);
-    setVersion(db, migration.version);
-  })();
-}
-
-// src/storage/db.ts
-var { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
-var BUSY_TIMEOUT_MS = 5e3;
-var GuardianStatement = class {
-  constructor(stmt) {
-    this.stmt = stmt;
-  }
-  stmt;
-  run(...params) {
-    const info = this.stmt.run(...params);
-    return { changes: Number(info.changes), lastInsertRowid: info.lastInsertRowid };
-  }
-  get(...params) {
-    return this.stmt.get(...params);
-  }
-  all(...params) {
-    return this.stmt.all(...params);
-  }
-};
-var GuardianDatabase = class {
-  raw;
-  txDepth = 0;
-  /**
-   * The path passed to the constructor (or `':memory:'`). Mirrors
-   * better-sqlite3's `db.name`, which `healthStatus` reads to stat the DB file.
-   */
-  name;
-  constructor(source) {
-    if (typeof source === "string") {
-      this.raw = new DatabaseSync(source);
-      this.name = source;
-    } else {
-      this.raw = source;
-      this.name = "";
-    }
-    this.raw.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
-  }
-  prepare(source) {
-    return new GuardianStatement(this.raw.prepare(source));
-  }
-  /** Run one or more statements for their side effects (DDL, PRAGMA, BEGIN…). */
-  exec(sql) {
-    this.raw.exec(sql);
-  }
-  /** better-sqlite3-style PRAGMA setter. Any returned row is intentionally ignored. */
-  pragma(source) {
-    this.raw.exec(`PRAGMA ${source}`);
-  }
-  /**
-   * Wraps `fn` in a transaction and returns a callable, mirroring
-   * better-sqlite3's `db.transaction(fn)`. Nesting-aware: the outermost call
-   * uses BEGIN IMMEDIATE/COMMIT/ROLLBACK, inner calls use SAVEPOINTs — so the
-   * repos' `tx(args)` semantics carry over unchanged.
-   *
-   * `BEGIN IMMEDIATE`, not a deferred `BEGIN`: a deferred transaction takes
-   * the write lock only at its first write, and if another connection wrote
-   * in between, that upgrade fails with SQLITE_BUSY without ever consulting
-   * the busy timeout. Taking the lock up front is what lets the timeout work.
-   *
-   * On failure, the ORIGINAL error is what the caller sees. SQLite rolls the
-   * whole transaction back by itself on some errors (`RAISE(ROLLBACK)`, a full
-   * disk, I/O errors); an unconditional `ROLLBACK` then throws
-   * `cannot rollback - no transaction is active`, which replaced the error
-   * that explained what went wrong and skipped the depth reset, leaving every
-   * later "transaction" on this connection a deferred SAVEPOINT.
-   */
-  transaction(fn) {
-    return (...args) => {
-      const depth = this.txDepth;
-      const top = depth === 0;
-      this.raw.exec(top ? "BEGIN IMMEDIATE" : `SAVEPOINT sp_${depth}`);
-      this.txDepth = depth + 1;
-      try {
-        const result = fn(...args);
-        this.raw.exec(top ? "COMMIT" : `RELEASE sp_${depth}`);
-        return result;
-      } catch (error2) {
-        this.rollbackAfterFailure(top, depth);
-        throw error2;
-      } finally {
-        this.txDepth = depth;
-      }
-    };
-  }
-  /** Best-effort undo for {@link transaction}; never throws over the caller's error. */
-  rollbackAfterFailure(top, depth) {
-    if (this.inTransaction() === false) return;
-    try {
-      if (top) {
-        this.raw.exec("ROLLBACK");
-      } else {
-        this.raw.exec(`ROLLBACK TO sp_${depth}`);
-        this.raw.exec(`RELEASE sp_${depth}`);
-      }
-    } catch {
-    }
-  }
-  /**
-   * `DatabaseSync#isTransaction` exists from Node 22.16 / 24.0. On 22.13–22.15
-   * it reads `undefined` at runtime (whatever the type declarations say), and
-   * the answer is "unknown": the rollback is then attempted and its own
-   * failure swallowed.
-   */
-  inTransaction() {
-    const flag = this.raw.isTransaction;
-    return typeof flag === "boolean" ? flag : void 0;
-  }
-  close() {
-    this.raw.close();
-  }
-};
-function openDatabase(options) {
-  if (options.inMemory) {
-    const db2 = new GuardianDatabase(":memory:");
-    applyPragmas(db2);
-    runMigrations(db2);
-    return { db: db2, path: ":memory:" };
-  }
-  const projectPath = resolve2(options.projectPath);
-  const preferredPath = join4(projectPath, ".guardian", "guardian.db");
-  let reason;
-  if (!isDirectory(projectPath)) {
-    reason = "it is not an existing directory";
-  } else {
-    try {
-      return { db: openWritable(preferredPath), path: preferredPath };
-    } catch (error2) {
-      if (!isNotWritableError(error2)) throw error2;
-      reason = error2 instanceof Error ? error2.message : String(error2);
-    }
-  }
-  const chosenPath = resolveFallbackDbPath(projectPath);
-  ensureDir(dirname4(chosenPath));
-  const db = new GuardianDatabase(chosenPath);
-  applyPragmas(db);
-  runMigrations(db);
-  return {
-    db,
-    path: chosenPath,
-    warning: `Project path '${projectPath}' is not writable (${reason}); dev-guardian DB persisted to '${chosenPath}' instead. Scans will not be visible alongside the project.`
-  };
-}
-function openWritable(dbPath) {
-  const dir = dirname4(dbPath);
-  ensureDir(dir);
-  probeDirectoryWritable(dir);
-  const db = new GuardianDatabase(dbPath);
-  try {
-    applyPragmas(db);
-    runMigrations(db);
-    probeDatabaseWritable(db);
-    return db;
-  } catch (error2) {
-    try {
-      db.close();
-    } catch {
-    }
-    throw error2;
-  }
-}
-function probeDirectoryWritable(dir) {
-  const probe2 = join4(dir, `.write-probe-${process.pid}-${randomBytes(4).toString("hex")}`);
-  writeFileSync3(probe2, "", { flag: "wx" });
-  try {
-    rmSync(probe2, { force: true });
-  } catch {
-  }
-}
-function probeDatabaseWritable(db) {
-  db.exec("PRAGMA busy_timeout = 0");
-  try {
-    db.exec("UPDATE schema_meta SET value = value WHERE 0");
-  } catch (error2) {
-    if (!isBusyError(error2)) throw error2;
-  } finally {
-    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
-  }
-}
-function isNotWritableError(error2) {
-  if (error2 instanceof Error && "code" in error2) {
-    const code = error2.code;
-    if (code === "EACCES" || code === "EPERM" || code === "EROFS") return true;
-  }
-  const sqlite = sqliteErrorCode(error2);
-  return sqlite === 8 || sqlite === 14;
-}
-function resolveFallbackDbPath(projectPath) {
-  return join4(tmpdir(), "dev-guardian", shortHash(resolve2(projectPath)), "guardian.db");
-}
-function applyPragmas(db) {
-  retryWhileBusy(() => db.pragma("journal_mode = WAL"));
-  db.pragma("foreign_keys = ON");
-  db.pragma("mmap_size = 67108864");
-  db.pragma("synchronous = NORMAL");
-}
-function retryWhileBusy(op) {
-  const deadline = Date.now() + BUSY_TIMEOUT_MS;
-  for (; ; ) {
-    try {
-      op();
-      return;
-    } catch (error2) {
-      if (!isBusyError(error2) || Date.now() >= deadline) throw error2;
-      sleepSync(20 + Math.floor(Math.random() * 30));
-    }
-  }
-}
-function isBusyError(error2) {
-  const primary = sqliteErrorCode(error2);
-  return primary === 5 || primary === 6;
-}
-function sqliteErrorCode(error2) {
-  if (typeof error2 !== "object" || error2 === null || !("errcode" in error2)) return void 0;
-  const code = error2.errcode;
-  return typeof code === "number" ? code & 255 : void 0;
-}
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-function ensureDir(dir) {
-  if (!existsSync4(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-}
-function isDirectory(path6) {
-  try {
-    return statSync2(path6).isDirectory();
-  } catch {
-    return false;
-  }
-}
-function shortHash(input) {
-  return createHash("sha1").update(input).digest("hex").slice(0, 16);
 }
 
 // src/storage/index.ts
@@ -55892,6 +55905,11 @@ registerResourceModule({
 var SERVER_NAME = "dev-guardian";
 var SERVER_VERSION2 = resolveVersion();
 async function main() {
+  if (!nodeSqliteAvailable()) {
+    process.stderr.write(`${NODE_SQLITE_REQUIRED}
+`);
+    process.exit(1);
+  }
   const projectPath = resolve8(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
@@ -55932,18 +55950,32 @@ async function main() {
   logErr("listening on stdio");
 }
 function installShutdownHooks(mcp, storage) {
-  const shutdown = (signal) => {
-    logErr(`received ${signal}; shutting down`);
+  let closing = false;
+  const shutdown = (reason, closeTransport) => {
+    if (closing) return;
+    closing = true;
+    logErr(`${reason}; shutting down`);
     try {
       storage.close();
     } catch {
     }
+    if (!closeTransport) process.exit(0);
     void mcp.close().finally(() => {
       process.exit(0);
     });
   };
-  process.on("SIGINT", () => shutdown("SIGINT"));
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("received SIGINT", true));
+  process.on("SIGTERM", () => shutdown("received SIGTERM", true));
+  process.stdout.on("error", (error2) => {
+    if (error2.code === "EPIPE") {
+      shutdown("stdout closed by the client (EPIPE)", false);
+      return;
+    }
+    logErr(`fatal: stdout: ${error2.stack ?? error2.message}`);
+    process.exit(1);
+  });
+  process.stderr.on("error", () => {
+  });
 }
 function logErr(line) {
   process.stderr.write(`[dev-guardian] ${line}

@@ -34,14 +34,42 @@ import { runMigrations } from './migrations/runner.js';
 // (vite-node, whose bundled Vite predates node:sqlite and would try to resolve
 // a bare `sqlite`) both leave a runtime require untouched, so Node resolves the
 // builtin natively in every context. The type-only import above is erased.
-const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
-type DatabaseSync = InstanceType<typeof DatabaseSync>;
+//
+// And LAZILY, on first use rather than at import: on a Node without it
+// (< 22.13, or 22.5-22.12 without --experimental-sqlite) a top-level require
+// threw ERR_UNKNOWN_BUILTIN_MODULE while the server's modules were still
+// loading, before it could say what was wrong. See nodeSqliteAvailable().
+type SqliteModule = typeof import('node:sqlite');
+type DatabaseSync = InstanceType<SqliteModule['DatabaseSync']>;
+
+let sqliteModule: SqliteModule | undefined;
+function loadSqlite(): SqliteModule {
+  sqliteModule ??= createRequire(import.meta.url)('node:sqlite') as SqliteModule;
+  return sqliteModule;
+}
+
+/** What the server prints, and exits 1 with, when `node:sqlite` is unavailable. */
+export const NODE_SQLITE_REQUIRED = 'dev-guardian requires Node.js >= 22.13 (node:sqlite)';
+
+/**
+ * Whether this Node can load `node:sqlite` without flags — Node >= 22.13
+ * (22.5-22.12 have it only behind `--experimental-sqlite`, which this project
+ * never requires). Entry points check it before touching storage.
+ */
+export function nodeSqliteAvailable(): boolean {
+  try {
+    loadSqlite();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * How long every connection waits for another connection's lock before
  * failing with `database is locked`. SQLite's own default is 0 — fail at
  * once — and several processes share one database file in real use (the
- * plugin's MCP server, a project-level one, the CLI): with 0, 14 of 20
+ * plugin's MCP server, a project-level one, the CLI): with 0, 15 of 20
  * fresh-database opens by 4 concurrent processes failed, and a write lock
  * held by one server made the next one's startup exit 1.
  */
@@ -99,7 +127,7 @@ export class GuardianDatabase {
 
   constructor(source: string | DatabaseSync) {
     if (typeof source === 'string') {
-      this.raw = new DatabaseSync(source);
+      this.raw = new (loadSqlite().DatabaseSync)(source);
       this.name = source;
     } else {
       this.raw = source;
@@ -428,7 +456,7 @@ function isBusyError(error: unknown): boolean {
 }
 
 /** The primary SQLite result code of a `node:sqlite` error, if it is one. */
-export function sqliteErrorCode(error: unknown): number | undefined {
+function sqliteErrorCode(error: unknown): number | undefined {
   if (typeof error !== 'object' || error === null || !('errcode' in error)) return undefined;
   const code: unknown = error.errcode;
   // Extended result codes carry the primary code in their low byte.

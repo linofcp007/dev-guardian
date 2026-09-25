@@ -26,17 +26,32 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { runMigrations } from './migrations/runner.js';
-// `node:sqlite` is pulled in via createRequire rather than a static value
-// import on purpose: the production bundler (esbuild) and the test runner
-// (vite-node, whose bundled Vite predates node:sqlite and would try to resolve
-// a bare `sqlite`) both leave a runtime require untouched, so Node resolves the
-// builtin natively in every context. The type-only import above is erased.
-const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+let sqliteModule;
+function loadSqlite() {
+    sqliteModule ??= createRequire(import.meta.url)('node:sqlite');
+    return sqliteModule;
+}
+/** What the server prints, and exits 1 with, when `node:sqlite` is unavailable. */
+export const NODE_SQLITE_REQUIRED = 'dev-guardian requires Node.js >= 22.13 (node:sqlite)';
+/**
+ * Whether this Node can load `node:sqlite` without flags — Node >= 22.13
+ * (22.5-22.12 have it only behind `--experimental-sqlite`, which this project
+ * never requires). Entry points check it before touching storage.
+ */
+export function nodeSqliteAvailable() {
+    try {
+        loadSqlite();
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
 /**
  * How long every connection waits for another connection's lock before
  * failing with `database is locked`. SQLite's own default is 0 — fail at
  * once — and several processes share one database file in real use (the
- * plugin's MCP server, a project-level one, the CLI): with 0, 14 of 20
+ * plugin's MCP server, a project-level one, the CLI): with 0, 15 of 20
  * fresh-database opens by 4 concurrent processes failed, and a write lock
  * held by one server made the next one's startup exit 1.
  */
@@ -81,7 +96,7 @@ export class GuardianDatabase {
     name;
     constructor(source) {
         if (typeof source === 'string') {
-            this.raw = new DatabaseSync(source);
+            this.raw = new (loadSqlite().DatabaseSync)(source);
             this.name = source;
         }
         else {
@@ -379,7 +394,7 @@ function isBusyError(error) {
     return primary === 5 || primary === 6;
 }
 /** The primary SQLite result code of a `node:sqlite` error, if it is one. */
-export function sqliteErrorCode(error) {
+function sqliteErrorCode(error) {
     if (typeof error !== 'object' || error === null || !('errcode' in error))
         return undefined;
     const code = error.errcode;

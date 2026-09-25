@@ -6,6 +6,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
@@ -97,5 +98,56 @@ describe('server startup against a database another process is writing to', () =
       holder.release();
       await holder.released;
     }
+  }, 60_000);
+});
+
+// Stands in for Node < 22.13, where `node:sqlite` is missing (or needs
+// --experimental-sqlite): any require of it fails the way Node itself does.
+const BLOCK_NODE_SQLITE = `
+const Module = require('node:module');
+const load = Module._load;
+Module._load = function (request, ...rest) {
+  if (request === 'node:sqlite') {
+    const error = new Error('No such built-in module: node:sqlite');
+    error.code = 'ERR_UNKNOWN_BUILTIN_MODULE';
+    throw error;
+  }
+  return load.call(this, request, ...rest);
+};
+`;
+
+const INITIALIZE =
+  JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '0' } },
+  }) + '\n';
+
+describe('server exits', () => {
+  it('exits 1 with a one-line explanation when node:sqlite is unavailable', async () => {
+    const project = makeTempDir('guardian-server-nosqlite-');
+    const preload = join(project, 'no-node-sqlite.cjs');
+    writeFileSync(preload, BLOCK_NODE_SQLITE);
+
+    const server = startServer(project, ['--require', preload]);
+    expect(await server.exited).toBe(1);
+    expect(server.stderr()).toContain('dev-guardian requires Node.js >= 22.13 (node:sqlite)');
+    expect(server.stderr()).not.toContain('ERR_UNKNOWN_BUILTIN_MODULE');
+  }, 60_000);
+
+  it('exits 0 when the client closes stdout, instead of crashing on an unhandled EPIPE', async () => {
+    const project = makeTempDir('guardian-server-epipe-');
+    const server = startServer(project);
+    await server.waitFor(/listening on stdio/);
+
+    // The client goes away: its end of our stdout closes. The next response
+    // the server writes hits a closed pipe.
+    server.child.stdout?.destroy();
+    server.child.stdin?.write(INITIALIZE);
+
+    expect(await server.exited).toBe(0);
+    expect(server.stderr()).not.toMatch(/Unhandled 'error' event/);
+    expect(server.stderr()).toMatch(/EPIPE/);
   }, 60_000);
 });

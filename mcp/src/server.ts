@@ -3,6 +3,8 @@
  * dev-guardian MCP server — entry point.
  *
  * Boot sequence:
+ *   0. Refuse to start, with one line on stderr and exit 1, on a Node without
+ *      `node:sqlite` (< 22.13) — not a stack trace from deep in module loading.
  *   1. Resolve project_path (defaults to process.cwd()).
  *   2. Open SQLite at `<project_root>/.guardian/guardian.db` (or temp
  *      fallback), apply migrations.
@@ -13,7 +15,9 @@
  *      limit. A failure in either is logged and never stops the server.
  *   5. Add `.guardian/` to the target project's `.gitignore` if missing.
  *   6. Build the McpServer, attach the registered TOOLS and RESOURCES.
- *   7. Connect the stdio transport. Block until the host closes it.
+ *   7. Connect the stdio transport. Block until the host closes it. A client
+ *      that closes our stdout (EPIPE on the next write) is a disconnect, not
+ *      a crash: exit 0.
  *
  * The bootstrap never logs to stdout — that channel belongs to the MCP
  * JSON-RPC stream. Everything diagnostic goes to stderr (visible to the
@@ -29,6 +33,7 @@ import { resolveScriptsDir } from './platform/scriptsDir.js';
 import { probeShell } from './platform/shellProbe.js';
 import { resolveVersion } from './platform/version.js';
 import type { ProgressNotifier, ProgressPayload } from './progress/progressEmitter.js';
+import { NODE_SQLITE_REQUIRED, nodeSqliteAvailable } from './storage/db.js';
 import { openDatabase, Storage } from './storage/index.js';
 import { runStartupMaintenance } from './storage/maintenance.js';
 import { attachAllResources } from './resources/index.js';
@@ -47,6 +52,13 @@ const SERVER_NAME = 'dev-guardian';
 const SERVER_VERSION = resolveVersion();
 
 async function main(): Promise<void> {
+  // storage/db.ts loads node:sqlite lazily precisely so this check can run.
+  if (!nodeSqliteAvailable()) {
+    process.stderr.write(`${NODE_SQLITE_REQUIRED}
+`);
+    process.exit(1);
+  }
+
   const projectPath = resolve(process.cwd());
 
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
@@ -106,19 +118,39 @@ async function main(): Promise<void> {
 }
 
 function installShutdownHooks(mcp: McpServer, storage: Storage): void {
-  const shutdown = (signal: string): void => {
-    logErr(`received ${signal}; shutting down`);
+  let closing = false;
+  const shutdown = (reason: string, closeTransport: boolean): void => {
+    if (closing) return;
+    closing = true;
+    logErr(`${reason}; shutting down`);
     try {
       storage.close();
     } catch {
       /* ignore */
     }
+    if (!closeTransport) process.exit(0);
     void mcp.close().finally(() => {
       process.exit(0);
     });
   };
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('received SIGINT', true));
+  process.on('SIGTERM', () => shutdown('received SIGTERM', true));
+
+  // The SDK's stdio transport listens for errors on stdin only. When the
+  // client closes its end of our stdout, the next write fails with EPIPE, and
+  // an 'error' event nobody listens for crashes the process (exit 1, with a
+  // stack trace). That is the client disconnecting: shut down cleanly.
+  // Nothing more can reach the client, so the transport is not closed first.
+  process.stdout.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EPIPE') {
+      shutdown('stdout closed by the client (EPIPE)', false);
+      return;
+    }
+    logErr(`fatal: stdout: ${error.stack ?? error.message}`);
+    process.exit(1);
+  });
+  // stderr is diagnostics only; if it is gone too there is nobody left to tell.
+  process.stderr.on('error', () => {});
 }
 
 function logErr(line: string): void {
