@@ -2,8 +2,11 @@
  * Run a `.sh` script under the probed shell.
  *
  * Thin wrapper over `runProcess` that translates a `ShellChoice` into
- * `(command, argsPrefix)`. WSL paths are converted before being passed to
- * the script via `toShellPath`.
+ * `(command, argsPrefix)`. Under WSL the script path AND every argument that
+ * is an absolute Windows path are converted (`C:\proj` → `/mnt/c/proj`):
+ * bash there runs in the Linux filesystem view, where a `C:\…` project path
+ * names nothing and the script scans nothing. Converting only the script path
+ * — as this once did — broke every script tool under WSL.
  *
  * All the safety machinery (5 MB cap, SIGTERM/SIGKILL, timeout, stderr
  * streaming) lives in `runProcess` — this file only wires the shell.
@@ -28,8 +31,12 @@ export interface ShellRunOptions {
 }
 
 export async function runShellScript(options: ShellRunOptions): Promise<ShellRunResult> {
-  const scriptArg = toShellPath(options.scriptPath, options.shell as ShellChoiceLike);
-  const args = [...options.shell.args_prefix, scriptArg, ...(options.args ?? [])];
+  const shell: ShellChoiceLike = options.shell;
+  const scriptArg = toShellPath(options.scriptPath, shell);
+  const userArgs = (options.args ?? []).map((a) =>
+    isWindowsAbsolutePath(a) ? toShellPath(a, shell) : a,
+  );
+  const args = [...options.shell.args_prefix, scriptArg, ...userArgs];
 
   const runOpts: Parameters<typeof runProcess>[0] = {
     command: options.shell.command,
@@ -42,4 +49,9 @@ export async function runShellScript(options: ShellRunOptions): Promise<ShellRun
   if (options.onLog !== undefined) runOpts.onLog = options.onLog;
 
   return runProcess(runOpts);
+}
+
+/** `C:\x`, `c:/x` — a drive-letter absolute path. Flags and relative paths are not. */
+function isWindowsAbsolutePath(arg: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(arg);
 }

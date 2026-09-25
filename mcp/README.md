@@ -147,8 +147,9 @@ error — see the spec at `.specs/dev-guardian-mcp/requirements.md`
 
 ## Cross-platform notes
 
-- **Windows**: the server probes `wsl bash` → `Git Bash` → `bash.exe` and
-  caches the working choice. WSL paths are translated automatically
+- **Windows**: the server probes `Git Bash` → `wsl bash` → `bash.exe` and
+  caches the working choice. Under WSL, the script path and every absolute
+  Windows path argument are translated automatically
   (`C:\Users\foo` → `/mnt/c/Users/foo`). Without any of those, the server
   still boots but every script-invoking tool returns a `no_bash_shell`
   domain error so resources stay queryable.
