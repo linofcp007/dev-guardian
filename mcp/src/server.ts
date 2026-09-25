@@ -8,7 +8,9 @@
  *      fallback), apply migrations.
  *   3. Probe a usable bash. Failure is fatal-for-scripts but the server
  *      still starts so resources and pure-SQL tools can serve data.
- *   4. Reap any scans left in `running` by a previous lifetime.
+ *   4. Startup maintenance, best-effort (storage/maintenance.ts): reap scans
+ *      whose owning process died, then prune scans beyond the retention
+ *      limit. A failure in either is logged and never stops the server.
  *   5. Add `.guardian/` to the target project's `.gitignore` if missing.
  *   6. Build the McpServer, attach the registered TOOLS and RESOURCES.
  *   7. Connect the stdio transport. Block until the host closes it.
@@ -28,6 +30,7 @@ import { probeShell } from './platform/shellProbe.js';
 import { resolveVersion } from './platform/version.js';
 import type { ProgressNotifier, ProgressPayload } from './progress/progressEmitter.js';
 import { openDatabase, Storage } from './storage/index.js';
+import { runStartupMaintenance } from './storage/maintenance.js';
 import { attachAllResources } from './resources/index.js';
 import { attachAllTools, TOOLS } from './tools/index.js';
 import { RESOURCES } from './resources/index.js';
@@ -51,9 +54,8 @@ async function main(): Promise<void> {
   logErr(`db opened: ${dbPath}`);
   if (storageWarning) logErr(`db warning: ${storageWarning}`);
 
-  // Reap any scans left running by a previous process.
-  const reaped = storage.scans.reapRunning();
-  if (reaped > 0) logErr(`reaped ${reaped} orphaned scan(s)`);
+  // Reap dead processes' scans, then apply retention. Never fatal.
+  runStartupMaintenance(storage, logErr);
 
   // Probe a usable shell once; tools read the choice from the cache later.
   const shell = await probeShell(storage.runtimeMeta);

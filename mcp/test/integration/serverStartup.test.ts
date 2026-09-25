@@ -1,0 +1,101 @@
+/**
+ * The MCP server's own process lifecycle — startup against a shared
+ * database, and exits. Runs `src/server.ts` in a real child process: every
+ * behaviour here is about the process (its exit code, its stderr, a lock
+ * another process holds), which nothing in-process can observe.
+ */
+
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { hostname } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import { openDatabase } from '../../src/storage/db.js';
+import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
+import { MCP_ROOT, TSX_NODE_ARGS } from '../helpers/tsxNode.js';
+import { holdWriteLock } from '../helpers/writeLockHolder.js';
+
+afterAll(cleanupTempDirs);
+
+const SERVER = join(MCP_ROOT, 'src', 'server.ts');
+
+interface ServerRun {
+  child: ChildProcess;
+  stderr(): string;
+  exited: Promise<number | null>;
+  /** Resolves once stderr matches `pattern`; rejects if the server exits first or on timeout. */
+  waitFor(pattern: RegExp, timeoutMs?: number): Promise<void>;
+}
+
+const running: ChildProcess[] = [];
+afterEach(() => {
+  for (const child of running.splice(0)) {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+  }
+});
+
+function startServer(cwd: string, nodeArgs: string[] = []): ServerRun {
+  const child = spawn(process.execPath, [...nodeArgs, ...TSX_NODE_ARGS, SERVER], {
+    cwd,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  running.push(child);
+  let err = '';
+  const waiters: Array<() => void> = [];
+  child.stderr?.on('data', (d: Buffer) => {
+    err += d.toString();
+    for (const w of waiters) w();
+  });
+  const exited = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
+  return {
+    child,
+    stderr: () => err,
+    exited,
+    waitFor(pattern, timeoutMs = 30_000) {
+      return new Promise((resolve, reject) => {
+        const check = (): void => {
+          if (pattern.test(err)) resolve();
+        };
+        waiters.push(check);
+        check();
+        const timer = setTimeout(() => reject(new Error(`timed out waiting for ${pattern}; stderr:\n${err}`)), timeoutMs);
+        void exited.then((code) => {
+          clearTimeout(timer);
+          if (!pattern.test(err)) reject(new Error(`server exited ${code} before ${pattern}; stderr:\n${err}`));
+        });
+      });
+    },
+  };
+}
+
+/** The pid of a process that has already exited. */
+function deadPid(): number {
+  const r = spawnSync(process.execPath, ['-e', '']);
+  if (typeof r.pid !== 'number') throw new Error('could not spawn a short-lived child');
+  return r.pid;
+}
+
+describe('server startup against a database another process is writing to', () => {
+  it('waits out a held write lock, reaps the dead scan and starts, instead of exiting 1', async () => {
+    const project = makeTempDir('guardian-server-lock-');
+    const { db, path } = openDatabase({ projectPath: project });
+    db.prepare(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, status, owner_pid, owner_host)
+       VALUES ('orphan', 'sast', ?, 'h', ?, 'running', ?, ?)`,
+    ).run(project, new Date().toISOString(), deadPid(), hostname());
+    db.close();
+
+    const holder = await holdWriteLock(path, 'stdin');
+    const server = startServer(project);
+    try {
+      await server.waitFor(/db opened/);
+      // The reaper is now waiting for the lock. Hold it a little longer, then let go.
+      await new Promise((r) => setTimeout(r, 500));
+      holder.release();
+      await server.waitFor(/listening on stdio/);
+      expect(server.stderr()).toMatch(/reaped 1 orphaned scan/);
+    } finally {
+      holder.release();
+      await holder.released;
+    }
+  }, 60_000);
+});

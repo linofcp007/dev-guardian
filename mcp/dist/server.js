@@ -37187,27 +37187,40 @@ function rowToBaseline(row) {
 }
 
 // src/storage/cvesRepo.ts
+function seenIn(direction) {
+  return `COALESCE((
+      SELECT o.scan_id FROM scan_cves o JOIN scans os ON os.id = o.scan_id
+      WHERE o.cve_id = sc.cve_id AND o.package_name = sc.package_name
+        AND o.installed_version = sc.installed_version
+        AND os.project_path = s.project_path
+      ORDER BY os.started_at ${direction}, os.rowid ${direction}
+      LIMIT 1
+    ), sc.scan_id)`;
+}
 var CvesRepo = class {
   constructor(db) {
     this.db = db;
     this.upsertStmt = db.prepare(`
-      INSERT INTO cves (
-        cve_id, package_name, installed_version, fixed_version, severity,
-        first_seen_scan_id, last_seen_scan_id
+      INSERT INTO scan_cves (
+        scan_id, cve_id, package_name, installed_version, fixed_version, severity
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(cve_id, package_name, installed_version) DO UPDATE SET
-        fixed_version    = excluded.fixed_version,
-        severity         = excluded.severity,
-        last_seen_scan_id = excluded.last_seen_scan_id
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(scan_id, cve_id, package_name, installed_version) DO UPDATE SET
+        fixed_version = excluded.fixed_version,
+        severity      = excluded.severity
     `);
     this.listActiveStmt = db.prepare(`
-      SELECT * FROM cves WHERE last_seen_scan_id = ?
+      SELECT sc.cve_id, sc.package_name, sc.installed_version, sc.fixed_version, sc.severity,
+             ${seenIn("ASC")} AS first_seen_scan_id,
+             ${seenIn("DESC")} AS last_seen_scan_id
+      FROM scan_cves sc
+      LEFT JOIN scans s ON s.id = sc.scan_id
+      WHERE sc.scan_id = ?
       ORDER BY
-        CASE severity
+        CASE sc.severity
           WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2
           WHEN 'low' THEN 1 ELSE 0 END DESC,
-        cve_id ASC
+        sc.cve_id ASC, sc.package_name ASC, sc.installed_version ASC
     `);
   }
   db;
@@ -37215,13 +37228,12 @@ var CvesRepo = class {
   listActiveStmt;
   upsert(input) {
     this.upsertStmt.run(
+      input.scan_id,
       input.cve_id,
       input.package_name,
-      input.installed_version ?? null,
+      input.installed_version ?? "",
       input.fixed_version ?? null,
-      input.severity,
-      input.scan_id,
-      input.scan_id
+      input.severity
     );
   }
   bulkUpsert(rows) {
@@ -37232,11 +37244,12 @@ var CvesRepo = class {
     tx(rows);
   }
   /**
-   * Returns CVEs whose `last_seen_scan_id` matches the given scan. Resources
-   * usually pass the latest completed deps scan id here.
+   * Exactly the CVEs the given scan saw, one per (cve, package, installed
+   * version), most severe first. Resources usually pass the latest completed
+   * deps scan id here.
    */
-  listActive(latestScanId) {
-    return this.listActiveStmt.all(latestScanId).map(rowToCve);
+  listActive(scanId) {
+    return this.listActiveStmt.all(scanId).map(rowToCve);
   }
 };
 function rowToCve(row) {
@@ -37247,7 +37260,7 @@ function rowToCve(row) {
     first_seen_scan_id: row.first_seen_scan_id,
     last_seen_scan_id: row.last_seen_scan_id
   };
-  if (row.installed_version !== null) cve.installed_version = row.installed_version;
+  if (row.installed_version !== "") cve.installed_version = row.installed_version;
   if (row.fixed_version !== null) cve.fixed_version = row.fixed_version;
   return cve;
 }
@@ -37533,12 +37546,15 @@ var RuntimeMetaRepo = class {
 };
 
 // src/storage/scansRepo.ts
+import { hostname as hostname2 } from "node:os";
 var WORKTREE_PATH_EXCLUSION2 = "%guardian-fixpr-wt-%";
+var UNKNOWN_OWNER_REAP_AFTER_MS = 6 * 60 * 60 * 1e3;
 var ScansRepo = class {
   insertStmt;
   finalizeStmt;
   markCancelledStmt;
-  reapRunningStmt;
+  listRunningStmt;
+  reapOneStmt;
   getByIdStmt;
   getLatestStmt;
   getLatestForProjectStmt;
@@ -37550,9 +37566,10 @@ var ScansRepo = class {
     this.insertStmt = db.prepare(`
       INSERT INTO scans (
         id, scan_type, project_path, tree_hash,
-        started_at, status, tools_run, missing_tools, report_dir, meta
+        started_at, status, tools_run, missing_tools, report_dir, meta,
+        owner_pid, owner_host
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.finalizeStmt = db.prepare(`
       UPDATE scans
@@ -37566,10 +37583,13 @@ var ScansRepo = class {
       SET status = 'cancelled', finished_at = ?
       WHERE id = ? AND status = 'running'
     `);
-    this.reapRunningStmt = db.prepare(`
+    this.listRunningStmt = db.prepare(`
+      SELECT id, started_at, owner_pid, owner_host FROM scans WHERE status = 'running'
+    `);
+    this.reapOneStmt = db.prepare(`
       UPDATE scans
-      SET status = 'failed', finished_at = ?, error = 'reaped on startup'
-      WHERE status = 'running'
+      SET status = 'failed', finished_at = ?, error = ?
+      WHERE id = ? AND status = 'running'
     `);
     this.getByIdStmt = db.prepare(`SELECT * FROM scans WHERE id = ?`);
     this.getLatestStmt = db.prepare(`
@@ -37619,7 +37639,9 @@ var ScansRepo = class {
       "[]",
       "[]",
       input.report_dir ?? null,
-      JSON.stringify(input.meta ?? {})
+      JSON.stringify(input.meta ?? {}),
+      process.pid,
+      hostname2()
     );
     return {
       scan_id: input.scan_id,
@@ -37650,12 +37672,28 @@ var ScansRepo = class {
     this.markCancelledStmt.run(nowIso(), scanId);
   }
   /**
-   * Sweeps any scan left in `running` state by a previous server lifetime
-   * (crash, kill -9). Called once on startup.
+   * Fails scans left in `running` by a process that is gone (crash, kill -9).
+   * Called once on startup.
+   *
+   * Only DEAD owners' scans: several servers share one database, and the old
+   * sweep (`every running scan`) killed whatever another live server was
+   * scanning at the time. A scan whose owner is on this host is reaped when
+   * that pid no longer exists; one whose owner cannot be checked from here
+   * (none recorded, or another host) only once it is older than
+   * {@link UNKNOWN_OWNER_REAP_AFTER_MS}. A live owner's scan is never reaped,
+   * however old — including this process's own.
    */
-  reapRunning() {
-    const info = this.reapRunningStmt.run(nowIso());
-    return info.changes;
+  reapRunning(options = {}) {
+    const now = options.now ?? Date.now();
+    const host = options.host ?? hostname2();
+    const isAlive = options.isAlive ?? pidIsAlive;
+    let reaped = 0;
+    for (const row of this.listRunningStmt.all()) {
+      const reason = reapReason(row, host, now, isAlive);
+      if (reason === null) continue;
+      reaped += this.reapOneStmt.run(nowIso(), `reaped on startup: ${reason}`, row.id).changes;
+    }
+    return reaped;
   }
   getById(scanId) {
     const row = this.getByIdStmt.get(scanId);
@@ -37717,6 +37755,25 @@ var ScansRepo = class {
     this.attachCacheStmt.run(args.tree_hash, args.scan_id, args.scan_type, nowIso());
   }
 };
+function reapReason(row, host, now, isAlive) {
+  const pid = row.owner_pid;
+  if (pid !== null && Number.isInteger(pid) && pid > 0 && row.owner_host === host) {
+    return isAlive(pid) ? null : `owner process ${pid} is no longer running`;
+  }
+  const started = Date.parse(row.started_at);
+  if (Number.isNaN(started) || now - started > UNKNOWN_OWNER_REAP_AFTER_MS) {
+    return "owner unknown on this host and the scan started more than 6 h ago";
+  }
+  return null;
+}
+function pidIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error2) {
+    return !(error2 instanceof Error && "code" in error2 && error2.code === "ESRCH");
+  }
+}
 function rowToRecord(row) {
   const record3 = {
     scan_id: row.id,
@@ -38420,6 +38477,80 @@ var Storage = class {
     return this.db;
   }
 };
+
+// src/storage/maintenance.ts
+var DEFAULT_RETENTION_SCANS = 50;
+var PRUNE_BATCH = 200;
+function resolveRetentionLimit(raw) {
+  const value = raw?.trim() ?? "";
+  if (value === "") return { keep: DEFAULT_RETENTION_SCANS };
+  if (/^\d+$/.test(value)) return { keep: Number.parseInt(value, 10) };
+  return {
+    keep: DEFAULT_RETENTION_SCANS,
+    warning: `GUARDIAN_RETENTION_SCANS='${raw}' is not a non-negative integer; keeping the newest ${DEFAULT_RETENTION_SCANS} scans per project and scan type.`
+  };
+}
+var DOOMED_SQL = `
+  SELECT id FROM (
+    SELECT id, status,
+           ROW_NUMBER() OVER (
+             PARTITION BY project_path, scan_type
+             ORDER BY started_at DESC, rowid DESC
+           ) AS rn
+    FROM scans
+  )
+  WHERE rn > ?
+    AND status <> 'running'
+    AND id NOT IN (SELECT scan_id FROM baselines)
+  LIMIT ${PRUNE_BATCH}
+`;
+function pruneScans(db, keep) {
+  if (!(keep > 0)) return { deleted: 0 };
+  const selectDoomed = db.prepare(DOOMED_SQL);
+  const batch = db.transaction(() => {
+    const ids2 = selectDoomed.all(keep).map((r) => r.id);
+    if (ids2.length > 0) deleteBatch(db, ids2);
+    return ids2.length;
+  });
+  let deleted = 0;
+  for (; ; ) {
+    const n2 = batch();
+    deleted += n2;
+    if (n2 < PRUNE_BATCH) return { deleted };
+  }
+}
+function deleteBatch(db, ids2) {
+  const list2 = ids2.map(() => "?").join(", ");
+  db.prepare(`DELETE FROM findings WHERE scan_id IN (${list2})`).run(...ids2);
+  db.prepare(`DELETE FROM scan_cves WHERE scan_id IN (${list2})`).run(...ids2);
+  db.prepare(`DELETE FROM tree_cache WHERE scan_id IN (${list2})`).run(...ids2);
+  db.prepare(
+    `DELETE FROM cves WHERE first_seen_scan_id IN (${list2}) OR last_seen_scan_id IN (${list2})`
+  ).run(...ids2, ...ids2);
+  db.prepare(`DELETE FROM scans WHERE id IN (${list2})`).run(...ids2);
+}
+function runStartupMaintenance(storage, log, env = process.env) {
+  try {
+    const reaped = storage.scans.reapRunning();
+    if (reaped > 0) log(`reaped ${reaped} orphaned scan(s)`);
+  } catch (error2) {
+    log(`reaper failed (continuing): ${describe(error2)}`);
+  }
+  const limit = resolveRetentionLimit(env["GUARDIAN_RETENTION_SCANS"]);
+  if (limit.warning !== void 0) log(limit.warning);
+  if (limit.keep === 0) return;
+  try {
+    const { deleted } = pruneScans(storage.rawHandle(), limit.keep);
+    if (deleted > 0) {
+      log(`pruned ${deleted} scan(s) beyond the newest ${limit.keep} per project and scan type`);
+    }
+  } catch (error2) {
+    log(`retention failed (continuing): ${describe(error2)}`);
+  }
+}
+function describe(error2) {
+  return error2 instanceof Error ? error2.message : String(error2);
+}
 
 // src/resources/index.ts
 var RESOURCES = [];
@@ -55711,8 +55842,7 @@ async function main() {
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
   if (storageWarning) logErr(`db warning: ${storageWarning}`);
-  const reaped = storage.scans.reapRunning();
-  if (reaped > 0) logErr(`reaped ${reaped} orphaned scan(s)`);
+  runStartupMaintenance(storage, logErr);
   const shell = await probeShell(storage.runtimeMeta);
   if (shell === null) {
     logErr(

@@ -29,14 +29,25 @@
  * they are already scoped to an exact `project_path`, which a worktree's
  * path can never equal.
  */
+import { hostname } from 'node:os';
 import { nowIso, parseJsonArray } from './repoUtil.js';
 /** See the module comment. Wraps `fixpr/worktree.ts`'s `WORKTREE_DIR_PREFIX`. */
 const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
+/**
+ * How old a `running` scan with an UNKNOWN owner must be before the startup
+ * reaper fails it. Unknown means the owner cannot be checked from here: a row
+ * written before owners were recorded (migration 004), or one started on
+ * another host — a shared network drive, a container with its own hostname —
+ * whose pid means nothing on this machine. Long enough that no real scan is
+ * still running; short enough that a crashed one does not linger for days.
+ */
+export const UNKNOWN_OWNER_REAP_AFTER_MS = 6 * 60 * 60 * 1000;
 export class ScansRepo {
     insertStmt;
     finalizeStmt;
     markCancelledStmt;
-    reapRunningStmt;
+    listRunningStmt;
+    reapOneStmt;
     getByIdStmt;
     getLatestStmt;
     getLatestForProjectStmt;
@@ -48,9 +59,10 @@ export class ScansRepo {
         this.insertStmt = db.prepare(`
       INSERT INTO scans (
         id, scan_type, project_path, tree_hash,
-        started_at, status, tools_run, missing_tools, report_dir, meta
+        started_at, status, tools_run, missing_tools, report_dir, meta,
+        owner_pid, owner_host
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
         this.finalizeStmt = db.prepare(`
       UPDATE scans
@@ -64,10 +76,15 @@ export class ScansRepo {
       SET status = 'cancelled', finished_at = ?
       WHERE id = ? AND status = 'running'
     `);
-        this.reapRunningStmt = db.prepare(`
+        this.listRunningStmt = db.prepare(`
+      SELECT id, started_at, owner_pid, owner_host FROM scans WHERE status = 'running'
+    `);
+        // `AND status = 'running'`: the owner may have finalized the scan between
+        // listRunningStmt and this update; a finished scan is never overwritten.
+        this.reapOneStmt = db.prepare(`
       UPDATE scans
-      SET status = 'failed', finished_at = ?, error = 'reaped on startup'
-      WHERE status = 'running'
+      SET status = 'failed', finished_at = ?, error = ?
+      WHERE id = ? AND status = 'running'
     `);
         this.getByIdStmt = db.prepare(`SELECT * FROM scans WHERE id = ?`);
         // rowid DESC is a tiebreaker for scans inserted in the same millisecond
@@ -129,7 +146,7 @@ export class ScansRepo {
     }
     insert(input) {
         const started = nowIso();
-        this.insertStmt.run(input.scan_id, input.scan_type, input.project_path, input.tree_hash, started, 'running', '[]', '[]', input.report_dir ?? null, JSON.stringify(input.meta ?? {}));
+        this.insertStmt.run(input.scan_id, input.scan_type, input.project_path, input.tree_hash, started, 'running', '[]', '[]', input.report_dir ?? null, JSON.stringify(input.meta ?? {}), process.pid, hostname());
         return {
             scan_id: input.scan_id,
             scan_type: input.scan_type,
@@ -150,12 +167,29 @@ export class ScansRepo {
         this.markCancelledStmt.run(nowIso(), scanId);
     }
     /**
-     * Sweeps any scan left in `running` state by a previous server lifetime
-     * (crash, kill -9). Called once on startup.
+     * Fails scans left in `running` by a process that is gone (crash, kill -9).
+     * Called once on startup.
+     *
+     * Only DEAD owners' scans: several servers share one database, and the old
+     * sweep (`every running scan`) killed whatever another live server was
+     * scanning at the time. A scan whose owner is on this host is reaped when
+     * that pid no longer exists; one whose owner cannot be checked from here
+     * (none recorded, or another host) only once it is older than
+     * {@link UNKNOWN_OWNER_REAP_AFTER_MS}. A live owner's scan is never reaped,
+     * however old — including this process's own.
      */
-    reapRunning() {
-        const info = this.reapRunningStmt.run(nowIso());
-        return info.changes;
+    reapRunning(options = {}) {
+        const now = options.now ?? Date.now();
+        const host = options.host ?? hostname();
+        const isAlive = options.isAlive ?? pidIsAlive;
+        let reaped = 0;
+        for (const row of this.listRunningStmt.all()) {
+            const reason = reapReason(row, host, now, isAlive);
+            if (reason === null)
+                continue;
+            reaped += this.reapOneStmt.run(nowIso(), `reaped on startup: ${reason}`, row.id).changes;
+        }
+        return reaped;
     }
     getById(scanId) {
         const row = this.getByIdStmt.get(scanId);
@@ -215,6 +249,35 @@ export class ScansRepo {
     }
     attachTreeCache(args) {
         this.attachCacheStmt.run(args.tree_hash, args.scan_id, args.scan_type, nowIso());
+    }
+}
+/** Why `row` should be reaped, or null to leave it running. */
+function reapReason(row, host, now, isAlive) {
+    const pid = row.owner_pid;
+    if (pid !== null && Number.isInteger(pid) && pid > 0 && row.owner_host === host) {
+        return isAlive(pid) ? null : `owner process ${pid} is no longer running`;
+    }
+    // A timestamp that does not parse was not written by a live scan of ours.
+    const started = Date.parse(row.started_at);
+    if (Number.isNaN(started) || now - started > UNKNOWN_OWNER_REAP_AFTER_MS) {
+        return 'owner unknown on this host and the scan started more than 6 h ago';
+    }
+    return null;
+}
+/**
+ * `process.kill(pid, 0)` sends nothing; it only asks whether `pid` exists.
+ * ESRCH is the one answer that means "gone". EPERM means it exists but
+ * belongs to someone else — alive — and anything unexpected is treated as
+ * alive too: wrongly leaving a scan `running` is recoverable, wrongly failing
+ * a live one is not.
+ */
+function pidIsAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch (error) {
+        return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
     }
 }
 function rowToRecord(row) {
