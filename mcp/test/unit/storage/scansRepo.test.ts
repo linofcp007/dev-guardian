@@ -273,3 +273,43 @@ describe('ScansRepo', () => {
     expect(history[0]?.status).toBe('running');
   });
 });
+
+describe('ScansRepo.listCompletedOfTypes — latest-by-type as one scoped query', () => {
+  function completed(repo: ScansRepo, id: string, type: 'sast' | 'secrets' | 'sbom', project: string): void {
+    repo.insert({ scan_id: id, scan_type: type, project_path: project, tree_hash: 'h' });
+    repo.finalize({ scan_id: id, status: 'completed', tools_run: [], missing_tools: [] });
+  }
+
+  it('finds a scan behind any number of newer scans of other types and projects', () => {
+    const { repo } = freshRepo();
+    completed(repo, 'mine', 'sast', '/a');
+    for (let i = 0; i < 60; i++) {
+      completed(repo, `other-${i}`, i % 2 === 0 ? 'sast' : 'sbom', i % 3 === 0 ? '/a' : '/b');
+    }
+    // 60 newer rows would have pushed it out of listHistory(50).
+    const sast = repo.listCompletedOfTypes('/a', ['sast'], { limit: 100 }).map((s) => s.scan_id);
+    expect(sast.at(-1)).toBe('mine');
+    expect(repo.listCompletedOfTypes('/b', ['secrets'], { limit: 1 })).toEqual([]);
+  });
+
+  it('skips running and failed scans, and pages with offset', () => {
+    const { repo } = freshRepo();
+    completed(repo, 's1', 'sast', '/a');
+    repo.insert({ scan_id: 'running', scan_type: 'sast', project_path: '/a', tree_hash: 'h' });
+    repo.insert({ scan_id: 'failed', scan_type: 'sast', project_path: '/a', tree_hash: 'h' });
+    repo.finalize({ scan_id: 'failed', status: 'failed', tools_run: [], missing_tools: [] });
+    completed(repo, 's2', 'sast', '/a');
+    expect(repo.listCompletedOfTypes('/a', ['sast'], { limit: 10 }).map((s) => s.scan_id)).toEqual(['s2', 's1']);
+    expect(repo.listCompletedOfTypes('/a', ['sast'], { limit: 1, offset: 1 }).map((s) => s.scan_id)).toEqual(['s1']);
+  });
+
+  it('orders "before" by started_at then insertion, so same-millisecond scans still have a previous', () => {
+    const { db, repo } = freshRepo();
+    for (const id of ['x1', 'x2', 'x3']) completed(repo, id, 'sast', '/a');
+    db.prepare(`UPDATE scans SET started_at = '2026-01-01T00:00:00.000Z'`).run();
+    expect(repo.listCompletedOfTypes('/a', ['sast'], { limit: 5, beforeScanId: 'x3' }).map((s) => s.scan_id))
+      .toEqual(['x2', 'x1']);
+    expect(repo.sortNewestFirst(['x1', 'x3', 'x2', 'unknown'])).toEqual(['x3', 'x2', 'x1']);
+    expect(repo.countForProject('/a')).toBe(3);
+  });
+});

@@ -34,6 +34,7 @@ export class StackRepo {
   private readonly insertStmt: Statement<[string, string, string]>;
   private readonly getLatestStmt: Statement<[], StackRow>;
   private readonly listRecentStmt: Statement<[number], StackRow>;
+  private readonly getLatestForProjectStmt: Statement<[string], StackRow>;
 
   constructor(db: DB) {
     this.insertStmt = db.prepare(`
@@ -42,6 +43,9 @@ export class StackRepo {
     `);
     this.getLatestStmt = db.prepare<[], StackRow>(`
       SELECT * FROM stack_snapshots ORDER BY captured_at DESC LIMIT 1
+    `);
+    this.getLatestForProjectStmt = db.prepare<[string], StackRow>(`
+      SELECT * FROM stack_snapshots WHERE project_path = ? ORDER BY captured_at DESC, id DESC LIMIT 1
     `);
     this.listRecentStmt = db.prepare<[number], StackRow>(`
       SELECT * FROM stack_snapshots ORDER BY captured_at DESC LIMIT ?
@@ -62,6 +66,12 @@ export class StackRepo {
 
   getLatest(): PersistedStackSnapshot | null {
     const row = this.getLatestStmt.get();
+    return row ? rowToSnapshot(row) : null;
+  }
+
+  /** The newest snapshot of ONE project — what `guardian://stack` serves. */
+  getLatestForProject(projectPath: string): PersistedStackSnapshot | null {
+    const row = this.getLatestForProjectStmt.get(projectPath);
     return row ? rowToSnapshot(row) : null;
   }
 

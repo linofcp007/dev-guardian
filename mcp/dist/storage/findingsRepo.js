@@ -11,8 +11,13 @@
  *     (`SUPPRESSION_MATCHES_F`), so one written before identities existed
  *     still works, and one written after survives a line shift.
  *
- * The `open` list is the canonical "what's wrong right now" view: it joins
- * the latest completed scan with the suppressions table.
+ * **A project's open findings are NOT read here.** They are the union over
+ * every state-describing scan type of that type's newest usable scan — see
+ * `history/openSet.ts#openSetForProject`, which every resource and history
+ * reader uses. `listOpen`, `listOpenForProject` and `listBySeverity` below
+ * read ONE scan (the latest completed row, of any type) and are kept only for
+ * callers that have not moved yet: after an SBOM, a stack detection or a scan
+ * of another type, they answer from that scan.
  *
  * **The UNSCOPED "latest scan" queries (`listOpen`, `listBySeverity`)
  * exclude `create_fix_pr`'s own verification re-scans (task-7-review.md
@@ -59,6 +64,7 @@ export class FindingsRepo {
     listOpenForProjectStmt;
     listBySeverityLatestStmt;
     countBySeverityStmt;
+    findInProjectStmt;
     constructor(db) {
         this.db = db;
         this.insertStmt = db.prepare(`
@@ -151,6 +157,13 @@ export class FindingsRepo {
         )
       ORDER BY f.fingerprint ASC
     `);
+        this.findInProjectStmt = db.prepare(`
+      SELECT f.* FROM findings f
+      JOIN scans s ON s.id = f.scan_id
+      WHERE f.fingerprint = ? AND s.project_path = ? AND s.status = 'completed'
+      ORDER BY s.started_at DESC, s.rowid DESC
+      LIMIT 1
+    `);
         this.countBySeverityStmt = db.prepare(`
       SELECT severity, COUNT(*) AS n FROM findings
       WHERE scan_id = ?
@@ -210,6 +223,18 @@ export class FindingsRepo {
     }
     listBySeverity(severity) {
         return this.listBySeverityLatestStmt.all(severity).map(rowToFinding);
+    }
+    /**
+     * The newest completed scan OF ONE PROJECT that reported `fingerprint`,
+     * with the finding as that scan stored it — whatever type the scan was
+     * and however many scans ran since. `suggest_fix` looked only in the
+     * single latest scan in the database, so a finding from a SAST run could
+     * not be found once anything else (a secrets scan, another project's
+     * scan) had run after it.
+     */
+    findLatestInProject(projectPath, fingerprint) {
+        const row = this.findInProjectStmt.get(fingerprint, projectPath);
+        return row ? { finding: rowToFinding(row), scan_id: row.scan_id } : null;
     }
     /**
      * Counts findings per severity for one scan, returning the full record

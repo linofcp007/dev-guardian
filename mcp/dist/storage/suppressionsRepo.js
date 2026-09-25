@@ -18,6 +18,7 @@ export class SuppressionsRepo {
     isSuppressedStmt;
     listForFingerprintStmt;
     adoptIdentitiesStmt;
+    listActiveForRuleStmt;
     constructor(db) {
         this.insertStmt = db.prepare(`
       INSERT INTO suppressions (
@@ -50,6 +51,17 @@ export class SuppressionsRepo {
         this.listForFingerprintStmt = db.prepare(`
       SELECT * FROM suppressions WHERE finding_fingerprint = ?
       ORDER BY created_at DESC
+    `);
+        this.listActiveForRuleStmt = db.prepare(`
+      SELECT s.* FROM suppressions s
+      WHERE (s.expires_at IS NULL OR s.expires_at > ?)
+        AND EXISTS (
+          SELECT 1 FROM findings f
+          WHERE (f.fingerprint = s.finding_fingerprint OR f.identity = s.finding_identity)
+            AND f.tool = ? AND f.rule_id = ?
+        )
+      ORDER BY s.created_at DESC, s.id DESC
+      LIMIT ?
     `);
         // A suppression written before schema 7 knows only a fingerprint. When a
         // scan reports that fingerprint again, its row carries the identity: copy
@@ -87,6 +99,14 @@ export class SuppressionsRepo {
     }
     listForFingerprint(fingerprint) {
         return this.listForFingerprintStmt.all(fingerprint).map(rowToSuppression);
+    }
+    /**
+     * Active suppressions of findings reported by `tool` under `ruleId` —
+     * matched through the findings table on either key, since a suppression
+     * stores only the finding's fingerprint/identity. Newest first.
+     */
+    listActiveForRule(tool, ruleId, limit) {
+        return this.listActiveForRuleStmt.all(nowIso(), tool, ruleId, limit).map(rowToSuppression);
     }
     /**
      * Give every identity-less suppression whose fingerprint `scanId` reported

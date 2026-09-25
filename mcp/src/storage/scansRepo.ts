@@ -28,6 +28,15 @@
  * `getLatestForProject` / `listHistoryForProject` need no such exclusion:
  * they are already scoped to an exact `project_path`, which a worktree's
  * path can never equal.
+ *
+ * Since then every history reader of the resources and of `risk_score`,
+ * `diff_scans`, `regression_alert`, `set_baseline`, `report_export`,
+ * `suggest_fix`, `create_github_issues`, `triage_findings`,
+ * `prioritize_findings` and `validate_finding` moved to the project- AND
+ * type-scoped `listCompletedOfTypes` (through `history/openSet.ts`): "the
+ * latest scan of type X" is one SQL query per project, never a search of the
+ * 50 (or 200) newest rows of the whole database. `getLatest` / `listHistory`
+ * remain for the callers outside that set.
  */
 
 import { hostname } from 'node:os';
@@ -133,8 +142,10 @@ export class ScansRepo {
   private readonly listHistoryForProjectStmt: Statement<[string, number], ScanRow>;
   private readonly findCacheStmt: Statement<[string, string], ScanRow>;
   private readonly attachCacheStmt: Statement<[string, string, string, string]>;
+  private readonly countForProjectStmt: Statement<[string], { n: number }>;
+  private readonly completedOfTypesCache = new Map<string, Statement<(string | number)[], ScanRow>>();
 
-  constructor(db: DB) {
+  constructor(private readonly db: DB) {
     this.insertStmt = db.prepare(`
       INSERT INTO scans (
         id, scan_type, project_path, tree_hash,
@@ -236,6 +247,10 @@ export class ScansRepo {
       INSERT OR REPLACE INTO tree_cache (tree_hash, scan_id, scan_type, computed_at)
       VALUES (?, ?, ?, ?)
     `);
+
+    this.countForProjectStmt = db.prepare<[string], { n: number }>(
+      `SELECT COUNT(*) AS n FROM scans WHERE project_path = ?`,
+    );
   }
 
   insert(input: InsertScanInput): ScanRecord {
@@ -328,15 +343,11 @@ export class ScansRepo {
   }
 
   /**
-   * The latest completed scan in the WHOLE database, from ANY project — no
-   * `project_path` filter. Correct for a caller with no project in scope
-   * (most resources and tools here take no `project_path` input at all and
-   * report on "whatever this server last scanned"). A caller that DID
-   * resolve a `project_path` and attributes something to the scan it names
-   * (e.g. `validate_finding`'s `findings_from_scan`) must use
-   * `getLatestForProject` instead — see that method and
-   * `findingsRepo.ts`'s `listOpen`/`listOpenForProject` for the identical
-   * split.
+   * The latest completed scan in the WHOLE database, from ANY project and of
+   * ANY type — no `project_path` filter. Only for a caller with genuinely no
+   * project in scope; a reader answering for a project uses
+   * `history/openSet.ts` (the open set, or the latest usable scan of a type),
+   * and one that wants that project's history uses `getLatestForProject`.
    */
   getLatest(): ScanRecord | null {
     const row = this.getLatestStmt.get();
@@ -372,6 +383,75 @@ export class ScansRepo {
    */
   listHistoryForProject(projectPath: string, limit = 50): ScanRecord[] {
     return this.listHistoryForProjectStmt.all(projectPath, limit).map(rowToRecord);
+  }
+
+  /**
+   * Completed scans of `types` for ONE project, newest first, as one SQL
+   * query — the latest scan of a type is found however many other scans
+   * (of other types, or of other projects) were written after it. Every
+   * "find the latest scan of type X" used to search `listHistory(50)`, a
+   * window of the 50 newest rows in the whole database, and read "no such
+   * scan" once 50 others had run since.
+   *
+   * `beforeScanId` keeps only scans strictly older than that one, in the
+   * same (started_at, rowid) order — how "the previous scan" is found.
+   * Paged by `limit` / `offset` for callers that skip some rows (a scan with
+   * coverage none, a scoped run) and must keep looking.
+   */
+  listCompletedOfTypes(
+    projectPath: string,
+    types: readonly string[],
+    opts: { limit: number; offset?: number; beforeScanId?: string },
+  ): ScanRecord[] {
+    if (types.length === 0) return [];
+    const before = opts.beforeScanId !== undefined;
+    const stmt = this.completedOfTypesStmt(types.length, before);
+    const params: (string | number)[] = [projectPath, ...types];
+    if (opts.beforeScanId !== undefined) params.push(opts.beforeScanId);
+    params.push(opts.limit, opts.offset ?? 0);
+    return stmt.all(...params).map(rowToRecord);
+  }
+
+  /**
+   * `scanIds`, newest first in the one order every "latest" query here uses
+   * — `started_at DESC, rowid DESC` — so two scans started in the same
+   * millisecond still sort the way SQL picked them. Unknown ids are dropped.
+   */
+  sortNewestFirst(scanIds: readonly string[]): string[] {
+    if (scanIds.length === 0) return [];
+    const placeholders = scanIds.map(() => '?').join(', ');
+    return this.db
+      .prepare<string[], { id: string }>(
+        `SELECT id FROM scans WHERE id IN (${placeholders}) ORDER BY started_at DESC, rowid DESC`,
+      )
+      .all(...scanIds)
+      .map((r) => r.id);
+  }
+
+  /** How many scans (any status, any type) one project has recorded. */
+  countForProject(projectPath: string): number {
+    return this.countForProjectStmt.get(projectPath)?.n ?? 0;
+  }
+
+  private completedOfTypesStmt(arity: number, before: boolean): Statement<(string | number)[], ScanRow> {
+    const key = `${arity}:${before ? 'b' : '-'}`;
+    const cached = this.completedOfTypesCache.get(key);
+    if (cached !== undefined) return cached;
+    const placeholders = Array.from({ length: arity }, () => '?').join(', ');
+    // Row values: "strictly before" in exactly the ORDER BY below, so two
+    // scans started in the same millisecond still have a defined previous.
+    const beforeClause = before
+      ? 'AND (started_at, rowid) < (SELECT started_at, rowid FROM scans WHERE id = ?)'
+      : '';
+    const stmt = this.db.prepare<(string | number)[], ScanRow>(`
+      SELECT * FROM scans
+      WHERE project_path = ? AND status = 'completed' AND scan_type IN (${placeholders})
+        ${beforeClause}
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT ? OFFSET ?
+    `);
+    this.completedOfTypesCache.set(key, stmt);
+    return stmt;
   }
 
   /**
