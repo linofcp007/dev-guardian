@@ -2999,7 +2999,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve18.call(this, root, ref);
+      let _sch = resolve20.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3026,7 +3026,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve18(root, ref) {
+    function resolve20(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3852,11 +3852,11 @@ var require_fast_uri = __commonJS({
         normalizeString(uri, options);
       } else if (typeof uri === "object") {
         uri = /** @type {T} */
-        parse5(serialize2(uri, options), options);
+        parse6(serialize2(uri, options), options);
       }
       return uri;
     }
-    function resolve18(baseURI, relativeURI, options) {
+    function resolve20(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -3892,8 +3892,8 @@ var require_fast_uri = __commonJS({
     function resolveComponent(base, relative22, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
-        base = parse5(serialize2(base, options), options);
-        relative22 = parse5(serialize2(relative22, options), options);
+        base = parse6(serialize2(base, options), options);
+        relative22 = parse6(serialize2(relative22, options), options);
       }
       options = options || {};
       if (!options.tolerant && relative22.scheme) {
@@ -4192,7 +4192,7 @@ var require_fast_uri = __commonJS({
       }
       return { parsed, malformedAuthorityOrPort, malformedPercentEncoding, malformedSchemeSpecific, malformedHost, malformedScheme };
     }
-    function parse5(uri, opts) {
+    function parse6(uri, opts) {
       return parseWithStatus(uri, opts).parsed;
     }
     function normalizeString(uri, opts) {
@@ -4225,11 +4225,11 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve18,
+      resolve: resolve20,
       resolveComponent,
       equal,
       serialize: serialize2,
-      parse: parse5
+      parse: parse6
     };
     module.exports = fastUri;
     module.exports.default = fastUri;
@@ -6474,11 +6474,11 @@ var require_format = __commonJS({
           }
           function getFormat(fmtDef) {
             const code = fmtDef instanceof RegExp ? (0, codegen_1.regexpCode)(fmtDef) : opts.code.formats ? (0, codegen_1._)`${opts.code.formats}${(0, codegen_1.getProperty)(schema)}` : void 0;
-            const fmt = gen.scopeValue("formats", { key: schema, ref: fmtDef, code });
+            const fmt2 = gen.scopeValue("formats", { key: schema, ref: fmtDef, code });
             if (typeof fmtDef == "object" && !(fmtDef instanceof RegExp)) {
-              return [fmtDef.type || "string", fmtDef.validate, (0, codegen_1._)`${fmt}.validate`];
+              return [fmtDef.type || "string", fmtDef.validate, (0, codegen_1._)`${fmt2}.validate`];
             }
-            return ["string", fmtDef, fmt];
+            return ["string", fmtDef, fmt2];
           }
           function validCondition() {
             if (typeof formatDef == "object" && !(formatDef instanceof RegExp) && formatDef.async) {
@@ -7140,8 +7140,8 @@ var require_limit = __commonJS({
             ref: self.formats,
             code: opts.code.formats
           });
-          const fmt = gen.const("fmt", (0, codegen_1._)`${fmts}[${fCxt.schemaCode}]`);
-          cxt.fail$data((0, codegen_1.or)((0, codegen_1._)`typeof ${fmt} != "object"`, (0, codegen_1._)`${fmt} instanceof RegExp`, (0, codegen_1._)`typeof ${fmt}.compare != "function"`, compareCode(fmt)));
+          const fmt2 = gen.const("fmt", (0, codegen_1._)`${fmts}[${fCxt.schemaCode}]`);
+          cxt.fail$data((0, codegen_1.or)((0, codegen_1._)`typeof ${fmt2} != "object"`, (0, codegen_1._)`${fmt2} instanceof RegExp`, (0, codegen_1._)`typeof ${fmt2}.compare != "function"`, compareCode(fmt2)));
         }
         function validateFormat() {
           const format2 = fCxt.schema;
@@ -7151,15 +7151,15 @@ var require_limit = __commonJS({
           if (typeof fmtDef != "object" || fmtDef instanceof RegExp || typeof fmtDef.compare != "function") {
             throw new Error(`"${keyword}": format "${format2}" does not define "compare" function`);
           }
-          const fmt = gen.scopeValue("formats", {
+          const fmt2 = gen.scopeValue("formats", {
             key: format2,
             ref: fmtDef,
             code: opts.code.formats ? (0, codegen_1._)`${opts.code.formats}${(0, codegen_1.getProperty)(format2)}` : void 0
           });
-          cxt.fail$data(compareCode(fmt));
+          cxt.fail$data(compareCode(fmt2));
         }
-        function compareCode(fmt) {
-          return (0, codegen_1._)`${fmt}.compare(${data}, ${schemaCode}) ${KWDs[keyword].fail} 0`;
+        function compareCode(fmt2) {
+          return (0, codegen_1._)`${fmt2}.compare(${data}, ${schemaCode}) ${KWDs[keyword].fail} 0`;
         }
       },
       dependencies: ["format"]
@@ -8285,12 +8285,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve18, reject) {
+        return new Promise(function(resolve20, reject) {
           isexe(path6, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve18(is);
+              resolve20(is);
             }
           });
         });
@@ -8356,27 +8356,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve18, reject) => {
+      const step = (i2) => new Promise((resolve20, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve18(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve20(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path6.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve18(subStep(p, i2, 0));
+        resolve20(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve18, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve20, reject) => {
         if (ii === pathExt.length)
-          return resolve18(step(i2 + 1));
+          return resolve20(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve18(p + ext);
+              return resolve20(p + ext);
           }
-          return resolve18(subStep(p, i2, ii + 1));
+          return resolve20(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -8588,7 +8588,7 @@ var require_parse = __commonJS({
       }
       return parsed;
     }
-    function parse5(command, args, options) {
+    function parse6(command, args, options) {
       if (args && !Array.isArray(args)) {
         options = args;
         args = null;
@@ -8607,7 +8607,7 @@ var require_parse = __commonJS({
       };
       return options.shell ? parsed : parseNonShell(parsed);
     }
-    module.exports = parse5;
+    module.exports = parse6;
   }
 });
 
@@ -8666,16 +8666,16 @@ var require_cross_spawn = __commonJS({
   "node_modules/cross-spawn/index.js"(exports, module) {
     "use strict";
     var cp = __require("child_process");
-    var parse5 = require_parse();
+    var parse6 = require_parse();
     var enoent = require_enoent();
     function spawn2(command, args, options) {
-      const parsed = parse5(command, args, options);
+      const parsed = parse6(command, args, options);
       const spawned = cp.spawn(parsed.command, parsed.args, parsed.options);
       enoent.hookChildProcess(spawned, parsed);
       return spawned;
     }
     function spawnSync2(command, args, options) {
-      const parsed = parse5(command, args, options);
+      const parsed = parse6(command, args, options);
       const result = cp.spawnSync(parsed.command, parsed.args, parsed.options);
       result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
       return result;
@@ -8683,7 +8683,7 @@ var require_cross_spawn = __commonJS({
     module.exports = spawn2;
     module.exports.spawn = spawn2;
     module.exports.sync = spawnSync2;
-    module.exports._parse = parse5;
+    module.exports._parse = parse6;
     module.exports._enoent = enoent;
   }
 });
@@ -9456,8 +9456,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve18, reject) => {
-        Object.assign(methods, { resolve: resolve18, reject });
+      const promise = new Promise((resolve20, reject) => {
+        Object.assign(methods, { resolve: resolve20, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -13704,16 +13704,16 @@ var init_mjs = __esm({
     };
     SignalExitBase = class {
     };
-    signalExitWrap = (handler44) => {
+    signalExitWrap = (handler45) => {
       return {
         onExit(cb, opts) {
-          return handler44.onExit(cb, opts);
+          return handler45.onExit(cb, opts);
         },
         load() {
-          return handler44.load();
+          return handler45.load();
         },
         unload() {
-          return handler44.unload();
+          return handler45.unload();
         }
       };
     };
@@ -14755,11 +14755,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve18 = promise.resolve.bind(promise);
-      return { resolve: resolve18, promises };
+      const resolve20 = promise.resolve.bind(promise);
+      return { resolve: resolve20, promises };
     };
-    waitForConcurrentStreams = async ({ resolve: resolve18, promises }, subprocess) => {
-      resolve18();
+    waitForConcurrentStreams = async ({ resolve: resolve20, promises }, subprocess) => {
+      resolve20();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -14831,7 +14831,7 @@ var init_readable = __esm({
       const binary = binaryOption || BINARY_ENCODINGS.has(encoding);
       const { subprocessStdout, waitReadableDestroy } = getSubprocessStdout(subprocess, from, concurrentStreams);
       const { readableEncoding, readableObjectMode, readableHighWaterMark } = getReadableOptions(subprocessStdout, binary);
-      const { read, onStdoutDataDone } = getReadableMethods({
+      const { read: read2, onStdoutDataDone } = getReadableMethods({
         subprocessStdout,
         subprocess,
         binary,
@@ -14839,7 +14839,7 @@ var init_readable = __esm({
         preserveNewlines
       });
       const readable2 = new Readable3({
-        read,
+        read: read2,
         destroy: callbackify2(onReadableDestroy.bind(void 0, { subprocessStdout, subprocess, waitReadableDestroy })),
         highWaterMark: readableHighWaterMark,
         objectMode: readableObjectMode,
@@ -15001,7 +15001,7 @@ var init_duplex = __esm({
       const { subprocessStdout, waitReadableDestroy } = getSubprocessStdout(subprocess, from, concurrentStreams);
       const { subprocessStdin, waitWritableFinal, waitWritableDestroy } = getSubprocessStdin(subprocess, to, concurrentStreams);
       const { readableEncoding, readableObjectMode, readableHighWaterMark } = getReadableOptions(subprocessStdout, binary);
-      const { read, onStdoutDataDone } = getReadableMethods({
+      const { read: read2, onStdoutDataDone } = getReadableMethods({
         subprocessStdout,
         subprocess,
         binary,
@@ -15009,7 +15009,7 @@ var init_duplex = __esm({
         preserveNewlines
       });
       const duplex2 = new Duplex3({
-        read,
+        read: read2,
         ...getWritableMethods(subprocessStdin, subprocess, waitWritableFinal),
         destroy: callbackify4(onDuplexDestroy.bind(void 0, {
           subprocessStdout,
@@ -17128,7 +17128,7 @@ var require_log = __commonJS({
       if (logLevel === "debug")
         console.log(...messages);
     }
-    function warn(logLevel, warning) {
+    function warn2(logLevel, warning) {
       if (logLevel === "debug" || logLevel === "warn") {
         if (typeof node_process.emitWarning === "function")
           node_process.emitWarning(warning);
@@ -17137,7 +17137,7 @@ var require_log = __commonJS({
       }
     }
     exports.debug = debug;
-    exports.warn = warn;
+    exports.warn = warn2;
   }
 });
 
@@ -18471,18 +18471,18 @@ var require_set = __commonJS({
       }
       static from(schema, iterable, ctx) {
         const { replacer } = ctx;
-        const set2 = new this(schema);
+        const set3 = new this(schema);
         if (iterable && Symbol.iterator in Object(iterable))
           for (let value of iterable) {
             if (typeof replacer === "function")
               value = replacer.call(iterable, value, value);
-            set2.items.push(Pair.createPair(value, null, ctx));
+            set3.items.push(Pair.createPair(value, null, ctx));
           }
-        return set2;
+        return set3;
       }
     };
     YAMLSet.tag = "tag:yaml.org,2002:set";
-    var set = {
+    var set2 = {
       collection: "map",
       identify: (value) => value instanceof Set,
       nodeClass: YAMLSet,
@@ -18501,7 +18501,7 @@ var require_set = __commonJS({
       }
     };
     exports.YAMLSet = YAMLSet;
-    exports.set = set;
+    exports.set = set2;
   }
 });
 
@@ -18608,7 +18608,7 @@ var require_schema3 = __commonJS({
     var merge2 = require_merge();
     var omap = require_omap();
     var pairs = require_pairs();
-    var set = require_set();
+    var set2 = require_set();
     var timestamp = require_timestamp();
     var schema = [
       map.map,
@@ -18628,7 +18628,7 @@ var require_schema3 = __commonJS({
       merge2.merge,
       omap.omap,
       pairs.pairs,
-      set.set,
+      set2.set,
       timestamp.intTime,
       timestamp.floatTime,
       timestamp.timestamp
@@ -18655,7 +18655,7 @@ var require_tags = __commonJS({
     var omap = require_omap();
     var pairs = require_pairs();
     var schema$2 = require_schema3();
-    var set = require_set();
+    var set2 = require_set();
     var timestamp = require_timestamp();
     var schemas = /* @__PURE__ */ new Map([
       ["core", schema.schema],
@@ -18681,7 +18681,7 @@ var require_tags = __commonJS({
       omap: omap.omap,
       pairs: pairs.pairs,
       seq: seq.seq,
-      set: set.set,
+      set: set2.set,
       timestamp: timestamp.timestamp
     };
     var coreKnownTags = {
@@ -18689,7 +18689,7 @@ var require_tags = __commonJS({
       "tag:yaml.org,2002:merge": merge2.merge,
       "tag:yaml.org,2002:omap": omap.omap,
       "tag:yaml.org,2002:pairs": pairs.pairs,
-      "tag:yaml.org,2002:set": set.set,
+      "tag:yaml.org,2002:set": set2.set,
       "tag:yaml.org,2002:timestamp": timestamp.timestamp
     };
     function getTags(customTags, schemaName, addMergeTag) {
@@ -22713,7 +22713,7 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse5(src, reviver, options) {
+    function parse6(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
@@ -22754,7 +22754,7 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
-    exports.parse = parse5;
+    exports.parse = parse6;
     exports.parseAllDocuments = parseAllDocuments;
     exports.parseDocument = parseDocument2;
     exports.stringify = stringify;
@@ -26993,10 +26993,10 @@ function jsonStringifyReplacer(_, value) {
   return value;
 }
 function cached(getter) {
-  const set = false;
+  const set2 = false;
   return {
     get value() {
-      if (!set) {
+      if (!set2) {
         const value = getter();
         Object.defineProperty(this, "value", { value });
         return value;
@@ -27022,10 +27022,10 @@ function floatSafeRemainder2(val, step) {
   return valInt % stepInt / 10 ** decCount;
 }
 function defineLazy(object3, key, getter) {
-  const set = false;
+  const set2 = false;
   Object.defineProperty(object3, key, {
     get() {
-      if (!set) {
+      if (!set2) {
         const value = getter();
         object3[key] = value;
         return value;
@@ -34643,25 +34643,25 @@ var Protocol = class {
     const error2 = McpError.fromError(ErrorCode.ConnectionClosed, "Connection closed");
     this._transport = void 0;
     this.onclose?.();
-    for (const handler44 of responseHandlers.values()) {
-      handler44(error2);
+    for (const handler45 of responseHandlers.values()) {
+      handler45(error2);
     }
   }
   _onerror(error2) {
     this.onerror?.(error2);
   }
   _onnotification(notification) {
-    const handler44 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
-    if (handler44 === void 0) {
+    const handler45 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
+    if (handler45 === void 0) {
       return;
     }
-    Promise.resolve().then(() => handler44(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
+    Promise.resolve().then(() => handler45(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
   }
   _onrequest(request, extra) {
-    const handler44 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
+    const handler45 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
     const capturedTransport = this._transport;
     const relatedTaskId = request.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
-    if (handler44 === void 0) {
+    if (handler45 === void 0) {
       const errorResponse = {
         jsonrpc: "2.0",
         id: request.id,
@@ -34725,7 +34725,7 @@ var Protocol = class {
       if (taskCreationParams) {
         this.assertTaskHandlerCapability(request.method);
       }
-    }).then(() => handler44(request, fullExtra)).then(async (result) => {
+    }).then(() => handler45(request, fullExtra)).then(async (result) => {
       if (abortController.signal.aborted) {
         return;
       }
@@ -34774,8 +34774,8 @@ var Protocol = class {
   _onprogress(notification) {
     const { progressToken, ...params } = notification.params;
     const messageId = Number(progressToken);
-    const handler44 = this._progressHandlers.get(messageId);
-    if (!handler44) {
+    const handler45 = this._progressHandlers.get(messageId);
+    if (!handler45) {
       this._onerror(new Error(`Received a progress notification for an unknown token: ${JSON.stringify(notification)}`));
       return;
     }
@@ -34792,7 +34792,7 @@ var Protocol = class {
         return;
       }
     }
-    handler44(params);
+    handler45(params);
   }
   _onresponse(response) {
     const messageId = Number(response.id);
@@ -34807,8 +34807,8 @@ var Protocol = class {
       }
       return;
     }
-    const handler44 = this._responseHandlers.get(messageId);
-    if (handler44 === void 0) {
+    const handler45 = this._responseHandlers.get(messageId);
+    if (handler45 === void 0) {
       this._onerror(new Error(`Received a response for an unknown message ID: ${JSON.stringify(response)}`));
       return;
     }
@@ -34829,10 +34829,10 @@ var Protocol = class {
       this._progressHandlers.delete(messageId);
     }
     if (isJSONRPCResultResponse(response)) {
-      handler44(response);
+      handler45(response);
     } else {
       const error2 = McpError.fromError(response.error.code, response.error.message, response.error.data);
-      handler44(error2);
+      handler45(error2);
     }
   }
   get transport() {
@@ -34920,7 +34920,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve18) => setTimeout(resolve18, pollInterval));
+        await new Promise((resolve20) => setTimeout(resolve20, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -34937,7 +34937,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve18, reject) => {
+    return new Promise((resolve20, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -35015,7 +35015,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve18(parseResult.data);
+            resolve20(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -35030,9 +35030,9 @@ var Protocol = class {
       const relatedTaskId = relatedTask?.taskId;
       if (relatedTaskId) {
         const responseResolver = (response) => {
-          const handler44 = this._responseHandlers.get(messageId);
-          if (handler44) {
-            handler44(response);
+          const handler45 = this._responseHandlers.get(messageId);
+          if (handler45) {
+            handler45(response);
           } else {
             this._onerror(new Error(`Response handler missing for side-channeled request ${messageId}`));
           }
@@ -35169,12 +35169,12 @@ var Protocol = class {
    *
    * Note that this will replace any previous request handler for the same method.
    */
-  setRequestHandler(requestSchema, handler44) {
+  setRequestHandler(requestSchema, handler45) {
     const method = getMethodLiteral(requestSchema);
     this.assertRequestHandlerCapability(method);
     this._requestHandlers.set(method, (request, extra) => {
       const parsed = parseWithCompat(requestSchema, request);
-      return Promise.resolve(handler44(parsed, extra));
+      return Promise.resolve(handler45(parsed, extra));
     });
   }
   /**
@@ -35196,11 +35196,11 @@ var Protocol = class {
    *
    * Note that this will replace any previous notification handler for the same method.
    */
-  setNotificationHandler(notificationSchema, handler44) {
+  setNotificationHandler(notificationSchema, handler45) {
     const method = getMethodLiteral(notificationSchema);
     this._notificationHandlers.set(method, (notification) => {
       const parsed = parseWithCompat(notificationSchema, notification);
-      return Promise.resolve(handler44(parsed));
+      return Promise.resolve(handler45(parsed));
     });
   }
   /**
@@ -35276,12 +35276,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve18, reject) => {
+    return new Promise((resolve20, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve18, interval);
+      const timeoutId = setTimeout(resolve20, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -35750,7 +35750,7 @@ var Server = class extends Protocol {
   /**
    * Override request handler registration to enforce server-side validation for tools/call.
    */
-  setRequestHandler(requestSchema, handler44) {
+  setRequestHandler(requestSchema, handler45) {
     const shape = getObjectShape(requestSchema);
     const methodSchema = shape?.method;
     if (!methodSchema) {
@@ -35769,7 +35769,7 @@ var Server = class extends Protocol {
           throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage4}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler44(request, extra));
+        const result = await Promise.resolve(handler45(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
@@ -35787,7 +35787,7 @@ var Server = class extends Protocol {
       };
       return super.setRequestHandler(requestSchema, wrappedHandler);
     }
-    return super.setRequestHandler(requestSchema, handler44);
+    return super.setRequestHandler(requestSchema, handler45);
   }
   assertCapabilityForMethod(method) {
     switch (method) {
@@ -36360,13 +36360,13 @@ var ExperimentalMcpServerTasks = class {
   constructor(_mcpServer) {
     this._mcpServer = _mcpServer;
   }
-  registerToolTask(name, config2, handler44) {
+  registerToolTask(name, config2, handler45) {
     const execution = { taskSupport: "required", ...config2.execution };
     if (execution.taskSupport === "forbidden") {
       throw new Error(`Cannot register task-based tool '${name}' with taskSupport 'forbidden'. Use registerTool() instead.`);
     }
     const mcpServerInternal = this._mcpServer;
-    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler44);
+    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler45);
   }
 };
 
@@ -36424,24 +36424,24 @@ var McpServer = class {
       }
     });
     this.server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: Object.entries(this._registeredTools).filter(([, tool47]) => tool47.enabled).map(([name, tool47]) => {
+      tools: Object.entries(this._registeredTools).filter(([, tool48]) => tool48.enabled).map(([name, tool48]) => {
         const toolDefinition = {
           name,
-          title: tool47.title,
-          description: tool47.description,
+          title: tool48.title,
+          description: tool48.description,
           inputSchema: (() => {
-            const obj = normalizeObjectSchema(tool47.inputSchema);
+            const obj = normalizeObjectSchema(tool48.inputSchema);
             return obj ? toJsonSchemaCompat(obj, {
               strictUnions: true,
               pipeStrategy: "input"
             }) : EMPTY_OBJECT_JSON_SCHEMA;
           })(),
-          annotations: tool47.annotations,
-          execution: tool47.execution,
-          _meta: tool47._meta
+          annotations: tool48.annotations,
+          execution: tool48.execution,
+          _meta: tool48._meta
         };
-        if (tool47.outputSchema) {
-          const obj = normalizeObjectSchema(tool47.outputSchema);
+        if (tool48.outputSchema) {
+          const obj = normalizeObjectSchema(tool48.outputSchema);
           if (obj) {
             toolDefinition.outputSchema = toJsonSchemaCompat(obj, {
               strictUnions: true,
@@ -36454,16 +36454,16 @@ var McpServer = class {
     }));
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       try {
-        const tool47 = this._registeredTools[request.params.name];
-        if (!tool47) {
+        const tool48 = this._registeredTools[request.params.name];
+        if (!tool48) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
         }
-        if (!tool47.enabled) {
+        if (!tool48.enabled) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} disabled`);
         }
         const isTaskRequest = !!request.params.task;
-        const taskSupport = tool47.execution?.taskSupport;
-        const isTaskHandler = "createTask" in tool47.handler;
+        const taskSupport = tool48.execution?.taskSupport;
+        const isTaskHandler = "createTask" in tool48.handler;
         if ((taskSupport === "required" || taskSupport === "optional") && !isTaskHandler) {
           throw new McpError(ErrorCode.InternalError, `Tool ${request.params.name} has taskSupport '${taskSupport}' but was not registered with registerToolTask`);
         }
@@ -36471,14 +36471,14 @@ var McpServer = class {
           throw new McpError(ErrorCode.MethodNotFound, `Tool ${request.params.name} requires task augmentation (taskSupport: 'required')`);
         }
         if (taskSupport === "optional" && !isTaskRequest && isTaskHandler) {
-          return await this.handleAutomaticTaskPolling(tool47, request, extra);
+          return await this.handleAutomaticTaskPolling(tool48, request, extra);
         }
-        const args = await this.validateToolInput(tool47, request.params.arguments, request.params.name);
-        const result = await this.executeToolHandler(tool47, args, extra);
+        const args = await this.validateToolInput(tool48, request.params.arguments, request.params.name);
+        const result = await this.executeToolHandler(tool48, args, extra);
         if (isTaskRequest) {
           return result;
         }
-        await this.validateToolOutput(tool47, result, request.params.name);
+        await this.validateToolOutput(tool48, result, request.params.name);
         return result;
       } catch (error2) {
         if (error2 instanceof McpError) {
@@ -36511,12 +36511,12 @@ var McpServer = class {
   /**
    * Validates tool input arguments against the tool's input schema.
    */
-  async validateToolInput(tool47, args, toolName) {
-    if (!tool47.inputSchema) {
+  async validateToolInput(tool48, args, toolName) {
+    if (!tool48.inputSchema) {
       return void 0;
     }
-    const inputObj = normalizeObjectSchema(tool47.inputSchema);
-    const schemaToParse = inputObj ?? tool47.inputSchema;
+    const inputObj = normalizeObjectSchema(tool48.inputSchema);
+    const schemaToParse = inputObj ?? tool48.inputSchema;
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36528,8 +36528,8 @@ var McpServer = class {
   /**
    * Validates tool output against the tool's output schema.
    */
-  async validateToolOutput(tool47, result, toolName) {
-    if (!tool47.outputSchema) {
+  async validateToolOutput(tool48, result, toolName) {
+    if (!tool48.outputSchema) {
       return;
     }
     if (!("content" in result)) {
@@ -36541,7 +36541,7 @@ var McpServer = class {
     if (!result.structuredContent) {
       throw new McpError(ErrorCode.InvalidParams, `Output validation error: Tool ${toolName} has an output schema but no structured content was provided`);
     }
-    const outputObj = normalizeObjectSchema(tool47.outputSchema);
+    const outputObj = normalizeObjectSchema(tool48.outputSchema);
     const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36552,49 +36552,49 @@ var McpServer = class {
   /**
    * Executes a tool handler (either regular or task-based).
    */
-  async executeToolHandler(tool47, args, extra) {
-    const handler44 = tool47.handler;
-    const isTaskHandler = "createTask" in handler44;
+  async executeToolHandler(tool48, args, extra) {
+    const handler45 = tool48.handler;
+    const isTaskHandler = "createTask" in handler45;
     if (isTaskHandler) {
       if (!extra.taskStore) {
         throw new Error("No task store provided.");
       }
       const taskExtra = { ...extra, taskStore: extra.taskStore };
-      if (tool47.inputSchema) {
-        const typedHandler = handler44;
+      if (tool48.inputSchema) {
+        const typedHandler = handler45;
         return await Promise.resolve(typedHandler.createTask(args, taskExtra));
       } else {
-        const typedHandler = handler44;
+        const typedHandler = handler45;
         return await Promise.resolve(typedHandler.createTask(taskExtra));
       }
     }
-    if (tool47.inputSchema) {
-      const typedHandler = handler44;
+    if (tool48.inputSchema) {
+      const typedHandler = handler45;
       return await Promise.resolve(typedHandler(args, extra));
     } else {
-      const typedHandler = handler44;
+      const typedHandler = handler45;
       return await Promise.resolve(typedHandler(extra));
     }
   }
   /**
    * Handles automatic task polling for tools with taskSupport 'optional'.
    */
-  async handleAutomaticTaskPolling(tool47, request, extra) {
+  async handleAutomaticTaskPolling(tool48, request, extra) {
     if (!extra.taskStore) {
       throw new Error("No task store provided for task-capable tool.");
     }
-    const args = await this.validateToolInput(tool47, request.params.arguments, request.params.name);
-    const handler44 = tool47.handler;
+    const args = await this.validateToolInput(tool48, request.params.arguments, request.params.name);
+    const handler45 = tool48.handler;
     const taskExtra = { ...extra, taskStore: extra.taskStore };
-    const createTaskResult = args ? await Promise.resolve(handler44.createTask(args, taskExtra)) : (
+    const createTaskResult = args ? await Promise.resolve(handler45.createTask(args, taskExtra)) : (
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await Promise.resolve(handler44.createTask(taskExtra))
+      await Promise.resolve(handler45.createTask(taskExtra))
     );
     const taskId = createTaskResult.task.taskId;
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve18) => setTimeout(resolve18, pollInterval));
+      await new Promise((resolve20) => setTimeout(resolve20, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -36924,7 +36924,7 @@ var McpServer = class {
     }
     return registeredPrompt;
   }
-  _createRegisteredTool(name, title, description, inputSchema28, outputSchema, annotations, execution, _meta, handler44) {
+  _createRegisteredTool(name, title, description, inputSchema28, outputSchema, annotations, execution, _meta, handler45) {
     validateAndWarnToolName(name);
     const registeredTool = {
       title,
@@ -36934,7 +36934,7 @@ var McpServer = class {
       annotations,
       execution,
       _meta,
-      handler: handler44,
+      handler: handler45,
       enabled: true,
       disable: () => registeredTool.update({ enabled: false }),
       enable: () => registeredTool.update({ enabled: true }),
@@ -37282,19 +37282,19 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message3) {
-    return new Promise((resolve18) => {
+    return new Promise((resolve20) => {
       const json = serializeMessage(message3);
       if (this._stdout.write(json)) {
-        resolve18();
+        resolve20();
       } else {
-        this._stdout.once("drain", resolve18);
+        this._stdout.once("drain", resolve20);
       }
     });
   }
 };
 
 // src/server.ts
-import { resolve as resolve17 } from "node:path";
+import { resolve as resolve19 } from "node:path";
 
 // src/gitignoreGuard.ts
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -38956,8 +38956,8 @@ var SuppressionsRepo = class {
    * matched through the findings table on either key, since a suppression
    * stores only the finding's fingerprint/identity. Newest first.
    */
-  listActiveForRule(tool47, ruleId, limit) {
-    return this.listActiveForRuleStmt.all(nowIso(), tool47, ruleId, limit).map(rowToSuppression);
+  listActiveForRule(tool48, ruleId, limit) {
+    return this.listActiveForRuleStmt.all(nowIso(), tool48, ruleId, limit).map(rowToSuppression);
   }
   /**
    * Give every identity-less suppression whose fingerprint `scanId` reported
@@ -39535,20 +39535,20 @@ function attachAllResources(server, ctx) {
 
 // src/tools/index.ts
 var TOOLS = [];
-function registerToolModule(tool47) {
-  if (TOOLS.some((t) => t.name === tool47.name)) {
-    throw new Error(`Tool '${tool47.name}' is already registered`);
+function registerToolModule(tool48) {
+  if (TOOLS.some((t) => t.name === tool48.name)) {
+    throw new Error(`Tool '${tool48.name}' is already registered`);
   }
-  TOOLS.push(tool47);
+  TOOLS.push(tool48);
 }
 function attachAllTools(server, ctx) {
-  for (const tool47 of TOOLS) {
+  for (const tool48 of TOOLS) {
     server.registerTool(
-      tool47.name,
+      tool48.name,
       {
-        ...tool47.title ? { title: tool47.title } : {},
-        description: tool47.description,
-        inputSchema: tool47.inputSchema
+        ...tool48.title ? { title: tool48.title } : {},
+        description: tool48.description,
+        inputSchema: tool48.inputSchema
       },
       async (input, extra) => {
         const callMeta = {};
@@ -39560,8 +39560,8 @@ function attachAllTools(server, ctx) {
         if (typedExtra?.signal instanceof AbortSignal) {
           callMeta.signal = typedExtra.signal;
         }
-        const result = await tool47.handler(input, ctx, callMeta);
-        return toCallToolResult(result, tool47.contentOnlyKeys ?? []);
+        const result = await tool48.handler(input, ctx, callMeta);
+        return toCallToolResult(result, tool48.contentOnlyKeys ?? []);
       }
     );
   }
@@ -40414,8 +40414,8 @@ ${collapse(snippetText(f.tool, f.snippet))}`;
   }
   return "none";
 }
-function snippetText(tool47, snippet) {
-  if (tool47.toLowerCase() !== "bandit") return snippet;
+function snippetText(tool48, snippet) {
+  if (tool48.toLowerCase() !== "bandit") return snippet;
   return snippet.split(/\r\n|\r|\n/).map((line) => line.replace(/^\d+ /, "")).join("\n");
 }
 var CREDENTIAL_RULE = /(^|[^a-z])(secrets?|passwords?|passwd|pwd|credentials?|api[-_]?keys?|private[-_]?keys?|access[-_]?keys?|aws[-_]?keys?|hardcoded[-_ ]?(passwords?|secrets?|credentials?|keys?|tokens?))([^a-z]|$)/i;
@@ -41480,7 +41480,7 @@ var Semaphore = class {
       this.active += 1;
       return;
     }
-    await new Promise((resolve18) => this.waiting.push(resolve18));
+    await new Promise((resolve20) => this.waiting.push(resolve20));
     this.active += 1;
   }
   release() {
@@ -44918,8 +44918,8 @@ async function runChild(name, input, ctx, meta) {
     cves: [],
     cancelled
   });
-  const tool47 = TOOLS.find((t) => t.name === name);
-  if (!tool47) {
+  const tool48 = TOOLS.find((t) => t.name === name);
+  if (!tool48) {
     return empty({ tool: name, scan_id: null, status: "failed", error: "not registered" }, [
       { name, status: "failed", reason: `tool ${name} is not registered` }
     ], false);
@@ -44927,7 +44927,7 @@ async function runChild(name, input, ctx, meta) {
   if (ctx.signal.aborted) return empty({ tool: name, scan_id: null, status: "cancelled" }, [], true);
   let r;
   try {
-    r = await tool47.handler(input, ctx.plugin, meta);
+    r = await tool48.handler(input, ctx.plugin, meta);
   } catch (e) {
     if (ctx.signal.aborted) return empty({ tool: name, scan_id: null, status: "cancelled" }, [], true);
     const reason = e instanceof Error ? e.message : String(e);
@@ -47083,10 +47083,10 @@ function compareVersionsLoose(a2, b) {
     const sb = pb.pre[i2];
     if (sa === void 0) return -1;
     if (sb === void 0) return 1;
-    const na = /^\d+$/.test(sa) ? parseInt(sa, 10) : null;
+    const na2 = /^\d+$/.test(sa) ? parseInt(sa, 10) : null;
     const nb = /^\d+$/.test(sb) ? parseInt(sb, 10) : null;
-    if (na !== null && nb !== null) {
-      if (na !== nb) return na - nb;
+    if (na2 !== null && nb !== null) {
+      if (na2 !== nb) return na2 - nb;
     } else {
       const c3 = sa.localeCompare(sb);
       if (c3 !== 0) return c3;
@@ -47657,7 +47657,7 @@ function readDependencyEvidence(projectPath) {
     e.declaredIn ??= file;
     if (version2) e.versions.add(version2);
   };
-  const resolve18 = (name, ecosystem, file, version2) => {
+  const resolve20 = (name, ecosystem, file, version2) => {
     const e = entry(name, ecosystem);
     if (!e) return;
     e.lockFile ??= file;
@@ -47724,7 +47724,7 @@ function readDependencyEvidence(projectPath) {
       const rec = p && typeof p === "object" ? p : void 0;
       const name = rec?.["name"];
       const version2 = rec?.["version"];
-      if (typeof name === "string") resolve18(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
+      if (typeof name === "string") resolve20(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
     }
   }
   let cargoName;
@@ -47734,7 +47734,7 @@ function readDependencyEvidence(projectPath) {
     if (n2?.[1]) cargoName = n2[1];
     const v = /^\s*version\s*=\s*"([^"]+)"/.exec(line);
     if (v?.[1] && cargoName !== void 0) {
-      resolve18(cargoName, "cargo", "Cargo.lock", v[1]);
+      resolve20(cargoName, "cargo", "Cargo.lock", v[1]);
       cargoName = void 0;
     }
   }
@@ -47742,10 +47742,10 @@ function readDependencyEvidence(projectPath) {
     const m = /^(\S+)\s+(v[^\s/]+)(\/go\.mod)?\s/.exec(line);
     if (!m?.[1]) continue;
     const inGoMod = out.get(m[1].toLowerCase())?.declaredIn === "go.mod";
-    resolve18(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
+    resolve20(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
   }
   for (const m of readText2("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
-    if (m[1]) resolve18(m[1], "rubygems", "Gemfile.lock", m[2]);
+    if (m[1]) resolve20(m[1], "rubygems", "Gemfile.lock", m[2]);
   }
   for (const project of projects) {
     for (const lock of lockFileCandidates(project)) {
@@ -47761,7 +47761,7 @@ function readDependencyEvidence(projectPath) {
         if (!deps || typeof deps !== "object") continue;
         for (const [name, info] of Object.entries(deps)) {
           const resolved = info && typeof info === "object" ? info["resolved"] : void 0;
-          resolve18(name, "dotnet", relative13(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
+          resolve20(name, "dotnet", relative13(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
         }
       }
     }
@@ -48039,8 +48039,8 @@ function planForNonNpmManager(projectPath, cves, manager) {
       continue;
     }
     const target = cve.fixedVersion ?? "<a version that fixes " + cve.cveIds.join(", ") + ">";
-    const bump = direct ? `raise the "${name}" range in package.json to ${target}, or ` : "";
-    const reason = manager.name === "pnpm" ? `pnpm project (${manager.evidence}): no npm command is emitted \u2014 npm would write a package-lock.json and rebuild node_modules while pnpm-lock.yaml stays vulnerable, and pnpm ignores npm's top-level "overrides". Fix manually: ${bump}add "pnpm": { "overrides": { "${name}": "${target}" } } to ${rootManifest}, then run pnpm install --ignore-scripts${runAt}.` : `yarn project (${manager.evidence}): no npm command is emitted \u2014 npm would write a package-lock.json while yarn.lock stays vulnerable, and yarn reads "resolutions", not npm's "overrides". Fix manually: ${bump}add "resolutions": { "${name}": "${target}" } to ${rootManifest}, then run yarn install${runAt} (--ignore-scripts on Yarn 1, --mode=skip-build on Yarn 2+).`;
+    const bump2 = direct ? `raise the "${name}" range in package.json to ${target}, or ` : "";
+    const reason = manager.name === "pnpm" ? `pnpm project (${manager.evidence}): no npm command is emitted \u2014 npm would write a package-lock.json and rebuild node_modules while pnpm-lock.yaml stays vulnerable, and pnpm ignores npm's top-level "overrides". Fix manually: ${bump2}add "pnpm": { "overrides": { "${name}": "${target}" } } to ${rootManifest}, then run pnpm install --ignore-scripts${runAt}.` : `yarn project (${manager.evidence}): no npm command is emitted \u2014 npm would write a package-lock.json while yarn.lock stays vulnerable, and yarn reads "resolutions", not npm's "overrides". Fix manually: ${bump2}add "resolutions": { "${name}": "${target}" } to ${rootManifest}, then run yarn install${runAt} (--ignore-scripts on Yarn 1, --mode=skip-build on Yarn 2+).`;
     unplanned.push({ package_name: name, ecosystem: "npm", cve_ids: cve.cveIds, reason });
   }
   return { steps: [], unplanned, unsupported: [manager.name] };
@@ -49252,8 +49252,8 @@ function detectManifestsIn(dir) {
   const packageManagers = [];
   const frameworks = [];
   const has = (rel2) => existsSync25(join35(dir, rel2));
-  const read = (rel2) => readTextSafe(join35(dir, rel2));
-  const pkgJsonText = read("package.json");
+  const read2 = (rel2) => readTextSafe(join35(dir, rel2));
+  const pkgJsonText = read2("package.json");
   if (pkgJsonText !== null) {
     languages.push("javascript");
     if (has("tsconfig.json") || hasTopLevelExtension(dir, ".ts")) languages.push("typescript");
@@ -49265,7 +49265,7 @@ function detectManifestsIn(dir) {
       if (pkgJsonText.includes(needle)) frameworks.push(framework);
     }
   }
-  const pyprojectText = read("pyproject.toml");
+  const pyprojectText = read2("pyproject.toml");
   if (has("pyproject.toml") || has("requirements.txt") || has("Pipfile") || has("setup.py") || has("setup.cfg")) {
     languages.push("python");
     if (has("poetry.lock")) packageManagers.push("poetry");
@@ -49279,7 +49279,7 @@ ${reqTexts}`;
     if (/flask/i.test(haystack)) frameworks.push("flask");
     if (/fastapi/i.test(haystack)) frameworks.push("fastapi");
   }
-  const composerText = read("composer.json");
+  const composerText = read2("composer.json");
   if (composerText !== null) {
     languages.push("php");
     packageManagers.push("composer");
@@ -50631,8 +50631,8 @@ function sourceTypesOf(slot) {
   const coveredByFull = Object.values(SCRIPT_ERA_RUN_SLOTS).includes(slot);
   return coveredByFull ? [slot, "security_full"] : [slot];
 }
-function runSlotOf(tool47) {
-  return SCRIPT_ERA_RUN_SLOTS[tool47] ?? "security_full";
+function runSlotOf(tool48) {
+  return SCRIPT_ERA_RUN_SLOTS[tool48] ?? "security_full";
 }
 function findingInSlot(scan2, finding4, slot) {
   if (scan2.scan_type !== "security_full") return scan2.scan_type === slot;
@@ -50843,12 +50843,12 @@ function openSetForProject(storage, projectPath, opts = {}) {
     newestSource: mapRun(storage, projectPath, picked[0]?.scan)
   };
 }
-function describeOpenSet(set) {
+function describeOpenSet(set2) {
   return {
-    project_path: set.project_path,
-    coverage: set.coverage,
-    sources: set.sources,
-    skipped: set.skipped
+    project_path: set2.project_path,
+    coverage: set2.coverage,
+    sources: set2.sources,
+    skipped: set2.skipped
   };
 }
 
@@ -51121,8 +51121,8 @@ function answerFor(holder, asked, f) {
   if (asked === null) return { verdict: "unmeasured", notRun: null };
   const verdict = bookkeepingVerdict(asked, f);
   if (verdict !== "measured") return { verdict, notRun: verdict === "not_run" ? f.tool : null };
-  const pass = ownTargetNotRun(holder, asked, f);
-  return pass === null ? { verdict, notRun: null } : { verdict: "not_run", notRun: pass };
+  const pass2 = ownTargetNotRun(holder, asked, f);
+  return pass2 === null ? { verdict, notRun: null } : { verdict: "not_run", notRun: pass2 };
 }
 function notMeasured(storage, scan2, scope = "any") {
   const out = [];
@@ -53967,8 +53967,8 @@ async function handler18(input, ctx) {
   } catch (e) {
     return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
   }
-  const set = openSetForProject(ctx.storage, projectPath);
-  const open = set.findings;
+  const set2 = openSetForProject(ctx.storage, projectPath);
+  const open = set2.findings;
   const likely_false_positive = [];
   const probably_safe = [];
   const keep = [];
@@ -53999,7 +53999,7 @@ async function handler18(input, ctx) {
       probably_safe: probably_safe.length > ITEMS_PER_BUCKET2,
       keep: keep.length > ITEMS_PER_BUCKET2
     },
-    open_set: describeOpenSet(set),
+    open_set: describeOpenSet(set2),
     instructions_for_model: "For each entry in `likely_false_positive`, consider calling `suppress_finding` with the suggested_suppression_reason. Be more conservative with `probably_safe` \u2014 review one before batch-suppressing. Never auto-suppress severity=critical without explicit human approval."
   };
 }
@@ -58030,9 +58030,9 @@ async function handler37(input, ctx) {
   } catch (e) {
     return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
   }
-  const set = openSetForProject(ctx.storage, projectPath);
-  const open = set.findings;
-  const latest = set.newest;
+  const set2 = openSetForProject(ctx.storage, projectPath);
+  const open = set2.findings;
+  const latest = set2.newest;
   const recentScanTs = latest ? new Date(latest.started_at).getTime() : Date.now();
   const cveIdsByFinding = new Map(open.map((f) => [f.fingerprint, findingCveIds(f)]));
   const allCveIds = [...new Set([...cveIdsByFinding.values()].flat())];
@@ -58076,7 +58076,7 @@ async function handler37(input, ctx) {
     ok: true,
     summary,
     ranked: top,
-    open_set: describeOpenSet(set),
+    open_set: describeOpenSet(set2),
     cve_intel: uncorrelatedCoverage(open),
     instructions_for_model: "Pick the first 3-5 entries to action. For each, prefer `suggest_fix(finding_fingerprint)` over speculation. If most top entries are security/critical, call `audit_executive` to understand cross-cutting impact first.",
     // unused reference to keep the time variable from being dead-code'd by
@@ -58114,7 +58114,8 @@ async function queryOsv(packages, opts = {}) {
   if (queryable.length === 0) {
     return { online: true, queried: 0, vulnerable_packages: [] };
   }
-  if (typeof fetch !== "function") {
+  const fetchImpl = opts.fetchImpl ?? (typeof fetch === "function" ? fetch : void 0);
+  if (fetchImpl === void 0) {
     return { online: false, queried: 0, vulnerable_packages: [], error: "no_fetch" };
   }
   const vulnerable = [];
@@ -58127,7 +58128,7 @@ async function queryOsv(packages, opts = {}) {
           ...p.version ? { version: p.version } : {}
         }))
       };
-      const json = await postJson(OSV_BATCH_URL, body, opts);
+      const json = await postJson(OSV_BATCH_URL, body, opts, fetchImpl);
       const results = Array.isArray(json.results) ? json.results : [];
       results.forEach((res, idx) => {
         const pkg = chunk[idx];
@@ -58156,7 +58157,7 @@ async function queryOsv(packages, opts = {}) {
   }
   return { online: true, queried: queryable.length, vulnerable_packages: vulnerable };
 }
-async function postJson(url, body, opts) {
+async function postJson(url, body, opts, fetchImpl) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS5);
   if (opts.signal) {
@@ -58164,7 +58165,7 @@ async function postJson(url, body, opts) {
     else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
   }
   try {
-    const res = await fetch(url, {
+    const res = await fetchImpl(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -61203,7 +61204,7 @@ function importSpec(file, text) {
     const templateParams = paramsFromTemplate(pathTemplate);
     const pathItemParams = paramNamesInPath(root, prop5(pathItem, "parameters"));
     const pathKeyPartial = !pathTemplate.startsWith("/");
-    const partial2 = basePartial || pathKeyPartial;
+    const partial3 = basePartial || pathKeyPartial;
     for (const opKey of OPERATION_KEYS) {
       const operation = prop5(pathItem, opKey);
       if (operation === void 0) continue;
@@ -61213,8 +61214,8 @@ function importSpec(file, text) {
         method: operationMethod(opKey),
         provenance: "spec",
         path_raw: pathTemplate,
-        path_resolved: partial2 ? pathTemplate : `${base}${pathTemplate}`,
-        path_partial: partial2,
+        path_resolved: partial3 ? pathTemplate : `${base}${pathTemplate}`,
+        path_partial: partial3,
         file,
         line,
         framework: format2,
@@ -63743,11 +63744,11 @@ function negativeVerdictBlockedBy(language, entry, graphTruncated, languageHasRe
   }
   return null;
 }
-function cachedReachFrom(graph, roots, target, cache) {
-  const cached2 = cache.get(target);
+function cachedReachFrom(graph, roots, target, cache2) {
+  const cached2 = cache2.get(target);
   if (cached2 !== void 0) return cached2;
   const result = reachFrom(graph, roots, target);
-  cache.set(target, result);
+  cache2.set(target, result);
   return result;
 }
 function unreachableVerdict(envelope, relFile, gaps) {
@@ -65943,8 +65944,8 @@ function isPinned(launcher, spec) {
     const version2 = unscoped.slice(at + 1);
     return version2.length > 0 && version2.toLowerCase() !== "latest";
   }
-  const eq = spec.indexOf("==");
-  return eq > 0 && spec.slice(eq + 2).length > 0;
+  const eq2 = spec.indexOf("==");
+  return eq2 > 0 && spec.slice(eq2 + 2).length > 0;
 }
 function checkUnpinnedLaunchers(entries2) {
   const out = [];
@@ -66589,6 +66590,1822 @@ function countBySeverity5(findings) {
   return out;
 }
 
+// src/tools/vetPackages.ts
+import { existsSync as existsSync52, statSync as statSync20 } from "node:fs";
+import { resolve as resolve18 } from "node:path";
+
+// src/hooks/bashGuard.ts
+var MAX_LINE_LENGTH2 = 16 * 1024;
+
+// src/pkgvet/parseCommand.ts
+var NAME_RE = {
+  npm: /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._~-]*$/,
+  pypi: /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/,
+  packagist: /^[a-z0-9](?:[_.-]?[a-z0-9]+)*\/[a-z0-9](?:(?:[_.]|-{1,2})?[a-z0-9]+)*$/i,
+  nuget: /^[A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_])?$/
+};
+var SHELL_EXPANSION = /[$`*?{}[\]<>|&;]/;
+var URL_OR_VCS = /^(?:[a-z][a-z0-9+.-]*:\/\/|git\+|git:|hg\+|svn\+|bzr\+|github:|gitlab:|bitbucket:|gist:|file:|link:|workspace:|portal:|patch:|exec:)/i;
+var ARCHIVE = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
+function isPathLike(word) {
+  return word === "." || word === ".." || word.startsWith("./") || word.startsWith("../") || word.startsWith(".\\") || word.startsWith("..\\") || word.startsWith("/") || word.startsWith("~") || word.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(word);
+}
+function notAPackage(word) {
+  if (word.length === 0) return "empty";
+  if (isPathLike(word)) return "local path \u2014 not looked up";
+  if (URL_OR_VCS.test(word)) return "URL / VCS / protocol spec \u2014 not looked up";
+  if (ARCHIVE.test(word)) return "archive file \u2014 not looked up";
+  return null;
+}
+function skip(raw, reason) {
+  return { raw, reason };
+}
+function checkName(ecosystem, name, raw) {
+  if (SHELL_EXPANSION.test(name)) return skip(raw, "not a literal package name (shell expansion or glob)");
+  if (!NAME_RE[ecosystem].test(name)) return skip(raw, `not a valid ${ecosystem} package name`);
+  return { ecosystem, name, raw };
+}
+function withRange(spec, range) {
+  if (!("name" in spec)) return spec;
+  const r = range?.trim();
+  return r !== void 0 && r !== "" ? { ...spec, range: r } : spec;
+}
+function parseNpm(raw) {
+  if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
+  const bad = notAPackage(raw);
+  if (bad !== null) return skip(raw, bad);
+  const scoped = raw.startsWith("@");
+  const at = raw.indexOf("@", scoped ? 1 : 0);
+  const name = at > 0 ? raw.slice(0, at) : raw;
+  let range = at > 0 ? raw.slice(at + 1) : void 0;
+  if (!scoped && name.includes("/")) return skip(raw, "GitHub shorthand (user/repo) \u2014 not looked up");
+  if (range !== void 0) {
+    if (range.startsWith("npm:")) {
+      const real = parseNpm(range.slice(4));
+      return "name" in real ? { ...real, raw } : skip(raw, real.reason);
+    }
+    const rangeBad = notAPackage(range);
+    if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? "URL / VCS / protocol spec \u2014 not looked up");
+    if (range === "latest") range = void 0;
+  }
+  return withRange(checkName("npm", name, raw), range);
+}
+var PEP440_OP = /(===|==|~=|!=|<=|>=|<|>)/;
+function parsePython(raw, poetryAt) {
+  let text = raw.trim();
+  const semi = text.indexOf(";");
+  if (semi >= 0) text = text.slice(0, semi).trim();
+  if (/[$`]/.test(text)) return skip(raw, "not a literal package name (shell expansion)");
+  if (/\s@\s|@\s*(?:[a-z][a-z0-9+.-]*:\/\/|git\+|file:)/i.test(text)) return skip(raw, "direct URL reference \u2014 not looked up");
+  const bad = notAPackage(text);
+  if (bad !== null) return skip(raw, bad);
+  if (/[\\/]/.test(text)) return skip(raw, "local path \u2014 not looked up");
+  let name = text;
+  let range;
+  const at = text.indexOf("@");
+  if (at > 0 && (poetryAt || !PEP440_OP.test(text))) {
+    name = text.slice(0, at);
+    range = text.slice(at + 1).trim();
+    if (range === "latest") range = void 0;
+  } else {
+    const m = PEP440_OP.exec(text);
+    if (m !== null) {
+      name = text.slice(0, m.index);
+      range = text.slice(m.index).replace(/\s+/g, "");
+    }
+  }
+  name = name.replace(/\[[^\]]*\]/, "").replace(/\s*\(.*$/, "").trim();
+  return withRange(checkName("pypi", name, raw), range);
+}
+function parseComposer(raw) {
+  if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
+  const bad = notAPackage(raw);
+  if (bad !== null) return skip(raw, bad);
+  const sep12 = raw.search(/[:=\s]/);
+  let name = sep12 > 0 ? raw.slice(0, sep12) : raw;
+  let range = sep12 > 0 ? raw.slice(sep12 + 1) : void 0;
+  if (sep12 < 0 && raw.includes("@") && !raw.startsWith("@")) {
+    const at = raw.indexOf("@");
+    name = raw.slice(0, at);
+    range = raw.slice(at + 1);
+  }
+  if (!name.includes("/")) return skip(raw, "platform package or not a vendor/name \u2014 not looked up");
+  return withRange(checkName("packagist", name, raw), range);
+}
+function parseNuget(raw) {
+  if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
+  const bad = notAPackage(raw);
+  if (bad !== null) return skip(raw, bad);
+  const at = raw.indexOf("@");
+  const name = at > 0 ? raw.slice(0, at) : raw;
+  const range = at > 0 ? raw.slice(at + 1) : void 0;
+  return withRange(checkName("nuget", name, raw), range);
+}
+function parsePackageSpec(ecosystem, raw) {
+  switch (ecosystem) {
+    case "npm":
+      return parseNpm(raw.trim());
+    case "pypi":
+      return parsePython(raw, false);
+    case "packagist":
+      return parseComposer(raw.trim());
+    case "nuget":
+      return parseNuget(raw.trim());
+    default:
+      return skip(raw, "unsupported ecosystem");
+  }
+}
+var set = (...xs) => new Set(xs);
+var NPM_COMMON_BOOL = [
+  "--save",
+  "-S",
+  "--save-dev",
+  "-D",
+  "--save-optional",
+  "-O",
+  "--save-peer",
+  "--save-exact",
+  "-E",
+  "--save-bundle",
+  "-B",
+  "--no-save",
+  "--save-prod",
+  "-P",
+  "--global",
+  "-g",
+  "--legacy-peer-deps",
+  "--strict-peer-deps",
+  "--force",
+  "-f",
+  "--ignore-scripts",
+  "--no-audit",
+  "--audit",
+  "--no-fund",
+  "--fund",
+  "--dry-run",
+  "--prefer-offline",
+  "--prefer-online",
+  "--offline",
+  "--no-package-lock",
+  "--package-lock-only",
+  "--foreground-scripts",
+  "--install-links",
+  "--no-optional",
+  "--production",
+  "--dev",
+  "--no-bin-links",
+  "--bin-links",
+  "--global-style",
+  "--legacy-bundling",
+  "--no-shrinkwrap",
+  "--silent",
+  "--quiet",
+  "-q",
+  "--verbose",
+  "-d",
+  "--json",
+  "--progress",
+  "--no-progress",
+  "--color",
+  "--no-color",
+  "--workspaces",
+  "--include-workspace-root",
+  "--if-present",
+  "--yes",
+  "-y",
+  "--no-workspaces",
+  "--no-update-notifier",
+  "--exact",
+  "--peer",
+  "--optional",
+  "--tilde",
+  "-T",
+  "--frozen-lockfile",
+  "--no-frozen-lockfile"
+];
+var FLAGS = {
+  npm: {
+    value: set(
+      "--registry",
+      "--prefix",
+      "--tag",
+      "--workspace",
+      "-w",
+      "--omit",
+      "--include",
+      "--install-strategy",
+      "--cache",
+      "--userconfig",
+      "--globalconfig",
+      "--before",
+      "--loglevel",
+      "--save-prefix",
+      "--otp",
+      "--scope",
+      "--cpu",
+      "--os",
+      "--libc",
+      "--location"
+    ),
+    bool: set(...NPM_COMMON_BOOL),
+    registry: set("--registry")
+  },
+  pnpm: {
+    value: set(
+      "--registry",
+      "--filter",
+      "-F",
+      "--dir",
+      "-C",
+      "--reporter",
+      "--store-dir",
+      "--global-dir",
+      "--modules-dir",
+      "--virtual-store-dir",
+      "--lockfile-dir",
+      "--network-concurrency",
+      "--config",
+      "--loglevel"
+    ),
+    bool: set(...NPM_COMMON_BOOL, "--workspace", "-w", "--workspace-root", "--recursive", "-r", "--allow-build"),
+    registry: set("--registry")
+  },
+  yarn: {
+    value: set("--registry", "--cwd", "--network-timeout", "--modules-folder", "--cache-folder", "--mutex", "--scope"),
+    bool: set(
+      ...NPM_COMMON_BOOL,
+      "--ignore-workspace-root-check",
+      "-W",
+      "--cached",
+      "--interactive",
+      "-i",
+      "--prefer-dev",
+      "--mode"
+    ),
+    registry: set("--registry")
+  },
+  bun: {
+    value: set(
+      "--registry",
+      "--cwd",
+      "--backend",
+      "--cache-dir",
+      "--config",
+      "-c",
+      "--concurrent-scripts",
+      "--network-concurrency",
+      "--omit",
+      "--linker",
+      "--ca",
+      "--cafile"
+    ),
+    bool: set(
+      ...NPM_COMMON_BOOL,
+      "--trust",
+      "--analyze",
+      "-a",
+      "--only-missing",
+      "--save-text-lockfile",
+      "--no-cache",
+      "-p"
+    ),
+    registry: set("--registry")
+  },
+  pip: {
+    value: set(
+      "-r",
+      "--requirement",
+      "-c",
+      "--constraint",
+      "-e",
+      "--editable",
+      "-t",
+      "--target",
+      "--prefix",
+      "--root",
+      "-i",
+      "--index-url",
+      "--extra-index-url",
+      "-f",
+      "--find-links",
+      "--trusted-host",
+      "--platform",
+      "--python-version",
+      "--implementation",
+      "--abi",
+      "--src",
+      "--upgrade-strategy",
+      "--progress-bar",
+      "--log",
+      "--proxy",
+      "--retries",
+      "--timeout",
+      "--exists-action",
+      "--cert",
+      "--client-cert",
+      "--cache-dir",
+      "--no-binary",
+      "--only-binary",
+      "--config-settings",
+      "-C",
+      "--global-option",
+      "--report",
+      "--python",
+      "--root-user-action",
+      "--keyring-provider",
+      "--group",
+      "--index-strategy",
+      "--extra",
+      "--override",
+      "-p",
+      "--prerelease",
+      "--resolution"
+    ),
+    bool: set(
+      "-U",
+      "--upgrade",
+      "--user",
+      "--no-deps",
+      "--pre",
+      "--force-reinstall",
+      "-I",
+      "--ignore-installed",
+      "--no-cache-dir",
+      "--no-cache",
+      "-q",
+      "-v",
+      "--quiet",
+      "--verbose",
+      "--break-system-packages",
+      "--dry-run",
+      "--no-build-isolation",
+      "--require-hashes",
+      "--isolated",
+      "--disable-pip-version-check",
+      "--no-input",
+      "--compile",
+      "--no-compile",
+      "--prefer-binary",
+      "--no-warn-script-location",
+      "--use-pep517",
+      "--no-clean",
+      "--check-build-dependencies",
+      "--ignore-requires-python",
+      "--system",
+      "--all-extras",
+      "--no-index"
+    ),
+    registry: set("-i", "--index-url", "--extra-index-url", "-f", "--find-links", "--index", "--default-index"),
+    registryBool: set("--no-index"),
+    reported: /* @__PURE__ */ new Map([
+      ["-r", "requirements file (-r) \u2014 its contents are not vetted"],
+      ["--requirement", "requirements file (-r) \u2014 its contents are not vetted"],
+      ["-c", "constraints file (-c) \u2014 not vetted"],
+      ["--constraint", "constraints file (-c) \u2014 not vetted"],
+      ["-e", "editable install (-e) \u2014 local or VCS source, not looked up"],
+      ["--editable", "editable install (-e) \u2014 local or VCS source, not looked up"]
+    ])
+  },
+  uv: {
+    value: set(
+      "--group",
+      "--optional",
+      "--index",
+      "--index-url",
+      "--default-index",
+      "--extra-index-url",
+      "--extra",
+      "--package",
+      "--script",
+      "-r",
+      "--requirements",
+      "--constraints",
+      "-c",
+      "--rev",
+      "--tag",
+      "--branch",
+      "--python",
+      "-p",
+      "--bounds",
+      "--directory",
+      "--project",
+      "--config-file",
+      "--cache-dir",
+      "--marker",
+      "-m",
+      "--find-links",
+      "-f",
+      "--index-strategy",
+      "--keyring-provider",
+      "--resolution",
+      "--prerelease",
+      "--exclude-newer",
+      "--link-mode",
+      "--compile-bytecode",
+      "--no-binary-package",
+      "--no-build-package",
+      "--upgrade-package",
+      "-P",
+      "--reinstall-package",
+      "--refresh-package",
+      "--config-setting",
+      "-C"
+    ),
+    bool: set(
+      "--dev",
+      "--editable",
+      "--no-editable",
+      "--raw",
+      "--raw-sources",
+      "--frozen",
+      "--locked",
+      "--no-sync",
+      "--workspace",
+      "--no-workspace",
+      "--active",
+      "-U",
+      "--upgrade",
+      "--offline",
+      "--no-cache",
+      "-n",
+      "-q",
+      "-v",
+      "--quiet",
+      "--verbose",
+      "--native-tls",
+      "--no-index",
+      "--no-build-isolation",
+      "--refresh",
+      "--reinstall",
+      "--no-build",
+      "--no-binary",
+      "--no-config",
+      "--no-progress"
+    ),
+    registry: set("--index", "--index-url", "--default-index", "--extra-index-url", "--find-links", "-f"),
+    registryBool: set("--no-index"),
+    reported: /* @__PURE__ */ new Map([
+      ["-r", "requirements file (-r) \u2014 its contents are not vetted"],
+      ["--requirements", "requirements file (-r) \u2014 its contents are not vetted"]
+    ])
+  },
+  poetry: {
+    value: set(
+      "--group",
+      "-G",
+      "--extras",
+      "-E",
+      "--python",
+      "--platform",
+      "--source",
+      "--markers",
+      "--directory",
+      "-C",
+      "--project",
+      "-P"
+    ),
+    bool: set(
+      "--dev",
+      "-D",
+      "--editable",
+      "-e",
+      "--optional",
+      "--allow-prereleases",
+      "--dry-run",
+      "--lock",
+      "--no-interaction",
+      "-n",
+      "-q",
+      "-v",
+      "-vv",
+      "-vvv",
+      "--quiet",
+      "--verbose",
+      "--no-ansi",
+      "--ansi"
+    ),
+    registry: set("--source")
+  },
+  composer: {
+    value: set("--working-dir", "-d"),
+    bool: set(
+      "--dev",
+      "--no-dev",
+      "--no-update",
+      "--no-install",
+      "--no-audit",
+      "--no-security-blocking",
+      "--update-with-dependencies",
+      "-w",
+      "--update-with-all-dependencies",
+      "-W",
+      "--with-dependencies",
+      "--with-all-dependencies",
+      "--prefer-dist",
+      "--prefer-source",
+      "--prefer-install",
+      "--dry-run",
+      "--no-progress",
+      "--no-scripts",
+      "--no-plugins",
+      "--update-no-dev",
+      "--ignore-platform-reqs",
+      "--prefer-stable",
+      "--prefer-lowest",
+      "--sort-packages",
+      "--optimize-autoloader",
+      "-o",
+      "--classmap-authoritative",
+      "-a",
+      "--apcu-autoloader",
+      "--fixed",
+      "-n",
+      "--no-interaction",
+      "-q",
+      "--quiet",
+      "-v",
+      "-vv",
+      "-vvv",
+      "--ansi",
+      "--no-ansi",
+      "--no-cache",
+      "--minimal-changes",
+      "-m"
+    ),
+    registry: set()
+  },
+  dotnet: {
+    value: set("-v", "--version", "-f", "--framework", "-s", "--source", "--package-directory"),
+    bool: set("-n", "--no-restore", "--interactive", "--prerelease"),
+    registry: set("-s", "--source")
+  }
+};
+
+// src/pkgvet/popular.ts
+import { readFileSync as readFileSync40 } from "node:fs";
+import { join as join72 } from "node:path";
+
+// src/pkgvet/typosquat.ts
+function damerauLevenshtein(a2, b, max) {
+  if (a2 === b) return 0;
+  const la = a2.length;
+  const lb = b.length;
+  if (Math.abs(la - lb) > max) return max + 1;
+  const INF = max + 1;
+  let prev2 = new Array(lb + 1).fill(INF);
+  let prev = new Array(lb + 1).fill(INF);
+  let cur = new Array(lb + 1).fill(INF);
+  for (let j = 0; j <= Math.min(lb, max); j += 1) prev[j] = j;
+  for (let i2 = 1; i2 <= la; i2 += 1) {
+    cur.fill(INF);
+    if (i2 <= max) cur[0] = i2;
+    const from = Math.max(1, i2 - max);
+    const to = Math.min(lb, i2 + max);
+    let rowMin = cur[0] ?? INF;
+    for (let j = from; j <= to; j += 1) {
+      const cost = a2.charCodeAt(i2 - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      let v = Math.min((prev[j] ?? INF) + 1, (cur[j - 1] ?? INF) + 1, (prev[j - 1] ?? INF) + cost);
+      if (i2 > 1 && j > 1 && a2.charCodeAt(i2 - 1) === b.charCodeAt(j - 2) && a2.charCodeAt(i2 - 2) === b.charCodeAt(j - 1)) {
+        v = Math.min(v, (prev2[j - 2] ?? INF) + 1);
+      }
+      if (v > INF) v = INF;
+      cur[j] = v;
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > max) return INF;
+    const recycled = prev2;
+    prev2 = prev;
+    prev = cur;
+    cur = recycled;
+  }
+  const d = prev[lb] ?? INF;
+  return d > max ? INF : d;
+}
+function typoThreshold(length) {
+  if (length < 5) return 0;
+  if (length < 8) return 1;
+  return 2;
+}
+function normalizePackageName(ecosystem, name) {
+  const lower = name.trim().toLowerCase();
+  return ecosystem === "pypi" ? lower.replace(/[-_.]+/g, "-") : lower;
+}
+function ownerOf(ecosystem, normalized) {
+  if (ecosystem === "npm") {
+    if (!normalized.startsWith("@")) return null;
+    const slash = normalized.indexOf("/");
+    return slash > 1 ? normalized.slice(1, slash) : null;
+  }
+  if (ecosystem === "packagist") {
+    const slash = normalized.indexOf("/");
+    return slash > 0 ? normalized.slice(0, slash) : null;
+  }
+  return null;
+}
+var SEGMENT_SPLIT = /[-_./@]+/;
+var DIGIT_RUN = /[0-9]+/g;
+function isSiblingNotTypo(a2, b, distance) {
+  if (a2.replace(DIGIT_RUN, "#") === b.replace(DIGIT_RUN, "#")) return true;
+  const sa = a2.split(SEGMENT_SPLIT);
+  const sb = b.split(SEGMENT_SPLIT);
+  if (sa.length < 2 || sa.length !== sb.length) return false;
+  let differing = -1;
+  for (let i2 = 0; i2 < sa.length; i2 += 1) {
+    if (sa[i2] === sb[i2]) continue;
+    if (differing !== -1) return false;
+    differing = i2;
+  }
+  if (differing === -1) return false;
+  const x = sa[differing] ?? "";
+  const y = sb[differing] ?? "";
+  const longest = Math.max(x.length, y.length);
+  if (longest <= 2) return true;
+  if (distance < 2) return false;
+  return damerauLevenshtein(x, y, longest) * 5 >= longest * 2;
+}
+function buildPopularIndex(ecosystem, names) {
+  const ordered = [];
+  const set2 = /* @__PURE__ */ new Set();
+  const byLength = /* @__PURE__ */ new Map();
+  for (const raw of names) {
+    const n2 = normalizePackageName(ecosystem, raw);
+    if (n2.length === 0 || set2.has(n2)) continue;
+    set2.add(n2);
+    ordered.push(n2);
+    const bucket = byLength.get(n2.length);
+    if (bucket === void 0) byLength.set(n2.length, [n2]);
+    else bucket.push(n2);
+  }
+  return { ecosystem, names: ordered, set: set2, byLength };
+}
+function findTyposquatTarget(index, name, opts = {}) {
+  const eco = index.ecosystem;
+  const cand = normalizePackageName(eco, name);
+  if (cand.length === 0) return null;
+  if ((opts.exemptPopular ?? true) && index.set.has(cand)) return null;
+  if (typoThreshold(cand.length) === 0) return null;
+  const candOwner = ownerOf(eco, cand);
+  const candScoped = eco === "npm" && cand.startsWith("@");
+  let best = null;
+  let bestRank = Number.POSITIVE_INFINITY;
+  for (let len = cand.length - 2; len <= cand.length + 2; len += 1) {
+    const bucket = index.byLength.get(len);
+    if (bucket === void 0) continue;
+    for (const target of bucket) {
+      if (target === cand) continue;
+      if (eco === "npm") {
+        const targetScoped = target.startsWith("@");
+        if (candScoped !== targetScoped) continue;
+      }
+      if (candOwner !== null && candOwner === ownerOf(eco, target)) continue;
+      const max = typoThreshold(Math.min(cand.length, target.length));
+      if (max === 0) continue;
+      const d = damerauLevenshtein(cand, target, max);
+      if (d === 0 || d > max) continue;
+      if (isSiblingNotTypo(cand, target, d)) continue;
+      const rank = index.names.indexOf(target);
+      if (best === null || d < best.distance || d === best.distance && rank < bestRank) {
+        best = { similar_to: target, distance: d };
+        bestRank = rank;
+      }
+    }
+  }
+  return best;
+}
+
+// src/pkgvet/popular.ts
+function defaultPopularDir() {
+  return join72(resolveConfigsDir(), "popular-packages");
+}
+function parsePopularList(text) {
+  return text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
+}
+var cache = /* @__PURE__ */ new Map();
+function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
+  const path6 = join72(dir, `${ecosystem}.txt`);
+  const hit = cache.get(path6);
+  if (hit !== void 0) return hit;
+  let index = null;
+  try {
+    const names = parsePopularList(readFileSync40(path6, "utf8"));
+    index = names.length > 0 ? buildPopularIndex(ecosystem, names) : null;
+  } catch {
+    index = null;
+  }
+  cache.set(path6, index);
+  return index;
+}
+
+// src/pkgvet/privateRegistry.ts
+import { existsSync as existsSync51, readdirSync as readdirSync23, readFileSync as readFileSync41 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { dirname as dirname20, join as join73, resolve as resolve17 } from "node:path";
+var PUBLIC_HOSTS = {
+  npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
+  pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
+  packagist: /^(?:https?:)?\/\/(?:repo\.)?packagist\.org(?:[:/]|$)/i,
+  nuget: /^(?:https?:)?\/\/(?:api\.nuget\.org|www\.nuget\.org|nuget\.org)(?:[:/]|$)/i
+};
+function isPublic(ecosystem, url) {
+  return PUBLIC_HOSTS[ecosystem].test(url.trim().replace(/^["']|["']$/g, ""));
+}
+function isPublicRegistryUrl(ecosystem, url) {
+  return isPublic(ecosystem, url);
+}
+function read(path6) {
+  try {
+    return existsSync51(path6) ? readFileSync41(path6, "utf8") : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function samePath(a2, b) {
+  const norm = (p) => resolve17(p).replace(/[\\/]+$/, "");
+  return process.platform === "win32" ? norm(a2).toLowerCase() === norm(b).toLowerCase() : norm(a2) === norm(b);
+}
+function ancestors(ctx) {
+  if (ctx.projectDir === void 0) return [];
+  const stops = [ctx.homeDir, homedir4()].filter((x) => typeof x === "string");
+  const out = [];
+  let dir = resolve17(ctx.projectDir);
+  for (let i2 = 0; i2 < 16; i2 += 1) {
+    if (stops.some((s) => samePath(s, dir))) break;
+    out.push(dir);
+    if (existsSync51(join73(dir, ".git"))) break;
+    const parent = dirname20(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return out;
+}
+function envOf(ctx) {
+  return ctx.env ?? process.env;
+}
+function homeOf(ctx) {
+  return ctx.homeDir ?? homedir4();
+}
+function envValue(env, name) {
+  const v = env[name] ?? env[name.toLowerCase()];
+  return v !== void 0 && v.trim() !== "" ? v.trim() : void 0;
+}
+function npmScope(name) {
+  const m = /^@([^/]+)\//.exec(name);
+  return m?.[1];
+}
+function fromNpmrc(text, scope) {
+  let found;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("#") || line.startsWith(";")) continue;
+    const m = /^(@[^:=\s]+:)?registry\s*=\s*(.+)$/i.exec(line);
+    if (m === null) continue;
+    const lineScope = m[1]?.slice(1, -1);
+    const url = (m[2] ?? "").trim();
+    if (lineScope === void 0) found = found ?? url;
+    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return url;
+  }
+  return found;
+}
+function fromYarnrcYml(text, scope) {
+  let global3;
+  let inScopes = false;
+  let currentScope;
+  for (const raw of text.split(/\r?\n/)) {
+    if (raw.trim() === "" || raw.trim().startsWith("#")) continue;
+    const indent = raw.length - raw.trimStart().length;
+    const line = raw.trim();
+    if (indent === 0) {
+      inScopes = /^npmScopes\s*:/.test(line);
+      currentScope = void 0;
+      const m = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
+      if (m !== null) global3 = (m[1] ?? "").replace(/^["']|["']$/g, "");
+      continue;
+    }
+    if (!inScopes) continue;
+    const scopeKey = /^["']?@?([^"':]+)["']?\s*:\s*$/.exec(line);
+    if (scopeKey !== null) {
+      currentScope = scopeKey[1];
+      continue;
+    }
+    const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
+    if (server !== null && scope !== void 0 && currentScope?.toLowerCase() === scope.toLowerCase()) {
+      return (server[1] ?? "").replace(/^["']|["']$/g, "");
+    }
+  }
+  return global3;
+}
+function fromYarnrc(text, scope) {
+  let found;
+  for (const raw of text.split(/\r?\n/)) {
+    const m = /^\s*["']?(@[^:"']+:)?registry["']?\s+["']?([^"'\s]+)["']?/.exec(raw);
+    if (m === null) continue;
+    const lineScope = m[1]?.slice(1, -1);
+    if (lineScope === void 0) found = found ?? m[2];
+    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return m[2];
+  }
+  return found;
+}
+function fromBunfig(text, scope) {
+  let section = "";
+  let found;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    const header = /^\[([^\]]+)\]$/.exec(line);
+    if (header !== null) {
+      section = (header[1] ?? "").trim();
+      continue;
+    }
+    const url = /https?:\/\/[^"'\s}]+/.exec(line)?.[0] ?? "(configured)";
+    if (section === "install" && /^registry\s*=/.test(line)) found = found ?? url;
+    if (section === "install.scopes" && scope !== void 0) {
+      const key = /^["']?@?([^"'=\s]+)["']?\s*=/.exec(line)?.[1];
+      if (key !== void 0 && key.toLowerCase() === scope.toLowerCase()) return url;
+    }
+  }
+  return found;
+}
+function npmRegistry(name, ctx) {
+  const scope = npmScope(name);
+  const env = envOf(ctx);
+  const candidates2 = [];
+  for (const dir of ancestors(ctx)) {
+    for (const [file, parse6] of [
+      [".npmrc", fromNpmrc],
+      [".yarnrc.yml", fromYarnrcYml],
+      [".yarnrc", fromYarnrc],
+      ["bunfig.toml", fromBunfig]
+    ]) {
+      const path6 = join73(dir, file);
+      const text = read(path6);
+      if (text !== void 0) candidates2.push({ source: path6, url: parse6(text, scope) });
+    }
+  }
+  const userConfig = envValue(env, "NPM_CONFIG_USERCONFIG") ?? join73(homeOf(ctx), ".npmrc");
+  const userText = read(userConfig);
+  if (userText !== void 0) candidates2.push({ source: userConfig, url: fromNpmrc(userText, scope) });
+  const envRegistry = envValue(env, "NPM_CONFIG_REGISTRY");
+  if (envRegistry !== void 0) candidates2.unshift({ source: "NPM_CONFIG_REGISTRY", url: envRegistry });
+  for (const c3 of candidates2) {
+    if (c3.url !== void 0 && !isPublic("npm", c3.url)) return { source: c3.source, url: c3.url };
+  }
+  return null;
+}
+var PY_ENV = ["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL", "UV_INDEX", "UV_DEFAULT_INDEX", "PIP_FIND_LINKS", "UV_FIND_LINKS"];
+function fromPipConf(text) {
+  for (const raw of text.split(/\r?\n/)) {
+    const m = /^\s*(index[-_]url|extra[-_]index[-_]url|find[-_]links)\s*[=:]\s*(\S+)/i.exec(raw);
+    if (m !== null && !isPublic("pypi", m[2] ?? "")) return m[2];
+    if (/^\s*no[-_]index\s*[=:]\s*(?:true|1|yes|on)\s*$/i.test(raw)) return "no-index";
+  }
+  return void 0;
+}
+function fromPyproject(text) {
+  if (/^\s*\[\[\s*tool\.(?:uv\.index|poetry\.source|pdm\.source)\s*\]\]/m.test(text)) {
+    return /https?:\/\/[^"'\s]+/.exec(text.slice(text.search(/\[\[\s*tool\.(?:uv\.index|poetry\.source|pdm\.source)/)))?.[0] ?? "(configured)";
+  }
+  const uv = /^\s*\[tool\.uv\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text);
+  if (uv !== null) {
+    const m = /^\s*(?:index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/m.exec(uv[1] ?? "");
+    if (m !== null && !isPublic("pypi", m[1] ?? "")) return m[1];
+  }
+  return void 0;
+}
+function fromUvToml(text) {
+  if (/^\s*\[\[\s*index\s*\]\]/m.test(text)) return /https?:\/\/[^"'\s]+/.exec(text)?.[0] ?? "(configured)";
+  const m = /^\s*(?:index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/m.exec(text);
+  if (m !== null && !isPublic("pypi", m[1] ?? "")) return m[1];
+  return void 0;
+}
+function pypiRegistry(ctx) {
+  const env = envOf(ctx);
+  for (const name of PY_ENV) {
+    const v = envValue(env, name);
+    if (v === void 0) continue;
+    if (v.split(/\s+/).some((u2) => !isPublic("pypi", u2))) return { source: name, url: v };
+  }
+  const noIndex = envValue(env, "PIP_NO_INDEX");
+  if (noIndex !== void 0 && /^(?:1|true|yes|on)$/i.test(noIndex)) return { source: "PIP_NO_INDEX" };
+  const home = homeOf(ctx);
+  const confs = [];
+  const explicit = envValue(env, "PIP_CONFIG_FILE");
+  if (explicit !== void 0) confs.push(explicit);
+  const xdg = envValue(env, "XDG_CONFIG_HOME") ?? join73(home, ".config");
+  confs.push(join73(xdg, "pip", "pip.conf"), join73(home, ".pip", "pip.conf"));
+  const appdata = envValue(env, "APPDATA") ?? join73(home, "AppData", "Roaming");
+  confs.push(join73(appdata, "pip", "pip.ini"), join73(home, "pip", "pip.ini"));
+  const venv = envValue(env, "VIRTUAL_ENV");
+  if (venv !== void 0) confs.push(join73(venv, "pip.conf"), join73(venv, "pip.ini"));
+  for (const path6 of confs) {
+    const text = read(path6);
+    const url = text === void 0 ? void 0 : fromPipConf(text);
+    if (url !== void 0) return { source: path6, url };
+  }
+  for (const dir of ancestors(ctx)) {
+    const uvToml = join73(dir, "uv.toml");
+    const uvText = read(uvToml);
+    const uvUrl = uvText === void 0 ? void 0 : fromUvToml(uvText);
+    if (uvUrl !== void 0) return { source: uvToml, url: uvUrl };
+    const pyproject = join73(dir, "pyproject.toml");
+    const text = read(pyproject);
+    if (text === void 0) continue;
+    const url = fromPyproject(text);
+    if (url !== void 0) return { source: pyproject, url };
+    break;
+  }
+  return null;
+}
+function hasRepositories(text) {
+  if (text === void 0) return false;
+  try {
+    const doc = JSON.parse(text);
+    const r = doc.repositories;
+    if (Array.isArray(r)) return r.length > 0;
+    return r !== null && typeof r === "object" && Object.keys(r).length > 0;
+  } catch {
+    return false;
+  }
+}
+function composerRegistry(ctx) {
+  for (const dir of ancestors(ctx)) {
+    const path6 = join73(dir, "composer.json");
+    const text = read(path6);
+    if (text === void 0) continue;
+    if (hasRepositories(text)) return { source: path6 };
+    break;
+  }
+  const env = envOf(ctx);
+  const home = homeOf(ctx);
+  const composerHome = envValue(env, "COMPOSER_HOME");
+  const globals = composerHome !== void 0 ? [join73(composerHome, "config.json")] : [join73(home, ".composer", "config.json"), join73(home, ".config", "composer", "config.json"), join73(envValue(env, "APPDATA") ?? join73(home, "AppData", "Roaming"), "Composer", "config.json")];
+  for (const path6 of globals) if (hasRepositories(read(path6))) return { source: path6 };
+  return null;
+}
+function nugetConfigIn(dir) {
+  try {
+    const hit = readdirSync23(dir).find((f) => f.toLowerCase() === "nuget.config");
+    return hit === void 0 ? void 0 : join73(dir, hit);
+  } catch {
+    return void 0;
+  }
+}
+function customNugetSource(text) {
+  const sources = /<packageSources>([\s\S]*?)<\/packageSources>/i.exec(text)?.[1] ?? "";
+  for (const m of sources.matchAll(/<add\b[^>]*\bvalue\s*=\s*"([^"]+)"/gi)) {
+    const url = m[1] ?? "";
+    if (url !== "" && !isPublic("nuget", url)) return url;
+  }
+  return void 0;
+}
+function nugetRegistry(ctx) {
+  const files = [];
+  for (const dir of ancestors(ctx)) {
+    const f = nugetConfigIn(dir);
+    if (f !== void 0) files.push(f);
+  }
+  const env = envOf(ctx);
+  const home = homeOf(ctx);
+  const appdata = envValue(env, "APPDATA") ?? join73(home, "AppData", "Roaming");
+  for (const dir of [join73(appdata, "NuGet"), join73(home, ".nuget", "NuGet"), join73(home, ".config", "NuGet")]) {
+    const f = nugetConfigIn(dir);
+    if (f !== void 0) files.push(f);
+  }
+  for (const path6 of files) {
+    const text = read(path6);
+    const url = text === void 0 ? void 0 : customNugetSource(text);
+    if (url !== void 0) return { source: path6, url };
+  }
+  return null;
+}
+function customRegistryFor(ecosystem, name, ctx = {}) {
+  try {
+    switch (ecosystem) {
+      case "npm":
+        return npmRegistry(name, ctx);
+      case "pypi":
+        return pypiRegistry(ctx);
+      case "packagist":
+        return composerRegistry(ctx);
+      case "nuget":
+        return nugetRegistry(ctx);
+      default:
+        return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+// src/pkgvet/registry.ts
+function describeError(e, signal) {
+  if (signal.aborted) return "network budget exhausted before the registry answered";
+  if (e instanceof Error) {
+    if (e.name === "AbortError" || e.name === "TimeoutError") return "request timed out";
+    const cause = e.cause;
+    const detail = cause instanceof Error ? cause.message : "";
+    return detail !== "" ? `${e.message} (${detail})` : e.message;
+  }
+  return String(e);
+}
+async function fetchJson(url, http, headers = {}) {
+  try {
+    const res = await http.fetchImpl(url, { headers: { accept: "application/json", ...headers }, signal: http.signal });
+    if (res.status === 404 || res.status === 410) return { kind: "not_found" };
+    if (res.status === 429) return { kind: "error", reason: `rate limited by ${new URL(url).host} (HTTP 429)` };
+    if (!res.ok) return { kind: "error", reason: `${new URL(url).host} answered HTTP ${res.status}` };
+    return { kind: "ok", json: await res.json() };
+  } catch (e) {
+    return { kind: "error", reason: describeError(e, http.signal) };
+  }
+}
+function isRecord6(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+function stringRecord(x) {
+  const out = {};
+  if (!isRecord6(x)) return out;
+  for (const [k, v] of Object.entries(x)) if (typeof v === "string") out[k] = v;
+  return out;
+}
+function npmDocUrl(name) {
+  return `https://registry.npmjs.org/${name.replace("/", "%2F")}`;
+}
+async function lookupNpm(name, http) {
+  const r = await fetchJson(npmDocUrl(name), http, { accept: "application/vnd.npm.install-v1+json" });
+  if (r.kind !== "ok") return r;
+  if (!isRecord6(r.json) || !isRecord6(r.json["versions"])) return { kind: "error", reason: "npm registry returned an unexpected document" };
+  const versions = Object.keys(r.json["versions"]);
+  const installScript = {};
+  for (const [v, meta] of Object.entries(r.json["versions"])) {
+    if (isRecord6(meta) && meta["hasInstallScript"] === true) installScript[v] = true;
+  }
+  const tags = stringRecord(r.json["dist-tags"]);
+  const info = { versions, tags, times: {}, installScript };
+  if (tags["latest"] !== void 0) info.latest = tags["latest"];
+  if (typeof r.json["modified"] === "string") info.modified = r.json["modified"];
+  return { kind: "found", info };
+}
+async function npmFullDocument(name, http) {
+  const r = await fetchJson(npmDocUrl(name), http);
+  if (r.kind === "not_found") return { kind: "error", reason: "npm registry no longer has this package" };
+  if (r.kind === "error") return r;
+  if (!isRecord6(r.json)) return { kind: "error", reason: "npm registry returned an unexpected document" };
+  const scripts = {};
+  const versions = r.json["versions"];
+  if (isRecord6(versions)) {
+    for (const [v, meta] of Object.entries(versions)) {
+      if (isRecord6(meta)) scripts[v] = stringRecord(meta["scripts"]);
+    }
+  }
+  return { kind: "ok", times: stringRecord(r.json["time"]), scripts };
+}
+async function npmVersionScripts(name, version2, http) {
+  const r = await fetchJson(`${npmDocUrl(name)}/${encodeURIComponent(version2)}`, http);
+  if (r.kind === "not_found") return { kind: "error", reason: "version manifest not found" };
+  if (r.kind === "error") return r;
+  return { kind: "ok", scripts: isRecord6(r.json) ? stringRecord(r.json["scripts"]) : {} };
+}
+async function lookupPypi(name, http) {
+  const r = await fetchJson(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`, http);
+  if (r.kind !== "ok") return r;
+  if (!isRecord6(r.json) || !isRecord6(r.json["info"])) return { kind: "error", reason: "PyPI returned an unexpected document" };
+  const releases = isRecord6(r.json["releases"]) ? r.json["releases"] : {};
+  const times = {};
+  const versions = [];
+  for (const [v, files] of Object.entries(releases)) {
+    if (!Array.isArray(files) || files.length === 0) continue;
+    versions.push(v);
+    let earliest;
+    for (const f of files) {
+      const t = isRecord6(f) ? f["upload_time_iso_8601"] ?? f["upload_time"] : void 0;
+      if (typeof t === "string" && (earliest === void 0 || t < earliest)) earliest = t;
+    }
+    if (earliest !== void 0) times[v] = earliest;
+  }
+  const info = { versions, times, installScript: {} };
+  const latest = r.json["info"]["version"];
+  if (typeof latest === "string") info.latest = latest;
+  return { kind: "found", info };
+}
+async function lookupPackagist(name, http) {
+  const lower = name.toLowerCase();
+  const r = await fetchJson(`https://repo.packagist.org/p2/${lower}.json`, http);
+  if (r.kind !== "ok") return r;
+  const pkgs = isRecord6(r.json) ? r.json["packages"] : void 0;
+  const list2 = isRecord6(pkgs) ? pkgs[lower] : void 0;
+  if (!Array.isArray(list2)) return { kind: "error", reason: "Packagist returned an unexpected document" };
+  let carried = {};
+  const versions = [];
+  const times = {};
+  for (const entry of list2) {
+    if (!isRecord6(entry)) continue;
+    const next = { ...carried };
+    for (const [k, v] of Object.entries(entry)) {
+      if (v === "__unset") delete next[k];
+      else next[k] = v;
+    }
+    carried = next;
+    const version2 = next["version"];
+    if (typeof version2 !== "string") continue;
+    versions.push(version2);
+    const time3 = next["time"];
+    if (typeof time3 === "string") times[version2] = time3;
+  }
+  return { kind: "found", info: { versions, times, installScript: {} } };
+}
+async function lookupNuget(name, http) {
+  const lower = name.toLowerCase();
+  const r = await fetchJson(`https://api.nuget.org/v3-flatcontainer/${encodeURIComponent(lower)}/index.json`, http);
+  if (r.kind !== "ok") return r;
+  const versions = isRecord6(r.json) && Array.isArray(r.json["versions"]) ? r.json["versions"].filter((v) => typeof v === "string") : null;
+  if (versions === null) return { kind: "error", reason: "NuGet returned an unexpected document" };
+  return { kind: "found", info: { versions, times: {}, installScript: {} } };
+}
+async function nugetPublished(name, version2, http) {
+  const url = `https://api.nuget.org/v3/registration5-gz-semver2/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(version2.toLowerCase())}.json`;
+  const r = await fetchJson(url, http);
+  if (r.kind === "not_found") return { kind: "error", reason: "NuGet registration leaf not found" };
+  if (r.kind === "error") return r;
+  const published = isRecord6(r.json) ? r.json["published"] : void 0;
+  return typeof published === "string" ? { kind: "ok", published } : { kind: "ok" };
+}
+function lookupRegistry(ecosystem, name, http) {
+  switch (ecosystem) {
+    case "npm":
+      return lookupNpm(name, http);
+    case "pypi":
+      return lookupPypi(name, http);
+    case "packagist":
+      return lookupPackagist(name, http);
+    case "nuget":
+      return lookupNuget(name, http);
+    default:
+      return Promise.resolve({ kind: "error", reason: "unsupported ecosystem" });
+  }
+}
+
+// src/pkgvet/types.ts
+var OSV_ECOSYSTEM = {
+  npm: "npm",
+  pypi: "PyPI",
+  packagist: "Packagist",
+  nuget: "NuGet"
+};
+
+// src/pkgvet/versions.ts
+var POST_REST = /^[-._]?(?:post|rev|r|p|patch|pl)[-._]?\d*$/i;
+var DEV_REST = /(?:^|[-._])dev/i;
+function parse5(version2) {
+  let s = version2.trim().replace(/^[vV=]+/, "");
+  const plus = s.indexOf("+");
+  if (plus >= 0) s = s.slice(0, plus);
+  const m = /^(\d+(?:\.\d+)*)(.*)$/.exec(s);
+  if (m === null) return null;
+  const releaseText = m[1] ?? "";
+  const rest = m[2] ?? "";
+  const release = releaseText.split(".").map((x) => Number(x));
+  if (release.some((n2) => !Number.isFinite(n2))) return null;
+  let stage = 2;
+  if (rest !== "") {
+    if (POST_REST.test(rest)) stage = 3;
+    else if (DEV_REST.test(rest)) stage = 0;
+    else stage = 1;
+  }
+  return { release, stage, rest };
+}
+function compareRelease(a2, b) {
+  const n2 = Math.max(a2.length, b.length);
+  for (let i2 = 0; i2 < n2; i2 += 1) {
+    const d = (a2[i2] ?? 0) - (b[i2] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+function compareRest(a2, b) {
+  const ta = a2.split(/[-._]|(?<=\d)(?=\D)|(?<=\D)(?=\d)/).filter(Boolean);
+  const tb = b.split(/[-._]|(?<=\d)(?=\D)|(?<=\D)(?=\d)/).filter(Boolean);
+  const n2 = Math.max(ta.length, tb.length);
+  for (let i2 = 0; i2 < n2; i2 += 1) {
+    const x = ta[i2];
+    const y = tb[i2];
+    if (x === void 0) return -1;
+    if (y === void 0) return 1;
+    const nx = Number(x);
+    const ny = Number(y);
+    if (Number.isFinite(nx) && Number.isFinite(ny)) {
+      if (nx !== ny) return nx - ny;
+    } else if (x.toLowerCase() !== y.toLowerCase()) {
+      return x.toLowerCase() < y.toLowerCase() ? -1 : 1;
+    }
+  }
+  return 0;
+}
+function compareVersions2(a2, b) {
+  const pa = parse5(a2);
+  const pb = parse5(b);
+  if (pa === null || pb === null) return pa === null ? pb === null ? 0 : -1 : 1;
+  const r = compareRelease(pa.release, pb.release);
+  if (r !== 0) return r;
+  if (pa.stage !== pb.stage) return pa.stage - pb.stage;
+  return compareRest(pa.rest, pb.rest);
+}
+function isPrerelease(version2) {
+  const p = parse5(version2);
+  return p === null || p.stage < 2;
+}
+var gte = (x) => (v) => compareVersions2(v, x) >= 0;
+var gt = (x) => (v) => compareVersions2(v, x) > 0;
+var lt = (x) => (v) => compareVersions2(v, x) < 0;
+var lte = (x) => (v) => compareVersions2(v, x) <= 0;
+var eq = (x) => (v) => compareVersions2(v, x) === 0;
+var ANY = () => true;
+var WILD = /^[xX*]$/;
+function partial2(text) {
+  const t = text.trim().replace(/^[vV]/, "");
+  if (t === "" || WILD.test(t)) return { nums: [], pre: "" };
+  const plus = t.indexOf("+");
+  const noBuild = plus >= 0 ? t.slice(0, plus) : t;
+  const dash = noBuild.search(/-/);
+  const core = dash >= 0 ? noBuild.slice(0, dash) : noBuild;
+  const pre = dash >= 0 ? noBuild.slice(dash) : "";
+  const nums = [];
+  for (const part of core.split(".")) {
+    if (WILD.test(part)) break;
+    if (!/^\d+$/.test(part)) return null;
+    nums.push(Number(part));
+  }
+  return { nums, pre };
+}
+var fmt = (nums) => [0, 1, 2].map((i2) => nums[i2] ?? 0).join(".");
+function bump(nums) {
+  const next = nums.slice();
+  const last = next.length - 1;
+  next[last] = (next[last] ?? 0) + 1;
+  return fmt(next);
+}
+function comparator(op, text, composerTilde) {
+  const p = partial2(text);
+  if (p === null) return null;
+  const { nums, pre } = p;
+  const full = nums.length >= 3;
+  const exact = full ? fmt(nums) + pre : fmt(nums);
+  switch (op) {
+    case "":
+    case "=":
+    case "==":
+      if (nums.length === 0) return [ANY];
+      if (full) return [eq(exact)];
+      return [gte(fmt(nums)), lt(bump(nums))];
+    case "^": {
+      if (nums.length === 0) return [ANY];
+      const [major = 0, minor, patch] = nums;
+      if (major > 0 || nums.length === 1) return [gte(exact), lt(bump([major]))];
+      if ((minor ?? 0) > 0 || nums.length === 2) return [gte(exact), lt(bump([0, minor ?? 0]))];
+      return [gte(exact), lt(bump([0, 0, patch ?? 0]))];
+    }
+    case "~":
+    case "~>": {
+      if (nums.length === 0) return [ANY];
+      if (nums.length === 1) return [gte(exact), lt(bump(nums))];
+      if (composerTilde && nums.length === 2) return [gte(exact), lt(bump(nums.slice(0, 1)))];
+      return [gte(exact), lt(bump(nums.slice(0, 2)))];
+    }
+    case ">=":
+      return [gte(exact)];
+    case ">":
+      return full ? [gt(exact)] : nums.length === 0 ? [() => false] : [gte(bump(nums))];
+    case "<":
+      return [lt(exact)];
+    case "<=":
+      return full ? [lte(exact)] : nums.length === 0 ? [ANY] : [lt(bump(nums))];
+    case "!=":
+      return [(v) => !eq(exact)(v)];
+    default:
+      return null;
+  }
+}
+var COMPARATOR = /^(\^|~>|~|>=|<=|>|<|==|=|!=)?\s*(.*)$/;
+function semverishRange(range, composer) {
+  const alternatives = range.split(composer ? /\s*\|\|?\s*/ : /\s*\|\|\s*/);
+  const out = [];
+  for (const alt of alternatives) {
+    let text = alt.trim();
+    if (composer) text = text.replace(/@[a-zA-Z]+$/, "").trim();
+    if (text === "" || text === "*" || WILD.test(text)) {
+      out.push([ANY]);
+      continue;
+    }
+    const hyphen = /^(\S+)\s+-\s+(\S+)$/.exec(text);
+    if (hyphen !== null) {
+      const lo = comparator(">=", hyphen[1] ?? "", composer);
+      const hiPartial = partial2(hyphen[2] ?? "");
+      if (lo === null || hiPartial === null) return null;
+      const hi = hiPartial.nums.length >= 3 ? [lte(fmt(hiPartial.nums) + hiPartial.pre)] : hiPartial.nums.length === 0 ? [ANY] : [lt(bump(hiPartial.nums))];
+      out.push([...lo, ...hi]);
+      continue;
+    }
+    const tokens = text.replace(/(\^|~>|~|>=|<=|>|<|==|=|!=)\s+/g, "$1").split(composer ? /[\s,]+/ : /\s+/);
+    const preds = [];
+    for (const token of tokens) {
+      if (token === "") continue;
+      const m = COMPARATOR.exec(token);
+      if (m === null) return null;
+      const c3 = comparator(m[1] ?? "", m[2] ?? "", composer);
+      if (c3 === null) return null;
+      preds.push(...c3);
+    }
+    out.push(preds);
+  }
+  return out;
+}
+var PEP440 = /^\s*(~=|===|==|!=|<=|>=|<|>)\s*([^\s,]+)\s*$/;
+function pep440Range(range) {
+  const preds = [];
+  for (const spec of range.split(",")) {
+    if (spec.trim() === "") continue;
+    const m = PEP440.exec(spec);
+    if (m === null) return null;
+    const op = m[1] ?? "";
+    const ver = m[2] ?? "";
+    if (op === "===") {
+      preds.push((v) => v === ver);
+      continue;
+    }
+    if (ver.endsWith(".*")) {
+      const prefix = partial2(ver.slice(0, -2));
+      if (prefix === null || prefix.nums.length === 0) return null;
+      const inPrefix = (v) => {
+        const p = parse5(v);
+        return p !== null && prefix.nums.every((n2, i2) => (p.release[i2] ?? 0) === n2);
+      };
+      if (op === "==") preds.push(inPrefix);
+      else if (op === "!=") preds.push((v) => !inPrefix(v));
+      else return null;
+      continue;
+    }
+    if (parse5(ver) === null) return null;
+    switch (op) {
+      case "==":
+        preds.push(eq(ver));
+        break;
+      case "!=":
+        preds.push((v) => !eq(ver)(v));
+        break;
+      case ">=":
+        preds.push(gte(ver));
+        break;
+      case "<=":
+        preds.push(lte(ver));
+        break;
+      case ">":
+        preds.push(gt(ver));
+        break;
+      case "<":
+        preds.push(lt(ver));
+        break;
+      case "~=": {
+        const p = parse5(ver);
+        if (p === null || p.release.length < 2) return null;
+        const prefix = p.release.slice(0, -1);
+        preds.push(gte(ver), (v) => {
+          const q = parse5(v);
+          return q !== null && prefix.every((n2, i2) => (q.release[i2] ?? 0) === n2);
+        });
+        break;
+      }
+      default:
+        return null;
+    }
+  }
+  return [preds];
+}
+function nugetRange(range) {
+  const r = range.trim();
+  const m = /^([[(])\s*([^,\])]*?)\s*(?:,\s*([^\])]*?)\s*)?([\])])$/.exec(r);
+  if (m === null) return parse5(r) === null ? null : [[eq(r)]];
+  const open = m[1];
+  const lo = m[2] ?? "";
+  const hasComma = r.includes(",");
+  const hi = m[3] ?? "";
+  const close = m[4];
+  if (!hasComma) return lo === "" ? null : [[eq(lo)]];
+  const preds = [];
+  if (lo !== "") preds.push(open === "[" ? gte(lo) : gt(lo));
+  if (hi !== "") preds.push(close === "]" ? lte(hi) : lt(hi));
+  return [preds];
+}
+var EXACT_SEMVER = /^[vV=]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+function isExactVersion(ecosystem, range) {
+  if (range === void 0) return false;
+  const r = range.trim();
+  switch (ecosystem) {
+    case "npm":
+      return EXACT_SEMVER.test(r);
+    case "pypi":
+      return /^(?:===?)\s*[^*,<>=!~\s]+$/.test(r) || /^\d/.test(r) && parse5(r) !== null && !/[,<>=!~*]/.test(r);
+    case "packagist":
+      return /^[vV]?\d+(?:\.\d+){0,3}(?:-[0-9A-Za-z.]+)?$/.test(r);
+    case "nuget":
+      return parse5(r) !== null && !/[[\](),]/.test(r);
+    default:
+      return false;
+  }
+}
+function highest(versions) {
+  let best;
+  for (const v of versions) if (best === void 0 || compareVersions2(v, best) > 0) best = v;
+  return best;
+}
+function resolveVersion2(ecosystem, range, ctx) {
+  const stable = ctx.versions.filter((v) => !isPrerelease(v));
+  const r = range?.trim() ?? "";
+  if (r === "" || ecosystem === "npm" && r === "latest") {
+    if (ctx.latest !== void 0 && ctx.versions.includes(ctx.latest)) return ctx.latest;
+    return highest(stable);
+  }
+  if (ecosystem === "npm") {
+    const tagged = ctx.tags?.[r];
+    if (tagged !== void 0) return ctx.versions.includes(tagged) ? tagged : void 0;
+  }
+  if (ecosystem === "packagist" && /^dev-|-dev$/i.test(r)) return void 0;
+  if (isExactVersion(ecosystem, r)) {
+    const wanted = r.replace(/^===?\s*/, "");
+    return ctx.versions.find((v) => v === wanted) ?? ctx.versions.find((v) => compareVersions2(v, wanted) === 0);
+  }
+  let alternatives;
+  switch (ecosystem) {
+    case "npm":
+      alternatives = semverishRange(r, false);
+      break;
+    case "packagist":
+      alternatives = semverishRange(r, true);
+      break;
+    case "pypi":
+      alternatives = /^(?:\^|~(?!=)|\*$|\d+(?:\.\d+)*\.\*$)/.test(r) ? semverishRange(r, false) : pep440Range(r);
+      break;
+    case "nuget":
+      alternatives = nugetRange(r);
+      break;
+    default:
+      alternatives = null;
+  }
+  if (alternatives === null) return void 0;
+  const matching = stable.filter((v) => alternatives.some((preds) => preds.every((p) => p(v))));
+  if (ecosystem === "npm" && ctx.latest !== void 0 && matching.includes(ctx.latest)) return ctx.latest;
+  return highest(matching);
+}
+
+// src/pkgvet/vet.ts
+var FRESH_HOURS = 72;
+var TOOL_BUDGET_MS = 1e4;
+var HOUR = 3600 * 1e3;
+var NPM_PLACEHOLDER = /^0\.0\.\d+-security$/;
+var INSTALL_SCRIPTS = ["preinstall", "install", "postinstall"];
+var REGISTRY_NAME = {
+  npm: "the npm registry",
+  pypi: "PyPI",
+  packagist: "Packagist",
+  nuget: "nuget.org"
+};
+function popularIndexFor(ecosystem, opts) {
+  const override = opts.popular?.[ecosystem];
+  if (override === null) return null;
+  if (override !== void 0) return buildPopularIndex(ecosystem, override);
+  return opts.popularDir === void 0 ? loadPopularIndex(ecosystem) : loadPopularIndex(ecosystem, opts.popularDir);
+}
+var pass = (detail) => detail === void 0 ? { status: "pass" } : { status: "pass", detail };
+var warn = (detail) => ({ status: "warn", detail });
+var fail3 = (detail) => ({ status: "fail", detail });
+var unknown2 = (detail) => ({ status: "unknown", detail });
+var na = (detail) => detail === void 0 ? { status: "not_applicable" } : { status: "not_applicable", detail };
+function hoursAgo(iso, now) {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? (now - t) / HOUR : void 0;
+}
+function ageText(hours) {
+  return hours < 48 ? `${Math.max(0, Math.round(hours))} h ago` : `${Math.round(hours / 24)} days ago`;
+}
+function customFor(spec, opts) {
+  if (opts.commandRegistry !== void 0 && !isPublicRegistryUrl(spec.ecosystem, opts.commandRegistry)) {
+    return { source: "the command line", url: opts.commandRegistry };
+  }
+  return customRegistryFor(spec.ecosystem, spec.name, opts.registry ?? {});
+}
+function resolveFor(w, info) {
+  const ctx = { versions: info.versions, latest: info.latest, tags: info.tags ?? {} };
+  const v = resolveVersion2(w.spec.ecosystem, w.spec.range, ctx);
+  if (v !== void 0) w.version = v;
+  else if (isExactVersion(w.spec.ecosystem, w.spec.range)) w.versionMissing = true;
+  const published = v === void 0 ? void 0 : info.times[v];
+  if (published !== void 0) w.publishedAt = published;
+}
+async function extrasFor(w, info, http, now) {
+  const v = w.version;
+  if (v === void 0) return;
+  if (w.spec.ecosystem === "npm") {
+    const modifiedHours = info.modified === void 0 ? void 0 : hoursAgo(info.modified, now);
+    const needFull = modifiedHours === void 0 || modifiedHours < FRESH_HOURS;
+    const hasScript = info.installScript[v] === true;
+    if (!needFull && info.modified !== void 0) w.quietSince = info.modified;
+    if (needFull) {
+      const full = await npmFullDocument(w.spec.name, http);
+      if (full.kind === "ok") {
+        const t = full.times[v];
+        if (t !== void 0) w.publishedAt = t;
+        else w.ageError = "the registry document has no publish time for this version";
+        const s = full.scripts[v];
+        if (hasScript) w.scripts = s === void 0 ? [] : INSTALL_SCRIPTS.filter((k) => s[k] !== void 0);
+      } else {
+        w.ageError = full.reason;
+        if (hasScript) w.scriptsError = full.reason;
+      }
+    } else if (hasScript) {
+      const s = await npmVersionScripts(w.spec.name, v, http);
+      if (s.kind === "ok") w.scripts = INSTALL_SCRIPTS.filter((k) => s.scripts[k] !== void 0);
+      else w.scriptsError = s.reason;
+    }
+    return;
+  }
+  if (w.spec.ecosystem === "nuget") {
+    const p = await nugetPublished(w.spec.name, v, http);
+    if (p.kind === "ok" && p.published !== void 0) w.publishedAt = p.published;
+    else w.ageError = p.kind === "error" ? p.reason : "the registration entry has no publish time";
+    return;
+  }
+  if (w.publishedAt === void 0) w.ageError = "the registry document has no publish time for this version";
+}
+function osvIds(osv, w) {
+  if (osv === void 0 || w.osvIndex === void 0) return [];
+  const eco = OSV_ECOSYSTEM[w.spec.ecosystem];
+  const hit = osv.vulnerable_packages.find(
+    (g) => g.ecosystem === eco && g.name === w.spec.name && (w.osvVersioned ? g.version === w.version : g.version === void 0)
+  );
+  return hit?.vuln_ids ?? [];
+}
+function buildResult(w, osv, osvError, now, offlineReason) {
+  const { spec } = w;
+  const eco = spec.ecosystem;
+  const registry2 = REGISTRY_NAME[eco];
+  const lookup = w.lookup;
+  const info = lookup?.kind === "found" ? lookup.info : void 0;
+  const extraWarn = [];
+  const extraUnknown = [];
+  const typosquat = !w.popularLoaded ? unknown2("popular-packages list unavailable \u2014 typosquat check not run") : w.typo !== null ? warn(`name is ${w.typo.distance} edit${w.typo.distance === 1 ? "" : "s"} from the popular package '${w.typo.similar_to}' \u2014 possible typosquat`) : pass();
+  const ids2 = osvIds(osv, w);
+  const malIds = ids2.filter((id) => id.startsWith("MAL-"));
+  const vulnIds = ids2.filter((id) => !id.startsWith("MAL-"));
+  const osvDown = offlineReason ?? (osv === void 0 || !osv.online ? `OSV lookup failed: ${osvError ?? osv?.error ?? "no answer"}` : void 0);
+  let exists;
+  let malicious;
+  let vulnerabilities;
+  let publishAge;
+  let installScripts = eco === "npm" ? unknown2("not checked") : na("install-script check is npm-only");
+  if (lookup === void 0) {
+    const why = offlineReason ?? "registry not consulted";
+    exists = unknown2(why);
+    malicious = unknown2(why);
+    vulnerabilities = unknown2(why);
+    publishAge = unknown2(why);
+    if (eco === "npm") installScripts = unknown2(why);
+  } else if (lookup.kind === "error") {
+    exists = unknown2(`${registry2} lookup failed: ${lookup.reason}`);
+    malicious = osvDown !== void 0 ? unknown2(osvDown) : malIds.length > 0 ? warn(`OSV lists malicious advisories for this name (${malIds.join(", ")}); the version could not be determined`) : pass("no OSV malicious-package advisory for any version");
+    vulnerabilities = unknown2(`version unknown: ${lookup.reason}`);
+    publishAge = unknown2(`version unknown: ${lookup.reason}`);
+    if (eco === "npm") installScripts = unknown2(`version unknown: ${lookup.reason}`);
+  } else if (lookup.kind === "not_found") {
+    const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : "";
+    if (w.custom !== null) {
+      exists = unknown2(
+        `not on ${registry2}, but a custom registry is configured (${w.custom.source}${w.custom.url !== void 0 ? `: ${w.custom.url}` : ""}) \u2014 possibly a private package; not vetted.${didYouMean}`
+      );
+    } else {
+      exists = fail3(`does not exist on ${registry2} \u2014 most likely a hallucinated or mistyped name.${didYouMean}`);
+    }
+    malicious = malIds.length > 0 ? w.custom !== null ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry2}`) : fail3(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry2}`) : osvDown !== void 0 ? unknown2(osvDown) : na();
+    vulnerabilities = na();
+    publishAge = na();
+    if (eco === "npm") installScripts = na();
+  } else {
+    exists = pass();
+    const placeholderVersion = [w.version, info?.latest].find((x) => x !== void 0 && NPM_PLACEHOLDER.test(x));
+    const placeholder = eco === "npm" && placeholderVersion !== void 0;
+    const v = w.version;
+    if (w.versionMissing === true) extraWarn.push(`requested version ${spec.range ?? ""} is not published on ${registry2} \u2014 possibly a hallucinated version`);
+    else if (v === void 0) extraUnknown.push(`no published version matches '${spec.range ?? ""}'`);
+    const versionUnknown = v === void 0 ? `could not determine which version '${spec.range ?? "latest"}' installs` : void 0;
+    if (placeholder) {
+      malicious = fail3(`npm replaced this package with a security placeholder (${placeholderVersion ?? "x-security"}): it was taken down as malicious`);
+    } else if (osvDown !== void 0) {
+      malicious = unknown2(osvDown);
+    } else if (malIds.length > 0) {
+      malicious = w.osvVersioned ? fail3(`OSV malicious-package advisory for ${v ?? "this version"}: ${malIds.join(", ")}`) : warn(`OSV lists malicious advisories for some versions of this package (${malIds.join(", ")}) \u2014 which version installs could not be determined`);
+    } else {
+      malicious = pass();
+    }
+    if (osvDown !== void 0) vulnerabilities = unknown2(osvDown);
+    else if (vulnIds.length > 0) {
+      vulnerabilities = w.osvVersioned ? warn(`${vulnIds.length} known vulnerabilit${vulnIds.length === 1 ? "y" : "ies"} in ${v ?? "this version"}: ${vulnIds.slice(0, 5).join(", ")}${vulnIds.length > 5 ? ", \u2026" : ""}`) : unknown2(`${vulnIds.length} advisories exist for some versions \u2014 which version installs could not be determined`);
+    } else vulnerabilities = pass();
+    if (versionUnknown !== void 0) publishAge = unknown2(versionUnknown);
+    else if (w.publishedAt !== void 0) {
+      const h2 = hoursAgo(w.publishedAt, now);
+      publishAge = h2 === void 0 ? unknown2("unparseable publish time") : h2 < FRESH_HOURS ? warn(
+        `${v ?? ""} was published ${ageText(h2)} (< ${FRESH_HOURS} h) \u2014 fresh releases are how the 2025-26 npm/PyPI worms spread; consider pinning the previous version until this one has aged`
+      ) : pass(`published ${ageText(h2)}`);
+    } else if (w.quietSince !== void 0) {
+      publishAge = pass(`no change to the package since ${w.quietSince.slice(0, 10)}`);
+    } else publishAge = unknown2(w.ageError ?? "publish time unavailable");
+    if (eco === "npm") {
+      if (versionUnknown !== void 0) installScripts = unknown2(versionUnknown);
+      else if (info?.installScript[v ?? ""] === true) {
+        const names = w.scripts !== void 0 && w.scripts.length > 0 ? w.scripts.join(", ") : w.scriptsError !== void 0 ? `names unavailable (${w.scriptsError})` : "install (e.g. a native build)";
+        installScripts = warn(`${v ?? ""} runs install scripts on install: ${names}`);
+      } else installScripts = pass();
+    }
+  }
+  const checks = {
+    exists,
+    malicious,
+    vulnerabilities,
+    publish_age: publishAge,
+    install_scripts: installScripts,
+    typosquat
+  };
+  const all = Object.values(checks);
+  const reasonsOf = (status) => all.filter((c3) => c3.status === status && c3.detail !== void 0).map((c3) => c3.detail ?? "");
+  const reasons = [...reasonsOf("fail"), ...reasonsOf("warn"), ...extraWarn, ...reasonsOf("unknown"), ...extraUnknown];
+  let verdict = "ok";
+  if (all.some((c3) => c3.status === "fail")) verdict = "block";
+  else if (all.some((c3) => c3.status === "warn") || extraWarn.length > 0) verdict = "warn";
+  else if (all.some((c3) => c3.status === "unknown") || extraUnknown.length > 0) verdict = "unknown";
+  const result = { ecosystem: eco, name: spec.name, verdict, reasons: [...new Set(reasons)], checks };
+  if (spec.range !== void 0) result.requested = spec.range;
+  if (w.version !== void 0) result.version = w.version;
+  if (w.publishedAt !== void 0) result.published_at = w.publishedAt;
+  if (malIds.length > 0) result.malicious_ids = malIds;
+  if (vulnIds.length > 0) result.vulnerability_ids = vulnIds;
+  if (w.scripts !== void 0 && w.scripts.length > 0) result.install_scripts = w.scripts;
+  if (w.typo !== null) result.similar_to = w.typo.similar_to;
+  return result;
+}
+async function vetPackages(specs, opts = {}) {
+  const now = opts.now ?? Date.now();
+  const offline = opts.offline ?? process.env["GUARDIAN_OFFLINE"] === "1";
+  const indexes = /* @__PURE__ */ new Map();
+  const work = specs.map((spec) => {
+    if (!indexes.has(spec.ecosystem)) indexes.set(spec.ecosystem, popularIndexFor(spec.ecosystem, opts));
+    const index = indexes.get(spec.ecosystem) ?? null;
+    return {
+      spec,
+      typo: index === null ? null : findTyposquatTarget(index, spec.name),
+      popularLoaded: index !== null,
+      custom: customFor(spec, opts)
+    };
+  });
+  if (offline) {
+    return work.map((w) => buildResult(w, void 0, void 0, now, "network disabled (GUARDIAN_OFFLINE=1)"));
+  }
+  const fetchImpl = opts.fetchImpl ?? (typeof fetch === "function" ? fetch : void 0);
+  if (fetchImpl === void 0) {
+    return work.map((w) => buildResult(w, void 0, void 0, now, "no fetch implementation available"));
+  }
+  const budgetMs = opts.budgetMs ?? TOOL_BUDGET_MS;
+  const deadline = Date.now() + budgetMs;
+  const budget = new AbortController();
+  const timer = setTimeout(() => budget.abort(new Error("network budget exhausted")), budgetMs);
+  const signal = opts.signal === void 0 ? budget.signal : AbortSignal.any([opts.signal, budget.signal]);
+  const http = { fetchImpl, signal };
+  try {
+    return await networkRounds(work, http, signal, deadline, now);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function networkRounds(work, http, signal, deadline, now) {
+  const fetchImpl = http.fetchImpl;
+  const lookups = /* @__PURE__ */ new Map();
+  const pending = work.map((w) => {
+    const key = `${w.spec.ecosystem}\0${w.spec.name.toLowerCase()}`;
+    let p = lookups.get(key);
+    if (p === void 0) {
+      p = lookupRegistry(w.spec.ecosystem, w.spec.name, http);
+      lookups.set(key, p);
+    }
+    return p;
+  });
+  const answers = await Promise.all(pending);
+  work.forEach((w, i2) => {
+    const answer = answers[i2];
+    if (answer !== void 0) w.lookup = answer;
+    if (answer?.kind === "found") resolveFor(w, answer.info);
+  });
+  if (signal.aborted) {
+    const why = "network budget exhausted before OSV was consulted";
+    return work.map((w) => buildResult(w, void 0, why, now, void 0));
+  }
+  const queries = [];
+  for (const w of work) {
+    const q = { ecosystem: OSV_ECOSYSTEM[w.spec.ecosystem], name: w.spec.name };
+    if (w.version !== void 0) q.version = w.version;
+    w.osvVersioned = w.version !== void 0;
+    w.osvIndex = queries.length;
+    queries.push(q);
+  }
+  let osvError;
+  const osvPromise = queryOsv(queries, { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()) }).catch(
+    (e) => {
+      osvError = e instanceof Error ? e.message : String(e);
+      return { online: false, queried: 0, vulnerable_packages: [] };
+    }
+  );
+  const extras = work.map(
+    (w) => w.lookup?.kind === "found" ? extrasFor(w, w.lookup.info, http, now).catch(() => void 0) : Promise.resolve()
+  );
+  const [osv] = await Promise.all([osvPromise, ...extras]);
+  if (signal.aborted && osv.online === false && osvError === void 0) {
+    osvError = "network budget exhausted before OSV answered";
+  }
+  return work.map((w) => buildResult(w, osv, osvError ?? (osv.online ? void 0 : osv.error), now, void 0));
+}
+function worstVerdict(results) {
+  const rank = { ok: 0, unknown: 1, warn: 2, block: 3 };
+  let worst = "ok";
+  for (const r of results) if (rank[r.verdict] > rank[worst]) worst = r.verdict;
+  return worst;
+}
+
+// src/tools/vetPackages.ts
+var ECOSYSTEM_ALIASES = {
+  npm: "npm",
+  pnpm: "npm",
+  yarn: "npm",
+  bun: "npm",
+  pypi: "pypi",
+  pip: "pypi",
+  python: "pypi",
+  uv: "pypi",
+  poetry: "pypi",
+  packagist: "packagist",
+  composer: "packagist",
+  php: "packagist",
+  nuget: "nuget",
+  dotnet: "nuget"
+};
+var tool47 = {
+  name: "vet_packages",
+  title: "Vet packages before installing",
+  description: 'Vet dependencies BEFORE installing them. Per package, against the public registry and OSV: does the name exist (a name nobody published is likely hallucinated), is the version that would install flagged malicious (OSV MAL- advisory, or npm security placeholder), known vulnerabilities, publish age (< 72 h warns: fresh releases are how npm/PyPI worms spread), npm install scripts, and typosquat suspicion against a committed popular-packages list. Verdict per package and overall: block | warn | unknown | ok. `unknown` means a check could not run (offline, timeout, HTTP error, rate limit, GUARDIAN_OFFLINE=1) \u2014 never read it as ok. A name missing from the public registry is `unknown`, not block, when a custom registry is configured for it (.npmrc, pip.conf / PIP_INDEX_URL, pyproject index, composer repositories, nuget.config). Accepts "name" or "name@version" (also name==1.2, vendor/pkg:^2). Read-only; 10 s network budget. The same checks run automatically on npm/pnpm/yarn/bun/pip/uv/poetry/composer/dotnet install commands via the PreToolUse hook.',
+  inputSchema: {
+    ecosystem: external_exports.enum(Object.keys(ECOSYSTEM_ALIASES)).describe("npm (also pnpm/yarn/bun), pypi (pip/uv/poetry), packagist (composer) or nuget (dotnet)."),
+    packages: external_exports.array(external_exports.string().min(1).max(214)).min(1).max(50).describe('Package specs: "name" or "name@version" (a range or tag is resolved to the version it installs).'),
+    project_path: ProjectPath.describe(
+      "Project whose registry configuration (.npmrc, pyproject.toml, composer.json, nuget.config) applies. Defaults to the current directory."
+    )
+  },
+  handler: async (input, ctx, callMeta) => handler44(input, ctx, callMeta)
+};
+registerToolModule(tool47);
+async function handler44(input, _ctx, callMeta) {
+  const inp = input;
+  const ecosystem = ECOSYSTEM_ALIASES[inp.ecosystem];
+  if (ecosystem === void 0) {
+    return { ok: false, error: { code: "unsupported_target", message: `unsupported ecosystem '${inp.ecosystem}'` } };
+  }
+  let projectDir = process.cwd();
+  if (inp.project_path !== void 0 && inp.project_path !== "") {
+    projectDir = resolve18(inp.project_path);
+    if (!existsSync52(projectDir) || !statSync20(projectDir).isDirectory()) {
+      return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
+    }
+  }
+  const specs = [];
+  const skipped = [];
+  for (const raw of inp.packages) {
+    const parsed = parsePackageSpec(ecosystem, raw);
+    if ("name" in parsed) specs.push(parsed);
+    else skipped.push(parsed);
+  }
+  const offline = process.env["GUARDIAN_OFFLINE"] === "1";
+  const results = await vetPackages(specs, {
+    budgetMs: TOOL_BUDGET_MS,
+    offline,
+    registry: { projectDir },
+    ...callMeta?.signal !== void 0 ? { signal: callMeta.signal } : {}
+  });
+  const summary = { block: 0, warn: 0, unknown: 0, ok: 0 };
+  for (const r of results) summary[r.verdict] += 1;
+  return {
+    ok: true,
+    ecosystem,
+    // Nothing vetted (every spec skipped) is not a clean bill of health.
+    verdict: results.length === 0 ? "unknown" : worstVerdict(results),
+    summary,
+    packages: results,
+    skipped,
+    network: offline ? "disabled (GUARDIAN_OFFLINE=1)" : `online, ${TOOL_BUDGET_MS / 1e3} s budget`
+  };
+}
+
 // src/resources/scans.ts
 registerResourceModule({
   name: "guardian-scans-latest",
@@ -66698,11 +68515,11 @@ registerResourceModule({
   }
 });
 function respond(uri, ctx, keep) {
-  const set = openSetForProject(ctx.storage, serverProjectPath());
-  const { items, total, page, page_size } = paginate(uri, set.findings.filter(keep));
-  const newest = set.sources[0];
+  const set2 = openSetForProject(ctx.storage, serverProjectPath());
+  const { items, total, page, page_size } = paginate(uri, set2.findings.filter(keep));
+  const newest = set2.sources[0];
   return {
-    project_path: set.project_path,
+    project_path: set2.project_path,
     findings: items.map(boundFinding),
     total,
     page,
@@ -66711,9 +68528,9 @@ function respond(uri, ctx, keep) {
     // single-scan shape. `sources` names every one.
     last_run: newest?.started_at ?? null,
     scan_id: newest?.scan_id ?? null,
-    coverage: set.coverage,
-    sources: set.sources,
-    skipped: set.skipped
+    coverage: set2.coverage,
+    sources: set2.sources,
+    skipped: set2.skipped
   };
 }
 function mcpInvalidParams2(message3) {
@@ -67025,7 +68842,7 @@ async function main() {
 `);
     process.exit(1);
   }
-  const projectPath = resolve17(process.cwd());
+  const projectPath = resolve19(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);

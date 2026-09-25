@@ -1,0 +1,1 @@
+{"version":3,"file":"types.js","sourceRoot":"","sources":["../../src/pkgvet/types.ts"],"names":[],"mappings":"AAAA;;;;;;;GAOG;AAEH,MAAM,CAAC,MAAM,cAAc,GAAG,CAAC,KAAK,EAAE,MAAM,EAAE,WAAW,EAAE,OAAO,CAAU,CAAC;AAG7E,uGAAuG;AACvG,MAAM,CAAC,MAAM,aAAa,GAAiC;IACzD,GAAG,EAAE,KAAK;IACV,IAAI,EAAE,MAAM;IACZ,SAAS,EAAE,WAAW;IACtB,KAAK,EAAE,OAAO;CACf,CAAC"}

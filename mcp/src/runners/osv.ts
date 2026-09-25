@@ -37,6 +37,13 @@ export interface OsvResult {
   error?: string;
 }
 
+export interface OsvQueryOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  /** Injectable for tests; defaults to the global `fetch`. */
+  fetchImpl?: typeof fetch;
+}
+
 const OSV_BATCH_URL = 'https://api.osv.dev/v1/querybatch';
 const DEFAULT_TIMEOUT_MS = 6000;
 const MAX_QUERIES = 200;
@@ -44,13 +51,14 @@ const CHUNK = 100;
 
 export async function queryOsv(
   packages: OsvPackageQuery[],
-  opts: { signal?: AbortSignal; timeoutMs?: number } = {},
+  opts: OsvQueryOptions = {},
 ): Promise<OsvResult> {
   const queryable = packages.filter((p) => p.name).slice(0, MAX_QUERIES);
   if (queryable.length === 0) {
     return { online: true, queried: 0, vulnerable_packages: [] };
   }
-  if (typeof fetch !== 'function') {
+  const fetchImpl = opts.fetchImpl ?? (typeof fetch === 'function' ? fetch : undefined);
+  if (fetchImpl === undefined) {
     return { online: false, queried: 0, vulnerable_packages: [], error: 'no_fetch' };
   }
 
@@ -64,7 +72,7 @@ export async function queryOsv(
           ...(p.version ? { version: p.version } : {}),
         })),
       };
-      const json = await postJson(OSV_BATCH_URL, body, opts);
+      const json = await postJson(OSV_BATCH_URL, body, opts, fetchImpl);
       const results = Array.isArray((json as { results?: unknown }).results)
         ? ((json as { results: unknown[] }).results)
         : [];
@@ -100,7 +108,8 @@ export async function queryOsv(
 async function postJson(
   url: string,
   body: unknown,
-  opts: { signal?: AbortSignal; timeoutMs?: number },
+  opts: OsvQueryOptions,
+  fetchImpl: typeof fetch,
 ): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
@@ -109,7 +118,7 @@ async function postJson(
     else opts.signal.addEventListener('abort', () => controller.abort(), { once: true });
   }
   try {
-    const res = await fetch(url, {
+    const res = await fetchImpl(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

@@ -75,6 +75,8 @@ import './tools/validateFinding.js';
 import './tools/createFixPr.js';
 // Agent workspace audit (Task 22):
 import './tools/auditAgentConfig.js';
+// Install-time package vetting (Task 16):
+import './tools/vetPackages.js';
 
 // Resources:
 import './resources/scans.js';
