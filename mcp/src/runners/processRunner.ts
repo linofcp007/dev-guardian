@@ -22,7 +22,7 @@
  *     and — because that table loses every process Git Bash `exec`s — the
  *     MSYS descendants are found by a per-child environment token and
  *     killed too. See `windowsTreeKill.ts`.
- *   - POSIX:the child is spawned `detached`, which makes it the leader of
+ *   - POSIX: the child is spawned `detached`, which makes it the leader of
  *     its own process group, and the NEGATIVE pid signals the whole group.
  *     Same mechanism as `ci/appRunner.ts`, with the same honest limit: a
  *     grandchild that calls `setsid()` itself leaves the group and cannot be
@@ -277,6 +277,7 @@ function killTree(
 ): void {
   const pid = child.pid;
   if (pid === undefined) return;
+  let treeKill: Promise<void> = Promise.resolve();
   if (treeToken !== null) {
     // `taskkill /T /F` plus the MSYS orphans it cannot see — see
     // `windowsTreeKill.ts`. The direct kill is only a FALLBACK, after
@@ -290,26 +291,32 @@ function killTree(
         /* already dead */
       }
     };
-    void killWindowsTree(pid, command, treeToken, direct).catch(direct);
+    treeKill = killWindowsTree(pid, command, treeToken, direct).catch(direct);
   } else {
     signalGroup(pid, 'SIGTERM');
   }
   setTimeout(() => {
     if (isSettled()) return;
-    if (treeToken !== null) {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* already dead */
-      }
-    } else {
-      signalGroup(pid, 'SIGKILL');
-    }
-    setTimeout(() => {
+    // On Windows, never escalate while taskkill is still walking the tree
+    // (measured at up to ~5 s on a loaded host): SIGKILLing the root under
+    // it would orphan the grandchildren it has not reached yet.
+    void treeKill.then(() => {
       if (isSettled()) return;
-      child.stdout?.destroy();
-      child.stderr?.destroy();
-    }, PIPE_ABANDON_MS).unref();
+      if (treeToken !== null) {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          /* already dead */
+        }
+      } else {
+        signalGroup(pid, 'SIGKILL');
+      }
+      setTimeout(() => {
+        if (isSettled()) return;
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }, PIPE_ABANDON_MS).unref();
+    });
   }, KILL_GRACE_MS).unref();
 }
 

@@ -39227,6 +39227,7 @@ function attachStderr(child, onChunk) {
 function killTree(child, command, treeToken, isSettled) {
   const pid = child.pid;
   if (pid === void 0) return;
+  let treeKill = Promise.resolve();
   if (treeToken !== null) {
     const direct = () => {
       try {
@@ -39234,25 +39235,28 @@ function killTree(child, command, treeToken, isSettled) {
       } catch {
       }
     };
-    void killWindowsTree(pid, command, treeToken, direct).catch(direct);
+    treeKill = killWindowsTree(pid, command, treeToken, direct).catch(direct);
   } else {
     signalGroup(pid, "SIGTERM");
   }
   setTimeout(() => {
     if (isSettled()) return;
-    if (treeToken !== null) {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-      }
-    } else {
-      signalGroup(pid, "SIGKILL");
-    }
-    setTimeout(() => {
+    void treeKill.then(() => {
       if (isSettled()) return;
-      child.stdout?.destroy();
-      child.stderr?.destroy();
-    }, PIPE_ABANDON_MS).unref();
+      if (treeToken !== null) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+        }
+      } else {
+        signalGroup(pid, "SIGKILL");
+      }
+      setTimeout(() => {
+        if (isSettled()) return;
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }, PIPE_ABANDON_MS).unref();
+    });
   }, KILL_GRACE_MS).unref();
 }
 function signalGroup(pid, signal) {
