@@ -309,16 +309,41 @@ function readHeredocOperator(source, start) {
     return { word, next: i };
 }
 /**
+ * Attaches a captured heredoc body to the statement that opened it
+ * ({@link PendingHeredoc.statement}), appending rather than overwriting —
+ * `bash <<A; bash <<B` opens two heredocs on the SAME statement's command
+ * list in principle (two simple commands, but if a single command opened
+ * two, e.g. via redirection tricks, both bodies belong to it).
+ */
+function attachHeredocBody(heredoc, body) {
+    const target = heredoc.statement;
+    if (target.heredocBodies === undefined)
+        target.heredocBodies = [];
+    target.heredocBodies.push(body);
+}
+/**
  * Skips the bodies of every heredoc opened on the line just ended, CAPTURING
- * each body's text along the way. The body is data on the command's stdin,
- * never shell code in general; a commit message written through
- * `git commit -F - <<'EOF'` is the shape that made skipping necessary in the
- * first place. It is captured, not just skipped, because that stops being
- * true for exactly one shape — `bash <<EOF … EOF` hands the body to bash as
- * the script it runs — and `collect()` is what tells the two apart, by
- * whether the statement's own command is a bare shell reading stdin
- * ({@link isBareShellStdin}); this function has no way to know that itself,
- * since it only ever sees raw source text, not resolved commands.
+ * each body's text along the way and attaching it to the STATEMENT THAT
+ * OPENED IT (`heredoc.statement`, set when `<<` was parsed) — never to
+ * whichever statement happens to be last on the source line. That
+ * distinction matters the moment a line carries more than one statement:
+ * `bash <<EOF; echo done` opens its heredoc on `bash`, and `echo done` is a
+ * second, unrelated statement that follows it on the same line; attaching by
+ * position (`statements[statements.length - 1]`) attached to `echo done`
+ * instead, so `bash`'s own heredoc — the one shape this file exists to
+ * assess as a command — silently lost its body. `bash <<A; cat <<B` was the
+ * other failure mode of that same bug: two heredocs opened on one line, both
+ * bodies landing on the second statement (`cat`) and none on the first.
+ *
+ * The body is data on the command's stdin, never shell code in general; a
+ * commit message written through `git commit -F - <<'EOF'` is the shape that
+ * made skipping necessary in the first place. It is captured, not just
+ * skipped, because that stops being true for exactly one shape — `bash
+ * <<EOF … EOF` hands the body to bash as the script it runs — and
+ * `collect()` is what tells the two apart, by whether the statement's own
+ * command is a bare shell reading stdin ({@link isBareShellStdin}); this
+ * function has no way to know that itself, since it only ever sees raw
+ * source text, not resolved commands.
  *
  * The delimiter is matched on the trimmed line, which covers `<<` and `<<-`
  * alike and errs toward ending the heredoc *early*. That is the safe side:
@@ -327,27 +352,30 @@ function readHeredocOperator(source, start) {
  */
 function skipHeredocBodies(source, from, pending) {
     let pos = from;
-    const bodies = [];
     while (pending.length > 0) {
         const heredoc = pending.shift();
         if (heredoc === undefined)
             break;
         const lines = [];
         for (;;) {
-            if (pos >= source.length)
-                return { pos: source.length, bodies };
+            if (pos >= source.length) {
+                attachHeredocBody(heredoc, lines.join('\n'));
+                return source.length;
+            }
             const newline = source.indexOf('\n', pos);
             const line = newline === -1 ? source.slice(pos) : source.slice(pos, newline);
             pos = newline === -1 ? source.length : newline + 1;
             if (line.trim() === heredoc.word)
                 break;
             lines.push(line);
-            if (newline === -1)
-                return { pos: source.length, bodies };
+            if (newline === -1) {
+                attachHeredocBody(heredoc, lines.join('\n'));
+                return source.length;
+            }
         }
-        bodies.push(lines.join('\n'));
+        attachHeredocBody(heredoc, lines.join('\n'));
     }
-    return { pos, bodies };
+    return pos;
 }
 /**
  * Segments a command into statements and their pipeline members. Quote-,
@@ -365,6 +393,18 @@ export function splitShell(command) {
     /** Last code character emitted, to tell a background `&` from `2>&1`. */
     let lastCode = '';
     const heredocs = [];
+    /**
+     * The `ShellStatement` object for whatever statement is currently being
+     * built — created up front, then mutated (not replaced) by `endStatement`
+     * once its `masked`/`commands` are known, and pushed by that SAME
+     * reference. A heredoc opened mid-statement (`<<` is parsed by
+     * `heredocs.push`, below) records a reference to this object — the object
+     * identity is what lets its body attach to the right statement later, once
+     * `skipHeredocBodies` reads it, even though the two events (opening a
+     * heredoc, and reading its body) happen many characters apart and possibly
+     * after other statements/heredocs on the same source line.
+     */
+    let currentStatement = { masked: '', commands: [] };
     const endWord = () => {
         if (hasWord)
             words.push({ value: buf, quoted: bufQuoted });
@@ -381,11 +421,15 @@ export function splitShell(command) {
     const endStatement = () => {
         endCommand();
         const text = masked.trim();
-        if (text.length > 0 || commands.length > 0)
-            statements.push({ masked: text, commands });
+        if (text.length > 0 || commands.length > 0) {
+            currentStatement.masked = text;
+            currentStatement.commands = commands;
+            statements.push(currentStatement);
+        }
         masked = '';
         commands = [];
         lastCode = '';
+        currentStatement = { masked: '', commands: [] };
     };
     const emitCode = (ch) => {
         buf += ch;
@@ -432,16 +476,13 @@ export function splitShell(command) {
         if (ch === '\n') {
             endStatement();
             maskedCommand += '\n';
-            if (heredocs.length > 0) {
-                const skipped = skipHeredocBodies(command, i + 1, heredocs);
-                const justEnded = statements[statements.length - 1];
-                if (justEnded !== undefined && skipped.bodies.length > 0)
-                    justEnded.heredocBodies = skipped.bodies;
-                i = skipped.pos;
-            }
-            else {
-                i += 1;
-            }
+            // skipHeredocBodies attaches each body directly, via the statement
+            // reference each PendingHeredoc recorded when its `<<` was parsed —
+            // not to whichever statement is last here. `endStatement()` above may
+            // have just pushed several statements onto a single line before this
+            // point (every `;` on the line already ran it), so "last" would be
+            // wrong whenever more than one statement shares this line.
+            i = heredocs.length > 0 ? skipHeredocBodies(command, i + 1, heredocs) : i + 1;
             continue;
         }
         if (ch === ';') {
@@ -496,7 +537,7 @@ export function splitShell(command) {
         if (ch === '<' && command.charAt(i + 1) === '<' && command.charAt(i + 2) !== '<') {
             const heredoc = readHeredocOperator(command, i);
             if (heredoc !== null) {
-                heredocs.push({ word: heredoc.word });
+                heredocs.push({ word: heredoc.word, statement: currentStatement });
                 endWord();
                 masked += ' ';
                 maskedCommand += ' ';

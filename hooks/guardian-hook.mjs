@@ -410,12 +410,19 @@ async function handlePreToolUseWrite(toolName, input, cwd, cfg, allowlist) {
   if (hits.length === 0) noop();
 
   const list = hits.slice(0, 6).map((h) => `${h.title} (line ${h.line})`).join(', ');
+  // Deliberately does not say HOW to turn this off (item 6, fix round 1) —
+  // that used to name the exact allowlist file and config key an assistant
+  // could write to disable itself, and both are now denied outright by
+  // `guardianConfigWriteGuard` anyway, which made the old wording not just a
+  // disclosure risk but actively wrong (advice the model cannot act on).
+  // Worded like `handlePreToolUseBash`'s own deny reason, for the same
+  // reason: the user decides whether this should be allowed.
   emit('PreToolUse', {
     permissionDecision: 'deny',
     permissionDecisionReason:
       `dev-guardian blocked writing a hard-coded secret to ${rawPath ? normalizePath(rawPath) : 'a file'}: ${list}. ` +
-      `Use an environment variable or secret manager instead. ` +
-      `False positive? add it to .guardian/hooks-allowlist.json or set "secrets":{"block":false}.`,
+      `Use an environment variable or secret manager instead. If this is a false positive, the user ` +
+      `can allow it or adjust the guard settings.`,
   });
 }
 

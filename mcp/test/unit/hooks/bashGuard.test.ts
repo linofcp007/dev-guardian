@@ -492,9 +492,27 @@ describe('splitShell', () => {
     expect(statements).toHaveLength(1);
   });
 
-  it('drops heredoc bodies', () => {
+  it('drops heredoc bodies from the masked text, but captures them on the statement that opened them', () => {
     const { statements } = splitShell([`cat <<'EOF'`, 'rm -rf /', 'EOF', 'echo done'].join('\n'));
     expect(statements.map((s) => s.masked)).toEqual(['cat', 'echo done']);
+    expect(statements[0]?.heredocBodies).toEqual(['rm -rf /']);
+    expect(statements[1]?.heredocBodies).toBeUndefined();
+  });
+
+  it('attaches a heredoc body to the statement that opened it, not to the last statement on the line', () => {
+    const { statements } = splitShell(['bash <<EOF; echo done', 'rm -rf ~', 'EOF'].join('\n'));
+    expect(statements.map((s) => s.masked)).toEqual(['bash', 'echo done']);
+    expect(statements[0]?.heredocBodies).toEqual(['rm -rf ~']);
+    expect(statements[1]?.heredocBodies).toBeUndefined();
+  });
+
+  it('keeps two same-line heredocs apart, each on its own opening statement', () => {
+    const { statements } = splitShell(
+      ['bash <<A; cat <<B', 'rm -rf ~', 'A', 'harmless cat data', 'B'].join('\n'),
+    );
+    expect(statements.map((s) => s.masked)).toEqual(['bash', 'cat']);
+    expect(statements[0]?.heredocBodies).toEqual(['rm -rf ~']);
+    expect(statements[1]?.heredocBodies).toEqual(['harmless cat data']);
   });
 });
 
@@ -648,6 +666,34 @@ describe('assessBashCommand — task-1: text fed to a shell is executed (finding
 
   it('echo "rm -rf ~" | bash is assessed as a command', () => {
     const a = assessBashCommand('echo "rm -rf ~" | bash');
+    expect(a.level).toBe('block');
+    expect(a.rules).toContain('rm-rf-root');
+  });
+
+  /**
+   * Fix round 1 — reviewer finding: `skipHeredocBodies` used to attach every
+   * body captured on a line to `statements[statements.length - 1]`, i.e.
+   * whichever statement happened to be LAST on the source line, never the
+   * one that actually opened the heredoc. `bash <<EOF; echo done` puts two
+   * statements on one line; the heredoc belongs to `bash`, and the old code
+   * attached its body to `echo done` instead, silently losing it.
+   */
+  it('bash <<EOF; echo done — the heredoc body attaches to bash, not to the statement after the semicolon', () => {
+    const command = ['bash <<EOF; echo done', 'rm -rf ~', 'EOF'].join('\n');
+    const a = assessBashCommand(command);
+    expect(a.level).toBe('block');
+    expect(a.rules).toContain('rm-rf-root');
+  });
+
+  /**
+   * The other failure mode of the same bug: two heredocs opened on one line
+   * by two DIFFERENT statements. Both bodies used to land on the second
+   * statement (`cat`, not a shell — so neither ever got assessed), and the
+   * first statement (`bash`, a shell) got none at all.
+   */
+  it('bash <<A; cat <<B — each heredoc body attaches to the statement that opened it, not just the last one', () => {
+    const command = ['bash <<A; cat <<B', 'rm -rf ~', 'A', 'harmless cat data', 'B'].join('\n');
+    const a = assessBashCommand(command);
     expect(a.level).toBe('block');
     expect(a.rules).toContain('rm-rf-root');
   });

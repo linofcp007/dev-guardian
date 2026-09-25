@@ -224,6 +224,35 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       });
       expect(r.stdout).toBeUndefined();
     });
+
+    // Fix round 1 — reviewer finding: this deny reason used to tell the
+    // model exactly how to disable the guard ("add it to
+    // .guardian/hooks-allowlist.json or set \"secrets\":{\"block\":false}"),
+    // which is doubly wrong now — item 6 removes model-facing disable
+    // instructions everywhere, and both of those specific actions are
+    // themselves denied outright by guardianConfigWriteGuard.
+    it('the secrets-block deny reason does not tell the model how to disable the guard either', () => {
+      mkdirSync(join(projectDir, '.guardian'), { recursive: true });
+      writeFileSync(
+        join(projectDir, '.guardian', 'hooks.config.json'),
+        JSON.stringify({ secrets: { block: true } }),
+      );
+      const target = join(projectDir, 'src', 'config.ts');
+      const r = runHook(
+        preToolUse(
+          'Write',
+          { file_path: target, content: 'const key = "AKIAIOSFODNN7EXAMPLE";' },
+          projectDir,
+        ),
+        { cwd: projectDir, homeDir },
+      );
+      expect(r.stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+      const reason = (r.stdout as { hookSpecificOutput: { permissionDecisionReason: string } })
+        .hookSpecificOutput.permissionDecisionReason;
+      expect(reason).not.toMatch(/hooks-allowlist\.json/);
+      expect(reason).not.toMatch(/"block"\s*:\s*false/);
+      expect(reason.toLowerCase()).toMatch(/the user can/);
+    });
   });
 
   describe('finding 10 — the ignore list is project-relative, not a raw substring', () => {
