@@ -276,6 +276,47 @@ describe('triage_findings', () => {
     expect(r.likely_false_positive).toHaveLength(1);
     expect(r.keep).toHaveLength(1);
   });
+
+  it('never suggests suppressing a leaked secret, even under a test/fixture path', async () => {
+    const plugin = makePlugin();
+    plugin.storage.scans.insert({
+      scan_id: 'SEC',
+      scan_type: 'secrets',
+      project_path: P,
+      tree_hash: 'h',
+    });
+    plugin.storage.findings.bulkInsert([
+      {
+        scan_id: 'SEC',
+        ...makeFinding({
+          tool: 'gitleaks',
+          severity: 'high',
+          category: 'security',
+          subcategory: 'secret',
+          title: 'AWS key',
+          file_path: 'test/fixtures/creds.env',
+          line_start: 1,
+        }),
+      },
+    ]);
+    plugin.storage.scans.finalize({
+      scan_id: 'SEC',
+      status: 'completed',
+      tools_run: [],
+      missing_tools: [],
+    });
+
+    const r = (await getTool('triage_findings').handler({ project_path: P }, plugin)) as {
+      ok: true;
+      likely_false_positive: unknown[];
+      probably_safe: unknown[];
+      keep: Array<{ suggested_suppression_reason: string }>;
+    };
+    expect(r.likely_false_positive).toHaveLength(0);
+    expect(r.probably_safe).toHaveLength(0);
+    expect(r.keep).toHaveLength(1);
+    expect(r.keep[0]?.suggested_suppression_reason.toLowerCase()).not.toContain('test/fixture pattern');
+  });
 });
 
 describe('suggest_fix', () => {
@@ -316,6 +357,49 @@ describe('suggest_fix', () => {
     )) as { ok: true; surrounding_source: string };
     expect(r.ok).toBe(true);
     expect(r.surrounding_source).toContain('>>     3');
+  });
+
+  it('withholds surrounding source for a credential finding and gives rotation guidance instead', async () => {
+    const project = tempProject();
+    writeFileSync(
+      join(project, 'app.py'),
+      'line1\nline2\npassword = "hunter2"\nline4\nline5\n',
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    plugin.storage.scans.insert({
+      scan_id: 'B',
+      scan_type: 'sast',
+      project_path: project,
+      tree_hash: 'h',
+    });
+    const f = makeFinding({
+      tool: 'bandit',
+      rule_id: 'B105',
+      subcategory: 'hardcoded_password_string',
+      severity: 'low',
+      category: 'security',
+      title: 'hardcoded password',
+      file_path: 'app.py',
+      line_start: 3,
+      line_end: 3,
+    });
+    plugin.storage.findings.bulkInsert([{ scan_id: 'B', ...f }]);
+    plugin.storage.scans.finalize({
+      scan_id: 'B',
+      status: 'completed',
+      tools_run: [],
+      missing_tools: [],
+    });
+
+    const r = (await getTool('suggest_fix').handler(
+      { project_path: project, finding_fingerprint: f.fingerprint },
+      plugin,
+    )) as { ok: true; surrounding_source: string | null; rotation_guidance: string | null };
+    expect(r.ok).toBe(true);
+    expect(r.surrounding_source).toBeNull();
+    expect(r.rotation_guidance).toBeTruthy();
+    expect(r.rotation_guidance?.toLowerCase()).toContain('rotate');
   });
 });
 
@@ -1204,6 +1288,77 @@ describe('report_export', () => {
     expect(r.cves_count).toBe(1);
     expect(readFileSync(r.file_path, 'utf8')).toContain('CVE-2024-DA');
   });
+
+  function seedCredentialFinding(plugin: PluginContext, scanId: string, project: string): void {
+    plugin.storage.scans.insert({
+      scan_id: scanId,
+      scan_type: 'secrets',
+      project_path: project,
+      tree_hash: 'h',
+    });
+    plugin.storage.findings.bulkInsert([
+      {
+        scan_id: scanId,
+        ...makeFinding({
+          tool: 'bandit',
+          rule_id: 'B105',
+          subcategory: 'hardcoded_password_string',
+          severity: 'high',
+          category: 'security',
+          title: 'hardcoded password',
+          file_path: 'app.py',
+          line_start: 1,
+          snippet: '1 password = "hunter2"',
+        }),
+      },
+    ]);
+    plugin.storage.scans.finalize({
+      scan_id: scanId,
+      status: 'completed',
+      tools_run: [],
+      missing_tools: [],
+    });
+  }
+
+  it('omits a credential finding\'s snippet from the json export', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedCredentialFinding(plugin, 'SEC', project);
+
+    const r = (await getTool('report_export').handler(
+      { project_path: project, scan_id: 'SEC', format: 'json' },
+      plugin,
+    )) as { ok: true; file_path: string };
+    const json = readFileSync(r.file_path, 'utf8');
+    expect(json).not.toContain('hunter2');
+  });
+
+  it('omits a credential finding\'s snippet from the markdown export', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedCredentialFinding(plugin, 'SEC2', project);
+
+    const r = (await getTool('report_export').handler(
+      { project_path: project, scan_id: 'SEC2', format: 'markdown' },
+      plugin,
+    )) as { ok: true; file_path: string };
+    expect(readFileSync(r.file_path, 'utf8')).not.toContain('hunter2');
+  });
+
+  it('states the real telemetry posture instead of the false "no telemetry" claim', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedFindings(plugin, 'TEL', 1, project);
+
+    const r = (await getTool('report_export').handler(
+      { project_path: project, scan_id: 'TEL', format: 'markdown' },
+      plugin,
+    )) as { ok: true; file_path: string };
+    const md = readFileSync(r.file_path, 'utf8');
+    expect(md).not.toMatch(/all scans local,?\s*no telemetry/i);
+    expect(md).toContain('dev-guardian sends no telemetry of its own');
+    expect(md).toContain('local_only');
+  });
 });
 
 /** A completed `deps_audit` scan (its own scan type) that saw one CVE. */
@@ -1236,6 +1391,68 @@ describe('compliance_evidence', () => {
     };
     expect(r.markdown).toContain('`EV`');
     expect(r.markdown).not.toContain('run `scan_deps` or `deps_audit` first');
+  });
+
+  function seedComplianceScan(plugin: PluginContext, scanId: string): void {
+    plugin.storage.scans.insert({ scan_id: scanId, scan_type: 'compliance', project_path: P, tree_hash: 'h' });
+    plugin.storage.scans.finalize({
+      scan_id: scanId,
+      status: 'completed',
+      tools_run: [],
+      missing_tools: [],
+      meta: {
+        licenses_summary: [{ license: 'MIT', packages: ['a'], risk: 'low' }],
+        risky_licenses: [],
+        policy_documents_found: {
+          privacy_policy: true,
+          terms_of_service: true,
+          security_policy: true,
+          cookie_policy: false,
+          paths: ['PRIVACY.md'],
+        },
+      },
+    });
+  }
+
+  it('never claims GDPR Article 5 (data minimisation) is evidenced by SBOM/license posture', async () => {
+    const plugin = makePlugin();
+    const r = (await getTool('compliance_evidence').handler({ framework: 'gdpr' }, plugin)) as {
+      ok: true;
+      markdown: string;
+    };
+    expect(r.markdown).not.toContain('Article 5');
+  });
+
+  it('states plainly which GDPR controls are NOT covered when no scans back them', async () => {
+    const plugin = makePlugin();
+    const r = (await getTool('compliance_evidence').handler({ framework: 'gdpr' }, plugin)) as {
+      ok: true;
+      markdown: string;
+    };
+    expect(r.markdown).toMatch(/not covered/i);
+    expect(r.markdown).toContain('Article 25');
+    expect(r.markdown).toContain('Article 32');
+  });
+
+  it('lists a GDPR control as evidenced once the scan that backs it exists', async () => {
+    const plugin = makePlugin();
+    seedComplianceScan(plugin, 'CE1');
+    seedDepsAuditWithCve(plugin, 'CE2');
+    const r = (await getTool('compliance_evidence').handler({ framework: 'gdpr' }, plugin)) as {
+      ok: true;
+      markdown: string;
+    };
+    const evidencedSection = r.markdown.split(/not covered/i)[0] ?? '';
+    expect(evidencedSection).toContain('Article 25');
+    expect(evidencedSection).toContain('Article 32');
+  });
+
+  it('uses the Task 5 telemetry wording, not the blanket "no telemetry" claim', async () => {
+    const plugin = makePlugin();
+    const r = (await getTool('compliance_evidence').handler({}, plugin)) as { ok: true; markdown: string };
+    expect(r.markdown).not.toMatch(/all scans local,?\s*no telemetry/i);
+    expect(r.markdown).toContain('dev-guardian sends no telemetry of its own');
+    expect(r.markdown).toContain('local_only');
   });
 });
 

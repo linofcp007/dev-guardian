@@ -977,3 +977,48 @@ describe('renderDashboard — findings a delta could not compare (Task 8 fix rou
     expect(html).toMatch(/4 not previously measured/);
   });
 });
+
+describe('renderDashboard — credential findings never carry their snippet into the page (Task 12)', () => {
+  it('omits the raw secret from the inlined JSON payload for a findings.items credential finding', () => {
+    const html = renderDashboard(snap({
+      findings: {
+        total: 1,
+        by_severity: { critical: 0, high: 1, medium: 0, low: 0, info: 0 },
+        by_category: { security: 1 },
+        by_tool: { bandit: 1 },
+        hotspots: [],
+        items: [
+          {
+            fingerprint: 'a', severity: 'high', title: 'hardcoded password',
+            file_path: 'app.py', tool: 'bandit', rule_id: 'B105',
+            subcategory: 'hardcoded_password_string',
+            snippet: '1 password = "hunter2"', line_start: 1,
+          } as never,
+        ],
+      },
+    }));
+    expect(html).not.toContain('hunter2');
+    const data = inlinedData(html) as { findings: { items: Array<{ snippet?: string }> } };
+    expect(data.findings.items[0]?.snippet).not.toBe('1 password = "hunter2"');
+  });
+
+  it('omits the raw secret from a credential finding inside deltas.since_previous.new_findings', () => {
+    const html = renderDashboard(snap({
+      deltas: {
+        since_previous: {
+          from_scan_id: 'a', to_scan_id: 'b', new_count: 1, resolved_count: 0, unchanged_count: 0,
+          new_findings: [
+            {
+              fingerprint: 'a', severity: 'high', title: 'hardcoded password',
+              file_path: 'app.py', tool: 'bandit', rule_id: 'B105',
+              subcategory: 'hardcoded_password_string',
+              snippet: '1 password = "hunter2"', line_start: 1,
+            } as never,
+          ],
+        },
+        since_baseline: null,
+      },
+    }));
+    expect(html).not.toContain('hunter2');
+  });
+});
