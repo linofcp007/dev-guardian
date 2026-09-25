@@ -50,6 +50,14 @@ describe('dotnetSarifParser', () => {
     expect(dotnetSarifParser.parse('not json', {}).findings).toEqual([]);
   });
 
+  it('takes every SARIF of a build at once, keeping a result once per (rule, file, region) across target frameworks', () => {
+    const { findings } = dotnetSarifParser.parse([FIXTURE, FIXTURE], {});
+    expect(findings.map((f) => f.rule_id)).toEqual(['CA5351', 'SCS0005']);
+    // A different region is a different finding.
+    const moved = FIXTURE.replace('"startLine": 1,', '"startLine": 2,');
+    expect(dotnetSarifParser.parse([FIXTURE, moved], {}).findings.map((f) => f.rule_id)).toEqual(['CA5351', 'SCS0005', 'CA5351']);
+  });
+
   it('counts the security rules the SARIF says were loaded — zero means the analyzers never ran', () => {
     expect(sarifSecurityRuleCount(FIXTURE)).toBe(1);
     expect(sarifSecurityRuleCount(FIXTURE.replace(/"category": "Security"/g, '"category": "Performance"'))).toBe(0);

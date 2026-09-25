@@ -124,12 +124,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
 import { z } from 'zod';
 import { applyGroup } from '../fixpr/apply.js';
-import { buildGroups, DEP_SCANNER_TOOLS, selectGroups } from '../fixpr/candidates.js';
+import { buildGroups, DEP_SCANNER_TOOLS, findingEcosystem, selectGroups } from '../fixpr/candidates.js';
 import { describeExclusions, summariseExclusions } from '../fixpr/exclusions.js';
 import { branchName, deleteLocalBranch, existsOutcome, openPr, prExists } from '../fixpr/pr.js';
 import { disposeSemgrepFixPlan, planSemgrepFix } from '../fixpr/semgrepFix.js';
 import { deriveTestCommand, TEST_MANIFESTS } from '../fixpr/testCommand.js';
 import { prepareTestEnvironment } from '../fixpr/testEnv.js';
+import { projectTreeState } from '../fixpr/treeState.js';
 import { rescanOriginOf, scannerNotVerified } from '../fixpr/rescan.js';
 import { judgeScan, judgeTests, mayOpenPr } from '../fixpr/verify.js';
 import { createWorktree } from '../fixpr/worktree.js';
@@ -260,7 +261,18 @@ async function handler(input, ctx, callMeta) {
         allFindings.some((f) => DEP_SCANNER_TOOLS.includes(f.tool) && f.fix_available && passes(f.severity, severityMin) && verifiable(f));
     const plan = needsPlan
         ? await fetchUpgradeSteps(projectPath, tree.prefix, ctx, callMeta)
-        : { steps: [], error: null };
+        : { steps: [], error: null, runnerFailures: [] };
+    // A dependency finding whose ecosystem the plan could not cover is not
+    // "no fix source" — nobody knows (Task 11 fix round 2).
+    const failedEcosystems = new Set(plan.runnerFailures.map((f) => f.ecosystem));
+    const planFailed = (f) => {
+        if (!needsPlan || !DEP_SCANNER_TOOLS.includes(f.tool))
+            return false;
+        if (plan.error !== null)
+            return true;
+        const ecosystem = findingEcosystem(f);
+        return ecosystem !== null && failedEcosystems.has(ecosystem);
+    };
     const groups = buildGroups({
         findings: allFindings,
         upgradeSteps: plan.steps,
@@ -273,7 +285,7 @@ async function handler(input, ctx, callMeta) {
     // two "not acted on" reports stay disjoint: `filtered` is about findings
     // that never became candidates, `deferred` about candidate groups the cap
     // held back. See `fixpr/exclusions.ts` for why silence here was a defect.
-    const filtered = summariseExclusions({ findings: allFindings, groups, severityMin, uncommitted });
+    const filtered = summariseExclusions({ findings: allFindings, groups, severityMin, uncommitted, planFailed });
     const filtered_reason = describeExclusions(filtered, severityMin, sources);
     const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
     const results = [];
@@ -339,6 +351,7 @@ async function handler(input, ctx, callMeta) {
         // The deps side found nothing to pair because the plan itself could not
         // be computed — said, never left to read as "no upgrade available".
         ...(plan.error !== null ? { deps_plan_error: plan.error } : {}),
+        ...(plan.runnerFailures.length > 0 ? { deps_plan_runner_failures: plan.runnerFailures } : {}),
         filtered,
         filtered_reason,
         groups: results,
@@ -368,11 +381,13 @@ async function handler(input, ctx, callMeta) {
  */
 async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta) {
     const depsPlanTool = TOOLS.find((t) => t.name === 'deps_update_plan');
-    if (depsPlanTool === undefined)
-        return { steps: [], error: "the 'deps_update_plan' tool is not registered" };
+    if (depsPlanTool === undefined) {
+        return { steps: [], error: "the 'deps_update_plan' tool is not registered", runnerFailures: [] };
+    }
     const created = await createWorktree({ projectPath, branch: null });
-    if (!created.ok)
-        return { steps: [], error: `could not create a worktree to plan in: ${created.reason}` };
+    if (!created.ok) {
+        return { steps: [], error: `could not create a worktree to plan in: ${created.reason}`, runnerFailures: [] };
+    }
     try {
         const meta = {
             ...(callMeta?.signal !== undefined ? { signal: callMeta.signal } : {}),
@@ -381,51 +396,23 @@ async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta) {
         };
         const result = await depsPlanTool.handler({ project_path: inWorktree(created.worktree.path, prefix) }, ctx, meta);
         if (!result.ok)
-            return { steps: [], error: `deps_update_plan failed: ${result.error.message}` };
+            return { steps: [], error: `deps_update_plan failed: ${result.error.message}`, runnerFailures: [] };
         const r = result;
-        return { steps: Array.isArray(r.plan) ? r.plan : [], error: null };
+        return {
+            steps: Array.isArray(r.plan) ? r.plan : [],
+            error: null,
+            runnerFailures: Array.isArray(r.runner_failures) ? r.runner_failures.filter(isRunnerFailure) : [],
+        };
     }
     finally {
         await created.worktree.remove();
     }
 }
-/**
- * The project's place in its repository (`git rev-parse --show-prefix`:
- * `''` at the root, `app/` for a subdirectory — the same subdirectory of any
- * worktree) and every path under it that differs from HEAD, repository-root
- * relative (`git status --porcelain -z` prints them that way from any
- * subdirectory — measured), untracked files and both sides of a rename
- * included.
- */
-async function projectTreeState(projectPath) {
-    const prefix = await runProcess({ command: 'git', args: ['-C', projectPath, 'rev-parse', '--show-prefix'], cwd: projectPath });
-    if (prefix.outcome !== 'completed')
-        return { ok: false, reason: `git rev-parse --show-prefix failed: ${prefix.stderr.trim()}` };
-    const status = await runProcess({
-        command: 'git',
-        args: ['-C', projectPath, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'],
-        cwd: projectPath,
-    });
-    if (status.outcome !== 'completed') {
-        return { ok: false, reason: `git status failed — cannot tell which files have uncommitted changes: ${status.stderr.trim()}` };
-    }
-    const dirty = new Set();
-    const entries = status.stdout.split('\0');
-    for (let i = 0; i < entries.length; i++) {
-        const entry = entries[i] ?? '';
-        if (entry.length < 4)
-            continue;
-        const xy = entry.slice(0, 2);
-        dirty.add(entry.slice(3));
-        // A rename or copy is followed by its source path.
-        if (xy.includes('R') || xy.includes('C')) {
-            const source = entries[i + 1];
-            if (source !== undefined && source.length > 0)
-                dirty.add(source);
-            i += 1;
-        }
-    }
-    return { ok: true, prefix: prefix.stdout.trim(), dirty };
+function isRunnerFailure(v) {
+    if (typeof v !== 'object' || v === null)
+        return false;
+    const o = v;
+    return typeof o['ecosystem'] === 'string' && typeof o['code'] === 'string' && typeof o['reason'] === 'string';
 }
 /** The project's directory inside a worktree: `prefix` (`app/`, or empty)
  *  under its root, with no trailing separator. */

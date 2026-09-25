@@ -3036,6 +3036,45 @@ describe('deps_update_plan', () => {
     ]);
   });
 
+  it('Task 11 fix round 2: composer plans from the LOCK file (--locked) — a fresh checkout has no vendor/', async () => {
+    // Measured, Composer 2.10.2, no vendor/: `composer outdated --format=json`
+    // prints `[]` (exit 0, "No dependencies installed") and every Composer
+    // step vanished; `--locked` lists the lock's packages with their latest.
+    const project = tempProject();
+    writeFileSync(join(project, 'composer.json'), JSON.stringify({ require: { 'psr/log': '1.0.0' } }), 'utf8');
+    writeFileSync(join(project, 'composer.lock'), JSON.stringify({ packages: [{ name: 'psr/log', version: '1.0.0' }] }), 'utf8');
+    const plugin = makePlugin(project);
+    const calls: string[] = [];
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      calls.push([cmd, ...args].join(' '));
+      if (cmd === 'composer' && args.includes('--locked')) {
+        return { exitCode: 0, stdout: JSON.stringify({ locked: [{ name: 'psr/log', version: '1.0.0', latest: '3.0.2' }] }), stderr: '' };
+      }
+      if (cmd === 'composer') return { exitCode: 0, stdout: '[]', stderr: 'No dependencies installed. Try running composer install or update.' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+    const r = okResult<{ plan: Array<{ package_name: string; installed_version: string; latest_version: string }>; runner_failures: unknown[] }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    expect(calls).toContain('composer outdated --locked --format=json');
+    expect(r.plan).toEqual([expect.objectContaining({ package_name: 'psr/log', installed_version: '1.0.0', latest_version: '3.0.2' })]);
+    expect(r.runner_failures).toEqual([]);
+  });
+
+  it('Task 11 fix round 2: composer saying "No dependencies installed" is a runner failure, never an empty plan', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'composer.json'), JSON.stringify({ require: { 'psr/log': '1.0.0' } }), 'utf8');
+    const plugin = makePlugin(project);
+    vi.mocked(execa).mockImplementation((async (cmd: string) =>
+      cmd === 'composer'
+        ? { exitCode: 0, stdout: '[]', stderr: 'No dependencies installed. Try running composer install or update.' }
+        : { exitCode: 0, stdout: '', stderr: '' }) as unknown as typeof execa);
+    const r = okResult<{ runner_failures: Array<{ ecosystem: string; reason: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    expect(r.runner_failures).toEqual([expect.objectContaining({ ecosystem: 'composer', reason: expect.stringContaining('No dependencies installed') })]);
+  });
+
   it('Task 11 fix round 1: a Ruby step only re-locks (bundle lock --update) — never bundle update, which installs gems into the host', async () => {
     const project = tempProject();
     writeFileSync(join(project, 'Gemfile'), "source 'https://rubygems.org'\ngem 'rack'\n", 'utf8');

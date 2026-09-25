@@ -53,9 +53,9 @@
  */
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, relative, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
-import { classifyRestoreFailure, findDotnetTargets, planDotnetRestore, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
+import { classifyRestoreFailure, findDotnetTargets, planDotnetRestore, projectsForTarget, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
 import { checkBanditReport } from '../runners/fileBatchScan.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
@@ -310,7 +310,8 @@ async function runBandit(args) {
  *      analyzers did not load: a gap, never an ok with 0 findings.
  *
  * `CustomAfterMicrosoftCommonTargets` is a global property: a project that
- * sets its own is built without it for this scan.
+ * sets its own is built without it for this scan, and the reason says so
+ * (`customAfterTargetsSetters`) as reduced coverage.
  */
 async function runDotnetAnalyzers(args) {
     const { ctx, tools_run, missing_tools, parser_inputs } = args;
@@ -332,6 +333,8 @@ async function runDotnetAnalyzers(args) {
     const targetsFile = join(work, 'dev-guardian-sarif.targets');
     writeFileSync(targetsFile, SARIF_TARGETS, 'utf8');
     const failures = [];
+    // Parsed together, so a result every target framework reports is one finding.
+    const sarifs = [];
     let reports = 0;
     try {
         for (const target of findDotnetTargets(ctx.projectPath)) {
@@ -400,7 +403,7 @@ async function runDotnetAnalyzers(args) {
                     failures.push(`${rel}: ${sarifLabel(name)} — the security analyzers did not load (its SARIF lists no security rule)`);
                     continue;
                 }
-                parser_inputs.push({ parser: dotnetSarifParser, input: raw });
+                sarifs.push(raw);
                 reports += 1;
             }
             if (build.outcome !== 'completed' || build.exitCode !== 0) {
@@ -411,11 +414,19 @@ async function runDotnetAnalyzers(args) {
     finally {
         rmSync(work, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
     }
+    if (sarifs.length > 0)
+        parser_inputs.push({ parser: dotnetSarifParser, input: sarifs });
     if (failures.length === 0 && reports === 0)
         failures.push('the build wrote no analyzer report (SARIF)');
     const run = failures.length === 0
         ? { name: 'dotnet-analyzers', status: 'ok', reason: `${reports} SARIF report(s) read (one per project and target framework)` }
         : { name: 'dotnet-analyzers', status: 'failed', reason: failures.join('; ') };
+    const ownTargets = customAfterTargetsSetters(ctx.projectPath);
+    if (ownTargets.length > 0) {
+        run.reason =
+            `${run.reason ?? ''}; reduced coverage: ${ownTargets.join(', ')} set CustomAfterMicrosoftCommonTargets, ` +
+                "which this scan's build replaces — the project's own imported targets did not run";
+    }
     tools_run.push(run);
     if (referencesScs) {
         // Security Code Scan is an analyzer of the same build: it reports through
@@ -436,6 +447,40 @@ const SARIF_TARGETS = [
     '</Project>',
     '',
 ].join('\n');
+/**
+ * Project files that set `CustomAfterMicrosoftCommonTargets` themselves —
+ * every project a root target builds, and the `Directory.Build.props` /
+ * `.targets` between it and the scanned root. The scan's build passes that
+ * property globally (see `runDotnetAnalyzers`), which replaces theirs, so the
+ * build it analyses is not quite theirs: named as reduced coverage.
+ * Project-relative paths, POSIX, sorted.
+ */
+function customAfterTargetsSetters(projectPath) {
+    const sets = /<CustomAfterMicrosoftCommonTargets\b/i;
+    const out = new Set();
+    const check = (file) => {
+        try {
+            if (sets.test(readFileSync(file, 'utf8')))
+                out.add(relative(projectPath, file).split(sep).join('/'));
+        }
+        catch {
+            /* absent or unreadable — nothing set there */
+        }
+    };
+    const root = resolve(projectPath);
+    for (const target of findDotnetTargets(projectPath)) {
+        for (const project of projectsForTarget(target)) {
+            check(project);
+            for (let dir = dirname(resolve(project));; dir = dirname(dir)) {
+                check(join(dir, 'Directory.Build.props'));
+                check(join(dir, 'Directory.Build.targets'));
+                if (dir === root || dirname(dir) === dir || relative(root, dir).startsWith('..'))
+                    break;
+            }
+        }
+    }
+    return [...out].sort();
+}
 function listSarif(dir) {
     try {
         return readdirSync(dir).filter((n) => n.endsWith('.sarif'));

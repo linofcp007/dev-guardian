@@ -2999,7 +2999,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve15.call(this, root, ref);
+      let _sch = resolve16.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3026,7 +3026,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve15(root, ref) {
+    function resolve16(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3856,7 +3856,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve15(baseURI, relativeURI, options) {
+    function resolve16(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -4225,7 +4225,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve15,
+      resolve: resolve16,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -8285,12 +8285,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve15, reject) {
+        return new Promise(function(resolve16, reject) {
           isexe(path6, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve15(is);
+              resolve16(is);
             }
           });
         });
@@ -8356,27 +8356,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve15, reject) => {
+      const step = (i2) => new Promise((resolve16, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve15(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve16(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path6.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve15(subStep(p, i2, 0));
+        resolve16(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve15, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve16, reject) => {
         if (ii === pathExt.length)
-          return resolve15(step(i2 + 1));
+          return resolve16(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve15(p + ext);
+              return resolve16(p + ext);
           }
-          return resolve15(subStep(p, i2, ii + 1));
+          return resolve16(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -9456,8 +9456,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve15, reject) => {
-        Object.assign(methods, { resolve: resolve15, reject });
+      const promise = new Promise((resolve16, reject) => {
+        Object.assign(methods, { resolve: resolve16, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -14755,11 +14755,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve15 = promise.resolve.bind(promise);
-      return { resolve: resolve15, promises };
+      const resolve16 = promise.resolve.bind(promise);
+      return { resolve: resolve16, promises };
     };
-    waitForConcurrentStreams = async ({ resolve: resolve15, promises }, subprocess) => {
-      resolve15();
+    waitForConcurrentStreams = async ({ resolve: resolve16, promises }, subprocess) => {
+      resolve16();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -34920,7 +34920,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve15) => setTimeout(resolve15, pollInterval));
+        await new Promise((resolve16) => setTimeout(resolve16, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -34937,7 +34937,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve15, reject) => {
+    return new Promise((resolve16, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -35015,7 +35015,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve15(parseResult.data);
+            resolve16(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -35276,12 +35276,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve15, reject) => {
+    return new Promise((resolve16, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve15, interval);
+      const timeoutId = setTimeout(resolve16, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -36594,7 +36594,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve15) => setTimeout(resolve15, pollInterval));
+      await new Promise((resolve16) => setTimeout(resolve16, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -37282,19 +37282,19 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message3) {
-    return new Promise((resolve15) => {
+    return new Promise((resolve16) => {
       const json = serializeMessage(message3);
       if (this._stdout.write(json)) {
-        resolve15();
+        resolve16();
       } else {
-        this._stdout.once("drain", resolve15);
+        this._stdout.once("drain", resolve16);
       }
     });
   }
 };
 
 // src/server.ts
-import { resolve as resolve14 } from "node:path";
+import { resolve as resolve15 } from "node:path";
 
 // src/gitignoreGuard.ts
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -39802,7 +39802,7 @@ function legacyRegistrationsNotApplied(ctx, projectPath) {
 }
 function legacyRegistrationNote(paths) {
   if (paths.length === 0) return null;
-  return `custom Semgrep rules registered before registrations became per-project (dev-guardian 2.0.x) are no longer applied here because they lie outside this project: ${paths.join(", ")}. Re-register the ones this project needs with register_custom_rules (paths: [...]); register_custom_rules clear=true removes the old registration and this notice.`;
+  return `custom Semgrep rules registered before registrations became per-project (dev-guardian 2.0.x) are no longer applied here because they lie outside this project: ${paths.join(", ")}. They still run for the projects that contain them. Re-register the ones this project needs with register_custom_rules (paths: [...]). Note that register_custom_rules clear=true removes the old registration for every project \u2014 including those that contain these paths \u2014 along with this notice.`;
 }
 function pathExists(p) {
   try {
@@ -40529,7 +40529,7 @@ var Semaphore = class {
       this.active += 1;
       return;
     }
-    await new Promise((resolve15) => this.waiting.push(resolve15));
+    await new Promise((resolve16) => this.waiting.push(resolve16));
     this.active += 1;
   }
   release() {
@@ -41285,7 +41285,7 @@ function failDomain(code, message3, retry_with) {
 // src/tools/scanSast.ts
 import { existsSync as existsSync13, mkdirSync as mkdirSync4, mkdtempSync as mkdtempSync2, readdirSync as readdirSync8, readFileSync as readFileSync14, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { basename as basename3, join as join18, relative as relative6, sep as sep5 } from "node:path";
+import { basename as basename3, dirname as dirname9, join as join18, relative as relative6, resolve as resolve7, sep as sep5 } from "node:path";
 
 // src/deps/dotnetRestore.ts
 import { existsSync as existsSync10, readFileSync as readFileSync12, readdirSync as readdirSync6, unlinkSync } from "node:fs";
@@ -42165,18 +42165,36 @@ var SECURITY_RULE_ID = /^(CA2100|CA23\d\d|CA3\d{3}|CA5\d{3})$/;
 var dotnetSarifParser = {
   name: DOTNET_ANALYZERS_TOOL_NAME,
   parse(input, ctx = {}) {
-    const root = parseInputAsJson(stripBom(input));
     const findings = [];
-    for (const run of asArray(getProp(root, "runs"))) {
-      const categories = ruleCategories(run);
-      for (const result of asArray(getProp(run, "results"))) {
-        const finding4 = mapResult2(result, categories, ctx);
-        if (finding4) findings.push(finding4);
+    const seen = /* @__PURE__ */ new Set();
+    for (const document of Array.isArray(input) ? input : [input]) {
+      const root = parseInputAsJson(stripBom(document));
+      for (const run of asArray(getProp(root, "runs"))) {
+        const categories = ruleCategories(run);
+        for (const result of asArray(getProp(run, "results"))) {
+          const key = resultKey(result);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const finding4 = mapResult2(result, categories, ctx);
+          if (finding4) findings.push(finding4);
+        }
       }
     }
     return { findings, cves: [] };
   }
 };
+function resultKey(result) {
+  const physical = getProp(asArray(getProp(result, "locations"))[0], "physicalLocation");
+  const region = getProp(physical, "region");
+  return JSON.stringify([
+    getString(result, "ruleId") ?? "",
+    getString(getProp(physical, "artifactLocation"), "uri") ?? "",
+    getNumber(region, "startLine") ?? null,
+    getNumber(region, "startColumn") ?? null,
+    getNumber(region, "endLine") ?? null,
+    getNumber(region, "endColumn") ?? null
+  ]);
+}
 function sarifSecurityRuleCount(input) {
   const root = parseInputAsJson(stripBom(input));
   let count2 = 0;
@@ -42598,6 +42616,7 @@ async function runDotnetAnalyzers(args) {
   const targetsFile = join18(work, "dev-guardian-sarif.targets");
   writeFileSync5(targetsFile, SARIF_TARGETS, "utf8");
   const failures = [];
+  const sarifs = [];
   let reports = 0;
   try {
     for (const target of findDotnetTargets(ctx.projectPath)) {
@@ -42661,7 +42680,7 @@ async function runDotnetAnalyzers(args) {
           failures.push(`${rel2}: ${sarifLabel(name)} \u2014 the security analyzers did not load (its SARIF lists no security rule)`);
           continue;
         }
-        parser_inputs.push({ parser: dotnetSarifParser, input: raw });
+        sarifs.push(raw);
         reports += 1;
       }
       if (build3.outcome !== "completed" || build3.exitCode !== 0) {
@@ -42671,8 +42690,13 @@ async function runDotnetAnalyzers(args) {
   } finally {
     rmSync4(work, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   }
+  if (sarifs.length > 0) parser_inputs.push({ parser: dotnetSarifParser, input: sarifs });
   if (failures.length === 0 && reports === 0) failures.push("the build wrote no analyzer report (SARIF)");
   const run = failures.length === 0 ? { name: "dotnet-analyzers", status: "ok", reason: `${reports} SARIF report(s) read (one per project and target framework)` } : { name: "dotnet-analyzers", status: "failed", reason: failures.join("; ") };
+  const ownTargets = customAfterTargetsSetters(ctx.projectPath);
+  if (ownTargets.length > 0) {
+    run.reason = `${run.reason ?? ""}; reduced coverage: ${ownTargets.join(", ")} set CustomAfterMicrosoftCommonTargets, which this scan's build replaces \u2014 the project's own imported targets did not run`;
+  }
   tools_run.push(run);
   if (referencesScs) {
     tools_run.push({ ...run, name: "security-code-scan" });
@@ -42686,6 +42710,28 @@ var SARIF_TARGETS = [
   "</Project>",
   ""
 ].join("\n");
+function customAfterTargetsSetters(projectPath) {
+  const sets = /<CustomAfterMicrosoftCommonTargets\b/i;
+  const out = /* @__PURE__ */ new Set();
+  const check2 = (file) => {
+    try {
+      if (sets.test(readFileSync14(file, "utf8"))) out.add(relative6(projectPath, file).split(sep5).join("/"));
+    } catch {
+    }
+  };
+  const root = resolve7(projectPath);
+  for (const target of findDotnetTargets(projectPath)) {
+    for (const project of projectsForTarget(target)) {
+      check2(project);
+      for (let dir = dirname9(resolve7(project)); ; dir = dirname9(dir)) {
+        check2(join18(dir, "Directory.Build.props"));
+        check2(join18(dir, "Directory.Build.targets"));
+        if (dir === root || dirname9(dir) === dir || relative6(root, dir).startsWith("..")) break;
+      }
+    }
+  }
+  return [...out].sort();
+}
 function listSarif(dir) {
   try {
     return readdirSync8(dir).filter((n2) => n2.endsWith(".sarif"));
@@ -42729,7 +42775,7 @@ function projectReferencesScs(projectPath) {
 // src/runners/gitleaksScan.ts
 import { copyFileSync, existsSync as existsSync14, lstatSync, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync3, rmSync as rmSync5, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
-import { dirname as dirname9, join as join19, relative as relative7, resolve as resolve7 } from "node:path";
+import { dirname as dirname10, join as join19, relative as relative7, resolve as resolve8 } from "node:path";
 
 // src/runners/scannerParsers/gitleaks.ts
 var GITLEAKS_TOOL_NAME = "gitleaks";
@@ -42934,7 +42980,7 @@ async function filesPass(opts, result, files) {
       }
       try {
         const to = join19(tmp, rel2);
-        mkdirSync5(dirname9(to), { recursive: true });
+        mkdirSync5(dirname10(to), { recursive: true });
         copyFileSync(from, to);
         copied += 1;
         total += size;
@@ -43116,7 +43162,7 @@ async function repoPrefix(projectPath) {
   return state.kind === "has_commits" || state.kind === "no_commits" ? posixRelative(state.toplevel, projectPath) : "";
 }
 function posixRelative(toplevel, projectPath) {
-  const rel2 = relative7(resolve7(toplevel), resolve7(projectPath)).replace(/\\/g, "/");
+  const rel2 = relative7(resolve8(toplevel), resolve8(projectPath)).replace(/\\/g, "/");
   return rel2.startsWith("..") ? "" : rel2;
 }
 function locate2(f, location, projectPrefix) {
@@ -43249,7 +43295,7 @@ import { join as join21 } from "node:path";
 
 // src/runners/scannerParsers/trivy.ts
 import { existsSync as existsSync15, readdirSync as readdirSync9, readFileSync as readFileSync15 } from "node:fs";
-import { dirname as dirname10, join as join20 } from "node:path";
+import { dirname as dirname11, join as join20 } from "node:path";
 var TRIVY_TOOL_NAME = "trivy";
 var trivyParser = {
   name: TRIVY_TOOL_NAME,
@@ -43462,7 +43508,7 @@ function npmManifestDeclaresNothing(path6) {
   const manifest = readJsonFile(path6);
   if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) return false;
   const fields = manifest;
-  return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(dirname10(path6));
+  return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(dirname11(path6));
 }
 function assessManifestCoverage(projectPath, rawTrivyOutput) {
   let entries2;
@@ -43770,7 +43816,7 @@ function uniqueRuns(runs) {
 
 // src/tools/scanContainers.ts
 import { existsSync as existsSync16, readFileSync as readFileSync16, realpathSync as realpathSync3 } from "node:fs";
-import { isAbsolute as isAbsolute4, join as join23, relative as relative8, resolve as resolve8, sep as sep6 } from "node:path";
+import { isAbsolute as isAbsolute4, join as join23, relative as relative8, resolve as resolve9, sep as sep6 } from "node:path";
 
 // src/runners/composeChecks.ts
 var import_yaml3 = __toESM(require_dist2(), 1);
@@ -43951,7 +43997,7 @@ var scanContainers = makeScanTool({
     const inp = input;
     const invalid = invalidInput(ctx.projectPath, inp);
     if (invalid) throw new Error(invalid);
-    const dockerfile = inp.dockerfile_path !== void 0 ? resolve8(ctx.projectPath, inp.dockerfile_path) : existsSync16(join23(ctx.projectPath, "Dockerfile")) ? join23(ctx.projectPath, "Dockerfile") : void 0;
+    const dockerfile = inp.dockerfile_path !== void 0 ? resolve9(ctx.projectPath, inp.dockerfile_path) : existsSync16(join23(ctx.projectPath, "Dockerfile")) ? join23(ctx.projectPath, "Dockerfile") : void 0;
     if (dockerfile !== void 0 || inp.image !== void 0) {
       const trivyBin = await scannerAvailable("trivy");
       if (!trivyBin) {
@@ -44101,7 +44147,7 @@ function isInside3(root, candidate) {
     const rel2 = relative8(base, target);
     return rel2 !== "" && rel2 !== ".." && !rel2.startsWith(`..${sep6}`) && !isAbsolute4(rel2);
   };
-  const abs = resolve8(root, candidate);
+  const abs = resolve9(root, candidate);
   if (!within(root, abs)) return false;
   if (!existsSync16(abs)) return true;
   try {
@@ -44461,7 +44507,7 @@ function recordPackChoice(input, invocation) {
 
 // src/tools/qualityCheck.ts
 import { existsSync as existsSync19, readFileSync as readFileSync18 } from "node:fs";
-import { dirname as dirname11, join as join26, relative as relative9 } from "node:path";
+import { dirname as dirname12, join as join26, relative as relative9 } from "node:path";
 
 // src/budgets/budgets.ts
 var import_yaml4 = __toESM(require_dist2(), 1);
@@ -45134,10 +45180,10 @@ function hasEslintConfig(projectPath) {
   }
 }
 function localEslint(projectPath) {
-  for (let dir = projectPath; ; dir = dirname11(dir)) {
+  for (let dir = projectPath; ; dir = dirname12(dir)) {
     const candidate = join26(dir, "node_modules", "eslint", "bin", "eslint.js");
     if (existsSync19(candidate)) return candidate;
-    if (existsSync19(join26(dir, ".git")) || dirname11(dir) === dir) return null;
+    if (existsSync19(join26(dir, ".git")) || dirname12(dir) === dir) return null;
   }
 }
 function isObject3(value) {
@@ -46056,7 +46102,7 @@ async function runDotnetSca(opts) {
 init_execa();
 var import_yaml5 = __toESM(require_dist2(), 1);
 import { existsSync as existsSync21, readFileSync as readFileSync19, readdirSync as readdirSync12, statSync as statSync8 } from "node:fs";
-import { dirname as dirname12, join as join30, relative as relative12, sep as sep8 } from "node:path";
+import { dirname as dirname13, join as join30, relative as relative12, sep as sep8 } from "node:path";
 
 // src/platform/glob.ts
 import { readdirSync as readdirSync11, statSync as statSync7 } from "node:fs";
@@ -46305,7 +46351,7 @@ function readDependencyEvidence(projectPath) {
     e.declaredIn ??= file;
     if (version2) e.versions.add(version2);
   };
-  const resolve15 = (name, ecosystem, file, version2) => {
+  const resolve16 = (name, ecosystem, file, version2) => {
     const e = entry(name, ecosystem);
     if (!e) return;
     e.lockFile ??= file;
@@ -46372,7 +46418,7 @@ function readDependencyEvidence(projectPath) {
       const rec = p && typeof p === "object" ? p : void 0;
       const name = rec?.["name"];
       const version2 = rec?.["version"];
-      if (typeof name === "string") resolve15(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
+      if (typeof name === "string") resolve16(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
     }
   }
   let cargoName;
@@ -46382,7 +46428,7 @@ function readDependencyEvidence(projectPath) {
     if (n2?.[1]) cargoName = n2[1];
     const v = /^\s*version\s*=\s*"([^"]+)"/.exec(line);
     if (v?.[1] && cargoName !== void 0) {
-      resolve15(cargoName, "cargo", "Cargo.lock", v[1]);
+      resolve16(cargoName, "cargo", "Cargo.lock", v[1]);
       cargoName = void 0;
     }
   }
@@ -46390,10 +46436,10 @@ function readDependencyEvidence(projectPath) {
     const m = /^(\S+)\s+(v[^\s/]+)(\/go\.mod)?\s/.exec(line);
     if (!m?.[1]) continue;
     const inGoMod = out.get(m[1].toLowerCase())?.declaredIn === "go.mod";
-    resolve15(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
+    resolve16(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
   }
   for (const m of readText2("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
-    if (m[1]) resolve15(m[1], "rubygems", "Gemfile.lock", m[2]);
+    if (m[1]) resolve16(m[1], "rubygems", "Gemfile.lock", m[2]);
   }
   for (const project of projects) {
     for (const lock of lockFileCandidates(project)) {
@@ -46409,7 +46455,7 @@ function readDependencyEvidence(projectPath) {
         if (!deps || typeof deps !== "object") continue;
         for (const [name, info] of Object.entries(deps)) {
           const resolved = info && typeof info === "object" ? info["resolved"] : void 0;
-          resolve15(name, "dotnet", relative12(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
+          resolve16(name, "dotnet", relative12(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
         }
       }
     }
@@ -46625,7 +46671,7 @@ function detectNpmPackageManager(projectPath) {
       if (dir !== projectPath && !inRepository) break;
     }
     if (has(dir, ".git")) break;
-    const parent = dirname12(dir);
+    const parent = dirname13(dir);
     if (parent === dir) break;
     dir = parent;
   }
@@ -46646,7 +46692,7 @@ function detectNpmPackageManager(projectPath) {
 function gitRootAbove(start) {
   for (let dir = start; ; ) {
     if (existsSync21(join30(dir, ".git"))) return dir;
-    const parent = dirname12(dir);
+    const parent = dirname13(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -47062,19 +47108,28 @@ function parseRunnerJson(ecosystem, label, stdout, failures) {
   }
 }
 async function runComposerOutdated(projectPath, cves) {
-  const result = await execa("composer", ["outdated", "--format=json"], {
+  const result = await execa("composer", ["outdated", "--locked", "--format=json"], {
     cwd: projectPath,
     reject: false,
     timeout: 9e4
   });
   const failures = [];
-  const exitFailure = describeExecFailure("composer outdated", result, [0]);
+  const exitFailure = describeExecFailure("composer outdated --locked", result, [0]);
   if (exitFailure) return { steps: [], unplanned: [], failures: [{ ecosystem: "composer", ...exitFailure }] };
-  const parsed = parseRunnerJson("composer", "composer outdated --format=json", result.stdout, failures);
-  const installed = parsed?.installed;
+  const stderr = typeof result.stderr === "string" ? result.stderr : "";
+  if (/No dependencies installed/i.test(stderr)) {
+    return {
+      steps: [],
+      unplanned: [],
+      failures: [{ ecosystem: "composer", code: "no_output", reason: `composer outdated listed nothing: ${stderr.trim().split(/\r?\n/)[0] ?? ""}` }]
+    };
+  }
+  const parsed = parseRunnerJson("composer", "composer outdated --locked --format=json", result.stdout, failures);
+  const record4 = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : void 0;
+  const installed = record4?.["locked"] ?? record4?.["installed"];
   if (!Array.isArray(installed)) {
     if (failures.length === 0) {
-      failures.push({ ecosystem: "composer", code: "unparseable_output", reason: 'composer outdated printed no "installed" list' });
+      failures.push({ ecosystem: "composer", code: "unparseable_output", reason: 'composer outdated --locked printed no "locked" list' });
     }
     return { steps: [], unplanned: [], failures };
   }
@@ -48161,7 +48216,7 @@ import { join as join36 } from "node:path";
 
 // src/configdrift/refresh.ts
 import { copyFileSync as copyFileSync2, existsSync as existsSync25, mkdirSync as mkdirSync6, writeFileSync as writeFileSync8, readFileSync as readFileSync22 } from "node:fs";
-import { dirname as dirname13, join as join35 } from "node:path";
+import { dirname as dirname14, join as join35 } from "node:path";
 function alongsideName(target, version2) {
   return `${target}.dev-guardian-${version2}.new`;
 }
@@ -48306,7 +48361,7 @@ function adoptIdenticalConfigs(input) {
 }
 function installFile(input) {
   try {
-    mkdirSync6(dirname13(input.dstPath), { recursive: true });
+    mkdirSync6(dirname14(input.dstPath), { recursive: true });
     const prefix = commentPrefixFor(input.formatHint ?? input.dstPath);
     if (prefix === null) {
       copyFileSync2(input.srcPath, input.dstPath);
@@ -48618,7 +48673,7 @@ function failDomain5(code, message3) {
 
 // src/tools/observabilitySetup.ts
 import { existsSync as existsSync27, mkdirSync as mkdirSync7, readdirSync as readdirSync16, writeFileSync as writeFileSync9 } from "node:fs";
-import { dirname as dirname14, join as join37 } from "node:path";
+import { dirname as dirname15, join as join37 } from "node:path";
 var tool8 = {
   name: "observability_setup",
   title: "Configure logging + metrics scaffolding",
@@ -48652,7 +48707,7 @@ async function handler5(input, ctx) {
         continue;
       }
       try {
-        mkdirSync7(dirname14(abs), { recursive: true });
+        mkdirSync7(dirname15(abs), { recursive: true });
         writeFileSync9(abs, p.contents, "utf8");
         written.push(p);
       } catch (e) {
@@ -52404,13 +52459,13 @@ function failDomain15(code, message3) {
 
 // src/tools/registerCustomRules.ts
 import { existsSync as existsSync33, statSync as statSync11 } from "node:fs";
-import { isAbsolute as isAbsolute5, join as join43, resolve as resolve9 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join43, resolve as resolve10 } from "node:path";
 var inputSchema11 = {
   project_path: ProjectPath,
   paths: external_exports.array(external_exports.string()).optional().describe(
     "Files, directories or globs (e.g. rules/**/*.yml), relative to the project. When omitted, auto-discovers .semgrep/, semgrep/ and rules/."
   ),
-  clear: external_exports.boolean().optional().describe("When true, remove this project's registered custom rules (and any 2.0.x global registration) and exit.")
+  clear: external_exports.boolean().optional().describe("When true, remove this project's registered custom rules \u2014 and the 2.0.x global registration, for every project \u2014 and exit.")
 };
 var tool23 = {
   name: "register_custom_rules",
@@ -52498,7 +52553,7 @@ function collectExplicit(projectPath, paths) {
       for (const match of matches) consider(match, registered, rejected);
       continue;
     }
-    consider(resolve9(projectPath, raw), registered, rejected);
+    consider(resolve10(projectPath, raw), registered, rejected);
   }
   return { registered: [...new Set(registered)], rejected };
 }
@@ -57328,7 +57383,7 @@ function hashFiles(parts) {
 
 // src/tools/mapAttackSurface.ts
 import { readFileSync as readFileSync34 } from "node:fs";
-import { isAbsolute as isAbsolute7, join as join57, resolve as resolve11 } from "node:path";
+import { isAbsolute as isAbsolute7, join as join57, resolve as resolve12 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -58428,13 +58483,13 @@ function buildToolRun(run, via) {
 
 // src/surface/specDiscover.ts
 import { readFileSync as readFileSync33, readdirSync as readdirSync22, statSync as statSync17 } from "node:fs";
-import { join as join56, relative as relative18, resolve as resolve10, sep as sep9 } from "node:path";
+import { join as join56, relative as relative18, resolve as resolve11, sep as sep9 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
 var SPEC_BASENAMES = /* @__PURE__ */ new Set(["openapi", "swagger", "api-docs"]);
 var SPEC_EXTENSIONS = /* @__PURE__ */ new Set([".json", ".yaml", ".yml"]);
 function discoverSpecs(projectPath, explicit) {
-  const root = resolve10(projectPath);
+  const root = resolve11(projectPath);
   const candidates2 = explicit && explicit.length > 0 ? dedupeResolved(explicit) : walk3(root, root).sort();
   const truncated = candidates2.length > MAX_SPEC_FILES;
   const selected = candidates2.slice(0, MAX_SPEC_FILES);
@@ -58446,7 +58501,7 @@ function dedupeResolved(paths) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
   for (const path6 of paths) {
-    const resolved = resolve10(path6);
+    const resolved = resolve11(path6);
     if (seen.has(resolved)) continue;
     seen.add(resolved);
     out.push(resolved);
@@ -59136,7 +59191,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path6) {
-  return resolve11(isAbsolute7(path6) ? path6 : join57(projectPath, path6));
+  return resolve12(isAbsolute7(path6) ? path6 : join57(projectPath, path6));
 }
 function resultsArrayOf(parsed) {
   const results = parsed.results;
@@ -60020,7 +60075,7 @@ function livenessMessage(target, liveness, timeoutMs) {
 import { join as join59 } from "node:path";
 
 // src/dast/nuclei.ts
-import { dirname as dirname15 } from "node:path";
+import { dirname as dirname16 } from "node:path";
 var DEFAULT_NUCLEI_RATE_LIMIT = 10;
 var ALWAYS_EXCLUDED_TAGS = ["dos", "fuzz"];
 function excludedTags(allowIntrusive) {
@@ -60095,7 +60150,7 @@ async function invokeNuclei(opts) {
     // has no bearing on what gets scanned; `outputPath`'s own directory is
     // used only because it is a real, already-relevant path handed to us,
     // rather than reaching for ambient process state.
-    cwd: dirname15(opts.outputPath),
+    cwd: dirname16(opts.outputPath),
     // An allowlisted environment, and `extendEnv: false` so it REPLACES the
     // parent's rather than being merged over it. Without the second half the
     // first is decorative: execa extends `process.env` by default, and the
@@ -61537,7 +61592,7 @@ import { isAbsolute as isAbsolute9, join as join65, relative as relative20 } fro
 
 // src/fixpr/apply.ts
 import { existsSync as existsSync43, readFileSync as readFileSync35, rmSync as rmSync7, writeFileSync as writeFileSync16 } from "node:fs";
-import { isAbsolute as isAbsolute8, join as join61, relative as relative19, resolve as resolve12, sep as sep10 } from "node:path";
+import { isAbsolute as isAbsolute8, join as join61, relative as relative19, resolve as resolve13, sep as sep10 } from "node:path";
 async function applyGroup(opts) {
   const run = opts.run ?? runProcess;
   if (opts.group.source === "semgrep") {
@@ -61668,7 +61723,7 @@ function editPipPin(worktreePath, step) {
   const file = step.file ?? "";
   const label = `edit ${file || "(no file)"}: ${step.package_name}==${step.installed_version} -> ${step.package_name}==${step.latest_version}`;
   if (file.length === 0) return { ok: false, label, reason: "the pip step names no file to edit" };
-  const target = resolve12(worktreePath, file);
+  const target = resolve13(worktreePath, file);
   const rel2 = relative19(worktreePath, target);
   if (isAbsolute8(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep10}`) || isAbsolute8(rel2)) {
     return { ok: false, label, reason: `'${file}' is not a file inside the project` };
@@ -61868,6 +61923,7 @@ function summariseExclusions(input) {
     no_fix_available: 0,
     below_severity_min: 0,
     uncommitted_changes: 0,
+    upgrade_plan_failed: 0,
     no_fix_source: 0
   };
   const belowFloor = [];
@@ -61882,6 +61938,8 @@ function summariseExclusions(input) {
       belowFloor.push(finding4);
     } else if (input.uncommitted?.(finding4) === true) {
       by_reason.uncommitted_changes += 1;
+    } else if (input.planFailed?.(finding4) === true) {
+      by_reason.upgrade_plan_failed += 1;
     } else {
       by_reason.no_fix_source += 1;
     }
@@ -61897,7 +61955,7 @@ function summariseExclusions(input) {
 function describeExclusions(exclusions, severityMin, sources) {
   if (exclusions.excluded === 0) return null;
   const parts = [];
-  const { no_fix_available, below_severity_min, uncommitted_changes, no_fix_source } = exclusions.by_reason;
+  const { no_fix_available, below_severity_min, uncommitted_changes, upgrade_plan_failed, no_fix_source } = exclusions.by_reason;
   if (below_severity_min > 0) {
     parts.push(
       `${below_severity_min} below severity_min "${severityMin}" (${describeShortfallTiers(exclusions.below_severity_min)})`
@@ -61911,6 +61969,11 @@ function describeExclusions(exclusions, severityMin, sources) {
   if (uncommitted_changes > 0) {
     parts.push(
       `${uncommitted_changes} in files with uncommitted changes (a fix is applied to and verified against committed HEAD \u2014 commit or stash them to include these)`
+    );
+  }
+  if (upgrade_plan_failed > 0) {
+    parts.push(
+      `${upgrade_plan_failed} whose dependency upgrade plan could not be computed (deps_update_plan or its runner for that ecosystem failed \u2014 see \`deps_plan_error\` / \`deps_plan_runner_failures\`)`
     );
   }
   if (no_fix_source > 0) {
@@ -62095,12 +62158,12 @@ function errorMessage(e) {
 var import_yaml7 = __toESM(require_dist2(), 1);
 import { mkdirSync as mkdirSync11, mkdtempSync as mkdtempSync5, readFileSync as readFileSync36, rmSync as rmSync8, statSync as statSync18, writeFileSync as writeFileSync17 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
-import { basename as basename7, dirname as dirname16, join as join62 } from "node:path";
+import { basename as basename7, dirname as dirname17, join as join62 } from "node:path";
 function checkIdMatches(checkId, ruleFile, id) {
   if (checkId === id) return true;
   if (!checkId.endsWith(`.${id}`)) return false;
   const prefix = checkId.slice(0, checkId.length - id.length - 1);
-  const tail = basename7(dirname16(ruleFile)).replace(/[^A-Za-z0-9._-]/g, "");
+  const tail = basename7(dirname17(ruleFile)).replace(/[^A-Za-z0-9._-]/g, "");
   return tail.length > 0 && (prefix === tail || prefix.endsWith(`.${tail}`));
 }
 function planSemgrepFix(sources, tmpRoot = tmpdir6()) {
@@ -62253,6 +62316,40 @@ async function prepareTestEnvironment(opts) {
     return { ok: false, command, reason: `${command} ${result.outcome}${line !== void 0 ? `: ${line}` : ""}` };
   }
   return { ok: true, command };
+}
+
+// src/fixpr/treeState.ts
+async function projectTreeState(projectPath, run = runProcess) {
+  const prefix = await run({
+    command: "git",
+    args: ["--no-optional-locks", "-C", projectPath, "rev-parse", "--show-prefix"],
+    cwd: projectPath
+  });
+  if (prefix.outcome !== "completed") {
+    return { ok: false, reason: `git rev-parse --show-prefix failed: ${prefix.stderr.trim()}` };
+  }
+  const status = await run({
+    command: "git",
+    args: ["--no-optional-locks", "-C", projectPath, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."],
+    cwd: projectPath
+  });
+  if (status.outcome !== "completed") {
+    return { ok: false, reason: `git status failed \u2014 cannot tell which files have uncommitted changes: ${status.stderr.trim()}` };
+  }
+  const dirty = /* @__PURE__ */ new Set();
+  const entries2 = status.stdout.split("\0");
+  for (let i2 = 0; i2 < entries2.length; i2++) {
+    const entry = entries2[i2] ?? "";
+    if (entry.length < 4) continue;
+    const xy = entry.slice(0, 2);
+    dirty.add(entry.slice(3));
+    if (xy.includes("R") || xy.includes("C")) {
+      const source = entries2[i2 + 1];
+      if (source !== void 0 && source.length > 0) dirty.add(source);
+      i2 += 1;
+    }
+  }
+  return { ok: true, prefix: prefix.stdout.trim(), dirty };
 }
 
 // src/fixpr/rescan.ts
@@ -62412,7 +62509,7 @@ function headOf(stdout, stderr) {
 // src/fixpr/worktree.ts
 import { existsSync as existsSync45, mkdtempSync as mkdtempSync6, realpathSync as realpathSync6, rmSync as rmSync9 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
-import { join as join64, resolve as resolve13 } from "node:path";
+import { join as join64, resolve as resolve14 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
 async function createWorktree(opts) {
   let dir;
@@ -62502,7 +62599,7 @@ function samePathKey(path6) {
   try {
     real = realpathSync6.native(path6);
   } catch {
-    real = resolve13(path6);
+    real = resolve14(path6);
   }
   const posix = real.replace(/\\/g, "/");
   return process.platform === "win32" ? posix.toLowerCase() : posix;
@@ -62634,7 +62731,14 @@ async function handler42(input, ctx, callMeta) {
   const needsPlan = sources.includes("deps") && allFindings.some(
     (f) => DEP_SCANNER_TOOLS.includes(f.tool) && f.fix_available && passes(f.severity, severityMin) && verifiable(f)
   );
-  const plan = needsPlan ? await fetchUpgradeSteps(projectPath, tree.prefix, ctx, callMeta) : { steps: [], error: null };
+  const plan = needsPlan ? await fetchUpgradeSteps(projectPath, tree.prefix, ctx, callMeta) : { steps: [], error: null, runnerFailures: [] };
+  const failedEcosystems = new Set(plan.runnerFailures.map((f) => f.ecosystem));
+  const planFailed = (f) => {
+    if (!needsPlan || !DEP_SCANNER_TOOLS.includes(f.tool)) return false;
+    if (plan.error !== null) return true;
+    const ecosystem = findingEcosystem(f);
+    return ecosystem !== null && failedEcosystems.has(ecosystem);
+  };
   const groups = buildGroups({
     findings: allFindings,
     upgradeSteps: plan.steps,
@@ -62642,7 +62746,7 @@ async function handler42(input, ctx, callMeta) {
     severityMin,
     rescannable: verifiable
   });
-  const filtered = summariseExclusions({ findings: allFindings, groups, severityMin, uncommitted });
+  const filtered = summariseExclusions({ findings: allFindings, groups, severityMin, uncommitted, planFailed });
   const filtered_reason = describeExclusions(filtered, severityMin, sources);
   const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
   const results = [];
@@ -62695,6 +62799,7 @@ async function handler42(input, ctx, callMeta) {
     // The deps side found nothing to pair because the plan itself could not
     // be computed — said, never left to read as "no upgrade available".
     ...plan.error !== null ? { deps_plan_error: plan.error } : {},
+    ...plan.runnerFailures.length > 0 ? { deps_plan_runner_failures: plan.runnerFailures } : {},
     filtered,
     filtered_reason,
     groups: results,
@@ -62704,9 +62809,13 @@ async function handler42(input, ctx, callMeta) {
 }
 async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta) {
   const depsPlanTool = TOOLS.find((t) => t.name === "deps_update_plan");
-  if (depsPlanTool === void 0) return { steps: [], error: "the 'deps_update_plan' tool is not registered" };
+  if (depsPlanTool === void 0) {
+    return { steps: [], error: "the 'deps_update_plan' tool is not registered", runnerFailures: [] };
+  }
   const created = await createWorktree({ projectPath, branch: null });
-  if (!created.ok) return { steps: [], error: `could not create a worktree to plan in: ${created.reason}` };
+  if (!created.ok) {
+    return { steps: [], error: `could not create a worktree to plan in: ${created.reason}`, runnerFailures: [] };
+  }
   try {
     const meta = {
       ...callMeta?.signal !== void 0 ? { signal: callMeta.signal } : {},
@@ -62714,38 +62823,21 @@ async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta) {
       originProjectPath: projectPath
     };
     const result = await depsPlanTool.handler({ project_path: inWorktree(created.worktree.path, prefix) }, ctx, meta);
-    if (!result.ok) return { steps: [], error: `deps_update_plan failed: ${result.error.message}` };
+    if (!result.ok) return { steps: [], error: `deps_update_plan failed: ${result.error.message}`, runnerFailures: [] };
     const r = result;
-    return { steps: Array.isArray(r.plan) ? r.plan : [], error: null };
+    return {
+      steps: Array.isArray(r.plan) ? r.plan : [],
+      error: null,
+      runnerFailures: Array.isArray(r.runner_failures) ? r.runner_failures.filter(isRunnerFailure) : []
+    };
   } finally {
     await created.worktree.remove();
   }
 }
-async function projectTreeState(projectPath) {
-  const prefix = await runProcess({ command: "git", args: ["-C", projectPath, "rev-parse", "--show-prefix"], cwd: projectPath });
-  if (prefix.outcome !== "completed") return { ok: false, reason: `git rev-parse --show-prefix failed: ${prefix.stderr.trim()}` };
-  const status = await runProcess({
-    command: "git",
-    args: ["-C", projectPath, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."],
-    cwd: projectPath
-  });
-  if (status.outcome !== "completed") {
-    return { ok: false, reason: `git status failed \u2014 cannot tell which files have uncommitted changes: ${status.stderr.trim()}` };
-  }
-  const dirty = /* @__PURE__ */ new Set();
-  const entries2 = status.stdout.split("\0");
-  for (let i2 = 0; i2 < entries2.length; i2++) {
-    const entry = entries2[i2] ?? "";
-    if (entry.length < 4) continue;
-    const xy = entry.slice(0, 2);
-    dirty.add(entry.slice(3));
-    if (xy.includes("R") || xy.includes("C")) {
-      const source = entries2[i2 + 1];
-      if (source !== void 0 && source.length > 0) dirty.add(source);
-      i2 += 1;
-    }
-  }
-  return { ok: true, prefix: prefix.stdout.trim(), dirty };
+function isRunnerFailure(v) {
+  if (typeof v !== "object" || v === null) return false;
+  const o2 = v;
+  return typeof o2["ecosystem"] === "string" && typeof o2["code"] === "string" && typeof o2["reason"] === "string";
 }
 function inWorktree(root, prefix) {
   return join65(root, ...prefix.split("/").filter((segment) => segment.length > 0));
@@ -64460,7 +64552,7 @@ async function main() {
 `);
     process.exit(1);
   }
-  const projectPath = resolve14(process.cwd());
+  const projectPath = resolve15(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);

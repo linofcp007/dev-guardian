@@ -33,6 +33,7 @@ export function summariseExclusions(input) {
         no_fix_available: 0,
         below_severity_min: 0,
         uncommitted_changes: 0,
+        upgrade_plan_failed: 0,
         no_fix_source: 0,
     };
     const belowFloor = [];
@@ -50,6 +51,9 @@ export function summariseExclusions(input) {
         }
         else if (input.uncommitted?.(finding) === true) {
             by_reason.uncommitted_changes += 1;
+        }
+        else if (input.planFailed?.(finding) === true) {
+            by_reason.upgrade_plan_failed += 1;
         }
         else {
             by_reason.no_fix_source += 1;
@@ -76,7 +80,7 @@ export function describeExclusions(exclusions, severityMin, sources) {
     if (exclusions.excluded === 0)
         return null;
     const parts = [];
-    const { no_fix_available, below_severity_min, uncommitted_changes, no_fix_source } = exclusions.by_reason;
+    const { no_fix_available, below_severity_min, uncommitted_changes, upgrade_plan_failed, no_fix_source } = exclusions.by_reason;
     if (below_severity_min > 0) {
         parts.push(`${below_severity_min} below severity_min "${severityMin}" ` +
             `(${describeShortfallTiers(exclusions.below_severity_min)})`);
@@ -88,6 +92,10 @@ export function describeExclusions(exclusions, severityMin, sources) {
     if (uncommitted_changes > 0) {
         parts.push(`${uncommitted_changes} in files with uncommitted changes (a fix is applied to and verified against ` +
             'committed HEAD — commit or stash them to include these)');
+    }
+    if (upgrade_plan_failed > 0) {
+        parts.push(`${upgrade_plan_failed} whose dependency upgrade plan could not be computed (deps_update_plan or its ` +
+            'runner for that ecosystem failed — see `deps_plan_error` / `deps_plan_runner_failures`)');
     }
     if (no_fix_source > 0) {
         parts.push(`${no_fix_source} that no requested source can act on or re-verify (sources: ${sources.join(', ')})`);

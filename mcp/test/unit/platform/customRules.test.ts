@@ -165,6 +165,10 @@ describe('resolveCustomSemgrepConfigs', () => {
     const note = legacyRegistrationNote(legacyRegistrationsNotApplied(ctx, a));
     expect(note).toContain(bRules);
     expect(note).toContain('register_custom_rules');
+    // clear=true removes the 2.0.x registration for EVERY project — the
+    // notice must not present it as a harmless way to silence itself.
+    expect(note).toContain('still run for the projects that contain them');
+    expect(note).toMatch(/clear=true removes .*for every project/);
     expect(legacyRegistrationNote([])).toBeNull();
   });
 

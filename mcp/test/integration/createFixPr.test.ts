@@ -918,6 +918,42 @@ describe('create_fix_pr', () => {
     REGISTRY_BACKED_TIMEOUT_MS,
   );
 
+  it('Task 11 fix round 2: a plan runner that failed is reported, and its findings are never labelled "no_fix_source"', async () => {
+    const c = ctx();
+    const scanId = randomUUID();
+    c.storage.scans.insert({ scan_id: scanId, scan_type: 'deps_audit', project_path: repo, tree_hash: 'h' });
+    c.storage.findings.bulkInsert([
+      {
+        scan_id: scanId, fingerprint: 'fp-composer', tool: 'trivy', rule_id: 'CVE-2099-1', severity: 'high',
+        category: 'security', subcategory: 'cve', title: 'psr/log vulnerable', fix_available: true,
+        file_path: 'composer.lock', snippet: 'psr/log@1.0.0->1.1.0',
+      },
+      {
+        scan_id: scanId, fingerprint: 'fp-npm', tool: 'trivy', rule_id: 'CVE-2099-2', severity: 'high',
+        category: 'security', subcategory: 'cve', title: 'left-pad vulnerable', fix_available: true,
+        file_path: 'package-lock.json', snippet: 'left-pad@1.0.0->1.1.0',
+      },
+    ]);
+    c.storage.scans.finalize({ scan_id: scanId, status: 'completed', tools_run: [], missing_tools: [] });
+    const failure = { ecosystem: 'composer', code: 'exit_1', reason: '`composer outdated --locked` exited 1' };
+    const planTool = TOOLS.find((t) => t.name === 'deps_update_plan');
+    if (planTool === undefined) throw new Error('deps_update_plan not registered');
+    const original = planTool.handler;
+    planTool.handler = async () => ({ ok: true, plan: [], runner_failures: [failure] });
+    try {
+      const res = await TOOLS.find((t) => t.name === 'create_fix_pr')?.handler(
+        { project_path: repo, sources: ['deps'] }, c as never,
+      ) as { ok: true; deps_plan_runner_failures?: unknown[]; filtered: { by_reason: Record<string, number> }; filtered_reason: string };
+      expect(res.deps_plan_runner_failures).toEqual([failure]);
+      // The composer finding: its runner failed. The npm one: planned fine,
+      // no step for it — that one really has no fix source.
+      expect(res.filtered.by_reason).toMatchObject({ upgrade_plan_failed: 1, no_fix_source: 1 });
+      expect(res.filtered_reason).toContain('upgrade plan could not be computed');
+    } finally {
+      planTool.handler = original;
+    }
+  });
+
   it.skipIf(!DOTNET_INSTALLED)(
     'Task 11 fix round 1 (item 1): a dry run never runs deps_update_plan\'s dotnet restore in the user\'s project',
     async () => {

@@ -224,9 +224,10 @@ export function legacyRegistrationNote(paths) {
     if (paths.length === 0)
         return null;
     return (`custom Semgrep rules registered before registrations became per-project (dev-guardian 2.0.x) are no ` +
-        `longer applied here because they lie outside this project: ${paths.join(', ')}. Re-register the ` +
-        `ones this project needs with register_custom_rules (paths: [...]); register_custom_rules ` +
-        'clear=true removes the old registration and this notice.');
+        `longer applied here because they lie outside this project: ${paths.join(', ')}. They still run for ` +
+        'the projects that contain them. Re-register the ones this project needs with ' +
+        'register_custom_rules (paths: [...]). Note that register_custom_rules clear=true removes the old ' +
+        'registration for every project — including those that contain these paths — along with this notice.');
 }
 function pathExists(p) {
     try {

@@ -1849,19 +1849,35 @@ async function runComposerOutdated(
   projectPath: string,
   cves: Map<string, CveInfo>,
 ): Promise<EcosystemPlan> {
-  const result = await execa('composer', ['outdated', '--format=json'], {
+  // `--locked`: planned from composer.lock, not from vendor/ (Task 11 fix
+  // round 2). create_fix_pr plans on a fresh checkout of HEAD, which has no
+  // vendor/ — measured on Composer 2.10.2 there, plain `composer outdated`
+  // prints `[]` with exit 0 ("No dependencies installed") and every Composer
+  // step vanished; `--locked` lists the lock's packages with their latest.
+  // It is also the right source: the lock is what the fix edits and what CI
+  // installs from.
+  const result = await execa('composer', ['outdated', '--locked', '--format=json'], {
     cwd: projectPath,
     reject: false,
     timeout: 90_000,
   });
   const failures: RunnerFailure[] = [];
-  const exitFailure = describeExecFailure('composer outdated', result, [0]);
+  const exitFailure = describeExecFailure('composer outdated --locked', result, [0]);
   if (exitFailure) return { steps: [], unplanned: [], failures: [{ ecosystem: 'composer', ...exitFailure }] };
-  const parsed = parseRunnerJson('composer', 'composer outdated --format=json', result.stdout, failures);
-  const installed = (parsed as { installed?: unknown[] } | undefined)?.installed;
+  const stderr = typeof result.stderr === 'string' ? result.stderr : '';
+  if (/No dependencies installed/i.test(stderr)) {
+    return {
+      steps: [],
+      unplanned: [],
+      failures: [{ ecosystem: 'composer', code: 'no_output', reason: `composer outdated listed nothing: ${stderr.trim().split(/\r?\n/)[0] ?? ''}` }],
+    };
+  }
+  const parsed = parseRunnerJson('composer', 'composer outdated --locked --format=json', result.stdout, failures);
+  const record = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
+  const installed = record?.['locked'] ?? record?.['installed'];
   if (!Array.isArray(installed)) {
     if (failures.length === 0) {
-      failures.push({ ecosystem: 'composer', code: 'unparseable_output', reason: 'composer outdated printed no "installed" list' });
+      failures.push({ ecosystem: 'composer', code: 'unparseable_output', reason: 'composer outdated --locked printed no "locked" list' });
     }
     return { steps: [], unplanned: [], failures };
   }

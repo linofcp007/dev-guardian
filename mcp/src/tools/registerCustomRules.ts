@@ -57,7 +57,7 @@ const inputSchema = {
   clear: z
     .boolean()
     .optional()
-    .describe("When true, remove this project's registered custom rules (and any 2.0.x global registration) and exit."),
+    .describe("When true, remove this project's registered custom rules — and the 2.0.x global registration, for every project — and exit."),
 };
 
 const tool: ToolModule = {

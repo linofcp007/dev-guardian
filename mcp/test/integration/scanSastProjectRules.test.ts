@@ -563,6 +563,48 @@ describe('scan_sast .NET: the SDK security analyzers, read from SARIF (Task 11 i
     expect(rules).toEqual(expect.arrayContaining(['CA5351', 'CA5350']));
   });
 
+  it('names a project-set CustomAfterMicrosoftCommonTargets as reduced coverage — the scan build replaces it', async () => {
+    const project = makeTempDir('sast-dotnet-');
+    writeFileSync(
+      join(project, 'App.csproj'),
+      CSPROJ.replace('</PropertyGroup>', '<CustomAfterMicrosoftCommonTargets>own.targets</CustomAfterMicrosoftCommonTargets></PropertyGroup>'),
+      'utf8',
+    );
+    writeFileSync(
+      join(project, 'Directory.Build.props'),
+      '<Project><PropertyGroup><CustomAfterMicrosoftCommonTargets>x</CustomAfterMicrosoftCommonTargets></PropertyGroup></Project>',
+      'utf8',
+    );
+    mockDotnet();
+    const r = await runSast(project, makePlugin(project));
+    const run = r.tools_run.find((t) => t.name === 'dotnet-analyzers');
+    expect(run?.reason).toMatch(/reduced coverage/);
+    expect(run?.reason).toContain('App.csproj');
+    expect(run?.reason).toContain('Directory.Build.props');
+  });
+
+  it('says nothing about CustomAfterMicrosoftCommonTargets when the project does not set it', async () => {
+    const project = dotnetProject();
+    mockDotnet();
+    const r = await runSast(project, makePlugin(project));
+    expect(r.tools_run.find((t) => t.name === 'dotnet-analyzers')?.reason).not.toMatch(/reduced coverage/);
+  });
+
+  it('the same result reported by two target frameworks is ONE finding, not two', async () => {
+    // Every framework of a multi-targeted project compiles the same source:
+    // its SARIFs carry the same result, and the identity pass numbered the
+    // copies as occurrences 0 and 1 — two findings for one line.
+    const project = dotnetProject();
+    mockDotnet({ sarifs: [SARIF, SARIF] });
+    const plugin = makePlugin(project);
+    const r = await runSast(project, plugin);
+    const rows = plugin.storage.findings.listByScan((r as unknown as { scan_id: string }).scan_id);
+    expect(rows.filter((f) => f.rule_id === 'CA5351')).toHaveLength(1);
+    expect(rows.filter((f) => f.rule_id === 'SCS0005')).toHaveLength(1);
+    const counts = (r as unknown as { findings_count_by_severity: Record<string, number> }).findings_count_by_severity;
+    expect(Object.values(counts).reduce((a, b) => a + b, 0)).toBe(2);
+  });
+
   it('a SARIF that lists no security rule means the analyzers did not load — a gap, never ok', async () => {
     const project = dotnetProject();
     mockDotnet({ sarifs: [SARIF_NO_SECURITY_RULES] });

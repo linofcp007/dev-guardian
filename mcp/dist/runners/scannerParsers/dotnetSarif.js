@@ -23,22 +23,50 @@ import { SCS_TOOL_NAME } from './securityCodeScan.js';
 export const DOTNET_ANALYZERS_TOOL_NAME = 'dotnet-analyzers';
 /** Security-category rule ids, for a SARIF whose rule metadata is missing. */
 const SECURITY_RULE_ID = /^(CA2100|CA23\d\d|CA3\d{3}|CA5\d{3})$/;
+/**
+ * Takes one SARIF document, or an ARRAY of them — every project and target
+ * framework of one build. A multi-targeted project compiles the same source
+ * once per framework and each SARIF carries the same result; they are one
+ * finding, so a result is kept once per (rule, file, region) across the set
+ * (Task 11 fix round 2: the copies became occurrences 0 and 1 — two findings
+ * for one line).
+ */
 export const dotnetSarifParser = {
     name: DOTNET_ANALYZERS_TOOL_NAME,
     parse(input, ctx = {}) {
-        const root = parseInputAsJson(stripBom(input));
         const findings = [];
-        for (const run of asArray(getProp(root, 'runs'))) {
-            const categories = ruleCategories(run);
-            for (const result of asArray(getProp(run, 'results'))) {
-                const finding = mapResult(result, categories, ctx);
-                if (finding)
-                    findings.push(finding);
+        const seen = new Set();
+        for (const document of Array.isArray(input) ? input : [input]) {
+            const root = parseInputAsJson(stripBom(document));
+            for (const run of asArray(getProp(root, 'runs'))) {
+                const categories = ruleCategories(run);
+                for (const result of asArray(getProp(run, 'results'))) {
+                    const key = resultKey(result);
+                    if (seen.has(key))
+                        continue;
+                    seen.add(key);
+                    const finding = mapResult(result, categories, ctx);
+                    if (finding)
+                        findings.push(finding);
+                }
             }
         }
         return { findings, cves: [] };
     },
 };
+/** A result's rule, file and exact region — the same across target frameworks. */
+function resultKey(result) {
+    const physical = getProp(asArray(getProp(result, 'locations'))[0], 'physicalLocation');
+    const region = getProp(physical, 'region');
+    return JSON.stringify([
+        getString(result, 'ruleId') ?? '',
+        getString(getProp(physical, 'artifactLocation'), 'uri') ?? '',
+        getNumber(region, 'startLine') ?? null,
+        getNumber(region, 'startColumn') ?? null,
+        getNumber(region, 'endLine') ?? null,
+        getNumber(region, 'endColumn') ?? null,
+    ]);
+}
 /**
  * How many security rules the SARIF says its analyzers loaded — rules whose
  * metadata category is `Security`, plus any Security Code Scan rule. Zero
