@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { GuardianDatabase as Database } from '../../../src/storage/db.js';
+import { openSetForProject } from '../../../src/history/openSet.js';
 import { listMigrations, runMigrations } from '../../../src/storage/migrations/runner.js';
 import { Storage } from '../../../src/storage/index.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
@@ -274,5 +275,150 @@ describe('migrations runner', () => {
     const storage = new Storage(db);
     expect(storage.findings.listOpenForProject('/a')).toEqual([]);
     expect(storage.findings.listOpenForProject('/b').map((f) => f.fingerprint)).toEqual(['fp-a']);
+  });
+
+  // Coordinator fix round 2: the first cut of 011's backfill picked "the
+  // newest scan reporting the fingerprint", with no `status = 'completed'`
+  // filter and no exclusion of `create_fix_pr`'s disposable worktrees
+  // (`%guardian-fixpr-wt-%`, `findingsRepo.ts`'s own `WORKTREE_PATH_EXCLUSION`).
+  // Fingerprints are project-relative, so a single `create_fix_pr` call —
+  // which re-runs `scan_sast` inside such a worktree to verify a fix —
+  // produced a newer scan of the SAME fingerprint in a directory that no
+  // longer exists by the time the migration runs. Reproduced by the
+  // reviewer with a newer scan in a fixpr worktree AND in a second, real
+  // project (`/main-clone`).
+  it('backfills from the real project, excluding a create_fix_pr worktree scan (011)', () => {
+    const db = new Database(':memory:');
+    for (const m of listMigrations().filter((x) => x.version <= 10)) {
+      db.exec(readFileSync(m.filePath, 'utf8'));
+    }
+    db.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '10')`);
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('main1', 'sast', '/main', 'h', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO findings (fingerprint, scan_id, tool, severity, category, title, file_path, line_start, identity)
+       VALUES ('fp-a', 'main1', 'semgrep', 'high', 'security', 't', 'a.js', 3, 'id-a')`,
+    );
+    db.exec(
+      `INSERT INTO suppressions (finding_fingerprint, finding_identity, reason, created_at)
+       VALUES ('fp-a', 'id-a', 'reviewed in /main', '2026-01-01T00:00:02.000Z')`,
+    );
+    // create_fix_pr's own verification re-scan: newer, same fingerprint,
+    // inside a disposable worktree that is gone by the time this runs.
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('wt1', 'sast', '/tmp/guardian-fixpr-wt-Ab12', 'h', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO findings (fingerprint, scan_id, tool, severity, category, title, file_path, line_start, identity)
+       VALUES ('fp-a', 'wt1', 'semgrep', 'high', 'security', 't', 'a.js', 3, 'id-a')`,
+    );
+
+    runMigrations(db);
+
+    // The ONLY real candidate is /main — the worktree is excluded outright,
+    // not merely outranked by recency — so this is unambiguous.
+    const row = db.prepare(`SELECT project_path FROM suppressions WHERE finding_fingerprint = 'fp-a'`).get() as {
+      project_path: string | null;
+    };
+    expect(row.project_path).toBe('/main');
+
+    const storage = new Storage(db);
+    expect(storage.findings.listOpenForProject('/main')).toEqual([]);
+    expect(openSetForProject(storage, '/main').findings).toEqual([]);
+  });
+
+  it('leaves project_path NULL (ambiguous) when a genuinely different real project also reports the fingerprint (011)', () => {
+    const db = new Database(':memory:');
+    for (const m of listMigrations().filter((x) => x.version <= 10)) {
+      db.exec(readFileSync(m.filePath, 'utf8'));
+    }
+    db.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '10')`);
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('main1', 'sast', '/main', 'h', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO findings (fingerprint, scan_id, tool, severity, category, title, file_path, line_start, identity)
+       VALUES ('fp-a', 'main1', 'semgrep', 'high', 'security', 't', 'a.js', 3, 'id-a')`,
+    );
+    db.exec(
+      `INSERT INTO suppressions (finding_fingerprint, finding_identity, reason, created_at)
+       VALUES ('fp-a', 'id-a', 'reviewed in /main', '2026-01-01T00:00:02.000Z')`,
+    );
+    // create_fix_pr's disposable worktree — excluded, same as above.
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('wt1', 'sast', '/tmp/guardian-fixpr-wt-Ab12', 'h', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO findings (fingerprint, scan_id, tool, severity, category, title, file_path, line_start, identity)
+       VALUES ('fp-a', 'wt1', 'semgrep', 'high', 'security', 't', 'a.js', 3, 'id-a')`,
+    );
+    // A second, genuinely different, real project — a clone of /main that
+    // happens to share the same relative paths and so the same fingerprint.
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('clone1', 'sast', '/main-clone', 'h', '2026-01-03T00:00:00.000Z', '2026-01-03T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO findings (fingerprint, scan_id, tool, severity, category, title, file_path, line_start, identity)
+       VALUES ('fp-a', 'clone1', 'semgrep', 'high', 'security', 't', 'a.js', 3, 'id-a')`,
+    );
+
+    runMigrations(db);
+
+    // Two DIFFERENT real projects now report this fingerprint/identity —
+    // genuinely ambiguous, so the row is left NULL rather than guessing.
+    const row = db.prepare(`SELECT project_path FROM suppressions WHERE finding_fingerprint = 'fp-a'`).get() as {
+      project_path: string | null;
+    };
+    expect(row.project_path).toBeNull();
+
+    // NULL is "matches every project" (the pre-011 global behaviour), so the
+    // suppression still hides the finding in /main via both readers —
+    // safe, even though the attribution itself could not be resolved.
+    const storage = new Storage(db);
+    expect(storage.findings.listOpenForProject('/main')).toEqual([]);
+    expect(openSetForProject(storage, '/main').findings).toEqual([]);
+  });
+
+  it('excludes a non-completed scan from the backfill candidates (011)', () => {
+    const db = new Database(':memory:');
+    for (const m of listMigrations().filter((x) => x.version <= 10)) {
+      db.exec(readFileSync(m.filePath, 'utf8'));
+    }
+    db.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '10')`);
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('main1', 'sast', '/main', 'h', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO findings (fingerprint, scan_id, tool, severity, category, title, file_path, line_start, identity)
+       VALUES ('fp-a', 'main1', 'semgrep', 'high', 'security', 't', 'a.js', 3, 'id-a')`,
+    );
+    db.exec(
+      `INSERT INTO suppressions (finding_fingerprint, finding_identity, reason, created_at)
+       VALUES ('fp-a', 'id-a', 'reviewed in /main', '2026-01-01T00:00:02.000Z')`,
+    );
+    // A newer scan of a SECOND project that never finished — must not count
+    // as a candidate, ambiguous or otherwise.
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('failed1', 'sast', '/other', 'h', '2026-01-02T00:00:00.000Z', NULL, 'failed')`,
+    );
+    db.exec(
+      `INSERT INTO findings (fingerprint, scan_id, tool, severity, category, title, file_path, line_start, identity)
+       VALUES ('fp-a', 'failed1', 'semgrep', 'high', 'security', 't', 'a.js', 3, 'id-a')`,
+    );
+
+    runMigrations(db);
+
+    const row = db.prepare(`SELECT project_path FROM suppressions WHERE finding_fingerprint = 'fp-a'`).get() as {
+      project_path: string | null;
+    };
+    expect(row.project_path).toBe('/main');
   });
 });
