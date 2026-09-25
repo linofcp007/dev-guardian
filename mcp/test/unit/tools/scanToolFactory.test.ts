@@ -171,6 +171,49 @@ describe('makeScanTool', () => {
     expect(invokeCalls).toBe(1);
   });
 
+  it('redacts a credential finding\'s snippet before it is persisted or returned', async () => {
+    const secretFinding = makeFinding({
+      tool: 'bandit',
+      rule_id: 'B105',
+      subcategory: 'hardcoded_password_string',
+      severity: 'low',
+      category: 'security',
+      title: 'hardcoded password',
+      file_path: 'app.py',
+      line_start: 1,
+      line_end: 1,
+      snippet: '1 password = "hunter2"',
+    });
+
+    const tool = makeScanTool({
+      name: 'secret_mock_scan',
+      scan_type: 'secrets',
+      category: 'security',
+      description: 'mock',
+      inputSchema: tinySchema,
+      invoke: async () => ({
+        outcome: 'completed' as const,
+        tools_run: [{ name: 'mock', status: 'ok' as const }],
+        missing_tools: [],
+        parser_inputs: [{ parser: constantParser([secretFinding]), input: {} }],
+        report_paths: [],
+      }),
+    });
+
+    const r = okResult<ToolOkPayload & { scan_id: string }>(
+      await tool.handler({ project_path: projectPath }, plugin),
+    );
+    expect(r.ok).toBe(true);
+    const topSnippet = (r.top_findings[0] as unknown as { snippet?: string }).snippet;
+    expect(topSnippet).toBeDefined();
+    expect(topSnippet).not.toContain('hunter2');
+
+    const stored = plugin.storage.findings.listByScan(r.scan_id);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.snippet).toBeDefined();
+    expect(stored[0]?.snippet).not.toContain('hunter2');
+  });
+
   it('returns a cached result on the second call within the TTL window', async () => {
     const finding = makeFinding({
       tool: 'mock',

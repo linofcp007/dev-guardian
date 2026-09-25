@@ -56,6 +56,7 @@ import { z } from 'zod';
 import { buildDriftAdvisory } from '../configdrift/advisory.js';
 import { detectConfigDrift } from '../configdrift/detect.js';
 import { assignIdentities, makeSourceReader } from '../fingerprint/findingIdentity.js';
+import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import { configsDirFromScriptsDir } from '../platform/configsDir.js';
 import { resolveVersion } from '../platform/version.js';
 import { makeProgressEmitter } from '../progress/progressEmitter.js';
@@ -308,6 +309,15 @@ async function runScanBody(args) {
         projectPath,
         readSource: makeSourceReader(projectPath),
     });
+    // Every finding that flags a credential (subcategory 'secret', Bandit's
+    // B105-B107, a rule naming a password/key/token — `isCredentialFinding`)
+    // has its `snippet` cleared here, once, before anything below reads
+    // `findings` again: `bulkInsert` two lines down, and `top_findings` /
+    // `applyResponseView` further below share this SAME array, so the DB row
+    // and the tool response are redacted by the one edit. A parser that
+    // already redacts its own output (bandit.ts, semgrep.ts, gitleaks.ts) is
+    // unaffected — this is the catch-all for the ones that do not.
+    findings = redactCredentialSnippets(findings);
     // Persist findings + CVEs (best-effort; one transaction per repo).
     //
     // ---- Why the severity floor is NOT applied before this ---------------
