@@ -14,6 +14,7 @@
  *   - fix_available: true when `extra.fix` (autofix string) exists
  */
 import { CONTAINER_PROJECT_ROOT } from '../dockerScanner.js';
+import { redactCredentialSnippet } from '../../redaction/secretFindingRedaction.js';
 import { asArray, getNumber, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
 export const SEMGREP_TOOL_NAME = 'semgrep';
 export const semgrepParser = {
@@ -67,7 +68,12 @@ function mapResult(raw, ctx) {
     const snippet = getString(extra, 'lines');
     if (snippet !== undefined)
         input.snippet = snippet;
-    return makeFinding(input);
+    // The registry secrets family (and any other rule/subcategory naming a
+    // credential) reports the real matched text in `extra.lines` when the
+    // caller is logged in or running via Docker — the anonymous "requires
+    // login" placeholder is the only case that redacts itself. Redacted here,
+    // at the source, rather than trusted to a later step.
+    return redactCredentialSnippet(makeFinding(input));
 }
 /**
  * Project-relative POSIX path. A path still absolute under the container

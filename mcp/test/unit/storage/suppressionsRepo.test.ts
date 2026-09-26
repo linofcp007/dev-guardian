@@ -68,6 +68,16 @@ describe('SuppressionsRepo', () => {
     expect(repo.listActive()[0]?.finding_identity).toBeUndefined();
   });
 
+  it('round-trips project_path (migration 011); omitted stays undefined, not the literal string "null"', () => {
+    const repo = freshRepo();
+    repo.insert({ finding_fingerprint: 'scoped', reason: 'fp', project_path: '/my-project' });
+    repo.insert({ finding_fingerprint: 'legacy', reason: 'no project given' });
+
+    const byFp = new Map(repo.listAll().map((s) => [s.finding_fingerprint, s]));
+    expect(byFp.get('scoped')?.project_path).toBe('/my-project');
+    expect(byFp.get('legacy')?.project_path).toBeUndefined();
+  });
+
   it('listAll returns every row regardless of expiry, unlike listActive', () => {
     const repo = freshRepo();
     repo.insert({ finding_fingerprint: 'forever', reason: 'fp' });
@@ -114,5 +124,74 @@ describe('SuppressionsRepo.adoptIdentities', () => {
     // From now on it follows the finding across a line shift.
     expect(suppressions.isSuppressed('fp-a-shifted', 'id-a')).toBe(true);
     expect(suppressions.adoptIdentities('s1')).toBe(0);
+  });
+
+  // Coordinator fix round 2: adoptIdentities had no project predicate at
+  // all, so a suppression scoped to a DIFFERENT project than the scan doing
+  // the adopting could pick up that scan's identity for its own fingerprint
+  // — attributing an identity computed in one project to a suppression that
+  // belongs to another.
+  it('does not adopt an identity onto a suppression scoped to a different project', () => {
+    const { suppressions } = withScan();
+    suppressions.insert({
+      finding_fingerprint: 'fp-a',
+      reason: 'belongs to a different project',
+      project_path: '/other',
+    });
+
+    expect(suppressions.adoptIdentities('s1')).toBe(0);
+    expect(suppressions.listAll()[0]?.finding_identity).toBeUndefined();
+  });
+
+  it('still adopts across a NULL (legacy/unscoped) suppression, and onto one scoped to the scan\'s own project', () => {
+    const { suppressions } = withScan();
+    suppressions.insert({ finding_fingerprint: 'fp-a', reason: 'legacy, no project' });
+    suppressions.insert({ finding_fingerprint: 'fp-a', reason: 'scoped to the scan\'s own project', project_path: '/p' });
+
+    expect(suppressions.adoptIdentities('s1')).toBe(2);
+    const byReason = new Map(suppressions.listAll().map((s) => [s.reason, s.finding_identity]));
+    expect(byReason.get('legacy, no project')).toBe('id-a');
+    expect(byReason.get("scoped to the scan's own project")).toBe('id-a');
+  });
+});
+
+describe('SuppressionsRepo.listActiveForRule', () => {
+  function withFindingsInTwoProjects() {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    const scans = new ScansRepo(db);
+    const findings = new FindingsRepo(db);
+    const suppressions = new SuppressionsRepo(db);
+    scans.insert({ scan_id: 'p1', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
+    scans.insert({ scan_id: 'o1', scan_type: 'sast', project_path: '/other', tree_hash: 'h' });
+    const base = {
+      tool: 'semgrep',
+      rule_id: 'r1',
+      severity: 'high' as const,
+      category: 'security' as const,
+      title: 't',
+      fix_available: false,
+    };
+    findings.bulkInsert([
+      { ...base, fingerprint: 'fp-p', scan_id: 'p1' },
+      { ...base, fingerprint: 'fp-o', scan_id: 'o1' },
+    ]);
+    return { suppressions };
+  }
+
+  // Coordinator fix round 2: this fed suggest_fix's "similar findings were
+  // suppressed before" hint with every project's history, not just this
+  // project's own.
+  it("lists a suppression scoped to the given project, or scoped to none, but not another project's", () => {
+    const { suppressions } = withFindingsInTwoProjects();
+    suppressions.insert({ finding_fingerprint: 'fp-p', reason: 'mine', project_path: '/p' });
+    suppressions.insert({ finding_fingerprint: 'fp-o', reason: 'theirs', project_path: '/other' });
+    suppressions.insert({ finding_fingerprint: 'fp-p', reason: 'legacy, no project' });
+
+    const reasons = suppressions
+      .listActiveForRule('semgrep', 'r1', 20, '/p')
+      .map((s) => s.reason)
+      .sort();
+    expect(reasons).toEqual(['legacy, no project', 'mine']);
   });
 });

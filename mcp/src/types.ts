@@ -235,6 +235,14 @@ export interface Suppression {
   created_at: string;
   expires_at?: string;
   created_by?: string;
+  /**
+   * The project this suppression belongs to (migration 011). Absent means
+   * "every project" — every row written before this column existed, and any
+   * row an older build still inserts without it — never "no project"; the
+   * match predicate treats it exactly like the global behaviour it always
+   * had. Present on every suppression `suppress_finding` writes from now on.
+   */
+  project_path?: string;
 }
 
 export interface Baseline {
@@ -523,6 +531,7 @@ export const DOMAIN_ERROR_CODES = [
   'not_a_git_repo',
   'working_tree_dirty',
   'unknown_scan_id',
+  'unknown_finding',
   'requires_elevation',
   'unsupported_os',
   'output_too_large',

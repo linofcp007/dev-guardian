@@ -43,6 +43,7 @@
 
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
+import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
 import { openSetForProject } from '../history/openSet.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
@@ -294,13 +295,25 @@ function buildTitle(f: Finding): string {
 }
 
 function buildBody(f: Finding, scanId: string): string {
+  // A credential finding's snippet is the leaked secret's own line — never
+  // pasted into a GitHub issue, which is visible to everyone with read
+  // access to the repository (and, for a public one, the internet). This is
+  // a second line of defence: the snippet should already be redacted by the
+  // time it reaches storage (`redaction/secretFindingRedaction.ts`), but a
+  // row written before that existed, or by a path this file does not
+  // control, must not leak here either.
+  const showSnippet = f.snippet && !isCredentialFinding(f);
   return [
     `**Severity:** ${f.severity}`,
     `**Category:** ${f.category}${f.subcategory ? ` / ${f.subcategory}` : ''}`,
     `**Tool:** ${f.tool}${f.rule_id ? ` (\`${f.rule_id}\`)` : ''}`,
     f.file_path ? `**Location:** \`${f.file_path}${f.line_start ? `:${f.line_start}` : ''}\`` : '',
     f.message ? `\n${f.message}\n` : '',
-    f.snippet ? `\n\`\`\`\n${f.snippet}\n\`\`\`\n` : '',
+    showSnippet ? `\n\`\`\`\n${f.snippet}\n\`\`\`\n` : '',
+    isCredentialFinding(f)
+      ? '\n_This finding flags a credential. Rotate/revoke it at its source and remove it from the ' +
+        "file — dev-guardian withholds the matched value from this issue._\n"
+      : '',
     `\n---`,
     `Fingerprint: \`${f.fingerprint}\``,
     `Scan id: \`${scanId}\``,

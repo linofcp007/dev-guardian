@@ -240,7 +240,68 @@ describe('FindingsRepo — line-independent identity (schema 7)', () => {
     expect(findings.listBySeverity('medium').map((f) => f.fingerprint).sort()).toEqual(['legacy', 'other']);
   });
 
-  it('identityForFingerprint answers from the newest scan that has one', () => {
+});
+
+describe('FindingsRepo — suppressions are per project at match time (migration 011)', () => {
+  it('a suppression scoped to project A does not hide the same fingerprint in project B', () => {
+    const { scans, findings, suppressions } = setup();
+    scans.insert({ scan_id: 'a1', scan_type: 'sast', project_path: '/project-a', tree_hash: 'ha' });
+    findings.bulkInsert([{ ...makeFinding({ fingerprint: 'shared-fp' }), scan_id: 'a1' }]);
+    scans.finalize({ scan_id: 'a1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    scans.insert({ scan_id: 'b1', scan_type: 'sast', project_path: '/project-b', tree_hash: 'hb' });
+    findings.bulkInsert([{ ...makeFinding({ fingerprint: 'shared-fp' }), scan_id: 'b1' }]);
+    scans.finalize({ scan_id: 'b1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    suppressions.insert({ finding_fingerprint: 'shared-fp', reason: 'fp', project_path: '/project-a' });
+
+    expect(findings.listOpenForProject('/project-a')).toEqual([]);
+    expect(findings.listOpenForProject('/project-b').map((f) => f.fingerprint)).toEqual(['shared-fp']);
+    // The unscoped "latest in the whole DB" readers must also respect it —
+    // whichever scan is newest, a project-A suppression must not hide a
+    // project-B finding, and vice-versa.
+    expect(findings.listOpen().map((f) => f.fingerprint)).toEqual(['shared-fp']);
+  });
+
+  it('a suppression scoped to project A by IDENTITY does not hide that identity in project B', () => {
+    const { scans, findings, suppressions } = setup();
+    scans.insert({ scan_id: 'a1', scan_type: 'sast', project_path: '/project-a', tree_hash: 'ha' });
+    findings.bulkInsert([{ ...makeFinding({ fingerprint: 'fp-a', identity: 'shared-identity' }), scan_id: 'a1' }]);
+    scans.finalize({ scan_id: 'a1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    scans.insert({ scan_id: 'b1', scan_type: 'sast', project_path: '/project-b', tree_hash: 'hb' });
+    findings.bulkInsert([{ ...makeFinding({ fingerprint: 'fp-b', identity: 'shared-identity' }), scan_id: 'b1' }]);
+    scans.finalize({ scan_id: 'b1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    suppressions.insert({
+      finding_fingerprint: 'fp-a',
+      finding_identity: 'shared-identity',
+      reason: 'fp',
+      project_path: '/project-a',
+    });
+
+    expect(findings.listOpenForProject('/project-a')).toEqual([]);
+    expect(findings.listOpenForProject('/project-b').map((f) => f.fingerprint)).toEqual(['fp-b']);
+  });
+
+  it('a suppression with no project (legacy / NULL) still matches globally, in every project', () => {
+    const { scans, findings, suppressions } = setup();
+    scans.insert({ scan_id: 'a1', scan_type: 'sast', project_path: '/project-a', tree_hash: 'ha' });
+    findings.bulkInsert([{ ...makeFinding({ fingerprint: 'shared-fp' }), scan_id: 'a1' }]);
+    scans.finalize({ scan_id: 'a1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    // No project_path passed — exactly what every suppression written
+    // before this migration, and any row inserted by an older build sharing
+    // this database, looks like.
+    suppressions.insert({ finding_fingerprint: 'shared-fp', reason: 'legacy, no project' });
+
+    expect(findings.listOpenForProject('/project-a')).toEqual([]);
+    expect(findings.listOpen()).toEqual([]);
+  });
+});
+
+describe('FindingsRepo — identityForFingerprint', () => {
+  it('answers from the newest scan that has one', () => {
     const { db, scans, findings } = setup();
     scans.insert({ scan_id: 'old', scan_type: 'sast', project_path: '/p', tree_hash: 'h1' });
     scans.insert({ scan_id: 'new', scan_type: 'sast', project_path: '/p', tree_hash: 'h2' });

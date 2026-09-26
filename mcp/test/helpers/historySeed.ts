@@ -55,6 +55,7 @@ export interface SeedFinding {
   message?: string;
   subcategory?: string;
   category?: Category;
+  snippet?: string;
 }
 
 export interface SeedScan {
@@ -152,6 +153,7 @@ export function seedScan(s: Seeded, scan: SeedScan): string {
           line_start: f.line ?? i + 1,
           ...(f.message !== undefined ? { message: f.message } : {}),
           ...(f.subcategory !== undefined ? { subcategory: f.subcategory } : {}),
+          ...(f.snippet !== undefined ? { snippet: f.snippet } : {}),
         });
         return {
           ...base,

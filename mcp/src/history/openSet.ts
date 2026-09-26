@@ -335,18 +335,28 @@ export function summarizeSkipped(hits: readonly SkipHit[]): SkippedSummary {
 }
 
 /**
- * "Is this finding suppressed?" against `now` — by fingerprint, or by
- * identity where both sides have one: the same either-key rule as
- * `findingsRepo.ts#SUPPRESSION_MATCHES_F`, decided on an injected clock.
+ * "Is this finding suppressed?" against `now` and `projectPath` — by
+ * fingerprint, or by identity where both sides have one: the same
+ * either-key rule as `findingsRepo.ts#SUPPRESSION_MATCHES_F`, decided on an
+ * injected clock. `suppressions` is typically the WHOLE database's list
+ * (`storage.suppressions.listAll()`, never project-scoped by the query
+ * itself), so this is also where cross-project isolation happens: a
+ * suppression whose `project_path` (migration 011) names a different
+ * project is skipped entirely, and one with no project at all (every row
+ * written before that column existed) still matches — see
+ * `suppressionsRepo.ts`'s module comment for why NULL means "every
+ * project", not "no project".
  */
 export function suppressionMatcher(
   suppressions: readonly Suppression[],
   now: number,
+  projectPath: string,
 ): (f: Pick<Finding, 'fingerprint' | 'identity'>) => boolean {
   const fingerprints = new Set<string>();
   const identities = new Set<string>();
   for (const s of suppressions) {
     if (s.expires_at !== undefined && !(Date.parse(s.expires_at) > now)) continue;
+    if (s.project_path !== undefined && s.project_path !== projectPath) continue;
     fingerprints.add(s.finding_fingerprint);
     if (s.finding_identity !== undefined) identities.add(s.finding_identity);
   }
@@ -406,7 +416,7 @@ export function openSetForProject(
   projectPath: string,
   opts: { now?: number } = {},
 ): OpenSet {
-  const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now());
+  const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
 
   const picked: Array<{ slot: OpenSetSlot } & SlotPick> = [];
   const hits: SkipHit[] = [];

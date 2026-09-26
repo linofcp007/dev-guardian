@@ -104,7 +104,7 @@ describe('E2E — a finding keeps its identity when a line is inserted above it 
       expect(before.identity).toMatch(/^[0-9a-f]{64}$/);
       okResult(
         await getTool('suppress_finding').handler(
-          { finding_fingerprint: before.fingerprint, reason: 'e2e' },
+          { project_path: dir, finding_fingerprint: before.fingerprint, reason: 'e2e' },
           plugin,
         ),
       );

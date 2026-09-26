@@ -7,6 +7,7 @@
  * `issue_severity` directly; `issue_confidence` lands in the message so
  * the model can weigh confidence when reasoning.
  */
+import { redactCredentialSnippet } from '../../redaction/secretFindingRedaction.js';
 import { asArray, getNumber, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
 export const BANDIT_TOOL_NAME = 'bandit';
 export const banditParser = {
@@ -59,6 +60,10 @@ function mapResult(raw, ctx) {
         input.line_end = lineEnd;
     if (code !== undefined)
         input.snippet = code;
-    return makeFinding(input);
+    // B105-B107 (hardcoded_password_*) put the plaintext default/compared
+    // password straight into `code`, line-number prefix and all — redacted at
+    // the source rather than trusted to a later step, the same defence in
+    // depth `gitleaks.ts` already applies to its own snippet.
+    return redactCredentialSnippet(makeFinding(input));
 }
 //# sourceMappingURL=bandit.js.map

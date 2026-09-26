@@ -9,6 +9,7 @@
  */
 
 import type { Finding } from '../../types.js';
+import { redactCredentialSnippet } from '../../redaction/secretFindingRedaction.js';
 import {
   asArray,
   getNumber,
@@ -77,5 +78,9 @@ function mapResult(raw: unknown, ctx: ParserContext): Finding | null {
   if (lineStart !== undefined) input.line_start = lineStart;
   if (lineEnd !== undefined) input.line_end = lineEnd;
   if (code !== undefined) input.snippet = code;
-  return makeFinding(input);
+  // B105-B107 (hardcoded_password_*) put the plaintext default/compared
+  // password straight into `code`, line-number prefix and all — redacted at
+  // the source rather than trusted to a later step, the same defence in
+  // depth `gitleaks.ts` already applies to its own snippet.
+  return redactCredentialSnippet(makeFinding(input));
 }

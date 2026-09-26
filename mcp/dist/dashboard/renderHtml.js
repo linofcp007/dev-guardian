@@ -38,9 +38,19 @@
  * same "stays text" guarantee as the server-rendered table).
  */
 import { escapeHtml, renderHtmlDocument, severityBar, severityChip, SEVERITY_COLORS } from '../report/htmlTheme.js';
+import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 const SEV_RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-export function renderDashboard(snapshot) {
+export function renderDashboard(rawSnapshot) {
+    // Every Finding-bearing array the snapshot carries — `findings.items` and
+    // both deltas' `new_findings` — is redacted here, once, before either the
+    // server-rendered tables or the inlined JSON payload reads it. The
+    // snapshot's own findings should already be redacted at persistence time
+    // (`redaction/secretFindingRedaction.ts`, applied at every scan-tool's
+    // write path), but this is the one place ALL of them funnel through on
+    // their way into a page anyone with the file can open, so it is the
+    // second, independent place that guarantees it.
+    const snapshot = redactSnapshot(rawSnapshot);
     if (snapshot.scan === null)
         return renderNoScan(snapshot);
     const scan = snapshot.scan;
@@ -439,6 +449,25 @@ function baselineMetaLine(baseline) {
     const note = baseline.active.note ? ` — ${escapeHtml(baseline.active.note)}` : '';
     const age = baseline.age_days === null ? '' : ` (${baseline.age_days}d ago)`;
     return `<br><strong>Baseline:</strong> ${escapeHtml(baseline.active.set_at)}${age}${note}`;
+}
+// ---------------------------------------------------------------------------
+// Credential-finding redaction — see the module-level comment and the call
+// in `renderDashboard`.
+// ---------------------------------------------------------------------------
+function redactSnapshot(snapshot) {
+    return {
+        ...snapshot,
+        findings: { ...snapshot.findings, items: redactCredentialSnippets(snapshot.findings.items) },
+        deltas: {
+            since_previous: redactDelta(snapshot.deltas.since_previous),
+            since_baseline: redactDelta(snapshot.deltas.since_baseline),
+        },
+    };
+}
+function redactDelta(delta) {
+    if (delta === null)
+        return null;
+    return { ...delta, new_findings: redactCredentialSnippets(delta.new_findings) };
 }
 // ---------------------------------------------------------------------------
 // The inlined data payload.

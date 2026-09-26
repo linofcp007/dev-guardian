@@ -24,6 +24,7 @@ import {
   makeFinding,
   type ParserOutput,
 } from '../runners/scannerParsers/index.js';
+import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import type { Finding, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
@@ -189,6 +190,12 @@ async function handler(
     }
   }
 
+  // Every finding here is `subcategory: 'secret'` by construction — the
+  // whole matched line (connection string, key, password and all) is what
+  // `snippet` held before this, straight into the response and the DB.
+  // Redacted once, before either sees it.
+  const redacted = redactCredentialSnippets(findings);
+
   const scanId = randomUUID();
   ctx.storage.scans.insert({
     scan_id: scanId,
@@ -196,8 +203,8 @@ async function handler(
     project_path: projectPath,
     tree_hash: '',
   });
-  if (findings.length > 0) {
-    ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
+  if (redacted.length > 0) {
+    ctx.storage.findings.bulkInsert(redacted.map((f) => ({ ...f, scan_id: scanId })));
   }
   ctx.storage.scans.finalize({
     scan_id: scanId,
@@ -207,7 +214,7 @@ async function handler(
     meta: { files_scanned: files.length, findings_count: findings.length },
   });
 
-  const parserOutput: ParserOutput = { findings, cves: [] };
+  const parserOutput: ParserOutput = { findings: redacted, cves: [] };
   return {
     ok: true,
     scan_id: scanId,
