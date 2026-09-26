@@ -31,7 +31,15 @@ import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
 
+/**
+ * `paths.scanned` of a run that looked at the project. A report without one
+ * is a run that scanned nothing (Global Constraint 3), so every fixture that
+ * stands for a real scan carries it — as real Semgrep output always does.
+ */
+const SCANNED = { scanned: ['src/app.ts', 'src/routes/users.ts'] };
+
 const SEMGREP_OUTPUT = JSON.stringify({
+  paths: SCANNED,
   results: [
     {
       check_id: 'guardian-route-express',
@@ -57,6 +65,7 @@ const SEMGREP_OUTPUT = JSON.stringify({
  * file", so both routes it declares are left resolved as-is.
  */
 const SEMGREP_OUTPUT_WITH_SHADOW = JSON.stringify({
+  paths: SCANNED,
   results: [
     {
       check_id: 'guardian-route-express',
@@ -96,6 +105,7 @@ const SEMGREP_OUTPUT_WITH_SHADOW = JSON.stringify({
 
 /** JS project: extension-less specifier, real route file is `.js` (B2 scenario 1). */
 const JS_MOUNT_OUTPUT = JSON.stringify({
+  paths: SCANNED,
   results: [
     {
       check_id: 'guardian-route-express',
@@ -145,6 +155,7 @@ const JS_MOUNT_OUTPUT = JSON.stringify({
  * directory-less importer.
  */
 const ROOT_LEVEL_MOUNT_OUTPUT = JSON.stringify({
+  paths: SCANNED,
   results: [
     {
       check_id: 'guardian-route-express',
@@ -191,6 +202,7 @@ const ROOT_LEVEL_MOUNT_OUTPUT = JSON.stringify({
  * degraded to the specifier text and every mounted route went partial.
  */
 const POSIX_ABSOLUTE_MOUNT_OUTPUT = JSON.stringify({
+  paths: SCANNED,
   results: [
     {
       check_id: 'guardian-route-express',
@@ -234,6 +246,7 @@ const POSIX_ABSOLUTE_MOUNT_OUTPUT = JSON.stringify({
  * scenario 2 — the mismatch the extension-insensitive match must bridge).
  */
 const TS_NODENEXT_MOUNT_OUTPUT = JSON.stringify({
+  paths: SCANNED,
   results: [
     {
       check_id: 'guardian-route-express',
@@ -277,6 +290,7 @@ const TS_NODENEXT_MOUNT_OUTPUT = JSON.stringify({
  * so a difference in the result can only come from path handling.
  */
 const WINDOWS_MOUNT_OUTPUT = JSON.stringify({
+  paths: SCANNED,
   results: [
     {
       check_id: 'guardian-route-express',
@@ -420,7 +434,7 @@ describe('map_attack_surface', () => {
   it('reports no_rules for a detected language the pack does not cover', async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockResolvedValue(okRun());
-    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], paths: SCANNED }));
 
     const ctx = makeCtx();
     const projectPath = resolveProjectPath(makeTempDir('guardian-surface-')).path;
@@ -456,7 +470,7 @@ describe('map_attack_surface', () => {
   it("never reads ANOTHER project's stack snapshot: its languages and stack_detected are this project's (Task 24)", async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockResolvedValue(okRun());
-    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], paths: SCANNED }));
 
     const ctx = makeCtx();
     const other = resolveProjectPath(makeTempDir('guardian-surface-other-')).path;
@@ -602,7 +616,7 @@ describe('map_attack_surface', () => {
     expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
   });
 
-  it('persists the snapshot when semgrep fails but still emitted parseable JSON', async () => {
+  it('persists NOTHING when semgrep exits 2, even with parseable JSON — and still shows what it read', async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     // exitCode 1 means "found matches" under the repo's Semgrep convention —
     // that is success. A genuine failure needs a different exit code.
@@ -619,15 +633,107 @@ describe('map_attack_surface', () => {
     const projectPath = makeTempDir('guardian-surface-');
     const result = okResult<{
       snapshot_id: number | null;
+      routes_total: number;
       tools_run: { status: string; reason?: string }[];
+      note?: string;
     }>(await tool().handler({ project_path: projectPath }, ctx));
 
-    // Partial data is still useful — the failed tools_run entry carries the
-    // warning. This is the one failure mode where we DO persist.
-    expect(result.snapshot_id).not.toBeNull();
+    // A run that failed is never the project's surface (Global Constraint 3):
+    // a snapshot would be served for 24 h and read by scan_dast as complete.
+    expect(result.snapshot_id).toBeNull();
+    expect(ctx.storage.surface.getLatest()).toBeNull();
     expect(result.tools_run[0]?.status).toBe('failed');
-    expect(result.tools_run[0]?.reason).toBe('semgrep: fatal: something broke');
-    expect(ctx.storage.surface.getLatest()).not.toBeNull();
+    expect(result.tools_run[0]?.reason).toMatch(/exit 2/);
+    // What it did read is real, and shown — as a partial, unpersisted result.
+    expect(result.routes_total).toBe(1);
+    expect(result.note).toMatch(/nothing was persisted/);
+  });
+
+  it('persists NOTHING when semgrep scanned no file: skipped and named missing, never ok (GC3)', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    // A `.semgrepignore` over the source tree, or a rule file the locale
+    // codec cannot read: exit 0, no results, no errors, nothing scanned.
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], errors: [], paths: { scanned: [] } }));
+
+    const ctx = makeCtx();
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
+      snapshot_id: number | null;
+      routes_total: number;
+      missing_tools: string[];
+      tools_run: { name: string; status: string; reason?: string }[];
+      note?: string;
+    }>(await tool().handler({ project_path: projectPath }, ctx));
+
+    expect(result.tools_run[0]).toMatchObject({ name: 'semgrep', status: 'skipped' });
+    expect(result.tools_run[0]?.reason).toMatch(/scanned 0 files/);
+    expect(result.missing_tools).toEqual(['semgrep']);
+    expect(result.snapshot_id).toBeNull();
+    expect(result.note).toMatch(/nothing was persisted/);
+    expect(ctx.storage.surface.getLatest()).toBeNull();
+  });
+
+  it('a report with no paths.scanned at all is a run that scanned nothing too', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+
+    const ctx = makeCtx();
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{ snapshot_id: number | null; tools_run: { status: string }[] }>(
+      await tool().handler({ project_path: projectPath }, ctx),
+    );
+
+    expect(result.tools_run[0]?.status).toBe('skipped');
+    expect(result.snapshot_id).toBeNull();
+    expect(ctx.storage.surface.getLatest()).toBeNull();
+  });
+
+  it('persists NOTHING when semgrep reports errors[] (a route file failed to parse): failed, the error named', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun('failed'));
+    const parsed = JSON.parse(SEMGREP_OUTPUT) as Record<string, unknown>;
+    vi.mocked(readJsonSafe).mockReturnValue(
+      JSON.stringify({
+        ...parsed,
+        errors: [{ type: 'PartialParsing', message: 'Syntax error at line src/routes/admin.ts:3' }],
+      }),
+    );
+
+    const ctx = makeCtx();
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
+      snapshot_id: number | null;
+      routes_total: number;
+      tools_run: { name: string; status: string; reason?: string }[];
+    }>(await tool().handler({ project_path: projectPath }, ctx));
+
+    expect(result.tools_run[0]).toMatchObject({ name: 'semgrep', status: 'failed' });
+    expect(result.tools_run[0]?.reason).toMatch(/PartialParsing/);
+    expect(result.snapshot_id).toBeNull();
+    expect(ctx.storage.surface.getLatest()).toBeNull();
+    expect(result.routes_total).toBe(1);
+  });
+
+  it('names the Docker route in a failed verdict', async () => {
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'docker' ? '/fake/bin/docker' : null,
+    );
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(
+      JSON.stringify({ results: [], paths: SCANNED, errors: [{ type: 'Timeout', message: 'rule timed out' }] }),
+    );
+
+    const ctx = makeCtx();
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{ tools_run: { status: string; reason?: string }[] }>(
+      await tool().handler({ project_path: projectPath }, ctx),
+    );
+
+    expect(result.tools_run[0]?.status).toBe('failed');
+    expect(result.tools_run[0]?.reason).toMatch(/^docker \(.+\): .*Timeout/);
+    expect(ctx.storage.surface.getLatest()).toBeNull();
   });
 
   it('treats exitCode 1 as success — semgrep exits 1 when it FINDS matches', async () => {
@@ -658,12 +764,11 @@ describe('map_attack_surface', () => {
     expect(result.snapshot_id).not.toBeNull();
   });
 
-  it('keeps reporting a persisted failed run on later cached calls', async () => {
+  it('never serves a failed run from the cache: the next call runs Semgrep again', async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
-    // Genuine failure (exit 2) that still left parseable JSON — the one case
-    // where a failed run is persisted. Its warning must not be swallowed by
-    // the cache marker on the second call, or an empty snapshot that is empty
-    // *because the scan died* reads as "this application exposes nothing".
+    // Genuine failure (exit 2) that still left parseable JSON. It used to be
+    // persisted and then served for 24 h — an empty snapshot that is empty
+    // *because the scan died*, read as "this application exposes nothing".
     vi.mocked(runProcess).mockResolvedValue({
       outcome: 'failed',
       exitCode: 2,
@@ -671,23 +776,21 @@ describe('map_attack_surface', () => {
       stderr: 'semgrep: fatal: rule pack failed to load\n',
       truncated: false,
     });
-    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], paths: SCANNED }));
 
     const ctx = makeCtx();
     const projectPath = makeTempDir('guardian-surface-');
 
     await tool().handler({ project_path: projectPath }, ctx);
     const second = okResult<{
-      routes_total: number;
+      snapshot_id: number | null;
       tools_run: { name: string; status: string; reason?: string }[];
     }>(await tool().handler({ project_path: projectPath }, ctx));
 
-    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(1);
-    expect(second.routes_total).toBe(0);
-    expect(second.tools_run[0]?.reason).toBe('cached');
-    const failed = second.tools_run.find((r) => r.status === 'failed');
-    expect(failed).toBeDefined();
-    expect(failed?.reason).toContain('rule pack failed to load');
+    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
+    expect(second.snapshot_id).toBeNull();
+    expect(second.tools_run[0]?.status).toBe('failed');
+    expect(second.tools_run[0]?.reason).toContain('rule pack failed to load');
   });
 
   it('persists nothing when semgrep runs but produces no readable output', async () => {
@@ -755,6 +858,7 @@ describe('map_attack_surface', () => {
     vi.mocked(runProcess).mockResolvedValue(okRun());
     vi.mocked(readJsonSafe).mockReturnValue(
       JSON.stringify({
+        paths: SCANNED,
         results: [
           {
             check_id: 'guardian-env-var',
@@ -930,6 +1034,7 @@ describe('map_attack_surface', () => {
     reportedPath: (file: string) => string = (file) => file,
   ): string {
     return JSON.stringify({
+      paths: SCANNED,
       results: spans.map(({ file, span, metadata }, i) => {
         const source = REDACTED_FILES.get(file);
         if (source === undefined) throw new Error(`no test source for ${file}`);
@@ -1059,7 +1164,7 @@ describe('map_attack_surface', () => {
         }
       ).results,
     ];
-    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results }));
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results, paths: SCANNED }));
 
     const ctx = makeCtx();
     const result = okResult<{
@@ -1093,6 +1198,7 @@ describe('map_attack_surface', () => {
     const projectPath = projectWithSource();
     vi.mocked(readJsonSafe).mockReturnValue(
       JSON.stringify({
+        paths: SCANNED,
         results: [
           // One readable express route, so the run is not wholly degraded.
           ...(JSON.parse(redactedOutput([REDACTED_SPANS[2] as never])) as { results: unknown[] })
@@ -1483,7 +1589,7 @@ describe('map_attack_surface — spec import and diff', () => {
     // truncation row (the deduped set never exceeded the cap). It vanishes.
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockResolvedValue(okRun());
-    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], paths: SCANNED }));
 
     const ctx = makeCtx();
     const projectPath = makeTempDir('guardian-surface-');
@@ -1565,7 +1671,7 @@ describe('map_attack_surface — spec import and diff', () => {
   it('reports the file-count discovery cap as a parse_error spec_files entry', async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockResolvedValue(okRun());
-    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], paths: SCANNED }));
 
     const ctx = makeCtx();
     const projectPath = makeTempDir('guardian-surface-');
@@ -1589,7 +1695,7 @@ describe('map_attack_surface — spec import and diff', () => {
   it('reports an oversized spec file as a parse_error spec_files entry', async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockResolvedValue(okRun());
-    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], paths: SCANNED }));
 
     const ctx = makeCtx();
     const projectPath = makeTempDir('guardian-surface-');

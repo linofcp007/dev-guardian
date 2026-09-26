@@ -590,10 +590,11 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
 
       // The bar from item 1's five-NestJS-rules incident: a rule that fails
       // to parse matches nothing on every run while the suite stays green.
-      // `level: 'warn'` is tolerated — the one pre-existing entry here is a
-      // PartialParsing note on php-wordpress/rest-controller.php's
-      // `const NAMESPACE` (see that file's own comment), unrelated to any
-      // import rule. `level: 'error'` — a genuine rule parse error, like the
+      // `level: 'warn'` is tolerated here — a target that does not parse
+      // (PartialParsing) says nothing about the import rules; the fixture no
+      // longer carries one (see php-wordpress/rest-controller.php), because
+      // map_attack_surface fails a run on any `errors[]` entry. `level:
+      // 'error'` — a genuine rule parse error, like the
       // one Rust's `use $MODULE::{ ..., $SYMBOL, ... };` produced during this
       // rule's own development — is not.
       const hardErrors = parsed.errors.filter((e) => e.level === 'error');

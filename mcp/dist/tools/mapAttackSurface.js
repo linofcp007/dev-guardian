@@ -14,12 +14,16 @@
  * never let a parse exception escape uncaught (there is no try/catch at the
  * MCP dispatch site), and we never treat garbage output as zero routes.
  *
- * The one case where a non-zero Semgrep exit DOES get persisted: Semgrep
- * exits 1 when it *finds* matches (see `buildToolRun` in `surface/scanSemgrep.ts`) — that is
- * success, not failure. A genuine failure (crash, bad config, timeout) still
- * blocks persistence only when it also failed to leave parseable JSON behind;
- * if it left partial-but-parseable JSON, that partial data is persisted with
- * a `failed` tools_run entry carrying the diagnostic.
+ * A readable report is judged, not trusted (Global Constraint 3), by the
+ * same Semgrep judge every other call site uses — see `judgeSurfaceReport`
+ * in `surface/scanSemgrep.ts`. Exit 1 is success (Semgrep exits 1 when it
+ * *finds* matches). A run that scanned no file (`paths.scanned` empty: a
+ * `.semgrepignore` over the sources, a rule file the locale codec could not
+ * read) is `skipped` with Semgrep named missing; any other problem — an
+ * unclean exit, a non-empty `errors[]` (a `PartialParsing` route file loses
+ * its routes) — is `failed`. Neither is persisted: a snapshot is served for
+ * 24 h and read by scan_dast as the whole surface. A failed run's routes are
+ * still returned, unpersisted, with a note saying so.
  *
  * The same guarantee covers a fourth failure mode: Semgrep reporting matches
  * whose content we cannot read. Current versions redact `extra.metavars`
@@ -40,7 +44,7 @@ import { extractModuleEdges, resolveModuleEdges, } from '../surface/moduleEdges.
 import { recoverMetavars, } from '../surface/recoverMetavars.js';
 import { resolveNodeMounts } from '../surface/resolvers/node.js';
 import { resolveWordpressRoutes } from '../surface/resolvers/wordpress.js';
-import { invokeSemgrep } from '../surface/scanSemgrep.js';
+import { invokeSemgrep, judgeSurfaceReport } from '../surface/scanSemgrep.js';
 import { dedupeResolved, discoverSpecs, MAX_SPEC_BYTES, MAX_SPEC_FILES, } from '../surface/specDiscover.js';
 import { diffSpecRoutes } from '../surface/specDiff.js';
 import { importSpec } from '../surface/specImport.js';
@@ -186,7 +190,12 @@ async function handler(input, ctx) {
         ], ['semgrep'], 'Semgrep is not installed and no Docker fallback is available, so no surface was ' +
             'mapped and nothing was persisted. Run install_toolchain, then retry.', ctx, projectPath);
     }
-    const { toolRun } = invocation;
+    const { toolRun, run, via } = invocation;
+    if (run === null) {
+        // The Docker fallback could not even stage the rules: nothing ran, and a
+        // report on disk would be an earlier run's.
+        return degradedResult([toolRun], [], 'Semgrep could not be run through Docker; no surface was mapped and nothing was persisted.', ctx, projectPath);
+    }
     // `readJsonSafe` returns null only for a missing/unreadable file (see
     // scanHelpers.ts) — never for unparseable content. A file that exists but
     // holds truncated/garbage JSON (mid-write timeout, stale partial file from
@@ -218,15 +227,29 @@ async function handler(input, ctx) {
         };
         return degradedResult([failedToolRun], [], 'Semgrep output was not valid JSON; nothing was persisted.', ctx, projectPath);
     }
+    // Parseable is not scanned: judge the report (exit code, paths.scanned,
+    // errors[]) before a single route is believed.
+    const judged = judgeSurfaceReport({ run, raw, via });
+    if (judged.verdict === 'scanned_nothing') {
+        return degradedResult([judged.toolRun], ['semgrep'], 'Semgrep scanned no file in this project, so no surface was mapped and nothing was ' +
+            'persisted — an empty result here is a gap, not an application that exposes nothing. ' +
+            'Check .semgrepignore and that the sources are in a language the routes rules cover.', ctx, projectPath);
+    }
     // Rebuild the captures modern Semgrep redacts, before anything downstream
     // looks for them. Reading the files is the impure half and belongs here;
     // `recoverMetavars` itself is pure and takes the text.
     const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
     if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable > 0) {
-        return degradedResult([toolRun, unreadableMatchesToolRun(recovery)], [], unreadableMatchesNote(recovery), ctx, projectPath);
+        return degradedResult([judged.toolRun, unreadableMatchesToolRun(recovery)], [], unreadableMatchesNote(recovery), ctx, projectPath);
     }
-    const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
+    const toolsRun = [judged.toolRun, ...recoveryToolRun(recovery)];
     const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars, recovery.unreadableRouteFiles, inp.spec_paths);
+    // A failed run is never the project's surface: shown, never persisted.
+    if (judged.verdict === 'failed') {
+        return withNote(summarize(snapshot, null, toolsRun, ctx, projectPath), `Semgrep did not complete a clean scan (${judged.toolRun.reason ?? 'failed'}). The routes ` +
+            'above are what it did read, and they may be incomplete; nothing was persisted, so ' +
+            'scan_dast and guardian://surface/latest will not use this run. Fix the error and re-run.');
+    }
     // An explicit `spec_paths` snapshot must never become "latest for this
     // tree hash": it answers the caller's one-off question about a document
     // THEY named, not a claim about what this project's own spec layout is. If
@@ -824,6 +847,13 @@ function shadowSample(diff) {
     if (diff === null)
         return [];
     return [...diff.code_only].sort((a, b) => a.path.localeCompare(b.path)).slice(0, SAMPLE_SIZE);
+}
+/** `note` first, then whatever note `result` already carried. */
+function withNote(result, note) {
+    if (!result.ok)
+        return result;
+    const prior = result['note'];
+    return { ...result, note: typeof prior === 'string' ? `${note} ${prior}` : note };
 }
 /**
  * Shared shape for every "Semgrep could not produce a usable result" exit —

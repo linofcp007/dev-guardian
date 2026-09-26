@@ -62489,12 +62489,18 @@ async function invokeSemgrep(options) {
     const run2 = await runProcess({
       command: "semgrep",
       args: ["--config", rulesPath, "--json", "--output", outFile, "--quiet", projectPath],
-      cwd: projectPath
+      cwd: projectPath,
+      // UTF-8 mode, like every other Semgrep call site: otherwise the locale
+      // codec reads the rule pack and writes `--output`
+      // (runners/semgrepReport.ts#pythonUtf8Env).
+      env: pythonUtf8Env(process.env)
     });
-    return { toolRun: buildToolRun(run2) };
+    return { toolRun: buildToolRun(run2), run: run2, via: null };
   }
   const dockerBin = await scannerAvailable("docker");
   if (dockerBin === null) return null;
+  const image = process.env["GUARDIAN_SEMGREP_IMAGE"] || DEFAULT_SEMGREP_IMAGE;
+  const via = `docker (${image})`;
   let containerRules;
   try {
     const stagedRules = join61(reportDir, "routes.yml");
@@ -62506,10 +62512,11 @@ async function invokeSemgrep(options) {
         name: "semgrep",
         status: "failed",
         reason: `docker: could not stage rule pack: ${e.message}`
-      }
+      },
+      run: null,
+      via
     };
   }
-  const image = process.env["GUARDIAN_SEMGREP_IMAGE"] || DEFAULT_SEMGREP_IMAGE;
   const run = await runProcess({
     command: "docker",
     args: buildSemgrepDockerArgs({
@@ -62520,7 +62527,7 @@ async function invokeSemgrep(options) {
     }),
     cwd: projectPath
   });
-  return { toolRun: buildToolRun(run, `docker (${image})`) };
+  return { toolRun: buildToolRun(run, via), run, via };
 }
 function buildToolRun(run, via) {
   const ok = run.outcome === "completed" || run.exitCode === 1;
@@ -62530,6 +62537,26 @@ function buildToolRun(run, via) {
   const firstLine6 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
   const reason = via ? `${via}: ${firstLine6 ?? "fallback failed"}` : firstLine6 ?? "unknown";
   return { name: "semgrep", status: "failed", reason };
+}
+function judgeSurfaceReport(args) {
+  const { run, raw, via } = args;
+  const check2 = checkSemgrepReport({ raw, exitCode: run.exitCode, outcome: run.outcome, targets: 1 });
+  if (check2.ok) return { verdict: "ok", toolRun: buildToolRun(run, via ?? void 0) };
+  const prefix = via !== null ? `${via}: ` : "";
+  const exitClean = run.outcome === "completed" || run.exitCode === 1;
+  if (exitClean && check2.scanned === 0 && check2.errors === 0) {
+    return {
+      verdict: "scanned_nothing",
+      toolRun: {
+        name: "semgrep",
+        status: "skipped",
+        reason: `${prefix}semgrep scanned 0 files \u2014 no file here is in a language the routes rules cover, or every source file is excluded (.semgrepignore)`
+      }
+    };
+  }
+  const stderr = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  const detail = [check2.reason ?? "semgrep failed", ...stderr !== void 0 ? [stderr] : []].join("; ");
+  return { verdict: "failed", toolRun: { name: "semgrep", status: "failed", reason: `${prefix}${detail}` } };
 }
 
 // src/surface/specDiscover.ts
@@ -63035,7 +63062,16 @@ async function handler39(input, ctx) {
       projectPath
     );
   }
-  const { toolRun } = invocation;
+  const { toolRun, run, via } = invocation;
+  if (run === null) {
+    return degradedResult(
+      [toolRun],
+      [],
+      "Semgrep could not be run through Docker; no surface was mapped and nothing was persisted.",
+      ctx,
+      projectPath
+    );
+  }
   const raw = readJsonSafe(outFile);
   if (raw === null) {
     const failedToolRun = {
@@ -63068,17 +63104,27 @@ async function handler39(input, ctx) {
       projectPath
     );
   }
+  const judged = judgeSurfaceReport({ run, raw, via });
+  if (judged.verdict === "scanned_nothing") {
+    return degradedResult(
+      [judged.toolRun],
+      ["semgrep"],
+      "Semgrep scanned no file in this project, so no surface was mapped and nothing was persisted \u2014 an empty result here is a gap, not an application that exposes nothing. Check .semgrepignore and that the sources are in a language the routes rules cover.",
+      ctx,
+      projectPath
+    );
+  }
   const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
   if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable > 0) {
     return degradedResult(
-      [toolRun, unreadableMatchesToolRun(recovery)],
+      [judged.toolRun, unreadableMatchesToolRun(recovery)],
       [],
       unreadableMatchesNote(recovery),
       ctx,
       projectPath
     );
   }
-  const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
+  const toolsRun = [judged.toolRun, ...recoveryToolRun(recovery)];
   const snapshot = buildSnapshot(
     recovery.json,
     projectPath,
@@ -63088,6 +63134,12 @@ async function handler39(input, ctx) {
     recovery.unreadableRouteFiles,
     inp.spec_paths
   );
+  if (judged.verdict === "failed") {
+    return withNote(
+      summarize4(snapshot, null, toolsRun, ctx, projectPath),
+      `Semgrep did not complete a clean scan (${judged.toolRun.reason ?? "failed"}). The routes above are what it did read, and they may be incomplete; nothing was persisted, so scan_dast and guardian://surface/latest will not use this run. Fix the error and re-run.`
+    );
+  }
   if (inp.spec_paths !== void 0) {
     return summarize4(snapshot, null, toolsRun, ctx, projectPath);
   }
@@ -63406,6 +63458,11 @@ function specDiffSummary(diff) {
 function shadowSample(diff) {
   if (diff === null) return [];
   return [...diff.code_only].sort((a2, b) => a2.path.localeCompare(b.path)).slice(0, SAMPLE_SIZE);
+}
+function withNote(result, note) {
+  if (!result.ok) return result;
+  const prior = result["note"];
+  return { ...result, note: typeof prior === "string" ? `${note} ${prior}` : note };
 }
 function degradedResult(toolsRun, missingTools, note, ctx, projectPath) {
   return {

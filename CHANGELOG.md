@@ -899,6 +899,13 @@ keeps working (migrations 004–011 are additive).
   pruning one made every later finding of its type "not previously measured"
   and `regression_alert` went quiet. The under-lock re-check re-applies the
   whole rule.
+- **`map_attack_surface` judged Semgrep by its exit code alone**, so a run that
+  scanned no file (a `.semgrepignore` over the sources, the locale-codec
+  hazard) was `ok` and persisted an empty surface for 24 h. It now uses the
+  shared Semgrep judge: nothing scanned is `skipped` with Semgrep named
+  missing, an unclean exit or any `errors[]` entry (a `PartialParsing` route
+  file) is `failed`, and neither is persisted; a failed run's routes are still
+  shown, marked unpersisted. Semgrep now runs in UTF-8 mode here too.
 
 ### Security
 
