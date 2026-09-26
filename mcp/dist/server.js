@@ -65324,8 +65324,13 @@ async function handler40(input, ctx, callMeta) {
   if (surfaceGaps !== null) {
     missingTools.push(`${DAST_ENGINE}:partial-surface`);
     const files = surfaceGaps.partially_parsed.map((p) => p.file);
+    const failed = (surfaceGaps.failed_steps ?? []).map((run) => run.name);
+    const causes = [
+      ...files.length > 0 ? [`Semgrep only partly parsed ${files.join(", ")}`] : [],
+      ...failed.length > 0 ? [`its ${failed.join(", ")} step failed`] : []
+    ];
     warnings.push(
-      "The attack-surface snapshot is partial" + (files.length > 0 ? ` \u2014 Semgrep only partly parsed ${files.join(", ")}` : ` \u2014 its own scan recorded gaps (${surfaceGaps.missing_tools.join(", ")})`) + ": routes the map could not read were never probed. Fix the gap and re-run map_attack_surface for a complete inventory."
+      "The attack-surface snapshot is partial" + (causes.length > 0 ? ` \u2014 ${causes.join("; ")}` : ` \u2014 its own scan recorded gaps (${surfaceGaps.missing_tools.join(", ")})`) + ": routes the map could not read were never probed. Fix the gap and re-run map_attack_surface for a complete inventory."
     );
   }
   const burst = await runRateLimitBurst({
@@ -65499,8 +65504,13 @@ async function handler40(input, ctx, callMeta) {
 }
 function surfaceGapsOf(snapshot) {
   const partiallyParsed = snapshot.partially_parsed ?? [];
-  if (snapshot.missing_tools.length === 0 && partiallyParsed.length === 0) return null;
-  return { missing_tools: [...snapshot.missing_tools], partially_parsed: partiallyParsed };
+  const failedSteps = snapshot.tools_run.filter((run) => run.status === "failed");
+  if (snapshot.missing_tools.length === 0 && partiallyParsed.length === 0 && failedSteps.length === 0) return null;
+  return {
+    missing_tools: [...snapshot.missing_tools],
+    partially_parsed: partiallyParsed,
+    ...failedSteps.length > 0 ? { failed_steps: failedSteps } : {}
+  };
 }
 function resolveCredential(inp, warnings) {
   const envName = inp.auth_header_env;

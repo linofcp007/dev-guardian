@@ -968,6 +968,12 @@ keeps working (migrations 004–011 are additive).
   and an image's findings are re-measured only by a scan of the same image —
   otherwise not re-measured, named `trivy-image (<image>)`. Rows written
   before keep today's reading.
+- **`scan_dast` over a surface whose route recovery failed** read coverage
+  `full`: `map_attack_surface` persists a snapshot whose
+  `semgrep-metavar-recovery` step lost some matches, with nothing in
+  `missing_tools`. Any failed step of the surface's run now makes the DAST run
+  partial (`guardian-dast:partial-surface`), names the step in the warning and
+  lists it under `summary.surface_gaps.failed_steps`.
 
 ### Security
 

@@ -369,16 +369,22 @@ async function handler(input, ctx, callMeta) {
     }
     const missingTools = [];
     // A surface map_attack_surface persisted as PARTIAL — a file Semgrep only
-    // partly parsed (`partially_parsed`), or any other gap its own run
-    // recorded. Routes in the unparsed spans were never in the inventory, so
+    // partly parsed (`partially_parsed`), a step of its run that failed (the
+    // metavariable recovery lost matches), or any other gap its own run
+    // recorded. Routes the map could not read were never in the inventory, so
     // never probed: this run is partial coverage too, never a complete one.
     const surfaceGaps = surfaceGapsOf(snapshot);
     if (surfaceGaps !== null) {
         missingTools.push(`${DAST_ENGINE}:partial-surface`);
         const files = surfaceGaps.partially_parsed.map((p) => p.file);
+        const failed = (surfaceGaps.failed_steps ?? []).map((run) => run.name);
+        const causes = [
+            ...(files.length > 0 ? [`Semgrep only partly parsed ${files.join(', ')}`] : []),
+            ...(failed.length > 0 ? [`its ${failed.join(', ')} step failed`] : []),
+        ];
         warnings.push('The attack-surface snapshot is partial' +
-            (files.length > 0
-                ? ` — Semgrep only partly parsed ${files.join(', ')}`
+            (causes.length > 0
+                ? ` — ${causes.join('; ')}`
                 : ` — its own scan recorded gaps (${surfaceGaps.missing_tools.join(', ')})`) +
             ': routes the map could not read were never probed. Fix the gap and re-run ' +
             'map_attack_surface for a complete inventory.');
@@ -585,13 +591,22 @@ async function handler(input, ctx, callMeta) {
 /**
  * The gaps a persisted surface snapshot carries, or null for a complete
  * one: its own `missing_tools` (map_attack_surface lists `semgrep` for a
- * partial parse) and the files Semgrep only partly parsed.
+ * partial parse), the files Semgrep only partly parsed, and every step of its
+ * run that failed yet let the snapshot persist — the metavariable recovery
+ * (`semgrep-metavar-recovery`) that lost some matches, whose routes are then
+ * missing from the inventory with nothing in `missing_tools` to say so.
+ * `failed_steps` is present only when there are some.
  */
 function surfaceGapsOf(snapshot) {
     const partiallyParsed = snapshot.partially_parsed ?? [];
-    if (snapshot.missing_tools.length === 0 && partiallyParsed.length === 0)
+    const failedSteps = snapshot.tools_run.filter((run) => run.status === 'failed');
+    if (snapshot.missing_tools.length === 0 && partiallyParsed.length === 0 && failedSteps.length === 0)
         return null;
-    return { missing_tools: [...snapshot.missing_tools], partially_parsed: partiallyParsed };
+    return {
+        missing_tools: [...snapshot.missing_tools],
+        partially_parsed: partiallyParsed,
+        ...(failedSteps.length > 0 ? { failed_steps: failedSteps } : {}),
+    };
 }
 /**
  * `auth_header_env` wins when both are supplied: it is the recommended path
