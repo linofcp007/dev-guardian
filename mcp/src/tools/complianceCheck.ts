@@ -20,13 +20,28 @@
  * The Findings carry the canonical compliance signal; the extras let the
  * model answer "do we have a privacy policy?" without parsing the report.
  *
- * Global Constraint 3 for the Semgrep pass: absent Semgrep is `skipped`
- * (`not_installed`) and listed in `missing_tools`; a run that scanned no file
- * is `skipped` AND listed — the pack covers none of the project's files,
- * which is a gap, not a clean RGPD result; a missing report, an abnormal exit
- * or any entry in Semgrep's `errors[]` (a timeout, a file it could only
- * partly parse) is `failed` with the reason. The findings of a failed run are
- * still kept: they are real, just not the whole answer.
+ * Global Constraint 3 for the Semgrep pass, recorded as `semgrep-rgpd`:
+ *
+ *   - Semgrep absent: `skipped` (`not_installed`), and `semgrep` in
+ *     `missing_tools` — the ONLY case that names `semgrep` there, because it
+ *     is the only one where the reader's fix is "install semgrep".
+ *   - A clean run that scanned no file, with the pack's rules LOADED
+ *     (`--time` makes the report list them in `time.rules`): `skipped` with
+ *     a "not applicable" reason and nothing in `missing_tools` — a Go-only
+ *     project has nothing for the pack to read, exactly as a project with no
+ *     Dockerfile has nothing for scan_containers (scanCoverage.ts). It used
+ *     to list `semgrep` as missing, and the status dashboard then printed
+ *     "MISSING semgrep — static-analysis findings are NOT in these numbers"
+ *     beside a scan_sast that ran fine, and the CI gate "semgrep not
+ *     installed" (full-review Task 20, fix round 1).
+ *   - A clean run that scanned no file with NO rule loaded: `failed`. That is
+ *     the silent-failure shape — `results: 0, scanned: 0, errors: 0` from a
+ *     pack that did not load — and "nothing to read" cannot be told apart
+ *     from it any other way.
+ *   - A missing report, an abnormal exit or any entry in Semgrep's
+ *     `errors[]` (a timeout, a file it could only partly parse): `failed`
+ *     with the reason. The findings of a failed run are still kept: they are
+ *     real, just not the whole answer.
  */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
@@ -94,6 +109,23 @@ const rgpdParser: ScannerParser = {
   },
 };
 
+/**
+ * How many rules the Semgrep report says it loaded (`time.rules`, present
+ * with `--time`), or null when the report does not say. Entries are rule-id
+ * strings in Semgrep 1.176 and objects in some older versions; either counts.
+ */
+export function loadedRuleCount(raw: string | null): number | null {
+  if (raw === null) return null;
+  let root: unknown;
+  try {
+    root = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const rules = getProp(getProp(root, 'time'), 'rules');
+  return Array.isArray(rules) ? rules.length : null;
+}
+
 /** Runs the RGPD pack and records the outcome — see the module header for the verdicts. */
 async function runRgpdPack(
   ctx: InvokeContext,
@@ -116,6 +148,9 @@ async function runRgpdPack(
     args: [
       `--config=${pack}`,
       '--metrics=off',
+      // Lists the rules that loaded (`time.rules`): the only way to tell a
+      // project with nothing to read from a pack that loaded nothing.
+      '--time',
       ...semgrepExcludeArgs(ctx.exclusions),
       '--json',
       '--quiet',
@@ -138,14 +173,23 @@ async function runRgpdPack(
   }
   const exitClean = result.outcome === 'completed' || result.exitCode === 1;
   if (exitClean && raw !== null && check.scanned === 0 && check.errors === 0) {
+    const loaded = loadedRuleCount(raw) ?? 0;
+    if (loaded > 0) {
+      // Not a gap, and so not in missing_tools: see the module header.
+      out.tools_run.push({
+        name: 'semgrep-rgpd',
+        status: 'skipped',
+        reason:
+          'not applicable: the RGPD pack loaded but found no file it reads here (JS/TS, PHP, Python, ' +
+          'C#, and HTML/JS/JSX/TSX/Vue/Twig/Razor/EJS/Handlebars templates)',
+      });
+      return;
+    }
     out.tools_run.push({
       name: 'semgrep-rgpd',
-      status: 'skipped',
-      reason:
-        'semgrep scanned 0 files — the RGPD pack reads JS/TS, PHP, Python, C# and HTML/JSX/Vue/Twig ' +
-        'markup, and none of it is here',
+      status: 'failed',
+      reason: 'semgrep scanned 0 files and loaded no rule from the RGPD pack — a pack that failed to load, not a clean result',
     });
-    out.missing_tools.push('semgrep');
     return;
   }
   out.tools_run.push({ name: 'semgrep-rgpd', status: 'failed', reason: check.reason ?? 'semgrep failed' });
@@ -314,15 +358,16 @@ registerToolModule(
       '`licenses_summary` and `risky_licenses`. (2) The RGPD Semgrep pack configs/semgrep/rgpd.yml, ' +
       'offline (--metrics=off): Portuguese personal identifiers (NIF, NISS, Cartão de Cidadão, IBAN, ' +
       'phone, email — matched by variable/field NAME) inside log calls in JS/TS, PHP, Python and C# ' +
-      '(subcategory rgpd-pii-in-logs), and trackers loaded by HTML/PHP/JSX/TSX/Vue/Twig markup before ' +
-      'consent — GA4/gtag.js, Meta Pixel fbq init, Hotjar, youtube.com/embed instead of ' +
-      'youtube-nocookie.com (subcategory rgpd-tracker-without-consent). Recognised consent guards: ' +
-      'type="text/plain" scripts, Consent Mode v2 defaults set to denied, fbq consent revoke, a ' +
-      'consent-checking block or JSX condition. Findings are category compliance, severity medium: ' +
-      'name-based heuristics, not proof. (3) `policy_documents_found`: PRIVACY, TERMS, COOKIES, DPA, ' +
-      'SECURITY, CODE_OF_CONDUCT near the project root. A missing or failed Trivy or Semgrep, a Semgrep ' +
-      'error (timeout, partial parse) or a Semgrep run that scanned no file is reported in tools_run / ' +
-      'missing_tools and lowers `coverage` — never a clean result. ' +
+      '(subcategory rgpd-pii-in-logs), and trackers loaded by HTML/PHP/JS/JSX/TSX/Vue/Twig/Razor/EJS/' +
+      'Handlebars markup before consent — GA4/gtag.js, Meta Pixel fbq init, Hotjar, youtube.com/embed ' +
+      '(subcategory rgpd-tracker-without-consent). Consent guards: type="text/plain" scripts, a ' +
+      'consent-checking block, JSX or template condition; Consent Mode v2 analytics_storage denied and ' +
+      'fbq consent revoke are also accepted, as a documented legal judgement (the messages prescribe ' +
+      'loading nothing before consent). Findings are category compliance, severity medium: name-based ' +
+      'heuristics, not proof. (3) `policy_documents_found`: PRIVACY, TERMS, COOKIES, DPA, SECURITY, ' +
+      'CODE_OF_CONDUCT near the project root. A missing or failed Trivy or Semgrep, or a Semgrep error ' +
+      '(timeout, partial parse), lowers `coverage` — never a clean result; a project with no file the ' +
+      'pack reads is not applicable (semgrep-rgpd skipped), not missing. ' +
       'Templates for the fixes: configs/compliance/cookie-banner/ and ' +
       'configs/compliance/privacy-policy-template.md.',
     scan_type: 'compliance',

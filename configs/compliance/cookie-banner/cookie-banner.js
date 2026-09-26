@@ -38,11 +38,10 @@
  */
 (function (root, factory) {
   var api = factory();
-  if (typeof module === 'object' && module.exports) {
-    module.exports = api; // pure helpers, for tests
-  } else if (typeof document !== 'undefined') {
-    api.start(root);
-  }
+  // Both, never either: a bundler (webpack, Vite) defines `module` in the
+  // browser too, and an `else` here left the banner silently never starting.
+  if (typeof module === 'object' && module.exports) module.exports = api; // pure helpers, for tests
+  if (root && root.document) api.start(root);
 })(typeof window !== 'undefined' ? window : this, function () {
   'use strict';
 
@@ -68,8 +67,10 @@
       analyticsDescription: 'Estatísticas de utilização (por exemplo, Google Analytics).',
       marketingLabel: 'Marketing',
       marketingDescription: 'Anúncios, pixels de conversão e vídeos de terceiros (por exemplo, Meta, YouTube).',
-      placeholder: 'Este conteúdo usa cookies de marketing.',
-      placeholderButton: 'Permitir e mostrar'
+      placeholder:
+        'Este conteúdo usa cookies de marketing. Mostrá-lo aceita os cookies de marketing em todo o site; ' +
+        'pode retirar essa escolha nas preferências de cookies.',
+      placeholderButton: 'Aceitar cookies de marketing e mostrar'
     },
     en: {
       title: 'Cookies on this site',
@@ -90,8 +91,10 @@
       analyticsDescription: 'Usage statistics (for example, Google Analytics).',
       marketingLabel: 'Marketing',
       marketingDescription: 'Ads, conversion pixels and third-party videos (for example, Meta, YouTube).',
-      placeholder: 'This content uses marketing cookies.',
-      placeholderButton: 'Allow and show'
+      placeholder:
+        'This content uses marketing cookies. Showing it accepts marketing cookies for the whole site; ' +
+        'you can withdraw that choice in the cookie preferences.',
+      placeholderButton: 'Accept marketing cookies and show'
     }
   };
 
@@ -151,6 +154,27 @@
     var stored = {};
     for (var i = 0; i < CATEGORIES.length; i += 1) stored[CATEGORIES[i]] = !!choice[CATEGORIES[i]];
     return JSON.stringify({ version: version, date: new Date(now).toISOString(), choice: stored });
+  }
+
+  /**
+   * Every `domain=` a cookie of this site can have been set with: host-only
+   * (''), the host, and each parent domain, with and without the leading dot.
+   * GA writes `_ga` on the registrable domain (`.loja.com.pt` for
+   * `www.loja.com.pt`), which a fixed "last two labels" gets wrong on any
+   * two-label public suffix. A public suffix itself (`com.pt`) is in the list
+   * too; the browser simply refuses that one, which is harmless. An IP or a
+   * single-label host has host-only cookies only.
+   */
+  function cookieDomains(hostname) {
+    var host = String(hostname || '').toLowerCase();
+    if (host === '' || host.indexOf('.') < 0 || /^[\d.]+$/.test(host) || host.indexOf(':') >= 0) return [''];
+    var labels = host.split('.');
+    var out = [''];
+    for (var i = 0; i < labels.length - 1; i += 1) {
+      var d = labels.slice(i).join('.');
+      out.push(d, '.' + d);
+    }
+    return out;
   }
 
   /** Only http(s) or site-relative links become the policy href. */
@@ -213,8 +237,7 @@
 
     function clearCookies(category) {
       var prefixes = COOKIE_PREFIXES[category] || [];
-      var host = win.location.hostname;
-      var domains = ['', host, '.' + host.split('.').slice(-2).join('.')];
+      var domains = cookieDomains(win.location.hostname);
       doc.cookie.split(';').forEach(function (pair) {
         var name = pair.split('=')[0].trim();
         if (!prefixes.some(function (p) { return name.indexOf(p) === 0; })) return;
@@ -430,6 +453,7 @@
     readRecord: readRecord,
     makeRecord: makeRecord,
     safeUrl: safeUrl,
+    cookieDomains: cookieDomains,
     start: start
   };
 });

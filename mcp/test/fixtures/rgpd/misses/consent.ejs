@@ -1,0 +1,10 @@
+<%# An Express/EJS layout that starts the pixel only once consented.
+    NOTHING here may fire (the consent-block guard: EJS keeps JavaScript's
+    braces). %>
+<head>
+  <% if (consent.marketing) { %>
+  <script>
+    fbq('init', '<%= pixelId %>');
+  </script>
+  <% } %>
+</head>

@@ -6,7 +6,7 @@ class Encomendas
 {
     private $logger;
 
-    public function registar($user, $order, $email, $nif_cliente, $telefone, array $data): void
+    public function registar($user, $order, $email, $nif_cliente, $telefone, array $data, $cliente): void
     {
         error_log('login falhado para ' . $email); // BUG: a plain variable
         error_log("novo registo {$user->user_email}"); // BUG: WP_User::$user_email, interpolated
@@ -19,6 +19,11 @@ class Encomendas
         $this->logger->info('registo', ['cliente' => $nif_cliente]); // BUG: a variable in PSR-3 context
         Log::withContext(['utilizador' => $email]); // BUG: shared context lands on every later line
         syslog(LOG_WARNING, "contacto $telefone"); // BUG: a variable interpolated into syslog
+        error_log('nif ' . $cliente->NIF); // BUG: an all-caps property is the value
+        \Illuminate\Support\Facades\Log::info('registo', ['e' => $email]); // BUG: the fully-qualified facade
+        Log::channel('stack')->info('registo', ['e' => $email]); // BUG: a Laravel log channel
+        logger()->info('registo', ['e' => $email]); // BUG: Laravel's logger() helper
+        logger('registo', ['e' => $email]); // BUG: logger() called directly logs at debug level
         error_log(md5($email) . ' ' . $user->niss); // BUG: the niss is whole (excluded: the hashed email)
         error_log(substr($data['iban'], -4) . ' ' . $email); // BUG: the email is whole (excluded: last four)
     }

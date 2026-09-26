@@ -25,5 +25,13 @@ function tema_video(string $id): string
   <script>
     fbq('init', '<?php echo esc_js(get_option('tema_pixel_id')); ?>'); // BUG rgpd-tracker-meta-pixel-without-consent
   </script>
+  <?php if ( is_front_page() ) : ?>
+  <!-- BUG rgpd-youtube-embed-without-nocookie: a template condition, but not a consent one -->
+  <iframe src="https://www.youtube.com/embed/apresentacao"></iframe>
+  <?php endif; ?>
+  <?php if ( ! wp_has_consent( 'marketing' ) ) : ?>
+  <!-- BUG rgpd-youtube-embed-without-nocookie: a NEGATED consent condition -->
+  <iframe src="https://www.youtube.com/embed/sem-consentimento"></iframe>
+  <?php endif; ?>
   <?php wp_head(); ?>
 </head>

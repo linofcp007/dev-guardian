@@ -39,8 +39,12 @@ vi.mock('../../src/tools/scanHelpers.js', async () => {
 
 import { runProcess } from '../../src/runners/processRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
+import { evaluateGate } from '../../src/ci/gate.js';
+import { buildSnapshot } from '../../src/dashboard/snapshot.js';
+import { renderStatus } from '../../src/dashboard/renderStatus.js';
 
 import type { PluginContext } from '../../src/context.js';
+import type { ToolRun } from '../../src/types.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
@@ -179,11 +183,13 @@ describe('compliance_check: the RGPD Semgrep pack', () => {
     results?: unknown[];
     errors?: unknown[];
     paths?: { scanned?: string[] };
+    time?: { rules?: unknown[] };
   }
 
   interface ComplianceResult {
     ok: true;
-    tools_run: { name: string; status: string; reason?: string }[];
+    project_path: string;
+    tools_run: ToolRun[];
     missing_tools: string[];
     coverage: string;
     top_findings: { rule_id?: string; category: string; subcategory?: string; severity: string; file_path?: string }[];
@@ -237,6 +243,9 @@ describe('compliance_check: the RGPD Semgrep pack', () => {
     expect(config.replace(/\\/g, '/')).toMatch(/\/configs\/semgrep\/rgpd\.yml$/);
     expect(existsSync(config)).toBe(true);
     expect(args).toContain('--metrics=off');
+    // `--time` makes the report list the rules that LOADED, which is what
+    // tells "nothing here to scan" from "the pack loaded nothing".
+    expect(args).toContain('--time');
     expect(args.at(-1)).toBe(project);
 
     const rgpd = r.top_findings.filter((f) => f.rule_id?.startsWith('configs.semgrep.rgpd-'));
@@ -264,15 +273,75 @@ describe('compliance_check: the RGPD Semgrep pack', () => {
     expect(vi.mocked(runProcess).mock.calls.some(([o]) => o.command === 'semgrep')).toBe(false);
   });
 
-  it('treats a run that scanned nothing as a gap, not as zero findings', async () => {
+  /**
+   * Fix round 1, item 5. A Go-only project has no file the pack reads:
+   * Semgrep loads the rules (`time.rules` lists them) and scans nothing. That
+   * is NOT APPLICABLE, not a missing scanner: listing `semgrep` in
+   * missing_tools made the status dashboard print "MISSING semgrep —
+   * static-analysis findings are NOT in these numbers" beside a scan_sast
+   * that ran fine, and the CI gate print "semgrep not installed".
+   */
+  it('reports a project with no file the pack reads as not applicable — not missing, on every surface', async () => {
     const project = tempProject();
-    scriptScanners({ results: [], errors: [], paths: { scanned: [] } });
-    const r = (await getTool('compliance_check').handler({ project_path: project }, makePlugin(project))) as unknown as ComplianceResult;
+    const plugin = makePlugin(project);
+    scriptScanners({ results: [], errors: [], paths: { scanned: [] }, time: { rules: ['rgpd-tracker-ga4-without-consent'] } });
+    const r = (await getTool('compliance_check').handler({ project_path: project }, plugin)) as unknown as ComplianceResult;
     const run = r.tools_run.find((t) => t.name === 'semgrep-rgpd');
     expect(run?.status).toBe('skipped');
-    expect(run?.reason).toMatch(/scanned 0 files/);
-    expect(r.missing_tools).toContain('semgrep');
+    expect(run?.reason).toMatch(/^not applicable/);
+    expect(r.missing_tools).toEqual([]);
+    expect(r.coverage).toBe('full');
+
+    // The status dashboard reads the stored scan.
+    const snapshot = buildSnapshot(plugin.storage, r.project_path, Date.now());
+    expect(snapshot.coverage.missing_tools).toEqual([]);
+    const status = renderStatus(snapshot, { color: false });
+    // The only gap left is the unrelated CVE-source one (no dependency scan
+    // in this history) — nothing about Semgrep or static analysis.
+    expect(status).not.toMatch(/semgrep/i);
+    expect(status).not.toMatch(/static-analysis/);
+
+    // The CI gate reads the step's bookkeeping.
+    const gate = evaluateGate({
+      findings: [],
+      baseline: null,
+      failOn: 'high',
+      steps: [{ tool: 'compliance_check', ran: true, tools_run: r.tools_run, missing_tools: r.missing_tools }],
+      droppedBaselineEntries: 0,
+    });
+    expect(gate.coverage).toBe('full');
+    expect(gate.coverageGaps).toEqual([]);
+  });
+
+  it('fails a run that scanned nothing when the pack did not load a single rule — the silent-failure shape', async () => {
+    const project = tempProject();
+    scriptScanners({ results: [], errors: [], paths: { scanned: [] }, time: { rules: [] } });
+    const r = (await getTool('compliance_check').handler({ project_path: project }, makePlugin(project))) as unknown as ComplianceResult;
+    const run = r.tools_run.find((t) => t.name === 'semgrep-rgpd');
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toMatch(/loaded no rule/);
+    expect(r.missing_tools).not.toContain('semgrep');
     expect(r.coverage).toBe('partial');
+  });
+
+  it('keeps `semgrep` in missing_tools only when it is not installed, so the gate says exactly that', async () => {
+    const project = tempProject();
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'trivy' ? '/fake/bin/trivy' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const args = opts.args ?? [];
+      const out = args[args.findIndex((a) => a === '--output') + 1];
+      if (out !== undefined) writeFileSync(out, readFileSync(join(FIX, 'trivy-fs.json'), 'utf8'), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = (await getTool('compliance_check').handler({ project_path: project }, makePlugin(project))) as unknown as ComplianceResult;
+    const gate = evaluateGate({
+      findings: [],
+      baseline: null,
+      failOn: 'high',
+      steps: [{ tool: 'compliance_check', ran: true, tools_run: r.tools_run, missing_tools: r.missing_tools }],
+      droppedBaselineEntries: 0,
+    });
+    expect(gate.coverageGaps).toEqual(['compliance_check: semgrep not installed']);
   });
 
   it('reports Semgrep errors as a failed run, and still keeps the findings it did produce', async () => {
@@ -300,8 +369,13 @@ describe('compliance_check: the RGPD Semgrep pack', () => {
   });
 
   it('keeps the tool description within the 1500-character budget', () => {
-    expect(getTool('compliance_check').description.length).toBeLessThanOrEqual(1500);
-    expect(getTool('compliance_check').description).toMatch(/rgpd\.yml/);
+    const description = getTool('compliance_check').description;
+    expect(description.length).toBeLessThanOrEqual(1500);
+    expect(description).toMatch(/rgpd\.yml/);
+    // Fix round 1: the accepted guards are a legal judgement, and a project
+    // the pack has nothing to read in is not applicable rather than missing.
+    expect(description).toMatch(/legal judgement/);
+    expect(description).toMatch(/not applicable/);
   });
 });
 

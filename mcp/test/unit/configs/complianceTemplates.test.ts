@@ -44,6 +44,7 @@ interface BannerApi {
   readRecord(raw: unknown, version: number, maxAgeDays: number, now: number): Record<string, boolean> | null;
   makeRecord(choice: Choice, version: number, now: number): string;
   safeUrl(url: unknown): string | null;
+  cookieDomains(hostname: string): string[];
 }
 
 function loadBanner(): BannerApi {
@@ -138,6 +139,43 @@ describe('cookie banner: strings and links', () => {
   });
 });
 
+describe('cookie banner: fix round 1', () => {
+  it('deletes a withdrawn cookie on every parent-domain level, not just the last two labels', () => {
+    // `slice(-2)` gave `.com.pt` on `www.loja.com.pt`, a public suffix the
+    // browser refuses, and never tried `.loja.com.pt`, where GA writes `_ga`.
+    const domains = [...banner.cookieDomains('www.loja.com.pt')];
+    expect(domains).toEqual(expect.arrayContaining(['', 'www.loja.com.pt', '.www.loja.com.pt', 'loja.com.pt', '.loja.com.pt']));
+    expect([...banner.cookieDomains('localhost')]).toEqual(['']);
+    expect([...banner.cookieDomains('127.0.0.1')]).toEqual(['']);
+  });
+
+  it('says that the placeholder button accepts marketing cookies for the whole site', () => {
+    const pt = banner.STRINGS['pt-PT'] ?? {};
+    const en = banner.STRINGS['en'] ?? {};
+    expect(`${pt['placeholder'] ?? ''} ${pt['placeholderButton'] ?? ''}`).toMatch(/todo o site/);
+    expect(pt['placeholderButton']).toMatch(/cookies de marketing/i);
+    expect(`${en['placeholder'] ?? ''} ${en['placeholderButton'] ?? ''}`).toMatch(/whole site/);
+    expect(en['placeholderButton']).toMatch(/marketing cookies/i);
+  });
+
+  it('still starts when a bundler defines `module` — exports for tests AND runs in the page', () => {
+    const listeners: string[] = [];
+    const page = {
+      document: {
+        readyState: 'loading',
+        documentElement: { getAttribute: (): string => 'pt-PT' },
+        addEventListener: (event: string): void => {
+          listeners.push(event);
+        },
+      },
+    };
+    const sandbox: Record<string, unknown> = { module: { exports: {} }, window: page, document: page.document };
+    runInNewContext(readFileSync(resolve(BANNER_DIR, 'cookie-banner.js'), 'utf8'), sandbox);
+    expect(typeof (sandbox['module'] as { exports: { start?: unknown } }).exports.start).toBe('function');
+    expect(listeners).toContain('DOMContentLoaded');
+  });
+});
+
 describe('cookie banner: the demo page', () => {
   const html = readFileSync(resolve(BANNER_DIR, 'banner.html'), 'utf8');
   // Comments explain the integration and quote tags; the contract is about
@@ -201,10 +239,30 @@ describe('privacy policy template (pt-PT, RGPD arts. 13 and 14)', () => {
   });
 
   it('marks every placeholder one greppable way, and leaves no other kind', () => {
-    const placeholders = text.match(/\[\[(?:PREENCHER|REMOVER SE N[AÃ]O SE APLICAR)[^\]]*\]\]/g) ?? [];
+    const placeholders = text.match(/\[\[(?:PREENCHER|CONFIRMAR|REMOVER SE N[AÃ]O SE APLICAR)[^\]]*\]\]/g) ?? [];
     expect(placeholders.length).toBeGreaterThan(20);
-    // Every `[[` opens one of the two marked forms.
+    // Every `[[` opens one of the three marked forms.
     expect((text.match(/\[\[/g) ?? []).length).toBe(placeholders.length);
     expect(text).not.toMatch(/\bTODO\b|\bXXX\b|\bLorem\b/);
+  });
+
+  // Fix round 1: statements that are true only of SOME processing are
+  // choices to confirm, never facts the template asserts on the user's behalf.
+  it.each([
+    ['the no-sale statement', /\[\[CONFIRMAR: N[aã]o vendemos dados pessoais\.\]\]/],
+    ['the cookie-consent claim', /\[\[CONFIRMAR: Usamos cookies estritamente necess[aá]rios/],
+  ])('marks %s as a choice to confirm', (_what, pattern) => {
+    expect(text).toMatch(pattern);
+  });
+
+  it('marks every row of the purposes table as an example to confirm', () => {
+    const section = text.slice(text.indexOf('## 3.'), text.indexOf('## 4.'));
+    const rows = section.split('\n').filter((l) => l.startsWith('| ') && !/^\| (?:Finalidade|---)/.test(l));
+    expect(rows.length).toBeGreaterThan(5);
+    for (const row of rows) expect(row).toMatch(/^\| \[\[(?:CONFIRMAR|PREENCHER)/);
+  });
+
+  it('identifies the controller by NIF or NIPC — a sole trader has no NIPC', () => {
+    expect(text).toMatch(/NIF\/NIPC/);
   });
 });

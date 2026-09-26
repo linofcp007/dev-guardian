@@ -25,7 +25,7 @@ export const TOOL_CATALOG = {
         name: 'semgrep',
         version_floor: '1.0.0',
         probe: { command: 'semgrep', args: ['--version'] },
-        required_by: ['scan_sast', 'security_scan_full', 'bug_hunt', 'review_pr'],
+        required_by: ['scan_sast', 'security_scan_full', 'bug_hunt', 'review_pr', 'compliance_check'],
         install: {
             win32: {
                 scoop: pipxInstall('semgrep'),

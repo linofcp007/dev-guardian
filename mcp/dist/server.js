@@ -49043,6 +49043,17 @@ var rgpdParser = {
     };
   }
 };
+function loadedRuleCount(raw) {
+  if (raw === null) return null;
+  let root;
+  try {
+    root = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const rules = getProp(getProp(root, "time"), "rules");
+  return Array.isArray(rules) ? rules.length : null;
+}
 async function runRgpdPack(ctx, reportDir, out) {
   if (!await scannerAvailable("semgrep")) {
     out.tools_run.push({ name: "semgrep-rgpd", status: "skipped", reason: "not_installed" });
@@ -49060,6 +49071,9 @@ async function runRgpdPack(ctx, reportDir, out) {
     args: [
       `--config=${pack}`,
       "--metrics=off",
+      // Lists the rules that loaded (`time.rules`): the only way to tell a
+      // project with nothing to read from a pack that loaded nothing.
+      "--time",
       ...semgrepExcludeArgs(ctx.exclusions),
       "--json",
       "--quiet",
@@ -49082,12 +49096,20 @@ async function runRgpdPack(ctx, reportDir, out) {
   }
   const exitClean = result.outcome === "completed" || result.exitCode === 1;
   if (exitClean && raw !== null && check2.scanned === 0 && check2.errors === 0) {
+    const loaded = loadedRuleCount(raw) ?? 0;
+    if (loaded > 0) {
+      out.tools_run.push({
+        name: "semgrep-rgpd",
+        status: "skipped",
+        reason: "not applicable: the RGPD pack loaded but found no file it reads here (JS/TS, PHP, Python, C#, and HTML/JS/JSX/TSX/Vue/Twig/Razor/EJS/Handlebars templates)"
+      });
+      return;
+    }
     out.tools_run.push({
       name: "semgrep-rgpd",
-      status: "skipped",
-      reason: "semgrep scanned 0 files \u2014 the RGPD pack reads JS/TS, PHP, Python, C# and HTML/JSX/Vue/Twig markup, and none of it is here"
+      status: "failed",
+      reason: "semgrep scanned 0 files and loaded no rule from the RGPD pack \u2014 a pack that failed to load, not a clean result"
     });
-    out.missing_tools.push("semgrep");
     return;
   }
   out.tools_run.push({ name: "semgrep-rgpd", status: "failed", reason: check2.reason ?? "semgrep failed" });
@@ -49205,7 +49227,7 @@ registerToolModule(
     name: "compliance_check",
     title: "Compliance check (licenses + RGPD code rules + policy docs)",
     // Under 1500 characters (test/unit/pluginSurface/descriptionLimits.test.ts).
-    description: 'Compliance scan of a project. (1) Trivy license scan: Findings for risky licenses, plus `licenses_summary` and `risky_licenses`. (2) The RGPD Semgrep pack configs/semgrep/rgpd.yml, offline (--metrics=off): Portuguese personal identifiers (NIF, NISS, Cart\xE3o de Cidad\xE3o, IBAN, phone, email \u2014 matched by variable/field NAME) inside log calls in JS/TS, PHP, Python and C# (subcategory rgpd-pii-in-logs), and trackers loaded by HTML/PHP/JSX/TSX/Vue/Twig markup before consent \u2014 GA4/gtag.js, Meta Pixel fbq init, Hotjar, youtube.com/embed instead of youtube-nocookie.com (subcategory rgpd-tracker-without-consent). Recognised consent guards: type="text/plain" scripts, Consent Mode v2 defaults set to denied, fbq consent revoke, a consent-checking block or JSX condition. Findings are category compliance, severity medium: name-based heuristics, not proof. (3) `policy_documents_found`: PRIVACY, TERMS, COOKIES, DPA, SECURITY, CODE_OF_CONDUCT near the project root. A missing or failed Trivy or Semgrep, a Semgrep error (timeout, partial parse) or a Semgrep run that scanned no file is reported in tools_run / missing_tools and lowers `coverage` \u2014 never a clean result. Templates for the fixes: configs/compliance/cookie-banner/ and configs/compliance/privacy-policy-template.md.',
+    description: 'Compliance scan of a project. (1) Trivy license scan: Findings for risky licenses, plus `licenses_summary` and `risky_licenses`. (2) The RGPD Semgrep pack configs/semgrep/rgpd.yml, offline (--metrics=off): Portuguese personal identifiers (NIF, NISS, Cart\xE3o de Cidad\xE3o, IBAN, phone, email \u2014 matched by variable/field NAME) inside log calls in JS/TS, PHP, Python and C# (subcategory rgpd-pii-in-logs), and trackers loaded by HTML/PHP/JS/JSX/TSX/Vue/Twig/Razor/EJS/Handlebars markup before consent \u2014 GA4/gtag.js, Meta Pixel fbq init, Hotjar, youtube.com/embed (subcategory rgpd-tracker-without-consent). Consent guards: type="text/plain" scripts, a consent-checking block, JSX or template condition; Consent Mode v2 analytics_storage denied and fbq consent revoke are also accepted, as a documented legal judgement (the messages prescribe loading nothing before consent). Findings are category compliance, severity medium: name-based heuristics, not proof. (3) `policy_documents_found`: PRIVACY, TERMS, COOKIES, DPA, SECURITY, CODE_OF_CONDUCT near the project root. A missing or failed Trivy or Semgrep, or a Semgrep error (timeout, partial parse), lowers `coverage` \u2014 never a clean result; a project with no file the pack reads is not applicable (semgrep-rgpd skipped), not missing. Templates for the fixes: configs/compliance/cookie-banner/ and configs/compliance/privacy-policy-template.md.',
     scan_type: "compliance",
     category: "compliance",
     supportsAutoFix: false,
@@ -52153,7 +52175,7 @@ var TOOL_CATALOG = {
     name: "semgrep",
     version_floor: "1.0.0",
     probe: { command: "semgrep", args: ["--version"] },
-    required_by: ["scan_sast", "security_scan_full", "bug_hunt", "review_pr"],
+    required_by: ["scan_sast", "security_scan_full", "bug_hunt", "review_pr", "compliance_check"],
     install: {
       win32: {
         scoop: pipxInstall("semgrep"),

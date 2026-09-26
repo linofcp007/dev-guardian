@@ -1,0 +1,11 @@
+@* An ASP.NET Core MVC layout. The single BUG fires
+   rgpd-tracker-ga4-without-consent exactly once. *@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+    <title>@ViewData["Title"]</title>
+    @* BUG *@
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-LLLL2222"></script>
+</head>
+<body>@RenderBody()</body>
+</html>

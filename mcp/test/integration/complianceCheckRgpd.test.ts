@@ -117,4 +117,19 @@ describe('compliance_check runs the RGPD pack (real Semgrep)', () => {
     expect(r.missing_tools).toContain('trivy');
     expect(r.coverage).toBe('partial');
   });
+
+  // Fix round 1, item 5, against the real binary: a Go-only project gives
+  // `scanned: []` with the rules LOADED (`time.rules`), which must read as not
+  // applicable — and never put `semgrep` in missing_tools.
+  it.skipIf(!AVAILABLE)('reports a Go-only project as not applicable, not as a missing scanner', async () => {
+    const project = makeTempDir('compliance-rgpd-go-');
+    writeFileSync(join(project, 'main.go'), 'package main\n\nfunc main() {}\n', 'utf8');
+    const tool = TOOLS.find((t) => t.name === 'compliance_check');
+    if (tool === undefined) throw new Error('compliance_check is not registered');
+    const r = (await tool.handler({ project_path: project }, makePlugin(project))) as unknown as Result;
+    const run = r.tools_run.find((t) => t.name === 'semgrep-rgpd');
+    expect(run?.status).toBe('skipped');
+    expect(run?.reason).toMatch(/^not applicable/);
+    expect(r.missing_tools).not.toContain('semgrep');
+  });
 });

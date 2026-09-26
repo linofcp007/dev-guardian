@@ -5,7 +5,7 @@ import { GoogleAnalytics } from '@next/third-parties/google';
 
 const GA_ID = 'G-DDDD4444';
 
-export function Analytics() {
+export function Analytics({ consent }) {
   return (
     <>
       {/* BUG rgpd-tracker-ga4-without-consent */}
@@ -14,6 +14,14 @@ export function Analytics() {
       <GoogleAnalytics gaId={GA_ID} />
       {/* BUG rgpd-tracker-ga4-without-consent: a condition, but not a consent one */}
       {process.env.NODE_ENV === 'production' && <Script src="https://www.googletagmanager.com/gtag/js?id=G-EEEE5555" />}
+      {/* BUG rgpd-tracker-ga4-without-consent: a NEGATED consent condition */}
+      {!consent.analytics && (
+        <>
+          <Script src="https://www.googletagmanager.com/gtag/js?id=G-HHHH8888" />
+        </>
+      )}
+      {/* BUG rgpd-tracker-ga4-without-consent: the ELSE branch of a consent ternary */}
+      {consent.analytics ? null : <Script src="https://www.googletagmanager.com/gtag/js?id=G-IIII9999" />}
     </>
   );
 }

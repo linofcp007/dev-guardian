@@ -8,6 +8,12 @@
     answer, or delete the sentence or section when it does not apply — no
     placeholder may be published. `grep -n "\[\[" politica.md` finds any left.
   - Sections marked [[REMOVER SE NÃO SE APLICAR]] are optional.
+  - Every [[CONFIRMAR: ...]] is a statement or an example that is true only
+    of SOME processing: keep its text (dropping the marker) only if it is
+    true of yours, adapt it, or delete it. On the first cell of a table row
+    it covers the whole row. Never publish one unreviewed: the template
+    cannot know, for instance, whether you sell data or which purposes you
+    have.
   - Describe the processing that actually happens. A policy that lists a
     purpose you do not have, or omits one you do, breaks the transparency it
     exists for.
@@ -23,7 +29,7 @@ Esta política explica que dados pessoais tratamos quando utiliza [[PREENCHER: n
 
 ## 1. Quem é o responsável pelo tratamento
 
-**[[PREENCHER: denominação social]]**, NIPC [[PREENCHER: número de identificação de pessoa coletiva]], com sede em [[PREENCHER: morada completa]].
+**[[PREENCHER: nome ou denominação social]]**, NIF/NIPC [[PREENCHER: NIF, se for empresário em nome individual, ou NIPC, se for uma pessoa coletiva]], com sede em [[PREENCHER: morada completa]].
 
 Contacto para questões de privacidade: [[PREENCHER: email dedicado, p.ex. privacidade@exemplo.pt]] ou por carta para a morada acima.
 
@@ -52,13 +58,13 @@ Não tratamos categorias especiais de dados (saúde, origem racial ou étnica, c
 
 | Finalidade | Dados | Fundamento (art. 6.º, n.º 1, do RGPD) |
 | --- | --- | --- |
-| Criar e gerir a sua conta | Identificação, contacto, conta | Execução de contrato — alínea b) |
-| Processar encomendas e pagamentos | Identificação, faturação | Execução de contrato — alínea b) |
-| Emitir faturas e cumprir obrigações fiscais | Faturação | Obrigação legal — alínea c) |
-| Responder a pedidos de contacto e de suporte | Identificação, contacto | Diligências pré-contratuais ou execução de contrato — alínea b) |
-| Segurança do serviço e prevenção de fraude | Técnicos | Interesse legítimo — alínea f) |
-| Estatísticas de utilização | Técnicos, cookies de análise | Consentimento — alínea a) |
-| Envio de comunicações de marketing | Contacto | Consentimento — alínea a) [[PREENCHER: ou, para clientes e produtos semelhantes, o regime da Lei n.º 41/2004]] |
+| [[CONFIRMAR: Criar e gerir a sua conta]] | Identificação, contacto, conta | Execução de contrato — alínea b) |
+| [[CONFIRMAR: Processar encomendas e pagamentos]] | Identificação, faturação | Execução de contrato — alínea b) |
+| [[CONFIRMAR: Emitir faturas e cumprir obrigações fiscais]] | Faturação | Obrigação legal — alínea c) |
+| [[CONFIRMAR: Responder a pedidos de contacto e de suporte]] | Identificação, contacto | Diligências pré-contratuais ou execução de contrato — alínea b) |
+| [[CONFIRMAR: Segurança do serviço e prevenção de fraude]] | Técnicos | Interesse legítimo — alínea f) |
+| [[CONFIRMAR: Estatísticas de utilização]] | Técnicos, cookies de análise | Consentimento — alínea a) |
+| [[CONFIRMAR: Envio de comunicações de marketing]] | Contacto | Consentimento — alínea a) [[PREENCHER: ou, para clientes e produtos semelhantes, o regime da Lei n.º 41/2004]] |
 | [[PREENCHER: outra finalidade, ou apagar a linha]] | [[PREENCHER]] | [[PREENCHER]] |
 
 **Interesses legítimos.** Quando o fundamento é o interesse legítimo, o interesse em causa é [[PREENCHER: p.ex. proteger o serviço e os utilizadores contra acessos abusivos e fraude]]. Pode opor-se a este tratamento (secção 7).
@@ -77,7 +83,7 @@ Partilhamos dados pessoais apenas com:
 - **Entidades a quem a lei nos obriga a comunicá-los**, como a Autoridade Tributária ou autoridades judiciais, quando legalmente exigido.
 - [[PREENCHER: outros destinatários, p.ex. transportadoras para entregas, ou apagar a linha]]
 
-Não vendemos dados pessoais.
+[[CONFIRMAR: Não vendemos dados pessoais.]]
 
 ## 6. Transferências para fora do Espaço Económico Europeu
 
@@ -116,7 +122,7 @@ No fim do prazo, os dados são apagados ou anonimizados de forma irreversível.
 
 ## 9. Cookies e tecnologias semelhantes
 
-Usamos cookies estritamente necessários ao funcionamento do site (sessão, segurança, registo da sua escolha sobre cookies), que não dependem de consentimento. Os cookies de análise e de marketing só são ativados depois de os aceitar no banner de cookies, e pode mudar a sua escolha a qualquer momento na ligação "Preferências de cookies" no rodapé.
+[[CONFIRMAR: Usamos cookies estritamente necessários ao funcionamento do site (sessão, segurança, registo da sua escolha sobre cookies), que não dependem de consentimento. Os cookies de análise e de marketing só são ativados depois de os aceitar no banner de cookies, e pode mudar a sua escolha a qualquer momento na ligação "Preferências de cookies" no rodapé.]]
 
 | Cookie | Fornecedor | Finalidade | Duração |
 | --- | --- | --- | --- |

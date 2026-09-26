@@ -6,7 +6,7 @@
 const logger = require('./logger');
 const winston = require('winston');
 
-function registo(user, users, req, email, nif_cliente, clienteNif, formData) {
+function registo(user, users, req, email, nif_cliente, clienteNif, formData, cliente) {
   console.log('login', email); // BUG: a plain identifier
   console.info(`novo utilizador ${user.email}`); // BUG: a member inside a template literal
   logger.info({ email }); // BUG: object shorthand
@@ -19,6 +19,10 @@ function registo(user, users, req, email, nif_cliente, clienteNif, formData) {
   console.log(users.map((u) => u.cartao_cidadao)); // BUG: inside a callback in the call
   console.log(user?.email); // BUG: optional chaining
   winston.info(user.getEmail()); // BUG: a getter
+  console.log(cliente.NIF, cliente.IBAN); // BUG x2: an all-caps member is the value, not a constant
+  console.log(truncate(user.email, 30)); // BUG: truncating is not masking
+  Logger.log(user.email); // BUG: NestJS's static Logger
+  logger.child({ email }); // BUG: a pino child logger stamps it on every later line
   console.log(mask(user.email), user.nif); // BUG: the nif is not masked (excluded: the email)
   console.log(user.iban.slice(-4), user.email); // BUG: the email is whole (excluded: last four of the IBAN)
 }

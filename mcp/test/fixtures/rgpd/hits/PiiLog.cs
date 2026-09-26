@@ -26,6 +26,7 @@ public class Registo
         _log.Info("registo " + email); // BUG: log4net
         _logger.LogDebug("Form {V}", form["telefone"]); // BUG: a request field by key
         Debug.WriteLine(cliente.NormalizedEmail); // BUG: ASP.NET Identity's NormalizedEmail is the email
+        _logger.LogInformation("{N} {I}", cliente.NIF, cliente.IBAN); // BUG x2: all-caps properties are the value
         _logger.LogInformation("{A} {B}", Mask(cliente.Email), cliente.Niss); // BUG: the Niss (excluded: the email)
         _logger.LogInformation("{A} {B}", cliente.Iban[^4..], cliente.Email); // BUG: the email (excluded: last four)
     }
@@ -41,4 +42,6 @@ public class Cliente
     public string Niss { get; set; } = "";
     public string Iban { get; set; } = "";
     public string PhoneNumber { get; set; } = "";
+    public string NIF { get; set; } = "";
+    public string IBAN { get; set; } = "";
 }

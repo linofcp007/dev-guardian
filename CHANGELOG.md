@@ -14,18 +14,26 @@ version bump.
   whenever Semgrep is installed (offline, `--metrics=off`). Eight rules, all
   WARNING: Portuguese personal identifiers — NIF, NISS, Cartão de Cidadão,
   IBAN, telefone/phone, email, recognised by variable/field/key NAME — inside
-  log calls in JS/TS, PHP (WordPress/WooCommerce, PSR-3, Laravel, syslog),
-  Python (logging, `print`) and C# (ILogger, Serilog, log4net, Console), with
-  masking helpers and last-four-digits truncation excluded; and trackers
-  loaded by HTML/PHP/JSX/TSX/Vue/Twig markup before consent — GA4 (`gtag.js`,
-  `<GoogleAnalytics>`, `wp_enqueue_script`), the Meta Pixel's `fbq('init')`,
-  Hotjar, and `youtube.com/embed` iframes — unless a consent guard is present
-  (`type="text/plain"`, Consent Mode v2 defaults `denied`,
-  `fbq('consent', 'revoke')`, a consent-checking block or JSX condition).
-  Findings are category `compliance`, subcategory `rgpd-pii-in-logs` or
-  `rgpd-tracker-without-consent`; an absent, failing or empty Semgrep run is
-  `skipped`/`failed` with a reason and lowers `coverage`, never a clean
-  result. Fixtures in `mcp/test/fixtures/rgpd/`, registered for
+  log calls in JS/TS (console, winston, pino incl. `child`, NestJS
+  `Logger`), PHP (WordPress/WooCommerce, PSR-3, Laravel incl. channels and
+  `logger()`, syslog), Python (logging, structlog incl. keyword arguments and
+  `bind`, `print`) and C# (ILogger, Serilog, log4net, Console), with masking
+  and derived values (hashes, lengths, booleans, last four digits) excluded;
+  and trackers loaded by HTML/PHP/JS/JSX/TSX/Vue/Twig/Razor/EJS/Handlebars
+  markup before consent — GA4 (`gtag.js`, `<GoogleAnalytics>`,
+  `wp_enqueue_script`), the Meta Pixel's `fbq('init')`, Hotjar, and
+  `youtube.com/embed` iframes — unless a consent guard is present
+  (`type="text/plain"`, a consent-checking block, JSX condition or template
+  condition — WordPress `if (...): endif;`, Twig, Blade, Handlebars, Vue
+  `v-if`). Consent Mode v2 with `analytics_storage` denied and
+  `fbq('consent', 'revoke')` are also accepted, as a documented legal
+  judgement; the messages prescribe loading nothing before consent (EDPB
+  Guidelines 2/2023). Findings are category `compliance`, subcategory
+  `rgpd-pii-in-logs` or `rgpd-tracker-without-consent`; an absent or failing
+  Semgrep run is `skipped`/`failed` with a reason and lowers `coverage`,
+  never a clean result, while a project with no file the pack reads is
+  reported as not applicable rather than as a missing scanner. Fixtures in
+  `mcp/test/fixtures/rgpd/`, registered for
   `npm run ablate -- rgpd` (`GUARDIAN_RGPD_SRC` for an axis-3 corpus). Zero
   findings on `mcp/src`, `node_modules`, WordPress core, CPython `Lib/`,
   `dotnet/runtime` and three sibling projects — all library code with almost
@@ -39,7 +47,8 @@ version bump.
   reloads; keyboard and screen-reader accessible) and
   `configs/compliance/privacy-policy-template.md` (pt-PT, the RGPD arts. 13
   and 14 content, the CNPD as supervisory authority, `[[PREENCHER: …]]`
-  placeholders).
+  placeholders and `[[CONFIRMAR: …]]` statements that hold only for some
+  processing).
 
 - CI workflow scanning and a CI config generator. `scan_iac` now also runs
   zizmor (GitHub Actions security auditor: template injection, unpinned
