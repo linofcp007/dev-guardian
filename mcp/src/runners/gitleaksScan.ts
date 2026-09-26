@@ -53,11 +53,21 @@
  *
  * Every finding says where it was found, in its `message`: `history`
  * (with the commit), `working_tree`, or `directory`.
+ *
+ * **Every run uses `--redact`** — except for `scan_secrets verify_live`
+ * (`captureSecrets`), which needs the values themselves. Such a run writes
+ * its report into a private temporary directory instead of the report
+ * directory (`secrets/verify/rawReport.ts`: 0700/0600 on POSIX), reads it
+ * once, keeps the values of the verifiable rules in memory
+ * (`GitleaksScanResult.captured`), deletes it, and hands on — and keeps under
+ * `.guardian/reports` — only the sanitized report, every value replaced by
+ * `REDACTED`. The directory is removed when the passes are done.
  */
 
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
+import { openPrivateReportDir, sanitizeGitleaksReport, type PrivateReportDir } from '../secrets/verify/rawReport.js';
 import type { Finding, ToolRun } from '../types.js';
 import { scannerAvailable, readJsonSafe } from '../tools/scanHelpers.js';
 import { countCommits, git, repoState, resolveCommit, uncommittedFiles } from './git.js';
@@ -96,6 +106,12 @@ export interface GitleaksScanOptions {
   onLog?: (line: string) => void;
   /** Size limits of the uncommitted-files copy; defaults below (tests override). */
   limits?: { maxFileBytes?: number; maxTotalBytes?: number };
+  /**
+   * `scan_secrets verify_live` only: run WITHOUT `--redact`, into a private
+   * temporary directory, and keep the raw value of every finding whose rule
+   * this accepts in `GitleaksScanResult.captured` — see the module comment.
+   */
+  captureSecrets?: (ruleId: string) => boolean;
 }
 
 export interface GitleaksScanResult {
@@ -104,6 +120,19 @@ export interface GitleaksScanResult {
   parser_inputs: Array<{ parser: ScannerParser; input: unknown }>;
   /** A pass was stopped by the caller's signal. */
   cancelled: boolean;
+  /**
+   * With `captureSecrets`: per `parser_inputs` entry (the entry object is the
+   * key), the raw values aligned with its report's items — null for an item
+   * whose rule `captureSecrets` did not accept. The caller must clear it.
+   */
+  captured?: Map<object, Array<string | null>>;
+  /** With `captureSecrets`: why nothing could be captured (the runs then used `--redact`). */
+  capture_error?: string;
+}
+
+/** The options plus the private directory of a capturing run (null otherwise). */
+interface ScanRun extends GitleaksScanOptions {
+  raw: PrivateReportDir | null;
 }
 
 /** Name of the history pass in `tools_run` (and of a directory scan). */
@@ -121,17 +150,37 @@ const EXCLUDED_DIRS: readonly string[] = [...PROJECT_WALK_EXCLUDE];
 
 export async function runGitleaksScan(opts: GitleaksScanOptions): Promise<GitleaksScanResult> {
   const result: GitleaksScanResult = { tools_run: [], missing_tools: [], parser_inputs: [], cancelled: false };
+  let raw: PrivateReportDir | null = null;
+  if (opts.captureSecrets !== undefined) {
+    try {
+      raw = openPrivateReportDir();
+      result.captured = new Map();
+    } catch (e) {
+      // Never a fallback to an unredacted report anywhere else: the runs redact.
+      result.capture_error = `no private temporary directory for the unredacted report (${errorCode(e)})`;
+    }
+  }
   try {
-    await scan(opts, result);
+    await scan({ ...opts, raw }, result);
   } catch (e) {
     // Every step below handles its own failures; this is the net under them,
     // so a pass that did finish is never lost to one that did not.
     result.tools_run.push({ name: GITLEAKS_HISTORY, status: 'failed', reason: `secret scan failed: ${message(e)}` });
+  } finally {
+    const failed = raw === null ? null : raw.remove();
+    if (raw !== null && failed !== null) {
+      const note =
+        `the private temporary directory ${raw.dir} may still hold unredacted gitleaks output and could ` +
+        `not be removed (${failed}) — delete it`;
+      const entry = result.tools_run[0];
+      if (entry) entry.reason = entry.reason ? `${entry.reason}; ${note}` : note;
+      else result.tools_run.push({ name: GITLEAKS_HISTORY, status: 'failed', reason: note });
+    }
   }
   return result;
 }
 
-async function scan(opts: GitleaksScanOptions, result: GitleaksScanResult): Promise<void> {
+async function scan(opts: ScanRun, result: GitleaksScanResult): Promise<void> {
   if (!(await scannerAvailable('gitleaks'))) {
     result.tools_run.push({ name: GITLEAKS_HISTORY, status: 'skipped', reason: 'not_installed' });
     result.missing_tools.push('gitleaks');
@@ -199,7 +248,7 @@ async function scan(opts: GitleaksScanOptions, result: GitleaksScanResult): Prom
  * "0 commits scanned".
  */
 async function scopedScan(
-  opts: GitleaksScanOptions,
+  opts: ScanRun,
   result: GitleaksScanResult,
   scope: Extract<SecretScanScope, { kind: 'scoped' }>,
 ): Promise<void> {
@@ -247,7 +296,7 @@ async function countCommitsSince(cwd: string, logOpts: string): Promise<number> 
  * known for a range; otherwise any repository with commits must scan some.
  */
 async function historyPass(
-  opts: GitleaksScanOptions,
+  opts: ScanRun,
   result: GitleaksScanResult,
   logOpts: string | undefined,
   expectedCommits: number | null,
@@ -256,13 +305,14 @@ async function historyPass(
 ): Promise<void> {
   const outFile = join(opts.reportDir, 'secrets-history.json');
   rmSync(outFile, { force: true });
+  const target = reportTarget(opts, outFile);
   const args = [
     'detect',
     '--no-banner',
     '--log-level=info',
     '--report-format=json',
-    `--report-path=${outFile}`,
-    '--redact',
+    `--report-path=${target.path}`,
+    ...target.redact,
     '-s',
     opts.projectPath,
   ];
@@ -277,7 +327,8 @@ async function historyPass(
   });
   if (run.outcome === 'cancelled') result.cancelled = true;
 
-  const raw = readJsonSafe(outFile);
+  const report = takeReport(opts, target.path, outFile);
+  const raw = report.text;
   const commits = commitsScanned(run.stderr);
   const problems = runProblems(run, raw);
   if (commits === 0) {
@@ -291,7 +342,7 @@ async function historyPass(
   if (gitError) problems.push(`git: ${gitError}`);
 
   if (raw !== null && problems.length === 0) {
-    result.parser_inputs.push({ parser: locatedParser('history', projectPrefix), input: raw });
+    pushParserInput(result, { parser: locatedParser('history', projectPrefix), input: raw }, report.secrets);
   }
   const scanned = commits ?? expectedCommits;
   result.tools_run.push(
@@ -305,7 +356,7 @@ async function historyPass(
  * The files of a repository that no commit holds: listed by git (a git error
  * is a `failed` pass), copied, scanned — see {@link filesPass}.
  */
-async function workingTreePass(opts: GitleaksScanOptions, result: GitleaksScanResult, hasCommits: boolean): Promise<void> {
+async function workingTreePass(opts: ScanRun, result: GitleaksScanResult, hasCommits: boolean): Promise<void> {
   let files: string[];
   try {
     files = await uncommittedFiles(opts.projectPath, hasCommits, EXCLUDED_DIRS);
@@ -322,7 +373,7 @@ async function workingTreePass(opts: GitleaksScanOptions, result: GitleaksScanRe
  * cannot be read costs).
  */
 async function filesPass(
-  opts: GitleaksScanOptions,
+  opts: ScanRun,
   result: GitleaksScanResult,
   files: readonly string[],
   labels: { none: string; scanned: (n: number) => string } = {
@@ -399,13 +450,14 @@ async function filesPass(
 
     const outFile = join(opts.reportDir, 'secrets-working-tree.json');
     rmSync(outFile, { force: true });
+    const target = reportTarget(opts, outFile);
     const args = [
       'detect',
       '--no-git',
       '--no-banner',
       '--report-format=json',
-      `--report-path=${outFile}`,
-      '--redact',
+      `--report-path=${target.path}`,
+      ...target.redact,
       '-s',
       '.',
       `--gitleaks-ignore-path=${opts.projectPath}`,
@@ -414,7 +466,8 @@ async function filesPass(
     if (existsSync(projectConfig)) args.push(`--config=${projectConfig}`);
     const run = await runProcess({ command: 'gitleaks', args, cwd: tmp, env: opts.env, signal: opts.signal, onLog: opts.onLog });
     if (run.outcome === 'cancelled') result.cancelled = true;
-    recordFilesRun(result, name, run, readJsonSafe(outFile), 'working_tree', labels.scanned(copied), gaps, notes);
+    const report = takeReport(opts, target.path, outFile);
+    recordFilesRun(result, name, run, report, 'working_tree', labels.scanned(copied), gaps, notes);
   } finally {
     try {
       rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -433,7 +486,7 @@ async function filesPass(
  * project's `.gitleaks.toml` (or gitleaks' defaults) and allowlists the
  * excluded directories. The config is written next to the report.
  */
-async function directoryPass(opts: GitleaksScanOptions, result: GitleaksScanResult, name: string): Promise<void> {
+async function directoryPass(opts: ScanRun, result: GitleaksScanResult, name: string): Promise<void> {
   const prefix = 'not a git repository — scanned the directory in place';
   let config: string;
   try {
@@ -445,6 +498,7 @@ async function directoryPass(opts: GitleaksScanOptions, result: GitleaksScanResu
   }
   const outFile = join(opts.reportDir, 'secrets.json');
   rmSync(outFile, { force: true });
+  const target = reportTarget(opts, outFile);
   const run = await runProcess({
     command: 'gitleaks',
     args: [
@@ -453,8 +507,8 @@ async function directoryPass(opts: GitleaksScanOptions, result: GitleaksScanResu
       '--no-banner',
       '--log-level=info',
       '--report-format=json',
-      `--report-path=${outFile}`,
-      '--redact',
+      `--report-path=${target.path}`,
+      ...target.redact,
       '-s',
       '.',
       `--config=${config}`,
@@ -465,14 +519,15 @@ async function directoryPass(opts: GitleaksScanOptions, result: GitleaksScanResu
     onLog: opts.onLog,
   });
   if (run.outcome === 'cancelled') result.cancelled = true;
+  const report = takeReport(opts, target.path, outFile);
   const bytes = bytesScanned(run.stderr);
-  if (bytes === 0 && runProblems(run, readJsonSafe(outFile)).length === 0) {
+  if (bytes === 0 && runProblems(run, report.text).length === 0) {
     result.tools_run.push({ name, status: 'skipped', reason: `${prefix}: it holds nothing gitleaks reads (0 bytes)` });
     return;
   }
   const excluded = EXCLUDED_DIRS.join(', ');
   const scanned = bytes === null ? '' : ` (~${bytes} bytes)`;
-  recordFilesRun(result, name, run, readJsonSafe(outFile), 'directory', `${prefix}${scanned}, excluding ${excluded}`, [], []);
+  recordFilesRun(result, name, run, report, 'directory', `${prefix}${scanned}, excluding ${excluded}`, [], []);
 }
 
 /** The config for {@link directoryPass}: the project's (or the default) plus the excluded directories. */
@@ -497,20 +552,73 @@ function recordFilesRun(
   result: GitleaksScanResult,
   name: string,
   run: ProcessRunResult,
-  raw: string | null,
+  report: TakenReport,
   location: 'working_tree' | 'directory',
   okReason: string,
   gaps: readonly string[],
   notes: readonly string[],
 ): void {
+  const raw = report.text;
   const problems = runProblems(run, raw);
   if (raw !== null && problems.length === 0) {
-    result.parser_inputs.push({ parser: locatedParser(location, ''), input: raw });
+    pushParserInput(result, { parser: locatedParser(location, ''), input: raw }, report.secrets);
     result.tools_run.push({ name, status: 'ok', reason: [okReason, ...gaps, ...notes].join('; ') });
     if (gaps.length > 0) result.missing_tools.push(name);
   } else {
     result.tools_run.push({ name, status: 'failed', reason: [...problems, ...gaps, ...notes].join('; ') });
   }
+}
+
+// ---- verify_live: the unredacted report ----------------------------------
+
+/** What a pass's report became: the text the parser may see, and the values captured from it. */
+interface TakenReport {
+  text: string | null;
+  secrets: Array<string | null> | null;
+}
+
+/** An unredacted report that is not a JSON array is withheld, unread: it may hold raw values. */
+const WITHHELD_REPORT = JSON.stringify('gitleaks report withheld: not a JSON array, and it may hold unredacted values');
+
+/** Where gitleaks writes this pass's report, and whether it redacts — see the module comment. */
+function reportTarget(opts: ScanRun, outFile: string): { path: string; redact: string[] } {
+  if (opts.raw === null) return { path: outFile, redact: ['--redact'] };
+  return { path: opts.raw.pathFor(basename(outFile)), redact: [] };
+}
+
+/**
+ * The pass's report: as gitleaks wrote it (a redacting run), or — from the
+ * private directory — sanitized, with the raw report deleted at once and the
+ * sanitized copy kept at `outFile`.
+ */
+function takeReport(opts: ScanRun, written: string, outFile: string): TakenReport {
+  if (opts.raw === null) return { text: readJsonSafe(written), secrets: null };
+  const rawText = readJsonSafe(written);
+  try {
+    rmSync(written, { force: true });
+  } catch {
+    // Removed with its directory at the end of the scan (or reported there).
+  }
+  // The report file was pre-created empty (0600): still empty means gitleaks
+  // wrote nothing — the same "wrote no report" a redacting run gets.
+  if (rawText === null || rawText.trim() === '') return { text: null, secrets: null };
+  const clean = sanitizeGitleaksReport(rawText, opts.captureSecrets ?? (() => false));
+  if (clean === null) return { text: WITHHELD_REPORT, secrets: null };
+  try {
+    writeFileSync(outFile, clean.text);
+  } catch {
+    // The kept copy is for `report_paths`; the scan does not depend on it.
+  }
+  return { text: clean.text, secrets: clean.secrets };
+}
+
+function pushParserInput(
+  result: GitleaksScanResult,
+  task: { parser: ScannerParser; input: unknown },
+  secrets: Array<string | null> | null,
+): void {
+  result.parser_inputs.push(task);
+  if (secrets !== null) result.captured?.set(task, secrets);
 }
 
 function message(e: unknown): string {
