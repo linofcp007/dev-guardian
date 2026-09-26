@@ -914,25 +914,33 @@ keeps working (migrations 004–011 are additive).
   `"C:\Users\me\CLAUDE SKILLS\…\.guardian\hooks.config.json"` was cut in two
   and let through; only a word that is itself a whole `mklink …` line is
   split now, the way cmd splits it.
-- **A hook config file can no longer hang the hooks into their timeout.**
-  They read `.guardian/hooks.config.json`, `.guardian/hooks-allowlist.json`
-  and `~/.config/dev-guardian/hooks.json` with no check on what the path was:
-  a FIFO or a link to `/dev/zero` there blocked the hook until Claude Code
-  killed it at 15 s, and the tool call then ran unguarded (a 300 MB file took
-  23 s on Windows). Each is now opened first (non-blocking on Linux and
+- **A hook config file that is a FIFO, a device, a link to a network share
+  or too large is not read.** The hooks read `.guardian/hooks.config.json`,
+  `.guardian/hooks-allowlist.json` and `~/.config/dev-guardian/hooks.json`
+  with no check on what the path was: a FIFO or a link to `/dev/zero` there
+  blocked the hook until Claude Code killed it at 15 s, and the tool call
+  then ran unguarded (a 300 MB file took 23 s on Windows; a Windows link to
+  an unreachable `\\host\share` held the open for ~136 s). Now the path's
+  components below the project (or home) directory are first walked with
+  `lstat` + `readlink`, which never touch a link's target, and a file reached
+  through a link to a UNC or device path (`\\…`, `//…`, `\\?\…`, `\\.\…`) —
+  the file, `.guardian` as a directory link, or a chain of local links ending
+  there — is not opened. Otherwise it is opened (non-blocking on Linux and
   macOS, so a FIFO opens at once) and judged by `fstat` on the open
   descriptor — never by an earlier look at the path, which a Windows link to
   a named pipe fools (it `stat`s as an empty regular file) and a swap between
   two checks defeats — and read only when it is a regular file of at most
   64 KiB, at most 64 KiB + 1 bytes (a file that grows meanwhile is refused).
   Anything else counts as absent — the protective defaults — and SessionStart
-  names it. The install hook's registry configuration reads work the same
-  way, capped at 1 MiB. The shell guard denies `mkfifo`, `mknod`, `ln`,
-  `mklink` (also through `cmd /c`) and PowerShell `New-Item -ItemType
-  SymbolicLink|HardLink|Junction` when the path they CREATE is one of those
-  files (never when it is only a link's source), and a leading UTF-8
-  byte-order mark (PowerShell 5 writes one) no longer makes a config file
-  unreadable.
+  names it. Not covered: the project and home directories themselves, and a
+  path the OS redirects without a link (a mapped drive, a DFS or NFS mount).
+  The install hook's registry configuration reads get the descriptor checks
+  (capped at 1 MiB) but not the link walk. The shell guard denies `mkfifo`,
+  `mknod`, `ln`, `mklink` (also through `cmd /c`) and PowerShell `New-Item
+  -ItemType SymbolicLink|HardLink|Junction` when the path they CREATE is one
+  of those files, or a link at `.guardian` or `~/.config/dev-guardian` (never
+  when it is only a link's source), and a leading UTF-8 byte-order mark
+  (PowerShell 5 writes one) no longer makes a config file unreadable.
 - **The secret warning reads real key names** (SCREAMING_SNAKE, kebab and
   camelCase, JSON keys, unquoted `.env` assignments, `scheme://user:pass@host`)
   while `${VAR}`, `process.env.X`, placeholders and empty values stay silent;

@@ -30,6 +30,20 @@ const HOOK = resolve(REPO_ROOT, 'hooks', 'guardian-hook.mjs');
  *  fast, dependency-free regex pass with no real scanner involved. */
 const TIMEOUT_MS = 15_000;
 
+/** Whether this account may create symlinks (Windows needs admin or Developer Mode). */
+const CAN_SYMLINK = ((): boolean => {
+  const probe = mkdtempSync(join(tmpdir(), 'guardian-hook-symlink-probe-'));
+  try {
+    writeFileSync(join(probe, 't'), 'x');
+    symlinkSync(join(probe, 't'), join(probe, 'l'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
+
 interface HookResult {
   status: number | null;
   stdout: unknown;
@@ -528,6 +542,41 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       writeFileSync(join(guardianDir(), 'hooks.config.json'), '\uFEFF' + JSON.stringify({ secrets: { block: true } }), 'utf8');
       expect(decision(tokenWrite())).toBe('deny');
     });
+
+    // Final review I12: a link to an unreachable `\\host\share` made the
+    // config read (and SessionStart's look at `.guardian`) wait ~136 s on
+    // Windows \u2014 past the hook's 15 s, after which the call ran unguarded.
+    // 192.0.2.1 is TEST-NET-1: never routed, and never contacted when the
+    // walk works.
+    const UNC = POSIX ? '//192.0.2.1/share' : '\\\\192.0.2.1\\share';
+    it.skipIf(!CAN_SYMLINK)(
+      '.guardian linked to a UNC share: rm -rf / is still denied at once, and SessionStart names the file (needs symlink rights; skipped without them)',
+      () => {
+        symlinkSync(UNC, join(projectDir, '.guardian'), 'dir');
+        const { r, ms } = timedRmRf();
+        expect(decision(r)).toBe('deny');
+        expect(ms).toBeLessThan(5000);
+        const t0 = Date.now();
+        const ctx = context(runHook({ hook_event_name: 'SessionStart', cwd: projectDir }, { cwd: projectDir, homeDir }));
+        expect(Date.now() - t0).toBeLessThan(5000);
+        expect(ctx).toMatch(
+          /\.guardian\/hooks\.config\.json was not read \(reached through a link to a network or device path\)/,
+        );
+      },
+      30_000,
+    );
+
+    it.skipIf(!CAN_SYMLINK)(
+      'a user-level config dir linked to a UNC share: rm -rf / is still denied at once (needs symlink rights; skipped without them)',
+      () => {
+        mkdirSync(join(homeDir, '.config'), { recursive: true });
+        symlinkSync(UNC, join(homeDir, '.config', 'dev-guardian'), 'dir');
+        const { r, ms } = timedRmRf();
+        expect(decision(r)).toBe('deny');
+        expect(ms).toBeLessThan(5000);
+      },
+      30_000,
+    );
   });
 
   it('fails open on malformed stdin (finding: preserved existing behaviour)', () => {

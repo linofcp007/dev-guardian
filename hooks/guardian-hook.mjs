@@ -108,21 +108,29 @@ async function readStdin() {
 /**
  * How a hook configuration file is read: `readSmallJsonFile` from
  * `mcp/dist/hooks/configFile.js`, loaded in `main()` by `loadConfigReader`.
- * It stats the path first (following a link to its target) and reads only a
- * regular file of at most 64 KiB, with a leading byte-order mark stripped.
- * The `existsSync` + `readFileSync` it replaced read whatever was there: a
- * FIFO or a link to `/dev/zero` at `.guardian/hooks.config.json` blocked the
- * hook until Claude Code killed it at 15 s — and the tool call then ran
- * unguarded (Task 23 fix round 2, N1). Until it is loaded, and if it cannot
- * be (no built `mcp/dist`), every file reads as absent: the protective
- * defaults.
+ * Given the directory the file lives under (the project, or the home
+ * directory for the user-level file), it first walks the path's components
+ * below it with `lstat` + `readlink` — never touching a link's target — and
+ * refuses a file reached through a link to a UNC or device path, whose open
+ * can wait minutes on the network. It then opens the path (a link is
+ * followed; non-blocking on POSIX, so a FIFO opens at once), judges what it
+ * OPENED with `fstat`, and reads only a regular file of at most 64 KiB, with
+ * a leading byte-order mark stripped. The `existsSync` + `readFileSync` it
+ * replaced read whatever was there: a FIFO or a link to `/dev/zero` at
+ * `.guardian/hooks.config.json` blocked the hook until Claude Code killed it
+ * at 15 s — and the tool call then ran unguarded (Task 23 fix round 2, N1).
+ * Until it is loaded, and if it cannot be (no built `mcp/dist`), every file
+ * reads as absent: the protective defaults.
  */
 let readSmallJsonFile = () => ({ status: 'absent' });
+/** `walkLinksUnder` from the same module — see `handleSessionStart`. */
+let walkLinksUnder = () => ({ ok: true });
 
 async function loadConfigReader() {
   try {
     const mod = await import(pathToFileURL(join(DIST_HOOKS, 'configFile.js')).href);
     if (typeof mod.readSmallJsonFile === 'function') readSmallJsonFile = mod.readSmallJsonFile;
+    if (typeof mod.walkLinksUnder === 'function') walkLinksUnder = mod.walkLinksUnder;
   } catch (err) {
     debug(`config reader unavailable — protective defaults: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -132,6 +140,7 @@ const UNREAD_REASON = {
   'not-a-regular-file': 'not a regular file',
   'too-large': 'larger than 64 KiB',
   unreadable: 'unreadable',
+  'remote-link': 'reached through a link to a network or device path',
 };
 
 function isPlainObject(value) {
@@ -141,10 +150,11 @@ function isPlainObject(value) {
 /**
  * The parsed JSON at `path`, or `undefined`. When `label` is given, a file
  * that exists but was refused or is not JSON is recorded in `unread`, which
- * SessionStart reports.
+ * SessionStart reports. `under` is the directory whose components below it
+ * are checked for a network link first (see `readSmallJsonFile` above).
  */
-function readJsonFile(path, label, unread) {
-  const r = readSmallJsonFile(path);
+function readJsonFile(path, label, unread, under) {
+  const r = readSmallJsonFile(path, undefined, under);
   if (r.status === 'ok') return r.value;
   if (label !== undefined && unread !== undefined) {
     if (r.status === 'refused') unread.push(`${label} was not read (${UNREAD_REASON[r.reason] ?? r.reason})`);
@@ -233,8 +243,13 @@ function projectOverrides(projectFile) {
 }
 
 function loadConfig(cwd, unread) {
-  const projectRaw = readJsonFile(join(cwd, '.guardian', 'hooks.config.json'), '.guardian/hooks.config.json', unread);
-  const userRaw = readJsonFile(userConfigPath(), '~/.config/dev-guardian/hooks.json', unread);
+  const projectRaw = readJsonFile(
+    join(cwd, '.guardian', 'hooks.config.json'),
+    '.guardian/hooks.config.json',
+    unread,
+    cwd,
+  );
+  const userRaw = readJsonFile(userConfigPath(), '~/.config/dev-guardian/hooks.json', unread, homedir());
   const projectFile = isPlainObject(projectRaw) ? projectRaw : {};
   const userFile = isPlainObject(userRaw) ? userRaw : {};
   const { overrides: project, ignored } = projectOverrides(projectFile);
@@ -259,7 +274,12 @@ function loadConfig(cwd, unread) {
 }
 
 function loadAllowlist(cwd, unread) {
-  const data = readJsonFile(join(cwd, '.guardian', 'hooks-allowlist.json'), '.guardian/hooks-allowlist.json', unread);
+  const data = readJsonFile(
+    join(cwd, '.guardian', 'hooks-allowlist.json'),
+    '.guardian/hooks-allowlist.json',
+    unread,
+    cwd,
+  );
   if (Array.isArray(data)) return data.filter((x) => typeof x === 'string');
   if (data && Array.isArray(data.secrets)) return data.secrets.filter((x) => typeof x === 'string');
   return [];
@@ -431,7 +451,12 @@ function handleSessionStart(cwd, cfg) {
   }
   const lines = [];
   const guardianDir = join(cwd, '.guardian');
-  const initialized = existsSync(guardianDir);
+  const dbPath = join(guardianDir, 'guardian.db');
+  // `existsSync`/`statSync` FOLLOW a link: `.guardian` linked to an
+  // unreachable `\\host\share` would hold SessionStart past its timeout the
+  // way it once held the config read. Walked first, with lstat + readlink only.
+  const reachable = walkLinksUnder(cwd, dbPath).ok;
+  const initialized = reachable ? existsSync(guardianDir) : true;
   const branch = git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
   const status = git(cwd, ['status', '--porcelain']);
   const changed = status ? status.split('\n').filter(Boolean).length : 0;
@@ -443,8 +468,7 @@ function handleSessionStart(cwd, cfg) {
   if (initialized) {
     let scanNote = '';
     try {
-      const dbPath = join(guardianDir, 'guardian.db');
-      if (existsSync(dbPath)) {
+      if (reachable && existsSync(dbPath)) {
         const ageMs = Date.now() - statSync(dbPath).mtimeMs;
         scanNote = ` Last scan activity: ${relativeTime(ageMs)}.`;
       }

@@ -910,3 +910,37 @@ describe('assessBashCommand — compound-command bodies are assessed like top-le
     expect(splitShell('echo do done').statements[0]?.commands[0]?.map((w) => w.value)).toEqual(['echo', 'do', 'done']);
   });
 });
+
+// Final review I12, shell half: `.guardian` itself (or the user-level config
+// directory) made a link — to `\\host\share` above all — redirects every hook
+// config file below it at once. The reader refuses a network link now; the
+// guard also refuses to create one there, as it refuses a link AT the files.
+describe('assessBashCommand — a link created AT the hook config directory (I12)', () => {
+  const blocked = [
+    'cmd /c mklink /D .guardian \\\\h\\s',
+    'mklink /J .guardian C:\\elsewhere',
+    'cmd /c mklink /D "C:\\Users\\me\\CLAUDE SKILLS\\proj\\.guardian" \\\\h\\s',
+    'New-Item -ItemType SymbolicLink -Path .guardian -Target \\\\h\\s',
+    'New-Item -ItemType Junction -Path C:\\proj\\.guardian -Value D:\\x',
+    'ln -sfn //h/s .guardian',
+    'ln -s /mnt/share/cfg ~/.config/dev-guardian',
+    'New-Item -ItemType SymbolicLink -Path "$HOME\\.config\\dev-guardian" -Target \\\\h\\s',
+  ];
+  it.each(blocked)('blocks %s', (command) => {
+    const a = assessBashCommand(command);
+    expect(a.level).toBe('block');
+    expect(a.rules).toContain('guard-config-special-file');
+  });
+
+  const allowed = [
+    'mkdir .guardian',
+    'New-Item -ItemType Directory -Path .guardian',
+    'mklink /D backup .guardian',
+    'ln -s .guardian/baseline.json baseline.json',
+    'ln -s ../shared/notes .guardian/notes',
+    'mkfifo .guardian.fifo',
+  ];
+  it.each(allowed)('does not flag %s', (command) => {
+    expect(assessBashCommand(command).rules).not.toContain('guard-config-special-file');
+  });
+});

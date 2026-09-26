@@ -909,6 +909,22 @@ function isHookConfigPath(arg: string): boolean {
   return HOOK_CONFIG_PATH.test(arg.replace(/\\/g, '/'));
 }
 
+/**
+ * The directories that hold those files: a project's `.guardian` and the
+ * user-level `~/.config/dev-guardian`. A LINK created at one of them redirects
+ * every config file below it at once — to `\\host\share`, whose open can hold
+ * the hook past its timeout, or to a directory the model wrote. Matched on the
+ * path's end, separators optional for the same reason as `HOOK_CONFIG_PATH`.
+ */
+const HOOK_CONFIG_DIR = /(?:\.guardian|\.config\/?dev-guardian)\/?$/i;
+
+function isHookConfigDir(arg: string): boolean {
+  return HOOK_CONFIG_DIR.test(arg.replace(/\\/g, '/'));
+}
+
+/** Commands that create a link (never a FIFO or a device node). */
+const LINK_CREATORS = new Set(['ln', 'mklink', 'cmd', 'new-item', 'ni']);
+
 /** `a/b/c` → `c`, for either separator. */
 function lastSegment(path: string): string {
   return path.split(/[\\/]/).filter((s) => s.length > 0).pop() ?? path;
@@ -1059,18 +1075,25 @@ function specialFileDestinations(name: string, args: readonly string[]): string[
 
 /**
  * A FIFO, a device node or a link created AT one of the hook configuration
- * files. A FIFO or a link to `/dev/zero` there used to hang the hook until its
- * 15 s timeout, after which the tool call ran unguarded (Task 23 fix round 2,
- * N1). The hook's reader now refuses such a file (it judges the descriptor it
- * opened), so this is defence in depth: refusing to create one there, as the
- * Write/Edit guard refuses an assistant's edit of the same files.
+ * files, or a link created at the directory holding them (`.guardian`,
+ * `~/.config/dev-guardian` — final review I12). A FIFO or a link to
+ * `/dev/zero` there used to hang the hook until its 15 s timeout, after which
+ * the tool call ran unguarded (Task 23 fix round 2, N1). The hook's reader
+ * now refuses such a file (it judges the descriptor it opened, and refuses a
+ * link to a network path before opening), so this is defence in depth:
+ * refusing to create one there, as the Write/Edit guard refuses an
+ * assistant's edit of the same files.
  */
 function assessGuardConfigSpecialFile(words: ShellWord[], start: number): MatchedRule | null {
   const head = words[start];
   if (head === undefined) return null;
   const name = basename(head.value).toLowerCase().replace(/\.exe$/, '');
   const args = words.slice(start + 1).map((w) => w.value);
-  if (!specialFileDestinations(name, args).some(isHookConfigPath)) return null;
+  const makesLink = LINK_CREATORS.has(name);
+  const hits = specialFileDestinations(name, args).some(
+    (p) => isHookConfigPath(p) || (makesLink && isHookConfigDir(p)),
+  );
+  if (!hits) return null;
   return {
     id: 'guard-config-special-file',
     level: 'block',

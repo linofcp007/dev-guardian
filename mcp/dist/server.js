@@ -69035,7 +69035,7 @@ import { homedir as homedir4 } from "node:os";
 import { dirname as dirname20, join as join74, resolve as resolve18 } from "node:path";
 
 // src/hooks/configFile.ts
-import { closeSync as closeSync2, constants as constants4, fstatSync, openSync as openSync2, readSync } from "node:fs";
+import { closeSync as closeSync2, constants as constants4, fstatSync, lstatSync as lstatSync6, openSync as openSync2, readlinkSync as readlinkSync2, readSync } from "node:fs";
 var MAX_HOOK_CONFIG_BYTES = 64 * 1024;
 var OPEN_FLAGS = constants4.O_RDONLY | (constants4.O_NONBLOCK ?? 0);
 function readText2(path6, maxBytes) {
