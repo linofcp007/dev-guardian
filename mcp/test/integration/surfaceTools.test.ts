@@ -31,7 +31,27 @@ import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
 
+/**
+ * `paths.scanned` of a run that looked at the project. A report without one
+ * is a run that scanned nothing (Global Constraint 3), so every fixture that
+ * stands for a real scan carries it — as real Semgrep output always does.
+ */
+const SCANNED = { scanned: ['src/app.ts', 'src/routes/users.ts'] };
+
+/**
+ * A project holding one file in a routes-pack language, so there is
+ * something for Semgrep to read (a project with none is "not applicable" and
+ * never runs Semgrep at all — see the tests of that case).
+ */
+function surfaceProject(prefix = 'guardian-surface-'): string {
+  const dir = makeTempDir(prefix);
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'app.ts'), 'export {};\n', 'utf8');
+  return dir;
+}
+
 const SEMGREP_OUTPUT = JSON.stringify({
+  paths: SCANNED,
   results: [
     {
       check_id: 'guardian-route-express',
@@ -57,6 +77,7 @@ const SEMGREP_OUTPUT = JSON.stringify({
  * file", so both routes it declares are left resolved as-is.
  */
 const SEMGREP_OUTPUT_WITH_SHADOW = JSON.stringify({
+  paths: SCANNED,
   results: [
     {
       check_id: 'guardian-route-express',
@@ -96,6 +117,7 @@ const SEMGREP_OUTPUT_WITH_SHADOW = JSON.stringify({
 
 /** JS project: extension-less specifier, real route file is `.js` (B2 scenario 1). */
 const JS_MOUNT_OUTPUT = JSON.stringify({
+  paths: SCANNED,
   results: [
     {
       check_id: 'guardian-route-express',
@@ -145,6 +167,7 @@ const JS_MOUNT_OUTPUT = JSON.stringify({
  * directory-less importer.
  */
 const ROOT_LEVEL_MOUNT_OUTPUT = JSON.stringify({
+  paths: SCANNED,
   results: [
     {
       check_id: 'guardian-route-express',
@@ -191,6 +214,7 @@ const ROOT_LEVEL_MOUNT_OUTPUT = JSON.stringify({
  * degraded to the specifier text and every mounted route went partial.
  */
 const POSIX_ABSOLUTE_MOUNT_OUTPUT = JSON.stringify({
+  paths: SCANNED,
   results: [
     {
       check_id: 'guardian-route-express',
@@ -234,6 +258,7 @@ const POSIX_ABSOLUTE_MOUNT_OUTPUT = JSON.stringify({
  * scenario 2 — the mismatch the extension-insensitive match must bridge).
  */
 const TS_NODENEXT_MOUNT_OUTPUT = JSON.stringify({
+  paths: SCANNED,
   results: [
     {
       check_id: 'guardian-route-express',
@@ -277,6 +302,7 @@ const TS_NODENEXT_MOUNT_OUTPUT = JSON.stringify({
  * so a difference in the result can only come from path handling.
  */
 const WINDOWS_MOUNT_OUTPUT = JSON.stringify({
+  paths: SCANNED,
   results: [
     {
       check_id: 'guardian-route-express',
@@ -359,7 +385,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{
       ok: boolean;
       routes_total: number;
@@ -379,7 +405,7 @@ describe('map_attack_surface', () => {
     vi.mocked(scannerAvailable).mockResolvedValue(null);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{
       ok: boolean;
       missing_tools: string[];
@@ -403,7 +429,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{
       snapshot_id: number | null;
       tools_run: { name: string; status: string; reason?: string }[];
@@ -420,10 +446,10 @@ describe('map_attack_surface', () => {
   it('reports no_rules for a detected language the pack does not cover', async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockResolvedValue(okRun());
-    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], paths: SCANNED }));
 
     const ctx = makeCtx();
-    const projectPath = resolveProjectPath(makeTempDir('guardian-surface-')).path;
+    const projectPath = resolveProjectPath(surfaceProject()).path;
     // The snapshot is THIS project's: it was seeded under '/p' until Task 24,
     // and only passed because the read was "the newest snapshot of any project".
     ctx.storage.stack.insert({ project_path: projectPath, snapshot: stackSnapshot(['elixir']) });
@@ -443,7 +469,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{
       stack_detected: boolean;
       note?: string;
@@ -456,13 +482,13 @@ describe('map_attack_surface', () => {
   it("never reads ANOTHER project's stack snapshot: its languages and stack_detected are this project's (Task 24)", async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockResolvedValue(okRun());
-    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], paths: SCANNED }));
 
     const ctx = makeCtx();
     const other = resolveProjectPath(makeTempDir('guardian-surface-other-')).path;
     ctx.storage.stack.insert({ project_path: other, snapshot: stackSnapshot(['elixir']) });
 
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{
       coverage: { language: string; status: string }[];
       stack_detected: boolean;
@@ -480,7 +506,7 @@ describe('map_attack_surface', () => {
     const other = resolveProjectPath(makeTempDir('guardian-surface-other-')).path;
     ctx.storage.stack.insert({ project_path: other, snapshot: stackSnapshot(['elixir']) });
 
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{ stack_detected: boolean }>(await tool().handler({ project_path: projectPath }, ctx));
     expect(result.stack_detected).toBe(false);
   });
@@ -491,7 +517,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
 
     const first = okResult<{
       snapshot_id: number;
@@ -515,10 +541,10 @@ describe('map_attack_surface', () => {
 
     const ctx = makeCtx();
     const first = okResult<{ snapshot_id: number }>(
-      await tool().handler({ project_path: makeTempDir('guardian-surface-') }, ctx),
+      await tool().handler({ project_path: surfaceProject() }, ctx),
     );
     const second = okResult<{ snapshot_id: number; tools_run: { reason?: string }[] }>(
-      await tool().handler({ project_path: makeTempDir('guardian-surface-') }, ctx),
+      await tool().handler({ project_path: surfaceProject() }, ctx),
     );
     expect(second.snapshot_id).not.toBe(first.snapshot_id);
     expect(second.tools_run[0]?.reason).not.toBe('cached');
@@ -531,7 +557,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const first = okResult<{ snapshot_id: number }>(
       await tool().handler({ project_path: projectPath }, ctx),
     );
@@ -559,7 +585,7 @@ describe('map_attack_surface', () => {
     const pack = join(root, 'configs', 'semgrep', 'routes.yml');
     writeFileSync(pack, 'rules: []\n');
     const ctx = { ...makeCtx(), scriptsDir: join(root, 'scripts') };
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
 
     const first = okResult<{ snapshot_id: number }>(await tool().handler({ project_path: projectPath }, ctx));
     const hit = okResult<{ snapshot_id: number }>(await tool().handler({ project_path: projectPath }, ctx));
@@ -577,7 +603,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const without = okResult<{ snapshot_id: number }>(
       await tool().handler({ project_path: projectPath, include_env_vars: false }, ctx),
     );
@@ -594,7 +620,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
 
     await tool().handler({ project_path: projectPath }, ctx);
     await tool().handler({ project_path: projectPath, force: true }, ctx);
@@ -602,7 +628,7 @@ describe('map_attack_surface', () => {
     expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
   });
 
-  it('persists the snapshot when semgrep fails but still emitted parseable JSON', async () => {
+  it('persists NOTHING when semgrep exits 2, even with parseable JSON — and still shows what it read', async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     // exitCode 1 means "found matches" under the repo's Semgrep convention —
     // that is success. A genuine failure needs a different exit code.
@@ -616,18 +642,261 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{
       snapshot_id: number | null;
+      routes_total: number;
       tools_run: { status: string; reason?: string }[];
+      note?: string;
     }>(await tool().handler({ project_path: projectPath }, ctx));
 
-    // Partial data is still useful — the failed tools_run entry carries the
-    // warning. This is the one failure mode where we DO persist.
-    expect(result.snapshot_id).not.toBeNull();
+    // A run that failed is never the project's surface (Global Constraint 3):
+    // a snapshot would be served for 24 h and read by scan_dast as complete.
+    expect(result.snapshot_id).toBeNull();
+    expect(ctx.storage.surface.getLatest()).toBeNull();
     expect(result.tools_run[0]?.status).toBe('failed');
-    expect(result.tools_run[0]?.reason).toBe('semgrep: fatal: something broke');
-    expect(ctx.storage.surface.getLatest()).not.toBeNull();
+    expect(result.tools_run[0]?.reason).toMatch(/exit 2/);
+    // What it did read is real, and shown — as a partial, unpersisted result.
+    expect(result.routes_total).toBe(1);
+    expect(result.note).toMatch(/nothing was persisted/);
+  });
+
+  it('persists NOTHING when semgrep scanned no file: skipped and named missing, never ok (GC3)', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    // A `.semgrepignore` over the source tree, or a rule file the locale
+    // codec cannot read: exit 0, no results, no errors, nothing scanned.
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], errors: [], paths: { scanned: [] } }));
+
+    const ctx = makeCtx();
+    const projectPath = surfaceProject();
+    const result = okResult<{
+      snapshot_id: number | null;
+      routes_total: number;
+      missing_tools: string[];
+      tools_run: { name: string; status: string; reason?: string }[];
+      note?: string;
+    }>(await tool().handler({ project_path: projectPath }, ctx));
+
+    expect(result.tools_run[0]).toMatchObject({ name: 'semgrep', status: 'skipped' });
+    expect(result.tools_run[0]?.reason).toMatch(/scanned 0 of 1 file/);
+    expect(result.missing_tools).toEqual(['semgrep']);
+    expect(result.snapshot_id).toBeNull();
+    expect(result.note).toMatch(/nothing was persisted/);
+    expect(ctx.storage.surface.getLatest()).toBeNull();
+  });
+
+  it('a report with no paths.scanned at all is a run that scanned nothing too', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+
+    const ctx = makeCtx();
+    const projectPath = surfaceProject();
+    const result = okResult<{ snapshot_id: number | null; tools_run: { status: string }[] }>(
+      await tool().handler({ project_path: projectPath }, ctx),
+    );
+
+    expect(result.tools_run[0]?.status).toBe('skipped');
+    expect(result.snapshot_id).toBeNull();
+    expect(ctx.storage.surface.getLatest()).toBeNull();
+  });
+
+  // Controller ruling on I3: a file Semgrep could only partly parse is
+  // PARTIAL coverage, not a failed scan. Refusing the whole snapshot over one
+  // `const NAMESPACE` warning left scan_dast probing nothing on real PHP.
+  interface PartialOut {
+    snapshot_id: number | null;
+    routes_total: number;
+    missing_tools: string[];
+    tools_run: { name: string; status: string; reason?: string }[];
+    partially_parsed?: Array<{ file: string; type: string; message: string }>;
+    note?: string;
+  }
+
+  function withErrors(errors: unknown[]): string {
+    return JSON.stringify({ ...(JSON.parse(SEMGREP_OUTPUT) as Record<string, unknown>), errors });
+  }
+
+  it('a warn-level PartialParsing on one file: persisted, Semgrep ok with a named gap, the file and error type listed', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun('failed'));
+    const projectPath = surfaceProject();
+    const admin = join(projectPath, 'src', 'routes', 'admin.ts');
+    vi.mocked(readJsonSafe).mockReturnValue(
+      withErrors([
+        {
+          code: 3,
+          level: 'warn',
+          type: ['PartialParsing', [{ path: admin, start: { line: 3 }, end: { line: 3 } }]],
+          message: `Syntax error at line ${admin}:3:\n \`const x\` was unexpected`,
+          path: admin,
+          spans: [{ file: admin, start: { line: 3 }, end: { line: 3 } }],
+        },
+      ]),
+    );
+
+    const ctx = makeCtx();
+    const result = okResult<PartialOut>(await tool().handler({ project_path: projectPath }, ctx));
+
+    expect(result.snapshot_id).not.toBeNull();
+    expect(result.routes_total).toBe(1);
+    expect(result.tools_run[0]).toMatchObject({ name: 'semgrep', status: 'ok' });
+    expect(result.tools_run[0]?.reason).toMatch(/partial/i);
+    expect(result.tools_run[0]?.reason).toContain('src/routes/admin.ts');
+    // ok AND missing under the same name: ran, with a narrower gap inside it
+    // — coverage `partial`, the CI gate's "ran with reduced coverage".
+    expect(result.missing_tools).toEqual(['semgrep']);
+    expect(result.partially_parsed).toEqual([
+      { file: 'src/routes/admin.ts', type: 'PartialParsing', message: `Syntax error at line ${admin}:3:` },
+    ]);
+    expect(result.note).toMatch(/partly parsed/);
+    const stored = ctx.storage.surface.getLatest()?.snapshot;
+    expect(stored?.partially_parsed).toEqual(result.partially_parsed);
+    expect(stored?.missing_tools).toEqual(['semgrep']);
+  });
+
+  it('a cache hit of a partial snapshot still says it is partial, and which file', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    const projectPath = surfaceProject();
+    vi.mocked(readJsonSafe).mockReturnValue(
+      withErrors([{ level: 'warn', type: 'PartialParsing', message: 'x', path: join(projectPath, 'src', 'app.ts') }]),
+    );
+    const ctx = makeCtx();
+    await tool().handler({ project_path: projectPath }, ctx);
+    const second = okResult<PartialOut>(await tool().handler({ project_path: projectPath }, ctx));
+
+    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(1);
+    expect(second.tools_run[0]?.reason).toBe('cached');
+    expect(second.missing_tools).toEqual(['semgrep']);
+    expect(second.partially_parsed?.map((p) => p.file)).toEqual(['src/app.ts']);
+  });
+
+  it('a level-error syntax error confined to one target file is partial too', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    const projectPath = surfaceProject();
+    vi.mocked(readJsonSafe).mockReturnValue(
+      withErrors([{ level: 'error', type: 'Syntax error', message: 'bad token', path: join(projectPath, 'src', 'x.py') }]),
+    );
+
+    const ctx = makeCtx();
+    const result = okResult<PartialOut>(await tool().handler({ project_path: projectPath }, ctx));
+    expect(result.snapshot_id).not.toBeNull();
+    expect(result.partially_parsed).toEqual([{ file: 'src/x.py', type: 'Syntax error', message: 'bad token' }]);
+  });
+
+  it('a rule/config error tied to no target is fatal: failed, nothing persisted', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    const projectPath = surfaceProject();
+    vi.mocked(readJsonSafe).mockReturnValue(
+      withErrors([
+        { level: 'warn', type: 'PartialParsing', message: 'x', path: join(projectPath, 'src', 'a.ts') },
+        { level: 'error', type: 'Rule parse error', message: 'Invalid pattern for PHP' },
+      ]),
+    );
+
+    const ctx = makeCtx();
+    const result = okResult<PartialOut>(await tool().handler({ project_path: projectPath }, ctx));
+    expect(result.tools_run[0]).toMatchObject({ name: 'semgrep', status: 'failed' });
+    expect(result.tools_run[0]?.reason).toMatch(/Rule parse error/);
+    expect(result.snapshot_id).toBeNull();
+    expect(ctx.storage.surface.getLatest()).toBeNull();
+  });
+
+  it('an error naming the rule file itself is a config error, never a per-file gap', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(
+      withErrors([{ level: 'warn', type: 'InvalidRuleSchemaError', message: 'bad rule', path: '/x/configs/semgrep/routes.yml' }]),
+    );
+
+    const ctx = makeCtx();
+    const result = okResult<PartialOut>(await tool().handler({ project_path: surfaceProject() }, ctx));
+    expect(result.tools_run[0]?.status).toBe('failed');
+    expect(result.snapshot_id).toBeNull();
+  });
+
+  // Ruling item 3: not applicable is never a gap. A project with no file in
+  // any routes-pack language has nothing for Semgrep to read — the snapshot
+  // (ports, env, specs) is still worth persisting, and Semgrep is not needed.
+  // Follow-up 2, item 1: with no .semgrepignore, Semgrep applies its own
+  // default ignore list (test/, tests/, *_test.go, build/, dist/, vendor/,
+  // *.min.js … — measured on 1.176.1). A Terraform module whose only Go is
+  // Terratest under test/ scanned "0 of 1" and read as a gap on every run.
+  it("Semgrep's default ignore: Terratest under test/ is not a target — not applicable, no gap", async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const projectPath = makeTempDir('guardian-surface-terratest-');
+    writeFileSync(join(projectPath, 'main.tf'), 'resource "null_resource" "x" {}\n', 'utf8');
+    mkdirSync(join(projectPath, 'test'));
+    writeFileSync(join(projectPath, 'test', 'x_test.go'), 'package test\n', 'utf8');
+    writeFileSync(join(projectPath, 'lib.min.js'), 'var a=1\n', 'utf8');
+
+    const ctx = makeCtx();
+    const result = okResult<PartialOut>(await tool().handler({ project_path: projectPath }, ctx));
+
+    expect(vi.mocked(runProcess)).not.toHaveBeenCalled();
+    expect(result.tools_run[0]).toMatchObject({ name: 'semgrep', status: 'skipped' });
+    expect(result.tools_run[0]?.reason).toMatch(/^not applicable/);
+    expect(result.missing_tools).toEqual([]);
+    expect(result.snapshot_id).not.toBeNull();
+  });
+
+  it('with a .semgrepignore of its own, Semgrep ignores nothing by default — the test/ file IS a target', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], errors: [], paths: { scanned: [] } }));
+    const projectPath = makeTempDir('guardian-surface-own-ignore-');
+    writeFileSync(join(projectPath, '.semgrepignore'), 'test/\n', 'utf8');
+    mkdirSync(join(projectPath, 'test'));
+    writeFileSync(join(projectPath, 'test', 'x_test.go'), 'package test\n', 'utf8');
+
+    const ctx = makeCtx();
+    const result = okResult<PartialOut>(await tool().handler({ project_path: projectPath }, ctx));
+
+    // The user's own ignore excluding every route file is a real gap.
+    expect(vi.mocked(runProcess)).toHaveBeenCalled();
+    expect(result.tools_run[0]?.reason).toMatch(/scanned 0 of 1 file/);
+    expect(result.missing_tools).toEqual(['semgrep']);
+  });
+
+  it('no file in any routes-pack language: Semgrep skipped as not applicable, never missing, snapshot persisted', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue(null); // not even installed
+    const projectPath = makeTempDir('guardian-surface-tf-');
+    writeFileSync(join(projectPath, 'main.tf'), 'resource "null_resource" "x" {}\n', 'utf8');
+
+    const ctx = makeCtx();
+    const result = okResult<PartialOut>(await tool().handler({ project_path: projectPath }, ctx));
+
+    expect(vi.mocked(runProcess)).not.toHaveBeenCalled();
+    expect(result.tools_run).toEqual([
+      { name: 'semgrep', status: 'skipped', reason: expect.stringMatching(/^not applicable/) as unknown as string },
+    ]);
+    expect(result.missing_tools).toEqual([]);
+    expect(result.snapshot_id).not.toBeNull();
+    expect(ctx.storage.surface.getLatest()?.snapshot.tools_run[0]?.status).toBe('skipped');
+  });
+
+  it('names the Docker route in a failed verdict', async () => {
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'docker' ? '/fake/bin/docker' : null,
+    );
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(
+      JSON.stringify({ results: [], paths: SCANNED, errors: [{ type: 'Timeout', message: 'rule timed out' }] }),
+    );
+
+    const ctx = makeCtx();
+    const projectPath = surfaceProject();
+    const result = okResult<{ tools_run: { status: string; reason?: string }[] }>(
+      await tool().handler({ project_path: projectPath }, ctx),
+    );
+
+    expect(result.tools_run[0]?.status).toBe('failed');
+    expect(result.tools_run[0]?.reason).toMatch(/^docker \(.+\): .*Timeout/);
+    expect(ctx.storage.surface.getLatest()).toBeNull();
   });
 
   it('treats exitCode 1 as success — semgrep exits 1 when it FINDS matches', async () => {
@@ -646,7 +915,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{
       snapshot_id: number | null;
       routes_total: number;
@@ -658,12 +927,11 @@ describe('map_attack_surface', () => {
     expect(result.snapshot_id).not.toBeNull();
   });
 
-  it('keeps reporting a persisted failed run on later cached calls', async () => {
+  it('never serves a failed run from the cache: the next call runs Semgrep again', async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
-    // Genuine failure (exit 2) that still left parseable JSON — the one case
-    // where a failed run is persisted. Its warning must not be swallowed by
-    // the cache marker on the second call, or an empty snapshot that is empty
-    // *because the scan died* reads as "this application exposes nothing".
+    // Genuine failure (exit 2) that still left parseable JSON. It used to be
+    // persisted and then served for 24 h — an empty snapshot that is empty
+    // *because the scan died*, read as "this application exposes nothing".
     vi.mocked(runProcess).mockResolvedValue({
       outcome: 'failed',
       exitCode: 2,
@@ -671,23 +939,21 @@ describe('map_attack_surface', () => {
       stderr: 'semgrep: fatal: rule pack failed to load\n',
       truncated: false,
     });
-    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], paths: SCANNED }));
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
 
     await tool().handler({ project_path: projectPath }, ctx);
     const second = okResult<{
-      routes_total: number;
+      snapshot_id: number | null;
       tools_run: { name: string; status: string; reason?: string }[];
     }>(await tool().handler({ project_path: projectPath }, ctx));
 
-    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(1);
-    expect(second.routes_total).toBe(0);
-    expect(second.tools_run[0]?.reason).toBe('cached');
-    const failed = second.tools_run.find((r) => r.status === 'failed');
-    expect(failed).toBeDefined();
-    expect(failed?.reason).toContain('rule pack failed to load');
+    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
+    expect(second.snapshot_id).toBeNull();
+    expect(second.tools_run[0]?.status).toBe('failed');
+    expect(second.tools_run[0]?.reason).toContain('rule pack failed to load');
   });
 
   it('persists nothing when semgrep runs but produces no readable output', async () => {
@@ -696,7 +962,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(null);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{
       snapshot_id: number | null;
       tools_run: { status: string; reason?: string }[];
@@ -715,7 +981,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue('{ this is not json');
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
 
     const result = okResult<{
       ok: boolean;
@@ -736,7 +1002,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     await tool().handler({ project_path: projectPath }, ctx);
 
     const call = vi.mocked(runProcess).mock.calls[0]?.[0];
@@ -755,6 +1021,7 @@ describe('map_attack_surface', () => {
     vi.mocked(runProcess).mockResolvedValue(okRun());
     vi.mocked(readJsonSafe).mockReturnValue(
       JSON.stringify({
+        paths: SCANNED,
         results: [
           {
             check_id: 'guardian-env-var',
@@ -770,7 +1037,7 @@ describe('map_attack_surface', () => {
     );
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{ env_vars_total: number; snapshot_id: number }>(
       await tool().handler({ project_path: projectPath, include_env_vars: false }, ctx),
     );
@@ -785,7 +1052,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(JS_MOUNT_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{
       sample: { path_resolved: string; path_partial: boolean; file: string }[];
     }>(await tool().handler({ project_path: projectPath }, ctx));
@@ -801,7 +1068,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(TS_NODENEXT_MOUNT_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{
       sample: { path_resolved: string; path_partial: boolean; file: string }[];
     }>(await tool().handler({ project_path: projectPath }, ctx));
@@ -822,7 +1089,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(ROOT_LEVEL_MOUNT_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{
       sample: { path_resolved: string; path_partial: boolean; file: string }[];
     }>(await tool().handler({ project_path: projectPath }, ctx));
@@ -842,7 +1109,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(POSIX_ABSOLUTE_MOUNT_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{
       sample: { path_resolved: string; path_partial: boolean; file: string }[];
     }>(await tool().handler({ project_path: projectPath }, ctx));
@@ -865,7 +1132,7 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(WINDOWS_MOUNT_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{
       sample: { path_resolved: string; path_partial: boolean; file: string }[];
     }>(await tool().handler({ project_path: projectPath }, ctx));
@@ -930,6 +1197,7 @@ describe('map_attack_surface', () => {
     reportedPath: (file: string) => string = (file) => file,
   ): string {
     return JSON.stringify({
+      paths: SCANNED,
       results: spans.map(({ file, span, metadata }, i) => {
         const source = REDACTED_FILES.get(file);
         if (source === undefined) throw new Error(`no test source for ${file}`);
@@ -953,7 +1221,7 @@ describe('map_attack_surface', () => {
 
   /** Write REDACTED_FILES into a fresh project and return its path. */
   function projectWithSource(): string {
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     for (const [file, source] of REDACTED_FILES) {
       const absolute = join(projectPath, file);
       mkdirSync(join(absolute, '..'), { recursive: true });
@@ -1024,7 +1292,7 @@ describe('map_attack_surface', () => {
     );
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const result = okResult<{
       ok: boolean;
       routes_total: number;
@@ -1059,7 +1327,7 @@ describe('map_attack_surface', () => {
         }
       ).results,
     ];
-    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results }));
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results, paths: SCANNED }));
 
     const ctx = makeCtx();
     const result = okResult<{
@@ -1093,6 +1361,7 @@ describe('map_attack_surface', () => {
     const projectPath = projectWithSource();
     vi.mocked(readJsonSafe).mockReturnValue(
       JSON.stringify({
+        paths: SCANNED,
         results: [
           // One readable express route, so the run is not wholly degraded.
           ...(JSON.parse(redactedOutput([REDACTED_SPANS[2] as never])) as { results: unknown[] })
@@ -1156,7 +1425,7 @@ describe('map_attack_surface', () => {
    * real `projectPath`, so this test measures the production convention.
    */
   it('resolves Python, Go and Rust import edges when Semgrep reports absolute paths', async () => {
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const abs = (rel: string): string => join(projectPath, rel);
     const importMatch = (rel: string, module: string, symbol?: string): unknown => ({
       check_id: 'guardian-import',
@@ -1246,7 +1515,7 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT); // one route: GET /users
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     writeFileSync(join(projectPath, 'openapi.yaml'), SPEC);
     // A second code route the spec does not document.
     // SEMGREP_OUTPUT_WITH_SHADOW adds GET /internal/metrics.
@@ -1273,7 +1542,7 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     const r = okResult<{
       spec_diff_summary: unknown;
       routes_total: number;
@@ -1291,7 +1560,7 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     writeFileSync(join(projectPath, 'openapi.yaml'), SPEC);
 
     const r = okResult<{
@@ -1311,7 +1580,7 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     writeFileSync(join(projectPath, 'openapi.yaml'), SPEC);
     writeFileSync(join(projectPath, 'swagger.yaml'), 'paths:\n  - [unclosed\n');
 
@@ -1340,7 +1609,7 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT); // one code route: GET /users
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     writeFileSync(join(projectPath, 'openapi.yaml'), MANY_PATHS_SPEC);
 
     const r = okResult<{
@@ -1372,7 +1641,7 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     writeFileSync(join(projectPath, 'a.yaml'), SPEC);
     writeFileSync(join(projectPath, 'b.yaml'), MANY_PATHS_SPEC);
 
@@ -1403,7 +1672,7 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     // 'a.yaml' is not a conventional spec basename (openapi/swagger/api-docs)
     // and does not live under an openapi/ directory, so auto-discovery would
     // never find it on its own.
@@ -1440,7 +1709,7 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     mkdirSync(join(projectPath, 'docs'), { recursive: true });
     writeFileSync(join(projectPath, 'docs', 'openapi.yaml'), SPEC);
 
@@ -1462,7 +1731,7 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
 
     const r = okResult<{ spec_files: { status: string; file: string; reason?: string }[] }>(
       await tool().handler({ project_path: projectPath, spec_paths: ['does-not-exist.yaml'] }, ctx),
@@ -1483,10 +1752,10 @@ describe('map_attack_surface — spec import and diff', () => {
     // truncation row (the deduped set never exceeded the cap). It vanishes.
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockResolvedValue(okRun());
-    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], paths: SCANNED }));
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     writeFileSync(join(projectPath, 'dup.yaml'), SPEC);
     const fillers: string[] = [];
     for (let i = 0; i < MAX_SPEC_FILES - 2; i += 1) {
@@ -1528,7 +1797,7 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     writeFileSync(join(projectPath, 'openapi.yaml'), 'openapi: "3.0.0"\npaths: {}\n');
 
     const r = okResult<{
@@ -1550,7 +1819,7 @@ describe('map_attack_surface — spec import and diff', () => {
     vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     writeFileSync(join(projectPath, 'openapi.yaml'), 'paths:\n  - [unclosed\n');
 
     const r = okResult<{
@@ -1565,10 +1834,10 @@ describe('map_attack_surface — spec import and diff', () => {
   it('reports the file-count discovery cap as a parse_error spec_files entry', async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockResolvedValue(okRun());
-    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], paths: SCANNED }));
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     mkdirSync(join(projectPath, 'openapi'), { recursive: true });
     for (let i = 0; i < MAX_SPEC_FILES + 3; i += 1) {
       writeFileSync(join(projectPath, 'openapi', `s${i}.yaml`), 'openapi: "3.0.0"\npaths: {}\n');
@@ -1589,10 +1858,10 @@ describe('map_attack_surface — spec import and diff', () => {
   it('reports an oversized spec file as a parse_error spec_files entry', async () => {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
     vi.mocked(runProcess).mockResolvedValue(okRun());
-    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], paths: SCANNED }));
 
     const ctx = makeCtx();
-    const projectPath = makeTempDir('guardian-surface-');
+    const projectPath = surfaceProject();
     writeFileSync(join(projectPath, 'openapi.yaml'), 'x'.repeat(6 * 1024 * 1024));
 
     const r = okResult<{

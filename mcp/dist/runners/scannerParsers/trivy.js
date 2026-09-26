@@ -185,19 +185,65 @@ const ECOSYSTEM_MANIFESTS = [
         trivyTypes: ['npm', 'yarn', 'pnpm', 'bun'],
         lockfiles: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock'],
         declaresNothing: npmManifestDeclaresNothing,
+        fix: 'commit the lock file your package manager writes (package-lock.json, yarn.lock, pnpm-lock.yaml or bun.lock)',
     },
-    { ecosystem: 'composer', matches: (n) => n === 'composer.json', trivyTypes: ['composer'], lockfiles: ['composer.lock'] },
+    {
+        ecosystem: 'composer',
+        matches: (n) => n === 'composer.json',
+        trivyTypes: ['composer'],
+        lockfiles: ['composer.lock'],
+        fix: 'commit composer.lock (composer update writes it)',
+    },
     {
         ecosystem: 'dotnet',
         matches: (n) => /\.(csproj|sln)$/i.test(n),
         trivyTypes: ['nuget'],
         lockfiles: ['packages.lock.json', 'packages.config'],
+        fix: 'set RestorePackagesWithLockFile to true, run dotnet restore and commit packages.lock.json',
     },
-    { ecosystem: 'rubygems', matches: (n) => n === 'Gemfile', trivyTypes: ['bundler'], lockfiles: ['Gemfile.lock'] },
-    { ecosystem: 'cargo', matches: (n) => n === 'Cargo.toml', trivyTypes: ['cargo'], lockfiles: ['Cargo.lock'] },
+    {
+        ecosystem: 'rubygems',
+        matches: (n) => n === 'Gemfile',
+        trivyTypes: ['bundler'],
+        lockfiles: ['Gemfile.lock'],
+        fix: 'commit Gemfile.lock (bundle lock writes it)',
+    },
+    {
+        ecosystem: 'cargo',
+        matches: (n) => n === 'Cargo.toml',
+        trivyTypes: ['cargo'],
+        lockfiles: ['Cargo.lock'],
+        fix: 'commit Cargo.lock (cargo generate-lockfile writes it)',
+    },
+    {
+        ecosystem: 'gradle',
+        matches: (n) => n === 'build.gradle' || n === 'build.gradle.kts',
+        trivyTypes: ['gradle'],
+        lockfiles: ['gradle.lockfile'],
+        // `--write-locks` writes nothing until locking is switched on in the build.
+        fix: 'enable dependencyLocking { lockAllConfigurations() } in the build, then run ' +
+            'gradle dependencies --write-locks and commit gradle.lockfile',
+    },
+    {
+        ecosystem: 'python',
+        matches: (n) => n === 'pyproject.toml' ||
+            n === 'Pipfile' ||
+            n === 'setup.py' ||
+            n === 'setup.cfg' ||
+            /^requirements.*\.txt$/i.test(n),
+        trivyTypes: ['pip', 'pipenv', 'poetry', 'uv'],
+        lockfiles: ['requirements.txt', 'Pipfile.lock', 'poetry.lock', 'uv.lock'],
+        declaresNothing: pythonManifestDeclaresNothing,
+        fix: 'commit poetry.lock, uv.lock or Pipfile.lock (poetry lock, uv lock, pipenv lock), ' +
+            'or pin every dependency (==) in requirements.txt',
+    },
 ];
 /** Every ecosystem the coverage check can report a gap for (`ManifestCoverageGap.ecosystem`). */
 export const MANIFEST_ECOSYSTEMS = ECOSYSTEM_MANIFESTS.map((e) => e.ecosystem);
+/** How to give Trivy a file it reads for `ecosystem`, or null for one this table does not know. */
+export function lockFileAdvice(ecosystem) {
+    return ECOSYSTEM_MANIFESTS.find((e) => e.ecosystem === ecosystem)?.fix ?? null;
+}
 /** Each ecosystem with the lock file names Trivy reports its Results under. */
 export const MANIFEST_ECOSYSTEM_LOCKFILES = ECOSYSTEM_MANIFESTS.map((e) => ({ ecosystem: e.ecosystem, lockfiles: e.lockfiles }));
 /**
@@ -295,6 +341,71 @@ function npmManifestDeclaresNothing(path) {
         return false;
     const fields = manifest;
     return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(dirname(path));
+}
+/** A TOML value that is literally empty: `[]` or `{}`, an optional trailing comment. */
+const EMPTY_TOML_VALUE = /^(\[\s*\]|\{\s*\})\s*(#.*)?$/;
+/** Key names that declare dependencies in whatever table they sit in (setuptools' dynamic ones included). */
+const PY_DEPENDENCY_KEYS = new Set(['dependencies', 'optional-dependencies', 'dev-dependencies']);
+/** Tables whose every key is a dependency (Poetry's `python` constraint aside). */
+const PY_DEPENDENCY_TABLES = /^(project\.optional-dependencies(\..+)?|dependency-groups|tool\.poetry\.(dependencies|dev-dependencies|group\.[^.]+\.dependencies)|tool\.pdm\.dev-dependencies|packages|dev-packages)$/;
+/**
+ * Python's "declares nothing" — nothing Trivy could have missed, so no gap:
+ * a `requirements*.txt` with no line but blanks and comments; a `setup.py`
+ * / `setup.cfg` that never mentions `install_requires` / `extras_require`;
+ * a `Pipfile` with no entry under `[packages]` / `[dev-packages]`; a `pyproject.toml`
+ * that declares no dependency — the common tool-config-only file (`[tool.ruff]`,
+ * `[build-system]`), or a `[project]` without `dependencies`. Read line by
+ * line, conservatively: a dependency key whose value is not literally `[]` /
+ * `{}` (a multi-line array included), an entry in a dependency table
+ * (Poetry's lone `python` constraint aside), a table header this reader
+ * cannot parse, or a file it cannot read — each may declare something, and
+ * stays a gap.
+ */
+function pythonManifestDeclaresNothing(path) {
+    let text;
+    try {
+        text = readFileSync(path, 'utf8').replace(/^﻿/, '');
+    }
+    catch {
+        return false;
+    }
+    const lines = text
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l !== '' && !l.startsWith('#'));
+    if (/\.txt$/i.test(path))
+        return lines.length === 0;
+    // setuptools: Trivy reads neither file. `install_requires` / `extras_require`
+    // anywhere (a keyword argument in setup.py, a key or an
+    // `[options.extras_require]` section in setup.cfg) may declare something.
+    if (/(^|[\\/])setup\.py$/i.test(path))
+        return !/\b(install_requires|extras_require)\b/.test(text);
+    if (/(^|[\\/])setup\.cfg$/i.test(path)) {
+        return !/^\s*(install_requires|extras_require)\s*=/m.test(text) && !/^\s*\[options\.extras_require\]/m.test(text);
+    }
+    let table = '';
+    for (const line of lines) {
+        if (line.startsWith('[')) {
+            const header = /^\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/.exec(line);
+            if (header?.[1] === undefined)
+                return false;
+            table = header[1].replace(/["'\s]/g, '');
+            continue;
+        }
+        const kv = /^["']?([A-Za-z0-9_.-]+)["']?\s*=\s*(.*)$/.exec(line);
+        // Not a key: the continuation of a value whose key was already judged.
+        if (kv?.[1] === undefined || kv[2] === undefined)
+            continue;
+        const key = kv[1];
+        const empty = EMPTY_TOML_VALUE.test(kv[2]);
+        const lastSegment = key.slice(key.lastIndexOf('.') + 1);
+        if (PY_DEPENDENCY_KEYS.has(lastSegment) && !empty)
+            return false;
+        if (PY_DEPENDENCY_TABLES.test(table) && !empty && !(table.startsWith('tool.poetry.') && key === 'python')) {
+            return false;
+        }
+    }
+    return true;
 }
 /**
  * Assess whether Trivy's fs-scan output covers every dependency manifest

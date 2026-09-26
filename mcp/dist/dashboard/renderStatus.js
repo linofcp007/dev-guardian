@@ -82,7 +82,7 @@ export function renderStatus(snapshot, opts) {
         lines.push('');
     }
     // MISSING / SUPPRESSED / truncation notices: each is independently
-    // omitted when it has nothing to say (design §6: "sections with nothing
+    // omitted when it has nothing to say (the design of record: "sections with nothing
     // to say are omitted, not printed empty"), so this whole block — and its
     // trailing separator — disappears when there is nothing to report.
     const trailing = [];
@@ -129,7 +129,7 @@ function formatDuration(durationSeconds, status) {
 // RISK
 // ---------------------------------------------------------------------------
 /**
- * Design §2's corollary: "a score computed over a partial scan is presented
+ * The design of record's corollary: "a score computed over a partial scan is presented
  * with its coverage caveat attached, never as a bare number." Reads
  * `risk.coverage_caveat` specifically (not `coverage.level`) because that is
  * the field `RiskAssessment` documents as carrying this exact promise —
@@ -169,7 +169,7 @@ function renderRiskLine(risk, coverage, color) {
 // ---------------------------------------------------------------------------
 /**
  * Unlike CVES below, OPEN always prints every severity column, even at
- * zero — design §6's explicit exception: "OPEN with a zero total prints,
+ * zero — the design of record's explicit exception: "OPEN with a zero total prints,
  * because 'zero open findings' is the answer the user came for."
  *
  * **`info` has its own column too** (coordinator review, Minor). It used to
@@ -197,7 +197,7 @@ function renderOpenLine(findings, color) {
  * CVES, unlike OPEN, is omitted entirely when `total` is 0 (nothing carves
  * out an exception for it the way §6 does for OPEN), and within a non-empty
  * line only shows the severities that are actually non-zero — matching the
- * design §6 mock, which shows "1 crit  4 high" with no "0 med  0 low".
+ * the design of record's mock, which shows "1 crit  4 high" with no "0 med  0 low".
  */
 function renderCvesLine(cves, color) {
     if (cves.total === 0)
@@ -216,7 +216,7 @@ function renderCvesLine(cves, color) {
     return `  CVES         ${breakdown}${cves.total}`;
 }
 // ---------------------------------------------------------------------------
-// Deltas — the "explicit absence, never zeros" rule (design §7)
+// Deltas — the "explicit absence, never zeros" rule (the design of record)
 // ---------------------------------------------------------------------------
 /**
  * Takes `scanType` as its own parameter (the caller's already-narrowed
@@ -326,7 +326,7 @@ function renderHottest(hotspots) {
  * on screen). Printing "semgrep did not run this scan" there would be false
  * — a scan with `by_tool: {semgrep: 1}` did run it. Split into two lines,
  * each naming only the tools its own claim is true for; either half is
- * omitted when it has nothing to name, matching design §6.
+ * omitted when it has nothing to name, matching the design of record.
  */
 function renderMissingLine(coverage, color) {
     if (coverage.omitted_categories.length === 0)
@@ -384,7 +384,7 @@ function daysUntil(iso, referenceIso) {
     return Math.max(0, Math.ceil((target - reference) / 86_400_000));
 }
 // ---------------------------------------------------------------------------
-// Truncation notices (design §8: no cap is ever silent)
+// Truncation notices (the design of record: no cap is ever silent)
 // ---------------------------------------------------------------------------
 function renderTruncationLines(notices) {
     return notices.map((n) => `  NOTE         ${n.what}: showing ${n.shown} of ${n.total} (${n.reason})`);

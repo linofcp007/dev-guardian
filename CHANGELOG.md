@@ -896,6 +896,69 @@ keeps working (migrations 004–011 are additive).
   a test spawns is bounded (120 s, SIGKILL; `GUARDIAN_TEST_SEMGREP_TIMEOUT_MS`)
   and fails its test at the bound; `ciInitCli` runs its probe with Git Bash
   and skips visibly when no usable bash exists (the WSL stub is not one).
+- **Scan retention** ranks scoped scans (`--staged`, `--unpushed`, file lists)
+  apart from whole-project ones, so pre-commit runs can no longer prune the
+  last whole-project scan the open set reads. It also keeps the children of a
+  baselined `security_scan_full` run (and the parent of a baselined child):
+  pruning one made every later finding of its type "not previously measured"
+  and `regression_alert` went quiet. The under-lock re-check re-applies the
+  whole rule.
+- **`map_attack_surface` judged Semgrep by its exit code alone**, so a run that
+  scanned no file (a `.semgrepignore` over the sources, the locale-codec
+  hazard) was `ok` and persisted an empty surface for 24 h. It now uses the
+  shared Semgrep judge against the project's route-language files — counted
+  as Semgrep would see them, its default ignore (`test/`, `tests/`,
+  `*_test.go`, …) applied when there is no `.semgrepignore`: none at all is
+  `skipped`, not applicable, never a gap (Semgrep is not run and the snapshot
+  persists), so a Terraform module with Terratest under `test/` stays exit 0;
+  files present but none scanned is a gap, nothing persisted; a file only
+  partly parsed (a warn-level `PartialParsing`, e.g. PHP's `const NAMESPACE`)
+  persists as partial coverage, the files listed in `partially_parsed`, and a
+  `scan_dast` over that surface reads partial (`guardian-dast:partial-surface`);
+  a fatal run (unclean exit, rule/config error) is `failed`, its routes shown
+  but not persisted. Semgrep now runs in UTF-8 mode here too.
+- **A Gradle build without `gradle.lockfile`, or a Python project Trivy
+  cannot read** (a PEP 621 `pyproject.toml`, a setuptools `setup.py` /
+  `setup.cfg`, a `Pipfile` without `Pipfile.lock`, an unpinned
+  `requirements.txt`, a `requirements-dev.txt`), made `scan_deps`,
+  `deps_audit`, `security_scan_full` and the CI gate report `trivy ok`,
+  coverage `full`, 0 findings — Trivy 0.69.3 returns no Results for any of
+  them. They are now `trivy:gradle` / `trivy:python` coverage gaps; a Python
+  manifest that declares nothing is not. The coverage warning no longer says
+  "NO scanner ran … Install trivy" for a Trivy that ran: it names the manifest
+  and the lock file that closes the gap (for Gradle, `dependencyLocking {
+  lockAllConfigurations() }` before `gradle dependencies --write-locks`).
+- **`bug_hunt` read a `build.gradle.kts` as Java** and ran `p/java` against a
+  Kotlin project, which read as a Java bug hunt with 0 findings. It is Kotlin,
+  as `detect_stack` says; a language no pack covers (Kotlin, Ruby) is named in
+  `languages_not_covered` with a warning.
+- **`dev-guardian scan --help` and the host rules said to add `.guardian/` to
+  `.gitignore`** — a bare directory entry, below which git cannot re-include
+  `baseline.json`, so the baseline CI needs could never be committed. Both now
+  name the two lines the server writes: `.guardian/*` and
+  `!.guardian/baseline.json`.
+- **`install_toolchain`'s elevation hint** said only "re-call with
+  `elevation_allowed=true`". Install steps run without a terminal, so that
+  works only with passwordless sudo (or, on Windows, a server already running
+  elevated); the hint now says so and names the command to run yourself.
+- **`scan_skill`'s OSV lookup ignored `GUARDIAN_OFFLINE=1`** and posted the
+  skill's dependency list to `api.osv.dev`. Offline it now sends nothing and
+  records `osv.dev: skipped` with `network disabled (GUARDIAN_OFFLINE=1)`, like
+  every other network caller; `docs/env.md` and `SECURITY.md` say so.
+- **"The latest scan" could be an orchestrated run that measured nothing**:
+  the search judged the child (an iac child with no IaC is coverage `full`),
+  then answered with its parent without judging it. A parent at coverage
+  `none` is now passed over, with its children, so `set_baseline` and
+  `report_export` default to the newest scan that measured something.
+- **`deps_update_plan` took its CVEs from the first completed deps-flavoured
+  row in a 50-row window**, so a scoped `deps` run or a `security_scan_full`
+  whose Trivy failed made it plan no security update while `risk_score`
+  counted the CVE. It now reads the same newest usable deps scan as
+  `risk_score` and the dashboard.
+- **A gitleaks history pass that logged no commit count read `ok`** ("an
+  unreported number of commits scanned"). On a repository with commits it is
+  now `failed` unless the report holds findings — git's own count of a range
+  says what there was to read, not what gitleaks read.
 
 ### Security
 

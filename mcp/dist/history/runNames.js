@@ -109,6 +109,8 @@ export const RUN_NAMES = {
     'trivy:dotnet': scanner(trivyFsKey('dotnet')),
     'trivy:rubygems': scanner(trivyFsKey('rubygems')),
     'trivy:cargo': scanner(trivyFsKey('cargo')),
+    'trivy:gradle': scanner(trivyFsKey('gradle')),
+    'trivy:python': scanner(trivyFsKey('python')),
     // deps_audit's native auditors, recorded by command: `npm audit`,
     // `pip-audit` (parsed into findings since Task 10), and the .NET SDK's
     // `dotnet list package --vulnerable`, whose findings say
@@ -140,6 +142,9 @@ export const RUN_NAMES = {
     'guardian-dast': scanner('dast'),
     'guardian-dast:unanswered': scanner('dast'),
     'guardian-dast:wall-clock': scanner('dast'),
+    // The surface it probed was partial (a file Semgrep only partly parsed):
+    // routes the map could not read were never probed.
+    'guardian-dast:partial-surface': scanner('dast'),
     nuclei: scanner('nuclei'),
     // WordPress.
     wpscan: scanner('wpscan'),

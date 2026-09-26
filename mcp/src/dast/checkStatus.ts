@@ -3,7 +3,7 @@
  * check could run at all, not detection: it never inspects a response body or
  * decides anything is wrong.
  *
- * Design §9 is the whole point of this module: "a check that never ran is
+ * The design of record's rule is the whole point of this module: "a check that never ran is
  * visible as such rather than as a check that found nothing". Every check
  * therefore reports a status even when it produced no findings, and `ok` is
  * the only value that means "this check ran, and what it found is what there

@@ -118,6 +118,7 @@ import { z } from 'zod';
 import { matchesAny } from '../platform/glob.js';
 import { classifyRestoreFailure, findDotnetTargets, lockFileCandidates, planDotnetRestore, projectsForTarget, readPackageReferences, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
 import { compareVersions, compareVersionsLoose, isCleanVersion, isLooseVersion, minCleanVersionAbove, minCleanVersionAboveLoose, } from '../deps/versionCompare.js';
+import { findLatestUsable } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES } from '../types.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -521,10 +522,16 @@ function readDependencyEvidence(projectPath) {
  * type" row — a `sast`-only scan of a different project could win here and
  * silently zero out every CVE, the same class of bug documented in
  * `scansRepo.ts`'s own module comment for `getLatest`/`listHistory`.
+ *
+ * "Latest" is the newest USABLE one, found exactly as `risk_score`, the
+ * dashboard and `guardian://cves/active` find it: unscoped, not coverage
+ * `none`, a security_full row judged on its Trivy half. The first completed
+ * row in a 50-row window let a scoped `deps` run, or a security_full whose
+ * Trivy failed, answer "nothing to update" while risk_score still counted
+ * the CVE.
  */
 function listActiveCves(ctx, projectPath) {
-    const history = ctx.storage.scans.listHistoryForProject(projectPath, 50);
-    const latest = history.find((s) => CVE_SOURCE_SCAN_TYPES.includes(s.scan_type) && s.status === 'completed');
+    const latest = findLatestUsable(ctx.storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: 'deps' }).scan;
     const out = new Map();
     if (!latest)
         return out;

@@ -105,3 +105,97 @@ describe('assessManifestCoverage on a real Trivy report (npm "declares nothing")
     expect(TRIVY_INSTALLED, 'GUARDIAN_REQUIRE_SEMGREP=1 but trivy is not on PATH.').toBe(true);
   });
 });
+
+/** Files written as given — Gradle and TOML are not JSON. */
+function textProject(files: Record<string, string>): string {
+  const dir = makeTempDir('trivy-manifest-e2e-');
+  for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body, 'utf8');
+  return dir;
+}
+
+const GRADLE = "plugins { id 'java' }\ndependencies { implementation 'org.apache.logging.log4j:log4j-core:2.14.1' }\n";
+const GRADLE_LOCK =
+  '# This is a Gradle generated file for dependency locking.\n' +
+  'org.apache.logging.log4j:log4j-core:2.14.1=compileClasspath,runtimeClasspath\nempty=\n';
+const PEP621 = '[project]\nname = "x"\nversion = "0.1.0"\ndependencies = ["django==3.2.0"]\n';
+
+/**
+ * Final review I4, measured on 0.69.3: Trivy reads Gradle only from
+ * `gradle.lockfile`, and Python only from a pinned `requirements.txt` or a
+ * lock file. Before these ecosystems were in the table, both bare shapes
+ * read `trivy ok`, coverage `full`, 0 findings. If a future Trivy starts
+ * reading a bare manifest, the first or third test fails here — the gap
+ * would then be a false alarm, and the table entry must be revisited.
+ */
+describe('assessManifestCoverage on a real Trivy report (Gradle and Python)', () => {
+  it.skipIf(!TRIVY_INSTALLED)(
+    'a build.gradle without gradle.lockfile: no Results, a gradle gap',
+    () => {
+      const dir = textProject({ 'build.gradle': GRADLE });
+      const raw = trivyFs(dir);
+      expect(resultsOf(raw) ?? []).toEqual([]);
+      expect(assessManifestCoverage(dir, raw)).toEqual({
+        gaps: [{ ecosystem: 'gradle', files: ['build.gradle'] }],
+        sawAnyResults: false,
+      });
+    },
+    TRIVY_TIMEOUT_MS,
+  );
+
+  it.skipIf(!TRIVY_INSTALLED)(
+    'a build.gradle with gradle.lockfile: a gradle Result, covered',
+    () => {
+      const dir = textProject({ 'build.gradle': GRADLE, 'gradle.lockfile': GRADLE_LOCK });
+      const raw = trivyFs(dir);
+      expect(resultsOf(raw)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ Target: 'gradle.lockfile', Type: 'gradle' })]),
+      );
+      expect(assessManifestCoverage(dir, raw)).toEqual({ gaps: [], sawAnyResults: true });
+    },
+    TRIVY_TIMEOUT_MS,
+  );
+
+  it.skipIf(!TRIVY_INSTALLED)(
+    'a PEP 621 pyproject.toml alone: no Results, a python gap',
+    () => {
+      const dir = textProject({ 'pyproject.toml': PEP621 });
+      const raw = trivyFs(dir);
+      expect(resultsOf(raw) ?? []).toEqual([]);
+      expect(assessManifestCoverage(dir, raw)).toEqual({
+        gaps: [{ ecosystem: 'python', files: ['pyproject.toml'] }],
+        sawAnyResults: false,
+      });
+    },
+    TRIVY_TIMEOUT_MS,
+  );
+
+  it.skipIf(!TRIVY_INSTALLED)(
+    'a setuptools project (setup.py install_requires + a build-system-only pyproject.toml): no Results, a python gap on setup.py',
+    () => {
+      const dir = textProject({
+        'setup.py': 'from setuptools import setup\nsetup(name="x", install_requires=["django==3.2.0"])\n',
+        'pyproject.toml': '[build-system]\nrequires = ["setuptools"]\nbuild-backend = "setuptools.build_meta"\n',
+      });
+      const raw = trivyFs(dir);
+      expect(resultsOf(raw) ?? []).toEqual([]);
+      expect(assessManifestCoverage(dir, raw)).toEqual({
+        gaps: [{ ecosystem: 'python', files: ['setup.py'] }],
+        sawAnyResults: false,
+      });
+    },
+    TRIVY_TIMEOUT_MS,
+  );
+
+  it.skipIf(!TRIVY_INSTALLED)(
+    'a pinned requirements.txt beside the pyproject.toml: a pip Result, python covered',
+    () => {
+      const dir = textProject({ 'pyproject.toml': PEP621, 'requirements.txt': 'django==3.2.0\n' });
+      const raw = trivyFs(dir);
+      expect(resultsOf(raw)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ Target: 'requirements.txt', Type: 'pip' })]),
+      );
+      expect(assessManifestCoverage(dir, raw)).toEqual({ gaps: [], sawAnyResults: true });
+    },
+    TRIVY_TIMEOUT_MS,
+  );
+});

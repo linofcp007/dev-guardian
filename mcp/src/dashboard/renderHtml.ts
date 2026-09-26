@@ -6,7 +6,7 @@
  * no I/O, no network — every value shown is read straight from the snapshot.
  *
  * Two properties this file exists to hold, both load-bearing enough that the
- * committed tests parse the output rather than eyeball it (design §11):
+ * committed tests parse the output rather than eyeball it (the design of record):
  *
  *  - **Self-contained.** No `<link>`, no `<script src>`, no CDN, no web font,
  *    no `@import url`. All CSS/JS is inline (built on `report/htmlTheme.ts`'s
@@ -95,7 +95,7 @@ export function renderDashboard(rawSnapshot: DashboardSnapshot): string {
 }
 
 /**
- * Design §5.1: a project with no completed scan is *unknown*, not safe. A
+ * The design of record: a project with no completed scan is *unknown*, not safe. A
  * single line naming the command to run, still inside the same branded
  * shell — never the full layout built over data that does not exist. The
  * JSON payload is still inlined (the snapshot's every field carries its
@@ -119,7 +119,7 @@ function renderNoScan(snapshot: DashboardSnapshot): string {
 }
 
 // ---------------------------------------------------------------------------
-// RISK — design §2's corollary: a score computed over a partial scan carries
+// RISK — the design of record's corollary: a score computed over a partial scan carries
 // its caveat attached, never as a bare number.
 // ---------------------------------------------------------------------------
 
@@ -138,7 +138,7 @@ function riskSection(snapshot: DashboardSnapshot): string {
 }
 
 // ---------------------------------------------------------------------------
-// Coverage banner — design §2's governing rule, made visible as a banner
+// Coverage banner — the design of record's governing rule, made visible as a banner
 // (not a footnote): present only when coverage is partial, naming both the
 // missing tools and what the numbers therefore do not contain.
 // ---------------------------------------------------------------------------
@@ -193,7 +193,7 @@ function coverageBanner(coverage: CoverageState): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Truncation notices (design §8: no cap is ever silent). Rendered generically
+// Truncation notices (the design of record: no cap is ever silent). Rendered generically
 // — one line per notice, regardless of what `what` says — deliberately NOT
 // matched to a specific section by exact string: `TruncationNotice.what` is
 // documented as free-form ("which field was capped, e.g. 'new_findings'"),
@@ -233,7 +233,7 @@ function severitySection(findings: FindingsSummary): string {
 }
 
 // ---------------------------------------------------------------------------
-// The two deltas (design §7) — an absent reference renders as an explicit
+// The two deltas (the design of record) — an absent reference renders as an explicit
 // sentence, never as zeros; a present-but-flat delta renders its zeros.
 // ---------------------------------------------------------------------------
 
@@ -391,7 +391,7 @@ function findingRow(f: Finding): string {
 }
 
 // ---------------------------------------------------------------------------
-// Hotspots — plain counts, not severity-weighted (design §12).
+// Hotspots — plain counts, not severity-weighted (the design of record).
 // ---------------------------------------------------------------------------
 
 function hotspotsSection(hotspots: readonly Hotspot[]): string {

@@ -244,9 +244,11 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          runner the moment this CLI read the key from there.
   Never writes .guardian/baseline.json — see \`baseline update\`.
   Leaves .guardian/reports/ in the scanned project either way (security_scan_full
-  and map_attack_surface write there, same as interactively) — add \`.guardian/\`
-  to .gitignore by hand. The MCP server does this automatically every time it
-  starts against a project; this CLI never starts that server.
+  and map_attack_surface write there, same as interactively) — add the two lines
+  \`.guardian/*\` and \`!.guardian/baseline.json\` to .gitignore by hand (never a
+  bare \`.guardian/\`: git cannot re-include a file below an ignored directory,
+  so the baseline CI needs could never be committed). The MCP server writes
+  them every time it starts against a project; this CLI never starts that server.
   --sarif records coverage as a single pass/fail bit (SARIF's own
   invocation.executionSuccessful) — enough to tell an incomplete run from a clean
   one without cross-referencing anything else, but not WHICH scanner was missing

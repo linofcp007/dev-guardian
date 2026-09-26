@@ -149,6 +149,7 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
   'tools/scanDast.ts:DAST_ENGINE': 'DAST_ENGINE',
   'tools/scanDast.ts:`${DAST_ENGINE}:unanswered`': 'the `${DAST_ENGINE}:…` passes',
   'tools/scanDast.ts:`${DAST_ENGINE}:wall-clock`': 'the `${DAST_ENGINE}:…` passes',
+  'tools/scanDast.ts:`${DAST_ENGINE}:partial-surface`': 'the `${DAST_ENGINE}:…` passes',
   'tools/generateSbom.ts:producedBy': "producedBy's declared type",
   'tools/mapAttackSurface.ts:RECOVERY_STEP':
     'never reaches a scans row: map_attack_surface returns its tools_run and caches the surface, writing no scan',

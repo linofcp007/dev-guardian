@@ -518,6 +518,25 @@ export interface AttackSurfaceSnapshot {
    * reachability to a later consumer.
    */
   imports: { file: string; module_file: string }[];
+  /**
+   * Files Semgrep could read only in part (a warn-level `PartialParsing`, a
+   * syntax error confined to one file): the routes outside the unparsed span
+   * are in `routes`, the ones inside it may be missing. Present only when
+   * there were some — the snapshot is then partial coverage, with `semgrep`
+   * both `ok` in `tools_run` and listed in `missing_tools`. Absent on every
+   * snapshot persisted before this field existed.
+   */
+  partially_parsed?: PartialParse[];
+}
+
+/** One file a Semgrep run could not fully parse, as `map_attack_surface` reports it. */
+export interface PartialParse {
+  /** Project-relative when the file is inside the project. */
+  file: string;
+  /** Semgrep's error type (`PartialParsing`, `Syntax error`, …). */
+  type: string;
+  /** The first line of Semgrep's message. */
+  message: string;
 }
 
 /**

@@ -199,11 +199,31 @@ function fallbackLanguages(projectPath) {
     if (has('pyproject.toml') || has('requirements.txt') || has('setup.py')) {
         languages.push('python');
     }
-    if (has('pom.xml') || has('build.gradle') || has('build.gradle.kts'))
+    if (has('pom.xml') || has('build.gradle'))
         languages.push('java');
+    // A Kotlin build script, as detect_stack reads it — never Java: p/java ran
+    // against Kotlin sources and read as a Java bug hunt with 0 findings.
+    if (has('build.gradle.kts'))
+        languages.push('kotlin');
     if (has('go.mod'))
         languages.push('go');
     return languages;
+}
+/**
+ * Detected languages with a bug pack of their own: a local
+ * `configs/semgrep/bugfix-*.yml` (always on), or a `LANGUAGE_PACKS` entry.
+ * Kotlin and Ruby have neither — their code gets only whatever registry
+ * rules happen to target them.
+ */
+const LANGUAGES_WITH_BUG_RULES = new Set([
+    'javascript', 'typescript', 'python', 'go', 'java', 'csharp', 'php', 'rust', ...LANGUAGE_PACKS.keys(),
+]);
+/**
+ * Pure: the detected languages `bug_hunt` has no pack for at all, in the
+ * order detected. Exported for tests.
+ */
+export function languagesNotCovered(languages) {
+    return [...new Set(languages.filter((l) => !LANGUAGES_WITH_BUG_RULES.has(l)))];
 }
 /**
  * Which languages `bug_hunt` should treat the project as using, preferring
@@ -477,7 +497,7 @@ registerToolModule(makeScanTool({
     },
     // The pack choice is recorded on the scan row (meta, via extras) so
     // create_fix_pr can re-scan a fix with the SAME packs that found it.
-    invoke: async (input, ctx) => recordPackChoice(input, await invokeBugHunt(input, ctx)),
+    invoke: async (input, ctx) => reportUncoveredLanguages(ctx, recordPackChoice(input, await invokeBugHunt(input, ctx))),
 }));
 async function invokeBugHunt(input, ctx) {
     const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'bugs');
@@ -737,6 +757,27 @@ async function invokeBugHuntOnScope(args) {
     });
     missing_tools.push('semgrep');
     return finish('completed');
+}
+/**
+ * Names the project's languages no bug_hunt pack covers (`languages_not_covered`,
+ * plus a warning the row keeps for cache hits), so a Kotlin project's run
+ * never reads as a bug hunt of its Kotlin code. Not a coverage gap: no
+ * scanner is missing or failed — the rules do not exist.
+ */
+function reportUncoveredLanguages(ctx, invocation) {
+    const uncovered = languagesNotCovered(detectLanguages(ctx.plugin, ctx.rulesProjectPath));
+    if (uncovered.length === 0)
+        return invocation;
+    return {
+        ...invocation,
+        warnings: [
+            ...(invocation.warnings ?? []),
+            `No bug_hunt pack covers ${uncovered.join(', ')} (no local bugfix rules, no language pack): ` +
+                'that code was not bug-hunted beyond whatever registry rules happen to target it, so a quiet ' +
+                'result says nothing about it.',
+        ],
+        extras: { ...(invocation.extras ?? {}), languages_not_covered: uncovered },
+    };
 }
 function recordPackChoice(input, invocation) {
     return {

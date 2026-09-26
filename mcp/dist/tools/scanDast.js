@@ -368,6 +368,21 @@ async function handler(input, ctx, callMeta) {
         });
     }
     const missingTools = [];
+    // A surface map_attack_surface persisted as PARTIAL — a file Semgrep only
+    // partly parsed (`partially_parsed`), or any other gap its own run
+    // recorded. Routes in the unparsed spans were never in the inventory, so
+    // never probed: this run is partial coverage too, never a complete one.
+    const surfaceGaps = surfaceGapsOf(snapshot);
+    if (surfaceGaps !== null) {
+        missingTools.push(`${DAST_ENGINE}:partial-surface`);
+        const files = surfaceGaps.partially_parsed.map((p) => p.file);
+        warnings.push('The attack-surface snapshot is partial' +
+            (files.length > 0
+                ? ` — Semgrep only partly parsed ${files.join(', ')}`
+                : ` — its own scan recorded gaps (${surfaceGaps.missing_tools.join(', ')})`) +
+            ': routes the map could not read were never probed. Fix the gap and re-run ' +
+            'map_attack_surface for a complete inventory.');
+    }
     // ---- 8. Optional rate-limit burst ------------------------------------
     const burst = await runRateLimitBurst({
         requested: inp.probe_rate_limit === true,
@@ -375,7 +390,7 @@ async function handler(input, ctx, callMeta) {
         // The full inventory, not `plan.routes`: the burst's target is almost
         // always a POST, which the default read-only envelope drops from the
         // plan. `probe_rate_limit` is its own authorization for exactly that one
-        // route (design §6).
+        // route (the design of record).
         routes: snapshot.routes,
         origin: target.origin,
         // Shares the deadline's signal, so the burst is inside the ceiling too:
@@ -560,10 +575,23 @@ async function handler(input, ctx, callMeta) {
             skipped: plan.skipped,
             checks,
             rate_limit: burst.summary,
+            // Present only when the surface probed was itself partial.
+            ...(surfaceGaps !== null ? { surface_gaps: surfaceGaps } : {}),
         },
     };
     // The final choke point: every string on the way out, whatever produced it.
     return { ok: true, ...redactObject(payload, redact) };
+}
+/**
+ * The gaps a persisted surface snapshot carries, or null for a complete
+ * one: its own `missing_tools` (map_attack_surface lists `semgrep` for a
+ * partial parse) and the files Semgrep only partly parsed.
+ */
+function surfaceGapsOf(snapshot) {
+    const partiallyParsed = snapshot.partially_parsed ?? [];
+    if (snapshot.missing_tools.length === 0 && partiallyParsed.length === 0)
+        return null;
+    return { missing_tools: [...snapshot.missing_tools], partially_parsed: partiallyParsed };
 }
 /**
  * `auth_header_env` wins when both are supplied: it is the recommended path
@@ -617,7 +645,7 @@ function specPaths(snapshot, side) {
 /**
  * `DastFinding` carries `check` and `evidence_id`, which are not columns.
  * They go into `raw` alongside the evidence file's path so a stored finding
- * still points at its proof, per design §8 ("pointed at by the finding, not
+ * still points at its proof, per the design of record ("pointed at by the finding, not
  * inlined into the SQLite row").
  *
  * `evidenceDir` is null when this finding's evidence file was capped or

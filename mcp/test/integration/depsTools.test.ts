@@ -192,6 +192,90 @@ describe('scan_deps', () => {
     expect(r.coverage).toBe('partial');
   });
 
+  // Final review I4, measured on Trivy 0.69.3: `Results: []` for both shapes.
+  // Before, neither was in the manifest table: `trivy ok`, coverage `full`,
+  // 0 findings — for a Spring service and a PEP 621 project alike.
+  it.each([
+    ['build.gradle', 'dependencies { implementation "org.apache.logging.log4j:log4j-core:2.14.1" }\n', 'gradle'],
+    ['build.gradle.kts', 'dependencies { implementation("org.apache.logging.log4j:log4j-core:2.14.1") }\n', 'gradle'],
+    ['pyproject.toml', '[project]\nname = "x"\ndependencies = ["django==3.2.0"]\n', 'python'],
+  ])('a bare %s Trivy cannot read is a trivy:<ecosystem> gap, never a clean full scan (%#)', async (file, body, eco) => {
+    const project = tempProject();
+    writeFileSync(join(project, file), body, 'utf8');
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const r = (await getTool('scan_deps').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      missing_tools: string[];
+      manifest_coverage_gaps: Array<{ ecosystem: string; files: string[] }>;
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+
+    expect(r.tools_run.find((t) => t.name === 'trivy')).toMatchObject({ status: 'skipped', reason: 'no_supported_manifest' });
+    expect(r.missing_tools).toContain('trivy');
+    expect(r.manifest_coverage_gaps).toEqual([{ ecosystem: eco, files: [file] }]);
+    expect(r.coverage).not.toBe('full');
+  });
+
+  // Follow-up 2, item 3: the warning said "NO scanner ran … Install trivy"
+  // for a Trivy that was installed and ran. It names the manifest and the fix.
+  it('the warning for a bare build.gradle names the manifest and the Gradle fix, never "Install trivy" — forced or not (a gap is never a cache hit)', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'build.gradle'), "plugins { id 'java' }\n", 'utf8');
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    for (const force of [true, false]) {
+      const r = (await getTool('scan_deps').handler({ project_path: project, force }, plugin)) as {
+        ok: true;
+        warnings: string[];
+      };
+      const text = r.warnings.join('\n');
+      expect(text).not.toMatch(/Install trivy/);
+      expect(text).toMatch(/trivy is installed and ran/);
+      expect(text).toContain('gradle (build.gradle)');
+      expect(text).toContain('dependencyLocking { lockAllConfigurations() }');
+    }
+  });
+
+  it('a Gradle build beside a covered npm project: trivy ok, `trivy:gradle` missing, coverage partial', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    writeFileSync(join(project, 'package-lock.json'), '{}', 'utf8');
+    writeFileSync(join(project, 'build.gradle'), 'plugins { id "java" }\n', 'utf8');
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const path = outputPathFor(opts.args);
+      if (path) {
+        writeFileSync(path, JSON.stringify({ Results: [{ Target: 'package-lock.json', Type: 'npm', Vulnerabilities: [] }] }), 'utf8');
+      }
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const r = (await getTool('scan_deps').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      missing_tools: string[];
+    };
+    expect(r.missing_tools).toEqual(['trivy:gradle']);
+    expect(r.coverage).toBe('partial');
+  });
+
   it('reports coverage=full for a project with no dependency manifest at all', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);
@@ -534,6 +618,34 @@ describe('deps_audit', () => {
     expect(r.ok).toBe(true);
     expect(r.bot_configured.dependabot).toBe(true);
     expect(r.missing_tools).toContain('trivy');
+  });
+
+  it('a Gradle build without gradle.lockfile is a gap: no auditor of its own, never a clean full scan (I4)', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'build.gradle.kts'), 'dependencies { implementation("x:y:1.0") }\n', 'utf8');
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'trivy' ? '/fake/bin/trivy' : null,
+    );
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      missing_tools: string[];
+      manifest_coverage_gaps: Array<{ ecosystem: string; files: string[] }>;
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+
+    expect(r.tools_run.find((t) => t.name === 'trivy')).toMatchObject({ status: 'skipped', reason: 'no_supported_manifest' });
+    expect(r.missing_tools).toContain('trivy');
+    expect(r.manifest_coverage_gaps).toEqual([{ ecosystem: 'gradle', files: ['build.gradle.kts'] }]);
+    expect(r.coverage).not.toBe('full');
   });
 
   it('marks trivy skipped/no_supported_manifest for a bare .csproj instead of a clean 0-findings scan', async () => {
@@ -1190,6 +1302,71 @@ describe('deps_update_plan', () => {
     expect(r.plan[0]?.classification).toBe('security');
     expect(r.plan[0]?.reason).toContain('CVE');
     expect(r.summary.has_security_updates).toBe(true);
+  });
+
+  // Final review M2: the CVE source was the first completed deps-flavoured
+  // row in a 50-row window — a scoped `deps` run, or a security_full whose
+  // Trivy half failed, answered "nothing to update" while risk_score (the
+  // newest USABLE deps scan) still counted the CVE.
+  it.each([
+    ['a newer scoped deps run', { scan_type: 'deps' as const, meta: { scope: { mode: 'staged', files: 1 } } }],
+    [
+      'a newer security_full whose Trivy half failed',
+      {
+        scan_type: 'security_full' as const,
+        tools_run: [{ name: 'semgrep', status: 'ok' as const }, { name: 'trivy', status: 'failed' as const }],
+      },
+    ],
+  ])('takes its CVEs from the newest usable deps scan, never %s', async (_label, newer) => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    const plugin = makePlugin(project);
+
+    plugin.storage.scans.insert({ scan_id: 'usable', scan_type: 'deps', project_path: project, tree_hash: 'h1' });
+    plugin.storage.scans.finalize({
+      scan_id: 'usable',
+      status: 'completed',
+      tools_run: [{ name: 'trivy', status: 'ok' }],
+      missing_tools: [],
+    });
+    plugin.storage.cves.upsert({
+      cve_id: 'CVE-2024-XXX',
+      package_name: 'lodash',
+      installed_version: '4.17.20',
+      severity: 'high',
+      scan_id: 'usable',
+    });
+    plugin.storage.scans.insert({
+      scan_id: 'newer',
+      scan_type: newer.scan_type,
+      project_path: project,
+      tree_hash: 'h2',
+      ...('meta' in newer ? { meta: newer.meta } : {}),
+    });
+    plugin.storage.scans.finalize({
+      scan_id: 'newer',
+      status: 'completed',
+      tools_run: 'tools_run' in newer ? newer.tools_run : [{ name: 'trivy', status: 'ok' }],
+      missing_tools: [],
+    });
+    plugin.storage
+      .rawHandle()
+      .prepare("UPDATE scans SET started_at = ? WHERE id = 'newer'")
+      .run(new Date(Date.now() + 60_000).toISOString());
+
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      if (cmd === 'npm' && args[0] === 'outdated') {
+        return { exitCode: 1, stdout: JSON.stringify({ lodash: { current: '4.17.20', latest: '4.17.21' } }), stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = (await getTool('deps_update_plan').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      plan: Array<{ classification: string; cve_ids?: string[] }>;
+    };
+    expect(r.plan[0]?.classification).toBe('security');
+    expect(r.plan[0]?.cve_ids).toEqual(['CVE-2024-XXX']);
   });
 
   it('orders security entries first when prefer=security (default)', async () => {

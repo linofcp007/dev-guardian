@@ -83,8 +83,8 @@ their respective projects.
 ## Network egress
 
 `GUARDIAN_OFFLINE=1` stops the lookups dev-guardian makes on its own initiative
-— marked ★ below: threat intelligence, package vetting, live secret
-verification and the Wordfence / wordpress.org feed. What could not be checked
+— marked ★ below: threat intelligence, package vetting, `scan_skill`'s OSV
+lookup, live secret verification and the Wordfence / wordpress.org feed. What could not be checked
 is then reported as `unknown` or as a coverage gap, never as clean. It does
 **not** stop a request to a target you named (DAST, a skill URL, a Lighthouse
 URL), anything a third-party scanner or build tool does on its own, or the
@@ -94,7 +94,7 @@ project's own build and test commands.
 
 | Destination | Who contacts it | When |
 | --- | --- | --- |
-| `api.osv.dev` | `vet_packages` ★, the install hook ★, `scan_skill` with `check_deps` (not affected by `GUARDIAN_OFFLINE`) | per call |
+| `api.osv.dev` | `vet_packages` ★, the install hook ★, `scan_skill` with `check_deps` ★ (offline, `osv.dev` reads `skipped`) | per call |
 | `registry.npmjs.org`, `pypi.org`, `repo.packagist.org`, `api.nuget.org`, `azuresearch-usnc.nuget.org` | `vet_packages` ★, the install hook ★ (3 s budget) | per call; the hook only for a command that installs a package by name |
 | `www.cisa.gov` (KEV catalog), `api.first.org` (EPSS) | `prioritize_findings` ★, `risk_score` ★, `create_fix_pr` ★ | at most once per 24 h per CVE and for the catalog; `guardian://cves/active` only reads the cache |
 | The secret's own provider: `api.github.com`, `gitlab.com`, `slack.com`, `api.stripe.com`, `api.openai.com`, `api.anthropic.com`, `registry.npmjs.org`, `api.sendgrid.com` | `scan_secrets` with `verify_live: true` ★ | **off by default**. Each secret goes only to its own provider's read-only identity endpoint (a fixed URL per rule, never a host from the repository), 5 s timeout, at most 4 in flight and 50 per scan; `security_scan_full` never verifies |

@@ -230,6 +230,8 @@ async function countCommitsSince(cwd, logOpts) {
  * `gitleaks detect` over commits. `logOpts` is passed to `git log` as-is, so
  * it must already be validated ({@link resolveLogOpts}). `expectedCommits` is
  * known for a range; otherwise any repository with commits must scan some.
+ * Either way the pass counts only on gitleaks' own word: its logged count,
+ * or findings in its report.
  */
 async function historyPass(opts, result, logOpts, expectedCommits, 
 /** The project's path inside its repository ('' at the root): history paths are repo-relative. */
@@ -271,10 +273,20 @@ projectPrefix) {
     const gitError = gitErrorLine(run.stderr);
     if (gitError)
         problems.push(`git: ${gitError}`);
+    // Every history pass runs on a repository — or a range — that holds
+    // commits. gitleaks logging no count at all (a release that changed its
+    // `N commits scanned.` line, or one that never walked the history) leaves
+    // nothing saying history was read; git's own count of the range says what
+    // there was to read, not what was. Only a report with findings proves it.
+    if (commits === null && problems.length === 0 && reportFindings(raw) === 0) {
+        problems.push('gitleaks logged no commit count and reported nothing — cannot tell that git history was read ' +
+            `(its "N commits scanned" log line is missing${expectedCommits !== null ? `; git counts ${describeCount(expectedCommits, 'commit')} to read` : ''})`);
+    }
     if (raw !== null && problems.length === 0) {
         pushParserInput(result, { parser: locatedParser('history', projectPrefix), input: raw }, report.secrets);
     }
-    const scanned = commits ?? expectedCommits;
+    // A missing count reaches here only with findings: say so, never git's count as gitleaks'.
+    const scanned = commits;
     result.tools_run.push(problems.length === 0
         ? { name: GITLEAKS_HISTORY, status: 'ok', reason: `history: ${describeCount(scanned, 'commit')} scanned` }
         : { name: GITLEAKS_HISTORY, status: 'failed', reason: problems.join('; ') });
@@ -565,6 +577,13 @@ function runProblems(run, raw) {
     if (!Array.isArray(parseInputAsJson(raw)))
         return ['gitleaks report is not a JSON array'];
     return [];
+}
+/** Entries in a gitleaks JSON report; 0 for no report or one that is not an array. */
+function reportFindings(raw) {
+    if (raw === null)
+        return 0;
+    const parsed = parseInputAsJson(raw);
+    return Array.isArray(parsed) ? parsed.length : 0;
 }
 /** gitleaks colours its log even when stderr is not a terminal. */
 const ANSI = /\u001b\[[0-9;]*m/g;

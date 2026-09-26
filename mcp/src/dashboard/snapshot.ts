@@ -77,11 +77,11 @@ import {
   type TruncationNotice,
 } from './types.js';
 
-/** Design §8: findings inlined for display are capped at 2000 items. */
+/** The design of record: findings inlined for display are capped at 2000 items. */
 const FINDINGS_CAP = 2000;
-/** Design §8: new-findings-per-delta are capped at 500, for EACH delta. */
+/** The design of record: new-findings-per-delta are capped at 500, for EACH delta. */
 const DELTA_CAP = 500;
-/** Design §5: "Active suppressions expiring within 7 days." */
+/** The design of record: "Active suppressions expiring within 7 days." */
 const EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -458,7 +458,7 @@ function isSuppressionActiveAt(s: Suppression, now: number): boolean {
 }
 
 /**
- * Design §5.1, verbatim: a project with no completed scan is *unknown*, not
+ * The design of record, verbatim: a project with no completed scan is *unknown*, not
  * safe. `scoreRisk` is not called here at all — feeding it empty findings/no
  * baseline would still charge the 8-point "never set a baseline" penalty
  * (`risk.ts`'s `baseline_set_at === null` branch), producing a small

@@ -92,17 +92,40 @@ function search(storage, projectPath, types, opts) {
  * `report_export`): an SBOM, a stack detection or a diff review is never it.
  */
 export function latestStateScan(storage, projectPath, scanType, opts = {}) {
-    const found = findLatestUsable(storage, projectPath, scanType !== undefined ? [scanType] : STATE_SCAN_TYPES, opts);
+    const types = scanType !== undefined ? [scanType] : STATE_SCAN_TYPES;
+    const found = findLatestUsable(storage, projectPath, types, opts);
     if (scanType !== undefined || found.scan === null)
         return found;
     // Any type: an orchestrated run is one scan to its reader. Its children
     // start after the parent, so the newest row is whichever child started
     // last — the iac child, say — and a baseline, an export or a diff of that
     // alone would silently leave out everything the other children found.
-    const run = runOf(storage, projectPath, found.scan);
-    if (run === found.scan)
-        return found;
-    return { ...found, scan: run, coverage: judge(run, undefined) };
+    //
+    // The child was judged, the run was not: an iac child that skipped every
+    // pass for want of IaC is coverage `full`, while its parent — every other
+    // child blind — measured nothing. A parent judged `none` is passed over
+    // like any other coverage-none scan, with every child that maps to it, and
+    // the search goes on below.
+    const hits = [...found.hits];
+    const rejected = new Set();
+    let current = found;
+    for (;;) {
+        const child = current.scan;
+        if (child === null)
+            return { ...current, hits, skipped: summarizeSkipped(hits) };
+        const run = runOf(storage, projectPath, child);
+        if (run === child)
+            return { ...current, hits, skipped: summarizeSkipped(hits) };
+        if (!rejected.has(run.scan_id)) {
+            const coverage = judge(run, undefined);
+            if (coverage !== 'none')
+                return { ...current, scan: run, coverage, hits, skipped: summarizeSkipped(hits) };
+            rejected.add(run.scan_id);
+            hits.push({ slot: run.scan_type, scan: run, reason: 'coverage_none' });
+        }
+        current = findLatestUsable(storage, projectPath, types, { beforeScanId: child.scan_id });
+        hits.push(...current.hits);
+    }
 }
 function mapRun(storage, projectPath, scan) {
     return scan === undefined ? null : runOf(storage, projectPath, scan);

@@ -171,6 +171,46 @@ describe('an orchestrated run is "the latest scan" as a whole, never one arbitra
   });
 });
 
+describe('an orchestrated parent that measured nothing is never "the latest scan" (final review M1)', () => {
+  // Semgrep and gitleaks absent, Trivy absent, no IaC: the iac child skipped
+  // everything with nothing to scan — coverage `full` — so the search stops
+  // on it, maps it to its parent, and the parent's own bookkeeping (every
+  // scanner skipped, three missing) is coverage `none`. set_baseline and
+  // report_export defaulted to that parent.
+  const BLIND_RUN = {
+    sast: { blind: true },
+    secrets: { blind: true },
+    deps: { blind: true },
+    iac: { runs: [{ name: 'trivy-config', status: 'skipped', reason: 'nothing to scan' }] satisfies ToolRun[], missing: [] },
+  };
+
+  it('latestStateScan skips it, with every child, and returns the older usable scan', () => {
+    const s = freshPlugin();
+    seedScan(s, { id: 'good-sast', type: 'sast', project: P, findings: [{ fp: fp('g'), tool: 'semgrep' }] });
+    orchestrated(s, 'blind-run', BLIND_RUN);
+
+    const latest = latestStateScan(s.storage, P);
+    expect(latest.scan?.scan_id).toBe('good-sast');
+    expect(latest.coverage).toBe('full');
+    expect(latest.hits.map((h) => h.scan.scan_id)).toContain('blind-run');
+  });
+
+  it('with nothing usable below it, the answer is no scan — never the blind parent', () => {
+    const s = freshPlugin();
+    orchestrated(s, 'blind-run', BLIND_RUN);
+    expect(latestStateScan(s.storage, P).scan).toBeNull();
+  });
+
+  it('a parent that measured something is still the answer', () => {
+    const s = freshPlugin();
+    seedScan(s, { id: 'good-sast', type: 'sast', project: P });
+    orchestrated(s, 'partial-run', { ...BLIND_RUN, sast: {} });
+    const latest = latestStateScan(s.storage, P);
+    expect(latest.scan?.scan_id).toBe('partial-run');
+    expect(latest.coverage).toBe('partial');
+  });
+});
+
 describe('skipped scans are summarised, never listed without bound (review item 3)', () => {
   it('counts every skipped scan and returns only the newest few', () => {
     const s = freshPlugin();

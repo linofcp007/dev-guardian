@@ -29,7 +29,7 @@
  * The only precondition that fails the WHOLE call is not being inside a git
  * repository at all — nothing downstream is meaningful without one, and nothing
  * has been created yet at that point. Every other failure this design
- * enumerates (design §7 items 2–8: no `gh`, worktree creation failed, the fix
+ * enumerates (the design of record's items 2–8: no `gh`, worktree creation failed, the fix
  * command failed, the scan differential failed, the fix broke the tests, push
  * failed, `gh pr create` failed) happens PER GROUP, inside a per-group
  * worktree that is always cleaned up, and is reported as that group's own
@@ -55,7 +55,7 @@
  * worktree was checked out on (confirmed by `pr.ts`'s own `push_failed`/
  * `create_failed` messages, which rely on exactly that). Left alone, EVERY
  * run that does not end in a created PR — not just a dry run — leaves a
- * stray branch behind: design §6's "not a branch" violated literally, and a
+ * stray branch behind: the design of record's "not a branch" violated literally, and a
  * later call for the SAME group collides on that branch name in
  * `createWorktree`, before `prExists`'s own idempotency check is ever
  * reached. `deleteLocalBranch` (`../fixpr/pr.js`) runs in the same `finally`
@@ -80,7 +80,7 @@
  * PR already exists for it, does not depend on this run's own `apply` value,
  * and `prExists` performs only the same read `openPr` would eventually have
  * made anyway on an `apply: true` repeat — never a write, so it does not
- * compromise design §6's actual boundary, which is stated in terms of what
+ * compromise the design of record's actual boundary, which is stated in terms of what
  * "leaves the machine" (commit, push, `gh pr create`), not in terms of `gh`
  * being touched at all.
  *
@@ -827,7 +827,7 @@ function buildPrTitle(group, findingCount) {
     return `dev-guardian: automated ${noun} fix (${findingCount} finding${plural})`;
 }
 /**
- * States exactly what design §6 requires: the findings covered, the exact
+ * States exactly what the design of record requires: the findings covered, the exact
  * commands run, the scan differential, and the test verdict — including,
  * VERBATIM when the outcome is `not_run`, "behaviour was not verified: this
  * project declares no test command".

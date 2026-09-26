@@ -55,6 +55,35 @@ export function hasFileWithExtension(
 }
 
 /**
+ * How many regular files under `root` end with one of `extensions` — the
+ * same walk as {@link hasFileWithExtension} (skipping `exclude` and hidden
+ * directories), counted to the end. `skipFile` (given the lower-cased file
+ * name) leaves a matching file out of the count.
+ */
+export function countFilesWithExtension(
+  root: string,
+  extensions: readonly string[],
+  exclude: ReadonlySet<string> = PROJECT_WALK_EXCLUDE,
+  skipFile: (lowerName: string) => boolean = () => false,
+): number {
+  let count = 0;
+  const stack = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    if (dir === undefined) break;
+    for (const entry of readDir(dir)) {
+      if (entry.isDirectory()) {
+        if (!exclude.has(entry.name) && !entry.name.startsWith('.')) stack.push(join(dir, entry.name));
+      } else if (entry.isFile()) {
+        const lower = entry.name.toLowerCase();
+        if (extensions.some((ext) => lower.endsWith(ext)) && !skipFile(lower)) count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+/**
  * Every regular file under `root`, as a `/`-separated path relative to it,
  * skipping `exclude` directories (at any depth) and anything that is not a
  * regular file (symlinks, sockets, devices).
