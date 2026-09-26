@@ -158,8 +158,10 @@ export const RUN_NAMES = {
     scan_dotnet_secrets: scanner('scan_dotnet_secrets'),
     dotnet_efcore_audit: scanner('dotnet_efcore_audit'),
     dotnet_target_framework_check: scanner(),
-    // compliance_check.
+    // compliance_check: its policy-document walk, and the RGPD Semgrep pack
+    // (configs/semgrep/rgpd.yml), whose findings say `semgrep`.
     'policy-docs': scanner(),
+    'semgrep-rgpd': scanner('semgrep'),
     // scan_skill.
     'guardian-scanskill:patterns': scanner(SKILL_TOOL),
     'guardian-scanskill:yara': scanner(SKILL_TOOL),
@@ -173,7 +175,7 @@ export const RUN_NAMES = {
     security_scan_full: scanner('semgrep', 'bandit', 'security-code-scan', 'dotnet-analyzers', 'gitleaks', ...TRIVY_FS_KEYS, TRIVY_CONFIG),
     quality_check: scanner('eslint', 'ruff', 'radon', 'jscpd', 'staticcheck', 'budgets'),
     deps_audit: scanner(...TRIVY_FS_KEYS, 'npm-audit', 'pip-audit', 'dotnet-list-package'),
-    compliance_check: scanner(...TRIVY_FS_KEYS),
+    compliance_check: scanner(...TRIVY_FS_KEYS, 'semgrep'),
     scan_wordpress: scanner('semgrep', 'gitleaks', ...TRIVY_FS_KEYS, 'phpcs'),
     // security_scan_full: its own entry for a child that threw, answered an
     // error, or is not registered — the child wrote no bookkeeping of its own.

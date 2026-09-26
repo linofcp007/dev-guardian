@@ -10,6 +10,37 @@ version bump.
 
 ### Added
 
+- RGPD/GDPR rule pack `configs/semgrep/rgpd.yml`, run by `compliance_check`
+  whenever Semgrep is installed (offline, `--metrics=off`). Eight rules, all
+  WARNING: Portuguese personal identifiers — NIF, NISS, Cartão de Cidadão,
+  IBAN, telefone/phone, email, recognised by variable/field/key NAME — inside
+  log calls in JS/TS, PHP (WordPress/WooCommerce, PSR-3, Laravel, syslog),
+  Python (logging, `print`) and C# (ILogger, Serilog, log4net, Console), with
+  masking helpers and last-four-digits truncation excluded; and trackers
+  loaded by HTML/PHP/JSX/TSX/Vue/Twig markup before consent — GA4 (`gtag.js`,
+  `<GoogleAnalytics>`, `wp_enqueue_script`), the Meta Pixel's `fbq('init')`,
+  Hotjar, and `youtube.com/embed` iframes — unless a consent guard is present
+  (`type="text/plain"`, Consent Mode v2 defaults `denied`,
+  `fbq('consent', 'revoke')`, a consent-checking block or JSX condition).
+  Findings are category `compliance`, subcategory `rgpd-pii-in-logs` or
+  `rgpd-tracker-without-consent`; an absent, failing or empty Semgrep run is
+  `skipped`/`failed` with a reason and lowers `coverage`, never a clean
+  result. Fixtures in `mcp/test/fixtures/rgpd/`, registered for
+  `npm run ablate -- rgpd` (`GUARDIAN_RGPD_SRC` for an axis-3 corpus). Zero
+  findings on `mcp/src`, `node_modules`, WordPress core, CPython `Lib/`,
+  `dotnet/runtime` and three sibling projects — all library code with almost
+  no candidate log call, so a weak precision signal, recorded as such in the
+  pack header.
+- RGPD templates the compliance skill points at:
+  `configs/compliance/cookie-banner/` (vanilla JS/CSS, pt-PT and English,
+  Google Consent Mode v2 — everything `denied` by default, `update` on the
+  visitor's choice, trackers written blocked and activated per category,
+  reject as easy as accept, withdrawal clears the category's cookies and
+  reloads; keyboard and screen-reader accessible) and
+  `configs/compliance/privacy-policy-template.md` (pt-PT, the RGPD arts. 13
+  and 14 content, the CNPD as supervisory authority, `[[PREENCHER: …]]`
+  placeholders).
+
 - `wp_vuln_check_source` — WordPress vulnerabilities from source: no live
   URL, no WP-CLI, no WPScan. Reads a local WordPress install's core version
   (`wp-includes/version.php`), plugin versions (main-file header, falling
