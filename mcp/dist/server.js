@@ -60667,6 +60667,7 @@ function locate3(content, index) {
 
 // src/skillaudit/analyze.ts
 var TOOL = "guardian-scanskill";
+var OSV_OFFLINE_REASON = "network disabled (GUARDIAN_OFFLINE=1)";
 async function analyzeSkill(files, opts = {}) {
   const findings = [];
   const signals2 = [];
@@ -60779,7 +60780,10 @@ async function analyzeSkill(files, opts = {}) {
     const deps = extractDependencies(
       files.map((f) => ({ relPath: f.relPath, content: f.content }))
     );
-    if (deps.length > 0) {
+    const offline = opts.offline ?? process.env["GUARDIAN_OFFLINE"] === "1";
+    if (deps.length > 0 && offline) {
+      osv = { online: false, queried: 0, vulnerable_packages: [], error: OSV_OFFLINE_REASON };
+    } else if (deps.length > 0) {
       const osvOpts = {};
       if (opts.signal) osvOpts.signal = opts.signal;
       osv = await queryOsv(deps, osvOpts);

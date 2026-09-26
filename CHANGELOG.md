@@ -927,6 +927,10 @@ keeps working (migrations 004–011 are additive).
   `elevation_allowed=true`". Install steps run without a terminal, so that
   works only with passwordless sudo (or, on Windows, a server already running
   elevated); the hint now says so and names the command to run yourself.
+- **`scan_skill`'s OSV lookup ignored `GUARDIAN_OFFLINE=1`** and posted the
+  skill's dependency list to `api.osv.dev`. Offline it now sends nothing and
+  records `osv.dev: skipped` with `network disabled (GUARDIAN_OFFLINE=1)`, like
+  every other network caller; `docs/env.md` and `SECURITY.md` say so.
 
 ### Security
 

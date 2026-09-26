@@ -31,6 +31,9 @@ import { matchSignatures } from './yaraSignatures.js';
 
 const TOOL = 'guardian-scanskill';
 
+/** The same words every other `GUARDIAN_OFFLINE` caller reports. */
+export const OSV_OFFLINE_REASON = 'network disabled (GUARDIAN_OFFLINE=1)';
+
 export interface SkillAuditReport {
   findings: Finding[];
   score: ScoreResult;
@@ -44,6 +47,12 @@ export interface SkillAuditReport {
 export interface AnalyzeOptions {
   checkDeps?: boolean;
   signal?: AbortSignal;
+  /**
+   * No network: the OSV lookup sends nothing and reports itself offline.
+   * Default: `GUARDIAN_OFFLINE === '1'`, as every other network caller
+   * (intel, pkgvet, secrets/verify) reads it.
+   */
+  offline?: boolean;
   /** Links `ingest.ts#collectDir` found and refused to follow — see
    *  `SymlinkEntry`'s own doc comment for why walking never reads through
    *  one. Each becomes its own finding below. */
@@ -192,7 +201,11 @@ export async function analyzeSkill(
     const deps = extractDependencies(
       files.map((f) => ({ relPath: f.relPath, content: f.content })),
     );
-    if (deps.length > 0) {
+    const offline = opts.offline ?? process.env['GUARDIAN_OFFLINE'] === '1';
+    if (deps.length > 0 && offline) {
+      // Unknown, never clean: scan_skill records `osv.dev: skipped` with this reason.
+      osv = { online: false, queried: 0, vulnerable_packages: [], error: OSV_OFFLINE_REASON };
+    } else if (deps.length > 0) {
       const osvOpts: { signal?: AbortSignal } = {};
       if (opts.signal) osvOpts.signal = opts.signal;
       osv = await queryOsv(deps, osvOpts);
